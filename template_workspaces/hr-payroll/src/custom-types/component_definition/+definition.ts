@@ -1,0 +1,79 @@
+import { defineCustomType } from '@norbital-ai/pod/authoring';
+import { z } from 'zod/mini';
+
+/** Cap applied to a claimable ENTRY component (medical, dental, …). */
+export const componentCapSchema = z.strictObject({
+	period: z.enum(['CALENDAR_YEAR', 'LEAVE_YEAR', 'MONTH', 'LIFETIME', 'PER_EVENT']),
+	matrix: z.string().check(z.minLength(1)),
+	reimbursement_percentage: z.number().check(z.minimum(0), z.maximum(100)),
+	on_exceed: z.enum(['BLOCK', 'ALLOW'])
+});
+
+export type ComponentCap = z.infer<typeof componentCapSchema>;
+
+/**
+ * How a pay component produces its amount.
+ *
+ * - `ENTRY`     — a person or an import supplies the number (claims, allowances, ad-hoc pay).
+ * - `FORMULA`   — a CEL expression over the payslip context.
+ * - `OVERTIME`  — the engine derives it from time entries + the jurisdiction's overtime rules.
+ * - `OVERTIME_EXCESS` — overtime corresponding to work beyond the daily total-work boundary or
+ *   calendar-month ordinary-OT limit. The hours are reclassified rather than dropped: same money,
+ *   a different component type, and therefore a different contribution treatment.
+ * - `SCHEDULE`  — the contracted amount from `employment_terms` (basic salary).
+ *
+ * There is deliberately NO statutory information here: chargeability is reachable only via
+ * `pay_components.component_type_id` → `contribution_treatments`.
+ */
+export const componentDefinitionSchema = z.discriminatedUnion('source', [
+	z.strictObject({
+		source: z.literal('ENTRY'),
+		unit: z.enum(['MONEY', 'DAYS', 'HOURS']),
+		evidence: z.enum(['NONE', 'OPTIONAL', 'REQUIRED']),
+		cap: z.nullable(componentCapSchema),
+		settlement: z.enum(['PAYROLL', 'COMPANY_DIRECT'])
+	}),
+	z.strictObject({
+		source: z.literal('FORMULA'),
+		unit: z.enum(['MONEY', 'DAYS', 'HOURS', 'RATE']),
+		expr: z.string().check(z.minLength(1))
+	}),
+	z.strictObject({
+		source: z.literal('OVERTIME'),
+		rule: z.strictObject({
+			day_type: z.enum(['ORDINARY', 'REST_DAY', 'PUBLIC_HOLIDAY']),
+			measure: z.enum(['BEYOND_NORMAL', 'FROM_START_OF_DAY']),
+			band_from: z.number().check(z.minimum(0))
+		}),
+		minimum: z.nullable(z.number().check(z.positive()))
+	}),
+	z.strictObject({
+		source: z.literal('OVERTIME_EXCESS'),
+		/** Overtime corresponding to work beyond this total-work-hours boundary is reclassified. */
+		after_total_work_hours: z.number().check(z.positive()),
+		/** The overtime rule whose overflow this component receives. */
+		rule: z.strictObject({
+			day_type: z.enum(['ORDINARY', 'REST_DAY', 'PUBLIC_HOLIDAY']),
+			measure: z.enum(['BEYOND_NORMAL', 'FROM_START_OF_DAY']),
+			band_from: z.number().check(z.minimum(0))
+		}),
+		/**
+		 * The statutory award's valuation basis. Hourly awards carry multiplier-weighted hours;
+		 * stepped rest-day and holiday awards carry the additional day-wage multiple earned
+		 * beyond the total-work-hours boundary.
+		 */
+		valued_at: z.enum(['ORDINARY_HOURLY', 'ORDINARY_DAY_WAGE'])
+	}),
+	z.strictObject({
+		source: z.literal('SCHEDULE'),
+		unit: z.literal('MONEY'),
+		reducible: z.boolean()
+	})
+]);
+
+export type ComponentDefinition = z.infer<typeof componentDefinitionSchema>;
+
+export default defineCustomType({
+	name: 'component_definition',
+	schema: componentDefinitionSchema
+});

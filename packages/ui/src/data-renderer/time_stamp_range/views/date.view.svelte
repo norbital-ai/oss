@@ -1,0 +1,470 @@
+<!-- fallow-ignore-file complexity -- the scalar/multiple temporal editor intentionally owns one cohesive calendar workflow -->
+<script lang="ts" generics="TMulti extends boolean">
+	// ==================================================================================
+	// IMPORTS
+	// ==================================================================================
+	import { buttonVariants } from '#lib/button';
+	import { cn } from '#lib/utils';
+	import Icon from '@iconify/svelte';
+	import {
+		toTime as extractTime,
+		getLocalTimeZone,
+		parseAbsolute,
+		parseTime,
+		Time,
+		toCalendarDate,
+		toCalendarDateTime,
+		toZoned,
+		type DateValue
+	} from '@internationalized/date';
+	import { formatUtcInstantLocal, parseUtcInstant } from '@norbital-ai/std/date';
+	import { type DateRange } from 'bits-ui';
+	import type { Snippet } from 'svelte';
+	import * as Popover from '#lib/popover';
+	import { RangeCalendar } from '#lib/range-calendar';
+	import type { TimeRange } from '#lib/time-range';
+	import TimeView from './time.view.svelte';
+
+	type DateMatcher = (date: DateValue) => boolean;
+
+	// ==================================================================================
+	// TYPES & INTERFACES
+	// ==================================================================================
+
+	type StringDateRange = { start?: string; end?: string };
+	type ValueType<T extends boolean> = T extends true ? StringDateRange[] : StringDateRange;
+	type OnValueChangeType<T extends boolean> = T extends true
+		? (value: StringDateRange[]) => void
+		: (value: StringDateRange) => void;
+
+	interface Props<T extends boolean> {
+		value: ValueType<T>;
+		style?: string;
+		multi: T;
+		onValueChange?: OnValueChangeType<T>;
+		align?: 'start' | 'center' | 'end';
+		emptyPlaceholder?: string | Snippet;
+		allowClear?: boolean;
+		allowTime?: boolean;
+		class?: string;
+		disabled?: boolean;
+		readonly?: boolean;
+		/**
+		 * When true, renders without borders. Used in collection table cells for inline display.
+		 */
+		borderless?: boolean;
+		maxTriggerRanges?: number;
+		numberOfMonths?: number;
+		minDate?: string;
+		maxDate?: string;
+		timeGranularity?: 'minute' | 'second';
+		hourCycle?: 12 | 24;
+		isDateDisabled?: DateMatcher;
+		isDateUnavailable?: DateMatcher;
+	}
+
+	// ==================================================================================
+	// COMPONENT PROPS
+	// ==================================================================================
+
+	let {
+		value = $bindable(),
+		multi,
+		onValueChange,
+		align = 'start',
+		emptyPlaceholder = 'Pick date range(s)',
+		allowClear = true,
+		allowTime = false,
+		class: className,
+		disabled = false,
+		readonly = false,
+		borderless = false,
+		maxTriggerRanges = 2,
+		numberOfMonths = 2,
+		minDate,
+		maxDate,
+		timeGranularity = 'minute',
+		hourCycle = 24,
+		style,
+		isDateDisabled,
+		isDateUnavailable
+	}: Props<TMulti> = $props();
+
+	// ==================================================================================
+	// UTILITIES
+	// ==================================================================================
+
+	const tz = getLocalTimeZone();
+
+	/** Convert stored UTC ISO instant to ZonedDateTime in the viewer timezone. */
+	const parseTimestamp = (timestamp: string) =>
+		parseAbsolute(parseUtcInstant(timestamp).toISOString(), tz);
+
+	/** Extract DateValue from timestamptz string */
+	const toDateValue = (timestamp?: string): DateValue | undefined => {
+		if (!timestamp) return undefined;
+		return toCalendarDate(parseTimestamp(timestamp));
+	};
+
+	/** Extract an editable time, or the local-day boundary for date-only range selection. */
+	const timestampToTime = (timestamp: string | undefined, boundary: 'start' | 'end'): Time => {
+		if (!allowTime) {
+			return boundary === 'start' ? new Time(0, 0) : new Time(23, 59, 59, 999);
+		}
+		if (!timestamp) return parseTime('09:00:00');
+		return extractTime(parseTimestamp(timestamp));
+	};
+
+	/** Combine DateValue and Time into timestamptz string */
+	const combineDateTime = (date?: DateValue, time?: Time): string | undefined => {
+		if (!date || !time) return undefined;
+		const calendarDateTime = toCalendarDateTime(date).set({
+			hour: time.hour,
+			minute: time.minute,
+			second: time.second,
+			millisecond: time.millisecond
+		});
+		return toZoned(calendarDateTime, tz).toAbsoluteString();
+	};
+
+	// ==================================================================================
+	// STATE & DERIVED VALUES
+	// ==================================================================================
+
+	let popoverOpen = $state(false);
+	let activeRangeIndex = $state(0);
+	const cantMutate = $derived(readonly || disabled);
+
+	/** Normalized array of ranges for consistent handling */
+	const ranges = $derived.by((): StringDateRange[] => {
+		if (multi) return (value as StringDateRange[]) ?? [];
+		const singleRange = value as StringDateRange;
+		return singleRange && (singleRange.start || singleRange.end) ? [singleRange] : [];
+	});
+
+	const activeRange = $derived(ranges[activeRangeIndex] ?? {});
+	const hasSelection = $derived(ranges.some((range) => range.start || range.end));
+
+	/** Convert active range to DateRange for calendar */
+	const activeDateRange = $derived.by((): DateRange => ({
+		start: toDateValue(activeRange.start),
+		end: toDateValue(activeRange.end)
+	}));
+
+	/** Extract times from active range */
+	const activeTimes = $derived.by((): TimeRange<Time> => ({
+		start: timestampToTime(activeRange.start, 'start'),
+		end: timestampToTime(activeRange.end, 'end')
+	}));
+
+	const activeRangeComplete = $derived(activeDateRange.start && activeDateRange.end);
+	const isSameDay = $derived.by(() => {
+		if (!activeDateRange.start || !activeDateRange.end) return false;
+		return activeDateRange.start.compare(activeDateRange.end) === 0;
+	});
+
+	// ==================================================================================
+	// EVENT HANDLERS
+	// ==================================================================================
+
+	function updateRange(updatedRange: StringDateRange) {
+		if (cantMutate || !onValueChange) return;
+
+		if (multi) {
+			const newRanges = [...ranges];
+			newRanges[activeRangeIndex] = updatedRange;
+			(onValueChange as (value: StringDateRange[]) => void)(newRanges);
+		} else {
+			(onValueChange as (value: StringDateRange) => void)(updatedRange);
+		}
+	}
+
+	function handleDateChange(newDateRange: DateRange | undefined) {
+		if (!newDateRange) return;
+
+		updateRange({
+			start: combineDateTime(newDateRange.start, activeTimes.start),
+			end: combineDateTime(newDateRange.end, activeTimes.end)
+		});
+	}
+
+	function handleTimeChange(updates: {
+		isStart?: boolean;
+		isEnd?: boolean;
+		time?: Time;
+		range?: TimeRange<Time>;
+	}) {
+		let { start: newStartTime, end: newEndTime } = activeTimes;
+
+		if (updates.isStart && updates.time) newStartTime = updates.time;
+		if (updates.isEnd && updates.time) newEndTime = updates.time;
+		if (updates.range) {
+			newStartTime = updates.range.start ?? newStartTime;
+			newEndTime = updates.range.end ?? newEndTime;
+		}
+
+		updateRange({
+			start: combineDateTime(activeDateRange.start, newStartTime),
+			end: combineDateTime(activeDateRange.end, newEndTime)
+		});
+	}
+
+	function addNewRange() {
+		if (cantMutate || !multi || !onValueChange) return;
+		const newRanges = [...ranges, {}];
+		(onValueChange as (value: StringDateRange[]) => void)(newRanges);
+		activeRangeIndex = newRanges.length - 1;
+	}
+
+	function removeRange(indexToRemove: number) {
+		if (cantMutate || !multi || !onValueChange) return;
+		const newRanges = ranges.filter((_, index) => index !== indexToRemove);
+		(onValueChange as (value: StringDateRange[]) => void)(newRanges);
+		if (activeRangeIndex >= newRanges.length) {
+			activeRangeIndex = Math.max(0, newRanges.length - 1);
+		}
+	}
+
+	function setActiveRange(index: number) {
+		if (cantMutate) return;
+		activeRangeIndex = index;
+	}
+
+	function clearAllRanges() {
+		if (cantMutate || !onValueChange) return;
+		if (multi) (onValueChange as (value: StringDateRange[]) => void)([]);
+		else (onValueChange as (value: StringDateRange) => void)({});
+		activeRangeIndex = 0;
+	}
+
+	// ==================================================================================
+	// HELPER FUNCTIONS
+	// ==================================================================================
+
+	function formatRange(range: StringDateRange): string {
+		if (range.start && range.end) {
+			return `${formatUtcInstantLocal(range.start, { dateStyle: 'medium', timeStyle: allowTime ? 'short' : undefined })} - ${formatUtcInstantLocal(range.end, { dateStyle: 'medium', timeStyle: allowTime ? 'short' : undefined })}`;
+		}
+		if (range.start) {
+			return `${formatUtcInstantLocal(range.start, { dateStyle: 'medium', timeStyle: allowTime ? 'short' : undefined })} - ...`;
+		}
+		if (range.end) {
+			return `... - ${formatUtcInstantLocal(range.end, { dateStyle: 'medium', timeStyle: allowTime ? 'short' : undefined })}`;
+		}
+		return 'Select dates';
+	}
+
+	function getRangeStatus(range: StringDateRange): 'complete' | 'partial' | 'empty' {
+		if (range.start && range.end) return 'complete';
+		if (range.start || range.end) return 'partial';
+		return 'empty';
+	}
+</script>
+
+{#snippet RangeBadge(range: StringDateRange, index: number, isActive: boolean = false)}
+	{@const status = getRangeStatus(range)}
+	<div
+		role="button"
+		tabindex="0"
+		onkeydown={(e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				if (multi && !isActive && !cantMutate) setActiveRange(index);
+			}
+		}}
+		class="flex items-center justify-between rounded-lg border px-3 py-2 text-sm transition-all
+       {isActive && !cantMutate ? 'border-brand bg-brand-100' : 'border-border bg-background'}
+       {status === 'complete' ? 'shadow-sm' : 'border-dashed'}
+       {multi && !isActive && !cantMutate ? 'cursor-pointer hover:bg-muted' : ''}"
+		onclick={multi && !isActive && !cantMutate ? () => setActiveRange(index) : undefined}
+	>
+		<div class="flex min-w-0 flex-1 items-center gap-2">
+			<div
+				class="h-2 w-2 shrink-0 rounded-full
+               {status === 'complete'
+					? 'bg-success'
+					: status === 'partial'
+						? 'bg-yellow-500'
+						: 'bg-border'}"
+			></div>
+			<span class="truncate {status === 'empty' ? 'text-muted-foreground' : 'text-foreground'}">
+				{formatRange(range)}
+			</span>
+		</div>
+		{#if !cantMutate && multi}
+			<div class="flex shrink-0 items-center gap-1">
+				<button
+					type="button"
+					onclick={(e) => {
+						e.stopPropagation();
+						removeRange(index);
+					}}
+					class="p-1 text-muted-foreground transition-colors hover:text-destructive"
+					aria-label="Remove this range"
+				>
+					<Icon icon="lucide:x" class="h-3 w-3" />
+				</button>
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet TriggerContent()}
+	<Icon icon="lucide:calendar" class="mr-2 size-4 shrink-0" />
+	{#if !hasSelection}
+		<span class="truncate text-xs font-normal text-muted-foreground">
+			{#if typeof emptyPlaceholder === 'string'}
+				{emptyPlaceholder}
+			{:else if emptyPlaceholder}
+				{@render emptyPlaceholder()}
+			{:else}
+				Pick date range(s)
+			{/if}
+		</span>
+	{:else if multi}
+		<div class="flex min-w-0 flex-1 items-center gap-2">
+			<span class="shrink-0 rounded-full bg-brand-100 px-2 py-0.5 text-xs text-brand-700">
+				{ranges.length} range{ranges.length !== 1 ? 's' : ''}
+			</span>
+			<span class="truncate text-xs">
+				{#if ranges.length <= maxTriggerRanges}
+					{ranges.map(formatRange).join(' • ')}
+				{:else}
+					{ranges.slice(0, maxTriggerRanges).map(formatRange).join(' • ')}
+					• +{ranges.length - maxTriggerRanges} more
+				{/if}
+			</span>
+		</div>
+	{:else}
+		<span class="flex-1 truncate text-left text-xs font-normal">{formatRange(ranges[0])}</span>
+	{/if}
+{/snippet}
+
+{#snippet RangeListSidebar()}
+	{#if multi}
+		<div class="min-w-[280px] border-l border-border bg-muted">
+			<div class="p-4">
+				<div class="mb-4 flex items-center justify-between">
+					<h4 class="text-sm font-semibold text-foreground">Selected Ranges ({ranges.length})</h4>
+					{#if hasSelection && !cantMutate}
+						<button
+							type="button"
+							onclick={clearAllRanges}
+							class="text-xs font-medium text-destructive hover:text-destructive-foreground"
+						>
+							Clear all
+						</button>
+					{/if}
+				</div>
+				<div class="mb-4 max-h-[300px] space-y-2 overflow-y-auto">
+					{#each ranges as range, index}
+						{@render RangeBadge(range, index, index === activeRangeIndex)}
+					{/each}
+					{#if ranges.length === 0}
+						<div class="py-8 text-center text-muted-foreground">
+							<Icon icon="lucide:calendar" class="mx-auto mb-2 h-8 w-8" />
+							<p class="text-sm">No ranges selected</p>
+						</div>
+					{/if}
+				</div>
+				<button
+					type="button"
+					onclick={addNewRange}
+					disabled={cantMutate}
+					class="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-brand-300 hover:text-brand disabled:cursor-not-allowed disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
+				>
+					<Icon icon="lucide:plus" class="h-4 w-4" />
+					Add new range
+				</button>
+			</div>
+		</div>
+	{/if}
+{/snippet}
+
+<Popover.Root bind:open={popoverOpen}>
+	<div class={cn('group relative w-full', className)} {style}>
+		<Popover.Trigger
+			class={cn(
+				buttonVariants({ variant: 'outline', class: 'w-full justify-start' }),
+				readonly && 'shadow-none',
+				borderless && 'border-none shadow-none'
+			)}
+			{disabled}
+			aria-readonly={readonly}
+		>
+			{@render TriggerContent()}
+		</Popover.Trigger>
+		{#if allowClear && hasSelection && !cantMutate}
+			<button
+				type="button"
+				class={cn(
+					buttonVariants({ variant: 'outline', size: 'icon' }),
+					'pointer-events-auto invisible absolute top-1/2 right-2 h-6 w-6 shrink-0 -translate-y-1/2 text-muted-foreground group-hover:visible hover:text-destructive'
+				)}
+				onclick={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					clearAllRanges();
+				}}
+				aria-label="Clear selection"
+			>
+				<Icon icon="lucide:x" class="h-3 w-3" />
+			</button>
+		{/if}
+	</div>
+
+	<Popover.Content class="w-auto p-0 shadow-lg" {align} sameWidth={false}>
+		<div class="flex">
+			<div class="p-4">
+				<RangeCalendar
+					value={activeDateRange}
+					onValueChange={handleDateChange}
+					{numberOfMonths}
+					readonly={cantMutate}
+					excludeDisabled={true}
+					isDateDisabled={(date) => {
+						if (isDateDisabled?.(date)) return true;
+						if (minDate) {
+							try {
+								const minCalendarDate = toCalendarDate(parseTimestamp(minDate));
+								if (date.compare(minCalendarDate) < 0) {
+									return true;
+								}
+							} catch (error) {
+								console.warn('Failed to parse minDate:', minDate, error);
+							}
+						}
+						if (maxDate) {
+							try {
+								const maxCalendarDate = toCalendarDate(parseTimestamp(maxDate));
+								if (date.compare(maxCalendarDate) > 0) {
+									return true;
+								}
+							} catch (error) {
+								console.warn('Failed to parse maxDate:', maxDate, error);
+							}
+						}
+						return false;
+					}}
+					{isDateUnavailable}
+				/>
+				{#if allowTime && activeDateRange.start}
+					<div class="mt-4 border-t border-border pt-4">
+						<TimeView
+							{isSameDay}
+							hasEnd={Boolean(activeDateRange.end)}
+							value={activeTimes}
+							granularity={timeGranularity}
+							{hourCycle}
+							disabled={cantMutate}
+							onStartChange={(time) => handleTimeChange({ isStart: true, time })}
+							onEndChange={(time) => handleTimeChange({ isEnd: true, time })}
+							onRangeChange={(range) => handleTimeChange({ range })}
+						/>
+					</div>
+				{/if}
+			</div>
+			{@render RangeListSidebar()}
+		</div>
+	</Popover.Content>
+</Popover.Root>

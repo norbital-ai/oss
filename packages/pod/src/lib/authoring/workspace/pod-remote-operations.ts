@@ -1,0 +1,47 @@
+import type { AnyDBQueryConfig } from 'drizzle-orm';
+import type {
+	TApprovalRequestStepAction,
+	TGeolocation
+} from '@norbital-ai/platform-utils/system/types';
+
+/** Pod-owned operations used by tenant collection UI. These are intentionally not part of workspace `api`. */
+export type PodRemoteOperations = {
+	readonly exportPipeline: (input: {
+		readonly collection_name: string;
+		readonly record_ids?: string[];
+		readonly with?: AnyDBQueryConfig['with'];
+		readonly where?: AnyDBQueryConfig['where'];
+		readonly limit?: number;
+		readonly bypass_secret?: string;
+	}) => Promise<unknown>;
+	readonly importPipeline: (input: {
+		readonly collection_name: string;
+		readonly import_data: unknown;
+		readonly bypass_secret?: string;
+	}) => Promise<unknown>;
+	readonly autocompleteGeolocation: (input: string) => Promise<TGeolocation[]>;
+	readonly renderStaticMap: (input: {
+		readonly markers: readonly {
+			readonly latitude: number;
+			readonly longitude: number;
+			readonly label?: string;
+			readonly tone?: 'default' | 'alert';
+		}[];
+	}) => Promise<{
+		readonly mimeType: 'image/png' | 'image/jpeg';
+		readonly dataBase64: string;
+		readonly markerPositions?: readonly {
+			readonly x: number;
+			readonly y: number;
+		}[];
+	}>;
+	readonly processApprovalRequestAction?: (input: {
+		readonly approval_request_id: string;
+		readonly action: TApprovalRequestStepAction;
+		readonly comments: string | null;
+		readonly isSupercede: boolean;
+	}) => Promise<unknown>;
+	readonly withdrawApprovalRequest?: (input: {
+		readonly approval_request_id: string;
+	}) => Promise<unknown>;
+};

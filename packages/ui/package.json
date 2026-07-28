@@ -1,0 +1,181 @@
+{
+	"name": "@norbital-ai/ui",
+	"version": "0.1.25",
+	"description": "Svelte component library and design tokens for Norbital tenant applications.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "SEE LICENSE IN LICENSE",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/ui"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/ui",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"files": [
+		"assets",
+		"build",
+		"src/base.css",
+		"package.json"
+	],
+	"exports": {
+		"./base.css": "./src/base.css",
+		"./*": {
+			"types": "./build/*/index.d.ts",
+			"svelte": "./build/*/index.js",
+			"default": "./build/*/index.js"
+		},
+		"./feature-colors": {
+			"types": "./build/feature-colors/index.d.ts",
+			"import": "./build/feature-colors/index.js",
+			"default": "./build/feature-colors/index.js"
+		},
+		"./collection-table/navigation": {
+			"types": "./build/collection-table/collection-table-navigation.svelte.d.ts",
+			"svelte": "./build/collection-table/collection-table-navigation.svelte.js",
+			"default": "./build/collection-table/collection-table-navigation.svelte.js"
+		},
+		"./utils/*": {
+			"types": "./build/utils/*.d.ts",
+			"import": "./build/utils/*.js",
+			"svelte": "./build/utils/*.js",
+			"default": "./build/utils/*.js"
+		},
+		"./utils/pixel-drag.js": {
+			"types": "./build/utils/pixel-drag.d.ts",
+			"import": "./build/utils/pixel-drag.js",
+			"svelte": "./build/utils/pixel-drag.js",
+			"default": "./build/utils/pixel-drag.js"
+		},
+		"./code-editor/theme.js": {
+			"types": "./build/code-editor/theme.d.ts",
+			"import": "./build/code-editor/theme.js",
+			"default": "./build/code-editor/theme.js"
+		},
+		"./assets/logo.svg": {
+			"types": "./assets/logo.svg.d.ts",
+			"default": "./assets/logo.svg"
+		},
+		"./assets/favicon/apple-icon.png": {
+			"types": "./assets/favicon/apple-icon.png.d.ts",
+			"default": "./assets/favicon/apple-icon.png"
+		},
+		"./assets/favicon/favicon-32x32.png": {
+			"types": "./assets/favicon/favicon-32x32.png.d.ts",
+			"default": "./assets/favicon/favicon-32x32.png"
+		},
+		"./assets/favicon/favicon.ico": {
+			"types": "./assets/favicon/favicon.ico.d.ts",
+			"default": "./assets/favicon/favicon.ico"
+		},
+		"./assets/*": {
+			"default": "./assets/*"
+		}
+	},
+	"imports": {
+		"#lib/utils/*": {
+			"types": "./build/utils/*.d.ts",
+			"import": "./build/utils/*.js",
+			"svelte": "./build/utils/*.js",
+			"default": "./build/utils/*.js"
+		},
+		"#lib/*": {
+			"types": "./build/*/index.d.ts",
+			"import": "./build/*/index.js",
+			"svelte": "./build/*/index.js",
+			"norbital-src": "./src/*",
+			"default": "./build/*/index.js"
+		}
+	},
+	"scripts": {
+		"build": "svelte-package -i src -o build",
+		"lint": "svelte-check --tsconfig tsconfig.json"
+	},
+	"peerDependencies": {
+		"@norbital-ai/platform-utils": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"svelte": "^5.56.7"
+	},
+	"peerDependenciesMeta": {
+		"svelte": {
+			"optional": false
+		}
+	},
+	"dependencies": {
+		"@codemirror/lang-javascript": "^6.2.5",
+		"@codemirror/lang-json": "^6.0.2",
+		"@codemirror/language": "^6.12.4",
+		"@codemirror/state": "^6.7.1",
+		"@codemirror/view": "^6.43.6",
+		"@floating-ui/dom": "^1.8.0",
+		"@fontsource-variable/geist": "^5.3.0",
+		"@fontsource-variable/geist-mono": "^5.3.0",
+		"@iconify/svelte": "catalog:",
+		"@internationalized/date": "^3.12.2",
+		"@lezer/highlight": "^1.2.3",
+		"@tailwindcss/typography": "^0.5.20",
+		"@tiptap/core": "^3.28.0",
+		"@tiptap/extension-bubble-menu": "^3.28.0",
+		"@tiptap/extension-code-block": "^3.28.0",
+		"@tiptap/extension-code-block-lowlight": "^3.28.0",
+		"@tiptap/extension-list": "^3.28.0",
+		"@tiptap/extension-mention": "^3.28.0",
+		"@tiptap/extension-placeholder": "^3.28.0",
+		"@tiptap/extension-table": "^3.28.0",
+		"@tiptap/extension-task-item": "^3.28.0",
+		"@tiptap/extension-task-list": "^3.28.0",
+		"@tiptap/extensions": "^3.28.0",
+		"@tiptap/markdown": "^3.28.0",
+		"@tiptap/pm": "^3.28.0",
+		"@tiptap/starter-kit": "^3.28.0",
+		"@tiptap/suggestion": "^3.28.0",
+		"bits-ui": "^2.18.1",
+		"clsx": "^2.1.1",
+		"codemirror": "^6.0.2",
+		"date-fns": "^4.4.0",
+		"dedent": "^1.7.2",
+		"embla-carousel-svelte": "^8.6.0",
+		"es-toolkit": "^1.49.0",
+		"highlight.js": "^11.11.1",
+		"layerchart": "2.0.2",
+		"leaflet": "1.9.4",
+		"libphonenumber-js": "^1.13.9",
+		"lowlight": "^3.3.0",
+		"marked": "18.0.6",
+		"mode-watcher": "^1.1.0",
+		"papaparse": "^5.5.4",
+		"prosemirror-model": "^1.25.11",
+		"prosemirror-view": "^1.42.1",
+		"runed": "catalog:",
+		"sortablejs": "^1.15.7",
+		"svelte-sonner": "^1.1.1",
+		"tailwind-merge": "^3.6.0",
+		"tailwind-variants": "^3.2.2",
+		"tippy.js": "^6.3.7",
+		"tw-animate-css": "^1.4.0",
+		"vaul-svelte": "1.0.0-next.7",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@norbital-ai/config": "workspace:*",
+		"@norbital-ai/platform-utils": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"@sveltejs/package": "^2.5.8",
+		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"@types/leaflet": "1.9.21",
+		"@types/node": "^26.1.1",
+		"@types/papaparse": "^5.5.2",
+		"@types/sortablejs": "^1.15.9",
+		"prettier": "^3.9.5",
+		"svelte": "catalog:",
+		"svelte-check": "^4.7.3",
+		"tailwindcss": "^4.3.3",
+		"typescript": "catalog:"
+	}
+}

@@ -1,0 +1,98 @@
+import { beforeApiStorage } from '$lib/server/collection/hook-api-context.server.js';
+import { createBeforeApi } from '$lib/server/collection/hook-api.server.js';
+import { buildCtx } from '$lib/server/bootstrap/context.js';
+import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';
+import { handleNorbitalRuntimeRequest } from '$lib/server/bootstrap/runtime_request.server.js';
+import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';
+import { NORBITAL_BASE_SCOPE_HEADER } from '$lib/server/bootstrap/host_base_scope.js';
+import { error, json, PodHttpError } from './http.js';
+import { runWithRequestEvent, type PodRequestEvent } from './request-context.js';
+import { loadTenantWorkspaceShellData } from './shell-data.server.js';
+import { toRuntimeWorkspace } from '$lib/authoring/workspace/workspace-runtime.js';
+import { registerTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
+
+export { getTenantManifest } from '$lib/server/bootstrap/tenant_workspace.server.js';
+import type { RuntimeWorkspaceSource } from '$lib/authoring/workspace/workspace-runtime.js';
+
+export function registerPodWorkspace(workspace: RuntimeWorkspaceSource): void {
+	registerTenantWorkspace(toRuntimeWorkspace(workspace));
+}
+
+function cookieValue(request: Request, name: string): string | undefined {
+	const cookie = request.headers.get('cookie');
+	if (!cookie) return undefined;
+	for (const part of cookie.split(';')) {
+		const [key, ...value] = part.trim().split('=');
+		if (key === name) return decodeURIComponent(value.join('='));
+	}
+	return undefined;
+}
+
+function createEvent(request: Request, bindings: RuntimeFacilityBindings): PodRequestEvent {
+	const url = new URL(request.url);
+	const runtimePath = url.pathname.startsWith('/_runtime/')
+		? url.pathname.slice('/_runtime/'.length)
+		: '';
+	return {
+		request,
+		params: { path: runtimePath },
+		platform: { bindings },
+		locals: {
+			db: bindings.db,
+			identity: request.headers.get('x-norbital-user-id')?.trim() ?? '',
+			org: {
+				id:
+					request.headers.get('x-norbital-org-id')?.trim() ??
+					process.env.NORBITAL_ORG_ID ??
+					'',
+				name:
+					request.headers.get('x-norbital-org-name')?.trim() ??
+					process.env.NORBITAL_ORG_NAME ??
+					''
+			},
+			zone: request.headers.get('x-norbital-zone') === 'preview' ? 'preview' : 'live'
+		},
+		fetch: globalThis.fetch,
+		cookies: { get: (name) => cookieValue(request, name) }
+	};
+}
+
+async function runRequest(event: PodRequestEvent): Promise<Response> {
+	const context = await buildCtx(event);
+	if (!context) {
+		const hasHostIdentity =
+			Boolean(event.locals.identity) ||
+			Boolean(event.request.headers.get(NORBITAL_BASE_SCOPE_HEADER)?.trim());
+		if (hasHostIdentity) error(401, 'Workspace context could not be established');
+		error(401, 'Unauthorized');
+	}
+
+	return beforeApiStorage.run(createBeforeApi(event.fetch), () =>
+		runWithWorkspaceContext(context, async () => {
+			const pathname = new URL(event.request.url).pathname;
+			if (pathname === '/_pod/bootstrap') {
+				return json(await loadTenantWorkspaceShellData(event));
+			}
+			if (pathname.startsWith('/_runtime/')) {
+				return handleNorbitalRuntimeRequest(event);
+			}
+			error(404, `Unknown Pod route: ${pathname}`);
+		})
+	);
+}
+
+export async function handlePodRequest(
+	request: Request,
+	bindings: RuntimeFacilityBindings
+): Promise<Response> {
+	const event = createEvent(request, bindings);
+	try {
+		return await runWithRequestEvent(event, () => runRequest(event));
+	} catch (caught) {
+		if (caught instanceof PodHttpError) {
+			return json(caught.body, { status: caught.status });
+		}
+		console.error('[pod-runtime]', caught);
+		return json({ message: caught instanceof Error ? caught.message : String(caught) }, { status: 500 });
+	}
+}

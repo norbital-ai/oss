@@ -1,0 +1,699 @@
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+@import 'leaflet/dist/leaflet.css';
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@plugin '@tailwindcss/typography';
+@custom-variant dark (&:is(.dark *));
+
+:root {
+	/* Norbital DESIGN.md — light: warm cream surfaces, Norbital Dark text, oklab borders */
+	--radius: 0.5rem;
+
+	/* Compact presentation is a phone viewport state, not a consequence of a narrow
+	   desktop pane. CSS media queries restate 48rem and the sidebar watcher uses 768px. */
+	--size-compact: 48rem;
+	--size-narrow: 48rem;
+	--measure: 70ch;
+	--background: #f2f1ed;
+	--foreground: #26251e;
+	--card: #f7f7f4;
+	--card-foreground: #26251e;
+	--popover: #ffffff;
+	--popover-foreground: #26251e;
+	--primary: #26251e;
+	--primary-foreground: #f7f7f4;
+	--secondary: #e6e5e0;
+	--secondary-foreground: #26251e;
+	--muted: #ebeae5;
+	--muted-foreground: oklab(0.263084 -0.00230259 0.0124794 / 0.55);
+	--accent: #e1e0db;
+	--accent-foreground: #26251e;
+	--destructive: #cf2d56;
+	--destructive-foreground: oklch(0.99 0 0);
+	--success: #1f8a65;
+	--success-foreground: oklch(0.99 0 0);
+	--info: oklch(0.55 0.15 250);
+	--info-foreground: oklch(0.99 0 0);
+	--warning: oklch(0.75 0.12 80);
+	--warning-foreground: oklch(0.3 0.05 80);
+	--border: oklab(0.263084 -0.00230259 0.0124794 / 0.1);
+	--input: oklab(0.263084 -0.00230259 0.0124794 / 0.12);
+	--ring: var(--brand-500);
+	--chart-1: oklch(0.646 0.222 41.116);
+	--chart-2: oklch(0.6 0.118 184.704);
+	--chart-3: oklch(0.398 0.07 227.392);
+	--chart-4: oklch(0.828 0.189 84.429);
+	--chart-5: oklch(0.769 0.188 70.08);
+	--sidebar: #f7f7f4;
+	--sidebar-foreground: #26251e;
+	--sidebar-primary: #26251e;
+	--sidebar-primary-foreground: #f7f7f4;
+	--sidebar-accent: #ebeae5;
+	--sidebar-accent-foreground: #26251e;
+	--sidebar-border: oklab(0.263084 -0.00230259 0.0124794 / 0.1);
+	--sidebar-ring: var(--brand-500);
+
+	/* Brand */
+	--brand-50: oklch(0.985 0.02 52);
+	--brand-100: oklch(0.964 0.045 50);
+	--brand-200: oklch(0.926 0.082 49);
+	--brand-300: oklch(0.864 0.128 48);
+	--brand-400: oklch(0.786 0.161 47);
+	--brand-500: oklch(0.696 0.185 46.5);
+	--brand-600: oklch(0.622 0.187 44.5);
+	--brand-700: oklch(0.544 0.165 42.5);
+	--brand-800: oklch(0.455 0.136 40.5);
+	--brand-900: oklch(0.391 0.11 38.5);
+	--brand-950: oklch(0.274 0.07 36);
+	--brand: var(--brand-500);
+	--brand-foreground: oklch(0.99 0 0);
+	--brand-muted: var(--brand-100);
+}
+
+.dark {
+	--background: oklch(0.185 0.012 95);
+	--foreground: oklch(0.96 0.008 95);
+	--card: oklch(0.245 0.012 95);
+	--card-foreground: oklch(0.96 0.008 95);
+	--popover: oklch(0.275 0.014 95);
+	--popover-foreground: oklch(0.96 0.008 95);
+	--primary: oklch(0.96 0.008 95);
+	--primary-foreground: oklch(0.185 0.012 95);
+	--secondary: oklch(0.285 0.014 95);
+	--secondary-foreground: oklch(0.96 0.008 95);
+	--muted: oklch(0.3 0.014 95);
+	--muted-foreground: oklch(0.76 0.018 95);
+	--accent: oklch(0.34 0.016 95);
+	--accent-foreground: oklch(0.96 0.008 95);
+	--destructive: oklch(0.62 0.2 18);
+	--destructive-foreground: oklch(0.99 0 0);
+	--success: oklch(0.65 0.15 162);
+	--success-foreground: oklch(0.21 0.012 95);
+	--info: oklch(0.65 0.15 250);
+	--info-foreground: oklch(0.21 0.012 95);
+	--warning: oklch(0.7 0.12 80);
+	--warning-foreground: oklch(0.21 0.012 95);
+	--border: oklch(0.96 0.008 95 / 16%);
+	--input: oklch(0.96 0.008 95 / 22%);
+	--ring: var(--brand-400);
+	--chart-1: oklch(0.488 0.243 264.376);
+	--chart-2: oklch(0.696 0.17 162.48);
+	--chart-3: oklch(0.769 0.188 70.08);
+	--chart-4: oklch(0.627 0.265 303.9);
+	--chart-5: oklch(0.645 0.246 16.439);
+	--sidebar: oklch(0.205 0.012 95);
+	--sidebar-foreground: oklch(0.96 0.008 95);
+	--sidebar-primary: oklch(0.96 0.008 95);
+	--sidebar-primary-foreground: oklch(0.185 0.012 95);
+	--sidebar-accent: oklch(0.29 0.014 95);
+	--sidebar-accent-foreground: oklch(0.96 0.008 95);
+	--sidebar-border: oklch(0.96 0.008 95 / 16%);
+	--sidebar-ring: var(--brand-400);
+
+	/* Brand */
+	--brand-50: oklch(0.985 0.02 52);
+	--brand-100: oklch(0.964 0.045 50);
+	--brand-200: oklch(0.926 0.082 49);
+	--brand-300: oklch(0.864 0.128 48);
+	--brand-400: oklch(0.786 0.161 47);
+	--brand-500: oklch(0.696 0.185 46.5);
+	--brand-600: oklch(0.622 0.187 44.5);
+	--brand-700: oklch(0.544 0.165 42.5);
+	--brand-800: oklch(0.455 0.136 40.5);
+	--brand-900: oklch(0.391 0.11 38.5);
+	--brand-950: oklch(0.274 0.07 36);
+	--brand: var(--brand-500);
+	--brand-foreground: oklch(0.985 0 0);
+	--brand-muted: var(--brand-900);
+
+	/* Dark mode elevation — slightly higher shadow opacity to remain perceptible */
+	--shadow-card:
+		rgba(0, 0, 0, 0.06) 0px 4px 18px, rgba(0, 0, 0, 0.04) 0px 2.025px 7.84688px,
+		rgba(0, 0, 0, 0.03) 0px 0.8px 2.925px, rgba(0, 0, 0, 0.015) 0px 0.175px 1.04062px;
+	--shadow-deep:
+		rgba(0, 0, 0, 0.015) 0px 1px 3px, rgba(0, 0, 0, 0.03) 0px 3px 7px,
+		rgba(0, 0, 0, 0.03) 0px 7px 15px, rgba(0, 0, 0, 0.06) 0px 14px 28px,
+		rgba(0, 0, 0, 0.075) 0px 23px 52px;
+
+	color-scheme: dark;
+}
+
+@theme inline {
+	--font-sans:
+		'Geist Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+		'Segoe UI Symbol', 'Noto Color Emoji';
+	--font-mono:
+		'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+		'Courier New', monospace;
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-brand: var(--brand);
+	--color-brand-50: var(--brand-50);
+	--color-brand-100: var(--brand-100);
+	--color-brand-200: var(--brand-200);
+	--color-brand-300: var(--brand-300);
+	--color-brand-400: var(--brand-400);
+	--color-brand-500: var(--brand-500);
+	--color-brand-600: var(--brand-600);
+	--color-brand-700: var(--brand-700);
+	--color-brand-800: var(--brand-800);
+	--color-brand-900: var(--brand-900);
+	--color-brand-950: var(--brand-950);
+	--color-brand-foreground: var(--brand-foreground);
+	--color-brand-muted: var(--brand-muted);
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-success: var(--success);
+	--color-success-foreground: var(--success-foreground);
+	--color-info: var(--info);
+	--color-info-foreground: var(--info-foreground);
+	--color-warning: var(--warning);
+	--color-warning-foreground: var(--warning-foreground);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-chart-1: var(--chart-1);
+	--color-chart-2: var(--chart-2);
+	--color-chart-3: var(--chart-3);
+	--color-chart-4: var(--chart-4);
+	--color-chart-5: var(--chart-5);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-ring: var(--sidebar-ring);
+	--shadow-card:
+		rgba(0, 0, 0, 0.04) 0px 4px 18px, rgba(0, 0, 0, 0.027) 0px 2.025px 7.84688px,
+		rgba(0, 0, 0, 0.02) 0px 0.8px 2.925px, rgba(0, 0, 0, 0.01) 0px 0.175px 1.04062px;
+	--shadow-deep:
+		rgba(0, 0, 0, 0.01) 0px 1px 3px, rgba(0, 0, 0, 0.02) 0px 3px 7px,
+		rgba(0, 0, 0, 0.02) 0px 7px 15px, rgba(0, 0, 0, 0.04) 0px 14px 28px,
+		rgba(0, 0, 0, 0.05) 0px 23px 52px;
+
+	/* ================================================================ */
+	/* Canonical type scale (DESIGN.md §3)                              */
+	/* Marketing tiers are fluid; product tiers are fixed.              */
+	/* ================================================================ */
+	--text-display: clamp(1.875rem, 1.4rem + 1.6vw, 3rem);
+	--text-display--line-height: 1.1;
+	--text-display--letter-spacing: -0.04em;
+	--text-display--font-weight: 600;
+	--text-title: clamp(1.75rem, 1.45rem + 0.9vw, 2.25rem);
+	--text-title--line-height: 1.15;
+	--text-title--letter-spacing: -0.035em;
+	--text-title--font-weight: 600;
+	--text-section: clamp(1.375rem, 1.2rem + 0.55vw, 1.875rem);
+	--text-section--line-height: 1.2;
+	--text-section--letter-spacing: -0.03em;
+	--text-section--font-weight: 600;
+	--text-subhead: 1.25rem;
+	--text-subhead--line-height: 1.3;
+	--text-subhead--letter-spacing: -0.02em;
+	--text-subhead--font-weight: 600;
+	--text-lede: 1.125rem;
+	--text-lede--line-height: 1.75;
+	--text-lede--font-weight: 400;
+	/* Product tiers */
+	--text-heading: 1.125rem;
+	--text-heading--line-height: 1.3;
+	--text-heading--letter-spacing: -0.01em;
+	--text-heading--font-weight: 600;
+	--text-micro: 0.6875rem;
+	--text-tiny: 0.625rem;
+
+	/* ================================================================ */
+	/* Luxe Component Animations */
+	/* ================================================================ */
+	@keyframes flip {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	@keyframes kitrotate {
+		to {
+			transform: rotate(90deg);
+		}
+	}
+
+	@keyframes shine {
+		from {
+			background-position: 0 0;
+		}
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	@keyframes slide {
+		from {
+			transform: translateX(0);
+		}
+		to {
+			transform: translateX(calc(-100% - var(--gap)));
+		}
+	}
+
+	@keyframes spotlight {
+		0% {
+			opacity: 0;
+			transform: translate(-72%, -62%) scale(0.5);
+		}
+		100% {
+			opacity: 1;
+			transform: translate(-50%, -40%) scale(1);
+		}
+	}
+
+	@keyframes border-width {
+		from {
+			width: 10px;
+			opacity: 0;
+		}
+		to {
+			width: 100px;
+			opacity: 1;
+		}
+	}
+
+	@keyframes text-gradient {
+		to {
+			background-position: 200% center;
+		}
+	}
+
+	@keyframes text-shake {
+		15% {
+			transform: translateX(5px);
+		}
+		30% {
+			transform: translateX(-5px);
+		}
+		50% {
+			transform: translateX(3px);
+		}
+		80% {
+			transform: translateX(2px);
+		}
+		100% {
+			transform: translateX(0);
+		}
+	}
+
+	@keyframes text-glitch-to {
+		from {
+			transform: translateY(0);
+		}
+		to {
+			transform: translateY(-100%);
+		}
+	}
+
+	@keyframes text-glitch-from {
+		from {
+			transform: translateY(100%);
+		}
+		to {
+			transform: translateY(0);
+		}
+	}
+
+	@keyframes text-scale {
+		0% {
+			transform: scaleX(0);
+			transform-origin: bottom left;
+		}
+		25% {
+			transform: scaleX(1);
+			transform-origin: bottom left;
+		}
+		75% {
+			transform: scaleX(1);
+			transform-origin: bottom right;
+		}
+		100% {
+			transform: scaleX(0);
+			transform-origin: bottom right;
+		}
+	}
+
+	@keyframes background-shine {
+		from {
+			background-position: 0 0;
+		}
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	/* Animation utility classes */
+	--animate-shimmer: shimmer 8s infinite;
+	--animate-flip: flip 6s infinite steps(2, end);
+	--animate-kitrotate: kitrotate 3s linear infinite both;
+	--animate-shine: shine 2s linear infinite;
+	--animate-slide: slide 40s linear infinite;
+	--animate-spotlight: spotlight 2s ease 0.75s 1 forwards;
+	--animate-border-width: border-width 3s infinite alternate;
+	--animate-text-gradient: text-gradient 2s linear infinite;
+	--animate-text-shake: text-shake 1s ease 1;
+	--animate-text-glitch-to: text-glitch-to 0.6s ease-in-out infinite;
+	--animate-text-glitch-from: text-glitch-from 0.6s ease-in-out infinite;
+	--animate-text-scale: text-scale 1s linear infinite forwards;
+	--animate-background-shine: background-shine 2s linear infinite;
+	--animate-pulse-slow: pulse 6s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+
+	body {
+		@apply bg-background text-foreground;
+	}
+}
+
+/* ================================================================ */
+/* 3 ▸ Base resets & Tiptap typography (GitHub-inspired)             */
+/* ================================================================ */
+@layer base {
+	/* ---- Base element resets ---- */
+	*,
+	::after,
+	::before,
+	::backdrop,
+	::file-selector-button {
+		border-color: var(--color-border, currentColor);
+	}
+
+	body {
+		@apply bg-background font-sans text-foreground;
+		font-kerning: normal;
+		font-synthesis-weight: none;
+	}
+
+	[data-sonner-toaster] {
+		font-family: var(--font-sans);
+	}
+
+	/* ──────────────────────────────────────────────────────────────────── */
+	/* Tiptap / ProseMirror Content Styling                               */
+	/* ──────────────────────────────────────────────────────────────────── */
+
+	.tiptap {
+		@apply leading-relaxed; /* Base line-height for prose */
+	}
+
+	/* Reset margins for first/last elements in the editor */
+	.tiptap > :first-child {
+		@apply mt-0;
+	}
+	.tiptap > :last-child {
+		@apply mb-0;
+	}
+
+	/* ---- Headings ---- */
+	.tiptap h1,
+	.tiptap h2,
+	.tiptap h3,
+	.tiptap h4,
+	.tiptap h5,
+	.tiptap h6 {
+		@apply mt-6 mb-4 leading-tight font-semibold tracking-tight;
+	}
+
+	.tiptap h1 {
+		@apply border-b border-border pb-2 text-4xl lg:text-5xl;
+	}
+	.tiptap h2 {
+		@apply border-b border-border pb-2 text-3xl;
+	}
+	.tiptap h3 {
+		@apply text-2xl;
+	}
+	.tiptap h4 {
+		@apply text-xl;
+	}
+	.tiptap h5 {
+		@apply text-lg;
+	}
+	.tiptap h6 {
+		@apply text-base text-muted-foreground;
+	}
+
+	/* ---- Block Elements ---- */
+	.tiptap p {
+		@apply my-4;
+	}
+
+	.tiptap blockquote {
+		@apply my-4 border-l-4 border-border pl-4 text-muted-foreground;
+	}
+	.tiptap blockquote > :first-child {
+		@apply mt-0;
+	}
+	.tiptap blockquote > :last-child {
+		@apply mb-0;
+	}
+
+	.tiptap hr {
+		@apply my-8 h-px border-0 bg-border;
+	}
+
+	/* ---- Lists ---- */
+	.tiptap ul,
+	.tiptap ol {
+		@apply my-4 pl-6;
+	}
+
+	.tiptap li {
+		@apply my-1.5;
+	}
+
+	.tiptap li > p {
+		@apply mt-2 mb-0;
+	}
+
+	.tiptap ul {
+		@apply list-disc;
+	}
+	.tiptap ul ul {
+		list-style-type: circle;
+	}
+	.tiptap ul ul ul {
+		list-style-type: square;
+	}
+	.tiptap ol {
+		@apply list-decimal;
+	}
+	.tiptap ol ol {
+		list-style-type: lower-roman;
+	}
+	.tiptap ol ol ol {
+		list-style-type: lower-alpha;
+	}
+
+	.tiptap ::marker {
+		@apply text-muted-foreground;
+	}
+
+	/* ---- Inline Elements ---- */
+	.tiptap a {
+		@apply font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80;
+	}
+
+	.tiptap img {
+		@apply max-w-full rounded-md border border-border;
+	}
+
+	/* THIS IS THE FIX: The selector now excludes code inside pre */
+	.tiptap :not(pre) > code {
+		@apply rounded bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground;
+		font-size: x-small;
+	}
+
+	/* only target code-blocks coming in via Tiptap’s CodeBlock extension */
+	.tiptap code[class*='language-'] {
+		background: transparent !important;
+		font-size: x-small;
+	}
+
+	.tiptap strong {
+		@apply font-bold;
+	}
+
+	.tiptap em {
+		@apply italic;
+	}
+
+	/* ---- Code Blocks ---- */
+	.tiptap pre {
+		background-color: var(--cm-bg, oklch(0.18 0 0));
+		color: var(--cm-fg, oklch(1 0 0));
+		@apply my-6 overflow-x-auto rounded-lg p-4 font-mono text-sm;
+	}
+	.tiptap pre code {
+		@apply border-0 bg-transparent p-0 text-inherit;
+		font-size: inherit;
+		white-space: pre;
+		word-break: normal;
+	}
+
+	/* ---- Tables ---- */
+	.tiptap table {
+		@apply block w-max max-w-full border-collapse overflow-auto rounded-md border border-border text-xs;
+	}
+	.tiptap tr {
+		@apply border-t border-border;
+	}
+	/* Striped rows */
+	.tiptap tbody tr:nth-child(2n) {
+		@apply bg-muted;
+	}
+	.tiptap th {
+		@apply border border-border px-2 text-left text-xs font-semibold;
+	}
+	.tiptap td {
+		@apply border border-border px-2 text-left;
+	}
+	.tiptap th[align='center'],
+	.tiptap td[align='center'] {
+		@apply text-center;
+	}
+	.tiptap th[align='right'],
+	.tiptap td[align='right'] {
+		@apply text-right;
+	}
+
+	/* ──────────────────────────────────────────────────────────────────── */
+	/* ProseMirror Editor-Specific Styles                                */
+	/* ──────────────────────────────────────────────────────────────────── */
+
+	.ProseMirror p.is-editor-empty:first-child::before {
+		color: var(--color-muted-foreground);
+		content: attr(data-placeholder);
+		float: left;
+		height: 0;
+		pointer-events: none;
+	}
+
+	.ProseMirror:focus {
+		@apply outline-none;
+	}
+
+	.ProseMirror-selectednode > *:first-child {
+		box-shadow: 0 0 0 3px var(--color-primary) !important;
+		outline: none !important;
+		@apply rounded-sm;
+	}
+
+	/* ---- Task Lists (Tiptap Extension) ---- */
+	.tiptap ul[data-type='taskList'] {
+		@apply my-4 list-none p-0;
+	}
+
+	.tiptap li[data-type='taskItem'] {
+		@apply my-2 flex items-start gap-x-3;
+	}
+
+	.tiptap li[data-type='taskItem'] > label {
+		@apply mt-1 flex-none;
+	}
+
+	.tiptap li[data-type='taskItem'] > div {
+		@apply flex-1;
+	}
+
+	.tiptap li[data-type='taskItem'] > div > p {
+		@apply my-0;
+	}
+
+	.tiptap li[data-type='taskItem'] input[type='checkbox'] {
+		@apply h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary;
+	}
+
+	.tiptap li[data-type='taskItem'][data-checked='true'] > div {
+		@apply text-muted-foreground line-through;
+	}
+}
+
+/* ---- scrollbars ---- */
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+	padding: 1px;
+}
+::-webkit-scrollbar-thumb {
+	background-color: var(--color-border);
+	border-radius: 9999px;
+	border: 2px solid transparent;
+	background-clip: content-box;
+	min-height: 40px;
+	transition: background-color 0.2s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+	background-color: color-mix(in oklab, var(--color-border) 75%, var(--foreground));
+}
+::-webkit-scrollbar-corner {
+	background: transparent;
+}
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-border) transparent;
+}
+
+/* Side sheets become reachable, thumb-friendly bottom sheets on narrow viewports.
+   The explicit contract wins over feature-local desktop width and height classes. */
+@media (max-width: 47.999rem) {
+	.sheet-content[data-mobile-bottom-sheet='true'] {
+		inset: auto 0 0 !important;
+		width: 100% !important;
+		max-width: 100% !important;
+		height: var(--sheet-height, min(90dvh, 48rem)) !important;
+		max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+		border-radius: 0.75rem 0.75rem 0 0 !important;
+		padding-bottom: env(safe-area-inset-bottom) !important;
+	}
+
+	.sheet-content[data-fullscreen='true'] {
+		inset: 0 !important;
+		width: 100% !important;
+		max-width: 100% !important;
+		height: 100% !important;
+		max-height: 100% !important;
+		border-radius: 0 !important;
+		padding-bottom: env(safe-area-inset-bottom) !important;
+	}
+}
+
+/* prevent selection */
+::-webkit-scrollbar,
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-thumb {
+	-webkit-user-select: none;
+	user-select: none;
+	touch-action: none;
+}

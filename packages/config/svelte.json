@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"allowArbitraryExtensions": true,
+		"allowJs": true,
+		"checkJs": true,
+		"esModuleInterop": true,
+		"allowSyntheticDefaultImports": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"sourceMap": true,
+		"strict": true,
+		"verbatimModuleSyntax": false,
+		"moduleResolution": "bundler"
+	}
+}

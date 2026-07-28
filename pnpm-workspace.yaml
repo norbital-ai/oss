@@ -1,0 +1,51 @@
+packages:
+  - packages/*
+  - template_workspaces/*
+
+catalog:
+  '@iconify/svelte': ^5.2.2
+  '@sveltejs/kit': ^2.70.1
+  drizzle-kit: 1.0.0-rc.4
+  drizzle-orm: 1.0.0-rc.4
+  runed: ^0.37.1
+  svelte: ^5.56.7
+  # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists). Stay on latest 6.x.
+  typescript: 6.0.3
+  vite: ^8.1.5
+  zod: ^4.4.3
+
+# Migrated from .npmrc / package.json#pnpm for pnpm 11.
+engineStrict: true
+injectWorkspacePackages: true
+storeDir: /tmp/norbital-pnpm-store
+syncInjectedDepsAfterScripts:
+  - build
+  - prepare
+publicHoistPattern:
+  - typescript
+  - es-toolkit
+  - '@norbital-ai/*'
+  - ws
+
+allowBuilds:
+  '@tailwindcss/oxide': true
+  esbuild: true
+  protobufjs: true
+
+overrides:
+  kysely: ^0.29.4
+  drizzle-orm: 'catalog:'
+  drizzle-kit: 'catalog:'
+  # TS 7 breaks svelte2tsx / @sveltejs/package. Pin workspace to latest 6.x.
+  typescript: 6.0.3
+
+peerDependencyRules:
+  allowAny:
+    - drizzle-orm
+    - vite
+  allowedVersions:
+    drizzle-orm: '*'
+    vite: '*'
+
+minimumReleaseAgeExclude:
+  - svelte@5.56.7

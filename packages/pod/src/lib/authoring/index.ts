@@ -1,0 +1,73 @@
+/** Filesystem-first tenant workspace authoring primitives. */
+
+export { boolean, index, integer, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+
+export {
+	date,
+	enums,
+	custom,
+	dateRange,
+	file,
+	geolocation,
+	numeric,
+	phone,
+	clockTime,
+	timestamp
+} from './builtin/columns.js';
+export type { CustomTypeOptionsMap, CustomTypeValueMap } from './builtin/columns.js';
+export { defineCustomType } from './custom-type.js';
+export type {
+	AnyCustomTypeDefinition,
+	CustomTypeDefinition,
+	CustomTypeFactoryOptions,
+	CustomTypeOutput,
+	CustomTypeResolvedSchema
+} from './custom-type.js';
+
+export {
+	dateRangeZodSchema,
+	fileZodSchema,
+	geolocationZodSchema,
+	moneyZodSchema
+} from './builtin/custom_types.js';
+
+export { ISO_CURRENCY } from './builtin/money.js';
+
+export { cascade, defineModel, group } from './filesystem.js';
+export { refuse } from './refuse.js';
+export type { GroupDefinition, ModelDeclaration, ModelMetadata } from './filesystem.js';
+export type {
+	TableExclusion,
+	TableExclusionElement,
+	TableIndex,
+	TableIndexMethod
+} from './schema/table.js';
+export type {
+	CollectionHooks,
+	CollectionIntegrations,
+	CollectionPipelines
+} from './schema/collection-behavior.js';
+export type {
+	AnySchema,
+	SchemaQueryConfig,
+	SchemaQueryRow,
+	SchemaRow,
+	TableName
+} from './schema/types.js';
+export { extract } from './schema/extract.js';
+export { defineAutomation, type AutomationTrigger } from './automations/automations.js';
+export { defineCommandHandler, defineQueryHandler } from './automations/handlers.js';
+export type { TExportAction, TExportManifest, TFileAttachment } from './automations/pipelines.js';
+export type {
+	CollectionIntegrationDefinition,
+	CollectionMutationEvent,
+	CollectionReceiveBinding,
+	CollectionSendBinding,
+	HttpConnection,
+	IntegrationRequest,
+	PrivateEnvReference,
+	PullTrigger,
+	WebhookTrigger,
+	WorkspaceConnections
+} from './integrations/integrations.js';
+export type { AfterApi, AfterHookApi, BeforeApi, HookApi } from './workspace/hook-api.js';

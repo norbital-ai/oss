@@ -1,0 +1,331 @@
+name: Publish platform release
+
+on:
+  push:
+    tags:
+      - 'platform-v*'
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: Human release name used for the immutable tag, for example 2026.07.29.1
+        required: true
+        type: string
+
+concurrency:
+  group: platform-release-${{ github.ref }}-${{ inputs.release_name }}
+  cancel-in-progress: false
+
+permissions:
+  artifact-metadata: write
+  attestations: write
+  contents: write
+  id-token: write
+  packages: write
+
+env:
+  OCI_REGISTRY: ${{ vars.NORBITAL_OCI_REGISTRY || 'ghcr.io' }}
+  OCI_NAMESPACE: ${{ vars.NORBITAL_OCI_NAMESPACE || github.repository_owner }}
+  PACKAGE_REGISTRY_URL: ${{ vars.NORBITAL_PACKAGE_REGISTRY || 'https://npm.pkg.github.com' }}
+  MAX_IMAGE_BYTES: ${{ vars.NORBITAL_MAX_IMAGE_BYTES || '524288000' }}
+  BENCHMARK_TEMPLATE: ${{ vars.NORBITAL_BENCHMARK_TEMPLATE || 'construction' }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_name: ${{ steps.release.outputs.release_name }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      package_key: ${{ steps.versions.outputs.package_key }}
+      config_version: ${{ steps.versions.outputs.config_version }}
+      platform_utils_version: ${{ steps.versions.outputs.platform_utils_version }}
+      pod_version: ${{ steps.versions.outputs.pod_version }}
+      std_version: ${{ steps.versions.outputs.std_version }}
+      ui_version: ${{ steps.versions.outputs.ui_version }}
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install and verify publishable packages
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm check
+
+      - name: Resolve immutable release identity
+        id: release
+        env:
+          REQUESTED_RELEASE_NAME: ${{ inputs.release_name }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            release_tag="$GITHUB_REF_NAME"
+            release_name="${GITHUB_REF_NAME#platform-v}"
+          else
+            release_name="$REQUESTED_RELEASE_NAME"
+            release_tag="platform-v${release_name}"
+          fi
+          if [[ ! "$release_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "Invalid release name: $release_name" >&2
+            exit 1
+          fi
+          echo "release_name=$release_name" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve package versions and package key
+        id: versions
+        run: node scripts/resolve-package-release.mjs --github-output "$GITHUB_OUTPUT"
+
+  builder:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.image.outputs.reference }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve image reference
+        id: image
+        run: echo "reference=${OCI_REGISTRY}/${OCI_NAMESPACE}/norbital-builder" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare package registry configuration
+        env:
+          CUSTOM_PACKAGE_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
+          GITHUB_PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p .tmp
+          node <<'NODE'
+          const { writeFileSync } = require('node:fs');
+          const registry = new URL(process.env.PACKAGE_REGISTRY_URL);
+          let npmrc = `@norbital-ai:registry=${registry.href}\n`;
+          const token =
+            process.env.CUSTOM_PACKAGE_TOKEN ||
+            (registry.hostname === 'npm.pkg.github.com' ? process.env.GITHUB_PACKAGE_TOKEN : '');
+          if (token) {
+            const key = `//${registry.host}${registry.pathname.replace(/\/?$/, '/')}:_authToken`;
+            npmrc += `${key}=${token}\nalways-auth=true\n`;
+          }
+          writeFileSync('.tmp/registry.npmrc', npmrc, { mode: 0o600 });
+          NODE
+
+      - name: Login to OCI registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.OCI_REGISTRY }}
+          username: ${{ vars.NORBITAL_OCI_USERNAME || github.actor }}
+          password: ${{ secrets.NORBITAL_OCI_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push builder image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: containers/builder/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ steps.image.outputs.reference }}:${{ needs.prepare.outputs.release_name }}
+            ${{ steps.image.outputs.reference }}:sha-${{ github.sha }}
+          build-args: |
+            PACKAGE_REGISTRY_URL=${{ env.PACKAGE_REGISTRY_URL }}
+            CONFIG_VERSION=${{ needs.prepare.outputs.config_version }}
+            PLATFORM_UTILS_VERSION=${{ needs.prepare.outputs.platform_utils_version }}
+            POD_VERSION=${{ needs.prepare.outputs.pod_version }}
+            STD_VERSION=${{ needs.prepare.outputs.std_version }}
+            UI_VERSION=${{ needs.prepare.outputs.ui_version }}
+            PLATFORM_FINGERPRINT=${{ needs.prepare.outputs.package_key }}
+            SOURCE_REVISION=${{ github.sha }}
+          secrets: |
+            npmrc=.tmp/registry.npmrc
+          cache-from: type=gha,scope=platform-builder
+          cache-to: type=gha,mode=max,scope=platform-builder
+
+      - name: Enforce builder image size
+        env:
+          IMAGE: ${{ steps.image.outputs.reference }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker pull "${IMAGE}@${DIGEST}"
+          image_bytes=$(docker image inspect "${IMAGE}@${DIGEST}" --format '{{.Size}}')
+          echo "Builder image size: ${image_bytes} bytes"
+          test "$image_bytes" -le "$MAX_IMAGE_BYTES"
+
+      - name: Benchmark published builder
+        env:
+          IMAGE: ${{ steps.image.outputs.reference }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          node scripts/benchmark-builder.mjs \
+            --image "${IMAGE}@${DIGEST}" \
+            --template "$BENCHMARK_TEMPLATE" \
+            --expected-package-key "${{ needs.prepare.outputs.package_key }}" \
+            --output dist/builder-benchmark.json
+          {
+            echo "### Tenant builder release gate"
+            echo
+            echo '```json'
+            cat dist/builder-benchmark.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attest builder benchmark
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/builder-benchmark.json
+
+      - name: Upload builder benchmark
+        uses: actions/upload-artifact@v7
+        with:
+          name: builder-benchmark-${{ needs.prepare.outputs.release_name }}
+          path: dist/builder-benchmark.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attest builder image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.image.outputs.reference }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  runtime:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.image.outputs.reference }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve image reference
+        id: image
+        run: echo "reference=${OCI_REGISTRY}/${OCI_NAMESPACE}/norbital-runtime" >> "$GITHUB_OUTPUT"
+
+      - name: Login to OCI registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.OCI_REGISTRY }}
+          username: ${{ vars.NORBITAL_OCI_USERNAME || github.actor }}
+          password: ${{ secrets.NORBITAL_OCI_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push runtime image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: containers/runtime/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ steps.image.outputs.reference }}:${{ needs.prepare.outputs.release_name }}
+            ${{ steps.image.outputs.reference }}:sha-${{ github.sha }}
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=platform-runtime
+          cache-to: type=gha,mode=max,scope=platform-runtime
+
+      - name: Enforce runtime image size
+        env:
+          IMAGE: ${{ steps.image.outputs.reference }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker pull "${IMAGE}@${DIGEST}"
+          image_bytes=$(docker image inspect "${IMAGE}@${DIGEST}" --format '{{.Size}}')
+          echo "Runtime image size: ${image_bytes} bytes"
+          test "$image_bytes" -le "$MAX_IMAGE_BYTES"
+
+      - name: Attest runtime image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.image.outputs.reference }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  catalogue:
+    needs:
+      - prepare
+      - builder
+      - runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve template projections
+        env:
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          node scripts/project-templates.mjs \
+            --source-revision "$GITHUB_SHA" \
+            --repository "$SOURCE_REPOSITORY_URL" \
+            --push origin \
+            --output dist/template-revisions.json
+
+      - name: Generate platform release manifest
+        env:
+          BUILDER_IMAGE_DIGEST: ${{ needs.builder.outputs.digest }}
+          BUILDER_IMAGE_REFERENCE: ${{ needs.builder.outputs.image }}
+          RUNTIME_IMAGE_DIGEST: ${{ needs.runtime.outputs.digest }}
+          RUNTIME_IMAGE_REFERENCE: ${{ needs.runtime.outputs.image }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          SOURCE_REVISION: ${{ github.sha }}
+          TEMPLATE_REVISIONS_FILE: dist/template-revisions.json
+        run: node scripts/generate-platform-release.mjs
+
+      - name: Download builder benchmark
+        uses: actions/download-artifact@v8
+        with:
+          name: builder-benchmark-${{ needs.prepare.outputs.release_name }}
+          path: dist
+
+      - name: Attest platform release manifest
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/platform-release.json
+
+      - name: Upload platform release manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: platform-release-${{ needs.prepare.outputs.release_name }}
+          path: dist/platform-release.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Platform ${{ needs.prepare.outputs.release_name }}" \
+              --notes "Immutable Norbital platform release manifest and digest-pinned OCI images."
+          fi
+          gh release upload \
+            "$RELEASE_TAG" \
+            dist/platform-release.json \
+            dist/builder-benchmark.json

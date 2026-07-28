@@ -1,0 +1,33 @@
+{
+	"name": "@template/bca",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "vite build",
+		"format": "prettier --write .",
+		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json",
+		"prepare": "pod sync",
+		"sync": "pod sync",
+		"sync:watch": "pod sync --watch"
+	},
+	"dependencies": {
+		"@iconify/svelte": "catalog:",
+		"@norbital-ai/pod": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/ui": "workspace:*",
+		"exifr": "7.1.3",
+		"jpeg-js": "0.4.4",
+		"mode-watcher": "^1.1.0",
+		"pngjs": "7.0.0",
+		"runed": "catalog:",
+		"svelte": "catalog:",
+		"vite": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@types/pngjs": "6.0.5",
+		"svelte-check": "^4.7.3",
+		"typescript": "catalog:"
+	}
+}

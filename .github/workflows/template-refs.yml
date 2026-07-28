@@ -1,0 +1,49 @@
+name: Publish template refs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'release/templates.json'
+      - 'scripts/project-templates.mjs'
+      - 'template_workspaces/**'
+      - '.github/workflows/template-refs.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: template-refs-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate template catalogue
+        run: node scripts/project-templates.mjs --check
+
+      - name: Project and publish root template refs
+        run: |
+          node scripts/project-templates.mjs \
+            --source-revision "$GITHUB_SHA" \
+            --repository "$SOURCE_REPOSITORY_URL" \
+            --push origin \
+            --output dist/template-revisions.json
+        env:
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+
+      - name: Upload resolved template revisions
+        uses: actions/upload-artifact@v7
+        with:
+          name: template-revisions-${{ github.sha }}
+          path: dist/template-revisions.json
+          if-no-files-found: error
+          retention-days: 30

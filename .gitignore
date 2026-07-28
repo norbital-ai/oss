@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+.local-packages/
+
+# Package-manager lockfiles other than the committed pnpm lockfile
+**/package-lock.json
+**/yarn.lock
+
+# Build output
+**/build/
+**/.svelte-kit/
+**/.generated/
+**/.norbital/*
+!**/.norbital/migrations/
+!**/.norbital/migrations/**
+*.tsbuildinfo
+
+# Tool caches and reports
+.turbo/
+coverage/
+test-results/
+playwright-report/
+.tmp/
+
+# Environment and local files
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*.log
+vite.config.*.timestamp-*

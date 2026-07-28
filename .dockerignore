@@ -1,0 +1,12 @@
+.git
+.github
+.changeset
+.local-packages
+.tmp
+**/.norbital
+**/.svelte-kit
+**/build
+**/node_modules
+**/test-results
+graphify-out
+template_workspaces

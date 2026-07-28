@@ -1,0 +1,4 @@
+{
+	"extends": "@norbital-ai/config/svelte.json",
+	"files": []
+}

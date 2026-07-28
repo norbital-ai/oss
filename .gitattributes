@@ -1,0 +1,10 @@
+graphify-out/graph.json merge=graphify -diff
+graphify-out/GRAPH_REPORT.md merge=graphify-generated
+graphify-out/manifest.json merge=graphify-generated
+graphify-out/.graphify_root merge=graphify-generated
+graphify-out/.graphify_analysis.json merge=graphify-generated
+graphify-out/.graphify_build.json merge=graphify-generated
+graphify-out/.graphify_labels.json merge=graphify-generated
+graphify-out/.graphify_labels.json.sig merge=graphify-generated
+graphify-out/.graphify_semantic_marker merge=graphify-generated
+apps/core/seed_assets/bca-simulation/_chat.txt -diff

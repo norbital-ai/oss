@@ -1,0 +1,28 @@
+{
+	"name": "@norbital-ai/config",
+	"version": "0.1.21",
+	"description": "Shared TypeScript and Svelte configuration for Norbital packages.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "SEE LICENSE IN LICENSE",
+	"files": [
+		"svelte.json",
+		"package.json"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/config"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/config",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"exports": {
+		"./svelte.json": "./svelte.json"
+	}
+}

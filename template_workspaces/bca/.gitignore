@@ -1,0 +1,9 @@
+node_modules/
+.norbital/diagnosis/
+.norbital/dist/
+.norbital/generated/
+.norbital/types/
+.norbital/tsconfig.json
+.pi/
+.tmp/
+.vite/

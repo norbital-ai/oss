@@ -1,0 +1,112 @@
+{
+	"name": "@norbital-ai/pod",
+	"version": "0.0.1",
+	"description": "Tenant workspace authoring SDK, runtime, and Vite plugin for Norbital.",
+	"type": "module",
+	"license": "SEE LICENSE IN LICENSE",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/pod"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/pod",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"bin": {
+		"pod": "./build/bin/invocation/index.js"
+	},
+	"sideEffects": false,
+	"exports": {
+		"./package.json": "./package.json",
+		"./authoring": {
+			"types": "./build/authoring/index.d.ts",
+			"default": "./build/authoring/index.js"
+		},
+		"./authoring/internals": {
+			"types": "./build/authoring/internals.d.ts",
+			"default": "./build/authoring/internals.js"
+		},
+		"./client": {
+			"types": "./build/client/public.d.ts",
+			"svelte": "./build/client/public.js",
+			"default": "./build/client/public.js"
+		},
+		"./client/platform": {
+			"types": "./build/runtime/mount-client.d.ts",
+			"svelte": "./build/runtime/mount-client.js",
+			"default": "./build/runtime/mount-client.js"
+		},
+		"./client/runtime": {
+			"types": "./build/runtime/client.d.ts",
+			"svelte": "./build/runtime/client.js",
+			"default": "./build/runtime/client.js"
+		},
+		"./vite": {
+			"types": "./build/vite/index.d.ts",
+			"default": "./build/vite/index.js"
+		}
+	},
+	"imports": {
+		"#lib/*": {
+			"types": "./src/lib/*",
+			"default": "./build/*"
+		}
+	},
+	"scripts": {
+		"build": "svelte-package -i src/lib -o build --tsconfig tsconfig.json",
+		"lint": "svelte-check --tsconfig ./tsconfig.json",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"dependencies": {
+		"@internationalized/date": "^3.12.2",
+		"@norbital-ai/platform-utils": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/ui": "workspace:*",
+		"@electric-sql/pglite": "^0.3.16",
+		"@standard-schema/spec": "^1.1.0",
+		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"@tailwindcss/vite": "^4.3.3",
+		"@typescript/native-preview": "7.0.0-dev.20260707.2",
+		"dedent": "^1.7.2",
+		"drizzle-kit": "catalog:",
+		"drizzle-orm": "catalog:",
+		"pg": "^8.22.0",
+		"svelte-sonner": "^1.1.1",
+		"svelte-check": "^4.7.3",
+		"tailwindcss": "^4.3.3",
+		"uuid": "^14.0.1"
+	},
+	"devDependencies": {
+		"@iconify/svelte": "catalog:",
+		"@norbital-ai/config": "workspace:*",
+		"@sveltejs/package": "^2.5.8",
+		"@types/node": "^26.1.1",
+		"@types/pg": "^8.20.0",
+		"mode-watcher": "^1.1.0",
+		"prettier": "^3.9.5",
+		"runed": "catalog:",
+		"svelte": "catalog:",
+		"typescript": "catalog:",
+		"vite": "catalog:",
+		"vitest": "^4.1.10",
+		"zod": "catalog:"
+	},
+	"peerDependencies": {
+		"@iconify/svelte": "catalog:",
+		"mode-watcher": "^1.1.0",
+		"runed": "catalog:",
+		"svelte": "catalog:",
+		"vite": "catalog:",
+		"zod": "catalog:"
+	}
+}

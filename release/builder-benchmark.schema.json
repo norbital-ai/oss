@@ -1,0 +1,49 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://github.com/norbital-ai/oss/blob/main/release/builder-benchmark.schema.json",
+	"title": "Norbital builder benchmark",
+	"type": "object",
+	"additionalProperties": false,
+	"required": [
+		"$schema",
+		"schemaVersion",
+		"image",
+		"packageKey",
+		"template",
+		"network",
+		"warm",
+		"elapsedMilliseconds",
+		"maximumBuildMilliseconds",
+		"memoryLimitBytes",
+		"memorySwapLimitBytes",
+		"peakMemoryBytes",
+		"peakScope",
+		"passed"
+	],
+	"properties": {
+		"$schema": { "const": "../release/builder-benchmark.schema.json" },
+		"schemaVersion": { "const": 1 },
+		"image": {
+			"type": "string",
+			"pattern": "^.+@sha256:[0-9a-f]{64}$"
+		},
+		"packageKey": {
+			"type": "string",
+			"pattern": "^[0-9a-f]{16}$"
+		},
+		"template": { "type": "string", "minLength": 1 },
+		"network": { "const": "none" },
+		"warm": { "const": true },
+		"elapsedMilliseconds": { "type": "number", "minimum": 0, "maximum": 5000 },
+		"maximumBuildMilliseconds": { "const": 5000 },
+		"memoryLimitBytes": { "const": 524288000 },
+		"memorySwapLimitBytes": { "const": 524288000 },
+		"peakMemoryBytes": {
+			"anyOf": [{ "type": "integer", "minimum": 0, "maximum": 524288000 }, { "type": "null" }]
+		},
+		"peakScope": {
+			"enum": ["measured-build", "warm-up-and-measured-build"]
+		},
+		"passed": { "const": true }
+	}
+}

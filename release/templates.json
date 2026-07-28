@@ -1,0 +1,63 @@
+{
+	"$schema": "./templates.schema.json",
+	"schemaVersion": 1,
+	"refNamespace": "refs/heads/templates",
+	"templates": [
+		{
+			"key": "bca",
+			"path": "template_workspaces/bca",
+			"name": "BCA Field Operations",
+			"industry": "Construction",
+			"description": "Site operations, contractor dispatch, variations, and photo integrity.",
+			"visibility": "public",
+			"counts": {
+				"collections": 9,
+				"apps": 2,
+				"automations": 0
+			},
+			"compatiblePod": "^0.0.1"
+		},
+		{
+			"key": "construction",
+			"path": "template_workspaces/construction",
+			"name": "Construction Operations",
+			"industry": "Construction",
+			"description": "Construction project, workforce, permit, quality, and commercial operations.",
+			"visibility": "public",
+			"counts": {
+				"collections": 16,
+				"apps": 3,
+				"automations": 4
+			},
+			"compatiblePod": "^0.0.1"
+		},
+		{
+			"key": "crm",
+			"path": "template_workspaces/crm",
+			"name": "CRM",
+			"industry": "Sales",
+			"description": "Customer relationship management, quoting, fulfilment, and payments.",
+			"visibility": "public",
+			"counts": {
+				"collections": 9,
+				"apps": 2,
+				"automations": 2
+			},
+			"compatiblePod": "^0.0.1"
+		},
+		{
+			"key": "hr-payroll",
+			"path": "template_workspaces/hr-payroll",
+			"name": "HR & Payroll",
+			"industry": "Human resources",
+			"description": "Multi-country HR, attendance, leave, payroll, and statutory reporting.",
+			"visibility": "public",
+			"counts": {
+				"collections": 28,
+				"apps": 9,
+				"automations": 0
+			},
+			"compatiblePod": "^0.0.1"
+		}
+	]
+}

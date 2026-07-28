@@ -1,0 +1,32 @@
+# Build & generated artifacts
+**/.svelte-kit/
+**/build/
+**/.generated/
+apps/core/.tmp/
+apps/core/src/lib/system_db/migrations/meta/
+
+# Tooling / CI
+.turbo/
+.tmp/
+**/.devtools/
+**/test-results/
+**/playwright-report/
+**/coverage/
+
+# Dependencies & lockfiles
+**/node_modules/
+pnpm-lock.yaml
+pnpm-workspace.yaml
+**/package-lock.json
+**/yarn.lock
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+vite.config.js*
