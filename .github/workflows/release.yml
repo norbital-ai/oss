@@ -38,7 +38,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm ci:install
 
       - name: Create release pull request or publish
         uses: changesets/action@v1

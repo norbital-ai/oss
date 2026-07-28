@@ -9,6 +9,7 @@
 		"build": "turbo build",
 		"lint": "turbo lint",
 		"test": "turbo test",
+		"ci:install": "pnpm install --frozen-lockfile --ignore-scripts && pnpm --filter @norbital-ai/pod... build && pnpm install --frozen-lockfile",
 		"check": "pnpm lint && pnpm test && pnpm build && pnpm templates:check && pnpm publication:check",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
