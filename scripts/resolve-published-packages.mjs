@@ -161,7 +161,7 @@ async function main() {
 		registryUrl: registry.href,
 		archiveOutput: archiveOutput ? path.resolve(repositoryRoot, archiveOutput) : undefined,
 		token:
-			process.env.NPM_REGISTRY_TOKEN ??
+			process.env.NPM_REGISTRY_TOKEN ||
 			(registry.hostname === 'npm.pkg.github.com'
 				? process.env.GITHUB_PACKAGE_TOKEN
 				: process.env.NODE_AUTH_TOKEN)
