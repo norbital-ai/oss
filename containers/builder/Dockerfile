@@ -21,6 +21,7 @@ RUN test -n "${PLATFORM_FINGERPRINT}" \
 COPY --chown=node:node dist/package-archives/ /opt/norbital/package-archives/
 
 USER node
+WORKDIR /opt/norbital/tenant-toolchain
 
 RUN npm install --prefix /opt/norbital/tenant-toolchain --omit=dev --ignore-scripts \
 		/opt/norbital/package-archives/config.tgz \
