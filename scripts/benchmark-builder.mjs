@@ -33,11 +33,12 @@ function required(options, key, environmentKey) {
 }
 
 function docker(arguments_, options = {}) {
-	return execFileSync('docker', arguments_, {
+	const output = execFileSync('docker', arguments_, {
 		cwd: repositoryRoot,
 		encoding: 'utf8',
 		stdio: options.stdio ?? ['ignore', 'pipe', 'pipe']
-	}).trim();
+	});
+	return typeof output === 'string' ? output.trim() : '';
 }
 
 function readPeakMemory(container) {
