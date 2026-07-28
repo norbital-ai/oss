@@ -32,6 +32,19 @@ RUN npm install --prefix /opt/norbital/tenant-toolchain --omit=dev --ignore-scri
 	&& printf '%s\n' "${PLATFORM_FINGERPRINT}" > /opt/norbital/tenant-toolchain/.package-key \
 	&& node /opt/norbital/tenant-toolchain/node_modules/@norbital-ai/pod/build/bin/invocation/index.js \
 		platform build /opt/norbital/platform-client "${PLATFORM_FINGERPRINT}" \
+	# Pod resolves drizzle-kit's root only to locate bin.cjs. The upstream package
+	# duplicates every dialect API, payload, and CLI as CJS and ESM; none are loaded
+	# by tenant builds or migration generation, so keep the executable and entrypoints.
+	&& drizzle_root=/opt/norbital/tenant-toolchain/node_modules/drizzle-kit \
+	&& test -f "${drizzle_root}/bin.cjs" \
+	&& test -f "${drizzle_root}/index.mjs" \
+	&& rm -f \
+		"${drizzle_root}"/api-*.js \
+		"${drizzle_root}"/api-*.mjs \
+		"${drizzle_root}"/payload-*.js \
+		"${drizzle_root}"/payload-*.mjs \
+		"${drizzle_root}"/cli.js \
+		"${drizzle_root}"/cli.mjs \
 	&& rm -rf /opt/norbital/package-archives \
 	&& npm cache clean --force
 
