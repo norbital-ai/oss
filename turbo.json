@@ -17,9 +17,6 @@
 			"outputs": ["build/**", ".generated/**", ".norbital/dist/**", ".svelte-kit/**", ".vercel/**"]
 		},
 		"lint": {
-			"dependsOn": ["^lint"]
-		},
-		"lint": {
 			"dependsOn": ["^build", "^lint"]
 		},
 		"test": {

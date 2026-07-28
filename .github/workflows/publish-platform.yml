@@ -58,7 +58,7 @@ jobs:
 
       - name: Install and verify publishable packages
         run: |
-          pnpm ci:install
+          pnpm install --frozen-lockfile --ignore-scripts
           pnpm check
 
       - name: Resolve immutable release identity

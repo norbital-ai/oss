@@ -7,7 +7,6 @@
 		"build": "vite build",
 		"format": "prettier --write .",
 		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json",
-		"prepare": "pod sync",
 		"sync": "pod sync",
 		"sync:watch": "pod sync --watch"
 	},

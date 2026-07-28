@@ -30,7 +30,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm ci:install
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Check packages and templates
         run: pnpm check

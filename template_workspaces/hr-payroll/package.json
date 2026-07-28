@@ -5,7 +5,6 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"prepare": "pod sync",
 		"sync": "pod sync",
 		"sync:watch": "pod sync --watch",
 		"build": "vite build",
