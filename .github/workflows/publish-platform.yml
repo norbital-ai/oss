@@ -326,4 +326,9 @@ jobs:
           gh release upload \
             "$RELEASE_TAG" \
             dist/platform-release.json \
-            dist/builder-benchmark.json
+            dist/builder-benchmark.json \
+            dist/package-archives/config.tgz \
+            dist/package-archives/platform-utils.tgz \
+            dist/package-archives/pod.tgz \
+            dist/package-archives/std.tgz \
+            dist/package-archives/ui.tgz
