@@ -48,6 +48,8 @@ RUN npm install --prefix /opt/norbital/tenant-toolchain --omit=dev --ignore-scri
 	&& rm -rf /opt/norbital/package-archives \
 	&& npm cache clean --force
 
+ENV NORBITAL_POD_PLATFORM_DIR=/opt/norbital/platform-client
+
 WORKDIR /workspace
 ENTRYPOINT []
 CMD ["sleep", "infinity"]

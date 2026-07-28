@@ -110,6 +110,8 @@ try {
 		'500m',
 		'--memory-swap',
 		'500m',
+		'--env',
+		'NORBITAL_POD_PLATFORM_DIR=/opt/norbital/platform-client',
 		image
 	]);
 	docker(['cp', `${templatePath}/.`, `${container}:/workspace`]);
