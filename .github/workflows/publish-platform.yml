@@ -291,6 +291,7 @@ jobs:
           SOURCE_REVISION: ${{ github.sha }}
           TEMPLATE_REVISIONS_FILE: dist/template-revisions.json
           PACKAGE_RELEASE_FILE: dist/package-release.json
+          PACKAGE_MIRROR_BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.release_tag }}/
         run: node scripts/generate-platform-release.mjs
 
       - name: Download builder benchmark

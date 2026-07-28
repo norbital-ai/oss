@@ -15,7 +15,7 @@ const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], {
 }).trim();
 const imageDigest = `sha256:${'a'.repeat(64)}`;
 
-function generate(directory, registry, tarballOrigin) {
+function generate(directory, registry, tarballOrigin, mirrorOrigin) {
 	const entries = readPublicPackageEntries(repositoryRoot).map((entry) => ({
 		...entry,
 		tarball: `${tarballOrigin}/${entry.name.slice('@norbital-ai/'.length)}.tgz`,
@@ -62,6 +62,8 @@ function generate(directory, registry, tarballOrigin) {
 			'https://git.example.test/norbital/oss.git',
 			'--package-release',
 			packageReleasePath,
+			'--package-mirror-base-url',
+			mirrorOrigin,
 			'--template-revisions',
 			templateRevisionsPath,
 			'--builder-image',
@@ -89,19 +91,22 @@ describe('platform release package content', () => {
 			const first = generate(
 				directory,
 				'https://registry-one.example.test',
-				'https://registry-one.example.test/tarballs'
+				'https://registry-one.example.test/tarballs',
+				'https://releases-one.example.test/platform-v1'
 			);
 			const mirrored = generate(
 				directory,
 				'https://registry-two.example.test',
-				'https://cdn.example.test/packages'
+				'https://cdn.example.test/packages',
+				'https://releases-two.example.test/platform-v1'
 			);
 			assert.equal(first.buildContractId, mirrored.buildContractId);
 			assert.equal(first.packages.packageKey, mirrored.packages.packageKey);
 			assert.notEqual(first.packages.registry, mirrored.packages.registry);
+			assert.notEqual(first.packages.entries[0].tarball, mirrored.packages.entries[0].tarball);
 			for (const entry of first.packages.entries) {
 				assert.match(entry.integrity, /^sha512-[A-Za-z0-9+/]{86}==$/);
-				assert.match(entry.tarball, /^https:/);
+				assert.match(entry.tarball, /^https:\/\/releases-one\.example\.test\/platform-v1\//);
 			}
 		} finally {
 			rmSync(directory, { recursive: true, force: true });

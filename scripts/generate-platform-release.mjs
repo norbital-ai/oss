@@ -102,10 +102,10 @@ for (const entry of packageRelease.entries) {
 if (packageRelease.entries.length !== localByName.size) {
 	fail('Package release entries do not match the complete public package set.');
 }
-const packageEntries = [...packageRelease.entries].sort((left, right) =>
+const verifiedPackageEntries = [...packageRelease.entries].sort((left, right) =>
 	left.name.localeCompare(right.name)
 );
-const packageKey = platformPackageKey(packageEntries);
+const packageKey = platformPackageKey(verifiedPackageEntries);
 if (
 	!packageKeyPattern.test(packageRelease.packageKey) ||
 	packageRelease.packageKey !== packageKey
@@ -125,6 +125,30 @@ if (
 ) {
 	fail('Package release registry must be an HTTP(S) URL without credentials.');
 }
+const packageMirrorBaseUrl = required(
+	options,
+	'package-mirror-base-url',
+	'PACKAGE_MIRROR_BASE_URL'
+);
+let packageMirrorBase;
+try {
+	packageMirrorBase = new URL(
+		packageMirrorBaseUrl.endsWith('/') ? packageMirrorBaseUrl : `${packageMirrorBaseUrl}/`
+	);
+} catch {
+	fail('Package mirror base URL is not a URL.');
+}
+if (
+	!['http:', 'https:'].includes(packageMirrorBase.protocol) ||
+	packageMirrorBase.username ||
+	packageMirrorBase.password
+) {
+	fail('Package mirror base URL must be an HTTP(S) URL without credentials.');
+}
+const packageEntries = verifiedPackageEntries.map((entry) => ({
+	...entry,
+	tarball: new URL(`${entry.name.slice('@norbital-ai/'.length)}.tgz`, packageMirrorBase).href
+}));
 const pod = packageEntries.find((entry) => entry.name === '@norbital-ai/pod');
 if (!pod) fail('The Pod package is required in every platform release.');
 
