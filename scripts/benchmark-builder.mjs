@@ -181,7 +181,21 @@ try {
 	const startedAt = process.hrtime.bigint();
 	const build = spawnSync(
 		'docker',
-		['exec', '-u', 'node', '-w', '/workspace', container, 'node', podBin, 'build'],
+		[
+			'exec',
+			'-e',
+			'NORBITAL_POD_SYNCED=1',
+			'-e',
+			'NORBITAL_POD_CHECKED=1',
+			'-u',
+			'node',
+			'-w',
+			'/workspace',
+			container,
+			'node',
+			podBin,
+			'build'
+		],
 		{ cwd: repositoryRoot, stdio: 'inherit' }
 	);
 	elapsedMilliseconds = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
@@ -203,6 +217,7 @@ const result = {
 	template: templateKey,
 	network: 'none',
 	warm: true,
+	prevalidated: true,
 	elapsedMilliseconds: Number(elapsedMilliseconds.toFixed(3)),
 	maximumBuildMilliseconds,
 	memoryLimitBytes,

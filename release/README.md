@@ -121,10 +121,13 @@ platform manifest identifies the executable content by OCI digest, so provider l
 part of tenant build identity.
 
 Every platform release also runs an active catalogue template twice in the digest-pinned builder.
-The first build primes the generated workspace and compiler caches; the second is the measured warm
-build. The release is blocked unless that build completes in at most 5,000 ms while the container
-has both `--memory=500m` and `--memory-swap=500m` and no network. The attested
-`builder-benchmark.json` records elapsed time and the cgroup memory peak when the runner exposes it.
+The first build performs the complete structural and Svelte validation and primes the generated
+workspace and compiler caches. The second measures the same prevalidated
+`NORBITAL_POD_SYNCED=1`/`NORBITAL_POD_CHECKED=1` contract used by the tenant build runner; it does
+not hide compiler or migration work. The release is blocked unless that measured build completes
+in at most 5,000 ms while the container has both `--memory=500m` and `--memory-swap=500m` and no
+network. The attested `builder-benchmark.json` records that prevalidated contract, elapsed time,
+and the cgroup memory peak when the runner exposes it.
 A host must only offer a platform auto-update after the immutable platform manifest exists, so a
 builder image that fails this gate is never eligible even if its OCI upload completed.
 The evidence format is defined by [`builder-benchmark.schema.json`](./builder-benchmark.schema.json).
