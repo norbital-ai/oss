@@ -1,0 +1,30 @@
+{
+	"name": "@template/construction",
+	"description": "Construction project management covering jobs, workers, permits, defects, RFIs, payment claims, and BIM reference data.",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "vite build",
+		"format": "prettier --write .",
+		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json",
+		"prepare": "pod sync",
+		"sync": "pod sync",
+		"sync:watch": "pod sync --watch"
+	},
+	"dependencies": {
+		"@iconify/svelte": "catalog:",
+		"@norbital-ai/pod": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/ui": "workspace:*",
+		"mode-watcher": "^1.1.0",
+		"runed": "catalog:",
+		"svelte": "catalog:",
+		"vite": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"svelte-check": "^4.7.3",
+		"typescript": "catalog:"
+	}
+}

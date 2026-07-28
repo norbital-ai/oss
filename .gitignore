@@ -1,0 +1,9 @@
+node_modules/
+# Drizzle migration history is versioned: it must be branch-scoped so a
+# branch's snapshot chain reflects its own fork, and it must travel through
+# rebase-at-merge. Everything else under .norbital/ is derived build state.
+.norbital/*
+!.norbital/migrations/
+.pi/
+.tmp/
+.vite/
