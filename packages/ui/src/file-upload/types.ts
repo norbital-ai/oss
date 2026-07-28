@@ -1,14 +1,9 @@
 /**
- * Client-agnostic upload contract. Concrete implementation lives in the app (e.g. apps/core).
+ * Client-agnostic upload contract. A concrete host adapter supplies the implementation.
  */
 
 export type UploadStage =
-	| 'uploading'
-	| 'converting'
-	| 'summarizing'
-	| 'complete'
-	| 'error'
-	| 'aborted';
+	'uploading' | 'converting' | 'summarizing' | 'complete' | 'error' | 'aborted';
 
 export const UPLOAD_STAGE_MESSAGES: Record<UploadStage, string> = {
 	uploading: 'Uploading...',

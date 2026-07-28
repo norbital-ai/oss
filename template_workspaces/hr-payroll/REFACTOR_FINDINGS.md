@@ -327,13 +327,13 @@ or any log line.
 
 ### Access policy is part of the schema contract
 
-`apps/core/seed/norbital_hr/steps/policies.ts` grants access **by collection name**. Replacing the
-schema silently invalidated every grant: `companies`, `jurisdictions` and the other new collections
-had no grants at all, so the HR controller's queries returned zero rows.
+The legacy host seed policy fixture granted access **by collection name**. Replacing the schema
+silently invalidated every grant: `companies`, `jurisdictions` and the other new collections had no
+grants at all, so the HR controller's queries returned zero rows.
 
 The symptom was a combobox rendering _"No options available"_ while the database held six companies.
-Nothing failed — the user simply could not see anything. The file lived in `steps/` rather than
-`generated/`, so seed regeneration never touched it.
+Nothing failed — the user simply could not see anything. The policy fixture was maintained outside
+generated output, so schema regeneration never touched it.
 
 Rewritten against the new collections, with the jurisdiction-level rows split into a
 `statutoryCollections` group that is **read-only for every role**. That puts chapter 01's one-way wall

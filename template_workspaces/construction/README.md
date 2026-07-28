@@ -66,5 +66,3 @@ construction/
 pnpm --dir template_workspaces/construction run lint
 pnpm --dir template_workspaces/construction run build
 ```
-
-Seed for dev/golden org reset lives in Core (`apps/core/seed/construction/`), not in this template.

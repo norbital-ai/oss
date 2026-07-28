@@ -25,8 +25,9 @@ pnpm install
 pnpm check
 ```
 
-`pnpm pack:local` creates ignored standalone archives for publication checks and registry
-bootstrap testing. No consumer is expected to read this repository through a sibling path.
+Publication checks create temporary standalone archives and delete them after validation. Consumers
+install released packages from the configured registry; no consumer reads this repository through
+a sibling path.
 
 Run `pnpm changeset` with any change to a publishable package. See
 [`RELEASING.md`](./RELEASING.md) for the release workflow.

@@ -2,8 +2,6 @@
 **/.svelte-kit/
 **/build/
 **/.generated/
-apps/core/.tmp/
-apps/core/src/lib/system_db/migrations/meta/
 
 # Tooling / CI
 .turbo/

@@ -23,5 +23,13 @@ export function readPublicPackageEntries(repositoryRoot) {
 }
 
 export function platformPackageKey(entries) {
-	return createHash('sha256').update(JSON.stringify(entries)).digest('hex').slice(0, 16);
+	const contentIdentity = entries
+		.map(({ name, version, integrity }) => {
+			if (typeof integrity !== 'string' || !integrity.startsWith('sha512-')) {
+				throw new Error(`${name}@${version} has no sha512 integrity.`);
+			}
+			return { name, version, integrity };
+		})
+		.sort((left, right) => left.name.localeCompare(right.name));
+	return createHash('sha256').update(JSON.stringify(contentIdentity)).digest('hex').slice(0, 16);
 }

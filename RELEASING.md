@@ -37,13 +37,14 @@ After the package versions in `main` are available from the configured registry,
 The workflow:
 
 1. verifies every standalone npm archive;
-2. installs the exact package versions into the generic builder image;
-3. publishes builder and minimal runtime images to GHCR with SBOM and provenance;
-4. enforces the configured 500 MiB image ceiling;
-5. resolves exact template commits;
-6. publishes an attested platform release manifest as a GitHub release asset.
+2. resolves and verifies each published registry tarball and its sha512 SRI;
+3. installs the exact package versions into the generic builder image;
+4. publishes builder and minimal runtime images to GHCR with SBOM and provenance;
+5. enforces the configured 500 MiB image ceiling and tenant-build performance gate;
+6. resolves exact template commits;
+7. publishes an attested platform release manifest as a GitHub release asset.
 
 Never reuse a platform release name or tag. The manifest derives its immutable 64-hex build
-contract from the package coordinates and OCI digests. Core pins that contract and both image
-digests for existing tenants, so a new Pod version or image is always a new release. See
+contract from exact package archive integrities and OCI digests. A host pins that contract and both
+image digests for existing tenants, so a new Pod version or image is always a new release. See
 [`release/README.md`](./release/README.md) for provider-neutral inputs and the complete contract.

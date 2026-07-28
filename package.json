@@ -20,8 +20,7 @@
 		"templates:sync": "node scripts/sync-templates.mjs",
 		"templates:check": "node scripts/project-templates.mjs --check",
 		"templates:project": "node scripts/project-templates.mjs --update-local --output .tmp/template-revisions.json",
-		"release:manifest": "node scripts/generate-platform-release.mjs",
-		"pack:local": "pnpm build && node scripts/pack-local.mjs"
+		"release:manifest": "node scripts/generate-platform-release.mjs"
 	},
 	"devDependencies": {
 		"@changesets/cli": "2.31.1",

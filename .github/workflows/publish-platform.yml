@@ -36,11 +36,6 @@ jobs:
       release_name: ${{ steps.release.outputs.release_name }}
       release_tag: ${{ steps.release.outputs.release_tag }}
       package_key: ${{ steps.versions.outputs.package_key }}
-      config_version: ${{ steps.versions.outputs.config_version }}
-      platform_utils_version: ${{ steps.versions.outputs.platform_utils_version }}
-      pod_version: ${{ steps.versions.outputs.pod_version }}
-      std_version: ${{ steps.versions.outputs.std_version }}
-      ui_version: ${{ steps.versions.outputs.ui_version }}
     steps:
       - name: Checkout complete history
         uses: actions/checkout@v7
@@ -80,9 +75,27 @@ jobs:
           echo "release_name=$release_name" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve package versions and package key
+      - name: Verify published package archives
         id: versions
-        run: node scripts/resolve-package-release.mjs --github-output "$GITHUB_OUTPUT"
+        env:
+          NPM_REGISTRY_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
+          GITHUB_PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/resolve-published-packages.mjs \
+            --registry "$PACKAGE_REGISTRY_URL" \
+            --output dist/package-release.json \
+            --archive-output dist/package-archives \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload verified package release
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-release-${{ steps.release.outputs.release_name }}
+          path: |
+            dist/package-release.json
+            dist/package-archives/*.tgz
+          if-no-files-found: error
+          retention-days: 90
 
   builder:
     needs: prepare
@@ -98,25 +111,11 @@ jobs:
         id: image
         run: echo "reference=${OCI_REGISTRY}/${OCI_NAMESPACE}/norbital-builder" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare package registry configuration
-        env:
-          CUSTOM_PACKAGE_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
-          GITHUB_PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p .tmp
-          node <<'NODE'
-          const { writeFileSync } = require('node:fs');
-          const registry = new URL(process.env.PACKAGE_REGISTRY_URL);
-          let npmrc = `@norbital-ai:registry=${registry.href}\n`;
-          const token =
-            process.env.CUSTOM_PACKAGE_TOKEN ||
-            (registry.hostname === 'npm.pkg.github.com' ? process.env.GITHUB_PACKAGE_TOKEN : '');
-          if (token) {
-            const key = `//${registry.host}${registry.pathname.replace(/\/?$/, '/')}:_authToken`;
-            npmrc += `${key}=${token}\nalways-auth=true\n`;
-          }
-          writeFileSync('.tmp/registry.npmrc', npmrc, { mode: 0o600 });
-          NODE
+      - name: Download verified package archives
+        uses: actions/download-artifact@v8
+        with:
+          name: package-release-${{ needs.prepare.outputs.release_name }}
+          path: dist
 
       - name: Login to OCI registry
         uses: docker/login-action@v4
@@ -142,16 +141,8 @@ jobs:
             ${{ steps.image.outputs.reference }}:${{ needs.prepare.outputs.release_name }}
             ${{ steps.image.outputs.reference }}:sha-${{ github.sha }}
           build-args: |
-            PACKAGE_REGISTRY_URL=${{ env.PACKAGE_REGISTRY_URL }}
-            CONFIG_VERSION=${{ needs.prepare.outputs.config_version }}
-            PLATFORM_UTILS_VERSION=${{ needs.prepare.outputs.platform_utils_version }}
-            POD_VERSION=${{ needs.prepare.outputs.pod_version }}
-            STD_VERSION=${{ needs.prepare.outputs.std_version }}
-            UI_VERSION=${{ needs.prepare.outputs.ui_version }}
             PLATFORM_FINGERPRINT=${{ needs.prepare.outputs.package_key }}
             SOURCE_REVISION=${{ github.sha }}
-          secrets: |
-            npmrc=.tmp/registry.npmrc
           cache-from: type=gha,scope=platform-builder
           cache-to: type=gha,mode=max,scope=platform-builder
 
@@ -284,6 +275,12 @@ jobs:
             --push origin \
             --output dist/template-revisions.json
 
+      - name: Download verified package release
+        uses: actions/download-artifact@v8
+        with:
+          name: package-release-${{ needs.prepare.outputs.release_name }}
+          path: dist
+
       - name: Generate platform release manifest
         env:
           BUILDER_IMAGE_DIGEST: ${{ needs.builder.outputs.digest }}
@@ -293,6 +290,7 @@ jobs:
           SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
           SOURCE_REVISION: ${{ github.sha }}
           TEMPLATE_REVISIONS_FILE: dist/template-revisions.json
+          PACKAGE_RELEASE_FILE: dist/package-release.json
         run: node scripts/generate-platform-release.mjs
 
       - name: Download builder benchmark

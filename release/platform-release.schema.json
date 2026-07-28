@@ -43,10 +43,15 @@
 					"items": {
 						"type": "object",
 						"additionalProperties": false,
-						"required": ["name", "version"],
+						"required": ["name", "version", "tarball", "integrity"],
 						"properties": {
 							"name": { "type": "string", "pattern": "^@norbital-ai/" },
-							"version": { "type": "string", "minLength": 1 }
+							"version": { "type": "string", "minLength": 1 },
+							"tarball": { "type": "string", "format": "uri" },
+							"integrity": {
+								"type": "string",
+								"pattern": "^sha512-[A-Za-z0-9+/]{86}==$"
+							}
 						}
 					}
 				}

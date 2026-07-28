@@ -81,7 +81,7 @@ export type ContributeInput = {
  * A rate is a PERCENTAGE NUMBER, never a fraction: `{kind:'PERCENT', employee: 11}` is 11%, and
  * `{kind:'PROGRESSIVE', rate: 3}` is a 3% marginal rate. That is how every statute states a rate,
  * how the `rate_award` editor labels the field ("Employee (%)"), and what the seeded law declares
- * (`apps/core/seed/norbital_hr/statutory/rows.ts`, convention C4). The division by 100 happens here
+ * (source-system convention C4). The division by 100 happens here
  * and NOWHERE else, so a rate can be read off a gazette and typed straight into a row.
  */
 function asFraction(rate: number): number {

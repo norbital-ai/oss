@@ -1,7 +1,7 @@
 # Template workspaces
 
-Shipped starter workspaces live in this directory. Each is a filesystem-first Pod project you can
-lint, build, and seed from Core dev tooling.
+Shipped starter workspaces live in this directory. Each is a standalone filesystem-first Pod
+project that can be synchronized, checked, built, migrated, and seeded with the public Pod CLI.
 
 | Template         | Directory       | Purpose                                                                  |
 | ---------------- | --------------- | ------------------------------------------------------------------------ |

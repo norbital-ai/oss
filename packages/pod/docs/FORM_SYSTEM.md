@@ -21,8 +21,9 @@ adjacent Svelte components.
 
 - `CollectionTable`, `CollectionKanban`, and `CollectionForm` receive context, collection, query, view,
   and display data through Pod runtime facilities.
-- The generated form owns validation, editable-field selection, submit lifecycle, policy/approval handling,
-  and query invalidation.
+- The generated form owns validation, editable-field selection, submit lifecycle, and policy/approval handling.
+  Submits go through `client.db` mutations; affected live queries re-evaluate locally — there is no query
+  invalidation or refetch.
 - Custom renderers come from the static custom-type map generated from
   `src/custom-types/<name>/+renderer.svelte`; they use discriminated display/edit props.
 - A form uses normal shell document scroll by default. A local scrolling composite must use a named,

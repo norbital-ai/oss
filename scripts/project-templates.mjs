@@ -8,6 +8,13 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const cataloguePath = path.join(repositoryRoot, 'release', 'templates.json');
 const keyPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const revisionPattern = /^[0-9a-f]{40}$/;
+const localDependencyProtocol = /^(?:workspace|catalog|file|link|portal):/;
+const dependencySections = [
+	'dependencies',
+	'devDependencies',
+	'optionalDependencies',
+	'peerDependencies'
+];
 
 function fail(message) {
 	throw new Error(message);
@@ -66,6 +73,34 @@ function countMatchingFiles(directory, predicate) {
 	return count;
 }
 
+function validateStandaloneManifest(template, directory) {
+	const manifest = JSON.parse(readFileSync(path.join(directory, 'package.json'), 'utf8'));
+	if (!manifest.private)
+		fail(`Template ${template.key} must remain a private application package.`);
+	for (const script of ['build', 'lint', 'sync']) {
+		if (typeof manifest.scripts?.[script] !== 'string' || manifest.scripts[script] === '') {
+			fail(`Template ${template.key} needs a ${script} script.`);
+		}
+	}
+	for (const section of dependencySections) {
+		for (const [name, version] of Object.entries(manifest[section] ?? {})) {
+			if (localDependencyProtocol.test(version)) {
+				fail(
+					`Template ${template.key} cannot project ${section}.${name} with local protocol ${version}.`
+				);
+			}
+		}
+	}
+	if (manifest.dependencies?.['@norbital-ai/pod'] !== '0.0.1') {
+		fail(`Template ${template.key} must pin @norbital-ai/pod to 0.0.1.`);
+	}
+	for (const dependency of ['prettier', 'prettier-plugin-svelte', 'svelte-check', 'typescript']) {
+		if (typeof manifest.devDependencies?.[dependency] !== 'string') {
+			fail(`Template ${template.key} needs standalone dev dependency ${dependency}.`);
+		}
+	}
+}
+
 function loadCatalogue() {
 	const catalogue = JSON.parse(readFileSync(cataloguePath, 'utf8'));
 	if (catalogue.schemaVersion !== 1) fail('release/templates.json must use schemaVersion 1.');
@@ -108,6 +143,7 @@ function loadCatalogue() {
 		if (!existsSync(path.join(directory, 'package.json'))) {
 			fail(`Template ${template.key} has no package.json at ${template.path}.`);
 		}
+		validateStandaloneManifest(template, directory);
 		const actualCounts = {
 			collections: countMatchingFiles(
 				path.join(directory, 'src', 'collections'),

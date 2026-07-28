@@ -12,9 +12,9 @@ How Pod delivers live, instant reads and optimistic writes across the network.
 import { client } from '$pod/client';
 
 const orders = client.db.orders.findMany({
-  where: { status: { eq: 'open' } },
-  with: { customer: true },
-  orderBy: { created_at: 'desc' },
+	where: { status: { eq: 'open' } },
+	with: { customer: true },
+	orderBy: { created_at: 'desc' }
 });
 // Live. Someone else closes an order in another tab, another browser, or an automation
 // on the server — this result updates. You wrote nothing extra to make that happen.
@@ -31,20 +31,20 @@ diffs the result into the reactive value.
 ```typescript
 // Scalar reads
 const employee = client.db.employees.findFirst({
-  where: { norbital_id: { eq: id } },
-  with: { employments: true },
+	where: { norbital_id: { eq: id } },
+	with: { employments: true }
 });
 
 const headcount = client.db.employees.count({
-  where: { status: { eq: 'active' } },
+	where: { status: { eq: 'active' } }
 });
 
 // Pagination — keyset, never offset
 const page = client.db.orders.findMany({
-  where: { status: { eq: 'open' } },
-  orderBy: { created_at: 'desc' },
-  limit: 25,
-  after: cursor,
+	where: { status: { eq: 'open' } },
+	orderBy: { created_at: 'desc' },
+	limit: 25,
+	after: cursor
 });
 ```
 
@@ -52,9 +52,9 @@ const page = client.db.orders.findMany({
 
 ```typescript
 await client.db.claims.create({
-  employee_id: employeeId,
-  amount: 1500,
-  description: 'Travel reimbursement',
+	employee_id: employeeId,
+	amount: 1500,
+	description: 'Travel reimbursement'
 });
 // UI updates same-frame. The mutation posts to the server;
 // on rejection the overlay rolls back and the reason is surfaced.
@@ -81,7 +81,8 @@ Engine code lives in two halves:
   `packages/pod/src/lib/runtime/client.ts` and `packages/pod/src/lib/client/remote-query.svelte.ts`
 - **server** — `packages/pod/src/lib/server/collection/sync/`
 
-Core hosts the server side. The sync engine itself is a Pod concern and does not depend on Core.
+A compatible host provides the server transport. The sync engine itself is a Pod concern and does
+not depend on any particular host application.
 
 ---
 
@@ -104,7 +105,7 @@ Reads execute against a local Postgres (PGlite) replica. The network exists to f
 and to accept writes — it is not consulted to answer a question the replica can already answer,
 and it is never asked the same question twice.
 
-The stronger form — "the read path never touches the network" — is the *goal*, and it is
+The stronger form — "the read path never touches the network" — is the _goal_, and it is
 achieved for the collections that fit locally (§3.1). It cannot be an absolute at a million
 records: the first time anyone asks for page 900 of a million-row table, someone has to go and
 get it. What the architecture must guarantee is narrower and actually achievable:
@@ -122,7 +123,7 @@ Worth being precise here, because the three systems are usually cited as if they
 **Linear.** Bootstraps the user's whole workspace subset into IndexedDB on first load, then
 receives deltas over a persistent socket. Every view — every filter, grouping, sort, and the
 command palette — is computed in memory from that store. There is no per-view server query, so
-there is no per-view loading state. The expensive moment is the *first* load, and it happens
+there is no per-view loading state. The expensive moment is the _first_ load, and it happens
 once; a reload is a socket connect and a delta catch-up. **Takeaway: the sync unit is the
 workspace subset, not the view.** Views are pure local computation over it.
 
@@ -131,8 +132,8 @@ local record store. Related-record resolution (a page's inline references) is a 
 chase, never a fetch. **Takeaway: relations must be local, or relation-heavy UI is death by a
 thousand round-trips.**
 
-**Electric SQL.** Shapes are genuinely good — but Electric shapes are *server-maintained
-materializations with their own append-only log and their own offset*. The server keeps each
+**Electric SQL.** Shapes are genuinely good — but Electric shapes are _server-maintained
+materializations with their own append-only log and their own offset_. The server keeps each
 shape live and hands the client a resumable per-shape position. Shapes are only worth their
 complexity when the server maintains them. **Takeaway: a "shape" that is really just a one-shot
 paginated `SELECT`, with liveness delivered by a separate global stream, is a shape in name
@@ -194,21 +195,21 @@ reached in a handful of pages). Everything about a resident collection is local 
 filter, sort, page, count, relation, search, offline.
 
 Above the cap it is **windowed**. The replica holds a working set rather than the whole slice,
-and the rules change in exactly the places where a window would otherwise produce a *wrong*
+and the rules change in exactly the places where a window would otherwise produce a _wrong_
 answer rather than a stale one:
 
-| Read | Resident | Windowed |
-|------|----------|----------|
-| a full page (filter / sort / paginate) | local | local — those rows are real and in order |
-| a page that comes up short | local — that's the end of the data | server — might be the window's edge |
-| primary-key lookup that hits | local | **local** — `norbital_id` is unique, so a hit is the whole answer |
-| primary-key lookup that misses | local `null` | server — the row may lie beyond the window |
-| `count` | local | server — a count over a window is wrong, not stale |
-| `search` | local | server — a match may sit outside the window, and the server has the trigram indexes |
-| `findFirst` miss | local `null` — proof of absence | server — absence from a window proves nothing |
-| to-one relation, all keys resolve | local | local |
-| to-one relation, some key missing | n/a | server |
-| to-many relation | local | server — a window can't prove a child set is complete |
+| Read                                   | Resident                           | Windowed                                                                            |
+| -------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------- |
+| a full page (filter / sort / paginate) | local                              | local — those rows are real and in order                                            |
+| a page that comes up short             | local — that's the end of the data | server — might be the window's edge                                                 |
+| primary-key lookup that hits           | local                              | **local** — `norbital_id` is unique, so a hit is the whole answer                   |
+| primary-key lookup that misses         | local `null`                       | server — the row may lie beyond the window                                          |
+| `count`                                | local                              | server — a count over a window is wrong, not stale                                  |
+| `search`                               | local                              | server — a match may sit outside the window, and the server has the trigram indexes |
+| `findFirst` miss                       | local `null` — proof of absence    | server — absence from a window proves nothing                                       |
+| to-one relation, all keys resolve      | local                              | local                                                                               |
+| to-one relation, some key missing      | n/a                                | server                                                                              |
+| to-many relation                       | local                              | server — a window can't prove a child set is complete                               |
 
 The primary-key row is the one worth calling out: opening a record and rendering relationship cells
 are both pinned-key reads, and they stay instant even on a collection far too large to hold. That
@@ -241,7 +242,7 @@ presented as a complete one is worse than a spinner. So:
    stay live on the stream from that moment on.
 
 The one honest asymmetry: search stays a server round-trip for as long as the collection is
-windowed. Absorbing results makes the *records* local, not the *index*, so a repeated search is
+windowed. Absorbing results makes the _records_ local, not the _index_, so a repeated search is
 still answered by the server. That is the correct trade — the alternative is a search box that
 silently misses rows.
 
@@ -265,7 +266,7 @@ result into the existing reactive array.
 Rules that follow, and they are the anti-blink rules:
 
 1. **Never render `undefined` for a query whose family has data.** Changing a filter, sort, page,
-   or search term produces a new query key. A new key must *inherit* the previous result as its
+   or search term produces a new query key. A new key must _inherit_ the previous result as its
    displayed value until its own result arrives. Blanking the table for one frame and refilling
    it is the blink.
 2. **`loading` means "no data has ever been available"**, not "a re-evaluation is in flight". A
@@ -296,13 +297,13 @@ option set, at the place that knows what the options should be.
 
 ```svelte
 <RelationshipRenderer
-  target="employments"
-  value={row.employment_id}
-  options={{
-    label: (employment) => employment.employee_number,
-    where: { status: { eq: 'active' } },
-    filters: ['legal_entity_id']
-  }}
+	target="employments"
+	value={row.employment_id}
+	options={{
+		label: (employment) => employment.employee_number,
+		where: { status: { eq: 'active' } },
+		filters: ['legal_entity_id']
+	}}
 />
 ```
 
@@ -330,9 +331,9 @@ design is right, and the client must not undermine it:
 
 ### 3.9 Writes are optimistic; the server is still the authority
 
-The write path is unchanged in *authority*: every mutation goes through `collection_ops` on the
+The write path is unchanged in _authority_: every mutation goes through `collection_ops` on the
 server, so permissions, hooks, audit, history, approvals and versioning always apply. What
-changes is *when the UI updates*.
+changes is _when the UI updates_.
 
 ```
 click ──▶ apply to local overlay ──▶ UI updates (same frame)
@@ -359,15 +360,15 @@ the same thing. Both paths are the same path.
 
 All under `/_runtime/sync/`, routed before body parsing so `stream` can hold the connection open.
 
-| Route       | Method | Purpose |
-|-------------|--------|---------|
-| `schema`    | GET    | Client-applicable DDL, introspected from the live tenant database. Additive and idempotent: `CREATE TABLE IF NOT EXISTS` carrying only the primary key, then one `ADD COLUMN IF NOT EXISTS` per column. |
-| `shape`     | POST   | One keyset page of a policy-scoped collection. Returns `{rows, nextCursor, watermark, cursor, liveReady, windowComplete}`. Stateless across pages — the client drives the loop and owns its residency cap. First page captures the watermark so the stream resumes without a gap. |
-| `stream`    | GET    | SSE change feed from `?cursor=`. Emits `{xid, seq, collection, action, id, version, row?}`. |
-| `mutate`    | POST   | Batch of `{clientId, collection, action, row, version}` through `collection_ops`. |
+| Route    | Method | Purpose                                                                                                                                                                                                                                                                           |
+| -------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema` | GET    | Client-applicable DDL, introspected from the live tenant database. Additive and idempotent: `CREATE TABLE IF NOT EXISTS` carrying only the primary key, then one `ADD COLUMN IF NOT EXISTS` per column.                                                                           |
+| `shape`  | POST   | One keyset page of a policy-scoped collection. Returns `{rows, nextCursor, watermark, cursor, liveReady, windowComplete}`. Stateless across pages — the client drives the loop and owns its residency cap. First page captures the watermark so the stream resumes without a gap. |
+| `stream` | GET    | SSE change feed from `?cursor=`. Emits `{xid, seq, collection, action, id, version, row?}`.                                                                                                                                                                                       |
+| `mutate` | POST   | Batch of `{clientId, collection, action, row, version}` through `collection_ops`.                                                                                                                                                                                                 |
 
-**Watermark-before-rows ordering.** `shape` reads the watermark *before* the rows. A change
-committing between the two is present in the page *and* re-streamed after the watermark; the
+**Watermark-before-rows ordering.** `shape` reads the watermark _before_ the rows. A change
+committing between the two is present in the page _and_ re-streamed after the watermark; the
 client upserts by id, so a double-apply is idempotent. The reverse order could drop it.
 
 ---
@@ -408,7 +409,7 @@ Checklist for reviewing any change to this engine.
     forever, and no collection may pull more than its residency budget.
 12. No leaf component owns a query for data its parent already has. A relation renders as the uuid
     it is unless a surface explicitly mounts `RelationshipRenderer` and supplies its option set.
-13. Local SQL orders by the *normalised* order (`norbital_id` appended), matching the cursor
+13. Local SQL orders by the _normalised_ order (`norbital_id` appended), matching the cursor
     encoding — anything else makes keyset pagination unstable across pages.
 14. A server-side data reset invalidates the replica. `seq` going backwards is the signal.
 
@@ -419,11 +420,11 @@ Checklist for reviewing any change to this engine.
 Honest list of what this design does not yet do.
 
 - **Local search is substring-only.** The server adds trigram typo tolerance via `pg_trgm`, which
-  PGlite does not ship, so a *misspelled* term matches fewer rows locally than it would on the
+  PGlite does not ship, so a _misspelled_ term matches fewer rows locally than it would on the
   server. Exact and partial matches are identical. Resident collections use local search; anything
   windowed goes to the server, where the trigram indexes are.
 - **A windowed collection never gets a local search index.** Absorbing server answers makes the
-  *records* local, not the *index*, so repeated searches stay server round-trips for as long as the
+  _records_ local, not the _index_, so repeated searches stay server round-trips for as long as the
   collection is over budget (§3.3).
 - **The residency cap is global, not per collection.** 25k rows for everything. A workspace with
   one huge collection and many small ones would be better served by a per-collection budget, or by
@@ -444,12 +445,12 @@ Honest list of what this design does not yet do.
 
 ## Code map
 
-| Layer | Location | Files |
-|-------|----------|-------|
-| **Client sync state** | `packages/pod/src/lib/client/sync/` | `pod-sync-client.ts` (connect, apply diffs, catch-up, mutate), `client-sync.ts` (local query executor), `subscription-registry.ts` (live query registry), `types.ts` (wire types) |
-| **Client storage** | `packages/pod/src/lib/client/sync/` | `pglite-worker.ts` (SharedWorker PGlite), `pglite-worker-bridge.ts` (postMessage bridge), `browser-bootstrap.ts` (browser-side bootstrap) |
-| **Client entry** | `packages/pod/src/lib/runtime/` | `client.ts` (browser API proxy), `packages/pod/src/lib/client/remote-query.svelte.ts` (remote query transport) |
-| **Server wire protocol** | `packages/pod/src/lib/server/collection/sync/` | `sync-endpoints.server.ts` (schema, shape, stream, mutate dispatch), `sync-outbox.server.ts` (change feed append), `outbox-tailer.server.ts` (cursor management) |
-| **Server authority** | `packages/pod/src/lib/server/collection/sync/` | `mutation-rejection.server.ts` (rejection detection), `db-notifications.server.ts` (PostgreSQL NOTIFY/LISTEN) |
+| Layer                    | Location                                       | Files                                                                                                                                                                             |
+| ------------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Client sync state**    | `packages/pod/src/lib/client/sync/`            | `pod-sync-client.ts` (connect, apply diffs, catch-up, mutate), `client-sync.ts` (local query executor), `subscription-registry.ts` (live query registry), `types.ts` (wire types) |
+| **Client storage**       | `packages/pod/src/lib/client/sync/`            | `pglite-worker.ts` (SharedWorker PGlite), `pglite-worker-bridge.ts` (postMessage bridge), `browser-bootstrap.ts` (browser-side bootstrap)                                         |
+| **Client entry**         | `packages/pod/src/lib/runtime/`                | `client.ts` (browser API proxy), `packages/pod/src/lib/client/remote-query.svelte.ts` (remote query transport)                                                                    |
+| **Server wire protocol** | `packages/pod/src/lib/server/collection/sync/` | `sync-endpoints.server.ts` (schema, shape, stream, mutate dispatch), `sync-outbox.server.ts` (change feed append), `outbox-tailer.server.ts` (cursor management)                  |
+| **Server authority**     | `packages/pod/src/lib/server/collection/sync/` | `mutation-rejection.server.ts` (rejection detection), `db-notifications.server.ts` (PostgreSQL NOTIFY/LISTEN)                                                                     |
 
 Tests: `packages/pod/tests/sync/` — `pod-sync-p0.test.ts`, `pod-sync-client.test.ts`, `sync-e2e-comprehensive.test.ts`, `sync-e2e.test.ts`, `sync-http-e2e.test.ts`, `client-sync.test.ts`, `mutation-rejection.test.ts`.

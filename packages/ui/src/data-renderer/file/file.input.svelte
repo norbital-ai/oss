@@ -8,13 +8,16 @@
 	import * as Popover from '#lib/popover';
 	import { FileMetadataTooltip } from '#lib/file-value';
 	import FileThumbnail from './file-thumbnail.svelte';
-	import type { AllowedFileType as TAllowedFileType, FileValue as TFileValue } from '#lib/file-value';
+	import type {
+		AllowedFileType as TAllowedFileType,
+		FileValue as TFileValue
+	} from '#lib/file-value';
 
 	interface Props<T extends boolean> {
 		multiple: T;
 		value?: T extends true ? TFileValue[] : TFileValue;
 		onValueChange?: (value: T extends true ? TFileValue[] : TFileValue) => void;
-		/** App-provided upload client (e.g. MinIO `/api/file` + SSE progress). */
+		/** Host-provided upload client with progress reporting. */
 		client: IFileUploadClient;
 		maxFiles?: number;
 		maxFileSize: number;

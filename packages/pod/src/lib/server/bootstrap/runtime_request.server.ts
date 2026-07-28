@@ -1,9 +1,8 @@
 /**
  * Permanent worker-runtime HTTP transport for tenant workspace operations.
  *
- * Core invokes these `/_runtime/*` routes inside the checkpoint isolate (see
- * `apps/core/src/lib/tenant_workspace/runtime/tenant/remote_paths.server.ts`).
- * This is the wire protocol between the host and the in-isolate Pod runtime.
+ * A compatible host invokes these `/_runtime/*` routes inside the tenant isolate. This is the
+ * stable wire protocol between the host and the in-isolate Pod runtime.
  */
 import { buildCtx } from '$lib/server/bootstrap/context.js';
 import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';

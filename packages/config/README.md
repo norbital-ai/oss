@@ -1,6 +1,6 @@
 # `@norbital-ai/config`
 
-Shared configuration consumed by the Norbital packages.
+Shared configuration consumed by Norbital packages. It has no runtime code or build step.
 
 ## Exports
 

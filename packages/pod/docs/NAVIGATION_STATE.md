@@ -157,7 +157,7 @@ existing row for display/edit; call sites do not register or override record com
 | [`pod-shell.svelte`](../src/lib/runtime/pod-shell.svelte)                                   | Sidebar, main surface, and detail sheet |
 | [`route_context.ts`](../src/lib/client/utils/route_context.ts)                              | Lightweight route context               |
 | [`scope_hydration.server.ts`](../src/lib/server/collection/scope/scope_hydration.server.ts) | `hydrateStackItems()`                   |
-| [`collection-table.svelte`](../src/lib/ui/collection-table/collection-table.svelte)         | Table and detail registration           |
+| [`collection-table.svelte`](../../ui/src/collection-table/collection-table.svelte)          | Table and detail registration           |
 | [`template_workspaces/*/src/apps`](../../../template_workspaces)                            | Tenant application entry components     |
 
 ---

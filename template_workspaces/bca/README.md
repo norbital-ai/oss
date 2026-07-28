@@ -21,14 +21,12 @@ Assignments carry progression, photos (duplicate checks), and variations.
 
 ## Google Maps
 
-The dispatch schedule uses Core's server-rendered Static Map facility. Map provider credentials are
-owned and configured by the Core host; tenant workspace source and browser JavaScript never receive
-them.
+The dispatch schedule requests Pod's host-provided Static Map facility. Provider credentials belong
+to the host adapter; tenant workspace source and browser JavaScript never receive them.
 
 ## Verify
 
 ```bash
 pnpm --dir template_workspaces/bca run lint
+pnpm --dir template_workspaces/bca run build
 ```
-
-Seed: `apps/core/seed/bca/`.

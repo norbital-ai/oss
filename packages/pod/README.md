@@ -8,7 +8,7 @@ and Vite plugin. Core is one host for Pod output; Pod itself does not depend on 
 
 - [Form system](./docs/FORM_SYSTEM.md)
 - [Navigation state](./docs/NAVIGATION_STATE.md)
-- [Sync engine](./docs/SYNC_ENGINE.md)
+- [Sync engine](./docs/SYNC_ENGINE.md) — native live queries and optimistic writes
 
 ## Workspace contract
 
@@ -71,8 +71,7 @@ an explicit `{#snippet columns({ Column })}` — table UI does not auto-derive c
 `RepresentationProps`) is the only create/display/edit override. Custom datatype renderers are discovered statically from
 `custom-types/`; there is no manual registry. Apps compose `PageHeader` with `Stack`, `Inline`, `Cluster`,
 `Split`, `Grid`, `Columns`, `Cover`, `Center`, and `Frame`; local scrolling is explicit `Bound` + `Scroll`. See
-[`authoring-tenant-workspace`](../../.agents/skills/authoring-tenant-workspace/SKILL.md#view-system-ui-authoring)
-for the authoring conventions.
+[template_workspaces/](../../template_workspaces/) for authoring conventions and examples.
 
 Each custom type owns its schema in `+definition.ts` and its UI in `+renderer.svelte`. Definitions may
 compose other filesystem custom-type schemas, but cannot import schema authority from a collection.
@@ -111,7 +110,7 @@ answer folds back into the local replica, so the second visit to anything is ins
 - **Warm reload** — sync state is persisted; a reload renders from local data on frame 1
 - **Instant relations** — `with: { customer: true }` is a batched local join, not N queries
 
-Full architecture: [Sync Engine](docs/SYNC_ENGINE.md).
+Full architecture: [Sync Engine](./docs/SYNC_ENGINE.md).
 
 ## Generated state
 
@@ -192,8 +191,6 @@ use a host that implements every reported facility.
 Commit workspace source and `.norbital/migrations/`. Ignore `.norbital/diagnosis/`,
 `.norbital/dist/`, `.norbital/generated/`, `.norbital/types/`, and `.norbital/tsconfig.json`.
 
-For the checkpoint lifecycle and host boundary, see
-[`apps/core/internal_docs/TENANT_WORKSPACE.md`](../../apps/core/internal_docs/TENANT_WORKSPACE.md).
-For authoring conventions, see
-[`authoring-tenant-workspace`](../../.agents/skills/authoring-tenant-workspace/SKILL.md).
-For how reads and writes work end-to-end, see [Sync Engine](docs/SYNC_ENGINE.md).
+Host checkpoint implementation is deliberately outside Pod's public package contract. Authoring
+conventions and examples live in [template_workspaces/](../../template_workspaces/). For how reads
+and writes work end-to-end, see [Sync Engine](./docs/SYNC_ENGINE.md).

@@ -31,7 +31,7 @@ export type PlatformStateParams = {
 	accessControlOptions?: AccessControlServiceOptions;
 };
 
-/** Manifest + requestor scope shared by Core host shell and inline tenant apps. */
+/** Manifest + requestor scope shared by a host shell and inline tenant apps. */
 export class PlatformState {
 	#getManifestContext!: () => ManifestContext;
 	#getUser!: () => TScopeRequestor;

@@ -254,7 +254,7 @@ async function insertSeedRelationships(input: {
 
 /**
  * Execute a seed plan against a live tenant DB. The caller resolves the tenant
- * connection string (live zone) so this module stays free of apps/core facilities.
+ * connection string (live zone) so this module stays free of host-application facilities.
  */
 export async function seedTemplateDataFromPlan(input: {
 	readonly templateKey: string;

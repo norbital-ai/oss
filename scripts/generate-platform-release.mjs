@@ -10,6 +10,8 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const shaPattern = /^[0-9a-f]{40}$/;
 const digestPattern = /^sha256:[0-9a-f]{64}$/;
 const contractIdPattern = /^[0-9a-f]{64}$/;
+const packageKeyPattern = /^[0-9a-f]{16}$/;
+const integrityPattern = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
 function fail(message) {
 	throw new Error(message);
@@ -66,8 +68,63 @@ const builderDigest = required(options, 'builder-digest', 'BUILDER_IMAGE_DIGEST'
 const runtimeDigest = required(options, 'runtime-digest', 'RUNTIME_IMAGE_DIGEST');
 if (!digestPattern.test(builderDigest)) fail('builder-digest must be a sha256 OCI digest.');
 if (!digestPattern.test(runtimeDigest)) fail('runtime-digest must be a sha256 OCI digest.');
-const packageEntries = readPublicPackageEntries(repositoryRoot);
+const packageReleasePath = path.resolve(
+	repositoryRoot,
+	required(options, 'package-release', 'PACKAGE_RELEASE_FILE')
+);
+const packageRelease = JSON.parse(readFileSync(packageReleasePath, 'utf8'));
+if (packageRelease.schemaVersion !== 1) fail('Package release file must use schemaVersion 1.');
+if (!Array.isArray(packageRelease.entries) || packageRelease.entries.length === 0) {
+	fail('Package release file has no entries.');
+}
+const localPackageEntries = readPublicPackageEntries(repositoryRoot);
+const localByName = new Map(localPackageEntries.map((entry) => [entry.name, entry.version]));
+const seenPackages = new Set();
+for (const entry of packageRelease.entries) {
+	if (seenPackages.has(entry.name)) fail(`Duplicate package release entry: ${entry.name}.`);
+	seenPackages.add(entry.name);
+	if (localByName.get(entry.name) !== entry.version) {
+		fail(`${entry.name}@${entry.version} does not match the checked-in package version.`);
+	}
+	if (!integrityPattern.test(entry.integrity)) {
+		fail(`${entry.name}@${entry.version} has invalid sha512 integrity.`);
+	}
+	let tarball;
+	try {
+		tarball = new URL(entry.tarball);
+	} catch {
+		fail(`${entry.name}@${entry.version} has an invalid tarball URL.`);
+	}
+	if (!['http:', 'https:'].includes(tarball.protocol) || tarball.username || tarball.password) {
+		fail(`${entry.name}@${entry.version} has an invalid tarball URL.`);
+	}
+}
+if (packageRelease.entries.length !== localByName.size) {
+	fail('Package release entries do not match the complete public package set.');
+}
+const packageEntries = [...packageRelease.entries].sort((left, right) =>
+	left.name.localeCompare(right.name)
+);
 const packageKey = platformPackageKey(packageEntries);
+if (
+	!packageKeyPattern.test(packageRelease.packageKey) ||
+	packageRelease.packageKey !== packageKey
+) {
+	fail(`Package release key does not match exact archive integrities: ${packageKey}.`);
+}
+let packageRegistry;
+try {
+	packageRegistry = new URL(packageRelease.registry);
+} catch {
+	fail('Package release registry is not a URL.');
+}
+if (
+	!['http:', 'https:'].includes(packageRegistry.protocol) ||
+	packageRegistry.username ||
+	packageRegistry.password
+) {
+	fail('Package release registry must be an HTTP(S) URL without credentials.');
+}
 const pod = packageEntries.find((entry) => entry.name === '@norbital-ai/pod');
 if (!pod) fail('The Pod package is required in every platform release.');
 
@@ -78,7 +135,7 @@ const createdAt =
 if (Number.isNaN(Date.parse(createdAt))) fail(`Invalid created-at timestamp: ${createdAt}`);
 
 const packages = {
-	registry: required(options, 'package-registry', 'PACKAGE_REGISTRY_URL').replace(/\/+$/, ''),
+	registry: packageRegistry.href.replace(/\/$/, ''),
 	packageKey,
 	entries: packageEntries
 };
@@ -100,8 +157,23 @@ const compatibility = {
 
 // Templates deliberately do not participate in this identity. A template ref can advance without
 // scheduling a same-tree Pod rebuild for every tenant tracking the stable platform.
+// Registry and repository locations are also excluded: mirrors can move without changing bytes.
+const packageContent = {
+	packageKey,
+	entries: packageEntries.map(({ name, version, integrity }) => ({ name, version, integrity }))
+};
+const imageContent = {
+	builder: images.builder.digest,
+	runtime: images.runtime.digest
+};
 const buildContractId = createHash('sha256')
-	.update(JSON.stringify({ packages, images, compilerContract: compatibility.compilerContract }))
+	.update(
+		JSON.stringify({
+			packages: packageContent,
+			images: imageContent,
+			compilerContract: compatibility.compilerContract
+		})
+	)
 	.digest('hex');
 if (!contractIdPattern.test(buildContractId)) {
 	fail(`Invalid generated platform build contract id: ${buildContractId}`);

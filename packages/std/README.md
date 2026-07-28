@@ -10,4 +10,13 @@ import { parseUtcInstant } from '@norbital-ai/std/date';
 import { typeGuard } from '@norbital-ai/std/schema';
 ```
 
-Build with `pnpm --filter @norbital-ai/std build`.
+Public subpaths are `async`, `billing`, `cache`, `cel`, `date`, `error`, `finance`, `json`, `reckon`,
+`result`, `schema`, `string`, `text`, `text/dedent`, `tree`, and `truncate`. The package root
+re-exports the stable general-purpose subset.
+
+## Development
+
+```sh
+pnpm --filter @norbital-ai/std build
+pnpm --filter @norbital-ai/std lint
+```

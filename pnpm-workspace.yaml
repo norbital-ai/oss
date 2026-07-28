@@ -17,6 +17,7 @@ catalog:
 # Migrated from .npmrc / package.json#pnpm for pnpm 11.
 engineStrict: true
 injectWorkspacePackages: true
+linkWorkspacePackages: true
 storeDir: /tmp/norbital-pnpm-store
 syncInjectedDepsAfterScripts:
   - build

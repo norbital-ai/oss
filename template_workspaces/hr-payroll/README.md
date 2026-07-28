@@ -137,12 +137,13 @@ node scripts/verify-payroll-arithmetic.mjs
 ```
 
 ```bash
-pnpm --filter @norbital-ai/core test:e2e:payroll
+pnpm run lint
+pnpm run build
 ```
 
 The first is 159 assertions over the places where the arithmetic is not obvious — cumulative PCB,
 EPF bracketing, SOCSO band-by-ceiling selection, the overtime floor, the daily-ceiling split, leave
-accrual rounding — and touches no database. The second is full parity against the workbook.
+accrual rounding — and touches no database. Lint and build validate the complete authored workspace.
 
 The parity gate is two-sided: a difference not in `payroll-parity-baseline.json` fails the run, **and**
 a baseline entry that no longer differs must be removed. The baseline cannot be used to paper over a
@@ -150,23 +151,12 @@ regression.
 
 ---
 
-## Updating a deployed local tenant
+## Updating a deployed tenant
 
-Editing this directory does not change an existing tenant checkpoint. With Core running, publish the
-checked-in template source, rebase the tenant repository, apply committed migrations, and deploy:
-
-```bash
-pnpm tenant:update --org=norbital_hr --template=hr-payroll
-```
-
-`.norbital/migrations` is source history and travels with every template publication; generated build
-output and caches do not. An ordinary update preserves tenant records; only `env:reset` reseeds them.
-
-Use `pnpm env:reset --template hr-payroll` only when you intend to destroy all local data, caches,
-service volumes, and builder images and recreate the environment from seed.
-
-In staging, run the equivalent publish → rebase → migrate → deploy action from staff Command Center;
-direct template publication is disabled in production.
+Editing this directory does not change an existing tenant. Publishing advances the projected
+template Git ref; a tenant fork then explicitly merges or rebases that source revision before its
+host applies committed migrations and builds a new Pod release. `.norbital/migrations` is source
+history and travels with every publication, while generated build output and caches do not.
 
 ---
 
