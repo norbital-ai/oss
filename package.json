@@ -1,0 +1,33 @@
+{
+	"name": "@template/hr-payroll",
+	"description": "Multi-country, shift-aware HR and payroll workspace",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"prepare": "pod sync",
+		"sync": "pod sync",
+		"sync:watch": "pod sync --watch",
+		"build": "vite build",
+		"format": "prettier --write .",
+		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json"
+	},
+	"dependencies": {
+		"@iconify/svelte": "catalog:",
+		"@norbital-ai/platform-utils": "workspace:*",
+		"@norbital-ai/pod": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/ui": "workspace:*",
+		"exceljs": "^4.4.0",
+		"mode-watcher": "^1.1.0",
+		"runed": "catalog:",
+		"svelte": "catalog:",
+		"svelte-sonner": "^1.1.1",
+		"vite": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"svelte-check": "^4.7.3",
+		"typescript": "catalog:"
+	}
+}

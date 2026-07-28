@@ -1,0 +1,83 @@
+<script lang="ts">
+	import { Combobox } from '@norbital-ai/ui/combobox';
+	import { Input } from '@norbital-ai/ui/input';
+	import { Grid } from '@norbital-ai/ui/layout';
+	import { contributionTreatmentSchema } from './+definition.js';
+	import type { RendererProps, Value } from './$types.js';
+
+	type TreatmentKind = Value['kind'];
+
+	const KIND_OPTIONS: { value: TreatmentKind; label: string; description: string }[] = [
+		{ value: 'INCLUDE', label: 'Include', description: 'Chargeable in full' },
+		{ value: 'EXCLUDE', label: 'Exclude', description: 'Not chargeable' },
+		{ value: 'REDUCE', label: 'Reduce', description: 'Reduces the contribution base' },
+		{ value: 'SPECIAL', label: 'Special rule', description: 'Named rule on the contribution' },
+		{ value: 'UNSET', label: 'Unset', description: 'Not yet decided by the authority' }
+	];
+
+	let props: RendererProps = $props();
+	const disabled = $derived(props.mode === 'edit' ? props.disabled : true);
+	const parsed = $derived(contributionTreatmentSchema.safeParse(props.value));
+	const current = $derived(parsed.success ? parsed.data : null);
+	const summary = $derived.by(() => {
+		if (current === null) return '—';
+		return current.kind === 'SPECIAL' ? `Special: ${current.rule}` : current.kind;
+	});
+
+	function emit(next: Value | null): void {
+		if (props.mode === 'edit') props.onValueChange(next);
+	}
+
+	function defaultFor(kind: TreatmentKind): Value {
+		switch (kind) {
+			case 'INCLUDE':
+				return { kind: 'INCLUDE' };
+			case 'EXCLUDE':
+				return { kind: 'EXCLUDE' };
+			case 'REDUCE':
+				return { kind: 'REDUCE' };
+			case 'SPECIAL':
+				return { kind: 'SPECIAL', rule: '' };
+			case 'UNSET':
+				return { kind: 'UNSET' };
+		}
+	}
+
+	function selectKind(kind: TreatmentKind | null): void {
+		if (kind === null) {
+			emit(null);
+			return;
+		}
+		if (current !== null && current.kind === kind) return;
+		emit(defaultFor(kind));
+	}
+</script>
+
+{#if props.mode === 'display'}
+	<span class="block truncate" title={summary}>{summary}</span>
+{:else}
+	<Grid class="rounded-md border border-border bg-muted/20 p-3" gap="sm" minimum="compact">
+		<label class="grid gap-1.5 text-sm font-medium">
+			Treatment
+			<Combobox
+				options={KIND_OPTIONS}
+				value={current?.kind ?? null}
+				{disabled}
+				searchable={false}
+				emptyPlaceholder="Select a treatment"
+				onValueChange={selectKind}
+			/>
+		</label>
+		{#if current?.kind === 'SPECIAL'}
+			<label class="grid gap-1.5 text-sm font-medium">
+				Rule name
+				<Input
+					value={current.rule}
+					{disabled}
+					placeholder="Must be listed on the contribution"
+					oninput={(event) => emit({ kind: 'SPECIAL', rule: event.currentTarget.value })}
+				/>
+			</label>
+		{/if}
+	</Grid>
+{/if}
