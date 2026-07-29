@@ -1,8 +1,9 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import type { Map as LeafletMap } from 'leaflet';
-	import { onMount } from 'svelte';
 	import type { Snippet } from 'svelte';
+	import type { Action } from 'svelte/action';
+	import { fromAction } from 'svelte/attachments';
 	import { cn } from '#lib/utils';
 	import * as Popover from '../popover';
 	import type { StaticMapMarker } from './static-map.types.js';
@@ -21,48 +22,48 @@
 		class?: string;
 	} = $props();
 
-	let container = $state<HTMLElement>();
-	let map: LeafletMap | undefined;
-	let leaflet: typeof import('leaflet') | undefined;
 	let ready = $state(false);
 	let errorMessage = $state<string>();
 	let markerPositions = $state<
 		readonly { readonly left: number; readonly top: number; readonly visible: boolean }[]
 	>([]);
-	const markerSignature = $derived(
-		markers.map(({ latitude, longitude }) => `${latitude}:${longitude}`).join('|')
-	);
 
-	function updateMarkerPositions(): void {
-		if (!map) return;
-		const visibleBounds = map.getBounds().pad(0.1);
-		markerPositions = markers.map((marker) => {
-			const point = map?.latLngToContainerPoint([marker.latitude, marker.longitude]);
-			return {
-				left: point?.x ?? 0,
-				top: point?.y ?? 0,
-				visible: visibleBounds.contains([marker.latitude, marker.longitude])
-			};
-		});
-	}
-
-	function fitMarkers(): void {
-		if (!map || !leaflet || markers.length === 0) return;
-		const bounds = leaflet.latLngBounds(
-			markers.map((marker) => [marker.latitude, marker.longitude])
-		);
-		map.fitBounds(bounds, { animate: false, padding: [56, 56], maxZoom: 12 });
-		map.setZoom(Math.max(map.getMinZoom(), map.getZoom() - 1), { animate: false });
-		updateMarkerPositions();
-	}
-
-	onMount(() => {
+	const mountMap: Action<HTMLElement, readonly StaticMapMarker[]> = (container, initialMarkers) => {
 		let cancelled = false;
 		let resizeObserver: ResizeObserver | undefined;
+		let map: LeafletMap | undefined;
+		let leaflet: typeof import('leaflet') | undefined;
+		let currentMarkers = initialMarkers;
+
+		function updateMarkerPositions(): void {
+			if (!map) return;
+			const visibleBounds = map.getBounds().pad(0.1);
+			markerPositions = currentMarkers.map((marker) => {
+				const point = map?.latLngToContainerPoint([marker.latitude, marker.longitude]);
+				return {
+					left: point?.x ?? 0,
+					top: point?.y ?? 0,
+					visible: visibleBounds.contains([marker.latitude, marker.longitude])
+				};
+			});
+		}
+
+		function fitMarkers(): void {
+			if (!map || !leaflet || currentMarkers.length === 0) {
+				markerPositions = [];
+				return;
+			}
+			const bounds = leaflet.latLngBounds(
+				currentMarkers.map((marker) => [marker.latitude, marker.longitude])
+			);
+			map.fitBounds(bounds, { animate: false, padding: [56, 56], maxZoom: 12 });
+			map.setZoom(Math.max(map.getMinZoom(), map.getZoom() - 1), { animate: false });
+			updateMarkerPositions();
+		}
 
 		void import('leaflet')
 			.then((module) => {
-				if (cancelled || !container) return;
+				if (cancelled) return;
 				leaflet = module;
 				map = module.map(container, {
 					attributionControl: true,
@@ -92,24 +93,25 @@
 				});
 				resizeObserver.observe(container);
 				ready = true;
+				fitMarkers();
 			})
 			.catch((cause: unknown) => {
 				errorMessage = cause instanceof Error ? cause.message : String(cause);
 			});
 
-		return () => {
-			cancelled = true;
-			resizeObserver?.disconnect();
-			map?.remove();
-			map = undefined;
+		return {
+			update(nextMarkers) {
+				currentMarkers = nextMarkers;
+				if (ready) fitMarkers();
+			},
+			destroy() {
+				cancelled = true;
+				resizeObserver?.disconnect();
+				map?.remove();
+				map = undefined;
+			}
 		};
-	});
-
-	$effect(() => {
-		markerSignature;
-		if (!ready) return;
-		fitMarkers();
-	});
+	};
 </script>
 
 <section
@@ -120,9 +122,9 @@
 	aria-label={ariaLabel}
 >
 	<div
-		bind:this={container}
 		class="absolute inset-0 z-0"
 		aria-label={`${ariaLabel}. Drag to pan; use the zoom controls or mouse wheel to zoom.`}
+		{@attach fromAction(mountMap, () => markers)}
 	></div>
 
 	{#if ready && markers.length > 0}

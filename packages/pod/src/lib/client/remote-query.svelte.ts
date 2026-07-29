@@ -27,13 +27,12 @@ class RemoteQueryResource<T> {
 	/** Bumped on every read of `current`. A rendered query re-reads it each render pass, so
 	 *  anything on screen is by construction among the most recently accessed. */
 	lastAccess = Date.now();
-	/** True once a value has ever been produced — `current` is then real data, not a placeholder. */
-	settled = false;
 
 	constructor(
 		readonly key: string,
 		readonly load: RemoteQueryLoader<T>,
-		placeholder?: T
+		placeholder?: T,
+		readonly onValue?: (value: T) => void
 	) {
 		// Seed with the previous result for this query family. Changing a filter, sort, page or
 		// search term mints a new key; without a seed the UI would render `undefined` for a frame
@@ -44,8 +43,11 @@ class RemoteQueryResource<T> {
 
 	start(): Promise<T> {
 		const generation = ++this.generation;
+		this.controller?.abort();
+		const controller = new AbortController();
+		this.controller = controller;
 		this.error = undefined;
-		const pending = this.load(this.controller?.signal ?? undefined);
+		const pending = Promise.resolve().then(() => this.load(controller.signal));
 		this.pending = pending;
 
 		// `loading` means "nothing to show", not "a request is in flight". A re-evaluation over
@@ -64,13 +66,18 @@ class RemoteQueryResource<T> {
 				if (timer) clearTimeout(timer);
 				if (generation !== this.generation) return;
 				this.current = value;
-				this.settled = true;
+				this.onValue?.(value);
 				this.loading = false;
+				this.controller = null;
 			},
 			(error) => {
 				if (timer) clearTimeout(timer);
 				if (generation !== this.generation) return;
-				if (error instanceof DOMException && error.name === 'AbortError') return;
+				this.controller = null;
+				if (error instanceof DOMException && error.name === 'AbortError') {
+					this.loading = false;
+					return;
+				}
 				this.error = error instanceof Error ? error : new Error(String(error));
 				this.loading = false;
 			}
@@ -101,7 +108,7 @@ export class ReactiveRemoteQuery<T> implements RemoteQuery<T>, PromiseLike<T> {
 	}
 
 	async refresh(): Promise<void> {
-		if (!this.resource.loading) this.resource.start();
+		this.resource.start();
 		await this.resource.pending.catch(() => undefined);
 	}
 
@@ -135,22 +142,15 @@ export class RemoteQueryResourceManager<T> {
 			resource = new RemoteQueryResource(
 				key,
 				load,
-				familyKey ? this.families.get(familyKey) : undefined
+				familyKey ? this.families.get(familyKey) : undefined,
+				familyKey ? (value) => this.families.set(familyKey, value) : undefined
 			);
 			this.resources.set(key, resource);
-			if (familyKey) this.trackFamily(resource, familyKey);
 			this.prune();
 		} else {
 			resource.lastAccess = Date.now();
 		}
 		return new ReactiveRemoteQuery(resource);
-	}
-
-	private trackFamily(resource: RemoteQueryResource<T>, familyKey: string): void {
-		void resource.pending.then(
-			(value) => this.families.set(familyKey, value),
-			() => undefined
-		);
 	}
 
 	invalidate(keyPrefix: string): void {
@@ -162,7 +162,7 @@ export class RemoteQueryResourceManager<T> {
 	private prune(): void {
 		if (this.resources.size <= MAX_QUERY_RESOURCES) return;
 		const evictable = [...this.resources.values()]
-			.filter((resource) => !resource.loading)
+			.filter((resource) => resource.controller === null)
 			.sort((left, right) => left.lastAccess - right.lastAccess);
 		const excess = this.resources.size - MAX_QUERY_RESOURCES;
 		for (const resource of evictable.slice(0, excess)) this.resources.delete(resource.key);

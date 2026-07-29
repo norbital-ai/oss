@@ -106,9 +106,8 @@ export const INFOTECH_SECTIONS: readonly OutputSection[] = [
 			'renewal_incentive',
 			'ex_gratia_loss',
 			'attendance_allowance',
-			'hari_raya_loan',
+			'loan_recovery',
 			'pcb_back_pay',
-			'loan_return',
 			'medical_recover_ee',
 			'cp38_amount'
 		]
@@ -322,9 +321,8 @@ export function infotechRow(payslip: ReportPayslip): Record<string, string | num
 		renewal_incentive: componentAmount(payslip, ['RENEWAL_INCENTIVE']),
 		ex_gratia_loss: componentAmount(payslip, ['EX_GRATIA_LOSS']),
 		attendance_allowance: componentAmount(payslip, ['ATTENDANCE_ALLOWANCE']),
-		hari_raya_loan: componentAmount(payslip, ['HARI_RAYA_2026']),
+		loan_recovery: generic.loanRecovery ?? 0,
 		pcb_back_pay: componentAmount(payslip, ['PCB_BACK_PAY']),
-		loan_return: componentAmount(payslip, ['AIR_TICKET']),
 		medical_recover_ee: componentAmount(payslip, ['MEDICAL_RECOVER_EE']),
 		cp38_amount: componentAmount(payslip, ['CP38']),
 		net_salary: payslip.net,

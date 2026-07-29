@@ -113,30 +113,32 @@
 {/snippet}
 
 {#snippet organizationSwitcher()}
-	<Combobox
-		value={model.activeOrganization.id}
-		options={organizationOptions}
-		display={organizationSelection}
-		searchPlaceholder="Search organizations..."
-		emptyPlaceholder="Select organization"
-		preserveOptionOrder={true}
-		scrollToSelection={true}
-		disabled={switchingOrganizationId !== null || !onOrganizationChange}
-		hideChevron={!displayExpanded}
-		class={displayExpanded ? 'w-full' : 'w-8'}
-		triggerClass={displayExpanded ? 'h-8 pl-2 pr-1' : 'size-8 justify-center p-1'}
-		minWidth={256}
-		align="start"
-		snapToEnds={true}
-		onValueChange={(organizationId) => {
-			if (organizationId) void selectOrganization(organizationId);
-		}}
-	/>
+	{#key sidebar.isMobile}
+		<Combobox
+			value={model.activeOrganization.id}
+			options={organizationOptions}
+			display={organizationSelection}
+			searchPlaceholder="Search organizations..."
+			emptyPlaceholder="Select organization"
+			preserveOptionOrder={true}
+			scrollToSelection={true}
+			disabled={switchingOrganizationId !== null || !onOrganizationChange}
+			hideChevron={!displayExpanded}
+			class={displayExpanded ? 'w-full' : 'w-8'}
+			triggerClass={displayExpanded ? 'h-8 pl-2 pr-1' : 'size-8 justify-center p-1'}
+			minWidth={256}
+			align="start"
+			snapToEnds={true}
+			onValueChange={(organizationId) => {
+				if (organizationId) void selectOrganization(organizationId);
+			}}
+		/>
+	{/key}
 {/snippet}
 
 <Sidebar.Indicator />
 
-<Sidebar.Header class={cn('gap-0 p-2', !displayExpanded && 'group/sidebar-header')}>
+<Sidebar.Header class="gap-0 p-2">
 	<div class="flex h-8 items-center gap-0.5">
 		{#if displayExpanded}
 			<div class="min-w-0 flex-1">{@render organizationSwitcher()}</div>
@@ -148,20 +150,7 @@
 			/>
 		{:else}
 			<div class="relative mx-auto size-8">
-				<div
-					aria-hidden="true"
-					class="pointer-events-none flex size-10 items-center justify-center transition-opacity duration-150 group-hover/sidebar-header:opacity-0 group-focus-within/sidebar-header:opacity-0"
-				>
-					{@render organizationAvatar(model.activeOrganization)}
-				</div>
-				<Sidebar.Trigger
-					target="expansion"
-					class={cn(
-						'absolute inset-0 m-auto size-8 transition-opacity duration-150 group-hover/sidebar-header:opacity-100 group-focus-within/sidebar-header:opacity-100 focus-visible:opacity-100',
-						sidebar.isMobile ? 'opacity-100' : 'opacity-0'
-					)}
-					aria-label="Expand sidebar"
-				/>
+				{@render organizationSwitcher()}
 			</div>
 		{/if}
 	</div>

@@ -13,8 +13,7 @@
 		search?: string;
 	} = $props();
 
-	let loading = $state(true);
-	let failed = $state(false);
+	let status = $state<'loading' | 'ready' | 'failed'>('loading');
 </script>
 
 <div class="relative flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden">
@@ -24,16 +23,14 @@
 		data-host-plugin={pluginKey}
 		class="h-full min-h-0 w-full flex-1 border-0 bg-background"
 		onload={() => {
-			loading = false;
-			failed = false;
+			status = 'ready';
 		}}
 		onerror={() => {
-			loading = false;
-			failed = true;
+			status = 'failed';
 		}}
 	></iframe>
 
-	{#if loading && !failed}
+	{#if status === 'loading'}
 		<div
 			class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/95 text-muted-foreground"
 			role="status"
@@ -41,7 +38,7 @@
 			<Spinner class="size-5" />
 			<span class="text-xs font-medium">Loading {label}…</span>
 		</div>
-	{:else if failed}
+	{:else if status === 'failed'}
 		<div class="absolute inset-0 z-10 grid place-items-center bg-background p-4">
 			<p class="text-xs font-medium text-destructive">Failed to load {label}</p>
 		</div>

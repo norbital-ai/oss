@@ -1,16 +1,17 @@
+import { SvelteURL } from 'svelte/reactivity';
+
 export interface PodPageState {
 	readonly url: URL;
 	readonly params: Readonly<Record<string, string>>;
 }
 
-let currentUrl = $state(
+const currentUrl = new SvelteURL(
 	new URL(typeof window === 'undefined' ? 'http://pod.local/' : window.location.href)
 );
-let navigationTarget = $state<URL>();
 
 if (typeof window !== 'undefined') {
 	window.addEventListener('popstate', () => {
-		currentUrl = new URL(window.location.href);
+		currentUrl.href = window.location.href;
 	});
 }
 
@@ -29,21 +30,13 @@ export const page: PodPageState = {
 	}
 };
 
-export const navigating = {
-	get to(): URL | undefined {
-		return navigationTarget;
-	}
-};
-
 export async function goto(
 	href: string | URL,
 	options?: { readonly replaceState?: boolean }
 ): Promise<void> {
 	if (typeof window === 'undefined') return;
 	const target = new URL(href, window.location.href);
-	navigationTarget = target;
 	if (options?.replaceState) window.history.replaceState({}, '', target);
 	else window.history.pushState({}, '', target);
-	currentUrl = target;
-	navigationTarget = undefined;
+	currentUrl.href = target.href;
 }

@@ -7,7 +7,6 @@
 	let {
 		stack,
 		resolveSurface,
-		isLoading = false,
 		depth = 0,
 		parentRouteKey,
 		unresolvedFallback,
@@ -15,7 +14,6 @@
 	}: {
 		stack: DetailStackEntry[];
 		resolveSurface: DetailSurfaceResolver;
-		isLoading?: boolean;
 		depth?: number;
 		parentRouteKey?: string;
 		unresolvedFallback?: Snippet<[{ entry: DetailStackEntry }]>;
@@ -44,16 +42,13 @@
 		{:else if unresolvedFallback}
 			{@render unresolvedFallback({ entry })}
 		{:else}
-			<p class="p-4 text-sm text-muted-foreground">
-				{isLoading ? 'Loading record…' : 'Record detail is unavailable.'}
-			</p>
+			<p class="p-4 text-sm text-muted-foreground">Record detail is unavailable.</p>
 		{/if}
 	</section>
 	{#if nextEntry}
 		<DetailSurfaceStack
 			{stack}
 			{resolveSurface}
-			{isLoading}
 			depth={depth + 1}
 			parentRouteKey={entry.routeKey}
 			{unresolvedFallback}

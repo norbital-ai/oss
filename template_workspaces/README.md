@@ -9,6 +9,7 @@ project that can be synchronized, checked, built, migrated, and seeded with the 
 | [**construction**](./construction/) | `construction/` | Project-centered construction ops with BIM and workforce compliance      |
 | [**bca**](./bca/)                   | `bca/`          | Site operations: contractor visits, variation approvals, photo integrity |
 | [**crm**](./crm/)                   | `crm/`          | Customer relationship management with pipelines and activity tracking    |
+| [**reclamation**](./reclamation/)   | `reclamation/`  | Survey documents stitched into a 3D site solid and priced from a matrix  |
 
 ## Choosing a template
 
@@ -20,6 +21,10 @@ project that can be synchronized, checked, built, migrated, and seeded with the 
   and sales activities.
 - **HR & Payroll** is the specialised multi-country payroll workspace, including attendance, leave,
   statutory contribution configuration, and reconciliation guidance.
+- **Reclamation** is the marine-works workspace: a floor plan, a bathymetric survey, and a section
+  sheet are stitched server-side into one 3D site solid, integrated cell by cell for volumes, and
+  priced against a shared unit cost matrix, with every geometric assumption recorded beside the
+  result.
 
 Each template README explains its domain model, workflows, safeguards, source layout, and verification.
 They are designed to be changed as normal Pod workspaces rather than treated as generated product code.

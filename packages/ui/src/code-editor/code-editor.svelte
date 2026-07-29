@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { javascript } from '@codemirror/lang-javascript';
 	import { json } from '@codemirror/lang-json';
-	import { Annotation, EditorState, type Extension } from '@codemirror/state';
+	import { Annotation, EditorState, StateEffect, type Extension } from '@codemirror/state';
 	import { EditorView } from '@codemirror/view';
 	import { cn } from '#lib/utils';
 	import { basicSetup } from 'codemirror';
-	import { untrack } from 'svelte';
-	import type { Attachment } from 'svelte/attachments';
+	import type { Action } from 'svelte/action';
+	import { fromAction } from 'svelte/attachments';
 	import { buildCodeEditorTheme, codeEditorShellClass } from './theme.js';
 	import type { CodeEditorLanguage } from './code-editor.types.js';
 
@@ -32,15 +32,17 @@
 		onValueChange?: (value: string) => void;
 	} = $props();
 
-	let mountRef = $state<{ view: EditorView } | null>(null);
-	let syncedValue = $state('');
+	type EditorParameters = {
+		value: string;
+		language: CodeEditorLanguage;
+		readonly: boolean;
+		invalid: boolean;
+		ariaLabel: string;
+		onValueChange?: (value: string) => void;
+	};
 
-	const setupKey = $derived(
-		`${language}::${readonly ? 'ro' : 'rw'}::${invalid ? 'bad' : 'ok'}::${ariaLabel}`
-	);
-
-	function languageExtension(): Extension {
-		switch (language) {
+	function languageExtension(editorLanguage: CodeEditorLanguage): Extension {
+		switch (editorLanguage) {
 			case 'javascript':
 				return javascript();
 			case 'json':
@@ -50,76 +52,80 @@
 		}
 	}
 
-	function buildExtensions(): Extension[] {
+	function buildExtensions(
+		parameters: EditorParameters,
+		handleDocumentChange: (value: string) => void
+	): Extension[] {
 		return [
 			basicSetup,
-			buildCodeEditorTheme({ invalid }),
-			languageExtension(),
-			EditorState.readOnly.of(readonly),
-			EditorView.editable.of(!readonly),
-			EditorView.contentAttributes.of({ 'aria-label': ariaLabel }),
+			buildCodeEditorTheme({ invalid: parameters.invalid }),
+			languageExtension(parameters.language),
+			EditorState.readOnly.of(parameters.readonly),
+			EditorView.editable.of(!parameters.readonly),
+			EditorView.contentAttributes.of({ 'aria-label': parameters.ariaLabel }),
 			EditorView.updateListener.of((update) => {
 				if (!update.docChanged) return;
 				if (update.transactions.some((tr) => tr.annotation(ExternalSyncAnnotation))) return;
-				const next = update.state.doc.toString();
-				syncedValue = next;
-				onValueChange?.(next);
+				handleDocumentChange(update.state.doc.toString());
 			})
 		];
 	}
 
-	function syncDocument(nextValue: string): void {
-		const mount = mountRef;
-		if (!mount) return;
-		const current = mount.view.state.doc.toString();
-		if (current === nextValue) return;
-		mount.view.dispatch({
-			changes: { from: 0, to: current.length, insert: nextValue },
-			annotations: ExternalSyncAnnotation.of(true)
+	const mountEditor: Action<HTMLElement, EditorParameters> = (node, initialParameters) => {
+		let parameters = initialParameters;
+		let externalValue = parameters.value;
+		let setupKey = '';
+
+		const nextSetupKey = (next: EditorParameters) =>
+			`${next.language}::${next.readonly ? 'ro' : 'rw'}::${next.invalid ? 'bad' : 'ok'}::${next.ariaLabel}`;
+
+		const view = new EditorView({
+			state: EditorState.create({
+				doc: parameters.value,
+				extensions: buildExtensions(parameters, (nextValue) =>
+					parameters.onValueChange?.(nextValue)
+				)
+			}),
+			parent: node
 		});
-	}
+		setupKey = nextSetupKey(parameters);
 
-	$effect(() => {
-		const nextValue = value ?? '';
-		if (nextValue === syncedValue) return;
-		syncedValue = nextValue;
-		syncDocument(nextValue);
-	});
+		return {
+			update(nextParameters) {
+				const currentDocument = view.state.doc.toString();
+				const nextKey = nextSetupKey(nextParameters);
+				const externalValueChanged = nextParameters.value !== externalValue;
+				const configurationChanged = nextKey !== setupKey;
+				parameters = nextParameters;
+				externalValue = parameters.value;
+				setupKey = nextKey;
 
-	let attachmentCache: { setupKey: string; attachment: Attachment<HTMLElement> } | null = null;
-
-	function createAttachment(): Attachment<HTMLElement> {
-		return (node) => {
-			if (typeof window === 'undefined') return;
-
-			return untrack(() => {
-				const initial = value ?? '';
-				syncedValue = initial;
-
-				const view = new EditorView({
-					state: EditorState.create({
-						doc: initial,
-						extensions: buildExtensions()
-					}),
-					parent: node
+				if (!externalValueChanged && !configurationChanged) return;
+				view.dispatch({
+					...(!externalValueChanged || currentDocument === parameters.value
+						? {}
+						: {
+								changes: {
+									from: 0,
+									to: currentDocument.length,
+									insert: parameters.value
+								},
+								annotations: ExternalSyncAnnotation.of(true)
+							}),
+					...(configurationChanged
+						? {
+								effects: StateEffect.reconfigure.of(
+									buildExtensions(parameters, (nextValue) => parameters.onValueChange?.(nextValue))
+								)
+							}
+						: {})
 				});
-
-				mountRef = { view };
-
-				return () => {
-					view.destroy();
-					if (mountRef?.view === view) mountRef = null;
-				};
-			});
+			},
+			destroy() {
+				view.destroy();
+			}
 		};
-	}
-
-	function editorAttachment(): Attachment<HTMLElement> {
-		if (attachmentCache?.setupKey === setupKey) return attachmentCache.attachment;
-		const attachment = createAttachment();
-		attachmentCache = { setupKey, attachment };
-		return attachment;
-	}
+	};
 </script>
 
 {#if typeof window === 'undefined'}
@@ -132,7 +138,14 @@
 	<div
 		class={cn(codeEditorShellClass(invalid), className)}
 		style:min-height={minHeight}
-		{@attach editorAttachment()}
+		{@attach fromAction(mountEditor, () => ({
+			value: value ?? '',
+			language,
+			readonly,
+			invalid,
+			ariaLabel,
+			onValueChange
+		}))}
 	></div>
 {/if}
 

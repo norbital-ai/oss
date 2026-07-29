@@ -15,7 +15,7 @@
 		mobileBottomSheet?: boolean;
 		/** Callback when horizontal resizing is done */
 		onResize: () => void;
-		/** Live + final vertical height in px (drives --sheet-height). */
+		/** Final vertical height in px, emitted after a drag or keyboard resize. */
 		onHeightChange?: (height: number) => void;
 	}
 
@@ -34,14 +34,15 @@
 		onHeightChange
 	}: SheetContentResizeProps = $props();
 
-	let isResizingWidth = $state(false);
-	let isResizingHeight = $state(false);
-	let startX = $state(0);
-	let startY = $state(0);
-	let startWidth = $state(0);
-	let startHeight = $state(0);
-	let activePointerId = $state<number | null>(null);
-	let activeHandleElement = $state<HTMLElement | null>(null);
+	let resizing = $state<'width' | 'height' | null>(null);
+	let startX = 0;
+	let startY = 0;
+	let startWidth = 0;
+	let startHeight = 0;
+	let activePointerId: number | null = null;
+	let activeHandleElement: HTMLElement | null = null;
+	let maxDragHeight = 0;
+	let liveHeight: number | null = null;
 
 	function containerWidth(): number {
 		return contained ? (ref.parentElement?.clientWidth ?? window.innerWidth) : window.innerWidth;
@@ -56,8 +57,7 @@
 	 */
 	function cleanupResizeState(): void {
 		const pointerId = activePointerId;
-		isResizingWidth = false;
-		isResizingHeight = false;
+		resizing = null;
 		activePointerId = null;
 		if (pointerId !== null && activeHandleElement?.hasPointerCapture(pointerId)) {
 			activeHandleElement.releasePointerCapture(pointerId);
@@ -76,7 +76,7 @@
 		}
 		if (!(event.currentTarget instanceof HTMLElement)) return;
 		event.preventDefault();
-		isResizingWidth = true;
+		resizing = 'width';
 		activePointerId = event.pointerId;
 		activeHandleElement = event.currentTarget;
 		startX = event.clientX;
@@ -95,20 +95,35 @@
 		}
 		if (!(event.currentTarget instanceof HTMLElement)) return;
 		event.preventDefault();
-		isResizingHeight = true;
+		resizing = 'height';
 		activePointerId = event.pointerId;
 		activeHandleElement = event.currentTarget;
 		startY = event.clientY;
 		startHeight = ref.offsetHeight;
+		maxDragHeight = containerHeight() * 0.95;
+		liveHeight = startHeight;
 		activeHandleElement.setPointerCapture(event.pointerId);
 		document.body.style.cursor = 'ns-resize';
 		document.body.style.userSelect = 'none';
 	}
 
-	function resizeHeight(height: number): void {
+	function clampHeight(height: number, maxHeight = containerHeight() * 0.95): number {
 		const minHeight = 200;
-		const maxHeight = containerHeight() * 0.95;
-		onHeightChange?.(Math.max(minHeight, Math.min(height, maxHeight)));
+		return Math.max(minHeight, Math.min(height, maxHeight));
+	}
+
+	function renderHeight(height: number, maxHeight = containerHeight() * 0.95): number {
+		const nextHeight = clampHeight(height, maxHeight);
+		// Keep the hot drag path outside Svelte reactivity and storage. Updating the
+		// custom property lets the browser paint the sheet at pointer speed without
+		// invalidating every child component.
+		ref.style.setProperty('--sheet-height', `${nextHeight}px`);
+		liveHeight = nextHeight;
+		return nextHeight;
+	}
+
+	function commitHeight(height: number): void {
+		onHeightChange?.(renderHeight(height));
 	}
 
 	function handleHeightKeyDown(event: KeyboardEvent): void {
@@ -116,14 +131,14 @@
 		event.preventDefault();
 
 		if (event.key === 'Home') {
-			resizeHeight(200);
+			commitHeight(200);
 			return;
 		}
 		if (event.key === 'End') {
-			resizeHeight(containerHeight() * 0.95);
+			commitHeight(containerHeight() * 0.95);
 			return;
 		}
-		resizeHeight(ref.offsetHeight + (event.key === 'ArrowUp' ? 24 : -24));
+		commitHeight(ref.offsetHeight + (event.key === 'ArrowUp' ? 24 : -24));
 	}
 
 	/**
@@ -133,7 +148,7 @@
 		if (activePointerId !== event.pointerId) return;
 		event.preventDefault();
 
-		if (isResizingWidth) {
+		if (resizing === 'width') {
 			const deltaX = event.clientX - startX;
 			let newWidth: number;
 
@@ -150,10 +165,9 @@
 			return;
 		}
 
-		if (isResizingHeight) {
+		if (resizing === 'height') {
 			const deltaY = startY - event.clientY;
-			// Mobile CSS uses `height: var(--sheet-height) !important` — mutate via callback, not style.height.
-			resizeHeight(startHeight + deltaY);
+			renderHeight(startHeight + deltaY, maxDragHeight);
 		}
 	}
 
@@ -161,24 +175,30 @@
 	 * Stop resizing when the active pointer ends or is cancelled.
 	 */
 	function finishResize(event?: PointerEvent): void {
-		if (!isResizingWidth && !isResizingHeight) {
+		if (!resizing) {
 			return;
 		}
 		if (event && activePointerId !== null && event.pointerId !== activePointerId) {
 			return;
 		}
-		const wasResizingWidth = isResizingWidth;
+		const wasResizingWidth = resizing === 'width';
+		const finalHeight = resizing === 'height' ? (liveHeight ?? ref.offsetHeight) : null;
 		cleanupResizeState();
 		if (wasResizingWidth) onResize();
+		if (finalHeight !== null) onHeightChange?.(finalHeight);
+		liveHeight = null;
 	}
 
 	function handleWindowBlur(): void {
-		if (!isResizingWidth && !isResizingHeight) {
+		if (!resizing) {
 			return;
 		}
-		const wasResizingWidth = isResizingWidth;
+		const wasResizingWidth = resizing === 'width';
+		const finalHeight = resizing === 'height' ? (liveHeight ?? ref.offsetHeight) : null;
 		cleanupResizeState();
 		if (wasResizingWidth) onResize();
+		if (finalHeight !== null) onHeightChange?.(finalHeight);
+		liveHeight = null;
 	}
 
 	/**
@@ -205,7 +225,8 @@
 		onkeydown={handleHeightKeyDown}
 	>
 		<div
-			class="h-1 w-10 rounded-full bg-border transition-colors duration-150 hover:bg-input active:bg-input {isResizingHeight
+			class="h-1 w-10 rounded-full bg-border transition-colors duration-150 hover:bg-input active:bg-input {resizing ===
+			'height'
 				? 'bg-input'
 				: ''}"
 		></div>
@@ -231,7 +252,7 @@
 	<div
 		class="h-12 w-1.5 rounded-full bg-border transition-colors duration-150
 			   hover:bg-input active:bg-input
-			   {isResizingWidth ? 'bg-input' : ''}"
+			   {resizing === 'width' ? 'bg-input' : ''}"
 	>
 		<!-- Optional: Add subtle pattern/texture -->
 		<div class="h-full w-full rounded-full bg-linear-to-b from-white/10 to-transparent"></div>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { onMount } from 'svelte';
 	import { dateToPixels, formatTimeLabel, isSameDay } from '../utils.js';
 
 	let {
@@ -20,7 +21,7 @@
 
 	let now = $state(new Date());
 
-	$effect(() => {
+	onMount(() => {
 		const interval = setInterval(() => {
 			now = new Date();
 		}, 60_000);

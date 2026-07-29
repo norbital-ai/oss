@@ -90,7 +90,7 @@ export function resolveTemplateToolchain() {
 		.slice(0, 16);
 	return {
 		name: '@norbital-ai/template-toolchain',
-		version: '0.0.0',
+		version: '0.0.1',
 		private: true,
 		description: 'Exact external packages required by active Norbital template workspaces.',
 		engines: { node: '>=26.0.0' },

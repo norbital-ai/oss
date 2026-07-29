@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { onDestroy } from 'svelte';
-	import { watch } from 'runed';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 	import { page, goto } from '$lib/client/router.svelte.js';
 	import {
@@ -133,30 +133,22 @@
 			return () => activeCollectionViews.delete(view);
 		}
 	});
-	const groupLandingHref = $derived(
-		requestedAppName && appName !== requestedAppName && currentPath === `/app/${requestedAppName}`
-			? `/app/${appName}`
-			: null
-	);
 	const accessible = $derived(appName && appAccessAllowed(appName, data.accessibleAppNames));
 	const loadableAppName = $derived(accessible ? appName : undefined);
-	/** Stable promise per app — do not call loaders inside `$derived` (restarts preload on churn). */
-	let activeApp = $state<ReturnType<WorkspaceAppLoader> | undefined>(undefined);
-	let loadedAppName: string | undefined;
-	watch(
-		() => loadableAppName,
-		(name) => {
-			if (!name) {
-				if (loadedAppName === undefined) return;
-				loadedAppName = undefined;
-				activeApp = undefined;
-				return;
-			}
-			if (loadedAppName === name) return;
-			loadedAppName = name;
-			activeApp = apps[name]?.();
-		}
-	);
+	const loadedApps = new Map<
+		string,
+		{ loader: WorkspaceAppLoader; promise: ReturnType<WorkspaceAppLoader> }
+	>();
+	function loadWorkspaceApp(name: string): ReturnType<WorkspaceAppLoader> | undefined {
+		const loader = apps[name];
+		if (!loader) return undefined;
+		const cached = loadedApps.get(name);
+		if (cached?.loader === loader) return cached.promise;
+		const promise = loader();
+		loadedApps.set(name, { loader, promise });
+		return promise;
+	}
+	const activeApp = $derived(loadableAppName ? loadWorkspaceApp(loadableAppName) : undefined);
 	const activeAppManifest = $derived(appName ? manifestContext.findApp(appName) : undefined);
 	const detailStack = $derived.by((): DetailStackEntry[] =>
 		platformState.state.navStack.map((item) => ({
@@ -172,37 +164,25 @@
 	const detailSheetFullScreen = $derived(
 		topDetailFrame ? detailPreferences.isFullScreen(topDetailFrame.collection_name) : false
 	);
+	const sidebarHostPlugins = $derived(
+		(data.hostPlugins?.apps ?? []).filter((plugin) => plugin.placement === 'sidebar')
+	);
 	const activeHostPlugin = $derived(
-		(data.hostPlugins?.apps ?? []).find(
-			(plugin) =>
-				plugin.placement === 'sidebar' &&
-				(currentPath === plugin.route || currentPath.startsWith(`${plugin.route}/`))
+		sidebarHostPlugins.find(
+			(plugin) => currentPath === plugin.route || currentPath.startsWith(`${plugin.route}/`)
 		) ?? null
 	);
-	let mountedHostPluginKeys = $state(new Set<string>());
+	const prefetchedHostPluginKeys = new SvelteSet<string>();
+	const mountedHostPlugins = $derived(
+		sidebarHostPlugins.filter(
+			(plugin) => plugin.key === activeHostPlugin?.key || prefetchedHostPluginKeys.has(plugin.key)
+		)
+	);
 
-	function mountHostPlugin(href: string): void {
-		const plugin = (data.hostPlugins?.apps ?? []).find(
-			(candidate) => candidate.placement === 'sidebar' && candidate.route === href
-		);
-		if (!plugin || mountedHostPluginKeys.has(plugin.key)) return;
-		mountedHostPluginKeys = new Set([...mountedHostPluginKeys, plugin.key]);
+	function prefetchHostPlugin(href: string): void {
+		const plugin = sidebarHostPlugins.find((candidate) => candidate.route === href);
+		if (plugin) prefetchedHostPluginKeys.add(plugin.key);
 	}
-
-	watch(
-		() => activeHostPlugin,
-		(plugin) => {
-			if (plugin) mountHostPlugin(plugin.route);
-		},
-		{ lazy: false }
-	);
-	watch(
-		() => groupLandingHref,
-		(href) => {
-			if (href) void goto(href, { replaceState: true });
-		},
-		{ lazy: false }
-	);
 	const navigationModel = $derived.by((): WorkspaceNavigationModel => ({
 		activeOrganization,
 		organizations: resolveWorkspaceOrganizationOptions({
@@ -334,7 +314,7 @@
 		}
 		navigate(href);
 	}}
-	onPrefetch={mountHostPlugin}
+	onPrefetch={prefetchHostPlugin}
 	onOrganizationChange={async (organizationId: string) => {
 		const response = await fetch('/api/auth/organization/set-active', {
 			method: 'POST',
@@ -356,7 +336,7 @@
 >
 	<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 		<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
-		{#each (data.hostPlugins?.apps ?? []).filter( (plugin) => mountedHostPluginKeys.has(plugin.key) ) as plugin (plugin.key)}
+		{#each mountedHostPlugins as plugin (plugin.key)}
 			<div
 				class={activeHostPlugin?.key === plugin.key ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}
 				aria-hidden={activeHostPlugin?.key === plugin.key ? undefined : 'true'}
@@ -529,6 +509,7 @@
 		class="w-[520px] sm:max-w-[520px]"
 		showCloseButton={false}
 		fullScreen={detailSheetFullScreen}
+		preventBackgroundClick="narrow"
 		onOpenAutoFocus={(event) => event.preventDefault()}
 		onCloseAutoFocus={(event) => event.preventDefault()}
 		onEscapeKeydown={(event) => {
@@ -539,11 +520,8 @@
 		<Bound size="full" clip class="relative w-full">
 			<DetailSurfaceStack
 				stack={detailStack}
-				resolveSurface={(routeKey: string, parentRouteKey?: string) => {
-					void platformState.detailSurfaceRegistrationRevision;
-					return platformState.navigation.resolve(routeKey, parentRouteKey);
-				}}
-				isLoading={platformState.state.isNavigating}
+				resolveSurface={(routeKey: string, parentRouteKey?: string) =>
+					platformState.navigation.resolve(routeKey, parentRouteKey)}
 				unresolvedFallback={platformDetailFallback}
 				actions={detailSheetToolbar}
 			/>

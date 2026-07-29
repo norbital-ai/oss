@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { IconWrapper } from '#lib/icon-wrapper';
 	import { cn } from '#lib/utils';
-	import { onMount, type Snippet } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import { Tabs as TabsPrimitive } from 'bits-ui';
 	import TabsList from './tabs-list.svelte';
 	import TabsContent from './tabs-content.svelte';
@@ -69,10 +69,6 @@
 	const resolvedListClass = $derived(
 		listClass ?? (variant === 'default' ? 'mx-4 mb-0 sm:mx-6' : undefined)
 	);
-	let interactive = $state(false);
-	onMount(() => {
-		interactive = true;
-	});
 </script>
 
 {#snippet tabList()}
@@ -120,7 +116,6 @@
 	)}
 	value={activeValue}
 	data-tabs-root
-	data-interactive={interactive || undefined}
 	onValueChange={(next) => {
 		value = next;
 		onValueChange?.(next);

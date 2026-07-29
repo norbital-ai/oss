@@ -1103,60 +1103,65 @@
 	{/key}
 {/if}
 
-<div
-	class="collection-table-responsive h-full min-h-[24rem] w-full min-w-0"
-	data-collection-table-surface
->
-	<div class="collection-table-wide h-full min-h-0" data-collection-layout="wide">
-		<CollectionGrid
-			table={tableApi}
-			{disabled}
-			class={className}
-			isLoading={tableLoading}
-			error={errorMessage}
-			enableSelection={effectiveSelectable}
-			onRowActivate={openRecord}
-			getRowLeadingAccent={approvalAccent}
-			{activeRecordId}
-			rowActions={gridRowActions}
-			leftActions={[tableToolbar]}
-			rightActions={[toolbarTools]}
-			stickyRowActions={true}
-			hasNextPage={Boolean(queries.rows?.nextCursor)}
-			onPreviousPage={previousPage}
-			onNextPage={nextPage}
-			{emptyPlaceholder}
-		/>
-	</div>
+<div class="collection-table-container h-full min-h-[24rem] w-full min-w-0">
+	<div
+		class="collection-table-responsive h-full min-h-0 w-full min-w-0"
+		data-collection-table-surface
+	>
+		<div class="collection-table-wide h-full min-h-0" data-collection-layout="wide">
+			<CollectionGrid
+				table={tableApi}
+				{disabled}
+				class={className}
+				isLoading={tableLoading}
+				error={errorMessage}
+				enableSelection={effectiveSelectable}
+				onRowActivate={openRecord}
+				getRowLeadingAccent={approvalAccent}
+				{activeRecordId}
+				rowActions={gridRowActions}
+				leftActions={[tableToolbar]}
+				rightActions={[toolbarTools]}
+				stickyRowActions={true}
+				hasNextPage={Boolean(queries.rows?.nextCursor)}
+				onPreviousPage={previousPage}
+				onNextPage={nextPage}
+				{emptyPlaceholder}
+			/>
+		</div>
 
-	<div class="collection-table-narrow h-full min-h-0" data-collection-layout="narrow">
-		<CollectionTableList
-			rows={listRows}
-			loading={tableLoading}
-			error={errorMessage}
-			selectable={effectiveSelectable}
-			{disabled}
-			class={className}
-			pageIndex={tableApi.pagination.current.pageIndex}
-			{pageCount}
-			hasNextPage={Boolean(queries.rows?.nextCursor)}
-			toolbar={tableToolbar}
-			{toolbarTools}
-			ListCard={ListCard ?? autoListCard}
-			{emptyPlaceholder}
-			{rowActions}
-			{recordTitle}
-			{activeRecordId}
-			recordHref={(record) =>
-				recordDetailHref({
-					record,
-					__collectionTableRowId: String(Reflect.get(record, recordIdField))
-				})}
-			onOpen={(record) =>
-				openRecord({ record, __collectionTableRowId: String(Reflect.get(record, recordIdField)) })}
-			onPreviousPage={previousPage}
-			onNextPage={nextPage}
-		/>
+		<div class="collection-table-narrow h-full min-h-0" data-collection-layout="narrow">
+			<CollectionTableList
+				rows={listRows}
+				loading={tableLoading}
+				error={errorMessage}
+				selectable={effectiveSelectable}
+				{disabled}
+				class={className}
+				pageIndex={tableApi.pagination.current.pageIndex}
+				{pageCount}
+				hasNextPage={Boolean(queries.rows?.nextCursor)}
+				toolbar={tableToolbar}
+				{toolbarTools}
+				ListCard={ListCard ?? autoListCard}
+				{emptyPlaceholder}
+				{rowActions}
+				{recordTitle}
+				{activeRecordId}
+				recordHref={(record) =>
+					recordDetailHref({
+						record,
+						__collectionTableRowId: String(Reflect.get(record, recordIdField))
+					})}
+				onOpen={(record) =>
+					openRecord({
+						record,
+						__collectionTableRowId: String(Reflect.get(record, recordIdField))
+					})}
+				onPreviousPage={previousPage}
+				onNextPage={nextPage}
+			/>
+		</div>
 	</div>
 </div>
 
@@ -1222,6 +1227,10 @@
 </Dialog.Root>
 
 <style>
+	.collection-table-container {
+		container-type: inline-size;
+	}
+
 	.collection-table-responsive {
 		min-width: 0;
 	}
@@ -1230,7 +1239,7 @@
 		display: none;
 	}
 
-	@media (max-width: 47.999rem) {
+	@container (max-width: 47.999rem) {
 		.collection-table-wide {
 			display: none;
 		}

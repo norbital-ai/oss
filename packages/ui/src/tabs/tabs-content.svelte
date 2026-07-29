@@ -20,11 +20,6 @@
 		animate?: boolean;
 		contentPadding?: boolean;
 	} = $props();
-
-	let hasActivated = $state(false);
-	$effect(() => {
-		if (active) hasActivated = true;
-	});
 </script>
 
 <TabsPrimitive.Content
@@ -42,7 +37,7 @@
 	{...restProps}
 	{value}
 >
-	{#if !lazyLoad || active || (keepAlive && hasActivated)}
+	{#if !lazyLoad || active || keepAlive}
 		{#if keepAlive}
 			<div hidden={!active} class="h-full min-h-0 min-w-0 overflow-clip">
 				{@render children?.()}

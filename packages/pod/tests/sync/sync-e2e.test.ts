@@ -19,6 +19,7 @@ function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch
 				method: init.method,
 				path,
 				body: init.body,
+				signal: init.signal,
 				headers: init.accept ? { accept: init.accept, 'content-type': 'application/json' } : {}
 			},
 			identity

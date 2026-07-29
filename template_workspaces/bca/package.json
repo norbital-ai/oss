@@ -1,6 +1,6 @@
 {
 	"name": "@template/bca",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"private": true,
 	"type": "module",
 	"scripts": {
@@ -13,8 +13,8 @@
 	"dependencies": {
 		"@iconify/svelte": "^5.2.2",
 		"@norbital-ai/pod": "0.0.1",
-		"@norbital-ai/std": "^0.1.21",
-		"@norbital-ai/ui": "^0.1.25",
+		"@norbital-ai/std": "0.0.1",
+		"@norbital-ai/ui": "0.0.1",
 		"exifr": "7.1.3",
 		"jpeg-js": "0.4.4",
 		"mode-watcher": "^1.1.0",

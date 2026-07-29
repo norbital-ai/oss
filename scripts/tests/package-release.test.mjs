@@ -20,7 +20,7 @@ const entries = [
 	},
 	{
 		name: '@norbital-ai/ui',
-		version: '0.1.25',
+		version: '0.0.1',
 		tarball: 'https://registry.example.test/ui-a.tgz',
 		integrity: sha512Integrity(Buffer.from('ui archive'))
 	}

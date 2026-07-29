@@ -2,6 +2,7 @@
 **/.svelte-kit/
 **/build/
 **/.generated/
+**/graphify-out/
 
 # Tooling / CI
 .turbo/

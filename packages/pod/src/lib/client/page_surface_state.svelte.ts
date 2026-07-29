@@ -1,4 +1,4 @@
-import { goto, navigating, page } from './router.svelte.js';
+import { goto, page } from './router.svelte.js';
 import {
 	PlatformState,
 	setPlatformStateContext,
@@ -29,7 +29,6 @@ export type PageSurfaceStateParams = PlatformStateParams & {
 /** Page navigation, detail stack, and scope hydration on top of {@link PlatformState}. */
 export class PageSurfaceState extends PlatformState {
 	readonly navigation: DetailSurfaceService;
-	detailSurfaceRegistrationRevision = $state(0);
 	currentUrl = $derived(page.url);
 
 	protected getScopeDataForDerivation(): TDynamicApplicationScopeData | null {
@@ -43,7 +42,6 @@ export class PageSurfaceState extends PlatformState {
 		const navState = this.navigation.getCurrentNavStack(currentUrl);
 		return {
 			currentUrl,
-			isNavigating: Boolean(navigating.to),
 			navState,
 			navStack: navState ? this.navigation.toNavigationTargets(navState.stack) : []
 		};
@@ -53,10 +51,6 @@ export class PageSurfaceState extends PlatformState {
 		super(params);
 		this.navigation = new DetailSurfaceService({
 			...params.detailSurfaceOptions,
-			onRegistrationsChanged: () => {
-				this.detailSurfaceRegistrationRevision += 1;
-				params.detailSurfaceOptions?.onRegistrationsChanged?.();
-			},
 			navigateInternal: (pathname) => {
 				const href = pathname.startsWith('/') ? pathname : `/${pathname}`;
 				void goto(href);

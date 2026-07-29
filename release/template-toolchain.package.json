@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/template-toolchain",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"private": true,
 	"description": "Exact external packages required by active Norbital template workspaces.",
 	"engines": { "node": ">=26.0.0" },
@@ -51,6 +51,11 @@
 					"vite",
 					"zod"
 				],
+				"devDependencies": ["prettier", "prettier-plugin-svelte", "svelte-check", "typescript"]
+			},
+			{
+				"key": "reclamation",
+				"dependencies": ["@iconify/svelte", "mode-watcher", "runed", "svelte", "vite", "zod"],
 				"devDependencies": ["prettier", "prettier-plugin-svelte", "svelte-check", "typescript"]
 			}
 		]

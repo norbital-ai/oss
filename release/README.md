@@ -78,7 +78,7 @@ The resulting package release file is an input to the provider-neutral generator
 ```sh
 node scripts/resolve-published-packages.mjs \
   --source workspace \
-  --archive-base-url https://releases.example.test/platform-v2026.07.29.15/ \
+  --archive-base-url https://releases.example.test/platform-v0.0.1/ \
   --output dist/package-release.json \
   --archive-output dist/package-archives
 

@@ -1,4 +1,5 @@
 import type { CollectionTableDetailRegistration } from '@norbital-ai/ui/collection-table/navigation';
+import { SvelteMap } from 'svelte/reactivity';
 import {
 	NavStateSchema,
 	isSameNavStackItem,
@@ -23,7 +24,7 @@ export type DetailSurfaceServiceOptions = {
 };
 
 export class DetailSurfaceService {
-	readonly #registrations = new Map<string, CollectionTableDetailRegistration>();
+	readonly #registrations = new SvelteMap<string, CollectionTableDetailRegistration>();
 	readonly #navigateInternal: (pathname: string) => void;
 	readonly #onRegistrationsChanged: () => void;
 	readonly #getRouteContext: (url: URL) => TRouteContext | null;

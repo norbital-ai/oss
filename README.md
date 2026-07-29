@@ -16,6 +16,17 @@ The open-source reference workspaces live in [`template_workspaces/`](./template
 They are tested as workspace members but marked private because they are source templates, not npm
 packages.
 
+## Documentation
+
+Docs live next to the code they describe — there is no root `docs/` folder:
+
+| Area                            | Location                                                                     |
+| ------------------------------- | ---------------------------------------------------------------------------- |
+| Pod framework                   | [`packages/pod/docs/`](./packages/pod/docs)                                  |
+| UI, std, config, platform-utils | `packages/<name>/docs/`                                                      |
+| Template workspaces             | `template_workspaces/<slug>/docs/`                                           |
+| Release contracts               | [`release/README.md`](./release/README.md), [`RELEASING.md`](./RELEASING.md) |
+
 ## Development
 
 Requires Node.js 26+ and pnpm 11.15.1.

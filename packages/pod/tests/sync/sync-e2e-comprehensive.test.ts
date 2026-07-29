@@ -26,6 +26,7 @@ function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch
 				method: init.method,
 				path,
 				body: init.body,
+				signal: init.signal,
 				headers: init.accept ? { accept: init.accept, 'content-type': 'application/json' } : {}
 			},
 			identity
@@ -571,6 +572,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			await localFindMany(sync, collection, { limit: 10 });
 			const firstLoad = shapeRequests;
 			expect(firstLoad).toBeGreaterThan(0);
+			await client.stopStream();
 			disableClientSync();
 
 			const reloaded = new PodSyncClient({

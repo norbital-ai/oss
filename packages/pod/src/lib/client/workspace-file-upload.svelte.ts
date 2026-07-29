@@ -28,11 +28,18 @@ function readFileBase64(file: File, signal?: AbortSignal): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
 		const abort = () => reader.abort();
+		const cleanup = () => signal?.removeEventListener('abort', abort);
 		signal?.addEventListener('abort', abort, { once: true });
-		reader.onerror = () => reject(reader.error ?? new Error('File could not be read.'));
-		reader.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
+		reader.onerror = () => {
+			cleanup();
+			reject(reader.error ?? new Error('File could not be read.'));
+		};
+		reader.onabort = () => {
+			cleanup();
+			reject(new DOMException('Upload cancelled', 'AbortError'));
+		};
 		reader.onload = () => {
-			signal?.removeEventListener('abort', abort);
+			cleanup();
 			const encoded = typeof reader.result === 'string' ? reader.result.split(',')[1] : undefined;
 			if (!encoded) reject(new Error('File could not be encoded.'));
 			else resolve(encoded);

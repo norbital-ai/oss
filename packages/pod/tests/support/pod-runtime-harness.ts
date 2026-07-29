@@ -15,6 +15,7 @@ export type TenantRequestInit = {
 	readonly path: string; // e.g. "sync/subscribe"
 	readonly headers?: Record<string, string>;
 	readonly body?: string;
+	readonly signal?: AbortSignal;
 };
 
 export type Identity = {
@@ -245,6 +246,7 @@ export async function bootPodRuntime(template = 'construction'): Promise<PodRunt
 			const request = new Request(`http://pod.local/_runtime/${init.path}`, {
 				method: init.method,
 				headers,
+				signal: init.signal,
 				...(init.body ? { body: init.body } : {})
 			});
 			return handleTenantRequest(request, { db: binding });

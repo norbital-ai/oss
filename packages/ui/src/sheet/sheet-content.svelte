@@ -11,7 +11,8 @@
 		flush?: boolean;
 		/** Position the sheet relative to its portal container instead of the viewport. */
 		contained?: boolean;
-		preventBackgroundClick?: boolean;
+		/** Block the background always, never, or only while the viewport uses the mobile sheet layout. */
+		preventBackgroundClick?: boolean | 'narrow';
 		actions?: Snippet[];
 		persistenceKey?: string;
 		portalTarget?: string;
@@ -25,6 +26,7 @@
 	import { Dialog as BitsDialog } from 'bits-ui';
 	import { PersistedState } from 'runed';
 	import { onMount } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import SheetContentResize from './sheet-content-resize.svelte';
 	import { resolveSheetPortalTarget } from './sheet-portal-target.js';
 	import { sheetVariants } from './sheet-variants.js';
@@ -44,8 +46,19 @@
 		portalTarget,
 		showCloseButton = true,
 		onOpenAutoFocus,
+		trapFocus: trapFocusProp,
+		interactOutsideBehavior: interactOutsideBehaviorProp,
 		...restProps
 	}: SheetContentProps = $props();
+
+	const narrowViewport = new MediaQuery('max-width: 47.999rem');
+	const shouldPreventBackgroundClick = $derived(
+		preventBackgroundClick === 'narrow' ? narrowViewport.current : preventBackgroundClick
+	);
+	const trapFocus = $derived(trapFocusProp ?? shouldPreventBackgroundClick);
+	const interactOutsideBehavior = $derived(
+		interactOutsideBehaviorProp ?? (shouldPreventBackgroundClick ? 'close' : 'ignore')
+	);
 
 	function handleOpenAutoFocus(event: Event): void {
 		// Sheets open from row actions. Preventing autofocus alone is not enough: with
@@ -197,6 +210,8 @@
 			data-fullscreen={fullScreen}
 			class={contentClasses}
 			style={inlineStyles}
+			{trapFocus}
+			{interactOutsideBehavior}
 			{...restProps}
 			onOpenAutoFocus={handleOpenAutoFocus}
 		>
