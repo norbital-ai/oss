@@ -55,6 +55,11 @@ RUN node -e "const manifest=require('./package.json'); if(manifest.norbitalTempl
 		"${drizzle_root}"/payload-*.mjs \
 		"${drizzle_root}"/cli.js \
 		"${drizzle_root}"/cli.mjs \
+	# Source maps are developer diagnostics for registry packages; tenant builds
+	# consume the JavaScript, declarations, native binaries, and baked platform.
+	# Removing maps in the install layer preserves runtime behavior while keeping
+	# the logical OCI image below Core's decimal 500 MB deployment contract.
+	&& find /opt/norbital/tenant-toolchain/node_modules -type f -name '*.map' -delete \
 	&& rm -rf /opt/norbital/package-archives \
 	&& npm cache clean --force
 

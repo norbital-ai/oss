@@ -26,7 +26,7 @@ env:
   OCI_REGISTRY: ${{ vars.NORBITAL_OCI_REGISTRY || 'ghcr.io' }}
   OCI_NAMESPACE: ${{ vars.NORBITAL_OCI_NAMESPACE || github.repository_owner }}
   PACKAGE_REGISTRY_URL: ${{ vars.NORBITAL_PACKAGE_REGISTRY || 'https://npm.pkg.github.com' }}
-  MAX_IMAGE_BYTES: ${{ vars.NORBITAL_MAX_IMAGE_BYTES || '524288000' }}
+  MAX_IMAGE_BYTES: ${{ vars.NORBITAL_MAX_IMAGE_BYTES || '500000000' }}
   BENCHMARK_TEMPLATE: ${{ vars.NORBITAL_BENCHMARK_TEMPLATE || 'construction' }}
 
 jobs:

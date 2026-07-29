@@ -112,6 +112,9 @@ redirect the same pipeline without changing source:
 - `NORBITAL_MAX_IMAGE_BYTES`
 - `NORBITAL_BENCHMARK_TEMPLATE`
 
+The default image ceiling is Core's decimal 500 MB contract (`500000000` bytes), distinct from the
+500 MiB cgroup limit used by tenant build benchmarks.
+
 If the package registry requires authentication during image construction, configure the
 `NPM_REGISTRY_TOKEN` Actions secret. GitHub Packages can use the workflow token. A non-GHCR OCI
 registry can use the `NORBITAL_OCI_TOKEN` secret with `NORBITAL_OCI_USERNAME`.
