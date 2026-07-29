@@ -36,6 +36,7 @@ jobs:
       release_name: ${{ steps.release.outputs.release_name }}
       release_tag: ${{ steps.release.outputs.release_tag }}
       package_key: ${{ steps.versions.outputs.package_key }}
+      template_dependency_key: ${{ steps.template-dependencies.outputs.template_dependency_key }}
     steps:
       - name: Checkout complete history
         uses: actions/checkout@v7
@@ -74,6 +75,13 @@ jobs:
           fi
           echo "release_name=$release_name" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Verify template toolchain dependencies
+        id: template-dependencies
+        run: |
+          node scripts/resolve-template-toolchain.mjs \
+            --check \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Verify published package archives
         id: versions
@@ -142,6 +150,7 @@ jobs:
             ${{ steps.image.outputs.reference }}:sha-${{ github.sha }}
           build-args: |
             PLATFORM_FINGERPRINT=${{ needs.prepare.outputs.package_key }}
+            TEMPLATE_DEPENDENCY_ID=${{ needs.prepare.outputs.template_dependency_key }}
             SOURCE_REVISION=${{ github.sha }}
           cache-from: type=gha,scope=platform-builder
           cache-to: type=gha,mode=max,scope=platform-builder
@@ -156,34 +165,63 @@ jobs:
           echo "Builder image size: ${image_bytes} bytes"
           test "$image_bytes" -le "$MAX_IMAGE_BYTES"
 
-      - name: Benchmark published builder
+      - name: Verify every active template in the published builder
         env:
           IMAGE: ${{ steps.image.outputs.reference }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          node scripts/benchmark-builder.mjs \
+          node scripts/verify-builder-toolchain.mjs \
             --image "${IMAGE}@${DIGEST}" \
-            --template "$BENCHMARK_TEMPLATE" \
             --expected-package-key "${{ needs.prepare.outputs.package_key }}" \
-            --output dist/builder-benchmark.json
+            --expected-template-dependency-key "${{ needs.prepare.outputs.template_dependency_key }}" \
+            --output dist/builder-toolchain-verification.json
+
+      - name: Benchmark every active template
+        env:
+          IMAGE: ${{ steps.image.outputs.reference }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p dist/builder-benchmarks
+          node -e \
+            "for (const template of require('./release/templates.json').templates) console.log(template.key)" \
+            | while read -r template; do
+                node scripts/benchmark-builder.mjs \
+                  --image "${IMAGE}@${DIGEST}" \
+                  --template "$template" \
+                  --expected-package-key "${{ needs.prepare.outputs.package_key }}" \
+                  --output "dist/builder-benchmarks/${template}.json"
+              done
+          cp "dist/builder-benchmarks/${BENCHMARK_TEMPLATE}.json" dist/builder-benchmark.json
           {
-            echo "### Tenant builder release gate"
+            echo "### Tenant builder all-template release gate"
             echo
-            echo '```json'
-            cat dist/builder-benchmark.json
-            echo '```'
+            for benchmark in dist/builder-benchmarks/*.json; do
+              echo "#### $(basename "$benchmark" .json)"
+              echo
+              echo '```json'
+              cat "$benchmark"
+              echo '```'
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Attest builder benchmark
+      - name: Attest builder toolchain verification
         uses: actions/attest@v4
         with:
-          subject-path: dist/builder-benchmark.json
+          subject-path: dist/builder-toolchain-verification.json
 
-      - name: Upload builder benchmark
+      - name: Attest builder benchmarks
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/builder-benchmarks/*.json
+
+      - name: Upload builder evidence
         uses: actions/upload-artifact@v7
         with:
           name: builder-benchmark-${{ needs.prepare.outputs.release_name }}
-          path: dist/builder-benchmark.json
+          path: |
+            dist/builder-toolchain-verification.json
+            dist/builder-benchmark.json
+            dist/builder-benchmarks/*.json
           if-no-files-found: error
           retention-days: 90
 
@@ -327,7 +365,9 @@ jobs:
           gh release upload \
             "$RELEASE_TAG" \
             dist/platform-release.json \
+            dist/builder-toolchain-verification.json \
             dist/builder-benchmark.json \
+            dist/builder-benchmarks/*.json \
             dist/package-archives/config.tgz \
             dist/package-archives/platform-utils.tgz \
             dist/package-archives/pod.tgz \

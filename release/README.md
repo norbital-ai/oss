@@ -86,6 +86,14 @@ node scripts/generate-platform-release.mjs \
   --runtime-digest "sha256:$RUNTIME_DIGEST"
 ```
 
+[`template-toolchain.package.json`](./template-toolchain.package.json) is the builder-owned union of
+external runtime and type-check dependencies declared by every active template. Its versions are
+exact, resolved from the repository lockfile, and its 16-hex dependency key is recorded in the
+builder image. `pnpm template-toolchain:check` fails whenever an active template manifest or
+lockfile changes without regenerating this contract. Template-only libraries such as `exceljs`
+therefore remain template dependencies rather than becoming false Pod dependencies, while
+no-network tenant builds and checks can still resolve them from the versioned toolchain.
+
 Each package entry carries `{ name, version, tarball, integrity }`, where `integrity` is an exact
 sha512 SRI. The 16-hex `packageKey` hashes sorted `{ name, version, integrity }` entries. The
 generator derives a 64-hex `buildContractId` from that package content, builder/runtime image
@@ -108,26 +116,28 @@ If the package registry requires authentication during image construction, confi
 `NPM_REGISTRY_TOKEN` Actions secret. GitHub Packages can use the workflow token. A non-GHCR OCI
 registry can use the `NORBITAL_OCI_TOKEN` secret with `NORBITAL_OCI_USERNAME`.
 
-The builder image contains the exact verified public package archives under
-`/opt/norbital/tenant-toolchain`, including its `.package-key`, and bakes the matching browser
-platform into `/opt/norbital/platform-client`. It has no entrypoint; a host scheduler can keep the
-container warm with `sleep infinity` and execute Pod in `/workspace`. The runtime image contains
-only Node, has no entrypoint, and defaults to the already-built tenant bundle mounted at
-`/workspace/serve.mjs`; it does not contain Pod or tenant source.
+The builder image contains the exact verified public package archives and exact active-template
+dependencies under `/opt/norbital/tenant-toolchain`, including its `.package-key` and
+`.template-dependency-key`. It bakes the matching browser platform and manifest into
+`/opt/norbital/platform-client`. It has no entrypoint; a host scheduler can keep the container warm
+with `sleep infinity` and execute Pod in `/workspace`. The runtime image contains only Node, has no
+entrypoint, and defaults to the already-built tenant bundle mounted at `/workspace/serve.mjs`; it
+does not contain Pod or tenant source.
 
 The versioned Node 26 builder labels its platform fingerprint and source revision. The minimal Node
 26 runtime only serves the immutable `serve.mjs` emitted by Pod. Hosts may mirror either image; the
 platform manifest identifies the executable content by OCI digest, so provider location is not
 part of tenant build identity.
 
-Every platform release also runs an active catalogue template twice in the digest-pinned builder.
-The first build performs the complete structural and Svelte validation and primes the generated
-workspace and compiler caches. The second measures the same prevalidated
-`NORBITAL_POD_SYNCED=1`/`NORBITAL_POD_CHECKED=1` contract used by the tenant build runner; it does
-not hide compiler or migration work. The release is blocked unless that measured build completes
-in at most 5,000 ms while the container has both `--memory=500m` and `--memory-swap=500m` and no
-network. The attested `builder-benchmark.json` records that prevalidated contract, elapsed time,
-and the cgroup memory peak when the runner exposes it.
+Every platform release runs sync, Pod check, and a complete build for every active template in the
+digest-pinned builder with no network and a 1 GiB static-verification memory limit. It then runs
+every template twice: the first build primes generated workspace and compiler caches, and the
+second measures the same prevalidated
+`NORBITAL_POD_SYNCED=1`/`NORBITAL_POD_CHECKED=1` contract used by the tenant build runner. The
+release is blocked unless every measured build completes in at most 5,000 ms while the warm-build
+container has both `--memory=500m` and `--memory-swap=500m` and no network. The attested
+`builder-toolchain-verification.json` and per-template benchmark files record the checks, elapsed
+time, and cgroup memory peak when the runner exposes it.
 A host must only offer a platform auto-update after the immutable platform manifest exists, so a
 builder image that fails this gate is never eligible even if its OCI upload completed.
 The evidence format is defined by [`builder-benchmark.schema.json`](./builder-benchmark.schema.json).

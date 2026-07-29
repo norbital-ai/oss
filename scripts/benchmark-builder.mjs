@@ -103,6 +103,8 @@ let packageKey;
 try {
 	docker([
 		'create',
+		'--platform',
+		'linux/amd64',
 		'--name',
 		container,
 		'--network',

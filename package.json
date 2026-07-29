@@ -10,7 +10,7 @@
 		"lint": "turbo lint",
 		"test": "turbo test",
 		"packages:build": "pnpm --filter @norbital-ai/pod... build",
-		"check": "pnpm packages:build && pnpm templates:sync && pnpm lint && pnpm test && pnpm build && pnpm templates:check && pnpm publication:check",
+		"check": "pnpm packages:build && pnpm templates:sync && pnpm lint && pnpm test && pnpm build && pnpm templates:check && pnpm template-toolchain:check && pnpm publication:check",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"changeset": "changeset",
@@ -20,6 +20,8 @@
 		"templates:sync": "node scripts/sync-templates.mjs",
 		"templates:check": "node scripts/project-templates.mjs --check",
 		"templates:project": "node scripts/project-templates.mjs --update-local --output .tmp/template-revisions.json",
+		"template-toolchain:check": "node scripts/resolve-template-toolchain.mjs --check",
+		"template-toolchain:write": "node scripts/resolve-template-toolchain.mjs --write",
 		"release:manifest": "node scripts/generate-platform-release.mjs"
 	},
 	"devDependencies": {
