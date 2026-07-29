@@ -9,6 +9,46 @@ function fail(message) {
 	throw new Error(message);
 }
 
+export function packedArchiveFilename(output, label = 'package pack') {
+	const candidatePattern = /^[\t ]*[\[{]/gm;
+	for (const candidate of output.matchAll(candidatePattern)) {
+		const start = candidate.index + candidate[0].search(/[\[{]/);
+		let depth = 0;
+		let inString = false;
+		let escaped = false;
+		for (let index = start; index < output.length; index += 1) {
+			const character = output[index];
+			if (inString) {
+				if (escaped) {
+					escaped = false;
+				} else if (character === '\\') {
+					escaped = true;
+				} else if (character === '"') {
+					inString = false;
+				}
+				continue;
+			}
+			if (character === '"') {
+				inString = true;
+			} else if (character === '{' || character === '[') {
+				depth += 1;
+			} else if (character === '}' || character === ']') {
+				depth -= 1;
+				if (depth !== 0) continue;
+				try {
+					const result = JSON.parse(output.slice(start, index + 1));
+					const filename = Array.isArray(result) ? result[0]?.filename : result.filename;
+					if (filename) return filename;
+				} catch {
+					// Lifecycle scripts may write JSON-like output before the pack report.
+				}
+				break;
+			}
+		}
+	}
+	fail(`${label} did not report an archive filename.`);
+}
+
 export function sha512Integrity(bytes) {
 	return `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
 }
@@ -58,6 +98,16 @@ export function inspectPackageArchive(
 	archivePath,
 	{ directory, expectedName, expectedVersion, repositoryLicense }
 ) {
+	const archiveEntries = execFileSync('tar', ['-tzf', archivePath], {
+		encoding: 'utf8'
+	})
+		.trim()
+		.split('\n')
+		.filter(Boolean);
+	const nestedArchives = archiveEntries.filter((entry) => /\.(?:tgz|tar|tar\.gz)$/i.test(entry));
+	if (nestedArchives.length > 0) {
+		fail(`${directory} publishes generated package archives: ${nestedArchives.join(', ')}.`);
+	}
 	const manifestText = execFileSync('tar', ['-xOf', archivePath, 'package/package.json'], {
 		encoding: 'utf8'
 	});

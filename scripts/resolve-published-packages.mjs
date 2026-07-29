@@ -12,7 +12,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { assertSha512Integrity, inspectPackageArchive } from './lib/package-archive.mjs';
+import {
+	assertSha512Integrity,
+	inspectPackageArchive,
+	packedArchiveFilename
+} from './lib/package-archive.mjs';
 import {
 	platformPackageKey,
 	publicPackageDirectories,
@@ -190,11 +194,10 @@ function packWorkspacePackage({ directory, temporaryDirectory }) {
 			stdio: ['ignore', 'pipe', 'inherit']
 		}
 	);
-	const initialResult = JSON.parse(initialOutput);
-	const initialFilename = Array.isArray(initialResult)
-		? initialResult[0]?.filename
-		: initialResult.filename;
-	if (!initialFilename) fail(`pnpm pack did not report an archive for packages/${directory}.`);
+	const initialFilename = packedArchiveFilename(
+		initialOutput,
+		`pnpm pack for packages/${directory}`
+	);
 	execFileSync(
 		'tar',
 		[
@@ -216,11 +219,10 @@ function packWorkspacePackage({ directory, temporaryDirectory }) {
 			stdio: ['ignore', 'pipe', 'inherit']
 		}
 	);
-	const normalizedResult = JSON.parse(normalizedOutput);
-	const normalizedFilename = Array.isArray(normalizedResult)
-		? normalizedResult[0]?.filename
-		: normalizedResult.filename;
-	if (!normalizedFilename) fail(`npm pack did not report an archive for packages/${directory}.`);
+	const normalizedFilename = packedArchiveFilename(
+		normalizedOutput,
+		`npm pack for packages/${directory}`
+	);
 	return resolveReportedArchive(normalizedFilename, normalizedArchiveDirectory);
 }
 

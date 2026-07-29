@@ -62,7 +62,8 @@
 		}
 	},
 	"scripts": {
-		"build": "svelte-package -i src/lib -o build --tsconfig tsconfig.json",
+		"build": "rm -rf build && svelte-package -i src/lib -o build --tsconfig tsconfig.json",
+		"prepack": "pnpm build",
 		"lint": "svelte-check --tsconfig ./tsconfig.json",
 		"test": "vitest run",
 		"test:watch": "vitest"

@@ -2,6 +2,12 @@
 node_modules/
 .local-packages/
 
+# Generated package and release archives
+/dist/
+*.tgz
+*.tar
+*.tar.gz
+
 # Package-manager lockfiles other than the committed pnpm lockfile
 **/package-lock.json
 **/yarn.lock

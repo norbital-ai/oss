@@ -25,9 +25,12 @@ pnpm install
 pnpm check
 ```
 
-Publication checks create temporary standalone archives and delete them after validation. Consumers
-install released packages from the configured registry; no consumer reads this repository through
-a sibling path.
+Every compiled package rebuilds from source during `pnpm pack`; Pod and UI use `svelte-package`,
+while the TypeScript-only packages use `tsc`. Publication checks remove existing build output,
+create temporary standalone archives, validate their contents, and delete the archives afterward.
+Platform-release assembly writes its immutable archives under the ignored root `dist/` directory.
+Consumers install released packages from the configured registry or an SRI-pinned platform release;
+no consumer reads this repository through a sibling path.
 
 Run `pnpm changeset` with any change to a publishable package. See
 [`RELEASING.md`](./RELEASING.md) for the release workflow.

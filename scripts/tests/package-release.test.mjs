@@ -3,7 +3,11 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { assertSha512Integrity, sha512Integrity } from '../lib/package-archive.mjs';
+import {
+	assertSha512Integrity,
+	packedArchiveFilename,
+	sha512Integrity
+} from '../lib/package-archive.mjs';
 import { platformPackageKey, publicPackageDirectories } from '../lib/package-release.mjs';
 import { resolveWorkspacePackages } from '../resolve-published-packages.mjs';
 
@@ -52,6 +56,15 @@ describe('published package identity', () => {
 
 	it('is independent of entry ordering', () => {
 		assert.equal(platformPackageKey(entries), platformPackageKey([...entries].reverse()));
+	});
+
+	it('reads a pack report after package lifecycle output', () => {
+		const output = [
+			'$ pnpm build',
+			'src/lib -> build',
+			JSON.stringify([{ filename: '/tmp/norbital-ai-pod-0.0.1.tgz' }], null, 2)
+		].join('\n');
+		assert.equal(packedArchiveFilename(output), '/tmp/norbital-ai-pod-0.0.1.tgz');
 	});
 });
 
