@@ -57,6 +57,7 @@ export type {
 const CLIENT_ENTRY = 'virtual:pod/client-entry';
 const CLIENT_RUNTIME = 'virtual:pod/client-runtime';
 const SERVER_ENTRY = 'virtual:pod/server-entry';
+const ISOLATED_SERVER_MAX_OLD_SPACE_MIB = 144;
 
 function podBuildFile(relativePath: string): string {
 	const abs = path.resolve(import.meta.dirname, '..', relativePath);
@@ -80,11 +81,15 @@ async function runIsolatedBuild(config: {
 		NORBITAL_POD_BUILD_TARGET: 'server',
 		NORBITAL_POD_ISOLATED_BUILD: '1'
 	};
-	const child = spawn(process.execPath, [worker, JSON.stringify(config)], {
-		cwd: config.root,
-		env: inheritedEnvironment,
-		stdio: 'inherit'
-	});
+	const child = spawn(
+		process.execPath,
+		[`--max-old-space-size=${ISOLATED_SERVER_MAX_OLD_SPACE_MIB}`, worker, JSON.stringify(config)],
+		{
+			cwd: config.root,
+			env: inheritedEnvironment,
+			stdio: 'inherit'
+		}
+	);
 	await new Promise<void>((resolve, reject) => {
 		const forwardedSignals = ['SIGINT', 'SIGTERM'] as const;
 		const signalHandlers = forwardedSignals.map(
