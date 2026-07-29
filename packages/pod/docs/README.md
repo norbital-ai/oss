@@ -6,6 +6,7 @@ framework contracts; template-specific behaviour lives with each template.
 | Guide                                     | Covers                                                                                |
 | ----------------------------------------- | ------------------------------------------------------------------------------------- |
 | [Overview](./OVERVIEW.md)                 | Authoring roles, commands, generated state, runtime boundary, and template lifecycle. |
+| [Architecture](./ARCHITECTURE.md)         | The Pod/host boundary, supplying facilities, and the notification and agent designs.  |
 | [Form system](./FORM_SYSTEM.md)           | Schema-derived forms and collection representation overrides.                         |
 | [Navigation state](./NAVIGATION_STATE.md) | Application navigation and state conventions.                                         |
 | [Sync engine](./SYNC_ENGINE.md)           | Local replica, live query, optimistic mutation, and server transport design.          |

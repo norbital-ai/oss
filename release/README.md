@@ -1,25 +1,40 @@
 # Distribution contracts
 
-Norbital OSS publishes four independent, immutable resource types:
+Norbital OSS publishes two independent, immutable resource types:
 
-1. exact public package archives for `@norbital-ai/config`, `platform-utils`, `pod`, `std`, and
-   `ui`, identified by tarball URL and sha512 SRI;
-2. root-projected Git refs for template workspace source;
-3. one generic tenant builder image and one generic tenant runtime image;
-4. a platform release manifest that pins the package versions, template commits, and image digests.
+1. exact public package archives for `@norbital-ai/config`, `platform-utils`, `pod`, `std`, and `ui`;
+2. root-projected Git refs for template workspace source, each carrying its own committed
+   `pnpm-lock.yaml`.
+
+There is no platform release, no builder image, no runtime image, and no OCI publication. Those
+existed to pin dependencies from outside a template that could not pin its own; a committed lockfile
+does that job directly, so the apparatus around it is gone.
 
 There is no prebuilt template bundle and no OSS checkpoint artifact. A compatible host produces one
-tenant build bundle from a tenant Git tree and a platform release; a checkpoint references that
-bundle rather than storing a duplicate.
+tenant build bundle from a tenant Git tree; a checkpoint references that bundle rather than storing
+a duplicate.
+
+## Three independent trains
+
+Pod, templates, and tenants do not propagate into one another. They respect each other's APIs and
+move only when their own owner moves them.
+
+| Train        | Moves when                                                                           |
+| ------------ | ------------------------------------------------------------------------------------ |
+| **Pod**      | changesets → version bump → publish. A normal npm package.                           |
+| **Template** | a developer edits source and pushes. It pins its own pod version until they bump it. |
+| **Tenant**   | its owner says so. Forked from a template, managed independently.                    |
+
+The only coupling is **notification**: a tenant can be told its upstream template is N commits
+ahead, or that a newer `@norbital-ai/pod` exists and may break it. Neither acts.
 
 ## Template catalogue and refs
 
-[`templates.json`](./templates.json) is the source catalogue. Its schema is
-[`templates.schema.json`](./templates.schema.json). The catalogue owns display metadata,
-compatibility, and the active set. `pnpm templates:check` validates declared paths and recomputes
-the collection, app, and automation counts from source.
-
-Each active template is projected to repository root with `git subtree split`:
+There is no separate catalogue file. A template declares itself by carrying
+`norbital.template.json` at the root of its own tree, so the picker metadata travels with the
+`git subtree split` projection and lands in every tenant fork — nothing has to stay in sync across
+two files. `pnpm templates:check` discovers every workspace on disk and recomputes the collection,
+app, and automation counts from source.
 
 | Template       | Source directory                   | Published ref                       |
 | -------------- | ---------------------------------- | ----------------------------------- |
@@ -27,16 +42,20 @@ Each active template is projected to repository root with `git subtree split`:
 | Construction   | `template_workspaces/construction` | `refs/heads/templates/construction` |
 | CRM            | `template_workspaces/crm`          | `refs/heads/templates/crm`          |
 | HR and payroll | `template_workspaces/hr-payroll`   | `refs/heads/templates/hr-payroll`   |
+| Reclamation    | `template_workspaces/reclamation`  | `refs/heads/templates/reclamation`  |
 
-The projection is deterministic for a source commit and retains per-template ancestry. Consumers
-read the catalogue from a configured repository URL, ref, and path, then fetch the exact projected
-commit. They do not need a GitHub API and can use any standards-compliant Git server.
+The projection is deterministic for a source commit and retains per-template ancestry. A consumer
+resolves the active set with one `git ls-remote --heads <url> 'refs/heads/templates/*'` round trip
+and fetches the exact projected commit. No provider API, no mirror, no local clone of the whole
+repository.
 
-Projected manifests contain ordinary public registry ranges rather than `workspace:` or `catalog:`
-protocols. Pod is pinned to exactly `0.0.1`, while compatible library packages use explicit SemVer
-ranges. Before a ref is published, `validate-template-projections.mjs` copies only tracked template
-files into clean standalone roots, installs exact locally packed public archives, runs Pod sync,
-type-checks, and builds every template.
+Projected manifests contain ordinary public registry versions rather than `workspace:` or `catalog:`
+protocols, and pod is pinned to an exact version. Before a ref is published,
+`validate-template-projections.mjs` copies only tracked template files into clean standalone roots,
+installs exact locally packed public archives, runs Pod sync, type-checks, and builds every
+template. It deliberately installs with `--no-frozen-lockfile` because it substitutes local
+unpublished archives for the registry versions the committed lockfile describes; lockfile freshness
+and offline installability belong to `pnpm templates:lock:verify`.
 
 `template-refs.yml` publishes the refs on changes to `main`. The underlying command is
 provider-neutral:
@@ -49,125 +68,76 @@ node scripts/project-templates.mjs \
   --output dist/template-revisions.json
 ```
 
-All active refs are pushed atomically and fast-forward only. A history rewrite therefore fails
-rather than silently replacing an already published template revision or publishing only part of
-the active set.
+All refs are pushed atomically and fast-forward only. A history rewrite therefore fails rather than
+silently replacing an already published template revision or publishing only part of the set.
 
-## Platform releases
+## Template lockfiles
 
-`publish-platform.yml` builds the builder and runtime images, enforces the configured 500 MiB
-uncompressed image ceiling, records their immutable digests, resolves the template projections,
-and generates `platform-release.json` against
-[`platform-release.schema.json`](./platform-release.schema.json). GitHub Actions publishes that
-file as both an attested workflow artifact and an immutable GitHub release asset. The platform
-workflow explicitly marks that release as GitHub's latest release, and the independent Changesets
-package workflow restores the newest `platform-v*` release as latest after publishing package
-releases. This keeps `/releases/latest/download/platform-release.json` bound to a release that
-actually carries the platform manifest.
-
-Before image construction, `resolve-published-packages.mjs` resolves one of two package-source
-adapters. The default `workspace` adapter packs the exact checked-in source and publishes those
-archives beside the platform manifest. The `registry` adapter reads each exact package version from
-an npm-compatible registry packument, downloads `dist.tarball`, and verifies `dist.integrity`.
-Both paths validate the same standalone archive contract as `pnpm publication:check`. The verified
-bytes are retained as deterministic package inputs to the builder image; the image never
-re-resolves a version from a registry. Credentials are accepted through environment variables and
-are never written into the manifest or image.
-
-Workspace archives let a platform release carry changed Pod bytes while the compatibility version
-remains `0.0.1`: the release tag, sha512 SRI, and `packageKey` identify the immutable bytes. Normal
-public npm releases remain a separate Changesets workflow and never overwrite a registry version.
-The resulting package release file is an input to the provider-neutral generator:
+Each template commits a `pnpm-lock.yaml` resolved as a standalone project — outside this pnpm
+workspace, so `@norbital-ai/*` come from the registry rather than workspace links.
 
 ```sh
-node scripts/resolve-published-packages.mjs \
-  --source workspace \
-  --archive-base-url https://releases.example.test/platform-v0.0.1/ \
-  --output dist/package-release.json \
-  --archive-output dist/package-archives
-
-node scripts/generate-platform-release.mjs \
-  --source-repository https://git.example.test/norbital/oss.git \
-  --source-revision "$SOURCE_SHA" \
-  --package-release dist/package-release.json \
-  --template-revisions dist/template-revisions.json \
-  --builder-image registry.example.test/norbital/builder \
-  --builder-digest "sha256:$BUILDER_DIGEST" \
-  --runtime-image registry.example.test/norbital/runtime \
-  --runtime-digest "sha256:$RUNTIME_DIGEST"
+pnpm templates:lock          # resolve and write
+pnpm templates:lock:check    # fail on drift (part of `pnpm check`)
+pnpm templates:lock:verify   # warm one shared store, then install offline with no credentials
 ```
 
-To source an existing registry release instead, pass `--source registry` and an npm-compatible
-`--registry`; private registry credentials may be supplied through `NPM_REGISTRY_TOKEN`.
+`templates:lock:verify` is the load-bearing gate: it proves the committed lockfile is what a host
+actually installs, by warming one shared content-addressed store over the network and then
+installing with credentials removed and `--offline`. A shared store across templates also exercises
+cross-template package reuse.
 
-[`template-toolchain.package.json`](./template-toolchain.package.json) is the builder-owned union of
-external runtime and type-check dependencies declared by every active template. Its versions are
-exact, resolved from the repository lockfile, and its 16-hex dependency key is recorded in the
-builder image. `pnpm template-toolchain:check` fails whenever an active template manifest or
-lockfile changes without regenerating this contract. Template-only libraries such as `exceljs`
-therefore remain template dependencies rather than becoming false Pod dependencies, while
-no-network tenant builds and checks can still resolve them from the versioned toolchain.
+Running it is a template developer's deliberate act when **they** choose to bump dependencies. It is
+never triggered by a pod publish.
 
-Each package entry carries `{ name, version, tarball, integrity }`, where `integrity` is an exact
-sha512 SRI. The 16-hex `packageKey` hashes sorted `{ name, version, integrity }` entries. The
-generator derives a 64-hex `buildContractId` from that package content, builder/runtime image
-digests, and compiler contract. Provider locations are deliberately excluded from content identity,
-so moving identical bytes to a registry mirror does not rebuild tenants. `releaseId` currently
-equals the build contract. Template commits are also excluded: advancing a template must not
-trigger a same-tree Pod rebuild for every tenant tracking platform updates.
+## Depsets and the store
 
-The checked-in GitHub workflow defaults to GitHub Packages and GHCR. These repository variables can
-redirect the same pipeline without changing source:
+A **depset** is `node_modules` for exactly one lockfile, addressed by the hash of that lockfile.
+`scripts/lib/depset.mjs` implements the host half:
+
+- `warmStore` — `pnpm fetch` into the shared content-addressed store. The only step that touches the
+  network, and the only step that needs registry credentials.
+- `materialize` — `pnpm install --offline --frozen-lockfile` into `node_modules/<lockHash>`,
+  idempotent, and published by rename so a failed install never leaves a half-materialized depset
+  visible.
+
+`node_modules` is a hardlink farm into the store, so N trees sharing a package is one copy on disk.
+A CRM tenant contains CRM's dependencies and nothing else — there is no curated union, so
+`exceljs` no longer travels to templates that never asked for it.
+
+This mirrors Core's `sandbox/toolchain.server.ts`; the two must agree on `lockHash` or a
+host-materialized depset would not be reusable.
+
+## Budgets
+
+Three numbers, measured separately, never compared:
+
+| Budget             | Where                                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `compileMs`        | `benchmark-builder.mjs` — `vite build` against a materialized depset on a fixed CI runner. Evidence: [`builder-benchmark.schema.json`](./builder-benchmark.schema.json). |
+| `deployCacheHitMs` | live SLO, measured against a real tenant deploy                                                                                                                          |
+| `deployColdMs`     | live SLO, measured against a real tenant deploy                                                                                                                          |
+
+Conflating the first with the last is what let an acceptance run report 5807 ms against a 5 s gate
+that had never measured the same thing.
+
+`smoke-runtime-bundle.mjs` proves the bundle contract: a build against a materialized depset
+produces a bundle that boots and emits its ready frame. The bundle format is the only cross-version
+contract left now that there are no images, so it is versioned and asserted in CI. Evidence:
+[`runtime-smoke.schema.json`](./runtime-smoke.schema.json).
+
+## Package archives
+
+`resolve-published-packages.mjs` reads each exact package version from an npm-compatible registry
+packument, downloads `dist.tarball`, and verifies `dist.integrity`. Each entry carries
+`{ name, version, tarball, integrity }` where `integrity` is an exact sha512 SRI, and the 16-hex
+`packageKey` hashes the sorted entries. Credentials are accepted through environment variables and
+are never written into any published file.
+
+Two repository variables configure the pipeline:
 
 - `NORBITAL_PACKAGE_REGISTRY`
-- `NORBITAL_PLATFORM_PACKAGE_SOURCE` (`workspace` or `registry`)
-- `NORBITAL_PLATFORM_ARCHIVE_BASE_URL`
-- `NORBITAL_OCI_REGISTRY`
-- `NORBITAL_OCI_NAMESPACE`
-- `NORBITAL_OCI_USERNAME`
-- `NORBITAL_MAX_IMAGE_BYTES`
-- `NORBITAL_BENCHMARK_TEMPLATE`
+- `NORBITAL_PACKAGE_SOURCE` (`workspace` or `registry`)
 
-The default image ceiling is Core's decimal 500 MB contract (`500000000` bytes), distinct from the
-500 MiB cgroup limit used by tenant build benchmarks.
-
-If the package registry requires authentication during image construction, configure the
-`NPM_REGISTRY_TOKEN` Actions secret. GitHub Packages can use the workflow token. A non-GHCR OCI
-registry can use the `NORBITAL_OCI_TOKEN` secret with `NORBITAL_OCI_USERNAME`.
-
-The builder image contains the exact verified public package archives and exact active-template
-dependencies under `/opt/norbital/tenant-toolchain`, including its `.package-key` and
-`.template-dependency-key`. It bakes the matching browser platform and manifest into
-`/opt/norbital/platform-client`. It has no entrypoint; a host scheduler can keep the container warm
-with `sleep infinity` and execute Pod in `/workspace`. A portable Node compile cache under the
-toolchain directory is populated while the image is built and reused by later Pod CLI processes,
-so independent tenant executions do not repeatedly compile the same immutable module graph. The
-runtime image contains only Node, has no entrypoint, and defaults to the already-built tenant bundle
-mounted at `/app/serve.mjs`; it does not contain Pod or tenant source.
-
-The versioned Node 26 builder labels its platform fingerprint and source revision. The minimal Node
-26 runtime only serves the immutable `serve.mjs` emitted by Pod. Hosts may mirror either image; the
-platform manifest identifies the executable content by OCI digest, so provider location is not
-part of tenant build identity.
-
-Every platform release runs sync, Pod check, and a complete build for every active template in the
-digest-pinned builder with no network and a 1 GiB static-verification memory limit. It then runs
-every template three times through separate fresh 500 MiB sync and build containers. Pod sync materializes the
-ignored generated workspace and validates a fingerprint over both schema inputs and versioned
-migration history; the preceding digest-matched static verifier supplies the `pod check` evidence.
-The synchronized state is transferred to a clean build container, where the benchmark measures the
-exact deployed `env NORBITAL_POD_CHECKED=1 vite build /workspace` phase from an empty output
-directory with Core's heap, allocator, and baked platform. The release is blocked unless every
-clean build completes in at most 5,000 ms, both lifecycle containers have `--memory=500m`,
-`--memory-swap=500m`, and no network, and both measured peaks are no higher than 450 MiB. Pod runs
-the server and client Vite targets in separate Node processes so the server compiler graph is
-released before client compilation. The attested
-`builder-toolchain-verification.json` and per-template benchmark files record the checks, elapsed
-time, production command/environment, and cgroup memory peak when the runner exposes it.
-A separate fresh-runner smoke gate clean-pulls both published image digests, builds the HR/Payroll
-template, asserts every required checkpoint path including root `serve.mjs`, and boots that bundle
-read-only at `/app` with the same no-network runtime command used by Core. Its attested
-`runtime-smoke.json` evidence is published beside the release manifest.
-A host must only offer a platform auto-update after the immutable platform manifest exists, so a
-builder image that fails this gate is never eligible even if its OCI upload completed.
-The evidence format is defined by [`builder-benchmark.schema.json`](./builder-benchmark.schema.json).
+If the package registry requires authentication, configure the `NPM_REGISTRY_TOKEN` Actions secret.
+GitHub Packages can use the workflow token.

@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
-	copyFileSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -9,21 +9,21 @@ import {
 	statSync,
 	writeFileSync
 } from 'node:fs';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { prepareDepset } from './lib/depset.mjs';
+import { discoverTemplates, repositoryRoot } from './lib/templates.mjs';
 
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const digestPinnedImagePattern = /^.+@sha256:[0-9a-f]{64}$/;
-const packageKeyPattern = /^[0-9a-f]{16}$/;
-const dockerMemoryPattern = /^([1-9]\d*)([mg])$/;
-const workspace = '/workspace';
-const buildOutput = `${workspace}/.norbital/dist/output`;
-const podBin =
-	'/opt/norbital/tenant-toolchain/node_modules/@norbital-ai/pod/build/bin/invocation/index.js';
-const viteBin = `${workspace}/node_modules/.bin/vite`;
-const runtimeEntry = '/app/serve.mjs';
+/**
+ * Proves the bundle contract: a build against a materialized depset produces a bundle that
+ * boots and emits its ready frame.
+ *
+ * The bundle format is the only cross-version contract left now that there are no images, so
+ * this gate exists to catch a bundle a newer runtime cannot serve. There is nothing to pull
+ * and nothing digest-pinned; dependencies come from a depset linked out of the shared
+ * content-addressed store.
+ */
+
 const requiredBundlePaths = [
 	'manifest.json',
 	'dist/index.html',
@@ -36,8 +36,6 @@ const buildEnvironment = {
 	MALLOC_ARENA_MAX: '1',
 	MALLOC_TRIM_THRESHOLD_: '131072',
 	NODE_OPTIONS: '--max-old-space-size=192',
-	NORBITAL_BUILD_OUT: buildOutput,
-	NORBITAL_POD_PLATFORM_DIR: '/opt/norbital/platform-client',
 	NORBITAL_POD_SYNCED: '1',
 	NORBITAL_POD_CHECKED: '1'
 };
@@ -58,30 +56,7 @@ function argumentsFrom(argv) {
 	return options;
 }
 
-function required(options, key, environmentKey) {
-	const value = options[key] ?? process.env[environmentKey];
-	if (!value) fail(`Pass --${key} or set ${environmentKey}.`);
-	return value;
-}
-
-function memoryBytes(value) {
-	const match = dockerMemoryPattern.exec(value);
-	if (!match) fail(`Invalid Docker memory value: ${value}.`);
-	const multiplier = match[2] === 'g' ? 1024 * 1024 * 1024 : 1024 * 1024;
-	return Number(match[1]) * multiplier;
-}
-
-function docker(arguments_, options = {}) {
-	const output = execFileSync('docker', arguments_, {
-		cwd: repositoryRoot,
-		encoding: 'utf8',
-		stdio: options.stdio ?? ['ignore', 'pipe', 'pipe']
-	});
-	return typeof output === 'string' ? output.trim() : '';
-}
-
-function materializeTrackedTemplate(template, temporaryDirectory) {
-	const destination = path.join(temporaryDirectory, 'source');
+function materializeTrackedTemplate(template, destination) {
 	const sourceRoot = path.join(repositoryRoot, template.path);
 	const tracked = execFileSync('git', ['ls-files', '--', template.path], {
 		cwd: repositoryRoot,
@@ -95,184 +70,119 @@ function materializeTrackedTemplate(template, temporaryDirectory) {
 		const source = path.join(repositoryRoot, trackedFile);
 		const target = path.join(destination, path.relative(sourceRoot, source));
 		mkdirSync(path.dirname(target), { recursive: true });
-		copyFileSync(source, target);
+		execFileSync('cp', [source, target]);
 	}
 	return destination;
 }
 
-function productionBuildArguments(container) {
-	const environment = Object.entries(buildEnvironment).flatMap(([key, value]) => [
-		'--env',
-		`${key}=${value}`
-	]);
-	return [
-		'exec',
-		...environment,
-		'-u',
-		'node',
-		'-w',
-		workspace,
-		container,
-		viteBin,
-		'build',
-		workspace
-	];
-}
-
-function waitForRuntimeReady(arguments_, container, timeoutMilliseconds) {
+/**
+ * Boot the bundle and wait for its ready frame. The runtime speaks the framed wire protocol,
+ * so a bundle that boots but never frames is a failure, not a timeout to be tolerated.
+ */
+function waitForRuntimeReady(entry, bundle, timeoutMilliseconds) {
 	return new Promise((resolve, reject) => {
-		const child = spawn('docker', arguments_, {
-			cwd: repositoryRoot,
-			stdio: ['pipe', 'pipe', 'pipe']
+		const child = spawn(process.execPath, [entry], {
+			cwd: bundle,
+			stdio: ['pipe', 'pipe', 'pipe'],
+			env: { ...process.env, NODE_ENV: 'production' }
 		});
 		const readyFrame = Buffer.from('{"t":"ready"}');
 		let stdout = Buffer.alloc(0);
 		let stderr = '';
-		let ready = false;
 		let settled = false;
 		const settle = (callback) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			child.kill('SIGKILL');
 			callback();
 		};
-		const timer = setTimeout(() => {
-			spawnSync('docker', ['rm', '--force', container], {
-				cwd: repositoryRoot,
-				stdio: 'ignore'
-			});
-			settle(() =>
-				reject(
-					new Error(
-						`Runtime did not emit its ready frame within ${timeoutMilliseconds}ms: ${stderr}`
+		const timer = setTimeout(
+			() =>
+				settle(() =>
+					reject(
+						new Error(
+							`Runtime did not emit its ready frame within ${timeoutMilliseconds}ms: ${stderr}`
+						)
 					)
-				)
-			);
-		}, timeoutMilliseconds);
+				),
+			timeoutMilliseconds
+		);
 		child.stdout.on('data', (chunk) => {
 			stdout = Buffer.concat([stdout, chunk]);
-			if (!ready && stdout.includes(readyFrame)) {
-				ready = true;
-				spawnSync('docker', ['rm', '--force', container], {
-					cwd: repositoryRoot,
-					stdio: 'ignore'
-				});
-			}
+			if (stdout.includes(readyFrame)) settle(resolve);
 		});
 		child.stderr.on('data', (chunk) => {
 			stderr += chunk.toString('utf8');
 		});
 		child.on('error', (error) => settle(() => reject(error)));
 		child.on('close', (code, signal) =>
-			settle(() => {
-				if (ready) resolve();
-				else
-					reject(
-						new Error(`Runtime exited before ready (code=${code} signal=${signal}): ${stderr}`)
-					);
-			})
+			settle(() =>
+				reject(new Error(`Runtime exited before ready (code=${code} signal=${signal}): ${stderr}`))
+			)
 		);
 	});
 }
 
 const options = argumentsFrom(process.argv.slice(2));
-const builderImage = required(options, 'builder-image', 'BUILDER_IMAGE');
-const runtimeImage = required(options, 'runtime-image', 'RUNTIME_IMAGE');
-const expectedPackageKey = required(
-	options,
-	'expected-package-key',
-	'EXPECTED_PLATFORM_PACKAGE_KEY'
-);
-if (!digestPinnedImagePattern.test(builderImage) || !digestPinnedImagePattern.test(runtimeImage)) {
-	fail('Runtime smoke requires digest-pinned builder and runtime image references.');
-}
-if (!packageKeyPattern.test(expectedPackageKey)) {
-	fail('Expected package key must be 16 lowercase hex.');
-}
-
-const localBuildMemory = options['local-emulation-build-memory'];
-if (localBuildMemory && !builderImage.startsWith('localhost:')) {
-	fail('The local emulation memory override only accepts a loopback registry builder image.');
-}
-const buildMemory = localBuildMemory ?? '500m';
-const buildMemoryLimitBytes = memoryBytes(buildMemory);
 const templateKey = options.template ?? process.env.RUNTIME_SMOKE_TEMPLATE ?? 'hr-payroll';
-const catalogue = JSON.parse(
-	readFileSync(path.join(repositoryRoot, 'release', 'templates.json'), 'utf8')
-);
-const template = catalogue.templates?.find((entry) => entry.key === templateKey);
-if (!template) fail(`Runtime smoke template must be an active catalogue entry: ${templateKey}`);
+const [template] = discoverTemplates(templateKey);
 const outputPath = path.resolve(
 	repositoryRoot,
 	options.output ?? process.env.RUNTIME_SMOKE_OUTPUT ?? 'dist/runtime-smoke.json'
 );
+const storeDirectory = path.resolve(
+	repositoryRoot,
+	options['store-dir'] ?? process.env.NORBITAL_PNPM_STORE ?? '.tmp/pnpm-store'
+);
 
 mkdirSync(path.join(repositoryRoot, '.tmp'), { recursive: true });
 const temporaryDirectory = mkdtempSync(path.join(repositoryRoot, '.tmp', 'runtime-smoke-'));
-const source = materializeTrackedTemplate(template, temporaryDirectory);
-const bundle = path.join(temporaryDirectory, 'bundle');
-const builderContainer = `norbital-runtime-smoke-builder-${process.pid}-${Date.now()}`;
-const runtimeContainer = `norbital-runtime-smoke-guest-${process.pid}-${Date.now()}`;
-let packageKey;
+const workspace = path.join(temporaryDirectory, 'src');
+const depsetRoot = path.join(temporaryDirectory, 'node_modules');
+const bundle = path.join(workspace, '.norbital', 'dist', 'output');
+let depset;
 let buildElapsedMilliseconds;
 let serveEntrySha256;
 let migrationSqlCount;
 
 try {
-	console.log(`Clean-pulling ${builderImage}.`);
-	docker(['pull', '--platform', 'linux/amd64', builderImage], { stdio: 'inherit' });
-	console.log(`Clean-pulling ${runtimeImage}.`);
-	docker(['pull', '--platform', 'linux/amd64', runtimeImage], { stdio: 'inherit' });
+	mkdirSync(workspace, { recursive: true });
+	mkdirSync(storeDirectory, { recursive: true });
+	materializeTrackedTemplate(template, workspace);
 
-	docker([
-		'create',
-		'--platform',
-		'linux/amd64',
-		'--name',
-		builderContainer,
-		'--network',
-		'none',
-		'--memory',
-		buildMemory,
-		'--memory-swap',
-		buildMemory,
-		builderImage
-	]);
-	docker(['cp', `${source}/.`, `${builderContainer}:${workspace}`]);
-	docker(['start', builderContainer]);
-	docker([
-		'exec',
-		'-u',
-		'0',
-		builderContainer,
-		'sh',
-		'-ec',
-		`chown -R node:node ${workspace}; rm -rf ${workspace}/node_modules; ln -s /opt/norbital/tenant-toolchain/node_modules ${workspace}/node_modules`
-	]);
-	packageKey = docker([
-		'exec',
-		'-u',
-		'node',
-		builderContainer,
-		'cat',
-		'/opt/norbital/tenant-toolchain/.package-key'
-	]);
-	if (packageKey !== expectedPackageKey) {
-		fail(`Builder package key ${packageKey} does not match expected ${expectedPackageKey}.`);
-	}
-	docker(['exec', '-u', 'node', '-w', workspace, builderContainer, 'node', podBin, 'sync'], {
-		stdio: 'inherit'
-	});
+	depset = prepareDepset({ templateDirectory: workspace, storeDirectory, depsetRoot });
+	execFileSync('ln', ['-sfn', depset.path, path.join(workspace, 'node_modules')]);
+
+	const podBin = path.join(
+		workspace,
+		'node_modules',
+		'@norbital-ai',
+		'pod',
+		'build',
+		'bin',
+		'invocation',
+		'index.js'
+	);
+	execFileSync(process.execPath, [podBin, 'sync'], { cwd: workspace, stdio: 'inherit' });
+
 	const buildStartedAt = process.hrtime.bigint();
-	docker(productionBuildArguments(builderContainer), { stdio: 'inherit' });
+	const build = spawnSync(
+		path.join(workspace, 'node_modules', '.bin', 'vite'),
+		['build', workspace],
+		{
+			cwd: workspace,
+			stdio: 'inherit',
+			env: { ...process.env, ...buildEnvironment, NORBITAL_BUILD_OUT: bundle }
+		}
+	);
 	buildElapsedMilliseconds = Number(process.hrtime.bigint() - buildStartedAt) / 1_000_000;
-	mkdirSync(bundle, { recursive: true });
-	docker(['cp', `${builderContainer}:${buildOutput}/.`, bundle]);
+	if (build.status !== 0) fail(`Tenant build exited with status ${build.status}.`);
 
 	for (const requiredPath of requiredBundlePaths) {
 		const file = path.join(bundle, requiredPath);
 		if (!statSync(file).isFile() || statSync(file).size === 0) {
-			fail(`Published builder output is missing non-empty ${requiredPath}.`);
+			fail(`Published build output is missing non-empty ${requiredPath}.`);
 		}
 	}
 	migrationSqlCount = readdirSync(path.join(bundle, '.norbital', 'migrations'), {
@@ -284,74 +194,27 @@ try {
 			entry.name === 'migration.sql' &&
 			statSync(path.join(entry.parentPath, entry.name)).size > 0
 	).length;
-	if (migrationSqlCount < 1) {
-		fail('Published builder output contains no non-empty migration.sql.');
-	}
+	if (migrationSqlCount < 1) fail('Published build output contains no non-empty migration.sql.');
 	serveEntrySha256 = createHash('sha256')
 		.update(readFileSync(path.join(bundle, 'serve.mjs')))
 		.digest('hex');
 
-	console.log(`Booting ${runtimeEntry} from the clean builder bundle in ${runtimeImage}.`);
-	await waitForRuntimeReady(
-		[
-			'run',
-			'-i',
-			'--rm',
-			'--platform',
-			'linux/amd64',
-			'--name',
-			runtimeContainer,
-			'--network',
-			'none',
-			'--read-only',
-			'--tmpfs',
-			'/tmp:rw,size=64m,mode=1777',
-			'--memory',
-			'500m',
-			'--memory-swap',
-			'500m',
-			'--cpus',
-			'1',
-			'--pids-limit',
-			'256',
-			'--cap-drop',
-			'ALL',
-			'--security-opt',
-			'no-new-privileges',
-			'--mount',
-			`type=bind,src=${bundle},dst=/app,readonly`,
-			runtimeImage,
-			'node',
-			runtimeEntry
-		],
-		runtimeContainer,
-		20_000
-	);
+	console.log('Booting serve.mjs from the clean bundle.');
+	await waitForRuntimeReady(path.join(bundle, 'serve.mjs'), bundle, 20_000);
 } finally {
-	for (const container of [runtimeContainer, builderContainer]) {
-		spawnSync('docker', ['rm', '--force', container], {
-			cwd: repositoryRoot,
-			stdio: 'ignore'
-		});
-	}
 	rmSync(temporaryDirectory, { recursive: true, force: true });
 }
 
 const result = {
 	$schema: '../release/runtime-smoke.schema.json',
-	schemaVersion: 2,
-	builderImage,
-	runtimeImage,
-	packageKey,
+	schemaVersion: 3,
 	template: templateKey,
-	network: 'none',
-	buildMemoryLimitBytes,
-	runtimeMemoryLimitBytes: 500 * 1024 * 1024,
-	buildCommand: 'env NORBITAL_POD_CHECKED=1 vite build /workspace',
+	lockHash: depset.lockHash,
+	buildCommand: 'vite build',
 	buildElapsedMilliseconds: Number(buildElapsedMilliseconds.toFixed(3)),
 	requiredBundlePaths,
 	migrationSqlCount,
-	runtimeEntry,
+	runtimeEntry: 'serve.mjs',
 	serveEntrySha256,
 	readyFrame: { t: 'ready' },
 	passed: true

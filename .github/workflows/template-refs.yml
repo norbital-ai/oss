@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'release/templates.json'
+      - 'scripts/lib/templates.mjs'
       - 'scripts/project-templates.mjs'
       - 'scripts/validate-template-projections.mjs'
       - 'template_workspaces/**'

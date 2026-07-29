@@ -1,12 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import {
+	actualCounts,
+	discoverTemplates,
+	repositoryRoot,
+	templateMetadataFile
+} from './lib/templates.mjs';
 
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cataloguePath = path.join(repositoryRoot, 'release', 'templates.json');
-const keyPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const revisionPattern = /^[0-9a-f]{40}$/;
 const localDependencyProtocol = /^(?:workspace|catalog|file|link|portal):/;
 const dependencySections = [
@@ -62,19 +64,8 @@ function runGit(arguments_, options = {}) {
 	}
 }
 
-function countMatchingFiles(directory, predicate) {
-	if (!existsSync(directory)) return 0;
-	let count = 0;
-	for (const entry of readdirSync(directory, { withFileTypes: true })) {
-		const entryPath = path.join(directory, entry.name);
-		if (entry.isDirectory()) count += countMatchingFiles(entryPath, predicate);
-		else if (entry.isFile() && predicate(entry.name)) count += 1;
-	}
-	return count;
-}
-
-function validateStandaloneManifest(template, directory) {
-	const manifest = JSON.parse(readFileSync(path.join(directory, 'package.json'), 'utf8'));
+function validateStandaloneManifest(template) {
+	const manifest = JSON.parse(readFileSync(path.join(template.directory, 'package.json'), 'utf8'));
 	if (!manifest.private)
 		fail(`Template ${template.key} must remain a private application package.`);
 	for (const script of ['build', 'lint', 'sync']) {
@@ -91,8 +82,12 @@ function validateStandaloneManifest(template, directory) {
 			}
 		}
 	}
-	if (manifest.dependencies?.['@norbital-ai/pod'] !== '0.0.1') {
-		fail(`Template ${template.key} must pin @norbital-ai/pod to 0.0.1.`);
+	// A template pins its own pod version. Nothing propagates a bump into it; a developer
+	// commits one when they choose to. The only requirement here is that the pin is exact,
+	// so the projected tree resolves to the same bytes the committed lockfile describes.
+	const podVersion = manifest.dependencies?.['@norbital-ai/pod'];
+	if (typeof podVersion !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(podVersion)) {
+		fail(`Template ${template.key} must pin @norbital-ai/pod to an exact version.`);
 	}
 	for (const dependency of ['prettier', 'prettier-plugin-svelte', 'svelte-check', 'typescript']) {
 		if (typeof manifest.devDependencies?.[dependency] !== 'string') {
@@ -101,85 +96,16 @@ function validateStandaloneManifest(template, directory) {
 	}
 }
 
-function loadCatalogue() {
-	const catalogue = JSON.parse(readFileSync(cataloguePath, 'utf8'));
-	if (catalogue.schemaVersion !== 1) fail('release/templates.json must use schemaVersion 1.');
-	if (!/^refs\/heads\/[a-z0-9][a-z0-9._/-]*[a-z0-9]$/.test(catalogue.refNamespace)) {
-		fail(`Invalid template ref namespace: ${catalogue.refNamespace}`);
+function validate(template) {
+	validateStandaloneManifest(template);
+	const actual = actualCounts(template.directory);
+	for (const key of ['collections', 'apps', 'automations']) {
+		if (template.counts[key] !== actual[key]) {
+			fail(
+				`Template ${template.key} declares ${template.counts[key]} ${key} in ${templateMetadataFile}; found ${actual[key]}.`
+			);
+		}
 	}
-	if (!Array.isArray(catalogue.templates) || catalogue.templates.length === 0) {
-		fail('release/templates.json must declare at least one active template.');
-	}
-	const keys = new Set();
-	const paths = new Set();
-	for (const template of catalogue.templates) {
-		if (!keyPattern.test(template.key)) fail(`Invalid template key: ${template.key}`);
-		const expectedPath = `template_workspaces/${template.key}`;
-		if (template.path !== expectedPath) {
-			fail(`Template ${template.key} must use path ${expectedPath}.`);
-		}
-		if (keys.has(template.key)) fail(`Duplicate template key: ${template.key}`);
-		if (paths.has(template.path)) fail(`Duplicate template path: ${template.path}`);
-		if (typeof template.description !== 'string' || template.description.trim() === '') {
-			fail(`Template ${template.key} needs a description.`);
-		}
-		for (const field of ['name', 'industry']) {
-			if (typeof template[field] !== 'string' || template[field].trim() === '') {
-				fail(`Template ${template.key} needs ${field}.`);
-			}
-		}
-		if (!['public', 'unlisted'].includes(template.visibility)) {
-			fail(`Template ${template.key} has invalid visibility.`);
-		}
-		for (const count of ['collections', 'apps', 'automations']) {
-			if (!Number.isInteger(template.counts?.[count]) || template.counts[count] < 0) {
-				fail(`Template ${template.key} has invalid ${count} count.`);
-			}
-		}
-		if (typeof template.compatiblePod !== 'string' || template.compatiblePod.trim() === '') {
-			fail(`Template ${template.key} needs a compatiblePod range.`);
-		}
-		const directory = path.join(repositoryRoot, template.path);
-		if (!existsSync(path.join(directory, 'package.json'))) {
-			fail(`Template ${template.key} has no package.json at ${template.path}.`);
-		}
-		validateStandaloneManifest(template, directory);
-		const actualCounts = {
-			collections: countMatchingFiles(
-				path.join(directory, 'src', 'collections'),
-				(filename) => filename === '+model.ts'
-			),
-			apps: countMatchingFiles(
-				path.join(directory, 'src', 'apps'),
-				(filename) => filename.startsWith('+') && filename.endsWith('.svelte')
-			),
-			automations: countMatchingFiles(
-				path.join(directory, 'src', 'automation'),
-				(filename) => filename.startsWith('+') && filename.endsWith('.ts')
-			)
-		};
-		for (const count of ['collections', 'apps', 'automations']) {
-			if (template.counts[count] !== actualCounts[count]) {
-				fail(
-					`Template ${template.key} declares ${template.counts[count]} ${count}; found ${actualCounts[count]}.`
-				);
-			}
-		}
-		keys.add(template.key);
-		paths.add(template.path);
-	}
-	const templatesRoot = path.join(repositoryRoot, 'template_workspaces');
-	const actualDirectories = readdirSync(templatesRoot)
-		.filter((entry) => statSync(path.join(templatesRoot, entry)).isDirectory())
-		.map((entry) => `template_workspaces/${entry}`)
-		.filter((directory) => existsSync(path.join(repositoryRoot, directory, 'package.json')))
-		.sort();
-	const undeclared = actualDirectories.filter((directory) => !paths.has(directory));
-	if (undeclared.length > 0) fail(`Undeclared template directories: ${undeclared.join(', ')}`);
-	return {
-		...catalogue,
-		templates: [...catalogue.templates].sort((left, right) => left.key.localeCompare(right.key))
-	};
 }
 
 function projectTemplate(template, sourceRevision) {
@@ -192,10 +118,11 @@ function projectTemplate(template, sourceRevision) {
 }
 
 const options = readArguments(process.argv.slice(2));
-const catalogue = loadCatalogue();
+const templates = discoverTemplates();
+for (const template of templates) validate(template);
 
 if (options.check && !options.updateLocal && !options.pushRemote && !options.output) {
-	console.log(`Validated ${catalogue.templates.length} active template declarations.`);
+	console.log(`Validated ${templates.length} template declarations.`);
 	process.exit(0);
 }
 
@@ -208,22 +135,20 @@ if (!sourceRepository && options.output) {
 }
 
 const entries = [];
-for (const template of catalogue.templates) {
+for (const template of templates) {
 	const revision = projectTemplate(template, sourceRevision);
-	const ref = `${catalogue.refNamespace}/${template.key}`;
-	if (options.updateLocal) runGit(['update-ref', ref, revision]);
+	if (options.updateLocal) runGit(['update-ref', template.ref, revision]);
 	entries.push({
 		key: template.key,
-		ref,
+		ref: template.ref,
 		revision,
 		name: template.name,
 		industry: template.industry,
 		description: template.description,
 		visibility: template.visibility,
-		counts: template.counts,
-		compatiblePod: template.compatiblePod
+		counts: template.counts
 	});
-	console.log(`${template.key}: ${ref} -> ${revision}`);
+	console.log(`${template.key}: ${template.ref} -> ${revision}`);
 }
 
 if (options.pushRemote) {

@@ -10,8 +10,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# `packages: read` lets the template lockfile check resolve published `@norbital-ai/*`
+# versions from the configured registry, the same way a projected template does.
 permissions:
   contents: read
+  packages: read
+
+env:
+  NORBITAL_PACKAGE_REGISTRY: ${{ vars.NORBITAL_PACKAGE_REGISTRY || 'https://npm.pkg.github.com' }}
 
 jobs:
   check:
@@ -34,3 +40,12 @@ jobs:
 
       - name: Check packages and templates
         run: pnpm check
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Proves the committed lockfiles are what a Core host installs: warm one shared
+      # store over the network, then install with no network and no credentials.
+      - name: Verify offline installability
+        run: pnpm templates:lock:verify
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}

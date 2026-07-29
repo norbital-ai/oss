@@ -20,4 +20,4 @@ aliases, generated paths, and application settings remain local to the consuming
 - It contains configuration only—no runtime code, UI, framework behaviour, or package exports beyond
   shared config files.
 - Do not add an application-specific setting here merely to avoid local configuration.
-- Version it with the public platform release whenever a consumer-visible configuration change is made.
+- Version it with a normal changeset whenever a consumer-visible configuration change is made.

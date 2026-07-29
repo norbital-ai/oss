@@ -1,0 +1,13 @@
+{
+	"schemaVersion": 1,
+	"key": "crm",
+	"name": "CRM",
+	"industry": "Sales",
+	"description": "Customer relationship management, quoting, fulfilment, and payments.",
+	"visibility": "public",
+	"counts": {
+		"collections": 9,
+		"apps": 2,
+		"automations": 2
+	}
+}

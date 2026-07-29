@@ -11,13 +11,8 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import { publicPackageDirectories } from './lib/package-release.mjs';
-
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const templateCatalogue = JSON.parse(
-	readFileSync(path.join(repositoryRoot, 'release', 'templates.json'), 'utf8')
-);
+import { discoverTemplates, repositoryRoot } from './lib/templates.mjs';
 
 function run(command, arguments_, options = {}) {
 	return execFileSync(command, arguments_, {
@@ -105,10 +100,17 @@ const temporaryDirectory = mkdtempSync(path.join(tmpdir(), 'norbital-template-pr
 
 try {
 	const archives = packageArchives(temporaryDirectory);
-	for (const template of templateCatalogue.templates) {
+	for (const template of discoverTemplates()) {
 		const destination = path.join(temporaryDirectory, 'templates', template.key);
 		mkdirSync(destination, { recursive: true });
 		copyTrackedProjection(template, destination);
+		// This gate deliberately resolves a different dependency set from the committed one:
+		// it swaps the registry `@norbital-ai/*` versions for locally packed archives so a
+		// template is validated before its packages are published. The committed lockfile
+		// describes the registry set, so it cannot describe this install — drop it rather
+		// than leave a lockfile that does not match the manifest being installed.
+		// Lockfile freshness and offline installability are owned by `pnpm templates:lock:verify`.
+		rmSync(path.join(destination, 'pnpm-lock.yaml'), { force: true });
 		writeFileSync(path.join(destination, 'pnpm-workspace.yaml'), workspaceConfiguration(archives));
 		useLocalPackageArchives(destination, archives);
 		for (const [label, arguments_] of [

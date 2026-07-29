@@ -43,21 +43,24 @@ before creating a new role or changing a workspace boundary.
 
 ## Release and tenant lifecycle
 
-The public active set, display metadata, compatible Pod range, and projected Git ref namespace are
-defined in [`../release/templates.json`](../release/templates.json). Core reads that catalogue and the
-root-projected template refs from a configured remote Git repository; templates are not copied into
-object storage.
+Each template declares itself with a `norbital.template.json` at the root of its own tree — key,
+display metadata, and picker counts. It projects with the template, so a tenant fork carries it and
+nothing has to be kept in sync in a second place. Core resolves the set with one
+`git ls-remote --heads <url> 'refs/heads/templates/*'`; there is no mirror and no catalogue file.
 
-The current catalogue is compatible with Pod `0.0.1`, and each projected template manifest pins
-`@norbital-ai/pod` to exactly that version. Publishing advances the fast-forward-only
-`refs/heads/templates/<key>` branch to a new commit; a tenant records the exact commit rather than
-tracking the moving branch implicitly. That tenant must explicitly merge or rebase the revision and
-deploy a new checkpoint with a compatible platform release.
+Each template also commits its own `pnpm-lock.yaml` and pins its own `@norbital-ai/pod` version.
+Nothing propagates a bump into a template: a developer runs `pnpm templates:lock` when they choose
+to move. Publishing a new pod version changes no template and rebuilds no tenant.
 
-No template archive or package tarball is committed under this directory. Template source is distributed
-through ordinary Git refs. Package archives used for publication and platform assembly are generated in
-temporary or ignored release directories, validated, and addressed by integrity in the platform manifest.
-See the provider-neutral [distribution contract](../release/README.md).
+Publishing advances the fast-forward-only `refs/heads/templates/<key>` branch to a new commit. A
+tenant is _forked_ from that commit, so it shares ancestry with the template and adopting a newer
+one is a real three-way rebase, not a conflicting re-add of every file. A tenant records the exact
+commit it adopted rather than tracking the moving branch implicitly, and is told when its upstream
+is ahead — it never moves on its own.
 
-Editing this checkout never changes an existing tenant, and a tenant’s local changes must be merged or
-rebased intentionally rather than overwritten by a template update.
+No template archive or package tarball is committed under this directory. Template source is
+distributed through ordinary Git refs, and dependency bytes live in one shared content-addressed
+pnpm store. See the provider-neutral [distribution contract](../release/README.md).
+
+Editing this checkout never changes an existing tenant, and a tenant's local changes must be merged
+or rebased intentionally rather than overwritten by a template update.

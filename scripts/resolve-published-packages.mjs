@@ -272,7 +272,7 @@ export function resolveWorkspacePackages({ archiveBaseUrl, archiveOutput }) {
 
 async function main() {
 	const options = argumentsFrom(process.argv.slice(2));
-	const source = options.source ?? process.env.PLATFORM_PACKAGE_SOURCE ?? 'registry';
+	const source = options.source ?? process.env.NORBITAL_PACKAGE_SOURCE ?? 'registry';
 	if (!['registry', 'workspace'].includes(source)) {
 		fail('Package source must be registry or workspace.');
 	}

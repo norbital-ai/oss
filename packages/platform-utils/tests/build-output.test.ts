@@ -1,47 +1,46 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-	CHECKPOINT_BUILD_FORMAT,
-	checkpointBuildContractId,
-	checkpointBuilderVersion,
-	checkpointPackageKey,
-	LEGACY_CHECKPOINT_BUILD_FORMAT,
-	parseCheckpointBuilderVersion
+	CHECKPOINT_BUILD_REQUIRED_PATHS,
+	CHECKPOINT_MANIFEST_FILENAME,
+	SERVE_ENTRY_FILENAME,
+	staticAssetContentType
 } from '../src/tenant_workspace/build-output.ts';
 
-describe('checkpoint build identity', () => {
-	it('round-trips a current immutable platform build contract', () => {
-		const buildContractId = 'a'.repeat(64);
-		const builderVersion = checkpointBuilderVersion(buildContractId);
-
-		assert.equal(builderVersion, `vite-2-${buildContractId}`);
-		assert.deepEqual(parseCheckpointBuilderVersion(builderVersion), {
-			format: CHECKPOINT_BUILD_FORMAT,
-			buildContractId
-		});
-		assert.equal(checkpointBuildContractId(builderVersion), buildContractId);
-		assert.throws(() => checkpointPackageKey(builderVersion), /platform release/);
-	});
-
-	it('continues to parse retained package-only checkpoints', () => {
-		const packageKey = '0123456789abcdef';
-		const builderVersion = `vite-1-${packageKey}`;
-
-		assert.deepEqual(parseCheckpointBuilderVersion(builderVersion), {
-			format: LEGACY_CHECKPOINT_BUILD_FORMAT,
-			packageKey
-		});
-		assert.equal(checkpointPackageKey(builderVersion), packageKey);
-		assert.throws(() => checkpointBuildContractId(builderVersion), /no platform build contract/);
-	});
-
-	it('rejects malformed current and legacy identities', () => {
-		assert.throws(
-			() => checkpointBuilderVersion('a'.repeat(63)),
-			/Invalid platform build contract/
+describe('the bundle contract', () => {
+	it('requires the entry point and manifest a runtime cannot boot without', () => {
+		// The bundle is the only cross-version contract between a Core replica and a tenant
+		// runtime now that there are no images, so its required shape is asserted, not assumed.
+		assert.ok(CHECKPOINT_BUILD_REQUIRED_PATHS.includes(SERVE_ENTRY_FILENAME));
+		assert.ok(CHECKPOINT_BUILD_REQUIRED_PATHS.includes(CHECKPOINT_MANIFEST_FILENAME));
+		assert.deepEqual(
+			[...CHECKPOINT_BUILD_REQUIRED_PATHS],
+			[
+				'manifest.json',
+				'dist/index.html',
+				'serve.mjs',
+				'output/server/index.js',
+				'schema-functions.sql',
+				'schema-post-ddl.sql'
+			]
 		);
-		assert.throws(() => parseCheckpointBuilderVersion('vite-2-not-a-digest'));
-		assert.throws(() => parseCheckpointBuilderVersion('vite-1-not-a-key'));
-		assert.throws(() => parseCheckpointBuilderVersion('webpack-1-0123456789abcdef'));
+	});
+
+	it('carries no build contract identity — the tenant tree already covers dependencies', async () => {
+		// A checkpoint used to be namespaced `vite-2-<64-hex>`, hashed from a curated package
+		// union and two image digests. All of that is now the tenant's own lockfile.
+		const module = await import('../src/tenant_workspace/build-output.ts');
+		assert.deepEqual(
+			Object.keys(module).filter((name) => /contract|packageKey|BUILD_FORMAT/i.test(name)),
+			[]
+		);
+	});
+
+	it('serves the SPA shell as html rather than a download', () => {
+		assert.equal(staticAssetContentType('index.html'), 'text/html; charset=utf-8');
+		assert.equal(staticAssetContentType('app-a1b2.js'), 'text/javascript; charset=utf-8');
+		assert.equal(staticAssetContentType('style.css'), 'text/css; charset=utf-8');
+		assert.equal(staticAssetContentType('font.woff2'), 'font/woff2');
+		assert.equal(staticAssetContentType('unknown.bin'), 'application/octet-stream');
 	});
 });

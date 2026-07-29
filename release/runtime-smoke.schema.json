@@ -2,18 +2,14 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://github.com/norbital-ai/oss/blob/main/release/runtime-smoke.schema.json",
 	"title": "Norbital published runtime smoke evidence",
+	"description": "Evidence that a build against a materialized depset produces a bundle that boots and frames. The bundle format is the only cross-version contract now that there are no images.",
 	"type": "object",
 	"additionalProperties": false,
 	"required": [
 		"$schema",
 		"schemaVersion",
-		"builderImage",
-		"runtimeImage",
-		"packageKey",
 		"template",
-		"network",
-		"buildMemoryLimitBytes",
-		"runtimeMemoryLimitBytes",
+		"lockHash",
 		"buildCommand",
 		"buildElapsedMilliseconds",
 		"requiredBundlePaths",
@@ -25,24 +21,10 @@
 	],
 	"properties": {
 		"$schema": { "const": "../release/runtime-smoke.schema.json" },
-		"schemaVersion": { "const": 2 },
-		"builderImage": {
-			"type": "string",
-			"pattern": "^.+@sha256:[0-9a-f]{64}$"
-		},
-		"runtimeImage": {
-			"type": "string",
-			"pattern": "^.+@sha256:[0-9a-f]{64}$"
-		},
-		"packageKey": {
-			"type": "string",
-			"pattern": "^[0-9a-f]{16}$"
-		},
+		"schemaVersion": { "const": 3 },
 		"template": { "type": "string", "minLength": 1 },
-		"network": { "const": "none" },
-		"buildMemoryLimitBytes": { "const": 524288000 },
-		"runtimeMemoryLimitBytes": { "const": 524288000 },
-		"buildCommand": { "const": "env NORBITAL_POD_CHECKED=1 vite build /workspace" },
+		"lockHash": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+		"buildCommand": { "const": "vite build" },
 		"buildElapsedMilliseconds": { "type": "number", "minimum": 0 },
 		"requiredBundlePaths": {
 			"const": [
@@ -55,7 +37,7 @@
 			]
 		},
 		"migrationSqlCount": { "type": "integer", "minimum": 1 },
-		"runtimeEntry": { "const": "/app/serve.mjs" },
+		"runtimeEntry": { "const": "serve.mjs" },
 		"serveEntrySha256": {
 			"type": "string",
 			"pattern": "^[0-9a-f]{64}$"

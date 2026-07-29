@@ -1,12 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { discoverTemplates, repositoryRoot } from './lib/templates.mjs';
 
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const catalogue = JSON.parse(
-	readFileSync(path.join(repositoryRoot, 'release', 'templates.json'), 'utf8')
-);
 const podCli = path.join(
 	repositoryRoot,
 	'packages',
@@ -17,11 +12,10 @@ const podCli = path.join(
 	'index.js'
 );
 
-for (const template of catalogue.templates ?? []) {
-	const directory = path.join(repositoryRoot, template.path);
+for (const template of discoverTemplates()) {
 	console.log(`Synchronizing ${template.key}...`);
 	execFileSync(process.execPath, [podCli, 'sync'], {
-		cwd: directory,
+		cwd: template.directory,
 		stdio: 'inherit'
 	});
 }

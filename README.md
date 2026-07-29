@@ -39,16 +39,16 @@ pnpm check
 Every compiled package rebuilds from source during `pnpm pack`; Pod and UI use `svelte-package`,
 while the TypeScript-only packages use `tsc`. Publication checks remove existing build output,
 create temporary standalone archives, validate their contents, and delete the archives afterward.
-Platform-release assembly writes its immutable archives under the ignored root `dist/` directory.
-Consumers install released packages from the configured registry or an SRI-pinned platform release;
-no consumer reads this repository through a sibling path.
+Consumers install released packages from the configured registry; no consumer reads this repository
+through a sibling path.
 
 Run `pnpm changeset` with any change to a publishable package. See
 [`RELEASING.md`](./RELEASING.md) for the release workflow.
 
-Template source is published as deterministic root-projected Git refs, while generic builder and
-runtime images are published by digest. The provider-neutral catalogue and release contracts are
-documented in [`release/README.md`](./release/README.md).
+Template source is published as deterministic root-projected Git refs, each carrying its own
+`norbital.template.json` and its own committed `pnpm-lock.yaml`. There is no platform release and no
+published image. The provider-neutral distribution contract is documented in
+[`release/README.md`](./release/README.md).
 
 ## License
 

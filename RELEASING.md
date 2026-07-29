@@ -25,26 +25,26 @@ another compatible registry can replace it without a code change.
 
 ## Template refs
 
-The `Publish template refs` workflow projects each active `template_workspaces/<key>` directory to
+The `Publish template refs` workflow projects each `template_workspaces/<key>` directory to
 `refs/heads/templates/<key>`. It publishes source commits, not template archives or prebuilt tenant
-bundles. Catalogue metadata and the active set live in
-[`release/templates.json`](./release/templates.json).
+bundles. Picker metadata lives in each template's own `norbital.template.json`, so it projects with
+the template rather than sitting in a catalogue that has to be kept in sync.
 
-## Platform release
+## Template dependencies
 
-After the package versions in `main` are available from the configured registry, dispatch
-`Publish platform release` with a new human release name, or push a matching `platform-v*` tag.
-The workflow:
+A template pins its own dependencies in a committed `pnpm-lock.yaml` and pins its own
+`@norbital-ai/pod` version. Nothing propagates a bump into it — a developer commits one when they
+choose to:
 
-1. verifies every standalone npm archive;
-2. resolves and verifies each published registry tarball and its sha512 SRI;
-3. installs the exact package versions into the generic builder image;
-4. publishes builder and minimal runtime images to GHCR with SBOM and provenance;
-5. enforces the configured 500 MiB image ceiling and tenant-build performance gate;
-6. resolves exact template commits;
-7. publishes an attested platform release manifest as a GitHub release asset.
+```sh
+pnpm templates:lock          # resolve and write
+pnpm templates:lock:check    # fail on drift (part of `pnpm check`)
+pnpm templates:lock:verify   # prove the lockfile installs offline from a warm store
+```
 
-Never reuse a platform release name or tag. The manifest derives its immutable 64-hex build
-contract from exact package archive integrities and OCI digests. A host pins that contract and both
-image digests for existing tenants, so a new Pod version or image is always a new release. See
-[`release/README.md`](./release/README.md) for provider-neutral inputs and the complete contract.
+Publishing a new pod version does not touch any template, and does not rebuild any tenant. A tenant
+is _told_ a newer pod exists and that adopting it may break its template; adopting it is a commit in
+the tenant's own tree, and `git revert` is the rollback.
+
+There is no platform release, no builder image, and no runtime image. See
+[`release/README.md`](./release/README.md) for the complete distribution contract.

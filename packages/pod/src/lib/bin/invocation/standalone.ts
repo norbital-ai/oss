@@ -1,7 +1,4 @@
 import type {
-	DbQueryConfig,
-	DbQueryInput,
-	DbQueryResult,
 	HostDbBinding,
 	RuntimeFacilityRequirement,
 	RuntimeFacilityBindings
@@ -9,7 +6,6 @@ import type {
 import { requiredRuntimeFacilities } from '@norbital-ai/platform-utils/runtime/binding';
 import { parseNorbitalManifest } from '@norbital-ai/platform-utils/manifest/parse';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
-import { BaseScopeSchema } from '@norbital-ai/platform-utils/scope/types';
 import {
 	CHECKPOINT_MANIFEST_FILENAME,
 	staticAssetContentType
@@ -19,12 +15,22 @@ import { compiledSeedPlanFromManifest } from '@norbital-ai/platform-utils/seed/p
 import { parseSeedManifest } from '@norbital-ai/platform-utils/seed/manifest';
 import { seedTemplateDataFromPlan } from '@norbital-ai/platform-utils/seed/execute';
 import { safeParse } from '@norbital-ai/std/json';
-import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Client, Pool, type PoolClient, type QueryResult } from 'pg';
+import { Client } from 'pg';
+import { PostgresHostDbBinding, type HostDbConnection } from '../../host/db.js';
+import { STORAGE_ROUTE_PREFIX, type LocalFileStorage } from '../../host/file-storage.js';
+import { satisfiedFacilities, type HostIdentity, type PodHostConfig } from '../../host/types.js';
+import {
+	loadHostConfig,
+	resolveDatabaseUrl,
+	type ResolvedHostConfig,
+	type StandaloneIdentityMode
+} from './host-config.js';
+import { startScheduler } from './scheduler.js';
 
 const STANDALONE_BUILD_DIRECTORY = path.join('.norbital', 'build');
 const REQUIRED_ENVIRONMENT = [
@@ -36,12 +42,9 @@ const REQUIRED_ENVIRONMENT = [
 	'POD_ADMIN_ID',
 	'POD_ADMIN_NAME',
 	'POD_ADMIN_EMAIL',
-	'POD_TEMPLATE_KEY',
-	'POD_TRUSTED_HOST_TOKEN'
+	'POD_TEMPLATE_KEY'
 ] as const;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
-const TRUSTED_HOST_TOKEN_HEADER = 'x-norbital-host-token';
-const BUILT_IN_FACILITIES = new Set<RuntimeFacilityRequirement>(['db']);
 
 interface StandaloneEnvironment {
 	readonly databaseUrl: string;
@@ -53,6 +56,7 @@ interface StandaloneEnvironment {
 	readonly adminName: string;
 	readonly adminEmail: string;
 	readonly templateKey: string;
+	/** Empty unless the host authenticates with the trusted-header provider. */
 	readonly trustedHostToken: string;
 }
 
@@ -67,7 +71,23 @@ function requiredEnvironmentValue(name: (typeof REQUIRED_ENVIRONMENT)[number]): 
 	return process.env[name]?.trim() ?? '';
 }
 
-export function loadStandaloneEnvironment(): StandaloneEnvironment {
+/**
+ * Read the workspace `.env` before the environment is inspected, so a cloned template only needs
+ * the file the README tells it to copy. Values already present in the real environment win, which
+ * keeps CI and container overrides authoritative over a file that happens to be on disk.
+ */
+function loadWorkspaceEnvFile(root: string): void {
+	const envPath = path.join(root, '.env');
+	if (!existsSync(envPath)) return;
+	try {
+		process.loadEnvFile(envPath);
+	} catch (cause) {
+		throw new Error(`Failed to read ${envPath}`, { cause });
+	}
+}
+
+export function loadStandaloneEnvironment(root?: string): StandaloneEnvironment {
+	if (root) loadWorkspaceEnvFile(root);
 	const missing = REQUIRED_ENVIRONMENT.filter((name) => !requiredEnvironmentValue(name));
 	if (missing.length > 0) {
 		throw new Error(`Missing required standalone Pod environment: ${missing.join(', ')}`);
@@ -85,8 +105,11 @@ export function loadStandaloneEnvironment(): StandaloneEnvironment {
 		);
 	}
 
-	const trustedHostToken = requiredEnvironmentValue('POD_TRUSTED_HOST_TOKEN');
-	if (Buffer.byteLength(trustedHostToken, 'utf8') < 32) {
+	// Validated here rather than where it is used so a typo fails before the build is loaded and
+	// the database is touched. Absence is legal: only the trusted-header provider needs it, and
+	// `resolveStandaloneHost` is what refuses to install that provider without one.
+	const trustedHostToken = process.env.POD_TRUSTED_HOST_TOKEN?.trim() ?? '';
+	if (trustedHostToken && Buffer.byteLength(trustedHostToken, 'utf8') < 32) {
 		throw new Error('POD_TRUSTED_HOST_TOKEN must contain at least 32 bytes');
 	}
 
@@ -102,113 +125,6 @@ export function loadStandaloneEnvironment(): StandaloneEnvironment {
 		templateKey: requiredEnvironmentValue('POD_TEMPLATE_KEY'),
 		trustedHostToken
 	};
-}
-
-function queryResult(result: QueryResult): DbQueryResult {
-	return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
-}
-
-async function runQuery(
-	client: Pool | PoolClient,
-	input: DbQueryInput,
-	params?: readonly unknown[]
-): Promise<DbQueryResult> {
-	if (typeof input === 'string') {
-		return queryResult(await client.query(input, params ? [...params] : undefined));
-	}
-	const config: DbQueryConfig = input;
-	return queryResult(
-		await client.query({
-			text: config.text,
-			...(config.values ? { values: [...config.values] } : {}),
-			...(config.rowMode ? { rowMode: config.rowMode } : {})
-		})
-	);
-}
-
-export class PostgresHostDbBinding implements HostDbBinding {
-	readonly #pool: Pool;
-	readonly #transactions = new Map<string, PoolClient>();
-
-	constructor(databaseUrl: string) {
-		this.#pool = new Pool({ connectionString: databaseUrl });
-	}
-
-	async validate(): Promise<void> {
-		const result = await this.#pool.query<{ server_version_num: string }>(
-			`SELECT current_setting('server_version_num') AS server_version_num`
-		);
-		const version = Number(result.rows[0]?.server_version_num);
-		if (!Number.isInteger(version) || version < 180_000) {
-			throw new Error(`Standalone Pod requires PostgreSQL 18 or newer; server reported ${version}`);
-		}
-	}
-
-	query(sql: DbQueryInput, params?: readonly unknown[]): Promise<DbQueryResult> {
-		return runQuery(this.#pool, sql, params);
-	}
-
-	async begin(): Promise<string> {
-		const transactionId = crypto.randomUUID();
-		const client = await this.#pool.connect();
-		try {
-			await client.query('BEGIN');
-			this.#transactions.set(transactionId, client);
-			return transactionId;
-		} catch (cause) {
-			client.release();
-			throw cause;
-		}
-	}
-
-	txQuery(
-		transactionId: string,
-		sql: DbQueryInput,
-		params?: readonly unknown[]
-	): Promise<DbQueryResult> {
-		return runQuery(this.#transaction(transactionId), sql, params);
-	}
-
-	async commit(transactionId: string): Promise<void> {
-		const client = this.#transaction(transactionId);
-		try {
-			await client.query('COMMIT');
-		} finally {
-			this.#transactions.delete(transactionId);
-			client.release();
-		}
-	}
-
-	async rollback(transactionId: string): Promise<void> {
-		const client = this.#transaction(transactionId);
-		try {
-			await client.query('ROLLBACK');
-		} finally {
-			this.#transactions.delete(transactionId);
-			client.release();
-		}
-	}
-
-	async close(): Promise<void> {
-		// stupidity:allow A6 -- each checked-out transaction must roll back before its client is released.
-		for (const [transactionId, client] of this.#transactions) {
-			try {
-				await client.query('ROLLBACK');
-			} catch (cause) {
-				console.error(`[pod] failed to roll back transaction ${transactionId}`, cause);
-			} finally {
-				client.release();
-			}
-		}
-		this.#transactions.clear();
-		await this.#pool.end();
-	}
-
-	#transaction(transactionId: string): PoolClient {
-		const client = this.#transactions.get(transactionId);
-		if (!client) throw new Error(`Unknown or completed database transaction: ${transactionId}`);
-		return client;
-	}
 }
 
 export function standaloneBuildDirectory(root: string): string {
@@ -297,19 +213,22 @@ export async function migrateStandalone(
 	root: string,
 	environment: StandaloneEnvironment
 ): Promise<void> {
-	const binding = new PostgresHostDbBinding(environment.databaseUrl);
+	// The configured adapter wins over the environment: a workspace that points `pod start` at one
+	// database must not have `pod migrate` quietly migrate a different one.
+	const databaseUrl = await resolveDatabaseUrl(root, environment.databaseUrl);
+	const binding = new PostgresHostDbBinding(databaseUrl);
 	try {
 		await binding.validate();
 	} finally {
 		await binding.close();
 	}
-	await withPostgresTransaction(environment.databaseUrl, async (client) => {
+	await withPostgresTransaction(databaseUrl, async (client) => {
 		// stupidity: boundary-cast -- node-postgres and Neon expose the same query client contract.
 		const migrationClient = client as unknown as NonNullable<
 			Parameters<typeof applyMigrations>[0]['client']
 		>;
 		await applyMigrations({
-			connStr: environment.databaseUrl,
+			connStr: databaseUrl,
 			bundleDir: standaloneBuildDirectory(root),
 			client: migrationClient
 		});
@@ -333,7 +252,8 @@ export async function seedStandalone(
 		throw cause;
 	}
 	const manifest = parseSeedManifest(safeParse(source));
-	await withPostgresTransaction(environment.databaseUrl, async (client) => {
+	const databaseUrl = await resolveDatabaseUrl(root, environment.databaseUrl);
+	await withPostgresTransaction(databaseUrl, async (client) => {
 		// stupidity: boundary-cast -- seed execution uses only the shared pg query contract.
 		const seedClient = client as unknown as NonNullable<
 			Parameters<typeof seedTemplateDataFromPlan>[0]['client']
@@ -344,7 +264,7 @@ export async function seedStandalone(
 			orgId: environment.orgId,
 			orgName: environment.orgName,
 			adminId: environment.adminId,
-			liveUrl: environment.databaseUrl,
+			liveUrl: databaseUrl,
 			log: (message) => console.log(message),
 			client: seedClient
 		});
@@ -370,51 +290,14 @@ async function requestBody(request: IncomingMessage): Promise<string | undefined
 	return chunks.length > 0 ? Buffer.concat(chunks).toString('utf8') : undefined;
 }
 
-class StandaloneRequestError extends Error {
-	constructor(
-		readonly status: number,
-		message: string
-	) {
-		super(message);
-	}
-}
-
-function trustedHostTokenMatches(provided: string, expected: string): boolean {
-	const providedBytes = Buffer.from(provided, 'utf8');
-	const expectedBytes = Buffer.from(expected, 'utf8');
-	return (
-		providedBytes.length === expectedBytes.length && timingSafeEqual(providedBytes, expectedBytes)
-	);
-}
-
-function validateForwardedIdentity(headers: Headers, environment: StandaloneEnvironment): void {
-	const token = headers.get(TRUSTED_HOST_TOKEN_HEADER)?.trim() ?? '';
-	if (!trustedHostTokenMatches(token, environment.trustedHostToken)) {
-		throw new StandaloneRequestError(401, 'Trusted host authentication is required');
-	}
-	const userId = headers.get('x-norbital-user-id')?.trim() ?? '';
-	const orgId = headers.get('x-norbital-org-id')?.trim() ?? '';
-	const orgName = headers.get('x-norbital-org-name')?.trim() ?? '';
-	const rawScope = headers.get('x-norbital-base-scope-json')?.trim() ?? '';
-	let scope: unknown;
-	try {
-		scope = safeParse(rawScope);
-	} catch {
-		throw new StandaloneRequestError(401, 'Trusted host workspace scope is invalid');
-	}
-	const parsed = BaseScopeSchema.safeParse(scope);
-	if (
-		!parsed.success ||
-		!userId ||
-		!orgId ||
-		!orgName ||
-		parsed.data.requestor.norbital_id !== userId ||
-		parsed.data.organization.norbital_id !== orgId ||
-		parsed.data.organization.name !== orgName
-	) {
-		throw new StandaloneRequestError(401, 'Trusted host workspace scope is invalid');
-	}
-}
+/** Headers the runtime reads to establish identity. Never forwarded from the client. */
+const IDENTITY_HEADERS = [
+	'x-norbital-user-id',
+	'x-norbital-org-id',
+	'x-norbital-org-name',
+	'x-norbital-base-scope-json',
+	'x-norbital-host-token'
+] as const;
 
 async function toWebRequest(
 	request: IncomingMessage,
@@ -422,14 +305,36 @@ async function toWebRequest(
 ): Promise<Request> {
 	const headers = new Headers();
 	appendIncomingHeaders(request, headers);
-	const pathname = new URL(request.url ?? '/', `http://${environment.host}:${environment.port}`)
-		.pathname;
-	if (pathname === '/_pod/bootstrap' || pathname.startsWith('/_runtime/')) {
-		validateForwardedIdentity(headers, environment);
-	}
-	headers.delete(TRUSTED_HOST_TOKEN_HEADER);
 	const body = await requestBody(request);
 	return new Request(`http://${environment.host}:${environment.port}${request.url ?? '/'}`, {
+		method: request.method,
+		headers,
+		...(body ? { body } : {})
+	});
+}
+
+/**
+ * Re-issue a request carrying the identity the provider established, and nothing the client sent
+ * about identity.
+ *
+ * Stripping first is what makes any provider safe to write. The runtime trusts `x-norbital-*`
+ * absolutely — that is the contract with Core, which sits behind an authenticated edge — so a
+ * client that set those headers itself would otherwise be believed. A provider therefore cannot
+ * accidentally pass identity through by forgetting to clear it; the only identity that survives
+ * this function is the one it returned.
+ */
+async function withHostIdentity(request: Request, identity: HostIdentity): Promise<Request> {
+	const headers = new Headers(request.headers);
+	for (const name of IDENTITY_HEADERS) headers.delete(name);
+	headers.set('x-norbital-user-id', identity.userId);
+	headers.set('x-norbital-org-id', identity.organizationId);
+	headers.set('x-norbital-org-name', identity.organizationName);
+	if (identity.baseScope) {
+		headers.set('x-norbital-base-scope-json', JSON.stringify(identity.baseScope));
+	}
+	const body =
+		request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text();
+	return new Request(request.url, {
 		method: request.method,
 		headers,
 		...(body ? { body } : {})
@@ -506,6 +411,8 @@ async function standaloneStaticAsset(
 	if (request.method !== 'GET' && request.method !== 'HEAD') return null;
 	const pathname = new URL(request.url ?? '/', 'http://pod.local').pathname;
 	if (pathname.startsWith('/_pod/') || pathname.startsWith('/_runtime/')) return null;
+	// A workspace app is a single-page client: unknown paths fall through to index.html below, so
+	// a deep link opened directly resolves to the shell rather than a 404.
 	const distRoot = path.join(standaloneBuildDirectory(root), 'dist');
 	const relativePath = decodeURIComponent(pathname).replace(/^\/+/, '') || 'index.html';
 	const candidate = path.normalize(path.join(distRoot, relativePath));
@@ -524,31 +431,185 @@ async function standaloneStaticAsset(
 	return (await read(candidate)) ?? (await read(path.join(distRoot, 'index.html')));
 }
 
+/**
+ * Resolve the host configuration and refuse the combinations that are unsafe rather than merely
+ * wrong.
+ *
+ * Both checks here are about a process that would otherwise start and look fine: a trusted-header
+ * provider with no token would reject every request as unauthenticated with no hint why, and a dev
+ * identity on a routable address is an open workspace. `loadStandaloneEnvironment` already refuses
+ * a non-loopback bind, so the second check is defence in depth against that rule being relaxed.
+ */
+async function resolveStandaloneHost(
+	root: string,
+	environment: StandaloneEnvironment,
+	identityMode: StandaloneIdentityMode
+): Promise<ResolvedHostConfig> {
+	if (identityMode === 'trusted-host' && !environment.trustedHostToken) {
+		throw new Error(
+			'POD_TRUSTED_HOST_TOKEN is required to serve with trusted-host identity. Set it, supply your own identity provider in pod.config.ts, or use `pod dev` for a local development identity.'
+		);
+	}
+	if (identityMode === 'dev' && !LOOPBACK_HOSTS.has(environment.host)) {
+		throw new Error(
+			`Development identity refuses to bind ${environment.host}: it authenticates nobody. Bind a loopback address or configure a real identity provider in pod.config.ts.`
+		);
+	}
+	return loadHostConfig({
+		root,
+		identityMode,
+		databaseUrl: environment.databaseUrl,
+		host: environment.host,
+		port: environment.port,
+		orgId: environment.orgId,
+		orgName: environment.orgName,
+		adminId: environment.adminId,
+		trustedHostToken: environment.trustedHostToken
+	});
+}
+
+/**
+ * The presigned-URL reader, when the configured file storage has one.
+ *
+ * Presigning is meaningless without a server willing to redeem the URL, and only a storage
+ * implementation that lives in this process needs that server — an S3-backed binding hands out
+ * URLs its own provider serves. So the route is installed exactly when the binding offers to
+ * resolve for it, rather than being conditioned on a particular implementation.
+ */
+function presignedStorage(config: PodHostConfig): LocalFileStorage | null {
+	const storage = config.fileStorage;
+	if (!storage) return null;
+	return typeof (storage as LocalFileStorage).resolvePresigned === 'function'
+		? (storage as LocalFileStorage)
+		: null;
+}
+
+export type StandaloneStartOptions = {
+	/**
+	 * `trusted-host` keeps the deployment contract: an authenticated proxy forwards the identity it
+	 * established. `dev` makes every request the bootstrapped admin, and is only reachable through
+	 * `pod dev` or an explicit flag.
+	 */
+	readonly identityMode?: StandaloneIdentityMode;
+};
+
+/**
+ * Bind the facilities the resolved host configuration provides.
+ *
+ * Optional facilities are omitted rather than set to `undefined` so that `requireRuntimeFacility`
+ * reports "the hosting platform did not provide the X facility" — the message that tells an author
+ * what to configure — instead of failing later inside a binding that does not exist.
+ */
+function facilityBindings(
+	config: PodHostConfig,
+	db: HostDbBinding
+): RuntimeFacilityBindings {
+	return {
+		db,
+		...(config.fileStorage ? { fileStorage: config.fileStorage } : {}),
+		...(config.ai ? { ai: config.ai } : {}),
+		...(config.notifications ? { notifications: config.notifications } : {}),
+		...(config.maps ? { maps: config.maps } : {})
+	};
+}
+
+function describeHost(config: PodHostConfig, stubbed: readonly string[], source: string): string {
+	const supplied = ['db', ...satisfiedFacilities(config)].filter(
+		(name, index, all) => all.indexOf(name) === index
+	);
+	const lines = [
+		`[pod] host configuration: ${source}`,
+		`[pod] identity provider: ${config.identity.name}`,
+		`[pod] facilities: ${supplied.join(', ')}`
+	];
+	if (stubbed.length > 0) {
+		lines.push(
+			`[pod] placeholder facilities (they will fail when used): ${stubbed.join(', ')} — supply them in pod.config.ts`
+		);
+	}
+	return lines.join('\n');
+}
+
 export async function startStandalone(
 	root: string,
-	environment: StandaloneEnvironment
+	environment: StandaloneEnvironment,
+	options: StandaloneStartOptions = {}
 ): Promise<void> {
-	assertStandaloneFacilities(await loadStandaloneManifest(root), BUILT_IN_FACILITIES);
-	const binding = new PostgresHostDbBinding(environment.databaseUrl);
+	const identityMode = options.identityMode ?? 'trusted-host';
+	const { config, source, stubbed } = await resolveStandaloneHost(root, environment, identityMode);
+
+	const manifest = await loadStandaloneManifest(root);
+	assertStandaloneFacilities(manifest, satisfiedFacilities(config));
+
+	const binding: HostDbConnection = config.db.connect();
 	await binding.validate();
 	const runtime = await loadPodRuntime(root);
+	const bindings = facilityBindings(config, binding);
+	const storage = presignedStorage(config);
+
+	/**
+	 * The host's own channel into the runtime. It carries the admin identity directly rather than
+	 * going through the identity provider: the scheduler is not a request from anyone, and making
+	 * it authenticate would mean every provider had to invent a service credential for it.
+	 */
+	const dispatch = async (body: unknown): Promise<unknown> => {
+		const headers = new Headers({
+			'content-type': 'application/json',
+			'x-norbital-user-id': environment.adminId,
+			'x-norbital-org-id': environment.orgId,
+			'x-norbital-org-name': environment.orgName
+		});
+		const request = new Request(
+			`http://${environment.host}:${environment.port}/_runtime/runtime/run`,
+			{ method: 'POST', headers, body: JSON.stringify(body) }
+		);
+		const response = await runtime.handlePodRequest(request, bindings);
+		if (!response.ok) {
+			throw new Error(`Runtime rejected host dispatch (${response.status}): ${await response.text()}`);
+		}
+		return response.json();
+	};
+
 	const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
-		try {
-			const asset = await standaloneStaticAsset(root, request);
-			if (asset) {
-				response.statusCode = 200;
-				response.setHeader('content-type', asset.contentType);
-				response.setHeader('content-length', String(asset.body.byteLength));
-				response.end(request.method === 'HEAD' ? undefined : asset.body);
+		const webRequest = await toWebRequest(request, environment);
+		const url = new URL(webRequest.url);
+
+		// A provider owns its routes before anything else looks at the request, so a login page is
+		// reachable while unauthenticated and is never mistaken for a workspace asset.
+		const routed = await config.identity.handleRoute?.(webRequest);
+		if (routed) return writeWebResponse(routed, response);
+
+		if (storage && url.pathname.startsWith(STORAGE_ROUTE_PREFIX)) {
+			const object = await storage.resolvePresigned(url);
+			if (!object) {
+				response.statusCode = 404;
+				response.end('Not Found');
 				return;
 			}
-			const webRequest = await toWebRequest(request, environment);
-			await writeWebResponse(await runtime.handlePodRequest(webRequest, { db: binding }), response);
-		} catch (cause) {
-			if (!(cause instanceof StandaloneRequestError)) throw cause;
-			response.statusCode = cause.status;
-			response.end(cause.message);
+			response.statusCode = 200;
+			response.setHeader('content-type', staticAssetContentType(object.key));
+			response.setHeader('content-length', String(object.body.byteLength));
+			response.end(request.method === 'HEAD' ? undefined : object.body);
+			return;
 		}
+
+		const asset = await standaloneStaticAsset(root, request);
+		if (asset) {
+			response.statusCode = 200;
+			response.setHeader('content-type', asset.contentType);
+			response.setHeader('content-length', String(asset.body.byteLength));
+			response.end(request.method === 'HEAD' ? undefined : asset.body);
+			return;
+		}
+
+		const identity = await config.identity.authenticate(webRequest);
+		if (!identity) {
+			response.statusCode = 401;
+			response.end('Unauthorized');
+			return;
+		}
+		const authenticated = await withHostIdentity(webRequest, identity);
+		await writeWebResponse(await runtime.handlePodRequest(authenticated, bindings), response);
 	};
 	const server = createServer((request, response) => {
 		void handleRequest(request, response).catch((cause: unknown) => {
@@ -558,14 +619,29 @@ export async function startStandalone(
 		});
 	});
 
+	const scheduler = startScheduler({
+		manifest,
+		dispatch,
+		automations: config.scheduler?.automations === true,
+		...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
+		intervalMs: config.scheduler?.intervalMs ?? 30_000
+	});
+
 	try {
 		await listen(server, environment);
+		console.log(describeHost(config, stubbed, source));
 		console.log(`Pod listening at http://${environment.host}:${environment.port}`);
+		if (identityMode === 'dev') {
+			console.log(
+				`[pod] DEVELOPMENT IDENTITY: every request is ${environment.adminEmail}. Never expose this process.`
+			);
+		}
 		await new Promise<void>((resolve) => {
 			process.once('SIGINT', resolve);
 			process.once('SIGTERM', resolve);
 		});
 	} finally {
+		scheduler.stop();
 		await new Promise<void>((resolve, reject) => {
 			server.close((cause) => (cause ? reject(cause) : resolve()));
 		});

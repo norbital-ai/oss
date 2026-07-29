@@ -1,0 +1,13 @@
+{
+	"schemaVersion": 1,
+	"key": "construction",
+	"name": "Construction Operations",
+	"industry": "Construction",
+	"description": "Construction project, workforce, permit, quality, and commercial operations.",
+	"visibility": "public",
+	"counts": {
+		"collections": 16,
+		"apps": 3,
+		"automations": 4
+	}
+}

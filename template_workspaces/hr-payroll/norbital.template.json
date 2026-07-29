@@ -1,0 +1,13 @@
+{
+	"schemaVersion": 1,
+	"key": "hr-payroll",
+	"name": "HR & Payroll",
+	"industry": "Human resources",
+	"description": "Multi-country HR, attendance, leave, payroll, and statutory reporting.",
+	"visibility": "public",
+	"counts": {
+		"collections": 28,
+		"apps": 9,
+		"automations": 0
+	}
+}

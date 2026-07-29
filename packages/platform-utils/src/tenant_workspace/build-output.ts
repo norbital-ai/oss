@@ -1,74 +1,12 @@
-/** Cache namespace for the filesystem-authored Vite checkpoint contract. */
-export const CHECKPOINT_BUILD_FORMAT = 'vite-2';
-export const LEGACY_CHECKPOINT_BUILD_FORMAT = 'vite-1';
-
-const PLATFORM_PACKAGE_KEY_PATTERN = /^[0-9a-f]{16}$/;
-const PLATFORM_BUILD_CONTRACT_ID_PATTERN = /^[0-9a-f]{64}$/;
-
-function assertPlatformPackageKey(packageKey: string): void {
-	if (!PLATFORM_PACKAGE_KEY_PATTERN.test(packageKey)) {
-		throw new Error(`Invalid platform package key: ${packageKey}`);
-	}
-}
-
-function assertPlatformBuildContractId(buildContractId: string): void {
-	if (!PLATFORM_BUILD_CONTRACT_ID_PATTERN.test(buildContractId)) {
-		throw new Error(`Invalid platform build contract id: ${buildContractId}`);
-	}
-}
-
-export type CheckpointBuildIdentity =
-	| {
-			readonly format: typeof CHECKPOINT_BUILD_FORMAT;
-			readonly buildContractId: string;
-	  }
-	| {
-			readonly format: typeof LEGACY_CHECKPOINT_BUILD_FORMAT;
-			readonly packageKey: string;
-	  };
-
-/** Exact builder namespace for one immutable package and OCI build contract. */
-export function checkpointBuilderVersion(buildContractId: string): string {
-	assertPlatformBuildContractId(buildContractId);
-	return `${CHECKPOINT_BUILD_FORMAT}-${buildContractId}`;
-}
-
-/** Parse current checkpoints and retained package-only `vite-1` checkpoints. */
-export function parseCheckpointBuilderVersion(builderVersion: string): CheckpointBuildIdentity {
-	const currentPrefix = `${CHECKPOINT_BUILD_FORMAT}-`;
-	if (builderVersion.startsWith(currentPrefix)) {
-		const buildContractId = builderVersion.slice(currentPrefix.length);
-		assertPlatformBuildContractId(buildContractId);
-		return { format: CHECKPOINT_BUILD_FORMAT, buildContractId };
-	}
-	const legacyPrefix = `${LEGACY_CHECKPOINT_BUILD_FORMAT}-`;
-	if (builderVersion.startsWith(legacyPrefix)) {
-		const packageKey = builderVersion.slice(legacyPrefix.length);
-		assertPlatformPackageKey(packageKey);
-		return { format: LEGACY_CHECKPOINT_BUILD_FORMAT, packageKey };
-	}
-	throw new Error(`Invalid checkpoint builder version: ${builderVersion}`);
-}
-
-/** Extract the immutable build contract from a current checkpoint namespace. */
-export function checkpointBuildContractId(builderVersion: string): string {
-	const identity = parseCheckpointBuilderVersion(builderVersion);
-	if (identity.format !== CHECKPOINT_BUILD_FORMAT) {
-		throw new Error(`Legacy checkpoint has no platform build contract: ${builderVersion}`);
-	}
-	return identity.buildContractId;
-}
-
-/** Extract the package key from a retained `vite-1` checkpoint namespace. */
-export function checkpointPackageKey(builderVersion: string): string {
-	const identity = parseCheckpointBuilderVersion(builderVersion);
-	if (identity.format !== LEGACY_CHECKPOINT_BUILD_FORMAT) {
-		throw new Error(
-			`Current checkpoint package key must be read from its platform release: ${builderVersion}`
-		);
-	}
-	return identity.packageKey;
-}
+/**
+ * The bundle contract.
+ *
+ * A checkpoint used to be namespaced `vite-2-<64-hex build contract>`, hashed from a curated
+ * package union and two image digests. Everything that identified now lives in the tenant's own
+ * committed `pnpm-lock.yaml`, so there is no build contract to parse here — Core keys a bundle by
+ * tree hash plus its own pipeline generation. What remains is the shape of the bundle itself,
+ * which is the only cross-version contract between a Core replica and a tenant runtime.
+ */
 
 /** Bundle-root file holding the precomputed NorbitalManifest projection. */
 export const CHECKPOINT_MANIFEST_FILENAME = 'manifest.json';

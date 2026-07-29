@@ -1,52 +1,35 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://github.com/norbital-ai/oss/blob/main/release/builder-benchmark.schema.json",
-	"title": "Norbital builder benchmark",
+	"title": "Norbital compile budget",
+	"description": "The compile budget measured on a fixed runner against a materialized depset. This is compileMs only. deployColdMs and deployCacheHitMs are live SLOs measured against a real tenant deploy and are not comparable to this number.",
 	"type": "object",
 	"additionalProperties": false,
 	"required": [
 		"$schema",
 		"schemaVersion",
-		"image",
-		"packageKey",
+		"measures",
 		"template",
-		"network",
-		"warm",
-		"cleanOutput",
-		"prevalidated",
-		"staticVerification",
+		"lockHash",
+		"depsetMaterialized",
+		"materializeMilliseconds",
 		"buildCommand",
 		"buildEnvironment",
 		"elapsedMilliseconds",
 		"maximumBuildMilliseconds",
-		"memoryLimitBytes",
-		"memorySwapLimitBytes",
-		"maximumPeakMemoryBytes",
-		"syncPeakMemoryBytes",
-		"peakMemoryBytes",
-		"peakScope",
 		"requiredOutputPresent",
 		"migrationSqlCount",
 		"passed"
 	],
 	"properties": {
 		"$schema": { "const": "../release/builder-benchmark.schema.json" },
-		"schemaVersion": { "const": 3 },
-		"image": {
-			"type": "string",
-			"pattern": "^.+@sha256:[0-9a-f]{64}$"
-		},
-		"packageKey": {
-			"type": "string",
-			"pattern": "^[0-9a-f]{16}$"
-		},
+		"schemaVersion": { "const": 4 },
+		"measures": { "const": "compileMs" },
 		"template": { "type": "string", "minLength": 1 },
-		"network": { "const": "none" },
-		"warm": { "const": false },
-		"cleanOutput": { "const": true },
-		"prevalidated": { "const": true },
-		"staticVerification": { "const": "builder-toolchain-verification.json" },
-		"buildCommand": { "const": "env NORBITAL_POD_CHECKED=1 vite build /workspace" },
+		"lockHash": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+		"depsetMaterialized": { "type": "boolean" },
+		"materializeMilliseconds": { "type": "number", "minimum": 0 },
+		"buildCommand": { "const": "vite build" },
 		"buildEnvironment": {
 			"type": "object",
 			"additionalProperties": false,
@@ -54,8 +37,6 @@
 				"MALLOC_ARENA_MAX",
 				"MALLOC_TRIM_THRESHOLD_",
 				"NODE_OPTIONS",
-				"NORBITAL_BUILD_OUT",
-				"NORBITAL_POD_PLATFORM_DIR",
 				"NORBITAL_POD_SYNCED",
 				"NORBITAL_POD_CHECKED"
 			],
@@ -63,30 +44,12 @@
 				"MALLOC_ARENA_MAX": { "const": "1" },
 				"MALLOC_TRIM_THRESHOLD_": { "const": "131072" },
 				"NODE_OPTIONS": { "const": "--max-old-space-size=192" },
-				"NORBITAL_BUILD_OUT": { "const": "/workspace/.norbital/dist/output" },
-				"NORBITAL_POD_PLATFORM_DIR": { "const": "/opt/norbital/platform-client" },
 				"NORBITAL_POD_SYNCED": { "const": "1" },
 				"NORBITAL_POD_CHECKED": { "const": "1" }
 			}
 		},
 		"elapsedMilliseconds": { "type": "number", "minimum": 0, "maximum": 5000 },
 		"maximumBuildMilliseconds": { "const": 5000 },
-		"memoryLimitBytes": { "const": 524288000 },
-		"memorySwapLimitBytes": { "const": 524288000 },
-		"maximumPeakMemoryBytes": { "const": 471859200 },
-		"syncPeakMemoryBytes": {
-			"type": "integer",
-			"minimum": 0,
-			"maximum": 471859200
-		},
-		"peakMemoryBytes": {
-			"type": "integer",
-			"minimum": 0,
-			"maximum": 471859200
-		},
-		"peakScope": {
-			"const": "measured-build"
-		},
 		"requiredOutputPresent": { "const": true },
 		"migrationSqlCount": { "type": "integer", "minimum": 1 },
 		"passed": { "const": true }

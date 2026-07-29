@@ -53,6 +53,10 @@
 		"./vite": {
 			"types": "./build/vite/index.d.ts",
 			"default": "./build/vite/index.js"
+		},
+		"./host": {
+			"types": "./build/host/index.d.ts",
+			"default": "./build/host/index.js"
 		}
 	},
 	"imports": {

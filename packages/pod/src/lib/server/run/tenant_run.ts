@@ -327,26 +327,46 @@ export async function runAutomation(params: {
 				scope: params.scope ?? {}
 			});
 
-			await createRecord(ctx, 'automation_run', {
-				automation_name: params.automationName,
-				status: 'success',
-				output: result,
-				error: null,
-				started_at: startedAt,
-				completed_at: new Date().toISOString()
-			});
+			// `automation_run` is a system collection: no workspace declares mutations on it, so an
+			// unelevated write is refused. Recording the run is the runtime's own bookkeeping, not a
+			// tenant mutation — and without elevation the refusal replaces the automation's result
+			// with a 403, reporting every successful scheduled run as a failure.
+			await createRecord(
+				ctx,
+				'automation_run',
+				{
+					automation_name: params.automationName,
+					status: 'success',
+					output: result,
+					error: null,
+					started_at: startedAt,
+					completed_at: new Date().toISOString()
+				},
+				{ isElevated: true }
+			);
 
 			return result;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			await createRecord(ctx, 'automation_run', {
-				automation_name: params.automationName,
-				status: 'failed',
-				output: null,
-				error: message,
-				started_at: startedAt,
-				completed_at: new Date().toISOString()
-			});
+			// Best-effort: the automation's own failure is the one worth propagating, so a failure to
+			// record it must not mask the cause with a bookkeeping error.
+			try {
+				await createRecord(
+					ctx,
+					'automation_run',
+					{
+						automation_name: params.automationName,
+						status: 'failed',
+						output: null,
+						error: message,
+						started_at: startedAt,
+						completed_at: new Date().toISOString()
+					},
+					{ isElevated: true }
+				);
+			} catch (recordingCause) {
+				console.error('[pod] failed to record automation run', recordingCause);
+			}
 			throw error;
 		}
 	}

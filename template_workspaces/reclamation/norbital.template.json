@@ -1,0 +1,13 @@
+{
+	"schemaVersion": 1,
+	"key": "reclamation",
+	"name": "Reclamation",
+	"industry": "Marine construction",
+	"description": "Survey documents stitched into a 3D site solid, integrated for volumes, and priced from a unit cost matrix.",
+	"visibility": "public",
+	"counts": {
+		"collections": 5,
+		"apps": 2,
+		"automations": 0
+	}
+}

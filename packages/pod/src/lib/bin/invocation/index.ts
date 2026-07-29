@@ -7,7 +7,7 @@ import type { CheckerDiagnostic } from '../../vite/checker.js';
 import type { compilePodFilesystem as CompilePodFilesystem } from '../../vite/compiler/index.js';
 
 const usage =
-	'Usage: pod sync [--watch] | pod check | pod build | pod migration create <name> [--custom] | pod migrate | pod seed | pod start | pod dev [--seed] | pod platform build <out-dir> <package-key>';
+	'Usage: pod sync [--watch] | pod check | pod build | pod migration create <name> [--custom] | pod migrate | pod seed | pod start [--dev-identity] | pod dev [--seed] | pod platform build <out-dir> <package-key>';
 
 type CompilationResult = Awaited<ReturnType<typeof CompilePodFilesystem>>;
 
@@ -70,7 +70,7 @@ async function buildClientPlatform(outDir: string, packageKey: string): Promise<
 
 async function migrate(root: string): Promise<number> {
 	const { loadStandaloneEnvironment, migrateStandalone } = await import('./standalone.js');
-	await migrateStandalone(root, loadStandaloneEnvironment());
+	await migrateStandalone(root, loadStandaloneEnvironment(root));
 	console.log('Pod migrations applied.');
 	return 0;
 }
@@ -98,24 +98,33 @@ async function createMigration(root: string, name: string, custom: boolean): Pro
 
 async function seed(root: string): Promise<number> {
 	const { loadStandaloneEnvironment, seedStandalone } = await import('./standalone.js');
-	await seedStandalone(root, loadStandaloneEnvironment());
+	await seedStandalone(root, loadStandaloneEnvironment(root));
 	return 0;
 }
 
-async function start(root: string): Promise<number> {
+async function start(root: string, devIdentity: boolean): Promise<number> {
 	const { loadStandaloneEnvironment, startStandalone } = await import('./standalone.js');
-	await startStandalone(root, loadStandaloneEnvironment());
+	await startStandalone(root, loadStandaloneEnvironment(root), {
+		identityMode: devIdentity ? 'dev' : 'trusted-host'
+	});
 	return 0;
 }
 
+/**
+ * The local loop: build, migrate, optionally seed, then serve with a development identity.
+ *
+ * `dev` differs from `start` in exactly one way — who the requestor is. Everything else, including
+ * the server bundle and the facility gate, is the code that runs in production, so a workspace that
+ * works here is not relying on anything the deployed host will not give it.
+ */
 async function develop(root: string, runSeed: boolean): Promise<number> {
 	await buildStandalone(root);
 	const { loadStandaloneEnvironment, migrateStandalone, seedStandalone, startStandalone } =
 		await import('./standalone.js');
-	const environment = loadStandaloneEnvironment();
+	const environment = loadStandaloneEnvironment(root);
 	await migrateStandalone(root, environment);
 	if (runSeed) await seedStandalone(root, environment);
-	await startStandalone(root, environment);
+	await startStandalone(root, environment, { identityMode: 'dev' });
 	return 0;
 }
 
@@ -210,7 +219,12 @@ export async function runPodCli(
 		return createMigration(root, args[2], args[3] === '--custom');
 	}
 	if (args[0] === 'seed' && args.length === 1) return seed(root);
-	if (args[0] === 'start' && args.length === 1) return start(root);
+	if (
+		args[0] === 'start' &&
+		(args.length === 1 || (args.length === 2 && args[1] === '--dev-identity'))
+	) {
+		return start(root, args[1] === '--dev-identity');
+	}
 	if (args[0] === 'dev' && (args.length === 1 || (args.length === 2 && args[1] === '--seed'))) {
 		return develop(root, args[1] === '--seed');
 	}
