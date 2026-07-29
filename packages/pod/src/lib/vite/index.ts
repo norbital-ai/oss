@@ -1,29 +1,43 @@
-import { svelte } from '@sveltejs/vite-plugin-svelte';
-import tailwindcss from '@tailwindcss/vite';
 import { type Plugin, type PluginOption } from 'vite';
 import { spawn } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parseSeedManifest, seedManifestJson } from '@norbital-ai/platform-utils/seed/manifest';
-import { parseNorbitalManifest } from '@norbital-ai/platform-utils/manifest/parse';
 import {
 	CHECKPOINT_MANIFEST_FILENAME,
 	SERVE_ENTRY_FILENAME
 } from '@norbital-ai/platform-utils/tenant_workspace/build-output';
-import { runSvelteCheck } from './checker.js';
-import { compilePodFilesystem } from './compiler/index.js';
-import { generatePodMigrations } from './migrations.js';
-import { SCHEMA_FUNCTIONS_SQL, SCHEMA_POST_DDL_SQL } from './schema-functions-sql.js';
-import { workspaceExclusionsDdl } from './workspace-exclusions-sql.js';
-import { readPodClientPlatformManifest, type PodClientPlatformManifest } from './platform.js';
-
-export { compilePodFilesystem, discoverPodFilesystem } from './compiler/index.js';
-export {
-	buildPodClientPlatform,
+import {
 	POD_CLIENT_PLATFORM_MANIFEST,
 	type PodClientPlatformManifest
-} from './platform.js';
+} from './platform-contract.js';
+import type {
+	PodFilesystemCompilation,
+	PodFilesystemCompilerOptions,
+	PodStructure
+} from './compiler/types.js';
+
+export async function compilePodFilesystem(
+	options: PodFilesystemCompilerOptions
+): Promise<PodFilesystemCompilation> {
+	const compiler = await import('./compiler/index.js');
+	return compiler.compilePodFilesystem(options);
+}
+
+export async function discoverPodFilesystem(root: string): Promise<PodStructure> {
+	const compiler = await import('./compiler/index.js');
+	return compiler.discoverPodFilesystem(root);
+}
+
+export async function buildPodClientPlatform(input: {
+	readonly outDir: string;
+	readonly packageKey: string;
+}): Promise<void> {
+	const platform = await import('./platform.js');
+	return platform.buildPodClientPlatform(input);
+}
+
+export { POD_CLIENT_PLATFORM_MANIFEST, type PodClientPlatformManifest };
 export type {
 	AppMetadata,
 	DiagnosticSnapshot,
@@ -110,6 +124,19 @@ function clientOnlyPlugin(plugin: Plugin): Plugin {
 	};
 }
 
+async function clientPlugins(): Promise<PluginOption[]> {
+	const [{ svelte }, { default: tailwindcss }] = await Promise.all([
+		import('@sveltejs/vite-plugin-svelte'),
+		import('@tailwindcss/vite')
+	]);
+	return [
+		...svelte({ configFile: false }).map((plugin) =>
+			plugin.name === 'vite-plugin-svelte:config' ? plugin : clientOnlyPlugin(plugin)
+		),
+		...tailwindcss().map(clientOnlyPlugin)
+	];
+}
+
 export function pod(options: PodPluginOptions = {}): PluginOption[] {
 	let root = '';
 	let artifactRoot = '';
@@ -134,13 +161,30 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 				throw new Error(`Pod filesystem has ${compilation.diagnostics.length} structural error(s)`);
 			}
 		}
-		if (process.env.NORBITAL_POD_CHECKED !== '1') await runSvelteCheck(root);
+		if (process.env.NORBITAL_POD_CHECKED !== '1') {
+			const { runSvelteCheck } = await import('./checker.js');
+			await runSvelteCheck(root);
+		}
 		if (options.clearArtifacts) await rm(artifactRoot, { recursive: true, force: true });
-		if (options.generateMigrations) await generatePodMigrations({ root, migrationsRoot });
+		if (options.generateMigrations) {
+			const { generatePodMigrations } = await import('./migrations.js');
+			await generatePodMigrations({ root, migrationsRoot });
+		}
 	}
 
 	async function finalizeArtifacts(): Promise<void> {
 		if (!clientEntryFile) throw new Error('Pod client entry was not emitted');
+		const [
+			{ parseSeedManifest, seedManifestJson },
+			{ parseNorbitalManifest },
+			{ SCHEMA_FUNCTIONS_SQL, SCHEMA_POST_DDL_SQL },
+			{ workspaceExclusionsDdl }
+		] = await Promise.all([
+			import('@norbital-ai/platform-utils/seed/manifest'),
+			import('@norbital-ai/platform-utils/manifest/parse'),
+			import('./schema-functions-sql.js'),
+			import('./workspace-exclusions-sql.js')
+		]);
 		await mkdir(clientDistRoot, { recursive: true });
 		const platform = clientPlatform;
 		const platformStylesheets = platform
@@ -221,7 +265,8 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			}
 			const configuredOutDir = options.outDir ?? process.env.NORBITAL_BUILD_OUT;
 			const platformDirectory = process.env.NORBITAL_POD_PLATFORM_DIR?.trim();
-			if (platformDirectory) {
+			if (platformDirectory && configuredBuildTarget !== 'server') {
+				const { readPodClientPlatformManifest } = await import('./platform.js');
 				const manifest = await readPodClientPlatformManifest(platformDirectory);
 				const configuredPublicBase = process.env.NORBITAL_POD_PLATFORM_BASE_URL?.trim();
 				const publicBase = configuredPublicBase || `/_platform/${manifest.packageKey}/`;
@@ -330,38 +375,42 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 							}
 						}
 					},
-					client: {
-						consumer: 'client',
-						build: {
-							outDir: clientDistRoot,
-							emptyOutDir: false,
-							copyPublicDir: false,
-							minify: 'oxc',
-							reportCompressedSize: false,
-							sourcemap: false,
-							rolldownOptions: {
-								input: CLIENT_ENTRY,
-								experimental: { chunkOptimization: false, lazyBarrel: false },
-								output: {
-									codeSplitting: {
-										groups: [
-											{
-												name: 'schema-runtime',
-												test: /node_modules[\\/]zod[\\/]/,
-												priority: 10
-											},
-											{
-												name: 'platform-runtime',
-												test: /(?:node_modules[\\/]@norbital-ai[\\/]platform-utils|packages[\\/]platform-utils)[\\/]/,
-												priority: 9
-											},
-											{ name: 'workspace-runtime', tags: ['$initial'] }
-										]
+					...(configuredBuildTarget === 'server'
+						? {}
+						: {
+								client: {
+									consumer: 'client' as const,
+									build: {
+										outDir: clientDistRoot,
+										emptyOutDir: false,
+										copyPublicDir: false,
+										minify: 'oxc',
+										reportCompressedSize: false,
+										sourcemap: false,
+										rolldownOptions: {
+											input: CLIENT_ENTRY,
+											experimental: { chunkOptimization: false, lazyBarrel: false },
+											output: {
+												codeSplitting: {
+													groups: [
+														{
+															name: 'schema-runtime',
+															test: /node_modules[\\/]zod[\\/]/,
+															priority: 10
+														},
+														{
+															name: 'platform-runtime',
+															test: /(?:node_modules[\\/]@norbital-ai[\\/]platform-utils|packages[\\/]platform-utils)[\\/]/,
+															priority: 9
+														},
+														{ name: 'workspace-runtime', tags: ['$initial'] }
+													]
+												}
+											}
+										}
 									}
 								}
-							}
-						}
-					}
+							})
 				}
 			};
 		},
@@ -427,10 +476,7 @@ mountPodWorkspace({ apps: appLoaders, collectionSurfaces, customTypeRenderers })
 		}
 	};
 	return [
-		...svelte({ configFile: false }).map((plugin) =>
-			plugin.name === 'vite-plugin-svelte:config' ? plugin : clientOnlyPlugin(plugin)
-		),
-		...tailwindcss().map(clientOnlyPlugin),
+		...(process.env.NORBITAL_POD_BUILD_TARGET === 'server' ? [] : [clientPlugins()]),
 		buildPlugin
 	];
 }

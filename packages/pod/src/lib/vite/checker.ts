@@ -153,6 +153,12 @@ export async function checkPodWorkspace(
 ): Promise<PodWorkspaceCheckResult> {
 	const cache = path.join(root, '.svelte-check');
 	await rm(cache, { recursive: true, force: true });
+	const checkerEnvironment = { ...process.env };
+	// svelte-check resolves the workspace Vite config to discover its Svelte plugin.
+	// Internal build targeting belongs only to the isolated Vite process; inheriting it
+	// would intentionally suppress client plugins and make valid .svelte files fail.
+	delete checkerEnvironment.NORBITAL_POD_BUILD_TARGET;
+	delete checkerEnvironment.NORBITAL_POD_ISOLATED_BUILD;
 
 	// One checker process covers both plain-`.ts` type errors and `.svelte`
 	// component errors over the full workspace tsconfig. `--tsgo-experimental-api`
@@ -180,7 +186,8 @@ export async function checkPodWorkspace(
 				'--no-color',
 				tsgoFlag
 			],
-			root
+			root,
+			checkerEnvironment
 		);
 	} finally {
 		await rm(cache, { recursive: true, force: true });

@@ -2,7 +2,6 @@ import { existsSync } from 'node:fs';
 import { cp, mkdir, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { generateDrizzleMigration } from '@norbital-ai/platform-utils/tenant_workspace/migrations/generate';
 import {
 	migrationFingerprint,
 	readMigrationFingerprint,
@@ -43,6 +42,8 @@ export async function generatePodMigrations(input: {
 	}
 
 	try {
+		const { generateDrizzleMigration } =
+			await import('@norbital-ai/platform-utils/tenant_workspace/migrations/generate');
 		await generateDrizzleMigration({
 			sourceDir: input.root,
 			outDir: input.migrationsRoot,

@@ -6,15 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { safeParse } from '@norbital-ai/std/json';
+import {
+	POD_CLIENT_PLATFORM_MANIFEST,
+	type PodClientPlatformManifest
+} from './platform-contract.js';
 
-export const POD_CLIENT_PLATFORM_MANIFEST = 'platform-manifest.json';
-
-export interface PodClientPlatformManifest {
-	readonly format: 'pod-client-platform-1';
-	readonly packageKey: string;
-	readonly imports: Readonly<Record<string, string>>;
-	readonly stylesheets: readonly string[];
-}
+export { POD_CLIENT_PLATFORM_MANIFEST, type PodClientPlatformManifest };
 
 const PACKAGE_KEY_PATTERN = /^[0-9a-f]{16}$/;
 const VIRTUAL_PREFIX = '\0virtual:norbital-platform-entry:';
