@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { workspaceContainerCreateArguments } from './lib/builder-benchmark.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const digestPinnedImagePattern = /^.+@sha256:[0-9a-f]{64}$/;
@@ -160,22 +161,13 @@ let requiredOutputPresent = false;
 let migrationSqlCount = 0;
 
 function createWorkspaceContainer(name, sourcePath) {
-	docker([
-		'create',
-		'--platform',
-		'linux/amd64',
-		'--name',
-		container,
-		'--network',
-		'none',
-		'--memory',
-		'500m',
-		'--memory-swap',
-		'500m',
-		'--env',
-		`NORBITAL_POD_PLATFORM_DIR=${buildEnvironment.NORBITAL_POD_PLATFORM_DIR}`,
-		image
-	]);
+	docker(
+		workspaceContainerCreateArguments({
+			name,
+			image,
+			platformDirectory: buildEnvironment.NORBITAL_POD_PLATFORM_DIR
+		})
+	);
 	docker(['cp', `${sourcePath}/.`, `${name}:/workspace`]);
 	docker(['start', name]);
 	docker([
