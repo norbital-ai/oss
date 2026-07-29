@@ -4,7 +4,8 @@
  * None of this is stored. A payslip is its lines and its charges; a workbook is a view of them.
  */
 
-import ExcelJS from 'exceljs';
+import ExcelJSBrowser from 'exceljs/dist/exceljs.bare.min.js';
+import type ExcelJS from 'exceljs';
 import {
 	INFOTECH_COLUMNS,
 	INFOTECH_SECTIONS,
@@ -66,7 +67,7 @@ export type WorkbookSheet = {
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
 export async function payrollReportXlsx(sheets: readonly WorkbookSheet[]): Promise<number[]> {
-	const workbook = new ExcelJS.Workbook();
+	const workbook = new ExcelJSBrowser.Workbook();
 	workbook.creator = 'Norbital';
 	workbook.subject = 'Payroll calculation report';
 
