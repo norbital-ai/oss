@@ -57,11 +57,11 @@ export type BillingSourceDefinition = {
  */
 export const BILLING_SOURCE_CATALOGUE = {
 	tenant_container: {
-		label: 'Tenant containers',
+		label: 'Tenant microVMs',
 		placement: 'bare_metal',
 		allocation: 'direct',
 		billable: true,
-		description: 'Podman CPU time and resident memory attributed by organization label.'
+		description: 'MicroVM CPU time and resident memory attributed by organization label.'
 	},
 	core_shared: {
 		label: 'Core shared service',

@@ -113,12 +113,12 @@ The templates are executable documentation as well as starter projects:
 | [CRM](../../../template_workspaces/crm/)                              | Accounts, quoting, fulfilment, payments, and sales operations.                |
 | [HR & Payroll](../../../template_workspaces/hr-payroll/)              | Multi-country payroll, attendance, leave, and statutory reporting.            |
 
-Use `sync`, `lint`, and `build` in a template before changing it. A production tenant receives a
-published, immutable template revision and Pod release; editing a local template directory never
-changes an already-deployed tenant.
+Use `sync`, `lint`, and `build` in a template before changing it. A production tenant receives an
+immutable template commit with its own committed package lockfile; editing a local template
+directory never changes an already-provisioned tenant.
 
-The current public catalogue pins Pod to `0.0.1`. Templates are published as root-projected Git refs and
-consumed at exact commits; Pod and the other public packages are supplied by an npm-compatible registry or
-an integrity-pinned platform release. Package archives are generated release inputs and are not committed
-inside `packages/pod`. See the [distribution contract](../../../release/README.md) for the provider-neutral
-catalogue, package, image, and platform-manifest boundaries.
+Templates are published as root-projected Git refs and consumed at exact commits. Pod and the other
+public packages are supplied by an npm-compatible registry and resolved by each template's lockfile.
+Package archives are generated release inputs and are not committed inside `packages/pod`. See the
+[distribution contract](../../../release/README.md) for the provider-neutral template and package
+boundaries.

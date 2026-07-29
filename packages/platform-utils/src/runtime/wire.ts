@@ -1,11 +1,11 @@
 /**
  * The tenant runtime wire protocol.
  *
- * A tenant runtime is a `podman run -i --network=none` container whose only channel to the
- * outside world is its own stdin/stdout. Core writes request frames to stdin and reads
- * response frames from stdout; the guest writes binding-call frames on the same stdout and
- * reads their results back on stdin. There is no port, no socket, and no credential inside
- * the container, so the tenant cannot name a resource that is not already its own.
+ * A tenant runtime is an isolated microVM whose only application channel to the outside world is
+ * its own stdin/stdout. Core writes request frames to stdin and reads response frames from stdout;
+ * the guest writes binding-call frames on the same stdout and reads their results back on stdin.
+ * There is no application port, shared runtime socket, or credential inside the guest, so the
+ * tenant cannot name a resource that is not already its own.
  *
  * Frame layout — every frame is self-delimiting so the two multiplexed directions can
  * interleave freely:
