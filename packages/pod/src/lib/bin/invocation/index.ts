@@ -220,7 +220,16 @@ export async function runPodCli(
 	}
 	if (args[1] === '--watch') return watchPodFilesystem(root);
 	const { compilePodFilesystem } = await import('../../vite/compiler/index.js');
-	return printCompilation(await compilePodFilesystem({ root, mode: 'authoring' }));
+	const compilation = await compilePodFilesystem({ root, mode: 'authoring' });
+	const code = printCompilation(compilation);
+	if (code !== 0) return code;
+	const { generatePodMigrations } = await import('../../vite/migrations.js');
+	const path = await import('node:path');
+	await generatePodMigrations({
+		root,
+		migrationsRoot: path.join(root, '.norbital', 'migrations')
+	});
+	return 0;
 }
 
 if (process.argv[1] != null && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

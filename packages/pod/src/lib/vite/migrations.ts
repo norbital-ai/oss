@@ -3,7 +3,11 @@ import { cp, mkdir, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { generateDrizzleMigration } from '@norbital-ai/platform-utils/tenant_workspace/migrations/generate';
-
+import {
+	migrationFingerprint,
+	readMigrationFingerprint,
+	writeMigrationFingerprint
+} from './migration-fingerprint.js';
 const platformSystemWorkspaceSchema = fileURLToPath(
 	import.meta.resolve('@norbital-ai/platform-utils/system/workspace-schema')
 );
@@ -15,6 +19,10 @@ export async function generatePodMigrations(input: {
 	custom?: boolean;
 }): Promise<void> {
 	const sourceMigrations = path.join(input.root, '.norbital/migrations');
+	const schemaFiles = [
+		path.join(input.root, '.norbital/generated/registry.ts'),
+		platformSystemWorkspaceSchema
+	];
 	if (input.migrationsRoot !== sourceMigrations) {
 		await rm(input.migrationsRoot, { recursive: true, force: true });
 		await mkdir(input.migrationsRoot, { recursive: true });
@@ -24,6 +32,15 @@ export async function generatePodMigrations(input: {
 	} else {
 		await mkdir(input.migrationsRoot, { recursive: true });
 	}
+	const fingerprint = await migrationFingerprint(schemaFiles, input.migrationsRoot);
+	if (
+		input.name == null &&
+		input.custom !== true &&
+		JSON.stringify(await readMigrationFingerprint(input.migrationsRoot)) ===
+			JSON.stringify(fingerprint)
+	) {
+		return;
+	}
 
 	try {
 		await generateDrizzleMigration({
@@ -31,11 +48,12 @@ export async function generatePodMigrations(input: {
 			outDir: input.migrationsRoot,
 			name: input.name ?? 'auto',
 			custom: input.custom,
-			schemaFiles: [
-				path.join(input.root, '.norbital/generated/registry.ts'),
-				platformSystemWorkspaceSchema
-			]
+			schemaFiles
 		});
+		await writeMigrationFingerprint(
+			input.migrationsRoot,
+			await migrationFingerprint(schemaFiles, input.migrationsRoot)
+		);
 	} catch (caught) {
 		const commandOutput =
 			caught && typeof caught === 'object'

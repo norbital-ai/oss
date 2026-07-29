@@ -147,17 +147,19 @@ const outputPath = path.resolve(
 const temporaryDirectory = mkdtempSync(path.join(tmpdir(), 'norbital-builder-benchmark-'));
 const templatePath = materializeTrackedTemplate(template, temporaryDirectory);
 const container = `norbital-builder-benchmark-${process.pid}-${Date.now()}`;
+const syncContainer = `${container}-sync`;
 const podBin =
 	'/opt/norbital/tenant-toolchain/node_modules/@norbital-ai/pod/build/bin/invocation/index.js';
 let elapsedMilliseconds;
 let peakMemoryBytes;
-let peakScope = 'synchronization-and-measured-build';
+let syncPeakMemoryBytes;
+const peakScope = 'measured-build';
 let buildStatus;
 let packageKey;
 let requiredOutputPresent = false;
 let migrationSqlCount = 0;
 
-try {
+function createWorkspaceContainer(name, sourcePath) {
 	docker([
 		'create',
 		'--platform',
@@ -174,13 +176,13 @@ try {
 		`NORBITAL_POD_PLATFORM_DIR=${buildEnvironment.NORBITAL_POD_PLATFORM_DIR}`,
 		image
 	]);
-	docker(['cp', `${templatePath}/.`, `${container}:/workspace`]);
-	docker(['start', container]);
+	docker(['cp', `${sourcePath}/.`, `${name}:/workspace`]);
+	docker(['start', name]);
 	docker([
 		'exec',
 		'-u',
 		'0',
-		container,
+		name,
 		'sh',
 		'-ec',
 		[
@@ -189,7 +191,20 @@ try {
 			'ln -s /opt/norbital/tenant-toolchain/node_modules /workspace/node_modules'
 		].join(' ')
 	]);
+}
 
+try {
+	createWorkspaceContainer(syncContainer, templatePath);
+	console.log(`Synchronizing ${templateKey} generated workspace in ${image}.`);
+	docker(['exec', '-u', 'node', '-w', '/workspace', syncContainer, 'node', podBin, 'sync'], {
+		stdio: 'inherit'
+	});
+	syncPeakMemoryBytes = readPeakMemory(syncContainer);
+	mkdirSync(path.join(templatePath, '.norbital'), { recursive: true });
+	docker(['cp', `${syncContainer}:/workspace/.norbital/.`, path.join(templatePath, '.norbital')]);
+	docker(['rm', '--force', syncContainer]);
+
+	createWorkspaceContainer(container, templatePath);
 	packageKey = docker([
 		'exec',
 		'-u',
@@ -204,26 +219,6 @@ try {
 	if (packageKey !== expectedPackageKey) {
 		fail(`Builder package key ${packageKey} does not match expected ${expectedPackageKey}.`);
 	}
-
-	console.log(`Synchronizing ${templateKey} generated workspace in ${image}.`);
-	docker(['exec', '-u', 'node', '-w', '/workspace', container, 'node', podBin, 'sync'], {
-		stdio: 'inherit'
-	});
-
-	const reset = spawnSync(
-		'docker',
-		[
-			'exec',
-			'-u',
-			'0',
-			container,
-			'sh',
-			'-c',
-			'test -w /sys/fs/cgroup/memory.peak && printf 0 > /sys/fs/cgroup/memory.peak'
-		],
-		{ cwd: repositoryRoot, stdio: 'ignore' }
-	);
-	if (reset.status === 0) peakScope = 'measured-build';
 
 	console.log(`Measuring clean ${templateKey} build (limit ${maximumBuildMilliseconds} ms).`);
 	const startedAt = process.hrtime.bigint();
@@ -267,10 +262,12 @@ try {
 		migrationSqlCount = Number(migrationCount);
 	}
 } finally {
-	spawnSync('docker', ['rm', '--force', container], {
-		cwd: repositoryRoot,
-		stdio: 'ignore'
-	});
+	for (const cleanupContainer of [syncContainer, container]) {
+		spawnSync('docker', ['rm', '--force', cleanupContainer], {
+			cwd: repositoryRoot,
+			stdio: 'ignore'
+		});
+	}
 	rmSync(temporaryDirectory, { recursive: true, force: true });
 }
 
@@ -293,6 +290,7 @@ const result = {
 	memoryLimitBytes,
 	memorySwapLimitBytes: memoryLimitBytes,
 	maximumPeakMemoryBytes,
+	syncPeakMemoryBytes,
 	peakMemoryBytes,
 	peakScope,
 	requiredOutputPresent,
@@ -300,6 +298,8 @@ const result = {
 	passed:
 		buildStatus === 0 &&
 		elapsedMilliseconds <= maximumBuildMilliseconds &&
+		syncPeakMemoryBytes != null &&
+		syncPeakMemoryBytes <= maximumPeakMemoryBytes &&
 		peakMemoryBytes != null &&
 		peakMemoryBytes <= maximumPeakMemoryBytes &&
 		requiredOutputPresent &&
@@ -317,6 +317,14 @@ if (elapsedMilliseconds > maximumBuildMilliseconds) {
 }
 if (peakMemoryBytes == null) {
 	fail('Clean tenant build did not expose a cgroup memory peak.');
+}
+if (syncPeakMemoryBytes == null) {
+	fail('Tenant synchronization did not expose a cgroup memory peak.');
+}
+if (syncPeakMemoryBytes > maximumPeakMemoryBytes) {
+	fail(
+		`Tenant synchronization peaked at ${syncPeakMemoryBytes} bytes; release headroom limit is 450 MiB.`
+	);
 }
 if (peakMemoryBytes > maximumPeakMemoryBytes) {
 	fail(`Clean tenant build peaked at ${peakMemoryBytes} bytes; release headroom limit is 450 MiB.`);

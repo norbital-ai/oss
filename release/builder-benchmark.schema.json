@@ -22,6 +22,7 @@
 		"memoryLimitBytes",
 		"memorySwapLimitBytes",
 		"maximumPeakMemoryBytes",
+		"syncPeakMemoryBytes",
 		"peakMemoryBytes",
 		"peakScope",
 		"requiredOutputPresent",
@@ -73,13 +74,18 @@
 		"memoryLimitBytes": { "const": 524288000 },
 		"memorySwapLimitBytes": { "const": 524288000 },
 		"maximumPeakMemoryBytes": { "const": 471859200 },
+		"syncPeakMemoryBytes": {
+			"type": "integer",
+			"minimum": 0,
+			"maximum": 471859200
+		},
 		"peakMemoryBytes": {
 			"type": "integer",
 			"minimum": 0,
 			"maximum": 471859200
 		},
 		"peakScope": {
-			"enum": ["measured-build", "synchronization-and-measured-build"]
+			"const": "measured-build"
 		},
 		"requiredOutputPresent": { "const": true },
 		"migrationSqlCount": { "type": "integer", "minimum": 1 },
