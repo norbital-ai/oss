@@ -2,6 +2,8 @@
 
 Portable contracts shared by Pod, tenant workspaces, and compatible hosts.
 
+See the [platform utilities overview](./docs/README.md) for the package goal and ownership boundaries.
+
 Capabilities:
 
 - collection query and mutation types

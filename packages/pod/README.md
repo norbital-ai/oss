@@ -6,6 +6,8 @@ and Vite plugin. Core is one host for Pod output; Pod itself does not depend on 
 
 ## Architecture
 
+- [Documentation index](./docs/README.md)
+- [Pod overview](./docs/OVERVIEW.md) — lifecycle, authoring surface, runtime boundary, and commands
 - [Form system](./docs/FORM_SYSTEM.md)
 - [Navigation state](./docs/NAVIGATION_STATE.md)
 - [Sync engine](./docs/SYNC_ENGINE.md) — native live queries and optimistic writes
@@ -145,6 +147,9 @@ pnpm --filter @norbital-ai/pod lint
 pnpm --dir template_workspaces/hr-payroll sync
 pnpm --dir template_workspaces/hr-payroll build
 ```
+
+Start with the [Pod overview](./docs/OVERVIEW.md) for the generated-state contract, command reference,
+trust boundary, and the complete tenant-template examples.
 
 ## Standalone runtime
 

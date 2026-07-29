@@ -3,6 +3,19 @@
 > Built for the EPG (Engineering Plastics Group) sales team. EPG is a plastics resin trading
 > subsidiary of Omni-Plus Systems, operating out of China, with per-project R&D capabilities.
 
+## Orientation and boundaries
+
+This is an executable Pod template, not a production-operations manual. It demonstrates a sales and
+operations split, server-enforced quote/payment rules, and the places where a reseller will need explicit
+extensions. Start with the workflow below, then use the [collections](#collections),
+[apps](#apps), [remotes](#remotes), and [verification](#verification) sections when changing it.
+
+The workspace owns CRM records and sales workflow. Platform `user` identities and policy enforcement
+remain host concerns; accounting, inventory, exchange rates, customer documents, supplier purchasing, and
+external messaging are intentionally outside this template’s current scope.
+
+For the template’s goal, users, and extension boundaries, see the [CRM documentation hub](./docs/README.md).
+
 ## What this system does
 
 A deal-to-cash pipeline for resin trading: qualify accounts, build quotes with line items that
@@ -270,6 +283,8 @@ This keeps identity in one place while allowing channel-specific routing and ope
 | `accounts`        | Customer companies. Multi-currency preference (CNY, USD, EUR, GBP, JPY, SGD, HKD).                                                                                                    |
 | `contacts`        | People at accounts — decision-makers, buyers, day-to-day contacts.                                                                                                                    |
 | `products`        | Resin grades, compounds, R&D project materials catalogue.                                                                                                                             |
+| `customer_prices` | Active account-and-product price overrides. Quote-line creation prefers this price to the catalogue price.                                                                            |
+| `projects`        | Customer R&D or commercial projects. Quotes can carry a project reference and activities may be recorded against one.                                                                 |
 | `quotes`          | Sales document — the full pipeline. Moves draft → sent → won (quote), then confirmed → fulfilled (order). Cancelled and lost are terminal, with `lost → won` as the only reopen path. |
 | `quote_lines`     | Line items on quotes. Snapshots product data at creation so price changes do not retroactively alter historical deals. Can only be modified on draft quotes.                          |
 | `payment_records` | Payments received against won/confirmed/fulfilled orders. Validates currency matches the order.                                                                                       |
@@ -279,15 +294,15 @@ This keeps identity in one place while allowing channel-specific routing and ope
 
 | App         | Purpose                                                                                  |
 | ----------- | ---------------------------------------------------------------------------------------- |
-| `crm_sales` | Sales workspace — pipeline kanban (7 lanes), accounts, contacts, catalogue.              |
+| `crm_sales` | Sales workspace — five active pipeline lanes, accounts, contacts, catalogue, and quotes. |
 | `crm_admin` | Operations workspace — order fulfilment, payment tracking, quote lines, team activities. |
 
 ## Remotes
 
-| Remote               | Purpose                                                                                                              | Wired to UI?                                                      |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `pipeline_dashboard` | Stage-by-stage counts, total pipeline value, enriched kanban cards with account names. Accepts `owner_id` parameter. | Yes — `+crm_sales.svelte`, but called with `{}` (no owner filter) |
-| `revenue_summary`    | Per-order invoiced/paid/outstanding summary, filterable by currency.                                                 | **No** — not imported in any app                                  |
+| Remote               | Purpose                                                                                                              | Wired to UI?                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `pipeline_dashboard` | Stage-by-stage counts, total pipeline value, enriched kanban cards with account names. Accepts `owner_id` parameter. | Yes — `+crm_sales.svelte` re-runs it when the selected owner changes. |
+| `revenue_summary`    | Per-order invoiced/paid/outstanding summary, filterable by currency.                                                 | Yes — `+crm_admin.svelte` powers the Revenue tab.                     |
 
 ## State machine
 
@@ -320,3 +335,8 @@ pnpm --dir template_workspaces/crm sync
 pnpm --dir template_workspaces/crm lint
 pnpm --dir template_workspaces/crm build
 ```
+
+`sync` may create or update `.norbital/migrations/`; commit that migration history with the authored
+change. Publish the revised template and deploy a new tenant checkpoint before it affects an existing
+tenant. See the [template lifecycle](../README.md#release-and-tenant-lifecycle) and the
+[Pod overview](../../packages/pod/docs/OVERVIEW.md).

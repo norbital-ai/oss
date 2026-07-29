@@ -3,6 +3,8 @@
 Small shared modules for async operations, billing, caching, CEL, dates, errors, finance, JSON,
 schemas, strings, text, trees, and truncation.
 
+See the [standard library overview](./docs/README.md) for the package goal and import guidance.
+
 Import the narrowest public export:
 
 ```ts

@@ -3,6 +3,8 @@
 Svelte components, design tokens, collection surfaces, and layout primitives for Norbital tenant
 applications.
 
+See the [UI package overview](./docs/README.md) for goals, layering, and styling boundaries.
+
 Import components through their public subpaths:
 
 ```svelte
