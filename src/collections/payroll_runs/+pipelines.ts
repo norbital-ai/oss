@@ -11,12 +11,12 @@
 
 import type { Pipelines } from './$types.js';
 import type { TExportManifest } from '@norbital-ai/pod/authoring';
-import { bankFileRows, payrollReportXlsx, payslipPdf } from './lib/export.js';
 import { loadRunExports } from './lib/export-data.js';
 
 export default {
 	export: {
 		handler: async ({ records }, api) => {
+			const { bankFileRows, payrollReportXlsx, payslipPdf } = await import('./lib/export.js');
 			const exports = await loadRunExports(api, records);
 			const actions: TExportManifest = [];
 
