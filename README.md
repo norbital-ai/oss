@@ -3,6 +3,20 @@
 A multi-country payroll workspace. One engine, one set of eight steps, and no country named anywhere
 in the code.
 
+## Orientation and operational boundary
+
+This is a specialised reference workspace for HR, attendance, leave, statutory configuration, and payroll
+calculation. It models payroll rules and produces derived results; it is not a legal opinion, tax filing
+service, banking gateway, or a substitute for customer approval and reconciliation.
+
+Start with the linked design material below, then read **Seeded versus derived**, **The run**, and
+**Correctness** before modifying a payroll rule. The template’s most important boundary is that observed
+facts may be imported or entered, while payroll results must be derived from those facts and never copied
+from a legacy payroll output.
+
+For the template’s goal, users, and non-negotiable correctness boundaries, see the
+[HR & Payroll documentation hub](./docs/README.md).
+
 - **[PAYROLL_ARCHITECTURE_PLAN.md](PAYROLL_ARCHITECTURE_PLAN.md)** — the design, in 14 chapters under
   [`plan/`](plan/). Read `plan/01-conventions.md` and `plan/03-types-and-grid.md` first; they explain
   everything else.
@@ -157,6 +171,21 @@ Editing this directory does not change an existing tenant. Publishing advances t
 template Git ref; a tenant fork then explicitly merges or rebases that source revision before its
 host applies committed migrations and builds a new Pod release. `.norbital/migrations` is source
 history and travels with every publication, while generated build output and caches do not.
+
+## Verify
+
+Run the payroll arithmetic check as well as the regular Pod workspace checks:
+
+```bash
+pnpm --dir template_workspaces/hr-payroll sync
+pnpm --dir template_workspaces/hr-payroll lint
+pnpm --dir template_workspaces/hr-payroll build
+```
+
+`build` also verifies the built spreadsheet output. Commit authored changes and any resulting
+`.norbital/migrations/` history, publish an immutable template revision, and deploy a new tenant
+checkpoint before expecting a tenant to use the change. See the
+[template lifecycle](../README.md#release-and-tenant-lifecycle).
 
 ---
 
