@@ -120,9 +120,11 @@ The builder image contains the exact verified public package archives and exact 
 dependencies under `/opt/norbital/tenant-toolchain`, including its `.package-key` and
 `.template-dependency-key`. It bakes the matching browser platform and manifest into
 `/opt/norbital/platform-client`. It has no entrypoint; a host scheduler can keep the container warm
-with `sleep infinity` and execute Pod in `/workspace`. The runtime image contains only Node, has no
-entrypoint, and defaults to the already-built tenant bundle mounted at `/workspace/serve.mjs`; it
-does not contain Pod or tenant source.
+with `sleep infinity` and execute Pod in `/workspace`. A portable Node compile cache under the
+toolchain directory is populated while the image is built and reused by later Pod CLI processes,
+so independent tenant executions do not repeatedly compile the same immutable module graph. The
+runtime image contains only Node, has no entrypoint, and defaults to the already-built tenant bundle
+mounted at `/workspace/serve.mjs`; it does not contain Pod or tenant source.
 
 The versioned Node 26 builder labels its platform fingerprint and source revision. The minimal Node
 26 runtime only serves the immutable `serve.mjs` emitted by Pod. Hosts may mirror either image; the

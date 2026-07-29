@@ -12,6 +12,8 @@ LABEL org.opencontainers.image.title="Norbital tenant builder" \
 	dev.norbital.template-dependency-key="${TEMPLATE_DEPENDENCY_ID}"
 
 ENV NODE_ENV=production \
+	NODE_COMPILE_CACHE=/opt/norbital/tenant-toolchain/.node-compile-cache \
+	NODE_COMPILE_CACHE_PORTABLE=1 \
 	NPM_CONFIG_UPDATE_NOTIFIER=false \
 	NPM_CONFIG_FUND=false \
 	NPM_CONFIG_AUDIT=false

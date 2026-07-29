@@ -138,13 +138,19 @@ try {
 				`const manifest=${JSON.stringify(platformManifest)};`,
 				'const env=process.env.NORBITAL_POD_PLATFORM_DIR;',
 				"const platform=JSON.parse(fs.readFileSync(manifest,'utf8'));",
-				"const result={env,platformKey:platform.packageKey,packageKey:fs.readFileSync('/opt/norbital/tenant-toolchain/.package-key','utf8').trim(),templateDependencyKey:fs.readFileSync('/opt/norbital/tenant-toolchain/.template-dependency-key','utf8').trim()};",
+				"const result={env,compileCache:process.env.NODE_COMPILE_CACHE,portableCompileCache:process.env.NODE_COMPILE_CACHE_PORTABLE,platformKey:platform.packageKey,packageKey:fs.readFileSync('/opt/norbital/tenant-toolchain/.package-key','utf8').trim(),templateDependencyKey:fs.readFileSync('/opt/norbital/tenant-toolchain/.template-dependency-key','utf8').trim()};",
 				'process.stdout.write(JSON.stringify(result));'
 			].join('')
 		])
 	);
 	if (contract.env !== '/opt/norbital/platform-client') {
 		fail(`Builder platform environment is ${contract.env}.`);
+	}
+	if (
+		contract.compileCache !== '/opt/norbital/tenant-toolchain/.node-compile-cache' ||
+		contract.portableCompileCache !== '1'
+	) {
+		fail('Builder must expose the portable toolchain-owned Node compile cache.');
 	}
 	packageKey = contract.packageKey;
 	templateDependencyKey = contract.templateDependencyKey;
