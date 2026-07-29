@@ -420,6 +420,7 @@ jobs:
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
+              --latest \
               --title "Platform ${{ needs.prepare.outputs.release_name }}" \
               --notes "Immutable Norbital platform release manifest and digest-pinned OCI images."
           fi
@@ -435,3 +436,4 @@ jobs:
             dist/package-archives/pod.tgz \
             dist/package-archives/std.tgz \
             dist/package-archives/ui.tgz
+          gh release edit "$RELEASE_TAG" --latest

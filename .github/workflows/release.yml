@@ -49,3 +49,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Preserve the platform release as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PLATFORM_TAG=$(
+            gh api \
+              --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
+              jq -sr 'add | map(select(.draft == false and .prerelease == false and (.tag_name | startswith("platform-v")))) | sort_by(.published_at) | last | .tag_name'
+          )
+          if [ -z "$PLATFORM_TAG" ] || [ "$PLATFORM_TAG" = "null" ]; then
+            echo "No published platform release exists to preserve as latest" >&2
+            exit 1
+          fi
+          gh release edit "$PLATFORM_TAG" --latest

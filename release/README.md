@@ -59,7 +59,11 @@ the active set.
 uncompressed image ceiling, records their immutable digests, resolves the template projections,
 and generates `platform-release.json` against
 [`platform-release.schema.json`](./platform-release.schema.json). GitHub Actions publishes that
-file as both an attested workflow artifact and an immutable GitHub release asset.
+file as both an attested workflow artifact and an immutable GitHub release asset. The platform
+workflow explicitly marks that release as GitHub's latest release, and the independent Changesets
+package workflow restores the newest `platform-v*` release as latest after publishing package
+releases. This keeps `/releases/latest/download/platform-release.json` bound to a release that
+actually carries the platform manifest.
 
 Before image construction, `resolve-published-packages.mjs` resolves one of two package-source
 adapters. The default `workspace` adapter packs the exact checked-in source and publishes those
