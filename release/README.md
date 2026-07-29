@@ -138,11 +138,12 @@ Every platform release runs sync, Pod check, and a complete build for every acti
 digest-pinned builder with no network and a 1 GiB static-verification memory limit. It then runs
 every template in a fresh 500 MiB benchmark container. Pod sync materializes the ignored generated
 workspace; the preceding digest-matched static verifier supplies the `pod check` evidence. The
-benchmark then primes compiler caches and measures the exact deployed
-`env NORBITAL_POD_CHECKED=1 vite build /workspace` phase with Core's heap, allocator, output, baked
-platform, and pre-synchronized environment. The release is blocked unless every measured build
-completes in at most 5,000 ms while the warm-build container has both `--memory=500m` and
-`--memory-swap=500m` and no network. The attested
+benchmark measures the exact deployed `env NORBITAL_POD_CHECKED=1 vite build /workspace` phase from
+an empty output directory with Core's heap, allocator, baked platform, and pre-synchronized
+environment. The release is blocked unless every clean build completes in at most 5,000 ms while
+its fresh container has both `--memory=500m` and `--memory-swap=500m`, no network, and a measured
+peak no higher than 450 MiB. Pod runs the server and client Vite targets in separate Node processes
+so the server compiler graph is released before client compilation. The attested
 `builder-toolchain-verification.json` and per-template benchmark files record the checks, elapsed
 time, production command/environment, and cgroup memory peak when the runner exposes it.
 A separate fresh-runner smoke gate clean-pulls both published image digests, builds the HR/Payroll

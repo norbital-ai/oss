@@ -1,9 +1,10 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import { type Plugin, type PluginOption } from 'vite';
+import { spawn } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseSeedManifest, seedManifestJson } from '@norbital-ai/platform-utils/seed/manifest';
 import { parseNorbitalManifest } from '@norbital-ai/platform-utils/manifest/parse';
 import {
@@ -52,6 +53,52 @@ export interface PodPluginOptions {
 	readonly outDir?: string;
 }
 
+async function runIsolatedBuild(config: {
+	readonly root: string;
+	readonly configFile: string;
+	readonly mode: string;
+	readonly logLevel: string;
+	readonly clearScreen: boolean;
+}): Promise<void> {
+	const worker = fileURLToPath(new URL('./isolated-build.js', import.meta.url));
+	const inheritedEnvironment = {
+		...process.env,
+		NORBITAL_POD_BUILD_TARGET: 'server',
+		NORBITAL_POD_ISOLATED_BUILD: '1'
+	};
+	const child = spawn(process.execPath, [worker, JSON.stringify(config)], {
+		cwd: config.root,
+		env: inheritedEnvironment,
+		stdio: 'inherit'
+	});
+	await new Promise<void>((resolve, reject) => {
+		const forwardedSignals = ['SIGINT', 'SIGTERM'] as const;
+		const signalHandlers = forwardedSignals.map(
+			(signal) => [signal, () => child.kill(signal)] as const
+		);
+		for (const [signal, handler] of signalHandlers) process.once(signal, handler);
+		const cleanup = () => {
+			for (const [signal, handler] of signalHandlers) process.off(signal, handler);
+		};
+		child.once('error', (error) => {
+			cleanup();
+			reject(error);
+		});
+		child.once('exit', (code, signal) => {
+			cleanup();
+			if (code === 0) {
+				resolve();
+				return;
+			}
+			reject(
+				new Error(
+					`Isolated Pod server build ${signal ? `was terminated by ${signal}` : `exited with status ${code ?? 'unknown'}`}`
+				)
+			);
+		});
+	});
+}
+
 function clientOnlyPlugin(plugin: Plugin): Plugin {
 	const appliesToEnvironment = plugin.applyToEnvironment;
 	return {
@@ -74,6 +121,23 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 	let clientStylesheets: string[] = [];
 	let clientPlatform: { manifest: PodClientPlatformManifest; publicBase: string } | undefined;
 	let buildArtifactsPrepared = false;
+
+	async function prepareBuild(options: {
+		readonly clearArtifacts: boolean;
+		readonly generateMigrations: boolean;
+	}): Promise<void> {
+		if (buildArtifactsPrepared) return;
+		buildArtifactsPrepared = true;
+		if (process.env.NORBITAL_POD_SYNCED !== '1') {
+			const compilation = await compilePodFilesystem({ root, mode: 'build' });
+			if (!compilation.valid) {
+				throw new Error(`Pod filesystem has ${compilation.diagnostics.length} structural error(s)`);
+			}
+		}
+		if (process.env.NORBITAL_POD_CHECKED !== '1') await runSvelteCheck(root);
+		if (options.clearArtifacts) await rm(artifactRoot, { recursive: true, force: true });
+		if (options.generateMigrations) await generatePodMigrations({ root, migrationsRoot });
+	}
 
 	async function finalizeArtifacts(): Promise<void> {
 		if (!clientEntryFile) throw new Error('Pod client entry was not emitted');
@@ -140,12 +204,20 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		async config(_config, environment) {
 			root = path.resolve(_config.root ?? process.cwd());
 			const configuredBuildTarget = process.env.NORBITAL_POD_BUILD_TARGET;
+			const isolatedBuildValue = process.env.NORBITAL_POD_ISOLATED_BUILD;
+			const isolatedBuild = isolatedBuildValue === '1';
+			if (isolatedBuildValue != null && !isolatedBuild) {
+				throw new Error('Invalid internal NORBITAL_POD_ISOLATED_BUILD marker');
+			}
 			if (
 				configuredBuildTarget != null &&
 				configuredBuildTarget !== 'server' &&
 				configuredBuildTarget !== 'client'
 			) {
 				throw new Error(`Invalid NORBITAL_POD_BUILD_TARGET: ${configuredBuildTarget}`);
+			}
+			if (isolatedBuild && configuredBuildTarget !== 'server') {
+				throw new Error('Internal isolated Pod builds must target the server environment');
 			}
 			const configuredOutDir = options.outDir ?? process.env.NORBITAL_BUILD_OUT;
 			const platformDirectory = process.env.NORBITAL_POD_PLATFORM_DIR?.trim();
@@ -169,7 +241,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			generatedClient = path.join(generatedRoot, 'client.ts');
 			generatedWorkspace = path.join(generatedRoot, 'workspace.ts');
 			const mode = environment.command === 'build' ? 'build' : 'authoring';
-			if (process.env.NORBITAL_POD_SYNCED !== '1') {
+			if (environment.command !== 'build' && process.env.NORBITAL_POD_SYNCED !== '1') {
 				const compilation = await compilePodFilesystem({ root, mode });
 				if (!compilation.valid) {
 					throw new Error(
@@ -177,19 +249,11 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 					);
 				}
 			}
-			if (environment.command === 'build' && !buildArtifactsPrepared) {
-				buildArtifactsPrepared = true;
-				if (process.env.NORBITAL_POD_CHECKED !== '1') await runSvelteCheck(root);
-				if (configuredBuildTarget !== 'client') {
-					await rm(artifactRoot, { recursive: true, force: true });
-				}
-				// Generate migrations before either Vite environment is built. Drizzle runs in a
-				// child Node process; starting it after the client build made it overlap with the
-				// retained server/client Rolldown graphs and could exceed the 500 MiB sandbox.
-				// Split builds intentionally keep their existing no-migration behavior.
-				if (configuredBuildTarget == null) {
-					await generatePodMigrations({ root, migrationsRoot });
-				}
+			if (environment.command === 'build' && configuredBuildTarget != null) {
+				await prepareBuild({
+					clearArtifacts: configuredBuildTarget === 'server',
+					generateMigrations: configuredBuildTarget === 'server' && isolatedBuild
+				});
 			}
 			return {
 				appType: 'custom',
@@ -201,13 +265,45 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 					sharedConfigBuild: true,
 					sharedPlugins: true,
 					buildApp: async (builder) => {
-						if (configuredBuildTarget !== 'client') {
+						if (configuredBuildTarget === 'server') {
 							await builder.build(builder.environments.server);
+							return;
 						}
-						if (configuredBuildTarget !== 'server') {
+						if (configuredBuildTarget === 'client') {
 							await builder.build(builder.environments.client);
 							await finalizeArtifacts();
+							return;
 						}
+						if (
+							Object.values(builder.environments).some(
+								(environment) => environment.config.build.watch
+							)
+						) {
+							throw new Error(
+								'Pod coordinated production builds do not support vite build --watch'
+							);
+						}
+						const configFile = builder.config.configFile;
+						if (configFile == null) {
+							// Programmatic configFile:false builds cannot be reconstructed in a child.
+							// Keep standalone SDK builds functional; production Vite config builds use
+							// isolated processes so each Rolldown graph is released before the next one.
+							await prepareBuild({ clearArtifacts: true, generateMigrations: true });
+							await builder.build(builder.environments.server);
+							await builder.build(builder.environments.client);
+							await finalizeArtifacts();
+							return;
+						}
+						const isolatedConfig = {
+							root: builder.config.root,
+							configFile,
+							mode: builder.config.mode,
+							logLevel: builder.config.logLevel ?? 'info',
+							clearScreen: builder.config.clearScreen ?? true
+						};
+						await runIsolatedBuild(isolatedConfig);
+						await builder.build(builder.environments.client);
+						await finalizeArtifacts();
 					}
 				},
 				environments: {

@@ -17,6 +17,7 @@
 		"buildCommand",
 		"buildElapsedMilliseconds",
 		"requiredBundlePaths",
+		"migrationSqlCount",
 		"runtimeEntry",
 		"serveEntrySha256",
 		"readyFrame",
@@ -24,7 +25,7 @@
 	],
 	"properties": {
 		"$schema": { "const": "../release/runtime-smoke.schema.json" },
-		"schemaVersion": { "const": 1 },
+		"schemaVersion": { "const": 2 },
 		"builderImage": {
 			"type": "string",
 			"pattern": "^.+@sha256:[0-9a-f]{64}$"
@@ -53,6 +54,7 @@
 				"schema-post-ddl.sql"
 			]
 		},
+		"migrationSqlCount": { "type": "integer", "minimum": 1 },
 		"runtimeEntry": { "const": "/app/serve.mjs" },
 		"serveEntrySha256": {
 			"type": "string",

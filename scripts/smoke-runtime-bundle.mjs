@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	statSync,
 	writeFileSync
@@ -215,6 +216,7 @@ const runtimeContainer = `norbital-runtime-smoke-guest-${process.pid}-${Date.now
 let packageKey;
 let buildElapsedMilliseconds;
 let serveEntrySha256;
+let migrationSqlCount;
 
 try {
 	console.log(`Clean-pulling ${builderImage}.`);
@@ -273,6 +275,18 @@ try {
 			fail(`Published builder output is missing non-empty ${requiredPath}.`);
 		}
 	}
+	migrationSqlCount = readdirSync(path.join(bundle, '.norbital', 'migrations'), {
+		recursive: true,
+		withFileTypes: true
+	}).filter(
+		(entry) =>
+			entry.isFile() &&
+			entry.name === 'migration.sql' &&
+			statSync(path.join(entry.parentPath, entry.name)).size > 0
+	).length;
+	if (migrationSqlCount < 1) {
+		fail('Published builder output contains no non-empty migration.sql.');
+	}
 	serveEntrySha256 = createHash('sha256')
 		.update(readFileSync(path.join(bundle, 'serve.mjs')))
 		.digest('hex');
@@ -325,7 +339,7 @@ try {
 
 const result = {
 	$schema: '../release/runtime-smoke.schema.json',
-	schemaVersion: 1,
+	schemaVersion: 2,
 	builderImage,
 	runtimeImage,
 	packageKey,
@@ -336,6 +350,7 @@ const result = {
 	buildCommand: 'env NORBITAL_POD_CHECKED=1 vite build /workspace',
 	buildElapsedMilliseconds: Number(buildElapsedMilliseconds.toFixed(3)),
 	requiredBundlePaths,
+	migrationSqlCount,
 	runtimeEntry,
 	serveEntrySha256,
 	readyFrame: { t: 'ready' },

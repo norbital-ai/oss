@@ -12,6 +12,7 @@
 		"template",
 		"network",
 		"warm",
+		"cleanOutput",
 		"prevalidated",
 		"staticVerification",
 		"buildCommand",
@@ -20,13 +21,16 @@
 		"maximumBuildMilliseconds",
 		"memoryLimitBytes",
 		"memorySwapLimitBytes",
+		"maximumPeakMemoryBytes",
 		"peakMemoryBytes",
 		"peakScope",
+		"requiredOutputPresent",
+		"migrationSqlCount",
 		"passed"
 	],
 	"properties": {
 		"$schema": { "const": "../release/builder-benchmark.schema.json" },
-		"schemaVersion": { "const": 2 },
+		"schemaVersion": { "const": 3 },
 		"image": {
 			"type": "string",
 			"pattern": "^.+@sha256:[0-9a-f]{64}$"
@@ -37,7 +41,8 @@
 		},
 		"template": { "type": "string", "minLength": 1 },
 		"network": { "const": "none" },
-		"warm": { "const": true },
+		"warm": { "const": false },
+		"cleanOutput": { "const": true },
 		"prevalidated": { "const": true },
 		"staticVerification": { "const": "builder-toolchain-verification.json" },
 		"buildCommand": { "const": "env NORBITAL_POD_CHECKED=1 vite build /workspace" },
@@ -67,12 +72,17 @@
 		"maximumBuildMilliseconds": { "const": 5000 },
 		"memoryLimitBytes": { "const": 524288000 },
 		"memorySwapLimitBytes": { "const": 524288000 },
+		"maximumPeakMemoryBytes": { "const": 471859200 },
 		"peakMemoryBytes": {
-			"anyOf": [{ "type": "integer", "minimum": 0, "maximum": 524288000 }, { "type": "null" }]
+			"type": "integer",
+			"minimum": 0,
+			"maximum": 471859200
 		},
 		"peakScope": {
-			"enum": ["measured-build", "warm-up-and-measured-build"]
+			"enum": ["measured-build", "synchronization-and-measured-build"]
 		},
+		"requiredOutputPresent": { "const": true },
+		"migrationSqlCount": { "type": "integer", "minimum": 1 },
 		"passed": { "const": true }
 	}
 }

@@ -130,6 +130,7 @@ if (!template) {
 }
 
 const maximumBuildMilliseconds = 5000;
+const maximumPeakMemoryBytes = 450 * 1024 * 1024;
 const expectedPackageKey = required(
 	options,
 	'expected-package-key',
@@ -150,9 +151,11 @@ const podBin =
 	'/opt/norbital/tenant-toolchain/node_modules/@norbital-ai/pod/build/bin/invocation/index.js';
 let elapsedMilliseconds;
 let peakMemoryBytes;
-let peakScope = 'warm-up-and-measured-build';
+let peakScope = 'synchronization-and-measured-build';
 let buildStatus;
 let packageKey;
+let requiredOutputPresent = false;
+let migrationSqlCount = 0;
 
 try {
 	docker([
@@ -206,9 +209,6 @@ try {
 	docker(['exec', '-u', 'node', '-w', '/workspace', container, 'node', podBin, 'sync'], {
 		stdio: 'inherit'
 	});
-	console.log(`Priming ${templateKey} in ${image}.`);
-	docker(productionBuildArguments(container), { stdio: 'inherit' });
-	docker(['exec', '-u', 'node', container, 'sh', '-ec', `rm -rf ${buildOutput}`]);
 
 	const reset = spawnSync(
 		'docker',
@@ -225,7 +225,7 @@ try {
 	);
 	if (reset.status === 0) peakScope = 'measured-build';
 
-	console.log(`Measuring warm ${templateKey} build (limit ${maximumBuildMilliseconds} ms).`);
+	console.log(`Measuring clean ${templateKey} build (limit ${maximumBuildMilliseconds} ms).`);
 	const startedAt = process.hrtime.bigint();
 	const build = spawnSync('docker', productionBuildArguments(container), {
 		cwd: repositoryRoot,
@@ -234,6 +234,38 @@ try {
 	elapsedMilliseconds = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
 	buildStatus = build.status;
 	peakMemoryBytes = readPeakMemory(container);
+	if (buildStatus === 0) {
+		const outputCheck = spawnSync(
+			'docker',
+			[
+				'exec',
+				'-u',
+				'node',
+				container,
+				'sh',
+				'-ec',
+				[
+					`test -s ${buildOutput}/serve.mjs`,
+					`test -s ${buildOutput}/output/server/index.js`,
+					`test -s ${buildOutput}/manifest.json`,
+					`test -s ${buildOutput}/schema-functions.sql`,
+					`test -s ${buildOutput}/schema-post-ddl.sql`
+				].join(' && ')
+			],
+			{ cwd: repositoryRoot, stdio: 'ignore' }
+		);
+		requiredOutputPresent = outputCheck.status === 0;
+		const migrationCount = docker([
+			'exec',
+			'-u',
+			'node',
+			container,
+			'sh',
+			'-ec',
+			`find ${buildOutput}/.norbital/migrations -type f -name migration.sql -size +0c | wc -l`
+		]);
+		migrationSqlCount = Number(migrationCount);
+	}
 } finally {
 	spawnSync('docker', ['rm', '--force', container], {
 		cwd: repositoryRoot,
@@ -245,12 +277,13 @@ try {
 const memoryLimitBytes = 500 * 1024 * 1024;
 const result = {
 	$schema: '../release/builder-benchmark.schema.json',
-	schemaVersion: 2,
+	schemaVersion: 3,
 	image,
 	packageKey,
 	template: templateKey,
 	network: 'none',
-	warm: true,
+	warm: false,
+	cleanOutput: true,
 	prevalidated: true,
 	staticVerification: 'builder-toolchain-verification.json',
 	buildCommand,
@@ -259,23 +292,34 @@ const result = {
 	maximumBuildMilliseconds,
 	memoryLimitBytes,
 	memorySwapLimitBytes: memoryLimitBytes,
+	maximumPeakMemoryBytes,
 	peakMemoryBytes,
 	peakScope,
+	requiredOutputPresent,
+	migrationSqlCount,
 	passed:
 		buildStatus === 0 &&
 		elapsedMilliseconds <= maximumBuildMilliseconds &&
-		(peakMemoryBytes == null || peakMemoryBytes <= memoryLimitBytes)
+		peakMemoryBytes != null &&
+		peakMemoryBytes <= maximumPeakMemoryBytes &&
+		requiredOutputPresent &&
+		migrationSqlCount > 0
 };
 mkdirSync(path.dirname(outputPath), { recursive: true });
 writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`);
 console.log(JSON.stringify(result, null, 2));
 
-if (buildStatus !== 0) fail(`Warm tenant build exited with status ${buildStatus}.`);
+if (buildStatus !== 0) fail(`Clean tenant build exited with status ${buildStatus}.`);
 if (elapsedMilliseconds > maximumBuildMilliseconds) {
 	fail(
-		`Warm tenant build took ${elapsedMilliseconds.toFixed(3)} ms; limit is ${maximumBuildMilliseconds} ms.`
+		`Clean tenant build took ${elapsedMilliseconds.toFixed(3)} ms; limit is ${maximumBuildMilliseconds} ms.`
 	);
 }
-if (peakMemoryBytes != null && peakMemoryBytes > memoryLimitBytes) {
-	fail(`Warm tenant build peaked at ${peakMemoryBytes} bytes; limit is 500 MiB.`);
+if (peakMemoryBytes == null) {
+	fail('Clean tenant build did not expose a cgroup memory peak.');
 }
+if (peakMemoryBytes > maximumPeakMemoryBytes) {
+	fail(`Clean tenant build peaked at ${peakMemoryBytes} bytes; release headroom limit is 450 MiB.`);
+}
+if (!requiredOutputPresent) fail('Clean tenant build is missing required runtime output.');
+if (migrationSqlCount < 1) fail('Clean tenant build emitted no non-empty migration.sql.');
