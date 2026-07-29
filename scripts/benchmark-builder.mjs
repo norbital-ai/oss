@@ -149,9 +149,24 @@ try {
 	}
 
 	console.log(`Priming ${templateKey} in ${image}.`);
-	docker(['exec', '-u', 'node', '-w', '/workspace', container, 'node', podBin, 'build'], {
-		stdio: 'inherit'
-	});
+	docker(
+		[
+			'exec',
+			'-e',
+			'NORBITAL_POD_SYNCED=1',
+			'-e',
+			'NORBITAL_POD_CHECKED=1',
+			'-u',
+			'node',
+			'-w',
+			'/workspace',
+			container,
+			'node',
+			podBin,
+			'build'
+		],
+		{ stdio: 'inherit' }
+	);
 	docker([
 		'exec',
 		'-u',
