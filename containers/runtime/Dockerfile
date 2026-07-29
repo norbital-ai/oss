@@ -9,9 +9,9 @@ LABEL org.opencontainers.image.title="Norbital tenant runtime" \
 
 ENV NODE_ENV=production
 
-RUN mkdir -p /workspace && chown node:node /workspace
+RUN mkdir -p /app && chown node:node /app
 
 USER node
-WORKDIR /workspace
+WORKDIR /app
 ENTRYPOINT []
-CMD ["node", "/workspace/serve.mjs"]
+CMD ["node", "/app/serve.mjs"]

@@ -127,7 +127,7 @@ with `sleep infinity` and execute Pod in `/workspace`. A portable Node compile c
 toolchain directory is populated while the image is built and reused by later Pod CLI processes,
 so independent tenant executions do not repeatedly compile the same immutable module graph. The
 runtime image contains only Node, has no entrypoint, and defaults to the already-built tenant bundle
-mounted at `/workspace/serve.mjs`; it does not contain Pod or tenant source.
+mounted at `/app/serve.mjs`; it does not contain Pod or tenant source.
 
 The versioned Node 26 builder labels its platform fingerprint and source revision. The minimal Node
 26 runtime only serves the immutable `serve.mjs` emitted by Pod. Hosts may mirror either image; the
@@ -145,6 +145,10 @@ completes in at most 5,000 ms while the warm-build container has both `--memory=
 `--memory-swap=500m` and no network. The attested
 `builder-toolchain-verification.json` and per-template benchmark files record the checks, elapsed
 time, production command/environment, and cgroup memory peak when the runner exposes it.
+A separate fresh-runner smoke gate clean-pulls both published image digests, builds the HR/Payroll
+template, asserts every required checkpoint path including root `serve.mjs`, and boots that bundle
+read-only at `/app` with the same no-network runtime command used by Core. Its attested
+`runtime-smoke.json` evidence is published beside the release manifest.
 A host must only offer a platform auto-update after the immutable platform manifest exists, so a
 builder image that fails this gate is never eligible even if its OCI upload completed.
 The evidence format is defined by [`builder-benchmark.schema.json`](./builder-benchmark.schema.json).

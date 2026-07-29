@@ -291,11 +291,56 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
+  runtime-smoke:
+    needs:
+      - prepare
+      - builder
+      - runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - name: Login to OCI registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.OCI_REGISTRY }}
+          username: ${{ vars.NORBITAL_OCI_USERNAME || github.actor }}
+          password: ${{ secrets.NORBITAL_OCI_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Clean-pull build and boot tenant bundle
+        run: |
+          node scripts/smoke-runtime-bundle.mjs \
+            --builder-image "${{ needs.builder.outputs.image }}@${{ needs.builder.outputs.digest }}" \
+            --runtime-image "${{ needs.runtime.outputs.image }}@${{ needs.runtime.outputs.digest }}" \
+            --expected-package-key "${{ needs.prepare.outputs.package_key }}" \
+            --template hr-payroll \
+            --output dist/runtime-smoke.json
+
+      - name: Attest runtime smoke evidence
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/runtime-smoke.json
+
+      - name: Upload runtime smoke evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-smoke-${{ needs.prepare.outputs.release_name }}
+          path: dist/runtime-smoke.json
+          if-no-files-found: error
+          retention-days: 90
+
   catalogue:
     needs:
       - prepare
       - builder
       - runtime
+      - runtime-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Checkout complete history
@@ -338,6 +383,12 @@ jobs:
           name: builder-benchmark-${{ needs.prepare.outputs.release_name }}
           path: dist
 
+      - name: Download runtime smoke evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: runtime-smoke-${{ needs.prepare.outputs.release_name }}
+          path: dist
+
       - name: Attest platform release manifest
         uses: actions/attest@v4
         with:
@@ -368,6 +419,7 @@ jobs:
             dist/builder-toolchain-verification.json \
             dist/builder-benchmark.json \
             dist/builder-benchmarks/*.json \
+            dist/runtime-smoke.json \
             dist/package-archives/config.tgz \
             dist/package-archives/platform-utils.tgz \
             dist/package-archives/pod.tgz \
