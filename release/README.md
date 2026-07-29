@@ -133,8 +133,9 @@ part of tenant build identity.
 
 Every platform release runs sync, Pod check, and a complete build for every active template in the
 digest-pinned builder with no network and a 1 GiB static-verification memory limit. It then runs
-every template twice: the first build primes generated workspace and compiler caches, and the
-second measures the same prevalidated
+every template in a fresh 500 MiB benchmark container. Pod sync first materializes the ignored
+generated workspace; the already-proven static checker is not repeated there. The first build
+primes compiler caches, and the second measures the same prevalidated
 `NORBITAL_POD_SYNCED=1`/`NORBITAL_POD_CHECKED=1` contract used by the tenant build runner. The
 release is blocked unless every measured build completes in at most 5,000 ms while the warm-build
 container has both `--memory=500m` and `--memory-swap=500m` and no network. The attested

@@ -148,6 +148,11 @@ try {
 		fail(`Builder package key ${packageKey} does not match expected ${expectedPackageKey}.`);
 	}
 
+	console.log(`Synchronizing ${templateKey} generated workspace in ${image}.`);
+	docker(['exec', '-u', 'node', '-w', '/workspace', container, 'node', podBin, 'sync'], {
+		stdio: 'inherit'
+	});
+
 	console.log(`Priming ${templateKey} in ${image}.`);
 	docker(
 		[
