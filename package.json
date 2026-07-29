@@ -1,7 +1,7 @@
 {
 	"name": "@template/construction",
 	"description": "Construction project management covering jobs, workers, permits, defects, RFIs, payment claims, and BIM reference data.",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"private": true,
 	"type": "module",
 	"scripts": {
@@ -14,8 +14,8 @@
 	"dependencies": {
 		"@iconify/svelte": "^5.2.2",
 		"@norbital-ai/pod": "0.0.1",
-		"@norbital-ai/std": "^0.1.21",
-		"@norbital-ai/ui": "^0.1.25",
+		"@norbital-ai/std": "0.0.1",
+		"@norbital-ai/ui": "0.0.1",
 		"mode-watcher": "^1.1.0",
 		"runed": "^0.37.1",
 		"svelte": "^5.56.7",
