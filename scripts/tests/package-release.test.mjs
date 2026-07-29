@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 import { assertSha512Integrity, sha512Integrity } from '../lib/package-archive.mjs';
-import { platformPackageKey } from '../lib/package-release.mjs';
+import { platformPackageKey, publicPackageDirectories } from '../lib/package-release.mjs';
+import { resolveWorkspacePackages } from '../resolve-published-packages.mjs';
 
 const entries = [
 	{
@@ -48,5 +52,44 @@ describe('published package identity', () => {
 
 	it('is independent of entry ordering', () => {
 		assert.equal(platformPackageKey(entries), platformPackageKey([...entries].reverse()));
+	});
+});
+
+describe('workspace package archives', () => {
+	it('packs exact source bytes without changing checked-in semantic versions', () => {
+		const directory = mkdtempSync(path.join(tmpdir(), 'norbital-workspace-packages-test-'));
+		const repeatedDirectory = mkdtempSync(
+			path.join(tmpdir(), 'norbital-workspace-packages-repeat-test-')
+		);
+		try {
+			const release = resolveWorkspacePackages({
+				archiveBaseUrl: 'https://releases.example.test/platform-v1/',
+				archiveOutput: directory
+			});
+			const repeatedRelease = resolveWorkspacePackages({
+				archiveBaseUrl: 'https://mirror.example.test/platform-v1/',
+				archiveOutput: repeatedDirectory
+			});
+			assert.equal(release.entries.length, publicPackageDirectories.length);
+			assert.equal(release.packageKey, platformPackageKey(release.entries));
+			assert.equal(repeatedRelease.packageKey, release.packageKey);
+			assert.deepEqual(
+				repeatedRelease.entries.map(({ name, version, integrity }) => ({
+					name,
+					version,
+					integrity
+				})),
+				release.entries.map(({ name, version, integrity }) => ({ name, version, integrity }))
+			);
+			const pod = release.entries.find((entry) => entry.name === '@norbital-ai/pod');
+			assert.equal(pod?.version, '0.0.1');
+			assert.equal(pod?.tarball, 'https://releases.example.test/platform-v1/pod.tgz');
+			for (const packageDirectory of publicPackageDirectories) {
+				assert.equal(existsSync(path.join(directory, `${packageDirectory}.tgz`)), true);
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+			rmSync(repeatedDirectory, { recursive: true, force: true });
+		}
 	});
 });

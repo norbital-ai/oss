@@ -7,6 +7,7 @@ import {
 	rmSync,
 	writeFileSync
 } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -149,28 +150,165 @@ export async function resolvePublishedPackages({
 	};
 }
 
+const dependencyMapFields = [
+	'dependencies',
+	'devDependencies',
+	'optionalDependencies',
+	'peerDependencies',
+	'peerDependenciesMeta'
+];
+
+function normalizePackedManifest(packageRoot) {
+	const manifestPath = path.join(packageRoot, 'package.json');
+	const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+	for (const field of dependencyMapFields) {
+		if (manifest[field] == null) continue;
+		manifest[field] = Object.fromEntries(
+			Object.entries(manifest[field]).sort(([left], [right]) => left.localeCompare(right))
+		);
+	}
+	writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function resolveReportedArchive(filename, destination) {
+	return path.isAbsolute(filename) ? filename : path.resolve(destination, filename);
+}
+
+function packWorkspacePackage({ directory, temporaryDirectory }) {
+	const initialArchiveDirectory = path.join(temporaryDirectory, 'initial');
+	const unpackedDirectory = path.join(temporaryDirectory, `unpacked-${directory}`);
+	const normalizedArchiveDirectory = path.join(temporaryDirectory, 'normalized');
+	mkdirSync(initialArchiveDirectory, { recursive: true });
+	mkdirSync(unpackedDirectory, { recursive: true });
+	mkdirSync(normalizedArchiveDirectory, { recursive: true });
+	const initialOutput = execFileSync(
+		'pnpm',
+		['pack', '--json', '--pack-destination', initialArchiveDirectory],
+		{
+			cwd: path.join(repositoryRoot, 'packages', directory),
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'inherit']
+		}
+	);
+	const initialResult = JSON.parse(initialOutput);
+	const initialFilename = Array.isArray(initialResult)
+		? initialResult[0]?.filename
+		: initialResult.filename;
+	if (!initialFilename) fail(`pnpm pack did not report an archive for packages/${directory}.`);
+	execFileSync(
+		'tar',
+		[
+			'-xzf',
+			resolveReportedArchive(initialFilename, initialArchiveDirectory),
+			'-C',
+			unpackedDirectory
+		],
+		{ stdio: 'inherit' }
+	);
+	const packageRoot = path.join(unpackedDirectory, 'package');
+	normalizePackedManifest(packageRoot);
+	const normalizedOutput = execFileSync(
+		'npm',
+		['pack', '--json', '--ignore-scripts', '--pack-destination', normalizedArchiveDirectory],
+		{
+			cwd: packageRoot,
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'inherit']
+		}
+	);
+	const normalizedResult = JSON.parse(normalizedOutput);
+	const normalizedFilename = Array.isArray(normalizedResult)
+		? normalizedResult[0]?.filename
+		: normalizedResult.filename;
+	if (!normalizedFilename) fail(`npm pack did not report an archive for packages/${directory}.`);
+	return resolveReportedArchive(normalizedFilename, normalizedArchiveDirectory);
+}
+
+export function resolveWorkspacePackages({ archiveBaseUrl, archiveOutput }) {
+	const archiveBase = normalizedRegistry(archiveBaseUrl);
+	const localEntries = readPublicPackageEntries(repositoryRoot);
+	const repositoryLicense = readFileSync(path.join(repositoryRoot, 'LICENSE'), 'utf8');
+	const temporaryDirectory = mkdtempSync(path.join(tmpdir(), 'norbital-workspace-packages-'));
+	const entries = [];
+
+	try {
+		for (const local of localEntries) {
+			const directory = publicPackageDirectories.find(
+				(candidate) => local.name === `@norbital-ai/${candidate}`
+			);
+			if (!directory) fail(`No package directory mapping for ${local.name}.`);
+			const archivePath = packWorkspacePackage({ directory, temporaryDirectory });
+			const inspected = inspectPackageArchive(archivePath, {
+				directory,
+				expectedName: local.name,
+				expectedVersion: local.version,
+				repositoryLicense
+			});
+			entries.push({
+				name: local.name,
+				version: local.version,
+				tarball: new URL(`${directory}.tgz`, archiveBase).href,
+				integrity: inspected.integrity
+			});
+			if (archiveOutput) {
+				mkdirSync(archiveOutput, { recursive: true });
+				copyFileSync(archivePath, path.join(archiveOutput, `${directory}.tgz`));
+			}
+		}
+	} finally {
+		rmSync(temporaryDirectory, { recursive: true, force: true });
+	}
+
+	entries.sort((left, right) => left.name.localeCompare(right.name));
+	return {
+		schemaVersion: 1,
+		registry: archiveBase.href.replace(/\/$/, ''),
+		packageKey: platformPackageKey(entries),
+		entries
+	};
+}
+
 async function main() {
 	const options = argumentsFrom(process.argv.slice(2));
+	const source = options.source ?? process.env.PLATFORM_PACKAGE_SOURCE ?? 'registry';
+	if (!['registry', 'workspace'].includes(source)) {
+		fail('Package source must be registry or workspace.');
+	}
 	const registryUrl = options.registry ?? process.env.PACKAGE_REGISTRY_URL;
-	if (!registryUrl) fail('Pass --registry or set PACKAGE_REGISTRY_URL.');
-	const registry = normalizedRegistry(registryUrl);
+	const archiveBaseUrl =
+		options['archive-base-url'] ?? process.env.PLATFORM_ARCHIVE_BASE_URL ?? registryUrl;
+	if (source === 'registry' && !registryUrl) {
+		fail('Registry package source requires --registry or PACKAGE_REGISTRY_URL.');
+	}
+	if (source === 'workspace' && !archiveBaseUrl) {
+		fail('Workspace package source requires --archive-base-url or PLATFORM_ARCHIVE_BASE_URL.');
+	}
 	const output = options.output ?? process.env.PACKAGE_RELEASE_OUTPUT;
 	if (!output) fail('Pass --output or set PACKAGE_RELEASE_OUTPUT.');
 	const archiveOutput = options['archive-output'] ?? process.env.PACKAGE_ARCHIVE_OUTPUT;
-	const release = await resolvePublishedPackages({
-		registryUrl: registry.href,
-		archiveOutput: archiveOutput ? path.resolve(repositoryRoot, archiveOutput) : undefined,
-		token:
-			process.env.NPM_REGISTRY_TOKEN ||
-			(registry.hostname === 'npm.pkg.github.com'
-				? process.env.GITHUB_PACKAGE_TOKEN
-				: process.env.NODE_AUTH_TOKEN)
-	});
+	const resolvedArchiveOutput = archiveOutput
+		? path.resolve(repositoryRoot, archiveOutput)
+		: undefined;
+	const release =
+		source === 'workspace'
+			? resolveWorkspacePackages({
+					archiveBaseUrl,
+					archiveOutput: resolvedArchiveOutput
+				})
+			: await resolvePublishedPackages({
+					registryUrl,
+					archiveOutput: resolvedArchiveOutput,
+					token:
+						process.env.NPM_REGISTRY_TOKEN ||
+						(normalizedRegistry(registryUrl).hostname === 'npm.pkg.github.com'
+							? process.env.GITHUB_PACKAGE_TOKEN
+							: process.env.NODE_AUTH_TOKEN)
+				});
 	const outputPath = path.resolve(repositoryRoot, output);
 	mkdirSync(path.dirname(outputPath), { recursive: true });
 	writeFileSync(outputPath, `${JSON.stringify(release, null, 2)}\n`);
 	console.log(
-		`Verified ${release.entries.length} published package archives for ${release.packageKey}.`
+		`Verified ${release.entries.length} ${source} package archives for ${release.packageKey}.`
 	);
 
 	const githubOutput = options['github-output'];

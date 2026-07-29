@@ -2,8 +2,8 @@
 
 Norbital OSS publishes four independent, immutable resource types:
 
-1. npm packages for `@norbital-ai/config`, `platform-utils`, `pod`, `std`, and `ui`, identified
-   by exact registry tarball URL and sha512 SRI;
+1. exact public package archives for `@norbital-ai/config`, `platform-utils`, `pod`, `std`, and
+   `ui`, identified by tarball URL and sha512 SRI;
 2. root-projected Git refs for template workspace source;
 3. one generic tenant builder image and one generic tenant runtime image;
 4. a platform release manifest that pins the package versions, template commits, and image digests.
@@ -61,17 +61,24 @@ and generates `platform-release.json` against
 [`platform-release.schema.json`](./platform-release.schema.json). GitHub Actions publishes that
 file as both an attested workflow artifact and an immutable GitHub release asset.
 
-Before image construction, `resolve-published-packages.mjs` reads each exact package version from
-the configured npm-compatible registry packument, downloads `dist.tarball`, verifies
-`dist.integrity`, and validates the same standalone archive contract as `pnpm publication:check`.
-The verified bytes are retained as deterministic package inputs to the builder image; the image
-never re-resolves a version from the registry. Credentials are accepted through environment
-variables and are never written into the manifest or image. The resulting package release file is
-an input to the provider-neutral generator:
+Before image construction, `resolve-published-packages.mjs` resolves one of two package-source
+adapters. The default `workspace` adapter packs the exact checked-in source and publishes those
+archives beside the platform manifest. The `registry` adapter reads each exact package version from
+an npm-compatible registry packument, downloads `dist.tarball`, and verifies `dist.integrity`.
+Both paths validate the same standalone archive contract as `pnpm publication:check`. The verified
+bytes are retained as deterministic package inputs to the builder image; the image never
+re-resolves a version from a registry. Credentials are accepted through environment variables and
+are never written into the manifest or image.
+
+Workspace archives let a platform release carry changed Pod bytes while the compatibility version
+remains `0.0.1`: the release tag, sha512 SRI, and `packageKey` identify the immutable bytes. Normal
+public npm releases remain a separate Changesets workflow and never overwrite a registry version.
+The resulting package release file is an input to the provider-neutral generator:
 
 ```sh
-NPM_REGISTRY_TOKEN=... node scripts/resolve-published-packages.mjs \
-  --registry https://registry.example.test \
+node scripts/resolve-published-packages.mjs \
+  --source workspace \
+  --archive-base-url https://releases.example.test/platform-v2026.07.29.15/ \
   --output dist/package-release.json \
   --archive-output dist/package-archives
 
@@ -85,6 +92,9 @@ node scripts/generate-platform-release.mjs \
   --runtime-image registry.example.test/norbital/runtime \
   --runtime-digest "sha256:$RUNTIME_DIGEST"
 ```
+
+To source an existing registry release instead, pass `--source registry` and an npm-compatible
+`--registry`; private registry credentials may be supplied through `NPM_REGISTRY_TOKEN`.
 
 [`template-toolchain.package.json`](./template-toolchain.package.json) is the builder-owned union of
 external runtime and type-check dependencies declared by every active template. Its versions are
@@ -106,6 +116,8 @@ The checked-in GitHub workflow defaults to GitHub Packages and GHCR. These repos
 redirect the same pipeline without changing source:
 
 - `NORBITAL_PACKAGE_REGISTRY`
+- `NORBITAL_PLATFORM_PACKAGE_SOURCE` (`workspace` or `registry`)
+- `NORBITAL_PLATFORM_ARCHIVE_BASE_URL`
 - `NORBITAL_OCI_REGISTRY`
 - `NORBITAL_OCI_NAMESPACE`
 - `NORBITAL_OCI_USERNAME`
@@ -136,7 +148,7 @@ part of tenant build identity.
 
 Every platform release runs sync, Pod check, and a complete build for every active template in the
 digest-pinned builder with no network and a 1 GiB static-verification memory limit. It then runs
-every template through separate fresh 500 MiB sync and build containers. Pod sync materializes the
+every template three times through separate fresh 500 MiB sync and build containers. Pod sync materializes the
 ignored generated workspace and validates a fingerprint over both schema inputs and versioned
 migration history; the preceding digest-matched static verifier supplies the `pod check` evidence.
 The synchronized state is transferred to a clean build container, where the benchmark measures the

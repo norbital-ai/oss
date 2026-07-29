@@ -26,6 +26,8 @@ env:
   OCI_REGISTRY: ${{ vars.NORBITAL_OCI_REGISTRY || 'ghcr.io' }}
   OCI_NAMESPACE: ${{ vars.NORBITAL_OCI_NAMESPACE || github.repository_owner }}
   PACKAGE_REGISTRY_URL: ${{ vars.NORBITAL_PACKAGE_REGISTRY || 'https://npm.pkg.github.com' }}
+  PLATFORM_PACKAGE_SOURCE: ${{ vars.NORBITAL_PLATFORM_PACKAGE_SOURCE || 'workspace' }}
+  PLATFORM_ARCHIVE_BASE_URL: ${{ vars.NORBITAL_PLATFORM_ARCHIVE_BASE_URL }}
   MAX_IMAGE_BYTES: ${{ vars.NORBITAL_MAX_IMAGE_BYTES || '500000000' }}
   BENCHMARK_TEMPLATE: ${{ vars.NORBITAL_BENCHMARK_TEMPLATE || 'construction' }}
 
@@ -83,14 +85,19 @@ jobs:
             --check \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Verify published package archives
+      - name: Resolve verified package archives
         id: versions
         env:
           NPM_REGISTRY_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN }}
           GITHUB_PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          package_source_args=(--source "$PLATFORM_PACKAGE_SOURCE" --registry "$PACKAGE_REGISTRY_URL")
+          if [[ "$PLATFORM_PACKAGE_SOURCE" == "workspace" ]]; then
+            archive_base_url="${PLATFORM_ARCHIVE_BASE_URL:-${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${{ steps.release.outputs.release_tag }}/}"
+            package_source_args=(--source workspace --archive-base-url "$archive_base_url")
+          fi
           node scripts/resolve-published-packages.mjs \
-            --registry "$PACKAGE_REGISTRY_URL" \
+            "${package_source_args[@]}" \
             --output dist/package-release.json \
             --archive-output dist/package-archives \
             --github-output "$GITHUB_OUTPUT"
@@ -185,13 +192,15 @@ jobs:
           node -e \
             "for (const template of require('./release/templates.json').templates) console.log(template.key)" \
             | while read -r template; do
-                node scripts/benchmark-builder.mjs \
-                  --image "${IMAGE}@${DIGEST}" \
-                  --template "$template" \
-                  --expected-package-key "${{ needs.prepare.outputs.package_key }}" \
-                  --output "dist/builder-benchmarks/${template}.json"
+                for attempt in 1 2 3; do
+                  node scripts/benchmark-builder.mjs \
+                    --image "${IMAGE}@${DIGEST}" \
+                    --template "$template" \
+                    --expected-package-key "${{ needs.prepare.outputs.package_key }}" \
+                    --output "dist/builder-benchmarks/${template}-${attempt}.json"
+                done
               done
-          cp "dist/builder-benchmarks/${BENCHMARK_TEMPLATE}.json" dist/builder-benchmark.json
+          cp "dist/builder-benchmarks/${BENCHMARK_TEMPLATE}-1.json" dist/builder-benchmark.json
           {
             echo "### Tenant builder all-template release gate"
             echo
@@ -374,8 +383,9 @@ jobs:
           SOURCE_REVISION: ${{ github.sha }}
           TEMPLATE_REVISIONS_FILE: dist/template-revisions.json
           PACKAGE_RELEASE_FILE: dist/package-release.json
-          PACKAGE_MIRROR_BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.release_tag }}/
-        run: node scripts/generate-platform-release.mjs
+        run: |
+          export PACKAGE_MIRROR_BASE_URL="${PLATFORM_ARCHIVE_BASE_URL:-${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${{ needs.prepare.outputs.release_tag }}/}"
+          node scripts/generate-platform-release.mjs
 
       - name: Download builder benchmark
         uses: actions/download-artifact@v8

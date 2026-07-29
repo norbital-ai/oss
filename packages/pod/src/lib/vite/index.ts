@@ -360,7 +360,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 							outDir: path.join(artifactRoot, 'output/server'),
 							emptyOutDir: true,
 							copyPublicDir: false,
-							minify: 'oxc',
+							minify: false,
 							reportCompressedSize: false,
 							sourcemap: false,
 							ssr: true,
@@ -369,8 +369,9 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 								external: (id: string) => id.startsWith('node:'),
 								output: {
 									format: 'esm',
-									codeSplitting: false,
-									entryFileNames: 'index.js'
+									codeSplitting: true,
+									entryFileNames: 'index.js',
+									chunkFileNames: 'chunks/[name]-[hash].js'
 								}
 							}
 						}
