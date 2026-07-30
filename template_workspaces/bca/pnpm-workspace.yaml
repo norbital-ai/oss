@@ -1,9 +1,15 @@
+# First-party packages are exempt from the minimum-release-age policy.
+#
+# The policy exists to blunt supply-chain attacks: a compromised third-party publish is usually
+# caught and yanked within hours, so refusing anything newer than the threshold buys that window.
+# It buys nothing against `@norbital-ai/*` — we are the publisher and the code is reviewed in this
+# repository rather than trusted from a registry.
+#
+# Scope-wide rather than version-pinned on purpose. Pinning each version meant every release had to
+# remember to edit five template files, and forgetting it fails as an opaque
+# ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION deep inside a tenant sandbox build.
 minimumReleaseAgeExclude:
-  - '@norbital-ai/config@0.0.1'
-  - '@norbital-ai/platform-utils@0.0.1'
-  - '@norbital-ai/pod@0.0.1'
-  - '@norbital-ai/std@0.0.1'
-  - '@norbital-ai/ui@0.0.1'
+  - '@norbital-ai/*'
 
 # Host tools execute from this depset, while tenant builds execute in a Linux/musl microVM.
 # Include both host-native and guest-native optional packages on macOS, Windows, and Linux hosts.
