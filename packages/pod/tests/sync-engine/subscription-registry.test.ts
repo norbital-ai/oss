@@ -144,7 +144,10 @@ describe('SubscriptionRegistry', () => {
 
 	it('restores persisted state so a reload reads locally without re-fetching', async () => {
 		const persisted = new Map<string, CollectionSyncState>([
-			['orders', { collection: 'orders', resident: true, rows: 12, syncedAt: 1 }]
+			[
+				'orders',
+				{ collection: 'orders', resident: true, rows: 12, bytes: budgetForRows(12), syncedAt: 1 }
+			]
 		]);
 		const { client, calls } = stubClient({ persisted });
 		const registry = new SubscriptionRegistry(client);
