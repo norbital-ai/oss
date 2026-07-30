@@ -343,6 +343,8 @@ const transport: WorkspaceRemoteTransport = {
 	invokeQuery: (input) => query(invokeQueries, 'invoke:', 'invoke/query', input),
 	exportPipeline: (input) => post('collections/export', input),
 	importPipeline: (input) => post('collections/import', input),
+	agentChat: (input) =>
+		post<{ runId: string; chatId: string | null; text: string }>('remotes/agentChat', input),
 	autocompleteGeolocation: (input) =>
 		post<TGeolocation[]>('remotes/autocompleteGeolocation', input),
 	renderStaticMap: (input) => post('remotes/renderStaticMap', input),
