@@ -429,6 +429,9 @@ importers:
       '@iconify/svelte':
         specifier: ^5.2.2
         version: 5.2.2(svelte@5.56.8)
+      '@norbital-ai/platform-utils':
+        specifier: 0.0.1
+        version: link:../../packages/platform-utils
       '@norbital-ai/pod':
         specifier: 0.0.1
         version: link:../../packages/pod
@@ -484,6 +487,9 @@ importers:
       '@iconify/svelte':
         specifier: ^5.2.2
         version: 5.2.2(svelte@5.56.8)
+      '@norbital-ai/platform-utils':
+        specifier: 0.0.1
+        version: link:../../packages/platform-utils
       '@norbital-ai/pod':
         specifier: 0.0.1
         version: link:../../packages/pod
@@ -527,6 +533,9 @@ importers:
       '@iconify/svelte':
         specifier: ^5.2.2
         version: 5.2.2(svelte@5.56.8)
+      '@norbital-ai/platform-utils':
+        specifier: 0.0.1
+        version: link:../../packages/platform-utils
       '@norbital-ai/pod':
         specifier: 0.0.1
         version: link:../../packages/pod
