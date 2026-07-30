@@ -1,117 +1,149 @@
-CREATE TABLE "cost_estimates" (
+CREATE TABLE "certification_types" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
-	"estimate_name" text NOT NULL,
-	"project_id" uuid NOT NULL,
-	"reconstruction_id" uuid,
+	"code" text NOT NULL,
+	"name" text NOT NULL,
+	"category" text,
+	"issuing_body" text,
+	"description" text,
+	"active" boolean NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "contractor_certifications" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"contractor_profile_id" uuid NOT NULL,
+	"certification_type_id" uuid NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "contractor_profiles" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"user_id" uuid NOT NULL,
+	"company_name" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "job_assignments" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"job_id" uuid NOT NULL,
+	"contractor_profile_id" uuid NOT NULL,
+	"dispatched_at" timestamp with time zone,
 	"status" text,
-	"currency" text,
-	"sand_loss_pct" numeric,
-	"dredged_fill_loss_pct" numeric,
-	"perimeter_margin_pct" numeric,
-	"pvd_area_fraction" numeric,
-	"pvd_spacing_m" numeric,
-	"contingency_pct" numeric,
-	"subtotal" jsonb,
-	"contingency" jsonb,
-	"total" jsonb,
-	"lines_json" text,
-	"priced_at" timestamp with time zone,
-	"notes" text
+	"completed_at" timestamp with time zone,
+	"amount_charged" jsonb,
+	"location" jsonb,
+	"summary" text,
+	"source_message_id" text
 );
 --> statement-breakpoint
-CREATE TABLE "cost_rates" (
+CREATE TABLE "job_certification_requirements" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
-	"substrate" text NOT NULL,
-	"label" text NOT NULL,
-	"unit" text NOT NULL,
-	"rate" jsonb,
-	"rate_basis" text,
-	"source" text,
-	"validity_range" jsonb,
-	"notes" text
+	"job_id" uuid NOT NULL,
+	"certification_type_id" uuid NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "project_documents" (
+CREATE TABLE "jobs" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
+	"site_id" uuid NOT NULL,
 	"title" text NOT NULL,
-	"project_id" uuid NOT NULL,
-	"category" text NOT NULL,
-	"document_role" text,
-	"document_file" uuid NOT NULL,
-	"document_number" text,
-	"discipline" text,
-	"revision" text,
-	"issued_on" date,
-	"issued_by" text,
+	"nature" text,
+	"scheduled_for" date NOT NULL,
 	"status" text,
-	"tags" text[],
-	"notes" text
+	"description" text NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "reclamation_projects" (
+CREATE TABLE "photo_evidence" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
-	"project_name" text NOT NULL,
-	"project_code" text,
-	"client" text,
-	"consultant" text,
-	"status" text,
-	"location" text,
-	"datum" text,
-	"currency" text,
-	"floor_plan_document" uuid,
-	"bathymetry_document" uuid,
-	"cross_section_document" uuid,
-	"interpolation" text,
-	"integration_cell_m" numeric,
-	"render_cell_m" numeric,
-	"stitch_overrides" text,
-	"notes" text
+	"job_assignment_id" uuid,
+	"variation_request_id" uuid,
+	"document_asset_id" uuid NOT NULL,
+	"source_key" text NOT NULL,
+	"source" jsonb NOT NULL,
+	"sha256" text NOT NULL,
+	"perceptual_hash" text NOT NULL,
+	"flags" text[] NOT NULL,
+	"matched_evidence_ids" uuid[] NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "site_reconstructions" (
+CREATE TABLE "sites" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
-	"project_id" uuid NOT NULL,
-	"revision" numeric NOT NULL,
-	"status" text NOT NULL,
-	"stitched_at" timestamp with time zone,
-	"engine_version" text,
-	"failure_reason" text,
-	"platform_area_m2" numeric,
-	"placed_volume_m3" numeric,
-	"mean_fill_depth_m" numeric,
-	"excavation_m3" numeric,
-	"integration_cell_m" numeric,
-	"assumption_count" numeric,
-	"warning_count" numeric,
-	"model_json" text,
-	"metrics_json" text,
-	"quantities_json" text,
-	"report_json" text
+	"name" text NOT NULL,
+	"location" jsonb,
+	"client_name" text,
+	"house_type" text,
+	"floor_area_sqm" numeric
+);
+--> statement-breakpoint
+CREATE TABLE "variation_requests" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"job_assignment_id" uuid NOT NULL,
+	"requested_at" timestamp with time zone NOT NULL,
+	"title" text NOT NULL,
+	"description" text NOT NULL,
+	"amount" jsonb,
+	"source_message_id" text
+);
+--> statement-breakpoint
+CREATE TABLE "agent_run_step" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"owner_user_id" uuid NOT NULL,
+	"automation_run_id" uuid NOT NULL,
+	"sequence" integer NOT NULL,
+	"kind" text NOT NULL,
+	"role" text,
+	"content" text,
+	"tool_call_id" text,
+	"tool_name" text,
+	"tool_input" jsonb,
+	"tool_output" jsonb,
+	"usage" jsonb
 );
 --> statement-breakpoint
 CREATE TABLE "approval_request" (
@@ -152,25 +184,14 @@ CREATE TABLE "automation_run" (
 	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
-	"automation_name" text NOT NULL,
+	"requested_by_user_id" uuid NOT NULL,
+	"automation_name" text,
 	"status" text DEFAULT 'pending' NOT NULL,
 	"input" jsonb DEFAULT '{}',
 	"output" jsonb,
 	"error" text,
 	"started_at" timestamp with time zone,
 	"completed_at" timestamp with time zone
-);
---> statement-breakpoint
-CREATE TABLE "chat_session" (
-	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"norbital_created_at" timestamp with time zone DEFAULT now(),
-	"norbital_updated_at" timestamp with time zone DEFAULT now(),
-	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
-	"norbital_row_version" integer DEFAULT 1,
-	"norbital_approval_id" uuid,
-	"title" text,
-	"messages" jsonb DEFAULT '[]',
-	"context" jsonb DEFAULT '{}'
 );
 --> statement-breakpoint
 CREATE TABLE "document_asset" (
@@ -180,13 +201,11 @@ CREATE TABLE "document_asset" (
 	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
+	"owner_user_id" uuid NOT NULL,
 	"file_name" text NOT NULL,
 	"mime_type" text,
 	"file_size" integer,
-	"storage_key" text NOT NULL,
-	"storage_provider" text DEFAULT 'minio',
-	"metadata" jsonb DEFAULT '{}',
-	"embedding_model" text
+	"storage_key" text NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "integration_outbox" (
@@ -210,21 +229,6 @@ CREATE TABLE "integration_outbox" (
 	"last_error" text
 );
 --> statement-breakpoint
-CREATE TABLE "mutation_log" (
-	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"norbital_created_at" timestamp with time zone DEFAULT now(),
-	"norbital_updated_at" timestamp with time zone DEFAULT now(),
-	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
-	"norbital_row_version" integer DEFAULT 1,
-	"norbital_approval_id" uuid,
-	"collection_name" text NOT NULL,
-	"record_id" uuid NOT NULL,
-	"action" text NOT NULL,
-	"payload" jsonb DEFAULT '{}',
-	"result" jsonb,
-	"actor_id" uuid
-);
---> statement-breakpoint
 CREATE TABLE "notification" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
@@ -240,6 +244,27 @@ CREATE TABLE "notification" (
 	"cta_url" text,
 	"notification_category" text,
 	"read_at" timestamp with time zone
+);
+--> statement-breakpoint
+CREATE TABLE "notification_outbox" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"channel" text NOT NULL,
+	"recipient_user_id" uuid NOT NULL,
+	"subject" text NOT NULL,
+	"message" text NOT NULL,
+	"cta_label" text,
+	"cta_url" text,
+	"status" text DEFAULT 'pending' NOT NULL,
+	"attempts" integer DEFAULT 0 NOT NULL,
+	"available_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"claimed_at" timestamp with time zone,
+	"delivered_at" timestamp with time zone,
+	"last_error" text
 );
 --> statement-breakpoint
 CREATE TABLE "policy" (
@@ -310,51 +335,44 @@ CREATE TABLE "user" (
 	"channels" jsonb DEFAULT '[]'
 );
 --> statement-breakpoint
-CREATE INDEX "cost_estimates_project_id_index" ON "cost_estimates" ("project_id");--> statement-breakpoint
-CREATE INDEX "cost_estimates_estimate_name_search_trgm_idx" ON "cost_estimates" USING gin ("estimate_name" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_estimates_status_search_trgm_idx" ON "cost_estimates" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_estimates_currency_search_trgm_idx" ON "cost_estimates" USING gin ("currency" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_estimates_lines_json_search_trgm_idx" ON "cost_estimates" USING gin ("lines_json" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_estimates_notes_search_trgm_idx" ON "cost_estimates" USING gin ("notes" gin_trgm_ops);--> statement-breakpoint
-CREATE UNIQUE INDEX "cost_rates_substrate_index" ON "cost_rates" ("substrate");--> statement-breakpoint
-CREATE INDEX "cost_rates_substrate_search_trgm_idx" ON "cost_rates" USING gin ("substrate" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_rates_label_search_trgm_idx" ON "cost_rates" USING gin ("label" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_rates_unit_search_trgm_idx" ON "cost_rates" USING gin ("unit" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_rates_rate_basis_search_trgm_idx" ON "cost_rates" USING gin ("rate_basis" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_rates_source_search_trgm_idx" ON "cost_rates" USING gin ("source" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "cost_rates_notes_search_trgm_idx" ON "cost_rates" USING gin ("notes" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_project_id_index" ON "project_documents" ("project_id");--> statement-breakpoint
-CREATE INDEX "project_documents_category_index" ON "project_documents" ("category");--> statement-breakpoint
-CREATE INDEX "project_documents_title_search_trgm_idx" ON "project_documents" USING gin ("title" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_category_search_trgm_idx" ON "project_documents" USING gin ("category" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_document_role_search_trgm_idx" ON "project_documents" USING gin ("document_role" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_document_number_search_trgm_idx" ON "project_documents" USING gin ("document_number" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_discipline_search_trgm_idx" ON "project_documents" USING gin ("discipline" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_revision_search_trgm_idx" ON "project_documents" USING gin ("revision" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_issued_by_search_trgm_idx" ON "project_documents" USING gin ("issued_by" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_status_search_trgm_idx" ON "project_documents" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "project_documents_notes_search_trgm_idx" ON "project_documents" USING gin ("notes" gin_trgm_ops);--> statement-breakpoint
-CREATE UNIQUE INDEX "reclamation_projects_project_code_index" ON "reclamation_projects" ("project_code");--> statement-breakpoint
-CREATE INDEX "reclamation_projects_project_name_search_trgm_idx" ON "reclamation_projects" USING gin ("project_name" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_project_code_search_trgm_idx" ON "reclamation_projects" USING gin ("project_code" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_client_search_trgm_idx" ON "reclamation_projects" USING gin ("client" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_consultant_search_trgm_idx" ON "reclamation_projects" USING gin ("consultant" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_status_search_trgm_idx" ON "reclamation_projects" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_location_search_trgm_idx" ON "reclamation_projects" USING gin ("location" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_datum_search_trgm_idx" ON "reclamation_projects" USING gin ("datum" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_currency_search_trgm_idx" ON "reclamation_projects" USING gin ("currency" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_interpolation_search_trgm_idx" ON "reclamation_projects" USING gin ("interpolation" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_stitch_overrides_search_trgm_idx" ON "reclamation_projects" USING gin ("stitch_overrides" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "reclamation_projects_notes_search_trgm_idx" ON "reclamation_projects" USING gin ("notes" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "site_reconstructions_project_id_index" ON "site_reconstructions" ("project_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "site_reconstructions_project_id_revision_index" ON "site_reconstructions" ("project_id","revision");--> statement-breakpoint
-CREATE INDEX "site_reconstructions_status_search_trgm_idx" ON "site_reconstructions" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "site_reconstructions_engine_version_search_trgm_idx" ON "site_reconstructions" USING gin ("engine_version" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "site_reconstructions_failure_reason_search_trgm_idx" ON "site_reconstructions" USING gin ("failure_reason" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "site_reconstructions_model_json_search_trgm_idx" ON "site_reconstructions" USING gin ("model_json" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "site_reconstructions_metrics_json_search_trgm_idx" ON "site_reconstructions" USING gin ("metrics_json" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "site_reconstructions_quantities_json_search_trgm_idx" ON "site_reconstructions" USING gin ("quantities_json" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "site_reconstructions_report_json_search_trgm_idx" ON "site_reconstructions" USING gin ("report_json" gin_trgm_ops);--> statement-breakpoint
+CREATE UNIQUE INDEX "certification_types_code_index" ON "certification_types" ("code");--> statement-breakpoint
+CREATE INDEX "certification_types_code_search_trgm_idx" ON "certification_types" USING gin ("code" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "certification_types_name_search_trgm_idx" ON "certification_types" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "certification_types_category_search_trgm_idx" ON "certification_types" USING gin ("category" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "certification_types_issuing_body_search_trgm_idx" ON "certification_types" USING gin ("issuing_body" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "certification_types_description_search_trgm_idx" ON "certification_types" USING gin ("description" gin_trgm_ops);--> statement-breakpoint
+CREATE UNIQUE INDEX "contractor_certifications_contractor_profile_id_certification_type_id_index" ON "contractor_certifications" ("contractor_profile_id","certification_type_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "contractor_profiles_user_id_index" ON "contractor_profiles" ("user_id");--> statement-breakpoint
+CREATE INDEX "contractor_profiles_company_name_search_trgm_idx" ON "contractor_profiles" USING gin ("company_name" gin_trgm_ops);--> statement-breakpoint
+CREATE UNIQUE INDEX "job_assignments_source_message_id_index" ON "job_assignments" ("source_message_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "job_assignments_job_id_index" ON "job_assignments" ("job_id");--> statement-breakpoint
+CREATE INDEX "job_assignments_contractor_profile_id_index" ON "job_assignments" ("contractor_profile_id");--> statement-breakpoint
+CREATE INDEX "job_assignments_status_search_trgm_idx" ON "job_assignments" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "job_assignments_summary_search_trgm_idx" ON "job_assignments" USING gin ("summary" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "job_assignments_source_message_id_search_trgm_idx" ON "job_assignments" USING gin ("source_message_id" gin_trgm_ops);--> statement-breakpoint
+CREATE UNIQUE INDEX "job_certification_requirements_job_id_certification_type_id_index" ON "job_certification_requirements" ("job_id","certification_type_id");--> statement-breakpoint
+CREATE INDEX "jobs_title_search_trgm_idx" ON "jobs" USING gin ("title" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "jobs_nature_search_trgm_idx" ON "jobs" USING gin ("nature" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "jobs_status_search_trgm_idx" ON "jobs" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "jobs_description_search_trgm_idx" ON "jobs" USING gin ("description" gin_trgm_ops);--> statement-breakpoint
+CREATE UNIQUE INDEX "photo_evidence_source_key_index" ON "photo_evidence" ("source_key");--> statement-breakpoint
+CREATE INDEX "photo_evidence_sha256_index" ON "photo_evidence" ("sha256");--> statement-breakpoint
+CREATE INDEX "photo_evidence_perceptual_hash_index" ON "photo_evidence" ("perceptual_hash");--> statement-breakpoint
+CREATE INDEX "photo_evidence_source_key_search_trgm_idx" ON "photo_evidence" USING gin ("source_key" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "photo_evidence_sha256_search_trgm_idx" ON "photo_evidence" USING gin ("sha256" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "photo_evidence_perceptual_hash_search_trgm_idx" ON "photo_evidence" USING gin ("perceptual_hash" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "sites_name_search_trgm_idx" ON "sites" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "sites_client_name_search_trgm_idx" ON "sites" USING gin ("client_name" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "sites_house_type_search_trgm_idx" ON "sites" USING gin ("house_type" gin_trgm_ops);--> statement-breakpoint
+CREATE UNIQUE INDEX "variation_requests_source_message_id_index" ON "variation_requests" ("source_message_id");--> statement-breakpoint
+CREATE INDEX "variation_requests_title_search_trgm_idx" ON "variation_requests" USING gin ("title" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "variation_requests_description_search_trgm_idx" ON "variation_requests" USING gin ("description" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "variation_requests_source_message_id_search_trgm_idx" ON "variation_requests" USING gin ("source_message_id" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "agent_run_step_kind_search_trgm_idx" ON "agent_run_step" USING gin ("kind" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "agent_run_step_role_search_trgm_idx" ON "agent_run_step" USING gin ("role" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "agent_run_step_content_search_trgm_idx" ON "agent_run_step" USING gin ("content" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "agent_run_step_tool_call_id_search_trgm_idx" ON "agent_run_step" USING gin ("tool_call_id" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "agent_run_step_tool_name_search_trgm_idx" ON "agent_run_step" USING gin ("tool_name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "approval_request_label_search_trgm_idx" ON "approval_request" USING gin ("label" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "approval_request_collection_name_search_trgm_idx" ON "approval_request" USING gin ("collection_name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "approval_request_status_search_trgm_idx" ON "approval_request" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
@@ -363,25 +381,27 @@ CREATE INDEX "audit_event_collection_name_search_trgm_idx" ON "audit_event" USIN
 CREATE INDEX "automation_run_automation_name_search_trgm_idx" ON "automation_run" USING gin ("automation_name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "automation_run_status_search_trgm_idx" ON "automation_run" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "automation_run_error_search_trgm_idx" ON "automation_run" USING gin ("error" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "chat_session_title_search_trgm_idx" ON "chat_session" USING gin ("title" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "document_asset_file_name_search_trgm_idx" ON "document_asset" USING gin ("file_name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "document_asset_mime_type_search_trgm_idx" ON "document_asset" USING gin ("mime_type" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "document_asset_storage_key_search_trgm_idx" ON "document_asset" USING gin ("storage_key" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "document_asset_storage_provider_search_trgm_idx" ON "document_asset" USING gin ("storage_provider" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "document_asset_embedding_model_search_trgm_idx" ON "document_asset" USING gin ("embedding_model" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "integration_outbox_integration_name_search_trgm_idx" ON "integration_outbox" USING gin ("integration_name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "integration_outbox_binding_name_search_trgm_idx" ON "integration_outbox" USING gin ("binding_name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "integration_outbox_collection_name_search_trgm_idx" ON "integration_outbox" USING gin ("collection_name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "integration_outbox_action_search_trgm_idx" ON "integration_outbox" USING gin ("action" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "integration_outbox_status_search_trgm_idx" ON "integration_outbox" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "integration_outbox_last_error_search_trgm_idx" ON "integration_outbox" USING gin ("last_error" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "mutation_log_collection_name_search_trgm_idx" ON "mutation_log" USING gin ("collection_name" gin_trgm_ops);--> statement-breakpoint
-CREATE INDEX "mutation_log_action_search_trgm_idx" ON "mutation_log" USING gin ("action" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "notification_subject_search_trgm_idx" ON "notification" USING gin ("subject" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "notification_message_search_trgm_idx" ON "notification" USING gin ("message" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "notification_cta_label_search_trgm_idx" ON "notification" USING gin ("cta_label" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "notification_cta_url_search_trgm_idx" ON "notification" USING gin ("cta_url" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "notification_notification_category_search_trgm_idx" ON "notification" USING gin ("notification_category" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "notification_outbox_channel_search_trgm_idx" ON "notification_outbox" USING gin ("channel" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "notification_outbox_subject_search_trgm_idx" ON "notification_outbox" USING gin ("subject" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "notification_outbox_message_search_trgm_idx" ON "notification_outbox" USING gin ("message" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "notification_outbox_cta_label_search_trgm_idx" ON "notification_outbox" USING gin ("cta_label" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "notification_outbox_cta_url_search_trgm_idx" ON "notification_outbox" USING gin ("cta_url" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "notification_outbox_status_search_trgm_idx" ON "notification_outbox" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "notification_outbox_last_error_search_trgm_idx" ON "notification_outbox" USING gin ("last_error" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "policy_key_search_trgm_idx" ON "policy" USING gin ("key" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "policy_name_search_trgm_idx" ON "policy" USING gin ("name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "policy_description_search_trgm_idx" ON "policy" USING gin ("description" gin_trgm_ops);--> statement-breakpoint
@@ -395,13 +415,23 @@ CREATE INDEX "user_avatar_url_search_trgm_idx" ON "user" USING gin ("avatar_url"
 CREATE INDEX "user_status_search_trgm_idx" ON "user" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "user_role_search_trgm_idx" ON "user" USING gin ("role" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "user_kind_search_trgm_idx" ON "user" USING gin ("kind" gin_trgm_ops);--> statement-breakpoint
-ALTER TABLE "cost_estimates" ADD CONSTRAINT "cost_estimates_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");--> statement-breakpoint
-ALTER TABLE "cost_estimates" ADD CONSTRAINT "cost_estimates_reconstruction_id_site_reconstructions_fk" FOREIGN KEY ("reconstruction_id") REFERENCES "site_reconstructions"("norbital_id");--> statement-breakpoint
-ALTER TABLE "project_documents" ADD CONSTRAINT "project_documents_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");--> statement-breakpoint
-ALTER TABLE "site_reconstructions" ADD CONSTRAINT "site_reconstructions_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");--> statement-breakpoint
+ALTER TABLE "contractor_certifications" ADD CONSTRAINT "contractor_certifications_contractor_profile_id_contractor_profiles_fk" FOREIGN KEY ("contractor_profile_id") REFERENCES "contractor_profiles"("norbital_id");--> statement-breakpoint
+ALTER TABLE "contractor_certifications" ADD CONSTRAINT "contractor_certifications_certification_type_id_certification_types_fk" FOREIGN KEY ("certification_type_id") REFERENCES "certification_types"("norbital_id");--> statement-breakpoint
+ALTER TABLE "job_assignments" ADD CONSTRAINT "job_assignments_job_id_jobs_fk" FOREIGN KEY ("job_id") REFERENCES "jobs"("norbital_id");--> statement-breakpoint
+ALTER TABLE "job_assignments" ADD CONSTRAINT "job_assignments_contractor_profile_id_contractor_profiles_fk" FOREIGN KEY ("contractor_profile_id") REFERENCES "contractor_profiles"("norbital_id");--> statement-breakpoint
+ALTER TABLE "job_certification_requirements" ADD CONSTRAINT "job_certification_requirements_job_id_jobs_fk" FOREIGN KEY ("job_id") REFERENCES "jobs"("norbital_id");--> statement-breakpoint
+ALTER TABLE "job_certification_requirements" ADD CONSTRAINT "job_certification_requirements_certification_type_id_certification_types_fk" FOREIGN KEY ("certification_type_id") REFERENCES "certification_types"("norbital_id");--> statement-breakpoint
+ALTER TABLE "jobs" ADD CONSTRAINT "jobs_site_id_sites_fk" FOREIGN KEY ("site_id") REFERENCES "sites"("norbital_id");--> statement-breakpoint
+ALTER TABLE "photo_evidence" ADD CONSTRAINT "photo_evidence_job_assignment_id_job_assignments_fk" FOREIGN KEY ("job_assignment_id") REFERENCES "job_assignments"("norbital_id");--> statement-breakpoint
+ALTER TABLE "photo_evidence" ADD CONSTRAINT "photo_evidence_variation_request_id_variation_requests_fk" FOREIGN KEY ("variation_request_id") REFERENCES "variation_requests"("norbital_id");--> statement-breakpoint
+ALTER TABLE "variation_requests" ADD CONSTRAINT "variation_requests_job_assignment_id_job_assignments_fk" FOREIGN KEY ("job_assignment_id") REFERENCES "job_assignments"("norbital_id");--> statement-breakpoint
+ALTER TABLE "agent_run_step" ADD CONSTRAINT "agent_run_step_owner_user_id_user_norbital_id_fkey" FOREIGN KEY ("owner_user_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
+ALTER TABLE "agent_run_step" ADD CONSTRAINT "agent_run_step_774UFu3iuSmm_fkey" FOREIGN KEY ("automation_run_id") REFERENCES "automation_run"("norbital_id");--> statement-breakpoint
 ALTER TABLE "audit_event" ADD CONSTRAINT "audit_event_actor_id_user_norbital_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
-ALTER TABLE "mutation_log" ADD CONSTRAINT "mutation_log_actor_id_user_norbital_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
+ALTER TABLE "automation_run" ADD CONSTRAINT "automation_run_requested_by_user_id_user_norbital_id_fkey" FOREIGN KEY ("requested_by_user_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
+ALTER TABLE "document_asset" ADD CONSTRAINT "document_asset_owner_user_id_user_norbital_id_fkey" FOREIGN KEY ("owner_user_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
 ALTER TABLE "notification" ADD CONSTRAINT "notification_recipient_user_id_user_norbital_id_fkey" FOREIGN KEY ("recipient_user_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
+ALTER TABLE "notification_outbox" ADD CONSTRAINT "notification_outbox_recipient_user_id_user_norbital_id_fkey" FOREIGN KEY ("recipient_user_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
 ALTER TABLE "requestor" ADD CONSTRAINT "requestor_approval_request_id_approval_request_norbital_id_fkey" FOREIGN KEY ("approval_request_id") REFERENCES "approval_request"("norbital_id");--> statement-breakpoint
 ALTER TABLE "requestor" ADD CONSTRAINT "requestor_user_id_user_norbital_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
 ALTER TABLE "team" ADD CONSTRAINT "team_policy_id_policy_norbital_id_fkey" FOREIGN KEY ("policy_id") REFERENCES "policy"("norbital_id");--> statement-breakpoint

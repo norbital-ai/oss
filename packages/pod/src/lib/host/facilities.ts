@@ -1,7 +1,41 @@
 import type {
-	HostMapsBinding,
-	HostNotificationsBinding
+	HostNotificationsBinding,
+	NotificationDelivery,
+	NotificationDeliveryResult
 } from '@norbital-ai/platform-utils/runtime/binding';
+
+export type NotificationProvider = {
+	readonly channel: string;
+	send(input: NotificationDelivery): Promise<NotificationDeliveryResult>;
+};
+
+export function notificationProviders(
+	...providers: readonly NotificationProvider[]
+): HostNotificationsBinding {
+	const byChannel = new Map<string, NotificationProvider>();
+	for (const provider of providers) {
+		if (provider.channel === 'system') {
+			throw new Error('A host cannot provide the Pod-owned system notification channel');
+		}
+		if (byChannel.has(provider.channel)) {
+			throw new Error(`Duplicate notification provider: ${provider.channel}`);
+		}
+		byChannel.set(provider.channel, provider);
+	}
+	return {
+		channels: [...byChannel.keys()].sort(),
+		send(input) {
+			const provider = byChannel.get(input.channel);
+			if (!provider) {
+				return Promise.resolve({
+					sent: false,
+					reason: `No provider for notification channel ${input.channel}`
+				});
+			}
+			return provider.send(input);
+		}
+	};
+}
 
 /**
  * Notifications written to the host log instead of delivered.
@@ -10,38 +44,20 @@ import type {
  * *was* handed to the host successfully — the host simply routes it to a console. Reporting a
  * failure here would make hooks take their delivery-failure branch during ordinary local work.
  */
-export function consoleNotifications(): HostNotificationsBinding {
+export function consoleNotifications(...channels: readonly string[]): HostNotificationsBinding {
+	if (channels.length === 0) {
+		throw new Error('consoleNotifications requires the external channels it handles');
+	}
+	if (channels.some((channel) => channel === '*' || channel === 'system')) {
+		throw new Error('consoleNotifications accepts explicit external channel names only');
+	}
 	return {
+		channels: [...new Set(channels)].sort(),
 		send(input) {
 			console.log(
-				`[pod:notifications] to=${input.recipientUserId} channels=${input.channels.join(',')} subject=${input.subject}\n${input.message}`
+				`[pod:notifications] to=${input.recipientUserId} channel=${input.channel} subject=${input.subject}\n${input.message}`
 			);
-			return Promise.resolve(
-				Object.fromEntries(input.channels.map((channel) => [channel, { sent: true }]))
-			);
-		}
-	};
-}
-
-/**
- * A maps facility that satisfies the requirement without holding a provider credential.
- *
- * Autocomplete returns nothing rather than throwing: an address field that offers no suggestions
- * still accepts a typed address, so a workspace with geolocation fields stays usable. Static map
- * rendering has no such degraded form — there is no image to return — so it fails with a message
- * that says what to configure.
- */
-export function stubMaps(): HostMapsBinding {
-	return {
-		autocompleteGeolocation() {
-			return Promise.resolve([]);
-		},
-		renderStaticMap() {
-			return Promise.reject(
-				new Error(
-					'This host has no maps provider configured. Supply `maps` in pod.config.ts to render static maps.'
-				)
-			);
+			return Promise.resolve({ sent: true });
 		}
 	};
 }
@@ -49,7 +65,7 @@ export function stubMaps(): HostMapsBinding {
 /*
  * There is deliberately no AI adapter here.
  *
- * `ai` is the one facility with no open implementation: the model credentials, the agent adapter,
+ * `ai` is the one facility with no built-in implementation: the model credentials, provider,
  * and the spend they represent belong to the trusted host, so Core supplies it and this package
  * only declares the contract. A standalone workspace that needs `ai` is therefore rejected at
  * startup, naming the facility — which is the honest outcome, because no configuration of this

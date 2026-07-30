@@ -79,8 +79,8 @@ describe('Pod approval lifecycle (real Postgres triggers)', () => {
 	beforeEach(async () => {
 		await inViaOps(pool, async (client) => {
 			await client.query('DELETE FROM _approval_lock');
-			await client.query('DELETE FROM orders_history');
 			await client.query('DELETE FROM orders');
+			await client.query(`DELETE FROM record_history WHERE collection_name = 'orders'`);
 		});
 	});
 
@@ -132,11 +132,13 @@ describe('Pod approval lifecycle (real Postgres triggers)', () => {
 					    SET norbital_approval_id = baseline.norbital_approval_id,
 					        status = baseline.status
 					   FROM (
-					          SELECT norbital_approval_id, status
-					            FROM orders_history
-					           WHERE norbital_id = $1::uuid
-					             AND norbital_approval_id IS DISTINCT FROM $2::uuid
-					           ORDER BY upper(norbital_sys_period::tstzrange) DESC NULLS LAST, norbital_row_version DESC
+					          SELECT (values->>'norbital_approval_id')::uuid AS norbital_approval_id,
+					                 values->>'status' AS status
+					            FROM record_history
+					           WHERE collection_name = 'orders'
+					             AND record_id = $1::uuid
+					             AND (values->>'norbital_approval_id') IS DISTINCT FROM $2
+					           ORDER BY row_version DESC
 					           LIMIT 1
 					        ) AS baseline
 					  WHERE live.norbital_id = $1::uuid`,
@@ -180,13 +182,17 @@ describe('Pod approval lifecycle (real Postgres triggers)', () => {
 					   norbital_id, norbital_created_at, norbital_updated_at,
 					   norbital_row_version, norbital_approval_id, status, norbital_sys_period
 					 )
-					 SELECT norbital_id, norbital_created_at, norbital_updated_at,
-					        norbital_row_version, norbital_approval_id, status,
+					 SELECT (snapshot.row).norbital_id, (snapshot.row).norbital_created_at,
+					        (snapshot.row).norbital_updated_at, (snapshot.row).norbital_row_version,
+					        (snapshot.row).norbital_approval_id, (snapshot.row).status,
 					        tstzrange(now(), NULL, '[)')::text
-					   FROM orders_history
-					  WHERE norbital_id = $1::uuid
-					  ORDER BY upper(norbital_sys_period::tstzrange) DESC NULLS LAST, norbital_row_version DESC
-					  LIMIT 1
+					   FROM (
+					     SELECT jsonb_populate_record(NULL::orders, values) AS row
+					       FROM record_history
+					      WHERE collection_name = 'orders' AND record_id = $1::uuid
+					      ORDER BY row_version DESC
+					      LIMIT 1
+					   ) snapshot
 					 ON CONFLICT (norbital_id) DO NOTHING`,
 					[id]
 				);

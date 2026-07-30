@@ -337,21 +337,18 @@ async function createRecordUnguarded(
 			});
 		}
 		if (afterHook) await afterHook({ record, api: await getElevatedAfterHookApi() });
+		await sendAuditEvent(
+			collection,
+			{
+				action: 'record.create',
+				entityType: collection,
+				entityId: sourceId || collection,
+				changesAfter: record
+			},
+			'create'
+		);
 		return record;
 	});
-
-	const sourceId = String(created[SYSTEM_COLUMN_NAMES.PKEY] ?? '');
-
-	await sendAuditEvent(
-		collection,
-		{
-			action: 'record.create',
-			entityType: collection,
-			entityId: sourceId || collection,
-			changesAfter: created
-		},
-		'create'
-	);
 
 	return created;
 }
@@ -483,20 +480,20 @@ async function createManyUnguarded(
 			if (afterHook && afterApi) await afterHook({ record, api: afterApi });
 		}
 
+		await sendAuditEvents(
+			created.map((record) => ({
+				collectionName: collection,
+				params: {
+					action: 'record.create',
+					entityType: collection,
+					entityId: String(record[SYSTEM_COLUMN_NAMES.PKEY] ?? collection),
+					changesAfter: record
+				},
+				eventLabel: 'create'
+			}))
+		);
 		return created;
 	});
-	await sendAuditEvents(
-		records.map((record) => ({
-			collectionName: collection,
-			params: {
-				action: 'record.create',
-				entityType: collection,
-				entityId: String(record[SYSTEM_COLUMN_NAMES.PKEY] ?? collection),
-				changesAfter: record
-			},
-			eventLabel: 'create'
-		}))
-	);
 	return records;
 }
 
@@ -726,20 +723,19 @@ async function updateRecordUnguarded(
 		if (updateAfterHook) {
 			await updateAfterHook({ record, api: await getElevatedAfterHookApi() });
 		}
+		await sendAuditEvent(
+			collection,
+			{
+				action: 'record.update',
+				entityType: collection,
+				entityId: recordId,
+				changesBefore: originalRecord,
+				changesAfter: record
+			},
+			'update'
+		);
 		return record;
 	});
-
-	await sendAuditEvent(
-		collection,
-		{
-			action: 'record.update',
-			entityType: collection,
-			entityId: recordId,
-			changesBefore: originalRecord,
-			changesAfter: updated
-		},
-		'update'
-	);
 
 	return updated;
 }
@@ -930,7 +926,7 @@ export async function updateMany(
 			if (afterHook && afterApi) await afterHook({ record, api: afterApi });
 		}
 
-		return prepared.map((item, index) => ({
+		const audits = prepared.map((item, index) => ({
 			collectionName: collection,
 			params: {
 				action: 'record.update' as const,
@@ -941,10 +937,10 @@ export async function updateMany(
 			},
 			eventLabel: 'update'
 		}));
+		await sendAuditEvents(audits);
+		return updated;
 	});
-
-	await sendAuditEvents(result);
-	return result.map((entry) => entry.params.changesAfter);
+	return result;
 }
 
 export async function deleteRecord(
@@ -992,7 +988,7 @@ async function loadRecordsById(
  * per chunk, and stamped into the change feed and the audit log in one statement each. The
  * database's per-row work is untouched: `_approval_lock_gate`, `_ops_guard` and
  * `_norbital_versioning` are FOR EACH ROW triggers and still fire once per deleted row, so a
- * locked record is still rejected and every deleted row is still archived to `<collection>_history`.
+ * locked record is still rejected and every deleted row is still archived to `record_history`.
  *
  * Failure is all-or-nothing: a denied, locked, missing or hook-rejected record rolls the whole
  * transaction back, matching {@link createMany} and {@link updateMany}.
@@ -1025,7 +1021,7 @@ async function deleteManyUnguarded(
 	const table = requireTable(ctx, collection);
 	const cols = getColumns(table);
 
-	const audits = await withCollectionTransaction(ctx, async () => {
+	await withCollectionTransaction(ctx, async () => {
 		const originals = await loadRecordsById(ctx, collection, ids);
 
 		type PreparedDelete = {
@@ -1140,7 +1136,7 @@ async function deleteManyUnguarded(
 			}
 		}
 
-		return prepared.map((item) => ({
+		const audits = prepared.map((item) => ({
 			collectionName: collection,
 			params: {
 				action: 'record.delete' as const,
@@ -1150,7 +1146,6 @@ async function deleteManyUnguarded(
 			},
 			eventLabel: 'delete'
 		}));
+		await sendAuditEvents(audits);
 	});
-
-	await sendAuditEvents(audits);
 }

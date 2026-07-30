@@ -107,25 +107,29 @@ function buildAutomationEntries(
 	const out: Record<string, ManifestAutomationTemplate> = {};
 	for (const [key, raw] of Object.entries(automations ?? {})) {
 		const tpl = raw as {
-			trigger?: { schedule?: string } | { collection?: string; event?: string };
+			trigger?:
+				| { schedule?: string }
+				| { trigger?: { collection?: string; event?: 'created' | 'updated' | 'deleted' } };
 			spec?: {
 				kind: string;
 				task?: string;
 				model?: string;
 				systemPrompt?: string;
+				collections?: string[];
+				access?: 'read' | 'write';
 				tools?: string[];
+				profile?: string;
+				maxIterations?: number;
+				maxTokens?: number;
 			};
 		};
-		const trigger = tpl.trigger as { schedule?: string } | undefined;
+		const trigger = tpl.trigger;
 		const isSchedule = trigger && 'schedule' in trigger;
-		const nested = (
-			tpl.trigger as { trigger?: { collection?: string; event?: string } } | undefined
-		)?.trigger;
 		const eventTrigger =
-			!isSchedule && typeof nested?.collection === 'string' && typeof nested?.event === 'string'
+			trigger && 'trigger' in trigger && trigger.trigger?.collection && trigger.trigger.event
 				? {
-						collection: nested.collection,
-						event: nested.event as 'created' | 'updated' | 'deleted'
+						collection: trigger.trigger.collection,
+						event: trigger.trigger.event
 					}
 				: undefined;
 		const agentSpec =
@@ -135,16 +139,16 @@ function buildAutomationEntries(
 						task: tpl.spec.task,
 						...(tpl.spec.model ? { model: tpl.spec.model } : {}),
 						...(tpl.spec.systemPrompt ? { systemPrompt: tpl.spec.systemPrompt } : {}),
-						...(tpl.spec.tools ? { tools: tpl.spec.tools } : {})
+						...(tpl.spec.collections ? { collections: tpl.spec.collections } : {}),
+						...(tpl.spec.access ? { access: tpl.spec.access } : {}),
+						...(tpl.spec.tools ? { tools: tpl.spec.tools } : {}),
+						...(tpl.spec.profile ? { profile: tpl.spec.profile } : {}),
+						...(tpl.spec.maxIterations ? { maxIterations: tpl.spec.maxIterations } : {}),
+						...(tpl.spec.maxTokens ? { maxTokens: tpl.spec.maxTokens } : {})
 					}
 				: undefined;
 		out[key] = {
-			name: key,
-			description: '',
-			enabled: true,
-			cron_schedule: isSchedule ? trigger!.schedule! : null,
-			...(eventTrigger ? { event_trigger: eventTrigger } : {}),
-			created_by_user_id: null,
+			trigger: isSchedule ? { schedule: trigger.schedule! } : eventTrigger!,
 			...(agentSpec ? { spec: agentSpec } : {})
 		};
 	}
@@ -230,6 +234,12 @@ export function buildNorbitalManifest(workspace: {
 		apps: buildAppEntries(workspace.registered?.apps),
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
 		automations: buildAutomationEntries(workspace.registered?.automations),
+		...(workspace.registered?.notificationChannels.length
+			? { notifications: { channels: workspace.registered.notificationChannels } }
+			: {}),
+		...(workspace.registered?.requiredFacilities.length
+			? { requiredFacilities: workspace.registered.requiredFacilities }
+			: {}),
 		env: workspace.env,
 		secrets: workspace.secrets
 			? Object.fromEntries(

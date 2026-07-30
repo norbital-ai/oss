@@ -39,28 +39,13 @@ const COLLECTION_ROLE_FILES = [
 	'+integrations.ts',
 	'+representation.svelte'
 ] as const;
-const FORBIDDEN_AUTHORING_DIRECTORIES = new Map([
-	[
-		'datatype_renderer',
-		'Custom datatype renderer folders were removed; use src/custom-types/<name>/+renderer.svelte'
-	],
-	[
-		'record_rep',
-		'Record representation folders were removed; use the collection-owned +representation.svelte role'
-	]
-]);
-const MANUAL_RENDERER_REGISTRATION_PATTERN = /\bregisterDatatypeRenderers\b/;
 const PRIVATE_VIRTUAL_IMPORT_PATTERN =
 	/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["']virtual:pod\/[^"']+["']/g;
-const REMOVED_LAYOUT_COMPONENTS = [
-	'Page',
-	'PageShell',
-	'Pane',
-	'Region',
-	'Spread',
-	'LayoutBehavior',
-	'ResponsiveSidebarLayout'
-] as const;
+const BUILTIN_AGENT_TOOL_NAMES = new Set([
+	'describe_workspace',
+	'read_collection',
+	'write_collection'
+]);
 const LAYOUT_PRIMITIVES = new Set([
 	'Stack',
 	'Inline',
@@ -75,10 +60,6 @@ const LAYOUT_PRIMITIVES = new Set([
 	'Bound',
 	'Scroll'
 ]);
-const REMOVED_LAYOUT_COMPONENT_PATTERN = new RegExp(
-	`\\b(?:${REMOVED_LAYOUT_COMPONENTS.join('|')})\\b`,
-	'g'
-);
 const COMPONENT_TAG_PATTERN = /<([A-Z][\w.]*)\b([^>]*?)(?:\/?>)/gs;
 const STATIC_CLASS_PATTERN = /\bclass\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 const RAW_CLIP_CLASS_PATTERN = /\boverflow(?:-[xy])?-hidden\b/;
@@ -154,8 +135,8 @@ function topologyDiagnostic(file: string, code: string, message: string): Struct
 
 /**
  * The tenant surface language deliberately has no escape hatch for host geometry.
- * This is a source guard, not a style linter: it only rejects removed Pod APIs and
- * static class combinations that would create a second scroll or clipping owner.
+ * This is a source guard, not a style linter. It validates the current layout contract:
+ * named primitives own their geometry and authored surfaces cannot create implicit scroll chains.
  */
 function authoredLayoutDiagnostics(
 	source: string,
@@ -163,43 +144,7 @@ function authoredLayoutDiagnostics(
 	options: { readonly checkPodLayout: boolean }
 ): StructuralDiagnostic[] {
 	const diagnostics: StructuralDiagnostic[] = [];
-	for (const match of source.matchAll(REMOVED_LAYOUT_COMPONENT_PATTERN)) {
-		const offset = match.index ?? 0;
-		const isTag = /<\/?\s*$/.test(source.slice(Math.max(0, offset - 3), offset));
-		const importStart = source.lastIndexOf('import', offset);
-		const previousSemicolon = source.lastIndexOf(';', offset);
-		const importEnd = source.indexOf(';', offset);
-		const importStatement =
-			importStart > previousSemicolon && importEnd >= offset
-				? source.slice(importStart, importEnd + 1)
-				: '';
-		const isRemovedImport =
-			importStatement.length > 0 &&
-			/from\s*['"]@norbital-ai\/(?:ui|pod\/ui)(?:\/[^'"]+)?['"]/.test(importStatement);
-		if (!isTag && !isRemovedImport) continue;
-		diagnostics.push(
-			sourceDiagnostic(
-				source,
-				file,
-				offset,
-				'LAYOUT_COMPONENT_REMOVED',
-				`${match[0]} was removed from Pod v1; compose with the supported layout primitives instead`
-			)
-		);
-	}
-	if (options.checkPodLayout) {
-		for (const match of source.matchAll(/\bpod:layout\b/g)) {
-			diagnostics.push(
-				sourceDiagnostic(
-					source,
-					file,
-					match.index ?? 0,
-					'LAYOUT_METADATA_REMOVED',
-					'pod:layout is no longer supported; the Pod shell owns application scrolling and layout'
-				)
-			);
-		}
-	}
+	void options;
 	for (const tag of source.matchAll(COMPONENT_TAG_PATTERN)) {
 		const component = tag[1];
 		const attributes = tag[2] ?? '';
@@ -232,8 +177,8 @@ function authoredLayoutDiagnostics(
 					source,
 					file,
 					attributesOffset + (attribute.index ?? 0),
-					'LAYOUT_PROP_REMOVED',
-					`${attribute[0]} is not a supported Pod v1 layout prop; parents own geometry`
+					'LAYOUT_PROP_UNKNOWN',
+					`${attribute[0]} is not a supported layout prop; parents own geometry`
 				)
 			);
 		}
@@ -282,37 +227,105 @@ async function filesBelow(directory: string): Promise<string[]> {
 	return files.sort((left, right) => compareText(posixPath(left), posixPath(right)));
 }
 
+type SourceEntry = {
+	readonly name: string;
+	readonly kind: 'file' | 'directory';
+	isFile(): boolean;
+	isDirectory(): boolean;
+};
+
+class SourceInventory {
+	readonly files: readonly string[];
+	private readonly directories: ReadonlySet<string>;
+	private readonly entriesByDirectory: ReadonlyMap<string, readonly SourceEntry[]>;
+	private readonly sourceCache = new Map<string, Promise<string>>();
+
+	private constructor(
+		files: readonly string[],
+		directories: ReadonlySet<string>,
+		entriesByDirectory: ReadonlyMap<string, readonly SourceEntry[]>
+	) {
+		this.files = files;
+		this.directories = directories;
+		this.entriesByDirectory = entriesByDirectory;
+	}
+
+	static async load(sourceRoot: string): Promise<SourceInventory> {
+		const files: string[] = [];
+		const directories = new Set<string>();
+		const entriesByDirectory = new Map<string, readonly SourceEntry[]>();
+
+		const scan = async (directory: string): Promise<void> => {
+			if (!existsSync(directory)) return;
+			directories.add(directory);
+			const diskEntries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
+				compareText(left.name, right.name)
+			);
+			const entries = diskEntries.flatMap((entry): SourceEntry[] => {
+				const kind = entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : null;
+				if (!kind) return [];
+				return [
+					{
+						name: entry.name,
+						kind,
+						isFile: () => kind === 'file',
+						isDirectory: () => kind === 'directory'
+					}
+				];
+			});
+			entriesByDirectory.set(directory, entries);
+			await Promise.all(
+				entries.map(async (entry) => {
+					const entryPath = path.join(directory, entry.name);
+					if (entry.kind === 'directory') await scan(entryPath);
+					else files.push(entryPath);
+				})
+			);
+		};
+
+		await scan(sourceRoot);
+		files.sort((left, right) => compareText(posixPath(left), posixPath(right)));
+		return new SourceInventory(files, directories, entriesByDirectory);
+	}
+
+	hasDirectory(directory: string): boolean {
+		return this.directories.has(directory);
+	}
+
+	hasFile(file: string): boolean {
+		return this.files.includes(file);
+	}
+
+	entries(directory: string): readonly SourceEntry[] {
+		return this.entriesByDirectory.get(directory) ?? [];
+	}
+
+	filesBelow(directory: string): readonly string[] {
+		const prefix = `${directory}${path.sep}`;
+		return this.files.filter((file) => file.startsWith(prefix));
+	}
+
+	source(file: string): Promise<string> {
+		let cached = this.sourceCache.get(file);
+		if (!cached) {
+			cached = readFile(file, 'utf8');
+			this.sourceCache.set(file, cached);
+		}
+		return cached;
+	}
+}
+
 async function validateAuthoredSource(
 	root: string,
-	diagnostics: StructuralDiagnostic[]
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
 ): Promise<void> {
-	const forbiddenDirectories = new Map<string, string>();
-	const files = await filesBelow(path.join(root, 'src'));
 	await Promise.all(
-		files.map(async (file) => {
+		inventory.files.map(async (file) => {
 			const authoredPath = relativePath(root, file);
-			const segments = authoredPath.split('/');
-			for (const [directory, message] of FORBIDDEN_AUTHORING_DIRECTORIES) {
-				const segmentIndex = segments.indexOf(directory);
-				if (segmentIndex >= 0) {
-					forbiddenDirectories.set(segments.slice(0, segmentIndex + 1).join('/'), message);
-				}
-			}
 
 			if (!file.endsWith('.ts') && !file.endsWith('.svelte')) return;
-			const source = await readFile(file, 'utf8');
-			const registrationOffset = source.search(MANUAL_RENDERER_REGISTRATION_PATTERN);
-			if (registrationOffset >= 0) {
-				diagnostics.push(
-					sourceDiagnostic(
-						source,
-						authoredPath,
-						registrationOffset,
-						'CUSTOM_TYPE_RENDERER_REGISTRATION_REMOVED',
-						'Manual datatype renderer registration was removed; the compiler discovers src/custom-types/<name>/+renderer.svelte'
-					)
-				);
-			}
+			const source = await inventory.source(file);
 			for (const match of source.matchAll(PRIVATE_VIRTUAL_IMPORT_PATTERN)) {
 				diagnostics.push(
 					sourceDiagnostic(
@@ -327,26 +340,22 @@ async function validateAuthoredSource(
 			if (file.endsWith('.svelte')) {
 				diagnostics.push(
 					...authoredLayoutDiagnostics(source, authoredPath, {
-						// App metadata discovery already emits the more specific APP_LAYOUT_REMOVED diagnostic.
 						checkPodLayout: !authoredPath.startsWith('src/apps/')
 					})
 				);
 			}
 		})
 	);
-
-	for (const [directory, message] of forbiddenDirectories) {
-		diagnostics.push(topologyDiagnostic(directory, 'AUTHORING_DIRECTORY_FORBIDDEN', message));
-	}
 }
 
 async function discoverCollections(
 	root: string,
-	diagnostics: StructuralDiagnostic[]
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
 ): Promise<{ relationships: string | null; collections: DiscoveredCollection[] }> {
 	const directory = path.join(root, 'src/collections');
 	const relationshipFile = path.join(directory, '+relationship.ts');
-	if (!existsSync(directory)) {
+	if (!inventory.hasDirectory(directory)) {
 		diagnostics.push(
 			topologyDiagnostic(
 				'src/collections',
@@ -357,9 +366,9 @@ async function discoverCollections(
 		return { relationships: null, collections: [] };
 	}
 
-	const allFiles = await filesBelow(directory);
+	const allFiles = inventory.filesBelow(directory);
 	const relationshipFiles = allFiles.filter((file) => path.basename(file) === '+relationship.ts');
-	if (!existsSync(relationshipFile)) {
+	if (!inventory.hasFile(relationshipFile)) {
 		diagnostics.push(
 			topologyDiagnostic(
 				'src/collections/+relationship.ts',
@@ -378,11 +387,14 @@ async function discoverCollections(
 		);
 	}
 
-	const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
-		compareText(left.name, right.name)
-	);
+	const entries = inventory.entries(directory);
 	for (const entry of entries) {
-		if (entry.isFile() && entry.name.startsWith('+') && entry.name !== '+relationship.ts') {
+		if (
+			entry.isFile() &&
+			entry.name.startsWith('+') &&
+			entry.name !== '+relationship.ts' &&
+			!entry.name.endsWith('.tool.ts')
+		) {
 			diagnostics.push(
 				topologyDiagnostic(
 					`src/collections/${entry.name}`,
@@ -401,7 +413,7 @@ async function discoverCollections(
 				const collectionPath = `src/collections/${entry.name}`;
 				const model = path.join(collectionDirectory, '+model.ts');
 				const collectionDiagnostics: StructuralDiagnostic[] = [];
-				if (!existsSync(model)) {
+				if (!inventory.hasFile(model)) {
 					collectionDiagnostics.push(
 						topologyDiagnostic(
 							`${collectionPath}/+model.ts`,
@@ -411,34 +423,31 @@ async function discoverCollections(
 					);
 				}
 
-				const [localEntries, nestedFiles] = await Promise.all([
-					readdir(collectionDirectory, { withFileTypes: true }),
-					filesBelow(collectionDirectory)
-				]);
+				const localEntries = inventory.entries(collectionDirectory);
+				const nestedFiles = inventory.filesBelow(collectionDirectory);
 				for (const localEntry of localEntries) {
 					if (
 						localEntry.isFile() &&
 						localEntry.name.startsWith('+') &&
+						!localEntry.name.endsWith('.tool.ts') &&
 						!COLLECTION_ROLE_FILES.some((role) => role === localEntry.name)
 					) {
-						const isRemovedRepresentationRole =
-							localEntry.name === '+record.svelte' || localEntry.name === '+create.svelte';
 						collectionDiagnostics.push(
 							topologyDiagnostic(
 								`${collectionPath}/${localEntry.name}`,
-								isRemovedRepresentationRole ? 'COLLECTION_ROLE_REMOVED' : 'COLLECTION_ROLE_UNKNOWN',
-								isRemovedRepresentationRole
-									? localEntry.name === '+record.svelte'
-										? '+record.svelte was removed; use +representation.svelte'
-										: '+create.svelte was removed; branch on the nullable record in +representation.svelte'
-									: `Unknown collection role ${localEntry.name}`
+								'COLLECTION_ROLE_UNKNOWN',
+								`Unknown collection role ${localEntry.name}`
 							)
 						);
 					}
 				}
 
 				for (const file of nestedFiles) {
-					if (path.dirname(file) === collectionDirectory || !path.basename(file).startsWith('+'))
+					if (
+						path.dirname(file) === collectionDirectory ||
+						!path.basename(file).startsWith('+') ||
+						path.basename(file).endsWith('.tool.ts')
+					)
 						continue;
 					collectionDiagnostics.push(
 						topologyDiagnostic(
@@ -449,22 +458,22 @@ async function discoverCollections(
 					);
 				}
 
-				const collection = existsSync(model)
+				const collection = inventory.hasFile(model)
 					? ({
 							id: entry.name,
 							path: collectionPath,
 							roles: {
 								model: `${collectionPath}/+model.ts`,
-								...(existsSync(path.join(collectionDirectory, '+hooks.ts'))
+								...(inventory.hasFile(path.join(collectionDirectory, '+hooks.ts'))
 									? { hooks: `${collectionPath}/+hooks.ts` }
 									: {}),
-								...(existsSync(path.join(collectionDirectory, '+pipelines.ts'))
+								...(inventory.hasFile(path.join(collectionDirectory, '+pipelines.ts'))
 									? { pipelines: `${collectionPath}/+pipelines.ts` }
 									: {}),
-								...(existsSync(path.join(collectionDirectory, '+integrations.ts'))
+								...(inventory.hasFile(path.join(collectionDirectory, '+integrations.ts'))
 									? { integrations: `${collectionPath}/+integrations.ts` }
 									: {}),
-								...(existsSync(path.join(collectionDirectory, '+representation.svelte'))
+								...(inventory.hasFile(path.join(collectionDirectory, '+representation.svelte'))
 									? { representation: `${collectionPath}/+representation.svelte` }
 									: {})
 							}
@@ -477,20 +486,19 @@ async function discoverCollections(
 	const collections = discovered.flatMap(({ collection }) => (collection ? [collection] : []));
 
 	return {
-		relationships: existsSync(relationshipFile) ? 'src/collections/+relationship.ts' : null,
+		relationships: inventory.hasFile(relationshipFile) ? 'src/collections/+relationship.ts' : null,
 		collections
 	};
 }
 
 async function discoverCustomTypes(
 	root: string,
-	diagnostics: StructuralDiagnostic[]
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
 ): Promise<DiscoveredCustomType[]> {
 	const directory = path.join(root, 'src/custom-types');
-	if (!existsSync(directory)) return [];
-	const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
-		compareText(left.name, right.name)
-	);
+	if (!inventory.hasDirectory(directory)) return [];
+	const entries = inventory.entries(directory);
 	const discovered = await Promise.all(
 		entries.map(async (entry) => {
 			const found: StructuralDiagnostic[] = [];
@@ -508,7 +516,7 @@ async function discoverCustomTypes(
 			const customTypeDirectory = path.join(directory, entry.name);
 			const definition = path.join(customTypeDirectory, '+definition.ts');
 			const renderer = path.join(customTypeDirectory, '+renderer.svelte');
-			if (!existsSync(definition)) {
+			if (!inventory.hasFile(definition)) {
 				found.push(
 					topologyDiagnostic(
 						`${entryPath}/+definition.ts`,
@@ -517,7 +525,7 @@ async function discoverCustomTypes(
 					)
 				);
 			}
-			if (!existsSync(renderer)) {
+			if (!inventory.hasFile(renderer)) {
 				found.push(
 					topologyDiagnostic(
 						`${entryPath}/+renderer.svelte`,
@@ -526,10 +534,10 @@ async function discoverCustomTypes(
 					)
 				);
 			}
-			const [customTypeFiles, definitionSource] = await Promise.all([
-				filesBelow(customTypeDirectory),
-				existsSync(definition) ? readFile(definition, 'utf8') : Promise.resolve(null)
-			]);
+			const customTypeFiles = inventory.filesBelow(customTypeDirectory);
+			const definitionSource = inventory.hasFile(definition)
+				? await inventory.source(definition)
+				: null;
 			for (const file of customTypeFiles) {
 				const relative = relativePath(root, file);
 				const direct = path.dirname(file) === customTypeDirectory;
@@ -544,7 +552,11 @@ async function discoverCustomTypes(
 					);
 					continue;
 				}
-				if (role !== '+definition.ts' && role !== '+renderer.svelte') {
+				if (
+					role !== '+definition.ts' &&
+					role !== '+renderer.svelte' &&
+					!role.endsWith('.tool.ts')
+				) {
 					found.push(
 						topologyDiagnostic(
 							relative,
@@ -593,7 +605,7 @@ async function discoverCustomTypes(
 				}
 			}
 			const customType =
-				existsSync(definition) && existsSync(renderer)
+				inventory.hasFile(definition) && inventory.hasFile(renderer)
 					? ({
 							id: entry.name,
 							path: entryPath,
@@ -615,16 +627,15 @@ async function discoverAppDirectory(
 	parentId: string | null,
 	nodes: DiscoveredAppNode[],
 	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory,
 	isRoot = false
 ): Promise<void> {
 	const relativeDirectory = posixPath(path.relative(appsRoot, directory));
 	const id = relativeDirectory || null;
 	const sourcePath = id ? `src/apps/${id}` : 'src/apps';
 	const groupFile = path.join(directory, '+group.ts');
-	const hasGroup = existsSync(groupFile);
-	const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
-		compareText(left.name, right.name)
-	);
+	const hasGroup = inventory.hasFile(groupFile);
+	const entries = inventory.entries(directory);
 
 	if (!isRoot) {
 		if (!hasGroup) {
@@ -651,6 +662,7 @@ async function discoverAppDirectory(
 	for (const entry of entries) {
 		if (!entry.isFile()) continue;
 		if (entry.name === '+group.ts' && !isRoot) continue;
+		if (entry.name.endsWith('.tool.ts')) continue;
 		const source = `${sourcePath}/${entry.name}`;
 		if (
 			entry.name === '+app.svelte' ||
@@ -669,7 +681,7 @@ async function discoverAppDirectory(
 		}
 		const leafId = entry.name.slice(1, -'.svelte'.length);
 		const appId = id ? `${id}/${leafId}` : leafId;
-		const appSource = await readFile(path.join(directory, entry.name), 'utf8');
+		const appSource = await inventory.source(path.join(directory, entry.name));
 		const result = extractAppMetadata(appSource, source);
 		diagnostics.push(...result.diagnostics);
 		if (result.metadata) {
@@ -691,17 +703,19 @@ async function discoverAppDirectory(
 			path.join(directory, child.name),
 			appParentId,
 			nodes,
-			diagnostics
+			diagnostics,
+			inventory
 		);
 	}
 }
 
 async function discoverApps(
 	root: string,
-	diagnostics: StructuralDiagnostic[]
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
 ): Promise<DiscoveredAppNode[]> {
 	const appsRoot = path.join(root, 'src/apps');
-	if (!existsSync(appsRoot)) {
+	if (!inventory.hasDirectory(appsRoot)) {
 		diagnostics.push(
 			topologyDiagnostic(
 				'src/apps',
@@ -713,7 +727,7 @@ async function discoverApps(
 	}
 
 	const nodes: DiscoveredAppNode[] = [];
-	await discoverAppDirectory(appsRoot, appsRoot, null, nodes, diagnostics, true);
+	await discoverAppDirectory(appsRoot, appsRoot, null, nodes, diagnostics, inventory, true);
 	if (!nodes.some((node) => node.kind === 'app')) {
 		diagnostics.push(
 			topologyDiagnostic('src/apps', 'APP_MISSING', 'Workspace requires at least one app')
@@ -725,17 +739,17 @@ async function discoverApps(
 async function discoverWorkspaceRoles(
 	root: string,
 	directoryName: 'automation' | 'remotes',
-	diagnostics: StructuralDiagnostic[]
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
 ): Promise<DiscoveredWorkspaceRole[]> {
 	const directory = path.join(root, 'src', directoryName);
-	if (!existsSync(directory)) return [];
+	if (!inventory.hasDirectory(directory)) return [];
 	const isAutomation = directoryName === 'automation';
 	const singular = isAutomation ? 'AUTOMATION' : 'REMOTE';
 	const roles: DiscoveredWorkspaceRole[] = [];
-	for (const entry of (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
-		compareText(left.name, right.name)
-	)) {
+	for (const entry of inventory.entries(directory)) {
 		const source = `src/${directoryName}/${entry.name}`;
+		if (entry.isFile() && entry.name.endsWith('.tool.ts')) continue;
 		if (!entry.isFile() || !/^\+[a-z][a-z0-9]*(?:_[a-z0-9]+)*\.ts$/.test(entry.name)) {
 			diagnostics.push(
 				topologyDiagnostic(
@@ -754,27 +768,88 @@ async function discoverWorkspaceRoles(
 	return roles;
 }
 
-async function discoverSeed(
+async function discoverAgentTools(
 	root: string,
-	diagnostics: StructuralDiagnostic[]
-): Promise<string | null> {
-	const sourceDirectory = path.join(root, 'src');
-	if (!existsSync(sourceDirectory)) return null;
-	for (const entry of await readdir(sourceDirectory, { withFileTypes: true })) {
-		if (entry.isDirectory() && entry.name === 'automations') {
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): Promise<DiscoveredWorkspaceRole[]> {
+	const sourceRoot = path.join(root, 'src');
+	if (!inventory.hasDirectory(sourceRoot)) return [];
+	const tools: DiscoveredWorkspaceRole[] = [];
+	const seen = new Map<string, string>();
+	for (const file of inventory.files) {
+		const name = path.basename(file);
+		const match = name.match(/^\+([a-z][a-z0-9]*(?:_[a-z0-9]+)*)\.tool\.ts$/);
+		if (!match) continue;
+		const id = match[1]!;
+		const source = relativePath(root, file);
+		if (BUILTIN_AGENT_TOOL_NAMES.has(id)) {
 			diagnostics.push(
 				topologyDiagnostic(
-					'src/automations',
-					'AUTOMATION_DIRECTORY_INVALID',
-					'Use singular src/automation with +<name>.ts files'
+					source,
+					'AGENT_TOOL_NAME_RESERVED',
+					`Agent tool ${id} is reserved by the Pod runtime`
 				)
 			);
+			continue;
 		}
+		const previous = seen.get(id);
+		if (previous) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'AGENT_TOOL_DUPLICATE',
+					`Agent tool ${id} is already declared by ${previous}`
+				)
+			);
+			continue;
+		}
+		seen.set(id, source);
+		tools.push({ id, path: source.slice(0, -3), source });
+	}
+	return tools.sort((left, right) => compareText(left.id, right.id));
+}
+
+async function discoverNotifications(
+	root: string,
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): Promise<string | null> {
+	const declaration = path.join(root, 'src/+notifications.ts');
+	for (const file of inventory.files) {
+		if (path.basename(file) !== '+notifications.ts' || file === declaration) continue;
+		diagnostics.push(
+			topologyDiagnostic(
+				relativePath(root, file),
+				'NOTIFICATIONS_LOCATION_INVALID',
+				'Notification channels may only be declared in src/+notifications.ts'
+			)
+		);
+	}
+	return inventory.hasFile(declaration) ? 'src/+notifications.ts' : null;
+}
+
+function discoverFacilities(root: string, inventory: SourceInventory): string | null {
+	const declaration = path.join(root, 'src/+facilities.ts');
+	return inventory.hasFile(declaration) ? 'src/+facilities.ts' : null;
+}
+
+async function discoverSeed(
+	root: string,
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): Promise<string | null> {
+	const sourceDirectory = path.join(root, 'src');
+	if (!inventory.hasDirectory(sourceDirectory)) return null;
+	for (const entry of inventory.entries(sourceDirectory)) {
 		if (
 			entry.isFile() &&
 			entry.name.startsWith('+') &&
 			entry.name.endsWith('.ts') &&
-			entry.name !== '+seed.ts'
+			entry.name !== '+seed.ts' &&
+			entry.name !== '+notifications.ts' &&
+			entry.name !== '+facilities.ts' &&
+			!entry.name.endsWith('.tool.ts')
 		) {
 			diagnostics.push(
 				topologyDiagnostic(
@@ -785,31 +860,21 @@ async function discoverSeed(
 			);
 		}
 	}
-	return existsSync(path.join(sourceDirectory, '+seed.ts')) ? 'src/+seed.ts' : null;
+	return inventory.hasFile(path.join(sourceDirectory, '+seed.ts')) ? 'src/+seed.ts' : null;
 }
 
 async function validateCustomTypeReferences(
 	root: string,
 	collections: readonly DiscoveredCollection[],
 	customTypes: readonly DiscoveredCustomType[],
-	diagnostics: StructuralDiagnostic[]
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
 ): Promise<void> {
 	const known = new Set(customTypes.map((customType) => customType.id));
 	const collectionDiagnostics = await Promise.all(
 		collections.map(async (collection) => {
 			const found: StructuralDiagnostic[] = [];
-			const source = await readFile(path.join(root, collection.roles.model), 'utf8');
-			for (const forbiddenHelper of source.matchAll(/\bcustomType\s*\(/g)) {
-				found.push(
-					sourceDiagnostic(
-						source,
-						collection.roles.model,
-						forbiddenHelper.index ?? 0,
-						'CUSTOM_TYPE_HELPER_FORBIDDEN',
-						"Use custom('name'); customType() is not part of the Pod 1.0 authoring surface"
-					)
-				);
-			}
+			const source = await inventory.source(path.join(root, collection.roles.model));
 			for (const call of source.matchAll(/\bcustom\s*\(\s*/g)) {
 				const argumentStart = (call.index ?? 0) + call[0].length;
 				const match = source.slice(argumentStart).match(/^(['"])([a-z][a-z0-9]*(?:_[a-z0-9]+)*)\1/);
@@ -819,8 +884,8 @@ async function validateCustomTypeReferences(
 							source,
 							collection.roles.model,
 							call.index ?? 0,
-							'CUSTOM_TYPE_INLINE_FORBIDDEN',
-							'custom() requires a filesystem custom-type name; inline schemas are not supported'
+							'CUSTOM_TYPE_REFERENCE_INVALID',
+							'custom() requires a static filesystem custom-type name'
 						)
 					);
 					continue;
@@ -846,19 +911,27 @@ async function validateCustomTypeReferences(
 export async function discoverPodFilesystem(root: string): Promise<PodStructure> {
 	const absoluteRoot = path.resolve(root);
 	const diagnostics: StructuralDiagnostic[] = [];
-	const collections = await discoverCollections(absoluteRoot, diagnostics);
-	const customTypes = await discoverCustomTypes(absoluteRoot, diagnostics);
+	const inventory = await SourceInventory.load(path.join(absoluteRoot, 'src'));
+	const [collections, customTypes] = await Promise.all([
+		discoverCollections(absoluteRoot, diagnostics, inventory),
+		discoverCustomTypes(absoluteRoot, diagnostics, inventory)
+	]);
 	await validateCustomTypeReferences(
 		absoluteRoot,
 		collections.collections,
 		customTypes,
-		diagnostics
+		diagnostics,
+		inventory
 	);
-	const apps = await discoverApps(absoluteRoot, diagnostics);
-	const automations = await discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics);
-	const remotes = await discoverWorkspaceRoles(absoluteRoot, 'remotes', diagnostics);
-	const seed = await discoverSeed(absoluteRoot, diagnostics);
-	await validateAuthoredSource(absoluteRoot, diagnostics);
+	const [apps, automations, remotes, agentTools, notifications, seed] = await Promise.all([
+		discoverApps(absoluteRoot, diagnostics, inventory),
+		discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics, inventory),
+		discoverWorkspaceRoles(absoluteRoot, 'remotes', diagnostics, inventory),
+		discoverAgentTools(absoluteRoot, diagnostics, inventory),
+		discoverNotifications(absoluteRoot, diagnostics, inventory),
+		discoverSeed(absoluteRoot, diagnostics, inventory),
+		validateAuthoredSource(absoluteRoot, diagnostics, inventory)
+	]);
 	diagnostics.sort(
 		(left, right) =>
 			compareText(left.file, right.file) ||
@@ -874,6 +947,9 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		apps,
 		automations,
 		remotes,
+		agentTools,
+		notifications,
+		facilities: discoverFacilities(absoluteRoot, inventory),
 		seed,
 		diagnostics
 	};
@@ -1039,6 +1115,19 @@ function renderWorkspace(
 	for (const [index, remote] of structure.remotes.entries()) {
 		imports.push(`import remote${index} from ${JSON.stringify(generatedImport(remote.source))};`);
 	}
+	for (const [index, tool] of structure.agentTools.entries()) {
+		imports.push(`import agentTool${index} from ${JSON.stringify(generatedImport(tool.source))};`);
+	}
+	if (structure.notifications) {
+		imports.push(
+			`import notifications from ${JSON.stringify(generatedImport(structure.notifications))};`
+		);
+	}
+	if (structure.facilities) {
+		imports.push(
+			`import requiredFacilities from ${JSON.stringify(generatedImport(structure.facilities))};`
+		);
+	}
 	if (structure.seed) {
 		imports.push(`import seed from ${JSON.stringify(generatedImport(structure.seed))};`);
 	}
@@ -1048,8 +1137,11 @@ function renderWorkspace(
 	const remotes = structure.remotes
 		.map((remote, index) => `\t\t${JSON.stringify(remote.id)}: remote${index}`)
 		.join(',\n');
+	const agentTools = structure.agentTools
+		.map((tool, index) => `\t\t${JSON.stringify(tool.id)}: agentTool${index}`)
+		.join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.notifications ? ',\n\tnotifications' : ''}${structure.facilities ? ',\n\trequiredFacilities' : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(
@@ -1097,8 +1189,24 @@ function relationshipTypes(): string {
 	return `import type { PlatformRelationshipsFor } from '@norbital-ai/pod/authoring/internals';\nimport type { Models } from '../../generated/models.js';\n\nexport type Relationships = PlatformRelationshipsFor<Models>;\n`;
 }
 
-function workspaceRoleTypes(): string {
-	return `export type { Api, WorkspaceRow } from '../../generated/types.js';\n`;
+function workspaceRoleTypes(structure: PodStructure): string {
+	void structure;
+	return `export type { Api, WorkspaceRow } from '../../generated/types.js';\nexport type { AgentToolName, CollectionName, NotificationChannel } from '../../generated/authoring-types.js';\n`;
+}
+
+function generatedAuthoringTypes(structure: PodStructure): string {
+	const collections =
+		structure.collections.map((entry) => JSON.stringify(entry.id)).join(' | ') || 'never';
+	const tools =
+		structure.agentTools.map((entry) => JSON.stringify(entry.id)).join(' | ') || 'never';
+	const channels = structure.notifications
+		? `typeof import('../../src/+notifications.js').default['channels'][number]`
+		: 'never';
+	return `export type CollectionName = ${collections};\nexport type AgentToolName = ${tools};\nexport type ExternalNotificationChannel = ${channels};\nexport type NotificationChannel = 'system' | ExternalNotificationChannel;\n`;
+}
+
+function workspaceAuthoringTypes(): string {
+	return `import type { AgentToolName, CollectionName, ExternalNotificationChannel } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface WorkspaceAuthoringTypes {\n\t\treadonly schema: WorkspaceSchema;\n\t\treadonly collectionName: CollectionName;\n\t\treadonly agentToolName: AgentToolName;\n\t\treadonly notificationChannel: ExternalNotificationChannel;\n\t}\n}\nexport {};\n`;
 }
 
 function customTypeTypes(customType: DiscoveredCustomType): string {
@@ -1225,6 +1333,9 @@ export async function compilePodFilesystem(
 			apps: [],
 			automations: [],
 			remotes: [],
+			agentTools: [],
+			notifications: null,
+			facilities: null,
 			seed: null,
 			diagnostics: [diagnostic]
 		};
@@ -1281,9 +1392,11 @@ export async function compilePodFilesystem(
 				renderClient(structure.apps, structure.remotes, structure.collections)
 			],
 			['.norbital/generated/types.ts', renderWorkspaceTypes()],
+			['.norbital/generated/authoring-types.ts', generatedAuthoringTypes(structure)],
 			['.norbital/types/collections/$types.d.ts', relationshipTypes()],
-			['.norbital/types/automation/$types.d.ts', workspaceRoleTypes()],
-			['.norbital/types/remotes/$types.d.ts', workspaceRoleTypes()],
+			['.norbital/types/automation/$types.d.ts', workspaceRoleTypes(structure)],
+			['.norbital/types/remotes/$types.d.ts', workspaceRoleTypes(structure)],
+			['.norbital/types/workspace-authoring.d.ts', workspaceAuthoringTypes()],
 			['.norbital/types/client-runtime.d.ts', clientRuntimeTypes()],
 			['.norbital/types/custom-type-values.d.ts', renderCustomTypeValueMap(structure.customTypes)],
 			['.norbital/tsconfig.json', renderTsconfig()]

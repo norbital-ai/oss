@@ -47,8 +47,8 @@ export async function dispatchChangeToAutomations(
 	ctx: ProvisionedContext,
 	change: { collection: string; action: ChangeAction; record: Record<string, unknown> }
 ): Promise<string[]> {
-	// The manifest only projects cron_schedule; collection-event triggers live in the registered
-	// workspace automations, keyed name → { trigger, spec }.
+	// Registered definitions hold the executable handler/spec; the manifest is only the serializable
+	// projection consumed by the host scheduler.
 	const registered = getTenantWorkspace().registered.automations as
 		Record<string, RegisteredAutomation> | undefined;
 	const names = matchChangeAutomations(
@@ -71,64 +71,59 @@ export async function dispatchChangeToAutomations(
 	return names;
 }
 
-/** Where the dispatcher left off, durable so a restart neither re-runs nor skips effects. */
-async function readAutomationCursor(ctx: ProvisionedContext): Promise<OutboxCursor> {
-	const result = await ctx.tenantDb.query<{ xid: string; seq: string }>(
-		`SELECT xid, seq FROM _norbital_automation_cursor WHERE singleton = TRUE`
-	);
-	const row = result.rows[0];
-	return row ? { xid: row.xid, seq: row.seq } : OUTBOX_CURSOR_START;
-}
-
-async function writeAutomationCursor(ctx: ProvisionedContext, cursor: OutboxCursor): Promise<void> {
-	await ctx.tenantDb.query(
-		`UPDATE _norbital_automation_cursor
-		    SET xid = $1, seq = $2, pumped_at = CURRENT_TIMESTAMP
-		  WHERE singleton = TRUE`,
-		[cursor.xid, cursor.seq]
-	);
-}
-
 /**
- * Drain the change feed and dispatch collection-event automations, then advance the durable cursor.
- *
- * This is the driver the declared `{ trigger: { collection, event } }` form depends on: without a
- * host calling it, such an automation is matched by nothing and never runs. Effects fire post-commit
- * off the authoritative feed, never on an optimistic client preview, and the record is re-read so
- * the automation sees committed state. The cursor advances only after the batch has dispatched, so
- * a crash repeats a batch rather than losing it.
+ * Pump: drain the change feed and dispatch automations, advancing the safe-watermark cursor. A
+ * worker calls this on the outbox tail (the same feed the sync stream consumes). Exactly-once
+ * relative to the cursor; the record is fetched fresh so the automation sees committed state.
  */
 export async function pumpAutomations(
 	ctx: ProvisionedContext,
-	limit = 200
-): Promise<{ readonly cursor: OutboxCursor; readonly dispatched: number }> {
-	const cursor = await readAutomationCursor(ctx);
+	cursor: OutboxCursor = OUTBOX_CURSOR_START,
+	limit = 200,
+	onAdvance?: (cursor: OutboxCursor) => Promise<void>
+): Promise<OutboxCursor> {
 	const batch = await readSyncOutboxBatch(ctx, cursor, limit);
-	if (batch.rows.length === 0) return { cursor, dispatched: 0 };
-	let dispatched = 0;
 	for (const row of batch.rows) {
 		if (row.action === 'delete') {
-			dispatched += (
-				await dispatchChangeToAutomations(ctx, {
-					collection: row.collection,
-					action: 'delete',
-					record: { norbital_id: row.recordId }
-				})
-			).length;
-			continue;
-		}
-		const record = await fetchRecord(ctx, row.collection, row.recordId);
-		if (!record) continue;
-		dispatched += (
 			await dispatchChangeToAutomations(ctx, {
 				collection: row.collection,
-				action: row.action === 'create' ? 'create' : 'update',
-				record
-			})
-		).length;
+				action: 'delete',
+				record: { norbital_id: row.recordId }
+			});
+		} else {
+			const record = await fetchRecord(ctx, row.collection, row.recordId);
+			if (record) {
+				await dispatchChangeToAutomations(ctx, {
+					collection: row.collection,
+					action: row.action === 'create' ? 'create' : 'update',
+					record
+				});
+			}
+		}
+		await onAdvance?.({ xid: row.xid, seq: row.seq });
 	}
-	await writeAutomationCursor(ctx, batch.cursor);
-	return { cursor: batch.cursor, dispatched };
+	return batch.cursor;
+}
+
+/** Tenant-wide event pump. Its cursor is durable and unrelated to any browser subscription. */
+export async function pumpRegisteredAutomations(
+	ctx: ProvisionedContext,
+	limit = 200
+): Promise<OutboxCursor> {
+	const stored = await ctx.tenantDb.query<{ xid: string; seq: string }>(
+		`SELECT xid::text AS xid, seq::text AS seq
+		   FROM _norbital_automation_cursor
+		  WHERE singleton = TRUE`
+	);
+	const cursor = stored.rows[0] ?? OUTBOX_CURSOR_START;
+	return pumpAutomations(ctx, cursor, limit, async (advanced) => {
+		await ctx.tenantDb.query(
+			`UPDATE _norbital_automation_cursor
+			    SET xid = $1::xid8, seq = $2::bigint
+			  WHERE singleton = TRUE`,
+			[advanced.xid, advanced.seq]
+		);
+	});
 }
 
 async function fetchRecord(

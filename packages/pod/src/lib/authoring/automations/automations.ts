@@ -1,6 +1,7 @@
 import type { AnySchema, SchemaRow, TableName } from '../schema/types.js';
 import type { MergedWorkspaceSchema } from '../schema/system-workspace.js';
 import type { BeforeApi } from '../workspace/hook-api.js';
+import type { WorkspaceAuthoringTypes } from '../index.js';
 
 type PlatformTriggerableTableName = 'user' | 'team' | 'team_members';
 
@@ -41,14 +42,29 @@ type AutomationScope<
 		}
 	: Record<string, unknown>;
 
-export type AgentToolName = 'find_many' | 'create_records' | 'update_record' | 'web';
+type WorkspaceCollectionName = WorkspaceAuthoringTypes extends {
+	readonly collectionName: infer TName extends string;
+}
+	? TName
+	: string;
+
+type WorkspaceAgentToolName = WorkspaceAuthoringTypes extends {
+	readonly agentToolName: infer TName extends string;
+}
+	? TName
+	: string;
 
 export type AgentAutomationSpec = {
 	readonly kind: 'agent';
 	readonly task: string;
 	readonly model?: string;
 	readonly systemPrompt?: string;
-	readonly tools?: readonly AgentToolName[];
+	readonly collections?: readonly WorkspaceCollectionName[];
+	readonly access?: 'read' | 'write';
+	readonly tools?: readonly WorkspaceAgentToolName[];
+	readonly profile?: string;
+	readonly maxIterations?: number;
+	readonly maxTokens?: number;
 };
 
 export type DeterministicAutomationSpec = {
@@ -73,17 +89,9 @@ export type AutomationDefinition = {
 
 export type AutomationDeclaration = AutomationDefinition & { readonly name: string };
 
-export function defineAutomation(
-	trigger: AutomationTrigger,
-	spec: AutomationSpec
-): AutomationDefinition;
-export function defineAutomation<S extends AnySchema, const TTrigger extends AutomationTrigger<S>>(
-	trigger: TTrigger,
-	handler: AutomationHandler<S, TTrigger>
-): AutomationDefinition;
 export function defineAutomation<
 	S extends AnySchema = AnySchema,
-	TTrigger extends AutomationTrigger = AutomationTrigger
+	const TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
 >(
 	trigger: TTrigger,
 	specOrHandler: AutomationSpec | AutomationHandler<S, TTrigger>

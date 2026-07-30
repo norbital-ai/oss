@@ -67,19 +67,14 @@ interface PlatformApprovalRequestRow extends SystemRecordFields {
 }
 
 interface PlatformAutomationRunRow extends SystemRecordFields {
-	readonly automation_name: string;
+	readonly requested_by_user_id: string;
+	readonly automation_name: string | null;
 	readonly status: string;
 	readonly input: JsonObject | null;
 	readonly output: JsonObject | null;
 	readonly error: string | null;
 	readonly started_at: string | null;
 	readonly completed_at: string | null;
-}
-
-interface PlatformChatSessionRow extends SystemRecordFields {
-	readonly title: string | null;
-	readonly messages: unknown[] | null;
-	readonly context: JsonObject | null;
 }
 
 interface PlatformAuditRow extends SystemRecordFields {
@@ -95,15 +90,22 @@ interface PlatformSystemRows {
 		readonly user_id: string;
 	};
 	readonly automation_run: PlatformAutomationRunRow;
+	readonly agent_run_step: SystemRecordFields & {
+		readonly owner_user_id: string;
+		readonly automation_run_id: string;
+		readonly sequence: number;
+		readonly kind: string;
+		readonly role: string | null;
+		readonly content: string | null;
+		readonly tool_call_id: string | null;
+		readonly tool_name: string | null;
+		readonly tool_input: JsonObject | null;
+		readonly tool_output: JsonObject | null;
+		readonly usage: JsonObject | null;
+	};
 	readonly user: PlatformUserRow;
 	readonly team: PlatformTeamRow;
 	readonly policy: PlatformPolicyRow;
-	readonly chat_session: PlatformChatSessionRow;
-	readonly mutation_log: PlatformAuditRow & {
-		readonly action: string;
-		readonly payload: JsonObject | null;
-		readonly result: JsonObject | null;
-	};
 	readonly audit_event: PlatformAuditRow & {
 		readonly event_type: string;
 		readonly details: JsonObject | null;
@@ -122,6 +124,20 @@ interface PlatformSystemRows {
 		readonly delivered_at: string | null;
 		readonly last_error: string | null;
 	};
+	readonly notification_outbox: SystemRecordFields & {
+		readonly channel: string;
+		readonly recipient_user_id: string;
+		readonly subject: string;
+		readonly message: string;
+		readonly cta_label: string | null;
+		readonly cta_url: string | null;
+		readonly status: string;
+		readonly attempts: number;
+		readonly available_at: string;
+		readonly claimed_at: string | null;
+		readonly delivered_at: string | null;
+		readonly last_error: string | null;
+	};
 	readonly notification: SystemRecordFields & {
 		readonly recipient_user_id: string;
 		readonly subject: string;
@@ -133,13 +149,11 @@ interface PlatformSystemRows {
 		readonly read_at: string | null;
 	};
 	readonly document_asset: SystemRecordFields & {
+		readonly owner_user_id: string;
 		readonly file_name: string;
 		readonly mime_type: string | null;
 		readonly file_size: number | null;
 		readonly storage_key: string;
-		readonly storage_provider: string | null;
-		readonly metadata: JsonObject | null;
-		readonly embedding_model: string | null;
 	};
 	readonly team_members: SystemRecordFields & {
 		readonly user_id: string;
@@ -151,13 +165,13 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'approval_request',
 	'requestor',
 	'automation_run',
+	'agent_run_step',
 	'user',
 	'team',
 	'policy',
-	'chat_session',
-	'mutation_log',
 	'audit_event',
 	'integration_outbox',
+	'notification_outbox',
 	'notification',
 	'document_asset',
 	'team_members'
@@ -207,13 +221,31 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 		name: 'automation_run',
 		fields: [
 			...SYSTEM_FIELDS,
-			{ name: 'automation_name', kind: 'text', nullable: false },
+			{ name: 'requested_by_user_id', kind: 'uuid', nullable: false },
+			{ name: 'automation_name', kind: 'text', nullable: true },
 			{ name: 'status', kind: 'text', nullable: false },
 			{ name: 'input', kind: 'json', nullable: true },
 			{ name: 'output', kind: 'json', nullable: true },
 			{ name: 'error', kind: 'text', nullable: true },
 			{ name: 'started_at', kind: 'timestamptz', nullable: true },
 			{ name: 'completed_at', kind: 'timestamptz', nullable: true }
+		]
+	},
+	agent_run_step: {
+		name: 'agent_run_step',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'owner_user_id', kind: 'uuid', nullable: false },
+			{ name: 'automation_run_id', kind: 'uuid', nullable: false },
+			{ name: 'sequence', kind: 'integer', nullable: false },
+			{ name: 'kind', kind: 'text', nullable: false },
+			{ name: 'role', kind: 'text', nullable: true },
+			{ name: 'content', kind: 'text', nullable: true },
+			{ name: 'tool_call_id', kind: 'text', nullable: true },
+			{ name: 'tool_name', kind: 'text', nullable: true },
+			{ name: 'tool_input', kind: 'json', nullable: true },
+			{ name: 'tool_output', kind: 'json', nullable: true },
+			{ name: 'usage', kind: 'json', nullable: true }
 		]
 	},
 	user: {
@@ -253,27 +285,6 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'grants', kind: 'json', nullable: true, array: true }
 		]
 	},
-	chat_session: {
-		name: 'chat_session',
-		fields: [
-			...SYSTEM_FIELDS,
-			{ name: 'title', kind: 'text', nullable: true },
-			{ name: 'messages', kind: 'json', nullable: true, array: true },
-			{ name: 'context', kind: 'json', nullable: true }
-		]
-	},
-	mutation_log: {
-		name: 'mutation_log',
-		fields: [
-			...SYSTEM_FIELDS,
-			{ name: 'collection_name', kind: 'text', nullable: false },
-			{ name: 'record_id', kind: 'uuid', nullable: false },
-			{ name: 'action', kind: 'text', nullable: false },
-			{ name: 'payload', kind: 'json', nullable: true },
-			{ name: 'result', kind: 'json', nullable: true },
-			{ name: 'actor_id', kind: 'uuid', nullable: true }
-		]
-	},
 	audit_event: {
 		name: 'audit_event',
 		recordLabel: 'event_type',
@@ -305,6 +316,24 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'last_error', kind: 'text', nullable: true }
 		]
 	},
+	notification_outbox: {
+		name: 'notification_outbox',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'channel', kind: 'text', nullable: false },
+			{ name: 'recipient_user_id', kind: 'uuid', nullable: false },
+			{ name: 'subject', kind: 'text', nullable: false },
+			{ name: 'message', kind: 'text', nullable: false },
+			{ name: 'cta_label', kind: 'text', nullable: true },
+			{ name: 'cta_url', kind: 'text', nullable: true },
+			{ name: 'status', kind: 'text', nullable: false },
+			{ name: 'attempts', kind: 'integer', nullable: false },
+			{ name: 'available_at', kind: 'timestamptz', nullable: false },
+			{ name: 'claimed_at', kind: 'timestamptz', nullable: true },
+			{ name: 'delivered_at', kind: 'timestamptz', nullable: true },
+			{ name: 'last_error', kind: 'text', nullable: true }
+		]
+	},
 	notification: {
 		name: 'notification',
 		fields: [
@@ -323,13 +352,11 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 		name: 'document_asset',
 		fields: [
 			...SYSTEM_FIELDS,
+			{ name: 'owner_user_id', kind: 'uuid', nullable: false },
 			{ name: 'file_name', kind: 'text', nullable: false },
 			{ name: 'mime_type', kind: 'text', nullable: true },
 			{ name: 'file_size', kind: 'integer', nullable: true },
-			{ name: 'storage_key', kind: 'text', nullable: false },
-			{ name: 'storage_provider', kind: 'text', nullable: true },
-			{ name: 'metadata', kind: 'json', nullable: true },
-			{ name: 'embedding_model', kind: 'text', nullable: true }
+			{ name: 'storage_key', kind: 'text', nullable: false }
 		]
 	},
 	team_members: {

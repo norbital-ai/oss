@@ -2,8 +2,6 @@ export {
 	processApprovalRequestAction,
 	withdrawApprovalRequest
 } from './approval_request/approval_request.remote.js';
-export { aiInfer } from './ai_infer/ai_infer.remote.js';
-export { browser } from './browser/browser.remote.js';
 export {
 	adminCreateSystemRecord,
 	adminDeleteSystemRecord,

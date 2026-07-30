@@ -12,10 +12,7 @@ import {
 } from '$lib/authoring/workspace/db-api.js';
 import { mergePlatformSchema } from '$lib/authoring/schema/system-workspace.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
-import type { z } from 'zod';
 import { z as zod } from 'zod';
-import { typeGuard } from '@norbital-ai/std/schema';
-import { runAiInfer } from '$lib/server/run/ai_infer.server.js';
 import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { qualifiedTableName } from '@norbital-ai/platform-utils/tenant_db/schema';
@@ -35,13 +32,12 @@ import {
 	updateMany,
 	updateRecord
 } from './collection_ops.server.js';
+import { withCollectionTransaction } from './collection_transaction.server.js';
 
-const recordSchema = zod.record(zod.string(), zod.unknown());
-const notificationChannelsSchema = zod
-	.array(zod.enum(['email', 'telegram', 'whatsapp', 'web']))
-	.default(['web']);
+const notificationChannelsSchema = zod.array(zod.string().min(1)).min(1).default(['system']);
 const fileAssetSchema = zod.object({
 	norbital_id: zod.string().uuid(),
+	owner_user_id: zod.string().uuid(),
 	file_name: zod.string(),
 	mime_type: zod.string().nullable(),
 	file_size: zod.number().int().nonnegative().nullable(),
@@ -116,42 +112,93 @@ function readWorkspaceSchema(workspace: ReturnType<typeof getTenantWorkspace>) {
 	return workspace.schema;
 }
 
-function sharedBuiltinApi(fetch: typeof globalThis.fetch) {
+function sharedBuiltinApi() {
 	return {
 		sendNotification: async (input: Parameters<BeforeApi['sendNotification']>[0]) => {
-			const workspace = getWorkspace({ provision: true });
-			const delivery = await requireRuntimeFacility('notifications').send({
-				organizationId: workspace.organization.norbital_id,
-				recipientUserId: input.recipient_user_id,
-				subject: input.subject,
-				message: input.message,
-				channels: notificationChannelsSchema.parse(input.channels),
-				cta: input.cta
+			const ctx = getWorkspace({ provision: true });
+			const channels = [...new Set(notificationChannelsSchema.parse(input.channels))];
+			const declared = new Set(['system', ...getTenantWorkspace().registered.notificationChannels]);
+			const unknown = channels.filter((channel) => !declared.has(channel));
+			if (unknown.length > 0) {
+				throw new Error(
+					`Notification channel not declared by this workspace: ${unknown.join(', ')}`
+				);
+			}
+			return withCollectionTransaction(ctx, async () => {
+				let notificationId: string | null = null;
+				if (channels.includes('system')) {
+					const notification = await createRecord(
+						ctx,
+						'notification',
+						{
+							recipient_user_id: input.recipient_user_id,
+							subject: input.subject,
+							message: input.message,
+							channels: ['system'],
+							cta_label: input.cta?.label ?? null,
+							cta_url: input.cta?.url ?? null,
+							notification_category: input.notification_category ?? null,
+							read_at: null
+						},
+						{ isElevated: true }
+					);
+					notificationId =
+						typeof notification.norbital_id === 'string' ? notification.norbital_id : null;
+				}
+				const external = channels.filter((channel) => channel !== 'system');
+				for (const channel of external) {
+					await createRecord(
+						ctx,
+						'notification_outbox',
+						{
+							channel,
+							recipient_user_id: input.recipient_user_id,
+							subject: input.subject,
+							message: input.message,
+							cta_label: input.cta?.label ?? null,
+							cta_url: input.cta?.url ?? null,
+							status: 'pending',
+							attempts: 0
+						},
+						{ isElevated: true }
+					);
+				}
+				return { notification_id: notificationId, queued_channels: external };
 			});
-			return { notification_id: crypto.randomUUID(), delivery };
 		},
-		fetch,
-		aiInferStructured: async <const TSchema extends z.ZodType>(
-			schema: TSchema,
-			input: { readonly prompt: string; readonly temperature?: number }
-		): Promise<z.infer<TSchema>> => {
-			const standard = typeGuard(recordSchema, schema) ? schema['~standard'] : undefined;
-			const jsonSchema = typeGuard(recordSchema, standard) ? standard.jsonSchema : undefined;
-			const raw = await runAiInfer({
-				...input,
-				schema: jsonSchema
+		ai: async (input: {
+			readonly prompt: string;
+			readonly schema?: zod.ZodType;
+			readonly model?: string;
+			readonly profile?: string;
+		}) => {
+			const result = await requireRuntimeFacility('ai').chat({
+				messages: [{ role: 'user', content: input.prompt }],
+				...(input.schema ? { outputSchema: zod.toJSONSchema(input.schema) } : {}),
+				...(input.model ? { model: input.model } : {}),
+				...(input.profile ? { profile: input.profile } : {})
 			});
-			return schema.parse(raw);
+			if (!input.schema) return result.text;
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(result.text);
+			} catch {
+				throw new Error('AI provider returned invalid JSON for a structured response');
+			}
+			return input.schema.parse(parsed);
 		},
 		readFileAsset: async (assetId: string) => {
 			const parsedAssetId = zod.string().uuid().parse(assetId);
 			const workspace = getWorkspace({ provision: true });
 			const result = await workspace.tenantDb.query({
-				text: `SELECT norbital_id, file_name, mime_type, file_size, storage_key FROM ${qualifiedTableName('document_asset')} WHERE norbital_id = $1::uuid LIMIT 1`,
+				text: `SELECT norbital_id, owner_user_id, file_name, mime_type, file_size, storage_key FROM ${qualifiedTableName('document_asset')} WHERE norbital_id = $1::uuid LIMIT 1`,
 				values: [parsedAssetId]
 			});
 			const asset = fileAssetSchema.safeParse(result.rows[0]);
 			if (!asset.success) throw new Error('The selected file asset does not exist.');
+			if (asset.data.owner_user_id !== workspace.baseScope.requestor.norbital_id) {
+				throw new Error('The selected file asset is not accessible to this requestor.');
+			}
 			const bytes = await requireRuntimeFacility('fileStorage').get(asset.data.storage_key);
 			if (bytes == null) throw new Error('The selected file asset is unavailable in storage.');
 			if (asset.data.file_size != null && bytes.byteLength !== asset.data.file_size) {
@@ -178,7 +225,7 @@ function toAfterApi(api: unknown): AfterApi {
 	return api as unknown as AfterApi; // stupidity: boundary-cast — the API has function members, not serializable data.
 }
 
-export function createBeforeApi(fetch: typeof globalThis.fetch = globalThis.fetch): BeforeApi {
+export function createBeforeApi(): BeforeApi {
 	const workspace = getTenantWorkspace();
 	const schema = readWorkspaceSchema(workspace);
 	const transport = buildDirectTransport();
@@ -191,27 +238,33 @@ export function createBeforeApi(fetch: typeof globalThis.fetch = globalThis.fetc
 		{ mode: 'direct', transport },
 		workspace.collections
 	);
-	return toBeforeApi({ db, ...sharedBuiltinApi(fetch) });
+	return toBeforeApi({ db, ...sharedBuiltinApi() });
 }
 
 export function restrictBeforeHookApi(api: BeforeApi): HookApi {
-	return { db: api.db, readFileAsset: api.readFileAsset };
+	return {
+		db: api.db,
+		readFileAsset: api.readFileAsset,
+		sendNotification: api.sendNotification
+	};
 }
 
 export function restrictAfterHookApi(api: AfterApi): AfterHookApi {
-	return { db: api.db, readFileAsset: api.readFileAsset };
+	return {
+		db: api.db,
+		readFileAsset: api.readFileAsset,
+		sendNotification: api.sendNotification
+	};
 }
 
-export function createElevatedAfterApi(
-	fetch: typeof globalThis.fetch = globalThis.fetch
-): AfterApi {
+export function createElevatedAfterApi(): AfterApi {
 	const workspace = getTenantWorkspace();
 	const readDb = createReadonlyDbApi(mergePlatformSchema(readWorkspaceSchema(workspace)), {
 		mode: 'direct',
 		transport: buildElevatedReadTransport()
 	});
 	return toAfterApi({
-		...sharedBuiltinApi(fetch),
+		...sharedBuiltinApi(),
 		db: createElevatedReadonlyDbApi(readDb, {
 			mutate: async (collectionName: string, payloads: Record<string, unknown>[]) => {
 				return runWithPermissionBypassAsync(async () => {

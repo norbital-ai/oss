@@ -70,10 +70,8 @@ export type HostIdentityProvider = {
 /**
  * Driving the loops the runtime cannot run for itself.
  *
- * The runtime exposes `automation` and `outbox` through `/_runtime/runtime/run` and then waits to
- * be driven — it has no timer and, in a hosted container, no network. A host that never drives
- * them does not satisfy `queue`, and a workspace declaring automations is rejected at startup
- * rather than starting with automations that silently never fire.
+ * The runtime exposes a private host-control function and then waits to be driven — it has no timer
+ * and, in a hosted container, no network. Tenant HTTP requests cannot reach that function.
  */
 export type HostSchedulerConfig = {
 	/** Run cron-scheduled automations. Satisfies `queue`. */
@@ -140,6 +138,7 @@ export function satisfiedFacilities(
 	if (config.fileStorage) satisfied.add('fileStorage');
 	if (config.maps) satisfied.add('maps');
 	if (config.ai) satisfied.add('ai');
+	if (config.notifications) satisfied.add('notifications');
 	if (config.scheduler?.automations) satisfied.add('queue');
 	if (config.integrationDelivery) satisfied.add('integrationDelivery');
 	return satisfied;

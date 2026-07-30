@@ -1,8 +1,9 @@
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import { cronMatches, parseCron, type CronSchedule } from '../../host/cron.js';
 import type { HostIntegrationDelivery, IntegrationDeliveryMessage } from '../../host/types.js';
+import type { HostNotificationsBinding } from '@norbital-ai/platform-utils/runtime/binding';
 
-/** Calls `/_runtime/runtime/run` as the host. Returns the decoded JSON result. */
+/** Calls the private runtime host-control entry point. */
 export type RuntimeDispatch = (body: unknown) => Promise<unknown>;
 
 export type SchedulerOptions = {
@@ -10,6 +11,8 @@ export type SchedulerOptions = {
 	readonly dispatch: RuntimeDispatch;
 	readonly automations: boolean;
 	readonly integrationDelivery?: HostIntegrationDelivery;
+	readonly notifications?: HostNotificationsBinding;
+	readonly organizationId: string;
 	readonly intervalMs: number;
 	readonly log?: (message: string) => void;
 };
@@ -32,6 +35,17 @@ type ClaimedOutboxRow = {
 	readonly attempts: number;
 };
 
+type ClaimedNotificationRow = {
+	readonly norbital_id: string;
+	readonly channel: string;
+	readonly recipient_user_id: string;
+	readonly subject: string;
+	readonly message: string;
+	readonly cta_label: string | null;
+	readonly cta_url: string | null;
+	readonly attempts: number;
+};
+
 function claimedRows(result: unknown): readonly ClaimedOutboxRow[] {
 	if (!Array.isArray(result)) return [];
 	return result.filter(
@@ -43,28 +57,32 @@ function claimedRows(result: unknown): readonly ClaimedOutboxRow[] {
 	);
 }
 
+function claimedNotificationRows(result: unknown): readonly ClaimedNotificationRow[] {
+	if (!Array.isArray(result)) return [];
+	return result.filter(
+		(row): row is ClaimedNotificationRow =>
+			typeof row === 'object' &&
+			row != null &&
+			typeof (row as ClaimedNotificationRow).norbital_id === 'string' &&
+			typeof (row as ClaimedNotificationRow).channel === 'string'
+	);
+}
+
 type ScheduledAutomation = { readonly name: string; readonly schedule: CronSchedule };
 
 /**
- * Only enabled automations with a parsable cron schedule are scheduled. A malformed schedule is
- * reported once at startup and then skipped: refusing to start the whole host over one bad string
- * would take every other automation down with it, and the workspace author needs to see which one.
+ * Resolve and validate every schedule trigger before the process starts serving requests.
+ * A malformed schedule is a workspace build defect, not a partially-operational runtime mode.
  */
-function scheduledAutomations(
-	manifest: NorbitalManifest,
-	log: (message: string) => void
-): readonly ScheduledAutomation[] {
+function scheduledAutomations(manifest: NorbitalManifest): readonly ScheduledAutomation[] {
 	const scheduled: ScheduledAutomation[] = [];
 	for (const [name, automation] of Object.entries(manifest.automations ?? {})) {
-		if (!automation.enabled || !automation.cron_schedule) continue;
+		if (!('schedule' in automation.trigger)) continue;
 		try {
-			scheduled.push({ name, schedule: parseCron(automation.cron_schedule) });
+			scheduled.push({ name, schedule: parseCron(automation.trigger.schedule) });
 		} catch (cause) {
-			log(
-				`[pod:scheduler] automation "${name}" has an unusable cron schedule and will not run: ${
-					cause instanceof Error ? cause.message : String(cause)
-				}`
-			);
+			const detail = cause instanceof Error ? cause.message : String(cause);
+			throw new Error(`Automation "${name}" has an invalid schedule: ${detail}`, { cause });
 		}
 	}
 	return scheduled;
@@ -80,15 +98,18 @@ function scheduledAutomations(
  */
 export function startScheduler(options: SchedulerOptions): Scheduler {
 	const log = options.log ?? ((message: string) => console.log(message));
-	const automations = options.automations ? scheduledAutomations(options.manifest, log) : [];
+	const automations = options.automations ? scheduledAutomations(options.manifest) : [];
 	const deliver = options.integrationDelivery;
-	// Collection-event automations are discovered from the change feed rather than from a schedule,
-	// so enabling automations at all means this host has to drain them. Without the drain a
-	// `{ trigger: { collection, event } }` automation is declared, typed, and never runs.
-	const pumpEvents = options.automations === true;
-	if (automations.length === 0 && !pumpEvents && !deliver) return { stop: () => {} };
+	const notifications = options.notifications;
+	const hasEventAutomations = Object.values(options.manifest.automations ?? {}).some(
+		(automation) => 'collection' in automation.trigger
+	);
+	if (automations.length === 0 && !deliver && !notifications && !hasEventAutomations) {
+		return { stop: () => {} };
+	}
 
 	const lastRunMinute = new Map<string, number>();
+	const inFlightAutomations = new Set<string>();
 	let sweeping = false;
 
 	const runAutomations = async (now: Date): Promise<void> => {
@@ -99,29 +120,26 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 			if (!cronMatches(automation.schedule, now)) continue;
 			if (lastRunMinute.get(automation.name) === minuteKey) continue;
 			lastRunMinute.set(automation.name, minuteKey);
-			try {
-				// 'CRON' is the value AutomationRunTriggerSchema accepts, and the automation variant of
-				// the dispatch schema is strict — anything else is rejected as a malformed request.
-				await options.dispatch({
+			if (inFlightAutomations.has(automation.name)) {
+				log(`[pod:scheduler] automation "${automation.name}" is still running; overlap skipped`);
+				continue;
+			}
+			inFlightAutomations.add(automation.name);
+			void options
+				.dispatch({
 					kind: 'automation',
 					automationName: automation.name,
 					triggeredBy: 'CRON'
-				});
-			} catch (cause) {
-				log(
-					`[pod:scheduler] automation "${automation.name}" failed: ${
-						cause instanceof Error ? cause.message : String(cause)
-					}`
-				);
-			}
+				})
+				.catch((cause) => {
+					log(
+						`[pod:scheduler] automation "${automation.name}" failed: ${
+							cause instanceof Error ? cause.message : String(cause)
+						}`
+					);
+				})
+				.finally(() => inFlightAutomations.delete(automation.name));
 		}
-	};
-
-	const runEventAutomations = async (): Promise<void> => {
-		if (!pumpEvents) return;
-		// One batch per sweep. A backlog drains over successive sweeps instead of holding the loop,
-		// which keeps a bulk import from starving integration delivery behind it.
-		await options.dispatch({ kind: 'automation', action: 'pump' });
 	};
 
 	const runOutbox = async (): Promise<void> => {
@@ -183,6 +201,41 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 		}
 	};
 
+	const runNotifications = async (): Promise<void> => {
+		if (!notifications) return;
+		const rows = claimedNotificationRows(
+			await options.dispatch({ kind: 'notification', action: 'claim', limit: 50 })
+		);
+		for (const row of rows) {
+			try {
+				const result = await notifications.send({
+					organizationId: options.organizationId,
+					channel: row.channel,
+					recipientUserId: row.recipient_user_id,
+					subject: row.subject,
+					message: row.message,
+					cta: row.cta_label && row.cta_url ? { label: row.cta_label, url: row.cta_url } : null
+				});
+				if (!result.sent)
+					throw new Error(result.reason ?? 'Notification provider refused delivery');
+				await options.dispatch({
+					kind: 'notification',
+					action: 'delivered',
+					ids: [row.norbital_id]
+				});
+			} catch (cause) {
+				const reason = cause instanceof Error ? cause.message : String(cause);
+				await options.dispatch({
+					kind: 'notification',
+					action: 'failed',
+					ids: [row.norbital_id],
+					error: reason,
+					retryAt: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString()
+				});
+			}
+		}
+	};
+
 	const sweep = async (): Promise<void> => {
 		// A sweep that outlives its interval must not overlap itself: two concurrent outbox drains
 		// would both claim, and two automation passes would both see the same unrun minute.
@@ -190,8 +243,13 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 		sweeping = true;
 		try {
 			await runAutomations(new Date());
-			await runEventAutomations();
-			await runOutbox();
+			await Promise.all([
+				runOutbox(),
+				runNotifications(),
+				hasEventAutomations
+					? options.dispatch({ kind: 'automation-events', limit: 200 }).then(() => undefined)
+					: Promise.resolve()
+			]);
 		} catch (cause) {
 			log(
 				`[pod:scheduler] sweep failed: ${cause instanceof Error ? cause.message : String(cause)}`
@@ -207,9 +265,7 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 	void sweep();
 
 	log(
-		`[pod:scheduler] started (${automations.length} scheduled automation(s)${
-			pumpEvents ? ', change-feed automations on' : ''
-		}${deliver ? ', integration delivery on' : ''})`
+		`[pod:scheduler] started (${automations.length} scheduled automation(s)${hasEventAutomations ? ', event automations on' : ''}${deliver ? ', integration delivery on' : ''}${notifications ? ', notification delivery on' : ''})`
 	);
 	return { stop: () => clearInterval(timer) };
 }

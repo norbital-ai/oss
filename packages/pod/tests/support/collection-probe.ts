@@ -21,10 +21,11 @@ export function sampleValue(type: string): unknown {
 export async function pickCollection(harness: PodRuntimeHarness): Promise<ProbeCollection> {
 	const tables = await harness.pool.query<{ name: string }>(
 		`SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-		  WHERE n.nspname='public' AND c.relkind='r' AND c.relname !~ '_history$'
-		    AND c.relname NOT IN ('mutation_log','audit_event','_approval_lock','_norbital_internal_schema',
+		  WHERE n.nspname='public' AND c.relkind='r'
+		    AND c.relname NOT IN ('audit_event','_approval_lock','_norbital_internal_schema',
 		      '__drizzle_migrations','sync_outbox','approval_request','requestor','automation_run','user',
-		      'team','policy','chat_session','integration_outbox','notification','document_asset','team_members')
+		      'agent_run_step','team','policy','integration_outbox','notification_outbox','notification',
+		      'document_asset','team_members')
 		    AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='norbital_id')
 		  ORDER BY c.relname`
 	);

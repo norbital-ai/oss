@@ -566,7 +566,7 @@ requested                                          = 5.0
 Checked against settled (6.0) both requests would approve and leave her one day overdrawn.
 Write-then-lock is what makes a pending request reserve its days.
 
-If the pending request is rejected, its two `TAKEN` rows roll back from `_history` — they were creates,
+If the pending request is rejected, its two `TAKEN` rows roll back from the temporal ledger — they were creates,
 so they are deleted. Projected returns to 6.0. Nothing else changes, and there is no rejected row to
 clean up.
 

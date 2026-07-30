@@ -450,12 +450,12 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		load(id) {
 			if (id === `\0${SERVER_ENTRY}`) {
 				return `import workspace from ${JSON.stringify(generatedWorkspace.split(path.sep).join('/'))};
-import { handlePodRequest, registerPodWorkspace, getTenantManifest } from ${JSON.stringify(podBuildFile('runtime/server.js'))};
+	import { handlePodHostCommand, handlePodRequest, registerPodWorkspace, registerPodDatabaseNotifications, getTenantManifest } from ${JSON.stringify(podBuildFile('runtime/server.js'))};
 export { startPodStdioServer } from ${JSON.stringify(podBuildFile('runtime/serve.js'))};
 registerPodWorkspace(workspace);
 export const workspaceSeedManifest = workspace.seed?.manifest ?? null;
 export const workspaceManifest = getTenantManifest();
-export { handlePodRequest };`;
+	export { handlePodHostCommand, handlePodRequest, registerPodDatabaseNotifications };`;
 			}
 			if (id !== `\0${CLIENT_ENTRY}`) return;
 			return `${clientPlatform ? '' : `import ${JSON.stringify(podBuildFile('app.css'))};\n`}import { mountPodWorkspace } from '@norbital-ai/pod/client/platform';

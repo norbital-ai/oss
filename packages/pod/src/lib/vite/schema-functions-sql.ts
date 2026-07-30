@@ -125,32 +125,38 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
     END;
     $$ LANGUAGE plpgsql;
 
-    -- System-versioned temporal tables. Attached to every collection that has a
-    -- <table>_history sibling, this owns all temporal bookkeeping so no code path can
-    -- forget to version: on UPDATE/DELETE it archives the prior row to history with its
-    -- system period closed at now(); on INSERT/UPDATE it opens a fresh period on the live
-    -- row; on UPDATE it also increments norbital_row_version (the sync engine's optimistic
-    -- concurrency token). Column-agnostic via a jsonb round-trip through the history row type.
+    -- System-versioned temporal records. One append-only JSONB ledger preserves snapshots
+    -- across collection schema changes. The trigger owns every period/version transition:
+    -- UPDATE/DELETE archives OLD, INSERT/UPDATE opens NEW, and UPDATE advances the sync token.
     CREATE OR REPLACE FUNCTION _norbital_versioning() RETURNS TRIGGER AS $$
     DECLARE
       -- A transaction can begin before a concurrent writer, wait for that writer's row lock, then
       -- see the newer row after the writer commits. Transaction-start now() would precede that
       -- row's lower bound and make the closing tstzrange invalid. Timestamp at trigger execution.
       now_ts TIMESTAMPTZ := clock_timestamp();
-      history_table TEXT := TG_TABLE_NAME || '_history';
     BEGIN
       IF TG_OP = 'INSERT' THEN
         NEW.norbital_sys_period := tstzrange(now_ts, NULL, '[)')::text;
         RETURN NEW;
       END IF;
 
-      -- UPDATE or DELETE: archive the prior row, closing its period at now().
-      EXECUTE format(
-        'INSERT INTO %I SELECT (jsonb_populate_record(NULL::%I, $1)).*',
-        history_table, history_table
-      ) USING to_jsonb(OLD) - 'norbital_sys_period' || jsonb_build_object(
-        'norbital_sys_period',
-        tstzrange(lower(OLD.norbital_sys_period::tstzrange), now_ts, '[)')::text
+      INSERT INTO record_history (
+        collection_name,
+        record_id,
+        row_version,
+        valid_from,
+        valid_to,
+        values
+      ) VALUES (
+        TG_TABLE_NAME,
+        OLD.norbital_id,
+        OLD.norbital_row_version,
+        lower(OLD.norbital_sys_period::tstzrange),
+        now_ts,
+        to_jsonb(OLD) || jsonb_build_object(
+          'norbital_sys_period',
+          tstzrange(lower(OLD.norbital_sys_period::tstzrange), now_ts, '[)')::text
+        )
       );
 
       IF TG_OP = 'DELETE' THEN
@@ -209,6 +215,31 @@ export const SCHEMA_POST_DDL_SQL = dedent`
       pruned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     INSERT INTO _norbital_sync_compaction (singleton)
+      VALUES (TRUE)
+      ON CONFLICT (singleton) DO NOTHING;
+
+    -- Durable temporal history. Unlike per-collection mirror tables, this ledger is not
+    -- rebuilt when a collection changes shape, so migrations can never erase history.
+    CREATE TABLE IF NOT EXISTS record_history (
+      seq BIGSERIAL PRIMARY KEY,
+      collection_name TEXT NOT NULL,
+      record_id UUID NOT NULL,
+      row_version INTEGER NOT NULL,
+      valid_from TIMESTAMPTZ NOT NULL,
+      valid_to TIMESTAMPTZ NOT NULL,
+      values JSONB NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS record_history_record_idx
+      ON record_history (collection_name, record_id, row_version DESC);
+
+    -- The event-automation consumer is tenant-wide and durable. It is independent of browser
+    -- stream cursors, so reconnecting clients can never duplicate automation dispatch.
+    CREATE TABLE IF NOT EXISTS _norbital_automation_cursor (
+      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+      xid xid8 NOT NULL DEFAULT '0'::xid8,
+      seq BIGINT NOT NULL DEFAULT 0
+    );
+    INSERT INTO _norbital_automation_cursor (singleton)
       VALUES (TRUE)
       ON CONFLICT (singleton) DO NOTHING;
 
@@ -343,6 +374,27 @@ export const SCHEMA_POST_DDL_SQL = dedent`
     END
     $approval_lock_sync$;
 
+    -- Agent transcripts are append-only. The unique sequence makes restart/resume deterministic;
+    -- the trigger closes direct-SQL paths as well as the collection-operation surface.
+    DO $agent_transcript$
+    BEGIN
+      IF to_regclass('public.agent_run_step') IS NOT NULL THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS agent_run_step_run_sequence_unique
+          ON agent_run_step (automation_run_id, sequence);
+        CREATE OR REPLACE FUNCTION _norbital_agent_step_insert_only() RETURNS trigger
+        LANGUAGE plpgsql AS $agent_step$
+        BEGIN
+          RAISE EXCEPTION 'agent_run_step is insert-only';
+        END;
+        $agent_step$;
+        DROP TRIGGER IF EXISTS _norbital_agent_step_insert_only ON agent_run_step;
+        CREATE TRIGGER _norbital_agent_step_insert_only
+          BEFORE UPDATE OR DELETE ON agent_run_step
+          FOR EACH ROW EXECUTE FUNCTION _norbital_agent_step_insert_only();
+      END IF;
+    END
+    $agent_transcript$;
+
     DO $refresh_approval_lock_gates$
     DECLARE
       tbl RECORD;
@@ -353,8 +405,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
-          AND c.relname !~ '_history$'
-          AND c.relname NOT IN ('mutation_log', 'audit_event', '_approval_lock', '_norbital_internal_schema')
+	          AND c.relname NOT IN ('audit_event', '_approval_lock', '_norbital_internal_schema')
           AND EXISTS (
             SELECT 1
               FROM pg_attribute a
@@ -389,13 +440,12 @@ export const SCHEMA_POST_DDL_SQL = dedent`
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
-          AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-            'mutation_log', 'audit_event', '_approval_lock', '_norbital_internal_schema',
-            '_norbital_sync_epoch',
-            '__drizzle_migrations', 'sync_outbox', 'approval_request', 'requestor',
-            'automation_run', 'user', 'team', 'policy', 'chat_session', 'integration_outbox',
-            'notification', 'document_asset', 'team_members'
+	            'audit_event', '_approval_lock', '_norbital_internal_schema',
+	            '_norbital_sync_epoch', '_norbital_automation_cursor',
+	            '__drizzle_migrations', 'sync_outbox', 'approval_request', 'requestor',
+	            'automation_run', 'agent_run_step', 'user', 'team', 'policy', 'integration_outbox',
+	            'notification_outbox', 'notification', 'document_asset', 'team_members'
           )
           AND EXISTS (
             SELECT 1
@@ -416,50 +466,8 @@ export const SCHEMA_POST_DDL_SQL = dedent`
 
     INSERT INTO _norbital_internal_schema (version, name) VALUES (1, 'initial') ON CONFLICT DO NOTHING;
 
-    -- History snapshots are a projection of the current collection schema, not the
-    -- durable audit record. Rebuild after every migration so type/default/nullability
-    -- changes cannot leave a stale row shape; audit_event remains the immutable log.
-    DO $history_tables$
-    DECLARE
-      main_table text;
-      history_table text;
-    BEGIN
-      FOR main_table IN
-        SELECT c.relname
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND c.relkind = 'r'
-          AND c.relname !~ '_history$'
-          AND c.relname NOT IN (
-            'mutation_log',
-            'audit_event',
-            '_approval_lock',
-            '_norbital_internal_schema',
-            '__drizzle_migrations'
-          )
-          AND EXISTS (
-            SELECT 1
-            FROM pg_attribute a
-            WHERE a.attrelid = c.oid
-              AND a.attname = 'norbital_id'
-              AND NOT a.attisdropped
-          )
-      LOOP
-        history_table := main_table || '_history';
-        EXECUTE format('DROP TABLE IF EXISTS %I', history_table);
-        EXECUTE format(
-          'CREATE TABLE %I (LIKE %I INCLUDING DEFAULTS)',
-          history_table,
-          main_table
-        );
-      END LOOP;
-    END
-    $history_tables$;
-
-    -- Attach the temporal-versioning trigger to every collection that now has a history
-    -- table. Runs after the history tables exist so the to_regclass probe finds them, and
-    -- after _ops_guard is attached; on UPDATE/DELETE the alphabetical fire order is
+    -- Attach temporal versioning to every record-shaped table except internal ledgers.
+    -- Runs after _ops_guard is attached; on UPDATE/DELETE the alphabetical fire order is
     -- _approval_lock_gate → _norbital_versioning → _ops_guard, so a blocked or unauthorized
     -- write is rejected and its archive rolls back with it. Idempotent (DROP IF EXISTS).
     DO $refresh_versioning$
@@ -472,8 +480,18 @@ export const SCHEMA_POST_DDL_SQL = dedent`
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
-          AND c.relname !~ '_history$'
-          AND to_regclass(format('public.%I', c.relname || '_history')) IS NOT NULL
+          AND c.relname NOT IN (
+            'audit_event', 'record_history', 'sync_outbox', '_approval_lock',
+            '_norbital_internal_schema', '_norbital_sync_epoch',
+            '_norbital_automation_cursor', '__drizzle_migrations'
+          )
+          AND EXISTS (
+            SELECT 1
+              FROM pg_attribute a
+             WHERE a.attrelid = c.oid
+               AND a.attname = 'norbital_id'
+               AND NOT a.attisdropped
+          )
       LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS _norbital_versioning ON %I', tbl.table_name);
         EXECUTE format(

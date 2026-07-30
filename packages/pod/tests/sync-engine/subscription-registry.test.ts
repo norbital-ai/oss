@@ -30,6 +30,7 @@ type Stub = {
 	calls: ShapeRequest[];
 	recorded: { collection: string; resident: boolean; rows: number }[];
 	notified: string[];
+	events: string[];
 };
 
 function stubClient(options?: {
@@ -39,8 +40,10 @@ function stubClient(options?: {
 	const calls: ShapeRequest[] = [];
 	const recorded: { collection: string; resident: boolean; rows: number }[] = [];
 	const notified: string[] = [];
+	const events: string[] = [];
 	const client = {
 		shapeSubscribe: async (request: ShapeRequest) => {
+			events.push(`shape:${request.collection}`);
 			const index = calls.length;
 			calls.push(request);
 			return options?.page?.(request, index) ?? lastPage();
@@ -49,10 +52,17 @@ function stubClient(options?: {
 		recordSyncState: async (collection: string, resident: boolean, rows: number) => {
 			recorded.push({ collection, resident, rows });
 		},
+		setSubscribedCollections: (collections: Iterable<string>) =>
+			events.push(`subscribe:${[...collections].join(',')}`),
 		notifyCollection: (collection: string) => notified.push(collection),
-		startStream: () => {}
+		startStream: () => {
+			events.push('start');
+		},
+		stopStream: async () => {
+			events.push('stop');
+		}
 	} as unknown as PodSyncClient;
-	return { client, calls, recorded, notified };
+	return { client, calls, recorded, notified, events };
 }
 
 /** `register` resolves on the first page; let the background catch-up finish. */
@@ -113,7 +123,26 @@ describe('SubscriptionRegistry', () => {
 		expect(notified).toContain('orders');
 	});
 
-	it('restores persisted state but does not serve it locally before the live-head barrier', async () => {
+	it('freezes the feed until catch-up completes, then subscribes before replaying it', async () => {
+		const { client, events } = stubClient({
+			page: (_request, index) => (index === 0 ? morePages(rowsOf(1)) : lastPage(rowsOf(1, 1)))
+		});
+		const registry = new SubscriptionRegistry(client);
+
+		await registry.register('orders');
+		await settle();
+
+		expect(events).toEqual([
+			'stop',
+			'shape:orders',
+			'subscribe:orders',
+			'shape:orders',
+			'subscribe:orders',
+			'start'
+		]);
+	});
+
+	it('restores persisted state so a reload reads locally without re-fetching', async () => {
 		const persisted = new Map<string, CollectionSyncState>([
 			['orders', { collection: 'orders', resident: true, rows: 12, syncedAt: 1 }]
 		]);
@@ -122,14 +151,10 @@ describe('SubscriptionRegistry', () => {
 
 		await registry.restore();
 		expect(registry.has('orders')).toBe(true);
-		expect(registry.isFresh('orders')).toBe(false);
-		expect(registry.isResident('orders')).toBe(false);
+		expect(registry.isResident('orders')).toBe(true);
 
 		await registry.register('orders');
 		expect(calls.length).toBe(0);
-		registry.markRestoredFresh();
-		expect(registry.isFresh('orders')).toBe(true);
-		expect(registry.isResident('orders')).toBe(true);
 	});
 
 	it('leaves a collection unregistered when catch-up fails, so the next read retries', async () => {
@@ -143,8 +168,10 @@ describe('SubscriptionRegistry', () => {
 			},
 			loadSyncState: async () => new Map<string, CollectionSyncState>(),
 			recordSyncState: async () => {},
+			setSubscribedCollections: () => {},
 			notifyCollection: () => {},
-			startStream: () => {}
+			startStream: () => {},
+			stopStream: async () => {}
 		} as unknown as PodSyncClient;
 		const registry = new SubscriptionRegistry(client);
 

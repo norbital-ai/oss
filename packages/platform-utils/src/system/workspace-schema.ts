@@ -141,6 +141,20 @@ export function getSystemTableMeta(table: object): SystemTableMeta | undefined {
 	return tableMeta.get(table);
 }
 
+const _user = systemTable(
+	'user',
+	{
+		email: text().notNull().unique(),
+		name: text(),
+		avatar_url: text(),
+		status: text().default('active'),
+		role: text().default('member'),
+		kind: text().default('human'),
+		channels: jsonbColumn(UserChannelsSchema).default([])
+	},
+	{ description: 'System users', record_label: 'name', system: true }
+);
+
 const _approval_request = systemTable(
 	'approval_request',
 	{
@@ -159,7 +173,10 @@ const _approval_request = systemTable(
 const _automation_run = systemTable(
 	'automation_run',
 	{
-		automation_name: text().notNull(),
+		requested_by_user_id: uuid()
+			.references(() => _user.norbital_id)
+			.notNull(),
+		automation_name: text(),
 		status: text().notNull().default('pending'),
 		input: jsonbColumn(JsonObjectSchema).default({}),
 		output: jsonbColumn(JsonObjectSchema),
@@ -170,18 +187,30 @@ const _automation_run = systemTable(
 	{ description: 'Automation runs', record_label: 'automation_name', system: true }
 );
 
-const _user = systemTable(
-	'user',
+const _agent_run_step = systemTable(
+	'agent_run_step',
 	{
-		email: text().notNull().unique(),
-		name: text(),
-		avatar_url: text(),
-		status: text().default('active'),
-		role: text().default('member'),
-		kind: text().default('human'),
-		channels: jsonbColumn(UserChannelsSchema).default([])
+		owner_user_id: uuid()
+			.references(() => _user.norbital_id)
+			.notNull(),
+		automation_run_id: uuid()
+			.references(() => _automation_run.norbital_id)
+			.notNull(),
+		sequence: integer().notNull(),
+		kind: text().notNull(),
+		role: text(),
+		content: text(),
+		tool_call_id: text(),
+		tool_name: text(),
+		tool_input: jsonbColumn(JsonObjectSchema),
+		tool_output: jsonbColumn(JsonObjectSchema),
+		usage: jsonbColumn(JsonObjectSchema)
 	},
-	{ description: 'System users', record_label: 'name', system: true }
+	{
+		description: 'Insert-only workspace agent transcript steps',
+		record_label: 'kind',
+		system: true
+	}
 );
 
 const _requestor = systemTable(
@@ -225,29 +254,6 @@ const _team = systemTable(
 	{ description: 'Teams', record_label: 'name', system: true }
 );
 
-const _chat_session = systemTable(
-	'chat_session',
-	{
-		title: text(),
-		messages: jsonbColumn(JsonArraySchema).default([]),
-		context: jsonbColumn(JsonObjectSchema).default({})
-	},
-	{ description: 'AI chat sessions', record_label: 'title', system: true }
-);
-
-const _mutation_log = systemTable(
-	'mutation_log',
-	{
-		collection_name: text().notNull(),
-		record_id: uuid().notNull(),
-		action: text().notNull(),
-		payload: jsonbColumn(JsonObjectSchema).default({}),
-		result: jsonbColumn(JsonObjectSchema),
-		actor_id: uuid().references(() => _user.norbital_id)
-	},
-	{ description: 'Mutation audit log', record_label: 'collection_name', system: true }
-);
-
 const _audit_event = systemTable(
 	'audit_event',
 	{
@@ -283,6 +289,31 @@ const _integration_outbox = systemTable(
 	}
 );
 
+const _notification_outbox = systemTable(
+	'notification_outbox',
+	{
+		channel: text().notNull(),
+		recipient_user_id: uuid()
+			.references(() => _user.norbital_id)
+			.notNull(),
+		subject: text().notNull(),
+		message: text().notNull(),
+		cta_label: text(),
+		cta_url: text(),
+		status: text().notNull().default('pending'),
+		attempts: integer().notNull().default(0),
+		available_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+		claimed_at: timestamp({ withTimezone: true }),
+		delivered_at: timestamp({ withTimezone: true }),
+		last_error: text()
+	},
+	{
+		description: 'Transactional external notification delivery outbox',
+		record_label: 'subject',
+		system: true
+	}
+);
+
 const _notification = systemTable(
 	'notification',
 	{
@@ -303,15 +334,15 @@ const _notification = systemTable(
 const _document_asset = systemTable(
 	'document_asset',
 	{
+		owner_user_id: uuid()
+			.references(() => _user.norbital_id)
+			.notNull(),
 		file_name: text().notNull(),
 		mime_type: text(),
 		file_size: integer(),
-		storage_key: text().notNull(),
-		storage_provider: text().default('minio'),
-		metadata: jsonbColumn(JsonObjectSchema).default({}),
-		embedding_model: text()
+		storage_key: text().notNull()
 	},
-	{ description: 'Document assets', record_label: 'file_name', semanticSearch: true, system: true }
+	{ description: 'Document assets', record_label: 'file_name', system: true }
 );
 
 const _team_members = systemTable(
@@ -330,13 +361,13 @@ const _team_members = systemTable(
 export const approval_request = _approval_request;
 export const requestor = _requestor;
 export const automation_run = _automation_run;
+export const agent_run_step = _agent_run_step;
 export const user = _user;
 export const team = _team;
 export const policy = _policy;
-export const chat_session = _chat_session;
-export const mutation_log = _mutation_log;
 export const audit_event = _audit_event;
 export const integration_outbox = _integration_outbox;
+export const notification_outbox = _notification_outbox;
 export const notification = _notification;
 export const document_asset = _document_asset;
 export const team_members = _team_members;
@@ -345,13 +376,13 @@ export const platformTables = {
 	approval_request,
 	requestor,
 	automation_run,
+	agent_run_step,
 	user,
 	team,
 	policy,
-	chat_session,
-	mutation_log,
 	audit_event,
 	integration_outbox,
+	notification_outbox,
 	notification,
 	document_asset,
 	team_members
@@ -361,13 +392,13 @@ export const systemTables = {
 	approval_request: { table: approval_request },
 	requestor: { table: requestor },
 	automation_run: { table: automation_run },
+	agent_run_step: { table: agent_run_step },
 	user: { table: user },
 	team: { table: team },
 	policy: { table: policy },
-	chat_session: { table: chat_session },
-	mutation_log: { table: mutation_log },
 	audit_event: { table: audit_event },
 	integration_outbox: { table: integration_outbox },
+	notification_outbox: { table: notification_outbox },
 	notification: { table: notification },
 	document_asset: { table: document_asset },
 	team_members: { table: team_members }

@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
 	deleteAllowed: true,
 	beforeHook: undefined as undefined | ((event: { existing: Record<string, unknown> }) => unknown),
 	afterHook: undefined as undefined | ((event: { record: Record<string, unknown> }) => unknown),
+	auditFailure: false,
 	auditBatches: [] as { entityId: string }[][]
 }));
 
@@ -70,6 +71,7 @@ vi.mock('$lib/server/audit/audit_event.server.js', () => ({
 	buildAuditEventPayload: () => ({}),
 	sendAuditEvent: async () => undefined,
 	sendAuditEvents: async (events: { params: { entityId: string } }[]) => {
+		if (state.auditFailure) throw new Error('injected audit failure');
 		state.auditBatches.push(events.map((event) => ({ entityId: event.params.entityId })));
 	}
 }));
@@ -156,16 +158,17 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		state.deleteAllowed = true;
 		state.beforeHook = undefined;
 		state.afterHook = undefined;
+		state.auditFailure = false;
 		state.auditBatches = [];
 		// A failed assertion can leave the pinned connection mid-transaction; start clean.
 		await client.query('ROLLBACK').catch(() => undefined);
 		await client.query('BEGIN');
 		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
 		// Locks first: while one stands, _approval_lock_gate rejects the delete it guards.
-		// History last: clearing `orders` archives whatever is left into it.
+		// Ledger last: clearing `orders` archives whatever is left into it.
 		await client.query('DELETE FROM _approval_lock');
 		await client.query('DELETE FROM orders');
-		await client.query('DELETE FROM orders_history');
+		await client.query(`DELETE FROM record_history WHERE collection_name = 'orders'`);
 		await client.query('DELETE FROM sync_outbox');
 		await client.query('COMMIT');
 		statements = [];
@@ -215,12 +218,16 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		await deleteMany(ctx, 'orders', ids.slice(0, 4), { isElevated: true });
 
 		const history = await pool.query<{ norbital_id: string; status: string }>(
-			`SELECT norbital_id, status FROM orders_history ORDER BY status`
+			`SELECT record_id AS norbital_id, values->>'status' AS status
+			   FROM record_history
+			  WHERE collection_name = 'orders'
+			  ORDER BY values->>'status'`
 		);
 		expect(history.rows.map((row) => row.status)).toEqual(['row-0', 'row-1', 'row-2', 'row-3']);
 		// Every archived version is closed at the delete.
 		const open = await pool.query(
-			`SELECT 1 FROM orders_history WHERE upper(norbital_sys_period::tstzrange) IS NULL`
+			`SELECT 1 FROM record_history
+			  WHERE collection_name = 'orders' AND valid_to IS NULL`
 		);
 		expect(open.rowCount).toBe(0);
 	});
@@ -278,6 +285,21 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		const feed = await pool.query(`SELECT 1 FROM sync_outbox`);
 		expect(feed.rowCount).toBe(0);
 		expect(state.auditBatches).toHaveLength(0);
+	});
+
+	it('rolls back records, history, and sync when the audit sink fails', async () => {
+		const ids = await seed(3);
+		state.auditFailure = true;
+
+		await expect(deleteMany(ctx, 'orders', ids, { isElevated: true })).rejects.toThrow(
+			'injected audit failure'
+		);
+
+		expect(await pool.query(`SELECT 1 FROM orders`)).toMatchObject({ rowCount: 3 });
+		expect(
+			await pool.query(`SELECT 1 FROM record_history WHERE collection_name = 'orders'`)
+		).toMatchObject({ rowCount: 0 });
+		expect(await pool.query(`SELECT 1 FROM sync_outbox`)).toMatchObject({ rowCount: 0 });
 	});
 
 	it('fails the whole batch when one id is missing, before touching any row', async () => {
@@ -354,9 +376,11 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		expect(live.rows.map((row) => row.norbital_id)).toEqual([ids[1]]);
 		const feed = await pool.query<{ record_id: string }>(`SELECT record_id FROM sync_outbox`);
 		expect(feed.rows.map((row) => row.record_id)).toEqual([ids[0]]);
-		const history = await pool.query(`SELECT 1 FROM orders_history WHERE norbital_id = $1::uuid`, [
-			ids[0]
-		]);
+		const history = await pool.query(
+			`SELECT 1 FROM record_history
+			  WHERE collection_name = 'orders' AND record_id = $1::uuid`,
+			[ids[0]]
+		);
 		expect(history.rowCount).toBe(1);
 	});
 
@@ -376,7 +400,9 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 
 		const live = await pool.query(`SELECT 1 FROM orders`);
 		expect(live.rowCount).toBe(0);
-		const history = await pool.query(`SELECT 1 FROM orders_history`);
+		const history = await pool.query(
+			`SELECT 1 FROM record_history WHERE collection_name = 'orders'`
+		);
 		expect(history.rowCount).toBe(1100);
 		const feed = await pool.query<{ record_id: string }>(
 			`SELECT record_id FROM sync_outbox ORDER BY seq`

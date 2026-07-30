@@ -130,6 +130,7 @@ describe('Withdrawn approval reaches the synced client', () => {
 		await client.bootstrap();
 		try {
 			await client.shapeSubscribe({ collection: collection.name, pageSize: 200 });
+			client.setSubscribedCollections([collection.name]);
 			client.startStream();
 			// The provisional record is what the user sees before deciding: local, and stamped.
 			expect(await client.localVersion(collection.name, recordId)).not.toBeNull();

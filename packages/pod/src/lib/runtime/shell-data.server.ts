@@ -136,7 +136,6 @@ export async function loadTenantWorkspaceShellData(
 		baseScope: workspace.baseScope,
 		userOrganizations: workspace.userOrganizations,
 		...(billing.success ? { billing: billing.data } : {}),
-		hostPlugins: workspace.hostPlugins,
 		accessibleAppNames: resolveAccessibleAppNames(teamsAndPolicies),
 		policyGrants: resolvePolicyGrants(teamsAndPolicies)
 	};

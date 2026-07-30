@@ -2,13 +2,12 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { postgresDb } from '../../host/db.js';
-import { consoleNotifications, stubMaps } from '../../host/facilities.js';
 import { localFileStorage } from '../../host/file-storage.js';
 import { devIdentity, trustedHeaderIdentity } from '../../host/identity.js';
 import type { HostDbAdapter, HostIdentityProvider, PodHostConfig } from '../../host/types.js';
 
 /** Config filenames tried in order. `.ts` first: Node strips types natively on the supported range. */
-const CONFIG_FILENAMES = ['pod.config.ts', 'pod.config.js', 'pod.config.mjs'] as const;
+const CONFIG_FILENAMES = ['pod.host.ts', 'pod.host.js', 'pod.host.mjs'] as const;
 
 export type StandaloneIdentityMode = 'trusted-host' | 'dev';
 
@@ -28,8 +27,6 @@ export type ResolvedHostConfig = {
 	readonly config: PodHostConfig;
 	/** Where the configuration came from, for the startup banner. */
 	readonly source: string;
-	/** Facilities installed with a placeholder implementation that fails at the point of use. */
-	readonly stubbed: readonly string[];
 };
 
 function isHostConfig(value: unknown): value is PodHostConfig {
@@ -60,34 +57,27 @@ function identityProvider(input: HostConfigInput): HostIdentityProvider {
 }
 
 /**
- * The configuration a workspace gets when it has no `pod.config.ts`.
+ * The configuration a workspace gets when it has no `pod.host.ts`.
  *
- * `ai` is absent on purpose — it is the trusted host's facility, and a workspace that needs it
- * should be refused here rather than started against a placeholder. `maps` is present but is a
- * placeholder that fails when used rather than when installed, so an address field still accepts
- * typed input; `stubbed` carries it to the banner so the operator learns that on boot instead of
- * from a stack trace later.
+ * Only facilities with complete local implementations are installed. Any other requirement is
+ * rejected by the startup gate and must be supplied explicitly in `pod.host.ts`.
  */
 export function defaultHostConfig(input: HostConfigInput): ResolvedHostConfig {
 	return {
 		source: 'built-in defaults',
-		stubbed: ['maps'],
 		config: {
 			db: postgresDb({ url: input.databaseUrl }),
 			identity: identityProvider(input),
 			fileStorage: localFileStorage({
-				directory: path.join(input.root, '.norbital', 'storage'),
-				origin: `http://${input.host}:${input.port}`
+				directory: path.join(input.root, '.norbital', 'storage')
 			}),
-			notifications: consoleNotifications(),
-			maps: stubMaps(),
 			scheduler: { automations: true }
 		}
 	};
 }
 
 /**
- * Load `pod.config.ts` if the workspace has one, otherwise fall back to the defaults.
+ * Load `pod.host.ts` if the workspace has one, otherwise fall back to the defaults.
  *
  * A workspace config replaces the defaults rather than merging with them. Merging would mean a
  * host that deliberately omits a facility silently gets the placeholder instead, and the facility
@@ -100,7 +90,7 @@ export async function loadHostConfig(input: HostConfigInput): Promise<ResolvedHo
 }
 
 /**
- * The workspace's own `pod.config.ts`, or `null` when it has none.
+ * The workspace's own `pod.host.ts`, or `null` when it has none.
  *
  * Separate from `loadHostConfig` because `pod migrate` and `pod seed` need one thing out of the
  * configuration — which database to open — and must not have to invent an identity mode or a
@@ -121,7 +111,7 @@ export async function loadHostConfigFile(root: string): Promise<ResolvedHostConf
 				`${filename} must default-export definePodHost({ ... }) with a \`db\` adapter and an identity provider.`
 			);
 		}
-		return { config: exported, source: filename, stubbed: [] };
+		return { config: exported, source: filename };
 	}
 	return null;
 }

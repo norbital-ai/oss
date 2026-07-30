@@ -1,35 +1,21 @@
 import { execFileSync } from 'node:child_process';
-import { readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rmdir, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Pool, type PoolClient } from 'pg';
+import type {
+	HostAiBinding,
+	HostFileStorageBinding,
+	HostMapsBinding,
+	HostNotificationsBinding,
+	RuntimeFacilityBindings
+} from '@norbital-ai/platform-utils/runtime/binding';
 import { startPostgres, type PgHarness } from './pg-harness.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js');
-
-function runPodCommand(command: 'build' | 'migrate', cwd: string, env: NodeJS.ProcessEnv): void {
-	try {
-		execFileSync('node', [POD_BIN, command], {
-			cwd,
-			env,
-			encoding: 'utf8',
-			stdio: ['ignore', 'pipe', 'pipe']
-		});
-	} catch (cause) {
-		const failure = cause as { stdout?: string | Buffer; stderr?: string | Buffer };
-		const detail = [failure.stdout, failure.stderr]
-			.map((value) => value?.toString().trim())
-			.filter(Boolean)
-			.join('\n');
-		throw new Error(
-			`pod ${command} failed for ${path.relative(REPO_ROOT, cwd)}${detail ? `\n${detail}` : ''}`,
-			{ cause }
-		);
-	}
-}
 
 export type TenantRequestInit = {
 	readonly method: 'GET' | 'POST';
@@ -57,28 +43,22 @@ export type PodRuntimeHarness = {
 	stop(): Promise<void>;
 };
 
-type HandleTenantRequest = (request: Request, bindings: RuntimeBindings) => Promise<Response>;
+type HandleTenantRequest = (
+	request: Request,
+	bindings: RuntimeFacilityBindings
+) => Promise<Response>;
 
-/**
- * What the host grants this runtime.
- *
- * `db` is always bound. Everything else is opt-in per test, which is the point: a facility the
- * host did not grant must fail at the point of use, and a test that silently received one would
- * be proving the wrong thing.
- */
-export type RuntimeBindings = { db: HostDbBinding } & Record<string, unknown>;
-
-type HostDbBinding = {
+type TestHostDbBinding = {
 	query(
 		sql: unknown,
 		params?: readonly unknown[]
-	): Promise<{ rows: readonly unknown[]; rowCount?: number }>;
+	): Promise<{ rows: readonly unknown[]; rowCount: number }>;
 	begin(): Promise<string>;
 	txQuery(
 		txId: string,
 		sql: unknown,
 		params?: readonly unknown[]
-	): Promise<{ rows: readonly unknown[]; rowCount?: number }>;
+	): Promise<{ rows: readonly unknown[]; rowCount: number }>;
 	commit(txId: string): Promise<void>;
 	rollback(txId: string): Promise<void>;
 };
@@ -87,8 +67,33 @@ const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const ORG_NAME = 'Sync IT Org';
 const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
 
+async function withTemplateBuildLock<T>(templateRoot: string, run: () => Promise<T>): Promise<T> {
+	const lockDirectory = path.join(templateRoot, '.norbital', '.test-build-lock');
+	const deadline = Date.now() + 120_000;
+	for (;;) {
+		try {
+			await mkdir(lockDirectory);
+			break;
+		} catch (cause) {
+			if (!(cause instanceof Error) || !('code' in cause) || cause.code !== 'EEXIST') throw cause;
+			const lock = await stat(lockDirectory).catch(() => null);
+			if (lock && Date.now() - lock.mtimeMs > 5 * 60_000) {
+				await rmdir(lockDirectory).catch(() => undefined);
+				continue;
+			}
+			if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${lockDirectory}`);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	}
+	try {
+		return await run();
+	} finally {
+		await rmdir(lockDirectory).catch(() => undefined);
+	}
+}
+
 /** Pinned-connection binding (mirrors PostgresHostDbBinding): txQuery/commit share one connection. */
-function createPgBinding(pool: Pool): HostDbBinding {
+function createPgBinding(pool: Pool): TestHostDbBinding {
 	const txns = new Map<string, PoolClient>();
 	let counter = 0;
 	const normalize = (sql: unknown): { text: string; values: unknown[]; rowMode?: 'array' } => {
@@ -124,7 +129,7 @@ function createPgBinding(pool: Pool): HostDbBinding {
 		async query(sql, params) {
 			const q = normalize(sql);
 			const result = await run(q, params);
-			return { rows: result.rows, rowCount: result.rowCount ?? undefined };
+			return { rows: result.rows, rowCount: result.rowCount ?? 0 };
 		},
 		async begin() {
 			const client = await pool.connect();
@@ -137,7 +142,7 @@ function createPgBinding(pool: Pool): HostDbBinding {
 			const client = txns.get(txId);
 			if (!client) throw new Error(`Unknown transaction ${txId}`);
 			const result = await run(normalize(sql), params, client);
-			return { rows: result.rows, rowCount: result.rowCount ?? undefined };
+			return { rows: result.rows, rowCount: result.rowCount ?? 0 };
 		},
 		async commit(txId) {
 			const client = txns.get(txId);
@@ -206,14 +211,18 @@ async function loadSchemaSql(templateRoot: string): Promise<string> {
 /**
  * Boot a full pod runtime in-process against a throwaway Postgres 18: build + migrate the template,
  * load the built `handleTenantRequest`, and expose an authed `request()` that drives `/_runtime/*`
- * with a forged base scope (no HTTP server, no facility gate).
- *
- * `db` is the only facility bound by default. Pass `facilities` to grant more; a test that wants to
- * prove what happens without one simply does not name it.
+ * with a forged base scope (no HTTP server, no facility gate — only the `db` facility is bound).
  */
+export type PodRuntimeTestFacilities = {
+	readonly ai?: HostAiBinding;
+	readonly fileStorage?: HostFileStorageBinding;
+	readonly maps?: HostMapsBinding;
+	readonly notifications?: HostNotificationsBinding;
+};
+
 export async function bootPodRuntime(
 	template = 'construction',
-	options?: { readonly facilities?: Readonly<Record<string, unknown>> }
+	facilities: PodRuntimeTestFacilities = {}
 ): Promise<PodRuntimeHarness> {
 	const templateRoot = path.join(REPO_ROOT, 'template_workspaces', template);
 	const pg: PgHarness = await startPostgres();
@@ -234,31 +243,39 @@ export async function bootPodRuntime(
 	// down on the way out rather than leaving it — and its data volume — behind.
 	let handleTenantRequest: HandleTenantRequest;
 	let pool: Pool;
-	let bindings: RuntimeBindings;
+	let binding: ReturnType<typeof createPgBinding>;
 	let schemaSql: string;
 	try {
-		runPodCommand('build', templateRoot, env);
-		runPodCommand('migrate', templateRoot, env);
-
-		const runtimePath = path.join(
+		({ handleTenantRequest, pool, binding, schemaSql } = await withTemplateBuildLock(
 			templateRoot,
-			'.norbital',
-			'build',
-			'output',
-			'server',
-			'index.js'
-		);
-		const runtimeModule = (await import(pathToFileURL(runtimePath).href)) as {
-			handlePodRequest?: HandleTenantRequest;
-		};
-		if (!runtimeModule.handlePodRequest) {
-			throw new Error('built pod runtime is missing handlePodRequest');
-		}
-		handleTenantRequest = runtimeModule.handlePodRequest;
+			async () => {
+				execFileSync('node', [POD_BIN, 'build'], { cwd: templateRoot, env, stdio: 'ignore' });
+				execFileSync('node', [POD_BIN, 'migrate'], { cwd: templateRoot, env, stdio: 'ignore' });
 
-		pool = new Pool({ connectionString: pg.connectionString, max: 12 });
-		bindings = { db: createPgBinding(pool), ...(options?.facilities ?? {}) };
-		schemaSql = await loadSchemaSql(templateRoot);
+				const runtimePath = path.join(
+					templateRoot,
+					'.norbital',
+					'build',
+					'output',
+					'server',
+					'index.js'
+				);
+				const runtimeModule = (await import(pathToFileURL(runtimePath).href)) as {
+					handlePodRequest?: HandleTenantRequest;
+				};
+				if (!runtimeModule.handlePodRequest) {
+					throw new Error('built pod runtime is missing handlePodRequest');
+				}
+				const loadedPool = new Pool({ connectionString: pg.connectionString, max: 12 });
+				const loadedBinding = createPgBinding(loadedPool);
+				return {
+					handleTenantRequest: runtimeModule.handlePodRequest,
+					pool: loadedPool,
+					binding: loadedBinding,
+					schemaSql: await loadSchemaSql(templateRoot)
+				};
+			}
+		));
 	} catch (err) {
 		pg.stop();
 		throw err;
@@ -285,16 +302,17 @@ export async function bootPodRuntime(
 				signal: init.signal,
 				...(init.body ? { body: init.body } : {})
 			});
-			return handleTenantRequest(request, bindings);
+			return handleTenantRequest(request, { db: binding, ...facilities });
 		},
 		async serveHttp(identity) {
 			const server = createServer((req, res) => {
-				void handleNodeRequest(req, res, identity, handleTenantRequest, bindings).catch(
-					(cause: unknown) => {
-						if (!res.headersSent) res.statusCode = 500;
-						res.end(String(cause));
-					}
-				);
+				void handleNodeRequest(req, res, identity, handleTenantRequest, {
+					db: binding,
+					...facilities
+				}).catch((cause: unknown) => {
+					if (!res.headersSent) res.statusCode = 500;
+					res.end(String(cause));
+				});
 			});
 			await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 			const port = (server.address() as AddressInfo).port;
@@ -316,7 +334,7 @@ async function handleNodeRequest(
 	res: ServerResponse,
 	identity: Identity,
 	handle: HandleTenantRequest,
-	bindings: RuntimeBindings
+	bindings: RuntimeFacilityBindings
 ): Promise<void> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of req) chunks.push(chunk as Buffer);

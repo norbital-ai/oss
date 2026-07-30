@@ -101,7 +101,7 @@ defines no approver routing, no pending flag and no rejected state.
 | null                   | in force                    |
 
 The engine reads one predicate everywhere: `WHERE norbital_approval_id IS NULL`. There is no
-`if (approved)` in it. Rejection _undoes the write_ — the row rolls back from `_history` — which is
+`if (approved)` in it. Rejection _undoes the write_ from the temporal ledger, which is
 why there is no rejected state to model.
 
 Two balances follow, and using the wrong one overdraws: **settled** (`approval_id IS NULL`) is what

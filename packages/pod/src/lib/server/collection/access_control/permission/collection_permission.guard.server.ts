@@ -99,9 +99,19 @@ export async function evaluatePolicyGrants(params: {
 async function workflowMetadataReadFallback(
 	collectionName: string
 ): Promise<{ reducedCondition?: Record<string, unknown> } | null> {
-	if (collectionName === 'team') return {};
-	if (collectionName !== 'approval_request') return null;
 	const workspace = getWorkspace({ provision: true });
+	const requestorId = workspace.baseScope.requestor.norbital_id;
+	if (collectionName === 'team') return {};
+	if (collectionName === 'notification') {
+		return { reducedCondition: { recipient_user_id: requestorId } };
+	}
+	if (collectionName === 'document_asset' || collectionName === 'agent_run_step') {
+		return { reducedCondition: { owner_user_id: requestorId } };
+	}
+	if (collectionName === 'automation_run') {
+		return { reducedCondition: { requested_by_user_id: requestorId } };
+	}
+	if (collectionName !== 'approval_request') return null;
 	const teamIds = workspace.baseScope.requestor.team_members.map((team) => team.norbital_id);
 	if (teamIds.length === 0) return null;
 	const { teams, policies } = await loadPoliciesForTeams(teamIds);

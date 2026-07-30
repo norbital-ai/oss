@@ -130,6 +130,7 @@ describe('An approval status change reaches the synced client', () => {
 		await client.bootstrap();
 		try {
 			await client.shapeSubscribe({ collection: 'approval_request', pageSize: 200 });
+			client.setSubscribedCollections(['approval_request']);
 			client.startStream();
 			const initial = await client.queryLocal<{ status: string }>(
 				`SELECT status FROM approval_request WHERE norbital_id = $1`,

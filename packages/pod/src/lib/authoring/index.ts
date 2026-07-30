@@ -1,5 +1,8 @@
 /** Filesystem-first tenant workspace authoring primitives. */
 
+/** Compiler-generated tenant declarations merge exact filesystem-derived authoring names here. */
+export interface WorkspaceAuthoringTypes {}
+
 export { boolean, index, integer, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 export {
@@ -56,6 +59,9 @@ export type {
 } from './schema/types.js';
 export { extract } from './schema/extract.js';
 export { defineAutomation, type AutomationTrigger } from './automations/automations.js';
+export { defineAgentTool, type AgentToolDefinition } from './automations/agent-tools.js';
+export { defineNotifications, type NotificationDefinition } from './notifications.js';
+export { defineFacilities, type FacilityDeclaration } from './facilities.js';
 export { defineCommandHandler, defineQueryHandler } from './automations/handlers.js';
 export type { TExportAction, TExportManifest, TFileAttachment } from './automations/pipelines.js';
 export type {

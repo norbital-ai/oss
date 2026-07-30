@@ -10,12 +10,21 @@ import { runWithRequestEvent, type PodRequestEvent } from './request-context.js'
 import { loadTenantWorkspaceShellData } from './shell-data.server.js';
 import { toRuntimeWorkspace } from '$lib/authoring/workspace/workspace-runtime.js';
 import { registerTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
+import { dispatchRuntimeRun, parseRuntimeRunRequest } from '$lib/server/run/tenant_run.js';
 
 export { getTenantManifest } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import type { RuntimeWorkspaceSource } from '$lib/authoring/workspace/workspace-runtime.js';
+import {
+	setDatabaseNotifications,
+	type DatabaseNotifications
+} from '$lib/server/collection/sync/db-notifications.server.js';
 
 export function registerPodWorkspace(workspace: RuntimeWorkspaceSource): void {
 	registerTenantWorkspace(toRuntimeWorkspace(workspace));
+}
+
+export function registerPodDatabaseNotifications(source: DatabaseNotifications | null): void {
+	setDatabaseNotifications(source);
 }
 
 function cookieValue(request: Request, name: string): string | undefined {
@@ -91,7 +100,7 @@ async function runRequest(event: PodRequestEvent): Promise<Response> {
 		error(401, 'Unauthorized');
 	}
 
-	return beforeApiStorage.run(createBeforeApi(event.fetch), () =>
+	return beforeApiStorage.run(createBeforeApi(), () =>
 		runWithWorkspaceContext(context, async () => {
 			const pathname = new URL(event.request.url).pathname;
 			if (pathname === '/_pod/bootstrap') {
@@ -123,4 +132,41 @@ export async function handlePodRequest(
 			{ status: 500 }
 		);
 	}
+}
+
+export type PodHostIdentity = {
+	readonly userId: string;
+	readonly organizationId: string;
+	readonly organizationName: string;
+	readonly baseScope?: unknown;
+};
+
+/**
+ * Private control plane used by the trusted host. It is deliberately not reachable through
+ * `handlePodRequest`, so a tenant identity can never claim jobs or inject system events.
+ */
+export async function handlePodHostCommand(
+	command: unknown,
+	bindings: RuntimeFacilityBindings,
+	identity: PodHostIdentity
+): Promise<unknown> {
+	const headers = new Headers({
+		'x-norbital-user-id': identity.userId,
+		'x-norbital-org-id': identity.organizationId,
+		'x-norbital-org-name': identity.organizationName
+	});
+	if (identity.baseScope) {
+		headers.set(NORBITAL_BASE_SCOPE_HEADER, JSON.stringify(identity.baseScope));
+	}
+	const event = createEvent(
+		new Request('http://tenant.local/_host-command', { headers }),
+		bindings
+	);
+	return runWithRequestEvent(event, async () => {
+		const context = await buildCtx(event);
+		if (!context) error(401, 'Host command workspace context could not be established');
+		return beforeApiStorage.run(createBeforeApi(), () =>
+			runWithWorkspaceContext(context, () => dispatchRuntimeRun(parseRuntimeRunRequest(command)))
+		);
+	});
 }

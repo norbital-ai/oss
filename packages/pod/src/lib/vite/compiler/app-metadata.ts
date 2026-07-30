@@ -141,13 +141,8 @@ export function extractAppMetadata(source: string, file: string): AppMetadataRes
 		'description' | 'pod:icon' | 'pod:thumbnail' | 'pod:banner',
 		MetadataEntry[]
 	>();
-	const removedLayoutEntries: AST.RegularElement[] = [];
 	for (const element of metadataElements) {
 		const name = staticAttribute(element, 'name');
-		if (name === 'pod:layout') {
-			removedLayoutEntries.push(element);
-			continue;
-		}
 		if (
 			name !== 'description' &&
 			name !== 'pod:icon' &&
@@ -168,18 +163,6 @@ export function extractAppMetadata(source: string, file: string): AppMetadataRes
 		values.get('pod:icon') ?? []
 	);
 	diagnostics.push(...iconResult.diagnostics);
-
-	for (const element of removedLayoutEntries) {
-		diagnostics.push(
-			sourceDiagnostic(
-				source,
-				file,
-				element.start,
-				'APP_LAYOUT_REMOVED',
-				'pod:layout is no longer supported; the Pod shell owns application scrolling and layout'
-			)
-		);
-	}
 
 	const descriptionEntries = values.get('description') ?? [];
 	for (const entry of descriptionEntries.slice(1)) {

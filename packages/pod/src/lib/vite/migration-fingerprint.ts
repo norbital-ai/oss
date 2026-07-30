@@ -74,7 +74,7 @@ export async function readMigrationFingerprint(
 			return parsed as MigrationFingerprint;
 		}
 	} catch {
-		// Missing and legacy migration directories are regenerated once.
+		// A missing or invalid fingerprint requires regeneration.
 	}
 	return undefined;
 }

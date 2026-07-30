@@ -1,5 +1,4 @@
 import type { NorbitalManifest } from '$lib/manifest';
-import type { AppPlugin, HostPluginRegistry } from '$lib/client/plugin/contract.js';
 import type { UserOrganizationInfo } from '$lib/server/bootstrap/workspace_store.js';
 import type { TBaseScope, TScopeRequestor } from '$lib/client/types.js';
 import type { CollectionColumnMap } from '@norbital-ai/platform-utils/manifest/context';
@@ -47,8 +46,6 @@ export type TenantWorkspaceShellData = {
 		readonly replicaEpoch: string;
 	};
 	readonly baseScope?: TBaseScope;
-	readonly hostPlugins?: HostPluginRegistry;
-	readonly sidebarPlugins?: readonly AppPlugin[];
 	readonly userOrganizations?: readonly UserOrganizationInfo[];
 	readonly billing?: WorkspaceBillingSummary;
 	readonly signOut?: () => Promise<void>;
@@ -67,9 +64,4 @@ export type TenantWorkspacePageData = Pick<
 	TenantWorkspaceShellData,
 	'user' | 'organization' | 'initialWorkspaceLatest' | 'accessibleAppNames' | 'policyGrants'
 > &
-	Partial<
-		Pick<
-			TenantWorkspaceShellData,
-			'baseScope' | 'hostPlugins' | 'sidebarPlugins' | 'userOrganizations'
-		>
-	>;
+	Partial<Pick<TenantWorkspaceShellData, 'baseScope' | 'userOrganizations'>>;

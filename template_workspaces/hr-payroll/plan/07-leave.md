@@ -359,7 +359,7 @@ what was taken in Q1.
             by period without parsing a range
 
 3  RESOLVE  approved ──► the stamp clears; settled 8.0 → 5.0
-            rejected ──► all four rows roll back from _history; they were
+            rejected ──► all four rows roll back from the temporal ledger; they were
                          creates, so they are deleted. Projected returns to
                          8.0 and the reservation is released.
 ```

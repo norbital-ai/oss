@@ -1,5 +1,3 @@
-import type { HostPluginRegistry } from '$lib/shared/plugins.js';
-import { parseHostPluginRegistry } from '$lib/shared/plugins.js';
 import type { TBaseScope } from '$lib/shared/scope.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import {
@@ -46,12 +44,6 @@ function parseHostProvidedUserOrganizations(
 
 function hostProvidedBaseScope(event: PodRequestEvent, userId: string): TBaseScope | null {
 	return parseHostProvidedBaseScope(event.request.headers.get(NORBITAL_BASE_SCOPE_HEADER), userId);
-}
-
-function hostProvidedPluginRegistry(event: PodRequestEvent): HostPluginRegistry | undefined {
-	const raw = event.request.headers.get('x-norbital-host-plugins-json')?.trim();
-	if (!raw) return undefined;
-	return parseHostPluginRegistry(raw);
 }
 
 export async function buildCtx(event: PodRequestEvent): Promise<ProvisionedContext | null> {
@@ -114,7 +106,6 @@ export async function buildCtx(event: PodRequestEvent): Promise<ProvisionedConte
 		userOrganizations: parseHostProvidedUserOrganizations(
 			event.request.headers.get(NORBITAL_USER_ORGANIZATIONS_HEADER)
 		),
-		hostPlugins: hostProvidedPluginRegistry(event),
 		zone,
 		tenantDb,
 		tableRegistry,

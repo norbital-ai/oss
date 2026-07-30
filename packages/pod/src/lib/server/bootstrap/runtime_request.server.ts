@@ -7,19 +7,15 @@
 import { buildCtx } from '$lib/server/bootstrap/context.js';
 import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';
 import { handleSyncRequest } from '$lib/server/collection/sync/sync-endpoints.server.js';
-import { AiInferInputSchema } from '$lib/remote/ai_infer/schema.js';
 import {
 	ProcessApprovalRequestActionInputSchema,
 	WithdrawApprovalRequestInputSchema
 } from '$lib/remote/approval_request/schema.js';
-import { BrowserInputSchema } from '$lib/remote/browser/schema.js';
 import {
-	aiInfer,
 	adminCreateSystemRecord,
 	adminDeleteSystemRecord,
 	adminUpdateSystemRecord,
 	autocompleteGeolocation,
-	browser,
 	count,
 	create,
 	createMany,
@@ -48,11 +44,6 @@ import {
 	AdminSystemUpdateSchema
 } from '$lib/remote/collection/collection.remote.js';
 import {
-	dispatchRuntimeRun,
-	runtimeRunRequestSchema,
-	type RuntimeRunRequest
-} from '$lib/server/run/tenant_run.js';
-import {
 	CountWireSchema,
 	CreateManyWireSchema,
 	CreateWireSchema,
@@ -76,6 +67,7 @@ import {
 	deleteRecord as deleteCollectionRecord
 } from '$lib/server/collection/collection_ops.server.js';
 import { z } from 'zod';
+import { startInteractiveAgent } from '$lib/server/agent/agent-loop.server.js';
 
 const MAX_WORKSPACE_FILE_SIZE = 10 * 1024 * 1024;
 const fileUploadSchema = z.object({
@@ -85,10 +77,14 @@ const fileUploadSchema = z.object({
 	data_base64: z.string().min(1)
 });
 const fileDeleteSchema = z.object({ record_id: z.string().uuid() });
+const agentStartSchema = z.object({
+	message: z.string().trim().min(1),
+	runId: z.string().uuid().optional()
+});
 const documentAssetSchema = z.object({
 	norbital_id: z.string().uuid(),
 	storage_key: z.string(),
-	metadata: z.object({ uploaded_by: z.string() }).passthrough().nullable()
+	owner_user_id: z.string().uuid()
 });
 
 function decodeBase64File(encoded: string, expectedSize: number): Uint8Array {
@@ -112,18 +108,18 @@ async function uploadWorkspaceFile(event: PodRequestEvent, body: unknown) {
 	if (!fileStorage) throw error(503, 'Workspace file storage is unavailable.');
 	const bytes = decodeBase64File(input.data_base64, input.file_size);
 	const storageKey = `document-assets/${crypto.randomUUID()}${storageExtension(input.file_name)}`;
+	const ownerUserId = getWorkspace({ provision: true }).baseScope.requestor.norbital_id;
 	await fileStorage.put(storageKey, bytes, input.mime_type);
 	try {
 		const record = await createCollectionRecord(
 			getWorkspace({ provision: true }),
 			'document_asset',
 			{
+				owner_user_id: ownerUserId,
 				file_name: input.file_name,
 				mime_type: input.mime_type,
 				file_size: input.file_size,
-				storage_key: storageKey,
-				storage_provider: 'host-file-storage',
-				metadata: { uploaded_by: event.locals.identity }
+				storage_key: storageKey
 			},
 			{ isElevated: true }
 		);
@@ -151,13 +147,13 @@ async function deleteWorkspaceFile(event: PodRequestEvent, body: unknown) {
 	if (!fileStorage) throw error(503, 'Workspace file storage is unavailable.');
 	const workspace = getWorkspace({ provision: true });
 	const result = await workspace.tenantDb.query({
-		text: `SELECT norbital_id, storage_key, metadata FROM ${qualifiedTableName('document_asset')} WHERE norbital_id = $1::uuid LIMIT 1`,
+		text: `SELECT norbital_id, storage_key, owner_user_id FROM ${qualifiedTableName('document_asset')} WHERE norbital_id = $1::uuid LIMIT 1`,
 		values: [input.record_id]
 	});
 	const rawRecord = result.rows[0];
 	const record = documentAssetSchema.safeParse(rawRecord);
 	if (!record.success) throw error(404, 'Uploaded file does not exist.');
-	if (record.data.metadata?.uploaded_by !== event.locals.identity) {
+	if (record.data.owner_user_id !== workspace.baseScope.requestor.norbital_id) {
 		throw error(403, 'Only the uploader can remove this file.');
 	}
 	await fileStorage.delete(record.data.storage_key);
@@ -187,14 +183,6 @@ function wireEndpoint<S extends z.ZodType>(
 	return (body) => handler(parseWireBody(schema, body));
 }
 
-function parseRuntimeRunRequest(body: unknown): RuntimeRunRequest {
-	const parsed = runtimeRunRequestSchema.safeParse(body);
-	if (!parsed.success) {
-		throw error(400, 'Runtime run body must include a valid registry dispatch request');
-	}
-	return parsed.data;
-}
-
 const RUNTIME_ENDPOINT_HANDLERS: Record<string, RuntimeEndpointHandler> = {
 	'collections/admin/create': wireEndpoint(AdminSystemCreateSchema, adminCreateSystemRecord),
 	'collections/admin/update': wireEndpoint(AdminSystemUpdateSchema, adminUpdateSystemRecord),
@@ -212,8 +200,6 @@ const RUNTIME_ENDPOINT_HANDLERS: Record<string, RuntimeEndpointHandler> = {
 	'collections/deleteRecord': wireEndpoint(DeleteWireSchema, deleteRecord),
 	'collections/export': wireEndpoint(ExportRecordsWireSchema, exportPipeline),
 	'collections/import': wireEndpoint(ImportRecordsWireSchema, importPipeline),
-	'remotes/aiInfer': wireEndpoint(AiInferInputSchema, aiInfer),
-	'remotes/browser': wireEndpoint(BrowserInputSchema, browser),
 	'remotes/autocompleteGeolocation': wireEndpoint(
 		AutocompleteGeolocationInputSchema,
 		autocompleteGeolocation
@@ -310,18 +296,17 @@ export async function handleNorbitalRuntimeRequest(event: PodRequestEvent): Prom
 		throw error(401, 'Unauthorized');
 	}
 
-	if (routePath === 'runtime/run') {
-		const result = await runWithWorkspaceContext(ctx, () =>
-			dispatchRuntimeRun(parseRuntimeRunRequest(body))
-		);
-		return json(result ?? null, { headers: responseHeaders() });
-	}
 	if (routePath === 'files/upload') {
 		const result = await runWithWorkspaceContext(ctx, () => uploadWorkspaceFile(event, body));
 		return json(result, { headers: responseHeaders() });
 	}
 	if (routePath === 'files/delete') {
 		const result = await runWithWorkspaceContext(ctx, () => deleteWorkspaceFile(event, body));
+		return json(result, { headers: responseHeaders() });
+	}
+	if (routePath === 'agent/start') {
+		const input = parseWireBody(agentStartSchema, body);
+		const result = await runWithWorkspaceContext(ctx, () => startInteractiveAgent(input));
 		return json(result, { headers: responseHeaders() });
 	}
 

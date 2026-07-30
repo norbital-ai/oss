@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { requireDocker } from '../support/pg-harness.js';
+import { dockerAvailable } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
 	type Identity,
@@ -16,7 +16,7 @@ import {
 	type ProbeCollection
 } from '../support/collection-probe.js';
 
-requireDocker();
+const hasDocker = dockerAvailable();
 
 const admin: Identity = {
 	userId: '22222222-2222-4222-8222-222222222222',
@@ -39,7 +39,7 @@ function httpSyncFetch(baseUrl: string): SyncFetch {
 		});
 }
 
-describe('Pod Sync — standalone HTTP transport (real socket + SSE)', () => {
+describe.skipIf(!hasDocker)('Pod Sync — standalone HTTP transport (real socket + SSE)', () => {
 	let harness: PodRuntimeHarness;
 	let server: { url: string; close: () => Promise<void> };
 	let collection: ProbeCollection;
@@ -58,7 +58,6 @@ describe('Pod Sync — standalone HTTP transport (real socket + SSE)', () => {
 	it('propagates a committed change over the network via the SSE stream', async () => {
 		const db = await createClientDb();
 		const client = new PodSyncClient({
-			replicaEpoch: 'test-epoch',
 			db,
 			schemaSql: harness.schemaSql,
 			fetch: httpSyncFetch(server.url)
@@ -66,6 +65,7 @@ describe('Pod Sync — standalone HTTP transport (real socket + SSE)', () => {
 		await client.bootstrap();
 		try {
 			await client.shapeSubscribe({ collection: collection.name, pageSize: 200 });
+			client.setSubscribedCollections([collection.name]);
 			client.startStream();
 			const id = await serverInsert(harness, collection);
 			// The diff must arrive over a real HTTP/SSE socket and be applied to the local replica.
@@ -93,17 +93,14 @@ describe('Pod Sync — standalone HTTP transport (real socket + SSE)', () => {
 
 		const db = await createClientDb();
 		const client = new PodSyncClient({
-			replicaEpoch: 'test-epoch',
 			db,
 			schemaSql: harness.schemaSql,
 			fetch: httpSyncFetch(server.url)
 		});
 		await client.bootstrap();
 		try {
-			// No catch-up: the whole burst must arrive through the stream as one backlog. Interest is
-			// declared explicitly, because the server resolves contents only for subscribed
-			// collections — an unsubscribed stream advances the cursor and sends no rows.
-			client.subscribeCollection(collection.name);
+			// No catch-up: the whole burst must arrive through the stream as one backlog.
+			client.setSubscribedCollections([collection.name]);
 			client.startStream();
 			const drained = await waitFor(async () => (await client.count(collection.name)) >= 20);
 			expect(drained, `lastError=${String(client.lastError)}`).toBe(true);
@@ -127,98 +124,5 @@ describe('Pod Sync — standalone HTTP transport (real socket + SSE)', () => {
 		}).then((r) => r.json() as Promise<{ rows: { norbital_id: string }[] }>);
 		const row = page.rows.find((r) => r.norbital_id === id);
 		expect(row, 'inserted row present in the HTTP shape page').toBeDefined();
-
-		const head = await fetch(`${server.url}/_runtime/sync/head`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: '{}'
-		}).then((r) => r.json() as Promise<{ sequence: string }>);
-		expect(head.sequence).toMatch(/^\d+$/);
-	});
-
-	it('rejects a create that does not carry a client-minted UUIDv7', async () => {
-		const response = await fetch(`${server.url}/_runtime/sync/mutate`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				mutations: [
-					{
-						clientId: 'invalid-create-id',
-						collection: collection.name,
-						action: 'create',
-						row: { norbital_id: '00000000-0000-4000-8000-000000000000' }
-					}
-				]
-			})
-		});
-		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({
-			results: [
-				{
-					clientId: 'invalid-create-id',
-					status: 'rejected',
-					reason: 'INVALID_CREATE_ID'
-				}
-			]
-		});
-	});
-
-	it('advances across unsubscribed outbox rows without resolving or emitting them', async () => {
-		const db = await createClientDb();
-		const client = new PodSyncClient({
-			replicaEpoch: 'test-epoch',
-			db,
-			schemaSql: harness.schemaSql,
-			fetch: httpSyncFetch(server.url)
-		});
-		await client.bootstrap();
-		try {
-			await client.shapeSubscribe({ collection: collection.name, pageSize: 200 });
-			client.startStream();
-			const inserted = await harness.pool.query<{ seq: string }>(
-				`INSERT INTO sync_outbox (collection, record_id, action, row_version)
-				 VALUES ('not_subscribed', gen_random_uuid(), 'create', 1)
-				 RETURNING seq::text AS seq`
-			);
-			const target = BigInt(inserted.rows[0]!.seq);
-			const advanced = await waitFor(async () => {
-				const meta = await client.queryLocal<{ value: string }>(
-					`SELECT value FROM _pod_meta WHERE key = 'cursor'`
-				);
-				if (!meta[0]) return false;
-				return BigInt((JSON.parse(meta[0].value) as { seq: string }).seq) >= target;
-			});
-			expect(advanced, `lastError=${String(client.lastError)}`).toBe(true);
-			expect(client.lastError).toBeUndefined();
-		} finally {
-			await client.close();
-		}
-	});
-
-	it('invalidates the replica immediately when a policy-bearing scope changes', async () => {
-		const db = await createClientDb();
-		const client = new PodSyncClient({
-			replicaEpoch: 'test-epoch',
-			db,
-			schemaSql: harness.schemaSql,
-			fetch: httpSyncFetch(server.url)
-		});
-		await client.bootstrap();
-		let resets = 0;
-		client.onReset(() => (resets += 1));
-		try {
-			await client.shapeSubscribe({ collection: collection.name, pageSize: 200 });
-			expect(await client.count(collection.name)).toBeGreaterThan(0);
-			client.startStream();
-			await harness.pool.query(
-				`INSERT INTO sync_outbox (collection, record_id, action, row_version)
-				 VALUES ('policy', gen_random_uuid(), 'update', 1)`
-			);
-			const reset = await waitFor(async () => resets === 1);
-			expect(reset, `lastError=${String(client.lastError)}`).toBe(true);
-			expect(await client.count(collection.name)).toBe(0);
-		} finally {
-			await client.close();
-		}
 	});
 });

@@ -4,19 +4,32 @@ import type { DbApi } from './db-api-types.js';
 import type { ReadonlyDbApi } from './db-api-types.js';
 import type { MergedWorkspaceSchema } from '$lib/authoring/schema/system-workspace.js';
 import type { TableName } from '../schema/types.js';
+import type { WorkspaceAuthoringTypes } from '../index.js';
+
+type WorkspaceNotificationChannel = WorkspaceAuthoringTypes extends {
+	readonly notificationChannel: infer TChannel extends string;
+}
+	? 'system' | TChannel
+	: 'system';
+
+type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
+	readonly schema: infer TSchema extends AnySchema;
+}
+	? TSchema
+	: AnySchema;
 
 export type SendNotificationInput = {
 	readonly recipient_user_id: string;
 	readonly subject: string;
 	readonly message: string;
-	readonly channels?: readonly string[];
+	readonly channels?: readonly WorkspaceNotificationChannel[];
 	readonly cta?: { readonly label: string; readonly url: string } | null;
 	readonly notification_category?: string | null;
 };
 
 export type SendNotificationResult = {
-	readonly notification_id: string;
-	readonly delivery: Record<string, unknown>;
+	readonly notification_id: string | null;
+	readonly queued_channels: readonly string[];
 };
 
 export type ReadFileAssetResult = {
@@ -28,21 +41,25 @@ export type ReadFileAssetResult = {
 };
 
 /** Server hook/automation/handler API — direct `db` ops (Promise, not RemoteQuery) + builtins. */
-export type BeforeApi<S extends AnySchema = AnySchema> = {
+export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 	readonly db: string extends TableName<S>
 		? DbApi<S, 'direct'>
 		: DbApi<MergedWorkspaceSchema<S>, 'direct'>;
 	readonly sendNotification: (input: SendNotificationInput) => Promise<SendNotificationResult>;
-	readonly aiInferStructured: <const TSchema extends z.ZodType>(
-		schema: TSchema,
-		input: { readonly prompt: string; readonly temperature?: number }
-	) => Promise<z.infer<TSchema>>;
+	readonly ai: <const TSchema extends z.ZodType | undefined = undefined>(input: {
+		readonly prompt: string;
+		readonly schema?: TSchema;
+		readonly model?: string;
+		readonly profile?: string;
+	}) => Promise<TSchema extends z.ZodType ? z.infer<TSchema> : string>;
 	readonly readFileAsset: (assetId: string) => Promise<ReadFileAssetResult>;
-	readonly fetch: typeof fetch;
 };
 
-/** Transactional collection-hook capabilities: database work plus deterministic asset reads only. */
-export type HookApi<S extends AnySchema = AnySchema> = Pick<BeforeApi<S>, 'db' | 'readFileAsset'>;
+/** Transactional hook capabilities; notification writes join the caller's database transaction. */
+export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
+	BeforeApi<S>,
+	'db' | 'readFileAsset' | 'sendNotification'
+>;
 
 type ElevatedMutationApi = {
 	readonly mutate: (
@@ -57,12 +74,12 @@ type AfterDbApi<S extends AnySchema> = ElevatedMutationApi &
 		? object
 		: ReadonlyDbApi<MergedWorkspaceSchema<S>, 'direct'>);
 
-export type AfterApi<S extends AnySchema = AnySchema> = Omit<BeforeApi<S>, 'db'> & {
+export type AfterApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<BeforeApi<S>, 'db'> & {
 	readonly db: AfterDbApi<S>;
 };
 
-/** Post-write collection hooks retain derived database writes but cannot perform external delivery. */
-export type AfterHookApi<S extends AnySchema = AnySchema> = Pick<
+/** Post-write hooks may add derived writes and transactional notification outbox entries. */
+export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
 	AfterApi<S>,
-	'db' | 'readFileAsset'
+	'db' | 'readFileAsset' | 'sendNotification'
 >;

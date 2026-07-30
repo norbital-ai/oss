@@ -70,6 +70,8 @@
 		"prepack": "pnpm build",
 		"lint": "svelte-check --tsconfig ./tsconfig.json",
 		"test": "vitest run",
+		"test:compiler": "vitest run tests/compiler",
+		"test:e2e": "vitest run tests/sync tests/storage tests/runtime tests/standalone",
 		"test:watch": "vitest"
 	},
 	"dependencies": {

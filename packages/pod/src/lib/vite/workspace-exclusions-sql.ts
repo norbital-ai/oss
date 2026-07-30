@@ -63,7 +63,7 @@ function exclusionDdl(table: string, exclusion: ManifestExclusion): string {
  * Drizzle has no entity for exclusion constraints, so they never appear in a migration and
  * `drizzle-kit generate` — which diffs snapshot against snapshot, never against the live
  * database — can never diff them away. This output is appended to `schema-post-ddl.sql`,
- * the same idempotent slot that already creates the `*_history` tables and triggers.
+ * the same idempotent slot that creates the temporal ledger and collection triggers.
  *
  * Returns an empty string when the workspace declares none.
  */

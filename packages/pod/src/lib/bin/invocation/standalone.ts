@@ -20,9 +20,8 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Client } from 'pg';
+import { Client, type Notification } from 'pg';
 import { PostgresHostDbBinding, type HostDbConnection } from '../../host/db.js';
-import { STORAGE_ROUTE_PREFIX, type LocalFileStorage } from '../../host/file-storage.js';
 import { satisfiedFacilities, type HostIdentity, type PodHostConfig } from '../../host/types.js';
 import {
 	loadHostConfig,
@@ -65,6 +64,14 @@ interface PodRuntimeModule {
 		request: Request,
 		bindings: RuntimeFacilityBindings
 	) => Promise<Response>;
+	readonly handlePodHostCommand: (
+		command: unknown,
+		bindings: RuntimeFacilityBindings,
+		identity: HostIdentity
+	) => Promise<unknown>;
+	readonly registerPodDatabaseNotifications: (
+		source: { subscribe(listener: (channel: string, payload: string) => void): () => void } | null
+	) => void;
 }
 
 function requiredEnvironmentValue(name: (typeof REQUIRED_ENVIRONMENT)[number]): string {
@@ -153,6 +160,42 @@ export function assertStandaloneFacilities(
 	throw new Error(
 		`Standalone Pod workspace requires unavailable runtime facilities: ${missing.join(', ')}. Run this build in a host that implements every required facility.`
 	);
+}
+
+function assertNotificationCoverage(
+	manifest: NorbitalManifest,
+	notificationChannels: readonly string[]
+): void {
+	const required = manifest.notifications?.channels ?? [];
+	if (required.length === 0) return;
+	const available = new Set(notificationChannels);
+	const missing = required.filter((channel) => !available.has(channel));
+	if (missing.length > 0) {
+		throw new Error(`Standalone Pod host has no notification provider for: ${missing.join(', ')}`);
+	}
+}
+
+async function installDatabaseNotifications(
+	runtime: PodRuntimeModule,
+	databaseUrl: string
+): Promise<() => Promise<void>> {
+	const client = new Client({ connectionString: databaseUrl });
+	const listeners = new Set<(channel: string, payload: string) => void>();
+	await client.connect();
+	client.on('notification', (message: Notification) => {
+		for (const listener of listeners) listener(message.channel, message.payload ?? '');
+	});
+	await client.query('LISTEN norbital_sync');
+	runtime.registerPodDatabaseNotifications({
+		subscribe(listener) {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		}
+	});
+	return async () => {
+		runtime.registerPodDatabaseNotifications(null);
+		await client.end();
+	};
 }
 
 async function withPostgresTransaction(
@@ -380,7 +423,11 @@ async function loadPodRuntime(root: string): Promise<PodRuntimeModule> {
 		typeof loaded !== 'object' ||
 		loaded == null ||
 		!('handlePodRequest' in loaded) ||
-		typeof loaded.handlePodRequest !== 'function'
+		typeof loaded.handlePodRequest !== 'function' ||
+		!('handlePodHostCommand' in loaded) ||
+		typeof loaded.handlePodHostCommand !== 'function' ||
+		!('registerPodDatabaseNotifications' in loaded) ||
+		typeof loaded.registerPodDatabaseNotifications !== 'function'
 	) {
 		throw new Error(`Invalid standalone Pod runtime artifact: ${runtimePath}`);
 	}
@@ -447,12 +494,12 @@ async function resolveStandaloneHost(
 ): Promise<ResolvedHostConfig> {
 	if (identityMode === 'trusted-host' && !environment.trustedHostToken) {
 		throw new Error(
-			'POD_TRUSTED_HOST_TOKEN is required to serve with trusted-host identity. Set it, supply your own identity provider in pod.config.ts, or use `pod dev` for a local development identity.'
+			'POD_TRUSTED_HOST_TOKEN is required to serve with trusted-host identity. Set it, supply your own identity provider in pod.host.ts, or use `pod dev` for a local development identity.'
 		);
 	}
 	if (identityMode === 'dev' && !LOOPBACK_HOSTS.has(environment.host)) {
 		throw new Error(
-			`Development identity refuses to bind ${environment.host}: it authenticates nobody. Bind a loopback address or configure a real identity provider in pod.config.ts.`
+			`Development identity refuses to bind ${environment.host}: it authenticates nobody. Bind a loopback address or configure a real identity provider in pod.host.ts.`
 		);
 	}
 	return loadHostConfig({
@@ -466,22 +513,6 @@ async function resolveStandaloneHost(
 		adminId: environment.adminId,
 		trustedHostToken: environment.trustedHostToken
 	});
-}
-
-/**
- * The presigned-URL reader, when the configured file storage has one.
- *
- * Presigning is meaningless without a server willing to redeem the URL, and only a storage
- * implementation that lives in this process needs that server — an S3-backed binding hands out
- * URLs its own provider serves. So the route is installed exactly when the binding offers to
- * resolve for it, rather than being conditioned on a particular implementation.
- */
-function presignedStorage(config: PodHostConfig): LocalFileStorage | null {
-	const storage = config.fileStorage;
-	if (!storage) return null;
-	return typeof (storage as LocalFileStorage).resolvePresigned === 'function'
-		? (storage as LocalFileStorage)
-		: null;
 }
 
 export type StandaloneStartOptions = {
@@ -510,7 +541,7 @@ function facilityBindings(config: PodHostConfig, db: HostDbBinding): RuntimeFaci
 	};
 }
 
-function describeHost(config: PodHostConfig, stubbed: readonly string[], source: string): string {
+function describeHost(config: PodHostConfig, source: string): string {
 	const supplied = ['db', ...satisfiedFacilities(config)].filter(
 		(name, index, all) => all.indexOf(name) === index
 	);
@@ -519,11 +550,6 @@ function describeHost(config: PodHostConfig, stubbed: readonly string[], source:
 		`[pod] identity provider: ${config.identity.name}`,
 		`[pod] facilities: ${supplied.join(', ')}`
 	];
-	if (stubbed.length > 0) {
-		lines.push(
-			`[pod] placeholder facilities (they will fail when used): ${stubbed.join(', ')} — supply them in pod.config.ts`
-		);
-	}
 	return lines.join('\n');
 }
 
@@ -533,64 +559,40 @@ export async function startStandalone(
 	options: StandaloneStartOptions = {}
 ): Promise<void> {
 	const identityMode = options.identityMode ?? 'trusted-host';
-	const { config, source, stubbed } = await resolveStandaloneHost(root, environment, identityMode);
+	const { config, source } = await resolveStandaloneHost(root, environment, identityMode);
 
 	const manifest = await loadStandaloneManifest(root);
 	assertStandaloneFacilities(manifest, satisfiedFacilities(config));
+	assertNotificationCoverage(manifest, config.notifications?.channels ?? []);
 
 	const binding: HostDbConnection = config.db.connect();
 	await binding.validate();
 	const runtime = await loadPodRuntime(root);
-	const bindings = facilityBindings(config, binding);
-	const storage = presignedStorage(config);
-
-	/**
-	 * The host's own channel into the runtime. It carries the admin identity directly rather than
-	 * going through the identity provider: the scheduler is not a request from anyone, and making
-	 * it authenticate would mean every provider had to invent a service credential for it.
-	 */
-	const dispatch = async (body: unknown): Promise<unknown> => {
-		const headers = new Headers({
-			'content-type': 'application/json',
-			'x-norbital-user-id': environment.adminId,
-			'x-norbital-org-id': environment.orgId,
-			'x-norbital-org-name': environment.orgName
-		});
-		const request = new Request(
-			`http://${environment.host}:${environment.port}/_runtime/runtime/run`,
-			{ method: 'POST', headers, body: JSON.stringify(body) }
+	let closeDatabaseNotifications: () => Promise<void>;
+	try {
+		closeDatabaseNotifications = await installDatabaseNotifications(
+			runtime,
+			config.db.connectionString
 		);
-		const response = await runtime.handlePodRequest(request, bindings);
-		if (!response.ok) {
-			throw new Error(
-				`Runtime rejected host dispatch (${response.status}): ${await response.text()}`
-			);
-		}
-		return response.json();
-	};
+	} catch (cause) {
+		await binding.close();
+		throw cause;
+	}
+	const bindings = facilityBindings(config, binding);
+
+	const dispatch = (command: unknown): Promise<unknown> =>
+		runtime.handlePodHostCommand(command, bindings, {
+			userId: environment.adminId,
+			organizationId: environment.orgId,
+			organizationName: environment.orgName
+		});
 
 	const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
 		const webRequest = await toWebRequest(request, environment);
-		const url = new URL(webRequest.url);
-
 		// A provider owns its routes before anything else looks at the request, so a login page is
 		// reachable while unauthenticated and is never mistaken for a workspace asset.
 		const routed = await config.identity.handleRoute?.(webRequest);
 		if (routed) return writeWebResponse(routed, response);
-
-		if (storage && url.pathname.startsWith(STORAGE_ROUTE_PREFIX)) {
-			const object = await storage.resolvePresigned(url);
-			if (!object) {
-				response.statusCode = 404;
-				response.end('Not Found');
-				return;
-			}
-			response.statusCode = 200;
-			response.setHeader('content-type', staticAssetContentType(object.key));
-			response.setHeader('content-length', String(object.body.byteLength));
-			response.end(request.method === 'HEAD' ? undefined : object.body);
-			return;
-		}
 
 		const asset = await standaloneStaticAsset(root, request);
 		if (asset) {
@@ -618,17 +620,26 @@ export async function startStandalone(
 		});
 	});
 
-	const scheduler = startScheduler({
-		manifest,
-		dispatch,
-		automations: config.scheduler?.automations === true,
-		...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
-		intervalMs: config.scheduler?.intervalMs ?? 30_000
-	});
+	let scheduler;
+	try {
+		scheduler = startScheduler({
+			manifest,
+			dispatch,
+			automations: config.scheduler?.automations === true,
+			organizationId: environment.orgId,
+			...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
+			...(config.notifications ? { notifications: config.notifications } : {}),
+			intervalMs: config.scheduler?.intervalMs ?? 30_000
+		});
+	} catch (cause) {
+		await closeDatabaseNotifications();
+		await binding.close();
+		throw cause;
+	}
 
 	try {
 		await listen(server, environment);
-		console.log(describeHost(config, stubbed, source));
+		console.log(describeHost(config, source));
 		console.log(`Pod listening at http://${environment.host}:${environment.port}`);
 		if (identityMode === 'dev') {
 			console.log(
@@ -641,6 +652,7 @@ export async function startStandalone(
 		});
 	} finally {
 		scheduler.stop();
+		await closeDatabaseNotifications();
 		await new Promise<void>((resolve, reject) => {
 			server.close((cause) => (cause ? reject(cause) : resolve()));
 		});

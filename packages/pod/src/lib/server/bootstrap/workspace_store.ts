@@ -1,6 +1,5 @@
 import { platformSchema, systemWorkspace } from '$lib/authoring/schema/system-workspace.js';
 import { defineRelations } from 'drizzle-orm';
-import type { HostPluginRegistry } from '$lib/shared/plugins.js';
 import type { TBaseScope } from '$lib/shared/scope.js';
 import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 import { error } from '$lib/runtime/http.js';
@@ -48,7 +47,6 @@ export type ProvisionedContext = {
 	organization: { norbital_id: string; name: string };
 	baseScope: TBaseScope;
 	userOrganizations: readonly UserOrganizationInfo[];
-	hostPlugins?: HostPluginRegistry;
 	zone: WorkspaceZone;
 	tenantDb: TenantDbClient;
 	chatId?: string;
@@ -93,7 +91,6 @@ export type CreateProvisionedParams = {
 	organization: { norbital_id: string; name: string };
 	baseScope: TBaseScope;
 	userOrganizations?: readonly UserOrganizationInfo[];
-	hostPlugins?: HostPluginRegistry;
 	zone?: WorkspaceZone;
 	chatId?: string;
 	tenantDb: TenantDbClient;

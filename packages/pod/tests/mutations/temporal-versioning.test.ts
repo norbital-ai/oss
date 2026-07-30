@@ -59,8 +59,8 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 
 	beforeEach(async () => {
 		await inViaOps(pool, async (client) => {
-			await client.query('DELETE FROM orders_history');
 			await client.query('DELETE FROM orders');
+			await client.query(`DELETE FROM record_history WHERE collection_name = 'orders'`);
 		});
 	});
 
@@ -72,10 +72,11 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 		);
 
 		const history = await pool.query<{ status: string; version: number; closed: boolean }>(
-			`SELECT status,
-			        norbital_row_version AS version,
-			        upper(norbital_sys_period::tstzrange) IS NOT NULL AS closed
-			   FROM orders_history WHERE norbital_id = $1::uuid`,
+			`SELECT values->>'status' AS status,
+			        row_version AS version,
+			        valid_to IS NOT NULL AS closed
+			   FROM record_history
+			  WHERE collection_name = 'orders' AND record_id = $1::uuid`,
 			[id]
 		);
 		expect(history.rows).toHaveLength(1);
@@ -115,10 +116,10 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 		}
 
 		const history = await pool.query<{ status: string; empty: boolean }>(
-			`SELECT status, isempty(norbital_sys_period::tstzrange) AS empty
-			   FROM orders_history
-			  WHERE norbital_id = $1::uuid
-			  ORDER BY norbital_row_version`,
+			`SELECT values->>'status' AS status, valid_to <= valid_from AS empty
+			   FROM record_history
+			  WHERE collection_name = 'orders' AND record_id = $1::uuid
+			  ORDER BY row_version`,
 			[id]
 		);
 		expect(history.rows).toEqual([
@@ -167,7 +168,10 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 		expect(live.rowCount).toBe(0);
 
 		const history = await pool.query<{ status: string }>(
-			`SELECT status FROM orders_history WHERE norbital_id = $1::uuid ORDER BY norbital_row_version`,
+			`SELECT values->>'status' AS status
+			   FROM record_history
+			  WHERE collection_name = 'orders' AND record_id = $1::uuid
+			  ORDER BY row_version`,
 			[id]
 		);
 		// Both the pre-update (v1) and the final pre-delete (v2) states are retained.
@@ -191,11 +195,12 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 
 		// restoreRecordBeforeApproval reads the newest history row NOT stamped by this approval.
 		const baseline = await pool.query<{ status: string }>(
-			`SELECT status
-			   FROM orders_history
-			  WHERE norbital_id = $1::uuid
-			    AND norbital_approval_id IS DISTINCT FROM $2::uuid
-			  ORDER BY upper(norbital_sys_period::tstzrange) DESC NULLS LAST, norbital_row_version DESC
+			`SELECT values->>'status' AS status
+			   FROM record_history
+			  WHERE collection_name = 'orders'
+			    AND record_id = $1::uuid
+			    AND (values->>'norbital_approval_id') IS DISTINCT FROM $2
+			  ORDER BY row_version DESC
 			  LIMIT 1`,
 			[id, approvalId]
 		);
@@ -210,55 +215,32 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 
 		// restoreRecordBeforeApproval (record_delete) resurrects the newest history version.
 		const source = await pool.query<{ status: string }>(
-			`SELECT status
-			   FROM orders_history
-			  WHERE norbital_id = $1::uuid
-			  ORDER BY upper(norbital_sys_period::tstzrange) DESC NULLS LAST, norbital_row_version DESC
+			`SELECT values->>'status' AS status
+			   FROM record_history
+			  WHERE collection_name = 'orders' AND record_id = $1::uuid
+			  ORDER BY row_version DESC
 			  LIMIT 1`,
 			[id]
 		);
 		expect(source.rows[0]?.status).toBe('confirmed');
 	});
 
-	it('rebuilds every history table from the current collection shape after migration', async () => {
-		await pool.query(`
-			CREATE TABLE migration_probe (
-				norbital_id UUID NOT NULL DEFAULT gen_random_uuid(),
-				current_value INTEGER NOT NULL DEFAULT 7
-			);
-			CREATE TABLE migration_probe_history (
-				norbital_id UUID,
-				legacy_value TEXT
-			);
-			INSERT INTO migration_probe_history (legacy_value) VALUES ('obsolete');
-		`);
+	it('preserves history when the idempotent post-DDL schema is reapplied', async () => {
+		const id = await insertOrder(pool, 'before-migration');
+		await inViaOps(pool, (client) =>
+			client
+				.query(`UPDATE orders SET status = 'after-migration' WHERE norbital_id = $1::uuid`, [id])
+				.then()
+		);
 
-		try {
-			await pool.query(SCHEMA_POST_DDL_SQL);
-			const { rows } = await pool.query<{
-				table_name: string;
-				column_name: string;
-				data_type: string;
-				is_nullable: string;
-				column_default: string | null;
-			}>(`
-				SELECT table_name, column_name, data_type, is_nullable, column_default
-				FROM information_schema.columns
-				WHERE table_schema = 'public'
-				  AND table_name IN ('migration_probe', 'migration_probe_history')
-				ORDER BY table_name, ordinal_position
-			`);
+		await pool.query(SCHEMA_POST_DDL_SQL);
 
-			expect(rows.filter((row) => row.table_name === 'migration_probe_history')).toEqual(
-				rows
-					.filter((row) => row.table_name === 'migration_probe')
-					.map((row) => ({ ...row, table_name: 'migration_probe_history' }))
-			);
-			expect(await pool.query('SELECT 1 FROM migration_probe_history')).toMatchObject({
-				rowCount: 0
-			});
-		} finally {
-			await pool.query('DROP TABLE IF EXISTS migration_probe_history, migration_probe');
-		}
+		const history = await pool.query<{ status: string }>(
+			`SELECT values->>'status' AS status
+			   FROM record_history
+			  WHERE collection_name = 'orders' AND record_id = $1::uuid`,
+			[id]
+		);
+		expect(history.rows).toEqual([{ status: 'before-migration' }]);
 	});
 });

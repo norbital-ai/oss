@@ -49,7 +49,7 @@ export type AuditEventInput = {
 async function writeAuditEvents(events: readonly AuditEventInput[]): Promise<void> {
 	const runtime = getWorkspace({ provision: true });
 	const actorId = runtime.baseScope.requestor?.norbital_id;
-	if (!actorId) return;
+	if (!actorId) throw new Error('Audit event requires an authenticated actor');
 	const db = runtime.drizzleDb;
 	if (!db) throw new Error('Tenant database is not provisioned');
 
@@ -81,9 +81,5 @@ export async function sendAuditEvent(
 
 export async function sendAuditEvents(events: readonly AuditEventInput[]): Promise<void> {
 	if (events.length === 0) return;
-	try {
-		await writeAuditEvents(events);
-	} catch (err) {
-		console.error('[audit]', { err, eventCount: events.length });
-	}
+	await writeAuditEvents(events);
 }

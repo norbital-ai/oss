@@ -1,14 +1,11 @@
 import { createHash, createHmac } from 'node:crypto';
-import type {
-	HostFileStorageBinding,
-	PresignResult
-} from '@norbital-ai/platform-utils/runtime/binding';
+import type { HostFileStorageBinding } from '@norbital-ai/platform-utils/runtime/binding';
 
 /**
  * S3-compatible object storage, signed with SigV4 over `fetch`.
  *
  * Signing is implemented here rather than pulled from an SDK because the surface actually used is
- * four verbs and a presigner, while every S3 SDK is a large dependency that a workspace with no
+ * three verbs, while every S3 SDK is a large dependency that a workspace with no
  * file fields would still install. SigV4 is a stable, specified algorithm; the cost of owning it
  * is bounded, and it keeps this package free of a vendor client.
  *
@@ -30,7 +27,6 @@ export type S3FileStorageOptions = {
 	readonly sessionToken?: string;
 };
 
-const UNSIGNED_PAYLOAD = 'UNSIGNED-PAYLOAD';
 const SERVICE = 's3';
 
 function sha256Hex(payload: Uint8Array | string): string {
@@ -135,46 +131,6 @@ export function s3FileStorage(options: S3FileStorageOptions): HostFileStorageBin
 		return headers;
 	};
 
-	const presign = (key: string, ttlSeconds: number, method: 'GET' | 'PUT', now: Date): string => {
-		const { stamp, dateStamp } = amzDate(now);
-		const url = objectUrl(key);
-		url.searchParams.set('X-Amz-Algorithm', 'AWS4-HMAC-SHA256');
-		url.searchParams.set(
-			'X-Amz-Credential',
-			`${options.accessKeyId}/${credentialScope(dateStamp)}`
-		);
-		url.searchParams.set('X-Amz-Date', stamp);
-		url.searchParams.set('X-Amz-Expires', String(Math.max(1, Math.min(ttlSeconds, 604_800))));
-		url.searchParams.set('X-Amz-SignedHeaders', 'host');
-		if (options.sessionToken) url.searchParams.set('X-Amz-Security-Token', options.sessionToken);
-		// SigV4 requires the query string in sorted order; URLSearchParams preserves insertion order,
-		// so sort explicitly rather than relying on the order the parameters happen to be set in.
-		url.search = [...url.searchParams.entries()]
-			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-			.map(([name, value]) => `${uriEncode(name, true)}=${uriEncode(value, true)}`)
-			.join('&');
-
-		const canonicalRequest = [
-			method,
-			url.pathname,
-			url.search.slice(1),
-			`host:${url.host}\n`,
-			'host',
-			UNSIGNED_PAYLOAD
-		].join('\n');
-		const stringToSign = [
-			'AWS4-HMAC-SHA256',
-			stamp,
-			credentialScope(dateStamp),
-			sha256Hex(canonicalRequest)
-		].join('\n');
-		const signature = hmac(
-			signingKey(options.secretAccessKey, dateStamp, options.region),
-			stringToSign
-		).toString('hex');
-		return `${url.toString()}&X-Amz-Signature=${signature}`;
-	};
-
 	const send = async (
 		method: string,
 		key: string,
@@ -216,20 +172,6 @@ export function s3FileStorage(options: S3FileStorageOptions): HostFileStorageBin
 			const response = await send('DELETE', key);
 			// A delete that finds nothing has already achieved what it was asked to do.
 			if (!response.ok && response.status !== 404) await failed(response, 'delete', key);
-		},
-		presignPut(key, ttlSeconds): Promise<PresignResult> {
-			const now = new Date();
-			return Promise.resolve({
-				url: presign(key, ttlSeconds, 'PUT', now),
-				expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString()
-			});
-		},
-		presignGet(key, ttlSeconds): Promise<PresignResult> {
-			const now = new Date();
-			return Promise.resolve({
-				url: presign(key, ttlSeconds, 'GET', now),
-				expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString()
-			});
 		}
 	};
 }

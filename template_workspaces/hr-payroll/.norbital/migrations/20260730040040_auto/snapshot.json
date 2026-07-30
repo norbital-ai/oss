@@ -1,7 +1,11 @@
 {
   "version": "8",
   "dialect": "postgres",
+<<<<<<<< HEAD:template_workspaces/hr-payroll/.norbital/migrations/20260731071948_auto/snapshot.json
   "id": "758bfcb5-1ef2-4fbf-9d45-3345a01c4b3a",
+========
+  "id": "8065179c-6766-4f04-8e97-93f9daa1cd99",
+>>>>>>>> 0c3e458 (feat(pod): implement self-contained tenant runtime architecture):template_workspaces/hr-payroll/.norbital/migrations/20260730040040_auto/snapshot.json
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
@@ -176,6 +180,12 @@
     },
     {
       "isRlsEnabled": false,
+      "name": "agent_run_step",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
       "name": "approval_request",
       "entityType": "tables",
       "schema": "public"
@@ -194,12 +204,6 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "chat_session",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
       "name": "document_asset",
       "entityType": "tables",
       "schema": "public"
@@ -212,13 +216,13 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "mutation_log",
+      "name": "notification",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "notification",
+      "name": "notification_outbox",
       "entityType": "tables",
       "schema": "public"
     },
@@ -5242,6 +5246,227 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "owner_user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "automation_run_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sequence",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "kind",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "role",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "content",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "tool_call_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "tool_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "tool_input",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "tool_output",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "usage",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
       "table": "approval_request"
     },
     {
@@ -5635,9 +5860,22 @@
       "table": "automation_run"
     },
     {
-      "type": "text",
+      "type": "uuid",
       "typeSchema": null,
       "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "requested_by_user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "automation_run"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -5736,123 +5974,6 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "title",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "'[]'",
-      "generated": null,
-      "identity": null,
-      "name": "messages",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "'{}'",
-      "generated": null,
-      "identity": null,
-      "name": "context",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
       "table": "document_asset"
     },
     {
@@ -5916,6 +6037,19 @@
       "generated": null,
       "identity": null,
       "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "document_asset"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "owner_user_id",
       "entityType": "columns",
       "schema": "public",
       "table": "document_asset"
@@ -5968,45 +6102,6 @@
       "generated": null,
       "identity": null,
       "name": "storage_key",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "document_asset"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "'minio'",
-      "generated": null,
-      "identity": null,
-      "name": "storage_provider",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "document_asset"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "'{}'",
-      "generated": null,
-      "identity": null,
-      "name": "metadata",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "document_asset"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "embedding_model",
       "entityType": "columns",
       "schema": "public",
       "table": "document_asset"
@@ -6256,162 +6351,6 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "collection_name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "record_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "action",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "'{}'",
-      "generated": null,
-      "identity": null,
-      "name": "payload",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "result",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "actor_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
       "table": "notification"
     },
     {
@@ -6582,6 +6521,240 @@
       "entityType": "columns",
       "schema": "public",
       "table": "notification"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "channel",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "recipient_user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "subject",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "message",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "cta_label",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "cta_url",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'pending'",
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "attempts",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "available_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "claimed_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "delivered_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_error",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "notification_outbox"
     },
     {
       "type": "uuid",
@@ -9292,6 +9465,126 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "kind",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "agent_run_step_kind_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "role",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "agent_run_step_role_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "content",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "agent_run_step_content_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "tool_call_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "agent_run_step_tool_call_id_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "tool_name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "agent_run_step_tool_name_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "label",
           "isExpression": false,
           "asc": true,
@@ -9484,30 +9777,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "title",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "chat_session_title_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "chat_session"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "file_name",
           "isExpression": false,
           "asc": true,
@@ -9572,54 +9841,6 @@
       "method": "gin",
       "concurrently": false,
       "name": "document_asset_storage_key_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "document_asset"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "storage_provider",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "document_asset_storage_provider_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "document_asset"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "embedding_model",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "document_asset_embedding_model_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
       "table": "document_asset"
@@ -9772,54 +9993,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "collection_name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "mutation_log_collection_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "action",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "mutation_log_action_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "mutation_log"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "subject",
           "isExpression": false,
           "asc": true,
@@ -9935,6 +10108,174 @@
       "entityType": "indexes",
       "schema": "public",
       "table": "notification"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "channel",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "notification_outbox_channel_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "subject",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "notification_outbox_subject_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "message",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "notification_outbox_message_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "cta_label",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "notification_outbox_cta_label_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "cta_url",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "notification_outbox_cta_url_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "notification_outbox_status_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "notification_outbox"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "last_error",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "notification_outbox_last_error_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "notification_outbox"
     },
     {
       "nameExplicit": true,
@@ -10880,6 +11221,40 @@
     {
       "nameExplicit": false,
       "columns": [
+        "owner_user_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "user",
+      "columnsTo": [
+        "norbital_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "agent_run_step_owner_user_id_user_norbital_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "automation_run_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "automation_run",
+      "columnsTo": [
+        "norbital_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "agent_run_step_774UFu3iuSmm_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "agent_run_step"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "actor_id"
       ],
       "schemaTo": "public",
@@ -10897,7 +11272,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "actor_id"
+        "requested_by_user_id"
       ],
       "schemaTo": "public",
       "tableTo": "user",
@@ -10906,10 +11281,27 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "mutation_log_actor_id_user_norbital_id_fkey",
+      "name": "automation_run_requested_by_user_id_user_norbital_id_fkey",
       "entityType": "fks",
       "schema": "public",
-      "table": "mutation_log"
+      "table": "automation_run"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "owner_user_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "user",
+      "columnsTo": [
+        "norbital_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "document_asset_owner_user_id_user_norbital_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "document_asset"
     },
     {
       "nameExplicit": false,
@@ -10927,6 +11319,23 @@
       "entityType": "fks",
       "schema": "public",
       "table": "notification"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "recipient_user_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "user",
+      "columnsTo": [
+        "norbital_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "notification_outbox_recipient_user_id_user_norbital_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "notification_outbox"
     },
     {
       "nameExplicit": false,
@@ -11298,6 +11707,16 @@
         "norbital_id"
       ],
       "nameExplicit": false,
+      "name": "agent_run_step_pkey",
+      "schema": "public",
+      "table": "agent_run_step",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "norbital_id"
+      ],
+      "nameExplicit": false,
       "name": "approval_request_pkey",
       "schema": "public",
       "table": "approval_request",
@@ -11328,16 +11747,6 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "chat_session_pkey",
-      "schema": "public",
-      "table": "chat_session",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "norbital_id"
-      ],
-      "nameExplicit": false,
       "name": "document_asset_pkey",
       "schema": "public",
       "table": "document_asset",
@@ -11358,9 +11767,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "mutation_log_pkey",
+      "name": "notification_pkey",
       "schema": "public",
-      "table": "mutation_log",
+      "table": "notification",
       "entityType": "pks"
     },
     {
@@ -11368,9 +11777,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "notification_pkey",
+      "name": "notification_outbox_pkey",
       "schema": "public",
-      "table": "notification",
+      "table": "notification_outbox",
       "entityType": "pks"
     },
     {

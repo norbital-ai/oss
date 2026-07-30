@@ -43,6 +43,17 @@ export type HostFrameHeader =
 			readonly path: string;
 			readonly headers: Record<string, string>;
 	  }
+	| {
+			readonly t: 'host-command';
+			readonly id: number;
+			readonly identity: {
+				readonly userId: string;
+				readonly organizationId: string;
+				readonly organizationName: string;
+				readonly baseScope?: unknown;
+			};
+			readonly command: unknown;
+	  }
 	| { readonly t: 'binding'; readonly id: number; readonly ok: true; readonly value: unknown }
 	| { readonly t: 'binding'; readonly id: number; readonly ok: false; readonly error: string }
 	| { readonly t: 'cancel'; readonly id: number }
@@ -63,6 +74,8 @@ export type GuestFrameHeader =
 	| { readonly t: 'chunk'; readonly id: number }
 	| { readonly t: 'end'; readonly id: number }
 	| { readonly t: 'error'; readonly id: number; readonly error: string }
+	| { readonly t: 'host-result'; readonly id: number; readonly ok: true; readonly value: unknown }
+	| { readonly t: 'host-result'; readonly id: number; readonly ok: false; readonly error: string }
 	| {
 			readonly t: 'binding';
 			readonly id: number;

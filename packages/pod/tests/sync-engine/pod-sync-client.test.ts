@@ -199,7 +199,7 @@ describe('PodSyncClient (client sync logic)', () => {
 			]);
 			expect(results[0]?.status).toBe('rejected');
 			expect((results[0] as { reason: string }).reason).toBe('CONFLICT');
-			expect((results[0] as { currentRow: { status: string } }).currentRow.status).toBe(
+			expect((results[0] as unknown as { currentRow: { status: string } }).currentRow.status).toBe(
 				'server-wins'
 			);
 			const row = await client.queryLocal<{ status: string }>(
@@ -465,6 +465,7 @@ describe('PodSyncClient (client sync logic)', () => {
 		const client = await makeClient(interceptedFetch);
 		try {
 			await client.shapeSubscribe({ collection: 'orders' });
+			client.setSubscribedCollections(['orders']);
 			client.startStream();
 			await new Promise((r) => setTimeout(r, 100));
 			await client.stopStream();

@@ -1,7 +1,7 @@
 /**
  * A five-field cron matcher.
  *
- * Pod stores `cron_schedule` as an opaque string and leaves interpretation to the host, so a host
+ * Pod stores schedule triggers as opaque strings and leaves interpretation to the host, so a host
  * that wants to run scheduled automations needs exactly this much: given a schedule and a minute,
  * does it fire? Anything beyond that — catch-up for missed minutes, timezone policy, jitter — is a
  * scheduling decision that belongs to the host, not to the parser.

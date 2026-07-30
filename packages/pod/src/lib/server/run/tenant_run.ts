@@ -36,6 +36,10 @@ import { z } from 'zod';
 import { AutomationRunTriggerSchema } from '@norbital-ai/platform-utils/system/types';
 import { typeGuard } from '@norbital-ai/std/schema';
 import { runTenantOutbox } from '$lib/server/integrations/tenant-outbox.server.js';
+import { runNotificationOutbox } from '$lib/server/notifications/notification-outbox.server.js';
+import { pumpRegisteredAutomations } from './automation-dispatch.server.js';
+import { runAgent } from '$lib/server/agent/agent-loop.server.js';
+import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 
 const recordSchema = z.record(z.string(), z.unknown());
 const collectionSchema = z.object({ id: z.string(), name: z.string() });
@@ -156,10 +160,35 @@ export const runtimeRunRequestSchema = z.union([
 		error: z.string(),
 		retryAt: z.string().datetime()
 	}),
+	z.object({
+		kind: z.literal('notification'),
+		action: z.literal('claim'),
+		limit: z.number().int().optional()
+	}),
+	z.object({
+		kind: z.literal('notification'),
+		action: z.literal('delivered'),
+		ids: z.array(z.string().uuid())
+	}),
+	z.object({
+		kind: z.literal('notification'),
+		action: z.literal('failed'),
+		ids: z.array(z.string().uuid()),
+		error: z.string(),
+		retryAt: z.string().datetime()
+	}),
+	z.object({
+		kind: z.literal('automation-events'),
+		limit: z.number().int().min(1).max(1000).optional()
+	}),
 	z.object({ kind: z.literal('getManifest') })
 ]);
 
 export type RuntimeRunRequest = z.infer<typeof runtimeRunRequestSchema>;
+
+export function parseRuntimeRunRequest(input: unknown): RuntimeRunRequest {
+	return runtimeRunRequestSchema.parse(input);
+}
 
 export async function runCollectionHook(params: {
 	readonly collectionName: string;
@@ -318,9 +347,21 @@ export async function runAutomation(params: {
 		workspaceAutomation !== null &&
 		'spec' in workspaceAutomation
 	) {
-		const spec = (workspaceAutomation as { spec: { kind: string; handler?: unknown } }).spec;
+		const spec = (
+			workspaceAutomation as {
+				spec: { kind: string; handler?: unknown } | AgentAutomationSpec;
+			}
+		).spec;
+		if (spec.kind === 'agent' && 'task' in spec && typeof spec.task === 'string') {
+			const result = await runAgent({
+				automationName: params.automationName,
+				spec,
+				input: spec.task
+			});
+			return { runId: result.runId, text: result.text };
+		}
 		if (spec.kind !== 'deterministic' || typeof spec.handler !== 'function') {
-			throw new Error(`Automation '${params.automationName}' is not a deterministic automation`);
+			throw new Error(`Automation '${params.automationName}' has an invalid runtime specification`);
 		}
 		const handler = spec.handler as (
 			api: BeforeApi,
@@ -330,6 +371,7 @@ export async function runAutomation(params: {
 
 		const api = createBeforeApi();
 		const ctx = getWorkspace({ provision: true });
+		const requestedByUserId = ctx.baseScope.requestor.norbital_id;
 
 		try {
 			const result = await handler(api, {
@@ -345,6 +387,7 @@ export async function runAutomation(params: {
 				ctx,
 				'automation_run',
 				{
+					requested_by_user_id: requestedByUserId,
 					automation_name: params.automationName,
 					status: 'success',
 					output: result,
@@ -365,6 +408,7 @@ export async function runAutomation(params: {
 					ctx,
 					'automation_run',
 					{
+						requested_by_user_id: requestedByUserId,
 						automation_name: params.automationName,
 						status: 'failed',
 						output: null,
@@ -471,6 +515,10 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 		}
 		case 'outbox':
 			return runTenantOutbox(request);
+		case 'notification':
+			return runNotificationOutbox(request);
+		case 'automation-events':
+			return pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
 		case 'getManifest':
 			return getTenantManifest();
 		default:

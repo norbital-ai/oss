@@ -33,7 +33,7 @@ import type {
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import { setDatabaseNotifications } from '$lib/server/collection/sync/db-notifications.server.js';
-import { handlePodRequest } from './server.js';
+import { handlePodHostCommand, handlePodRequest } from './server.js';
 
 type PendingBindingCall = {
 	resolve: (value: unknown) => void;
@@ -237,6 +237,26 @@ export function startPodStdioServer(): void {
 		}
 	}
 
+	async function runHostCommand(
+		header: Extract<HostFrameHeader, { t: 'host-command' }>
+	): Promise<void> {
+		try {
+			const value = await handlePodHostCommand(
+				decodeWireValue(header.command),
+				bindings,
+				header.identity
+			);
+			await write({ t: 'host-result', id: header.id, ok: true, value: encodeWireValue(value) });
+		} catch (caught) {
+			await write({
+				t: 'host-result',
+				id: header.id,
+				ok: false,
+				error: caught instanceof Error ? (caught.stack ?? caught.message) : String(caught)
+			});
+		}
+	}
+
 	process.stdin.on('data', (chunk: Uint8Array) => {
 		reader.push(chunk);
 		for (const frame of reader.drain()) {
@@ -244,6 +264,9 @@ export function startPodStdioServer(): void {
 			switch (header.t) {
 				case 'request':
 					void respond(header, frame.body);
+					break;
+				case 'host-command':
+					void runHostCommand(header);
 					break;
 				case 'cancel':
 					// The client hung up. Aborting the request signal is what ends an otherwise

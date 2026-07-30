@@ -26,10 +26,6 @@ import {
 } from './outbox-tailer.server.js';
 import { SYNC_REPLICA_EPOCH_HEADER, SYNC_REPLICA_STAMP_HEADER } from '$lib/client/sync/types.js';
 import { quoteSqlIdentifier } from '../sql-identifier.server.js';
-import { validate as uuidValidate, version as uuidVersion } from 'uuid';
-
-/** A change to any of these can alter the policy scope represented by an open stream context. */
-const SCOPE_BEARING_COLLECTIONS = new Set(['policy', 'team', 'team_members', 'user']);
 
 /**
  * `/_runtime/sync/*` — the sync-engine wire protocol. Routed in runtime_request.server.ts
@@ -45,16 +41,10 @@ export function handleSyncRequest(
 	headers: HeadersInit
 ): Promise<Response> {
 	if (action === 'shape') return handleShape(event, ctx, headers);
-	if (action === 'head') return handleHead(ctx, headers);
 	if (action === 'stream') return handleStream(event, ctx);
 	if (action === 'mutate') return handleMutate(event, ctx, headers);
 	if (action === 'schema') return handleSchema(ctx, headers);
 	throw error(404, `Unknown sync route: sync/${action}`);
-}
-
-/** Ordered feed position visible at document boot; restored replicas cross this before local use. */
-async function handleHead(ctx: ProvisionedContext, headers: HeadersInit): Promise<Response> {
-	return jsonResponse({ sequence: await currentOutboxWatermark(ctx) }, headers);
 }
 
 // ---------------------------------------------------------------------------
@@ -74,11 +64,11 @@ const REPLICA_EXCLUDED_TABLES = [
 	'sync_outbox',
 	'_norbital_sync_epoch',
 	'_norbital_sync_compaction',
-	'_norbital_automation_cursor',
 	'_approval_lock',
 	'_norbital_internal_schema',
-	'mutation_log',
+	'record_history',
 	'integration_outbox',
+	'notification_outbox',
 	'__drizzle_migrations'
 ];
 
@@ -152,7 +142,7 @@ async function buildClientSchema(ctx: ProvisionedContext): Promise<string> {
 		   FROM pg_class c
 		   JOIN pg_namespace n ON n.oid = c.relnamespace
 		   JOIN pg_attribute a ON a.attrelid = c.oid
-		  WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname !~ '_history$'
+		  WHERE n.nspname = 'public' AND c.relkind = 'r'
 		    AND c.relname <> ALL($1::text[])
 		    AND a.attnum > 0 AND NOT a.attisdropped
 		    AND EXISTS (
@@ -304,17 +294,7 @@ async function handleMutate(
 async function runOneMutation(ctx: ProvisionedContext, m: WireMutation): Promise<MutationResult> {
 	try {
 		if (m.action === 'create') {
-			const recordId = pkeyOf(m.row ?? {});
-			if (!recordId || !uuidValidate(recordId) || uuidVersion(recordId) !== 7) {
-				return {
-					clientId: m.clientId,
-					status: 'rejected',
-					reason: 'INVALID_CREATE_ID'
-				};
-			}
-			const created = await createRecord(ctx, m.collection, m.row ?? {}, {
-				recordId
-			});
+			const created = await createRecord(ctx, m.collection, m.row ?? {});
 			return {
 				clientId: m.clientId,
 				status: 'confirmed',
@@ -401,11 +381,13 @@ async function mapWithConcurrency<TIn, TOut>(
 
 async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Promise<Response> {
 	const url = new URL(event.request.url);
-	const startCursor = resolveStreamCursor(url);
-	// Interest is explicit. A client with nothing subscribed yet still needs the cursor to advance —
-	// that is what a read-your-command barrier waits on — but it must not make the server resolve a
-	// policy-scoped read for every row in the tenant to deliver contents nobody asked for.
-	const subscriptions = new Set(url.searchParams.getAll('collection').filter(Boolean));
+	const startCursor = await resolveStreamCursor(ctx, url);
+	const subscribedCollections = new Set(
+		(url.searchParams.get('collections') ?? '')
+			.split(',')
+			.map((collection) => collection.trim())
+			.filter(Boolean)
+	);
 	const encoder = new TextEncoder();
 
 	// Client disconnect is surfaced two ways: the request's own AbortSignal (when the host
@@ -460,21 +442,6 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 					if (await cursorTooOld()) break;
 					const batch = await runWithWorkspaceContext(ctx, () => readSyncOutboxBatch(ctx, cursor));
 					if (batch.rows.length > 0) {
-						// The request's base scope is immutable. A policy/team/user edit can therefore make
-						// every row in the replica wrong in either direction. Advance past the announcing
-						// batch and require a fresh context + collection catch-up on reconnect.
-						if (batch.rows.some((row) => SCOPE_BEARING_COLLECTIONS.has(row.collection))) {
-							if (!send(`event: scope-reset\ndata: ${JSON.stringify(batch.cursor)}\n\n`)) break;
-							cursor = batch.cursor;
-							break;
-						}
-						const subscribedRows = batch.rows.filter((row) => subscriptions.has(row.collection));
-						if (subscribedRows.length === 0) {
-							if (!send(`event: cursor\ndata: ${JSON.stringify(batch.cursor)}\n\n`)) break;
-							cursor = batch.cursor;
-							settling = HORIZON_SETTLE_ATTEMPTS;
-							continue;
-						}
 						// Resolve the batch concurrently, then write it as one chunk.
 						//
 						// Both halves matter, and for the same reason: a burst must not cost a round
@@ -489,8 +456,11 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 						// emission order does, and concatenating in `diffs` order preserves it. SSE
 						// frames are `\n\n`-delimited, so several in one write are indistinguishable
 						// on the wire from several writes.
+						const relevantRows = batch.rows.filter((row) =>
+							subscribedCollections.has(row.collection)
+						);
 						const diffs = await runWithWorkspaceContext(ctx, () =>
-							mapWithConcurrency(subscribedRows, DIFF_CONCURRENCY, (row) => buildDiff(ctx, row))
+							mapWithConcurrency(relevantRows, DIFF_CONCURRENCY, (row) => buildDiff(ctx, row))
 						);
 						if (signal.aborted) break;
 						for (let start = 0; start < diffs.length; start += STREAM_EMIT_CHUNK_SIZE) {
@@ -611,9 +581,15 @@ async function buildDiff(
 	};
 }
 
-function resolveStreamCursor(url: URL): OutboxCursor {
+async function resolveStreamCursor(ctx: ProvisionedContext, url: URL): Promise<OutboxCursor> {
 	const encoded = url.searchParams.get('cursor');
-	return (encoded && decodeCursor(encoded)) || OUTBOX_CURSOR_START;
+	if (encoded) {
+		const decoded = decodeCursor(encoded);
+		if (decoded) return decoded;
+	}
+	const since = url.searchParams.get('since');
+	if (since) return outboxCursorForSeq(ctx, since);
+	return OUTBOX_CURSOR_START;
 }
 
 function decodeCursor(encoded: string): OutboxCursor | null {

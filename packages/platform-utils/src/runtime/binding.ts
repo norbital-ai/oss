@@ -23,11 +23,6 @@ export type HostDbBinding = {
 	rollback(txId: string): Promise<void>;
 };
 
-export type PresignResult = {
-	readonly url: string;
-	readonly expiresAt: string;
-};
-
 export const NORBITAL_BILLING_HEADER = 'x-norbital-billing-json';
 
 export type WorkspaceBillingSummary = {
@@ -45,53 +40,62 @@ export type HostFileStorageBinding = {
 	put(key: string, body: Uint8Array, contentType?: string): Promise<void>;
 	get(key: string): Promise<Uint8Array | null>;
 	delete(key: string): Promise<void>;
-	presignPut(key: string, ttlSeconds: number): Promise<PresignResult>;
-	presignGet(key: string, ttlSeconds: number): Promise<PresignResult>;
 };
 
-export type AiInferInput = {
-	readonly prompt: string;
-	readonly model?: string;
-	readonly temperature?: number;
-	readonly schema?: unknown;
+export type AiMessage = {
+	readonly role: 'system' | 'user' | 'assistant' | 'tool';
+	readonly content: string;
+	readonly toolCallId?: string;
+	readonly toolCalls?: readonly AiToolCall[];
 };
 
-export type AiInferResult = {
-	readonly text: string;
-	readonly usage?: unknown;
+export type AiToolSpec = {
+	readonly name: string;
+	readonly description: string;
+	readonly inputSchema: unknown;
+};
+
+export type AiToolCall = {
+	readonly id: string;
+	readonly name: string;
+	readonly input: unknown;
 };
 
 export type AiChatInput = {
-	readonly messages: readonly {
-		readonly role: 'system' | 'user' | 'assistant';
-		readonly content: string;
-	}[];
+	readonly messages: readonly AiMessage[];
+	readonly tools?: readonly AiToolSpec[];
+	readonly outputSchema?: unknown;
 	readonly model?: string;
-	readonly temperature?: number;
+	readonly profile?: string;
 };
 
+export type AiChatResult = {
+	readonly text: string;
+	readonly toolCalls?: readonly AiToolCall[];
+	readonly stopReason: 'end' | 'tool_use' | 'max_tokens' | 'refusal';
+	readonly usage?: unknown;
+};
+
+/** Model inference is the host's only AI responsibility; Pod owns the agent loop and tools. */
 export type HostAiBinding = {
-	infer(input: AiInferInput): Promise<AiInferResult>;
-	chat(input: AiChatInput): Promise<AiInferResult>;
+	chat(input: AiChatInput): Promise<AiChatResult>;
 };
 
-export type NotificationChannel = 'email' | 'telegram' | 'whatsapp' | 'web';
-
-export type NotificationDeliveryInput = {
+export type NotificationDelivery = {
 	readonly organizationId: string;
+	readonly channel: string;
 	readonly recipientUserId: string;
 	readonly subject: string;
 	readonly message: string;
-	readonly channels: readonly NotificationChannel[];
 	readonly cta?: { readonly label: string; readonly url: string } | null;
 };
 
-export type NotificationDeliveryResult = {
-	readonly [channel: string]: { readonly sent: boolean; readonly reason?: string };
-};
+export type NotificationDeliveryResult = { readonly sent: boolean; readonly reason?: string };
 
 export type HostNotificationsBinding = {
-	send(input: NotificationDeliveryInput): Promise<NotificationDeliveryResult>;
+	/** External channels this host can deliver. `system` is reserved to Pod. */
+	readonly channels: readonly string[];
+	send(input: NotificationDelivery): Promise<NotificationDeliveryResult>;
 };
 
 export type StaticMapMarker = {
@@ -146,8 +150,9 @@ export type HostMapsBinding = {
 
 /**
  * Capabilities supplied by whichever platform hosts a tenant runtime. The runtime owns this
- * contract; hosts own the implementations and credentials. Optional capabilities fail at their
- * point of use, allowing the same build to run on platforms with different facility sets.
+ * contract; hosts own the implementations and credentials. Bindings are optional in the transport
+ * shape because workspaces require different facilities, but a host must satisfy the compiled
+ * manifest before it accepts traffic.
  */
 export type RuntimeFacilityBindings = {
 	readonly db: HostDbBinding;
@@ -158,7 +163,7 @@ export type RuntimeFacilityBindings = {
 };
 
 export type RuntimeFacilityRequirement =
-	'db' | 'fileStorage' | 'integrationDelivery' | 'queue' | 'ai' | 'maps';
+	'db' | 'fileStorage' | 'integrationDelivery' | 'queue' | 'ai' | 'maps' | 'notifications';
 
 /** Facilities implied by the portable workspace manifest, independent of a particular host. */
 export function requiredRuntimeFacilities(
@@ -178,6 +183,8 @@ export function requiredRuntimeFacilities(
 	const automations = Object.values(manifest.automations ?? {});
 	if (automations.length > 0) required.add('queue');
 	if (automations.some((automation) => automation.spec?.kind === 'agent')) required.add('ai');
+	if (manifest.requiredFacilities?.includes('ai')) required.add('ai');
+	if ((manifest.notifications?.channels.length ?? 0) > 0) required.add('notifications');
 
 	return [...required];
 }

@@ -14,7 +14,6 @@ The host proxies tenant requests into the checkpoint isolate; the Pod runtime sh
 ```text
 ┌─ TenantWorkspaceShell ─────────────────────────────────────────────────────┐
 │ [Sidebar]                       │  Main app surface (+<name>.svelte)      │
-│  PLATFORM — host plugins        │  [data-workspace-app-surface]            │
 │  APPLICATIONS — tenant apps     │                                          │
 │                                 │                                          │
 │                                 │  CollectionTable / Kanban / custom UI    │
@@ -34,9 +33,9 @@ The host proxies tenant requests into the checkpoint isolate; the Pod runtime sh
               └──────────────────────────────────────┘
 ```
 
-**Platform** and **Applications** are uppercase muted section labels in the sidebar, not navigation
-items. Host plugins and tenant apps remain visually distinct. The implementation lives in
-[`pod-shell.svelte`](../src/lib/runtime/pod-shell.svelte).
+**Applications** is the uppercase muted section label in the sidebar. The implementation lives in
+[`pod-shell.svelte`](../src/lib/runtime/pod-shell.svelte); the shell renders tenant applications
+directly and has no host-provided application registry.
 
 Opening a record does **not** navigate to a new document route. The app stays on
 `/app/{appName}`; the selected record stack lives in `?stack=` and the shell renders the detail
