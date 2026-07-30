@@ -212,20 +212,20 @@ Ordered so each item is verifiable when it lands. Tick nothing that has not been
 
 Core seeds policies today; Pod declares them. Both cannot be true. Measured state:
 
-| Template      | Core seed step                    | Pod declaration        |
-| ------------- | --------------------------------- | ---------------------- |
-| `bca`         | 147 lines, 2 policies             | none                   |
-| `construction`| 67 lines, 3 policies              | none                   |
-| `norbital_hr` | 369 lines, 1 policy (generated)   | none                   |
-| `crm`         | none                              | `+sales_rep.policy.ts` |
-| `reclamation` | none                              | none                   |
+| Template       | Core seed step                  | Pod declaration        |
+| -------------- | ------------------------------- | ---------------------- |
+| `bca`          | 147 lines, 2 policies           | none                   |
+| `construction` | 67 lines, 3 policies            | none                   |
+| `norbital_hr`  | 369 lines, 1 policy (generated) | none                   |
+| `crm`          | none                            | `+sales_rep.policy.ts` |
+| `reclamation`  | none                            | none                   |
 
-- [ ] **A1.** Confirm how `${requestor.norbital_id}` is substituted. The seed interpolates it into a
-      stored condition **at seed time**. A declaration cannot: the value is per-request. Establish
-      whether `policy_grant.conditions` is substituted at evaluation time, and if not, add it. *Nothing
-      else in A is safe until this is answered — a wrongly-substituted condition either matches nothing
-      or matches everything.*
-- [ ] **A2.** Port `bca` (2 policies, `$sql` subqueries through the `RAW` escape hatch). Verify a
+- [x] **A1. Resolved — the premise was wrong, and A2–A5 are unblocked.** `${requestor.norbital_id}` is
+      bound at **evaluation** time, not seed time: the seed stores the literal token in single-quoted
+      strings and only does parameterised inserts. See `docs/POLICY_SUBSTITUTION.md`.
+      **Use `$sql`, never `RAW`.** `RAW` is a function, so it does not survive storage and the grant
+      lands unconditional; `definePolicy` now refuses it.
+- [ ] **A2.** Port `bca` (2 policies, `$sql` subqueries — _not_ `RAW`). Verify a
       contractor sees only their own rows and an admin sees all.
 - [ ] **A3.** Port `construction` (3 policies).
 - [ ] **A4.** Port `norbital_hr` (1 policy, generated from collection lists — keep the generation, move
@@ -234,7 +234,10 @@ Core seeds policies today; Pod declares them. Both cannot be true. Measured stat
 - [ ] **A6.** Delete each `seed/<template>/steps/policies.ts` and its `index.ts` wiring, **only after**
       the matching declaration reconciles. `reconcileDeclaredPolicies()` upserts by key and never
       deletes undeclared rows, so a stale seeded policy lingers silently — remove it deliberately.
-- [ ] **A7.** Same for `team.ts` where it only exists to hold `policy_id`.
+- [ ] **A7.** ~~Delete `team.ts` where it only holds `policy_id`.~~ **Corrected:** no such file exists.
+      Every `team.ts` carries names, descriptions, `is_active`, and (in `norbital_hr`) a three-level
+      hierarchy, and its ids are imported by each `user.ts`. A7 reduces to dropping the `policy_id`
+      value and its `dependsOn` edge.
 
 ### B. Channels
 
@@ -249,15 +252,36 @@ Core seeds policies today; Pod declares them. Both cannot be true. Measured stat
 
 Every item below is already listed above with its rationale.
 
-- [ ] **C1.** Delete better-auth and the auth routes; Pod owns authentication.
-- [ ] **C2.** Drive `workspaceJobs()` from pg-boss; `HostSchedulerConfig` is gone.
+- [ ] **C1.** Delete better-auth and the auth routes; Pod owns authentication. **Three traps:**
+      the Stripe webhook receiver lives _inside_ `auth.server.ts`, so a naive deletion silently removes
+      billing ingestion; `auth/utils/encryption.ts` is generic AES-GCM whose only consumer is the
+      integration secret repository, so deleting it breaks integration secrets; and the `member` table
+      is better-auth's but is not in the delete list.
+- [ ] **C2.** Drive `workspaceJobs()` from pg-boss. **Correction:** there is no `schedule` table and
+      `queue-supervisor.server.ts` is a liveness probe, not a job registry — the thing to change is
+      `automation-scheduler.server.ts`.
 - [ ] **C3.** Migrate `member` → `basic`; widen anything typed `'admin' | 'member'`.
-- [ ] **C4.** Consume seat snapshots from `host_event_outbox`. **Snapshots, never deltas** —
-      at-least-once delivery plus delta counting double-bills.
-- [ ] **C5.** Supply `hostPlugins` (Workspace Studio, org settings) through the host contract.
+- [ ] **C4.** Consume seat snapshots from `host_event_outbox`. **Correction:** Core already counts
+      absolute rows, so delta-counting was never the bug; what changes is the _source_, since the
+      `member` table dies with C1.
+- [ ] **C4a. Unresolved blocker.** The seat axes do not line up. Pod publishes `{admin, advanced,
+    basic}` — a security role. Core bills on `member.billingTier` (`standard | builder`), an
+      independent axis with a "≥1 Builder seat" rule. A role-keyed snapshot cannot drive Core's Stripe
+      items. Decide whether billing tier becomes a Pod concept or Core keeps its own mapping, before
+      C1 removes the table it reads today.
+- [ ] **C5.** Supply `hostPlugins` through the host contract. **Correction — and a live defect:**
+      `CORE_HOST_PLUGINS` already exists and already ships to pods **in a request header**
+      (`ingress.ts`), which is exactly the vector Pod's `HostAppPlugin` refuses: a settable header lets
+      anyone put an arbitrary link, under Core's label, into a tenant's sidebar. Shapes differ too
+      (`route`/`requiredCapability` vs `entry`/`adminOnly`). Move it off the header.
 - [ ] **C6.** Re-expose sandbox tools as `HostAgentTool`; delete `lib/agent/**` the port replaced.
 - [ ] **C7.** Replace Core's inline Google maps with Pod's `googleMaps()`.
-- [ ] **C8.** Rebuild `(ops)/ops` on `cookieSession` + `emailOtpIdentity` with its own `operator` table.
+- [ ] **C8.** Rebuild `(ops)/ops` on `cookieSession` + `emailOtpIdentity` with its own `operator`
+      table. There is a **second** copy of the ops email allowlist in `ingress.ts` that must go too.
+- [ ] **C9.** `resolveRuntimeBindings` supplies only db/fileStorage/ai/notifications/maps — `queue`,
+      `integrationDelivery` and `agentTools` are absent, not merely unchanged.
+- [ ] **C10.** The `hmac(email) → org_ids` routing index does not exist. `platform_user_lookup` is a
+      chat-platform mapping and is not it; build it.
 
 ### D. Prove it works
 
