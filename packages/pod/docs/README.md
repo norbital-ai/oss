@@ -12,6 +12,7 @@ workspace layout, generated client, compiler, runtime internals, history, sync, 
 | [Authoring](./AUTHORING.md)               | The mental model: what a workspace declares, what the host supplies, and why.   |
 | [Overview](./OVERVIEW.md)                 | A shorter lifecycle and generated-state reference.                              |
 | [Core refactor](./CORE_REFACTOR.md)       | What Core must change to run against this Pod. Deferred, not optional.          |
+| [Agent port](./AGENT_PORT.md)             | The W5 inventory: what moves from Core into Pod, and what cannot.               |
 | [Architecture](./ARCHITECTURE.md)         | Runtime invariants, Pod/host boundary, notifications, agents, files, and tests. |
 | [Form system](./FORM_SYSTEM.md)           | Schema-derived forms and collection representation overrides.                   |
 | [Navigation state](./NAVIGATION_STATE.md) | Application navigation and state conventions.                                   |
