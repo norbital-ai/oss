@@ -392,6 +392,17 @@ export const SCHEMA_POST_DDL_SQL = dedent`
     END
     $approval_lock_sync$;
 
+    -- A policy's key is its identity across deploys, so reconciliation can upsert on it and every
+    -- team.policy_id pointing at that policy survives. Without the constraint, two rows could share a
+    -- key and a team would be assigned to whichever one a query happened to return first.
+    DO $policy_key$
+    BEGIN
+      IF to_regclass('public.policy') IS NOT NULL THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS policy_key_unique ON policy (key);
+      END IF;
+    END
+    $policy_key$;
+
     -- One live invitation per address, enforced by the database rather than by a read-then-write.
     -- Two accepts racing on the same email would otherwise both see "no user yet" and both create
     -- one; the partial unique index makes the second INSERT fail instead, and the loser re-reads.

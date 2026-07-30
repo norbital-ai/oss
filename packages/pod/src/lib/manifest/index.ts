@@ -214,6 +214,46 @@ function buildHandlerEntries(
 	return out;
 }
 
+/**
+ * Policy definitions, flattened into the manifest so the runtime can reconcile `policy` rows from it.
+ *
+ * The authoring shape uses `where`/`approval`; the stored grant uses `conditions`/`approval_config`.
+ * Translating here rather than in the engine keeps the runtime unchanged — the only thing that moved
+ * is where the rows come from.
+ */
+function buildPolicyEntries(
+	policies: Record<string, unknown> | undefined
+): NorbitalManifest['policies'] {
+	if (!policies || Object.keys(policies).length === 0) return undefined;
+	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(policies)) {
+		const policy = value as {
+			name?: string;
+			description?: string | null;
+			apps?: readonly string[];
+			grants?: readonly {
+				collection?: string;
+				action?: string;
+				where?: Record<string, unknown>;
+				approval?: Record<string, unknown> | null;
+			}[];
+		};
+		out[key] = {
+			key,
+			name: policy.name ?? key,
+			...(policy.description == null ? {} : { description: policy.description }),
+			...(policy.apps ? { apps: [...policy.apps] } : {}),
+			grants: (policy.grants ?? []).map((grant) => ({
+				collection: grant.collection ?? '',
+				action: grant.action ?? 'read',
+				...(grant.where ? { where: grant.where } : {}),
+				...(grant.approval == null ? {} : { approval: grant.approval })
+			}))
+		};
+	}
+	return out as NorbitalManifest['policies'];
+}
+
 export function buildNorbitalManifest(workspace: {
 	readonly collections: Record<string, unknown>;
 	readonly relationships?: Record<string, ManifestRelationship>;
@@ -234,6 +274,7 @@ export function buildNorbitalManifest(workspace: {
 		apps: buildAppEntries(workspace.registered?.apps),
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
 		automations: buildAutomationEntries(workspace.registered?.automations),
+		policies: buildPolicyEntries(workspace.registered?.policies),
 		env: workspace.env,
 		secrets: workspace.secrets
 			? Object.fromEntries(

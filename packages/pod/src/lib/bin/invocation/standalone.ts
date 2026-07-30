@@ -35,6 +35,10 @@ import { cookieSession, subjectHmac } from '../../host/session.js';
 import { emailOtpIdentity } from '../../host/email-otp.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from './host-config.js';
 import { workspaceJobs } from './jobs.js';
+import {
+	reconcileDeclaredPolicies,
+	type PolicyReconcileClient
+} from '../../server/bootstrap/policy_reconcile.server.js';
 
 const STANDALONE_BUILD_DIRECTORY = path.join('.norbital', 'build');
 const REQUIRED_ENVIRONMENT = [
@@ -256,6 +260,20 @@ export async function migrateStandalone(
 			bundleDir: standaloneBuildDirectory(root),
 			client: migrationClient
 		});
+		// Declared policies land in the same transaction as the schema they grant on. A migration that
+		// adds a collection and a policy that reads it must become visible together, or a deploy has a
+		// window where the collection exists and nothing may touch it.
+		const manifest = await loadStandaloneManifest(root);
+		// stupidity: boundary-cast -- node-postgres satisfies the narrow query contract reconciliation needs.
+		const reconciled = await reconcileDeclaredPolicies(
+			client as unknown as PolicyReconcileClient,
+			manifest
+		);
+		if (reconciled.created + reconciled.updated > 0) {
+			console.log(
+				`[pod] policies reconciled (${reconciled.created} created, ${reconciled.updated} updated).`
+			);
+		}
 		await bootstrapStandaloneAdmin(client, environment);
 	});
 }

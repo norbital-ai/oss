@@ -220,6 +220,71 @@ export default defineAutomation(
 		expect(diagnostics).toContain('thingz');
 	});
 
+	it('pairs each policy grant with its own collection row type', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/policies/+viewer.policy.ts',
+			`import type { Policy } from './$types.js';
+export default {
+	name: 'Viewer',
+	grants: [{ collection: 'things', action: 'read', where: { name: { isNotNull: true } } }]
+} satisfies Policy;`
+		);
+		const result = await compilePodFilesystem({ root });
+		expect(result.valid, JSON.stringify(result.diagnostics, null, 2)).toBe(true);
+
+		const tsc = path.join(REPO_ROOT, 'packages/pod/node_modules/.bin/tsc');
+		try {
+			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+				cwd: root,
+				encoding: 'utf8'
+			});
+		} catch (cause) {
+			const failure = cause as { stdout?: string; stderr?: string };
+			throw new Error(`${failure.stdout ?? ''}\n${failure.stderr ?? ''}`, { cause });
+		}
+
+		// A `where` naming a column the granted collection does not have would otherwise compile and
+		// then match no rows — a grant that reads as access while granting none.
+		await write(
+			root,
+			'src/policies/+viewer.policy.ts',
+			`import type { Policy } from './$types.js';
+export default {
+	name: 'Viewer',
+	grants: [{ collection: 'things', action: 'read', where: { nope: { isNotNull: true } } }]
+} satisfies Policy;`
+		);
+		let diagnostics = '';
+		try {
+			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+				cwd: root,
+				encoding: 'utf8'
+			});
+		} catch (cause) {
+			const failure = cause as { stdout?: string; stderr?: string };
+			diagnostics = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`;
+		}
+		expect(diagnostics).toContain('nope');
+	});
+
+	it('emits a policy name union and rejects a badly named policy file', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/policies/+ok.policy.ts',
+			`export default { name: 'Ok', grants: [{ collection: 'things', action: 'read' }] };`
+		);
+		await write(root, 'src/policies/NotAPolicy.ts', `export default {};`);
+
+		const structure = await discoverPodFilesystem(root);
+		expect(structure.policies.map((policy) => policy.id)).toEqual(['ok']);
+		expect(structure.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+			'POLICY_NAME_INVALID'
+		);
+	});
+
 	it('infers the workspace schema in invoke handlers without an api annotation', async () => {
 		const root = await workspace();
 		await write(

@@ -75,6 +75,7 @@ export interface PodStructure {
 	readonly automations: readonly DiscoveredWorkspaceRole[];
 	readonly remotes: readonly DiscoveredWorkspaceRole[];
 	readonly agentTools: readonly DiscoveredWorkspaceRole[];
+	readonly policies: readonly DiscoveredWorkspaceRole[];
 	readonly seed: string | null;
 	readonly diagnostics: readonly StructuralDiagnostic[];
 }

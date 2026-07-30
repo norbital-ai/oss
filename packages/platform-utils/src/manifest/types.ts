@@ -240,11 +240,38 @@ export const ManifestIntegrationSchema = z
 	})
 	.strict();
 
+/**
+ * One access grant, exactly as the runtime policy engine already consumes it.
+ *
+ * Deliberately the same shape the `policy.grants` column holds: the engine is unchanged, and the only
+ * thing that moves is where the rows come from. Declaring them in source means a grant is reviewable
+ * in a diff and a typo is a compile error, instead of a row somebody has to remember to seed.
+ */
+export const ManifestPolicyGrantSchema = z
+	.object({
+		collection: nonEmpty,
+		action: z.enum(['create', 'read', 'update', 'delete']),
+		where: z.record(z.string(), z.unknown()).optional(),
+		approval: z.record(z.string(), z.unknown()).nullable().optional()
+	})
+	.strict();
+
+export const ManifestPolicySchema = z
+	.object({
+		key: nonEmpty,
+		name: nonEmpty,
+		description: z.string().nullable().optional(),
+		apps: z.array(nonEmpty).optional(),
+		grants: z.array(ManifestPolicyGrantSchema)
+	})
+	.strict();
+
 export const NorbitalManifestSchema = z
 	.object({
 		version: z.literal(1),
 		collections: z.record(z.string(), ManifestCollectionEntrySchema),
 		relationships: z.record(z.string(), ManifestRelationshipSchema),
+		policies: z.record(z.string(), ManifestPolicySchema).optional(),
 		apps: z.record(z.string(), ManifestAppSchema).optional(),
 		handlers: z.record(z.string(), ManifestHandlerEntrySchema).optional(),
 		automations: z.record(z.string(), ManifestAutomationSchema),
@@ -276,6 +303,26 @@ export const NorbitalManifestSchema = z
 					path: ['integrations', key, 'name'],
 					message: 'must match its map key'
 				});
+			}
+		}
+		for (const [key, policy] of Object.entries(manifest.policies ?? {})) {
+			if (policy.key !== key) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['policies', key, 'key'],
+					message: 'must match its map key'
+				});
+			}
+			// A grant on a collection the workspace does not define can never match, so it is dead
+			// permission surface that reads as if it grants something.
+			for (const [index, grant] of policy.grants.entries()) {
+				if (!manifest.collections[grant.collection]) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['policies', key, 'grants', index, 'collection'],
+						message: `unknown collection "${grant.collection}"`
+					});
+				}
 			}
 		}
 	});

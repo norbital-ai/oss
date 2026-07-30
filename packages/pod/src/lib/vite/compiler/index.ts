@@ -810,6 +810,63 @@ async function discoverAgentTools(
 	return tools.sort((left, right) => compareText(left.id, right.id));
 }
 
+/**
+ * Policies declared in `src/policies/+<name>.policy.ts`.
+ *
+ * Confined to one directory, unlike agent tools: a policy is workspace-wide permission surface, and
+ * letting one hide next to a collection would make the total set of grants something you have to
+ * search for rather than read.
+ */
+async function discoverPolicies(
+	root: string,
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): Promise<DiscoveredWorkspaceRole[]> {
+	const directory = path.join(root, 'src', 'policies');
+	if (!inventory.hasDirectory(directory)) return [];
+	const policies: DiscoveredWorkspaceRole[] = [];
+	const seen = new Map<string, string>();
+	for (const entry of inventory.entries(directory)) {
+		const source = relativePath(root, path.join(directory, entry.name));
+		if (entry.isDirectory()) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'POLICY_UNEXPECTED_DIRECTORY',
+					'src/policies contains only +<name>.policy.ts files'
+				)
+			);
+			continue;
+		}
+		const match = entry.name.match(/^\+([a-z][a-z0-9]*(?:_[a-z0-9]+)*)\.policy\.ts$/);
+		if (!match) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'POLICY_NAME_INVALID',
+					`${entry.name} must be named +<lower_snake_case>.policy.ts`
+				)
+			);
+			continue;
+		}
+		const id = match[1]!;
+		const previous = seen.get(id);
+		if (previous) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'POLICY_DUPLICATE',
+					`Policy ${id} is already declared by ${previous}`
+				)
+			);
+			continue;
+		}
+		seen.set(id, source);
+		policies.push({ id, path: source.slice(0, -3), source });
+	}
+	return policies.sort((left, right) => compareText(left.id, right.id));
+}
+
 async function discoverSeed(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
@@ -902,11 +959,12 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		diagnostics,
 		inventory
 	);
-	const [apps, automations, remotes, agentTools, seed] = await Promise.all([
+	const [apps, automations, remotes, agentTools, policies, seed] = await Promise.all([
 		discoverApps(absoluteRoot, diagnostics, inventory),
 		discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics, inventory),
 		discoverWorkspaceRoles(absoluteRoot, 'remotes', diagnostics, inventory),
 		discoverAgentTools(absoluteRoot, diagnostics, inventory),
+		discoverPolicies(absoluteRoot, diagnostics, inventory),
 		discoverSeed(absoluteRoot, diagnostics, inventory),
 		validateAuthoredSource(absoluteRoot, diagnostics, inventory)
 	]);
@@ -926,6 +984,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		automations,
 		remotes,
 		agentTools,
+		policies,
 		seed,
 		diagnostics
 	};
@@ -1094,6 +1153,9 @@ function renderWorkspace(
 	for (const [index, tool] of structure.agentTools.entries()) {
 		imports.push(`import agentTool${index} from ${JSON.stringify(generatedImport(tool.source))};`);
 	}
+	for (const [index, policy] of structure.policies.entries()) {
+		imports.push(`import policy${index} from ${JSON.stringify(generatedImport(policy.source))};`);
+	}
 	if (structure.seed) {
 		imports.push(`import seed from ${JSON.stringify(generatedImport(structure.seed))};`);
 	}
@@ -1106,8 +1168,14 @@ function renderWorkspace(
 	const agentTools = structure.agentTools
 		.map((tool, index) => `\t\t${JSON.stringify(tool.id)}: agentTool${index}`)
 		.join(',\n');
+	const policies = structure.policies
+		.map(
+			(policy, index) =>
+				`\t\t${JSON.stringify(policy.id)}: { ...policy${index}, key: ${JSON.stringify(policy.id)} }`
+		)
+		.join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(
@@ -1182,15 +1250,24 @@ function agentToolTypeFiles(structure: PodStructure): Map<string, string> {
 }
 
 function generatedAuthoringTypes(structure: PodStructure): string {
-	const collections =
-		structure.collections.map((entry) => JSON.stringify(entry.id)).join(' | ') || 'never';
-	const tools =
-		structure.agentTools.map((entry) => JSON.stringify(entry.id)).join(' | ') || 'never';
-	return `export type CollectionName = ${collections};\nexport type AgentToolName = ${tools};\n`;
+	const union = (entries: readonly DiscoveredWorkspaceRole[] | readonly DiscoveredCollection[]) =>
+		entries.map((entry) => JSON.stringify(entry.id)).join(' | ') || 'never';
+	return [
+		`export type CollectionName = ${union(structure.collections)};`,
+		`export type AgentToolName = ${union(structure.agentTools)};`,
+		`export type PolicyName = ${union(structure.policies)};`,
+		`export type AppName = ${union(structure.apps.filter((node) => node.kind === 'app'))};`,
+		''
+	].join('\n');
 }
 
 function workspaceAuthoringTypes(): string {
-	return `import type { AgentToolName, CollectionName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface WorkspaceAuthoringTypes {\n\t\treadonly schema: WorkspaceSchema;\n\t\treadonly collectionName: CollectionName;\n\t\treadonly agentToolName: AgentToolName;\n\t}\n}\nexport {};\n`;
+	return `import type { AgentToolName, AppName, CollectionName, PolicyName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface WorkspaceAuthoringTypes {\n\t\treadonly schema: WorkspaceSchema;\n\t\treadonly collectionName: CollectionName;\n\t\treadonly agentToolName: AgentToolName;\n\t\treadonly policyName: PolicyName;\n\t\treadonly appName: AppName;\n\t}\n}\nexport {};\n`;
+}
+
+/** `$types` for `src/policies`, carrying a `Policy` bound to this workspace's collections. */
+function policyTypes(): string {
+	return `import type { PolicyDefinition } from '@norbital-ai/pod/authoring';\nimport type { WorkspaceSchema } from '../../generated/types.js';\n\nexport type { AppName, CollectionName, PolicyName } from '../../generated/authoring-types.js';\n\n/** Declare with \`satisfies Policy\` so collection names and \`where\` columns are exact. */\nexport type Policy = PolicyDefinition<WorkspaceSchema>;\n`;
 }
 
 function customTypeTypes(customType: DiscoveredCustomType): string {
@@ -1317,6 +1394,7 @@ export async function compilePodFilesystem(
 			apps: [],
 			automations: [],
 			remotes: [],
+			policies: [],
 			agentTools: [],
 			seed: null,
 			diagnostics: [diagnostic]
@@ -1376,6 +1454,7 @@ export async function compilePodFilesystem(
 			['.norbital/generated/types.ts', renderWorkspaceTypes()],
 			['.norbital/generated/authoring-types.ts', generatedAuthoringTypes(structure)],
 			['.norbital/types/collections/$types.d.ts', relationshipTypes()],
+			['.norbital/types/policies/$types.d.ts', policyTypes()],
 			['.norbital/types/automation/$types.d.ts', workspaceRoleTypes(2)],
 			['.norbital/types/remotes/$types.d.ts', workspaceRoleTypes(2)],
 			['.norbital/types/workspace-authoring.d.ts', workspaceAuthoringTypes()],
