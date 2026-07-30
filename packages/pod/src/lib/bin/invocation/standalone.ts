@@ -1,6 +1,6 @@
 import type {
 	HostDbBinding,
-	RuntimeFacilityRequirement,
+	RuntimeFacilityName,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import { requiredRuntimeFacilities } from '@norbital-ai/platform-utils/runtime/binding';
@@ -22,13 +22,12 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Client, type Notification } from 'pg';
 import { PostgresHostDbBinding, type HostDbConnection } from '../../host/db.js';
-import { satisfiedFacilities, type HostIdentity, type PodHostConfig } from '../../host/types.js';
 import {
-	loadHostConfig,
-	resolveDatabaseUrl,
-	type ResolvedHostConfig,
-	type StandaloneIdentityMode
-} from './host-config.js';
+	satisfiedFacilities,
+	type HostIdentity,
+	type SelfHostedPodHostConfig
+} from '../../host/types.js';
+import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from './host-config.js';
 import { startScheduler } from './scheduler.js';
 
 const STANDALONE_BUILD_DIRECTORY = path.join('.norbital', 'build');
@@ -55,8 +54,6 @@ interface StandaloneEnvironment {
 	readonly adminName: string;
 	readonly adminEmail: string;
 	readonly templateKey: string;
-	/** Empty unless the host authenticates with the trusted-header provider. */
-	readonly trustedHostToken: string;
 }
 
 interface PodRuntimeModule {
@@ -112,14 +109,6 @@ export function loadStandaloneEnvironment(root?: string): StandaloneEnvironment 
 		);
 	}
 
-	// Validated here rather than where it is used so a typo fails before the build is loaded and
-	// the database is touched. Absence is legal: only the trusted-header provider needs it, and
-	// `resolveStandaloneHost` is what refuses to install that provider without one.
-	const trustedHostToken = process.env.POD_TRUSTED_HOST_TOKEN?.trim() ?? '';
-	if (trustedHostToken && Buffer.byteLength(trustedHostToken, 'utf8') < 32) {
-		throw new Error('POD_TRUSTED_HOST_TOKEN must contain at least 32 bytes');
-	}
-
 	return {
 		databaseUrl: requiredEnvironmentValue('DATABASE_URL'),
 		host,
@@ -129,8 +118,7 @@ export function loadStandaloneEnvironment(root?: string): StandaloneEnvironment 
 		adminId: requiredEnvironmentValue('POD_ADMIN_ID'),
 		adminName: requiredEnvironmentValue('POD_ADMIN_NAME'),
 		adminEmail: requiredEnvironmentValue('POD_ADMIN_EMAIL'),
-		templateKey: requiredEnvironmentValue('POD_TEMPLATE_KEY'),
-		trustedHostToken
+		templateKey: requiredEnvironmentValue('POD_TEMPLATE_KEY')
 	};
 }
 
@@ -151,7 +139,7 @@ async function loadStandaloneManifest(root: string): Promise<NorbitalManifest> {
 
 export function assertStandaloneFacilities(
 	manifest: NorbitalManifest,
-	available: ReadonlySet<RuntimeFacilityRequirement>
+	available: ReadonlySet<RuntimeFacilityName>
 ): void {
 	const missing = requiredRuntimeFacilities(manifest).filter(
 		(facility) => !available.has(facility)
@@ -160,19 +148,6 @@ export function assertStandaloneFacilities(
 	throw new Error(
 		`Standalone Pod workspace requires unavailable runtime facilities: ${missing.join(', ')}. Run this build in a host that implements every required facility.`
 	);
-}
-
-function assertNotificationCoverage(
-	manifest: NorbitalManifest,
-	notificationChannels: readonly string[]
-): void {
-	const required = manifest.notifications?.channels ?? [];
-	if (required.length === 0) return;
-	const available = new Set(notificationChannels);
-	const missing = required.filter((channel) => !available.has(channel));
-	if (missing.length > 0) {
-		throw new Error(`Standalone Pod host has no notification provider for: ${missing.join(', ')}`);
-	}
 }
 
 async function installDatabaseNotifications(
@@ -490,38 +465,21 @@ async function standaloneStaticAsset(
 async function resolveStandaloneHost(
 	root: string,
 	environment: StandaloneEnvironment,
-	identityMode: StandaloneIdentityMode
+	development: boolean
 ): Promise<ResolvedHostConfig> {
-	if (identityMode === 'trusted-host' && !environment.trustedHostToken) {
-		throw new Error(
-			'POD_TRUSTED_HOST_TOKEN is required to serve with trusted-host identity. Set it, supply your own identity provider in pod.host.ts, or use `pod dev` for a local development identity.'
-		);
-	}
-	if (identityMode === 'dev' && !LOOPBACK_HOSTS.has(environment.host)) {
-		throw new Error(
-			`Development identity refuses to bind ${environment.host}: it authenticates nobody. Bind a loopback address or configure a real identity provider in pod.host.ts.`
-		);
-	}
 	return loadHostConfig({
 		root,
-		identityMode,
+		development,
 		databaseUrl: environment.databaseUrl,
-		host: environment.host,
-		port: environment.port,
 		orgId: environment.orgId,
 		orgName: environment.orgName,
-		adminId: environment.adminId,
-		trustedHostToken: environment.trustedHostToken
+		adminId: environment.adminId
 	});
 }
 
 export type StandaloneStartOptions = {
-	/**
-	 * `trusted-host` keeps the deployment contract: an authenticated proxy forwards the identity it
-	 * established. `dev` makes every request the bootstrapped admin, and is only reachable through
-	 * `pod dev` or an explicit flag.
-	 */
-	readonly identityMode?: StandaloneIdentityMode;
+	/** Core targets may be locally emulated only through `pod dev`. */
+	readonly development?: boolean;
 };
 
 /**
@@ -531,7 +489,10 @@ export type StandaloneStartOptions = {
  * reports "the hosting platform did not provide the X facility" — the message that tells an author
  * what to configure — instead of failing later inside a binding that does not exist.
  */
-function facilityBindings(config: PodHostConfig, db: HostDbBinding): RuntimeFacilityBindings {
+function facilityBindings(
+	config: SelfHostedPodHostConfig,
+	db: HostDbBinding
+): RuntimeFacilityBindings {
 	return {
 		db,
 		...(config.fileStorage ? { fileStorage: config.fileStorage } : {}),
@@ -541,10 +502,8 @@ function facilityBindings(config: PodHostConfig, db: HostDbBinding): RuntimeFaci
 	};
 }
 
-function describeHost(config: PodHostConfig, source: string): string {
-	const supplied = ['db', ...satisfiedFacilities(config)].filter(
-		(name, index, all) => all.indexOf(name) === index
-	);
+function describeHost(config: SelfHostedPodHostConfig, source: string): string {
+	const supplied = [...satisfiedFacilities(config)];
 	const lines = [
 		`[pod] host configuration: ${source}`,
 		`[pod] identity provider: ${config.identity.name}`,
@@ -558,12 +517,14 @@ export async function startStandalone(
 	environment: StandaloneEnvironment,
 	options: StandaloneStartOptions = {}
 ): Promise<void> {
-	const identityMode = options.identityMode ?? 'trusted-host';
-	const { config, source } = await resolveStandaloneHost(root, environment, identityMode);
+	const { config, source } = await resolveStandaloneHost(
+		root,
+		environment,
+		options.development === true
+	);
 
 	const manifest = await loadStandaloneManifest(root);
 	assertStandaloneFacilities(manifest, satisfiedFacilities(config));
-	assertNotificationCoverage(manifest, config.notifications?.channels ?? []);
 
 	const binding: HostDbConnection = config.db.connect();
 	await binding.validate();
@@ -641,7 +602,7 @@ export async function startStandalone(
 		await listen(server, environment);
 		console.log(describeHost(config, source));
 		console.log(`Pod listening at http://${environment.host}:${environment.port}`);
-		if (identityMode === 'dev') {
+		if (config.identity.name === 'dev') {
 			console.log(
 				`[pod] DEVELOPMENT IDENTITY: every request is ${environment.adminEmail}. Never expose this process.`
 			);

@@ -240,15 +240,6 @@ export const ManifestIntegrationSchema = z
 	})
 	.strict();
 
-const externalNotificationChannelsSchema = z
-	.array(z.string().regex(/^[a-z][a-z0-9_-]*$/))
-	.refine(
-		(channels) => !channels.includes('system') && new Set(channels).size === channels.length,
-		{
-			message: 'must contain unique external channel names'
-		}
-	);
-
 export const NorbitalManifestSchema = z
 	.object({
 		version: z.literal(1),
@@ -257,8 +248,6 @@ export const NorbitalManifestSchema = z
 		apps: z.record(z.string(), ManifestAppSchema).optional(),
 		handlers: z.record(z.string(), ManifestHandlerEntrySchema).optional(),
 		automations: z.record(z.string(), ManifestAutomationSchema),
-		notifications: z.object({ channels: externalNotificationChannelsSchema }).strict().optional(),
-		requiredFacilities: z.array(z.literal('ai')).optional(),
 		env: z
 			.object({
 				public: stringRecord.optional(),

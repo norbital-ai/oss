@@ -4,7 +4,7 @@ import type {
 	HostFileStorageBinding,
 	HostMapsBinding,
 	HostNotificationsBinding,
-	RuntimeFacilityRequirement
+	RuntimeFacilityName
 } from '@norbital-ai/platform-utils/runtime/binding';
 import type { TBaseScope } from '@norbital-ai/platform-utils/scope/types';
 import type { HostDbAdapter } from './db.js';
@@ -100,14 +100,19 @@ export type IntegrationDeliveryMessage = {
  */
 export type HostIntegrationDelivery = (message: IntegrationDeliveryMessage) => Promise<void>;
 
+/** Core owns all runtime bindings; this file only declares the deployment target. */
+export type CorePodHostConfig = {
+	readonly mode: 'core';
+};
+
 /**
- * Everything a host supplies.
+ * Everything an independent host supplies.
  *
- * `db` is required and the rest are optional, which mirrors the facility gate exactly: a workspace
- * that cannot reach a database is not a workspace, while every other facility is needed only by
- * workspaces that use the feature behind it.
+ * `db` and `identity` are required. Optional facilities are present only when this host has a real
+ * provider for them; tenant source never duplicates this declaration.
  */
-export type PodHostConfig = {
+export type SelfHostedPodHostConfig = {
+	readonly mode: 'self-hosted';
 	readonly db: HostDbAdapter;
 	readonly identity: HostIdentityProvider;
 	readonly fileStorage?: HostFileStorageBinding;
@@ -118,8 +123,10 @@ export type PodHostConfig = {
 	readonly scheduler?: HostSchedulerConfig;
 };
 
+export type PodHostConfig = CorePodHostConfig | SelfHostedPodHostConfig;
+
 /** Identity function that exists for its type inference; a config file gets checked on write. */
-export function definePodHost(config: PodHostConfig): PodHostConfig {
+export function definePodHost<const TConfig extends PodHostConfig>(config: TConfig): TConfig {
 	return config;
 }
 
@@ -131,10 +138,9 @@ export function definePodHost(config: PodHostConfig): PodHostConfig {
  * host that adds file storage starts passing workspaces with file fields, with no change here.
  */
 export function satisfiedFacilities(
-	config: PodHostConfig
-): ReadonlySet<RuntimeFacilityRequirement> {
-	const satisfied = new Set<RuntimeFacilityRequirement>();
-	if (config.db) satisfied.add('db');
+	config: SelfHostedPodHostConfig
+): ReadonlySet<RuntimeFacilityName> {
+	const satisfied = new Set<RuntimeFacilityName>(['db']);
 	if (config.fileStorage) satisfied.add('fileStorage');
 	if (config.maps) satisfied.add('maps');
 	if (config.ai) satisfied.add('ai');
@@ -151,4 +157,4 @@ export type {
 	HostFileStorageBinding,
 	HostMapsBinding
 };
-export type { HostNotificationsBinding, RuntimeFacilityRequirement, TBaseScope };
+export type { HostNotificationsBinding, RuntimeFacilityName, TBaseScope };

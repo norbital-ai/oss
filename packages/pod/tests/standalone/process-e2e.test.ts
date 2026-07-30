@@ -64,6 +64,28 @@ describe.skipIf(!hasDocker)('Pod standalone process — E2E', () => {
 			recursive: true,
 			filter: (source) => !source.includes(`${path.sep}.norbital${path.sep}build`)
 		});
+		await writeFile(
+			path.join(root, 'pod.host.ts'),
+			`import {
+	definePodHost,
+	devIdentity,
+	env,
+	localFileStorage,
+	postgresDb
+} from '@norbital-ai/pod/host';
+
+export default definePodHost({
+	mode: 'self-hosted',
+	db: postgresDb({ url: env('DATABASE_URL') }),
+	identity: devIdentity({
+		userId: env('POD_ADMIN_ID'),
+		organizationId: env('POD_ORG_ID'),
+		organizationName: env('POD_ORG_NAME')
+	}),
+	fileStorage: localFileStorage({ directory: '.norbital/storage' }),
+	scheduler: { automations: true }
+});`
+		);
 		const port = await freePort();
 		environment = {
 			...process.env,
@@ -75,8 +97,7 @@ describe.skipIf(!hasDocker)('Pod standalone process — E2E', () => {
 			POD_ADMIN_ID: '22222222-2222-4222-8222-222222222222',
 			POD_ADMIN_NAME: 'Standalone Admin',
 			POD_ADMIN_EMAIL: 'admin@standalone.test',
-			POD_TEMPLATE_KEY: 'construction',
-			POD_TRUSTED_HOST_TOKEN: '0123456789abcdef0123456789abcdef-test-token'
+			POD_TEMPLATE_KEY: 'construction'
 		};
 		execFileSync('node', [POD_BIN, 'build'], { cwd: root, env: environment, stdio: 'ignore' });
 		execFileSync('node', [POD_BIN, 'migrate'], { cwd: root, env: environment, stdio: 'ignore' });
@@ -88,7 +109,7 @@ describe.skipIf(!hasDocker)('Pod standalone process — E2E', () => {
 	});
 
 	it('listens with complete facilities and exits before listening when a required facility is absent', async () => {
-		const running = spawn('node', [POD_BIN, 'start', '--dev-identity'], {
+		const running = spawn('node', [POD_BIN, 'start'], {
 			cwd: root,
 			env: environment,
 			stdio: 'pipe'
@@ -111,7 +132,7 @@ describe.skipIf(!hasDocker)('Pod standalone process — E2E', () => {
 		};
 		await writeFile(manifestPath, JSON.stringify(manifest));
 
-		const refused = spawn('node', [POD_BIN, 'start', '--dev-identity'], {
+		const refused = spawn('node', [POD_BIN, 'start'], {
 			cwd: root,
 			env: environment,
 			stdio: 'pipe'

@@ -64,12 +64,6 @@ export default defineAgentTool({
 	);
 	await write(
 		root,
-		'src/+notifications.ts',
-		`import { defineNotifications } from '@norbital-ai/pod/authoring';
-export default defineNotifications({ channels: ['email'] as const });`
-	);
-	await write(
-		root,
 		'src/automation/+triage.ts',
 		`import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
@@ -93,31 +87,41 @@ describe('Pod filesystem compiler conformance', () => {
 
 		expect(structure.diagnostics).toEqual([]);
 		expect(structure.agentTools.map((tool) => tool.id)).toEqual(['lookup', 'summarize']);
-		expect(structure.notifications).toBe('src/+notifications.ts');
-		expect(structure.facilities).toBeNull();
 	});
 
-	it('rejects duplicate tools and notification declarations outside the workspace root', async () => {
+	it('rejects duplicate tools and obsolete tenant capability declarations', async () => {
 		const root = await workspace();
 		await write(
 			root,
 			'src/apps/+lookup.tool.ts',
 			`export { default } from '../collections/things/+lookup.tool.js';`
 		);
-		await write(
-			root,
-			'src/collections/things/+notifications.ts',
-			`export default { channels: ['sms'] as const };`
-		);
+		await write(root, 'src/+notifications.ts', `export default { channels: ['email'] as const };`);
+		await write(root, 'src/+facilities.ts', `export default ['ai'] as const;`);
 
 		const structure = await discoverPodFilesystem(root);
-		expect(structure.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
-			expect.arrayContaining(['AGENT_TOOL_DUPLICATE', 'NOTIFICATIONS_LOCATION_INVALID'])
-		);
+		const codes = structure.diagnostics.map((diagnostic) => diagnostic.code);
+		expect(codes).toContain('AGENT_TOOL_DUPLICATE');
+		expect(codes.filter((code) => code === 'WORKSPACE_ROLE_UNKNOWN')).toHaveLength(2);
 	});
 
-	it('generates exact collection, tool, and notification unions that pass end-to-end TypeScript', async () => {
+	it('generates exact collection and tool unions while notification channels stay host-owned', async () => {
 		const root = await workspace();
+		await write(
+			root,
+			'src/automation/+notify.ts',
+			`import { defineAutomation } from '@norbital-ai/pod/authoring';
+import type { Api } from './$types.js';
+export default defineAutomation({ schedule: '0 7 * * *' }, async (api: Api) => {
+	await api.sendNotification({
+		recipient_user_id: '00000000-0000-4000-8000-000000000000',
+		subject: 'Portable',
+		message: 'The active host chooses the provider',
+		channels: ['sms']
+	});
+	return {};
+});`
+		);
 		const result = await compilePodFilesystem({ root });
 		expect(result.valid, JSON.stringify(result.diagnostics, null, 2)).toBe(true);
 
@@ -141,21 +145,6 @@ export default defineAutomation(
 	{ kind: 'agent', task: 'Invalid', collections: ['missing_collection'], tools: ['missing_tool'] }
 );`
 		);
-		await write(
-			root,
-			'src/automation/+notify.ts',
-			`import { defineAutomation } from '@norbital-ai/pod/authoring';
-import type { Api } from './$types.js';
-export default defineAutomation({ schedule: '0 7 * * *' }, async (api: Api) => {
-	await api.sendNotification({
-		recipient_user_id: '00000000-0000-4000-8000-000000000000',
-		subject: 'Invalid',
-		message: 'Invalid',
-		channels: ['sms']
-	});
-	return {};
-});`
-		);
 		let diagnostics = '';
 		try {
 			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
@@ -168,6 +157,5 @@ export default defineAutomation({ schedule: '0 7 * * *' }, async (api: Api) => {
 		}
 		expect(diagnostics).toContain('missing_collection');
 		expect(diagnostics).toContain('missing_tool');
-		expect(diagnostics).toContain('"sms"');
 	});
 });

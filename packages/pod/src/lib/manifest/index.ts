@@ -234,12 +234,6 @@ export function buildNorbitalManifest(workspace: {
 		apps: buildAppEntries(workspace.registered?.apps),
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
 		automations: buildAutomationEntries(workspace.registered?.automations),
-		...(workspace.registered?.notificationChannels.length
-			? { notifications: { channels: workspace.registered.notificationChannels } }
-			: {}),
-		...(workspace.registered?.requiredFacilities.length
-			? { requiredFacilities: workspace.registered.requiredFacilities }
-			: {}),
 		env: workspace.env,
 		secrets: workspace.secrets
 			? Object.fromEntries(

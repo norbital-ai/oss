@@ -810,30 +810,6 @@ async function discoverAgentTools(
 	return tools.sort((left, right) => compareText(left.id, right.id));
 }
 
-async function discoverNotifications(
-	root: string,
-	diagnostics: StructuralDiagnostic[],
-	inventory: SourceInventory
-): Promise<string | null> {
-	const declaration = path.join(root, 'src/+notifications.ts');
-	for (const file of inventory.files) {
-		if (path.basename(file) !== '+notifications.ts' || file === declaration) continue;
-		diagnostics.push(
-			topologyDiagnostic(
-				relativePath(root, file),
-				'NOTIFICATIONS_LOCATION_INVALID',
-				'Notification channels may only be declared in src/+notifications.ts'
-			)
-		);
-	}
-	return inventory.hasFile(declaration) ? 'src/+notifications.ts' : null;
-}
-
-function discoverFacilities(root: string, inventory: SourceInventory): string | null {
-	const declaration = path.join(root, 'src/+facilities.ts');
-	return inventory.hasFile(declaration) ? 'src/+facilities.ts' : null;
-}
-
 async function discoverSeed(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
@@ -847,8 +823,6 @@ async function discoverSeed(
 			entry.name.startsWith('+') &&
 			entry.name.endsWith('.ts') &&
 			entry.name !== '+seed.ts' &&
-			entry.name !== '+notifications.ts' &&
-			entry.name !== '+facilities.ts' &&
 			!entry.name.endsWith('.tool.ts')
 		) {
 			diagnostics.push(
@@ -923,12 +897,11 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		diagnostics,
 		inventory
 	);
-	const [apps, automations, remotes, agentTools, notifications, seed] = await Promise.all([
+	const [apps, automations, remotes, agentTools, seed] = await Promise.all([
 		discoverApps(absoluteRoot, diagnostics, inventory),
 		discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics, inventory),
 		discoverWorkspaceRoles(absoluteRoot, 'remotes', diagnostics, inventory),
 		discoverAgentTools(absoluteRoot, diagnostics, inventory),
-		discoverNotifications(absoluteRoot, diagnostics, inventory),
 		discoverSeed(absoluteRoot, diagnostics, inventory),
 		validateAuthoredSource(absoluteRoot, diagnostics, inventory)
 	]);
@@ -948,8 +921,6 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		automations,
 		remotes,
 		agentTools,
-		notifications,
-		facilities: discoverFacilities(absoluteRoot, inventory),
 		seed,
 		diagnostics
 	};
@@ -1118,16 +1089,6 @@ function renderWorkspace(
 	for (const [index, tool] of structure.agentTools.entries()) {
 		imports.push(`import agentTool${index} from ${JSON.stringify(generatedImport(tool.source))};`);
 	}
-	if (structure.notifications) {
-		imports.push(
-			`import notifications from ${JSON.stringify(generatedImport(structure.notifications))};`
-		);
-	}
-	if (structure.facilities) {
-		imports.push(
-			`import requiredFacilities from ${JSON.stringify(generatedImport(structure.facilities))};`
-		);
-	}
 	if (structure.seed) {
 		imports.push(`import seed from ${JSON.stringify(generatedImport(structure.seed))};`);
 	}
@@ -1141,7 +1102,7 @@ function renderWorkspace(
 		.map((tool, index) => `\t\t${JSON.stringify(tool.id)}: agentTool${index}`)
 		.join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.notifications ? ',\n\tnotifications' : ''}${structure.facilities ? ',\n\trequiredFacilities' : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(
@@ -1191,7 +1152,7 @@ function relationshipTypes(): string {
 
 function workspaceRoleTypes(structure: PodStructure): string {
 	void structure;
-	return `export type { Api, WorkspaceRow } from '../../generated/types.js';\nexport type { AgentToolName, CollectionName, NotificationChannel } from '../../generated/authoring-types.js';\n`;
+	return `export type { Api, WorkspaceRow } from '../../generated/types.js';\nexport type { AgentToolName, CollectionName } from '../../generated/authoring-types.js';\n`;
 }
 
 function generatedAuthoringTypes(structure: PodStructure): string {
@@ -1199,14 +1160,11 @@ function generatedAuthoringTypes(structure: PodStructure): string {
 		structure.collections.map((entry) => JSON.stringify(entry.id)).join(' | ') || 'never';
 	const tools =
 		structure.agentTools.map((entry) => JSON.stringify(entry.id)).join(' | ') || 'never';
-	const channels = structure.notifications
-		? `typeof import('../../src/+notifications.js').default['channels'][number]`
-		: 'never';
-	return `export type CollectionName = ${collections};\nexport type AgentToolName = ${tools};\nexport type ExternalNotificationChannel = ${channels};\nexport type NotificationChannel = 'system' | ExternalNotificationChannel;\n`;
+	return `export type CollectionName = ${collections};\nexport type AgentToolName = ${tools};\n`;
 }
 
 function workspaceAuthoringTypes(): string {
-	return `import type { AgentToolName, CollectionName, ExternalNotificationChannel } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface WorkspaceAuthoringTypes {\n\t\treadonly schema: WorkspaceSchema;\n\t\treadonly collectionName: CollectionName;\n\t\treadonly agentToolName: AgentToolName;\n\t\treadonly notificationChannel: ExternalNotificationChannel;\n\t}\n}\nexport {};\n`;
+	return `import type { AgentToolName, CollectionName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface WorkspaceAuthoringTypes {\n\t\treadonly schema: WorkspaceSchema;\n\t\treadonly collectionName: CollectionName;\n\t\treadonly agentToolName: AgentToolName;\n\t}\n}\nexport {};\n`;
 }
 
 function customTypeTypes(customType: DiscoveredCustomType): string {
@@ -1334,8 +1292,6 @@ export async function compilePodFilesystem(
 			automations: [],
 			remotes: [],
 			agentTools: [],
-			notifications: null,
-			facilities: null,
 			seed: null,
 			diagnostics: [diagnostic]
 		};

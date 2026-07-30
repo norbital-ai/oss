@@ -3,36 +3,44 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { postgresDb } from '../../host/db.js';
 import { localFileStorage } from '../../host/file-storage.js';
-import { devIdentity, trustedHeaderIdentity } from '../../host/identity.js';
-import type { HostDbAdapter, HostIdentityProvider, PodHostConfig } from '../../host/types.js';
+import { devIdentity } from '../../host/identity.js';
+import type {
+	HostDbAdapter,
+	HostIdentityProvider,
+	PodHostConfig,
+	SelfHostedPodHostConfig
+} from '../../host/types.js';
 
 /** Config filenames tried in order. `.ts` first: Node strips types natively on the supported range. */
 const CONFIG_FILENAMES = ['pod.host.ts', 'pod.host.js', 'pod.host.mjs'] as const;
 
-export type StandaloneIdentityMode = 'trusted-host' | 'dev';
-
 export type HostConfigInput = {
 	readonly root: string;
-	readonly identityMode: StandaloneIdentityMode;
+	readonly development: boolean;
 	readonly databaseUrl: string;
-	readonly host: string;
-	readonly port: number;
 	readonly orgId: string;
 	readonly orgName: string;
 	readonly adminId: string;
-	readonly trustedHostToken: string;
 };
 
 export type ResolvedHostConfig = {
-	readonly config: PodHostConfig;
+	readonly config: SelfHostedPodHostConfig;
 	/** Where the configuration came from, for the startup banner. */
+	readonly source: string;
+};
+
+type LoadedHostConfig = {
+	readonly config: PodHostConfig;
 	readonly source: string;
 };
 
 function isHostConfig(value: unknown): value is PodHostConfig {
 	if (typeof value !== 'object' || value == null) return false;
-	const identity = (value as PodHostConfig).identity as unknown;
-	const db = (value as PodHostConfig).db as unknown;
+	const mode = (value as { mode?: unknown }).mode;
+	if (mode === 'core') return true;
+	if (mode !== 'self-hosted') return false;
+	const identity = (value as SelfHostedPodHostConfig).identity as unknown;
+	const db = (value as SelfHostedPodHostConfig).db as unknown;
 	return (
 		typeof identity === 'object' &&
 		identity != null &&
@@ -45,29 +53,20 @@ function isHostConfig(value: unknown): value is PodHostConfig {
 	);
 }
 
-function identityProvider(input: HostConfigInput): HostIdentityProvider {
-	if (input.identityMode === 'trusted-host') {
-		return trustedHeaderIdentity({ token: input.trustedHostToken });
-	}
-	return devIdentity({
-		userId: input.adminId,
-		organizationId: input.orgId,
-		organizationName: input.orgName
-	});
-}
-
 /**
- * The configuration a workspace gets when it has no `pod.host.ts`.
- *
- * Only facilities with complete local implementations are installed. Any other requirement is
- * rejected by the startup gate and must be supplied explicitly in `pod.host.ts`.
+ * Local Core emulation used only by `pod dev`.
  */
-export function defaultHostConfig(input: HostConfigInput): ResolvedHostConfig {
+function coreDevelopmentHostConfig(input: HostConfigInput, source: string): ResolvedHostConfig {
 	return {
-		source: 'built-in defaults',
+		source: `${source} (Core development emulation)`,
 		config: {
+			mode: 'self-hosted',
 			db: postgresDb({ url: input.databaseUrl }),
-			identity: identityProvider(input),
+			identity: devIdentity({
+				userId: input.adminId,
+				organizationId: input.orgId,
+				organizationName: input.orgName
+			}),
 			fileStorage: localFileStorage({
 				directory: path.join(input.root, '.norbital', 'storage')
 			}),
@@ -77,26 +76,32 @@ export function defaultHostConfig(input: HostConfigInput): ResolvedHostConfig {
 }
 
 /**
- * Load `pod.host.ts` if the workspace has one, otherwise fall back to the defaults.
- *
- * A workspace config replaces the defaults rather than merging with them. Merging would mean a
- * host that deliberately omits a facility silently gets the placeholder instead, and the facility
- * gate — the one place that can tell an operator a workspace will not work here — would stop
- * firing. An explicit config is a complete statement of what this host provides.
+ * Resolve an explicit deployment target. Core workspaces may be emulated by `pod dev`, but
+ * production `pod start` requires a complete self-hosted configuration.
  */
 export async function loadHostConfig(input: HostConfigInput): Promise<ResolvedHostConfig> {
 	const loaded = await loadHostConfigFile(input.root);
-	return loaded ?? defaultHostConfig(input);
+	if (!loaded) {
+		throw new Error(
+			'Missing pod.host.ts. Declare definePodHost({ mode: "core" }) or a complete mode: "self-hosted" host.'
+		);
+	}
+	if (loaded.config.mode === 'self-hosted') {
+		return { config: loaded.config, source: loaded.source };
+	}
+	if (input.development) return coreDevelopmentHostConfig(input, loaded.source);
+	throw new Error(
+		`${loaded.source} targets Core and cannot run with \`pod start\`. Deploy it to Core or configure mode: "self-hosted" with real providers.`
+	);
 }
 
 /**
  * The workspace's own `pod.host.ts`, or `null` when it has none.
  *
  * Separate from `loadHostConfig` because `pod migrate` and `pod seed` need one thing out of the
- * configuration — which database to open — and must not have to invent an identity mode or a
- * port to ask for it.
+ * configuration — which database to open — and do not need a resolved runtime host.
  */
-export async function loadHostConfigFile(root: string): Promise<ResolvedHostConfig | null> {
+export async function loadHostConfigFile(root: string): Promise<LoadedHostConfig | null> {
 	for (const filename of CONFIG_FILENAMES) {
 		const configPath = path.join(root, filename);
 		if (!existsSync(configPath)) continue;
@@ -108,7 +113,7 @@ export async function loadHostConfigFile(root: string): Promise<ResolvedHostConf
 				: undefined;
 		if (!isHostConfig(exported)) {
 			throw new Error(
-				`${filename} must default-export definePodHost({ ... }) with a \`db\` adapter and an identity provider.`
+				`${filename} must default-export definePodHost({ mode: 'core' }) or definePodHost({ mode: 'self-hosted', db, identity, ... }).`
 			);
 		}
 		return { config: exported, source: filename };
@@ -123,5 +128,10 @@ export async function loadHostConfigFile(root: string): Promise<ResolvedHostConf
  */
 export async function resolveDatabaseUrl(root: string, fallbackUrl: string): Promise<string> {
 	const loaded = await loadHostConfigFile(root);
-	return loaded?.config.db.connectionString ?? fallbackUrl;
+	if (!loaded) {
+		throw new Error(
+			'Missing pod.host.ts. Declare whether this workspace targets Core or is self-hosted.'
+		);
+	}
+	return loaded.config.mode === 'self-hosted' ? loaded.config.db.connectionString : fallbackUrl;
 }

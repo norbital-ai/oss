@@ -60,8 +60,6 @@ export type {
 export { extract } from './schema/extract.js';
 export { defineAutomation, type AutomationTrigger } from './automations/automations.js';
 export { defineAgentTool, type AgentToolDefinition } from './automations/agent-tools.js';
-export { defineNotifications, type NotificationDefinition } from './notifications.js';
-export { defineFacilities, type FacilityDeclaration } from './facilities.js';
 export { defineCommandHandler, defineQueryHandler } from './automations/handlers.js';
 export type { TExportAction, TExportManifest, TFileAttachment } from './automations/pipelines.js';
 export type {

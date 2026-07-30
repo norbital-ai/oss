@@ -20,6 +20,7 @@ import {
 	runWithBypassSecretIfValidAsync,
 	runWithPermissionBypassAsync
 } from './access_control/permission/permission_bypass_key.server.js';
+import { assertNotificationChannelSupport } from '$lib/server/notifications/channels.js';
 import {
 	createMany,
 	createRecord,
@@ -117,11 +118,11 @@ function sharedBuiltinApi() {
 		sendNotification: async (input: Parameters<BeforeApi['sendNotification']>[0]) => {
 			const ctx = getWorkspace({ provision: true });
 			const channels = [...new Set(notificationChannelsSchema.parse(input.channels))];
-			const declared = new Set(['system', ...getTenantWorkspace().registered.notificationChannels]);
-			const unknown = channels.filter((channel) => !declared.has(channel));
-			if (unknown.length > 0) {
-				throw new Error(
-					`Notification channel not declared by this workspace: ${unknown.join(', ')}`
+			const external = channels.filter((channel) => channel !== 'system');
+			if (external.length > 0) {
+				assertNotificationChannelSupport(
+					external,
+					requireRuntimeFacility('notifications').channels
 				);
 			}
 			return withCollectionTransaction(ctx, async () => {
@@ -145,7 +146,6 @@ function sharedBuiltinApi() {
 					notificationId =
 						typeof notification.norbital_id === 'string' ? notification.norbital_id : null;
 				}
-				const external = channels.filter((channel) => channel !== 'system');
 				for (const channel of external) {
 					await createRecord(
 						ctx,

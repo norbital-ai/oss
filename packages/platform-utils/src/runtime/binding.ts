@@ -162,14 +162,14 @@ export type RuntimeFacilityBindings = {
 	readonly maps?: HostMapsBinding;
 };
 
-export type RuntimeFacilityRequirement =
+export type RuntimeFacilityName =
 	'db' | 'fileStorage' | 'integrationDelivery' | 'queue' | 'ai' | 'maps' | 'notifications';
 
 /** Facilities implied by the portable workspace manifest, independent of a particular host. */
 export function requiredRuntimeFacilities(
 	manifest: NorbitalManifest
-): readonly RuntimeFacilityRequirement[] {
-	const required = new Set<RuntimeFacilityRequirement>(['db']);
+): readonly RuntimeFacilityName[] {
+	const required = new Set<RuntimeFacilityName>(['db']);
 	const fields = Object.values(manifest.collections).flatMap(
 		(collection) => collection.fields ?? []
 	);
@@ -183,8 +183,6 @@ export function requiredRuntimeFacilities(
 	const automations = Object.values(manifest.automations ?? {});
 	if (automations.length > 0) required.add('queue');
 	if (automations.some((automation) => automation.spec?.kind === 'agent')) required.add('ai');
-	if (manifest.requiredFacilities?.includes('ai')) required.add('ai');
-	if ((manifest.notifications?.channels.length ?? 0) > 0) required.add('notifications');
 
 	return [...required];
 }

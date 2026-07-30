@@ -6,12 +6,6 @@ import type { MergedWorkspaceSchema } from '$lib/authoring/schema/system-workspa
 import type { TableName } from '../schema/types.js';
 import type { WorkspaceAuthoringTypes } from '../index.js';
 
-type WorkspaceNotificationChannel = WorkspaceAuthoringTypes extends {
-	readonly notificationChannel: infer TChannel extends string;
-}
-	? 'system' | TChannel
-	: 'system';
-
 type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
 	readonly schema: infer TSchema extends AnySchema;
 }
@@ -22,7 +16,8 @@ export type SendNotificationInput = {
 	readonly recipient_user_id: string;
 	readonly subject: string;
 	readonly message: string;
-	readonly channels?: readonly WorkspaceNotificationChannel[];
+	/** `system` is built in; every other channel must be provided by the active host. */
+	readonly channels?: readonly string[];
 	readonly cta?: { readonly label: string; readonly url: string } | null;
 	readonly notification_category?: string | null;
 };

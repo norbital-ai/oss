@@ -35,7 +35,7 @@ describe('standalone facility gate', () => {
 		).not.toThrow();
 	});
 
-	it('requires every facility implied by file, map, integration, and notification declarations', () => {
+	it('requires every facility structurally implied by files, maps, and integrations', () => {
 		const full = manifest({
 			collections: {
 				assets: {
@@ -53,11 +53,10 @@ describe('standalone facility gate', () => {
 					system: null
 				}
 			},
-			notifications: { channels: ['email'] },
 			integrations: { crm: { name: 'crm', definition: {} } }
 		});
 		expect(() => assertStandaloneFacilities(full, new Set(['db']))).toThrow(
-			/fileStorage, maps, integrationDelivery, queue, notifications/
+			/fileStorage, maps, integrationDelivery, queue/
 		);
 	});
 });

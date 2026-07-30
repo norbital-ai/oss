@@ -84,14 +84,15 @@ The authored root `tsconfig.json` extends `.norbital/tsconfig.json`. Commit only
 ## Runtime and trust boundary
 
 The browser never talks to tenant hooks or server handlers directly. Pod’s server runtime receives a
-request from a trusted host, validates its user, organisation, role, and complete base scope, then
-evaluates ordinary policy before executing server code. The built-in standalone runtime listens only on
-a loopback address and requires a trusted host token; put an authenticated host in front of it.
+request from a host identity provider, resolves or validates its user, organisation, role, and base
+scope, then evaluates ordinary policy before executing server code. The standalone runtime listens
+only on a loopback address; a production self-hosted `pod.host.ts` must provide its identity provider.
 
-Hosts also implement facilities reported by the built workspace. A DB-only host can run a workspace
-that needs only database access; file fields require file storage, geolocation requires maps, and
-automations and integrations require queue and delivery facilities as applicable. A host rejects a
-build whose required facilities it cannot provide.
+Hosts implement facilities structurally required by the built workspace. A DB-only host can run a
+workspace that needs only database access; file fields require file storage, geolocation requires
+maps, and automations and integrations require queue and delivery facilities as applicable.
+Non-inferable direct calls such as AI and external notifications require the corresponding active
+host binding when invoked.
 
 ## Data and sync model
 

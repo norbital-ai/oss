@@ -44,37 +44,44 @@ Pod deliberately targets PostgreSQL. The sync ordering contract depends on trans
 snapshot horizons, and workspace constraints depend on PostgreSQL extensions. `HostDbBinding`
 chooses where PostgreSQL lives, not which database engine Pod uses.
 
-## Host modes
+## Deployment targets
 
-Both modes run the same build and the same facility gate.
+`pod.host.ts` makes the target explicit. It is not tenant source and the filesystem compiler does
+not bundle it.
 
-|                   | Hosted                | Standalone                   |
-| ----------------- | --------------------- | ---------------------------- |
-| Runtime transport | framed process I/O    | in-process calls             |
-| HTTP socket       | host                  | `pod start`                  |
-| Facilities        | host bindings         | `pod.host.ts` bindings       |
-| Identity          | trusted host identity | configured identity provider |
-| Static build      | served by host        | served by standalone process |
+|                         | Core                    | Self-hosted                     |
+| ----------------------- | ----------------------- | ------------------------------- |
+| `pod.host.ts` mode      | `core`                  | `self-hosted`                   |
+| Runtime transport       | framed process I/O      | in-process calls                |
+| HTTP and static assets  | Core                    | `pod start`                     |
+| Facilities and identity | Core runtime bindings   | `pod.host.ts` providers         |
+| Local development       | `pod dev` emulates Core | uses the declared providers     |
+| Production `pod start`  | refused                 | allowed after the facility gate |
 
-`pod.host.ts` is loaded only by standalone commands. A hosted runtime never reads it.
+A Core workspace needs only a marker:
+
+```ts
+import { definePodHost } from '@norbital-ai/pod/host';
+
+export default definePodHost({ mode: 'core' });
+```
+
+An independent deployment provides the complete host:
 
 ```ts
 import {
 	definePodHost,
-	devIdentity,
 	env,
 	notificationProviders,
 	postgresDb,
-	s3FileStorage
+	s3FileStorage,
+	trustedHeaderIdentity
 } from '@norbital-ai/pod/host';
 
 export default definePodHost({
+	mode: 'self-hosted',
 	db: postgresDb({ url: env('DATABASE_URL') }),
-	identity: devIdentity({
-		userId: env('POD_ADMIN_ID'),
-		organizationId: env('POD_ORG_ID'),
-		organizationName: env('POD_ORG_NAME')
-	}),
+	identity: trustedHeaderIdentity({ token: env('POD_TRUSTED_HOST_TOKEN') }),
 	fileStorage: s3FileStorage({
 		bucket: env('S3_BUCKET'),
 		region: env('S3_REGION'),
@@ -88,23 +95,28 @@ export default definePodHost({
 });
 ```
 
+There are no implicit production defaults and configurations are never merged. A missing
+`pod.host.ts` is an error. Core never reads self-hosted providers from the tenant bundle; its
+runtime installs the same binding interfaces directly.
+
 ## Facility gate
 
-The compiler projects requirements into the manifest. Standalone startup compares them with the
-resolved host configuration and refuses to listen if anything is missing.
+The compiler projects requirements that are structurally knowable into the manifest. Self-hosted
+startup compares them with `pod.host.ts` and refuses to listen if anything is missing.
 
-| Facility              | Required when                                           |
-| --------------------- | ------------------------------------------------------- |
-| `db`                  | always                                                  |
-| `fileStorage`         | a collection contains a file field                      |
-| `maps`                | a collection contains a geolocation field               |
-| `notifications`       | the workspace declares an external notification channel |
-| `ai`                  | an agent automation or `src/+facilities.ts` declares it |
-| `queue`               | the workspace declares any automation or integration    |
-| `integrationDelivery` | the workspace declares an integration                   |
+| Facility              | Required before startup when              |
+| --------------------- | ----------------------------------------- |
+| `db`                  | always                                    |
+| `fileStorage`         | a collection contains a file field        |
+| `maps`                | a collection contains a geolocation field |
+| `ai`                  | an agent automation is compiled           |
+| `queue`               | any automation or integration is compiled |
+| `integrationDelivery` | an integration is compiled                |
 
-This makes capability support binary and observable: a workspace either starts with every facility
-it requires or does not start.
+Direct calls that cannot be inferred without executing tenant code are checked at the call site.
+`api.ai(...)` requires an AI binding. An external `api.sendNotification(...)` requires a
+notification binding that advertises that channel. Failure occurs before Pod writes an outbox row.
+There is no parallel tenant capability declaration and no provider name in the manifest.
 
 ## Request lifecycle
 
@@ -140,8 +152,10 @@ Temporal row state and audit are deliberately separate:
   shape rather than a JSONB envelope. Pod creates the history tuple descriptor from PostgreSQL's
   catalog so array dimensions, types, collations, nullability, and defaults stay native.
 - Generated migrations mirror every column add, alter, rename, and drop into the history table.
-  History tables are never rebuilt. A migration locks `approval_request` and refuses to run while
-  any approval is non-terminal, so approval rollback never crosses schema versions.
+  History tables are never rebuilt. Migrations may run while approvals are non-terminal: rollback
+  selects the current table's columns from the correspondingly migrated typed history table, so
+  added, altered, renamed, and removed fields follow the current schema without a separate payload
+  migration.
 - `audit_event` is the append-only action log, and `agent_run_step` is the append-only AI
   transcript. Neither is a temporal snapshot or rollback source.
 
@@ -156,8 +170,6 @@ across discovery passes, and independent roles are discovered concurrently.
 
 ```text
 src/
-├── +facilities.ts
-├── +notifications.ts
 ├── +seed.ts
 ├── collections/
 │   ├── +relationship.ts
@@ -176,37 +188,8 @@ src/
 ```
 
 Agent tools use the `+<lower_snake_case>.tool.ts` suffix and may live anywhere under `src/`.
-Duplicate names are compile errors. Notification channels are declared once at
-`src/+notifications.ts`. Non-inferable facilities are declared once at `src/+facilities.ts`.
-
-### Capability declarations
-
-`src/+facilities.ts` declares a host capability that source discovery cannot infer. Today that is
-direct AI use from deterministic hooks, remotes, or pipelines:
-
-```ts
-// src/+facilities.ts
-import { defineFacilities } from '@norbital-ai/pod/authoring';
-
-export default defineFacilities({ ai: true });
-```
-
-The compiler copies `ai` into the manifest. Hosted and standalone startup then require an AI
-binding before accepting traffic. Agent automations imply `ai` automatically, so they do not need
-this file. The declaration contains no credentials and does not select a provider.
-
-`src/+notifications.ts` declares the complete set of external channels tenant code may send:
-
-```ts
-// src/+notifications.ts
-import { defineNotifications } from '@norbital-ai/pod/authoring';
-
-export default defineNotifications({ channels: ['email', 'telegram'] as const });
-```
-
-The compiler turns these names into the exact `NotificationChannel` type and the runtime manifest.
-Startup verifies that the host covers every declared channel. `system` is built into Pod, is always
-available, and cannot be redeclared.
+Duplicate names are compile errors. `+notifications.ts` and `+facilities.ts` are not roles and are
+rejected as unknown workspace files. Host capabilities exist only at the host boundary.
 
 A `+<name>.tool.ts` module defines one opt-in agent tool:
 
@@ -232,13 +215,12 @@ schema, and restricts `api.db` to that automation's collection allowlist and rea
 
 - the runtime workspace registry;
 - client and server assembly;
-- exact collection, tool, and notification unions;
+- exact collection and agent-tool unions;
 - workspace-aware authoring module augmentation;
 - an isolated strict TypeScript configuration;
 - migration inputs and deployable build metadata.
 
-The generated declarations make collection allowlists, tenant tool names, and notification channels
-compile-time exact.
+The generated declarations make collection allowlists and tenant tool names compile-time exact.
 
 ## Sync engine
 
@@ -282,12 +264,17 @@ notification and prevents external delivery. The host receives a recipient user 
 own delivery address and preferences.
 
 ```ts
-// src/+notifications.ts
-export default defineNotifications({ channels: ['email', 'telegram'] as const });
+await api.sendNotification({
+	recipient_user_id: userId,
+	subject: 'Permit approved',
+	message: 'Your permit is ready.',
+	channels: ['system', 'email']
+});
 ```
 
-The compiler adds those values to `NotificationChannel`; `system` is always present and cannot be
-declared or shadowed by a host provider.
+`system` needs no host binding. Before any external outbox row is written, Pod requires the active
+host's notification binding and verifies that every requested channel appears in its `channels`
+list. A Core provider and a `pod.host.ts` provider satisfy the same interface.
 
 ## Agents
 

@@ -17,7 +17,6 @@ import type { TableName } from '../schema/types.js';
 import { deriveManifestRelationships } from './derive-relationships.js';
 import type { AutomationDeclaration } from '../automations/automations.js';
 import type { AgentToolDefinition } from '../automations/agent-tools.js';
-import type { NotificationDefinition } from '../notifications.js';
 import type { HandlerDefinition } from '../automations/handlers.js';
 import type { InvokeMap } from './invoke-api-types.js';
 import type { WorkspaceClient } from '$lib/client/workspace-client.js';
@@ -70,8 +69,6 @@ export type DefineWorkspaceInput<
 	readonly collections: TCollections;
 	readonly automations?: readonly AutomationDeclaration[];
 	readonly agentTools?: Readonly<Record<string, AgentToolDefinition>>;
-	readonly notifications?: NotificationDefinition<readonly string[]>;
-	readonly requiredFacilities?: readonly 'ai'[];
 	readonly apps?: Readonly<Record<string, WorkspaceAppDef>>;
 	readonly invoke?: InvokeMapInput;
 	readonly meta?: WorkspaceMeta;
@@ -94,8 +91,6 @@ export type RegisteredWorkspaceState = {
 	readonly pipelines: Record<string, Record<string, unknown>>;
 	readonly automations: Record<string, unknown>;
 	readonly agentTools: Record<string, AgentToolDefinition>;
-	readonly notificationChannels: readonly string[];
-	readonly requiredFacilities: readonly 'ai'[];
 	readonly apps: Record<string, WorkspaceAppDef>;
 	readonly remotes: Record<string, HandlerDefinition>;
 	readonly integrationBindings: Record<string, RegisteredIntegrationRuntimeBinding>;
@@ -459,8 +454,6 @@ export function defineWorkspace<
 		pipelines,
 		automations,
 		agentTools: { ...(input.agentTools ?? {}) },
-		notificationChannels: [...(input.notifications?.channels ?? [])],
-		requiredFacilities: [...(input.requiredFacilities ?? [])],
 		apps: { ...(input.apps ?? {}) },
 		remotes,
 		integrationBindings: registration.integrationBindings

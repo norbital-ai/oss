@@ -10,6 +10,7 @@
  * import { definePodHost, env, postgresDb, localFileStorage, devIdentity } from '@norbital-ai/pod/host';
  *
  * export default definePodHost({
+ *   mode: 'self-hosted',
  *   db: postgresDb({ url: env('DATABASE_URL') }),
  *   identity: devIdentity({ ... }),
  *   fileStorage: localFileStorage({ directory: '.norbital/storage' }),
@@ -31,7 +32,9 @@ export type {
 	HostSchedulerConfig,
 	IntegrationDeliveryMessage,
 	PodHostConfig,
-	RuntimeFacilityRequirement,
+	CorePodHostConfig,
+	SelfHostedPodHostConfig,
+	RuntimeFacilityName,
 	TBaseScope
 } from './types.js';
 
