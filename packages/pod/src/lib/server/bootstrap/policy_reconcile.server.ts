@@ -36,6 +36,42 @@ export type PolicyReconcileResult = {
  * - `is_active` is never overwritten on an existing row. Deactivating a policy is an operational act,
  *   and a deploy must not silently re-enable one somebody switched off.
  */
+/**
+ * Refuse a condition that will not survive storage, at the last moment before it is stored.
+ *
+ * A callback in a `where` is dropped by serialisation, and the grant then lands with `conditions: {}`
+ * — which the permission guard reads as *unconditional access to the whole collection*. A narrowing
+ * that silently inverts into a widening is the worst failure a permission rule has, so it is refused
+ * here as well as in the type.
+ *
+ * Belt and braces on purpose. The type stops it being written; this stops it being stored, including
+ * when a manifest arrives from somewhere the compiler never saw.
+ */
+function assertStorableCondition(
+	policyKey: string,
+	collection: string,
+	where: unknown,
+	path = 'where'
+): void {
+	if (where == null || typeof where !== 'object') return;
+	for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
+		const here = `${path}.${key}`;
+		if (typeof value === 'function') {
+			throw new Error(
+				`Policy "${policyKey}" grant on "${collection}" has a function at ${here}. It cannot be ` +
+					'stored, so the grant would reconcile as unconditional. Use `$sql` instead of `RAW`.'
+			);
+		}
+		if (Array.isArray(value)) {
+			value.forEach((entry, index) =>
+				assertStorableCondition(policyKey, collection, entry, `${here}[${index}]`)
+			);
+			continue;
+		}
+		assertStorableCondition(policyKey, collection, value, here);
+	}
+}
+
 export async function reconcileDeclaredPolicies(
 	client: PolicyReconcileClient,
 	manifest: NorbitalManifest
@@ -49,13 +85,16 @@ export async function reconcileDeclaredPolicies(
 		// The stored grant shape is the engine's, not the author's: `where` becomes `conditions` and
 		// `approval` becomes `approval_config`. Translating on write means the engine reads exactly what
 		// it read before policies moved into source.
-		const grants = policy.grants.map((grant, index) => ({
-			id: `${policy.key}:${index}`,
-			collection_name: grant.collection,
-			action: grant.action,
-			conditions: grant.where ?? {},
-			...(grant.action === 'read' ? {} : { approval_config: grant.approval ?? null })
-		}));
+		const grants = policy.grants.map((grant, index) => {
+			assertStorableCondition(policy.key, grant.collection, grant.where);
+			return {
+				id: `${policy.key}:${index}`,
+				collection_name: grant.collection,
+				action: grant.action,
+				conditions: grant.where ?? {},
+				...(grant.action === 'read' ? {} : { approval_config: grant.approval ?? null })
+			};
+		});
 
 		const result = await client.query(
 			`INSERT INTO policy (key, name, description, is_active, accessible_applications, grants)

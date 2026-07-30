@@ -32,10 +32,26 @@ type PolicyAppName = DefaultAppName | AppGroupName<DefaultAppName>;
 
 type PolicyCollection<S extends AnySchema> = TableName<MergedWorkspaceSchema<S>>;
 
+/**
+ * A policy condition, which is everything `SchemaWhere` allows *except* `RAW`.
+ *
+ * `RAW` is a callback. A policy is serialised to jsonb and round-tripped through the manifest, so the
+ * callback is dropped and the grant lands with `conditions: {}` — which the guard reads as
+ * unconditional access to the whole collection. A condition written to narrow a grant silently
+ * inverted into a widening, and nothing on the compile or reconcile path noticed.
+ *
+ * Removing it from the type is what actually closes that: an earlier attempt validated inside
+ * `definePolicy`, but every policy file is written as `export default {...} satisfies Policy`, which
+ * never calls it. Use `$sql`, which is a string and survives.
+ */
+export type PolicyWhere<Row extends Record<string, unknown>> = Omit<SchemaWhere<Row>, 'RAW'> & {
+	readonly RAW?: never;
+};
+
 type PolicyGrantFor<S extends AnySchema, C extends PolicyCollection<S>> = {
 	readonly collection: C;
 	readonly action: PolicyAction;
-	readonly where?: SchemaWhere<SchemaRow<MergedWorkspaceSchema<S>, C>>;
+	readonly where?: PolicyWhere<SchemaRow<MergedWorkspaceSchema<S>, C>>;
 	/**
 	 * Route matching mutations through an approval flow instead of applying them directly. Reads cannot
 	 * be gated, so this is only meaningful on `create`, `update`, and `delete`.
