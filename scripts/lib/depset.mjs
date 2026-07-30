@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
 	cpSync,
 	existsSync,
@@ -11,6 +11,9 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+
+const depsetLayoutMarker = '.norbital-depset-layout';
+const depsetLayoutVersion = 'host-plus-linux-musl-x64-arm64-v1';
 
 /**
  * Depset materialization — the host half of the mount contract.
@@ -39,6 +42,28 @@ function requirePnpmWorkspace(pnpmWorkspace) {
 		throw new Error(
 			'A template with pnpm-lock.yaml must also carry the root pnpm-workspace.yaml supply-chain policy.'
 		);
+	}
+	for (const [axis, values] of [
+		['os', ['current', 'linux']],
+		['cpu', ['current', 'x64', 'arm64']],
+		['libc', ['glibc', 'musl']]
+	]) {
+		const section = new RegExp(`${axis}:\\s*\\n((?:\\s+-\\s+[^\\n]+\\n?)+)`).exec(
+			pnpmWorkspace
+		)?.[1];
+		if (!section || values.some((value) => !new RegExp(`-\\s+${value}(?:\\s|$)`).test(section))) {
+			throw new Error(
+				`pnpm-workspace.yaml must materialize portable optional dependencies: supportedArchitectures.${axis} requires ${values.join(', ')}`
+			);
+		}
+	}
+}
+
+function hasCurrentLayout(directory) {
+	try {
+		return readFileSync(path.join(directory, depsetLayoutMarker), 'utf8') === depsetLayoutVersion;
+	} catch {
+		return false;
 	}
 }
 
@@ -94,7 +119,8 @@ export function materialize({ manifest, lockfile, pnpmWorkspace, storeDirectory,
 	requirePnpmWorkspace(pnpmWorkspace);
 	const hash = lockHash(lockfile);
 	const target = path.join(depsetRoot, hash);
-	if (existsSync(target)) return { lockHash: hash, path: target, installed: false, elapsedMs: 0 };
+	if (hasCurrentLayout(target))
+		return { lockHash: hash, path: target, installed: false, elapsedMs: 0 };
 
 	mkdirSync(depsetRoot, { recursive: true });
 	const staging = path.join(depsetRoot, `.staging-${hash}-${process.pid}`);
@@ -120,7 +146,21 @@ export function materialize({ manifest, lockfile, pnpmWorkspace, storeDirectory,
 		);
 		const produced = path.join(staging, 'node_modules');
 		if (!existsSync(produced)) throw new Error(`Materializing ${hash} produced no node_modules.`);
-		renameSync(produced, target);
+		writeFileSync(path.join(produced, depsetLayoutMarker), depsetLayoutVersion);
+		if (hasCurrentLayout(target)) {
+			return { lockHash: hash, path: target, installed: false, elapsedMs: 0 };
+		}
+		let retired;
+		if (existsSync(target)) {
+			retired = `${target}.retired-${randomUUID()}`;
+			renameSync(target, retired);
+		}
+		try {
+			renameSync(produced, target);
+		} catch (cause) {
+			if (retired && !existsSync(target)) renameSync(retired, target);
+			throw cause;
+		}
 		return {
 			lockHash: hash,
 			path: target,
@@ -128,7 +168,6 @@ export function materialize({ manifest, lockfile, pnpmWorkspace, storeDirectory,
 			elapsedMs: Number(process.hrtime.bigint() - started) / 1_000_000
 		};
 	} catch (cause) {
-		rmSync(target, { recursive: true, force: true });
 		throw cause;
 	} finally {
 		rmSync(staging, { recursive: true, force: true });

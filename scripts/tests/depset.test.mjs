@@ -5,7 +5,21 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { lockHash, materialize } from '../lib/depset.mjs';
 
-const pnpmWorkspace = 'minimumReleaseAgeExclude: []\n';
+const pnpmWorkspace = [
+	'minimumReleaseAgeExclude: []',
+	'supportedArchitectures:',
+	'  os:',
+	'    - current',
+	'    - linux',
+	'  cpu:',
+	'    - current',
+	'    - x64',
+	'    - arm64',
+	'  libc:',
+	'    - glibc',
+	'    - musl',
+	''
+].join('\n');
 
 describe('depset addressing', () => {
 	it('addresses a depset by its lockfile bytes alone', () => {
@@ -34,7 +48,12 @@ describe('depset addressing', () => {
 		const root = mkdtempSync(path.join(tmpdir(), 'norbital-depset-'));
 		try {
 			const lockfile = 'lockfileVersion: 9.0\n';
-			mkdirSync(path.join(root, lockHash(lockfile)), { recursive: true });
+			const target = path.join(root, lockHash(lockfile));
+			mkdirSync(target, { recursive: true });
+			writeFileSync(
+				path.join(target, '.norbital-depset-layout'),
+				'host-plus-linux-musl-x64-arm64-v1'
+			);
 			const result = materialize({
 				manifest: '{}',
 				lockfile,
@@ -86,6 +105,20 @@ describe('depset addressing', () => {
 					depsetRoot: '/not-used'
 				}),
 			/pnpm-workspace\.yaml supply-chain policy/
+		);
+	});
+
+	it('requires host and Linux/musl guest native dependency targets', () => {
+		assert.throws(
+			() =>
+				materialize({
+					manifest: '{}',
+					lockfile: 'lockfileVersion: 9.0\n',
+					pnpmWorkspace: 'minimumReleaseAgeExclude: []\n',
+					storeDirectory: '/not-used',
+					depsetRoot: '/not-used'
+				}),
+			/supportedArchitectures\.os/
 		);
 	});
 });

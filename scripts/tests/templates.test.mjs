@@ -64,6 +64,16 @@ describe('template discovery', () => {
 		}
 	});
 
+	it('materializes host and Linux/musl guest native dependencies on every developer OS', () => {
+		for (const template of discoverTemplates()) {
+			const policy = readFileSync(path.join(template.directory, 'pnpm-workspace.yaml'), 'utf8');
+			assert.match(policy, /supportedArchitectures:/);
+			for (const architecture of ['current', 'linux', 'x64', 'arm64', 'glibc', 'musl']) {
+				assert.match(policy, new RegExp(`- ${architecture}`), `${template.key}: ${architecture}`);
+			}
+		}
+	});
+
 	it('rejects a filter that matches no template', () => {
 		assert.throws(() => discoverTemplates('no-such-template'), /No template matched/);
 	});
