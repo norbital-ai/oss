@@ -10,6 +10,26 @@ import type { SchemaWhere } from '../schema/types.js';
 
 export type PolicyAction = 'create' | 'read' | 'update' | 'delete';
 
+/**
+ * The group half of a nested app id — `hr_controller` out of `hr_controller/people`.
+ *
+ * Derived from the generated `AppName` union rather than declared, so only groups that actually have
+ * apps under them exist. A workspace with no nested apps produces `never` and gains nothing.
+ */
+type AppGroupName<TApp extends string> = TApp extends `${infer TGroup}/${string}` ? TGroup : never;
+
+/**
+ * What `apps` may name: a single app, or the group every app under it belongs to.
+ *
+ * The group form is not a convenience — it is what `appAccessAllowed`
+ * (`src/lib/runtime/workspace-navigation.ts`) already implements, matching `grant === appId` **or**
+ * `appId.startsWith(grant + '/')`. Without it the only way to open a nested application is to list
+ * its children, which reads as an exhaustive grant and then silently is not one: the next app added
+ * under the group is unreachable to every policy that enumerated its siblings, with nothing to
+ * indicate it. Naming the group says "this application", and keeps saying it.
+ */
+type PolicyAppName = DefaultAppName | AppGroupName<DefaultAppName>;
+
 type PolicyCollection<S extends AnySchema> = TableName<MergedWorkspaceSchema<S>>;
 
 type PolicyGrantFor<S extends AnySchema, C extends PolicyCollection<S>> = {
@@ -56,8 +76,10 @@ export type PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> = {
 	 * silent: the id is compared by exact string match when the sidebar is built, so a typo, a stray
 	 * space, or the wrong case grants nothing *and* revokes the app the author meant to allow — with no
 	 * error anywhere.
+	 *
+	 * A nested app may be named by its group instead of its children; see `PolicyAppName`.
 	 */
-	readonly apps?: readonly DefaultAppName[];
+	readonly apps?: readonly PolicyAppName[];
 	readonly grants: readonly PolicyGrant<S>[];
 };
 
