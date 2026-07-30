@@ -825,11 +825,16 @@ async function discoverSeed(
 			entry.name !== '+seed.ts' &&
 			!entry.name.endsWith('.tool.ts')
 		) {
+			// Facilities are the host's contract, not a tenant role. The generic "unknown role" message
+			// reads like a typo, so name the reason: there is nowhere for a workspace to declare one.
+			const isFacilityAttempt = /^\+facilit(y|ies)\.ts$/.test(entry.name);
 			diagnostics.push(
 				topologyDiagnostic(
 					`src/${entry.name}`,
-					'WORKSPACE_ROLE_UNKNOWN',
-					`Unknown workspace role ${entry.name}`
+					isFacilityAttempt ? 'WORKSPACE_ROLE_RESERVED' : 'WORKSPACE_ROLE_UNKNOWN',
+					isFacilityAttempt
+						? `Facilities are supplied by the active host, not declared by a workspace. Remove src/${entry.name} and configure the facility in pod.host.ts.`
+						: `Unknown workspace role ${entry.name}`
 				)
 			);
 		}

@@ -165,7 +165,23 @@ export type RuntimeFacilityBindings = {
 export type RuntimeFacilityName =
 	'db' | 'fileStorage' | 'integrationDelivery' | 'queue' | 'ai' | 'maps' | 'notifications';
 
-/** Facilities implied by the portable workspace manifest, independent of a particular host. */
+/**
+ * Facilities implied by the portable workspace manifest, independent of a particular host.
+ *
+ * A facility belongs here only when the workspace cannot *function* without it, not merely when it
+ * would be nice to have. The distinction is whether the stored data depends on the provider:
+ *
+ * - a `file()` field has nowhere to put its bytes without `fileStorage`;
+ * - an agent automation has no model to call without `ai`;
+ * - a scheduled or event automation, and an outbound integration, have nothing to drive them
+ *   without `queue` — and an integration has nowhere to deliver without `integrationDelivery`.
+ *
+ * `maps` is deliberately absent. A `geolocation()` value is self-contained
+ * (`{ geometry, formatted_address, type, srid }`), so storing, querying, and displaying one needs no
+ * provider at all — only edit-time address autocomplete and static-map rendering do. Those validate
+ * when called, the same way a `notifications` channel does, so a workspace that merely holds
+ * coordinates is not blocked from starting.
+ */
 export function requiredRuntimeFacilities(
 	manifest: NorbitalManifest
 ): readonly RuntimeFacilityName[] {
@@ -174,7 +190,6 @@ export function requiredRuntimeFacilities(
 		(collection) => collection.fields ?? []
 	);
 	if (fields.some((field) => field.kind === 'file')) required.add('fileStorage');
-	if (fields.some((field) => field.kind === 'geolocation')) required.add('maps');
 
 	if (Object.keys(manifest.integrations ?? {}).length > 0) {
 		required.add('integrationDelivery');

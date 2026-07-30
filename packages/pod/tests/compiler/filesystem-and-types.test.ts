@@ -102,7 +102,14 @@ describe('Pod filesystem compiler conformance', () => {
 		const structure = await discoverPodFilesystem(root);
 		const codes = structure.diagnostics.map((diagnostic) => diagnostic.code);
 		expect(codes).toContain('AGENT_TOOL_DUPLICATE');
-		expect(codes.filter((code) => code === 'WORKSPACE_ROLE_UNKNOWN')).toHaveLength(2);
+		expect(codes).toContain('WORKSPACE_ROLE_UNKNOWN');
+		// A facility attempt gets its own code: the set is the host's contract, so "unknown role"
+		// would read like a typo rather than "there is nowhere to declare this".
+		expect(codes).toContain('WORKSPACE_ROLE_RESERVED');
+		const facilityDiagnostic = structure.diagnostics.find(
+			(diagnostic) => diagnostic.code === 'WORKSPACE_ROLE_RESERVED'
+		);
+		expect(facilityDiagnostic?.message).toContain('pod.host.ts');
 	});
 
 	it('generates exact collection and tool unions while notification channels stay host-owned', async () => {

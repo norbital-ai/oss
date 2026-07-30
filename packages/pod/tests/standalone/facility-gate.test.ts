@@ -1,11 +1,50 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import { assertStandaloneFacilities } from '../../src/lib/bin/invocation/standalone.js';
+import { loadHostConfig } from '../../src/lib/bin/invocation/host-config.js';
 import { satisfiedFacilities } from '../../src/lib/host/types.js';
 import { intervalQueue } from '../../src/lib/host/interval-queue.js';
 import { postgresDb } from '../../src/lib/host/db.js';
 import { devIdentity } from '../../src/lib/host/identity.js';
 import type { SelfHostedPodHostConfig } from '../../src/lib/host/types.js';
+
+const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(
+		temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true }))
+	);
+});
+
+/** A Core-targeted workspace root, which is what `pod dev` emulates. */
+async function coreWorkspace(): Promise<string> {
+	const root = await mkdtemp(path.join(REPO_ROOT, '.test-workspaces/facility-'));
+	temporaryRoots.push(root);
+	await symlink(
+		path.join(REPO_ROOT, 'template_workspaces/construction/node_modules'),
+		path.join(root, 'node_modules')
+	);
+	await writeFile(
+		path.join(root, 'pod.host.ts'),
+		`import { definePodHost } from '@norbital-ai/pod/host';\nexport default definePodHost({ mode: 'core' });\n`
+	);
+	return root;
+}
+
+async function developmentFacilities(): Promise<ReadonlySet<string>> {
+	const { config } = await loadHostConfig({
+		root: await coreWorkspace(),
+		development: true,
+		databaseUrl: 'postgres://localhost:5432/pod',
+		orgId: 'o',
+		orgName: 'Org',
+		adminId: 'a'
+	});
+	return satisfiedFacilities(config);
+}
 
 function hostConfig(overrides: Partial<SelfHostedPodHostConfig> = {}): SelfHostedPodHostConfig {
 	return {
@@ -69,9 +108,17 @@ describe('standalone facility gate', () => {
 			},
 			integrations: { crm: { name: 'crm', definition: {} } }
 		});
+		// `maps` is deliberately absent: a geolocation value is self-contained, so only edit-time
+		// autocomplete and static-map rendering need a provider, and those validate when called.
 		expect(() => assertStandaloneFacilities(full, new Set(['db']))).toThrow(
-			/fileStorage, maps, integrationDelivery, queue/
+			/fileStorage, integrationDelivery, queue/
 		);
+		expect(() =>
+			assertStandaloneFacilities(
+				full,
+				new Set(['db', 'fileStorage', 'integrationDelivery', 'queue'])
+			)
+		).not.toThrow();
 	});
 
 	it('satisfies queue from a supplied binding, not from a declared intent', () => {
@@ -94,5 +141,48 @@ describe('standalone facility gate', () => {
 				satisfiedFacilities(hostConfig({ queue: intervalQueue() }))
 			)
 		).not.toThrow();
+	});
+});
+
+describe('pod dev facility gate', () => {
+	it('supplies only what it actually implements', async () => {
+		// `pod dev` emulates Core but holds none of Core's credentials. Enumerating the set here means
+		// a facility silently appearing (or disappearing) from the development host is a test failure.
+		expect([...(await developmentFacilities())].sort()).toEqual(['db', 'fileStorage', 'queue']);
+	});
+
+	it('refuses to start a workspace whose facilities it cannot provide', async () => {
+		const available = await developmentFacilities();
+		const agentWorkspace = manifest({
+			automations: {
+				triage: { trigger: { schedule: '0 6 * * *' }, spec: { kind: 'agent', task: 'Triage' } }
+			}
+		});
+		// Starting anyway would fail at the first inference call, far from the cause.
+		expect(() => assertStandaloneFacilities(agentWorkspace, available)).toThrow(/ai/);
+	});
+
+	it('starts a workspace that only stores geolocation, with no maps provider', async () => {
+		const available = await developmentFacilities();
+		expect(available.has('maps')).toBe(false);
+		const geolocationWorkspace = manifest({
+			collections: {
+				sites: {
+					collection_name: 'sites',
+					description: null,
+					record_label: null,
+					icon: null,
+					fields: [{ name: 'location', kind: 'geolocation', nullable: true }],
+					extensions: { indexes: [] },
+					hooks: {},
+					pipelines: {},
+					system: null
+				}
+			}
+		});
+		// The stored value carries its own geometry and formatted address, so reading and rendering it
+		// needs no provider. Requiring one blocked two templates from `pod dev` for a dependency they
+		// never use.
+		expect(() => assertStandaloneFacilities(geolocationWorkspace, available)).not.toThrow();
 	});
 });

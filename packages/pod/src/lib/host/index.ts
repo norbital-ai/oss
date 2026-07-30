@@ -56,9 +56,13 @@ export type { LocalFileStorageOptions } from './file-storage.js';
 export { s3FileStorage } from './s3.js';
 export type { S3FileStorageOptions } from './s3.js';
 
-// Notifications and maps. There is no `ai` adapter: model credentials and the agent that runs
-// against a tenant's data belong to the trusted host, so this package declares that contract and
-// Core implements it.
+// Maps
+export { googleMaps } from './maps.js';
+export type { GoogleMapsOptions } from './maps.js';
+
+// Notifications. There is no `ai` adapter: model credentials and the agent that runs against a
+// tenant's data belong to the trusted host, so this package declares that contract and Core
+// implements it (on `@tanstack/ai`, defaulting to OpenRouter).
 export {
 	consoleNotifications,
 	notificationProviders,
