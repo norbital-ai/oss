@@ -20,7 +20,7 @@ component_entries row INSERTED
   norbital_approval_id set ──► pending, immutable, invisible to payroll
       │
       ├── approved ──► the stamp clears
-      └── rejected ──► rolled back from _history; the row does not exist
+      └── rejected ──► rolled back from the temporal ledger; the row does not exist
 
 then, by definition.settlement:
   PAYROLL         pay_period set   ──► picked up by the next run
