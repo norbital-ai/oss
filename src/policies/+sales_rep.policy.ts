@@ -16,11 +16,21 @@ export default {
 		{ collection: 'products', action: 'read' },
 		{ collection: 'customer_prices', action: 'read' },
 
-		// Scoped to the requestor's own records. The condition is typed against the collection's row, so
-		// a rename of `owner_id` breaks this file rather than silently matching nothing.
-		{ collection: 'quotes', action: 'read', where: { owner_id: { isNotNull: true } } },
+		// Scoped to the requestor. `${requestor.norbital_id}` is bound at evaluation time against the
+		// request scope, so this reads *their* quotes rather than every quote that has an owner. The
+		// column is typed against the collection's row, so renaming `owner_id` breaks this file rather
+		// than silently matching nothing.
+		{
+			collection: 'quotes',
+			action: 'read',
+			where: { owner_id: { eq: '${requestor.norbital_id}' } }
+		},
 		{ collection: 'quotes', action: 'create' },
-		{ collection: 'quotes', action: 'update' },
+		{
+			collection: 'quotes',
+			action: 'update',
+			where: { owner_id: { eq: '${requestor.norbital_id}' } }
+		},
 		{ collection: 'quote_lines', action: 'read' },
 		{ collection: 'quote_lines', action: 'create' },
 		{ collection: 'quote_lines', action: 'update' },
