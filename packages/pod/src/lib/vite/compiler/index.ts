@@ -1150,9 +1150,30 @@ function relationshipTypes(): string {
 	return `import type { PlatformRelationshipsFor } from '@norbital-ai/pod/authoring/internals';\nimport type { Models } from '../../generated/models.js';\n\nexport type Relationships = PlatformRelationshipsFor<Models>;\n`;
 }
 
-function workspaceRoleTypes(structure: PodStructure): string {
-	void structure;
-	return `export type { Api, WorkspaceRow } from '../../generated/types.js';\nexport type { AgentToolName, CollectionName } from '../../generated/authoring-types.js';\n`;
+/**
+ * Shared `$types` for a directory holding automations, remotes, or agent tools.
+ *
+ * `depth` is how far the emitted file sits below `.norbital/`, so the generated imports resolve from
+ * both `types/automation/` and a nested `types/collections/<id>/`.
+ */
+function workspaceRoleTypes(depth: number): string {
+	const up = '../'.repeat(depth);
+	return `import type { AutomationContext, AutomationTrigger } from '@norbital-ai/pod/authoring';\nimport type { WorkspaceSchema } from '${up}generated/types.js';\n\nexport type { Api, WorkspaceRow } from '${up}generated/types.js';\nexport type { AgentToolName, CollectionName } from '${up}generated/authoring-types.js';\n\n/** Every trigger this workspace can declare — a checked union of its own collections. */\nexport type Trigger = AutomationTrigger<WorkspaceSchema>;\n\n/** The scope an automation receives for one trigger, with an exact \`incoming_record\`. */\nexport type Scope<T extends Trigger> = AutomationContext<T, WorkspaceSchema>['scope'];\n`;
+}
+
+/** `.norbital/types/<segments>/$types.d.ts` for each directory holding a `+<name>.tool.ts`. */
+function agentToolTypeFiles(structure: PodStructure): Map<string, string> {
+	const files = new Map<string, string>();
+	for (const tool of structure.agentTools) {
+		const directory = path.posix.dirname(tool.source);
+		if (!directory.startsWith('src/')) continue;
+		const segments = directory.slice('src/'.length);
+		files.set(
+			`.norbital/types/${segments}/$types.d.ts`,
+			workspaceRoleTypes(segments.split('/').length + 1)
+		);
+	}
+	return files;
 }
 
 function generatedAuthoringTypes(structure: PodStructure): string {
@@ -1350,13 +1371,16 @@ export async function compilePodFilesystem(
 			['.norbital/generated/types.ts', renderWorkspaceTypes()],
 			['.norbital/generated/authoring-types.ts', generatedAuthoringTypes(structure)],
 			['.norbital/types/collections/$types.d.ts', relationshipTypes()],
-			['.norbital/types/automation/$types.d.ts', workspaceRoleTypes(structure)],
-			['.norbital/types/remotes/$types.d.ts', workspaceRoleTypes(structure)],
+			['.norbital/types/automation/$types.d.ts', workspaceRoleTypes(2)],
+			['.norbital/types/remotes/$types.d.ts', workspaceRoleTypes(2)],
 			['.norbital/types/workspace-authoring.d.ts', workspaceAuthoringTypes()],
 			['.norbital/types/client-runtime.d.ts', clientRuntimeTypes()],
 			['.norbital/types/custom-type-values.d.ts', renderCustomTypeValueMap(structure.customTypes)],
 			['.norbital/tsconfig.json', renderTsconfig()]
 		]);
+		// Tool directories first: a collection directory holding a tool keeps its richer collection
+		// types, which already carry `Api`.
+		for (const [file, content] of agentToolTypeFiles(structure)) generated.set(file, content);
 		for (const collection of structure.collections) {
 			generated.set(
 				`.norbital/types/collections/${collection.id}/$types.d.ts`,

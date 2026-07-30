@@ -2,7 +2,6 @@ import { defineCommandHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
 import { PROJECT_STITCH_COLUMNS, stitchDriver } from '../lib/reclamation/stitch-driver.js';
 import { runStitchForProject } from '../collections/reclamation_projects/lib/run-stitch.js';
-import type { Api } from './$types.js';
 
 /**
  * Re-run the reconstruction for one project on demand.
@@ -21,7 +20,7 @@ export default defineCommandHandler({
 		/** Append a revision even when the inputs are unchanged. */
 		force: z.boolean().optional()
 	}),
-	handler: async ({ project_id, force }, api: Api) => {
+	handler: async ({ project_id, force }, api) => {
 		const project = await api.db.query.reclamation_projects.findFirst({
 			where: { norbital_id: { eq: project_id } },
 			columns: PROJECT_STITCH_COLUMNS

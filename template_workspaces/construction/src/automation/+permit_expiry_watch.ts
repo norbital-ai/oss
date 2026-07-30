@@ -1,7 +1,6 @@
 import { defineAutomation } from '@norbital-ai/pod/authoring';
-import type { Api } from './$types.js';
 
-export default defineAutomation({ schedule: '0 6 * * *' }, async (api: Api) => {
+export default defineAutomation({ schedule: '0 6 * * *' }, async (api) => {
 	const permits = await api.db.query.permits_to_work.findMany({ limit: 250 });
 	return {
 		automation_key: 'permit_expiry_watch',

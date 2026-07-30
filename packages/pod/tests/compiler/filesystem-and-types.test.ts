@@ -158,4 +158,92 @@ export default defineAutomation(
 		expect(diagnostics).toContain('missing_collection');
 		expect(diagnostics).toContain('missing_tool');
 	});
+
+	it('infers the workspace schema without an api annotation and rejects an unknown trigger', async () => {
+		const root = await workspace();
+		// No `api: Api` annotation and no explicit schema generic: `defineAutomation` must still
+		// resolve `things` and its row type from the compiler-merged authoring types.
+		await write(
+			root,
+			'src/automation/+on_thing.ts',
+			`import { defineAutomation } from '@norbital-ai/pod/authoring';
+export default defineAutomation(
+	{ trigger: { collection: 'things', event: 'created' } },
+	async (api, { scope }) => {
+		const name: string = scope.incoming_record.name;
+		await api.db.query.things.findMany({ where: { name: { eq: name } }, limit: 1 });
+		return { name };
+	}
+);`
+		);
+		const result = await compilePodFilesystem({ root });
+		expect(result.valid, JSON.stringify(result.diagnostics, null, 2)).toBe(true);
+
+		const tsc = path.join(REPO_ROOT, 'packages/pod/node_modules/.bin/tsc');
+		try {
+			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+				cwd: root,
+				encoding: 'utf8'
+			});
+		} catch (cause) {
+			const failure = cause as { stdout?: string; stderr?: string };
+			throw new Error(`${failure.stdout ?? ''}\n${failure.stderr ?? ''}`, { cause });
+		}
+
+		// A misspelled trigger collection is a compile error, not a runtime one.
+		await write(
+			root,
+			'src/automation/+on_thing.ts',
+			`import { defineAutomation } from '@norbital-ai/pod/authoring';
+export default defineAutomation(
+	{ trigger: { collection: 'thingz', event: 'created' } },
+	async () => ({})
+);`
+		);
+		let diagnostics = '';
+		try {
+			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+				cwd: root,
+				encoding: 'utf8'
+			});
+		} catch (cause) {
+			const failure = cause as { stdout?: string; stderr?: string };
+			diagnostics = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`;
+		}
+		expect(diagnostics).toContain('thingz');
+	});
+
+	it('infers the workspace schema in invoke handlers without an api annotation', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/remotes/+thing_count.ts',
+			`import { defineQueryHandler } from '@norbital-ai/pod/authoring';
+import { z } from 'zod';
+export default defineQueryHandler({
+	schema: z.object({ prefix: z.string() }),
+	handler: async ({ prefix }, api) => {
+		const rows = await api.db.query.things.findMany({
+			where: { name: { like: prefix } },
+			columns: { name: true },
+			limit: 10
+		});
+		return { names: rows.map((row) => row.name) };
+	}
+});`
+		);
+		const result = await compilePodFilesystem({ root });
+		expect(result.valid, JSON.stringify(result.diagnostics, null, 2)).toBe(true);
+
+		const tsc = path.join(REPO_ROOT, 'packages/pod/node_modules/.bin/tsc');
+		try {
+			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+				cwd: root,
+				encoding: 'utf8'
+			});
+		} catch (cause) {
+			const failure = cause as { stdout?: string; stderr?: string };
+			throw new Error(`${failure.stdout ?? ''}\n${failure.stderr ?? ''}`, { cause });
+		}
+	});
 });

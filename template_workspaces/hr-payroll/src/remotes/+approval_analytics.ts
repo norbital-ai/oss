@@ -1,6 +1,5 @@
 import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
-import type { Api } from './$types.js';
 
 /**
  * Year-to-date approval counters and a five-year application trend for the three subjects the HR
@@ -95,7 +94,7 @@ function approvalDurationHours(
 
 export default defineQueryHandler({
 	schema: z.object({ subject: subjectSchema }),
-	handler: async ({ subject }: { subject: Subject }, api: Api) => {
+	handler: async ({ subject }: { subject: Subject }, api) => {
 		const now = new Date();
 		const currentYear = now.getUTCFullYear();
 		const ytdStart = new Date(Date.UTC(currentYear, 0, 1));

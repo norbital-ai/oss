@@ -1,5 +1,6 @@
 import type { BuildQueryResult, DBQueryConfig, TablesRelationalConfig } from 'drizzle-orm';
 import type { NorbitalTable } from './table.js';
+import type { WorkspaceAuthoringTypes } from '../index.js';
 
 /** Workspace schema value produced by the compiler-generated registry. */
 export type AnySchema = {
@@ -15,6 +16,19 @@ export type AnySchema = {
 		>
 	>;
 };
+
+/**
+ * The compiler-merged workspace schema, or `AnySchema` when no generated types are present.
+ *
+ * Every authoring entry point defaults its schema generic to this. That is what makes an unannotated
+ * handler exact: without it the generic falls back to `AnySchema`, whose `TableName` collapses to
+ * `string`, so a misspelled collection type-checks and only fails at runtime.
+ */
+export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
+	readonly schema: infer TSchema extends AnySchema;
+}
+	? TSchema
+	: AnySchema;
 
 export type TableName<S extends AnySchema> = keyof S['tables'] & string;
 

@@ -1,5 +1,5 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type { AnySchema } from '../schema/types.js';
+import type { AnySchema, DefaultWorkspaceSchema } from '../schema/types.js';
 import type { BeforeApi } from '../workspace/hook-api.js';
 
 export type HandlerKind = 'query' | 'command';
@@ -45,7 +45,7 @@ function eraseTypedHandler<S extends AnySchema, TSchema extends StandardSchemaV1
 
 export function defineQueryHandler<
 	const TSchema extends StandardSchemaV1,
-	S extends AnySchema = AnySchema,
+	S extends AnySchema = DefaultWorkspaceSchema,
 	TOutput = unknown
 >(def: {
 	readonly schema: TSchema;
@@ -60,7 +60,7 @@ export function defineQueryHandler<
 
 export function defineCommandHandler<
 	const TSchema extends StandardSchemaV1,
-	S extends AnySchema = AnySchema,
+	S extends AnySchema = DefaultWorkspaceSchema,
 	TOutput = unknown
 >(def: {
 	readonly schema: TSchema;

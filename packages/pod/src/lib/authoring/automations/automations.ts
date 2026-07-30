@@ -1,4 +1,4 @@
-import type { AnySchema, SchemaRow, TableName } from '../schema/types.js';
+import type { AnySchema, DefaultWorkspaceSchema, SchemaRow, TableName } from '../schema/types.js';
 import type { MergedWorkspaceSchema } from '../schema/system-workspace.js';
 import type { BeforeApi } from '../workspace/hook-api.js';
 import type { WorkspaceAuthoringTypes } from '../index.js';
@@ -90,7 +90,7 @@ export type AutomationDefinition = {
 export type AutomationDeclaration = AutomationDefinition & { readonly name: string };
 
 export function defineAutomation<
-	S extends AnySchema = AnySchema,
+	S extends AnySchema = DefaultWorkspaceSchema,
 	const TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
 >(
 	trigger: TTrigger,

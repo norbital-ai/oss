@@ -1,10 +1,9 @@
 import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
-import type { Api } from './$types.js';
 
 export default defineQueryHandler({
 	schema: z.object({ scheduled_for: z.iso.date() }),
-	handler: async ({ scheduled_for }, api: Api) => {
+	handler: async ({ scheduled_for }, api) => {
 		const jobs = await api.db.query.jobs.findMany({
 			where: { scheduled_for: { eq: scheduled_for } },
 			columns: {

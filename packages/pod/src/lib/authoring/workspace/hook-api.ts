@@ -3,14 +3,7 @@ import type { AnySchema } from '../schema/types.js';
 import type { DbApi } from './db-api-types.js';
 import type { ReadonlyDbApi } from './db-api-types.js';
 import type { MergedWorkspaceSchema } from '$lib/authoring/schema/system-workspace.js';
-import type { TableName } from '../schema/types.js';
-import type { WorkspaceAuthoringTypes } from '../index.js';
-
-type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
-	readonly schema: infer TSchema extends AnySchema;
-}
-	? TSchema
-	: AnySchema;
+import type { DefaultWorkspaceSchema, TableName } from '../schema/types.js';
 
 export type SendNotificationInput = {
 	readonly recipient_user_id: string;

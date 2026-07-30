@@ -52,13 +52,18 @@ export type {
 } from './schema/collection-behavior.js';
 export type {
 	AnySchema,
+	DefaultWorkspaceSchema,
 	SchemaQueryConfig,
 	SchemaQueryRow,
 	SchemaRow,
 	TableName
 } from './schema/types.js';
 export { extract } from './schema/extract.js';
-export { defineAutomation, type AutomationTrigger } from './automations/automations.js';
+export {
+	defineAutomation,
+	type AutomationContext,
+	type AutomationTrigger
+} from './automations/automations.js';
 export { defineAgentTool, type AgentToolDefinition } from './automations/agent-tools.js';
 export { defineCommandHandler, defineQueryHandler } from './automations/handlers.js';
 export type { TExportAction, TExportManifest, TFileAttachment } from './automations/pipelines.js';
