@@ -192,12 +192,12 @@ Pod now has the contract, so `CORE_HOST_PLUGINS` has somewhere to go. `HostAppPl
 
 Listed so Core does not plan against something that is not there.
 
-|                                                                             | State                                                  |
-| --------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Agent runtime port (loop, store, streams, subagents, todos, channels, UI)   | **not started** — see [AGENT_PORT.md](./AGENT_PORT.md) |
-| `+<name>.channel.ts` authoring and the `messaging` facility rename          | **not started**                                        |
-| `HostAppPlugin` / `buildSystemNavigation`                                   | **done** — Core can send `configure`                   |
-| Tenant configuration sidebar (teams, users, invitations, policy assignment) | **not started**                                        |
+|                                                                             | State                                           |
+| --------------------------------------------------------------------------- | ----------------------------------------------- |
+| Agent runtime port (loop, store, transcript, chat, channel authoring, UI)   | **done** — see [AGENT_PORT.md](./AGENT_PORT.md) |
+| `+<name>.channel.ts` authoring and the `messaging` facility rename          | **not started**                                 |
+| `HostAppPlugin` / `buildSystemNavigation`                                   | **done** — Core can send `configure`            |
+| Tenant configuration sidebar (teams, users, invitations, policy assignment) | **not started**                                 |
 
 Until the agent port lands, Core's `lib/agent/**` stays authoritative and the deletions above do not
 apply to it.

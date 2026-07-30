@@ -38,7 +38,6 @@ const writeInput = z.discriminatedUnion('action', [
 	z.object({ collection: z.string(), action: z.literal('delete'), id: z.string().uuid() })
 ]);
 
-
 type AgentRunOptions = {
 	readonly automationName: string | null;
 	readonly spec: AgentAutomationSpec;
@@ -78,6 +77,13 @@ function tenantCollectionNames(): string[] {
 		.sort();
 }
 
+/**
+ * The collections this run may name, narrowed by its spec.
+ *
+ * Not the security boundary: `read_collection` goes through `findMany` without elevation, so the
+ * requestor's policy decides what actually comes back. This narrows on top of that, so an agent
+ * declared for `quotes` cannot wander into `accounts` even where its requestor could.
+ */
 function allowedCollections(spec: AgentAutomationSpec): Set<string> {
 	const all = tenantCollectionNames();
 	const selected = spec.collections ? [...spec.collections] : all;
@@ -312,10 +318,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 	let sequence = restored.sequence;
 	const messages: AiMessage[] = [...restored.messages];
 	let sessionId: string | null = null;
-	const persist = async (
-		message: AiMessage,
-		usage?: Record<string, unknown>
-	): Promise<void> => {
+	const persist = async (message: AiMessage, usage?: Record<string, unknown>): Promise<void> => {
 		sessionId ??= await ensureRunSession(runId, ownerUserId);
 		sequence += 1;
 		await createRecord(

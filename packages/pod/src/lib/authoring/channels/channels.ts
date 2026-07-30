@@ -15,10 +15,17 @@ import type { DefaultPolicyName } from '../schema/types.js';
  */
 export type ChannelDefinition = {
 	/**
-	 * The transport carrying this channel, resolved against the host's `messaging` facility at startup.
+	 * The transport carrying this channel — `telegram`, `whatsapp`, and so on.
 	 *
-	 * Not a closed union: which transports a host offers is the host's business, and a workspace naming
-	 * one its host does not provide refuses to boot rather than failing at the first inbound message.
+	 * Not a closed union: which transports a host offers is the host's business, and holding a socket
+	 * open is not something a scale-to-zero tenant can do, so the workspace names one and the host
+	 * provides it.
+	 *
+	 * **Not yet validated.** The check belongs at startup — a workspace naming a transport its host does
+	 * not provide should refuse to boot rather than fail at the first inbound message — but it needs the
+	 * `messaging` facility and its `transports` record, which do not exist yet (the facility is still
+	 * named `notifications` and carries no transports). Until then a wrong name fails when a message
+	 * arrives. Tracked in docs/CORE_REFACTOR.md.
 	 */
 	readonly transport: string;
 	/**

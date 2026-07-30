@@ -1,83 +1,75 @@
-# W5: porting the agent into Pod
+# The agent port: what moved from Core into Pod
 
-The agent loop moves from Core into the OSS package. This file is the inventory the port runs from —
-measured against `norbital/apps/core/src/lib/agent` rather than estimated, so the work can be planned
-without re-reading Core.
+The agent loop now lives in the OSS package. This file records what moved, what deliberately did not,
+and what is still owed — measured against `norbital/apps/core/src/lib/agent` rather than estimated.
 
-**Status: not started.** Nothing in this document is implemented. It is written so the next session
-can begin without re-deriving the shape.
+**Status: the six planned steps are done.** The loop, its storage, its permissions, an interactive
+surface, channel authoring, and a chat panel are all in Pod. What remains is listed under
+[Still owed](#still-owed) and is smaller than what landed, but it is not nothing.
 
-## Why it is not a copy
+## What Pod now owns
 
-9,691 lines across 30 files. Only about 15% of that is liftable as-is; the rest is bound to Core
-subsystems Pod does not have and should not grow.
+| Step | What landed                                                                                    |
+| ---- | ---------------------------------------------------------------------------------------------- |
+| 1    | `chat_session` / `chat_turn` / `chat_message` as system collections, migrated in all templates |
+| 2    | The loop writes `AiMessage` verbatim; `agent_run_step` retired                                 |
+| 3    | Transcripts scoped to their session's owner                                                    |
+| 4    | `remotes/agentChat` — an interactive conversation is a run with no automation name             |
+| 5    | `src/channels/+<name>.channel.ts`, with `policy` bound to the generated `PolicyName`           |
+| 6    | `@norbital-ai/pod/client/agent` — a chat panel driven by the pod's own loop                    |
 
-| Core dependency                   | What it provides to the agent         | Where it goes                                    |
-| --------------------------------- | ------------------------------------- | ------------------------------------------------ |
-| `$lib/system_db/*`                | `chat.schema`, `agent_channel.schema` | **rewritten** onto Pod tenant collections        |
-| `$lib/tenant_workspace/sandbox/*` | the microsandbox session and mounts   | **stays in Core**, re-exposed as `HostAgentTool` |
-| `$lib/workspace_studio/*`         | branch operations                     | **stays in Core**, reached as a host plugin      |
-| `$lib/billing/*`                  | usage gating                          | **stays in Core**                                |
-| `$lib/live_object/*`              | live streaming                        | superseded by Pod's own sync                     |
-| `@durable-streams/*`              | the chat transport                    | **stays host-side**                              |
+Two decisions shaped the rest:
 
-The storage rewrite is the bulk of the work. Core keeps agent state in a _system_ database shared
-across tenants; Pod has no system database, so `chat.schema` and `agent_channel.schema` become tenant
-collections, and every query in `store.server.ts`, `channel-history.server.ts`, and
-`channel-manager.ts` is rewritten against the tenant `db` facility.
+**One transcript model.** An automation's agent run and a person talking to the agent produce the same
+messages, so they share `chat_session`; `automation_run_id` marks which is which. The old
+`agent_run_step` was a bespoke decomposition (`kind`/`role`/`content`/`tool_*`) rebuilt on read, so the
+stored form and the in-memory form could disagree. Storing the message means replay is a read.
 
-## Inventory
+**The tenant database, not a system one.** Core keeps agent state in a system database shared across
+tenants. Pod has none, so this was a rewrite rather than a copy — and it is why `organization_id`
+disappeared: a pod database _is_ one tenant, so that column would be a constant on every row and a
+filter every query had to remember.
 
-### Liftable — no Core imports (~1,444 lines, 13 files)
+## What deliberately stayed in Core
 
-`tools/_vendor/opencode/edit.ts` (253) · `channels/telegram.ts` (338) · `channels/channel-message.ts`
-(293) · `channels/channel-tools.ts` (117) · `subagent-summary.ts` (116) · `tool-result.ts` (53) ·
-`client.ts` (52) · `chat-stream-identity.ts` (50) · `model.server.ts` (49) · `assistant-parts.ts`
-(40) · `models.ts` (37) · `todo-schema.ts` (24) · `channels/agent-run-link.server.ts` (22)
+| Core subsystem                    | Why it stays                                                   |
+| --------------------------------- | -------------------------------------------------------------- |
+| `$lib/tenant_workspace/sandbox/*` | a sandbox is host infrastructure; re-expose as `HostAgentTool` |
+| `$lib/workspace_studio/*`         | a host surface, reached as a host plugin                       |
+| `$lib/billing/*`                  | Core owns the commercial relationship                          |
+| `$lib/live_object/*`              | superseded by Pod's own sync                                   |
+| `@durable-streams/*`              | a socket the tenant cannot hold open                           |
 
-These need one new dependency: `@tanstack/ai`.
+`tools/coding.tool.ts` and `tools/deployment.tool.ts` follow the sandbox and stay in Core.
 
-**Do not land these on their own.** They are leaves — without the trunk below they are unreferenced
-modules, which is dead code by the definition applied everywhere else in this package. Port them with
-their consumers or not at all.
+## Still owed
 
-### Needs adaptation (~8,247 lines, 17 files)
+**Channel transport validation.** `ChannelDefinition.transport` is not checked against anything. The
+check belongs at startup, in the same shape as the system-event reachability check in
+`define-workspace.ts` — but it needs the `messaging` facility and its `transports` record, and the
+facility is still named `notifications` and carries no transports. Until then, a wrong transport name
+fails when a message arrives rather than when the workspace boots.
 
-| File                                  | Lines | Principal blocker                           |
-| ------------------------------------- | ----- | ------------------------------------------- |
-| `agent.server.ts`                     | 1114  | sandbox, billing, live objects, studio      |
-| `channels/channel-history.server.ts`  | 957   | system DB                                   |
-| `channels/whatsapp-baileys.ts`        | 923   | `@whiskeysockets/baileys` socket, `node:fs` |
-| `tools/index.ts`                      | 897   | sandbox, browser service, system DB         |
-| `store.server.ts`                     | 887   | system DB, live objects                     |
-| `channels/channel-manager.ts`         | 705   | system DB                                   |
-| `channels/index.ts`                   | 696   | Core auth and session                       |
-| `tools/coding.tool.ts`                | 441   | sandbox — **stays in Core**                 |
-| `agent_profile.ts`                    | 335   | Neon `Pool` held directly                   |
-| `chat.remote.ts`                      | 334   | Core remote-function guard, durable streams |
-| `tools/deployment.tool.ts`            | 197   | ops types — **stays in Core**               |
-| `discovery.server.ts`                 | 171   | sandbox, MCP                                |
-| `file-upload.svelte.ts`               | 163   | UI, straightforward                         |
-| `channels/automation.ts`              | 140   | system DB, tenant runtime host              |
-| `session_files.server.ts`             | 135   | worktree paths                              |
-| `channels/pending-channel-message.ts` | 80    | system DB                                   |
-| `streams.server.ts`                   | 72    | durable streams — **stays host-side**       |
+**Channel delivery.** Authoring a channel does not yet route anything. Core's channel runtime is
+~2,500 lines across `channel-manager`, `channel-history`, `automation`, and `pending-channel-message`,
+all of it against Core's system DB. It needs the same rewrite the chat tables got, plus per-transport
+tables of its own.
 
-Plus roughly 40 UI files under `routes/(workspace)/_components/agent/`, not inventoried here.
+**The rest of the agent UI.** Core has roughly 40 components carrying streaming, subagent trees, todo
+panels, and file upload. They depend on `@durable-streams` and `@tanstack/ai`; the panel here is a
+working chat surface, not a replacement for them.
 
-## Suggested order
+**Nothing further on the collection allowlist.** An earlier note here called it an ad-hoc placeholder
+needing policy-driven replacement; reading it again, that overstated the problem. `read_collection`
+calls `findMany` without `isElevated`, so the permission guard already applies and policy is the
+enforcement. `spec.collections` narrows further on top of that — a declared scope, not a substitute
+for one. It is a correct belt-and-braces, so it stays.
 
-1. **Tenant collections first.** Define the agent tables as Pod system collections and generate the
-   migration. Nothing else can be ported until agent state has somewhere to live.
-2. **`store.server.ts`** onto those collections. It is the seam every other server file goes through.
-3. **The liftable leaves**, now that they have consumers.
-4. **`agent.server.ts`**, with sandbox and studio calls replaced by `HostAgentTool` invocations.
-5. **Channels**, with Telegram as the built-in transport and WhatsApp supplied by the host.
-6. **UI**, last — it is the least coupled and the easiest to verify by eye.
+## A note on verification
 
-## What already exists in Pod
+Steps 1–5 are covered end to end against real Postgres — `agent-transcript-e2e` and `agent-chat-e2e`
+prove transcript shape, sequence continuity, replay across turns, and cross-user rejection.
 
-`src/lib/server/agent/agent-loop.server.ts` and `src/lib/authoring/automations/agent-tools.ts`
-(450 lines together). The loop there is a reduced implementation that agent automations already use;
-step 4 replaces it rather than adding beside it. Its ad-hoc collection allowlist
-(`agent-loop.server.ts`) is a placeholder for the policy-driven access the port should adopt.
+Step 6 is not. There is no component test infrastructure in this package — no jsdom, no browser runner
+— so the panel is covered by `svelte-check` and by its one data dependency being proven end to end.
+Rendering is unverified, and that gap is worth closing before anyone relies on it.
