@@ -209,6 +209,19 @@ describe('Pod Sync — runtime contract (real runtime + PGlite clients)', () => 
 			         AND p.table_name = c.table_name
 			         AND p.column_name = 'norbital_id'
 			    )
+			    -- Client-opaque collections never enter the replica, so a shape request for one is
+			    -- correctly refused. They are not candidates for a sync test.
+			    AND c.table_name NOT IN ('invitation', 'host_event_outbox')
+			    -- serverInsert fills every NOT NULL column with a synthetic sample value, which cannot
+			    -- satisfy a foreign key. Any temporal collection proves the instant handling, so pick one
+			    -- that stands alone rather than teaching the helper to resolve references.
+			    AND NOT EXISTS (
+			      SELECT 1
+			        FROM information_schema.table_constraints tc
+			       WHERE tc.table_schema = c.table_schema
+			         AND tc.table_name = c.table_name
+			         AND tc.constraint_type = 'FOREIGN KEY'
+			    )
 			  ORDER BY table_name, ordinal_position
 			  LIMIT 1`,
 			[collectionInfos.map((info) => info.name)]
