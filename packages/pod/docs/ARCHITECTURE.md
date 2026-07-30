@@ -133,10 +133,21 @@ validate input
 
 `_ops_guard` rejects tenant-table writes that bypass this path.
 
-Temporal snapshots live in one append-only `record_history` JSONB ledger. Collection migrations do
-not rebuild or reshape it, so schema changes cannot erase record history. Audit writes occur inside
-the same transaction as the record, temporal snapshot, and sync row; an audit failure rolls the
-entire mutation back.
+Temporal row state and audit are deliberately separate:
+
+- PostgreSQL's `temporal_tables` extension archives native rows into a typed
+  `<collection>_history` table. Historical rows therefore have the collection's queryable column
+  shape rather than a JSONB envelope. Pod creates the history tuple descriptor from PostgreSQL's
+  catalog so array dimensions, types, collations, nullability, and defaults stay native.
+- Generated migrations mirror every column add, alter, rename, and drop into the history table.
+  History tables are never rebuilt. A migration locks `approval_request` and refuses to run while
+  any approval is non-terminal, so approval rollback never crosses schema versions.
+- `audit_event` is the append-only action log, and `agent_run_step` is the append-only AI
+  transcript. Neither is a temporal snapshot or rollback source.
+
+The record, typed temporal snapshot, audit event, and sync row share one transaction; an audit
+failure rolls the entire mutation back. A PostgreSQL installation hosting Pod must provide the
+`temporal_tables` extension before Pod applies its schema.
 
 ## Filesystem compiler
 
@@ -167,6 +178,55 @@ src/
 Agent tools use the `+<lower_snake_case>.tool.ts` suffix and may live anywhere under `src/`.
 Duplicate names are compile errors. Notification channels are declared once at
 `src/+notifications.ts`. Non-inferable facilities are declared once at `src/+facilities.ts`.
+
+### Capability declarations
+
+`src/+facilities.ts` declares a host capability that source discovery cannot infer. Today that is
+direct AI use from deterministic hooks, remotes, or pipelines:
+
+```ts
+// src/+facilities.ts
+import { defineFacilities } from '@norbital-ai/pod/authoring';
+
+export default defineFacilities({ ai: true });
+```
+
+The compiler copies `ai` into the manifest. Hosted and standalone startup then require an AI
+binding before accepting traffic. Agent automations imply `ai` automatically, so they do not need
+this file. The declaration contains no credentials and does not select a provider.
+
+`src/+notifications.ts` declares the complete set of external channels tenant code may send:
+
+```ts
+// src/+notifications.ts
+import { defineNotifications } from '@norbital-ai/pod/authoring';
+
+export default defineNotifications({ channels: ['email', 'telegram'] as const });
+```
+
+The compiler turns these names into the exact `NotificationChannel` type and the runtime manifest.
+Startup verifies that the host covers every declared channel. `system` is built into Pod, is always
+available, and cannot be redeclared.
+
+A `+<name>.tool.ts` module defines one opt-in agent tool:
+
+```ts
+// src/collections/permits/+check_registry.tool.ts
+import { defineAgentTool } from '@norbital-ai/pod/authoring';
+import { z } from 'zod';
+
+export default defineAgentTool({
+	description: 'Check a permit against the tenant registry.',
+	input: z.object({ permitId: z.string().uuid() }),
+	run: (api, { permitId }) => api.db.permits.findFirst({ where: { norbital_id: permitId } })
+});
+```
+
+The filename supplies `check_registry`. An agent automation must list
+`tools: ['check_registry']`; discovery does not grant every agent every tool. The compiler rejects
+duplicate and built-in names, generates an exact tool-name union, and registers the module.
+Runtime exposes only tools selected by the automation, validates input through the tool's Zod
+schema, and restricts `api.db` to that automation's collection allowlist and read/write mode.
 
 `pod sync` emits:
 

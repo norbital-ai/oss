@@ -202,6 +202,7 @@ async function loadSchemaSql(templateRoot: string): Promise<string> {
 			// depends on contrib extensions PGlite doesn't bundle (pg_trgm's gin_trgm_ops).
 			if (/gin_trgm_ops/i.test(statement)) continue;
 			if (/^create\s+extension/i.test(statement)) continue;
+			if (/_norbital_create_history_table/i.test(statement)) continue;
 			statements.push(statement);
 		}
 	}

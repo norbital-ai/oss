@@ -7,6 +7,7 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
     CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
     CREATE EXTENSION IF NOT EXISTS "pgcrypto";
     CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+    CREATE EXTENSION IF NOT EXISTS "temporal_tables";
     -- Lets a GiST index (and therefore an EXCLUDE ... USING gist) carry plain-equality
     -- members such as uuid/text scalars beside a range member. Without it, an exclusion
     -- of the form \`(tenant_id WITH =, period WITH &&)\` cannot be created at all.
@@ -125,49 +126,80 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
     END;
     $$ LANGUAGE plpgsql;
 
-    -- System-versioned temporal records. One append-only JSONB ledger preserves snapshots
-    -- across collection schema changes. The trigger owns every period/version transition:
-    -- UPDATE/DELETE archives OLD, INSERT/UPDATE opens NEW, and UPDATE advances the sync token.
-    CREATE OR REPLACE FUNCTION _norbital_versioning() RETURNS TRIGGER AS $$
-    DECLARE
-      -- A transaction can begin before a concurrent writer, wait for that writer's row lock, then
-      -- see the newer row after the writer commits. Transaction-start now() would precede that
-      -- row's lower bound and make the closing tstzrange invalid. Timestamp at trigger execution.
-      now_ts TIMESTAMPTZ := clock_timestamp();
+    -- Row versions are Pod's optimistic-concurrency token. Temporal row storage belongs to the
+    -- temporal_tables extension; this trigger owns only the independent integer token.
+    CREATE OR REPLACE FUNCTION _norbital_row_version() RETURNS TRIGGER AS $$
     BEGIN
-      IF TG_OP = 'INSERT' THEN
-        NEW.norbital_sys_period := tstzrange(now_ts, NULL, '[)')::text;
-        RETURN NEW;
-      END IF;
-
-      INSERT INTO record_history (
-        collection_name,
-        record_id,
-        row_version,
-        valid_from,
-        valid_to,
-        values
-      ) VALUES (
-        TG_TABLE_NAME,
-        OLD.norbital_id,
-        OLD.norbital_row_version,
-        lower(OLD.norbital_sys_period::tstzrange),
-        now_ts,
-        to_jsonb(OLD) || jsonb_build_object(
-          'norbital_sys_period',
-          tstzrange(lower(OLD.norbital_sys_period::tstzrange), now_ts, '[)')::text
-        )
-      );
-
-      IF TG_OP = 'DELETE' THEN
-        RETURN OLD;
-      END IF;
-
-      NEW.norbital_sys_period := tstzrange(now_ts, NULL, '[)')::text;
       NEW.norbital_row_version := OLD.norbital_row_version + 1;
       RETURN NEW;
     END;
     $$ LANGUAGE plpgsql;
+
+    -- CREATE TABLE ... LIKE loses PostgreSQL's declared array dimensionality metadata
+    -- (attndims). The temporal_tables extension correctly requires the history tuple
+    -- descriptor to match the live relation exactly, so build the history columns from
+    -- pg_attribute instead. History is deliberately a data relation: keys, foreign keys,
+    -- checks, and uniqueness remain constraints of the current-state table only.
+    CREATE OR REPLACE FUNCTION _norbital_create_history_table(
+      base_table REGCLASS,
+      history_table TEXT
+    ) RETURNS VOID
+    LANGUAGE plpgsql
+    AS $norbital_create_history_table$
+    DECLARE
+      column_definitions TEXT;
+    BEGIN
+      IF to_regclass(format('public.%I', history_table)) IS NOT NULL THEN
+        RETURN;
+      END IF;
+
+      SELECT string_agg(
+        format(
+          '%I %s%s%s%s%s',
+          attribute.attname,
+          format_type(attribute.atttypid, attribute.atttypmod),
+          CASE
+            WHEN attribute.attndims > 1 THEN repeat('[]', attribute.attndims - 1)
+            ELSE ''
+          END,
+          CASE
+            WHEN attribute.attcollation <> 0
+             AND attribute.attcollation <> data_type.typcollation
+              THEN format(' COLLATE %s', attribute.attcollation::regcollation)
+            ELSE ''
+          END,
+          CASE WHEN attribute.attnotnull THEN ' NOT NULL' ELSE '' END,
+          CASE
+            WHEN attribute.attgenerated <> '' THEN format(
+              ' GENERATED ALWAYS AS (%s) STORED',
+              pg_get_expr(default_value.adbin, default_value.adrelid)
+            )
+            WHEN default_value.adbin IS NOT NULL THEN format(
+              ' DEFAULT %s',
+              pg_get_expr(default_value.adbin, default_value.adrelid)
+            )
+            ELSE ''
+          END
+        ),
+        ', ' ORDER BY attribute.attnum
+      )
+      INTO column_definitions
+      FROM pg_attribute attribute
+      JOIN pg_type data_type ON data_type.oid = attribute.atttypid
+      LEFT JOIN pg_attrdef default_value
+        ON default_value.adrelid = attribute.attrelid
+       AND default_value.adnum = attribute.attnum
+      WHERE attribute.attrelid = base_table
+        AND attribute.attnum > 0
+        AND NOT attribute.attisdropped;
+
+      IF column_definitions IS NULL THEN
+        RAISE EXCEPTION 'cannot create temporal history for missing or empty relation %', base_table;
+      END IF;
+
+      EXECUTE format('CREATE TABLE %I (%s)', history_table, column_definitions);
+    END;
+    $norbital_create_history_table$;
 `;
 
 /** Idempotent tenant internals applied after manifest DDL (tables + triggers). */
@@ -217,20 +249,6 @@ export const SCHEMA_POST_DDL_SQL = dedent`
     INSERT INTO _norbital_sync_compaction (singleton)
       VALUES (TRUE)
       ON CONFLICT (singleton) DO NOTHING;
-
-    -- Durable temporal history. Unlike per-collection mirror tables, this ledger is not
-    -- rebuilt when a collection changes shape, so migrations can never erase history.
-    CREATE TABLE IF NOT EXISTS record_history (
-      seq BIGSERIAL PRIMARY KEY,
-      collection_name TEXT NOT NULL,
-      record_id UUID NOT NULL,
-      row_version INTEGER NOT NULL,
-      valid_from TIMESTAMPTZ NOT NULL,
-      valid_to TIMESTAMPTZ NOT NULL,
-      values JSONB NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS record_history_record_idx
-      ON record_history (collection_name, record_id, row_version DESC);
 
     -- The event-automation consumer is tenant-wide and durable. It is independent of browser
     -- stream cursors, so reconnecting clients can never duplicate automation dispatch.
@@ -395,6 +413,25 @@ export const SCHEMA_POST_DDL_SQL = dedent`
     END
     $agent_transcript$;
 
+    -- audit_event is the append-only action log. Temporal history stores row states; audit_event
+    -- stores who did what and must never be rewritten or repurposed as a rollback source.
+    DO $audit_event_insert_only$
+    BEGIN
+      IF to_regclass('public.audit_event') IS NOT NULL THEN
+        CREATE OR REPLACE FUNCTION _norbital_audit_event_insert_only() RETURNS trigger
+        LANGUAGE plpgsql AS $audit_event$
+        BEGIN
+          RAISE EXCEPTION 'audit_event is insert-only';
+        END;
+        $audit_event$;
+        DROP TRIGGER IF EXISTS _norbital_audit_event_insert_only ON audit_event;
+        CREATE TRIGGER _norbital_audit_event_insert_only
+          BEFORE UPDATE OR DELETE ON audit_event
+          FOR EACH ROW EXECUTE FUNCTION _norbital_audit_event_insert_only();
+      END IF;
+    END
+    $audit_event_insert_only$;
+
     DO $refresh_approval_lock_gates$
     DECLARE
       tbl RECORD;
@@ -405,6 +442,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
+          AND c.relname !~ '_history$'
 	          AND c.relname NOT IN ('audit_event', '_approval_lock', '_norbital_internal_schema')
           AND EXISTS (
             SELECT 1
@@ -440,6 +478,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
+          AND c.relname !~ '_history$'
           AND c.relname NOT IN (
 	            'audit_event', '_approval_lock', '_norbital_internal_schema',
 	            '_norbital_sync_epoch', '_norbital_automation_cursor',
@@ -466,22 +505,23 @@ export const SCHEMA_POST_DDL_SQL = dedent`
 
     INSERT INTO _norbital_internal_schema (version, name) VALUES (1, 'initial') ON CONFLICT DO NOTHING;
 
-    -- Attach temporal versioning to every record-shaped table except internal ledgers.
-    -- Runs after _ops_guard is attached; on UPDATE/DELETE the alphabetical fire order is
-    -- _approval_lock_gate → _norbital_versioning → _ops_guard, so a blocked or unauthorized
-    -- write is rejected and its archive rolls back with it. Idempotent (DROP IF EXISTS).
+    -- Extension-backed temporal history. Every record table has a typed, same-shaped
+    -- <table>_history relation. CREATE IF NOT EXISTS is intentionally non-destructive:
+    -- schema migrations own both relations and must evolve them together.
     DO $refresh_versioning$
     DECLARE
       tbl RECORD;
+      history_table TEXT;
     BEGIN
       FOR tbl IN
-        SELECT c.relname AS table_name
+        SELECT c.oid AS table_oid, c.relname AS table_name
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
+          AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-            'audit_event', 'record_history', 'sync_outbox', '_approval_lock',
+            'audit_event', 'agent_run_step', 'sync_outbox', '_approval_lock',
             '_norbital_internal_schema', '_norbital_sync_epoch',
             '_norbital_automation_cursor', '__drizzle_migrations'
           )
@@ -493,10 +533,55 @@ export const SCHEMA_POST_DDL_SQL = dedent`
                AND NOT a.attisdropped
           )
       LOOP
+        history_table := tbl.table_name || '_history';
+        PERFORM _norbital_create_history_table(tbl.table_oid::regclass, history_table);
+        IF EXISTS (
+          SELECT 1
+          FROM (
+            SELECT attname, atttypid, atttypmod, attndims, attcollation, attnotnull
+              FROM pg_attribute
+             WHERE attrelid = tbl.table_oid
+               AND attnum > 0
+               AND NOT attisdropped
+          ) current_column
+          FULL JOIN (
+            SELECT attname, atttypid, atttypmod, attndims, attcollation, attnotnull
+              FROM pg_attribute
+             WHERE attrelid = to_regclass(format('public.%I', history_table))
+               AND attnum > 0
+               AND NOT attisdropped
+          ) history_column USING (attname)
+          WHERE current_column.attname IS NULL
+             OR history_column.attname IS NULL
+             OR current_column.atttypid <> history_column.atttypid
+             OR current_column.atttypmod <> history_column.atttypmod
+             OR current_column.attndims <> history_column.attndims
+             OR current_column.attcollation <> history_column.attcollation
+             OR current_column.attnotnull <> history_column.attnotnull
+        ) THEN
+          RAISE EXCEPTION 'temporal history schema mismatch for %', tbl.table_name
+            USING HINT = format(
+              'Apply every column migration to both %I and %I',
+              tbl.table_name,
+              history_table
+            );
+        END IF;
+        EXECUTE format(
+          'CREATE INDEX IF NOT EXISTS %I ON %I (norbital_id, norbital_row_version DESC)',
+          history_table || '_record_version_idx',
+          history_table
+        );
+        EXECUTE format('DROP TRIGGER IF EXISTS _norbital_row_version ON %I', tbl.table_name);
+        EXECUTE format(
+          'CREATE TRIGGER _norbital_row_version BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION _norbital_row_version()',
+          tbl.table_name
+        );
         EXECUTE format('DROP TRIGGER IF EXISTS _norbital_versioning ON %I', tbl.table_name);
         EXECUTE format(
-          'CREATE TRIGGER _norbital_versioning BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION _norbital_versioning()',
-          tbl.table_name
+          'CREATE TRIGGER _norbital_versioning BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION versioning(%L, %L, true)',
+          tbl.table_name,
+          'norbital_sys_period',
+          history_table
         );
       END LOOP;
     END

@@ -9,7 +9,7 @@ const ORDERS_TABLE_SQL = `
 		norbital_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		norbital_created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		norbital_updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		norbital_sys_period TEXT NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text),
+		norbital_sys_period TSTZRANGE NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'),
 		norbital_row_version INTEGER NOT NULL DEFAULT 1,
 		norbital_approval_id UUID,
 		status TEXT
@@ -27,7 +27,7 @@ const APPROVAL_TABLES_SQL = `
 		norbital_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		norbital_created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		norbital_updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		norbital_sys_period TEXT NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text),
+		norbital_sys_period TSTZRANGE NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'),
 		norbital_row_version INTEGER NOT NULL DEFAULT 1,
 		norbital_approval_id UUID,
 		email TEXT NOT NULL UNIQUE,
@@ -38,7 +38,7 @@ const APPROVAL_TABLES_SQL = `
 		norbital_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		norbital_created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		norbital_updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		norbital_sys_period TEXT NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text),
+		norbital_sys_period TSTZRANGE NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'),
 		norbital_row_version INTEGER NOT NULL DEFAULT 1,
 		norbital_approval_id UUID,
 		organization_id UUID NOT NULL,
@@ -55,11 +55,25 @@ const APPROVAL_TABLES_SQL = `
 		norbital_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		norbital_created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		norbital_updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		norbital_sys_period TEXT NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text),
+		norbital_sys_period TSTZRANGE NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'),
 		norbital_row_version INTEGER NOT NULL DEFAULT 1,
 		norbital_approval_id UUID,
 		approval_request_id UUID NOT NULL REFERENCES approval_request(norbital_id),
 		user_id UUID NOT NULL REFERENCES "user"(norbital_id)
+	);
+
+	CREATE TABLE IF NOT EXISTS audit_event (
+		norbital_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		norbital_created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		norbital_updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		norbital_sys_period TSTZRANGE NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'),
+		norbital_row_version INTEGER NOT NULL DEFAULT 1,
+		norbital_approval_id UUID,
+		event_type TEXT NOT NULL DEFAULT 'mutation',
+		collection_name TEXT,
+		record_id UUID,
+		details JSONB DEFAULT '{}'::jsonb,
+		actor_id UUID
 	);
 `;
 

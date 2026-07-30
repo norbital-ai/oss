@@ -1,6 +1,6 @@
 ---
-"@norbital-ai/platform-utils": minor
-"@norbital-ai/pod": minor
+'@norbital-ai/platform-utils': minor
+'@norbital-ai/pod': minor
 ---
 
 Make Pod a self-contained tenant runtime with one AI chat binding, Pod-owned agents and synced
@@ -8,7 +8,8 @@ transcripts, transactional notification delivery, durable event automations, sub
 sync, standalone database notifications, exact compiler-generated authoring unions, and strict
 facility-gated startup. The manifest now has one strict schema, compiler discovery uses one source
 inventory, audit and sync writes are atomic with mutations, temporal history uses a migration-safe
-ledger, and file/agent records carry first-class requestor ownership.
+typed table per collection backed by PostgreSQL's `temporal_tables` extension, and file/agent
+records carry first-class requestor ownership.
 
 This is a clean break: raw tenant network access, host application plugins, the split inference
 surface, and obsolete system collections are removed.

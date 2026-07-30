@@ -1,11 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-<<<<<<<< HEAD:template_workspaces/hr-payroll/.norbital/migrations/20260731071948_auto/snapshot.json
-  "id": "758bfcb5-1ef2-4fbf-9d45-3345a01c4b3a",
-========
-  "id": "8065179c-6766-4f04-8e97-93f9daa1cd99",
->>>>>>>> 0c3e458 (feat(pod): implement self-contained tenant runtime architecture):template_workspaces/hr-payroll/.norbital/migrations/20260730040040_auto/snapshot.json
+  "id": "08b7f333-d53a-4cf0-a940-1f227ff70924",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
@@ -296,11 +292,11 @@
       "table": "accrual_bands"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -452,11 +448,11 @@
       "table": "companies"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -660,11 +656,11 @@
       "table": "company_holidays"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -803,11 +799,11 @@
       "table": "component_entries"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -985,11 +981,11 @@
       "table": "component_types"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1128,11 +1124,11 @@
       "table": "contribution_rates"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1258,11 +1254,11 @@
       "table": "contribution_treatments"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1401,11 +1397,11 @@
       "table": "employees"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1635,11 +1631,11 @@
       "table": "employment_statutory_facts"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1765,11 +1761,11 @@
       "table": "employment_terms"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2025,11 +2021,11 @@
       "table": "employments"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2207,11 +2203,11 @@
       "table": "jurisdictions"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2428,11 +2424,11 @@
       "table": "leave_ledger"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2597,11 +2593,11 @@
       "table": "leave_requests"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2792,11 +2788,11 @@
       "table": "leave_types"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3000,11 +2996,11 @@
       "table": "overtime_limits"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3156,11 +3152,11 @@
       "table": "overtime_rules"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3312,11 +3308,11 @@
       "table": "pay_components"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3481,11 +3477,11 @@
       "table": "payroll_runs"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3650,11 +3646,11 @@
       "table": "payslip_contributions"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3819,11 +3815,11 @@
       "table": "payslip_line_sources"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3923,11 +3919,11 @@
       "table": "payslip_lines"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -4092,11 +4088,11 @@
       "table": "payslips"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -4261,11 +4257,11 @@
       "table": "repayment_agreements"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -4365,19 +4361,6 @@
       "table": "repayment_agreements"
     },
     {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "repay_by",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "repayment_agreements"
-    },
-    {
       "type": "jsonb",
       "typeSchema": null,
       "notNull": true,
@@ -4443,11 +4426,11 @@
       "table": "roster_entries"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -4586,11 +4569,11 @@
       "table": "shift_definitions"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -4794,11 +4777,11 @@
       "table": "statutory_contributions"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -5015,11 +4998,11 @@
       "table": "time_entries"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -5275,11 +5258,11 @@
       "table": "agent_run_step"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -5496,11 +5479,11 @@
       "table": "approval_request"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -5678,11 +5661,11 @@
       "table": "audit_event"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -5821,11 +5804,11 @@
       "table": "automation_run"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -6003,11 +5986,11 @@
       "table": "document_asset"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -6146,11 +6129,11 @@
       "table": "integration_outbox"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -6380,11 +6363,11 @@
       "table": "notification"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -6562,11 +6545,11 @@
       "table": "notification_outbox"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -6796,11 +6779,11 @@
       "table": "policy"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -6952,11 +6935,11 @@
       "table": "requestor"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -7056,11 +7039,11 @@
       "table": "team"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -7212,11 +7195,11 @@
       "table": "team_members"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -7316,11 +7299,11 @@
       "table": "user"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",

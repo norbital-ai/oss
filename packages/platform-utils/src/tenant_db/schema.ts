@@ -37,6 +37,10 @@ export function qualifiedRelationshipTable(
 }
 
 /** Escaped qualified temporal history table ref. */
+export function qualifiedHistoryTableName(collectionName: string): string {
+	return `${ei(collectionSchema(collectionName))}.${ei(`${tableName(collectionName)}_history`)}`;
+}
+
 /** Idempotent bootstrap for the protected auth schema. */
 export function protectedSchemaBootstrapSql(): string {
 	return `CREATE SCHEMA IF NOT EXISTS ${ei(PROTECTED_AUTH_SCHEMA)};`;

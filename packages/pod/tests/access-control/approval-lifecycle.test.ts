@@ -9,7 +9,7 @@ const APPROVAL_A = '99999999-9999-4999-8999-999999999999';
 
 /**
  * End-to-end test of the approval-as-a-lock contract at the database level, exercising the real
- * DDL the whole system rests on: _norbital_versioning (archives every write), _approval_lock_gate
+ * DDL the whole system rests on: temporal_tables (archives every write), _approval_lock_gate
  * (blocks writes to a locked record), _ops_guard (writes must be authorized), and the
  * approval_terminal_transition bypass used during resolution. Each block issues the exact statement
  * sequence collection_ops (write-then-lock) and approval_service (restore/re-insert) emit, so a
@@ -80,7 +80,7 @@ describe('Pod approval lifecycle (real Postgres triggers)', () => {
 		await inViaOps(pool, async (client) => {
 			await client.query('DELETE FROM _approval_lock');
 			await client.query('DELETE FROM orders');
-			await client.query(`DELETE FROM record_history WHERE collection_name = 'orders'`);
+			await client.query('DELETE FROM orders_history');
 		});
 	});
 
@@ -132,13 +132,11 @@ describe('Pod approval lifecycle (real Postgres triggers)', () => {
 					    SET norbital_approval_id = baseline.norbital_approval_id,
 					        status = baseline.status
 					   FROM (
-					          SELECT (values->>'norbital_approval_id')::uuid AS norbital_approval_id,
-					                 values->>'status' AS status
-					            FROM record_history
-					           WHERE collection_name = 'orders'
-					             AND record_id = $1::uuid
-					             AND (values->>'norbital_approval_id') IS DISTINCT FROM $2
-					           ORDER BY row_version DESC
+					          SELECT norbital_approval_id, status
+					            FROM orders_history
+					           WHERE norbital_id = $1::uuid
+					             AND norbital_approval_id IS DISTINCT FROM $2::uuid
+					           ORDER BY norbital_row_version DESC
 					           LIMIT 1
 					        ) AS baseline
 					  WHERE live.norbital_id = $1::uuid`,
@@ -182,17 +180,14 @@ describe('Pod approval lifecycle (real Postgres triggers)', () => {
 					   norbital_id, norbital_created_at, norbital_updated_at,
 					   norbital_row_version, norbital_approval_id, status, norbital_sys_period
 					 )
-					 SELECT (snapshot.row).norbital_id, (snapshot.row).norbital_created_at,
-					        (snapshot.row).norbital_updated_at, (snapshot.row).norbital_row_version,
-					        (snapshot.row).norbital_approval_id, (snapshot.row).status,
-					        tstzrange(now(), NULL, '[)')::text
-					   FROM (
-					     SELECT jsonb_populate_record(NULL::orders, values) AS row
-					       FROM record_history
-					      WHERE collection_name = 'orders' AND record_id = $1::uuid
-					      ORDER BY row_version DESC
-					      LIMIT 1
-					   ) snapshot
+					 SELECT snapshot.norbital_id, snapshot.norbital_created_at,
+					        snapshot.norbital_updated_at, snapshot.norbital_row_version,
+					        snapshot.norbital_approval_id, snapshot.status,
+					        tstzrange(now(), NULL, '[)')
+					   FROM orders_history snapshot
+					  WHERE snapshot.norbital_id = $1::uuid
+					  ORDER BY snapshot.norbital_row_version DESC
+					  LIMIT 1
 					 ON CONFLICT (norbital_id) DO NOTHING`,
 					[id]
 				);

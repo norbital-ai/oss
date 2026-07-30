@@ -66,7 +66,6 @@ const REPLICA_EXCLUDED_TABLES = [
 	'_norbital_sync_compaction',
 	'_approval_lock',
 	'_norbital_internal_schema',
-	'record_history',
 	'integration_outbox',
 	'notification_outbox',
 	'__drizzle_migrations'
@@ -144,6 +143,7 @@ async function buildClientSchema(ctx: ProvisionedContext): Promise<string> {
 		   JOIN pg_attribute a ON a.attrelid = c.oid
 		  WHERE n.nspname = 'public' AND c.relkind = 'r'
 		    AND c.relname <> ALL($1::text[])
+		    AND c.relname !~ '_history$'
 		    AND a.attnum > 0 AND NOT a.attisdropped
 		    AND EXISTS (
 		      SELECT 1 FROM pg_attribute p

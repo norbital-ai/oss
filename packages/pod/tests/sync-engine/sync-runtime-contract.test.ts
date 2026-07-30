@@ -43,10 +43,12 @@ type CollectionInfo = { name: string; notNull: { name: string; type: string }[] 
 async function tenantCollections(harness: PodRuntimeHarness): Promise<CollectionInfo[]> {
 	const tables = await harness.pool.query<{ name: string }>(
 		`SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-		  WHERE n.nspname='public' AND c.relkind='r' AND c.relname !~ '_history$'
-		    AND c.relname NOT IN ('mutation_log','audit_event','_approval_lock','_norbital_internal_schema',
+		  WHERE n.nspname='public' AND c.relkind='r'
+		    AND c.relname !~ '_history$'
+		    AND c.relname NOT IN ('audit_event','_approval_lock','_norbital_internal_schema',
 		      '__drizzle_migrations','sync_outbox','approval_request','requestor','automation_run','user',
-		      'team','policy','chat_session','integration_outbox','notification','document_asset','team_members')
+		      'agent_run_step','team','policy','integration_outbox','notification_outbox','notification',
+		      'document_asset','team_members')
 		    AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='norbital_id')
 		  ORDER BY c.relname`
 	);
@@ -80,6 +82,7 @@ async function pickInsertableCollection(harness: PodRuntimeHarness): Promise<Col
 }
 
 function sampleValue(type: string): unknown {
+	if (type === 'uuid') return crypto.randomUUID();
 	if (type.includes('int') || type === 'numeric' || type.includes('double')) return 1;
 	if (type === 'boolean') return false;
 	if (type.includes('timestamp') || type === 'date') return new Date().toISOString();
@@ -89,6 +92,7 @@ function sampleValue(type: string): unknown {
 
 /** SQL literal for a column type, for bulk generate_series inserts. */
 function literalFor(type: string): string {
+	if (type === 'uuid') return 'gen_random_uuid()';
 	if (type.includes('int') || type === 'numeric' || type.includes('double')) return '1';
 	if (type === 'boolean') return 'false';
 	if (type.includes('timestamp')) return 'now()';

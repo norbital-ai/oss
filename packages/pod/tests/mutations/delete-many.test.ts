@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
-import { integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { customType, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema, seedApprovalRequest } from '../support/pod-schema.js';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
@@ -21,13 +21,16 @@ requireDocker();
 
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
+const tstzrange = customType<{ data: string }>({
+	dataType: () => 'tstzrange'
+});
 
 /** Mirrors the `orders` table in support/pod-schema.ts. */
 const orders = pgTable('orders', {
 	norbital_id: uuid('norbital_id').primaryKey().defaultRandom(),
 	norbital_created_at: timestamp('norbital_created_at', { withTimezone: true }).defaultNow(),
 	norbital_updated_at: timestamp('norbital_updated_at', { withTimezone: true }).defaultNow(),
-	norbital_sys_period: text('norbital_sys_period'),
+	norbital_sys_period: tstzrange('norbital_sys_period'),
 	norbital_row_version: integer('norbital_row_version'),
 	norbital_approval_id: uuid('norbital_approval_id'),
 	status: text('status')
@@ -165,10 +168,10 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		await client.query('BEGIN');
 		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
 		// Locks first: while one stands, _approval_lock_gate rejects the delete it guards.
-		// Ledger last: clearing `orders` archives whatever is left into it.
+		// History last: clearing `orders` archives whatever is left into it.
 		await client.query('DELETE FROM _approval_lock');
 		await client.query('DELETE FROM orders');
-		await client.query(`DELETE FROM record_history WHERE collection_name = 'orders'`);
+		await client.query('DELETE FROM orders_history');
 		await client.query('DELETE FROM sync_outbox');
 		await client.query('COMMIT');
 		statements = [];
@@ -218,16 +221,15 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		await deleteMany(ctx, 'orders', ids.slice(0, 4), { isElevated: true });
 
 		const history = await pool.query<{ norbital_id: string; status: string }>(
-			`SELECT record_id AS norbital_id, values->>'status' AS status
-			   FROM record_history
-			  WHERE collection_name = 'orders'
-			  ORDER BY values->>'status'`
+			`SELECT norbital_id, status
+			   FROM orders_history
+			  ORDER BY status`
 		);
 		expect(history.rows.map((row) => row.status)).toEqual(['row-0', 'row-1', 'row-2', 'row-3']);
 		// Every archived version is closed at the delete.
 		const open = await pool.query(
-			`SELECT 1 FROM record_history
-			  WHERE collection_name = 'orders' AND valid_to IS NULL`
+			`SELECT 1 FROM orders_history
+			  WHERE upper(norbital_sys_period) IS NULL`
 		);
 		expect(open.rowCount).toBe(0);
 	});
@@ -296,9 +298,7 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		);
 
 		expect(await pool.query(`SELECT 1 FROM orders`)).toMatchObject({ rowCount: 3 });
-		expect(
-			await pool.query(`SELECT 1 FROM record_history WHERE collection_name = 'orders'`)
-		).toMatchObject({ rowCount: 0 });
+		expect(await pool.query('SELECT 1 FROM orders_history')).toMatchObject({ rowCount: 0 });
 		expect(await pool.query(`SELECT 1 FROM sync_outbox`)).toMatchObject({ rowCount: 0 });
 	});
 
@@ -377,8 +377,8 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		const feed = await pool.query<{ record_id: string }>(`SELECT record_id FROM sync_outbox`);
 		expect(feed.rows.map((row) => row.record_id)).toEqual([ids[0]]);
 		const history = await pool.query(
-			`SELECT 1 FROM record_history
-			  WHERE collection_name = 'orders' AND record_id = $1::uuid`,
+			`SELECT 1 FROM orders_history
+			  WHERE norbital_id = $1::uuid`,
 			[ids[0]]
 		);
 		expect(history.rowCount).toBe(1);
@@ -400,9 +400,7 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 
 		const live = await pool.query(`SELECT 1 FROM orders`);
 		expect(live.rowCount).toBe(0);
-		const history = await pool.query(
-			`SELECT 1 FROM record_history WHERE collection_name = 'orders'`
-		);
+		const history = await pool.query('SELECT 1 FROM orders_history');
 		expect(history.rowCount).toBe(1100);
 		const feed = await pool.query<{ record_id: string }>(
 			`SELECT record_id FROM sync_outbox ORDER BY seq`

@@ -92,6 +92,7 @@ describe('exclusion DDL on a real server', () => {
 describe('schema-functions.sql', () => {
 	it('installs btree_gist so a gist exclusion can mix equality and range members', () => {
 		expect(SCHEMA_FUNCTIONS_SQL).toContain('CREATE EXTENSION IF NOT EXISTS "btree_gist"');
+		expect(SCHEMA_FUNCTIONS_SQL).toContain('CREATE EXTENSION IF NOT EXISTS "temporal_tables"');
 	});
 
 	it('declares an IMMUTABLE daterange projection for date-range JSONB columns', () => {

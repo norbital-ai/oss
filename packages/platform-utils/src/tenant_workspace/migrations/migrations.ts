@@ -119,11 +119,40 @@ async function readAppliedMigrations(
 	};
 }
 
+async function assertNoActiveApprovals(client: Client): Promise<void> {
+	const relation = await client.query<{ exists: boolean }>(
+		`SELECT to_regclass('public.approval_request') IS NOT NULL AS exists`
+	);
+	if (!relation.rows[0]?.exists) return;
+
+	// Held until the surrounding migration transaction commits. Approval DML cannot race the
+	// check and cross a schema version while typed temporal tables are being evolved.
+	await client.query('LOCK TABLE approval_request IN SHARE ROW EXCLUSIVE MODE');
+	const active = await client.query<{ count: string }>(
+		`SELECT count(*)::text AS count
+		   FROM approval_request
+		  WHERE status NOT IN ('APPROVED', 'REJECTED')`
+	);
+	const count = Number(active.rows[0]?.count ?? '0');
+	if (count > 0) {
+		throw new Error(
+			`Cannot migrate tenant schema while ${count} approval request${count === 1 ? ' is' : 's are'} active`
+		);
+	}
+}
+
 export async function applyPendingMigrations(
 	client: Client,
 	migrations: readonly OrderedMigration[]
 ): Promise<void> {
 	const applied = await readAppliedMigrations(client);
+	const hasExecutableMigration = migrations.some((migration) => {
+		if (applied.tags.has(migration.tag)) return false;
+		const hash = sqlHash(migration.sql);
+		return !(applied.hashes.has(hash) && /\bCREATE TABLE\b/i.test(migration.sql));
+	});
+	if (hasExecutableMigration) await assertNoActiveApprovals(client);
+
 	// stupidity:allow A6 -- migrations must execute and be recorded in order
 	for (const migration of migrations) {
 		if (applied.tags.has(migration.tag)) continue;

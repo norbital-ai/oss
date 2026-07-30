@@ -39,9 +39,11 @@ const _systemColumnDefs = {
 	norbital_id: uuid().primaryKey().defaultRandom(),
 	norbital_created_at: timestamp({ withTimezone: true }).defaultNow(),
 	norbital_updated_at: timestamp({ withTimezone: true }).defaultNow(),
-	norbital_sys_period: text()
+	norbital_sys_period: pgCustomType<{ data: string; driverData: string }>({
+		dataType: () => 'tstzrange'
+	})()
 		.notNull()
-		.default(sql`tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)`),
+		.default(sql`tstzrange(CURRENT_TIMESTAMP, NULL, '[)')`),
 	norbital_row_version: integer().default(1),
 	norbital_approval_id: uuid()
 };

@@ -186,7 +186,8 @@ next step rather than a tweak.
   writes ──────────────▶│  collection_ops  (authority: policy, hooks, audit,   │
                         │                   history, approvals, versioning)    │
                         │        │                                             │
-                        │        ├──▶ tables + record_history (trigger-driven)│
+                        │        ├──▶ tables + <collection>_history          │
+                        │        │    (temporal_tables extension)            │
                         │        └──▶ sync_outbox         (trigger-driven)     │
                         │                   │                                  │
                         │            outbox tailer  (xid, seq) ordered,        │

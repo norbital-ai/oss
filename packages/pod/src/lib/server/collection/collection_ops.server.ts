@@ -988,7 +988,7 @@ async function loadRecordsById(
  * per chunk, and stamped into the change feed and the audit log in one statement each. The
  * database's per-row work is untouched: `_approval_lock_gate`, `_ops_guard` and
  * `_norbital_versioning` are FOR EACH ROW triggers and still fire once per deleted row, so a
- * locked record is still rejected and every deleted row is still archived to `record_history`.
+ * locked record is still rejected and every deleted row is still archived to its typed history table.
  *
  * Failure is all-or-nothing: a denied, locked, missing or hook-rejected record rolls the whole
  * transaction back, matching {@link createMany} and {@link updateMany}.

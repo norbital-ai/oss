@@ -60,23 +60,23 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 	beforeEach(async () => {
 		await inViaOps(pool, async (client) => {
 			await client.query('DELETE FROM orders');
-			await client.query(`DELETE FROM record_history WHERE collection_name = 'orders'`);
+			await client.query('DELETE FROM orders_history');
 		});
 	});
 
 	it('archives the prior version and bumps the live row on a plain UPDATE', async () => {
 		const id = await insertOrder(pool, 'pending');
-		// A bare UPDATE — no manual period/version/capture. The _norbital_versioning trigger does it all.
+		// A bare UPDATE — temporal_tables archives the row and Pod advances its sync version.
 		await inViaOps(pool, (client) =>
 			client.query(`UPDATE orders SET status = 'shipped' WHERE norbital_id = $1::uuid`, [id]).then()
 		);
 
 		const history = await pool.query<{ status: string; version: number; closed: boolean }>(
-			`SELECT values->>'status' AS status,
-			        row_version AS version,
-			        valid_to IS NOT NULL AS closed
-			   FROM record_history
-			  WHERE collection_name = 'orders' AND record_id = $1::uuid`,
+			`SELECT status,
+			        norbital_row_version AS version,
+			        upper(norbital_sys_period) IS NOT NULL AS closed
+			   FROM orders_history
+			  WHERE norbital_id = $1::uuid`,
 			[id]
 		);
 		expect(history.rows).toHaveLength(1);
@@ -85,7 +85,7 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 		const live = await pool.query<{ status: string; version: number; open: boolean }>(
 			`SELECT status,
 			        norbital_row_version AS version,
-			        upper(norbital_sys_period::tstzrange) IS NULL AS open
+			        upper(norbital_sys_period) IS NULL AS open
 			   FROM orders WHERE norbital_id = $1::uuid`,
 			[id]
 		);
@@ -116,10 +116,10 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 		}
 
 		const history = await pool.query<{ status: string; empty: boolean }>(
-			`SELECT values->>'status' AS status, valid_to <= valid_from AS empty
-			   FROM record_history
-			  WHERE collection_name = 'orders' AND record_id = $1::uuid
-			  ORDER BY row_version`,
+			`SELECT status, isempty(norbital_sys_period) AS empty
+			   FROM orders_history
+			  WHERE norbital_id = $1::uuid
+			  ORDER BY norbital_row_version`,
 			[id]
 		);
 		expect(history.rows).toEqual([
@@ -168,10 +168,10 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 		expect(live.rowCount).toBe(0);
 
 		const history = await pool.query<{ status: string }>(
-			`SELECT values->>'status' AS status
-			   FROM record_history
-			  WHERE collection_name = 'orders' AND record_id = $1::uuid
-			  ORDER BY row_version`,
+			`SELECT status
+			   FROM orders_history
+			  WHERE norbital_id = $1::uuid
+			  ORDER BY norbital_row_version`,
 			[id]
 		);
 		// Both the pre-update (v1) and the final pre-delete (v2) states are retained.
@@ -195,12 +195,11 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 
 		// restoreRecordBeforeApproval reads the newest history row NOT stamped by this approval.
 		const baseline = await pool.query<{ status: string }>(
-			`SELECT values->>'status' AS status
-			   FROM record_history
-			  WHERE collection_name = 'orders'
-			    AND record_id = $1::uuid
-			    AND (values->>'norbital_approval_id') IS DISTINCT FROM $2
-			  ORDER BY row_version DESC
+			`SELECT status
+			   FROM orders_history
+			  WHERE norbital_id = $1::uuid
+			    AND norbital_approval_id IS DISTINCT FROM $2::uuid
+			  ORDER BY norbital_row_version DESC
 			  LIMIT 1`,
 			[id, approvalId]
 		);
@@ -215,10 +214,10 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 
 		// restoreRecordBeforeApproval (record_delete) resurrects the newest history version.
 		const source = await pool.query<{ status: string }>(
-			`SELECT values->>'status' AS status
-			   FROM record_history
-			  WHERE collection_name = 'orders' AND record_id = $1::uuid
-			  ORDER BY row_version DESC
+			`SELECT status
+			   FROM orders_history
+			  WHERE norbital_id = $1::uuid
+			  ORDER BY norbital_row_version DESC
 			  LIMIT 1`,
 			[id]
 		);
@@ -236,11 +235,147 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 		await pool.query(SCHEMA_POST_DDL_SQL);
 
 		const history = await pool.query<{ status: string }>(
-			`SELECT values->>'status' AS status
-			   FROM record_history
-			  WHERE collection_name = 'orders' AND record_id = $1::uuid`,
+			`SELECT status
+			   FROM orders_history
+			  WHERE norbital_id = $1::uuid`,
 			[id]
 		);
 		expect(history.rows).toEqual([{ status: 'before-migration' }]);
+	});
+
+	it('keeps historical rows natively queryable after mirrored schema evolution', async () => {
+		const id = await insertOrder(pool, 'before-schema-change');
+		await inViaOps(pool, (client) =>
+			client
+				.query(`UPDATE orders SET status = 'after-schema-change' WHERE norbital_id = $1::uuid`, [
+					id
+				])
+				.then()
+		);
+
+		try {
+			await pool.query(
+				`ALTER TABLE orders ADD COLUMN reference text NOT NULL DEFAULT 'unassigned'`
+			);
+			await expect(pool.query(SCHEMA_POST_DDL_SQL)).rejects.toThrow(
+				/temporal history schema mismatch for orders/
+			);
+			await pool.query(
+				`ALTER TABLE orders_history ADD COLUMN reference text NOT NULL DEFAULT 'unassigned'`
+			);
+			await pool.query(SCHEMA_POST_DDL_SQL);
+
+			const history = await pool.query<{ status: string; reference: string }>(
+				`SELECT status, reference
+				   FROM orders_history
+				  WHERE norbital_id = $1::uuid`,
+				[id]
+			);
+			expect(history.rows).toEqual([{ status: 'before-schema-change', reference: 'unassigned' }]);
+		} finally {
+			await pool.query('ALTER TABLE orders_history DROP COLUMN IF EXISTS reference');
+			await pool.query('ALTER TABLE orders DROP COLUMN IF EXISTS reference');
+		}
+	});
+
+	it('preserves array types and declared dimensions in native history rows', async () => {
+		try {
+			await pool.query(`
+				CREATE TABLE array_records (
+					norbital_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+					norbital_created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					norbital_updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					norbital_sys_period TSTZRANGE NOT NULL
+						DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'),
+					norbital_row_version INTEGER NOT NULL DEFAULT 1,
+					norbital_approval_id UUID,
+					tags TEXT[] NOT NULL,
+					matrix INTEGER[][]
+				)
+			`);
+			await pool.query(
+				`SELECT _norbital_create_history_table('array_records'::regclass, 'array_records_history')`
+			);
+			await pool.query(SCHEMA_POST_DDL_SQL);
+
+			const dimensions = await pool.query<{
+				table_name: string;
+				column_name: string;
+				attndims: number;
+			}>(
+				`SELECT relation.relname AS table_name,
+				        attribute.attname AS column_name,
+				        attribute.attndims
+				   FROM pg_class relation
+				   JOIN pg_attribute attribute ON attribute.attrelid = relation.oid
+				  WHERE relation.relname IN ('array_records', 'array_records_history')
+				    AND attribute.attname IN ('tags', 'matrix')
+				  ORDER BY relation.relname, attribute.attname`
+			);
+			expect(dimensions.rows).toEqual([
+				{ table_name: 'array_records', column_name: 'matrix', attndims: 2 },
+				{ table_name: 'array_records', column_name: 'tags', attndims: 1 },
+				{ table_name: 'array_records_history', column_name: 'matrix', attndims: 2 },
+				{ table_name: 'array_records_history', column_name: 'tags', attndims: 1 }
+			]);
+
+			let id = '';
+			await inViaOps(pool, async (client) => {
+				const inserted = await client.query<{ norbital_id: string }>(
+					`INSERT INTO array_records (tags, matrix)
+					 VALUES (ARRAY['draft'], ARRAY[[1, 2], [3, 4]])
+					 RETURNING norbital_id`
+				);
+				id = inserted.rows[0].norbital_id;
+			});
+			await inViaOps(pool, async (client) => {
+				await client.query(
+					`UPDATE array_records SET tags = ARRAY['published'] WHERE norbital_id = $1::uuid`,
+					[id]
+				);
+			});
+
+			const history = await pool.query<{ tags: string[]; matrix: number[][] }>(
+				`SELECT tags, matrix FROM array_records_history WHERE norbital_id = $1::uuid`,
+				[id]
+			);
+			expect(history.rows).toEqual([
+				{
+					tags: ['draft'],
+					matrix: [
+						[1, 2],
+						[3, 4]
+					]
+				}
+			]);
+		} finally {
+			await pool.query('DROP TABLE IF EXISTS array_records_history, array_records CASCADE');
+		}
+	});
+
+	it('keeps audit_event append-only instead of treating it as temporal row history', async () => {
+		const excludedHistory = await pool.query<{ audit: boolean; transcript: boolean }>(
+			`SELECT to_regclass('public.audit_event_history') IS NULL AS audit,
+			        to_regclass('public.agent_run_step_history') IS NULL AS transcript`
+		);
+		expect(excludedHistory.rows[0]).toEqual({ audit: true, transcript: true });
+
+		const inserted = await pool.query<{ norbital_id: string }>(
+			`INSERT INTO audit_event (event_type, collection_name, details)
+			 VALUES ('mutation', 'orders', '{"action":"create"}'::jsonb)
+			 RETURNING norbital_id`
+		);
+		const id = inserted.rows[0].norbital_id;
+
+		await expect(
+			pool.query(
+				`UPDATE audit_event SET details = '{"action":"rewrite"}'::jsonb
+				  WHERE norbital_id = $1::uuid`,
+				[id]
+			)
+		).rejects.toThrow(/audit_event is insert-only/);
+		await expect(
+			pool.query(`DELETE FROM audit_event WHERE norbital_id = $1::uuid`, [id])
+		).rejects.toThrow(/audit_event is insert-only/);
 	});
 });

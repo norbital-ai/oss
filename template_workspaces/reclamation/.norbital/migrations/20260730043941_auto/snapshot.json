@@ -1,66 +1,38 @@
 {
   "version": "8",
   "dialect": "postgres",
-<<<<<<<< HEAD:template_workspaces/crm/.norbital/migrations/20260731071946_auto/snapshot.json
-  "id": "7f4f0922-c41e-4ba1-b4c6-c37fcc38a3a6",
-========
-  "id": "5c077b37-718a-4d71-af23-9259bcf33ad5",
->>>>>>>> 0c3e458 (feat(pod): implement self-contained tenant runtime architecture):template_workspaces/crm/.norbital/migrations/20260730040040_auto/snapshot.json
+  "id": "6be526f7-0ceb-44f0-b87c-774c6e0c8102",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
   "ddl": [
     {
       "isRlsEnabled": false,
-      "name": "accounts",
+      "name": "cost_estimates",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "activities",
+      "name": "cost_rates",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "contacts",
+      "name": "project_documents",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "customer_prices",
+      "name": "reclamation_projects",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "payment_records",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "products",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "projects",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "quote_lines",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "quotes",
+      "name": "site_reconstructions",
       "entityType": "tables",
       "schema": "public"
     },
@@ -153,7 +125,7 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "type": "timestamp with time zone",
@@ -166,7 +138,7 @@
       "name": "norbital_created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "type": "timestamp with time zone",
@@ -179,20 +151,20 @@
       "name": "norbital_updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "type": "integer",
@@ -205,7 +177,7 @@
       "name": "norbital_row_version",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "type": "uuid",
@@ -218,7 +190,7 @@
       "name": "norbital_approval_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "type": "text",
@@ -228,10 +200,36 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "name",
+      "name": "estimate_name",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "cost_estimates"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "reconstruction_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "cost_estimates"
     },
     {
       "type": "text",
@@ -241,36 +239,10 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "industry",
+      "name": "status",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "website",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "phone",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "type": "text",
@@ -283,644 +255,85 @@
       "name": "currency",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "active",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "regarding_type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "regarding_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "subject",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "description",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "due_date",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "completed_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "owner_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "account_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "first_name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "last_name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "email",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "title",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "department",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "active",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "account_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
+      "table": "cost_estimates"
     },
     {
       "type": "numeric",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "unit_price",
+      "name": "sand_loss_pct",
       "entityType": "columns",
       "schema": "public",
-      "table": "customer_prices"
+      "table": "cost_estimates"
     },
     {
-      "type": "text",
+      "type": "numeric",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "currency",
+      "name": "dredged_fill_loss_pct",
       "entityType": "columns",
       "schema": "public",
-      "table": "customer_prices"
+      "table": "cost_estimates"
     },
     {
-      "type": "date",
+      "type": "numeric",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "valid_from",
+      "name": "perimeter_margin_pct",
       "entityType": "columns",
       "schema": "public",
-      "table": "customer_prices"
+      "table": "cost_estimates"
     },
     {
-      "type": "date",
+      "type": "numeric",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "valid_until",
+      "name": "pvd_area_fraction",
       "entityType": "columns",
       "schema": "public",
-      "table": "customer_prices"
+      "table": "cost_estimates"
     },
     {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "active",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "uuid",
+      "type": "numeric",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "norbital_approval_id",
+      "name": "pvd_spacing_m",
       "entityType": "columns",
       "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
     },
     {
-      "type": "uuid",
+      "type": "numeric",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "quote_id",
+      "name": "contingency_pct",
       "entityType": "columns",
       "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
     },
     {
       "type": "jsonb",
@@ -930,23 +343,36 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "amount",
+      "name": "subtotal",
       "entityType": "columns",
       "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
     },
     {
-      "type": "date",
+      "type": "jsonb",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "payment_date",
+      "name": "contingency",
       "entityType": "columns",
       "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "total",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "cost_estimates"
     },
     {
       "type": "text",
@@ -956,23 +382,36 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "method",
+      "name": "lines_json",
       "entityType": "columns",
       "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
     },
     {
       "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 1,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "missing_rates",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "cost_estimates"
+    },
+    {
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "reference",
+      "name": "priced_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
     },
     {
       "type": "text",
@@ -985,7 +424,7 @@
       "name": "notes",
       "entityType": "columns",
       "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
     },
     {
       "type": "uuid",
@@ -998,7 +437,7 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "type": "timestamp with time zone",
@@ -1011,7 +450,7 @@
       "name": "norbital_created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "type": "timestamp with time zone",
@@ -1024,20 +463,20 @@
       "name": "norbital_updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "type": "integer",
@@ -1050,7 +489,7 @@
       "name": "norbital_row_version",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "type": "uuid",
@@ -1063,7 +502,7 @@
       "name": "norbital_approval_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "type": "text",
@@ -1073,10 +512,10 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "code",
+      "name": "substrate",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "type": "text",
@@ -1086,80 +525,15 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "name",
+      "name": "label",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "type": "text",
       "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "description",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "grade",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "mfi",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "density",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "supplier",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -1167,46 +541,72 @@
       "name": "unit",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
-      "type": "numeric",
+      "type": "jsonb",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "unit_price",
+      "name": "rate",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
-      "type": "timestamp with time zone",
+      "type": "text",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "price_updated_at",
+      "name": "rate_basis",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
-      "type": "boolean",
+      "type": "text",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "active",
+      "name": "source",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "validity_range",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "cost_rates"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "notes",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "cost_rates"
     },
     {
       "type": "uuid",
@@ -1219,7 +619,7 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "project_documents"
     },
     {
       "type": "timestamp with time zone",
@@ -1232,7 +632,7 @@
       "name": "norbital_created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "project_documents"
     },
     {
       "type": "timestamp with time zone",
@@ -1245,20 +645,20 @@
       "name": "norbital_updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "project_documents"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "project_documents"
     },
     {
       "type": "integer",
@@ -1271,7 +671,7 @@
       "name": "norbital_row_version",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "project_documents"
     },
     {
       "type": "uuid",
@@ -1284,423 +684,7 @@
       "name": "norbital_approval_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "description",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "account_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "status",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "start_date",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "end_date",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "owner_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "quote_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_code",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_unit",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "quantity",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "unit_price",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "discount_pct",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "tax_rate",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "line_total",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "doc_no",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "account_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "contact_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
+      "table": "project_documents"
     },
     {
       "type": "text",
@@ -1713,7 +697,124 @@
       "name": "title",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "project_documents"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "category",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "document_role",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "document_file",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "document_number",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "discipline",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "revision",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "date",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "issued_on",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "issued_by",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
     },
     {
       "type": "text",
@@ -1726,7 +827,202 @@
       "name": "status",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "project_documents"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 1,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "tags",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "notes",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "tstzrange",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "project_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "project_code",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "client",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "consultant",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "location",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "datum",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
     },
     {
       "type": "text",
@@ -1739,111 +1035,46 @@
       "name": "currency",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "tax_inclusive",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "valid_until",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "net",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "tax",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "gross",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
+      "table": "reclamation_projects"
     },
     {
       "type": "uuid",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "owner_id",
+      "name": "floor_plan_document",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "reclamation_projects"
     },
     {
-      "type": "timestamp with time zone",
+      "type": "uuid",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "confirmed_at",
+      "name": "bathymetry_document",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "reclamation_projects"
     },
     {
-      "type": "timestamp with time zone",
+      "type": "uuid",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "fulfilled_at",
+      "name": "cross_section_document",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "reclamation_projects"
     },
     {
       "type": "text",
@@ -1853,36 +1084,10 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "description",
+      "name": "interpolation",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "project_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "revision_of",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
+      "table": "reclamation_projects"
     },
     {
       "type": "numeric",
@@ -1892,10 +1097,478 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "revision_number",
+      "name": "integration_cell_m",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "render_cell_m",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "stitch_overrides",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "notes",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "tstzrange",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "revision",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "stitched_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "engine_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "failure_reason",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "platform_area_m2",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "works_footprint_m2",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "armor_face_area_m2",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "shoreline_length_m",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "mean_fill_depth_m",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "max_fill_depth_m",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "integration_cell_m",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "structure_displacement_m3",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "excavation_m3",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "placed_volume_m3",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "rock_armor_m3",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "geofabric_m2",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "dredged_rock_m3",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sand_key_m3",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sand_fill_m3",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "dredged_fill_m3",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "assumption_count",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "warning_count",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "model_json",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "quantities_json",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "report_json",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "site_reconstructions"
     },
     {
       "type": "uuid",
@@ -1937,11 +1610,11 @@
       "table": "agent_run_step"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2158,11 +1831,11 @@
       "table": "approval_request"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2340,11 +2013,11 @@
       "table": "audit_event"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2483,11 +2156,11 @@
       "table": "automation_run"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2665,11 +2338,11 @@
       "table": "document_asset"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2808,11 +2481,11 @@
       "table": "integration_outbox"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3042,11 +2715,11 @@
       "table": "notification"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3224,11 +2897,11 @@
       "table": "notification_outbox"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3458,11 +3131,11 @@
       "table": "policy"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3614,11 +3287,11 @@
       "table": "requestor"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3718,11 +3391,11 @@
       "table": "team"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3874,11 +3547,11 @@
       "table": "team_members"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3978,11 +3651,11 @@
       "table": "user"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -4108,34 +3781,31 @@
       "table": "user"
     },
     {
-      "nameExplicit": true,
+      "nameExplicit": false,
       "columns": [
         {
-          "value": "name",
+          "value": "project_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
+          "opclass": null
         }
       ],
       "isUnique": false,
       "where": null,
       "with": "",
-      "method": "gin",
+      "method": "btree",
       "concurrently": false,
-      "name": "accounts_name_search_trgm_idx",
+      "name": "cost_estimates_project_id_index",
       "entityType": "indexes",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "industry",
+          "value": "estimate_name",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -4150,16 +3820,16 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "accounts_industry_search_trgm_idx",
+      "name": "cost_estimates_estimate_name_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "website",
+          "value": "status",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -4174,34 +3844,10 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "accounts_website_search_trgm_idx",
+      "name": "cost_estimates_status_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "phone",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "accounts_phone_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "nameExplicit": true,
@@ -4222,16 +3868,16 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "accounts_currency_search_trgm_idx",
+      "name": "cost_estimates_currency_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "accounts"
+      "table": "cost_estimates"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "address",
+          "value": "lines_json",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -4246,501 +3892,10 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "accounts_address_search_trgm_idx",
+      "name": "cost_estimates_lines_json_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "regarding_type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "regarding_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "activities_regarding_type_regarding_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "owner_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "activities_owner_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "due_date",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "activities_due_date_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "regarding_type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "activities_regarding_type_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "activities_type_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "subject",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "activities_subject_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "description",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "activities_description_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "account_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "contacts_account_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "first_name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_first_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "last_name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_last_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "email",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_email_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "title",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_title_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "department",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_department_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "account_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "product_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "customer_prices_account_id_product_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "account_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "customer_prices_account_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "product_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "customer_prices_product_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "currency",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "customer_prices_currency_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "quote_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "payment_records_quote_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "payment_date",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "payment_records_payment_date_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "method",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "payment_records_method_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "reference",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "payment_records_reference_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
     },
     {
       "nameExplicit": true,
@@ -4761,16 +3916,16 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "payment_records_notes_search_trgm_idx",
+      "name": "cost_estimates_notes_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "payment_records"
+      "table": "cost_estimates"
     },
     {
       "nameExplicit": false,
       "columns": [
         {
-          "value": "code",
+          "value": "substrate",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -4782,37 +3937,16 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "products_code_index",
+      "name": "cost_rates_substrate_index",
       "entityType": "indexes",
       "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "grade",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "products_grade_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "code",
+          "value": "substrate",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -4827,16 +3961,16 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "products_code_search_trgm_idx",
+      "name": "cost_rates_substrate_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "name",
+          "value": "label",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -4851,130 +3985,10 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "products_name_search_trgm_idx",
+      "name": "cost_rates_label_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "description",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_description_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "grade",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_grade_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "mfi",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_mfi_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "density",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_density_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "supplier",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_supplier_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
+      "table": "cost_rates"
     },
     {
       "nameExplicit": true,
@@ -4995,79 +4009,16 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "products_unit_search_trgm_idx",
+      "name": "cost_rates_unit_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "account_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "projects_account_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "owner_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "projects_owner_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "status",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "projects_status_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
+      "table": "cost_rates"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "name",
+          "value": "rate_basis",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -5082,16 +4033,16 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "projects_name_search_trgm_idx",
+      "name": "cost_rates_rate_basis_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "projects"
+      "table": "cost_rates"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "description",
+          "value": "source",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -5106,16 +4057,16 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "projects_description_search_trgm_idx",
+      "name": "cost_rates_source_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "projects"
+      "table": "cost_rates"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "status",
+          "value": "notes",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -5130,208 +4081,10 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "projects_status_search_trgm_idx",
+      "name": "cost_rates_notes_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "quote_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quote_lines_quote_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "product_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quote_lines_product_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "product_code",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "quote_lines_product_code_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "product_name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "quote_lines_product_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "product_unit",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "quote_lines_product_unit_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "doc_no",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quotes_doc_no_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "account_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quotes_account_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "owner_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quotes_owner_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "status",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quotes_status_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
+      "table": "cost_rates"
     },
     {
       "nameExplicit": false,
@@ -5349,16 +4102,16 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "quotes_project_id_index",
+      "name": "project_documents_project_id_index",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "project_documents"
     },
     {
       "nameExplicit": false,
       "columns": [
         {
-          "value": "revision_of",
+          "value": "category",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -5370,34 +4123,10 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "quotes_revision_of_index",
+      "name": "project_documents_category_index",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "doc_no",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "quotes_doc_no_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
+      "table": "project_documents"
     },
     {
       "nameExplicit": true,
@@ -5418,10 +4147,154 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "quotes_title_search_trgm_idx",
+      "name": "project_documents_title_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "project_documents"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "category",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "project_documents_category_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "document_role",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "project_documents_document_role_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "document_number",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "project_documents_document_number_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "discipline",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "project_documents_discipline_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "revision",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "project_documents_revision_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "issued_by",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "project_documents_issued_by_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "project_documents"
     },
     {
       "nameExplicit": true,
@@ -5442,10 +4315,223 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "quotes_status_search_trgm_idx",
+      "name": "project_documents_status_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "project_documents"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "notes",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "project_documents_notes_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "project_documents"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "project_code",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "reclamation_projects_project_code_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "project_name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_project_name_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "project_code",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_project_code_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "client",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_client_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "consultant",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_consultant_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_status_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "location",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_location_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "datum",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_datum_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
     },
     {
       "nameExplicit": true,
@@ -5466,16 +4552,16 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "quotes_currency_search_trgm_idx",
+      "name": "reclamation_projects_currency_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "reclamation_projects"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "description",
+          "value": "interpolation",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -5490,10 +4576,251 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "quotes_description_search_trgm_idx",
+      "name": "reclamation_projects_interpolation_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "stitch_overrides",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_stitch_overrides_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "notes",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "reclamation_projects_notes_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "reclamation_projects"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "site_reconstructions_project_id_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "revision",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "site_reconstructions_project_id_revision_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "site_reconstructions_status_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "engine_version",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "site_reconstructions_engine_version_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "failure_reason",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "site_reconstructions_failure_reason_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "model_json",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "site_reconstructions_model_json_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "quantities_json",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "site_reconstructions_quantities_json_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "site_reconstructions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "report_json",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "site_reconstructions_report_json_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "site_reconstructions"
     },
     {
       "nameExplicit": true,
@@ -6626,206 +5953,36 @@
     {
       "nameExplicit": true,
       "columns": [
-        "owner_id"
+        "project_id"
       ],
       "schemaTo": "public",
-      "tableTo": "user",
+      "tableTo": "reclamation_projects",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "activities_owner_id_user_fk",
+      "name": "cost_estimates_project_id_reclamation_projects_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "activities"
+      "table": "cost_estimates"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "account_id"
+        "reconstruction_id"
       ],
       "schemaTo": "public",
-      "tableTo": "accounts",
+      "tableTo": "site_reconstructions",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "contacts_account_id_accounts_fk",
+      "name": "cost_estimates_reconstruction_id_site_reconstructions_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "account_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "accounts",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "customer_prices_account_id_accounts_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "product_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "products",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "customer_prices_product_id_products_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "quote_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "quotes",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "payment_records_quote_id_quotes_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "account_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "accounts",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "projects_account_id_accounts_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "owner_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "user",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "projects_owner_id_user_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "quote_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "quotes",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quote_lines_quote_id_quotes_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "product_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "products",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quote_lines_product_id_products_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "account_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "accounts",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quotes_account_id_accounts_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "contact_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "contacts",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quotes_contact_id_contacts_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "owner_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "user",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quotes_owner_id_user_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quotes"
+      "table": "cost_estimates"
     },
     {
       "nameExplicit": true,
@@ -6833,33 +5990,33 @@
         "project_id"
       ],
       "schemaTo": "public",
-      "tableTo": "projects",
+      "tableTo": "reclamation_projects",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "quotes_project_id_projects_fk",
+      "name": "project_documents_project_id_reclamation_projects_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "quotes"
+      "table": "project_documents"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "revision_of"
+        "project_id"
       ],
       "schemaTo": "public",
-      "tableTo": "quotes",
+      "tableTo": "reclamation_projects",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "quotes_revision_of_quotes_fk",
+      "name": "site_reconstructions_project_id_reclamation_projects_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "quotes"
+      "table": "site_reconstructions"
     },
     {
       "nameExplicit": false,
@@ -7070,9 +6227,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "accounts_pkey",
+      "name": "cost_estimates_pkey",
       "schema": "public",
-      "table": "accounts",
+      "table": "cost_estimates",
       "entityType": "pks"
     },
     {
@@ -7080,9 +6237,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "activities_pkey",
+      "name": "cost_rates_pkey",
       "schema": "public",
-      "table": "activities",
+      "table": "cost_rates",
       "entityType": "pks"
     },
     {
@@ -7090,9 +6247,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "contacts_pkey",
+      "name": "project_documents_pkey",
       "schema": "public",
-      "table": "contacts",
+      "table": "project_documents",
       "entityType": "pks"
     },
     {
@@ -7100,9 +6257,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "customer_prices_pkey",
+      "name": "reclamation_projects_pkey",
       "schema": "public",
-      "table": "customer_prices",
+      "table": "reclamation_projects",
       "entityType": "pks"
     },
     {
@@ -7110,49 +6267,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "payment_records_pkey",
+      "name": "site_reconstructions_pkey",
       "schema": "public",
-      "table": "payment_records",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "norbital_id"
-      ],
-      "nameExplicit": false,
-      "name": "products_pkey",
-      "schema": "public",
-      "table": "products",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "norbital_id"
-      ],
-      "nameExplicit": false,
-      "name": "projects_pkey",
-      "schema": "public",
-      "table": "projects",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "norbital_id"
-      ],
-      "nameExplicit": false,
-      "name": "quote_lines_pkey",
-      "schema": "public",
-      "table": "quote_lines",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "norbital_id"
-      ],
-      "nameExplicit": false,
-      "name": "quotes_pkey",
-      "schema": "public",
-      "table": "quotes",
+      "table": "site_reconstructions",
       "entityType": "pks"
     },
     {

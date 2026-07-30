@@ -100,7 +100,7 @@ describe('Approval terminal transitions (real Postgres triggers)', () => {
 		await client.query('DELETE FROM requestor');
 		await client.query('DELETE FROM approval_request');
 		await client.query('DELETE FROM orders');
-		await client.query(`DELETE FROM record_history WHERE collection_name = 'orders'`);
+		await client.query('DELETE FROM orders_history');
 		await client.query('DELETE FROM sync_outbox');
 		await client.query('COMMIT');
 	});
@@ -181,12 +181,12 @@ describe('Approval terminal transitions (real Postgres triggers)', () => {
 
 	async function orderHistory(id: string): Promise<HistoryRow[]> {
 		const { rows } = await pool.query<HistoryRow>(
-			`SELECT values->>'status' AS status,
-			        values->>'norbital_approval_id' AS approval,
-			        row_version
-			   FROM record_history
-			  WHERE collection_name = 'orders' AND record_id = $1::uuid
-			  ORDER BY row_version`,
+			`SELECT status,
+			        norbital_approval_id AS approval,
+			        norbital_row_version AS row_version
+			   FROM orders_history
+			  WHERE norbital_id = $1::uuid
+			  ORDER BY norbital_row_version`,
 			[id]
 		);
 		return rows;

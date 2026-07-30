@@ -12,5 +12,7 @@ the same compiled runtime artifact in both hosted-style and standalone-style har
 | Agents, AI, automation transcript delivery | `runtime/`                       | one AI binding, Pod tool loop, synced step-level transcript                   |
 | Standalone boot/refusal                    | `standalone/`                    | facility gate and process-level startup contract                              |
 
-Database suites use disposable PostgreSQL 18 containers. The shared runtime harness serializes
-template compilation so parallel Vitest workers cannot replace one another's build artifact.
+Database suites build a pinned PostgreSQL 18 image with `temporal_tables` 1.2.2 and use disposable
+containers from it. This exercises the production temporal trigger rather than a test substitute.
+The shared runtime harness serializes template compilation so parallel Vitest workers cannot
+replace one another's build artifact.
