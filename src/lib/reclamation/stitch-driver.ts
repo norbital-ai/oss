@@ -10,6 +10,7 @@
  * nothing else is repeated.
  */
 
+import type { ReconstructionWrite } from '../../collections/reclamation_projects/lib/run-stitch.js';
 import type {
 	ExtraDocument,
 	PreviousRun,
@@ -39,7 +40,10 @@ export type StitchApi = {
 
 export function stitchDriver(
 	api: StitchApi,
-	write: (payload: Record<string, unknown>) => Promise<unknown>
+	// Typed rather than `Record<string, unknown>`: this payload goes straight into an elevated,
+	// permission-bypassing write, so an erased type would put a column typo on that path with nothing
+	// to catch it. `ReconstructionWrite` is the generated insert type for the collection.
+	write: (payload: ReconstructionWrite) => Promise<unknown>
 ): StitchDriver {
 	return {
 		readFileAsset: (assetId) => api.readFileAsset(assetId),
