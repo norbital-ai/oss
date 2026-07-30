@@ -5,6 +5,9 @@ a normal Svelte and Vite project: authors describe collections, apps, custom typ
 server remotes under `src/`; Pod derives the registry, types, client, database migrations, runtime, and
 application shell. Pod has no dependency on a particular host product.
 
+The package [README](../README.md) is the canonical end-to-end guide. This page is the short
+lifecycle reference.
+
 ## From source to running workspace
 
 ```text
@@ -25,14 +28,17 @@ The tenant owns authored source and committed migration history. Pod owns every 
 | `src/collections/<id>/+model.ts`              | Required collection model and metadata.                  |
 | `src/collections/<id>/+hooks.ts`              | Optional server-side validation and lifecycle behaviour. |
 | `src/collections/<id>/+pipelines.ts`          | Optional export and processing pipelines.                |
+| `src/collections/<id>/+integrations.ts`       | Optional inbound and outbound integration behavior.      |
 | `src/collections/<id>/+representation.svelte` | Optional collection-specific create/display/edit UI.     |
 | `src/collections/+relationship.ts`            | Relationship definitions between authored collections.   |
 | `src/custom-types/<name>/+definition.ts`      | Reusable validated data type.                            |
 | `src/custom-types/<name>/+renderer.svelte`    | Display and edit renderer for that type.                 |
 | `src/apps/**/+<lower_snake_case>.svelte`      | Browser application surfaces discovered by filename.     |
-| `src/automation/+<lower_snake_case>.ts`       | Scheduled server automations.                            |
+| `src/automation/+<lower_snake_case>.ts`       | Scheduled or collection-event server automations.        |
 | `src/remotes/+<lower_snake_case>.ts`          | Typed server query and command handlers.                 |
+| `src/**/+<lower_snake_case>.tool.ts`          | Opt-in, compiler-discovered workspace agent tool.        |
 | `src/+seed.ts`                                | Optional standalone development seed.                    |
+| `pod.host.ts`                                 | Required Core or self-hosted deployment target.          |
 
 Tenant code imports declaration helpers from `@norbital-ai/pod/authoring`, the Vite plugin from
 `@norbital-ai/pod/vite`, and the generated typed browser client from `$pod/client`. The
@@ -72,14 +78,15 @@ Tailwind plugin, another base stylesheet, manual registries, or hand-written sch
 .norbital/
 ├── diagnosis/      # ignored diagnostics
 ├── dist/           # ignored deployable output
+├── build/          # ignored standalone output
 ├── generated/      # ignored source assembly
 ├── migrations/     # committed source history
 ├── types/          # ignored generated declarations
 └── tsconfig.json   # ignored generated compiler configuration
 ```
 
-The authored root `tsconfig.json` extends `.norbital/tsconfig.json`. Commit only
-`.norbital/migrations/`; ignore the other generated entries individually.
+The authored root `tsconfig.json` extends `.norbital/tsconfig.json`. Commit authored workspace
+source, `pod.host.ts`, and `.norbital/migrations/`; ignore the other generated entries.
 
 ## Runtime and trust boundary
 
@@ -113,6 +120,7 @@ The templates are executable documentation as well as starter projects:
 | [Construction Operations](../../../template_workspaces/construction/) | Projects, permits, quality, BIM references, claims, and workforce compliance. |
 | [CRM](../../../template_workspaces/crm/)                              | Accounts, quoting, fulfilment, payments, and sales operations.                |
 | [HR & Payroll](../../../template_workspaces/hr-payroll/)              | Multi-country payroll, attendance, leave, and statutory reporting.            |
+| [Reclamation](../../../template_workspaces/reclamation/)              | Geospatial reclamation planning, costs, execution, and reconstruction.        |
 
 Use `sync`, `lint`, and `build` in a template before changing it. A production tenant receives an
 immutable template commit with its own committed package lockfile; editing a local template

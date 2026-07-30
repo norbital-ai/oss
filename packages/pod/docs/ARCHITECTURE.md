@@ -201,7 +201,8 @@ import { z } from 'zod';
 export default defineAgentTool({
 	description: 'Check a permit against the tenant registry.',
 	input: z.object({ permitId: z.string().uuid() }),
-	run: (api, { permitId }) => api.db.permits.findFirst({ where: { norbital_id: permitId } })
+	run: (api, { permitId }) =>
+		api.db.query.permits.findFirst({ where: { norbital_id: { eq: permitId } } })
 });
 ```
 
