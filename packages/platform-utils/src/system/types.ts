@@ -210,12 +210,6 @@ export const AutomationRunSchema = SystemRecordFieldsSchema.extend({
 });
 export type TAutomationRun = z.infer<typeof AutomationRunSchema>;
 
-export const DateRangeSchema = z.object({
-	start: z.string(),
-	end: z.string()
-});
-export type TDateRange = z.infer<typeof DateRangeSchema>;
-
 export const ChatMessageTextPartSchema = z.object({
 	type: z.literal('text'),
 	text: z.string(),
@@ -327,16 +321,3 @@ export const ChatSessionSchema = SystemRecordFieldsSchema.extend({
 });
 export type TChatSession = z.infer<typeof ChatSessionSchema>;
 
-export const GeolocationSchema = z.object({
-	geometry: z.object({ lon: z.number(), lat: z.number() }).nullable(),
-	formatted_address: z.string(),
-	type: z.literal('Point'),
-	srid: z.number()
-});
-export type TGeolocation = z.infer<typeof GeolocationSchema>;
-
-export const MoneySchema = z.object({
-	value: z.number(),
-	currency: z.string()
-});
-export type TMoney = z.infer<typeof MoneySchema>;

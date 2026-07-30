@@ -1,8 +1,6 @@
 import type { AnyDBQueryConfig } from 'drizzle-orm';
-import type {
-	TApprovalRequestStepAction,
-	TGeolocation
-} from '@norbital-ai/platform-utils/system/types';
+import type { TApprovalRequestStepAction } from '@norbital-ai/platform-utils/system/types';
+import type { TGeolocation } from '$lib/authoring/builtin/custom_types.js';
 
 /** Pod-owned operations used by tenant collection UI. These are intentionally not part of workspace `api`. */
 export type PodRemoteOperations = {
