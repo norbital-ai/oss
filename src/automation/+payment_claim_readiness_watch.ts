@@ -1,7 +1,6 @@
 import { defineAutomation } from '@norbital-ai/pod/authoring';
-import type { Api } from './$types.js';
 
-export default defineAutomation({ schedule: '0 6 * * *' }, async (api: Api) => {
+export default defineAutomation({ schedule: '0 6 * * *' }, async (api) => {
 	const claims = await api.db.query.payment_claims.findMany({ limit: 250 });
 	return {
 		automation_key: 'payment_claim_readiness_watch',

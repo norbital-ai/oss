@@ -1,7 +1,6 @@
 import { defineAutomation } from '@norbital-ai/pod/authoring';
-import type { Api } from './$types.js';
 
-export default defineAutomation({ schedule: '0 6 * * *' }, async (api: Api) => {
+export default defineAutomation({ schedule: '0 6 * * *' }, async (api) => {
 	const rfis = await api.db.query.rfis.findMany({ limit: 250 });
 	return {
 		automation_key: 'rfi_followup_watch',
