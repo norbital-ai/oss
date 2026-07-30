@@ -368,6 +368,98 @@ const _team_members = systemTable(
  * single-use, and the unique index on `(email) WHERE consumed_at IS NULL` is what makes concurrent
  * accepts settle to one user.
  */
+/**
+ * One agent conversation.
+ *
+ * Ported from Core's `chat_session`, minus `organization_id`: a pod database *is* one tenant, so a
+ * tenancy column here would be a constant on every row and a filter every query had to remember.
+ *
+ * The channel columns are plain ids rather than references — the channel tables are a later step of
+ * the agent port, and a foreign key to a table that does not exist yet would block the migration.
+ */
+const _chat_session = systemTable(
+	'chat_session',
+	{
+		user_id: uuid()
+			.references(() => _user.norbital_id)
+			.notNull(),
+		title: text().notNull(),
+		platform: text(),
+		/** `personal`, `channel_dm`, or `channel_group`. */
+		visibility: text().notNull().default('personal'),
+		external_thread_id: text(),
+		agent_profile_id: uuid(),
+		channel_config_id: uuid(),
+		assigned_channel_id: uuid()
+	},
+	{ description: 'Agent conversations', record_label: 'title', system: true }
+);
+
+/**
+ * One request/response cycle within a session, possibly nested for a subagent.
+ *
+ * `parent_turn_id` is self-referential: a subagent turn hangs off the turn that spawned it, which is
+ * what lets a transcript be reassembled without a separate subagent table.
+ */
+const _chat_turn = systemTable(
+	'chat_turn',
+	{
+		chat_id: uuid()
+			.references(() => _chat_session.norbital_id, { onDelete: 'cascade' })
+			.notNull(),
+		prompt_message_id: uuid(),
+		/** `running`, `succeeded`, `aborted`, or `failed`. */
+		status: text().notNull().default('running'),
+		model: text().notNull(),
+		parent_turn_id: uuid(),
+		subagent_id: text(),
+		error: text(),
+		started_at: timestamp({ withTimezone: true }).defaultNow().notNull(),
+		/** Refreshed while a turn runs, so an abandoned turn can be told from a slow one. */
+		heartbeat_at: timestamp({ withTimezone: true }).defaultNow().notNull(),
+		ended_at: timestamp({ withTimezone: true })
+	},
+	{ description: 'Agent turns', record_label: 'model', system: true }
+);
+
+/**
+ * One message in a session.
+ *
+ * `parts` holds the `UIMessage['parts']` array from `@tanstack/ai` verbatim — the agent transcript
+ * carries the library's own message types rather than a parallel set of ours, so nothing has to be
+ * translated on the way to the client.
+ */
+const _chat_message = systemTable(
+	'chat_message',
+	{
+		chat_id: uuid()
+			.references(() => _chat_session.norbital_id, { onDelete: 'cascade' })
+			.notNull(),
+		turn_id: uuid().references(() => _chat_turn.norbital_id, { onDelete: 'cascade' }),
+		/** `system`, `user`, or `assistant`. */
+		role: text().notNull(),
+		seq: integer().notNull(),
+		parts: jsonbColumn(JsonArraySchema),
+		model: text(),
+		plan_mode: boolean().default(false).notNull(),
+		/** `normal` or `summary`. */
+		kind: text().notNull().default('normal'),
+		/** `streaming`, `complete`, or `aborted`. */
+		status: text().notNull().default('complete'),
+		/** `live`, `queued`, `released`, or `removed`. */
+		queue_status: text().notNull().default('live'),
+		/** `step` or `turn`. */
+		release_mode: text(),
+		author_user_id: uuid().references(() => _user.norbital_id),
+		author_display_name: text(),
+		source_provider: text(),
+		source_conversation_id: text(),
+		source_message_id: text(),
+		source_deleted_at: timestamp({ withTimezone: true })
+	},
+	{ description: 'Agent messages', record_label: 'role', system: true }
+);
+
 const _invitation = systemTable(
 	'invitation',
 	{
@@ -418,6 +510,9 @@ const _host_event_outbox = systemTable(
 
 export const approval_request = _approval_request;
 export const requestor = _requestor;
+export const chat_session = _chat_session;
+export const chat_turn = _chat_turn;
+export const chat_message = _chat_message;
 export const invitation = _invitation;
 export const host_event_outbox = _host_event_outbox;
 export const automation_run = _automation_run;
@@ -465,7 +560,10 @@ export const systemTables = {
 	notification_outbox: { table: notification_outbox },
 	notification: { table: notification },
 	document_asset: { table: document_asset },
-	team_members: { table: team_members }
+	team_members: { table: team_members },
+	chat_session: { table: chat_session },
+	chat_turn: { table: chat_turn },
+	chat_message: { table: chat_message }
 } satisfies Record<SystemCollectionName, { table: PgTable }>;
 
 export const platformRelations = defineRelations(platformTables, (r) => ({
