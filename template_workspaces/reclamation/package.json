@@ -9,6 +9,7 @@
 		"format": "prettier --write .",
 		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json",
 		"sync": "pod sync",
+		"verify": "node --disable-warning=ExperimentalWarning --import ./scripts/ts-resolve.mjs scripts/verify-engine.ts",
 		"sync:watch": "pod sync --watch"
 	},
 	"dependencies": {

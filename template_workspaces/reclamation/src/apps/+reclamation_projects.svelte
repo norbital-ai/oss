@@ -51,10 +51,9 @@
 			<Column name="status" />
 			<Column name="stitched_at" label="Stitched" />
 			<Column name="platform_area_m2" label="Platform m²" />
+			<Column name="placed_volume_m3" label="Placed m³" />
 			<Column name="mean_fill_depth_m" label="Mean depth m" />
-			<Column name="sand_fill_m3" label="Sand m³" />
-			<Column name="dredged_fill_m3" label="Dredged m³" />
-			<Column name="rock_armor_m3" label="Armour m³" />
+			<Column name="excavation_m3" label="Excavated m³" />
 			<Column name="warning_count" label="Flagged" />
 			<Column name="assumption_count" label="Assumed" />
 		{/snippet}
