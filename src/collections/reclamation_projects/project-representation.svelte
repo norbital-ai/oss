@@ -8,6 +8,7 @@
 	import type { SiteLayer, SiteViewerStats } from '../../lib/site-viewer/site_viewer.types.js';
 	import type { CostLevers, RateRow } from '../../lib/reclamation/cost.js';
 	import type {
+		ReconstructionMetrics,
 		StitchReport,
 		StitchedModel,
 		SubstrateQuantity
@@ -26,6 +27,20 @@
 	 * moving between documents and cost never costs a re-tessellation.
 	 */
 	let { record }: { record: Row } = $props();
+
+	const EMPTY_METRICS: ReconstructionMetrics = {
+		platformAreaM2: 0,
+		worksFootprintM2: 0,
+		armorFaceAreaM2: 0,
+		shorelineLengthM: 0,
+		meanFillDepthM: 0,
+		maxFillDepthM: 0,
+		integratedCells: 0,
+		integrationCellM: 0,
+		structureDisplacementM3: 0,
+		excavationM3: 0,
+		placedVolumeM3: 0
+	};
 
 	const projectId = $derived(record.norbital_id);
 	const currency = $derived(record.currency?.trim() || 'SGD');
@@ -68,19 +83,11 @@
 	const report = $derived(parse<StitchReport>(latestReady?.report_json));
 	const quantities = $derived(parse<SubstrateQuantity[]>(latestReady?.quantities_json) ?? []);
 
-	const metrics = $derived({
-		platformAreaM2: latestReady?.platform_area_m2 ?? 0,
-		worksFootprintM2: latestReady?.works_footprint_m2 ?? 0,
-		armorFaceAreaM2: latestReady?.armor_face_area_m2 ?? 0,
-		shorelineLengthM: latestReady?.shoreline_length_m ?? 0,
-		meanFillDepthM: latestReady?.mean_fill_depth_m ?? 0,
-		maxFillDepthM: latestReady?.max_fill_depth_m ?? 0,
-		integratedCells: 0,
-		integrationCellM: latestReady?.integration_cell_m ?? 0,
-		structureDisplacementM3: latestReady?.structure_displacement_m3 ?? 0,
-		excavationM3: latestReady?.excavation_m3 ?? 0,
-		placedVolumeM3: latestReady?.placed_volume_m3 ?? 0
-	});
+	// One shape, parsed once. The reconstruction stores the whole metric record,
+	// so nothing here re-assembles it field by field.
+	const metrics = $derived(
+		parse<ReconstructionMetrics>(latestReady?.metrics_json) ?? EMPTY_METRICS
+	);
 
 	const rates = $derived(
 		(ratesQuery.current ?? []).flatMap((row): RateRow[] => {
@@ -298,6 +305,7 @@
 	<Scroll name="Cost simulation" class="h-full pr-1">
 		{#if latestReady && quantities.length > 0}
 			<CostPanel
+				{model}
 				{quantities}
 				{metrics}
 				{rates}

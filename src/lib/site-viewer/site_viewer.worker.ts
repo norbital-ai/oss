@@ -1,44 +1,55 @@
 /// <reference lib="webworker" />
 
 /**
- * Tessellation worker.
+ * Off-thread geometry worker.
  *
- * The stitched model is compact; the surfaces built from it are not. Building
- * them here keeps a multi-hundred-thousand-triangle rebuild off the main thread,
- * and the typed arrays are transferred rather than copied.
+ * Two jobs, both pure functions of the stitched model: tessellate it for the
+ * viewer, and re-integrate it under a what-if simulation. Neither re-reads a
+ * document, and both call the same engine the server used, so a simulated volume
+ * is directly comparable with the stored take-off.
  */
 
-import { buildSurfaces } from '../reclamation/solids.js';
+import { buildSurfaces, integrateSite } from '../reclamation/solids.js';
+import { applySimulation } from '../reclamation/simulation.js';
+import type { GeometrySimulation } from '../reclamation/simulation.js';
 import type { StitchedModel } from '../reclamation/types.js';
 
-type BuildMessage = {
-	readonly type: 'build';
-	readonly model: StitchedModel;
-	/** Optional per-request resolution, so quality can change without a re-stitch. */
-	readonly renderCellM?: number;
-};
+type Request =
+	| { readonly type: 'build'; readonly model: StitchedModel; readonly renderCellM?: number }
+	| {
+			readonly type: 'simulate';
+			readonly model: StitchedModel;
+			readonly simulation: GeometrySimulation;
+	  };
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
-scope.onmessage = (event: MessageEvent<BuildMessage>) => {
-	if (event.data?.type !== 'build') return;
+scope.onmessage = (event: MessageEvent<Request>) => {
+	const request = event.data;
 	try {
-		const requested = event.data.renderCellM;
-		const model =
-			typeof requested === 'number' && Number.isFinite(requested) && requested > 0
-				? {
-						...event.data.model,
-						settings: { ...event.data.model.settings, renderCellM: requested }
-					}
-				: event.data.model;
-		const surfaces = buildSurfaces(model);
-		// Typed arrays built in this worker are always backed by a plain
-		// ArrayBuffer, so they can be handed over instead of copied.
-		const transfer = [
-			...surfaces.meshes.flatMap((mesh) => [mesh.positions, mesh.normals, mesh.indices]),
-			...surfaces.cuts.map((cut) => cut.points)
-		].map((view) => view.buffer as ArrayBuffer);
-		scope.postMessage({ type: 'surfaces', surfaces }, transfer);
+		if (request?.type === 'build') {
+			const requested = request.renderCellM;
+			const model =
+				typeof requested === 'number' && Number.isFinite(requested) && requested > 0
+					? { ...request.model, settings: { ...request.model.settings, renderCellM: requested } }
+					: request.model;
+			const surfaces = buildSurfaces(model);
+			// Typed arrays built here are backed by plain ArrayBuffers, so they can
+			// be handed over instead of copied.
+			const transfer = [
+				...surfaces.meshes.flatMap((mesh) => [mesh.positions, mesh.normals, mesh.indices]),
+				...surfaces.cuts.map((cut) => cut.points)
+			].map((view) => view.buffer as ArrayBuffer);
+			scope.postMessage({ type: 'surfaces', surfaces }, transfer);
+			return;
+		}
+		if (request?.type === 'simulate') {
+			const { quantities, metrics } = integrateSite(
+				applySimulation(request.model, request.simulation)
+			);
+			scope.postMessage({ type: 'simulated', quantities, metrics });
+			return;
+		}
 	} catch (error) {
 		scope.postMessage({
 			type: 'error',

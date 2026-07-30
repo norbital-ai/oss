@@ -5,8 +5,13 @@
  * applies the commercial levers a quantity surveyor owns — placement loss,
  * perimeter margin, soil-improvement intensity, contingency — and multiplies by
  * the rate matrix.
+ *
+ * A measured substrate with no usable rate is an **error**, not a zero. An
+ * estimate that quietly prices a material at nothing reads as complete when it
+ * is not, so `buildEstimate` reports it and the server hook refuses the write.
  */
 
+import { MANUAL_TAKE_OFF, SUBSTRATES, substrateDefinition } from './substrates.js';
 import type {
 	QuantityUnit,
 	ReconstructionMetrics,
@@ -14,73 +19,8 @@ import type {
 	SubstrateQuantity
 } from './types.js';
 
-export type SubstrateDefinition = {
-	readonly id: SubstrateId;
-	readonly label: string;
-	readonly unit: QuantityUnit;
-	/** Which lever family the quantity belongs to. */
-	readonly driver: 'perimeter' | 'platform' | 'improvement';
-	readonly note: string;
-};
-
-/** The priced substrate catalogue. A rate row exists per entry. */
-export const SUBSTRATES: readonly SubstrateDefinition[] = [
-	{
-		id: 'rock_armor',
-		label: 'Rock armour',
-		unit: 'm3',
-		driver: 'perimeter',
-		note: 'Armour skin on the seaward face, integrated from the solid.'
-	},
-	{
-		id: 'geofabric',
-		label: 'Geofabric',
-		unit: 'm2',
-		driver: 'perimeter',
-		note: 'One layer under the armour, 1:1 with the sloped face area.'
-	},
-	{
-		id: 'dredged_rock',
-		label: 'Dredged rock foundation',
-		unit: 'm3',
-		driver: 'perimeter',
-		note: 'Foundation rock under the toe; prism, only when a thickness is stated.'
-	},
-	{
-		id: 'sand_key',
-		label: 'Sand key',
-		unit: 'm3',
-		driver: 'perimeter',
-		note: 'Trench under the bund; prism from the section dimensions.'
-	},
-	{
-		id: 'sand_fill',
-		label: 'Sand fill',
-		unit: 'm3',
-		driver: 'platform',
-		note: 'Bund sand plus platform fill above the material change level.'
-	},
-	{
-		id: 'dredged_fill',
-		label: 'Dredged and excavated fill',
-		unit: 'm3',
-		driver: 'platform',
-		note: 'Platform fill below the material change level.'
-	},
-	{
-		id: 'pvd',
-		label: 'PVD soil improvement',
-		unit: 'm',
-		driver: 'improvement',
-		note: 'Drain length from the treated area, grid spacing, and mean fill depth.'
-	}
-];
-
-export function substrateDefinition(id: SubstrateId): SubstrateDefinition {
-	const found = SUBSTRATES.find((entry) => entry.id === id);
-	if (!found) throw new Error(`Unknown substrate "${id}".`);
-	return found;
-}
+export { MANUAL_TAKE_OFF, SUBSTRATES, substrateDefinition };
+export type { ManualTakeOff, SubstrateDefinition } from './substrates.js';
 
 /** Commercial levers held per project, all as plain percentages or metres. */
 export type CostLevers = {
@@ -119,7 +59,7 @@ export type CostLine = {
 	readonly substrate: SubstrateId;
 	readonly label: string;
 	readonly unit: QuantityUnit;
-	/** Quantity as integrated from the solid, before commercial levers. */
+	/** Quantity as measured from the solid, before commercial levers. */
 	readonly stitchedQuantity: number;
 	/** Quantity actually priced, after loss and margin. */
 	readonly pricedQuantity: number;
@@ -127,6 +67,8 @@ export type CostLine = {
 	readonly amount: number;
 	readonly basis: string;
 	readonly method: SubstrateQuantity['method'];
+	/** True when this line has a measured quantity but no usable rate. */
+	readonly unpriced: boolean;
 };
 
 export type CostEstimateResult = {
@@ -135,17 +77,17 @@ export type CostEstimateResult = {
 	readonly subtotal: number;
 	readonly contingency: number;
 	readonly total: number;
-	readonly missingRates: readonly SubstrateId[];
+	/**
+	 * Substrates with a quantity but no usable rate. Non-empty means the total
+	 * understates the works and the estimate must not be treated as complete.
+	 */
+	readonly unpricedSubstrates: readonly SubstrateId[];
+	/** Rates that exist but in another currency, so they could not be applied. */
+	readonly wrongCurrencySubstrates: readonly SubstrateId[];
 };
 
-function leverFor(
-	levers: CostLevers,
-	definition: SubstrateDefinition,
-	substrate: SubstrateId
-): {
-	factor: number;
-	note: string;
-} {
+function leverFor(levers: CostLevers, substrate: SubstrateId): { factor: number; note: string } {
+	const definition = substrateDefinition(substrate);
 	if (definition.driver === 'perimeter') {
 		return {
 			factor: 1 + levers.perimeterMarginPct / 100,
@@ -167,9 +109,9 @@ function leverFor(
 /**
  * PVD drain length for a triangular grid.
  *
- * `drains/m² = 2 / (√3 · s²)`, each drain driven to the mean fill depth. This is
- * the one priced quantity that is not a solid: the treated share of the platform
- * and the grid spacing are commercial choices, not drawn geometry.
+ * `drains/m² = 2 / (√3 · s²)`, each driven to the mean fill depth. This is the
+ * one priced quantity that is not a solid: the treated share of the platform and
+ * the grid spacing are commercial choices, not drawn geometry.
  */
 export function pvdLength(metrics: ReconstructionMetrics, levers: CostLevers): number {
 	const spacing = Math.max(0.5, levers.pvdSpacingM);
@@ -186,11 +128,16 @@ export function buildEstimate(input: {
 	readonly levers: CostLevers;
 	readonly currency: string;
 }): CostEstimateResult {
-	const rateBySubstrate = new Map(input.rates.map((row) => [row.substrate, row]));
-	const quantityBySubstrate = new Map(input.quantities.map((row) => [row.substrate, row]));
+	const usable = new Map(
+		input.rates.filter((row) => row.currency === input.currency).map((row) => [row.substrate, row])
+	);
+	const otherCurrency = new Set(
+		input.rates.filter((row) => row.currency !== input.currency).map((row) => row.substrate)
+	);
+	const measured = new Map(input.quantities.map((row) => [row.substrate, row]));
 
 	const lines: CostLine[] = [];
-	const missingRates: SubstrateId[] = [];
+	const unpricedSubstrates: SubstrateId[] = [];
 
 	for (const definition of SUBSTRATES) {
 		const stitched =
@@ -202,14 +149,14 @@ export function buildEstimate(input: {
 						method: 'analytic' as const,
 						basis: `${(input.levers.pvdAreaFraction * 100).toFixed(0)}% of the platform on a ${input.levers.pvdSpacingM} m triangular grid, ${input.metrics.meanFillDepthM.toFixed(2)} m mean depth`
 					}
-				: quantityBySubstrate.get(definition.id);
+				: measured.get(definition.id);
 		if (!stitched) continue;
 
-		const rateRow = rateBySubstrate.get(definition.id);
-		if (!rateRow) missingRates.push(definition.id);
-		const rate = rateRow?.rate ?? 0;
-		const { factor, note } = leverFor(input.levers, definition, definition.id);
+		const rateRow = usable.get(definition.id);
+		const { factor, note } = leverFor(input.levers, definition.id);
 		const pricedQuantity = stitched.quantity * factor;
+		const unpriced = rateRow === undefined && pricedQuantity > 0;
+		if (unpriced) unpricedSubstrates.push(definition.id);
 
 		lines.push({
 			substrate: definition.id,
@@ -217,10 +164,11 @@ export function buildEstimate(input: {
 			unit: definition.unit,
 			stitchedQuantity: stitched.quantity,
 			pricedQuantity,
-			rate,
-			amount: pricedQuantity * rate,
+			rate: rateRow?.rate ?? 0,
+			amount: pricedQuantity * (rateRow?.rate ?? 0),
 			basis: `${stitched.basis} · ${note}`,
-			method: stitched.method
+			method: stitched.method,
+			unpriced
 		});
 	}
 
@@ -233,15 +181,29 @@ export function buildEstimate(input: {
 		subtotal,
 		contingency,
 		total: subtotal + contingency,
-		missingRates
+		unpricedSubstrates,
+		wrongCurrencySubstrates: [...otherCurrency].filter((id) => unpricedSubstrates.includes(id))
 	};
 }
 
+/** The message a caller shows, or throws, when the matrix is incomplete. */
+export function unpricedMessage(result: CostEstimateResult): string | null {
+	if (result.unpricedSubstrates.length === 0) return null;
+	const names = result.unpricedSubstrates.map((id) => substrateDefinition(id).label).join(', ');
+	const currencyNote =
+		result.wrongCurrencySubstrates.length > 0
+			? ` A rate exists for ${result.wrongCurrencySubstrates.map((id) => substrateDefinition(id).label).join(', ')} in another currency; this workspace holds no exchange rates, so it was not applied.`
+			: '';
+	return (
+		`The cost matrix has no ${result.currency} rate for: ${names}. ` +
+		`Those materials are measured but not priced, so the total understates the works.${currencyNote} ` +
+		'Add the missing rates in the cost matrix and re-price.'
+	);
+}
+
 export function formatQuantity(value: number, unit: QuantityUnit): string {
-	const digits = unit === 'm2' || unit === 'm3' ? 0 : 0;
-	return `${value.toLocaleString(undefined, { maximumFractionDigits: digits })} ${
-		unit === 'm3' ? 'm³' : unit === 'm2' ? 'm²' : 'm'
-	}`;
+	const suffix = unit === 'm3' ? 'm³' : unit === 'm2' ? 'm²' : 'm';
+	return `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${suffix}`;
 }
 
 export function formatMoney(value: number, currency: string): string {

@@ -142,7 +142,8 @@ export function stitch(input: StitchInput): StitchResult {
 		ledger.warn(
 			'design-below-bed',
 			`${Math.round(metrics.excavationM3).toLocaleString()} m³ of the footprint sits below the surveyed bed, so that part of the works is a cut rather than a fill. ` +
-				'That is real dredging where the design toe is deeper than the seabed, and a coordinate-frame or datum mismatch otherwise. It is reported but not priced: the substrate matrix has no dredging rate.'
+				'That is real dredging where the design toe is deeper than the seabed, and a coordinate-frame or datum mismatch otherwise. ' +
+				'The volume is measured but deliberately not priced here: dredging and disposal are a manual take-off, because the rate depends on the material and the disposal ground rather than on the shape.'
 		);
 		ledger.assume({
 			id: 'cut-not-filled',

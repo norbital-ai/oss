@@ -2,7 +2,7 @@
 	import { Bound, Inline } from '@norbital-ai/ui/layout';
 	import { onDestroy } from 'svelte';
 	import { watch } from 'runed';
-	import workerUrl from './site_viewer.worker.ts?worker&url';
+	import { tessellate } from './geometry-worker.js';
 	import type {
 		SiteSurfaces,
 		SiteViewerProps,
@@ -55,7 +55,7 @@
 	async function buildSurfaces(current: typeof model): Promise<void> {
 		status = 'building';
 		try {
-			const built = await requestSurfaces(current);
+			const built = await tessellate(current, renderCellM);
 			surfaces = built;
 			onLayers?.(
 				built.meshes.map((mesh) => ({
@@ -75,38 +75,6 @@
 		} catch (error) {
 			status = { error: error instanceof Error ? error.message : String(error) };
 		}
-	}
-
-	async function requestSurfaces(current: typeof model): Promise<SiteSurfaces> {
-		let worker: Worker;
-		try {
-			// A sandboxed iframe blocks a direct worker URL, so the script is fetched
-			// and handed to the worker as a blob, as elsewhere in the platform.
-			const response = await fetch(new URL(workerUrl, import.meta.url).href);
-			const blob = new Blob([await response.text()], { type: 'application/javascript' });
-			worker = new Worker(URL.createObjectURL(blob), { name: 'reclamation-tessellator' });
-		} catch {
-			const { buildSurfaces: buildOnMainThread } = await import('../reclamation/solids.js');
-			return buildOnMainThread(
-				renderCellM ? { ...current, settings: { ...current.settings, renderCellM } } : current
-			);
-		}
-
-		return new Promise<SiteSurfaces>((resolve, reject) => {
-			worker.onmessage = (
-				event: MessageEvent<{ type: string; surfaces?: SiteSurfaces; error?: string }>
-			) => {
-				if (event.data.type === 'ready') return;
-				worker.terminate();
-				if (event.data.type === 'surfaces' && event.data.surfaces) resolve(event.data.surfaces);
-				else reject(new Error(event.data.error ?? 'The tessellation worker failed.'));
-			};
-			worker.onerror = (event) => {
-				worker.terminate();
-				reject(new Error(event.message || 'The tessellation worker failed to start.'));
-			};
-			worker.postMessage({ type: 'build', model: current, renderCellM });
-		});
 	}
 
 	function readCssColor(name: string, fallback: string): string {

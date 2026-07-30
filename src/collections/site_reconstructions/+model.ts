@@ -21,29 +21,20 @@ export default defineModel(
 		/** Error message when `status` is `failed`. */
 		failure_reason: text(),
 
+		// Headline figures stay as columns so a list can sort and filter on them.
 		platform_area_m2: numeric(),
-		works_footprint_m2: numeric(),
-		armor_face_area_m2: numeric(),
-		shoreline_length_m: numeric(),
-		mean_fill_depth_m: numeric(),
-		max_fill_depth_m: numeric(),
-		integration_cell_m: numeric(),
-		structure_displacement_m3: numeric(),
-		excavation_m3: numeric(),
 		placed_volume_m3: numeric(),
-
-		rock_armor_m3: numeric(),
-		geofabric_m2: numeric(),
-		dredged_rock_m3: numeric(),
-		sand_key_m3: numeric(),
-		sand_fill_m3: numeric(),
-		dredged_fill_m3: numeric(),
+		mean_fill_depth_m: numeric(),
+		excavation_m3: numeric(),
+		integration_cell_m: numeric(),
 
 		assumption_count: numeric(),
 		warning_count: numeric(),
 
 		/** `StitchedModel` — the normalised model the viewer rebuilds surfaces from. */
 		model_json: text(),
+		/** `ReconstructionMetrics` — every measured figure, in one shape. */
+		metrics_json: text(),
 		/** `SubstrateQuantity[]` — quantities as integrated from the solid. */
 		quantities_json: text(),
 		/** `StitchReport` — assumptions, warnings, and document provenance. */

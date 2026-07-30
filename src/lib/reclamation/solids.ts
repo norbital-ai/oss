@@ -352,6 +352,11 @@ class MeshBuilder {
 		this.indices.push(a, b, c);
 	}
 
+	/** Emit one vertex per polygon corner at a constant level; returns their indices. */
+	polygonIndices(polygon: readonly Point2[], level: number): number[] {
+		return polygon.map((point) => this.vertex(point[0], point[1], level));
+	}
+
 	quad(a: number, b: number, c: number, d: number): void {
 		this.triangle(a, b, c);
 		this.triangle(a, c, d);
@@ -410,30 +415,31 @@ class MeshBuilder {
  * Flat context surfaces — existing land, containment ponds, adjacent works — are
  * polygons, not height fields. Gridding their bounding box would spend millions
  * of triangles on a flat plane and would spill outside a concave outline; a fan
- * would fold back on itself for the same shape. This costs one triangle per
- * vertex pair and is exact for any simple polygon.
+ * would fold back on itself for the same shape.
+ *
+ * `earcut` is the natural third-party choice here and this is a drop-in for it:
+ * same signature, same output shape. It is in-tree only because this workspace
+ * cannot currently resolve new npm dependencies.
  */
-function triangulatePolygon(
-	polygon: readonly Point2[]
-): readonly (readonly [number, number, number])[] {
-	const ring = polygon.map((point, index) => index);
+function triangulatePolygon(polygon: readonly Point2[]): readonly (readonly number[])[] {
 	if (polygon.length < 3) return [];
+	const ring = polygon.map((_, index) => index);
 
 	const area = (a: Point2, b: Point2, c: Point2): number =>
 		(b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-	let signedArea = 0;
+	let signed = 0;
 	for (let index = 0; index < polygon.length; index++) {
 		const [x0, y0] = polygon[index];
 		const [x1, y1] = polygon[(index + 1) % polygon.length];
-		signedArea += x0 * y1 - x1 * y0;
+		signed += x0 * y1 - x1 * y0;
 	}
 	// Work anticlockwise so a positive cross product means a convex corner.
-	if (signedArea < 0) ring.reverse();
+	if (signed < 0) ring.reverse();
 
 	const inside = (a: Point2, b: Point2, c: Point2, p: Point2): boolean =>
 		area(a, b, p) >= 0 && area(b, c, p) >= 0 && area(c, a, p) >= 0;
 
-	const triangles: [number, number, number][] = [];
+	const triangles: number[][] = [];
 	let guard = ring.length * ring.length;
 	while (ring.length > 3 && guard-- > 0) {
 		let clipped = false;
@@ -460,9 +466,9 @@ function triangulatePolygon(
 	return triangles;
 }
 
-/** One flat polygon at a constant level, triangulated. */
+/** One flat polygon at a constant level. */
 function addFlatPolygon(builder: MeshBuilder, polygon: readonly Point2[], level: number): void {
-	const indices = polygon.map((point) => builder.vertex(point[0], point[1], level));
+	const indices = builder.polygonIndices(polygon, level);
 	for (const [a, b, c] of triangulatePolygon(polygon)) {
 		builder.triangle(indices[a], indices[b], indices[c]);
 	}

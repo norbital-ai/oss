@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { Bound, Grid, Inline, Scroll, Split, Stack } from '@norbital-ai/ui/layout';
 	import SiteDisplay from '../../lib/site-viewer/site_display.svelte';
-	import type { StitchReport, StitchedModel } from '../../lib/reclamation/types.js';
+	import { formatQuantity, substrateDefinition } from '../../lib/reclamation/cost.js';
+	import type {
+		ReconstructionMetrics,
+		StitchReport,
+		StitchedModel,
+		SubstrateQuantity
+	} from '../../lib/reclamation/types.js';
 	import type { RepresentationProps } from './$types.js';
 
 	/**
@@ -24,6 +30,8 @@
 
 	const model = $derived(parse<StitchedModel>(record?.model_json));
 	const report = $derived(parse<StitchReport>(record?.report_json));
+	const metrics = $derived(parse<ReconstructionMetrics>(record?.metrics_json));
+	const quantities = $derived(parse<SubstrateQuantity[]>(record?.quantities_json) ?? []);
 
 	function number(value: number | null | undefined, digits = 0): string {
 		if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
@@ -54,35 +62,50 @@
 				<div>
 					<p class="text-xs text-muted-foreground">Platform area</p>
 					<p class="mt-0.5 font-medium tabular-nums">
-						{number((record?.platform_area_m2 ?? 0) / 10_000, 1)} ha
+						{number((metrics?.platformAreaM2 ?? 0) / 10_000, 1)} ha
 					</p>
 				</div>
 				<div>
 					<p class="text-xs text-muted-foreground">Works footprint</p>
 					<p class="mt-0.5 font-medium tabular-nums">
-						{number((record?.works_footprint_m2 ?? 0) / 10_000, 1)} ha
+						{number((metrics?.worksFootprintM2 ?? 0) / 10_000, 1)} ha
 					</p>
 				</div>
 				<div>
 					<p class="text-xs text-muted-foreground">Seaward perimeter</p>
-					<p class="mt-0.5 font-medium tabular-nums">{number(record?.shoreline_length_m)} m</p>
+					<p class="mt-0.5 font-medium tabular-nums">{number(metrics?.shorelineLengthM)} m</p>
 				</div>
 				<div>
 					<p class="text-xs text-muted-foreground">Mean / max fill depth</p>
 					<p class="mt-0.5 font-medium tabular-nums">
-						{number(record?.mean_fill_depth_m, 2)} / {number(record?.max_fill_depth_m, 2)} m
+						{number(metrics?.meanFillDepthM, 2)} / {number(metrics?.maxFillDepthM, 2)} m
 					</p>
+				</div>
+				<div>
+					<p class="text-xs text-muted-foreground">Placed volume</p>
+					<p class="mt-0.5 font-medium tabular-nums">{number(metrics?.placedVolumeM3)} m³</p>
+				</div>
+				<div>
+					<p class="text-xs text-muted-foreground">Excavated</p>
+					<p class="mt-0.5 font-medium tabular-nums">{number(metrics?.excavationM3)} m³</p>
 				</div>
 			</Grid>
 
 			<Stack as="section" gap="sm">
-				<h3 class="border-b pb-2 text-sm font-semibold">Integrated volumes</h3>
+				<h3 class="border-b pb-2 text-sm font-semibold">Substrates</h3>
 				<dl class="divide-y rounded-md border bg-card text-sm">
-					{#each [['Rock armour', record?.rock_armor_m3, 'm³'], ['Geofabric', record?.geofabric_m2, 'm²'], ['Dredged rock', record?.dredged_rock_m3, 'm³'], ['Sand key', record?.sand_key_m3, 'm³'], ['Sand fill', record?.sand_fill_m3, 'm³'], ['Dredged fill', record?.dredged_fill_m3, 'm³'], ['Existing bund displaced', record?.structure_displacement_m3, 'm³'], ['Below the surveyed bed', record?.excavation_m3, 'm³']] as entry (entry[0])}
-						<Inline as="div" justify="between" gap="sm" class="p-3">
-							<dt>{entry[0]}</dt>
-							<dd class="tabular-nums">{number(entry[1] as number)} {entry[2]}</dd>
-						</Inline>
+					{#each quantities as entry (entry.substrate)}
+						<div class="p-3">
+							<Inline align="start" justify="between" gap="sm">
+								<dt class="min-w-0 truncate font-medium">
+									{substrateDefinition(entry.substrate).label}
+								</dt>
+								<dd class="shrink-0 tabular-nums">
+									{formatQuantity(entry.quantity, entry.unit)}
+								</dd>
+							</Inline>
+							<p class="mt-1 text-xs text-muted-foreground">{entry.basis}</p>
+						</div>
 					{/each}
 				</dl>
 			</Stack>
