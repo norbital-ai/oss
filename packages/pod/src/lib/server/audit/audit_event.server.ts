@@ -1,5 +1,5 @@
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { requireTable } from '$lib/server/collection/direct/collection_direct.js';
+import { requireTable } from '$lib/server/collection/collection_direct.js';
 import { runWithPermissionBypassAsync } from '$lib/server/collection/access_control/permission/permission_bypass_key.server.js';
 import { validate as uuidValidate, v7 as uuidv7 } from 'uuid';
 

@@ -1,6 +1,6 @@
 import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
-import { StaticMapInputSchema } from './schema.js';
+import { StaticMapInputSchema } from '@norbital-ai/platform-utils/runtime/binding';
 
 const authenticated = Guard.init().use(requireAuthMiddleware());
 

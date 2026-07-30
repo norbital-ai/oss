@@ -7,7 +7,7 @@ import { getColumns, type AnyRelationsFilter } from 'drizzle-orm';
 import { portableCollectionField } from '$lib/authoring/schema/table.js';
 import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
-import { requireTable } from './direct/collection_direct.js';
+import { requireTable } from './collection_direct.js';
 
 function searchableCollectionFields(
 	ctx: ProvisionedContext,

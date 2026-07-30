@@ -1,7 +1,9 @@
 import type { TGeolocation } from '$lib/authoring/builtin/custom_types.js';
 import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
-import { AutocompleteGeolocationInputSchema } from './schema.js';
+import { z } from 'zod';
+
+export const AutocompleteGeolocationInputSchema = z.string();
 
 function toGeolocationValue(
 	formattedAddress: string,

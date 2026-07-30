@@ -19,8 +19,8 @@ export {
 	importPipeline,
 	update,
 	updateMany
-} from './collection/collection.remote.js';
-export { autocompleteGeolocation } from './geolocation/geolocation.remote.js';
+} from './collection.remote.js';
+export { autocompleteGeolocation } from './geolocation.remote.js';
 
 export {
 	NoArgRemoteInputSchema,

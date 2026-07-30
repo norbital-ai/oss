@@ -56,7 +56,7 @@ import {
 	firstRowAsRecord,
 	requireTable,
 	getCollectionQuery
-} from './direct/collection_direct.js';
+} from './collection_direct.js';
 import {
 	emitOutboundRows,
 	emitOutboundRowsMany

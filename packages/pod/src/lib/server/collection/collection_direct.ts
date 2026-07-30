@@ -21,8 +21,8 @@ import { isTemporalOperand, temporalKindForFieldKind } from '@norbital-ai/std/da
 import { z } from 'zod';
 import { v7 } from 'uuid';
 import { portableCollectionField } from '$lib/authoring/schema/table.js';
-import { error } from '../http_error.js';
-import type { TNorbitalDBRecord } from '../norbital_db_record.js';
+import { error } from './http_error.js';
+import type { TNorbitalDBRecord } from './norbital_db_record.js';
 import type { ManifestCollectionEntry } from '$lib/manifest/index.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';

@@ -14,7 +14,7 @@ import {
 } from '$lib/authoring/workspace/relations-filter.js';
 import { portableCollectionField } from '$lib/authoring/schema/table.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
-import { requireTable } from './direct/collection_direct.js';
+import { requireTable } from './collection_direct.js';
 import { error } from './http_error.js';
 
 const utcInstantSchema = z.string().refine(isUtcIsoInstant);

@@ -7,7 +7,7 @@ import {
 } from '@norbital-ai/platform-utils/system/types';
 import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { directFindMany } from '../direct/collection_direct.js';
+import { directFindMany } from '../collection_direct.js';
 import { error } from '../http_error.js';
 import { runWithPermissionBypassAsync } from './permission/permission_bypass_key.server.js';
 

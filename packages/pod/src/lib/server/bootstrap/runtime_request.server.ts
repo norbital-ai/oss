@@ -30,19 +30,19 @@ import {
 	update,
 	updateMany
 } from '$lib/remote';
-import { invokeCommand, invokeHandler, invokeQuery } from '$lib/remote/handler/handler.remote.js';
+import { invokeCommand, invokeHandler, invokeQuery } from '$lib/remote/handler.remote.js';
 import {
 	runProcessApprovalRequestAction,
 	runWithdrawApprovalRequest
 } from '$lib/remote/approval_request/approval_request.runtime.server.js';
-import { AutocompleteGeolocationInputSchema } from '$lib/remote/geolocation/schema.js';
-import { StaticMapInputSchema } from '$lib/remote/static_map/schema.js';
-import { renderStaticMap } from '$lib/remote/static_map/static_map.remote.js';
+import { AutocompleteGeolocationInputSchema } from '$lib/remote/geolocation.remote.js';
+import { StaticMapInputSchema } from '@norbital-ai/platform-utils/runtime/binding';
+import { renderStaticMap } from '$lib/remote/static_map.remote.js';
 import {
 	AdminSystemCreateSchema,
 	AdminSystemDeleteSchema,
 	AdminSystemUpdateSchema
-} from '$lib/remote/collection/collection.remote.js';
+} from '$lib/remote/collection.remote.js';
 import {
 	CountWireSchema,
 	CreateManyWireSchema,
