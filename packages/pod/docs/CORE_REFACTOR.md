@@ -59,6 +59,35 @@ Not applicable to `mode: 'core'` directly, but Core must supply the equivalent p
 issues the `provision` command — an invitation link has to be absolute and its token travels by email,
 so there is no request to derive an origin from.
 
+### 6. Binding and manifest shapes changed without being written down
+
+Found by typechecking Core against the current Pod. Each one breaks Core today; none were listed.
+
+| Symbol                      | Change                                                               |
+| --------------------------- | -------------------------------------------------------------------- |
+| `HostFileStorageBinding`    | lost `presignPut` / `presignGet`                                     |
+| `HostAiBinding`             | lost `infer`                                                         |
+| `AiChatInput`               | lost `temperature`                                                   |
+| `AiChatResult`              | gained a **required** `stopReason`                                   |
+| `NotificationDeliveryInput` | renamed `NotificationDelivery`, and the result shape changed         |
+| manifest `automations`      | lost `enabled`, `cron_schedule`, `created_by_user_id`, `description` |
+| manifest automation `spec`  | lost `agentProfileId`                                                |
+
+### 7. `queue` needs more than a binding
+
+`workspaceJobs()` is now exported from `@norbital-ai/pod/host` — it previously was not, which made
+`queue` a facility no host could satisfy, since the contract hands the host a job set it had no way to
+obtain.
+
+Two things still block a host from driving it, and both are Core-side:
+
+- `QueueJob.run()` goes through `handlePodHostCommand`, which is deliberately unreachable from
+  `handlePodRequest`. Core's frame sender speaks `request` / `notify` / `cancel` / `binding` — there is
+  no `host-command` sender.
+- **Automations are already dead against this Pod, not merely unported.** Core's
+  `AutomationRunDispatcher` POSTs to `/_runtime/runtime/run`, which is not in
+  `RUNTIME_ENDPOINT_HANDLERS`.
+
 ---
 
 ## What Core must delete
@@ -289,8 +318,12 @@ Every item below is already listed above with its rationale.
 - [ ] **C7.** Replace Core's inline Google maps with Pod's `googleMaps()`.
 - [ ] **C8.** Rebuild `(ops)/ops` on `cookieSession` + `emailOtpIdentity` with its own `operator`
       table. There is a **second** copy of the ops email allowlist in `ingress.ts` that must go too.
-- [ ] **C9.** `resolveRuntimeBindings` supplies only db/fileStorage/ai/notifications/maps — `queue`,
-      `integrationDelivery` and `agentTools` are absent, not merely unchanged.
+- [ ] **C9. Correction: `resolveRuntimeBindings` is the wrong plane.** `queue` and
+      `integrationDelivery` cannot be `RuntimeFacilityBinding`s at all — bindings cross the isolate by
+      structured clone and cannot carry callbacks, and `RuntimeFacilityBindings` has only five fields.
+      They belong on Core's host side, mirroring `SelfHostedPodHostConfig`. `workspaceJobs()` is now
+      exported so a host can obtain the job set; the remaining blocker is that Core has no
+      `host-command` frame sender (see §7).
 - [ ] **C10.** The `hmac(email) → org_ids` routing index does not exist. `platform_user_lookup` is a
       chat-platform mapping and is not it; build it.
 

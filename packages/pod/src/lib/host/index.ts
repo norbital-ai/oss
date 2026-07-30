@@ -93,4 +93,15 @@ export {
 export { intervalQueue } from './interval-queue.js';
 export type { IntervalQueueOptions } from './interval-queue.js';
 export { cronMatches, parseCron } from './cron.js';
+
+/**
+ * The job set a `HostQueue` is defined to receive.
+ *
+ * Exported here because a host cannot implement `HostQueue` without it: the contract says the host is
+ * handed Pod's whole job set and returns a stop function, and this is the only thing that produces
+ * that set. It was unreachable from outside the package, which made `queue` a facility no host could
+ * actually satisfy.
+ */
+export { workspaceJobs } from '../bin/invocation/jobs.js';
+export type { WorkspaceJobOptions } from '../bin/invocation/jobs.js';
 export type { CronSchedule } from './cron.js';
