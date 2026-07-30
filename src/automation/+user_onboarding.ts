@@ -1,9 +1,8 @@
 import { defineAutomation } from '@norbital-ai/pod/authoring';
-import type { Api } from './$types.js';
 
 export default defineAutomation(
 	{ trigger: { collection: 'user', event: 'created' } },
-	async (api: Api, { scope }) => {
+	async (api, { scope }) => {
 		const user = scope.incoming_record;
 		await api.db.activities.create({
 			regarding_type: 'accounts',

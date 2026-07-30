@@ -1,10 +1,9 @@
 import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
-import type { Api } from './$types.js';
 
 export default defineQueryHandler({
 	schema: z.object({ owner_id: z.string().optional() }),
-	handler: async ({ owner_id }, api: Api) => {
+	handler: async ({ owner_id }, api) => {
 		const where = owner_id ? { owner_id: { eq: owner_id } } : {};
 
 		const quotes = await api.db.query.quotes.findMany({

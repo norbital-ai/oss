@@ -1,7 +1,6 @@
 import { defineAutomation } from '@norbital-ai/pod/authoring';
-import type { Api } from './$types.js';
 
-export default defineAutomation({ schedule: '0 6 * * *' }, async (api: Api) => {
+export default defineAutomation({ schedule: '0 6 * * *' }, async (api) => {
 	const today = new Date().toISOString().split('T')[0];
 
 	const expiredQuotes = await api.db.query.quotes.findMany({

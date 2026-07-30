@@ -1,10 +1,9 @@
 import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
-import type { Api } from './$types.js';
 
 export default defineQueryHandler({
 	schema: z.object({ currency: z.string().optional() }),
-	handler: async ({ currency }, api: Api) => {
+	handler: async ({ currency }, api) => {
 		const quotes = await api.db.query.quotes.findMany({
 			where: { status: { in: ['confirmed', 'fulfilled', 'won'] } },
 			columns: {
