@@ -264,11 +264,13 @@ Every item below is already listed above with its rationale.
 - [ ] **C4.** Consume seat snapshots from `host_event_outbox`. **Correction:** Core already counts
       absolute rows, so delta-counting was never the bug; what changes is the _source_, since the
       `member` table dies with C1.
-- [ ] **C4a. Unresolved blocker.** The seat axes do not line up. Pod publishes `{admin, advanced,
-  basic}` — a security role. Core bills on `member.billingTier` (`standard | builder`), an
-      independent axis with a "≥1 Builder seat" rule. A role-keyed snapshot cannot drive Core's Stripe
-      items. Decide whether billing tier becomes a Pod concept or Core keeps its own mapping, before
-      C1 removes the table it reads today.
+- [x] **C4a. Resolved — the mapping is fixed and lives in one place.** `admin` and `advanced` are both
+      **builder** seats; `basic` is **standard**. Do not re-derive this in Core: call
+      `billableSeats(census)` from `@norbital-ai/platform-utils/system/types`, which turns a
+      `host_event_outbox` snapshot into `{ builder, standard }`. A host that mapped `advanced` to the
+      cheap tier would under-bill silently and nothing in either codebase would contradict it — the
+      mistake only ever surfaces on an invoice — so it is pinned by a test. The "≥1 builder seat" rule
+      needs no special case: a workspace always has an admin.
 - [ ] **C5.** Supply `hostPlugins` through the host contract. **Correction — and a live defect:**
       `CORE_HOST_PLUGINS` already exists and already ships to pods **in a request header**
       (`ingress.ts`), which is exactly the vector Pod's `HostAppPlugin` refuses: a settable header lets
