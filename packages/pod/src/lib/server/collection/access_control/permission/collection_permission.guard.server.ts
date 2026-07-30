@@ -111,9 +111,20 @@ async function workflowMetadataReadFallback(
 	if (collectionName === 'chat_session') {
 		return { reducedCondition: { user_id: requestorId } };
 	}
-	// `chat_turn` and `chat_message` are deliberately absent: scoping them to the requestor needs a join
-	// through `chat_session`, which a reduced condition cannot express, so they fall through to the
-	// non-admin deny below rather than being given a weaker rule that looks like a scope.
+	// A transcript belongs to whoever owns its session, so turns and messages are scoped by resolving
+	// that ownership to a set of ids. A reduced condition cannot express the join, and the same `in`
+	// shape already carries `approval_request` below — this is that pattern, not a new one.
+	if (collectionName === 'chat_turn' || collectionName === 'chat_message') {
+		const owned = await workspace.tenantDb.query<{ norbital_id: string }>({
+			text: `SELECT norbital_id FROM chat_session WHERE user_id = $1::uuid`,
+			values: [requestorId]
+		});
+		const chatIds = owned.rows.map((row) => row.norbital_id);
+		// No sessions means nothing to read. An empty `in` would match every row on some backends, so
+		// deny outright rather than emit a condition whose meaning depends on the driver.
+		if (chatIds.length === 0) return null;
+		return { reducedCondition: { chat_id: { in: chatIds } } };
+	}
 
 	if (collectionName === 'automation_run') {
 		return { reducedCondition: { requested_by_user_id: requestorId } };

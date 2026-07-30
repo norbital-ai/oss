@@ -15,6 +15,14 @@ const admin: Identity = {
 	role: 'admin'
 };
 
+/** A second, non-admin member — the transcript guard must not hand them someone else's session. */
+const member: Identity = {
+	userId: '33333333-3333-4333-8333-333333333333',
+	userName: 'Field Member',
+	email: 'member@it.local',
+	role: 'basic'
+};
+
 describe.skipIf(!hasDocker)('Pod AI and automation transcript — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	let calls = 0;
@@ -104,6 +112,50 @@ describe.skipIf(!hasDocker)('Pod AI and automation transcript — runtime E2E', 
 		expect(steps[1]?.parts?.[0]?.toolCalls?.[0]?.name).toBe('describe_workspace');
 		expect(steps[2]?.parts?.[0]?.toolCallId).toBeTruthy();
 		expect(steps[3]?.parts?.[0]?.content).toBe('The workspace is ready.');
+
+		// A transcript belongs to its session's owner. An admin short-circuits every policy deny, so the
+		// isolation has to be proved with a plain member — and the member needs a session of their own,
+		// or the assertion passes for the wrong reason (no sessions means denied outright, so an empty
+		// result would prove nothing about filtering).
+		await harness.pool.query(
+			`INSERT INTO "user" (norbital_id, email, name, role, status)
+			 VALUES ($1::uuid, 'member@it.local', 'Field Member', 'basic', 'active')
+			 ON CONFLICT (norbital_id) DO NOTHING`,
+			[member.userId]
+		);
+		const ownSession = await harness.pool.query<{ norbital_id: string }>(
+			`INSERT INTO chat_session (user_id, title, visibility)
+			 VALUES ($1::uuid, 'Member session', 'personal') RETURNING norbital_id`,
+			[member.userId]
+		);
+		await harness.pool.query(
+			`INSERT INTO chat_message (chat_id, role, seq, parts)
+			 VALUES ($1::uuid, 'user', 1, '[{"role":"user","content":"mine"}]'::jsonb)`,
+			[ownSession.rows[0]!.norbital_id]
+		);
+
+		const otherShape = await harness.request(
+			{
+				method: 'POST',
+				path: 'sync/shape',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ collection: 'chat_message', pageSize: 100 })
+			},
+			member
+		);
+		const otherRows =
+			otherShape.status === 200
+				? ((await otherShape.json()) as { rows: Array<{ chat_id: string }> }).rows
+				: [];
+		// Their own message is visible — so the guard is filtering, not just refusing.
+		expect(otherShape.status).toBe(200);
+		expect(
+			otherRows.filter((row) => row.chat_id === ownSession.rows[0]?.norbital_id)
+		).toHaveLength(1);
+		// The automation's session belongs to the admin, and must not appear.
+		expect(
+			otherRows.filter((row) => row.chat_id === session.rows[0]?.norbital_id)
+		).toHaveLength(0);
 
 		const run = await harness.pool.query<{ status: string }>(
 			`SELECT status FROM automation_run WHERE norbital_id = $1::uuid`,
