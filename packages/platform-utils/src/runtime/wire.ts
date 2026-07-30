@@ -1,3 +1,4 @@
+import type { HostAppPlugin } from './binding.js';
 /**
  * The tenant runtime wire protocol.
  *
@@ -57,7 +58,15 @@ export type HostFrameHeader =
 	| { readonly t: 'binding'; readonly id: number; readonly ok: true; readonly value: unknown }
 	| { readonly t: 'binding'; readonly id: number; readonly ok: false; readonly error: string }
 	| { readonly t: 'cancel'; readonly id: number }
-	| { readonly t: 'notify'; readonly channel: string; readonly payload: string };
+	| { readonly t: 'notify'; readonly channel: string; readonly payload: string }
+	/**
+	 * Deployment configuration, sent once before the first request.
+	 *
+	 * Anything a browser must not be able to assert travels here rather than in a request header. A
+	 * sidebar entry is the motivating case: a spoofable header would let a caller put an arbitrary link
+	 * under the host's own label into every session's navigation.
+	 */
+	| { readonly t: 'configure'; readonly hostPlugins: readonly HostAppPlugin[] };
 
 /**
  * Guest → Core. A response always arrives as `head` then zero or more `chunk`s then `end`, because

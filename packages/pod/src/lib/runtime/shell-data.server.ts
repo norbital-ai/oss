@@ -1,3 +1,4 @@
+import { getHostPlugins } from '$lib/server/run/host_plugins.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { loadSyncBootstrap } from '$lib/server/collection/sync/sync-endpoints.server.js';
 import { loadPoliciesForTeams } from '$lib/server/collection/access_control/policy_grant_loader.server.js';
@@ -137,6 +138,11 @@ export async function loadTenantWorkspaceShellData(
 		userOrganizations: workspace.userOrganizations,
 		...(billing.success ? { billing: billing.data } : {}),
 		accessibleAppNames: resolveAccessibleAppNames(teamsAndPolicies),
-		policyGrants: resolvePolicyGrants(teamsAndPolicies)
+		policyGrants: resolvePolicyGrants(teamsAndPolicies),
+		// Filtered here rather than in the browser: an entry the requestor may not see must not reach
+		// the client at all, since the payload is readable whatever the sidebar chooses to render.
+		hostPlugins: getHostPlugins()
+			.filter((plugin) => !plugin.adminOnly || workspace.baseScope.requestor.role === 'admin')
+			.map(({ key, label, icon, entry }) => ({ key, label, icon, entry }))
 	};
 }

@@ -33,6 +33,7 @@ import type {
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import { setDatabaseNotifications } from '$lib/server/collection/sync/db-notifications.server.js';
+import { setHostPlugins } from '$lib/server/run/host_plugins.js';
 import { handlePodHostCommand, handlePodRequest } from './server.js';
 
 type PendingBindingCall = {
@@ -276,6 +277,11 @@ export function startPodStdioServer(): void {
 					break;
 				case 'notify':
 					for (const listener of notificationListeners) listener(header.channel, header.payload);
+					break;
+				case 'configure':
+					// Trusted-host configuration, not request data. Core sends this before the first
+					// request; an unconfigured isolate simply has no host surfaces.
+					setHostPlugins(header.hostPlugins);
 					break;
 				case 'binding': {
 					const call = pending.get(header.id);

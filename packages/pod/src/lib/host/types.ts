@@ -1,5 +1,6 @@
 import type {
 	HostAiBinding,
+	HostAppPlugin,
 	HostDbBinding,
 	HostFileStorageBinding,
 	HostMapsBinding,
@@ -195,6 +196,31 @@ export type IntegrationDeliveryMessage = {
  */
 export type HostIntegrationDelivery = (message: IntegrationDeliveryMessage) => Promise<void>;
 
+/**
+ * Validates a host plugin set at startup, so a bad `entry` fails naming the plugin rather than
+ * rendering into every user's sidebar.
+ *
+ * A plugin is host *configuration*, never request data. It is set once at startup — by the runner from
+ * `pod.host.ts`, or by the isolate `configure` frame under Core — and deliberately does not travel in
+ * a header the way the billing summary does. A header a browser can set would let anyone put an
+ * arbitrary link, under the host's own label, into the workspace sidebar.
+ */
+export function assertHostPlugins(plugins: readonly HostAppPlugin[]): void {
+	const seen = new Set<string>();
+	for (const plugin of plugins) {
+		if (!plugin.key.trim()) throw new Error('Host plugin key must not be empty');
+		if (seen.has(plugin.key)) throw new Error(`Duplicate host plugin key: ${plugin.key}`);
+		seen.add(plugin.key);
+		const entry = plugin.entry.trim();
+		const safe = entry.startsWith('/') ? !entry.startsWith('//') : entry.startsWith('https://');
+		if (!safe) {
+			throw new Error(
+				`Host plugin ${plugin.key} has an unsupported entry (${plugin.entry}); use a site-relative path or an https URL`
+			);
+		}
+	}
+}
+
 /** Core owns all runtime bindings; this file only declares the deployment target. */
 export type CorePodHostConfig = {
 	readonly mode: 'core';
@@ -228,6 +254,8 @@ export type SelfHostedPodHostConfig = {
 	readonly maps?: HostMapsBinding;
 	readonly integrationDelivery?: HostIntegrationDelivery;
 	readonly queue?: HostQueue;
+	/** Host-owned surfaces linked into the workspace sidebar. Validated at startup. */
+	readonly hostPlugins?: readonly HostAppPlugin[];
 };
 
 export type PodHostConfig = CorePodHostConfig | SelfHostedPodHostConfig;
@@ -264,4 +292,4 @@ export type {
 	HostFileStorageBinding,
 	HostMapsBinding
 };
-export type { HostNotificationsBinding, RuntimeFacilityName, TBaseScope };
+export type { HostAppPlugin, HostNotificationsBinding, RuntimeFacilityName, TBaseScope };

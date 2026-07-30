@@ -170,9 +170,21 @@ zoom derivation. Core's copy in `tenant_runtime/bindings.ts` should be deleted i
 
 ### Host plugins
 
-`pod-shell.svelte` still hardcodes `system: []`, so `CORE_HOST_PLUGINS` has nothing to mount into.
-When Pod lands `HostAppPlugin` / `hostPlugins?`, Core supplies its set (Workspace Studio, org
-settings) through the host contract. The agent leaves that list — it is a normal pod capability now.
+Pod now has the contract, so `CORE_HOST_PLUGINS` has somewhere to go. `HostAppPlugin` is pure data
+(`key`, `label`, `icon`, `entry`, `placement`, `adminOnly?`) and lives in
+`platform-utils/src/runtime/binding.ts`.
+
+- **Core action:** send one `{ t: 'configure', hostPlugins }` frame per container, before the first
+  request. Core's Workspace Studio and organization-settings entries become plugin records pointing at
+  their existing Core routes.
+- The agent **leaves** that list — it is a normal pod capability now, not a host surface.
+- `entry` must be site-relative or `https:`; `assertHostPlugins()` is exported so Core can validate its
+  own set at startup rather than shipping a bad link to every tenant.
+- Do **not** put plugins in a request header. The billing summary travels that way and a browser can
+  forge it; a forged plugin puts an attacker's link under Core's own label in the sidebar. Pod reads
+  them only from the `configure` frame, never from a request.
+- Hiding an `adminOnly` entry is presentation only. Core's routes must still authorize their own
+  requests — the URL is in the markup.
 
 ---
 
@@ -184,7 +196,7 @@ Listed so Core does not plan against something that is not there.
 | --------------------------------------------------------------------------- | ------------------------------------ |
 | Agent runtime port (loop, store, streams, subagents, todos, channels, UI)   | **not started** — Core still owns it |
 | `+<name>.channel.ts` authoring and the `messaging` facility rename          | **not started**                      |
-| `HostAppPlugin` / `buildSystemNavigation`                                   | **not started**                      |
+| `HostAppPlugin` / `buildSystemNavigation`                                   | **done** — Core can send `configure` |
 | Tenant configuration sidebar (teams, users, invitations, policy assignment) | **not started**                      |
 
 Until the agent port lands, Core's `lib/agent/**` stays authoritative and the deletions above do not

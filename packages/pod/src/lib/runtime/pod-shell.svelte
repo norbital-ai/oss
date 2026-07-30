@@ -38,6 +38,7 @@
 	import {
 		appAccessAllowed,
 		buildApplicationNavigation,
+		buildSystemNavigation,
 		resolveApplicationLandingAppId,
 		resolveWorkspaceOrganizationOptions
 	} from './workspace-navigation.js';
@@ -165,7 +166,11 @@
 			avatarUrl: data.user.avatar_url,
 			teamLabels: data.user.team_members.flatMap((team) => (team.name ? [team.name] : []))
 		},
-		system: [],
+		system: buildSystemNavigation({
+			plugins: data.hostPlugins ?? [],
+			isAdmin: data.user.role === 'admin',
+			currentPath
+		}),
 		applications: buildApplicationNavigation({
 			appIds: appNames,
 			apps: manifestContext.getAppsRecord(),

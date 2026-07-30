@@ -23,9 +23,11 @@ import { pathToFileURL } from 'node:url';
 import { Client, type Notification } from 'pg';
 import { PostgresHostDbBinding, type HostDbConnection } from '../../host/db.js';
 import {
+	assertHostPlugins,
 	isIdentityDescriptor,
 	isVerifiedSubject,
 	satisfiedFacilities,
+	type HostAppPlugin,
 	type HostIdentity,
 	type HostIdentityProvider,
 	type HostVerifiedSubject,
@@ -79,6 +81,7 @@ interface PodRuntimeModule {
 	readonly registerPodDatabaseNotifications: (
 		source: { subscribe(listener: (channel: string, payload: string) => void): () => void } | null
 	) => void;
+	readonly registerPodHostPlugins: (plugins: readonly HostAppPlugin[]) => void;
 }
 
 function requiredEnvironmentValue(name: (typeof REQUIRED_ENVIRONMENT)[number]): string {
@@ -459,7 +462,9 @@ async function loadPodRuntime(root: string): Promise<PodRuntimeModule> {
 		!('handlePodHostCommand' in loaded) ||
 		typeof loaded.handlePodHostCommand !== 'function' ||
 		!('registerPodDatabaseNotifications' in loaded) ||
-		typeof loaded.registerPodDatabaseNotifications !== 'function'
+		typeof loaded.registerPodDatabaseNotifications !== 'function' ||
+		!('registerPodHostPlugins' in loaded) ||
+		typeof loaded.registerPodHostPlugins !== 'function'
 	) {
 		throw new Error(`Invalid standalone Pod runtime artifact: ${runtimePath}`);
 	}
@@ -587,10 +592,15 @@ export async function startStandalone(
 
 	const manifest = await loadStandaloneManifest(root);
 	assertStandaloneFacilities(manifest, satisfiedFacilities(config));
+	// Validated before anything is served: an unusable `entry` must name its plugin here rather than
+	// render into every session's sidebar.
+	const hostPlugins = config.hostPlugins ?? [];
+	assertHostPlugins(hostPlugins);
 
 	const binding: HostDbConnection = config.db.connect();
 	await binding.validate();
 	const runtime = await loadPodRuntime(root);
+	runtime.registerPodHostPlugins(hostPlugins);
 	let closeDatabaseNotifications: () => Promise<void>;
 	try {
 		closeDatabaseNotifications = await installDatabaseNotifications(

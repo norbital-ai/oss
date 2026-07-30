@@ -32,6 +32,35 @@ export type WorkspaceBillingSummary = {
 };
 
 /**
+ * A host-owned application the pod shell links into its sidebar — Workspace Studio, organization
+ * settings. The pod renders a navigation entry and links to `entry`; it never loads the plugin's
+ * code, so a host surface stays a host route and nothing of it enters the workspace bundle.
+ *
+ * Pure data, so it crosses the isolate boundary by structured clone. It lives here rather than with
+ * the host contract because the wire has to name it, and the wire cannot depend on Pod.
+ */
+export type HostAppPlugin = {
+	/** Stable identifier, unique within a host. */
+	readonly key: string;
+	readonly label: string;
+	readonly icon: string | null;
+	/**
+	 * Where the pod shell sends the browser: a host-owned path or absolute URL.
+	 *
+	 * Rejected at startup unless it is site-relative (`/studio`) or `https:`. A `javascript:` entry
+	 * would be script injection into every session, and the shell renders this straight into an href.
+	 */
+	readonly entry: string;
+	/** Only `sidebar` today; the field exists so a second placement does not need a contract change. */
+	readonly placement: 'sidebar';
+	/**
+	 * Show the entry only to workspace admins. Hiding an entry is not authorization — the host route
+	 * behind `entry` must still authorize the request itself, since a URL is guessable.
+	 */
+	readonly adminOnly?: boolean;
+};
+
+/**
  * File bytes cross the isolate boundary as raw `Uint8Array`. The V8 isolate marshals binding args/returns
  * with `v8.serialize` (structured clone), which supports typed arrays natively, so base64 would only
  * add overhead.

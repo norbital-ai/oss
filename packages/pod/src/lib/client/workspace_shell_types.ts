@@ -58,6 +58,20 @@ export type TenantWorkspaceShellData = {
 	 * Raw policy grants for the requestor's teams. `null` means unrestricted admin access.
 	 */
 	readonly policyGrants: readonly TenantWorkspacePolicyGrant[] | null;
+	/**
+	 * Host-owned sidebar surfaces (Workspace Studio, organization settings), already filtered to what
+	 * this requestor may see. Empty under a host that supplies none, which is every workspace running
+	 * on `pod start` by default.
+	 */
+	readonly hostPlugins: readonly TenantWorkspaceHostPlugin[];
+};
+
+/** The client-visible projection of a `HostAppPlugin`; `adminOnly` is resolved server-side. */
+export type TenantWorkspaceHostPlugin = {
+	readonly key: string;
+	readonly label: string;
+	readonly icon: string | null;
+	readonly entry: string;
 };
 
 export type TenantWorkspacePageData = Pick<

@@ -23,6 +23,7 @@
  * deployed workspace points it at pg-boss or an equivalent; `intervalQueue` is for development.
  */
 export {
+	assertHostPlugins,
 	definePodHost,
 	emailOtp,
 	env,
@@ -32,6 +33,7 @@ export {
 } from './types.js';
 export type {
 	HostAiBinding,
+	HostAppPlugin,
 	HostDbAdapter,
 	HostDbBinding,
 	HostFileStorageBinding,

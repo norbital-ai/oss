@@ -3,7 +3,11 @@ import { createBeforeApi } from '$lib/server/collection/hook-api.server.js';
 import { buildCtx } from '$lib/server/bootstrap/context.js';
 import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';
 import { handleNorbitalRuntimeRequest } from '$lib/server/bootstrap/runtime_request.server.js';
-import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';
+import type {
+	HostAppPlugin,
+	RuntimeFacilityBindings
+} from '@norbital-ai/platform-utils/runtime/binding';
+import { setHostPlugins } from '$lib/server/run/host_plugins.js';
 import { NORBITAL_BASE_SCOPE_HEADER } from '$lib/server/bootstrap/host_base_scope.js';
 import { error, isPodHttpError, json } from './http.js';
 import { runWithRequestEvent, type PodRequestEvent } from './request-context.js';
@@ -25,6 +29,14 @@ export function registerPodWorkspace(workspace: RuntimeWorkspaceSource): void {
 
 export function registerPodDatabaseNotifications(source: DatabaseNotifications | null): void {
 	setDatabaseNotifications(source);
+}
+
+/**
+ * Register the host's sidebar surfaces. Called once at startup by the host, never from a request, so
+ * a caller cannot inject a navigation entry. See `host_plugins.ts`.
+ */
+export function registerPodHostPlugins(plugins: readonly HostAppPlugin[]): void {
+	setHostPlugins(plugins);
 }
 
 function cookieValue(request: Request, name: string): string | undefined {

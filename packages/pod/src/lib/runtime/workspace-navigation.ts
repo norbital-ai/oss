@@ -27,6 +27,35 @@ export function resolveWorkspaceOrganizationOptions(input: {
 	return [...optionsById.values()];
 }
 
+/**
+ * Turns the host's plugin set into sidebar entries.
+ *
+ * Host surfaces are links, not apps: the pod never loads their code, so there is no manifest entry,
+ * no access grant, and no nesting. `adminOnly` filtering happens here for presentation only — the
+ * host route behind each entry authorizes its own requests, since the URL is visible in the markup.
+ */
+export function buildSystemNavigation(input: {
+	plugins: readonly {
+		readonly key: string;
+		readonly label: string;
+		readonly icon: string | null;
+		readonly entry: string;
+		readonly adminOnly?: boolean;
+	}[];
+	isAdmin: boolean;
+	currentPath: string;
+}): WorkspaceNavigationItem[] {
+	return input.plugins
+		.filter((plugin) => input.isAdmin || !plugin.adminOnly)
+		.map((plugin) => ({
+			key: plugin.key,
+			label: plugin.label,
+			icon: plugin.icon,
+			href: plugin.entry,
+			active: input.currentPath === plugin.entry || input.currentPath.startsWith(`${plugin.entry}/`)
+		}));
+}
+
 export function appAccessAllowed(
 	appId: string,
 	accessibleAppNames: readonly string[] | null
