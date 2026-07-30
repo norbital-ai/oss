@@ -289,7 +289,23 @@ Every item below is already listed above with its rationale.
 
 Unit and e2e coverage did not catch total auth failure in standalone. These are manual passes.
 
-- [ ] **D1.** Integrations round trip: sync a template collection to a real external API and back.
+- [x] **D1. Done, and it found that outbound integrations never ran.** `toRuntimeWorkspace()` dropped
+      `integrations`/`secrets`, so no outbox row was ever written and the facility gate was a no-op.
+      Fixed; covered by `tests/standalone/integration-delivery-e2e.test.ts`, verified non-vacuous by
+      stashing the fix. **Two gaps remain open — integrations are not finished:**
+- [ ] **D1a. An HTTP `request` destination cannot be built from a filesystem workspace.** A `send`
+      binding needs a `connection` registered in `defineWorkspace`'s `connections` input, but the
+      compiler never emits `connections` or `env.private` — `PodStructure` has no field for them and no
+      source file is scanned. Declaring one inline in `+integrations.ts` fails with "uses an
+      unregistered connection"; omitting it fails with "requires a connection". `AUTHORING.md` says
+      `+integrations.ts` is where the connection is declared, so the surface and the doc disagree. The
+      same gap blocks `authentication`. Only a `systemEvent` destination is reachable today.
+- [ ] **D1b. The inbound half has no consumers at all.** Nothing dispatches
+      `{kind:'integration', direction:'receive'}` or `{kind:'system-event'}`; the handlers in
+      `tenant_run.ts` are unreachable. No HTTP route accepts a `webhook` origin or verifies its HMAC,
+      and `workspaceJobs()` builds jobs only from automations, so a `pull` binding's `schedule` never
+      fires. A `receive` binding can never run, and a `send` with a `systemEvent` destination never
+      reaches its matching `receive` — it is only handed to the host as an outbound delivery.
 - [ ] **D2.** Notifications: trigger one from a hook and confirm delivery.
 - [ ] **D3.** Automations: scheduled and event-triggered, both observed firing.
 - [ ] **D4.** Hooks: `before` mutation and `after` derived write.
