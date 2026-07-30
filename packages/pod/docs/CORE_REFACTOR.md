@@ -241,13 +241,19 @@ Ordered so each item is verifiable when it lands. Tick nothing that has not been
 
 Core seeds policies today; Pod declares them. Both cannot be true. Measured state:
 
-| Template       | Core seed step                  | Pod declaration        |
-| -------------- | ------------------------------- | ---------------------- |
-| `bca`          | 147 lines, 2 policies           | none                   |
-| `construction` | 67 lines, 3 policies            | none                   |
-| `norbital_hr`  | 369 lines, 1 policy (generated) | none                   |
-| `crm`          | none                            | `+sales_rep.policy.ts` |
-| `reclamation`  | none                            | none                   |
+All five templates now declare their policies. The seed steps still exist and are still the source of
+truth on a live tenant until A6 deletes them.
+
+| Template       | Core seed step                   | Pod declaration                          |
+| -------------- | -------------------------------- | ---------------------------------------- |
+| `bca`          | 147 lines, 2 policies            | 2 policies, 49 grants                    |
+| `construction` | 67 lines, 3 policies             | 3 policies, 36 grants                    |
+| `norbital_hr`  | 369 lines, **3** policies        | 3 policies, 140 grants (`hr-payroll/`)   |
+| `crm`          | none                             | `+sales_rep.policy.ts`                   |
+| `reclamation`  | none                             | 1 policy, 9 grants (new, not a port)     |
+
+The `norbital_hr` row previously read "1 policy (generated)". It is three — `HR`, `Management`, and
+`Employee` — and only the first two are generated.
 
 - [x] **A1. Resolved — the premise was wrong, and A2–A5 are unblocked.** `${requestor.norbital_id}` is
       bound at **evaluation** time, not seed time: the seed stores the literal token in single-quoted
@@ -265,13 +271,65 @@ Core seeds policies today; Pod declares them. Both cannot be true. Measured stat
       rows exist. `approval` is typed `Record<string, unknown> | null`, so its shape is not checked
       either: a misspelled key compiles and fails at request time with a 400. Either teams become
       declarable or approvals need a name-based reference.
-- [ ] **A3.** Port `construction` (3 policies).
-- [ ] **A4.** Port `norbital_hr` (1 policy, generated from collection lists — keep the generation, move
-      it into the declaration).
-- [ ] **A5.** Add a `reclamation` policy; it has none anywhere today.
+- [ ] **A2b. The `RAW` guard does not run in the way policies are actually written.** A1 records that
+      `definePolicy` refuses a function-valued condition, and it does — but every policy file in this
+      repository is `export default { … } satisfies Policy`, which never calls it. Nothing else on the
+      path checks: the compiler imports the default export and stamps a key on it
+      (`vite/compiler/index.ts`), and `reconcileDeclaredPolicies` `JSON.stringify`s the grants, which
+      is exactly where a `RAW` callback disappears. `RAW` is still a member of `SchemaWhere`, so
+      `where: { RAW: (t, ops) => … }` typechecks in a policy today and lands as `conditions: {}` —
+      unconditional. The guard belongs in the compiler, or `RAW` belongs out of the policy `where`
+      type. The runtime consequence is unchanged since A1 wrote it down; what is new is that the stated
+      mitigation does not fire. **Demonstrated, not inferred:** a `where: { RAW: (t, ops) => … }` added
+      to `construction`'s `defects` read grant compiled with 0 errors, reconciled without complaint,
+      and stored `conditions: {}` — the whole collection, readable.
+- [x] **A3. Done.** Three policies in `template_workspaces/construction/src/policies/`, 12 unconditional
+      read grants each, differing only in `apps`. Keys match the seed's. Booted standalone: migrate
+      logged `policies reconciled (3 created, 0 updated)`; all three rows read back with 12 grants and
+      the right single app; no grant carries conditions, which is also true of the seed.
+      The seed shared one `readGrants` array across all three records; the declarations repeat it,
+      because `src/policies` admits only `+<name>.policy.ts` — a shared module beside them is a
+      `POLICY_NAME_INVALID` diagnostic.
+- [x] **A4. Done.** Three policies in `template_workspaces/hr-payroll/src/policies/` — `HR` (79 grants),
+      `Management` (35), `Employee` (26, 14 of them conditional) — with the collection groups kept as
+      generation, in `src/lib/policy_grants.ts`. Booted standalone: `policies reconciled (3 created,
+      0 updated)`, grant counts 79/35/26 exactly matching the seed, every `$sql` string stored with its
+      literal `${requestor.email}` token, and **all eleven approval steps read back with the seed's
+      `norbital_id`, derived step id, and `teams_that_can_approve` unchanged**.
+      Two things the port surfaced, both recorded below as A4a and A4b. A third was fixed on the way:
+      `apps` was bound to the generated `AppName` union, which lists only leaf ids, so no policy could
+      name the `hr_controller` **group** that `appAccessAllowed` has always honoured as a prefix.
+      `PolicyAppName` now derives group names from the same union, so `hr_controller` compiles and
+      `hr_controler` does not.
+- [ ] **A4a. Blocking for Core: the seed's policy keys cannot be reproduced.** A policy's key is its
+      filename, and the compiler requires `+<lower_snake_case>.policy.ts`. `norbital_hr`'s seeded keys
+      are `HR`, `Management`, and `Employee`, so the declarations land as `hr`, `management`,
+      `employee`. Reconciliation upserts by key, so on an existing tenant this **inserts three new rows
+      and leaves every `team.policy_id` pointing at the old ones** — precisely the orphaning the
+      key-preservation rule exists to prevent. Core must run `UPDATE policy SET key = lower(key)`
+      before A6 deletes the seed. (`construction` and `bca` are unaffected; their keys are already
+      lower_snake_case.) The alternative — letting a policy declare an explicit `key` — was not taken,
+      because it reintroduces the identity drift the filename convention removed.
+- [ ] **A4b. The seed derives colliding approval step ids, and the port preserves them.** Every step id
+      is `configId.slice(0, -1) + '9'`, so `…0004`, `…0007`, `…0009`, and `…000a` all yield step
+      `…0009` — four distinct approval configs inside the `HR` policy share one step id, and the same
+      happens in `Management` and `Employee`. Kept verbatim, because an in-flight `approval_request`
+      resolves against these ids and changing them strands it. It needs fixing with a migration, not in
+      a port.
+- [x] **A5. Done.** `template_workspaces/reclamation/src/policies/+reclamation_estimator.policy.ts` —
+      9 grants, 4 conditional. A decision, not a port: reclamation had no policy in either repository.
+      **No collection carries an owner column** (no `owner_id`, `user_id`, or `created_by`), so there is
+      nothing to scope to the requestor; a reclamation project is a shared workbook and inventing an
+      owner column to enable requestor scoping would be changing the schema to justify the rule. The
+      narrowing is by what a row is instead: the rate matrix is read-only, a `reconstruction` document
+      is not writable because the stitch hook reads it, and an `issued` or `superseded` estimate is not
+      editable. Booted standalone: `policies reconciled (1 created, 0 updated)`, 9 grants, both `$sql`
+      strings stored intact.
 - [ ] **A6.** Delete each `seed/<template>/steps/policies.ts` and its `index.ts` wiring, **only after**
-      the matching declaration reconciles. `reconcileDeclaredPolicies()` upserts by key and never
-      deletes undeclared rows, so a stale seeded policy lingers silently — remove it deliberately.
+      the matching declaration reconciles. All five now do (A2–A5), so this is unblocked — but do A4a
+      first for `norbital_hr`, or the deletion strands three policies' worth of team assignments.
+      `reconcileDeclaredPolicies()` upserts by key and never deletes undeclared rows, so a stale seeded
+      policy lingers silently — remove it deliberately.
 - [ ] **A7.** ~~Delete `team.ts` where it only holds `policy_id`.~~ **Corrected:** no such file exists.
       Every `team.ts` carries names, descriptions, `is_active`, and (in `norbital_hr`) a three-level
       hierarchy, and its ids are imported by each `user.ts`. A7 reduces to dropping the `policy_id`
