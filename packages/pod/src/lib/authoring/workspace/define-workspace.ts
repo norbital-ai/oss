@@ -18,6 +18,7 @@ import { deriveManifestRelationships } from './derive-relationships.js';
 import type { AutomationDeclaration } from '../automations/automations.js';
 import type { AgentToolDefinition } from '../automations/agent-tools.js';
 import type { PolicyDeclaration } from '../policies/policies.js';
+import type { ChannelDefinition } from '../channels/channels.js';
 import type { HandlerDefinition } from '../automations/handlers.js';
 import type { InvokeMap } from './invoke-api-types.js';
 import type { WorkspaceClient } from '$lib/client/workspace-client.js';
@@ -72,6 +73,8 @@ export type DefineWorkspaceInput<
 	readonly agentTools?: Readonly<Record<string, AgentToolDefinition>>;
 	/** Policy definitions declared in `src/policies`, keyed by filename. */
 	readonly policies?: Readonly<Record<string, PolicyDeclaration>>;
+	/** Channel declarations from `src/channels`, keyed by filename. */
+	readonly channels?: Readonly<Record<string, ChannelDefinition>>;
 	readonly apps?: Readonly<Record<string, WorkspaceAppDef>>;
 	readonly invoke?: InvokeMapInput;
 	readonly meta?: WorkspaceMeta;
@@ -95,6 +98,7 @@ export type RegisteredWorkspaceState = {
 	readonly automations: Record<string, unknown>;
 	readonly agentTools: Record<string, AgentToolDefinition>;
 	readonly policies: Record<string, PolicyDeclaration>;
+	readonly channels: Record<string, ChannelDefinition>;
 	readonly apps: Record<string, WorkspaceAppDef>;
 	readonly remotes: Record<string, HandlerDefinition>;
 	readonly integrationBindings: Record<string, RegisteredIntegrationRuntimeBinding>;
@@ -494,6 +498,7 @@ export function defineWorkspace<
 		automations,
 		agentTools: { ...(input.agentTools ?? {}) },
 		policies: { ...(input.policies ?? {}) },
+		channels: { ...(input.channels ?? {}) },
 		apps: { ...(input.apps ?? {}) },
 		remotes,
 		integrationBindings: registration.integrationBindings

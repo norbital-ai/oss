@@ -1288,6 +1288,9 @@ function renderWorkspace(
 	for (const [index, policy] of structure.policies.entries()) {
 		imports.push(`import policy${index} from ${JSON.stringify(generatedImport(policy.source))};`);
 	}
+	for (const [index, channel] of structure.channels.entries()) {
+		imports.push(`import channel${index} from ${JSON.stringify(generatedImport(channel.source))};`);
+	}
 	if (structure.seed) {
 		imports.push(`import seed from ${JSON.stringify(generatedImport(structure.seed))};`);
 	}
@@ -1306,8 +1309,11 @@ function renderWorkspace(
 				`\t\t${JSON.stringify(policy.id)}: { ...policy${index}, key: ${JSON.stringify(policy.id)} }`
 		)
 		.join(',\n');
+	const channels = structure.channels
+		.map((channel, index) => `\t\t${JSON.stringify(channel.id)}: channel${index}`)
+		.join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(

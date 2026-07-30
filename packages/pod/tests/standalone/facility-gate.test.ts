@@ -2,7 +2,10 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
-import { assertStandaloneFacilities } from '../../src/lib/bin/invocation/standalone.js';
+import {
+	assertStandaloneFacilities,
+	manifestChannelTransports
+} from '../../src/lib/bin/invocation/standalone.js';
 import { loadHostConfig } from '../../src/lib/bin/invocation/host-config.js';
 import { satisfiedFacilities, type RuntimeFacilityName } from '../../src/lib/host/types.js';
 import { intervalQueue } from '../../src/lib/host/interval-queue.js';
@@ -150,7 +153,14 @@ describe('pod dev facility gate', () => {
 	it('supplies only what it actually implements', async () => {
 		// `pod dev` emulates Core but holds none of Core's credentials. Enumerating the set here means
 		// a facility silently appearing (or disappearing) from the development host is a test failure.
-		expect([...(await developmentFacilities())].sort()).toEqual(['db', 'fileStorage', 'queue']);
+		// `messaging` is in the set but holds no credentials either: it writes to the console, which is
+		// what lets a workspace with channels boot under `pod dev` at all.
+		expect([...(await developmentFacilities())].sort()).toEqual([
+			'db',
+			'fileStorage',
+			'messaging',
+			'queue'
+		]);
 	});
 
 	it('refuses to start a workspace whose facilities it cannot provide', async () => {
@@ -162,6 +172,38 @@ describe('pod dev facility gate', () => {
 		});
 		// Starting anyway would fail at the first inference call, far from the cause.
 		expect(() => assertStandaloneFacilities(agentWorkspace, available)).toThrow(/ai/);
+	});
+
+	/**
+	 * `pod dev` holds no sockets, so it stands in for whatever transports the workspace declares and
+	 * logs what would have been sent. That only works if the declared set is readable from the
+	 * manifest — the host never loads the workspace bundle.
+	 */
+	it('reads the declared channel transports out of the manifest for the development host', async () => {
+		expect(
+			manifestChannelTransports(
+				manifest({
+					channels: {
+						sales_desk: { key: 'sales_desk', transport: 'telegram', policy: 'sales_rep' },
+						support: { key: 'support', transport: 'whatsapp', policy: 'sales_rep' },
+						escalations: { key: 'escalations', transport: 'telegram', policy: 'sales_rep' }
+					}
+				})
+			)
+		).toEqual(['telegram', 'whatsapp']);
+		expect(manifestChannelTransports(manifest())).toEqual([]);
+
+		const { config } = await loadHostConfig({
+			root: await coreWorkspace(),
+			development: true,
+			databaseUrl: 'postgres://localhost:5432/pod',
+			publicUrl: 'http://localhost:5173',
+			orgId: 'o',
+			orgName: 'Org',
+			adminId: 'a',
+			channelTransports: ['telegram']
+		});
+		expect(await config.messaging?.listTransports()).toEqual(['telegram']);
 	});
 
 	it('starts a workspace that only stores geolocation, with no maps provider', async () => {

@@ -111,6 +111,7 @@ startup compares them with `pod.host.ts` and refuses to listen if anything is mi
 | `ai`                  | an agent automation is compiled           |
 | `queue`               | any automation or integration is compiled |
 | `integrationDelivery` | an integration is compiled                |
+| `messaging` transport | a channel declares it in `src/channels`   |
 
 Direct calls that cannot be inferred without executing tenant code are checked at the call site.
 `api.ai(...)` requires an AI binding. An external `api.sendNotification(...)` requires a

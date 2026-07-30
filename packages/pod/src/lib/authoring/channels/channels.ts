@@ -21,11 +21,9 @@ export type ChannelDefinition = {
 	 * open is not something a scale-to-zero tenant can do, so the workspace names one and the host
 	 * provides it.
 	 *
-	 * **Not yet validated.** The check belongs at startup — a workspace naming a transport its host does
-	 * not provide should refuse to boot rather than fail at the first inbound message — but it needs the
-	 * `messaging` facility and its `transports` record, which do not exist yet (the facility is still
-	 * named `notifications` and carries no transports). Until then a wrong name fails when a message
-	 * arrives. Tracked in docs/CORE_REFACTOR.md.
+	 * Checked at startup against the host's `messaging.listTransports()`, so a workspace naming a
+	 * transport its host does not supply refuses to boot instead of failing at the first inbound
+	 * message — see {@link assertChannelTransportsAreSupported}.
 	 */
 	readonly transport: string;
 	/**
@@ -47,4 +45,39 @@ export function defineChannel<const TChannel extends ChannelDefinition>(
 	if (!channel.transport.trim()) throw new Error('Channel transport cannot be empty');
 	if (!String(channel.policy).trim()) throw new Error('Channel policy cannot be empty');
 	return channel;
+}
+
+/**
+ * Refuse a channel whose transport this host cannot carry.
+ *
+ * Same reasoning as the system-event reachability check: the two halves are matched by exact string
+ * far from where either is written, so a wrong name produced no error and no record — the channel
+ * simply never carried anything, and the silence was only noticed when somebody expected a reply.
+ * A transport name is knowable from source and the host's list is knowable at boot, so this is a
+ * cross-reference that can be checked once, before the workspace serves anything.
+ *
+ * The available list is in the message because the mistake is nearly always a name, not a missing
+ * provider: `telegram` against a host offering `whatsapp` is a typo-shaped failure, and the fix is
+ * unguessable without seeing what the host actually has.
+ */
+export function assertChannelTransportsAreSupported(
+	channels: Readonly<Record<string, { readonly transport: string }>>,
+	available: ReadonlySet<string>
+): void {
+	const unsupported = Object.entries(channels).filter(
+		([, channel]) => !available.has(channel.transport)
+	);
+	if (unsupported.length === 0) return;
+	const known = [...available].sort();
+	throw new Error(
+		unsupported
+			.map(
+				([name, channel]) =>
+					`Channel "${name}" needs transport "${channel.transport}", which this host does not supply.` +
+					(known.length > 0
+						? ` Available transports: ${known.join(', ')}.`
+						: ' This host supplies no transports.')
+			)
+			.join('\n')
+	);
 }

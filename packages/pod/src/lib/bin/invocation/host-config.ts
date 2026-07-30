@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { postgresDb } from '../../host/db.js';
+import { consoleMessaging } from '../../host/facilities.js';
 import { localFileStorage } from '../../host/file-storage.js';
 import { devIdentity } from '../../host/identity.js';
 import { intervalQueue } from '../../host/interval-queue.js';
@@ -25,6 +26,15 @@ export type HostConfigInput = {
 	readonly adminId: string;
 	/** Where this workspace is reachable. `pod dev` derives it from the bind address. */
 	readonly publicUrl: string;
+	/**
+	 * Transports the compiled workspace's channels name, for `pod dev` to echo to the console.
+	 *
+	 * Only the Core development emulation reads this. A real host declares its transports because it
+	 * holds the sockets; a development run holds none, so it stands in for every transport the
+	 * workspace declares and logs what would have been sent — the same bargain `devIdentity` and
+	 * console channel delivery already make.
+	 */
+	readonly channelTransports?: readonly string[];
 };
 
 export type ResolvedHostConfig = {
@@ -82,6 +92,10 @@ function coreDevelopmentHostConfig(input: HostConfigInput, source: string): Reso
 			publicUrl: input.publicUrl,
 			fileStorage: localFileStorage({
 				directory: path.join(input.root, '.norbital', 'storage')
+			}),
+			messaging: consoleMessaging({
+				channels: ['email'],
+				transports: input.channelTransports ?? []
 			}),
 			// `pod dev` is a single short-lived process, so a timer is the honest fit. A deployed
 			// workspace configures a durable queue in its own `pod.host.ts`.

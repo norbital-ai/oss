@@ -35,6 +35,7 @@ import {
 } from '../../host/types.js';
 import { cookieSession, subjectHmac } from '../../host/session.js';
 import { emailOtpIdentity } from '../../host/email-otp.js';
+import { assertChannelTransportsAreSupported } from '../../authoring/channels/channels.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from './host-config.js';
 import { workspaceJobs } from './jobs.js';
 import {
@@ -148,6 +149,13 @@ async function loadStandaloneManifest(root: string): Promise<NorbitalManifest> {
 		throw new Error(`Standalone Pod build is missing ${manifestPath}`, { cause });
 	}
 	return parseNorbitalManifest(safeParse(source));
+}
+
+/** Every distinct transport this workspace's channels name, in a stable order. */
+export function manifestChannelTransports(manifest: NorbitalManifest): readonly string[] {
+	return [
+		...new Set(Object.values(manifest.channels ?? {}).map((channel) => channel.transport))
+	].sort();
 }
 
 export function assertStandaloneFacilities(
@@ -566,7 +574,8 @@ async function standaloneAppDocument(
 async function resolveStandaloneHost(
 	root: string,
 	environment: StandaloneEnvironment,
-	development: boolean
+	development: boolean,
+	channelTransports: readonly string[] = []
 ): Promise<ResolvedHostConfig> {
 	return loadHostConfig({
 		root,
@@ -575,7 +584,8 @@ async function resolveStandaloneHost(
 		orgId: environment.orgId,
 		orgName: environment.orgName,
 		adminId: environment.adminId,
-		publicUrl: `http://${environment.host}:${environment.port}`
+		publicUrl: `http://${environment.host}:${environment.port}`,
+		channelTransports
 	});
 }
 
@@ -623,14 +633,23 @@ export async function startStandalone(
 	environment: StandaloneEnvironment,
 	options: StandaloneStartOptions = {}
 ): Promise<void> {
+	// The manifest is read before the host is resolved because `pod dev` stands in for the transports
+	// the workspace declares, and it cannot do that without knowing what they are.
+	const manifest = await loadStandaloneManifest(root);
 	const { config, source } = await resolveStandaloneHost(
 		root,
 		environment,
-		options.development === true
+		options.development === true,
+		manifestChannelTransports(manifest)
 	);
 
-	const manifest = await loadStandaloneManifest(root);
 	assertStandaloneFacilities(manifest, satisfiedFacilities(config));
+	// A channel names a wire only the host can hold open, so this is the last cross-reference in the
+	// startup set: a name that matches nothing must fail here rather than at the first inbound message.
+	assertChannelTransportsAreSupported(
+		manifest.channels ?? {},
+		new Set(config.messaging ? await config.messaging.listTransports() : [])
+	);
 	// Validated before anything is served: an unusable `entry` must name its plugin here rather than
 	// render into every session's sidebar.
 	const hostPlugins = config.hostPlugins ?? [];

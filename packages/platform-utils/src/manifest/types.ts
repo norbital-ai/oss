@@ -266,12 +266,31 @@ export const ManifestPolicySchema = z
 	})
 	.strict();
 
+/**
+ * One conversational entry point, exactly as `src/channels/+<name>.channel.ts` declared it.
+ *
+ * In the manifest because `transport` names something only the *host* can supply, and the host reads
+ * the manifest — not the workspace bundle — when it decides whether it can run this workspace. A
+ * channel naming a transport the host has no provider for is refused at startup for the same reason
+ * a file field without `fileStorage` is.
+ */
+export const ManifestChannelSchema = z
+	.object({
+		key: nonEmpty,
+		transport: nonEmpty,
+		policy: nonEmpty,
+		description: z.string().nullable().optional(),
+		task: z.string().optional()
+	})
+	.strict();
+
 export const NorbitalManifestSchema = z
 	.object({
 		version: z.literal(1),
 		collections: z.record(z.string(), ManifestCollectionEntrySchema),
 		relationships: z.record(z.string(), ManifestRelationshipSchema),
 		policies: z.record(z.string(), ManifestPolicySchema).optional(),
+		channels: z.record(z.string(), ManifestChannelSchema).optional(),
 		apps: z.record(z.string(), ManifestAppSchema).optional(),
 		handlers: z.record(z.string(), ManifestHandlerEntrySchema).optional(),
 		automations: z.record(z.string(), ManifestAutomationSchema),
@@ -301,6 +320,15 @@ export const NorbitalManifestSchema = z
 				ctx.addIssue({
 					code: 'custom',
 					path: ['integrations', key, 'name'],
+					message: 'must match its map key'
+				});
+			}
+		}
+		for (const [key, channel] of Object.entries(manifest.channels ?? {})) {
+			if (channel.key !== key) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['channels', key, 'key'],
 					message: 'must match its map key'
 				});
 			}

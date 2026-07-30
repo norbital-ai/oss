@@ -254,6 +254,36 @@ function buildPolicyEntries(
 	return out as NorbitalManifest['policies'];
 }
 
+/**
+ * Channel declarations, flattened into the manifest so a host can check `transport` before it serves.
+ *
+ * The host never loads the workspace bundle, so a transport name that lives only in
+ * `src/channels/+<name>.channel.ts` is invisible to it. Carrying it here is what lets startup refuse
+ * a workspace whose channels reach a wire nobody holds open.
+ */
+function buildChannelEntries(
+	channels: Record<string, unknown> | undefined
+): NorbitalManifest['channels'] {
+	if (!channels || Object.keys(channels).length === 0) return undefined;
+	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(channels)) {
+		const channel = value as {
+			transport?: string;
+			policy?: string;
+			description?: string | null;
+			task?: string;
+		};
+		out[key] = {
+			key,
+			transport: channel.transport ?? '',
+			policy: String(channel.policy ?? ''),
+			...(channel.description == null ? {} : { description: channel.description }),
+			...(channel.task == null ? {} : { task: channel.task })
+		};
+	}
+	return out as NorbitalManifest['channels'];
+}
+
 export function buildNorbitalManifest(workspace: {
 	readonly collections: Record<string, unknown>;
 	readonly relationships?: Record<string, ManifestRelationship>;
@@ -275,6 +305,7 @@ export function buildNorbitalManifest(workspace: {
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
 		automations: buildAutomationEntries(workspace.registered?.automations),
 		policies: buildPolicyEntries(workspace.registered?.policies),
+		channels: buildChannelEntries(workspace.registered?.channels),
 		env: workspace.env,
 		secrets: workspace.secrets
 			? Object.fromEntries(

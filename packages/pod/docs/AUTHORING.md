@@ -174,11 +174,22 @@ pod dev           # build, migrate, and serve with a loopback development identi
 pod invite you@example.com   # mint a founding invitation (self-hosted)
 ```
 
-`pod dev` supplies `db`, `fileStorage`, and `queue`, and nothing else. A workspace with an agent
-automation refuses to start under it, because `ai` is a _static_ requirement — which is the intended
-answer, not an inconvenience: the alternative is a development run that fails at the first inference
-call, far from the cause.
+`pod dev` supplies `db`, `fileStorage`, `queue`, and a console-only `messaging`, and nothing else. A
+workspace with an agent automation refuses to start under it, because `ai` is a _static_ requirement —
+which is the intended answer, not an inconvenience: the alternative is a development run that fails at
+the first inference call, far from the cause.
+
+`messaging` is there because `pod dev` holds no sockets and a channel needs one. It stands in for every
+transport the workspace's channels declare and logs what would have been sent, so a channel-carrying
+workspace runs locally without Telegram credentials. A deployed host has to supply the transport for
+real — the startup check below is against the host's list, and `pod dev`'s is generous by design.
 
 `maps` and notification channels are not static requirements and never gate startup. Nothing in the
 manifest implies them: a stored geolocation carries its own geometry and address, and a notification
 channel is chosen at call time. Both validate when called.
+
+A **channel** transport is the opposite, and does gate startup. `src/channels/+<name>.channel.ts`
+names its `transport` in source, so it is knowable before anything is served — and the failure it
+prevents is silence rather than an error: a wrong name means the channel simply never carries
+anything, noticed only when somebody expected a reply. A workspace naming a transport its host does
+not supply refuses to boot, naming the channel and listing the transports that are available.

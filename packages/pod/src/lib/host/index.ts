@@ -119,5 +119,14 @@ export type {
 } from '../server/bootstrap/policy_reconcile.server.js';
 
 export { workspaceJobs } from '../bin/invocation/jobs.js';
+
+/**
+ * Refuse a workspace whose channels name a transport this host cannot carry.
+ *
+ * Exported for the same reason `workspaceJobs` is: the check belongs to whoever knows the host's
+ * transports, and only the host does. `pod start` runs it before it listens; Core must run it before
+ * it accepts traffic for a tenant, or the tenant boots with a channel that silently carries nothing.
+ */
+export { assertChannelTransportsAreSupported } from '../authoring/channels/channels.js';
 export type { WorkspaceJobOptions } from '../bin/invocation/jobs.js';
 export type { CronSchedule } from './cron.js';

@@ -734,16 +734,17 @@ Tenant code calls `api.sendNotification(...)`; it does not define a notification
 
 The same rule applies across facilities:
 
-| Workspace behavior                     | Required host facility                    |
-| -------------------------------------- | ----------------------------------------- |
-| Any running workspace                  | `db`                                      |
-| A `file()` field                       | `fileStorage`                             |
-| Deterministic automation               | `queue`                                   |
-| Agent automation                       | `queue` and `ai`                          |
-| Outbound integration                   | `queue` and `integrationDelivery`         |
-| External notification call             | matching `messaging` channel at call time |
-| Geolocation autocomplete or static map | `maps` at call time                       |
-| Direct runtime AI call not in manifest | `ai` at call time                         |
+| Workspace behavior                     | Required host facility                         |
+| -------------------------------------- | ---------------------------------------------- |
+| Any running workspace                  | `db`                                           |
+| A `file()` field                       | `fileStorage`                                  |
+| Deterministic automation               | `queue`                                        |
+| Agent automation                       | `queue` and `ai`                               |
+| Outbound integration                   | `queue` and `integrationDelivery`              |
+| External notification call             | matching `messaging` channel at call time      |
+| A declared channel                     | `messaging` transport of that name, at startup |
+| Geolocation autocomplete or static map | `maps` at call time                            |
+| Direct runtime AI call not in manifest | `ai` at call time                              |
 
 Static field and automation requirements are checked before the server listens. Dynamic notification
 channels and direct API calls are validated precisely when called.

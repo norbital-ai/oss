@@ -347,8 +347,19 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
       and `sendVia(transport, message)` instead — method calls, which is the only thing that boundary
       carries. (The pre-existing `channels` field has the same defect and is unfixed: it is read
       inside the isolate by `hook-api.server.ts`, where it is a function, not an array.)
-- [ ] **B2.** Validate `+<name>.channel.ts` transports at startup, in the shape of
-      `assertSystemEventsAreReachable` in `define-workspace.ts`.
+- [x] **B2. Done.** `assertChannelTransportsAreSupported` in `authoring/channels/channels.ts`, run by
+      `startStandalone` after the facility gate and exported from `@norbital-ai/pod/host` so Core runs
+      the same check. A channel naming a transport the host does not supply refuses to boot, naming
+      the channel and listing what is available — every offending channel, not just the first.
+      Channels now reach the manifest (`buildChannelEntries`, `ManifestChannelSchema`), because the
+      host never loads the workspace bundle and a transport name that lives only in
+      `src/channels/+<name>.channel.ts` is invisible to it.
+      **`pod dev` supplies the transports the workspace declares, as console loggers.** It holds no
+      sockets, so the alternative was `crm` — whose `+sales_desk.channel.ts` names `telegram` — being
+      unrunnable locally without Telegram credentials. The template was left alone: `telegram` is what
+      that channel is, and changing source to suit the weakest host would have made the declaration a
+      lie. The generosity is confined to the Core development emulation; `pod start` checks against a
+      real `pod.host.ts`.
 - [ ] **B3.** Port channel delivery (~2,500 lines: `channel-manager`, `channel-history`, `automation`,
       `pending-channel-message`) onto tenant collections. Telegram built in; WhatsApp host-supplied.
 
