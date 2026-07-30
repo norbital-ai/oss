@@ -75,6 +75,9 @@ silently replacing an already published template revision or publishing only par
 
 Each template commits a `pnpm-lock.yaml` resolved as a standalone project — outside this pnpm
 workspace, so `@norbital-ai/*` come from the registry rather than workspace links.
+It also carries its own `pnpm-workspace.yaml`. That policy exempts only explicitly reviewed,
+exact-version Norbital releases from pnpm's minimum-release-age gate; third-party packages and
+future Norbital versions remain subject to the gate until the template deliberately trusts them.
 
 ```sh
 pnpm templates:lock          # resolve and write

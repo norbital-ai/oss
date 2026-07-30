@@ -1,0 +1,6 @@
+minimumReleaseAgeExclude:
+  - '@norbital-ai/config@0.0.1'
+  - '@norbital-ai/platform-utils@0.0.1'
+  - '@norbital-ai/pod@0.0.1'
+  - '@norbital-ai/std@0.0.1'
+  - '@norbital-ai/ui@0.0.1'

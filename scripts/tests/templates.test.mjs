@@ -49,6 +49,21 @@ describe('template discovery', () => {
 		}
 	});
 
+	it('trusts only the exact first-party v0.0.1 package release before the age gate', () => {
+		const expected = [
+			'@norbital-ai/config@0.0.1',
+			'@norbital-ai/platform-utils@0.0.1',
+			'@norbital-ai/pod@0.0.1',
+			'@norbital-ai/std@0.0.1',
+			'@norbital-ai/ui@0.0.1'
+		];
+		for (const template of discoverTemplates()) {
+			const policy = readFileSync(path.join(template.directory, 'pnpm-workspace.yaml'), 'utf8');
+			for (const release of expected) assert.match(policy, new RegExp(`'${release}'`));
+			assert.doesNotMatch(policy, /@norbital-ai\/\*/);
+		}
+	});
+
 	it('rejects a filter that matches no template', () => {
 		assert.throws(() => discoverTemplates('no-such-template'), /No template matched/);
 	});
