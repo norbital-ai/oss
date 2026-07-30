@@ -74,17 +74,34 @@ const REPLICA_EXCLUDED_TABLES = [
  * initializes the client, rather than after a second round trip. `handleSchema` below is the same
  * data over the wire, for the sync protocol's own tests and for any client that wants it alone.
  */
+/**
+ * The client DDL, cached for the life of this runtime process.
+ *
+ * Building it introspects `pg_class`/`pg_attribute` for every collection — 41 tables and ~40 KB of
+ * DDL on an ordinary workspace — and it is now on the critical path of every workspace load, since
+ * the shell carries it. The answer only changes when the tenant schema does, and a schema change
+ * redeploys the workspace, which replaces this process. So the cache cannot go stale while it
+ * exists: there is no edit that changes the schema and leaves this runtime running.
+ *
+ * Keyed by manifest node anyway, so a runtime that somehow serves two manifests cannot serve one's
+ * DDL for the other.
+ */
+const clientSchemaCache = new Map<string, string>();
+
 export async function loadSyncBootstrap(ctx: ProvisionedContext): Promise<{
 	schemaSql: string;
 	replicaStamp: string;
 	replicaEpoch: string;
 }> {
+	const schemaKey = ctx.manifestCtx.nodeId;
+	const cachedSchema = clientSchemaCache.get(schemaKey);
 	const [schemaSql, epochResult] = await Promise.all([
-		buildClientSchema(ctx),
+		cachedSchema ?? buildClientSchema(ctx),
 		ctx.tenantDb.query<{ epoch: string }>(
 			`SELECT epoch::text AS epoch FROM _norbital_sync_epoch WHERE singleton = TRUE`
 		)
 	]);
+	if (!cachedSchema) clientSchemaCache.set(schemaKey, schemaSql);
 	const replicaEpoch = epochResult.rows[0]?.epoch;
 	if (!replicaEpoch) throw error(500, 'Tenant sync epoch is missing');
 	return {
