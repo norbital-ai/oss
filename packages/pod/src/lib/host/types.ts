@@ -102,6 +102,48 @@ export type HostIdentityProvider = {
 	handleRoute?(request: Request): Promise<Response | null> | Response | null;
 };
 
+/**
+ * A built-in provider named as data rather than constructed.
+ *
+ * The built-in providers need things a configuration file cannot reach: a mailer (the host's messaging
+ * facility) and the invitation table (inside the tenant database). Asking an operator to wire those
+ * would be asking them to reach past the boundary the host contract draws — so the config names the
+ * provider and its policy, and the runner binds the rest. That keeps `pod.host.ts` data, which is
+ * what makes it readable, diffable, and checkable.
+ */
+export type HostIdentityDescriptor = {
+	readonly provider: 'email-otp';
+	/** Signing secret for the session cookie and the code challenge. At least 32 bytes. */
+	readonly secret: string;
+	/** Code lifetime in seconds. Defaults to 10 minutes. */
+	readonly codeTtlSeconds?: number;
+	/** Session lifetime in seconds. Defaults to 30 days. */
+	readonly sessionTtlSeconds?: number;
+	/** Code requests per address per 15 minutes. Defaults to 5. */
+	readonly maxRequestsPerWindow?: number;
+	/**
+	 * Send session and challenge cookies over HTTPS only. Defaults to `true`; set it false only for a
+	 * loopback development bind, where there is no TLS to require.
+	 */
+	readonly secureCookies?: boolean;
+};
+
+/** Email one-time codes, with no password stored anywhere. Bound to the runtime by `pod start`. */
+export function emailOtp(
+	options: Omit<HostIdentityDescriptor, 'provider'>
+): HostIdentityDescriptor {
+	if (Buffer.byteLength(options.secret, 'utf8') < 32) {
+		throw new Error('emailOtp secret must contain at least 32 bytes');
+	}
+	return { provider: 'email-otp', ...options };
+}
+
+export function isIdentityDescriptor(
+	value: HostIdentityProvider | HostIdentityDescriptor
+): value is HostIdentityDescriptor {
+	return 'provider' in value;
+}
+
 /** One unit of recurring work the runtime cannot drive for itself. */
 export type QueueJob = {
 	/**
@@ -167,7 +209,11 @@ export type CorePodHostConfig = {
 export type SelfHostedPodHostConfig = {
 	readonly mode: 'self-hosted';
 	readonly db: HostDbAdapter;
-	readonly identity: HostIdentityProvider;
+	/**
+	 * Either a built-in provider named as data (`emailOtp({ ... })`) or a provider you implement
+	 * yourself for a specific IdP.
+	 */
+	readonly identity: HostIdentityProvider | HostIdentityDescriptor;
 	/**
 	 * The origin this workspace is reachable at, e.g. `https://crm.acme.com`.
 	 *

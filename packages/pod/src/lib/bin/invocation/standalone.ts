@@ -23,13 +23,16 @@ import { pathToFileURL } from 'node:url';
 import { Client, type Notification } from 'pg';
 import { PostgresHostDbBinding, type HostDbConnection } from '../../host/db.js';
 import {
+	isIdentityDescriptor,
 	isVerifiedSubject,
 	satisfiedFacilities,
 	type HostIdentity,
+	type HostIdentityProvider,
 	type HostVerifiedSubject,
 	type SelfHostedPodHostConfig
 } from '../../host/types.js';
-import { subjectHmac } from '../../host/session.js';
+import { cookieSession, subjectHmac } from '../../host/session.js';
+import { emailOtpIdentity } from '../../host/email-otp.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from './host-config.js';
 import { workspaceJobs } from './jobs.js';
 
@@ -255,6 +258,39 @@ export async function migrateStandalone(
 		});
 		await bootstrapStandaloneAdmin(client, environment);
 	});
+}
+
+/**
+ * Mint a founding invitation without starting a server.
+ *
+ * It boots just enough runtime to reach the private control plane — the invitation lives in the
+ * tenant database and the token has to be generated there, so this cannot be a plain SQL insert.
+ * Returns the accept URL for the operator to open or forward; a live invitation for the same address
+ * returns `null` rather than issuing a second redeemable token.
+ */
+export async function inviteStandalone(
+	root: string,
+	environment: StandaloneEnvironment,
+	email: string
+): Promise<string | null> {
+	const { config } = await resolveStandaloneHost(root, environment, false);
+	const runtime = await loadPodRuntime(root);
+	const binding: HostDbConnection = config.db.connect();
+	await binding.validate();
+	try {
+		const result = (await runtime.handlePodHostCommand(
+			{ kind: 'identity', action: 'invite', email, role: 'admin', publicUrl: config.publicUrl },
+			facilityBindings(config, binding),
+			{
+				userId: environment.adminId,
+				organizationId: environment.orgId,
+				organizationName: environment.orgName
+			}
+		)) as { readonly acceptUrl?: string } | null;
+		return result?.acceptUrl ?? null;
+	} finally {
+		await binding.close();
+	}
 }
 
 export async function seedStandalone(
@@ -506,11 +542,15 @@ function facilityBindings(
 	};
 }
 
-function describeHost(config: SelfHostedPodHostConfig, source: string): string {
+function describeHost(
+	config: SelfHostedPodHostConfig,
+	identity: HostIdentityProvider,
+	source: string
+): string {
 	const supplied = [...satisfiedFacilities(config)];
 	const lines = [
 		`[pod] host configuration: ${source}`,
-		`[pod] identity provider: ${config.identity.name}`,
+		`[pod] identity provider: ${identity.name}`,
 		`[pod] facilities: ${supplied.join(', ')}`
 	];
 	return lines.join('\n');
@@ -549,6 +589,59 @@ export async function startStandalone(
 	// which is honest: a host that supplied no key cannot maintain a routing index anyway.
 	const subjectKey = process.env.POD_SUBJECT_HMAC_KEY?.trim() ?? '';
 
+	/**
+	 * Turn a named provider into a live one.
+	 *
+	 * This is the seam the descriptor exists for: delivery needs the messaging facility and the
+	 * invitation lookup needs the tenant database, and neither is reachable from a configuration file.
+	 * Binding here means an operator writes `emailOtp({ secret })` and gets a working login.
+	 */
+	const bindIdentity = (): HostIdentityProvider => {
+		if (!isIdentityDescriptor(config.identity)) return config.identity;
+		const descriptor = config.identity;
+		const notifications = config.notifications;
+		if (!notifications) {
+			throw new Error(
+				'emailOtp requires a notifications provider to send codes. Configure `notifications` in pod.host.ts.'
+			);
+		}
+		return emailOtpIdentity({
+			sessions: cookieSession({
+				secret: descriptor.secret,
+				...(descriptor.sessionTtlSeconds ? { maxAgeSeconds: descriptor.sessionTtlSeconds } : {}),
+				...(descriptor.secureCookies === false ? { secure: false } : {})
+			}),
+			secret: descriptor.secret,
+			organizationId: environment.orgId,
+			organizationName: environment.orgName,
+			...(descriptor.codeTtlSeconds ? { ttlSeconds: descriptor.codeTtlSeconds } : {}),
+			...(descriptor.maxRequestsPerWindow
+				? { maxRequestsPerWindow: descriptor.maxRequestsPerWindow }
+				: {}),
+			deliver: async ({ email, code }) => {
+				const result = await notifications.send({
+					organizationId: environment.orgId,
+					channel: notifications.channels[0] ?? 'email',
+					recipientUserId: email,
+					subject: `Your ${environment.orgName} sign-in code`,
+					message: `Your sign-in code is ${code}. It expires in ten minutes.`,
+					cta: null
+				});
+				if (!result.sent) throw new Error(result.reason ?? 'provider refused delivery');
+			},
+			inviteeEmailForToken: async (token) => {
+				const found = (await dispatch({
+					kind: 'identity',
+					action: 'invite-email',
+					token
+				})) as { readonly email?: string | null } | null;
+				return found?.email ?? null;
+			}
+		});
+	};
+
+	const identity = bindIdentity();
+
 	const dispatch = (command: unknown): Promise<unknown> =>
 		runtime.handlePodHostCommand(command, bindings, {
 			userId: environment.adminId,
@@ -576,7 +669,7 @@ export async function startStandalone(
 		const webRequest = await toWebRequest(request, environment);
 		// A provider owns its routes before anything else looks at the request, so a login page is
 		// reachable while unauthenticated and is never mistaken for a workspace asset.
-		const routed = await config.identity.handleRoute?.(webRequest);
+		const routed = await identity.handleRoute?.(webRequest);
 		if (routed) return writeWebResponse(routed, response);
 
 		const asset = await standaloneStaticAsset(root, request);
@@ -588,7 +681,7 @@ export async function startStandalone(
 			return;
 		}
 
-		const authentication = await config.identity.authenticate(webRequest);
+		const authentication = await identity.authenticate(webRequest);
 		if (!authentication) {
 			response.statusCode = 401;
 			response.end('Unauthorized');
@@ -601,15 +694,15 @@ export async function startStandalone(
 		}
 		// The provider proved an address; the directory that turns it into a user lives in the tenant
 		// database, so resolution goes over the private control plane rather than here.
-		const identity = isVerifiedSubject(authentication)
+		const resolved = isVerifiedSubject(authentication)
 			? await resolveSubject(authentication)
 			: authentication;
-		if (!identity) {
+		if (!resolved) {
 			response.statusCode = 403;
 			response.end('Forbidden: this address has no workspace user and no pending invitation');
 			return;
 		}
-		const authenticated = await withHostIdentity(webRequest, identity);
+		const authenticated = await withHostIdentity(webRequest, resolved);
 		await writeWebResponse(await runtime.handlePodRequest(authenticated, bindings), response);
 	};
 	const server = createServer((request, response) => {
@@ -640,9 +733,9 @@ export async function startStandalone(
 
 	try {
 		await listen(server, environment);
-		console.log(describeHost(config, source));
+		console.log(describeHost(config, identity, source));
 		console.log(`Pod listening at http://${environment.host}:${environment.port}`);
-		if (config.identity.name === 'dev') {
+		if (identity.name === 'dev') {
 			console.log(
 				`[pod] DEVELOPMENT IDENTITY: every request is ${environment.adminEmail}. Never expose this process.`
 			);

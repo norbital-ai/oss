@@ -37,11 +37,7 @@ export async function seatCensus(): Promise<TSeatCensus> {
  */
 export async function emitMembershipEvent(input: {
 	readonly reason:
-		| 'invite_accepted'
-		| 'user_removed'
-		| 'user_deactivated'
-		| 'user_reactivated'
-		| 'role_changed';
+		'invite_accepted' | 'user_removed' | 'user_deactivated' | 'user_reactivated' | 'role_changed';
 	readonly subjectHmac: string | null;
 }): Promise<void> {
 	const ctx = getWorkspace({ provision: true });

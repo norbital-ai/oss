@@ -7,6 +7,7 @@ import { devIdentity } from '../../host/identity.js';
 import { intervalQueue } from '../../host/interval-queue.js';
 import type {
 	HostDbAdapter,
+	HostIdentityDescriptor,
 	HostIdentityProvider,
 	PodHostConfig,
 	SelfHostedPodHostConfig
@@ -44,11 +45,19 @@ function isHostConfig(value: unknown): value is PodHostConfig {
 	if (mode !== 'self-hosted') return false;
 	const identity = (value as SelfHostedPodHostConfig).identity as unknown;
 	const db = (value as SelfHostedPodHostConfig).db as unknown;
-	return (
+	const publicUrl = (value as SelfHostedPodHostConfig).publicUrl as unknown;
+	// Identity is either a live provider or a named descriptor the runner binds; both are objects, so
+	// the shape check has to accept either rather than insisting on `authenticate`.
+	const identityShaped =
 		typeof identity === 'object' &&
 		identity != null &&
-		typeof (identity as HostIdentityProvider).authenticate === 'function' &&
-		typeof (identity as HostIdentityProvider).name === 'string' &&
+		((typeof (identity as HostIdentityProvider).authenticate === 'function' &&
+			typeof (identity as HostIdentityProvider).name === 'string') ||
+			typeof (identity as HostIdentityDescriptor).provider === 'string');
+	return (
+		identityShaped &&
+		typeof publicUrl === 'string' &&
+		publicUrl.trim().length > 0 &&
 		typeof db === 'object' &&
 		db != null &&
 		typeof (db as HostDbAdapter).connect === 'function' &&
@@ -119,7 +128,7 @@ export async function loadHostConfigFile(root: string): Promise<LoadedHostConfig
 				: undefined;
 		if (!isHostConfig(exported)) {
 			throw new Error(
-				`${filename} must default-export definePodHost({ mode: 'core' }) or definePodHost({ mode: 'self-hosted', db, identity, ... }).`
+				`${filename} must default-export definePodHost({ mode: 'core' }) or definePodHost({ mode: 'self-hosted', db, identity, publicUrl, ... }). A self-hosted host needs all three: db, identity (a provider or emailOtp({ secret })), and publicUrl.`
 			);
 		}
 		return { config: exported, source: filename };

@@ -15,7 +15,11 @@ import {
 	seatCensus,
 	workspaceMembership
 } from '$lib/server/identity/subject.server.js';
-import { provisionFoundingInvitation } from '$lib/server/identity/invitation.server.js';
+import {
+	inviteeEmailForToken,
+	mintInvitation,
+	provisionFoundingInvitation
+} from '$lib/server/identity/invitation.server.js';
 import type {
 	CollectionExportPipeline,
 	CollectionImportPipeline,
@@ -198,6 +202,21 @@ export const runtimeRunRequestSchema = z.union([
 	}),
 	z.object({ kind: z.literal('identity'), action: z.literal('seats') }),
 	z.object({ kind: z.literal('identity'), action: z.literal('membership') }),
+	// Which address an invitation token belongs to. Lookup only — the claim happens during subject
+	// resolution, so this cannot consume an invitation and cannot be used to enumerate them.
+	z.object({
+		kind: z.literal('identity'),
+		action: z.literal('invite-email'),
+		token: z.string().min(1).max(512)
+	}),
+	z.object({
+		kind: z.literal('identity'),
+		action: z.literal('invite'),
+		email: z.string().trim().min(1).max(320),
+		role: z.string().trim().min(1).max(32).optional(),
+		invitedByUserId: z.string().uuid().optional(),
+		publicUrl: z.string().trim().min(1)
+	}),
 	// Mints the founding invitation for a freshly provisioned tenant. The token is generated here and
 	// leaves only by email, so the provisioning host never sees a redeemable credential.
 	z.object({
@@ -547,6 +566,17 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 		case 'identity': {
 			if (request.action === 'seats') return seatCensus();
 			if (request.action === 'membership') return workspaceMembership();
+			if (request.action === 'invite-email') {
+				return { email: await inviteeEmailForToken(request.token) };
+			}
+			if (request.action === 'invite') {
+				return mintInvitation({
+					email: request.email,
+					...(request.role ? { role: request.role } : {}),
+					...(request.invitedByUserId ? { invitedByUserId: request.invitedByUserId } : {}),
+					publicUrl: request.publicUrl
+				});
+			}
 			return resolveSubjectToUser({
 				email: request.email,
 				...(request.displayName ? { displayName: request.displayName } : {}),

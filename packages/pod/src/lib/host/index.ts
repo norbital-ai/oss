@@ -22,7 +22,14 @@
  * need durability, restart survival, and single-flight execution that a timer cannot give, so a
  * deployed workspace points it at pg-boss or an equivalent; `intervalQueue` is for development.
  */
-export { definePodHost, env, isVerifiedSubject, satisfiedFacilities } from './types.js';
+export {
+	definePodHost,
+	emailOtp,
+	env,
+	isIdentityDescriptor,
+	isVerifiedSubject,
+	satisfiedFacilities
+} from './types.js';
 export type {
 	HostAiBinding,
 	HostDbAdapter,
@@ -32,6 +39,7 @@ export type {
 	HostIdentityProvider,
 	HostIntegrationDelivery,
 	HostAuthentication,
+	HostIdentityDescriptor,
 	HostMapsBinding,
 	HostNotificationsBinding,
 	HostQueue,

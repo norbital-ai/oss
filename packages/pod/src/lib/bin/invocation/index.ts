@@ -7,7 +7,7 @@ import type { CheckerDiagnostic } from '../../vite/checker.js';
 import type { compilePodFilesystem as CompilePodFilesystem } from '../../vite/compiler/index.js';
 
 const usage =
-	'Usage: pod sync [--watch] | pod check | pod build | pod migration create <name> [--custom] | pod migrate | pod seed | pod start | pod dev [--seed] | pod platform build <out-dir> <package-key>';
+	'Usage: pod sync [--watch] | pod check | pod build | pod migration create <name> [--custom] | pod migrate | pod seed | pod invite <email> | pod start | pod dev [--seed] | pod platform build <out-dir> <package-key>';
 
 type CompilationResult = Awaited<ReturnType<typeof CompilePodFilesystem>>;
 
@@ -99,6 +99,20 @@ async function createMigration(root: string, name: string, custom: boolean): Pro
 async function seed(root: string): Promise<number> {
 	const { loadStandaloneEnvironment, seedStandalone } = await import('./standalone.js');
 	await seedStandalone(root, loadStandaloneEnvironment(root));
+	return 0;
+}
+
+/**
+ * Mint the founding invitation for a self-hosted workspace.
+ *
+ * The standalone counterpart to the `provision` host command Core issues: it creates an invitation
+ * and no account, so a freshly migrated database admits nobody until the address is proven. Safe to
+ * re-run — a live invitation for the same address is reused rather than a second token issued.
+ */
+async function invite(root: string, email: string): Promise<number> {
+	const { inviteStandalone, loadStandaloneEnvironment } = await import('./standalone.js');
+	const url = await inviteStandalone(root, loadStandaloneEnvironment(root), email);
+	console.log(url ? `[pod] invitation ready: ${url}` : '[pod] a live invitation already exists');
 	return 0;
 }
 
@@ -216,6 +230,7 @@ export async function runPodCli(
 		return createMigration(root, args[2], args[3] === '--custom');
 	}
 	if (args[0] === 'seed' && args.length === 1) return seed(root);
+	if (args[0] === 'invite' && args.length === 2 && args[1]) return invite(root, args[1]);
 	if (args[0] === 'start' && args.length === 1) return start(root);
 	if (args[0] === 'dev' && (args.length === 1 || (args.length === 2 && args[1] === '--seed'))) {
 		return develop(root, args[1] === '--seed');

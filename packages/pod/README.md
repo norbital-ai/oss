@@ -777,10 +777,10 @@ import {
 	consoleNotifications,
 	definePodHost,
 	env,
+	emailOtp,
 	intervalQueue,
 	localFileStorage,
-	postgresDb,
-	trustedHeaderIdentity
+	postgresDb
 } from '@norbital-ai/pod/host';
 
 export default definePodHost({
@@ -789,9 +789,8 @@ export default definePodHost({
 		url: env('DATABASE_URL'),
 		maxConnections: 20
 	}),
-	identity: trustedHeaderIdentity({
-		token: env('POD_TRUSTED_HOST_TOKEN')
-	}),
+	publicUrl: env('POD_PUBLIC_URL'),
+	identity: emailOtp({ secret: env('POD_AUTH_SECRET') }),
 	fileStorage: localFileStorage({
 		directory: '.norbital/storage'
 	}),
@@ -805,6 +804,51 @@ export default definePodHost({
 PostgreSQL, local/S3-compatible file storage, trusted-header/development identity, and notification
 composition helpers. AI, maps, and integration credentials remain host-specific contracts; there is
 no pretend default provider.
+
+### Identity
+
+Pod owns authentication. The directory is the `user` table, credentials and invitations live in the
+tenant database, and the login, code-entry, and invitation-accept pages ship with the runtime — a
+workspace author writes no auth code and no auth markup.
+
+`emailOtp({ secret })` is the default and stores no password: the address is the credential. It is a
+_descriptor_, not a constructed provider, because sending a code needs the messaging facility and
+reading an invitation needs the tenant database — neither reachable from a config file. `pod start`
+binds those, so `pod.host.ts` stays data.
+
+`publicUrl` is required. An invitation link has to be absolute, and the token travels by email, so
+there is no request to derive an origin from when the link is built.
+
+```ts
+identity: emailOtp({ secret: env('POD_AUTH_SECRET') });
+```
+
+Bring your own IdP by implementing `HostIdentityProvider` instead:
+
+```ts
+identity: {
+	name: 'oidc',
+	async handleRoute(request) {
+		// Consulted before authentication, so a login page is reachable with no session.
+		// Return null for "not my route".
+	},
+	async authenticate(request) {
+		// A `HostIdentity` names a user. A `HostVerifiedSubject` — `{ subject: { email } }` — says
+		// "I proved this address" and lets Pod resolve it against the directory, honouring a pending
+		// invitation. A `Response` challenges (a redirect to your login page). `null` is a bare 401.
+	}
+}
+```
+
+Invite people from the tenant configuration surface, or from the CLI:
+
+```bash
+pod invite someone@example.com
+```
+
+That mints an invitation and **no account** — an invitation is a claim, not an identity, so a freshly
+migrated workspace admits nobody until the address is proven. The token is stored only as a digest;
+the plaintext exists once, in the link.
 
 ### The queue facility
 

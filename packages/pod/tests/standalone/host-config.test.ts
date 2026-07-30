@@ -25,7 +25,8 @@ function input(root: string, development: boolean): HostConfigInput {
 		databaseUrl: 'postgres://core-development',
 		orgId: '11111111-1111-4111-8111-111111111111',
 		orgName: 'Test Organization',
-		adminId: '22222222-2222-4222-8222-222222222222'
+		adminId: '22222222-2222-4222-8222-222222222222',
+		publicUrl: 'http://127.0.0.1:5173'
 	};
 }
 
@@ -53,15 +54,41 @@ describe('pod.host.ts deployment target', () => {
 		const root = await rootWith(`
 export default {
 	mode: 'self-hosted',
+	publicUrl: 'https://crm.acme.com',
 	db: { connectionString: 'postgres://self-hosted', connect() { return {}; } },
 	identity: { name: 'custom', authenticate() { return null; } }
 };`);
 		const resolved = await loadHostConfig(input(root, false));
 
 		expect(resolved.config.mode).toBe('self-hosted');
-		expect(resolved.config.identity.name).toBe('custom');
+		expect(resolved.config.publicUrl).toBe('https://crm.acme.com');
 		expect(resolved.config.fileStorage).toBeUndefined();
 		expect(await resolveDatabaseUrl(root, 'postgres://fallback')).toBe('postgres://self-hosted');
+	});
+
+	it('accepts a named identity descriptor as well as a constructed provider', async () => {
+		// `emailOtp({ ... })` is data, so the shape check must not insist on an `authenticate` method.
+		const root = await rootWith(`
+export default {
+	mode: 'self-hosted',
+	publicUrl: 'https://crm.acme.com',
+	db: { connectionString: 'postgres://self-hosted', connect() { return {}; } },
+	identity: { provider: 'email-otp', secret: '${'a'.repeat(32)}' }
+};`);
+		const resolved = await loadHostConfig(input(root, false));
+		expect(resolved.config.identity).toMatchObject({ provider: 'email-otp' });
+	});
+
+	it('refuses a self-hosted config with no publicUrl, naming what is missing', async () => {
+		// Without it an invitation link cannot be absolute, and the token travels by email — so there is
+		// no request to derive an origin from later. Failing at startup beats failing at the first invite.
+		const root = await rootWith(`
+export default {
+	mode: 'self-hosted',
+	db: { connectionString: 'postgres://self-hosted', connect() { return {}; } },
+	identity: { name: 'custom', authenticate() { return null; } }
+};`);
+		await expect(loadHostConfig(input(root, false))).rejects.toThrow(/publicUrl/);
 	});
 
 	it('requires an explicit target and lets Core commands use the environment database', async () => {

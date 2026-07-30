@@ -78,6 +78,7 @@ describe.skipIf(!hasDocker)('Pod standalone process — E2E', () => {
 export default definePodHost({
 	mode: 'self-hosted',
 	db: postgresDb({ url: env('DATABASE_URL') }),
+	publicUrl: \`http://\${env('POD_HOST')}:\${env('POD_PORT')}\`,
 	identity: devIdentity({
 		userId: env('POD_ADMIN_ID'),
 		organizationId: env('POD_ORG_ID'),
