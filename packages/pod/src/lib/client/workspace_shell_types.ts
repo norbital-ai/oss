@@ -73,9 +73,3 @@ export type TenantWorkspaceHostPlugin = {
 	readonly icon: string | null;
 	readonly entry: string;
 };
-
-export type TenantWorkspacePageData = Pick<
-	TenantWorkspaceShellData,
-	'user' | 'organization' | 'initialWorkspaceLatest' | 'accessibleAppNames' | 'policyGrants'
-> &
-	Partial<Pick<TenantWorkspaceShellData, 'baseScope' | 'userOrganizations'>>;

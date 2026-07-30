@@ -33,8 +33,6 @@ export const ApprovalRequestResolvedSchema = z.object({
 	teams: z.array(_TeamWithMembersZod)
 });
 
-export type TApprovalRequestResolved = z.infer<typeof ApprovalRequestResolvedSchema>;
-
 const ApprovalStepStackSchema = z.array(ApprovalRequestStepNodeSchema);
 const ApprovalStepStacksSchema = z.array(ApprovalStepStackSchema);
 

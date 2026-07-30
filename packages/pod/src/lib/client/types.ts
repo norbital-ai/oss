@@ -56,11 +56,6 @@ const _BaseNavStateZod = z.object({
 	stack: z.array(NavStackItemSchema)
 });
 
-export const SYSTEM_NAV_NODE_IDS = {
-	APPROVAL: 'host:system:approval',
-	WORKSPACE_RECORD: 'host:system:workspace-record'
-} as const;
-
 function validateNavStateSemantics(nav: TNavStateShape): void {
 	if (nav.stack.length === 0) {
 		throw new Error('Navigation stack must contain at least one item.');
@@ -87,69 +82,6 @@ export type TDynamicApplicationContextResolvedState = z.infer<
 >;
 
 export type TDynamicApplicationScopeData = TBaseScope & TDynamicApplicationContextResolvedState;
-
-export type TCollectionMutationPayload = Record<string, unknown>;
-
-export type TCollectionActionContext =
-	| {
-			type: 'list';
-			scope: TBaseScope & { records: null };
-			collectionMetadata?: ManifestCollectionEntry;
-	  }
-	| {
-			type: 'view';
-			scope: TBaseScope & { records: null };
-			collectionMetadata?: ManifestCollectionEntry;
-	  }
-	| {
-			type: 'create';
-			payload: TCollectionMutationPayload;
-			scope: TBaseScope & { incoming_record: TCollectionMutationPayload };
-			collectionMetadata?: ManifestCollectionEntry;
-	  }
-	| {
-			type: 'update';
-			payload: TCollectionMutationPayload;
-			scope: TBaseScope & {
-				incoming_record: TCollectionMutationPayload;
-				original_record: TNorbitalDBRecord;
-			};
-			collectionMetadata?: ManifestCollectionEntry;
-	  }
-	| {
-			type: 'delete';
-			scope: TBaseScope & { original_record: TNorbitalDBRecord };
-			collectionMetadata?: ManifestCollectionEntry;
-	  };
-
-export type TResolvedApprovalConfig = TApprovalConfig & {
-	collection_name: string;
-};
-
-export type PermissionEvaluationResult = {
-	hasDirectAccess: boolean;
-	reducedCondition: TPolicy['grants'][number]['conditions'] | null;
-	approvalConfig: TResolvedApprovalConfig | null;
-};
-
-export type TCollectionPermissionScopeInput = {
-	approvalServiceBypassKey?: string;
-	approvalRequestId?: string;
-	collectionMetadata: ManifestCollectionEntry;
-	context: TCollectionActionContext;
-};
-
-export type TCollectionPermissionScopeOutput = TCollectionPermissionScopeInput & {
-	policyGrants: Array<TPolicy['grants'][number]>;
-	approvalConfig?: TResolvedApprovalConfig | null;
-	reducedCondition?: TPolicy['grants'][number]['conditions'];
-};
-
-export function parseDynamicApplicationContextResolvedState(
-	value: unknown
-): TDynamicApplicationContextResolvedState {
-	return DynamicApplicationContextResolvedSchema.parse(value);
-}
 
 export function isSameNavStackItem(a: NavStackItem, b: NavStackItem): boolean {
 	return (

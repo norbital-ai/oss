@@ -1,4 +1,3 @@
-import { NORBITAL_ORG_ID, NORBITAL_ORG_NAME } from '$lib/server/run/env.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import type { TBaseScope, TScopeRequestor } from '$lib/shared/scope.js';
 import { UserInfoSchema } from '@norbital-ai/platform-utils/scope/types';
@@ -74,18 +73,6 @@ function resolveUserAndBaseScope(params: {
 	return { user: requestor, baseScope };
 }
 
-function organizationIdentity(): { norbital_id: string; name: string } {
-	const norbital_id = NORBITAL_ORG_ID?.trim();
-	if (!norbital_id) {
-		throw new Error('NORBITAL_ORG_ID is not set — cannot build workspace context');
-	}
-	const name = NORBITAL_ORG_NAME?.trim();
-	if (!name) {
-		throw new Error('NORBITAL_ORG_NAME is not set — cannot build workspace context');
-	}
-	return { norbital_id, name };
-}
-
 export async function resolveRequestorBaseScope(params: {
 	tenantDb: TenantDbClient;
 	organization: { norbital_id: string; name: string };
@@ -118,35 +105,4 @@ export async function resolveRequestorBaseScope(params: {
 	});
 	if (!resolved) return null;
 	return { baseScope: resolved.baseScope };
-}
-
-export async function buildWorkspaceContext(params: {
-	userId: string;
-	zone: WorkspaceZone;
-	tenantDb: TenantDbClient;
-}): Promise<ProvisionedContext | null> {
-	const zone = params.zone;
-	const tenantDb = params.tenantDb;
-	const organization = organizationIdentity();
-	const manifestCtx = getManifestContext(zone, organization.norbital_id);
-	const workspace = getTenantWorkspace();
-	const tableRegistry = workspace.tables;
-	const relationsRegistry = workspace.relations;
-	const resolved = await resolveRequestorBaseScope({
-		tenantDb,
-		organization,
-		userId: params.userId
-	});
-	if (!resolved) return null;
-
-	return createWorkspaceContext({
-		provision: 'provisioned',
-		manifestCtx,
-		organization,
-		baseScope: resolved.baseScope,
-		zone,
-		tenantDb,
-		tableRegistry,
-		relationsRegistry
-	});
 }

@@ -46,10 +46,3 @@ export function compileRawSqlRelationsFilter(
 			parameterizedSql(operators.sql, text, params)
 	} as unknown as AnyRelationsFilter; // stupidity: boundary-cast — Drizzle's callback filter is opaque and non-serializable.
 }
-
-export function assertRelationsFilterRecord(value: unknown): Record<string, unknown> {
-	if (!typeGuard(recordSchema, value)) {
-		throw new Error('Expected a relations filter record');
-	}
-	return value;
-}

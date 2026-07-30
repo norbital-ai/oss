@@ -27,14 +27,6 @@ export function getPermissionBypassKey(): string | undefined {
 	return trimmed(RAW_KEY);
 }
 
-export function requirePermissionBypassKey(): string {
-	const key = trimmed(RAW_KEY);
-	if (!key) {
-		throw new Error('System config error: Bypass key not configured');
-	}
-	return key;
-}
-
 const bypassStorage = new AsyncLocalStorage<string | undefined>();
 
 /** The bypass key active for the current async context, if any. */

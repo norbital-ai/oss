@@ -13,10 +13,6 @@ import { createContext } from 'svelte';
 
 const [getPageSurfaceContext, setPageSurfaceContext] = createContext<() => PageSurfaceState>();
 
-export function getPageSurfaceStateContext(): () => PageSurfaceState {
-	return getPageSurfaceContext();
-}
-
 export function setPageSurfaceStateContext(context: () => PageSurfaceState): void {
 	setPageSurfaceContext(context);
 	setPlatformStateContext(context);

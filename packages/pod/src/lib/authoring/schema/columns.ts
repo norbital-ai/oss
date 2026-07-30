@@ -97,10 +97,6 @@ export function readColumnCustom(column: Column): ColumnCustomMeta | undefined {
 	return readColumnCustomFromHost(column);
 }
 
-export function columnCustomKind(column: Column): ColumnCustomKind | undefined {
-	return readColumnCustom(column)?.kind ?? column.custom;
-}
-
 export type ColumnCustomMetaForKind<K extends ColumnCustomMeta['kind']> = Extract<
 	ColumnCustomMeta,
 	{ readonly kind: K }
@@ -111,11 +107,6 @@ export function columnCustomIsKind<K extends ColumnCustomMeta['kind']>(
 	kind: K
 ): meta is ColumnCustomMetaForKind<K> /* stupidity:allow R5b -- canonical union guard */ {
 	return meta?.kind === kind;
-}
-
-/** Array columns — Drizzle only (`PgArray`). */
-export function isPgArrayColumn(column: Column): boolean {
-	return column.columnType === 'PgArray';
 }
 
 /** Resolve custom metadata from a column builder, including `.array()` wrappers. */
