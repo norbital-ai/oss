@@ -11,21 +11,14 @@ import type { CollectionSyncState } from './types.js';
 const PAGE_SIZE = 5000;
 
 /**
- * How many rows a collection may hold before it stops being *resident* (fully local) and becomes
- * *windowed*.
- *
- * The budget is small on purpose. A collection that fits is fully local within a few round-trips;
- * one that doesn't is abandoned immediately rather than speculatively pulling tens of thousands of
- * rows. Speculative pulling is not just slow — a window materialised under one sort order is
- * useless for a different one, so most of those rows would be dead weight. Windowed collections
- * instead accumulate their working set from the queries the app actually makes
- * (`absorbServerRows`), which converges on what this user touches.
- *
- * Note this counts *policy-scoped* rows. A million-row table is often a few thousand rows for any
- * one user, and those users get the fully-local experience with no special handling.
- */
-/**
  * How many bytes of collection data this replica may hold, across every collection.
+ *
+ * A collection that fits is fully local within a few round trips; one that does not is *windowed*
+ * — the replica keeps the working set the app actually asks for (`absorbServerRows`) rather than
+ * speculatively pulling rows that a different sort order would make useless anyway.
+ *
+ * Note this measures *policy-scoped* data. A million-row table is often a few thousand rows for
+ * any one user, and those users get the fully-local experience with no special handling.
  *
  * A row count is the wrong unit for a storage budget: 25,000 rows of a four-column lookup table
  * and 25,000 rows of a wide document collection differ by orders of magnitude on disk, and the
@@ -42,6 +35,15 @@ export const DEFAULT_RESIDENCY_BYTES = 1_073_741_824; // 1 GiB
 type CollectionMeta = {
 	/** Rows are local and safe to read. */
 	ready: boolean;
+	/**
+	 * A catch-up has run to completion at least once on this device.
+	 *
+	 * Distinct from `ready`, which is set on the FIRST page so reads can start immediately. The
+	 * difference is what separates "no rows yet" from "no rows": mid-catch-up a collection can
+	 * legitimately answer with nothing, and treating that as the answer renders an empty table for
+	 * data that is still arriving.
+	 */
+	synced: boolean;
 	/** Every policy-visible row is local — counts, search and end-of-data are answerable offline. */
 	resident: boolean;
 	rows: number;
@@ -104,8 +106,11 @@ export class SubscriptionRegistry {
 			.then((persisted) => {
 				for (const [collection, state] of persisted) {
 					if (this.meta.has(collection)) continue;
+					// `_pod_sync_state` is only written when a catch-up completes, so anything restored
+					// from it has genuinely synced at least once.
 					this.meta.set(collection, {
 						ready: true,
+						synced: true,
 						resident: state.resident,
 						rows: state.rows,
 						bytes: state.bytes
@@ -117,6 +122,16 @@ export class SubscriptionRegistry {
 
 	has(collection: string): boolean {
 		return this.meta.get(collection)?.ready ?? false;
+	}
+
+	/**
+	 * Whether an empty local answer for this collection can be trusted as the answer.
+	 *
+	 * Until a catch-up has completed once, it cannot: the rows may simply not have arrived. Callers
+	 * fall back to the server rather than render an empty state over data that is still in flight.
+	 */
+	hasSynced(collection: string): boolean {
+		return this.meta.get(collection)?.synced ?? false;
 	}
 
 	/** True when every policy-visible row of the collection is local. */
@@ -186,6 +201,10 @@ export class SubscriptionRegistry {
 		let bytes = 0;
 		let resident = false;
 		let firstPage = true;
+		// A catch-up may stop for three reasons, and only two of them mean the local rows can be
+		// trusted as an answer. Reaching the end of the data, or the budget, is a real stopping
+		// point. A server that offers a cursor and then sends nothing is not — see below.
+		let trustworthy = false;
 		const budget = Math.max(0, this.residencyBytes - this.bytesHeldExcluding(collection));
 
 		try {
@@ -199,7 +218,13 @@ export class SubscriptionRegistry {
 					onFirstPage();
 				}
 				if (!this.meta.get(collection)?.ready) {
-					this.meta.set(collection, { ready: true, resident: false, rows, bytes });
+					this.meta.set(collection, {
+						ready: true,
+						synced: false,
+						resident: false,
+						rows,
+						bytes
+					});
 					// Tell the UI the replica just warmed up; otherwise the rows sit in PGlite unread
 					// until some unrelated change happens to invalidate the query.
 					this.client.notifyCollection(collection);
@@ -210,19 +235,23 @@ export class SubscriptionRegistry {
 
 				if (page.nextCursor === null) {
 					resident = true;
+					trustworthy = true;
 					break;
 				}
-				// An empty page that still offers a cursor would spin forever. Treat it as the end
-				// of the data rather than trusting the cursor — the stream keeps us correct either
-				// way, and a hung catch-up loop would take the whole tab with it.
-				if (page.rows.length === 0) {
-					resident = true;
-					break;
-				}
+				// An empty page that still offers a cursor would spin forever, so stop — but do NOT
+				// call the collection complete. It used to, and that is how a table renders "no
+				// records" over data that exists: the server says "there is more" and sends none of
+				// it, the replica records itself as fully synced and empty, and from then on it
+				// answers every read locally with nothing. Leaving it untrusted sends reads to the
+				// server, which is the only party that can say whether the collection is really empty.
+				if (page.rows.length === 0) break;
 				// Over the shared budget: this collection is windowed. Stop rather than keep pulling —
 				// the rows already here still serve reads that fall inside them, and the server owns
 				// everything past the edge.
-				if (bytes >= budget) break;
+				if (bytes >= budget) {
+					trustworthy = true;
+					break;
+				}
 				cursor = page.nextCursor;
 			}
 		} catch {
@@ -233,8 +262,12 @@ export class SubscriptionRegistry {
 			return;
 		}
 
-		this.meta.set(collection, { ready: true, resident, rows, bytes });
-		await this.client.recordSyncState(collection, resident, rows, bytes).catch(() => undefined);
+		this.meta.set(collection, { ready: true, synced: trustworthy, resident, rows, bytes });
+		// Only a trustworthy stop is persisted. Recording an untrustworthy one would make the next
+		// reload restore it as synced and re-introduce the empty-table-over-real-data state.
+		if (trustworthy) {
+			await this.client.recordSyncState(collection, resident, rows, bytes).catch(() => undefined);
+		}
 		this.client.notifyCollection(collection);
 		this.client.startStream();
 	}

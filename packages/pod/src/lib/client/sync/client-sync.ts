@@ -167,6 +167,11 @@ export async function localFindMany(
 		const cursor = encodeLocalCursor(rows[rows.length - 1]!, normalizeOrder(query.orderBy));
 		return { rows: hydrated, nextCursor: cursor };
 	}
+	// Nothing local, and this collection has never finished a catch-up: the rows may simply not
+	// have arrived. Answering "empty" here is what renders a populated table as "no records" during
+	// a first sync. Let the server say whether it is really empty — until it does, the query has no
+	// value and reports itself as loading, which is the honest state.
+	if (hydrated.length === 0 && !sync.registry.hasSynced(collection)) return null;
 	// The result ran out. That is the end of the data only when the whole collection is local —
 	// inside a window it may just be the window's edge, so let the server answer.
 	if (sync.registry.isResident(collection)) return { rows: hydrated, nextCursor: null };
@@ -212,9 +217,15 @@ export async function localFindFirst(
 	const rows = await sync.client.queryLocal<Record<string, unknown>>(built.sql, built.params);
 	const hydrated = await hydrateRelations(sync, collection, rows, query.with);
 	if (hydrated === null) return undefined;
-	// A miss inside a windowed collection is not proof of absence — the row may lie beyond the
-	// window. A hit is always trustworthy: the replica only ever holds real, policy-scoped rows.
-	if (hydrated.length === 0 && !sync.registry.isResident(collection)) return undefined;
+	// A miss is not proof of absence while the collection is windowed (the row may lie beyond the
+	// window) or still catching up (it may not have arrived). A hit is always trustworthy: the
+	// replica only ever holds real, policy-scoped rows.
+	if (
+		hydrated.length === 0 &&
+		(!sync.registry.isResident(collection) || !sync.registry.hasSynced(collection))
+	) {
+		return undefined;
+	}
 	return hydrated[0] ?? null;
 }
 
@@ -223,9 +234,10 @@ export async function localCount(
 	collection: string,
 	query: Record<string, unknown>
 ): Promise<number | null> {
-	// A count over a window is a wrong answer, not a stale one.
+	// A count over a window is a wrong answer, not a stale one — and so is a count taken before the
+	// collection finished arriving.
 	if (!(await ensureCollections(sync, collection, query))) return null;
-	if (!sync.registry.isResident(collection)) return null;
+	if (!sync.registry.isResident(collection) || !sync.registry.hasSynced(collection)) return null;
 
 	const where = buildWhereClause(collection, query);
 	if (where === null) return null;
