@@ -52,7 +52,7 @@ describe('depset addressing', () => {
 			mkdirSync(target, { recursive: true });
 			writeFileSync(
 				path.join(target, '.norbital-depset-layout'),
-				'host-plus-linux-musl-x64-arm64-v1'
+				'host-plus-linux-musl-x64-arm64-v2'
 			);
 			const result = materialize({
 				manifest: '{}',

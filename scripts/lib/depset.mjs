@@ -13,7 +13,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 const depsetLayoutMarker = '.norbital-depset-layout';
-const depsetLayoutVersion = 'host-plus-linux-musl-x64-arm64-v1';
+const depsetLayoutVersion = 'host-plus-linux-musl-x64-arm64-v2';
 
 /**
  * Depset materialization — the host half of the mount contract.
@@ -146,6 +146,7 @@ export function materialize({ manifest, lockfile, pnpmWorkspace, storeDirectory,
 		);
 		const produced = path.join(staging, 'node_modules');
 		if (!existsSync(produced)) throw new Error(`Materializing ${hash} produced no node_modules.`);
+		mkdirSync(path.join(produced, '.vite-temp'), { recursive: true });
 		writeFileSync(path.join(produced, depsetLayoutMarker), depsetLayoutVersion);
 		if (hasCurrentLayout(target)) {
 			return { lockHash: hash, path: target, installed: false, elapsedMs: 0 };
