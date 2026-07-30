@@ -207,9 +207,83 @@ describe('emailOtpIdentity', () => {
 		expect(await provider().handleRoute?.(get('/some/app/page'))).toBeNull();
 	});
 
-	it('clears the session on logout', async () => {
-		const response = await provider().handleRoute?.(get('/logout'));
+	it('clears the session on a posted logout', async () => {
+		const response = await provider().handleRoute?.(form('/logout', {}));
 		expect(response?.headers.get('set-cookie')).toContain('Max-Age=0');
 		expect(response?.headers.get('location')).toBe('/login');
+	});
+
+	/** A cross-site `<img src="/logout">` is a GET, and it must not end the session. */
+	it('refuses a logout that is not a POST', async () => {
+		const response = await provider().handleRoute?.(get('/logout'));
+		expect(response?.status).toBe(405);
+		expect(response?.headers.get('set-cookie')).toBeNull();
+	});
+});
+
+describe('emailOtpIdentity brute-force resistance', () => {
+	/**
+	 * The whole reason a six-digit code is acceptable. `/login` hands the challenge cookie to whoever
+	 * asks — for any address, including one they do not control — so an unbounded verify path is 10^6
+	 * unlimited guesses, which one host covers in minutes.
+	 */
+	it('burns the challenge after five wrong codes', async () => {
+		const identity = provider();
+		const issued = await identity.handleRoute?.(form('/login', { email: 'victim@acme.example' }));
+		const cookie = challengeCookie(issued!);
+
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			const response = await codeEntry(identity, cookie, '000000');
+			expect(await response.text()).toContain('not correct');
+		}
+
+		// Sixth guess: the challenge is spent, and stays spent for this cookie.
+		const exhausted = await codeEntry(identity, cookie, '000000');
+		expect(await exhausted.text()).toContain('Too many incorrect codes');
+		const afterwards = await codeEntry(identity, cookie, '000000');
+		expect(await afterwards.text()).toContain('already used');
+	});
+
+	/** A correct code must not be redeemable twice by a client that keeps its own cookie. */
+	it('refuses a second session from one correct code', async () => {
+		const sent: Sent[] = [];
+		const identity = provider({ sent });
+		const issued = await identity.handleRoute?.(form('/login', { email: 'user@acme.example' }));
+		const cookie = challengeCookie(issued!);
+		const code = sent[0]!.code;
+
+		const first = await codeEntry(identity, cookie, code);
+		expect(first.status).toBe(303);
+
+		const replayed = await codeEntry(identity, cookie, code);
+		expect(replayed.status).not.toBe(303);
+		expect(await replayed.text()).toContain('already used');
+	});
+
+	/**
+	 * The digest is length-prefixed, so one MAC covers exactly one splitting of its fields. A delimiter
+	 * alone made `address + code + expiry` re-readable when the address carried the delimiter byte.
+	 */
+	it.each([
+		'victim@acme.example\u0000111111\u00001769000000000',
+		'victim@acme.example 111111 1769000000000',
+		'two@at@acme.example',
+		'@acme.example',
+		'noatsign.example'
+	])('rejects %j as an address', async (email) => {
+		const sent: Sent[] = [];
+		const identity = provider({ sent });
+		const response = await identity.handleRoute?.(form('/login', { email }));
+		expect(await response!.text()).toContain('valid email address');
+		expect(sent).toHaveLength(0);
+	});
+
+	/** The one page carrying the credential form must not be cacheable or frameable. */
+	it('keeps the security headers on the code-entry page', async () => {
+		const identity = provider();
+		const response = await identity.handleRoute?.(form('/login', { email: 'user@acme.example' }));
+		expect(response?.headers.get('cache-control')).toBe('no-store');
+		expect(response?.headers.get('x-frame-options')).toBe('DENY');
+		expect(challengeCookie(response!)).toContain('pod_otp=');
 	});
 });
