@@ -538,6 +538,10 @@ export type RuntimeWorkspaceInstance = {
 	readonly meta?: WorkspaceMeta;
 	readonly seed?: import('@norbital-ai/platform-utils/seed/plan').WorkspaceSeedDefinition;
 	readonly env?: { readonly public?: Readonly<Record<string, string>> };
+	readonly integrations: readonly RegisteredIntegration[];
+	readonly secrets?: Readonly<
+		Record<string, { readonly description: string; readonly required?: boolean }>
+	>;
 	readonly registered: RegisteredWorkspaceState;
 };
 

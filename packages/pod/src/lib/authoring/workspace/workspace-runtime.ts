@@ -16,6 +16,7 @@ import type {
 	WorkspaceMeta,
 	WorkspaceRelationshipMap
 } from './define-workspace.js';
+import type { RegisteredIntegration } from '../integrations/integrations.js';
 import type { WorkspaceSeedDefinition } from '@norbital-ai/platform-utils/seed/plan';
 import type { CollectionDefinition } from '@norbital-ai/platform-utils/collection';
 import { buildCollectionDefinitions } from '../schema/table.js';
@@ -40,6 +41,18 @@ export type RuntimeWorkspace = {
 	readonly meta?: WorkspaceMeta;
 	readonly seed?: WorkspaceSeedDefinition;
 	readonly env?: RuntimeWorkspaceEnv;
+	/**
+	 * The compiled integration definitions, carried so the manifest can name them.
+	 *
+	 * Dropping these here is not cosmetic: the manifest is the only thing the outbound path consults
+	 * to decide a mutation should be queued (`activeOutboundBindings`), and the only thing
+	 * `requiredRuntimeFacilities` reads to demand `integrationDelivery` and `queue`. A projection
+	 * without them silently turns every declared integration into no rows and no facility check.
+	 */
+	readonly integrations?: readonly RegisteredIntegration[];
+	readonly secrets?: Readonly<
+		Record<string, { readonly description: string; readonly required?: boolean }>
+	>;
 	readonly registered: RegisteredWorkspaceState;
 };
 
@@ -68,6 +81,8 @@ export function toRuntimeWorkspace(ws: RuntimeWorkspaceSource): RuntimeWorkspace
 		meta: ws.meta,
 		seed: ws.seed,
 		env: ws.env,
+		integrations: ws.integrations,
+		secrets: ws.secrets,
 		registered: ws.registered
 	};
 }
