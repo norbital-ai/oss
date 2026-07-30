@@ -5,6 +5,8 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { lockHash, materialize } from '../lib/depset.mjs';
 
+const pnpmWorkspace = 'minimumReleaseAgeExclude: []\n';
+
 describe('depset addressing', () => {
 	it('addresses a depset by its lockfile bytes alone', () => {
 		const lockfile = 'lockfileVersion: 9.0\n';
@@ -36,6 +38,7 @@ describe('depset addressing', () => {
 			const result = materialize({
 				manifest: '{}',
 				lockfile,
+				pnpmWorkspace,
 				// Reaching either of these would mean the present depset was not honoured.
 				storeDirectory: path.join(root, 'absent-store'),
 				depsetRoot: root
@@ -57,6 +60,7 @@ describe('depset addressing', () => {
 				materialize({
 					manifest: '{"name":"x","dependencies":{"no-such-package-xyz":"1.0.0"}}',
 					lockfile,
+					pnpmWorkspace,
 					storeDirectory: path.join(root, 'store'),
 					depsetRoot: root
 				})
@@ -69,5 +73,19 @@ describe('depset addressing', () => {
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it('requires the projected supply-chain policy instead of taking host defaults', () => {
+		assert.throws(
+			() =>
+				materialize({
+					manifest: '{}',
+					lockfile: 'lockfileVersion: 9.0\n',
+					pnpmWorkspace: '',
+					storeDirectory: '/not-used',
+					depsetRoot: '/not-used'
+				}),
+			/pnpm-workspace\.yaml supply-chain policy/
+		);
 	});
 });

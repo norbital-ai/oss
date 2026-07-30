@@ -16,6 +16,8 @@ import process from 'node:process';
  * Depset materialization — the host half of the mount contract.
  *
  * A depset is `node_modules` for exactly one lockfile, keyed by the hash of that lockfile.
+ * The accompanying `pnpm-workspace.yaml` is the supply-chain verification policy: it does not
+ * change the installed bytes, but must travel into both pnpm invocations.
  * The host is the only thing with network access: it warms one content-addressed pnpm store
  * (`pnpm fetch`), then links a depset out of it with no network and no credentials
  * (`pnpm install --offline --frozen-lockfile`). Nothing is baked into an image, and no
@@ -30,6 +32,14 @@ export const defaultRegistry = 'https://npm.pkg.github.com';
 /** Content address of a depset: the lockfile bytes alone decide it. */
 export function lockHash(lockfile) {
 	return createHash('sha256').update(lockfile).digest('hex').slice(0, 32);
+}
+
+function requirePnpmWorkspace(pnpmWorkspace) {
+	if (!pnpmWorkspace.trim()) {
+		throw new Error(
+			'A template with pnpm-lock.yaml must also carry the root pnpm-workspace.yaml supply-chain policy.'
+		);
+	}
 }
 
 function pnpm(arguments_, cwd) {
@@ -57,13 +67,15 @@ function writeRegistryConfiguration(directory, { withCredentials }) {
  * Fetch every package the lockfile names into the shared store. The only step that touches
  * the network, and the only step that needs registry credentials.
  */
-export function warmStore({ manifest, lockfile, storeDirectory }) {
+export function warmStore({ manifest, lockfile, pnpmWorkspace, storeDirectory }) {
+	requirePnpmWorkspace(pnpmWorkspace);
 	const scratch = path.join(storeDirectory, '.warm', lockHash(lockfile));
 	rmSync(scratch, { recursive: true, force: true });
 	mkdirSync(scratch, { recursive: true });
 	try {
 		writeFileSync(path.join(scratch, 'package.json'), manifest);
 		writeFileSync(path.join(scratch, 'pnpm-lock.yaml'), lockfile);
+		writeFileSync(path.join(scratch, 'pnpm-workspace.yaml'), pnpmWorkspace);
 		writeRegistryConfiguration(scratch, { withCredentials: true });
 		pnpm(['fetch', '--frozen-lockfile', '--store-dir', storeDirectory], scratch);
 	} finally {
@@ -78,7 +90,8 @@ export function warmStore({ manifest, lockfile, storeDirectory }) {
  *
  * Idempotent: an existing depset is a mount, not an install.
  */
-export function materialize({ manifest, lockfile, storeDirectory, depsetRoot }) {
+export function materialize({ manifest, lockfile, pnpmWorkspace, storeDirectory, depsetRoot }) {
+	requirePnpmWorkspace(pnpmWorkspace);
 	const hash = lockHash(lockfile);
 	const target = path.join(depsetRoot, hash);
 	if (existsSync(target)) return { lockHash: hash, path: target, installed: false, elapsedMs: 0 };
@@ -91,6 +104,7 @@ export function materialize({ manifest, lockfile, storeDirectory, depsetRoot }) 
 	try {
 		writeFileSync(path.join(staging, 'package.json'), manifest);
 		writeFileSync(path.join(staging, 'pnpm-lock.yaml'), lockfile);
+		writeFileSync(path.join(staging, 'pnpm-workspace.yaml'), pnpmWorkspace);
 		// No `.npmrc`: an offline install must not be able to reach a registry even if one is
 		// configured, and must not have a credential to reach it with.
 		pnpm(
@@ -132,6 +146,13 @@ export function prepareDepset({ templateDirectory, storeDirectory, depsetRoot })
 		throw new Error(`${templateDirectory} has no pnpm-lock.yaml; run \`pnpm templates:lock\`.`);
 	}
 	const lockfile = readFileSync(lockfilePath, 'utf8');
-	warmStore({ manifest, lockfile, storeDirectory });
-	return materialize({ manifest, lockfile, storeDirectory, depsetRoot });
+	const pnpmWorkspacePath = path.join(templateDirectory, 'pnpm-workspace.yaml');
+	if (!existsSync(pnpmWorkspacePath)) {
+		throw new Error(
+			`${templateDirectory} has no pnpm-workspace.yaml supply-chain policy; add and review it before materializing dependencies.`
+		);
+	}
+	const pnpmWorkspace = readFileSync(pnpmWorkspacePath, 'utf8');
+	warmStore({ manifest, lockfile, pnpmWorkspace, storeDirectory });
+	return materialize({ manifest, lockfile, pnpmWorkspace, storeDirectory, depsetRoot });
 }
