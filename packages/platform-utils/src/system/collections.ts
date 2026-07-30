@@ -103,6 +103,28 @@ interface PlatformSystemRows {
 		readonly tool_output: JsonObject | null;
 		readonly usage: JsonObject | null;
 	};
+	readonly invitation: SystemRecordFields & {
+		readonly email: string;
+		readonly token_hash: string;
+		readonly role: string;
+		readonly invited_by_user_id: string | null;
+		readonly expires_at: string;
+		readonly consumed_at: string | null;
+		readonly consumed_user_id: string | null;
+	};
+	readonly host_event_outbox: SystemRecordFields & {
+		readonly event: string;
+		readonly reason: string;
+		readonly subject_hmac: string | null;
+		readonly seats: JsonObject | null;
+		readonly observed_at: string;
+		readonly status: string;
+		readonly attempts: number;
+		readonly available_at: string;
+		readonly claimed_at: string | null;
+		readonly delivered_at: string | null;
+		readonly last_error: string | null;
+	};
 	readonly user: PlatformUserRow;
 	readonly team: PlatformTeamRow;
 	readonly policy: PlatformPolicyRow;
@@ -164,6 +186,8 @@ interface PlatformSystemRows {
 export const SYSTEM_COLLECTION_NAMES = [
 	'approval_request',
 	'requestor',
+	'invitation',
+	'host_event_outbox',
 	'automation_run',
 	'agent_run_step',
 	'user',
@@ -246,6 +270,36 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'tool_input', kind: 'json', nullable: true },
 			{ name: 'tool_output', kind: 'json', nullable: true },
 			{ name: 'usage', kind: 'json', nullable: true }
+		]
+	},
+	invitation: {
+		name: 'invitation',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'email', kind: 'text', nullable: false, label: 'Email' },
+			{ name: 'token_hash', kind: 'text', nullable: false },
+			{ name: 'role', kind: 'text', nullable: false },
+			{ name: 'invited_by_user_id', kind: 'uuid', nullable: true },
+			{ name: 'expires_at', kind: 'timestamptz', nullable: false },
+			{ name: 'consumed_at', kind: 'timestamptz', nullable: true },
+			{ name: 'consumed_user_id', kind: 'uuid', nullable: true }
+		]
+	},
+	host_event_outbox: {
+		name: 'host_event_outbox',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'event', kind: 'text', nullable: false },
+			{ name: 'reason', kind: 'text', nullable: false },
+			{ name: 'subject_hmac', kind: 'text', nullable: true },
+			{ name: 'seats', kind: 'json', nullable: true },
+			{ name: 'observed_at', kind: 'timestamptz', nullable: false },
+			{ name: 'status', kind: 'text', nullable: false },
+			{ name: 'attempts', kind: 'integer', nullable: false },
+			{ name: 'available_at', kind: 'timestamptz', nullable: false },
+			{ name: 'claimed_at', kind: 'timestamptz', nullable: true },
+			{ name: 'delivered_at', kind: 'timestamptz', nullable: true },
+			{ name: 'last_error', kind: 'text', nullable: true }
 		]
 	},
 	user: {

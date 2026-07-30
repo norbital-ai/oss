@@ -18,7 +18,7 @@ const otherUser: Identity = {
 	userId: '33333333-3333-4333-8333-333333333333',
 	userName: 'Other User',
 	email: 'other@it.local',
-	role: 'member'
+	role: 'basic'
 };
 
 function memoryStorage(objects: Map<string, Uint8Array>): HostFileStorageBinding {

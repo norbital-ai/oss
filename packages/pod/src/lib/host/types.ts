@@ -49,6 +49,41 @@ export type HostIdentity = {
 };
 
 /**
+ * A person a provider has authenticated but cannot name a workspace user for.
+ *
+ * This is what lets a provider verify a credential without owning the user directory. A provider that
+ * knows only "this address was proven" returns a subject; Pod resolves it against `user.email` —
+ * matching an existing row, accepting a pending invitation and creating one, or refusing. Requiring a
+ * `userId` is what previously forced the directory to live wherever the credential did.
+ */
+export type HostSubject = {
+	readonly email: string;
+	/** A stable provider-side identifier, when the provider has one (an OIDC `sub`). */
+	readonly externalId?: string;
+	readonly displayName?: string;
+};
+
+export type HostVerifiedSubject = {
+	readonly subject: HostSubject;
+	readonly organizationId: string;
+	readonly organizationName: string;
+};
+
+/**
+ * What a provider may return for a request.
+ *
+ * `HostIdentity` and `HostVerifiedSubject` are both "authenticated". A `Response` means "not
+ * authenticated, and here is how to fix it" — a redirect to a login page, or a `WWW-Authenticate`
+ * challenge — which is what makes a browser-facing provider expressible: `null` produces a bare 401,
+ * and a 401 cannot send anyone anywhere.
+ */
+export type HostAuthentication = HostIdentity | HostVerifiedSubject | Response | null;
+
+export function isVerifiedSubject(value: HostAuthentication): value is HostVerifiedSubject {
+	return value != null && !(value instanceof Response) && 'subject' in value;
+}
+
+/**
  * Authenticates an inbound request.
  *
  * Returning `null` means "not authenticated" and produces a 401 — it is not an error path, so a
@@ -63,7 +98,7 @@ export type HostIdentity = {
 export type HostIdentityProvider = {
 	/** Diagnostic name, reported on startup so a misconfigured host is obvious in the log. */
 	readonly name: string;
-	authenticate(request: Request): Promise<HostIdentity | null> | HostIdentity | null;
+	authenticate(request: Request): Promise<HostAuthentication> | HostAuthentication;
 	handleRoute?(request: Request): Promise<Response | null> | Response | null;
 };
 
@@ -133,6 +168,14 @@ export type SelfHostedPodHostConfig = {
 	readonly mode: 'self-hosted';
 	readonly db: HostDbAdapter;
 	readonly identity: HostIdentityProvider;
+	/**
+	 * The origin this workspace is reachable at, e.g. `https://crm.acme.com`.
+	 *
+	 * Required because an invitation link has to be absolute: the token travels by email, so there is
+	 * no request to derive an origin from at the moment the link is built. A relative link would
+	 * arrive unusable, so a missing value fails at startup rather than at the first invite.
+	 */
+	readonly publicUrl: string;
 	readonly fileStorage?: HostFileStorageBinding;
 	readonly ai?: HostAiBinding;
 	readonly notifications?: HostNotificationsBinding;

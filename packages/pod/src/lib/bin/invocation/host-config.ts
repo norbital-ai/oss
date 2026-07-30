@@ -22,6 +22,8 @@ export type HostConfigInput = {
 	readonly orgId: string;
 	readonly orgName: string;
 	readonly adminId: string;
+	/** Where this workspace is reachable. `pod dev` derives it from the bind address. */
+	readonly publicUrl: string;
 };
 
 export type ResolvedHostConfig = {
@@ -68,6 +70,7 @@ function coreDevelopmentHostConfig(input: HostConfigInput, source: string): Reso
 				organizationId: input.orgId,
 				organizationName: input.orgName
 			}),
+			publicUrl: input.publicUrl,
 			fileStorage: localFileStorage({
 				directory: path.join(input.root, '.norbital', 'storage')
 			}),

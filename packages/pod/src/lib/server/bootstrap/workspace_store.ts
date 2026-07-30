@@ -1,4 +1,5 @@
 import { platformSchema, systemWorkspace } from '$lib/authoring/schema/system-workspace.js';
+import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
 import { defineRelations } from 'drizzle-orm';
 import type { TBaseScope } from '$lib/shared/scope.js';
 import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
@@ -37,7 +38,7 @@ export type UserOrganizationInfo = {
 	readonly organizationName: string;
 	readonly organizationSlug: string;
 	readonly logoUrl: string | null;
-	readonly role: 'admin' | 'member';
+	readonly role: TUserRole;
 	readonly userStatus: 'active' | 'inactive' | 'pending_invitation';
 };
 

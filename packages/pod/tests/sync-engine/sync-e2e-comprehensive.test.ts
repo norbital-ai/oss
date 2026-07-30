@@ -141,7 +141,7 @@ const member: Identity = {
 	userId: '99999999-9999-4999-8999-999999999999',
 	userName: 'Site Worker',
 	email: 'worker@it.local',
-	role: 'member'
+	role: 'basic'
 };
 
 describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
@@ -183,6 +183,41 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 
 	afterAll(async () => {
 		await harness?.stop();
+	});
+
+	describe('client-opaque collections', () => {
+		// `invitation` holds single-use token hashes and `host_event_outbox` holds keyed subject digests
+		// and seat counts bound for the billing host. Every other deny in the permission guard is
+		// policy-driven and an admin short-circuits it, so without an explicit check an admin session
+		// would replicate both tables into a browser.
+		for (const opaque of ['invitation', 'host_event_outbox']) {
+			it(`refuses to read ${opaque} even for an admin`, async () => {
+				const response = await harness.request(
+					{
+						method: 'POST',
+						path: 'collections/findMany',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ collection: opaque, limit: 1 })
+					},
+					admin
+				);
+				expect(response.status).toBe(403);
+				expect(await response.text()).toContain('not client-readable');
+			});
+
+			it(`refuses to write ${opaque} even for an admin`, async () => {
+				const response = await harness.request(
+					{
+						method: 'POST',
+						path: 'collections/create',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ collection: opaque, input: { email: 'x@example.com' } })
+					},
+					admin
+				);
+				expect(response.status).toBe(403);
+			});
+		}
 	});
 
 	describe('permission layer filtering', () => {

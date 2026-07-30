@@ -12,6 +12,7 @@ import type {
 	HostNotificationsBinding,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
+import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
 import { startPostgres, type PgHarness } from './pg-harness.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
@@ -29,7 +30,7 @@ export type Identity = {
 	readonly userId: string;
 	readonly userName: string;
 	readonly email: string;
-	readonly role: 'admin' | 'member';
+	readonly role: TUserRole;
 };
 
 export type PodRuntimeHarness = {
@@ -202,7 +203,12 @@ async function loadSchemaSql(templateRoot: string): Promise<string> {
 			// depends on contrib extensions PGlite doesn't bundle (pg_trgm's gin_trgm_ops).
 			if (/gin_trgm_ops/i.test(statement)) continue;
 			if (/^create\s+extension/i.test(statement)) continue;
+			// The replica has no temporal history at all, so skip every statement that touches one —
+			// not just the create. A column default or type change on a record table also emits an
+			// ALTER against its `<table>_history` twin, which would fail here for a table that was
+			// never created.
 			if (/_norbital_create_history_table/i.test(statement)) continue;
+			if (/"[a-z0-9_]+_history"/i.test(statement)) continue;
 			statements.push(statement);
 		}
 	}

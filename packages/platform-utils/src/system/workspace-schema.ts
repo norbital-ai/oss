@@ -150,7 +150,7 @@ const _user = systemTable(
 		name: text(),
 		avatar_url: text(),
 		status: text().default('active'),
-		role: text().default('member'),
+		role: text().default('basic'),
 		kind: text().default('human'),
 		channels: jsonbColumn(UserChannelsSchema).default([])
 	},
@@ -360,8 +360,66 @@ const _team_members = systemTable(
 	{ system: true }
 );
 
+/**
+ * Pending workspace invitations.
+ *
+ * The token is stored only as a SHA-256 hash: a leaked table gives an attacker nothing to redeem,
+ * and the plaintext exists exactly once, in the email pod sends. `consumed_at` makes redemption
+ * single-use, and the unique index on `(email) WHERE consumed_at IS NULL` is what makes concurrent
+ * accepts settle to one user.
+ */
+const _invitation = systemTable(
+	'invitation',
+	{
+		email: text().notNull(),
+		token_hash: text().notNull().unique(),
+		role: text().notNull().default('basic'),
+		invited_by_user_id: uuid().references(() => _user.norbital_id),
+		expires_at: timestamp({ withTimezone: true }).notNull(),
+		consumed_at: timestamp({ withTimezone: true }),
+		consumed_user_id: uuid().references(() => _user.norbital_id)
+	},
+	{
+		description: 'Pending workspace invitations',
+		record_label: 'email',
+		system: true
+	}
+);
+
+/**
+ * Lifecycle events pod publishes to whichever host is driving it.
+ *
+ * Drained by the `queue` facility with the same claim/ack/fail protocol as the integration and
+ * notification outboxes, so a host restart cannot silently lose one. `subject_hmac` carries a keyed
+ * digest of the email rather than the address, and `seats` carries the resulting census rather than a
+ * delta — at-least-once delivery plus delta counting would double-bill.
+ */
+const _host_event_outbox = systemTable(
+	'host_event_outbox',
+	{
+		event: text().notNull(),
+		reason: text().notNull(),
+		subject_hmac: text(),
+		seats: jsonbColumn(JsonObjectSchema),
+		observed_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+		status: text().notNull().default('pending'),
+		attempts: integer().notNull().default(0),
+		available_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+		claimed_at: timestamp({ withTimezone: true }),
+		delivered_at: timestamp({ withTimezone: true }),
+		last_error: text()
+	},
+	{
+		description: 'Host-facing lifecycle and seat events',
+		record_label: 'event',
+		system: true
+	}
+);
+
 export const approval_request = _approval_request;
 export const requestor = _requestor;
+export const invitation = _invitation;
+export const host_event_outbox = _host_event_outbox;
 export const automation_run = _automation_run;
 export const agent_run_step = _agent_run_step;
 export const user = _user;
@@ -377,6 +435,8 @@ export const team_members = _team_members;
 export const platformTables = {
 	approval_request,
 	requestor,
+	invitation,
+	host_event_outbox,
 	automation_run,
 	agent_run_step,
 	user,
@@ -393,6 +453,8 @@ export const platformTables = {
 export const systemTables = {
 	approval_request: { table: approval_request },
 	requestor: { table: requestor },
+	invitation: { table: invitation },
+	host_event_outbox: { table: host_event_outbox },
 	automation_run: { table: automation_run },
 	agent_run_step: { table: agent_run_step },
 	user: { table: user },

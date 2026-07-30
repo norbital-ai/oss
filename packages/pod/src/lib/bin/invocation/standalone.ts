@@ -23,10 +23,13 @@ import { pathToFileURL } from 'node:url';
 import { Client, type Notification } from 'pg';
 import { PostgresHostDbBinding, type HostDbConnection } from '../../host/db.js';
 import {
+	isVerifiedSubject,
 	satisfiedFacilities,
 	type HostIdentity,
+	type HostVerifiedSubject,
 	type SelfHostedPodHostConfig
 } from '../../host/types.js';
+import { subjectHmac } from '../../host/session.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from './host-config.js';
 import { workspaceJobs } from './jobs.js';
 
@@ -473,7 +476,8 @@ async function resolveStandaloneHost(
 		databaseUrl: environment.databaseUrl,
 		orgId: environment.orgId,
 		orgName: environment.orgName,
-		adminId: environment.adminId
+		adminId: environment.adminId,
+		publicUrl: `http://${environment.host}:${environment.port}`
 	});
 }
 
@@ -541,12 +545,32 @@ export async function startStandalone(
 	}
 	const bindings = facilityBindings(config, binding);
 
+	// Keys the digest the host-facing event stream carries. Absent means events carry no subject key,
+	// which is honest: a host that supplied no key cannot maintain a routing index anyway.
+	const subjectKey = process.env.POD_SUBJECT_HMAC_KEY?.trim() ?? '';
+
 	const dispatch = (command: unknown): Promise<unknown> =>
 		runtime.handlePodHostCommand(command, bindings, {
 			userId: environment.adminId,
 			organizationId: environment.orgId,
 			organizationName: environment.orgName
 		});
+
+	const resolveSubject = async (verified: HostVerifiedSubject): Promise<HostIdentity | null> => {
+		const resolved = (await dispatch({
+			kind: 'identity',
+			action: 'resolve-subject',
+			email: verified.subject.email,
+			...(verified.subject.displayName ? { displayName: verified.subject.displayName } : {}),
+			...(subjectKey ? { subjectHmac: subjectHmac(subjectKey, verified.subject.email) } : {})
+		})) as { readonly userId?: string } | null;
+		if (!resolved?.userId) return null;
+		return {
+			userId: resolved.userId,
+			organizationId: verified.organizationId,
+			organizationName: verified.organizationName
+		};
+	};
 
 	const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
 		const webRequest = await toWebRequest(request, environment);
@@ -564,10 +588,25 @@ export async function startStandalone(
 			return;
 		}
 
-		const identity = await config.identity.authenticate(webRequest);
-		if (!identity) {
+		const authentication = await config.identity.authenticate(webRequest);
+		if (!authentication) {
 			response.statusCode = 401;
 			response.end('Unauthorized');
+			return;
+		}
+		// A provider that wants a browser to go somewhere returns the response itself. `null` still
+		// means a bare 401, which is right for an API client and useless for a person.
+		if (authentication instanceof Response) {
+			return writeWebResponse(authentication, response);
+		}
+		// The provider proved an address; the directory that turns it into a user lives in the tenant
+		// database, so resolution goes over the private control plane rather than here.
+		const identity = isVerifiedSubject(authentication)
+			? await resolveSubject(authentication)
+			: authentication;
+		if (!identity) {
+			response.statusCode = 403;
+			response.end('Forbidden: this address has no workspace user and no pending invitation');
 			return;
 		}
 		const authenticated = await withHostIdentity(webRequest, identity);

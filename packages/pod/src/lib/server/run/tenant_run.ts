@@ -10,6 +10,12 @@ import {
 import { createBeforeApi, restrictBeforeHookApi } from '$lib/server/collection/hook-api.server.js';
 import { getElevatedAfterHookApi } from '$lib/server/collection/hook-api-context.server.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
+import {
+	resolveSubjectToUser,
+	seatCensus,
+	workspaceMembership
+} from '$lib/server/identity/subject.server.js';
+import { provisionFoundingInvitation } from '$lib/server/identity/invitation.server.js';
 import type {
 	CollectionExportPipeline,
 	CollectionImportPipeline,
@@ -181,7 +187,24 @@ export const runtimeRunRequestSchema = z.union([
 		kind: z.literal('automation-events'),
 		limit: z.number().int().min(1).max(1000).optional()
 	}),
-	z.object({ kind: z.literal('getManifest') })
+	z.object({ kind: z.literal('getManifest') }),
+	// Identity work the host cannot do for itself: it holds the credential, Pod holds the directory.
+	z.object({
+		kind: z.literal('identity'),
+		action: z.literal('resolve-subject'),
+		email: z.string().trim().min(1).max(320),
+		displayName: z.string().trim().max(255).optional(),
+		subjectHmac: z.string().min(1).optional()
+	}),
+	z.object({ kind: z.literal('identity'), action: z.literal('seats') }),
+	z.object({ kind: z.literal('identity'), action: z.literal('membership') }),
+	// Mints the founding invitation for a freshly provisioned tenant. The token is generated here and
+	// leaves only by email, so the provisioning host never sees a redeemable credential.
+	z.object({
+		kind: z.literal('provision'),
+		adminEmail: z.string().trim().min(1).max(320),
+		publicUrl: z.string().trim().min(1)
+	})
 ]);
 
 export type RuntimeRunRequest = z.infer<typeof runtimeRunRequestSchema>;
@@ -521,6 +544,20 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 			return pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
 		case 'getManifest':
 			return getTenantManifest();
+		case 'identity': {
+			if (request.action === 'seats') return seatCensus();
+			if (request.action === 'membership') return workspaceMembership();
+			return resolveSubjectToUser({
+				email: request.email,
+				...(request.displayName ? { displayName: request.displayName } : {}),
+				subjectHmac: request.subjectHmac ?? null
+			});
+		}
+		case 'provision':
+			return provisionFoundingInvitation({
+				adminEmail: request.adminEmail,
+				publicUrl: request.publicUrl
+			});
 		default:
 			request satisfies never;
 			throw new Error('Unknown runtime run kind');

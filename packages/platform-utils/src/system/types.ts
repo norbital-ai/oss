@@ -4,8 +4,24 @@ import { SystemRecordFieldsSchema } from './columns.js';
 const JsonRecordSchema = z.record(z.string(), z.unknown());
 const NullableProviderMetadataSchema = JsonRecordSchema.nullable().optional();
 
-export const UserRoleSchema = z.enum(['admin', 'member']);
+/**
+ * Workspace seat tiers.
+ *
+ * `admin` is the only role the runtime itself branches on (it gates system-record administration).
+ * `advanced` and `basic` differ only in what they cost and which policies reference them — the
+ * runtime treats them identically, which is what keeps billing a host concern rather than a
+ * permission model.
+ */
+export const UserRoleSchema = z.enum(['admin', 'advanced', 'basic']);
 export type TUserRole = z.infer<typeof UserRoleSchema>;
+
+/** A seat census. Counts only active human users, so an agent user never bills. */
+export const SeatCensusSchema = z.object({
+	admin: z.number().int().nonnegative(),
+	advanced: z.number().int().nonnegative(),
+	basic: z.number().int().nonnegative()
+});
+export type TSeatCensus = z.infer<typeof SeatCensusSchema>;
 
 export const UserStatusSchema = z.enum(['active', 'inactive', 'pending_invitation']);
 export type TUserStatus = z.infer<typeof UserStatusSchema>;

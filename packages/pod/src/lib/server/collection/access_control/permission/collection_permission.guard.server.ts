@@ -128,9 +128,27 @@ async function workflowMetadataReadFallback(
 	return { reducedCondition: { collection_name: { in: [...readableCollections] } } };
 }
 
+/**
+ * Collections no client may read or write, at any role.
+ *
+ * These hold credential material and host-facing plumbing: `invitation` carries single-use token
+ * hashes, `host_event_outbox` carries keyed subject digests and seat counts destined for the billing
+ * host. Every other deny in this file is policy-driven and an `admin` short-circuits it, so a plain
+ * grant check is not enough — an admin session would otherwise replicate both tables into a browser.
+ * Pod reaches them through elevated server paths that never consult this guard.
+ */
+const CLIENT_OPAQUE_COLLECTIONS: ReadonlySet<string> = new Set(['invitation', 'host_event_outbox']);
+
+function assertClientReachable(collectionName: string): void {
+	if (CLIENT_OPAQUE_COLLECTIONS.has(collectionName)) {
+		throw error(403, `Unauthorized: ${collectionName} is not client-readable`);
+	}
+}
+
 export async function resolveCollectionReadPermission<
 	TScope extends TCollectionReadPermissionScopeBase
 >(scope: TScope): Promise<TScope & TCollectionReadPermissionResolvedFields> {
+	assertClientReachable(scope.collectionMetadata.collection_name);
 	const policyGrants = await resolvePolicyGrants(scope, 'read');
 	if (policyGrants.length === 0) {
 		const workspace = getWorkspace({ provision: true });
@@ -176,6 +194,7 @@ export async function resolveCollectionMutationPermission(params: {
 	actionType: Exclude<PolicyActionKey, 'read'>;
 }): Promise<TCollectionPermissionScopeOutput> {
 	const { scope, actionType } = params;
+	assertClientReachable(scope.collectionMetadata.collection_name);
 	const policyGrants = await resolvePolicyGrants(scope, actionType);
 	if (policyGrants.length === 0) {
 		if (scope.approvalServiceBypassKey) {

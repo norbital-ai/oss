@@ -22,7 +22,7 @@
  * need durability, restart survival, and single-flight execution that a timer cannot give, so a
  * deployed workspace points it at pg-boss or an equivalent; `intervalQueue` is for development.
  */
-export { definePodHost, env, satisfiedFacilities } from './types.js';
+export { definePodHost, env, isVerifiedSubject, satisfiedFacilities } from './types.js';
 export type {
 	HostAiBinding,
 	HostDbAdapter,
@@ -31,9 +31,12 @@ export type {
 	HostIdentity,
 	HostIdentityProvider,
 	HostIntegrationDelivery,
+	HostAuthentication,
 	HostMapsBinding,
 	HostNotificationsBinding,
 	HostQueue,
+	HostSubject,
+	HostVerifiedSubject,
 	IntegrationDeliveryMessage,
 	QueueJob,
 	PodHostConfig,
@@ -47,8 +50,14 @@ export type {
 export { postgresDb, PostgresHostDbBinding } from './db.js';
 export type { HostDbConnection, PostgresDbOptions } from './db.js';
 
-// Identity
+// Identity. `emailOtpIdentity` is the zero-configuration default: it stores no password, sends its
+// codes through the host's messaging facility, and ships the login, code-entry, and invitation-accept
+// pages, so a workspace author writes no auth code and no auth markup.
 export { devIdentity, trustedHeaderIdentity, TRUSTED_HOST_TOKEN_HEADER } from './identity.js';
+export { emailOtpIdentity } from './email-otp.js';
+export type { EmailOtpIdentityOptions, EmailOtpDeliver } from './email-otp.js';
+export { cookieSession, hashToken, mintToken, subjectHmac } from './session.js';
+export type { CookieSession, CookieSessionOptions, SessionClaims } from './session.js';
 
 // File storage
 export { localFileStorage } from './file-storage.js';

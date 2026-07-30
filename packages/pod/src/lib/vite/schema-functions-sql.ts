@@ -392,6 +392,19 @@ export const SCHEMA_POST_DDL_SQL = dedent`
     END
     $approval_lock_sync$;
 
+    -- One live invitation per address, enforced by the database rather than by a read-then-write.
+    -- Two accepts racing on the same email would otherwise both see "no user yet" and both create
+    -- one; the partial unique index makes the second INSERT fail instead, and the loser re-reads.
+    -- The predicate scopes it to live rows, so an address can be re-invited after leaving.
+    DO $invitation_guard$
+    BEGIN
+      IF to_regclass('public.invitation') IS NOT NULL THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS invitation_live_email_unique
+          ON invitation (email) WHERE consumed_at IS NULL;
+      END IF;
+    END
+    $invitation_guard$;
+
     -- Agent transcripts are append-only. The unique sequence makes restart/resume deterministic;
     -- the trigger closes direct-SQL paths as well as the collection-operation surface.
     DO $agent_transcript$
@@ -484,7 +497,8 @@ export const SCHEMA_POST_DDL_SQL = dedent`
 	            '_norbital_sync_epoch', '_norbital_automation_cursor',
 	            '__drizzle_migrations', 'sync_outbox', 'approval_request', 'requestor',
 	            'automation_run', 'agent_run_step', 'user', 'team', 'policy', 'integration_outbox',
-	            'notification_outbox', 'notification', 'document_asset', 'team_members'
+	            'notification_outbox', 'notification', 'document_asset', 'team_members',
+	            'invitation', 'host_event_outbox'
           )
           AND EXISTS (
             SELECT 1
@@ -523,7 +537,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
           AND c.relname NOT IN (
             'audit_event', 'agent_run_step', 'sync_outbox', '_approval_lock',
             '_norbital_internal_schema', '_norbital_sync_epoch',
-            '_norbital_automation_cursor', '__drizzle_migrations'
+            '_norbital_automation_cursor', '__drizzle_migrations', 'host_event_outbox'
           )
           AND EXISTS (
             SELECT 1
