@@ -70,6 +70,7 @@ describe.skipIf(!hasDocker)('Pod standalone process — E2E', () => {
 	definePodHost,
 	devIdentity,
 	env,
+	intervalQueue,
 	localFileStorage,
 	postgresDb
 } from '@norbital-ai/pod/host';
@@ -83,7 +84,7 @@ export default definePodHost({
 		organizationName: env('POD_ORG_NAME')
 	}),
 	fileStorage: localFileStorage({ directory: '.norbital/storage' }),
-	scheduler: { automations: true }
+	queue: intervalQueue()
 });`
 		);
 		const port = await freePort();

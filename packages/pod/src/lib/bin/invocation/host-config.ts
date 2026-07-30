@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { postgresDb } from '../../host/db.js';
 import { localFileStorage } from '../../host/file-storage.js';
 import { devIdentity } from '../../host/identity.js';
+import { intervalQueue } from '../../host/interval-queue.js';
 import type {
 	HostDbAdapter,
 	HostIdentityProvider,
@@ -70,7 +71,9 @@ function coreDevelopmentHostConfig(input: HostConfigInput, source: string): Reso
 			fileStorage: localFileStorage({
 				directory: path.join(input.root, '.norbital', 'storage')
 			}),
-			scheduler: { automations: true }
+			// `pod dev` is a single short-lived process, so a timer is the honest fit. A deployed
+			// workspace configures a durable queue in its own `pod.host.ts`.
+			queue: intervalQueue()
 		}
 	};
 }

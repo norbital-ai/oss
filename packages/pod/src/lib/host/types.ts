@@ -67,18 +67,36 @@ export type HostIdentityProvider = {
 	handleRoute?(request: Request): Promise<Response | null> | Response | null;
 };
 
+/** One unit of recurring work the runtime cannot drive for itself. */
+export type QueueJob = {
+	/**
+	 * Stable identity. A host must never run two instances of the same name at once — an overlapping
+	 * outbox drain would claim the same rows twice, and an overlapping automation would see the same
+	 * unrun schedule.
+	 */
+	readonly name: string;
+	/**
+	 * A five-field cron expression, or `'continuous'` for a drain loop the host paces itself.
+	 * `parseCron` is exported for a host that has to match cron by hand.
+	 */
+	readonly schedule: string;
+	run(): Promise<void>;
+};
+
 /**
- * Driving the loops the runtime cannot run for itself.
+ * Durable execution for the loops the runtime cannot run for itself. Satisfies `queue`.
  *
  * The runtime exposes a private host-control function and then waits to be driven — it has no timer
  * and, in a hosted container, no network. Tenant HTTP requests cannot reach that function.
+ *
+ * Pod decides *what* runs and in what order and hands over the whole job set at startup; the host
+ * supplies timing, persistence across restarts, and the non-overlap guarantee above. Returns a
+ * function that stops every job.
+ *
+ * This is host-process code rather than a `RuntimeFacilityBinding` for a concrete reason: bindings
+ * cross the isolate boundary by structured clone, so they cannot carry a callback.
  */
-export type HostSchedulerConfig = {
-	/** Run cron-scheduled automations. Satisfies `queue`. */
-	readonly automations?: boolean;
-	/** How often to sweep, in milliseconds. Defaults to 30s; floored at 1s. */
-	readonly intervalMs?: number;
-};
+export type HostQueue = (jobs: readonly QueueJob[]) => Promise<() => void>;
 
 /** One claimed outbox row, already transformed by the workspace's outbound pipeline. */
 export type IntegrationDeliveryMessage = {
@@ -120,7 +138,7 @@ export type SelfHostedPodHostConfig = {
 	readonly notifications?: HostNotificationsBinding;
 	readonly maps?: HostMapsBinding;
 	readonly integrationDelivery?: HostIntegrationDelivery;
-	readonly scheduler?: HostSchedulerConfig;
+	readonly queue?: HostQueue;
 };
 
 export type PodHostConfig = CorePodHostConfig | SelfHostedPodHostConfig;
@@ -145,7 +163,7 @@ export function satisfiedFacilities(
 	if (config.maps) satisfied.add('maps');
 	if (config.ai) satisfied.add('ai');
 	if (config.notifications) satisfied.add('notifications');
-	if (config.scheduler?.automations) satisfied.add('queue');
+	if (config.queue) satisfied.add('queue');
 	if (config.integrationDelivery) satisfied.add('integrationDelivery');
 	return satisfied;
 }

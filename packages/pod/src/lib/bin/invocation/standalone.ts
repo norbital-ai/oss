@@ -28,7 +28,7 @@ import {
 	type SelfHostedPodHostConfig
 } from '../../host/types.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from './host-config.js';
-import { startScheduler } from './scheduler.js';
+import { workspaceJobs } from './jobs.js';
 
 const STANDALONE_BUILD_DIRECTORY = path.join('.norbital', 'build');
 const REQUIRED_ENVIRONMENT = [
@@ -581,17 +581,18 @@ export async function startStandalone(
 		});
 	});
 
-	let scheduler;
+	// The job set is built even with no queue configured, so an invalid cron expression still fails
+	// at startup naming the automation rather than at the first tick that never comes.
+	let stopQueue: () => void = () => {};
 	try {
-		scheduler = startScheduler({
+		const jobs = workspaceJobs({
 			manifest,
 			dispatch,
-			automations: config.scheduler?.automations === true,
 			organizationId: environment.orgId,
 			...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
-			...(config.notifications ? { notifications: config.notifications } : {}),
-			intervalMs: config.scheduler?.intervalMs ?? 30_000
+			...(config.notifications ? { notifications: config.notifications } : {})
 		});
+		if (config.queue && jobs.length > 0) stopQueue = await config.queue(jobs);
 	} catch (cause) {
 		await closeDatabaseNotifications();
 		await binding.close();
@@ -612,7 +613,7 @@ export async function startStandalone(
 			process.once('SIGTERM', resolve);
 		});
 	} finally {
-		scheduler.stop();
+		stopQueue();
 		await closeDatabaseNotifications();
 		await new Promise<void>((resolve, reject) => {
 			server.close((cause) => (cause ? reject(cause) : resolve()));

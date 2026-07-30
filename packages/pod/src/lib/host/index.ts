@@ -14,9 +14,13 @@
  *   db: postgresDb({ url: env('DATABASE_URL') }),
  *   identity: devIdentity({ ... }),
  *   fileStorage: localFileStorage({ directory: '.norbital/storage' }),
- *   scheduler: { automations: true }
+ *   queue: intervalQueue()
  * });
  * ```
+ *
+ * `queue` is the one facility with no production adapter here. Cron automations and outbox draining
+ * need durability, restart survival, and single-flight execution that a timer cannot give, so a
+ * deployed workspace points it at pg-boss or an equivalent; `intervalQueue` is for development.
  */
 export { definePodHost, env, satisfiedFacilities } from './types.js';
 export type {
@@ -29,8 +33,9 @@ export type {
 	HostIntegrationDelivery,
 	HostMapsBinding,
 	HostNotificationsBinding,
-	HostSchedulerConfig,
+	HostQueue,
 	IntegrationDeliveryMessage,
+	QueueJob,
 	PodHostConfig,
 	CorePodHostConfig,
 	SelfHostedPodHostConfig,
@@ -60,6 +65,9 @@ export {
 	type NotificationProvider
 } from './facilities.js';
 
-// Scheduling
+// Queue. Pod ships no durable implementation: a real queue is the host's to choose, and the
+// `intervalQueue` below is explicitly the development one.
+export { intervalQueue } from './interval-queue.js';
+export type { IntervalQueueOptions } from './interval-queue.js';
 export { cronMatches, parseCron } from './cron.js';
 export type { CronSchedule } from './cron.js';

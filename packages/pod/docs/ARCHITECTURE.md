@@ -27,7 +27,7 @@ both, with no source changes and no host-specific tenant APIs.
 ┌──────────────────────────┴─────────────────────────────────────┐
 │ HOST                                                          │
 │ db · fileStorage · maps · notifications · ai                  │
-│ scheduler · integrationDelivery                               │
+│ queue · integrationDelivery                                   │
 │                                                               │
 │ owns credentials, outbound sockets, timers, and process I/O   │
 └────────────────────────────────────────────────────────────────┘
@@ -91,7 +91,7 @@ export default definePodHost({
 	}),
 	notifications: notificationProviders(emailProvider),
 	ai: modelProvider,
-	scheduler: { automations: true }
+	queue: intervalQueue()
 });
 ```
 
@@ -255,7 +255,7 @@ notification seam used in hosted mode. Idle streams issue no polling queries.
 api.sendNotification(...)
   ├─ system → notification row → sync → in-app client
   └─ external channel → notification_outbox
-                         → host scheduler claim
+                         → host queue claim
                          → provider send
                          → delivered | retry | dead-letter
 ```
@@ -338,7 +338,7 @@ Interactive runs use the same loop and transcript:
 POST /_runtime/agent/start { message, runId? }
 ```
 
-## Automations and scheduler
+## Automations and the queue
 
 An automation has one trigger:
 
@@ -350,7 +350,7 @@ An automation has one trigger:
 Schedule expressions are validated before the process listens. Scheduled runs are detached from
 outbox drains, and one automation cannot overlap itself.
 
-Collection-event dispatch is tenant-wide, not client-driven. The scheduler tails the authoritative
+Collection-event dispatch is tenant-wide, not client-driven. A queue job tails the authoritative
 outbox and advances `_norbital_automation_cursor`; opening another browser cannot duplicate a run.
 Integration and notification outboxes drain independently with claim leases and bounded retry.
 

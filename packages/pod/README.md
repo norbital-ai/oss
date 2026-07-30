@@ -457,7 +457,7 @@ export default defineAutomation(
 );
 ```
 
-Scheduled and event automations are driven by the host scheduler. Event cursors are durable and do
+Scheduled and event automations are driven by the host queue. Event cursors are durable and do
 not depend on an open browser. The same automation never overlaps itself.
 
 An agent automation declares its task and narrow capabilities:
@@ -728,7 +728,7 @@ Tenant code calls `api.sendNotification(...)`; it does not define a notification
 
 - `system` is Pod-owned: a notification record is written transactionally and sync delivers it;
 - every external channel is host-owned: a `notification_outbox` row is written transactionally,
-  then the scheduler resolves the recipient and invokes the matching provider;
+  then the queue job resolves the recipient and invokes the matching provider;
 - retries and dead-letter state are durable;
 - Pod rejects an external channel that the active host does not advertise.
 
@@ -739,7 +739,7 @@ The same rule applies across facilities:
 | Any running workspace                  | `db`                                          |
 | A `file()` field                       | `fileStorage`                                 |
 | A `geolocation()` field                | `maps`                                        |
-| Deterministic automation               | `queue` via `scheduler.automations`           |
+| Deterministic automation               | `queue`                                       |
 | Agent automation                       | `queue` and `ai`                              |
 | Outbound integration                   | `queue` and `integrationDelivery`             |
 | External notification call             | matching `notifications` channel at call time |
@@ -762,7 +762,7 @@ export default definePodHost({ mode: 'core' });
 ```
 
 Core supplies every runtime binding. `pod dev` may run this target locally by emulating Core with
-PostgreSQL, local file storage, the scheduler, and the bootstrapped development identity.
+PostgreSQL, local file storage, an interval queue, and the bootstrapped development identity.
 
 `pod start` deliberately refuses `mode: 'core'`. A production Core artifact must be deployed to
 Core; it must not silently turn into a different host.
@@ -777,6 +777,7 @@ import {
 	consoleNotifications,
 	definePodHost,
 	env,
+	intervalQueue,
 	localFileStorage,
 	postgresDb,
 	trustedHeaderIdentity
@@ -795,18 +796,38 @@ export default definePodHost({
 		directory: '.norbital/storage'
 	}),
 	notifications: consoleNotifications('email'),
-	scheduler: {
-		automations: true,
-		intervalMs: 30_000
-	}
+	queue: intervalQueue({ intervalMs: 30_000 })
 });
 ```
 
 `db` and `identity` are required. Add only real implementations for the optional `fileStorage`,
-`ai`, `notifications`, `maps`, `integrationDelivery`, and `scheduler` fields. Pod exports
+`ai`, `notifications`, `maps`, `integrationDelivery`, and `queue` fields. Pod exports
 PostgreSQL, local/S3-compatible file storage, trusted-header/development identity, and notification
 composition helpers. AI, maps, and integration credentials remain host-specific contracts; there is
 no pretend default provider.
+
+### The queue facility
+
+Cron automations, outbox draining, and event-automation tailing cannot be driven by the runtime: it
+has no timer and, in a hosted container, no network. Pod derives the whole job set from the manifest
+and hands it to `queue`; the host supplies timing, persistence across restarts, and the guarantee
+that one job name never overlaps itself.
+
+```ts
+type HostQueue = (jobs: readonly QueueJob[]) => Promise<() => void>;
+type QueueJob = { name: string; schedule: string; run(): Promise<void> };
+```
+
+`schedule` is a five-field cron expression or `'continuous'` for a drain loop the host paces.
+
+Pod ships **no durable queue**. `intervalQueue()` is a timer, and it is named rather than defaulted
+so a deployment running on one says so in its own config: nothing survives a restart, a missed
+schedule is never caught up, and two processes against one database will both claim. That is fine
+for `pod dev` and a single container, and wrong for anything that must not drop work — point `queue`
+at pg-boss or an equivalent there, which is what Core does.
+
+A workspace with automations refuses to start when no `queue` is configured, rather than starting
+with schedules that silently never fire.
 
 `s3FileStorage` works with S3-compatible stores such as AWS S3, MinIO, Cloudflare R2, and DigitalOcean
 Spaces.
@@ -921,7 +942,7 @@ The suite is organized by boundary:
 - `tests/collection` and `tests/runtime` — authoritative mutations, access control, approvals,
   temporal history, audit, hooks, remotes, agents, and streaming;
 - `tests/storage` — file upload/download/delete, authorization, and lifecycle;
-- `tests/standalone` — host loading, facility gates, migrations, seed, scheduler, restart, and
+- `tests/standalone` — host loading, facility gates, migrations, seed, queue, restart, and
   runnable/non-runnable artifacts.
 
 PostgreSQL end-to-end tests use disposable PostgreSQL 18 containers with `temporal_tables` 1.2.2.
