@@ -225,8 +225,17 @@ Core seeds policies today; Pod declares them. Both cannot be true. Measured stat
       strings and only does parameterised inserts. See `docs/POLICY_SUBSTITUTION.md`.
       **Use `$sql`, never `RAW`.** `RAW` is a function, so it does not survive storage and the grant
       lands unconditional; `definePolicy` now refuses it.
-- [ ] **A2.** Port `bca` (2 policies, `$sql` subqueries — _not_ `RAW`). Verify a
-      contractor sees only their own rows and an admin sees all.
+- [x] **A2. Done.** `bca_controller` (36 grants) and `bca_contractor` (13, all conditional) declared in
+      `template_workspaces/bca/src/policies/`, keeping the seed's keys so reconciliation upserts the
+      existing rows rather than orphaning `team.policy_id`. Verified by booting standalone: migrate
+      logged `policies reconciled (2 created, 0 updated)` and all seven `$sql` strings read back out of
+      jsonb byte-for-byte identical to the seed.
+- [ ] **A2a. Approvals drag a Core seed UUID into public template source.** A gated grant carries
+      `teams_that_can_approve`, which holds `team.norbital_id` — and teams have no declarative
+      counterpart, so the id is unchecked by anything and unsatisfiable under `pod start`, where no team
+      rows exist. `approval` is typed `Record<string, unknown> | null`, so its shape is not checked
+      either: a misspelled key compiles and fails at request time with a 400. Either teams become
+      declarable or approvals need a name-based reference.
 - [ ] **A3.** Port `construction` (3 policies).
 - [ ] **A4.** Port `norbital_hr` (1 policy, generated from collection lists — keep the generation, move
       it into the declaration).
