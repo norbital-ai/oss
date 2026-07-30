@@ -421,7 +421,16 @@ async function withHostIdentity(request: Request, identity: HostIdentity): Promi
 
 async function writeWebResponse(response: Response, target: ServerResponse): Promise<void> {
 	target.statusCode = response.status;
-	response.headers.forEach((value, name) => target.setHeader(name, value));
+	// `set-cookie` is the one header that legitimately repeats, and `forEach` reports it as a single
+	// comma-joined value while `setHeader` overwrites. Together they silently reduced any multi-cookie
+	// response to one mangled header — which is how signing in could answer 303 to `/` while setting no
+	// session at all. `getSetCookie()` returns each cookie separately, and Node accepts the array.
+	for (const [name, value] of response.headers) {
+		if (name.toLowerCase() === 'set-cookie') continue;
+		target.setHeader(name, value);
+	}
+	const cookies = response.headers.getSetCookie();
+	if (cookies.length > 0) target.setHeader('set-cookie', cookies);
 
 	// Stream the body incrementally when present so Server-Sent Events (the sync-engine
 	// `/_runtime/sync/stream` endpoint) reach the client as they are produced rather than
@@ -495,10 +504,11 @@ async function standaloneStaticAsset(
 	if (request.method !== 'GET' && request.method !== 'HEAD') return null;
 	const pathname = new URL(request.url ?? '/', 'http://pod.local').pathname;
 	if (pathname.startsWith('/_pod/') || pathname.startsWith('/_runtime/')) return null;
-	// A workspace app is a single-page client: unknown paths fall through to index.html below, so
-	// a deep link opened directly resolves to the shell rather than a 404.
 	const distRoot = path.join(standaloneBuildDirectory(root), 'dist');
-	const relativePath = decodeURIComponent(pathname).replace(/^\/+/, '') || 'index.html';
+	const relativePath = decodeURIComponent(pathname).replace(/^\/+/, '');
+	// `/` is the app document, not an asset. Resolving it here would serve the shell before the session
+	// is checked, which is the same hole as the removed fallback — `standaloneAppDocument` owns it.
+	if (relativePath === '' || relativePath === 'index.html') return null;
 	const candidate = path.normalize(path.join(distRoot, relativePath));
 	if (candidate !== distRoot && !candidate.startsWith(`${distRoot}${path.sep}`)) return null;
 	const read = async (filePath: string): Promise<{ body: Buffer; contentType: string } | null> => {
@@ -512,7 +522,38 @@ async function standaloneStaticAsset(
 			throw error;
 		}
 	};
-	return (await read(candidate)) ?? (await read(path.join(distRoot, 'index.html')));
+	// Only a file that actually exists. The single-page fallback to index.html deliberately does not
+	// happen here: this runs *before* authentication, so falling back would serve the app shell — and
+	// every unknown deep link — to anyone. `standaloneAppDocument` does it after a session is proven.
+	return read(candidate);
+}
+
+/**
+ * The single-page shell, for a request that authenticated and matched no real file.
+ *
+ * A deep link opened directly has to resolve to the shell rather than a 404, but it is a *document*,
+ * so it belongs behind the session rather than beside the JavaScript. Serving it before authentication
+ * meant an anonymous visitor got a shell that booted, fired its first sync call, received a redirect to
+ * the login page in place of JSON, and failed — instead of simply landing on the login page.
+ */
+async function standaloneAppDocument(
+	root: string,
+	request: IncomingMessage
+): Promise<{ body: Buffer; contentType: string } | null> {
+	if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+	// The runtime owns its own prefixes. Returning the shell for one would answer a bootstrap or sync
+	// call with HTML, which the client then fails to parse — the same confusion the pre-auth fallback
+	// caused, just moved behind the session.
+	const pathname = new URL(request.url ?? '/', 'http://pod.local').pathname;
+	if (pathname.startsWith('/_pod/') || pathname.startsWith('/_runtime/')) return null;
+	const distRoot = path.join(standaloneBuildDirectory(root), 'dist');
+	try {
+		const indexPath = path.join(distRoot, 'index.html');
+		return { body: await readFile(indexPath), contentType: staticAssetContentType(indexPath) };
+	} catch (error) {
+		if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+		throw error;
+	}
 }
 
 /**
@@ -644,6 +685,9 @@ export async function startStandalone(
 			...(descriptor.maxRequestsPerWindow
 				? { maxRequestsPerWindow: descriptor.maxRequestsPerWindow }
 				: {}),
+			// The challenge cookie needs this as much as the session one: a `Secure` challenge over a
+			// loopback HTTP bind is dropped by the browser, and sign-in then fails with nothing logged.
+			...(descriptor.secureCookies === false ? { secureCookies: false } : {}),
 			deliver: async ({ email, code }) => {
 				const result = await notifications.send({
 					organizationId: environment.orgId,
@@ -728,6 +772,16 @@ export async function startStandalone(
 			response.end('Forbidden: this address has no workspace user and no pending invitation');
 			return;
 		}
+		// Authenticated and no real file matched: this is a deep link into the single-page app.
+		const document = await standaloneAppDocument(root, request);
+		if (document) {
+			response.statusCode = 200;
+			response.setHeader('content-type', document.contentType);
+			response.setHeader('content-length', String(document.body.byteLength));
+			response.end(request.method === 'HEAD' ? undefined : document.body);
+			return;
+		}
+
 		const authenticated = await withHostIdentity(webRequest, resolved);
 		await writeWebResponse(await runtime.handlePodRequest(authenticated, bindings), response);
 	};

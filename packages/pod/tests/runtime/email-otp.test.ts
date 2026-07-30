@@ -91,11 +91,23 @@ describe('emailOtpIdentity', () => {
 		expect(await response?.text()).toContain('Send sign-in code');
 	});
 
-	it('redirects an unauthenticated request instead of returning a bare 401', async () => {
-		const result = await provider().authenticate(get('/'));
+	it('sends an unauthenticated browser to the login page', async () => {
+		const navigation = new Request('https://acme.example/', { headers: { accept: 'text/html' } });
+		const result = await provider().authenticate(navigation);
 		expect(result).toBeInstanceOf(Response);
 		expect((result as Response).status).toBe(303);
 		expect((result as Response).headers.get('location')).toBe('/login');
+	});
+
+	/**
+	 * A `fetch` follows a 303 transparently and then tries to parse the login page as JSON, so the
+	 * caller sees a parse error rather than "you are not signed in". An API caller gets told plainly.
+	 */
+	it('tells an unauthenticated API caller so, rather than redirecting it into HTML', async () => {
+		const result = await provider().authenticate(get('/'));
+		expect(result).toBeInstanceOf(Response);
+		expect((result as Response).status).toBe(401);
+		expect(await (result as Response).json()).toEqual({ error: 'Unauthorized', login: '/login' });
 	});
 
 	it('returns a verified subject rather than a user id, leaving the directory to Pod', async () => {

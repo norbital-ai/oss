@@ -21,6 +21,14 @@ export type EmailOtpIdentityOptions = {
 	/** Max code requests per address per window. Defaults to 5 per 15 minutes. */
 	readonly maxRequestsPerWindow?: number;
 	/**
+	 * Send the challenge cookie over HTTPS only. Defaults to `true`.
+	 *
+	 * Set false only for a loopback development bind. A `Secure` cookie is silently discarded over
+	 * plain HTTP, and the discard is invisible: the code arrives, the form accepts it, and the browser
+	 * simply has no challenge to send back — so sign-in fails with no error anywhere.
+	 */
+	readonly secureCookies?: boolean;
+	/**
 	 * Which address an invitation token was issued to, or `null`.
 	 *
 	 * Supplied by the host because the invitation lives in the tenant database and this provider runs
@@ -133,13 +141,14 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 		return withinLimit(attempts, email, maxRequests);
 	}
 
+	const secureCookies = options.secureCookies ?? true;
 	const challengeCookie = (value: string, ageSeconds: number): string =>
 		[
 			`pod_otp=${value}`,
 			'Path=/',
 			'HttpOnly',
 			'SameSite=Lax',
-			'Secure',
+			...(secureCookies ? ['Secure'] : []),
 			`Max-Age=${ageSeconds}`
 		].join('; ');
 
@@ -255,9 +264,20 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 					},
 					{ redirectTo: '/' }
 				);
-				const headers = new Headers(session.headers);
+				// `new Headers(other)` does NOT carry `set-cookie` across — it is the one header the Headers
+				// constructor collapses rather than copies. Building the response that way dropped the
+				// session cookie entirely: sign-in answered 303 to `/`, set nothing, and bounced straight
+				// back to the login page with no error anywhere. `getSetCookie()` is the accessor that
+				// returns each cookie separately.
+				const headers = new Headers();
+				for (const [name, value] of session.headers) {
+					if (name.toLowerCase() !== 'set-cookie') headers.set(name, value);
+				}
+				for (const cookie of session.headers.getSetCookie()) {
+					headers.append('set-cookie', cookie);
+				}
 				headers.append('set-cookie', challengeCookie('', 0));
-				return new Response(null, { status: 303, headers });
+				return new Response(null, { status: session.status, headers });
 			}
 
 			if (path === '/accept-invite' && request.method === 'GET') {
@@ -307,8 +327,19 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 		authenticate(request): HostAuthentication {
 			const claims = options.sessions.read(request);
 			if (!claims) {
-				// A person needs somewhere to go; a bare 401 sends them nowhere. `handleRoute` above already
-				// serves `/login` without a session, so this redirect always lands.
+				// A person needs somewhere to go; a bare 401 sends them nowhere. `handleRoute` above
+				// already serves `/login` without a session, so this redirect always lands.
+				//
+				// But only for a navigation. A `fetch` follows a 303 transparently and then tries to
+				// parse an HTML login page as JSON, so an API caller is told plainly that it is
+				// unauthenticated and where to send its user instead.
+				const wantsDocument = (request.headers.get('accept') ?? '').includes('text/html');
+				if (!wantsDocument) {
+					return new Response(JSON.stringify({ error: 'Unauthorized', login: '/login' }), {
+						status: 401,
+						headers: { 'content-type': 'application/json' }
+					});
+				}
 				return new Response(null, { status: 303, headers: { location: '/login' } });
 			}
 			return {
