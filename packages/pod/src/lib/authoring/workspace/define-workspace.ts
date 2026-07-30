@@ -238,6 +238,7 @@ function registerIntegrations(
 		...(privateEnv ?? {})
 	};
 	const integrationBindings: Record<string, RegisteredIntegrationRuntimeBinding> = {};
+	const emittedSystemEvents = new Set<string>();
 	const integrationConnections = new Map<string, HttpConnection | undefined>();
 	const definitions = new Map<
 		string,
@@ -387,6 +388,7 @@ function registerIntegrations(
 					trigger: 'collection-events',
 					destination
 				};
+				if (destination.type === 'system-event') emittedSystemEvents.add(destination.event);
 				const transform = binding.transform;
 				integrationBindings[`${integrationName}:${bindingId}`] = {
 					direction: 'send',
@@ -400,6 +402,8 @@ function registerIntegrations(
 		}
 	}
 
+	assertSystemEventsAreReachable(integrationBindings, emittedSystemEvents);
+
 	const integrations = [...definitions].map(([name, definition]) => ({ name, definition }));
 	for (const integration of integrations)
 		validateJsonValue(integration.definition, `Integration "${integration.name}"`, new Set());
@@ -408,6 +412,37 @@ function registerIntegrations(
 		secrets: Object.keys(requirements).length > 0 ? requirements : undefined,
 		integrationBindings
 	};
+}
+
+/**
+ * Refuse a receive binding waiting on a system event nothing emits.
+ *
+ * The two halves are matched by exact string at dispatch, so a typo on either side produced no
+ * matching bindings, no error, and no record — the integration simply never fired. That is the worst
+ * failure shape in the surface, and the name is a cross-reference, so it can be checked once the whole
+ * registry is built. Startup is the right moment: it names the binding rather than leaving a silence
+ * to be noticed weeks later.
+ */
+export function assertSystemEventsAreReachable(
+	integrationBindings: Record<string, RegisteredIntegrationRuntimeBinding>,
+	emitted: ReadonlySet<string>
+): void {
+	const unreachable = Object.entries(integrationBindings).flatMap(([key, binding]) =>
+		binding.direction === 'receive' && binding.systemEvent && !emitted.has(binding.systemEvent)
+			? [{ key, event: binding.systemEvent }]
+			: []
+	);
+	if (unreachable.length === 0) return;
+	const known = [...emitted].sort();
+	throw new Error(
+		unreachable
+			.map(
+				({ key, event }) =>
+					`Integration binding "${key}" receives system event "${event}", which no send binding emits.` +
+					(known.length > 0 ? ` Declared events: ${known.join(', ')}.` : ' No events are declared.')
+			)
+			.join('\n')
+	);
 }
 
 export function defineWorkspace<

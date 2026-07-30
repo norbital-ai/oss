@@ -318,4 +318,95 @@ export default defineQueryHandler({
 			throw new Error(`${failure.stdout ?? ''}\n${failure.stderr ?? ''}`, { cause });
 		}
 	});
+
+	/**
+	 * Discovery is a whitelist, so a role file in an unread directory was previously registered by
+	 * nothing and reported by nothing — the automation just never ran. The mixed singular/plural
+	 * convention (`src/automation` but `src/remotes`) makes this the likeliest typo in the surface.
+	 */
+	it('refuses role declarations in a directory nothing reads', async () => {
+		const root = await workspace();
+		await write(root, 'src/automations/+nightly_digest.ts', `export default {};`);
+		await write(root, 'src/remote/+summary.ts', `export default {};`);
+		// Agent tools are discoverable anywhere by design, so this one must stay silent.
+		await write(root, 'src/helpers/+lookup.tool.ts', `export default {};`);
+
+		const structure = await discoverPodFilesystem(root);
+		const orphans = structure.diagnostics.filter(
+			(diagnostic) => diagnostic.code === 'WORKSPACE_ROLE_ORPHANED'
+		);
+		expect(orphans.map((diagnostic) => diagnostic.file).sort()).toEqual([
+			'src/automations/+nightly_digest.ts',
+			'src/remote/+summary.ts'
+		]);
+		expect(orphans[0]?.message).toContain('Did you mean src/automation?');
+		expect(orphans[1]?.message).toContain('Did you mean src/remotes?');
+	});
+
+	/**
+	 * The object form carries `kind` and nothing else, yet it used to be the weaker of the two: its
+	 * handler fell back to `AnySchema`, collapsing `scope.incoming_record` to `Record<string, unknown>`.
+	 * Two ways of declaring the same automation must not disagree about how well it is typed.
+	 */
+	it('infers the workspace schema in the object spec form too', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/automation/+on_thing_object.ts',
+			`import { defineAutomation } from '@norbital-ai/pod/authoring';
+export default defineAutomation(
+	{ trigger: { collection: 'things', event: 'created' } },
+	{
+		kind: 'deterministic',
+		handler: async (api, { scope }) => {
+			const name: string = scope.incoming_record.name;
+			await api.db.query.things.findMany({ where: { name: { eq: name } }, limit: 1 });
+			return { name };
+		}
+	}
+);`
+		);
+		const result = await compilePodFilesystem({ root });
+		expect(result.valid, JSON.stringify(result.diagnostics, null, 2)).toBe(true);
+
+		const tsc = path.join(REPO_ROOT, 'packages/pod/node_modules/.bin/tsc');
+		try {
+			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+				cwd: root,
+				encoding: 'utf8'
+			});
+		} catch (cause) {
+			const failure = cause as { stdout?: string; stderr?: string };
+			throw new Error(`${failure.stdout ?? ''}\n${failure.stderr ?? ''}`, { cause });
+		}
+
+		// `incoming_record` is now a things row, so a wrong field type is caught.
+		await write(
+			root,
+			'src/automation/+on_thing_object.ts',
+			`import { defineAutomation } from '@norbital-ai/pod/authoring';
+export default defineAutomation(
+	{ trigger: { collection: 'things', event: 'created' } },
+	{
+		kind: 'deterministic',
+		handler: async (_api, { scope }) => {
+			const name: number = scope.incoming_record.name;
+			return { name };
+		}
+	}
+);`
+		);
+		await compilePodFilesystem({ root });
+		let diagnostics = '';
+		try {
+			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+				cwd: root,
+				encoding: 'utf8'
+			});
+		} catch (cause) {
+			const failure = cause as { stdout?: string; stderr?: string };
+			diagnostics = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`;
+		}
+		expect(diagnostics).toContain("not assignable to type 'number'");
+	});
 });

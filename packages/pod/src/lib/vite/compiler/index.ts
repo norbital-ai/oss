@@ -768,6 +768,78 @@ async function discoverWorkspaceRoles(
 	return roles;
 }
 
+/**
+ * Directories under `src/` whose `+<name>.ts` files mean something.
+ *
+ * `lib` is free-form helper code and `collections`/`apps` nest, so they are listed to be skipped
+ * rather than scanned.
+ */
+const KNOWN_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set([
+	'apps',
+	'automation',
+	'collections',
+	'custom-types',
+	'lib',
+	'policies',
+	'remotes'
+]);
+
+/** Edit distance, capped — only used to decide whether to suggest a name. */
+function editDistance(left: string, right: string): number {
+	let previous = Array.from({ length: right.length + 1 }, (_unused, index) => index);
+	for (let i = 1; i <= left.length; i += 1) {
+		const current = [i];
+		for (let j = 1; j <= right.length; j += 1) {
+			current[j] = Math.min(
+				(previous[j] ?? 0) + 1,
+				(current[j - 1] ?? 0) + 1,
+				(previous[j - 1] ?? 0) + (left[i - 1] === right[j - 1] ? 0 : 1)
+			);
+		}
+		previous = current;
+	}
+	return previous[right.length] ?? right.length;
+}
+
+/**
+ * Refuse a role declaration sitting in a directory nothing reads.
+ *
+ * Discovery is a whitelist: only `src/automation` and `src/remotes` are scanned for `+<name>.ts`. A
+ * file in `src/automations` — the plural, which the mixed singular/plural convention invites — was
+ * simply never registered, so the automation never ran and nothing said why. A bad role file *inside*
+ * a known directory was always a hard error; only the directory name escaped checking.
+ *
+ * Agent tools are exempt: `+<name>.tool.ts` is deliberately discoverable anywhere under `src`.
+ */
+function validateRoleDirectories(
+	root: string,
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): void {
+	const sourceRoot = path.join(root, 'src');
+	if (!inventory.hasDirectory(sourceRoot)) return;
+	for (const entry of inventory.entries(sourceRoot)) {
+		if (!entry.isDirectory() || KNOWN_SOURCE_DIRECTORIES.has(entry.name)) continue;
+		const directory = path.join(sourceRoot, entry.name);
+		const orphans = [directory, ...inventory.filesBelow(directory)].filter(
+			(file) => path.basename(file).startsWith('+') && !file.endsWith('.tool.ts')
+		);
+		if (orphans.length === 0) continue;
+		const nearest = [...KNOWN_SOURCE_DIRECTORIES]
+			.map((known) => ({ known, distance: editDistance(entry.name, known) }))
+			.sort((left, right) => left.distance - right.distance)[0];
+		const suggestion =
+			nearest && nearest.distance <= 2 ? ` Did you mean src/${nearest.known}?` : '';
+		diagnostics.push(
+			topologyDiagnostic(
+				relativePath(root, orphans[0] ?? directory),
+				'WORKSPACE_ROLE_ORPHANED',
+				`src/${entry.name} is not a role directory, so its +<name>.ts declarations are never registered.${suggestion}`
+			)
+		);
+	}
+}
+
 async function discoverAgentTools(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
@@ -968,6 +1040,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		discoverSeed(absoluteRoot, diagnostics, inventory),
 		validateAuthoredSource(absoluteRoot, diagnostics, inventory)
 	]);
+	validateRoleDirectories(absoluteRoot, diagnostics, inventory);
 	diagnostics.sort(
 		(left, right) =>
 			compareText(left.file, right.file) ||

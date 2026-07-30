@@ -20,7 +20,7 @@ export type AutomationTrigger<S extends AnySchema = AnySchema> =
 
 export type AutomationContext<
 	TTrigger extends AutomationTrigger<S> = AutomationTrigger,
-	S extends AnySchema = AnySchema
+	S extends AnySchema = DefaultWorkspaceSchema
 > = {
 	readonly args: Record<string, unknown>;
 	readonly scope: AutomationScope<S, TTrigger>;
@@ -67,12 +67,20 @@ export type AgentAutomationSpec = {
 	readonly maxTokens?: number;
 };
 
-export type DeterministicAutomationSpec = {
+/**
+ * The object form of a deterministic automation.
+ *
+ * Generic in the schema and the trigger for the same reason the bare-function form is: without it the
+ * handler's `context` falls back to `AnySchema`, which collapses `scope.incoming_record` to
+ * `Record<string, unknown>`. Two ways to declare the same automation should not disagree about how
+ * well it is typed — the object form existed only to carry `kind`, and it was quietly the weaker one.
+ */
+export type DeterministicAutomationSpec<
+	S extends AnySchema = DefaultWorkspaceSchema,
+	TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
+> = {
 	readonly kind: 'deterministic';
-	readonly handler: (
-		api: BeforeApi,
-		context: AutomationContext
-	) => Promise<Record<string, unknown>>;
+	readonly handler: AutomationHandler<S, TTrigger>;
 };
 
 type AutomationHandler<S extends AnySchema, TTrigger extends AutomationTrigger<S>> = (
@@ -80,7 +88,10 @@ type AutomationHandler<S extends AnySchema, TTrigger extends AutomationTrigger<S
 	context: AutomationContext<TTrigger, S>
 ) => Promise<Record<string, unknown>>;
 
-export type AutomationSpec = AgentAutomationSpec | DeterministicAutomationSpec;
+export type AutomationSpec<
+	S extends AnySchema = DefaultWorkspaceSchema,
+	TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
+> = AgentAutomationSpec | DeterministicAutomationSpec<S, TTrigger>;
 
 export type AutomationDefinition = {
 	readonly trigger: AutomationTrigger;
@@ -94,12 +105,17 @@ export function defineAutomation<
 	const TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
 >(
 	trigger: TTrigger,
-	specOrHandler: AutomationSpec | AutomationHandler<S, TTrigger>
+	specOrHandler: AutomationSpec<S, TTrigger> | AutomationHandler<S, TTrigger>
 ): AutomationDefinition {
+	// Both forms erase at the same boundary. The object form now carries the author's generics too, so
+	// it needs the same unwrapping the bare function always had — otherwise the typed handler cannot be
+	// stored in the erased registry.
 	const spec: AutomationSpec =
 		typeof specOrHandler === 'function'
 			? { kind: 'deterministic', handler: eraseAutomationHandler(specOrHandler) }
-			: specOrHandler;
+			: specOrHandler.kind === 'deterministic'
+				? { kind: 'deterministic', handler: eraseAutomationHandler(specOrHandler.handler) }
+				: specOrHandler;
 	return { trigger: trigger as AutomationTrigger, spec };
 }
 
