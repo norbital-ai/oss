@@ -102,6 +102,21 @@ export { cronMatches, parseCron } from './cron.js';
  * that set. It was unreachable from outside the package, which made `queue` a facility no host could
  * actually satisfy.
  */
+/**
+ * Reconcile a workspace's declared policies into a tenant database.
+ *
+ * Exported because a host must run this at its own migrate seam. Policies moved from Core's seed into
+ * workspace source, and nothing else creates the rows — a host that migrates a tenant without calling
+ * this leaves it with no policies at all, and `team.policy_id` pointing at nothing.
+ *
+ * Upserts by key and never deletes an undeclared row, so it is safe to run on every migrate.
+ */
+export { reconcileDeclaredPolicies } from '../server/bootstrap/policy_reconcile.server.js';
+export type {
+	PolicyReconcileClient,
+	PolicyReconcileResult
+} from '../server/bootstrap/policy_reconcile.server.js';
+
 export { workspaceJobs } from '../bin/invocation/jobs.js';
 export type { WorkspaceJobOptions } from '../bin/invocation/jobs.js';
 export type { CronSchedule } from './cron.js';

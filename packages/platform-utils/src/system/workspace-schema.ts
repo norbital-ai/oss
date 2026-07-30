@@ -224,9 +224,15 @@ const _team = systemTable(
 		parent_id: text(),
 		is_active: boolean().notNull().default(true),
 		kind: text().default('human'),
-		policy_id: uuid()
-			.references(() => _policy.norbital_id)
-			.notNull()
+		/**
+		 * The policy this team holds, or null while it holds none.
+		 *
+		 * Nullable because policies are now *declared* in source and reconciled at migrate time, while
+		 * teams are runtime rows. A team therefore exists before any policy does — seeding one with
+		 * `NOT NULL` forced a policy id to be invented at seed time, which is exactly the coupling that
+		 * kept permission sets out of source. Assignment is an ordinary update.
+		 */
+		policy_id: uuid().references(() => _policy.norbital_id)
 	},
 	{ description: 'Teams', record_label: 'name', system: true }
 );

@@ -43,7 +43,7 @@ interface PlatformTeamRow extends SystemRecordFields {
 	readonly parent_id: string | null;
 	readonly is_active: boolean;
 	readonly kind: string | null;
-	readonly policy_id: string;
+	readonly policy_id: string | null;
 }
 
 interface PlatformPolicyRow extends SystemRecordFields {
@@ -394,7 +394,7 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'parent_id', kind: 'text', nullable: true },
 			{ name: 'is_active', kind: 'boolean', nullable: false },
 			{ name: 'kind', kind: 'text', nullable: true },
-			{ name: 'policy_id', kind: 'uuid', nullable: false }
+			{ name: 'policy_id', kind: 'uuid', nullable: true }
 		]
 	},
 	policy: {
