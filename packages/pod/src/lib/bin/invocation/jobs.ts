@@ -5,7 +5,7 @@ import type {
 	IntegrationDeliveryMessage,
 	QueueJob
 } from '../../host/types.js';
-import type { HostNotificationsBinding } from '@norbital-ai/platform-utils/runtime/binding';
+import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
 
 /** Calls the private runtime host-control entry point. */
 export type RuntimeDispatch = (body: unknown) => Promise<unknown>;
@@ -14,7 +14,7 @@ export type WorkspaceJobOptions = {
 	readonly manifest: NorbitalManifest;
 	readonly dispatch: RuntimeDispatch;
 	readonly integrationDelivery?: HostIntegrationDelivery;
-	readonly notifications?: HostNotificationsBinding;
+	readonly messaging?: HostMessagingBinding;
 	readonly organizationId: string;
 	readonly log?: (message: string) => void;
 };
@@ -153,8 +153,8 @@ function integrationOutboxJob(options: WorkspaceJobOptions): QueueJob {
 }
 
 function notificationOutboxJob(options: WorkspaceJobOptions): QueueJob {
-	const notifications = options.notifications;
-	if (!notifications) throw new Error('Notification outbox job requires a notifications binding');
+	const messaging = options.messaging;
+	if (!messaging) throw new Error('Notification outbox job requires a messaging binding');
 	return {
 		name: 'pod:notification-outbox',
 		schedule: 'continuous',
@@ -164,7 +164,7 @@ function notificationOutboxJob(options: WorkspaceJobOptions): QueueJob {
 			);
 			for (const row of rows) {
 				try {
-					const result = await notifications.send({
+					const result = await messaging.send({
 						organizationId: options.organizationId,
 						channel: row.channel,
 						recipientUserId: row.recipient_user_id,
@@ -219,7 +219,7 @@ export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[]
 	}
 
 	if (options.integrationDelivery) jobs.push(integrationOutboxJob(options));
-	if (options.notifications) jobs.push(notificationOutboxJob(options));
+	if (options.messaging) jobs.push(notificationOutboxJob(options));
 
 	const hasEventAutomations = Object.values(options.manifest.automations ?? {}).some(
 		(automation) => 'collection' in automation.trigger

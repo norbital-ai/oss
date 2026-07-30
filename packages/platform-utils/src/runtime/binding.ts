@@ -121,10 +121,36 @@ export type NotificationDelivery = {
 
 export type NotificationDeliveryResult = { readonly sent: boolean; readonly reason?: string };
 
-export type HostNotificationsBinding = {
+/**
+ * A message on a conversational transport — Telegram, WhatsApp, SMS.
+ *
+ * Distinct from `NotificationDelivery`, which addresses a *workspace user* and lets the host resolve
+ * an address for them. Here the person on the other end may have no user row at all, so the address
+ * is the transport's own: a chat id, a phone number, whatever the wire uses.
+ */
+export type TransportMessage = {
+	/** Transport-native address of the conversation — chat id, phone number, thread id. */
+	readonly conversationId: string;
+	readonly text: string;
+};
+
+export type TransportSendResult = { readonly sent: boolean; readonly reason?: string };
+
+export type HostMessagingBinding = {
 	/** External channels this host can deliver. `system` is reserved to Pod. */
 	readonly channels: readonly string[];
 	send(input: NotificationDelivery): Promise<NotificationDeliveryResult>;
+	/**
+	 * The transports this host can carry a declared channel over.
+	 *
+	 * Two methods rather than the `transports` record the shape suggests, because bindings reach a
+	 * tenant runtime through the stdio proxy in `runtime/serve.ts`: it traps every property get and
+	 * returns a call forwarder, so a data field arrives as a function and a record of *functions*
+	 * does not survive the structured clone at all. Anything a tenant runtime must reach has to be
+	 * a method call, and that is what these are.
+	 */
+	listTransports(): Promise<readonly string[]>;
+	sendVia(transport: string, message: TransportMessage): Promise<TransportSendResult>;
 };
 
 export type StaticMapMarker = {
@@ -187,12 +213,12 @@ export type RuntimeFacilityBindings = {
 	readonly db: HostDbBinding;
 	readonly fileStorage?: HostFileStorageBinding;
 	readonly ai?: HostAiBinding;
-	readonly notifications?: HostNotificationsBinding;
+	readonly messaging?: HostMessagingBinding;
 	readonly maps?: HostMapsBinding;
 };
 
 export type RuntimeFacilityName =
-	'db' | 'fileStorage' | 'integrationDelivery' | 'queue' | 'ai' | 'maps' | 'notifications';
+	'db' | 'fileStorage' | 'integrationDelivery' | 'queue' | 'ai' | 'maps' | 'messaging';
 
 /**
  * Facilities implied by the portable workspace manifest, independent of a particular host.
@@ -208,7 +234,7 @@ export type RuntimeFacilityName =
  * `maps` is deliberately absent. A `geolocation()` value is self-contained
  * (`{ geometry, formatted_address, type, srid }`), so storing, querying, and displaying one needs no
  * provider at all — only edit-time address autocomplete and static-map rendering do. Those validate
- * when called, the same way a `notifications` channel does, so a workspace that merely holds
+ * when called, the same way a `messaging` channel does, so a workspace that merely holds
  * coordinates is not blocked from starting.
  */
 export function requiredRuntimeFacilities(

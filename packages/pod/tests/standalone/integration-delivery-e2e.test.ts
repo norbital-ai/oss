@@ -187,7 +187,7 @@ export default {
 
 /** A host that supplies the queue that drains the outbox and the delivery function that ships it. */
 const HOST_SOURCE = `import {
-	consoleNotifications,
+	consoleMessaging,
 	definePodHost,
 	devIdentity,
 	env,
@@ -206,7 +206,7 @@ export default definePodHost({
 		organizationName: env('POD_ORG_NAME')
 	}),
 	fileStorage: localFileStorage({ directory: '.norbital/storage' }),
-	notifications: consoleNotifications('email'),
+	messaging: consoleMessaging({ channels: ['email'] }),
 	queue: intervalQueue({ intervalMs: 1000 }),
 	integrationDelivery: async (message) => {
 		const response = await fetch(\`\${env('POD_TEST_SINK_URL')}/delivered\`, {

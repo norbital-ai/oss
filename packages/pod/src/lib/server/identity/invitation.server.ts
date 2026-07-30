@@ -113,7 +113,7 @@ export async function provisionFoundingInvitation(input: {
 
 	// Required, not best-effort: a founding invitation nobody receives leaves a tenant that can never
 	// be entered, so a missing messaging facility must fail provisioning loudly.
-	const messaging = requireRuntimeFacility('notifications');
+	const messaging = requireRuntimeFacility('messaging');
 	const result = await messaging.send({
 		organizationId: ctx.baseScope.organization.norbital_id,
 		channel: messaging.channels[0] ?? 'email',

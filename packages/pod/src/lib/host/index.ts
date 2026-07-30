@@ -43,7 +43,7 @@ export type {
 	HostAuthentication,
 	HostIdentityDescriptor,
 	HostMapsBinding,
-	HostNotificationsBinding,
+	HostMessagingBinding,
 	HostQueue,
 	HostSubject,
 	HostVerifiedSubject,
@@ -79,12 +79,13 @@ export type { S3FileStorageOptions } from './s3.js';
 export { googleMaps } from './maps.js';
 export type { GoogleMapsOptions } from './maps.js';
 
-// Notifications. There is no `ai` adapter: model credentials and the agent that runs against a
+// Messaging. There is no `ai` adapter: model credentials and the agent that runs against a
 // tenant's data belong to the trusted host, so this package declares that contract and Core
 // implements it (on `@tanstack/ai`, defaulting to OpenRouter).
 export {
-	consoleNotifications,
-	notificationProviders,
+	consoleMessaging,
+	messagingProviders,
+	type MessagingTransport,
 	type NotificationProvider
 } from './facilities.js';
 

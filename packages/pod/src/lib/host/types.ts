@@ -4,7 +4,7 @@ import type {
 	HostDbBinding,
 	HostFileStorageBinding,
 	HostMapsBinding,
-	HostNotificationsBinding,
+	HostMessagingBinding,
 	RuntimeFacilityName
 } from '@norbital-ai/platform-utils/runtime/binding';
 import type { TBaseScope } from '@norbital-ai/platform-utils/scope/types';
@@ -250,7 +250,7 @@ export type SelfHostedPodHostConfig = {
 	readonly publicUrl: string;
 	readonly fileStorage?: HostFileStorageBinding;
 	readonly ai?: HostAiBinding;
-	readonly notifications?: HostNotificationsBinding;
+	readonly messaging?: HostMessagingBinding;
 	readonly maps?: HostMapsBinding;
 	readonly integrationDelivery?: HostIntegrationDelivery;
 	readonly queue?: HostQueue;
@@ -279,7 +279,7 @@ export function satisfiedFacilities(
 	if (config.fileStorage) satisfied.add('fileStorage');
 	if (config.maps) satisfied.add('maps');
 	if (config.ai) satisfied.add('ai');
-	if (config.notifications) satisfied.add('notifications');
+	if (config.messaging) satisfied.add('messaging');
 	if (config.queue) satisfied.add('queue');
 	if (config.integrationDelivery) satisfied.add('integrationDelivery');
 	return satisfied;
@@ -292,4 +292,4 @@ export type {
 	HostFileStorageBinding,
 	HostMapsBinding
 };
-export type { HostAppPlugin, HostNotificationsBinding, RuntimeFacilityName, TBaseScope };
+export type { HostAppPlugin, HostMessagingBinding, RuntimeFacilityName, TBaseScope };

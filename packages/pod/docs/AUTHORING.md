@@ -179,6 +179,6 @@ automation refuses to start under it, because `ai` is a _static_ requirement —
 answer, not an inconvenience: the alternative is a development run that fails at the first inference
 call, far from the cause.
 
-`maps` and notifications are not static requirements and never gate startup. Nothing in the manifest
-implies them: a stored geolocation carries its own geometry and address, and a notification channel is
-chosen at call time. Both validate when called.
+`maps` and notification channels are not static requirements and never gate startup. Nothing in the
+manifest implies them: a stored geolocation carries its own geometry and address, and a notification
+channel is chosen at call time. Both validate when called.

@@ -46,9 +46,10 @@ filter every query had to remember.
 
 **Channel transport validation.** `ChannelDefinition.transport` is not checked against anything. The
 check belongs at startup, in the same shape as the system-event reachability check in
-`define-workspace.ts` — but it needs the `messaging` facility and its `transports` record, and the
-facility is still named `notifications` and carries no transports. Until then, a wrong transport name
-fails when a message arrives rather than when the workspace boots.
+`define-workspace.ts`. The `messaging` facility now carries its transports — as `listTransports()`
+and `sendVia()`, because a binding reaches a tenant runtime through a proxy that forwards method
+calls and cannot carry a record of functions — so the check is unblocked. Until it lands, a wrong
+transport name fails when a message arrives rather than when the workspace boots.
 
 **Channel delivery.** Authoring a channel does not yet route anything. Core's channel runtime is
 ~2,500 lines across `channel-manager`, `channel-history`, `automation`, and `pending-channel-message`,

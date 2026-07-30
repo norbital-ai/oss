@@ -26,7 +26,7 @@ both, with no source changes and no host-specific tenant APIs.
                            │ facility bindings
 ┌──────────────────────────┴─────────────────────────────────────┐
 │ HOST                                                          │
-│ db · fileStorage · maps · notifications · ai                  │
+│ db · fileStorage · maps · messaging · ai                     │
 │ queue · integrationDelivery                                   │
 │                                                               │
 │ owns credentials, outbound sockets, timers, and process I/O   │
@@ -72,7 +72,7 @@ An independent deployment provides the complete host:
 import {
 	definePodHost,
 	env,
-	notificationProviders,
+	messagingProviders,
 	postgresDb,
 	s3FileStorage,
 	trustedHeaderIdentity
@@ -89,7 +89,7 @@ export default definePodHost({
 		accessKeyId: env('S3_ACCESS_KEY_ID'),
 		secretAccessKey: env('S3_SECRET_ACCESS_KEY')
 	}),
-	notifications: notificationProviders(emailProvider),
+	messaging: messagingProviders({ channels: [emailProvider], transports: [telegram] }),
 	ai: modelProvider,
 	queue: intervalQueue()
 });
@@ -114,7 +114,9 @@ startup compares them with `pod.host.ts` and refuses to listen if anything is mi
 
 Direct calls that cannot be inferred without executing tenant code are checked at the call site.
 `api.ai(...)` requires an AI binding. An external `api.sendNotification(...)` requires a
-notification binding that advertises that channel. Failure occurs before Pod writes an outbox row.
+`messaging` binding that advertises that channel. Failure occurs before Pod writes an outbox row.
+A channel declared in `src/channels/` is the exception: its `transport` is knowable from source, so
+it is checked at startup against the host's `listTransports()` rather than at the first message.
 There is no parallel tenant capability declaration and no provider name in the manifest.
 
 ## Request lifecycle
@@ -273,7 +275,7 @@ await api.sendNotification({
 ```
 
 `system` needs no host binding. Before any external outbox row is written, Pod requires the active
-host's notification binding and verifies that every requested channel appears in its `channels`
+host's `messaging` binding and verifies that every requested channel appears in its `channels`
 list. A Core provider and a `pod.host.ts` provider satisfy the same interface.
 
 ## Agents

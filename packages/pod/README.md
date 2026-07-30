@@ -734,16 +734,16 @@ Tenant code calls `api.sendNotification(...)`; it does not define a notification
 
 The same rule applies across facilities:
 
-| Workspace behavior                     | Required host facility                        |
-| -------------------------------------- | --------------------------------------------- |
-| Any running workspace                  | `db`                                          |
-| A `file()` field                       | `fileStorage`                                 |
-| Deterministic automation               | `queue`                                       |
-| Agent automation                       | `queue` and `ai`                              |
-| Outbound integration                   | `queue` and `integrationDelivery`             |
-| External notification call             | matching `notifications` channel at call time |
-| Geolocation autocomplete or static map | `maps` at call time                           |
-| Direct runtime AI call not in manifest | `ai` at call time                             |
+| Workspace behavior                     | Required host facility                    |
+| -------------------------------------- | ----------------------------------------- |
+| Any running workspace                  | `db`                                      |
+| A `file()` field                       | `fileStorage`                             |
+| Deterministic automation               | `queue`                                   |
+| Agent automation                       | `queue` and `ai`                          |
+| Outbound integration                   | `queue` and `integrationDelivery`         |
+| External notification call             | matching `messaging` channel at call time |
+| Geolocation autocomplete or static map | `maps` at call time                       |
+| Direct runtime AI call not in manifest | `ai` at call time                         |
 
 Static field and automation requirements are checked before the server listens. Dynamic notification
 channels and direct API calls are validated precisely when called.
@@ -779,7 +779,7 @@ Self-hosting is explicit and adapter-driven:
 ```ts
 // pod.host.ts
 import {
-	consoleNotifications,
+	consoleMessaging,
 	definePodHost,
 	env,
 	emailOtp,
@@ -799,14 +799,14 @@ export default definePodHost({
 	fileStorage: localFileStorage({
 		directory: '.norbital/storage'
 	}),
-	notifications: consoleNotifications('email'),
+	messaging: consoleMessaging({ channels: ['email'] }),
 	queue: intervalQueue({ intervalMs: 30_000 })
 });
 ```
 
 `db` and `identity` are required. Add only real implementations for the optional `fileStorage`,
-`ai`, `notifications`, `maps`, `integrationDelivery`, and `queue` fields. Pod exports
-PostgreSQL, local/S3-compatible file storage, trusted-header/development identity, and notification
+`ai`, `messaging`, `maps`, `integrationDelivery`, and `queue` fields. Pod exports
+PostgreSQL, local/S3-compatible file storage, trusted-header/development identity, and messaging
 composition helpers. AI, maps, and integration credentials remain host-specific contracts; there is
 no pretend default provider.
 

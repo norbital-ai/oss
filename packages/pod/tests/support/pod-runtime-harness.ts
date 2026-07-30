@@ -9,7 +9,7 @@ import type {
 	HostAiBinding,
 	HostFileStorageBinding,
 	HostMapsBinding,
-	HostNotificationsBinding,
+	HostMessagingBinding,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
@@ -224,7 +224,7 @@ export type PodRuntimeTestFacilities = {
 	readonly ai?: HostAiBinding;
 	readonly fileStorage?: HostFileStorageBinding;
 	readonly maps?: HostMapsBinding;
-	readonly notifications?: HostNotificationsBinding;
+	readonly messaging?: HostMessagingBinding;
 };
 
 export async function bootPodRuntime(

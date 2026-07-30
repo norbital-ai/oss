@@ -189,7 +189,7 @@ invitation. `TenantWorkspaceShellData.userOrganizations` already carries the lis
 | `fileStorage`         | unchanged                                                                                                                            |
 | `ai`                  | Core's, on `@tanstack/ai`, OpenRouter default. Pod ships **no** ai adapter                                                           |
 | `maps`                | replace Core's inline Google implementation with Pod's `googleMaps({ apiKey, region })`                                              |
-| `messaging`           | rename from `notifications`; add the `transports` record. Supply `whatsapp` (socket + `node:fs` auth state) as `transports.whatsapp` |
+| `messaging`           | renamed from `notifications`. Transports are **methods**, not a record — `listTransports()` and `sendVia(transport, message)` — because a binding crosses the isolate as a proxy that forwards method calls. Supply `whatsapp` (socket + `node:fs` auth state) as a `MessagingTransport` |
 | `queue`               | pg-boss, driving `workspaceJobs()`                                                                                                   |
 | `integrationDelivery` | unchanged                                                                                                                            |
 | `agentTools`          | re-expose `coding.tool.ts` / `deployment.tool.ts` as `HostAgentTool`s pointed at the sandbox                                         |
@@ -337,8 +337,16 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
 
 ### B. Channels
 
-- [ ] **B1.** Rename the `notifications` facility to `messaging` and add its `transports` record.
-      Blocks B2 and the transport validation in `ChannelDefinition`.
+- [x] **B1. Done.** The facility is `messaging` everywhere — `HostMessagingBinding`,
+      `RuntimeFacilityBindings.messaging`, `RuntimeFacilityName`, `satisfiedFacilities`,
+      `requireRuntimeFacility('messaging')`, `messagingProviders`/`consoleMessaging`, and the
+      standalone runner's wiring. **Transports are not a record.** `RuntimeFacilityBindings` reach a
+      tenant runtime through the proxy in `runtime/serve.ts`, which traps every property get and
+      returns a call forwarder, so a data field arrives as a function and a record of functions does
+      not survive the structured clone at all. They are `listTransports(): Promise<readonly string[]>`
+      and `sendVia(transport, message)` instead — method calls, which is the only thing that boundary
+      carries. (The pre-existing `channels` field has the same defect and is unfixed: it is read
+      inside the isolate by `hook-api.server.ts`, where it is a function, not an array.)
 - [ ] **B2.** Validate `+<name>.channel.ts` transports at startup, in the shape of
       `assertSystemEventsAreReachable` in `define-workspace.ts`.
 - [ ] **B3.** Port channel delivery (~2,500 lines: `channel-manager`, `channel-history`, `automation`,

@@ -18,7 +18,7 @@ swept into a commit. Both were caught and reverted, both were avoidable.
 
 - **Pod owns** authentication (sessions, invitations, login/code/accept-invite pages), collection ops,
   policy enforcement, approvals, audit, temporal history, sync, and now the agent loop.
-- **The host supplies** facilities: `db`, `fileStorage`, `ai`, `maps`, `notifications`, `queue`,
+- **The host supplies** facilities: `db`, `fileStorage`, `ai`, `maps`, `messaging`, `queue`,
   `integrationDelivery`. The set is closed — there is no authoring surface for a new one.
 - **Core is one host**; `pod start` is another. The workspace bundle is identical; only `pod.host.ts`
   differs.

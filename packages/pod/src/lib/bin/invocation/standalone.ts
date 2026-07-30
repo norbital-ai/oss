@@ -599,7 +599,7 @@ function facilityBindings(
 		db,
 		...(config.fileStorage ? { fileStorage: config.fileStorage } : {}),
 		...(config.ai ? { ai: config.ai } : {}),
-		...(config.notifications ? { notifications: config.notifications } : {}),
+		...(config.messaging ? { messaging: config.messaging } : {}),
 		...(config.maps ? { maps: config.maps } : {})
 	};
 }
@@ -666,10 +666,10 @@ export async function startStandalone(
 	const bindIdentity = (): HostIdentityProvider => {
 		if (!isIdentityDescriptor(config.identity)) return config.identity;
 		const descriptor = config.identity;
-		const notifications = config.notifications;
-		if (!notifications) {
+		const messaging = config.messaging;
+		if (!messaging) {
 			throw new Error(
-				'emailOtp requires a notifications provider to send codes. Configure `notifications` in pod.host.ts.'
+				'emailOtp requires a messaging provider to send codes. Configure `messaging` in pod.host.ts.'
 			);
 		}
 		return emailOtpIdentity({
@@ -689,9 +689,9 @@ export async function startStandalone(
 			// loopback HTTP bind is dropped by the browser, and sign-in then fails with nothing logged.
 			...(descriptor.secureCookies === false ? { secureCookies: false } : {}),
 			deliver: async ({ email, code }) => {
-				const result = await notifications.send({
+				const result = await messaging.send({
 					organizationId: environment.orgId,
-					channel: notifications.channels[0] ?? 'email',
+					channel: messaging.channels[0] ?? 'email',
 					recipientUserId: email,
 					subject: `Your ${environment.orgName} sign-in code`,
 					message: `Your sign-in code is ${code}. It expires in ten minutes.`,
@@ -802,7 +802,7 @@ export async function startStandalone(
 			dispatch,
 			organizationId: environment.orgId,
 			...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
-			...(config.notifications ? { notifications: config.notifications } : {})
+			...(config.messaging ? { messaging: config.messaging } : {})
 		});
 		if (config.queue && jobs.length > 0) stopQueue = await config.queue(jobs);
 	} catch (cause) {

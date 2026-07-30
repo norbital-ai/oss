@@ -29,7 +29,7 @@ import type {
 	HostDbBinding,
 	HostFileStorageBinding,
 	HostMapsBinding,
-	HostNotificationsBinding,
+	HostMessagingBinding,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import { setDatabaseNotifications } from '$lib/server/collection/sync/db-notifications.server.js';
@@ -171,7 +171,7 @@ export function startPodStdioServer(): void {
 		db: facility<HostDbBinding>('db'),
 		fileStorage: facility<HostFileStorageBinding>('fileStorage'),
 		ai: facility<HostAiBinding>('ai'),
-		notifications: facility<HostNotificationsBinding>('notifications'),
+		messaging: facility<HostMessagingBinding>('messaging'),
 		maps: facility<HostMapsBinding>('maps')
 	};
 

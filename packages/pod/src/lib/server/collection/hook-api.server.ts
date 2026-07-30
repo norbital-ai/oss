@@ -120,10 +120,7 @@ function sharedBuiltinApi() {
 			const channels = [...new Set(notificationChannelsSchema.parse(input.channels))];
 			const external = channels.filter((channel) => channel !== 'system');
 			if (external.length > 0) {
-				assertNotificationChannelSupport(
-					external,
-					requireRuntimeFacility('notifications').channels
-				);
+				assertNotificationChannelSupport(external, requireRuntimeFacility('messaging').channels);
 			}
 			return withCollectionTransaction(ctx, async () => {
 				let notificationId: string | null = null;

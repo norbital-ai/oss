@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
+import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { workspaceJobs } from '../../src/lib/bin/invocation/jobs.js';
 import { intervalQueue } from '../../src/lib/host/interval-queue.js';
+
+/** A `messaging` binding that only has to deliver on the `email` channel. */
+function messagingBinding(binding: Pick<HostMessagingBinding, 'send'>): HostMessagingBinding {
+	return {
+		channels: ['email'],
+		send: binding.send,
+		listTransports: async () => [],
+		sendVia: async () => ({ sent: false, reason: 'no transports' })
+	};
+}
 
 function manifest(schedule: string): NorbitalManifest {
 	return {
@@ -40,7 +51,7 @@ describe('workspace jobs', () => {
 			manifest: manifest('* * * * *'),
 			dispatch: async () => undefined,
 			organizationId: 'org-1',
-			notifications: { channels: ['email'], send: async () => ({ sent: true }) }
+			messaging: messagingBinding({ send: async () => ({ sent: true }) })
 		});
 		expect(jobs.map((job) => job.name)).toEqual(['pod:automation:job', 'pod:notification-outbox']);
 		// A host that supplies no delivery provider gets no drain job to run.
@@ -63,13 +74,12 @@ describe('workspace jobs', () => {
 		const jobs = workspaceJobs({
 			manifest: manifest('* * * * *'),
 			organizationId: 'org-1',
-			notifications: {
-				channels: ['email'],
+			messaging: messagingBinding({
 				async send(input) {
 					sentOrganization = input.organizationId;
 					return { sent: true };
 				}
-			},
+			}),
 			async dispatch(request) {
 				const input = request as { kind?: string; action?: string };
 				if (input.kind === 'automation') return automation;
