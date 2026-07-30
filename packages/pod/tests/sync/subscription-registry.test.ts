@@ -16,6 +16,15 @@ function rowsOf(count: number, offset = 0): Record<string, unknown>[] {
 	return Array.from({ length: count }, (_v, i) => ({ norbital_id: String(offset + i) }));
 }
 
+/**
+ * The residency budget is measured in bytes, but these tests reason in rows. The stub's rows have
+ * a fixed shape, so one is converted to the other by measuring the encoding the registry itself
+ * charges against the budget.
+ */
+function budgetForRows(count: number): number {
+	return JSON.stringify(rowsOf(count)).length;
+}
+
 type Stub = {
 	client: PodSyncClient;
 	calls: ShapeRequest[];
@@ -90,7 +99,7 @@ describe('SubscriptionRegistry', () => {
 
 		await registry.register('orders');
 		await settle();
-		await registry.refreshAll();
+		await registry.refresh(['orders']);
 		await settle();
 
 		expect(calls.map((call) => call.collection)).toEqual(['orders', 'orders']);
@@ -162,7 +171,7 @@ describe('SubscriptionRegistry', () => {
 			const { client, calls, recorded } = stubClient({
 				page: (_request, index) => morePages(rowsOf(100, index * 100))
 			});
-			const registry = new SubscriptionRegistry(client, { residencyCap: 250 });
+			const registry = new SubscriptionRegistry(client, { residencyBytes: budgetForRows(250) });
 
 			await registry.register('orders');
 			await settle();
@@ -179,7 +188,7 @@ describe('SubscriptionRegistry', () => {
 			const { client, calls } = stubClient({
 				page: (_request, index) => morePages(rowsOf(100, index * 100))
 			});
-			const registry = new SubscriptionRegistry(client, { residencyCap: 1000 });
+			const registry = new SubscriptionRegistry(client, { residencyBytes: budgetForRows(1000) });
 
 			// The read unblocks on page 1, not on the whole catch-up — a large collection must not
 			// hold up the first paint.
@@ -190,7 +199,7 @@ describe('SubscriptionRegistry', () => {
 
 		it('keeps a windowed collection windowed across a reload', async () => {
 			const persisted = new Map<string, CollectionSyncState>([
-				['orders', { collection: 'orders', resident: false, rows: 25_000, syncedAt: 1 }]
+				['orders', { collection: 'orders', resident: false, rows: 25_000, bytes: 1, syncedAt: 1 }]
 			]);
 			const { client } = stubClient({ persisted });
 			const registry = new SubscriptionRegistry(client);

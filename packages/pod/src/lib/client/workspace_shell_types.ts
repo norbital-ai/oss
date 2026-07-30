@@ -27,6 +27,25 @@ export type TenantWorkspaceShellData = {
 		readonly manifest: NorbitalManifest;
 		readonly columns: Readonly<Record<string, CollectionColumnMap>>;
 	};
+	/**
+	 * Everything the local replica needs to open, delivered with the shell rather than fetched
+	 * separately.
+	 *
+	 * The replica used to cost a second serialized round trip (`GET /_runtime/sync/schema`) before
+	 * PGlite could even be opened, because the data directory name came back in that response's
+	 * headers. Both responses are resolved from the same workspace context, so there was never a
+	 * reason for two — and while the second one was in flight the app had already rendered and sent
+	 * its first reads to the server.
+	 *
+	 * `replicaStamp` is `<organizationId>:<userId>`. It names the local database, which is what
+	 * keeps one tenant's rows out of another's: switching organizations reloads the page onto a
+	 * different stamp, so a different replica.
+	 */
+	readonly sync: {
+		readonly schemaSql: string;
+		readonly replicaStamp: string;
+		readonly replicaEpoch: string;
+	};
 	readonly baseScope?: TBaseScope;
 	readonly hostPlugins?: HostPluginRegistry;
 	readonly sidebarPlugins?: readonly AppPlugin[];

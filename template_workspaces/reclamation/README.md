@@ -272,10 +272,62 @@ subtotal        = Σ priced quantity × rate
 total           = subtotal × (1 + contingency)
 ```
 
-Levers are placement loss on sand, placement loss on dredged fill, a perimeter margin for an
-uneven reclaim edge, PVD treated-area and spacing, and contingency. Rates quoted in a currency
-other than the estimate's are dropped rather than converted, and listed as missing: this workspace
-holds no exchange rates, and a silent conversion is worse than a visibly missing line.
+Commercial levers are placement loss on sand, placement loss on dredged fill, a perimeter margin
+for an uneven reclaim edge, PVD treated-area and spacing, and contingency. Rates quoted in a
+currency other than the estimate's are dropped rather than converted: this workspace holds no
+exchange rates, and a silent conversion is worse than a visibly missing line.
+
+#### Every measured substrate must have a rate
+
+`src/lib/reclamation/substrates.ts` is the single registry of what the engine can measure. A
+substrate that comes back with a quantity and has no rate in the matrix is an **error**, not a zero:
+the panel refuses to save and the `cost_estimates` hook throws. A total that quietly omits a
+material is worse than no total, because it looks finished.
+
+A substrate the site does not use — armour on an all-caisson quay, a sand key nobody drew — is
+measured as zero and needs no rate. Only what the solid actually contains is demanded.
+
+| Substrate    | Unit | Where the quantity comes from                              |
+| ------------ | ---- | ---------------------------------------------------------- |
+| Rock armour  | m³   | Integrated: thickness × the true sloped face area          |
+| Geofabric    | m²   | Integrated: the same sloped face area                      |
+| Dredged rock | m³   | Analytic prism from the section's core dimensions          |
+| Sand key     | m³   | Integrated against the surveyed bed, trench by trench      |
+| Sand fill    | m³   | Integrated: bund zones, column by column                   |
+| Dredged fill | m³   | Integrated: platform columns below the split level         |
+| PVD          | m    | Analytic from platform area, treated fraction, and spacing |
+
+#### What is deliberately left out
+
+Seven items are a **manual take-off**, listed in `MANUAL_TAKE_OFF` and shown at the bottom of the
+cost tab. They are excluded because a plan, a survey, and a section do not contain what decides
+them — not because they are small:
+
+| Item                  | Why it cannot be measured from the documents                                          |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| Caisson concrete      | Wall geometry and reinforcement come from the structural drawings, not the site plan. |
+| Caisson founding      | Bedding, scour protection, and founding treatment are detailed per berth.             |
+| Dredging and disposal | Priced by material and disposal ground, not by shape. The cut volume _is_ reported.   |
+| Temporary works       | Access bunds, silt curtains, and haul roads are a method choice.                      |
+| Surcharge             | Height and duration follow a settlement analysis.                                     |
+| Services and pavement | Above the platform level this model stops at.                                         |
+| Monitoring and survey | A programme cost, not a quantity.                                                     |
+
+### Step 5 — simulate
+
+Two kinds of lever, and the difference matters.
+
+**Commercial levers** change only what is priced. They recompute instantly and never touch the
+solid.
+
+**Design levers** change the solid. Platform level, bed level, face batter, armour thickness, and
+sub-grade invert each rewrite the model and re-run the whole integration in the Web Worker, through
+`applySimulation()` and the same `integrateSite()` the server called. The volumes that come back are
+those of a real alternative design — not a factor on the base case. Raising the platform by 1 m adds
+one metre of fill over the whole footprint, and doubling armour thickness doubles the armour line
+exactly — both asserted in `pnpm verify`.
+
+A simulation is exploratory and is never persisted. To keep one, change the project and re-stitch.
 
 ## Assumptions that change how the model looks
 
@@ -307,15 +359,16 @@ mounted across tab changes, so moving between tabs never costs a re-tessellation
 | ------------- | ------------------------------------------------------------------------------------------ |
 | **Documents** | The three reconstruction inputs with their provenance, plus the project's other documents. |
 | **Model**     | Layer switches, render quality, measured metrics, and the assumption ledger.               |
-| **Cost**      | Live simulation levers, priced lines, totals, and _save as estimate_.                      |
+| **Cost**      | Design and commercial levers, priced lines, totals, the manual register, and _save_.       |
 
 Layer switches change mesh visibility in the live scene — no rebuild. Render quality (Draft 8 m,
 Standard 3 m, High 1.5 m) does rebuild, so it is a deliberate, separate control, and the panel
 states plainly that it changes only what is drawn: volumes come from the server integration.
 
-The cost levers recompute in the browser against the _same_ engine the server uses, so a slider
-answers immediately and cannot disagree with what saving would produce. Nothing is written until
-the estimate is saved.
+Both kinds of lever run in the browser against the _same_ engine the server uses, so a slider
+cannot disagree with what saving would produce. Commercial levers answer instantly; a design lever
+re-integrates in the worker and reports the new volume against the design as drawn. Nothing is
+written until the estimate is saved.
 
 ### Why full fidelity is affordable
 
@@ -357,14 +410,31 @@ the schemas in [docs/RECONSTRUCTION.md](./docs/RECONSTRUCTION.md).
 ```bash
 pnpm --dir template_workspaces/reclamation sync
 pnpm --dir template_workspaces/reclamation lint
+pnpm --dir template_workspaces/reclamation verify
 pnpm --dir template_workspaces/reclamation build
 ```
 
-The engine's generality is checked against sites it has never seen — a circular island with
-completely unlabelled sections, a comb of finger piers, a foreign section vocabulary, and 40
-arbitrary star polygons — plus two invariance checks that no hardcoded dimension could survive:
-the same site rotated and translated must price the same, and the volume must not move when the
-integration cell shrinks. See [docs/RECONSTRUCTION.md](./docs/RECONSTRUCTION.md#what-generality-means-here).
+`verify` runs `scripts/verify-engine.ts` — 21 checks, no test framework and no dependency, straight
+on `node`. Three groups:
+
+**Against calculus.** Shapes whose answer can be worked out by hand, so a plausible-looking wrong
+number cannot pass: a square pad against the closed-form volume of its four ramps and corners
+(0.000% at a 2 m cell), armour against thickness × true sloped area, the footprint against the
+shoelace area, and a parabolic bed against its exact integral — where pricing off a mid-depth prism
+instead would be 6.3% out. It also asserts the substrates partition the solid exactly: they sum to
+the placed volume to seven significant figures, so nothing is double-counted or dropped.
+
+**Against generality.** Sites the engine has never seen — a comb of finger piers with three
+different sections, a foreign section vocabulary mapped through `profileLayers`, 40 arbitrary star
+polygons — plus the invariance no hardcoded dimension could survive: the same site rotated 37° and
+translated 48 km prices within 0.00% on fill and 0.20% on armour. Uncalibrated drawings must be
+_refused_, naming every shortfall in one message.
+
+**Against the cost rules.** A matrix missing a rate for a measured substrate must produce an error,
+and a complete one must price cleanly. Design levers must move volume in the physically right
+direction and by the right amount.
+
+All 21 pass. See [docs/RECONSTRUCTION.md](./docs/RECONSTRUCTION.md#what-generality-means-here).
 
 ## Stack
 

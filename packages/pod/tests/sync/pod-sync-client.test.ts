@@ -715,4 +715,38 @@ describe('PodSyncClient (client sync logic)', () => {
 			await reloaded.close();
 		}
 	});
+
+	/**
+	 * A bind message counts its parameters in a signed int16, so a single statement can carry at
+	 * most 32767. `upsertRows` chunks for exactly this reason, but it sized the chunk against 65535
+	 * — twice the real ceiling — so a wide-enough collection produced one oversized statement,
+	 * PGlite threw `Invalid array length`, and `runCatchUp` swallowed it. The collection then never
+	 * became resident and the replica appeared to download forever.
+	 *
+	 * 40 columns × 1000 rows = 40,000 parameters, which is an ordinary page of an ordinary wide
+	 * collection and used to fail.
+	 */
+	it('chunks a wide bulk upsert under the bind-parameter ceiling', async () => {
+		const columns = Array.from({ length: 39 }, (_value, index) => `field_${index}`);
+		const schema = [
+			`CREATE TABLE IF NOT EXISTS "wide" ("norbital_id" text PRIMARY KEY);`,
+			...columns.map(
+				(column) => `ALTER TABLE "wide" ADD COLUMN IF NOT EXISTS "${column}" text;`
+			)
+		].join('\n');
+
+		const db = await createClientDb();
+		const client = new PodSyncClient({ db, schemaSql: schema, fetch: mockTransport({}).fetch });
+		await client.bootstrap();
+		try {
+			const rows = Array.from({ length: 1000 }, (_value, index) => ({
+				norbital_id: `row-${index}`,
+				...Object.fromEntries(columns.map((column) => [column, `${column}-${index}`]))
+			}));
+			await client.upsertRows('wide', rows);
+			expect(await client.count('wide')).toBe(1000);
+		} finally {
+			await client.close();
+		}
+	});
 });

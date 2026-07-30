@@ -150,7 +150,7 @@ async function windowedSync() {
 			customer_id: 'c1'
 		}
 	]);
-	return { sync: enableClientSync(client, { residencyCap: 1 }), client };
+	return { sync: enableClientSync(client, { residencyBytes: 1 }), client };
 }
 
 afterEach(() => disableClientSync());
@@ -569,6 +569,59 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 				customer_id: 'not-local'
 			});
 			expect(await localFindMany(sync, 'orders', { with: { customer: true } })).toBeNull();
+		} finally {
+			await client.close();
+		}
+	});
+
+	/**
+	 * "No rows yet" and "no rows" are different answers and the UI renders them differently — a
+	 * spinner versus an empty state. The replica can only tell them apart by whether it has ever
+	 * finished a catch-up: `ready` is set on the FIRST page so reads can start immediately, so a
+	 * collection mid-first-sync is readable and empty at the same time.
+	 *
+	 * Answering "empty" there is what makes a populated table render as "no records" while its data
+	 * is still arriving. Declining instead sends the read to the server, and the query correctly
+	 * reports itself as loading until a real answer exists.
+	 */
+	it('declines an empty answer until the collection has finished a catch-up once', async () => {
+		installSchema();
+		const db = await createClientDb();
+		// Never resolves a page, so the catch-up starts but never completes: `ready` without
+		// `synced`, which is exactly the first-load window.
+		const stalledFetch: SyncFetch = async (path) => {
+			if (path.startsWith('sync/shape')) {
+				return new Response(
+					JSON.stringify({ rows: [], nextCursor: 'more', watermark: '0' }),
+					{ headers: { 'content-type': 'application/json' } }
+				);
+			}
+			return new Response('{}', { headers: { 'content-type': 'application/json' } });
+		};
+		const client = new PodSyncClient({ db, schemaSql: SCHEMA, fetch: stalledFetch });
+		await client.bootstrap();
+		const sync = enableClientSync(client);
+		try {
+			// Empty and not yet synced: no answer, so the caller asks the server.
+			expect(await localFindMany(sync, 'customers', {})).toBeNull();
+			expect(await localFindFirst(sync, 'customers', {})).toBeUndefined();
+			expect(await localCount(sync, 'customers', {})).toBeNull();
+			expect(sync.registry.has('customers')).toBe(true);
+			expect(sync.registry.hasSynced('customers')).toBe(false);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('answers an empty collection locally once it has genuinely synced', async () => {
+		const { sync, client } = await seededSync();
+		try {
+			// `residentFetch` returns nextCursor:null, so the catch-up completes on page one.
+			await sync.registry.register('customers');
+			await client.queryLocal('DELETE FROM customers');
+			expect(sync.registry.hasSynced('customers')).toBe(true);
+			expect(await localFindMany(sync, 'customers', {})).toEqual({ rows: [], nextCursor: null });
+			expect(await localCount(sync, 'customers', {})).toBe(0);
 		} finally {
 			await client.close();
 		}

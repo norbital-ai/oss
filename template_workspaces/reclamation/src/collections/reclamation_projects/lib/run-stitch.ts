@@ -275,26 +275,15 @@ export async function runStitchForProject(
 			engine_version: result.report.engineVersion,
 
 			platform_area_m2: result.metrics.platformAreaM2,
-			works_footprint_m2: result.metrics.worksFootprintM2,
-			armor_face_area_m2: result.metrics.armorFaceAreaM2,
-			shoreline_length_m: result.metrics.shorelineLengthM,
-			mean_fill_depth_m: result.metrics.meanFillDepthM,
-			max_fill_depth_m: result.metrics.maxFillDepthM,
-			integration_cell_m: result.metrics.integrationCellM,
-			structure_displacement_m3: result.metrics.structureDisplacementM3,
-			excavation_m3: result.metrics.excavationM3,
 			placed_volume_m3: result.metrics.placedVolumeM3,
-
-			rock_armor_m3: quantityOf(result.quantities, 'rock_armor'),
-			geofabric_m2: quantityOf(result.quantities, 'geofabric'),
-			dredged_rock_m3: quantityOf(result.quantities, 'dredged_rock'),
-			sand_key_m3: quantityOf(result.quantities, 'sand_key'),
-			sand_fill_m3: quantityOf(result.quantities, 'sand_fill'),
-			dredged_fill_m3: quantityOf(result.quantities, 'dredged_fill'),
+			mean_fill_depth_m: result.metrics.meanFillDepthM,
+			excavation_m3: result.metrics.excavationM3,
+			integration_cell_m: result.metrics.integrationCellM,
 
 			assumption_count: result.report.assumptions.length,
 			warning_count: result.report.warnings.length,
 
+			metrics_json: JSON.stringify(result.metrics),
 			model_json: JSON.stringify(result.model),
 			quantities_json: JSON.stringify(result.quantities),
 			report_json: JSON.stringify({ ...result.report, inputFingerprint: fingerprint })

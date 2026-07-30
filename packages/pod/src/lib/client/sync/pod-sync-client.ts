@@ -27,6 +27,8 @@ const PKEY = 'norbital_id';
 const VERSION = 'norbital_row_version';
 /** Pause between SSE connections, so a stream that ends immediately can't become a hot loop. */
 const RECONNECT_DELAY_MS = 500;
+/** Postgres binds at most this many parameters per statement: the count is a signed int16. */
+const MAX_BIND_PARAMETERS = 32_767;
 
 const META_TABLE = `CREATE TABLE IF NOT EXISTS _pod_meta (key TEXT PRIMARY KEY, value TEXT)`;
 const PENDING_TABLE = `CREATE TABLE IF NOT EXISTS _pod_pending (
@@ -48,6 +50,13 @@ const SYNC_STATE_TABLE = `CREATE TABLE IF NOT EXISTS _pod_sync_state (
 	row_count INTEGER NOT NULL,
 	synced_at BIGINT NOT NULL
 )`;
+/**
+ * Added after the residency budget moved from a row count to a byte budget. Replicas written by
+ * an earlier build already have the table, so this is a separate additive statement rather than a
+ * change to the CREATE above — which would be a no-op against an existing table and leave the
+ * column missing.
+ */
+const SYNC_STATE_BYTES_COLUMN = `ALTER TABLE _pod_sync_state ADD COLUMN IF NOT EXISTS byte_count BIGINT`;
 
 /** Internal bookkeeping tables — never part of the tenant schema, never dropped by reconciliation. */
 const INTERNAL_TABLES = new Set(['_pod_meta', '_pod_pending', '_pod_sync_state']);
@@ -124,7 +133,9 @@ export class PodSyncClient {
 
 	async bootstrap(): Promise<void> {
 		if (this.booted) return;
-		await this.db.exec(`${META_TABLE};\n${PENDING_TABLE};\n${SYNC_STATE_TABLE};`);
+		await this.db.exec(
+			`${META_TABLE};\n${PENDING_TABLE};\n${SYNC_STATE_TABLE};\n${SYNC_STATE_BYTES_COLUMN};`
+		);
 		await this.reconcileReplicaEpoch();
 		await this.reconcileSchema();
 
@@ -213,8 +224,9 @@ export class PodSyncClient {
 				collection: string;
 				resident: boolean;
 				row_count: number;
+				byte_count: string | number | null;
 				synced_at: string | number;
-			}>(`SELECT collection, resident, row_count, synced_at FROM _pod_sync_state`)
+			}>(`SELECT collection, resident, row_count, byte_count, synced_at FROM _pod_sync_state`)
 			.catch(() => ({ rows: [] as never[] }));
 		const state = new Map<string, CollectionSyncState>();
 		for (const row of result.rows) {
@@ -222,21 +234,33 @@ export class PodSyncClient {
 				collection: row.collection,
 				resident: row.resident === true,
 				rows: Number(row.row_count),
+				bytes: Number(row.byte_count ?? 0),
 				syncedAt: Number(row.synced_at)
 			});
 		}
 		return state;
 	}
 
-	async recordSyncState(collection: string, resident: boolean, rows: number): Promise<void> {
+	/**
+	 * `bytes` is nullable, and the column is too. A replica written before the residency budget
+	 * moved to bytes has rows with no size recorded; reporting those as 0 is honest — nothing was
+	 * measured — and the budget simply readmits that collection on its next catch-up.
+	 */
+	async recordSyncState(
+		collection: string,
+		resident: boolean,
+		rows: number,
+		bytes = 0
+	): Promise<void> {
 		await this.db.query(
-			`INSERT INTO _pod_sync_state (collection, resident, row_count, synced_at)
-			 VALUES ($1, $2, $3, $4)
+			`INSERT INTO _pod_sync_state (collection, resident, row_count, byte_count, synced_at)
+			 VALUES ($1, $2, $3, $4, $5)
 			 ON CONFLICT (collection) DO UPDATE
 			   SET resident = EXCLUDED.resident,
 			       row_count = EXCLUDED.row_count,
+			       byte_count = EXCLUDED.byte_count,
 			       synced_at = EXCLUDED.synced_at`,
-			[collection, resident, rows, this.now()]
+			[collection, resident, rows, bytes, this.now()]
 		);
 	}
 
@@ -646,7 +670,12 @@ export class PodSyncClient {
 			const conflict =
 				updates.length > 0 ? `DO UPDATE SET ${updates.join(', ')}${versionGuard}` : 'DO NOTHING';
 
-			const perChunk = Math.max(1, Math.floor(65535 / columns.length));
+			// A bind message counts its parameters in a SIGNED int16, so 32767 is the ceiling — not
+			// 65535. Past it PGlite throws `Invalid array length`, `runCatchUp` swallows it as a
+			// failed catch-up, and the collection silently never becomes resident: the replica looks
+			// like it is still downloading forever. Measured on PGlite 0.3.16 — 32760 parameters
+			// succeed, 33300 do not.
+			const perChunk = Math.max(1, Math.floor(MAX_BIND_PARAMETERS / columns.length));
 			for (let start = 0; start < bucket.length; start += perChunk) {
 				const chunk = bucket.slice(start, start + perChunk);
 				const values: unknown[] = [];

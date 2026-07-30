@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -10,6 +10,7 @@ import {
 } from '../lib/package-archive.mjs';
 import { platformPackageKey, publicPackageDirectories } from '../lib/package-release.mjs';
 import { resolveWorkspacePackages } from '../resolve-published-packages.mjs';
+import { repositoryRoot } from '../lib/templates.mjs';
 
 const entries = [
 	{
@@ -95,7 +96,13 @@ describe('workspace package archives', () => {
 				release.entries.map(({ name, version, integrity }) => ({ name, version, integrity }))
 			);
 			const pod = release.entries.find((entry) => entry.name === '@norbital-ai/pod');
-			assert.equal(pod?.version, '0.0.1');
+			// Compared against the checked-in manifest, not a literal. What this test is for is that
+			// packing does not *invent* or *rewrite* a version — hardcoding the current one turned it
+			// into a version pin that fails on any release, which says nothing about packing.
+			const podManifest = JSON.parse(
+				readFileSync(path.join(repositoryRoot, 'packages', 'pod', 'package.json'), 'utf8')
+			);
+			assert.equal(pod?.version, podManifest.version);
 			assert.equal(pod?.tarball, 'https://releases.example.test/platform-v1/pod.tgz');
 			for (const packageDirectory of publicPackageDirectories) {
 				assert.equal(existsSync(path.join(directory, `${packageDirectory}.tgz`)), true);

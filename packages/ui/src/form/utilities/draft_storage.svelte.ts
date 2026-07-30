@@ -10,6 +10,7 @@
 
 import { safeParse } from '@norbital-ai/std';
 import { z } from 'zod';
+import { scopedStorageKey } from '../../storage-scope/index.js';
 import type { FormSchema } from '../form_state.svelte';
 
 /**
@@ -82,7 +83,10 @@ export class DraftStorage<T = Record<string, unknown>> {
 	constructor(config: DraftStorageConfig) {
 		const { keyParts, schema, onSchemaMismatch = 'evict' } = config;
 
-		this.key = DRAFT_PREFIX + keyParts.filter(Boolean).join('_');
+		// Scoped to the active tenant. Two organizations created from the same template have
+		// identically named collections, so an unscoped key would hand one tenant's unsaved form
+		// back to another.
+		this.key = scopedStorageKey(DRAFT_PREFIX + keyParts.filter(Boolean).join('_'));
 		this.onSchemaMismatch = onSchemaMismatch;
 
 		hashSchema(schema)

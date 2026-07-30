@@ -6,7 +6,7 @@
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { SiteLayer, SiteViewerStats } from '../../../lib/site-viewer/site_viewer.types.js';
-	import type { StitchReport } from '../../../lib/reclamation/types.js';
+	import type { ReconstructionMetrics, StitchReport } from '../../../lib/reclamation/types.js';
 
 	/**
 	 * What is in the model, and how much of it to draw.
@@ -15,17 +15,6 @@
 	 * one changes mesh visibility in the live scene and never re-tessellates.
 	 * Changing quality does rebuild, so it is a deliberate, separate control.
 	 */
-	type Metrics = {
-		readonly platformAreaM2: number;
-		readonly worksFootprintM2: number;
-		readonly shorelineLengthM: number;
-		readonly meanFillDepthM: number;
-		readonly maxFillDepthM: number;
-		readonly integrationCellM: number;
-		readonly structureDisplacementM3: number;
-		readonly excavationM3: number;
-	};
-
 	let {
 		layers,
 		visible,
@@ -42,7 +31,7 @@
 		quality: QualityId;
 		onQuality: (next: QualityId) => void;
 		stats: SiteViewerStats | null;
-		metrics: Metrics;
+		metrics: ReconstructionMetrics;
 		report: StitchReport | null;
 	} = $props();
 

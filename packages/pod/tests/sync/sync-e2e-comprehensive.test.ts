@@ -19,6 +19,9 @@ import type { SyncFetch } from '$lib/client/sync/types.js';
 
 const hasDocker = dockerAvailable();
 
+/** Mirrors PAGE_SIZE in subscription-registry: the most a single catch-up page can add. */
+const SHAPE_PAGE_SIZE = 5000;
+
 function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch {
 	return (path, init) =>
 		harness.request(
@@ -712,8 +715,8 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			await client.bootstrap();
 			disableClientSync();
 			// A deliberately small budget so the assertions are about the *rule*, not the constant.
-			// The default cap behaves identically, just with more pages.
-			const sync = enableClientSync(client, { residencyCap: 3000 });
+			// The default budget behaves identically, just with more pages.
+			const sync = enableClientSync(client, { residencyBytes: 64 * 1024 });
 			try {
 				const started = Date.now();
 				await sync.registry.register(collection);
@@ -732,8 +735,9 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 				expect(sync.registry.isResident(collection)).toBe(false);
 
 				const localRows = await client.count(collection);
-				// Bounded: a page's worth of slack over the budget, and nowhere near the slice.
-				expect(localRows).toBeLessThanOrEqual(4000);
+				// Bounded: the budget is checked after a page lands, so at most one page of slack
+				// over it — and nowhere near the slice.
+				expect(localRows).toBeLessThanOrEqual(SHAPE_PAGE_SIZE);
 				expect(shapeRequests).toBeLessThanOrEqual(6);
 			} finally {
 				await client.close();
@@ -751,7 +755,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			});
 			await client.bootstrap();
 			disableClientSync();
-			const sync = enableClientSync(client, { residencyCap: 1000 });
+			const sync = enableClientSync(client, { residencyBytes: 16 * 1024 });
 			try {
 				await sync.registry.register(collection);
 
@@ -795,7 +799,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			});
 			await client.bootstrap();
 			disableClientSync();
-			const sync = enableClientSync(client, { residencyCap: 1000 });
+			const sync = enableClientSync(client, { residencyBytes: 16 * 1024 });
 			try {
 				await sync.registry.register(collection);
 

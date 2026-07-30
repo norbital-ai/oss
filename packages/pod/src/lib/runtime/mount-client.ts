@@ -4,6 +4,7 @@ import type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';
 import PodApp from './pod-app.svelte';
 import { initializeWorkspaceClient } from './client.js';
 import { bootstrapClientSync } from '../client/sync/browser-bootstrap.js';
+import { setStorageScope } from '@norbital-ai/ui/storage-scope';
 import type { TenantWorkspaceShellData } from '../client/workspace_shell_types.js';
 
 export interface PodWorkspaceClientModules {
@@ -23,6 +24,13 @@ export function mountPodWorkspace(modules: PodWorkspaceClientModules): void {
 		}> => {
 			if (!response.ok) throw new Error(`Workspace bootstrap failed (${response.status})`);
 			const data: TenantWorkspaceShellData = await response.json();
+			// Namespace browser storage before anything can write to it. Every tenant is served from
+			// this same origin, so an unscoped key is shared between them.
+			setStorageScope(data.organization.id);
+			// Start opening the replica the moment its identity is known. Reads await the promise
+			// this registers, so a device that already holds the rows answers from disk instead of
+			// asking the server for them again.
+			void bootstrapClientSync(data.sync);
 			return {
 				data,
 				workspaceApi: initializeWorkspaceClient(
@@ -32,7 +40,6 @@ export function mountPodWorkspace(modules: PodWorkspaceClientModules): void {
 			};
 		}
 	);
-	void bootstrapClientSync();
 	mount(PodApp, {
 		target: document.body,
 		props: {
