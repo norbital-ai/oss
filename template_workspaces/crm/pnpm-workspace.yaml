@@ -1,15 +1,22 @@
-# First-party packages are exempt from the minimum-release-age policy.
+# Only these exact, reviewed first-party releases bypass the minimum-release-age gate.
 #
-# The policy exists to blunt supply-chain attacks: a compromised third-party publish is usually
-# caught and yanked within hours, so refusing anything newer than the threshold buys that window.
-# It buys nothing against `@norbital-ai/*` — we are the publisher and the code is reviewed in this
-# repository rather than trusted from a registry.
+# Pinned by version on purpose, and deliberately not by a scope-wide wildcard. The gate's value
+# against our own packages is the case where the publish credential is stolen: a wildcard would
+# install that attacker's release the moment it appeared, which is exactly the window the gate
+# exists to close. Adding a line here states that this exact version was built from reviewed
+# source in this repository.
 #
-# Scope-wide rather than version-pinned on purpose. Pinning each version meant every release had to
-# remember to edit five template files, and forgetting it fails as an opaque
-# ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION deep inside a tenant sandbox build.
+# Publishing therefore means updating this list in every template, and
+# scripts/tests/templates.test.mjs enforces it. Forgetting surfaces as
+# ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION inside a tenant sandbox build.
 minimumReleaseAgeExclude:
-  - '@norbital-ai/*'
+  - '@norbital-ai/config@0.0.1'
+  - '@norbital-ai/platform-utils@0.0.1'
+  - '@norbital-ai/pod@0.0.1'
+  - '@norbital-ai/pod@0.0.2-sync.1'
+  - '@norbital-ai/std@0.0.1'
+  - '@norbital-ai/ui@0.0.1'
+  - '@norbital-ai/ui@0.0.2-sync.1'
 
 # Host tools execute from this depset, while tenant builds execute in a Linux/musl microVM.
 # Include both host-native and guest-native optional packages on macOS, Windows, and Linux hosts.
