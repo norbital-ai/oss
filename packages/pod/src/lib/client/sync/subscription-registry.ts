@@ -1,7 +1,14 @@
 import type { PodSyncClient } from './pod-sync-client.js';
 import type { CollectionSyncState } from './types.js';
 
-const PAGE_SIZE = 1000;
+/**
+ * Rows per catch-up request, at the server's ceiling (`MAX_SHAPE_PAGE_SIZE`).
+ *
+ * This is a bulk download, not a page of UI, and each request is a full browser → Core → microVM →
+ * Postgres round trip. At the old 1,000 a 20k-row collection cost 21 serialized round trips before
+ * it was resident; the payload was never the expensive part, the trips were.
+ */
+const PAGE_SIZE = 5000;
 
 /**
  * How many rows a collection may hold before it stops being *resident* (fully local) and becomes
@@ -17,7 +24,20 @@ const PAGE_SIZE = 1000;
  * Note this counts *policy-scoped* rows. A million-row table is often a few thousand rows for any
  * one user, and those users get the fully-local experience with no special handling.
  */
-export const DEFAULT_RESIDENCY_CAP = 25_000;
+/**
+ * How many bytes of collection data this replica may hold, across every collection.
+ *
+ * A row count is the wrong unit for a storage budget: 25,000 rows of a four-column lookup table
+ * and 25,000 rows of a wide document collection differ by orders of magnitude on disk, and the
+ * browser's quota is measured in bytes. The budget is shared, so a large collection consumes the
+ * allowance that would otherwise have made three small ones resident, which is the correct
+ * trade — the small ones are the ones that pay off.
+ *
+ * Reaching it is not an error. A collection that does not fit is *windowed*: reads that provably
+ * fall inside what is local are answered locally, and anything else is answered by the server,
+ * which has the indexes for it.
+ */
+export const DEFAULT_RESIDENCY_BYTES = 1_073_741_824; // 1 GiB
 
 type CollectionMeta = {
 	/** Rows are local and safe to read. */
@@ -25,7 +45,26 @@ type CollectionMeta = {
 	/** Every policy-visible row is local — counts, search and end-of-data are answerable offline. */
 	resident: boolean;
 	rows: number;
+	/** Approximate encoded size of what was downloaded, for the shared residency budget. */
+	bytes: number;
 };
+
+/**
+ * Encoded size of a page, as the wire measured it.
+ *
+ * `JSON.stringify` over the rows is what the server actually sent, so it needs no per-column
+ * guessing and tracks reality as schemas change. It is an approximation of on-disk size, and
+ * deliberately so: the budget exists to stop a replica growing without bound, and being within a
+ * factor of the true figure is enough for that.
+ */
+function approximateBytes(rows: readonly Record<string, unknown>[]): number {
+	if (rows.length === 0) return 0;
+	try {
+		return JSON.stringify(rows).length;
+	} catch {
+		return 0;
+	}
+}
 
 /**
  * Tracks which collections this replica holds, and whether it holds all of them.
@@ -41,13 +80,13 @@ export class SubscriptionRegistry {
 	private readonly meta = new Map<string, CollectionMeta>();
 	private readonly inFlight = new Map<string, Promise<void>>();
 	private restoring: Promise<void> | null = null;
-	private readonly residencyCap: number;
+	private readonly residencyBytes: number;
 
 	constructor(
 		private readonly client: PodSyncClient,
-		options?: { readonly residencyCap?: number }
+		options?: { readonly residencyBytes?: number }
 	) {
-		this.residencyCap = options?.residencyCap ?? DEFAULT_RESIDENCY_CAP;
+		this.residencyBytes = options?.residencyBytes ?? DEFAULT_RESIDENCY_BYTES;
 		// The server's data was reset out from under us and the replica has been discarded. Forget
 		// what we believed was local, or every collection would still report itself resident while
 		// holding nothing.
@@ -65,7 +104,12 @@ export class SubscriptionRegistry {
 			.then((persisted) => {
 				for (const [collection, state] of persisted) {
 					if (this.meta.has(collection)) continue;
-					this.meta.set(collection, { ready: true, resident: state.resident, rows: state.rows });
+					this.meta.set(collection, {
+						ready: true,
+						resident: state.resident,
+						rows: state.rows,
+						bytes: state.bytes
+					});
 				}
 			});
 		return this.restoring;
@@ -89,13 +133,23 @@ export class SubscriptionRegistry {
 	}
 
 	/**
-	 * Re-read every collection this identity has touched after a policy decision changes what the
-	 * identity may see. Outbox diffs describe rows that changed; they cannot describe an unchanged
-	 * child row that merely became visible because its parent was approved. A fresh shape supplies
-	 * those rows without discarding the still-valid local working set.
+	 * Re-read named collections after a policy decision changes what this identity may see.
+	 *
+	 * Outbox diffs describe rows that changed; they cannot describe an unchanged child row that
+	 * merely became visible because its parent was approved. A fresh shape supplies those rows
+	 * without discarding the still-valid local working set.
+	 *
+	 * Only collections this replica already holds are re-read — registering a new one here would
+	 * download a collection nobody has asked for. Callers pass the collections that can actually be
+	 * affected (see `relatedCollections`); re-reading everything meant a single approval refetched
+	 * the whole workspace.
 	 */
-	async refreshAll(): Promise<void> {
-		await Promise.all([...this.meta.keys()].map((collection) => this.catchUp(collection, true)));
+	async refresh(collections: readonly string[]): Promise<void> {
+		await Promise.all(
+			collections
+				.filter((collection) => this.meta.get(collection)?.ready)
+				.map((collection) => this.catchUp(collection, true))
+		);
 	}
 
 	private async catchUp(collection: string, force: boolean): Promise<void> {
@@ -117,23 +171,35 @@ export class SubscriptionRegistry {
 		return firstPage;
 	}
 
+	/** Bytes already committed to other collections, which this one has to fit alongside. */
+	private bytesHeldExcluding(collection: string): number {
+		let total = 0;
+		for (const [name, entry] of this.meta) {
+			if (name !== collection) total += entry.bytes;
+		}
+		return total;
+	}
+
 	private async runCatchUp(collection: string, onFirstPage: () => void): Promise<void> {
 		let cursor: string | null = null;
 		let rows = 0;
+		let bytes = 0;
 		let resident = false;
 		let firstPage = true;
+		const budget = Math.max(0, this.residencyBytes - this.bytesHeldExcluding(collection));
 
 		try {
 			for (;;) {
 				const page = await this.client.shapeSubscribe({ collection, cursor, pageSize: PAGE_SIZE });
 				rows += page.rows.length;
+				bytes += approximateBytes(page.rows);
 
 				if (firstPage) {
 					firstPage = false;
 					onFirstPage();
 				}
 				if (!this.meta.get(collection)?.ready) {
-					this.meta.set(collection, { ready: true, resident: false, rows });
+					this.meta.set(collection, { ready: true, resident: false, rows, bytes });
 					// Tell the UI the replica just warmed up; otherwise the rows sit in PGlite unread
 					// until some unrelated change happens to invalidate the query.
 					this.client.notifyCollection(collection);
@@ -153,8 +219,10 @@ export class SubscriptionRegistry {
 					resident = true;
 					break;
 				}
-				// Over budget: this collection is windowed. Stop rather than keep pulling.
-				if (rows >= this.residencyCap) break;
+				// Over the shared budget: this collection is windowed. Stop rather than keep pulling —
+				// the rows already here still serve reads that fall inside them, and the server owns
+				// everything past the edge.
+				if (bytes >= budget) break;
 				cursor = page.nextCursor;
 			}
 		} catch {
@@ -165,8 +233,8 @@ export class SubscriptionRegistry {
 			return;
 		}
 
-		this.meta.set(collection, { ready: true, resident, rows });
-		await this.client.recordSyncState(collection, resident, rows).catch(() => undefined);
+		this.meta.set(collection, { ready: true, resident, rows, bytes });
+		await this.client.recordSyncState(collection, resident, rows, bytes).catch(() => undefined);
 		this.client.notifyCollection(collection);
 		this.client.startStream();
 	}

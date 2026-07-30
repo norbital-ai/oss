@@ -56,6 +56,25 @@ function localRelationship(collection: string, relation: string): LocalRelations
 }
 
 /**
+ * The collections whose policy-visible rows can change when `collection` does, without any of
+ * those rows themselves being written.
+ *
+ * Visibility conditions are expressed over relationships, so a row can only become visible through
+ * one. Both directions count: a payslip becomes readable when its payroll run is approved, and the
+ * run's own summary can become readable when a payslip lands. `collection` itself is excluded —
+ * its changes travel as ordinary outbox diffs and need no re-read.
+ */
+function relatedCollections(collection: string): string[] {
+	const related = new Set<string>();
+	for (const target of schema.get(collection)?.relationships ?? []) related.add(target.target);
+	for (const [name, entry] of schema) {
+		if (entry.relationships.some((relation) => relation.target === collection)) related.add(name);
+	}
+	related.delete(collection);
+	return [...related];
+}
+
+/**
  * The client-sync layer: reads resolve from the local PGlite replica, writes route through the
  * authoritative `/_runtime/sync/mutate` endpoint.
  *
@@ -82,16 +101,23 @@ export function setSyncInvalidator(fn: (collection: string) => void): void {
 
 export function enableClientSync(
 	client: PodSyncClient,
-	options?: { readonly residencyCap?: number }
+	options?: { readonly residencyBytes?: number }
 ): ClientSync {
 	if (active) return active;
 	const registry = new SubscriptionRegistry(client, options);
 	client.onChange((collection) => {
 		invalidateAll(collection);
-		// Approval can change policy visibility without modifying the newly visible row itself.
-		// Every identity that observes the approval feed refreshes the collections it already uses,
-		// so unchanged children (for example a run's payslips) are announced after the stamp clears.
-		if (collection === 'approval_request') void registry.refreshAll();
+		// Approval can change policy visibility without modifying the newly visible row itself, and
+		// the outbox cannot describe that: it carries rows that changed, and these did not. The
+		// affected rows are reachable from the approval through a relationship — a run's payslips
+		// become visible when the run is approved — so re-reading the collections related to
+		// `approval_request` supplies them.
+		//
+		// This used to re-read EVERY collection the replica had touched, which meant one approval
+		// re-downloaded the entire workspace, including collections that could not possibly have
+		// changed visibility. On a tenant holding 20k roster entries that is tens of thousands of
+		// rows refetched to discover nothing.
+		if (collection === 'approval_request') void registry.refresh(relatedCollections(collection));
 	});
 	active = { client, registry };
 	return active;

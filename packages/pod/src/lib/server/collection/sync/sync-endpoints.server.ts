@@ -66,8 +66,20 @@ const REPLICA_EXCLUDED_TABLES = [
 	'__drizzle_migrations'
 ];
 
-async function handleSchema(ctx: ProvisionedContext, headers: HeadersInit): Promise<Response> {
-	const [ddl, epochResult] = await Promise.all([
+/**
+ * Everything a browser needs to open its local replica: the DDL, the database name, and the epoch
+ * that says whether the rows already on the device are still about the same database.
+ *
+ * The workspace shell embeds this so the replica can start opening on the same response that
+ * initializes the client, rather than after a second round trip. `handleSchema` below is the same
+ * data over the wire, for the sync protocol's own tests and for any client that wants it alone.
+ */
+export async function loadSyncBootstrap(ctx: ProvisionedContext): Promise<{
+	schemaSql: string;
+	replicaStamp: string;
+	replicaEpoch: string;
+}> {
+	const [schemaSql, epochResult] = await Promise.all([
 		buildClientSchema(ctx),
 		ctx.tenantDb.query<{ epoch: string }>(
 			`SELECT epoch::text AS epoch FROM _norbital_sync_epoch WHERE singleton = TRUE`
@@ -75,11 +87,22 @@ async function handleSchema(ctx: ProvisionedContext, headers: HeadersInit): Prom
 	]);
 	const replicaEpoch = epochResult.rows[0]?.epoch;
 	if (!replicaEpoch) throw error(500, 'Tenant sync epoch is missing');
-	return new Response(ddl, {
+	return {
+		schemaSql,
+		// Names the local database. One tenant's rows can never land in another's replica because
+		// this stamp differs, and switching organizations reloads the page.
+		replicaStamp: `${ctx.organization.norbital_id}:${ctx.baseScope.requestor.norbital_id}`,
+		replicaEpoch
+	};
+}
+
+async function handleSchema(ctx: ProvisionedContext, headers: HeadersInit): Promise<Response> {
+	const bootstrap = await loadSyncBootstrap(ctx);
+	return new Response(bootstrap.schemaSql, {
 		headers: {
 			'content-type': 'text/plain; charset=utf-8',
-			[SYNC_REPLICA_STAMP_HEADER]: `${ctx.organization.norbital_id}:${ctx.baseScope.requestor.norbital_id}`,
-			[SYNC_REPLICA_EPOCH_HEADER]: replicaEpoch,
+			[SYNC_REPLICA_STAMP_HEADER]: bootstrap.replicaStamp,
+			[SYNC_REPLICA_EPOCH_HEADER]: bootstrap.replicaEpoch,
 			...headers
 		}
 	});

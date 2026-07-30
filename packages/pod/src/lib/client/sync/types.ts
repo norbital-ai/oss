@@ -7,6 +7,19 @@
 export const SYNC_REPLICA_STAMP_HEADER = 'x-norbital-sync-replica-stamp';
 export const SYNC_REPLICA_EPOCH_HEADER = 'x-norbital-sync-replica-epoch';
 
+/**
+ * What a browser needs to open its local replica, delivered with the workspace shell.
+ *
+ * `replicaStamp` names the local database as `<organizationId>:<userId>`; `replicaEpoch` identifies
+ * the physical tenant database, so rows cached against a database that has since been replaced are
+ * discarded rather than served.
+ */
+export type SyncBootstrap = {
+	readonly schemaSql: string;
+	readonly replicaStamp: string;
+	readonly replicaEpoch: string;
+};
+
 export type SyncCursor = { readonly xid: string; readonly seq: string };
 
 export type SyncDiff = {
@@ -45,6 +58,8 @@ export type CollectionSyncState = {
 	/** Every row the policy exposes is local. False means only a bounded window is. */
 	readonly resident: boolean;
 	readonly rows: number;
+	/** Approximate encoded size held locally, charged against the shared residency budget. */
+	readonly bytes: number;
 	readonly syncedAt: number;
 };
 

@@ -1,4 +1,5 @@
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
+import { loadSyncBootstrap } from '$lib/server/collection/sync/sync-endpoints.server.js';
 import { loadPoliciesForTeams } from '$lib/server/collection/access_control/policy_grant_loader.server.js';
 import type {
 	TenantWorkspacePolicyGrant,
@@ -89,7 +90,13 @@ export async function loadTenantWorkspaceShellData(
 		? billingSummarySchema.safeParse(safeParse(billingHeader))
 		: { success: false as const };
 
+	// Resolved alongside the shell, not after it. The replica cannot open until it knows its name,
+	// so fetching this separately meant the app rendered and issued its first reads while the
+	// local database was still waiting on a round trip it did not need to make.
+	const sync = await loadSyncBootstrap(workspace);
+
 	return {
+		sync,
 		user: workspace.baseScope.requestor,
 		organization: {
 			id: workspace.organization.norbital_id,

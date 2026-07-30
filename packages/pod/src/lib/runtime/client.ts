@@ -16,6 +16,7 @@ import {
 	syncMutate,
 	type LocalCollectionSchema
 } from '$lib/client/sync/client-sync.js';
+import { clientSyncReady } from '$lib/client/sync/browser-bootstrap.js';
 import { isSearchableCollectionField } from '@norbital-ai/platform-utils/collection';
 import { mutationRejectionMessage } from '$lib/client/sync/mutation-rejection.js';
 import type { WireMutation } from '$lib/client/sync/types.js';
@@ -99,10 +100,14 @@ function query<T>(
 	return manager.query(
 		key,
 		async (signal) => {
-			// Local-first: when client-sync is active, resolve reads from the local replica. A
-			// null/undefined result means this particular read reaches past what is local (a
+			// Local-first, and deliberately an await rather than a peek. Asking whether sync happened
+			// to be ready yet made every page load a race the replica lost: PGlite takes longer to
+			// open than the shell takes to arrive, so the first reads went to the server even when
+			// the device already held every row. That is why a refresh cost the same as a cold load.
+			//
+			// A null/undefined result still means this particular read reaches past what is local (a
 			// windowed collection, an untranslatable operator) — go to the server for correctness.
-			if (local && getClientSync()) {
+			if (local && (await clientSyncReady())) {
 				const localResult = await local();
 				if (localResult !== null && localResult !== undefined) return localResult;
 			}
@@ -241,7 +246,7 @@ const transport: WorkspaceRemoteTransport = {
 				localCount(getClientSync()!, input.collection, input)
 			),
 		create: async (input) => {
-			const sync = getClientSync();
+			const sync = await clientSyncReady();
 			if (sync) return runSyncMutation(input.collection, 'create', input.input);
 			const result = await post<Record<string, unknown>>('collections/create', input);
 			invalidateCollectionQueries(input.collection);
@@ -253,7 +258,7 @@ const transport: WorkspaceRemoteTransport = {
 			return result;
 		},
 		update: async (input) => {
-			const sync = getClientSync();
+			const sync = await clientSyncReady();
 			if (sync) {
 				const version = await sync.client.localVersion(input.collection, input.record_id);
 				return runSyncMutation(
@@ -273,7 +278,7 @@ const transport: WorkspaceRemoteTransport = {
 			return result;
 		},
 		delete: async (input) => {
-			const sync = getClientSync();
+			const sync = await clientSyncReady();
 			if (sync) {
 				await runSyncMutation(input.collection, 'delete', { [PKEY]: input.record_id });
 				return;
