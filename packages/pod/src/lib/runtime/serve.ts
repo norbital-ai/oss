@@ -42,6 +42,27 @@ type PendingBindingCall = {
 };
 
 /**
+ * Project one host facility into the isolate.
+ *
+ * Every facility is the same shape — forward the call, decode the result — so the bindings are
+ * projections of one proxy rather than five hand-written adapters. The consequence is that a
+ * facility binding may only declare *methods*: this trap answers every property get with a call
+ * forwarder, so a data field on the host object arrives here as a function. Exported so a test can
+ * drive a binding through the real thing rather than a look-alike.
+ */
+export function facilityProxy<T>(
+	name: string,
+	call: (facility: string, method: string, args: readonly unknown[]) => Promise<unknown>
+): T {
+	// stupidity:allow R3a -- Proxy needs an object target; every exposed property is trapped below.
+	return new Proxy({} as Record<string, unknown>, {
+		get(_target, method: string) {
+			return (...args: unknown[]) => call(name, method, args).then(decodeWireValue);
+		}
+	}) as T;
+}
+
+/**
  * Reserve stdout for frames, and send everything else to stderr.
  *
  * The frame format is a length prefix followed by exactly that many bytes, and `FrameReader` has
@@ -154,18 +175,7 @@ export function startPodStdioServer(): void {
 		});
 	}
 
-	/**
-	 * Every facility is the same shape — forward the call, decode the result — so the bindings
-	 * are projections of one proxy rather than five hand-written adapters.
-	 */
-	function facility<T>(name: string): T {
-		// stupidity:allow R3a -- Proxy needs an object target; every exposed property is trapped below.
-		return new Proxy({} as Record<string, unknown>, {
-			get(_target, method: string) {
-				return (...args: unknown[]) => call(name, method, args).then(decodeWireValue);
-			}
-		}) as T;
-	}
+	const facility = <T>(name: string): T => facilityProxy<T>(name, call);
 
 	const bindings: RuntimeFacilityBindings = {
 		db: facility<HostDbBinding>('db'),

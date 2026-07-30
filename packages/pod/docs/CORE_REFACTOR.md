@@ -183,16 +183,16 @@ invitation. `TenantWorkspaceShellData.userOrganizations` already carries the lis
 
 ### Facilities Core supplies
 
-| Facility              | Notes                                                                                                                                |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `db`                  | unchanged                                                                                                                            |
-| `fileStorage`         | unchanged                                                                                                                            |
-| `ai`                  | Core's, on `@tanstack/ai`, OpenRouter default. Pod ships **no** ai adapter                                                           |
-| `maps`                | replace Core's inline Google implementation with Pod's `googleMaps({ apiKey, region })`                                              |
-| `messaging`           | renamed from `notifications`. Transports are **methods**, not a record — `listTransports()` and `sendVia(transport, message)` — because a binding crosses the isolate as a proxy that forwards method calls. Supply `whatsapp` (socket + `node:fs` auth state) as a `MessagingTransport` |
-| `queue`               | pg-boss, driving `workspaceJobs()`                                                                                                   |
-| `integrationDelivery` | unchanged                                                                                                                            |
-| `agentTools`          | re-expose `coding.tool.ts` / `deployment.tool.ts` as `HostAgentTool`s pointed at the sandbox                                         |
+| Facility              | Notes                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `db`                  | unchanged                                                                                                                                                                                                                                                                                                                                                                    |
+| `fileStorage`         | unchanged                                                                                                                                                                                                                                                                                                                                                                    |
+| `ai`                  | Core's, on `@tanstack/ai`, OpenRouter default. Pod ships **no** ai adapter                                                                                                                                                                                                                                                                                                   |
+| `maps`                | replace Core's inline Google implementation with Pod's `googleMaps({ apiKey, region })`                                                                                                                                                                                                                                                                                      |
+| `messaging`           | renamed from `notifications`. Channels and transports are **methods**, not fields or a record — `listChannels()`, `listTransports()`, `sendVia(transport, message)` — because a binding crosses the isolate as a proxy that forwards method calls, and a data field arrives there as a function. Supply `whatsapp` (socket + `node:fs` auth state) as a `MessagingTransport` |
+| `queue`               | pg-boss, driving `workspaceJobs()`                                                                                                                                                                                                                                                                                                                                           |
+| `integrationDelivery` | unchanged                                                                                                                                                                                                                                                                                                                                                                    |
+| `agentTools`          | re-expose `coding.tool.ts` / `deployment.tool.ts` as `HostAgentTool`s pointed at the sandbox                                                                                                                                                                                                                                                                                 |
 
 `googleMaps` is already ported into `packages/pod/src/lib/host/maps.ts`, including the fit-to-markers
 zoom derivation. Core's copy in `tenant_runtime/bindings.ts` should be deleted in favour of it.
@@ -244,13 +244,13 @@ Core seeds policies today; Pod declares them. Both cannot be true. Measured stat
 All five templates now declare their policies. The seed steps still exist and are still the source of
 truth on a live tenant until A6 deletes them.
 
-| Template       | Core seed step                   | Pod declaration                          |
-| -------------- | -------------------------------- | ---------------------------------------- |
-| `bca`          | 147 lines, 2 policies            | 2 policies, 49 grants                    |
-| `construction` | 67 lines, 3 policies             | 3 policies, 36 grants                    |
-| `norbital_hr`  | 369 lines, **3** policies        | 3 policies, 140 grants (`hr-payroll/`)   |
-| `crm`          | none                             | `+sales_rep.policy.ts`                   |
-| `reclamation`  | none                             | 1 policy, 9 grants (new, not a port)     |
+| Template       | Core seed step            | Pod declaration                        |
+| -------------- | ------------------------- | -------------------------------------- |
+| `bca`          | 147 lines, 2 policies     | 2 policies, 49 grants                  |
+| `construction` | 67 lines, 3 policies      | 3 policies, 36 grants                  |
+| `norbital_hr`  | 369 lines, **3** policies | 3 policies, 140 grants (`hr-payroll/`) |
+| `crm`          | none                      | `+sales_rep.policy.ts`                 |
+| `reclamation`  | none                      | 1 policy, 9 grants (new, not a port)   |
 
 The `norbital_hr` row previously read "1 policy (generated)". It is three — `HR`, `Management`, and
 `Employee` — and only the first two are generated.
@@ -293,7 +293,7 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
 - [x] **A4. Done.** Three policies in `template_workspaces/hr-payroll/src/policies/` — `HR` (79 grants),
       `Management` (35), `Employee` (26, 14 of them conditional) — with the collection groups kept as
       generation, in `src/lib/policy_grants.ts`. Booted standalone: `policies reconciled (3 created,
-      0 updated)`, grant counts 79/35/26 exactly matching the seed, every `$sql` string stored with its
+    0 updated)`, grant counts 79/35/26 exactly matching the seed, every `$sql` string stored with its
       literal `${requestor.email}` token, and **all eleven approval steps read back with the seed's
       `norbital_id`, derived step id, and `teams_that_can_approve` unchanged**.
       Two things the port surfaced, both recorded below as A4a and A4b. A third was fixed on the way:
@@ -345,8 +345,20 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
       returns a call forwarder, so a data field arrives as a function and a record of functions does
       not survive the structured clone at all. They are `listTransports(): Promise<readonly string[]>`
       and `sendVia(transport, message)` instead — method calls, which is the only thing that boundary
-      carries. (The pre-existing `channels` field has the same defect and is unfixed: it is read
-      inside the isolate by `hook-api.server.ts`, where it is a function, not an array.)
+      carries. **The pre-existing `channels` field is fixed too** — it is
+      `listChannels(): Promise<readonly string[]>`. It was read inside the isolate in two places, and
+      the two failed differently: `hook-api.server.ts` handed it to
+      `assertNotificationChannelSupport`, where `new Set(fn)` threw
+      `TypeError: function is not iterable`, so under Core _every_ external notification failed with
+      an error naming neither the channel nor the facility; `invitation.server.ts` read
+      `channels[0] ?? 'email'` off the same function, got `undefined`, and silently addressed the
+      founding invitation to `email` whatever the host actually advertised. No binding on
+      `RuntimeFacilityBindings` — `db`, `fileStorage`, `ai`, `messaging`, `maps` — carries a data
+      field now, and `tests/runtime/facility-binding-shape.test.ts` keeps it that way with a
+      type-level assertion that fails `pnpm lint` naming the offending property, plus a runtime check
+      that drives `messaging` through the real `facilityProxy` from `runtime/serve.ts`. `queue`,
+      `integrationDelivery`, and `agentTools` are host-side and never cross the proxy;
+      `HostAppPlugin` is deliberately pure data and crosses on the `configure` frame instead.
 - [x] **B2. Done.** `assertChannelTransportsAreSupported` in `authoring/channels/channels.ts`, run by
       `startStandalone` after the facility gate and exported from `@norbital-ai/pod/host` so Core runs
       the same check. A channel naming a transport the host does not supply refuses to boot, naming

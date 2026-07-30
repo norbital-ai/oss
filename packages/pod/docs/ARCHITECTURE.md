@@ -276,8 +276,13 @@ await api.sendNotification({
 ```
 
 `system` needs no host binding. Before any external outbox row is written, Pod requires the active
-host's `messaging` binding and verifies that every requested channel appears in its `channels`
-list. A Core provider and a `pod.host.ts` provider satisfy the same interface.
+host's `messaging` binding and verifies that every requested channel appears in what its
+`listChannels()` returns. A Core provider and a `pod.host.ts` provider satisfy the same interface.
+
+`listChannels()` is a call, not a field, for the same reason `listTransports()` is: a facility
+binding reaches a tenant runtime through a proxy that answers every property get with a call
+forwarder, so a data field on a binding is a function inside a hosted isolate and an array only
+under `pod start`.
 
 ## Agents
 

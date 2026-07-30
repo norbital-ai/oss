@@ -79,7 +79,7 @@ describe('channel transports', () => {
 		const binding = consoleMessaging({ channels: ['email'], transports: ['telegram'] });
 		// Channels and transports are separate lists: `email` delivers to a user, `telegram` carries a
 		// conversation, and neither satisfies the other.
-		expect(binding.channels).toEqual(['email']);
+		expect(await binding.listChannels()).toEqual(['email']);
 		const transports = new Set(await binding.listTransports());
 		expect(() =>
 			assertChannelTransportsAreSupported({ sales_desk: channel('telegram') }, transports)

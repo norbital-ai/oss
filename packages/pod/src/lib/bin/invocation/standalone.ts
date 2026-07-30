@@ -708,9 +708,10 @@ export async function startStandalone(
 			// loopback HTTP bind is dropped by the browser, and sign-in then fails with nothing logged.
 			...(descriptor.secureCookies === false ? { secureCookies: false } : {}),
 			deliver: async ({ email, code }) => {
+				const channels = await messaging.listChannels();
 				const result = await messaging.send({
 					organizationId: environment.orgId,
-					channel: messaging.channels[0] ?? 'email',
+					channel: channels[0] ?? 'email',
 					recipientUserId: email,
 					subject: `Your ${environment.orgName} sign-in code`,
 					message: `Your sign-in code is ${code}. It expires in ten minutes.`,

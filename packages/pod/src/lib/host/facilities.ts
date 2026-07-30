@@ -52,8 +52,11 @@ export function messagingProviders(input: {
 		byTransport.set(transport.transport, transport);
 	}
 	const transportNames = [...byTransport.keys()].sort();
+	const channelNames = [...byChannel.keys()].sort();
 	return {
-		channels: [...byChannel.keys()].sort(),
+		listChannels() {
+			return Promise.resolve(channelNames);
+		},
 		send(delivery) {
 			const provider = byChannel.get(delivery.channel);
 			if (!provider) {

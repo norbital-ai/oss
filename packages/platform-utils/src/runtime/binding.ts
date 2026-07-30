@@ -136,19 +136,19 @@ export type TransportMessage = {
 
 export type TransportSendResult = { readonly sent: boolean; readonly reason?: string };
 
+/**
+ * Every member of every binding here is a *method*, and a facility binding may never carry a data
+ * field. Bindings reach a tenant runtime through the stdio proxy in `runtime/serve.ts`, which traps
+ * every property get and returns a call forwarder — so a data field arrives inside the isolate as a
+ * function, and a record of functions does not survive the structured clone at all. The type checks
+ * out on both sides and the standalone runner, which holds the real object, works; only a hosted
+ * isolate sees the difference. That is why `listChannels()` and `listTransports()` are calls.
+ */
 export type HostMessagingBinding = {
 	/** External channels this host can deliver. `system` is reserved to Pod. */
-	readonly channels: readonly string[];
+	listChannels(): Promise<readonly string[]>;
 	send(input: NotificationDelivery): Promise<NotificationDeliveryResult>;
-	/**
-	 * The transports this host can carry a declared channel over.
-	 *
-	 * Two methods rather than the `transports` record the shape suggests, because bindings reach a
-	 * tenant runtime through the stdio proxy in `runtime/serve.ts`: it traps every property get and
-	 * returns a call forwarder, so a data field arrives as a function and a record of *functions*
-	 * does not survive the structured clone at all. Anything a tenant runtime must reach has to be
-	 * a method call, and that is what these are.
-	 */
+	/** The transports this host can carry a declared channel over. */
 	listTransports(): Promise<readonly string[]>;
 	sendVia(transport: string, message: TransportMessage): Promise<TransportSendResult>;
 };
@@ -208,6 +208,10 @@ export type HostMapsBinding = {
  * contract; hosts own the implementations and credentials. Bindings are optional in the transport
  * shape because workspaces require different facilities, but a host must satisfy the compiled
  * manifest before it accepts traffic.
+ *
+ * **Methods only.** No binding below may declare a data field — see `HostMessagingBinding` for why
+ * a field type-checks everywhere and still arrives as a function inside a hosted isolate.
+ * `tests/runtime/facility-binding-shape.test.ts` enforces it.
  */
 export type RuntimeFacilityBindings = {
 	readonly db: HostDbBinding;

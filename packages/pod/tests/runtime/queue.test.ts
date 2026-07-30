@@ -7,7 +7,7 @@ import { intervalQueue } from '../../src/lib/host/interval-queue.js';
 /** A `messaging` binding that only has to deliver on the `email` channel. */
 function messagingBinding(binding: Pick<HostMessagingBinding, 'send'>): HostMessagingBinding {
 	return {
-		channels: ['email'],
+		listChannels: async () => ['email'],
 		send: binding.send,
 		listTransports: async () => [],
 		sendVia: async () => ({ sent: false, reason: 'no transports' })

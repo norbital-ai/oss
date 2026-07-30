@@ -114,9 +114,10 @@ export async function provisionFoundingInvitation(input: {
 	// Required, not best-effort: a founding invitation nobody receives leaves a tenant that can never
 	// be entered, so a missing messaging facility must fail provisioning loudly.
 	const messaging = requireRuntimeFacility('messaging');
+	const channels = await messaging.listChannels();
 	const result = await messaging.send({
 		organizationId: ctx.baseScope.organization.norbital_id,
-		channel: messaging.channels[0] ?? 'email',
+		channel: channels[0] ?? 'email',
 		recipientUserId: email,
 		subject: `Your ${ctx.baseScope.organization.name} workspace is ready`,
 		message: `Open your workspace to finish setting it up: ${invitation.acceptUrl}`,
