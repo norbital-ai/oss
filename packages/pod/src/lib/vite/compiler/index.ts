@@ -777,6 +777,7 @@ async function discoverWorkspaceRoles(
 const KNOWN_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set([
 	'apps',
 	'automation',
+	'channels',
 	'collections',
 	'custom-types',
 	'lib',
@@ -939,6 +940,62 @@ async function discoverPolicies(
 	return policies.sort((left, right) => compareText(left.id, right.id));
 }
 
+/**
+ * `src/channels/+<name>.channel.ts` — one conversational entry point per file.
+ *
+ * Same shape as policy discovery: the filename is the identity, so there is no registry to keep in
+ * step and a misnamed file is an error rather than a declaration that silently does nothing.
+ */
+async function discoverChannels(
+	root: string,
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): Promise<DiscoveredWorkspaceRole[]> {
+	const directory = path.join(root, 'src', 'channels');
+	if (!inventory.hasDirectory(directory)) return [];
+	const channels: DiscoveredWorkspaceRole[] = [];
+	const seen = new Map<string, string>();
+	for (const entry of inventory.entries(directory)) {
+		const source = relativePath(root, path.join(directory, entry.name));
+		if (entry.isDirectory()) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'CHANNEL_UNEXPECTED_DIRECTORY',
+					'src/channels contains only +<name>.channel.ts files'
+				)
+			);
+			continue;
+		}
+		const match = entry.name.match(/^\+([a-z][a-z0-9]*(?:_[a-z0-9]+)*)\.channel\.ts$/);
+		if (!match) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'CHANNEL_NAME_INVALID',
+					`${entry.name} must be named +<lower_snake_case>.channel.ts`
+				)
+			);
+			continue;
+		}
+		const id = match[1]!;
+		const previous = seen.get(id);
+		if (previous) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'CHANNEL_DUPLICATE',
+					`Channel ${id} is already declared by ${previous}`
+				)
+			);
+			continue;
+		}
+		seen.set(id, source);
+		channels.push({ id, path: source.slice(0, -3), source });
+	}
+	return channels.sort((left, right) => compareText(left.id, right.id));
+}
+
 async function discoverSeed(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
@@ -1031,12 +1088,13 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		diagnostics,
 		inventory
 	);
-	const [apps, automations, remotes, agentTools, policies, seed] = await Promise.all([
+	const [apps, automations, remotes, agentTools, policies, channels, seed] = await Promise.all([
 		discoverApps(absoluteRoot, diagnostics, inventory),
 		discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics, inventory),
 		discoverWorkspaceRoles(absoluteRoot, 'remotes', diagnostics, inventory),
 		discoverAgentTools(absoluteRoot, diagnostics, inventory),
 		discoverPolicies(absoluteRoot, diagnostics, inventory),
+		discoverChannels(absoluteRoot, diagnostics, inventory),
 		discoverSeed(absoluteRoot, diagnostics, inventory),
 		validateAuthoredSource(absoluteRoot, diagnostics, inventory)
 	]);
@@ -1058,6 +1116,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		remotes,
 		agentTools,
 		policies,
+		channels,
 		seed,
 		diagnostics
 	};
@@ -1330,12 +1389,18 @@ function generatedAuthoringTypes(structure: PodStructure): string {
 		`export type AgentToolName = ${union(structure.agentTools)};`,
 		`export type PolicyName = ${union(structure.policies)};`,
 		`export type AppName = ${union(structure.apps.filter((node) => node.kind === 'app'))};`,
+		`export type ChannelName = ${union(structure.channels)};`,
 		''
 	].join('\n');
 }
 
 function workspaceAuthoringTypes(): string {
 	return `import type { AgentToolName, AppName, CollectionName, PolicyName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface WorkspaceAuthoringTypes {\n\t\treadonly schema: WorkspaceSchema;\n\t\treadonly collectionName: CollectionName;\n\t\treadonly agentToolName: AgentToolName;\n\t\treadonly policyName: PolicyName;\n\t\treadonly appName: AppName;\n\t}\n}\nexport {};\n`;
+}
+
+/** `$types` for `src/channels`, carrying a `Channel` whose `policy` is checked against this workspace. */
+function channelTypes(): string {
+	return `import type { ChannelDefinition } from '@norbital-ai/pod/authoring';\n\nexport type { ChannelName, PolicyName } from '../../generated/authoring-types.js';\n\n/** Declare with \`satisfies Channel\` so the policy name is checked against this workspace. */\nexport type Channel = ChannelDefinition;\n`;
 }
 
 /** `$types` for `src/policies`, carrying a `Policy` bound to this workspace's collections. */
@@ -1468,6 +1533,7 @@ export async function compilePodFilesystem(
 			automations: [],
 			remotes: [],
 			policies: [],
+			channels: [],
 			agentTools: [],
 			seed: null,
 			diagnostics: [diagnostic]
@@ -1528,6 +1594,7 @@ export async function compilePodFilesystem(
 			['.norbital/generated/authoring-types.ts', generatedAuthoringTypes(structure)],
 			['.norbital/types/collections/$types.d.ts', relationshipTypes()],
 			['.norbital/types/policies/$types.d.ts', policyTypes()],
+			['.norbital/types/channels/$types.d.ts', channelTypes()],
 			['.norbital/types/automation/$types.d.ts', workspaceRoleTypes(2)],
 			['.norbital/types/remotes/$types.d.ts', workspaceRoleTypes(2)],
 			['.norbital/types/workspace-authoring.d.ts', workspaceAuthoringTypes()],

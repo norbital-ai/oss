@@ -43,6 +43,18 @@ export type DefaultAppName = WorkspaceAuthoringTypes extends {
 	? TName
 	: string;
 
+/**
+ * The workspace's policy names, or `string` when no generated types are present.
+ *
+ * Lets one declaration reference another by name and have it checked — a channel naming the policy its
+ * agent acts under is the case this exists for.
+ */
+export type DefaultPolicyName = WorkspaceAuthoringTypes extends {
+	readonly policyName: infer TName extends string;
+}
+	? TName
+	: string;
+
 export type TableName<S extends AnySchema> = keyof S['tables'] & string;
 
 export type SchemaRow<S extends AnySchema, N extends TableName<S>> = S['tables'][N]['$inferSelect'];

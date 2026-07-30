@@ -409,4 +409,63 @@ export default defineAutomation(
 		}
 		expect(diagnostics).toContain("not assignable to type 'number'");
 	});
+
+	/**
+	 * A channel names the policy its agent acts under. That is a cross-reference, so it is checkable —
+	 * and worth checking: a channel pointing at a policy that does not exist would be an agent whose
+	 * permissions resolve to nothing, which reads as "the channel is broken" rather than "the name is
+	 * wrong".
+	 */
+	it('binds a channel to a policy that exists', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/policies/+support_agent.policy.ts',
+			`import type { Policy } from './$types.js';
+export default {
+	name: 'Support agent',
+	grants: [{ collection: 'things', action: 'read' }]
+} satisfies Policy;`
+		);
+		await write(
+			root,
+			'src/channels/+support_inbox.channel.ts',
+			`import type { Channel } from './$types.js';
+export default { transport: 'telegram', policy: 'support_agent' } satisfies Channel;`
+		);
+		const result = await compilePodFilesystem({ root });
+		expect(result.valid, JSON.stringify(result.diagnostics, null, 2)).toBe(true);
+
+		const tsc = path.join(REPO_ROOT, 'packages/pod/node_modules/.bin/tsc');
+		execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+			cwd: root,
+			encoding: 'utf8'
+		});
+
+		await write(
+			root,
+			'src/channels/+support_inbox.channel.ts',
+			`import type { Channel } from './$types.js';
+export default { transport: 'telegram', policy: 'support_agentt' } satisfies Channel;`
+		);
+		await compilePodFilesystem({ root });
+		let diagnostics = '';
+		try {
+			execFileSync(tsc, ['-p', path.join(root, '.norbital/tsconfig.json')], {
+				cwd: root,
+				encoding: 'utf8'
+			});
+		} catch (cause) {
+			const failure = cause as { stdout?: string; stderr?: string };
+			diagnostics = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`;
+		}
+		expect(diagnostics).toContain('support_agentt');
+	});
+
+	it('rejects a badly named channel file', async () => {
+		const root = await workspace();
+		await write(root, 'src/channels/+Support Inbox.channel.ts', `export default {};`);
+		const structure = await discoverPodFilesystem(root);
+		expect(structure.diagnostics.map((d) => d.code)).toContain('CHANNEL_NAME_INVALID');
+	});
 });

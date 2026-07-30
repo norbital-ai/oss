@@ -65,6 +65,8 @@ export {
 	type AutomationTrigger
 } from './automations/automations.js';
 export { defineAgentTool, type AgentToolDefinition } from './automations/agent-tools.js';
+export { defineChannel } from './channels/channels.js';
+export type { ChannelDefinition } from './channels/channels.js';
 export { definePolicy } from './policies/policies.js';
 export type { PolicyAction, PolicyDefinition, PolicyGrant } from './policies/policies.js';
 export { defineCommandHandler, defineQueryHandler } from './automations/handlers.js';
