@@ -93,6 +93,14 @@ The surface is designed so that mistakes surface at their cause rather than down
 Where a foot-gun cannot be removed, it is named. `intervalQueue()` is a timer with no durability, so it
 is an explicit opt-in rather than a default — a deployment running on one says so in its own config.
 
+**One known limit.** A `before` hook that returns a _spread_ — `{ ...input, no_such_column: 'x' }` —
+compiles, because TypeScript does not apply excess-property checking to an object literal built from a
+spread. A bare literal with the same mistake is rejected. This is a compiler limitation rather than a
+loose type: the payload type itself is exact, and the same key assigned to `WorkspaceInsert<'quotes'>`
+directly is an error. The mistake is caught at runtime with a 400 naming the field and listing every
+valid field and relation for the collection, so it fails loudly — just one layer later than the rest of
+the surface.
+
 ### 4. Simplicity — the smallest surface that is still honest
 
 Pod ships the parts every workspace would otherwise write badly, and a workspace author never sees
