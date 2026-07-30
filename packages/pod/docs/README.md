@@ -9,6 +9,7 @@ workspace layout, generated client, compiler, runtime internals, history, sync, 
 
 | Deep dive                                 | Covers                                                                          |
 | ----------------------------------------- | ------------------------------------------------------------------------------- |
+| [Handoff](./HANDOFF.md)                   | Takeover brief: both worktrees, what landed, what is not done, ground rules.    |
 | [Authoring](./AUTHORING.md)               | The mental model: what a workspace declares, what the host supplies, and why.   |
 | [Overview](./OVERVIEW.md)                 | A shorter lifecycle and generated-state reference.                              |
 | [Core refactor](./CORE_REFACTOR.md)       | What Core must change to run against this Pod. Deferred, not optional.          |

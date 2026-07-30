@@ -201,3 +201,72 @@ Listed so Core does not plan against something that is not there.
 
 Until the agent port lands, Core's `lib/agent/**` stays authoritative and the deletions above do not
 apply to it.
+
+---
+
+## Checklist
+
+Ordered so each item is verifiable when it lands. Tick nothing that has not been run.
+
+### A. Policies become declarations (OSS, then Core)
+
+Core seeds policies today; Pod declares them. Both cannot be true. Measured state:
+
+| Template      | Core seed step                    | Pod declaration        |
+| ------------- | --------------------------------- | ---------------------- |
+| `bca`         | 147 lines, 2 policies             | none                   |
+| `construction`| 67 lines, 3 policies              | none                   |
+| `norbital_hr` | 369 lines, 1 policy (generated)   | none                   |
+| `crm`         | none                              | `+sales_rep.policy.ts` |
+| `reclamation` | none                              | none                   |
+
+- [ ] **A1.** Confirm how `${requestor.norbital_id}` is substituted. The seed interpolates it into a
+      stored condition **at seed time**. A declaration cannot: the value is per-request. Establish
+      whether `policy_grant.conditions` is substituted at evaluation time, and if not, add it. *Nothing
+      else in A is safe until this is answered — a wrongly-substituted condition either matches nothing
+      or matches everything.*
+- [ ] **A2.** Port `bca` (2 policies, `$sql` subqueries through the `RAW` escape hatch). Verify a
+      contractor sees only their own rows and an admin sees all.
+- [ ] **A3.** Port `construction` (3 policies).
+- [ ] **A4.** Port `norbital_hr` (1 policy, generated from collection lists — keep the generation, move
+      it into the declaration).
+- [ ] **A5.** Add a `reclamation` policy; it has none anywhere today.
+- [ ] **A6.** Delete each `seed/<template>/steps/policies.ts` and its `index.ts` wiring, **only after**
+      the matching declaration reconciles. `reconcileDeclaredPolicies()` upserts by key and never
+      deletes undeclared rows, so a stale seeded policy lingers silently — remove it deliberately.
+- [ ] **A7.** Same for `team.ts` where it only exists to hold `policy_id`.
+
+### B. Channels
+
+- [ ] **B1.** Rename the `notifications` facility to `messaging` and add its `transports` record.
+      Blocks B2 and the transport validation in `ChannelDefinition`.
+- [ ] **B2.** Validate `+<name>.channel.ts` transports at startup, in the shape of
+      `assertSystemEventsAreReachable` in `define-workspace.ts`.
+- [ ] **B3.** Port channel delivery (~2,500 lines: `channel-manager`, `channel-history`, `automation`,
+      `pending-channel-message`) onto tenant collections. Telegram built in; WhatsApp host-supplied.
+
+### C. Core absorbs the breaking changes
+
+Every item below is already listed above with its rationale.
+
+- [ ] **C1.** Delete better-auth and the auth routes; Pod owns authentication.
+- [ ] **C2.** Drive `workspaceJobs()` from pg-boss; `HostSchedulerConfig` is gone.
+- [ ] **C3.** Migrate `member` → `basic`; widen anything typed `'admin' | 'member'`.
+- [ ] **C4.** Consume seat snapshots from `host_event_outbox`. **Snapshots, never deltas** —
+      at-least-once delivery plus delta counting double-bills.
+- [ ] **C5.** Supply `hostPlugins` (Workspace Studio, org settings) through the host contract.
+- [ ] **C6.** Re-expose sandbox tools as `HostAgentTool`; delete `lib/agent/**` the port replaced.
+- [ ] **C7.** Replace Core's inline Google maps with Pod's `googleMaps()`.
+- [ ] **C8.** Rebuild `(ops)/ops` on `cookieSession` + `emailOtpIdentity` with its own `operator` table.
+
+### D. Prove it works
+
+Unit and e2e coverage did not catch total auth failure in standalone. These are manual passes.
+
+- [ ] **D1.** Integrations round trip: sync a template collection to a real external API and back.
+- [ ] **D2.** Notifications: trigger one from a hook and confirm delivery.
+- [ ] **D3.** Automations: scheduled and event-triggered, both observed firing.
+- [ ] **D4.** Hooks: `before` mutation and `after` derived write.
+- [ ] **D5.** Policies: two users, different policies, confirm each sees only their own scope.
+- [ ] **D6.** Agent: chat from the panel, tool call, transcript replay across turns.
+- [ ] **D7.** A full standalone walkthrough per template, not just `crm`.
