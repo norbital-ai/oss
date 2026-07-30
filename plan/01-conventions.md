@@ -67,7 +67,7 @@ norbital_approval_id = <request id>          the row exists, is visible, is immu
       │
       ├── approved ──►  norbital_approval_id set to NULL; the row stands
       │
-      └── rejected ──►  the temporal ledger restores the row's pre-approval
+      └── rejected ──►  typed temporal history restores the row's pre-approval state
                         state, or deleted if it was a create
 ```
 
@@ -119,7 +119,7 @@ A run is authorised for payment when its record's approval stamp clears; the lif
 ### Cancelling an approved record
 
 A cancellation is a delete, and the delete is itself approval-stamped: approved removes the rows,
-rejected restores them from the temporal ledger. For rows already consumed by a `PAID` run, deletion is refused
+rejected restores them from typed temporal history. For rows already consumed by a `PAID` run, deletion is refused
 — the correction is a compensating entry (chapter [11](11-corrections.md)).
 
 ---
