@@ -4,6 +4,7 @@ import type { DbApi } from './db-api-types.js';
 import type { ReadonlyDbApi } from './db-api-types.js';
 import type { MergedWorkspaceSchema } from '$lib/authoring/schema/system-workspace.js';
 import type { DefaultWorkspaceSchema, TableName } from '../schema/types.js';
+import type { MutationInsertFor, MutationUpdateFor } from '../schema/mutation-types.js';
 
 export type SendNotificationInput = {
 	readonly recipient_user_id: string;
@@ -49,15 +50,39 @@ export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
 	'db' | 'readFileAsset' | 'sendNotification'
 >;
 
-type ElevatedMutationApi = {
-	readonly mutate: (
-		collectionName: string,
-		payloads: Record<string, unknown>[]
+/**
+ * One `mutate` payload: a create, or an update naming the row it changes.
+ *
+ * `mutate` is a create-*or*-update batch — a payload carrying `norbital_id` updates that record and
+ * anything else is a create. That is worth stating in the type rather than in prose, because the
+ * distinction is invisible at the call site: the only difference between inserting a row and rewriting
+ * an existing one is the presence of a single field.
+ */
+type ElevatedMutationPayload<S extends AnySchema, N extends TableName<MergedWorkspaceSchema<S>>> =
+	| MutationInsertFor<MergedWorkspaceSchema<S>, N>
+	| ({ readonly norbital_id: string } & MutationUpdateFor<MergedWorkspaceSchema<S>, N>);
+
+/**
+ * Derived writes an `after` hook may perform, bypassing permission checks.
+ *
+ * Bound to the workspace schema rather than taking `(string, Record<string, unknown>[])`. This is the
+ * only authoring surface that runs with permissions bypassed, so it was also the only one where a
+ * misspelled collection or column reached a privileged code path before failing — the inverse of where
+ * type safety is worth the most. The collection name is a generic parameter so each call correlates
+ * its payloads to *that* collection.
+ */
+type ElevatedMutationApi<S extends AnySchema> = {
+	readonly mutate: <const N extends TableName<MergedWorkspaceSchema<S>>>(
+		collectionName: N,
+		payloads: readonly ElevatedMutationPayload<S, N>[]
 	) => Promise<Record<string, unknown>[]>;
-	readonly delete: (collectionName: string, ids: string[]) => Promise<void>;
+	readonly delete: <const N extends TableName<MergedWorkspaceSchema<S>>>(
+		collectionName: N,
+		ids: readonly string[]
+	) => Promise<void>;
 };
 
-type AfterDbApi<S extends AnySchema> = ElevatedMutationApi &
+type AfterDbApi<S extends AnySchema> = ElevatedMutationApi<S> &
 	(string extends TableName<MergedWorkspaceSchema<S>>
 		? object
 		: ReadonlyDbApi<MergedWorkspaceSchema<S>, 'direct'>);

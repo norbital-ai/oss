@@ -6,11 +6,22 @@
  * writer, and this module decides whether a stitch is needed and what to record.
  */
 
+import type { WorkspaceInsert } from '../../../../.norbital/generated/types.js';
 import type { RawDocument, StitchOverrides } from '../../../lib/reclamation/extract.js';
 import { normalizeDrawing } from '../../../lib/reclamation/normalize-drawing.server.js';
 import { sha256Hex } from '../../../lib/reclamation/hash.js';
 import { DEFAULT_STITCH_SETTINGS, stitch } from '../../../lib/reclamation/stitch.js';
 import type { DocumentKind, StitchSettings } from '../../../lib/reclamation/types.js';
+
+/**
+ * The row this driver records for one stitch attempt.
+ *
+ * Taken from the generated schema rather than restated. This module stays free of generated *runtime*
+ * dependencies so it can be unit tested on its own, and a type-only import does not change that — the
+ * import is erased. Restating 28 columns by hand would duplicate the schema, and the previous
+ * `Record<string, unknown>` put a typo straight onto an elevated, permission-bypassing write.
+ */
+export type ReconstructionWrite = WorkspaceInsert<'site_reconstructions'>;
 
 export type ProjectDocumentFields = {
 	readonly norbital_id: string;
@@ -48,7 +59,7 @@ export type PreviousRun = {
 export type StitchDriver = {
 	readonly readFileAsset: (assetId: string) => Promise<FileAsset>;
 	readonly previousRuns: (projectId: string) => Promise<readonly PreviousRun[]>;
-	readonly writeReconstruction: (payload: Record<string, unknown>) => Promise<unknown>;
+	readonly writeReconstruction: (payload: ReconstructionWrite) => Promise<unknown>;
 	/** Reconstruction-category documents attached to the project, if any. */
 	readonly extraDocuments?: (projectId: string) => Promise<readonly ExtraDocument[]>;
 };
@@ -241,7 +252,7 @@ export async function runStitchForProject(
 	}
 	const revision =
 		previous.reduce((highest, run) => Math.max(highest, Number(run.revision ?? 0)), 0) + 1;
-	const stitchedAt = new Date().toISOString();
+	const stitchedAt = new Date();
 
 	let documents: Record<DocumentKind, RawDocument>;
 	let additional: { sections: RawDocument[]; bathymetry: RawDocument[] };

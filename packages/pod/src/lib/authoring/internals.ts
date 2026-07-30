@@ -10,7 +10,7 @@ import {
 	type RelationshipsFor,
 	type TablesForModels
 } from './filesystem.js';
-import type { InputValuesForTables } from './schema/mutation-types.js';
+import type { InputValuesForTables, MutationInsertFor } from './schema/mutation-types.js';
 import {
 	defineRuntimeWorkspace,
 	defineWorkspace,
@@ -37,6 +37,7 @@ export type {
 	RelationshipsFor,
 	TablesForModels,
 	InputValuesForTables,
+	MutationInsertFor,
 	WorkspaceAppDef,
 	WorkspaceCollectionRegistry
 };
