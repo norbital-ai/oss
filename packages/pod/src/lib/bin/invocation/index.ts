@@ -126,7 +126,7 @@ async function start(root: string): Promise<number> {
  * The local loop: build, migrate, optionally seed, then emulate Core with a development identity.
  *
  * A self-hosted target retains its explicit providers. A Core target receives only the local
- * database, file-storage, scheduler, and development identity implementations.
+ * database, file-storage, queue, and development identity implementations.
  */
 async function develop(root: string, runSeed: boolean): Promise<number> {
 	await buildStandalone(root);

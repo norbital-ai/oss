@@ -43,7 +43,6 @@ import {
 import type { ErasedHookActionContext } from '$lib/server/collection/hook-context.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { z } from 'zod';
-import { AutomationRunTriggerSchema } from '@norbital-ai/platform-utils/system/types';
 import { typeGuard } from '@norbital-ai/std/schema';
 import { runTenantOutbox } from '$lib/server/integrations/tenant-outbox.server.js';
 import { runNotificationOutbox } from '$lib/server/notifications/notification-outbox.server.js';
@@ -139,8 +138,7 @@ export const runtimeRunRequestSchema = z.union([
 	z
 		.object({
 			kind: z.literal('automation'),
-			automationName: z.string().min(1),
-			triggeredBy: AutomationRunTriggerSchema.optional()
+			automationName: z.string().min(1)
 		})
 		.strict(),
 	// The host's drain of collection-event automations. Cron automations name themselves; these are
@@ -378,7 +376,6 @@ export async function runCollectionActionHook(
 
 export async function runAutomation(params: {
 	readonly automationName: string;
-	readonly triggeredBy?: 'MANUAL' | 'CRON' | 'AGENT' | 'EVENT';
 	/** Change-feed dispatch populates `scope.incoming_record` with the committed row. */
 	readonly scope?: Record<string, unknown>;
 	readonly args?: Record<string, unknown>;
@@ -495,8 +492,7 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 				return pumpAutomations(getWorkspace({ provision: true }), request.limit);
 			}
 			return runAutomation({
-				automationName: request.automationName,
-				triggeredBy: request.triggeredBy
+				automationName: request.automationName
 			});
 		}
 		case 'integration': {

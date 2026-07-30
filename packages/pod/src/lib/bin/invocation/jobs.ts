@@ -212,8 +212,7 @@ export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[]
 			run: async () => {
 				await options.dispatch({
 					kind: 'automation',
-					automationName: name,
-					triggeredBy: 'CRON'
+					automationName: name
 				});
 			}
 		});

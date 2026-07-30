@@ -6,6 +6,7 @@ import {
 	resolveDatabaseUrl,
 	type HostConfigInput
 } from '../../src/lib/bin/invocation/host-config.js';
+import { isIdentityDescriptor } from '../../src/lib/host/types.js';
 
 const temporaryRoots: string[] = [];
 
@@ -43,6 +44,10 @@ describe('pod.host.ts deployment target', () => {
 
 		expect(resolved.source).toContain('Core development emulation');
 		expect(resolved.config.mode).toBe('self-hosted');
+		// A resolved development host always yields a live provider, never a descriptor — the narrowing
+		// is the assertion, since a descriptor here would mean nothing bound the built-in provider.
+		expect(isIdentityDescriptor(resolved.config.identity)).toBe(false);
+		if (isIdentityDescriptor(resolved.config.identity)) throw new Error('expected a provider');
 		expect(resolved.config.identity.name).toBe('dev');
 		expect(resolved.config.db.connectionString).toBe('postgres://core-development');
 		await expect(loadHostConfig(input(root, false))).rejects.toThrow(

@@ -145,8 +145,12 @@ export function mintToken(): { readonly token: string; readonly hash: string } {
 /**
  * The digest stored for a token.
  *
- * Plain SHA-256 rather than a password hash: the input is 256 bits of CSPRNG output, so it has no
- * guessable structure for a slow KDF to defend, and a lookup happens on every accept.
+ * A single SHA-256 pass rather than a password hash: the input is 256 bits of CSPRNG output, so it has
+ * no guessable structure for a slow KDF to defend, and a lookup happens on every accept.
+ *
+ * HMAC with a fixed, in-source key, which is *not* a secret and buys nothing over a bare digest. It is
+ * written this way only so the construction is domain-separated from every other digest in this file;
+ * do not read the key as protection for the stored value.
  */
 export function hashToken(token: string): string {
 	return createHmac('sha256', 'pod:token').update(token).digest('base64url');

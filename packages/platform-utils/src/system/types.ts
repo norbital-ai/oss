@@ -199,9 +199,6 @@ export type TApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 export const AutomationRunStatusSchema = z.enum(['running', 'success', 'failed']);
 export type TAutomationRunStatus = z.infer<typeof AutomationRunStatusSchema>;
 
-export const AutomationRunTriggerSchema = z.enum(['MANUAL', 'CRON', 'AGENT']);
-export type TAutomationRunTrigger = z.infer<typeof AutomationRunTriggerSchema>;
-
 export const AutomationRunSchema = SystemRecordFieldsSchema.extend({
 	automation_name: z.string(),
 	status: z.string(),

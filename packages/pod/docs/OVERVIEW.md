@@ -96,10 +96,10 @@ scope, then evaluates ordinary policy before executing server code. The standalo
 only on a loopback address; a production self-hosted `pod.host.ts` must provide its identity provider.
 
 Hosts implement facilities structurally required by the built workspace. A DB-only host can run a
-workspace that needs only database access; file fields require file storage, geolocation requires
-maps, and automations and integrations require queue and delivery facilities as applicable.
-Non-inferable direct calls such as AI and external notifications require the corresponding active
-host binding when invoked.
+workspace that needs only database access; file fields require file storage, and automations and
+integrations require queue and delivery facilities as applicable. Non-inferable direct calls such as
+AI, external notifications, and map lookups require the corresponding active host binding when
+invoked — a stored geolocation needs no provider to read or render, so it does not gate startup.
 
 ## Data and sync model
 

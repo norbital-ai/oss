@@ -30,6 +30,19 @@ export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
 	? TSchema
 	: AnySchema;
 
+/**
+ * The workspace's app ids, or `string` when no generated types are present.
+ *
+ * Same purpose as `DefaultWorkspaceSchema`, for the names that are cross-references rather than
+ * schemas. An app id that only ever appears as `string` is compared by exact match at runtime, so a
+ * typo neither errors nor grants — it silently revokes the app the author meant to allow.
+ */
+export type DefaultAppName = WorkspaceAuthoringTypes extends {
+	readonly appName: infer TName extends string;
+}
+	? TName
+	: string;
+
 export type TableName<S extends AnySchema> = keyof S['tables'] & string;
 
 export type SchemaRow<S extends AnySchema, N extends TableName<S>> = S['tables'][N]['$inferSelect'];

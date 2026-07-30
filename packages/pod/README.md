@@ -738,15 +738,20 @@ The same rule applies across facilities:
 | -------------------------------------- | --------------------------------------------- |
 | Any running workspace                  | `db`                                          |
 | A `file()` field                       | `fileStorage`                                 |
-| A `geolocation()` field                | `maps`                                        |
 | Deterministic automation               | `queue`                                       |
 | Agent automation                       | `queue` and `ai`                              |
 | Outbound integration                   | `queue` and `integrationDelivery`             |
 | External notification call             | matching `notifications` channel at call time |
+| Geolocation autocomplete or static map | `maps` at call time                           |
 | Direct runtime AI call not in manifest | `ai` at call time                             |
 
 Static field and automation requirements are checked before the server listens. Dynamic notification
 channels and direct API calls are validated precisely when called.
+
+`maps` is deliberately _not_ a startup requirement of a `geolocation()` field. A stored geolocation
+carries its own geometry and formatted address, so reading and rendering one needs no provider — only
+edit-time autocomplete and static-map rendering do, and those validate when called. Gating startup on
+it blocked two templates from `pod dev` for a dependency they never use.
 
 ## Hosting
 

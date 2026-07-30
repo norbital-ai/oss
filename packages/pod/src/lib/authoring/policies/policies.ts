@@ -1,4 +1,10 @@
-import type { AnySchema, DefaultWorkspaceSchema, SchemaRow, TableName } from '../schema/types.js';
+import type {
+	AnySchema,
+	DefaultAppName,
+	DefaultWorkspaceSchema,
+	SchemaRow,
+	TableName
+} from '../schema/types.js';
 import type { MergedWorkspaceSchema } from '../schema/system-workspace.js';
 import type { SchemaWhere } from '../schema/types.js';
 
@@ -43,8 +49,15 @@ export type PolicyGrant<S extends AnySchema = DefaultWorkspaceSchema> = {
 export type PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> = {
 	readonly name: string;
 	readonly description?: string | null;
-	/** App ids this policy may open. Omitted means every app. */
-	readonly apps?: readonly string[];
+	/**
+	 * App ids this policy may open. Omitted means every app.
+	 *
+	 * Bound to the generated `AppName` union, because this is the one field whose mistakes are entirely
+	 * silent: the id is compared by exact string match when the sidebar is built, so a typo, a stray
+	 * space, or the wrong case grants nothing *and* revokes the app the author meant to allow — with no
+	 * error anywhere.
+	 */
+	readonly apps?: readonly DefaultAppName[];
 	readonly grants: readonly PolicyGrant<S>[];
 };
 

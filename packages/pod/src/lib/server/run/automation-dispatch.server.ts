@@ -48,7 +48,7 @@ export async function dispatchChangeToAutomations(
 	change: { collection: string; action: ChangeAction; record: Record<string, unknown> }
 ): Promise<string[]> {
 	// Registered definitions hold the executable handler/spec; the manifest is only the serializable
-	// projection consumed by the host scheduler.
+	// projection drained through the `queue` facility.
 	const registered = getTenantWorkspace().registered.automations as
 		Record<string, RegisteredAutomation> | undefined;
 	const names = matchChangeAutomations(
@@ -60,7 +60,6 @@ export async function dispatchChangeToAutomations(
 		try {
 			await runAutomation({
 				automationName,
-				triggeredBy: 'EVENT',
 				scope: { incoming_record: change.record }
 			});
 		} catch (err) {

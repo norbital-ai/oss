@@ -166,7 +166,11 @@ pod dev           # build, migrate, and serve with a loopback development identi
 pod invite you@example.com   # mint a founding invitation (self-hosted)
 ```
 
-`pod dev` supplies `db`, `fileStorage`, and `queue`, and nothing else. A workspace needing `ai`,
-`maps`, or `messaging` will refuse to start under it — which is the intended answer, not an
-inconvenience: the alternative is a development run that fails at the first inference call, far from
-the cause.
+`pod dev` supplies `db`, `fileStorage`, and `queue`, and nothing else. A workspace with an agent
+automation refuses to start under it, because `ai` is a _static_ requirement — which is the intended
+answer, not an inconvenience: the alternative is a development run that fails at the first inference
+call, far from the cause.
+
+`maps` and notifications are not static requirements and never gate startup. Nothing in the manifest
+implies them: a stored geolocation carries its own geometry and address, and a notification channel is
+chosen at call time. Both validate when called.

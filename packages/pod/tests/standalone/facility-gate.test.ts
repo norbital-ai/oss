@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import { assertStandaloneFacilities } from '../../src/lib/bin/invocation/standalone.js';
 import { loadHostConfig } from '../../src/lib/bin/invocation/host-config.js';
-import { satisfiedFacilities } from '../../src/lib/host/types.js';
+import { satisfiedFacilities, type RuntimeFacilityName } from '../../src/lib/host/types.js';
 import { intervalQueue } from '../../src/lib/host/interval-queue.js';
 import { postgresDb } from '../../src/lib/host/db.js';
 import { devIdentity } from '../../src/lib/host/identity.js';
@@ -34,11 +34,12 @@ async function coreWorkspace(): Promise<string> {
 	return root;
 }
 
-async function developmentFacilities(): Promise<ReadonlySet<string>> {
+async function developmentFacilities(): Promise<ReadonlySet<RuntimeFacilityName>> {
 	const { config } = await loadHostConfig({
 		root: await coreWorkspace(),
 		development: true,
 		databaseUrl: 'postgres://localhost:5432/pod',
+		publicUrl: 'http://localhost:5173',
 		orgId: 'o',
 		orgName: 'Org',
 		adminId: 'a'
@@ -51,6 +52,7 @@ function hostConfig(overrides: Partial<SelfHostedPodHostConfig> = {}): SelfHoste
 		mode: 'self-hosted',
 		db: postgresDb({ url: 'postgres://localhost:5432/pod' }),
 		identity: devIdentity({ userId: 'u', organizationId: 'o', organizationName: 'Org' }),
+		publicUrl: 'http://localhost:5173',
 		...overrides
 	};
 }

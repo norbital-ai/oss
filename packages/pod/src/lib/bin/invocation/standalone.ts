@@ -516,13 +516,11 @@ async function standaloneStaticAsset(
 }
 
 /**
- * Resolve the host configuration and refuse the combinations that are unsafe rather than merely
- * wrong.
+ * Resolve the host configuration for a standalone run.
  *
- * Both checks here are about a process that would otherwise start and look fine: a trusted-header
- * provider with no token would reject every request as unauthenticated with no hint why, and a dev
- * identity on a routable address is an open workspace. `loadStandaloneEnvironment` already refuses
- * a non-loopback bind, so the second check is defence in depth against that rule being relaxed.
+ * A thin delegation to `loadHostConfig`, which owns the refusals: a `mode: 'core'` config cannot run
+ * under `pod start` outside development emulation. The dev-identity-on-a-routable-address case is
+ * enforced upstream instead — `loadStandaloneEnvironment` refuses a non-loopback bind.
  */
 async function resolveStandaloneHost(
 	root: string,

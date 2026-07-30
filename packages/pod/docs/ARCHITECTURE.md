@@ -108,7 +108,6 @@ startup compares them with `pod.host.ts` and refuses to listen if anything is mi
 | --------------------- | ----------------------------------------- |
 | `db`                  | always                                    |
 | `fileStorage`         | a collection contains a file field        |
-| `maps`                | a collection contains a geolocation field |
 | `ai`                  | an agent automation is compiled           |
 | `queue`               | any automation or integration is compiled |
 | `integrationDelivery` | an integration is compiled                |

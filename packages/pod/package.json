@@ -68,7 +68,7 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.mjs svelte-package -i src/lib -o {} --tsconfig tsconfig.json",
 		"prepack": "pnpm build",
-		"lint": "svelte-check --tsconfig ./tsconfig.json",
+		"lint": "svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
 		"test": "vitest run",
 		"test:compiler": "vitest run tests/compiler",
 		"test:e2e": "vitest run tests/sync tests/storage tests/runtime tests/standalone",
