@@ -23,6 +23,24 @@ export const SeatCensusSchema = z.object({
 });
 export type TSeatCensus = z.infer<typeof SeatCensusSchema>;
 
+/**
+ * What a seat census costs, on the axis a host actually bills.
+ *
+ * Pod counts by *security role* because that is what a workspace decides; a host bills by *tier*.
+ * The two are different axes, and the mapping between them is a commercial decision, so it lives here
+ * once rather than being re-derived by each host — a host that mapped `advanced` to the cheap tier
+ * would under-bill silently, and nothing in either codebase would contradict it.
+ *
+ * `admin` and `advanced` are both builder seats; `basic` is not. A workspace always has at least one
+ * admin, so the "at least one builder seat" rule holds without a special case.
+ */
+export function billableSeats(census: TSeatCensus): {
+	readonly builder: number;
+	readonly standard: number;
+} {
+	return { builder: census.admin + census.advanced, standard: census.basic };
+}
+
 export const UserStatusSchema = z.enum(['active', 'inactive', 'pending_invitation']);
 export type TUserStatus = z.infer<typeof UserStatusSchema>;
 

@@ -39,3 +39,6 @@ playwright-report/
 Thumbs.db
 *.log
 vite.config.*.timestamp-*
+
+# Scratch workspaces for manual and end-to-end runs.
+.test-workspaces/

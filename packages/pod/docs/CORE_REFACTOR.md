@@ -265,7 +265,7 @@ Every item below is already listed above with its rationale.
       absolute rows, so delta-counting was never the bug; what changes is the _source_, since the
       `member` table dies with C1.
 - [ ] **C4a. Unresolved blocker.** The seat axes do not line up. Pod publishes `{admin, advanced,
-    basic}` — a security role. Core bills on `member.billingTier` (`standard | builder`), an
+  basic}` — a security role. Core bills on `member.billingTier` (`standard | builder`), an
       independent axis with a "≥1 Builder seat" rule. A role-keyed snapshot cannot drive Core's Stripe
       items. Decide whether billing tier becomes a Pod concept or Core keeps its own mapping, before
       C1 removes the table it reads today.
