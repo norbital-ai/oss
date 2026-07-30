@@ -62,6 +62,44 @@ export type PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> = {
 };
 
 /**
+ * Refuse a condition that cannot survive being stored.
+ *
+ * A grant is serialised to jsonb and round-tripped through the manifest, so a function-valued `RAW`
+ * silently becomes nothing. The grant then lands with empty conditions — which the guard reads as
+ * *unconditional access to the whole collection*. A narrowing that quietly inverts into a widening is
+ * the worst failure a permission rule can have, so it is refused where it is written.
+ *
+ * Use `$sql` instead: it is a string, so it survives, and its placeholders are bound against the
+ * request scope at evaluation time.
+ */
+function assertSerialisableWhere(
+	policyName: string,
+	collection: string,
+	where: unknown,
+	path = 'where'
+): void {
+	if (where == null || typeof where !== 'object') return;
+	for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
+		const here = `${path}.${key}`;
+		if (typeof value === 'function') {
+			throw new Error(
+				`Policy "${policyName}" grant on "${collection}" uses a function at ${here}. ` +
+					'A policy is stored as JSON, so the function is dropped and the grant becomes ' +
+					'unconditional. Use `$sql` with ${...} placeholders instead of `RAW`.'
+			);
+		}
+		if (Array.isArray(value)) {
+			value.forEach((entry, index) =>
+				assertSerialisableWhere(policyName, collection, entry, `${here}[${index}]`)
+			);
+			continue;
+		}
+		assertSerialisableWhere(policyName, collection, value, here);
+	}
+}
+
+
+/**
  * Identity function that exists for its inference; a policy file gets checked on write.
  *
  * Prefer `satisfies Policy` from the generated `$types.js` — it binds the workspace schema, so
@@ -79,6 +117,7 @@ export function definePolicy<const TPolicy extends PolicyDefinition>(policy: TPo
 				`Policy "${policy.name}" gates a read behind approval; only create, update, and delete can be gated`
 			);
 		}
+		assertSerialisableWhere(policy.name, String(grant.collection), grant.where);
 	}
 	return policy;
 }

@@ -111,6 +111,19 @@ export type SchemaWhere<Row extends Record<string, unknown>> = {
 		table: Readonly<Record<keyof Row, unknown>>,
 		operators: SchemaRawOperators
 	) => unknown;
+	/**
+	 * A raw SQL predicate, as data rather than a callback.
+	 *
+	 * `RAW` is a function, so it cannot survive a policy: a declared policy is serialised to jsonb and
+	 * round-tripped through the manifest, and a function silently becomes nothing — leaving a grant
+	 * with empty conditions, which the guard reads as *unconditional*. `$sql` is a string, so it
+	 * survives, and it is what a policy condition must use.
+	 *
+	 * `${path}` placeholders are resolved against the request scope at evaluation time and bound as
+	 * positional parameters, so `${requestor.norbital_id}` is the current requestor and an unknown
+	 * path throws rather than binding null.
+	 */
+	readonly $sql?: string;
 };
 
 export type SchemaColumnSelection<Row extends Record<string, unknown>> = Partial<
