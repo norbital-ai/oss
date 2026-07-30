@@ -20,6 +20,7 @@ export {
 	update,
 	updateMany
 } from './collection.remote.js';
+export { agentChat, AgentChatInputSchema, type AgentChatResult } from './agent_chat.remote.js';
 export { autocompleteGeolocation } from './geolocation.remote.js';
 
 export {

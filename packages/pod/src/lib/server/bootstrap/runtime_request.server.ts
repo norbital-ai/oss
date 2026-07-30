@@ -15,6 +15,7 @@ import {
 	adminCreateSystemRecord,
 	adminDeleteSystemRecord,
 	adminUpdateSystemRecord,
+	agentChat,
 	autocompleteGeolocation,
 	count,
 	create,
@@ -35,6 +36,7 @@ import {
 	runProcessApprovalRequestAction,
 	runWithdrawApprovalRequest
 } from '$lib/remote/approval_request/approval_request.runtime.server.js';
+import { AgentChatInputSchema } from '$lib/remote/agent_chat.remote.js';
 import { AutocompleteGeolocationInputSchema } from '$lib/remote/geolocation.remote.js';
 import { StaticMapInputSchema } from '@norbital-ai/platform-utils/runtime/binding';
 import { renderStaticMap } from '$lib/remote/static_map.remote.js';
@@ -200,6 +202,7 @@ const RUNTIME_ENDPOINT_HANDLERS: Record<string, RuntimeEndpointHandler> = {
 	'collections/deleteRecord': wireEndpoint(DeleteWireSchema, deleteRecord),
 	'collections/export': wireEndpoint(ExportRecordsWireSchema, exportPipeline),
 	'collections/import': wireEndpoint(ImportRecordsWireSchema, importPipeline),
+	'remotes/agentChat': wireEndpoint(AgentChatInputSchema, agentChat),
 	'remotes/autocompleteGeolocation': wireEndpoint(
 		AutocompleteGeolocationInputSchema,
 		autocompleteGeolocation
