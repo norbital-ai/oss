@@ -93,7 +93,7 @@ query shape — so filtering, sorting, pagination, and relations are pure local 
 
 - **Client:** `client/sync/` — PodSyncClient (connect, catch-up, diff application), live query
   registry, PGlite SharedWorker, optimistic write overlay
-- **Server:** `server/collection/sync/` — wire protocol (`/_runtime/sync/schema|shape|stream|mutate`),
+- **Server:** `server/collection/sync/` — wire protocol (`/_runtime/sync/shape|stream|mutate`; the client DDL rides on `/_pod/bootstrap`),
   sync_outbox change feed, outbox tailer with `(xid, seq)` cursor management, PostgreSQL NOTIFY/LISTEN
 
 For the full architecture, invariants, and how to author queries and mutations, see

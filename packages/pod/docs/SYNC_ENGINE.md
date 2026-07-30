@@ -190,8 +190,8 @@ and those users get the fully-local experience with no special handling.
 
 ### 3.2 Two tiers: resident and windowed
 
-A collection is **resident** when its policy-scoped rows fit the residency cap (currently 25k,
-reached in a handful of pages). Everything about a resident collection is local and instant:
+A collection is **resident** when its policy-scoped rows fit the residency budget — 1 GiB of
+encoded row data, shared across every collection, reached in a handful of pages. Everything about a resident collection is local and instant:
 filter, sort, page, count, relation, search, offline.
 
 Above the cap it is **windowed**. The replica holds a working set rather than the whole slice,
@@ -426,9 +426,9 @@ Honest list of what this design does not yet do.
 - **A windowed collection never gets a local search index.** Absorbing server answers makes the
   _records_ local, not the _index_, so repeated searches stay server round-trips for as long as the
   collection is over budget (§3.3).
-- **The residency cap is global, not per collection.** 25k rows for everything. A workspace with
-  one huge collection and many small ones would be better served by a per-collection budget, or by
-  a cap on total replica size rather than per-collection rows.
+- **The residency budget is shared, not per collection.** One huge collection can consume the
+  allowance that would have made several small ones resident. That is usually the right trade — the
+  small ones are the ones that pay off — but nothing currently prioritises between them.
 - **Creates are not optimistic.** `norbital_id` is minted server-side, so an optimistic insert
   would need a temporary id and a rewrite when the real one arrives. Updates and deletes are
   optimistic. Fixing this means letting the client mint the (time-ordered) id.
