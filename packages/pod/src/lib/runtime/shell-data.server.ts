@@ -33,11 +33,14 @@ async function fetchTeamsAndPolicies(): Promise<{
 	return loadPoliciesForTeams(teamIds);
 }
 
-async function resolveAccessibleAppNames(): Promise<string[] | null> {
+function resolveAccessibleAppNames(loaded: {
+	teams: TTeam[];
+	policies: TPolicy[];
+}): string[] | null {
 	const workspace = getWorkspace({ provision: true });
 	if (workspace.baseScope.requestor.role === 'admin') return null;
 
-	const { policies } = await fetchTeamsAndPolicies();
+	const { policies } = loaded;
 	const accessible = new Set<string>();
 	for (const row of policies) {
 		if (row.is_active !== true || !Array.isArray(row.accessible_applications)) continue;
@@ -50,11 +53,14 @@ async function resolveAccessibleAppNames(): Promise<string[] | null> {
 	return [...accessible].sort();
 }
 
-async function resolvePolicyGrants(): Promise<readonly TenantWorkspacePolicyGrant[] | null> {
+function resolvePolicyGrants(loaded: {
+	teams: TTeam[];
+	policies: TPolicy[];
+}): readonly TenantWorkspacePolicyGrant[] | null {
 	const workspace = getWorkspace({ provision: true });
 	if (workspace.baseScope.requestor.role === 'admin') return null;
 
-	const { teams, policies } = await fetchTeamsAndPolicies();
+	const { teams, policies } = loaded;
 	const policyById = new Map(policies.map((policy) => [policy.norbital_id, policy]));
 	const grants: TenantWorkspacePolicyGrant[] = [];
 	for (const team of teams) {
@@ -90,10 +96,20 @@ export async function loadTenantWorkspaceShellData(
 		? billingSummarySchema.safeParse(safeParse(billingHeader))
 		: { success: false as const };
 
-	// Resolved alongside the shell, not after it. The replica cannot open until it knows its name,
-	// so fetching this separately meant the app rendered and issued its first reads while the
-	// local database was still waiting on a round trip it did not need to make.
-	const sync = await loadSyncBootstrap(workspace);
+	// This response is the whole critical path of a workspace load, and everything on it that
+	// touches the database is independent, so none of it waits for the rest.
+	//
+	// The policy load in particular used to run TWICE and in series — `resolveAccessibleAppNames`
+	// and `resolvePolicyGrants` each fetched the same teams and policies for themselves — so a
+	// non-admin paid two sequential guest → Core → Postgres round trips to answer one question.
+	// It is fetched once here and both are derived from it.
+	//
+	// The sync bootstrap joins the same batch. Resolving it after the shell would put a round trip
+	// back on the path this change exists to shorten.
+	const [sync, teamsAndPolicies] = await Promise.all([
+		loadSyncBootstrap(workspace),
+		fetchTeamsAndPolicies()
+	]);
 
 	return {
 		sync,
@@ -121,7 +137,7 @@ export async function loadTenantWorkspaceShellData(
 		userOrganizations: workspace.userOrganizations,
 		...(billing.success ? { billing: billing.data } : {}),
 		hostPlugins: workspace.hostPlugins,
-		accessibleAppNames: await resolveAccessibleAppNames(),
-		policyGrants: await resolvePolicyGrants()
+		accessibleAppNames: resolveAccessibleAppNames(teamsAndPolicies),
+		policyGrants: resolvePolicyGrants(teamsAndPolicies)
 	};
 }
