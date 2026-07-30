@@ -38,7 +38,6 @@ const writeInput = z.discriminatedUnion('action', [
 	z.object({ collection: z.string(), action: z.literal('delete'), id: z.string().uuid() })
 ]);
 
-type StepKind = 'message' | 'tool_call' | 'tool_result' | 'error';
 
 type AgentRunOptions = {
 	readonly automationName: string | null;
@@ -205,54 +204,57 @@ async function executeTool(
 	return objectValue(await definition.run(agentToolApi(spec), definition.input.parse(call.input)));
 }
 
+/**
+ * The session holding one automation run's transcript, created on first write.
+ *
+ * An automation's agent run and a person talking to the agent produce the same messages, so they
+ * share one transcript model rather than two tables that drift. The session is keyed by its run.
+ */
+async function ensureRunSession(runId: string, ownerUserId: string): Promise<string> {
+	const ctx = getWorkspace({ provision: true });
+	const existing = await ctx.tenantDb.query<{ norbital_id: string }>({
+		text: `SELECT norbital_id FROM chat_session WHERE automation_run_id = $1::uuid LIMIT 1`,
+		values: [runId]
+	});
+	const found = existing.rows[0]?.norbital_id;
+	if (found) return found;
+	const created = await createRecord(
+		ctx,
+		'chat_session',
+		{
+			user_id: ownerUserId,
+			automation_run_id: runId,
+			title: `Automation run ${runId}`,
+			visibility: 'personal'
+		},
+		{ isElevated: true }
+	);
+	return String(created.norbital_id);
+}
+
+/**
+ * Replay a run's transcript.
+ *
+ * Each row stores one `AiMessage` verbatim, so replay is a read rather than a reconstruction — the
+ * previous shape spread a single assistant turn across `tool_call` rows and rebuilt it on load, which
+ * meant the stored form and the in-memory form could disagree.
+ */
 async function loadMessages(runId: string): Promise<{ messages: AiMessage[]; sequence: number }> {
 	const ctx = getWorkspace({ provision: true });
-	const result = await ctx.tenantDb.query<{
-		sequence: number;
-		kind: StepKind;
-		role: 'user' | 'assistant' | null;
-		content: string | null;
-		tool_call_id: string | null;
-		tool_name: string | null;
-		tool_input: Record<string, unknown> | null;
-		tool_output: Record<string, unknown> | null;
-	}>({
-		text: `SELECT sequence, kind, role, content, tool_call_id, tool_name, tool_input, tool_output
-		         FROM agent_run_step
-		        WHERE automation_run_id = $1::uuid
-		        ORDER BY sequence`,
+	const result = await ctx.tenantDb.query<{ seq: number; parts: AiMessage[] | null }>({
+		text: `SELECT m.seq, m.parts
+		         FROM chat_message m
+		         JOIN chat_session s ON s.norbital_id = m.chat_id
+		        WHERE s.automation_run_id = $1::uuid
+		        ORDER BY m.seq`,
 		values: [runId]
 	});
 	const messages: AiMessage[] = [];
 	let sequence = 0;
-	for (const step of result.rows) {
-		sequence = Math.max(sequence, step.sequence);
-		if (step.kind === 'message' && step.content != null && step.role != null) {
-			messages.push({ role: step.role, content: step.content });
-		} else if (step.kind === 'tool_result') {
-			messages.push({
-				role: 'tool',
-				content: JSON.stringify(step.tool_output ?? {}),
-				...(step.tool_call_id ? { toolCallId: step.tool_call_id } : {})
-			});
-		} else if (
-			step.kind === 'tool_call' &&
-			step.tool_call_id &&
-			step.tool_name &&
-			step.tool_input
-		) {
-			messages.push({
-				role: 'assistant',
-				content: '',
-				toolCalls: [
-					{
-						id: step.tool_call_id,
-						name: step.tool_name,
-						input: step.tool_input
-					}
-				]
-			});
-		}
+	for (const row of result.rows) {
+		sequence = Math.max(sequence, row.seq);
+		const message = row.parts?.[0];
+		if (message) messages.push(message);
 	}
 	return { messages, sequence };
 }
@@ -309,19 +311,30 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 	const restored = await loadMessages(runId);
 	let sequence = restored.sequence;
 	const messages: AiMessage[] = [...restored.messages];
-	const persist = async (kind: StepKind, values: Record<string, unknown>): Promise<void> => {
+	let sessionId: string | null = null;
+	const persist = async (
+		message: AiMessage,
+		usage?: Record<string, unknown>
+	): Promise<void> => {
+		sessionId ??= await ensureRunSession(runId, ownerUserId);
 		sequence += 1;
 		await createRecord(
 			ctx,
-			'agent_run_step',
-			{ owner_user_id: ownerUserId, automation_run_id: runId, sequence, kind, ...values },
+			'chat_message',
+			{
+				chat_id: sessionId,
+				role: message.role,
+				seq: sequence,
+				parts: [message],
+				...(usage ? { usage } : {})
+			},
 			{ isElevated: true }
 		);
 	};
 	const initial = options.input ?? (messages.length === 0 ? options.spec.task : undefined);
 	if (initial) {
 		messages.push({ role: 'user', content: initial });
-		await persist('message', { role: 'user', content: initial });
+		await persist({ role: 'user', content: initial });
 	}
 	if (messages.length === 0) throw new Error('Agent run requires an input message');
 
@@ -350,15 +363,16 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 			if (result.text) {
 				finalText = result.text;
 				messages.push({ role: 'assistant', content: result.text });
-				await persist('message', {
-					role: 'assistant',
-					content: result.text,
-					...(result.usage ? { usage: objectValue(result.usage) } : {})
-				});
+				await persist(
+					{ role: 'assistant', content: result.text },
+					result.usage ? objectValue(result.usage) : undefined
+				);
 			}
 			const calls = result.toolCalls ?? [];
 			if (calls.length > 0) {
-				messages.push({ role: 'assistant', content: '', toolCalls: calls });
+				const call_message: AiMessage = { role: 'assistant', content: '', toolCalls: calls };
+				messages.push(call_message);
+				await persist(call_message);
 			}
 			if (calls.length === 0) {
 				if (result.stopReason === 'refusal') throw new Error('AI provider refused the run');
@@ -377,11 +391,6 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 				return { runId, status: 'success', text: finalText };
 			}
 			for (const call of calls) {
-				await persist('tool_call', {
-					tool_call_id: call.id,
-					tool_name: call.name,
-					tool_input: objectValue(call.input)
-				});
 				let output: Record<string, unknown>;
 				try {
 					output = await executeTool(options.spec, call);
@@ -390,22 +399,19 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 						error: cause instanceof Error ? cause.message : String(cause)
 					};
 				}
-				await persist('tool_result', {
-					tool_call_id: call.id,
-					tool_name: call.name,
-					tool_output: output
-				});
-				messages.push({
+				const tool_message: AiMessage = {
 					role: 'tool',
 					content: JSON.stringify(output),
 					toolCallId: call.id
-				});
+				};
+				messages.push(tool_message);
+				await persist(tool_message);
 			}
 		}
 		throw new Error(`Agent exceeded maxIterations (${maxIterations})`);
 	} catch (cause) {
 		const message = cause instanceof Error ? cause.message : String(cause);
-		await persist('error', { content: message }).catch(() => undefined);
+		await persist({ role: 'system', content: message }).catch(() => undefined);
 		await updateRecord(
 			ctx,
 			'automation_run',

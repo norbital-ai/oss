@@ -416,26 +416,19 @@ export const SCHEMA_POST_DDL_SQL = dedent`
     END
     $invitation_guard$;
 
-    -- Agent transcripts are append-only. The unique sequence makes restart/resume deterministic;
-    -- the trigger closes direct-SQL paths as well as the collection-operation surface.
-    DO $agent_transcript$
+    -- One sequence per conversation. This is what makes restart and resume deterministic: a replayed
+    -- run must not be able to write a second message at a position that already exists.
+    --
+    -- Deliberately no insert-only trigger, unlike the agent_run_step table this replaces. An
+    -- interactive session edits and truncates queued messages, so the transcript is genuinely mutable.
+    DO $chat_transcript$
     BEGIN
-      IF to_regclass('public.agent_run_step') IS NOT NULL THEN
-        CREATE UNIQUE INDEX IF NOT EXISTS agent_run_step_run_sequence_unique
-          ON agent_run_step (automation_run_id, sequence);
-        CREATE OR REPLACE FUNCTION _norbital_agent_step_insert_only() RETURNS trigger
-        LANGUAGE plpgsql AS $agent_step$
-        BEGIN
-          RAISE EXCEPTION 'agent_run_step is insert-only';
-        END;
-        $agent_step$;
-        DROP TRIGGER IF EXISTS _norbital_agent_step_insert_only ON agent_run_step;
-        CREATE TRIGGER _norbital_agent_step_insert_only
-          BEFORE UPDATE OR DELETE ON agent_run_step
-          FOR EACH ROW EXECUTE FUNCTION _norbital_agent_step_insert_only();
+      IF to_regclass('public.chat_message') IS NOT NULL THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_message_chat_seq_unique
+          ON chat_message (chat_id, seq);
       END IF;
     END
-    $agent_transcript$;
+    $chat_transcript$;
 
     -- audit_event is the append-only action log. Temporal history stores row states; audit_event
     -- stores who did what and must never be rewritten or repurposed as a rollback source.
@@ -507,7 +500,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
 	            'audit_event', '_approval_lock', '_norbital_internal_schema',
 	            '_norbital_sync_epoch', '_norbital_automation_cursor',
 	            '__drizzle_migrations', 'sync_outbox', 'approval_request', 'requestor',
-	            'automation_run', 'agent_run_step', 'user', 'team', 'policy', 'integration_outbox',
+	            'automation_run', 'chat_session', 'chat_turn', 'chat_message', 'user', 'team', 'policy', 'integration_outbox',
 	            'notification_outbox', 'notification', 'document_asset', 'team_members',
 	            'invitation', 'host_event_outbox'
           )
@@ -546,7 +539,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
           AND c.relkind = 'r'
           AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-            'audit_event', 'agent_run_step', 'sync_outbox', '_approval_lock',
+            'audit_event', 'chat_session', 'chat_turn', 'chat_message', 'sync_outbox', '_approval_lock',
             '_norbital_internal_schema', '_norbital_sync_epoch',
             '_norbital_automation_cursor', '__drizzle_migrations', 'host_event_outbox'
           )

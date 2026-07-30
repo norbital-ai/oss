@@ -189,31 +189,6 @@ const _automation_run = systemTable(
 	{ description: 'Automation runs', record_label: 'automation_name', system: true }
 );
 
-const _agent_run_step = systemTable(
-	'agent_run_step',
-	{
-		owner_user_id: uuid()
-			.references(() => _user.norbital_id)
-			.notNull(),
-		automation_run_id: uuid()
-			.references(() => _automation_run.norbital_id)
-			.notNull(),
-		sequence: integer().notNull(),
-		kind: text().notNull(),
-		role: text(),
-		content: text(),
-		tool_call_id: text(),
-		tool_name: text(),
-		tool_input: jsonbColumn(JsonObjectSchema),
-		tool_output: jsonbColumn(JsonObjectSchema),
-		usage: jsonbColumn(JsonObjectSchema)
-	},
-	{
-		description: 'Insert-only workspace agent transcript steps',
-		record_label: 'kind',
-		system: true
-	}
-);
 
 const _requestor = systemTable(
 	'requestor',
@@ -383,6 +358,13 @@ const _chat_session = systemTable(
 		user_id: uuid()
 			.references(() => _user.norbital_id)
 			.notNull(),
+		/**
+		 * Set when this session is an automation's agent run rather than an interactive conversation.
+		 *
+		 * One transcript model serves both: an automation agent and a person talking to the agent produce
+		 * the same messages, so they should not be two tables that drift.
+		 */
+		automation_run_id: uuid().references(() => _automation_run.norbital_id),
 		title: text().notNull(),
 		platform: text(),
 		/** `personal`, `channel_dm`, or `channel_group`. */
@@ -441,6 +423,8 @@ const _chat_message = systemTable(
 		seq: integer().notNull(),
 		parts: jsonbColumn(JsonArraySchema),
 		model: text(),
+		/** Provider token accounting for the message that produced it, when the provider reported any. */
+		usage: jsonbColumn(JsonObjectSchema),
 		plan_mode: boolean().default(false).notNull(),
 		/** `normal` or `summary`. */
 		kind: text().notNull().default('normal'),
@@ -516,7 +500,6 @@ export const chat_message = _chat_message;
 export const invitation = _invitation;
 export const host_event_outbox = _host_event_outbox;
 export const automation_run = _automation_run;
-export const agent_run_step = _agent_run_step;
 export const user = _user;
 export const team = _team;
 export const policy = _policy;
@@ -533,7 +516,6 @@ export const platformTables = {
 	invitation,
 	host_event_outbox,
 	automation_run,
-	agent_run_step,
 	user,
 	team,
 	policy,
@@ -551,7 +533,6 @@ export const systemTables = {
 	invitation: { table: invitation },
 	host_event_outbox: { table: host_event_outbox },
 	automation_run: { table: automation_run },
-	agent_run_step: { table: agent_run_step },
 	user: { table: user },
 	team: { table: team },
 	policy: { table: policy },

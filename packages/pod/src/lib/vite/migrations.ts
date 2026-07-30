@@ -12,7 +12,14 @@ const platformSystemWorkspaceSchema = fileURLToPath(
 	import.meta.resolve('@norbital-ai/platform-utils/system/workspace-schema')
 );
 
-const NON_TEMPORAL_RECORD_TABLES = new Set(['audit_event', 'agent_run_step']);
+// Transcripts are high-volume and already ordered by their own sequence; a history table per message
+// would roughly double the write cost of every agent run for a revision trail nothing reads.
+const NON_TEMPORAL_RECORD_TABLES = new Set([
+	'audit_event',
+	'chat_session',
+	'chat_turn',
+	'chat_message'
+]);
 const STATEMENT_BREAKPOINT = '--> statement-breakpoint';
 
 function quoteIdentifier(identifier: string): string {

@@ -90,21 +90,9 @@ interface PlatformSystemRows {
 		readonly user_id: string;
 	};
 	readonly automation_run: PlatformAutomationRunRow;
-	readonly agent_run_step: SystemRecordFields & {
-		readonly owner_user_id: string;
-		readonly automation_run_id: string;
-		readonly sequence: number;
-		readonly kind: string;
-		readonly role: string | null;
-		readonly content: string | null;
-		readonly tool_call_id: string | null;
-		readonly tool_name: string | null;
-		readonly tool_input: JsonObject | null;
-		readonly tool_output: JsonObject | null;
-		readonly usage: JsonObject | null;
-	};
 	readonly chat_session: SystemRecordFields & {
 		readonly user_id: string;
+		readonly automation_run_id: string | null;
 		readonly title: string;
 		readonly platform: string | null;
 		readonly visibility: string;
@@ -132,6 +120,7 @@ interface PlatformSystemRows {
 		readonly seq: number;
 		readonly parts: readonly unknown[] | null;
 		readonly model: string | null;
+		readonly usage: JsonObject | null;
 		readonly plan_mode: boolean;
 		readonly kind: string;
 		readonly status: string;
@@ -230,7 +219,6 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'invitation',
 	'host_event_outbox',
 	'automation_run',
-	'agent_run_step',
 	'chat_session',
 	'chat_turn',
 	'chat_message',
@@ -304,6 +292,7 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 		fields: [
 			...SYSTEM_FIELDS,
 			{ name: 'user_id', kind: 'uuid', nullable: false },
+			{ name: 'automation_run_id', kind: 'uuid', nullable: true },
 			{ name: 'title', kind: 'text', nullable: false },
 			{ name: 'platform', kind: 'text', nullable: true },
 			{ name: 'visibility', kind: 'text', nullable: false },
@@ -339,6 +328,7 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'seq', kind: 'integer', nullable: false },
 			{ name: 'parts', kind: 'json', nullable: true },
 			{ name: 'model', kind: 'text', nullable: true },
+			{ name: 'usage', kind: 'json', nullable: true },
 			{ name: 'plan_mode', kind: 'boolean', nullable: false },
 			{ name: 'kind', kind: 'text', nullable: false },
 			{ name: 'status', kind: 'text', nullable: false },
@@ -350,23 +340,6 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'source_conversation_id', kind: 'text', nullable: true },
 			{ name: 'source_message_id', kind: 'text', nullable: true },
 			{ name: 'source_deleted_at', kind: 'timestamptz', nullable: true }
-		]
-	},
-	agent_run_step: {
-		name: 'agent_run_step',
-		fields: [
-			...SYSTEM_FIELDS,
-			{ name: 'owner_user_id', kind: 'uuid', nullable: false },
-			{ name: 'automation_run_id', kind: 'uuid', nullable: false },
-			{ name: 'sequence', kind: 'integer', nullable: false },
-			{ name: 'kind', kind: 'text', nullable: false },
-			{ name: 'role', kind: 'text', nullable: true },
-			{ name: 'content', kind: 'text', nullable: true },
-			{ name: 'tool_call_id', kind: 'text', nullable: true },
-			{ name: 'tool_name', kind: 'text', nullable: true },
-			{ name: 'tool_input', kind: 'json', nullable: true },
-			{ name: 'tool_output', kind: 'json', nullable: true },
-			{ name: 'usage', kind: 'json', nullable: true }
 		]
 	},
 	invitation: {

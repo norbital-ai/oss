@@ -105,9 +105,16 @@ async function workflowMetadataReadFallback(
 	if (collectionName === 'notification') {
 		return { reducedCondition: { recipient_user_id: requestorId } };
 	}
-	if (collectionName === 'document_asset' || collectionName === 'agent_run_step') {
+	if (collectionName === 'document_asset') {
 		return { reducedCondition: { owner_user_id: requestorId } };
 	}
+	if (collectionName === 'chat_session') {
+		return { reducedCondition: { user_id: requestorId } };
+	}
+	// `chat_turn` and `chat_message` are deliberately absent: scoping them to the requestor needs a join
+	// through `chat_session`, which a reduced condition cannot express, so they fall through to the
+	// non-admin deny below rather than being given a weaker rule that looks like a scope.
+
 	if (collectionName === 'automation_run') {
 		return { reducedCondition: { requested_by_user_id: requestorId } };
 	}
