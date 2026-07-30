@@ -137,7 +137,17 @@ async function workflowMetadataReadFallback(
  * grant check is not enough — an admin session would otherwise replicate both tables into a browser.
  * Pod reaches them through elevated server paths that never consult this guard.
  */
-const CLIENT_OPAQUE_COLLECTIONS: ReadonlySet<string> = new Set(['invitation', 'host_event_outbox']);
+/**
+ * Collections no client may reach, whatever its role.
+ *
+ * Exported because reachability is not only a permission question: the replica DDL and the sync
+ * stream are separate paths to the same rows, and a set duplicated across three files drifts. Anything
+ * added here must be denied by all of them.
+ */
+export const CLIENT_OPAQUE_COLLECTIONS: ReadonlySet<string> = new Set([
+	'invitation',
+	'host_event_outbox'
+]);
 
 function assertClientReachable(collectionName: string): void {
 	if (CLIENT_OPAQUE_COLLECTIONS.has(collectionName)) {

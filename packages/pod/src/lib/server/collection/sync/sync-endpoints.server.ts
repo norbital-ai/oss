@@ -2,6 +2,7 @@ import type { PodRequestEvent } from '$lib/runtime/request-context.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
+import { CLIENT_OPAQUE_COLLECTIONS } from '$lib/server/collection/access_control/permission/collection_permission.guard.server.js';
 import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js';
 import { abortableDelay } from '$lib/shared/abortable-delay.js';
 import { waitForSyncNotification } from './db-notifications.server.js';
@@ -60,6 +61,14 @@ export function handleSyncRequest(
 // reconcileSchema) without a SQL parser.
 // ---------------------------------------------------------------------------
 
+/**
+ * Tables the client replica never mirrors.
+ *
+ * The operational tables are excluded because a browser has no use for them. The client-opaque ones
+ * are excluded because their *shape* is disclosure on its own: the DDL every authenticated client
+ * receives named `token_hash` and `subject_hmac` and created local tables for them, even though every
+ * row read 403s. Taken from the guard's own set so the two cannot drift.
+ */
 const REPLICA_EXCLUDED_TABLES = [
 	'sync_outbox',
 	'_norbital_sync_epoch',
@@ -68,7 +77,8 @@ const REPLICA_EXCLUDED_TABLES = [
 	'_norbital_internal_schema',
 	'integration_outbox',
 	'notification_outbox',
-	'__drizzle_migrations'
+	'__drizzle_migrations',
+	...CLIENT_OPAQUE_COLLECTIONS
 ];
 
 /**
@@ -382,11 +392,14 @@ async function mapWithConcurrency<TIn, TOut>(
 async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Promise<Response> {
 	const url = new URL(event.request.url);
 	const startCursor = await resolveStreamCursor(ctx, url);
+	// The subscription list is client-supplied, so it is filtered rather than trusted. Subscribing to a
+	// client-opaque collection used to yield one `leave` diff per row — values withheld, but carrying
+	// the row id and commit timing, which is a live "an invitation was just minted" oracle.
 	const subscribedCollections = new Set(
 		(url.searchParams.get('collections') ?? '')
 			.split(',')
 			.map((collection) => collection.trim())
-			.filter(Boolean)
+			.filter((collection) => collection.length > 0 && !CLIENT_OPAQUE_COLLECTIONS.has(collection))
 	);
 	const encoder = new TextEncoder();
 
