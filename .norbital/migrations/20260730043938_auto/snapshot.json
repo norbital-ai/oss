@@ -1,11 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-<<<<<<<< HEAD:template_workspaces/crm/.norbital/migrations/20260731071946_auto/snapshot.json
-  "id": "7f4f0922-c41e-4ba1-b4c6-c37fcc38a3a6",
-========
-  "id": "5c077b37-718a-4d71-af23-9259bcf33ad5",
->>>>>>>> 0c3e458 (feat(pod): implement self-contained tenant runtime architecture):template_workspaces/crm/.norbital/migrations/20260730040040_auto/snapshot.json
+  "id": "14438289-0fb6-4156-97b4-58245470b4f7",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
@@ -182,11 +178,11 @@
       "table": "accounts"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -351,11 +347,11 @@
       "table": "activities"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -533,11 +529,11 @@
       "table": "contacts"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -702,11 +698,11 @@
       "table": "customer_prices"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -871,11 +867,11 @@
       "table": "payment_records"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1027,11 +1023,11 @@
       "table": "products"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1248,11 +1244,11 @@
       "table": "projects"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1417,11 +1413,11 @@
       "table": "quote_lines"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1625,11 +1621,11 @@
       "table": "quotes"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -1937,11 +1933,11 @@
       "table": "agent_run_step"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2158,11 +2154,11 @@
       "table": "approval_request"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2340,11 +2336,11 @@
       "table": "audit_event"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2483,11 +2479,11 @@
       "table": "automation_run"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2665,11 +2661,11 @@
       "table": "document_asset"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -2808,11 +2804,11 @@
       "table": "integration_outbox"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3042,11 +3038,11 @@
       "table": "notification"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3224,11 +3220,11 @@
       "table": "notification_outbox"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3458,11 +3454,11 @@
       "table": "policy"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3614,11 +3610,11 @@
       "table": "requestor"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3718,11 +3714,11 @@
       "table": "team"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3874,11 +3870,11 @@
       "table": "team_members"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
@@ -3978,11 +3974,11 @@
       "table": "user"
     },
     {
-      "type": "text",
+      "type": "tstzrange",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
       "generated": null,
       "identity": null,
       "name": "norbital_sys_period",
