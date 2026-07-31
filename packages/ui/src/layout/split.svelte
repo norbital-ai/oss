@@ -93,6 +93,14 @@
 	}
 	.split__pane {
 		min-width: 0;
+		/*
+			A grid item defaults to `min-height: auto`, so a pane refuses to shrink
+			below its content and grows straight past a bounded `.split`. Anything
+			the ancestor then clips is unreachable — no scrollbar appears, because
+			the pane never overflowed anything itself. The horizontal counterpart
+			above has always been here; this is the same fix for the other axis.
+		*/
+		min-height: 0;
 	}
 	.split__switch {
 		display: none;
