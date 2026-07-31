@@ -54,7 +54,7 @@
 			>
 				<option value="">All reps</option>
 				{#each usersQuery.current ?? [] as user (user.norbital_id)}
-					<option value={user.norbital_id}>{user.name ?? user.norbital_id}</option>
+					<option value={user.norbital_id}>{user.name || 'Unnamed rep'}</option>
 				{/each}
 			</select>
 			{#if selectedOwnerId}
