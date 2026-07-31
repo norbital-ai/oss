@@ -121,20 +121,21 @@
 				Current status is derived from effective employments, not a duplicated employee flag.
 			</p>
 		</div>
+		<!-- stupidity:allow UI10 -- 1px hairline gutters via bg-border are not on the gap scale -->
 		<Columns count={2} gap="none" class="gap-px rounded-lg border bg-border">
-			<div class="bg-card p-4">
+			<Stack gap="none" class="bg-card p-4">
 				<p class="text-xs font-medium text-muted-foreground">Current</p>
-				<p class="mt-2 text-2xl font-semibold tabular-nums">{currentEmployees}</p>
-			</div>
-			<div class="bg-card p-4">
+				<p class="text-2xl font-semibold tabular-nums">{currentEmployees}</p>
+			</Stack>
+			<Stack gap="none" class="bg-card p-4">
 				<p class="text-xs font-medium text-muted-foreground">12-month average turnover</p>
-				<p class="mt-2 text-2xl font-semibold tabular-nums">
+				<p class="text-2xl font-semibold tabular-nums">
 					{averageTurnover.toLocaleString(undefined, {
 						style: 'percent',
 						maximumFractionDigits: 1
 					})}
 				</p>
-			</div>
+			</Stack>
 		</Columns>
 	</Stack>
 {/snippet}

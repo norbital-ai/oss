@@ -2,7 +2,7 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
-	import { Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import {
 		eligibilityRulesSchema,
 		type EligibilityRule,
@@ -120,16 +120,16 @@
 		{/if}
 
 		{#each rules as rule, index (index)}
-			<div class="grid gap-2 rounded-md border border-border bg-background p-2">
-				<div class="flex items-center justify-between gap-2">
+			<Grid gap="xs" class="rounded-md border border-border bg-background p-2" minimum="compact">
+				<Inline justify="between" gap="xs">
 					<span class="text-sm font-medium">{rule.field.replaceAll('_', ' ').toLowerCase()}</span>
 					<Button variant="ghost" size="sm" {disabled} onclick={() => removeAt(index)}>
 						Remove
 					</Button>
-				</div>
+				</Inline>
 
 				{#if rule.field === 'EMPLOYMENT_TYPE'}
-					<div class="flex flex-wrap gap-3">
+					<Cluster gap="sm">
 						{#each EMPLOYMENT_TYPES as option (option)}
 							<label class="flex items-center gap-1.5 text-sm">
 								<input
@@ -145,9 +145,9 @@
 								{option}
 							</label>
 						{/each}
-					</div>
+					</Cluster>
 				{:else if rule.field === 'WORK_CLASSIFICATION'}
-					<div class="flex flex-wrap gap-3">
+					<Cluster gap="sm">
 						{#each CLASSIFICATIONS as option (option)}
 							<label class="flex items-center gap-1.5 text-sm">
 								<input
@@ -163,9 +163,9 @@
 								{option}
 							</label>
 						{/each}
-					</div>
+					</Cluster>
 				{:else if rule.field === 'GENDER'}
-					<div class="flex flex-wrap gap-3">
+					<Cluster gap="sm">
 						{#each GENDERS as option (option)}
 							<label class="flex items-center gap-1.5 text-sm">
 								<input
@@ -181,9 +181,9 @@
 								{option}
 							</label>
 						{/each}
-					</div>
+					</Cluster>
 				{:else if rule.field === 'SERVICE_MONTHS'}
-					<div class="grid gap-2 sm:grid-cols-2">
+					<Grid gap="xs" minimum="compact">
 						<label class="grid gap-1.5 text-sm font-medium">
 							From (months)
 							<Input
@@ -214,7 +214,7 @@
 									})}
 							/>
 						</label>
-					</div>
+					</Grid>
 				{:else if rule.field === 'DEPARTMENT'}
 					<label class="grid gap-1.5 text-sm font-medium">
 						Departments (comma separated)
@@ -244,7 +244,7 @@
 						/>
 					</label>
 				{/if}
-			</div>
+			</Grid>
 		{/each}
 
 		<Combobox

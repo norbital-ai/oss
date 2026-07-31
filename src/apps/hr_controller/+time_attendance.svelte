@@ -4,7 +4,7 @@
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Cover, Grid } from '@norbital-ai/ui/layout';
+	import { Cover, Grid, Stack } from '@norbital-ai/ui/layout';
 	import { startOfIsoWeekDate } from '../../lib/ui/calendar.js';
 
 	const recentEntriesQuery = client.db.time_entries.findMany({
@@ -72,7 +72,7 @@
 
 {#snippet overview()}
 	<Grid gap="xl" minimum="panel">
-		<div class="space-y-4">
+		<Stack gap="md">
 			<div>
 				<h2 class="text-lg font-semibold">Attendance readiness</h2>
 				<p class="text-sm text-muted-foreground">
@@ -81,10 +81,11 @@
 					reach payroll; the platform approval stamp governs edits to the whole attendance row.
 				</p>
 			</div>
-		</div>
-		<div class="rounded-lg border bg-card p-4 shadow-card">
-			<Display spec={attendanceChart} class="min-h-[18rem]" />
-		</div>
+		</Stack>
+		<Display
+			spec={attendanceChart}
+			class="min-h-[18rem] rounded-lg border bg-card p-4 shadow-card"
+		/>
 	</Grid>
 {/snippet}
 

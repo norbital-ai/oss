@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '@norbital-ai/ui/button';
 	import { Input } from '@norbital-ai/ui/input';
+	import { Cluster, Inline, Stack } from '@norbital-ai/ui/layout';
 	import * as Table from '@norbital-ai/ui/table';
 	import { repaymentScheduleSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
@@ -39,9 +40,8 @@
 {#if props.mode === 'display'}
 	<span class="block truncate" title={summary}>{summary}</span>
 {:else}
-	<div class="space-y-3 rounded-md border border-border bg-muted/20 p-3">
-		<div class="rounded-md border border-border bg-background">
-			<Table.Root>
+	<Stack gap="sm" class="rounded-md border border-border bg-muted/20 p-3">
+		<Table.Root class="rounded-md border border-border bg-background">
 				<Table.Header>
 					<Table.Row>
 						<Table.Head class="w-12">#</Table.Head>
@@ -92,8 +92,7 @@
 					{/each}
 				</Table.Body>
 			</Table.Root>
-		</div>
-		<div class="flex flex-wrap items-center justify-between gap-2">
+		<Cluster justify="between" gap="sm">
 			<Button
 				type="button"
 				size="sm"
@@ -106,11 +105,11 @@
 			<span class="text-sm font-medium tabular-nums">
 				{schedule.length} instalment{schedule.length === 1 ? '' : 's'} · {total.toFixed(2)}
 			</span>
-		</div>
+		</Cluster>
 		{#if !parsed.success}
 			<p class="text-sm text-destructive" role="alert">
 				Every repayment needs a valid date and a positive amount.
 			</p>
 		{/if}
-	</div>
+	</Stack>
 {/if}

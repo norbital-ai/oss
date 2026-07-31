@@ -53,13 +53,13 @@
 			</Grid>
 
 			{#if !record}
-				<div class="space-y-3 rounded-md border border-border bg-muted/20 p-3">
-					<div>
+				<Stack gap="sm" class="rounded-md border border-border bg-muted/20 p-3">
+					<Stack gap="none">
 						<p class="text-sm font-medium">Provision equal instalments</p>
-						<p class="mt-1 text-xs text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							The remainder, if any, is placed on the final instalment so the total is exact.
 						</p>
-					</div>
+					</Stack>
 					<Grid gap="md" minimum="compact">
 						<label class="grid gap-1.5 text-sm font-medium">
 							First repayment date
@@ -93,7 +93,7 @@
 					{#if provisioningError}
 						<p class="text-sm text-destructive" role="alert">{provisioningError}</p>
 					{/if}
-				</div>
+				</Stack>
 			{/if}
 
 			<Grid gap="md" minimum="compact">

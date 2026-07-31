@@ -141,16 +141,16 @@
 	);
 </script>
 
-<Scroll name="Payslip detail" class="h-full">
+<Scroll name="Payslip detail">
 	<Stack gap="lg">
-		<section aria-labelledby="payslip-summary-heading">
+		<Stack as="section" gap="sm" aria-labelledby="payslip-summary-heading">
 			<h2 id="payslip-summary-heading" class="text-xl font-semibold">
 				{employeeName ?? 'Employee'}
 			</h2>
-			<p class="mt-1 text-sm text-muted-foreground">
+			<p class="text-sm text-muted-foreground">
 				{employment?.employee_number ?? 'Employment'} · {record.currency}
 			</p>
-			<Grid as="dl" class="mt-4" gap="sm" minimum="compact">
+			<Grid as="dl" gap="sm" minimum="compact">
 				<div>
 					<dt class="text-xs text-muted-foreground">Gross</dt>
 					<dd class="mt-1 font-semibold tabular-nums">{formatNumeric(record.gross)}</dd>
@@ -170,14 +170,19 @@
 					<dd class="mt-1 font-semibold tabular-nums">{formatNumeric(record.employer_cost)}</dd>
 				</div>
 			</Grid>
-		</section>
+		</Stack>
 
-		<section aria-labelledby="payslip-evidence-heading" class="border-t border-border pt-4">
+		<Stack
+			as="section"
+			gap="sm"
+			class="border-t border-border pt-4"
+			aria-labelledby="payslip-evidence-heading"
+		>
 			<h3 id="payslip-evidence-heading" class="text-sm font-semibold">Consumed records</h3>
-			<p class="mt-0.5 text-xs text-muted-foreground">
+			<p class="text-xs text-muted-foreground">
 				The source records this payslip's lines read, written by the run that produced them.
 			</p>
-			<Grid as="dl" class="mt-3" gap="sm" minimum="compact">
+			<Grid as="dl" gap="sm" minimum="compact">
 				<div>
 					<dt class="text-xs text-muted-foreground">Pay components</dt>
 					<dd class="mt-1 text-sm">
@@ -197,10 +202,15 @@
 					</dd>
 				</div>
 			</Grid>
-		</section>
+		</Stack>
 
-		<section aria-labelledby="payslip-lines-heading" class="border-t border-border pt-4">
-			<h3 id="payslip-lines-heading" class="mb-3 text-sm font-semibold">Line items</h3>
+		<Stack
+			as="section"
+			gap="sm"
+			class="border-t border-border pt-4"
+			aria-labelledby="payslip-lines-heading"
+		>
+			<h3 id="payslip-lines-heading" class="text-sm font-semibold">Line items</h3>
 			<Bound size="standard">
 				<CollectionTable
 					{client}
@@ -234,6 +244,6 @@
 					{/snippet}
 				</CollectionTable>
 			</Bound>
-		</section>
+		</Stack>
 	</Stack>
 </Scroll>

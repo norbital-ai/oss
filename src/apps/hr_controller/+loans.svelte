@@ -2,7 +2,7 @@
 	import { client } from '$pod/client';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Cover } from '@norbital-ai/ui/layout';
+	import { Bound, Cover, Inline } from '@norbital-ai/ui/layout';
 	import { entryOriginSchema } from '../../custom-types/entry_origin/+definition.js';
 	import { formatNumeric, formatRepaymentSchedule } from '../../lib/ui/display-formatters.js';
 
@@ -109,53 +109,55 @@
 {/snippet}
 
 <Cover top={pageHeading}>
-	<CollectionTable
-		{client}
-		collection="repayment_agreements"
-		title="Repayment agreements"
-		description="Outstanding falls only when a scheduled entry is linked through a paid payslip."
-		query={{ orderBy: { disbursed_on: 'desc' } }}
-		searchPlaceholder="Search agreements…"
-	>
-		{#snippet columns({ Column })}
-			<Column name="reference" card="title" />
-			<Column
-				name="employment_id"
-				label="Employment"
-				card="subtitle"
-				render={({ value }) => employmentLabelsById.get(String(value)) ?? value}
-			/>
-			<Column
-				name="pay_component_id"
-				label="Deducted as"
-				render={({ value }) => payComponentLabelsById.get(String(value)) ?? value}
-			/>
-			<Column
-				name="principal"
-				label="Principal · outstanding"
-				render={({ row, value }) =>
-					`${formatNumeric(value)} · ${outstandingLabel(row.norbital_id, row.principal)}`}
-			/>
-			<Column
-				name="schedule"
-				label="Schedule"
-				render={({ value }) => formatRepaymentSchedule(value)}
-			/>
-			<Column name="disbursed_on" label="Disbursed" />
-			<Column name="repay_by" label="Repay by" />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-		{#snippet ListCard(agreement)}
-			<div class="flex items-start justify-between gap-3">
-				<p class="truncate font-medium">{agreement.reference}</p>
-				<span class="shrink-0 text-xs text-muted-foreground">{agreement.disbursed_on}</span>
-			</div>
-			<p class="mt-1 truncate text-sm text-muted-foreground">
-				{formatRepaymentSchedule(agreement.schedule)}
-			</p>
-			<p class="mt-1 text-sm">
-				{outstandingLabel(agreement.norbital_id, agreement.principal)} outstanding
-			</p>
-		{/snippet}
-	</CollectionTable>
+	<Bound size="full" inset>
+		<CollectionTable
+			{client}
+			collection="repayment_agreements"
+			title="Repayment agreements"
+			description="Outstanding falls only when a scheduled entry is linked through a paid payslip."
+			query={{ orderBy: { disbursed_on: 'desc' } }}
+			searchPlaceholder="Search agreements…"
+		>
+			{#snippet columns({ Column })}
+				<Column name="reference" card="title" />
+				<Column
+					name="employment_id"
+					label="Employment"
+					card="subtitle"
+					render={({ value }) => employmentLabelsById.get(String(value)) ?? value}
+				/>
+				<Column
+					name="pay_component_id"
+					label="Deducted as"
+					render={({ value }) => payComponentLabelsById.get(String(value)) ?? value}
+				/>
+				<Column
+					name="principal"
+					label="Principal · outstanding"
+					render={({ row, value }) =>
+						`${formatNumeric(value)} · ${outstandingLabel(row.norbital_id, row.principal)}`}
+				/>
+				<Column
+					name="schedule"
+					label="Schedule"
+					render={({ value }) => formatRepaymentSchedule(value)}
+				/>
+				<Column name="disbursed_on" label="Disbursed" />
+				<Column name="repay_by" label="Repay by" />
+				<Column name="effective_range" label="Effective" />
+			{/snippet}
+			{#snippet ListCard(agreement)}
+				<Inline align="start" justify="between" gap="sm">
+					<p class="truncate font-medium">{agreement.reference}</p>
+					<span class="shrink-0 text-xs text-muted-foreground">{agreement.disbursed_on}</span>
+				</Inline>
+				<p class="mt-1 truncate text-sm text-muted-foreground">
+					{formatRepaymentSchedule(agreement.schedule)}
+				</p>
+				<p class="mt-1 text-sm">
+					{outstandingLabel(agreement.norbital_id, agreement.principal)} outstanding
+				</p>
+			{/snippet}
+		</CollectionTable>
+	</Bound>
 </Cover>

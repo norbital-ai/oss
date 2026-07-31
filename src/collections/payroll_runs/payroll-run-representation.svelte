@@ -11,7 +11,7 @@
 	import type { Row } from './$types.js';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Bound, Grid, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { toast } from 'svelte-sonner';
 	import { formatNumeric } from '../../lib/ui/display-formatters.js';
 
@@ -65,17 +65,17 @@
 	}
 </script>
 
-<Scroll name="Payroll run detail" class="h-full">
+<Scroll name="Payroll run detail">
 	<Stack gap="lg">
-		<section aria-label="Payroll run summary">
-			<div class="flex flex-wrap items-start justify-between gap-3">
-				<div class="min-w-0">
+		<Stack as="section" gap="sm" aria-label="Payroll run summary">
+			<Cluster align="start" justify="between" gap="sm">
+				<Stack gap="none" class="min-w-0">
 					<h2 class="truncate text-lg font-semibold">{company?.name ?? 'Company'}</h2>
-					<p class="mt-0.5 text-sm text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						Period {record.period} · {payslipCountQuery.current ?? 0} payslips
 					</p>
-				</div>
-				<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+				</Stack>
+				<Inline gap="xs" justify="end" class="shrink-0">
 					<span class="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
 						{record.lifecycle}
 					</span>
@@ -92,9 +92,9 @@
 							{pendingAction === 'pay' ? 'Marking paid…' : 'Mark paid'}
 						</Button>
 					{/if}
-				</div>
-			</div>
-			<Grid as="dl" class="mt-4" gap="sm" minimum="compact">
+				</Inline>
+			</Cluster>
+			<Grid as="dl" gap="sm" minimum="compact">
 				<div>
 					<dt class="text-xs text-muted-foreground">Attendance window</dt>
 					<dd class="mt-1 font-medium tabular-nums">
@@ -110,10 +110,10 @@
 					<dd class="mt-1 truncate font-mono text-xs">{record.configuration_hash}</dd>
 				</div>
 			</Grid>
-		</section>
+		</Stack>
 
-		<section aria-labelledby="run-payslips-heading">
-			<h3 id="run-payslips-heading" class="mb-3 text-sm font-semibold">Payslips</h3>
+		<Stack as="section" gap="sm" aria-labelledby="run-payslips-heading">
+			<h3 id="run-payslips-heading" class="text-sm font-semibold">Payslips</h3>
 			<Bound size="tall">
 				<CollectionTable
 					{client}
@@ -150,6 +150,6 @@
 					{/snippet}
 				</CollectionTable>
 			</Bound>
-		</section>
+		</Stack>
 	</Stack>
 </Scroll>
