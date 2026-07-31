@@ -1,7 +1,3 @@
-<script lang="ts" module>
-	export type QualityId = 'draft' | 'standard' | 'high';
-</script>
-
 <script lang="ts">
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
@@ -13,14 +9,16 @@
 	 *
 	 * The layer switches drive the viewer beside this panel directly — toggling
 	 * one changes mesh visibility in the live scene and never re-tessellates.
-	 * Changing quality does rebuild, so it is a deliberate, separate control.
+	 *
+	 * There is no quality control: the surface is always drawn at the finest cell
+	 * the vertex budget allows. A coarser option only ever existed to save frames
+	 * on a machine that did not need saving, and a half-resolution solid invites
+	 * exactly the wrong conclusion when it is being checked against a drawing.
 	 */
 	let {
 		layers,
 		visible,
 		onToggle,
-		quality,
-		onQuality,
 		stats,
 		metrics,
 		report
@@ -28,18 +26,10 @@
 		layers: readonly SiteLayer[];
 		visible: Readonly<Record<string, boolean>>;
 		onToggle: (id: string) => void;
-		quality: QualityId;
-		onQuality: (next: QualityId) => void;
 		stats: SiteViewerStats | null;
 		metrics: ReconstructionMetrics;
 		report: StitchReport | null;
 	} = $props();
-
-	const QUALITY: readonly { id: QualityId; label: string; note: string }[] = [
-		{ id: 'draft', label: 'Draft', note: '8 m' },
-		{ id: 'standard', label: 'Standard', note: '3 m' },
-		{ id: 'high', label: 'High', note: '1.5 m' }
-	];
 
 	const errors = $derived((report?.warnings ?? []).filter((entry) => entry.severity === 'error'));
 	const cautions = $derived(
@@ -58,7 +48,7 @@
 		<div class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Layers</h3>
 			<p class="text-xs text-muted-foreground">
-				Switch a layer off to look inside the solid. Nothing is recalculated.
+				Switch one off to look inside the solid. Nothing is recalculated.
 			</p>
 		</div>
 		{#if layers.length === 0}
@@ -89,37 +79,12 @@
 		{/if}
 	</Stack>
 
-	<Stack as="section" gap="sm">
-		<div class="border-b pb-2">
-			<h3 class="text-sm font-semibold">Render quality</h3>
-			<p class="text-xs text-muted-foreground">
-				Resolution of the drawn surface only. Volumes come from the server integration at
-				{number(metrics.integrationCellM, 1)} m and do not move with this.
-			</p>
-		</div>
-		<Inline gap="xs" role="group" aria-label="Render quality">
-			{#each QUALITY as option (option.id)}
-				<button
-					type="button"
-					class={cn(
-						'flex-1 rounded-md border px-3 py-2 text-sm',
-						quality === option.id ? 'border-brand bg-brand/10 font-medium' : 'hover:bg-muted/60'
-					)}
-					onclick={() => onQuality(option.id)}
-					aria-pressed={quality === option.id}
-				>
-					{option.label}
-					<span class="block text-xs text-muted-foreground">{option.note} cell</span>
-				</button>
-			{/each}
-		</Inline>
-		{#if stats}
-			<p class="text-xs text-muted-foreground tabular-nums">
-				{number(stats.triangleCount)} triangles · {number(stats.vertexCount)} vertices ·
-				{number(stats.renderCellM, 1)} m applied
-			</p>
-		{/if}
-	</Stack>
+	{#if stats}
+		<p class="text-xs text-muted-foreground tabular-nums">
+			{number(stats.triangleCount)} triangles at {number(stats.renderCellM, 1)} m · volumes integrated
+			server-side at {number(metrics.integrationCellM, 1)} m
+		</p>
+	{/if}
 
 	<Stack as="section" gap="sm">
 		<h3 class="border-b pb-2 text-sm font-semibold">Measured from the solid</h3>

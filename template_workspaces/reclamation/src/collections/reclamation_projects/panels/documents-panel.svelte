@@ -36,8 +36,7 @@
 		<div class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Reconstruction inputs</h3>
 			<p class="text-xs text-muted-foreground">
-				All three are required. Elevations come from the sections, plan extents from the floor plan,
-				and the existing bed from the survey. Edit the project record to attach or replace one.
+				All three required. Edit the project record to attach or replace one.
 			</p>
 		</div>
 		<div class="divide-y rounded-md border bg-card">
@@ -74,9 +73,8 @@
 		<div class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Further reconstruction documents</h3>
 			<p class="text-xs text-muted-foreground">
-				Extra section sheets and surveys that also feed the model. Another perimeter section is the
-				most useful thing you can add: it replaces a stretch of interpolation with measurement.
-				Saving one re-runs the stitch.
+				Extra sections and surveys that also feed the model. Another section replaces a stretch of
+				interpolation with measurement. Saving one re-runs the stitch.
 			</p>
 		</div>
 		<!-- Both tables read project_documents, so each names its own view: the -->
@@ -111,8 +109,7 @@
 		<div class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Tender and reference</h3>
 			<p class="text-xs text-muted-foreground">
-				Filed against the project and never parsed: tender returns, correspondence, permits, method
-				statements. Nothing here can change a quantity.
+				Filed, never parsed. Nothing here changes a quantity.
 			</p>
 		</div>
 		<CollectionTable

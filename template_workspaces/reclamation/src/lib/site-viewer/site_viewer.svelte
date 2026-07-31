@@ -17,6 +17,19 @@
 
 	let { model, label, visible, renderCellM, onLayers, onStats }: SiteViewerProps = $props();
 
+	/**
+	 * Vertical exaggeration.
+	 *
+	 * A reclamation site is three kilometres across and twenty metres tall. Drawn
+	 * true to scale it is a sheet of paper — the relief is a third of a percent of
+	 * the width, so a correct render looks flat and tells you nothing. Every
+	 * marine and civil viewer exaggerates the vertical for inspection; this does
+	 * the same, and says so, because an exaggerated section must never be read as
+	 * the drawn one.
+	 */
+	let exaggeration = $state(1);
+	const EXAGGERATIONS = [1, 3, 5, 10, 20] as const;
+
 	const runtime: Promise<
 		[
 			ThreeModule,
@@ -117,7 +130,10 @@
 
 		const group = new THREE.Group();
 		// Engineering frame (X alongshore, Y seaward, Z up) → the renderer's Y-up frame.
+		// After this rotation the group's local Z is world up, so scaling local Z is
+		// exactly the vertical exaggeration.
 		group.rotation.x = -Math.PI / 2;
+		group.scale.z = exaggeration;
 		scene.add(group);
 
 		stage = { THREE, renderer, scene, camera, controls, group, materials: [], frame: 0 };
@@ -195,9 +211,15 @@
 		const { bounds } = next;
 		const centreX = (bounds.minX + bounds.maxX) / 2;
 		const centreY = (bounds.minY + bounds.maxY) / 2;
-		const centreZ = (bounds.minZ + bounds.maxZ) / 2;
+		// Heights are drawn exaggerated, so the camera has to frame the exaggerated
+		// extent or the solid climbs out of view as the factor rises.
+		const centreZ = ((bounds.minZ + bounds.maxZ) / 2) * exaggeration;
 		const radius =
-			Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) / 2;
+			Math.max(
+				bounds.maxX - bounds.minX,
+				bounds.maxY - bounds.minY,
+				(bounds.maxZ - bounds.minZ) * exaggeration
+			) / 2;
 		const distance = Math.max(radius * 2.1, 100);
 		current.controls.target.set(centreX, centreZ, -centreY);
 		current.camera.position.set(
@@ -215,6 +237,13 @@
 
 	function resetView(): void {
 		if (stage && surfaces) frameCamera(stage, surfaces);
+	}
+
+	function setExaggeration(next: number): void {
+		exaggeration = next;
+		if (!stage) return;
+		stage.group.scale.z = next;
+		if (surfaces) frameCamera(stage, surfaces);
 	}
 
 	let resizeObserver: ResizeObserver | null = null;
@@ -288,15 +317,37 @@
 
 	{#if surfaces && status === 'ready'}
 		<div
-			class="absolute right-3 bottom-3 rounded-md border bg-background/85 px-2 py-1 text-tiny text-muted-foreground shadow-xs backdrop-blur"
+			class="absolute right-3 bottom-3 flex items-center gap-2 rounded-md border bg-background/85 px-2 py-1 text-tiny text-muted-foreground shadow-xs backdrop-blur"
 		>
-			<button type="button" class="font-medium hover:underline" onclick={resetView}>
-				Reset view
-			</button>
-			<span class="mx-1.5">·</span>
+			<span class="font-medium">Vertical</span>
+			<div class="flex divide-x rounded border" role="group" aria-label="Vertical exaggeration">
+				{#each EXAGGERATIONS as factor (factor)}
+					<button
+						type="button"
+						class={[
+							'px-1.5 py-0.5 tabular-nums',
+							exaggeration === factor ? 'bg-brand/15 font-medium text-foreground' : 'hover:bg-muted'
+						]}
+						aria-pressed={exaggeration === factor}
+						onclick={() => setExaggeration(factor)}
+					>
+						×{factor}
+					</button>
+				{/each}
+			</div>
+			<span aria-hidden="true">·</span>
+			<button type="button" class="font-medium hover:underline" onclick={resetView}>Reset</button>
+			<span aria-hidden="true">·</span>
 			<span class="tabular-nums">
-				{surfaces.triangleCount.toLocaleString()} tri · {surfaces.renderCellM.toFixed(1)} m cell
+				{surfaces.triangleCount.toLocaleString()} tri · {surfaces.renderCellM.toFixed(1)} m
 			</span>
 		</div>
+		{#if exaggeration !== 1}
+			<p
+				class="absolute top-3 left-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-tiny font-medium text-amber-700 shadow-xs backdrop-blur dark:text-amber-300"
+			>
+				Heights ×{exaggeration} — not to scale
+			</p>
+		{/if}
 	{/if}
 </Bound>

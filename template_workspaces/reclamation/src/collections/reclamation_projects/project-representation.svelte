@@ -16,13 +16,13 @@
 	import CostPanel from './panels/cost-panel.svelte';
 	import DocumentsPanel from './panels/documents-panel.svelte';
 	import ModelPanel from './panels/model-panel.svelte';
-	import type { QualityId } from './panels/model-panel.svelte';
+	import SectionPanel from './panels/section-panel.svelte';
 	import type { Row } from './$types.js';
 
 	/**
 	 * Project detail: what the project holds on the left, what it built on the right.
 	 *
-	 * The left pane owns every control — layers, render quality, cost levers — and
+	 * The left pane owns every control — layers, cost levers — and
 	 * the right pane holds one viewer that stays mounted across tab changes, so
 	 * moving between documents and cost never costs a re-tessellation.
 	 */
@@ -106,8 +106,14 @@
 
 	/* ------------------------------------------------------------- viewer state */
 
-	const QUALITY_CELL: Record<QualityId, number> = { draft: 8, standard: 3, high: 1.5 };
-	let quality = $state<QualityId>('standard');
+	/**
+	 * Always the finest surface the vertex budget allows.
+	 *
+	 * `resolveCell` coarsens whatever it is handed until the mesh fits
+	 * `settings.maxCells`, so asking for a metre asks for the best available and
+	 * never for something unbounded.
+	 */
+	const RENDER_CELL_M = 1;
 	let layers = $state<readonly SiteLayer[]>([]);
 	let stats = $state<SiteViewerStats | null>(null);
 	let visible = $state<Record<string, boolean>>({});
@@ -298,18 +304,19 @@
 {#snippet modelTab()}
 	<Scroll name="Model layers and checks" class="h-full pr-1">
 		{#if latestReady}
-			<ModelPanel
-				{layers}
-				{visible}
-				onToggle={toggleLayer}
-				{quality}
-				onQuality={(next) => (quality = next)}
-				{stats}
-				{metrics}
-				{report}
-			/>
+			<ModelPanel {layers} {visible} onToggle={toggleLayer} {stats} {metrics} {report} />
 		{:else}
 			<p class="p-3 text-sm text-muted-foreground">No successful reconstruction yet.</p>
+		{/if}
+	</Scroll>
+{/snippet}
+
+{#snippet sectionsTab()}
+	<Scroll name="Sections as read" class="h-full pr-1">
+		{#if model}
+			<SectionPanel {model} />
+		{:else}
+			<p class="p-3 text-sm text-muted-foreground">Build the model to plot its sections.</p>
 		{/if}
 	</Scroll>
 {/snippet}
@@ -358,6 +365,12 @@
 					content: documentsTab
 				},
 				{ name: 'model', label: 'Model', icon: 'lucide:box', content: modelTab },
+				{
+					name: 'sections',
+					label: 'Sections',
+					icon: 'lucide:chart-spline',
+					content: sectionsTab
+				},
 				{ name: 'cost', label: 'Cost', icon: 'lucide:calculator', content: costTab }
 			] satisfies TabConfig[]}
 		/>
@@ -370,7 +383,7 @@
 			<SiteDisplay
 				{model}
 				{visible}
-				renderCellM={QUALITY_CELL[quality]}
+				renderCellM={RENDER_CELL_M}
 				{onLayers}
 				onStats={(next) => (stats = next)}
 				label={`${record.project_name} reconstruction`}
