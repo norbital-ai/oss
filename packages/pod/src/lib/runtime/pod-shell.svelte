@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { switchOrganization } from './mount-client.js';
 	import Icon from '@iconify/svelte';
 	import { onDestroy } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -315,16 +316,7 @@
 		navigate(href);
 	}}
 	onPrefetch={prefetchHostPlugin}
-	onOrganizationChange={async (organizationId: string) => {
-		const response = await fetch('/api/auth/organization/set-active', {
-			method: 'POST',
-			credentials: 'include',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ organizationId })
-		});
-		if (!response.ok) throw new Error('Unable to switch workspace');
-		window.location.assign('/');
-	}}
+	onOrganizationChange={switchOrganization}
 	onSignOut={async () => {
 		const response = await fetch('/api/auth/sign-out', {
 			method: 'POST',

@@ -123,6 +123,9 @@ export async function warmAllCollections(sync: ClientSync): Promise<void> {
 
 export function disableClientSync(): void {
 	active = undefined;
+	// The schema describes the tenant we are leaving. Left in place, the next tenant's first reads
+	// would compile against another workspace's columns and relationships.
+	schema = new Map();
 }
 
 export type LocalPage = { rows: Record<string, unknown>[]; nextCursor: string | null };

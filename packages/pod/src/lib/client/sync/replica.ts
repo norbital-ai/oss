@@ -1,5 +1,10 @@
 import { PodSyncClient, type PgliteLike } from './pod-sync-client.js';
-import { enableClientSync, getClientSync, type ClientSync } from './client-sync.js';
+import {
+	disableClientSync,
+	enableClientSync,
+	getClientSync,
+	type ClientSync
+} from './client-sync.js';
 import type { SyncBootstrap, SyncFetch } from './types.js';
 import { withTimeout } from '@norbital-ai/std';
 
@@ -207,6 +212,22 @@ export function clientSyncReady(): Promise<ClientSync | null> {
 	if (existing) return Promise.resolve(existing);
 	if (!replicaHoldsRows) return Promise.resolve(null);
 	return bootstrapping ?? Promise.resolve(null);
+}
+
+/**
+ * Close this tenant's replica and forget everything remembered about it.
+ *
+ * The bootstrap promise and the warm bit are per-tenant: carried into another organization they
+ * would hand it the previous tenant's database handle and its "this device already has rows"
+ * answer. The PGlite connection is closed rather than dropped so the SharedWorker port does not
+ * leak for the life of the tab.
+ */
+export async function teardownClientSync(): Promise<void> {
+	const sync = getClientSync();
+	bootstrapping = null;
+	replicaHoldsRows = false;
+	disableClientSync();
+	await sync?.client.close().catch(() => undefined);
 }
 
 export function bootstrapClientSync(

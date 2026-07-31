@@ -571,6 +571,29 @@ function publishLocalSchema(
 	setLocalSchema(schema);
 }
 
+/**
+ * Forget every piece of workspace state this module holds, so the next organization starts clean.
+ *
+ * Enumerated deliberately, and kept next to the declarations it clears. Each of these is a module
+ * global that outlives a component tree, and every one of them is scoped to a single tenant: the
+ * six query caches hold that tenant's rows, and the collection client is built from its manifest.
+ * A switch that missed any one of them would show the previous organization's data to the next —
+ * which is why the switch reloaded the page for so long rather than trust a partial teardown.
+ */
+export function resetWorkspaceRuntime(): void {
+	for (const manager of [
+		findManyQueries,
+		findFirstQueries,
+		findHistoryQueries,
+		findGroupedQueries,
+		countQueries,
+		invokeQueries
+	]) {
+		manager.clear();
+	}
+	initializedWorkspaceClient = undefined;
+}
+
 export function initializeWorkspaceClient(
 	columns: WorkspaceCollectionColumns,
 	manifest: NorbitalManifest

@@ -22,6 +22,41 @@ const hasDocker = dockerAvailable();
 /** Mirrors PAGE_SIZE in subscription-registry: the most a single catch-up page can add. */
 const SHAPE_PAGE_SIZE = 5000;
 
+/**
+ * Publish the schema facts `runtime/client.ts` publishes from the manifest in the real app.
+ *
+ * Every test that absorbs a server answer needs these: without them the executor cannot tell a
+ * column from a relation payload, and `absorbServerRows` is a deliberate no-op. It used to be set
+ * by one test and relied on by others through module state — which held only until
+ * `disableClientSync` began clearing the schema on teardown (it must, or an organization switch
+ * would compile the next tenant's reads against the previous tenant's columns). Each test now
+ * publishes its own.
+ */
+async function publishSchemaFor(harness: PodRuntimeHarness, collection: string): Promise<void> {
+	const columns = await harness.pool.query<{ column_name: string; data_type: string }>(
+		`SELECT column_name, data_type FROM information_schema.columns
+		  WHERE table_schema='public' AND table_name=$1`,
+		[collection]
+	);
+	setLocalSchema(
+		new Map([
+			[
+				collection,
+				{
+					name: collection,
+					columns: columns.rows.map((c) => c.column_name),
+					fieldKinds: Object.fromEntries(columns.rows.map((c) => [c.column_name, c.data_type])),
+					searchFields: columns.rows
+						.filter((c) => c.data_type === 'text' || c.data_type.startsWith('character'))
+						.map((c) => c.column_name),
+					relationships: []
+				}
+			]
+		])
+	);
+}
+
+
 function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch {
 	return (path, init) =>
 		harness.request(
@@ -653,32 +688,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 				await pg.query(`ALTER TABLE "${collection}" ENABLE TRIGGER USER`);
 				await pg.query(`ANALYZE "${collection}"`);
 
-				// Publish the schema facts the way runtime/client.ts does in the real app. Without
-				// them the executor cannot tell a column from a relation payload, and absorption of
-				// server answers is a deliberate no-op.
-				const columns = await pg.query<{ column_name: string; data_type: string }>(
-					`SELECT column_name, data_type FROM information_schema.columns
-					  WHERE table_schema='public' AND table_name=$1`,
-					[collection]
-				);
-				setLocalSchema(
-					new Map([
-						[
-							collection,
-							{
-								name: collection,
-								columns: columns.rows.map((c) => c.column_name),
-								fieldKinds: Object.fromEntries(
-									columns.rows.map((c) => [c.column_name, c.data_type])
-								),
-								searchFields: columns.rows
-									.filter((c) => c.data_type === 'text' || c.data_type.startsWith('character'))
-									.map((c) => c.column_name),
-								relationships: []
-							}
-						]
-					])
-				);
+				await publishSchemaFor(harness, collection);
 				unavailable = null;
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -800,6 +810,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			await client.bootstrap();
 			disableClientSync();
 			const sync = enableClientSync(client, { residencyBytes: 16 * 1024 });
+			await publishSchemaFor(harness, collection);
 			try {
 				await sync.registry.register(collection);
 
