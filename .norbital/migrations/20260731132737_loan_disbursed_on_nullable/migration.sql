@@ -1,0 +1,1 @@
+ALTER TABLE "repayment_agreements" ALTER COLUMN "disbursed_on" DROP NOT NULL;
