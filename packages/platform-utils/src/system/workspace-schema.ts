@@ -297,6 +297,37 @@ const _integration_cursor = systemTable(
 	}
 );
 
+/**
+ * One inbound delivery, claimed before its import runs.
+ *
+ * A provider that redelivers is normal — a slow acknowledgement, a retry policy, an operator pressing
+ * "resend" — and without this row every redelivery imports the same page again. `receipt_key` carries
+ * the uniqueness, so the second arrival loses one insert instead of writing a second set of records.
+ * It is the same ledger `channel_inbound_message` is, for the same reason and in the same order:
+ * claimed first, settled after.
+ */
+const _integration_inbound_event = systemTable(
+	'integration_inbound_event',
+	{
+		integration_name: text().notNull(),
+		binding_name: text().notNull(),
+		binding_key: text().notNull(),
+		/** The provider's own event id, or a digest of the body when it sends none. */
+		event_id: text().notNull(),
+		receipt_key: text().notNull().unique(),
+		/** `received`, `imported`, or `failed`. */
+		status: text().notNull().default('received'),
+		imported: integer(),
+		error: text(),
+		completed_at: timestamp({ withTimezone: true })
+	},
+	{
+		description: 'Inbound integration deliveries already accepted',
+		record_label: 'receipt_key',
+		system: true
+	}
+);
+
 const _notification_outbox = systemTable(
 	'notification_outbox',
 	{
@@ -617,6 +648,7 @@ export const policy = _policy;
 export const audit_event = _audit_event;
 export const integration_outbox = _integration_outbox;
 export const integration_cursor = _integration_cursor;
+export const integration_inbound_event = _integration_inbound_event;
 export const notification_outbox = _notification_outbox;
 export const notification = _notification;
 export const document_asset = _document_asset;
@@ -634,6 +666,7 @@ export const platformTables = {
 	audit_event,
 	integration_outbox,
 	integration_cursor,
+	integration_inbound_event,
 	notification_outbox,
 	notification,
 	document_asset,
@@ -652,6 +685,7 @@ export const systemTables = {
 	audit_event: { table: audit_event },
 	integration_outbox: { table: integration_outbox },
 	integration_cursor: { table: integration_cursor },
+	integration_inbound_event: { table: integration_inbound_event },
 	notification_outbox: { table: notification_outbox },
 	notification: { table: notification },
 	document_asset: { table: document_asset },

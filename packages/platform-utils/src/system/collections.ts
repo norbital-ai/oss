@@ -230,6 +230,17 @@ interface PlatformSystemRows {
 		readonly last_pulled_at: string | null;
 		readonly last_error: string | null;
 	};
+	readonly integration_inbound_event: SystemRecordFields & {
+		readonly integration_name: string;
+		readonly binding_name: string;
+		readonly binding_key: string;
+		readonly event_id: string;
+		readonly receipt_key: string;
+		readonly status: string;
+		readonly imported: number | null;
+		readonly error: string | null;
+		readonly completed_at: string | null;
+	};
 	readonly document_asset: SystemRecordFields & {
 		readonly owner_user_id: string;
 		readonly file_name: string;
@@ -260,6 +271,7 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'audit_event',
 	'integration_outbox',
 	'integration_cursor',
+	'integration_inbound_event',
 	'notification_outbox',
 	'notification',
 	'document_asset',
@@ -415,6 +427,21 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'cursor', kind: 'text', nullable: true },
 			{ name: 'last_pulled_at', kind: 'timestamptz', nullable: true },
 			{ name: 'last_error', kind: 'text', nullable: true }
+		]
+	},
+	integration_inbound_event: {
+		name: 'integration_inbound_event',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'integration_name', kind: 'text', nullable: false },
+			{ name: 'binding_name', kind: 'text', nullable: false },
+			{ name: 'binding_key', kind: 'text', nullable: false },
+			{ name: 'event_id', kind: 'text', nullable: false },
+			{ name: 'receipt_key', kind: 'text', nullable: false },
+			{ name: 'status', kind: 'text', nullable: false },
+			{ name: 'imported', kind: 'integer', nullable: true },
+			{ name: 'error', kind: 'text', nullable: true },
+			{ name: 'completed_at', kind: 'timestamptz', nullable: true }
 		]
 	},
 	invitation: {

@@ -295,14 +295,23 @@ function integrationPullJob(
 					throw new Error(`${describe} pull was refused by ${url.origin} — ${response.status}`);
 				}
 				const importData: unknown = await response.json();
-				await options.dispatch({
+				const outcome = (await options.dispatch({
 					kind: 'integration',
 					direction: 'receive',
 					integrationName,
 					bindingName,
 					collectionName,
 					importData
-				});
+				})) as { readonly status?: string; readonly reason?: string };
+				// A body the binding's `input` schema turns down comes back as a result rather than a throw,
+				// because a webhook host needs to answer its sender. A pull has no sender to answer, so the
+				// refusal has to become the failure it is or the cursor would advance past a page that
+				// imported nothing.
+				if (outcome?.status === 'refused') {
+					throw new Error(
+						`${describe} pull returned a body the binding refused — ${outcome.reason ?? 'no reason given'}`
+					);
+				}
 				await options.dispatch({
 					kind: 'integration-cursor',
 					action: 'write',

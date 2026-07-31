@@ -119,7 +119,10 @@ export const runtimeRunRequestSchema = z.union([
 		integrationName: z.string().min(1),
 		bindingName: z.string().min(1),
 		collectionName: z.string().min(1),
-		importData: z.unknown()
+		importData: z.unknown(),
+		// Present when the delivery can be repeated by whoever sent it — a webhook. The ledger row is
+		// claimed on it before the import runs, so a redelivery is refused rather than re-imported.
+		eventId: z.string().min(1).max(512).optional()
 	}),
 	z.object({
 		kind: z.literal('integration'),
@@ -533,7 +536,8 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 					integrationName: request.integrationName,
 					bindingName: request.bindingName,
 					collectionName: request.collectionName,
-					importData: request.importData
+					importData: request.importData,
+					...(request.eventId ? { eventId: request.eventId } : {})
 				});
 			}
 			return runIntegrationSendPipeline({
