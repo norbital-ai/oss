@@ -31,7 +31,18 @@ export default defineConfig({
 			},
 			{
 				plugins: [svelte()],
-				resolve: { alias, conditions: ['browser'] },
+				resolve: {
+					alias: {
+						...alias,
+						// Iconify fetches its glyphs from api.iconify.design at render time. A suite that
+						// reaches the network fails when the network does, and no assertion here is about
+						// the drawing — see the stub for what it keeps.
+						'@iconify/svelte': fileURLToPath(
+							new URL('./tests/support/icon-stub.svelte', import.meta.url)
+						)
+					},
+					conditions: ['browser']
+				},
 				// Vitest transforms these files through Vite's SSR pipeline even in a DOM environment,
 				// so without this `svelte` resolves to its server build and `mount` is not a function
 				// that exists. `externalConditions` is the half that reaches packages under node_modules.
