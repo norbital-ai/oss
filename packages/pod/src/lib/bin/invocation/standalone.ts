@@ -900,13 +900,13 @@ export async function startStandalone(
 	}
 	const unsigned = webhookBindings.filter((webhook) => !webhook.signed);
 	if (config.webhooks && unsigned.length > 0) {
-		// A binding with no `signature` accepts whatever the listener hands over. That is legitimate when
-		// the host authenticates the wire some other way — mutual TLS, a private network — and a mistake
+		// A binding with no `authentication` accepts whatever the listener hands over. That is legitimate
+		// when the host proves the sender some other way — mutual TLS, a private network — and a mistake
 		// otherwise, and the two look identical from here.
 		console.warn(
 			`[pod] webhook bindings declare no signature and are accepted unverified: ${unsigned
 				.map((webhook) => `${webhook.integrationName}.${webhook.bindingName}`)
-				.join(', ')}. Declare \`signature\` unless this host proves the sender itself.`
+				.join(', ')}. Declare \`authentication\` unless this host proves the sender itself.`
 		);
 	}
 

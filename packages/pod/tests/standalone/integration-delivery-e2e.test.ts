@@ -1,4 +1,5 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer } from 'node:net';
@@ -151,6 +152,16 @@ async function waitFor<T>(
 const SENDING = 'certification_types';
 const PULLED_INTO = 'site_locations';
 const EVENT_INTO = 'defects';
+const WEBHOOK_INTO = 'rfis';
+
+/** The webhook's signing secret. Like the API key, the workspace only ever names it. */
+const WEBHOOK_SECRET = 'whsec-1f7a44d0';
+/** The manifest's own name for the webhook binding — the key its ledger rows are filed under. */
+const WEBHOOK_BINDING = 'field_reports:rfis.receive.rfi';
+
+function signWebhook(body: string, secret: string = WEBHOOK_SECRET): string {
+	return createHmac('sha256', secret).update(body, 'utf8').digest('hex');
+}
 
 /**
  * Make the collection writable.
@@ -331,12 +342,73 @@ export default {
 } satisfies Integrations;
 `;
 
+/**
+ * The webhook half: a delivery the remote pushes, rather than one this pod went and fetched.
+ *
+ * `input` is on the *binding*, not the pipeline, and that placement is what the refusal test turns
+ * on: it is parsed before the import pipeline runs, so a payload of the wrong shape is turned down
+ * with nothing written rather than part-way through writing.
+ */
+const WEBHOOK_INTEGRATIONS_SOURCE = `import { z } from 'zod';
+import type { Integrations } from './$types.js';
+
+export default {
+	field_reports: {
+		receive: {
+			rfi: {
+				webhook: {
+					authentication: {
+						type: 'hmac-sha256',
+						secret: { env: 'REPORTS_WEBHOOK_SECRET' },
+						signatureHeader: 'x-reports-signature'
+					},
+					eventIdHeader: 'x-reports-event-id'
+				},
+				input: z.object({
+					rfi: z.object({
+						number: z.string(),
+						title: z.string(),
+						question: z.string()
+					})
+				})
+			}
+		}
+	}
+} satisfies Integrations;
+`;
+
+const WEBHOOK_PIPELINES_SOURCE = `import { z } from 'zod';
+import type { Pipelines } from './$types.js';
+
+const report = z.object({
+	rfi: z.object({ number: z.string(), title: z.string(), question: z.string() })
+});
+
+export default {
+	import: {
+		input: report,
+		handler: async (ctx) => {
+			const input = ctx.input as z.infer<typeof report>;
+			return [
+				{
+					rfi_number: input.rfi.number,
+					title: input.rfi.title,
+					question: input.rfi.question,
+					status: 'open'
+				}
+			];
+		}
+	}
+} satisfies Pipelines;
+`;
+
 /** The one file naming what the host must provide. Names only — a value here would be the bug. */
 const ENV_SOURCE = `import { defineEnv } from '@norbital-ai/pod/authoring';
 
 export default defineEnv({
 	private: {
-		REGISTRY_API_KEY: { description: 'Bearer token for the certification registry API' }
+		REGISTRY_API_KEY: { description: 'Bearer token for the certification registry API' },
+		REPORTS_WEBHOOK_SECRET: { description: 'HMAC secret the field-reports webhook is signed with' }
 	}
 });
 `;
@@ -354,6 +426,7 @@ const HOST_SOURCE = `import {
 	devIdentity,
 	env,
 	httpIntegrationDelivery,
+	httpWebhookListener,
 	intervalQueue,
 	localFileStorage,
 	postgresDb
@@ -371,7 +444,10 @@ export default definePodHost({
 	fileStorage: localFileStorage({ directory: '.norbital/storage' }),
 	messaging: consoleMessaging({ channels: ['email'] }),
 	queue: intervalQueue({ intervalMs: 1000 }),
-	integrationDelivery: httpIntegrationDelivery()
+	integrationDelivery: httpIntegrationDelivery(),
+	// The whole webhook configuration: a port. No route, no secret, no signature scheme is written
+	// here — the routes come from the manifest and the verification happens before \`deliver\`.
+	webhooks: httpWebhookListener({ host: '127.0.0.1', port: Number(env('POD_WEBHOOK_PORT')) })
 });
 `;
 
@@ -389,6 +465,8 @@ async function writeWorkspace(root: string, sinkUrl: string): Promise<void> {
 	await writeFile(collection(PULLED_INTO, '+integrations.ts'), pullIntegrationsSource(sinkUrl));
 	await writeFile(collection(EVENT_INTO, '+pipelines.ts'), EVENT_PIPELINES_SOURCE);
 	await writeFile(collection(EVENT_INTO, '+integrations.ts'), EVENT_INTEGRATIONS_SOURCE);
+	await writeFile(collection(WEBHOOK_INTO, '+pipelines.ts'), WEBHOOK_PIPELINES_SOURCE);
+	await writeFile(collection(WEBHOOK_INTO, '+integrations.ts'), WEBHOOK_INTEGRATIONS_SOURCE);
 	await writeFile(path.join(root, 'pod.host.ts'), HOST_SOURCE);
 }
 
@@ -398,6 +476,7 @@ describe.skipIf(!hasDocker)('Pod standalone integrations — E2E, both direction
 	let sink: Sink;
 	let environment: NodeJS.ProcessEnv;
 	let db: Client;
+	let webhookPort: number;
 
 	async function rows(collection: string): Promise<Record<string, unknown>[]> {
 		const result = await db.query(`SELECT * FROM "${collection}" ORDER BY norbital_created_at`);
@@ -413,11 +492,14 @@ describe.skipIf(!hasDocker)('Pod standalone integrations — E2E, both direction
 		await writeWorkspace(root, sink.url);
 
 		const port = await freePort();
+		webhookPort = await freePort();
 		environment = {
 			...process.env,
 			DATABASE_URL: pg.connectionString,
 			POD_HOST: '127.0.0.1',
 			POD_PORT: String(port),
+			POD_WEBHOOK_PORT: String(webhookPort),
+			REPORTS_WEBHOOK_SECRET: WEBHOOK_SECRET,
 			POD_ORG_ID: '11111111-1111-4111-8111-111111111111',
 			POD_ORG_NAME: 'Integration Delivery Test',
 			POD_ADMIN_ID: '22222222-2222-4222-8222-222222222222',
@@ -574,4 +656,152 @@ describe.skipIf(!hasDocker)('Pod standalone integrations — E2E, both direction
 			await stop(running);
 		}
 	}, 180_000);
+
+	/**
+	 * The push half, against the host's own socket.
+	 *
+	 * Everything here goes through a real HTTP request to a port `pod start` opened from the manifest,
+	 * so it exercises the listener, the signature check, the ledger claim, and the import pipeline in
+	 * the order a provider would hit them. The three negatives are the point: a webhook that imports
+	 * the happy case and also imports a forgery, a replay, or a malformed body is worse than one that
+	 * does not exist, because it looks like it works.
+	 */
+	describe('inbound webhooks', () => {
+		let running: ChildProcessWithoutNullStreams;
+		let log = '';
+
+		/** One delivery, exactly as a provider would send it. Nothing is done for it in-process. */
+		async function post(params: {
+			readonly body: unknown;
+			readonly eventId: string;
+			readonly secret?: string;
+			readonly signature?: string;
+		}): Promise<number> {
+			const body = JSON.stringify(params.body);
+			const response = await fetch(
+				`http://127.0.0.1:${webhookPort}/webhooks/field_reports/${encodeURIComponent('rfis.receive.rfi')}`,
+				{
+					method: 'POST',
+					headers: {
+						'content-type': 'application/json',
+						'x-reports-signature': params.signature ?? signWebhook(body, params.secret),
+						'x-reports-event-id': params.eventId
+					},
+					body
+				}
+			);
+			return response.status;
+		}
+
+		function rfi(number: string): Record<string, unknown> {
+			return {
+				rfi: {
+					number,
+					title: `Cladding detail ${number}`,
+					question: 'Which fixing centres apply at the parapet?'
+				}
+			};
+		}
+
+		async function ledger(): Promise<Record<string, unknown>[]> {
+			const result = await db.query(
+				`SELECT event_id, status, imported, error FROM integration_inbound_event
+				  WHERE binding_key = $1 ORDER BY norbital_created_at`,
+				[WEBHOOK_BINDING]
+			);
+			return result.rows as Record<string, unknown>[];
+		}
+
+		beforeAll(async () => {
+			running = spawn('node', [POD_BIN, 'start'], { cwd: root, env: environment, stdio: 'pipe' });
+			running.stdout.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
+			running.stderr.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
+			await waitForOutput(running, /Pod listening at/);
+			// The endpoint is derived from the manifest, so seeing it announced is already evidence the
+			// declared binding produced a route rather than a warning.
+			expect(log).toContain('/webhooks/field_reports/rfis.receive.rfi');
+			expect(log).not.toContain('supplies no listener');
+		}, 120_000);
+
+		afterAll(async () => {
+			await stop(running);
+		});
+
+		it('imports a signed delivery through the declared receive binding', async () => {
+			expect(await rows(WEBHOOK_INTO)).toHaveLength(0);
+			expect(await post({ body: rfi('RFI-001'), eventId: 'evt_001' })).toBe(200);
+
+			const landed = await waitFor(async () => {
+				const found = await rows(WEBHOOK_INTO);
+				return found.length > 0 ? found : undefined;
+			}, `the webhook delivery to land a row. Pod log:\n${log}`);
+			expect(landed).toHaveLength(1);
+			expect(landed[0]?.rfi_number).toBe('RFI-001');
+			// The `import` pipeline shaped it: `title` is composed here, not sent.
+			expect(landed[0]?.title).toBe('Cladding detail RFI-001');
+			expect(landed[0]?.status).toBe('open');
+
+			expect(await ledger()).toEqual([
+				{ event_id: 'evt_001', status: 'imported', imported: 1, error: null }
+			]);
+		}, 60_000);
+
+		it('rejects a wrong signature and imports nothing', async () => {
+			const before = await rows(WEBHOOK_INTO);
+			// Signed with a secret this host does not hold — the shape of a forgery, or of a provider
+			// whose key was rotated without telling anyone.
+			expect(
+				await post({ body: rfi('RFI-FORGED'), eventId: 'evt_forged', secret: 'not-the-secret' })
+			).toBe(401);
+			// And with no signature at all.
+			expect(
+				await post({ body: rfi('RFI-UNSIGNED'), eventId: 'evt_unsigned', signature: '' })
+			).toBe(401);
+
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+			expect(await rows(WEBHOOK_INTO)).toHaveLength(before.length);
+			// Nothing was claimed either: a rejected delivery never reached the runtime, so it left no
+			// trace an operator could mistake for a handled event.
+			expect((await ledger()).map((row) => row.event_id)).toEqual(['evt_001']);
+		}, 60_000);
+
+		it('imports nothing the second time an event id is delivered', async () => {
+			const before = await rows(WEBHOOK_INTO);
+			// A different body under the *same* event id. If the ledger were not doing the work, this
+			// would land a second row with a different number and the assertion below would say so —
+			// re-sending identical bytes would prove nothing an idempotent pipeline could not fake.
+			expect(await post({ body: rfi('RFI-REPLAY'), eventId: 'evt_001' })).toBe(200);
+
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+			const after = await rows(WEBHOOK_INTO);
+			expect(after).toHaveLength(before.length);
+			expect(after.map((row) => row.rfi_number)).not.toContain('RFI-REPLAY');
+			// One ledger row, still the first one, still recording one import.
+			expect(await ledger()).toEqual([
+				{ event_id: 'evt_001', status: 'imported', imported: 1, error: null }
+			]);
+		}, 60_000);
+
+		it('refuses a payload the binding refuses, rather than importing part of it', async () => {
+			const before = await rows(WEBHOOK_INTO);
+			// Correctly signed, correctly new — and the wrong shape. `question` is missing, which the
+			// binding's `input` schema requires.
+			expect(
+				await post({
+					body: { rfi: { number: 'RFI-BAD', title: 'No question' } },
+					eventId: 'evt_bad'
+				})
+			).toBe(422);
+
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+			expect(await rows(WEBHOOK_INTO)).toHaveLength(before.length);
+			const rows_ = await ledger();
+			const failed = rows_.find((row) => row.event_id === 'evt_bad');
+			// The refusal is recorded, imported nothing, and says why: it was claimed before the import
+			// ran, which is what makes the record possible at all.
+			expect(failed?.status).toBe('failed');
+			expect(failed?.imported).toBeNull();
+			expect(String(failed?.error)).toContain('question');
+		}, 60_000);
+	});
 });
