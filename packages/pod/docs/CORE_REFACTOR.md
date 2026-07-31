@@ -192,7 +192,7 @@ invitation. `TenantWorkspaceShellData.userOrganizations` already carries the lis
 | `messaging`           | renamed from `notifications`. Channels and transports are **methods**, not fields or a record — `listChannels()`, `listTransports()`, `sendVia(transport, message)` — because a binding crosses the isolate as a proxy that forwards method calls, and a data field arrives there as a function. Supply `whatsapp` (socket + `node:fs` auth state) as a `MessagingTransport` |
 | `queue`               | pg-boss, driving `workspaceJobs()`                                                                                                                                                                                                                                                                                                                                           |
 | `integrationDelivery` | unchanged                                                                                                                                                                                                                                                                                                                                                                    |
-| `agentTools`          | re-expose `coding.tool.ts` / `deployment.tool.ts` as `HostAgentTool`s pointed at the sandbox                                                                                                                                                                                                                                                                                 |
+| `agentTools`          | re-expose `coding.tool.ts` / `deployment.tool.ts` as `HostAgentTool`s pointed at the sandbox. The seam exists now: `agentTools` on the host config, a `HostAgentToolBinding` (`list()` / `run(name, input)`) in the bindings, and `assertHostAgentTools(tools, manifest)` at startup. See [AGENT_PORT.md](./AGENT_PORT.md#hostagenttool)                                     |
 
 `googleMaps` is already ported into `packages/pod/src/lib/host/maps.ts`, including the fit-to-markers
 zoom derivation. Core's copy in `tenant_runtime/bindings.ts` should be deleted in favour of it.
@@ -276,7 +276,7 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
       carried verbatim (A4b's collisions included) — an in-flight `approval_request` resolves against
       them.
       **Three outcomes, deliberately different.** A name matching one team resolves. A name matching
-      none, on a tenant that *has* teams, throws naming the policy, the grant and the team, and the
+      none, on a tenant that _has_ teams, throws naming the policy, the grant and the team, and the
       migration rolls back — storing `approval_config: null` would read to the guard as a direct write.
       A name matching none on a tenant with **no teams at all** is deferred, not refused: `pod migrate`
       legitimately precedes any seed, and refusing there would make `pod start` impossible. The gate is
@@ -472,6 +472,13 @@ Every item below is already listed above with its rationale.
       anyone put an arbitrary link, under Core's label, into a tenant's sidebar. Shapes differ too
       (`route`/`requiredCapability` vs `entry`/`adminOnly`). Move it off the header.
 - [ ] **C6.** Re-expose sandbox tools as `HostAgentTool`; delete `lib/agent/**` the port replaced.
+      The Pod side is built — put them on `agentTools` in the tenant's host config, bind
+      `HostAgentToolBinding` alongside `db`/`ai` in `resolveRuntimeBindings` (it is a normal facility
+      and crosses on the existing proxy), and run `assertHostAgentTools(tools, manifest)` before a
+      tenant accepts traffic, next to `assertChannelTransportsAreSupported`. Skipping that check is
+      not cosmetic: it is what stops a Core tool from silently shadowing a workspace tool of the same
+      name. A workspace still has to opt in per agent (`spec.hostTools`), so nothing is exposed by
+      Core registering a tool.
 - [ ] **C7.** Replace Core's inline Google maps with Pod's `googleMaps()`.
 - [ ] **C8.** Rebuild `(ops)/ops` on `cookieSession` + `emailOtpIdentity` with its own `operator`
       table. There is a **second** copy of the ops email allowlist in `ingress.ts` that must go too.

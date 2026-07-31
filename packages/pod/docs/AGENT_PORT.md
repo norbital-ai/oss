@@ -36,19 +36,90 @@ filter every query had to remember.
 | --------------------------------- | -------------------------------------------------------------- |
 | `$lib/tenant_workspace/sandbox/*` | a sandbox is host infrastructure; re-expose as `HostAgentTool` |
 | `$lib/workspace_studio/*`         | a host surface, reached as a host plugin                       |
+| `$lib/billing/*`                  | Core owns the commercial relationship                          |
+| `$lib/live_object/*`              | superseded by Pod's own sync                                   |
+| `@durable-streams/*`              | a socket the tenant cannot hold open                           |
 
-> **`HostAgentTool` does not exist.** It is named in this document as a design intent, not as an API —
-> `grep -rn HostAgentTool packages/*/src` returns nothing. There is currently nowhere for a host tool
-> to be invoked from: `agentTools` are workspace-declared and compiled into the guest, the host-command
-> plane runs host→guest only, and facility bindings cannot carry callbacks. Building that seam is
-> unstarted work, not a rename. Nothing is lost meanwhile — Core's sandbox tools are already wired into
-> the loop its builder agent uses.
+`tools/coding.tool.ts` and `tools/deployment.tool.ts` follow the sandbox and stay in Core. They reach
+a tenant's agent through the seam below.
 
-| `$lib/billing/*` | Core owns the commercial relationship |
-| `$lib/live_object/*` | superseded by Pod's own sync |
-| `@durable-streams/*` | a socket the tenant cannot hold open |
+## `HostAgentTool`
 
-`tools/coding.tool.ts` and `tools/deployment.tool.ts` follow the sandbox and stay in Core.
+A host tool is a facility whose _method set_ is discovered at runtime rather than fixed by its type.
+
+That sentence is the whole design, and it is what made the seam look impossible for a while. Three
+constraints were real: `agentTools` are workspace-declared and compiled into the guest bundle, so a
+host tool is not in it; the host-command plane runs host→guest only; and `RuntimeFacilityBindings`
+cross the isolate by structured clone and cannot carry callbacks, which is why `HostQueue` and
+`HostIntegrationDelivery` live on the host config instead.
+
+What the third constraint actually forbids is a binding that _is_ a map of host functions. It does not
+forbid guest→host calls: `facilityProxy` in `runtime/serve.ts` already answers every property get with
+a call forwarder, which is exactly how `db` and `fileStorage` are called from inside the isolate. So
+the binding is fixed at two methods and the tools are data:
+
+```ts
+export type HostAgentToolBinding = {
+	list(): Promise<readonly HostAgentToolSpec[]>; // { name, description, inputSchema }
+	run(name: string, input: unknown): Promise<unknown>;
+};
+```
+
+`list()` is a call and not a field for the same reason `listChannels()` is. The host writes tools as
+data on its config, and `pod start` assembles the binding:
+
+```ts
+// pod.host.ts
+export default definePodHost({
+	mode: 'self-hosted',
+	// ...
+	agentTools: [
+		{
+			name: 'deploy_workspace',
+			description: 'Build and deploy this workspace from the host sandbox.',
+			input: z.object({ target: z.enum(['staging', 'production']) }),
+			run: async (input) => sandbox.deploy(input.target)
+		}
+	]
+});
+```
+
+```ts
+// src/automation/+nightly_deploy.ts — the opt-in, and the whole of it
+export default defineAutomation(
+	{ schedule: '0 3 * * *' },
+	{ kind: 'agent', task: 'Deploy staging.', hostTools: ['deploy_workspace'] }
+);
+```
+
+**Permissions: default deny, workspace opt-in, no convenience path.** A host tool runs in the host
+process with the host's credentials, so registering one exposes it to nothing. An agent sees a host
+tool only if its own spec names it in `hostTools` — the same narrowing `tools` already applies to
+workspace tools, in workspace source, where it appears in a diff. Deliberately absent: any "offer
+every host tool" shortcut. `agentChat` grants a chat every _workspace_ tool on the reasoning that an
+authored tool is a surface the workspace already decided to expose; that reasoning does not transfer
+to a tool the workspace did not write, so an interactive chat reaches no host tool at all.
+
+Also absent: a caller. `run(name, input)` carries no identity, because a tenant isolate's claim about
+who is asking is not something the host can verify. A host tool authorizes against what the host
+already knows — which tenant this container is — and never against an assertion that arrived over the
+binding wire.
+
+**Collisions are a startup error.** The model is offered one flat list, so a host tool named
+`create_quote` beside a workspace tool named `create_quote` produces a call that names one thing and
+could mean two. `assertHostAgentTools(config.agentTools, manifest)` runs before `pod start` listens
+and refuses both directions: a host tool shadowing a workspace tool or a built-in, and an agent naming
+a host tool this host does not supply. The manifest now carries workspace agent-tool names (name and
+description only) so a host can see the namespace it is joining; agent specs carry `hostTools` so the
+host can check the other way. `requiredRuntimeFacilities` treats `agentTools` as static, so a
+workspace whose agent names a host tool refuses to start on a host that supplies none. The loop
+repeats the shadow check when it resolves a run's tools, because Core is a host this package does not
+run — a collision that slips past a host's startup still fails before any model call rather than
+resolving to whichever dispatch branch is reached first.
+
+Proven by `tests/standalone/host-agent-tool-e2e.test.ts` (a real `pod start`, a real `pod.host.ts`,
+an agent run whose result reaches `chat_message`) and `tests/runtime/host-agent-tool.test.ts` (the
+same binding through the real `facilityProxy` and a structured clone — the Core path).
 
 ## Still owed
 

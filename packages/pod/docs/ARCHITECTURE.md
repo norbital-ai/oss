@@ -329,6 +329,36 @@ export default defineAutomation(
 );
 ```
 
+### Host tools
+
+A host may offer tools of its own — a sandbox, a deploy pipeline, anything holding a credential the
+tenant must never have. They arrive as the `agentTools` facility, whose binding is fixed at two
+methods because the _tools_ vary, not the methods:
+
+```ts
+export type HostAgentToolBinding = {
+	list(): Promise<readonly HostAgentToolSpec[]>;
+	run(name: string, input: unknown): Promise<unknown>;
+};
+```
+
+`list()` is a call rather than a field for the reason `listChannels()` is, and it is what lets a
+facility carry a tool set the binding's type does not name. A host writes tools as data
+(`agentTools` on `definePodHost`); `run` validates input host-side and returns plain data, since the
+result crosses the isolate by structured clone like every other binding result.
+
+A host tool is offered to nothing by default. An agent reaches one only by naming it in
+`hostTools` — the same narrowing `tools` applies to workspace tools — so a host capability is never
+inherited by being an agent, and an interactive chat reaches none. `run` carries no caller: an
+isolate's claim about who is asking is unverifiable from the host side, so a host tool authorizes
+against the tenant it already knows it is serving.
+
+Both lists share one namespace, because the model is offered one list.
+`assertHostAgentTools(tools, manifest)` runs before `pod start` listens and refuses a host tool that
+shadows a workspace tool or a built-in, and an agent that names a host tool this host does not
+supply. `agentTools` is a static facility requirement, so a workspace whose agent names a host tool
+will not start on a host that has none.
+
 `agent_run_step` is append-only. Its `(automation_run_id, sequence)` pair is unique, and database
 triggers reject updates and deletes. Messages persist their explicit role; messages, tool calls,
 tool results, and errors are individual steps. Both runs and steps carry their requestor owner, so
