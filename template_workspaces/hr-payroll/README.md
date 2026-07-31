@@ -17,12 +17,10 @@ from a legacy payroll output.
 For the template’s goal, users, and non-negotiable correctness boundaries, see the
 [HR & Payroll documentation hub](./docs/README.md).
 
-- **[PAYROLL_ARCHITECTURE_PLAN.md](PAYROLL_ARCHITECTURE_PLAN.md)** — the design, in 14 chapters under
-  [`plan/`](plan/). Read `plan/01-conventions.md` and `plan/03-types-and-grid.md` first; they explain
-  everything else.
-- **[REFACTOR_FINDINGS.md](REFACTOR_FINDINGS.md)** — where the plan, the law and the source system
-  disagree, and which one won. Read before changing any figure.
-- **[CALCULATION_MALAYSIA.md](CALCULATION_MALAYSIA.md)** — the Malaysian arithmetic in longhand.
+- **[Payroll architecture](docs/PAYROLL_ARCHITECTURE.md)** — the design, with 14 canonical chapters
+  under [`docs/payroll/`](docs/payroll/). Read conventions and the type/treatment grid first; they
+  explain everything else.
+- **[Malaysia calculation](docs/CALCULATION_MALAYSIA.md)** — the Malaysian arithmetic in longhand.
 
 ---
 
@@ -197,11 +195,11 @@ checkpoint before expecting a tenant to use the change. See the
 ## Structure
 
 ```
-src/collections/    28 collections — see plan/02-data-model.md
+src/collections/    28 collections — see docs/payroll/02-data-model.md
 src/custom-types/   the discriminated unions every variant column is validated against
 src/apps/           hr_controller (payroll, people, leave, loans, scheduling, …) and hr_employee
 src/lib/            cross-collection helpers
-plan/               the design, 14 chapters
+docs/payroll/       the payroll architecture, 14 chapters
 ```
 
 Levels, and who writes what:

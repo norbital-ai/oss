@@ -158,8 +158,9 @@ Temporal row state and audit are deliberately separate:
   selects the current table's columns from the correspondingly migrated typed history table, so
   added, altered, renamed, and removed fields follow the current schema without a separate payload
   migration.
-- `audit_event` is the append-only action log, and `agent_run_step` is the append-only AI
-  transcript. Neither is a temporal snapshot or rollback source.
+- `audit_event` is the append-only action log. Agent messages live in the tenant-owned conversation
+  collections described in [Agent architecture](./AGENT_ARCHITECTURE.md); neither is a temporal
+  snapshot or rollback source.
 
 The record, typed temporal snapshot, audit event, and sync row share one transaction; an audit
 failure rolls the entire mutation back. A PostgreSQL installation hosting Pod must provide the
@@ -308,33 +309,9 @@ a reduced condition, because the mutation path applies those to nothing.
 
 ## Agents
 
-Pod owns the workspace-agent loop. The host AI facility performs model inference only:
-
-```ts
-export type HostAiBinding = {
-	chat(input: {
-		messages: readonly AiMessage[];
-		tools?: readonly AiToolSpec[];
-		outputSchema?: unknown;
-		model?: string;
-		profile?: string;
-	}): Promise<{
-		text: string;
-		toolCalls?: readonly AiToolCall[];
-		stopReason: 'end' | 'tool_use' | 'max_tokens' | 'refusal';
-		usage?: unknown;
-	}>;
-};
-```
-
-Built-in tools are:
-
-- `describe_workspace`;
-- `read_collection`, bounded by `collections`;
-- `write_collection`, exposed only when `access: 'write'`.
-
-Tenant-defined tools receive the same scoped API as workspace automations. Every read and write
-therefore retains policy, hook, approval, version, and audit behavior.
+Pod owns the loop, tool dispatch, runs, conversations, messages, channel bindings, authorization,
+replication and UI. The host AI facility performs one model-inference turn at a time and may provide
+trusted tools through a default-deny binding. The host does not own or persist a transcript.
 
 ```ts
 export default defineAutomation(
@@ -351,51 +328,12 @@ export default defineAutomation(
 );
 ```
 
-### Host tools
+Interactive chat, agent automations and declared channels use the same loop and transcript model.
+Messages are stored as ordered `AiMessage` values in `chat_message` under a `chat_session`, then
+reach the browser through ordinary policy-scoped sync rather than an agent-specific stream.
 
-A host may offer tools of its own — a sandbox, a deploy pipeline, anything holding a credential the
-tenant must never have. They arrive as the `agentTools` facility, whose binding is fixed at two
-methods because the _tools_ vary, not the methods:
-
-```ts
-export type HostAgentToolBinding = {
-	list(): Promise<readonly HostAgentToolSpec[]>;
-	run(name: string, input: unknown): Promise<unknown>;
-};
-```
-
-`list()` is a call rather than a field for the reason `listChannels()` is, and it is what lets a
-facility carry a tool set the binding's type does not name. A host writes tools as data
-(`agentTools` on `definePodHost`); `run` validates input host-side and returns plain data, since the
-result crosses the isolate by structured clone like every other binding result.
-
-A host tool is offered to nothing by default. An agent reaches one only by naming it in
-`hostTools` — the same narrowing `tools` applies to workspace tools — so a host capability is never
-inherited by being an agent, and an interactive chat reaches none. `run` carries no caller: an
-isolate's claim about who is asking is unverifiable from the host side, so a host tool authorizes
-against the tenant it already knows it is serving.
-
-Both lists share one namespace, because the model is offered one list.
-`assertHostAgentTools(tools, manifest)` runs before `pod start` listens and refuses a host tool that
-shadows a workspace tool or a built-in, and an agent that names a host tool this host does not
-supply. `agentTools` is a static facility requirement, so a workspace whose agent names a host tool
-will not start on a host that has none.
-
-`agent_run_step` is append-only. Its `(automation_run_id, sequence)` pair is unique, and database
-triggers reject updates and deletes. Messages persist their explicit role; messages, tool calls,
-tool results, and errors are individual steps. Both runs and steps carry their requestor owner, so
-ordinary policy fallback exposes only the caller's transcripts. Tenant-defined tools receive a
-runtime-enforced collection allowlist and read/write mode, not merely a TypeScript hint.
-
-There is intentionally no token stream. Completed steps flow through the ordinary sync engine,
-giving reconnect, refresh, offline catch-up, multi-tab convergence, and local querying without a
-second transport. `automation_run.status` and the newest step provide liveness.
-
-Interactive runs use the same loop and transcript:
-
-```text
-POST /_runtime/remotes/agentChat { message, runId? }
-```
+See [Agent architecture](./AGENT_ARCHITECTURE.md) for execution entry points, transcript ownership,
+host-tool authorization, channel continuation, UI behavior and conformance coverage.
 
 ## Automations and the queue
 

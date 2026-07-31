@@ -1,5 +1,7 @@
 # Malaysia Payroll Calculation
 
+This is the canonical country calculation reference for Malaysia.
+
 Current Norbital specification for Malaysian payroll. This document describes the calculation that
 the engine performs now; it does not preserve superseded rules or earlier variance explanations.
 

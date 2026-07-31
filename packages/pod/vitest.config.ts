@@ -12,7 +12,7 @@ const alias = { $lib: fileURLToPath(new URL('./src/lib', import.meta.url)) };
 //
 // `components` mounts Svelte surfaces in happy-dom. That is a DOM, not a browser: it has no layout,
 // no paint and no assistive-technology tree, so it can prove what a component renders and does and
-// nothing about how it looks. docs/HANDOFF.md records where that line falls.
+// nothing about how it looks. Browser-level behaviour belongs in the template suites.
 export default defineConfig({
 	test: {
 		projects: [

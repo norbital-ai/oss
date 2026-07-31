@@ -1,5 +1,7 @@
 # 11 — Corrections
 
+This is a canonical chapter of the payroll architecture.
+
 Two mechanisms. One question chooses between them: **has a `PAID` run already consumed it?**
 
 | answer | mechanism                                                                                                                       |

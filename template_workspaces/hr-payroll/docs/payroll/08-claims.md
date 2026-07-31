@@ -1,5 +1,7 @@
 # 08 — Claims and caps
 
+This is a canonical chapter of the payroll architecture.
+
 A claim is a reimbursement: the employee spent their own money and the company pays it back. It is not
 wages, so it enters no contribution base. The interesting part is the cap.
 

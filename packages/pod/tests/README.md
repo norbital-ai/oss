@@ -9,7 +9,7 @@ the same compiled runtime artifact in both hosted-style and standalone-style har
 | Sync engine                                | `sync/`                          | shape, filtered SSE, optimistic mutation, reset, reconnect, policy visibility |
 | Mutation, access control, approval, audit  | `collection/`, `sync/*approval*` | every record write passes collection operations                               |
 | File storage                               | `storage/`                       | host byte binding plus Pod-owned asset rows and authorization                 |
-| Agents, AI, automation transcript delivery | `runtime/`                       | one AI binding, Pod tool loop, synced step-level transcript                   |
+| Agents, AI, automation transcript delivery | `runtime/`                       | one AI binding, Pod tool loop, synced tenant-owned messages                   |
 | Standalone boot/refusal                    | `standalone/`                    | facility gate and process-level startup contract                              |
 
 Database suites build a pinned PostgreSQL 18 image with `temporal_tables` 1.2.2 and use disposable

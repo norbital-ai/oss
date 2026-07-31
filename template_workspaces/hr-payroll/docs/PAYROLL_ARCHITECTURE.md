@@ -52,22 +52,22 @@ this?" is answered for every contribution.
 
 ## Chapters
 
-| #   | chapter                                                   | covers                                                                    |
-| --- | --------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 01  | [Conventions](plan/01-conventions.md)                     | levels, approval, variants — read first                                   |
-| 02  | [Data model](plan/02-data-model.md)                       | every model, field and relation                                           |
-| 03  | [Component types and the grid](plan/03-types-and-grid.md) | the closed type list; which pay is chargeable under which law             |
-| 04  | [Statutory contributions](plan/04-contributions.md)       | base to employee and employer amounts                                     |
-| 05  | [The payroll run](plan/05-payroll-run.md)                 | eight steps, periods, proration, formulas, settlement                     |
-| 06  | [Time and overtime](plan/06-time-and-overtime.md)         | clocks to hours to money; day types; statutory multipliers                |
-| 07  | [Leave](plan/07-leave.md)                                 | eligibility, entitlement, the ledger, derived accrual                     |
-| 08  | [Claims and caps](plan/08-claims.md)                      | reimbursements, layered caps, settlement routes                           |
-| 09  | [Repayment agreements](plan/09-agreements.md)             | loans, advances, overpayment recovery                                     |
-| 10  | [Payslip and reporting](plan/10-payslip.md)               | outputs, year-to-date, filings, payment                                   |
-| 11  | [Corrections](plan/11-corrections.md)                     | reversals, arrears, derived history                                       |
-| 12  | [Validation](plan/12-validation.md)                       | what blocks activation, a run, or approval                                |
-| 13  | [Extending](plan/13-extending.md)                         | new allowance, leave type, contribution, country                          |
-| 14  | [Examples](plan/14-examples.md)                           | Malaysia in full; hard cases; Singapore and Indonesia; things going wrong |
+| #   | chapter                                                      | covers                                                                    |
+| --- | ------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| 01  | [Conventions](payroll/01-conventions.md)                     | levels, approval, variants — read first                                   |
+| 02  | [Data model](payroll/02-data-model.md)                       | every model, field and relation                                           |
+| 03  | [Component types and the grid](payroll/03-types-and-grid.md) | the closed type list; which pay is chargeable under which law             |
+| 04  | [Statutory contributions](payroll/04-contributions.md)       | base to employee and employer amounts                                     |
+| 05  | [The payroll run](payroll/05-payroll-run.md)                 | eight steps, periods, proration, formulas, settlement                     |
+| 06  | [Time and overtime](payroll/06-time-and-overtime.md)         | clocks to hours to money; day types; statutory multipliers                |
+| 07  | [Leave](payroll/07-leave.md)                                 | eligibility, entitlement, the ledger, derived accrual                     |
+| 08  | [Claims and caps](payroll/08-claims.md)                      | reimbursements, layered caps, settlement routes                           |
+| 09  | [Repayment agreements](payroll/09-agreements.md)             | loans, advances, overpayment recovery                                     |
+| 10  | [Payslip and reporting](payroll/10-payslip.md)               | outputs, year-to-date, filings, payment                                   |
+| 11  | [Corrections](payroll/11-corrections.md)                     | reversals, arrears, derived history                                       |
+| 12  | [Validation](payroll/12-validation.md)                       | what blocks activation, a run, or approval                                |
+| 13  | [Extending](payroll/13-extending.md)                         | new allowance, leave type, contribution, country                          |
+| 14  | [Examples](payroll/14-examples.md)                           | Malaysia in full; hard cases; Singapore and Indonesia; things going wrong |
 
 ## Vocabulary
 
@@ -99,6 +99,6 @@ this?" is answered for every contribution.
 | `leave_types` + `accrual_bands` | absence plan + accrual matrix  | absence quota + quota generation   |
 
 Oracle and SAP materialise leave accrual through a scheduled process. This design derives it
-(chapter [07](plan/07-leave.md) §7), so nothing must have run for a balance to be correct. The
+(chapter [07](payroll/07-leave.md) §7), so nothing must have run for a balance to be correct. The
 derivation holds for closed-form plans — days per year by length of service. It does not hold for
 accrual per hours worked or for waiting periods; neither is supported.

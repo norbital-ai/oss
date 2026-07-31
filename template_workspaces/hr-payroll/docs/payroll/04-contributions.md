@@ -1,5 +1,7 @@
 # 04 — Statutory contributions
 
+This is a canonical chapter of the payroll architecture.
+
 A contribution turns a base into an employee amount and an employer amount. It never knows what
 produced the base. Chapter [03](03-types-and-grid.md) built the base; this chapter spends it.
 

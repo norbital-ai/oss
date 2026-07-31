@@ -1,5 +1,7 @@
 # 07 — Leave
 
+This is a canonical chapter of the payroll architecture.
+
 Three separate questions, usually confused with each other:
 
 | question                                     | answered by                   | is         |

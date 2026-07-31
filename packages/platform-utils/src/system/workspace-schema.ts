@@ -189,7 +189,6 @@ const _automation_run = systemTable(
 	{ description: 'Automation runs', record_label: 'automation_name', system: true }
 );
 
-
 const _requestor = systemTable(
 	'requestor',
 	{
@@ -408,13 +407,13 @@ const _team_members = systemTable(
 /**
  * One agent conversation.
  *
- * Ported from Core's `chat_session`, minus `organization_id`: a pod database *is* one tenant, so a
- * tenancy column here would be a constant on every row and a filter every query had to remember.
+ * Tenant-scoped agent conversation. A Pod database is one tenant, so an organization column would
+ * be constant on every row and a filter every query had to remember.
  *
  * `platform` and `external_thread_id` carry the transport and the conversation a channel session
  * answers; `channel_conversation` holds the same pair under a unique key and is what the lookup goes
- * through. The remaining `*_id` columns are Core's shape for rows Pod deliberately does not have —
- * a channel is *declared*, so there is no `channel_config` or `agent_profile` table to reference.
+ * through. A channel is declared, so there is no separate `channel_config` or `agent_profile` table
+ * to reference.
  */
 const _chat_session = systemTable(
 	'chat_session',

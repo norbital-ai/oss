@@ -3,9 +3,8 @@ import type { Policy } from './$types.js';
 /**
  * The estimator: prices a project against the rate matrix, and cannot move the matrix.
  *
- * Reclamation had no policy anywhere — not in this repository and not in Core's seed — so unlike the
- * other four templates this is a decision rather than a port. It answers **A5** in
- * `packages/pod/docs/CORE_REFACTOR.md`.
+ * Reclamation projects are shared workbooks, so access narrows by record state rather than a
+ * fictional per-user owner.
  *
  * **There is no owner column to scope to, on any of the five collections.** No `owner_id`, no
  * `user_id`, no `created_by`; the only system columns a model gets are `norbital_id`, the two

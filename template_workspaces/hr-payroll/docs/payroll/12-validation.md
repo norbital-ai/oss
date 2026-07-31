@@ -1,5 +1,7 @@
 # 12 — Validation
 
+This is a canonical chapter of the payroll architecture.
+
 Three gates. Nothing reaches an employee that has not passed all three.
 
 | gate              | when                                             | blocks     |

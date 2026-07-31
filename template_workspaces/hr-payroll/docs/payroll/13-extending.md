@@ -1,5 +1,7 @@
 # 13 — Extending
 
+This is a canonical chapter of the payroll architecture.
+
 Every extension is rows.
 
 ---

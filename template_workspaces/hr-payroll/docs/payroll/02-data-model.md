@@ -1,5 +1,7 @@
 # 02 — Data model
 
+This is a canonical chapter of the payroll architecture.
+
 26 models. Every table also carries the platform's system columns: `norbital_id`,
 `norbital_created_at`, `norbital_updated_at`, `norbital_row_version`, `norbital_sys_period`,
 `norbital_approval_id`. No model below declares an approval field.

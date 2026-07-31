@@ -7,14 +7,16 @@ Start with the package [README](../README.md). It is the canonical author, opera
 workspace layout, generated client, compiler, runtime internals, history, sync, facilities,
 `pod.host.ts`, standalone operation, commands, testing, and distribution.
 
-| Deep dive                                 | Covers                                                                          |
-| ----------------------------------------- | ------------------------------------------------------------------------------- |
-| [Handoff](./HANDOFF.md)                   | Takeover brief: both worktrees, what landed, what is not done, ground rules.    |
-| [Authoring](./AUTHORING.md)               | The mental model: what a workspace declares, what the host supplies, and why.   |
-| [Overview](./OVERVIEW.md)                 | A shorter lifecycle and generated-state reference.                              |
-| [Core refactor](./CORE_REFACTOR.md)       | What Core must change to run against this Pod. Deferred, not optional.          |
-| [Agent port](./AGENT_PORT.md)             | The W5 inventory: what moves from Core into Pod, and what cannot.               |
-| [Architecture](./ARCHITECTURE.md)         | Runtime invariants, Pod/host boundary, notifications, agents, files, and tests. |
-| [Form system](./FORM_SYSTEM.md)           | Schema-derived forms and collection representation overrides.                   |
-| [Navigation state](./NAVIGATION_STATE.md) | Application navigation and state conventions.                                   |
-| [Sync engine](./SYNC_ENGINE.md)           | Local replica, live query, optimistic mutation, and server transport design.    |
+| Deep dive                                     | Covers                                                                           |
+| --------------------------------------------- | -------------------------------------------------------------------------------- |
+| [Authoring](./AUTHORING.md)                   | What a workspace declares, what the host supplies, and the authoring principles. |
+| [Overview](./OVERVIEW.md)                     | Short lifecycle, generated-state, runtime and trust-boundary reference.          |
+| [Architecture](./ARCHITECTURE.md)             | Runtime invariants, deployment targets, facilities, notifications and files.     |
+| [Agent architecture](./AGENT_ARCHITECTURE.md) | Loop, tools, transcripts, channels, UI and the host boundary.                    |
+| [Sync engine](./SYNC_ENGINE.md)               | Local replica, live query, optimistic mutation and server transport design.      |
+| [Form system](./FORM_SYSTEM.md)               | Schema-derived forms and collection representation overrides.                    |
+| [Navigation state](./NAVIGATION_STATE.md)     | Application navigation and state conventions.                                    |
+
+Migration diaries, takeover notes and cross-repository refactor checklists are intentionally not
+part of this documentation set. Current contracts belong in the architecture guides; work tracking
+belongs in issues and pull requests.
