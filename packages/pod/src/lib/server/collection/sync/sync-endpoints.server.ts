@@ -25,6 +25,7 @@ import {
 	type OutboxCursor
 } from './outbox-tailer.server.js';
 import { SYNC_REPLICA_EPOCH_HEADER, SYNC_REPLICA_STAMP_HEADER } from '$lib/client/sync/types.js';
+import { quoteSqlIdentifier } from '../sql-identifier.server.js';
 
 /**
  * `/_runtime/sync/*` — the sync-engine wire protocol. Routed in runtime_request.server.ts
@@ -162,14 +163,14 @@ async function buildClientSchema(ctx: ProvisionedContext): Promise<string> {
 		const pkeyColumn = columns.find((c) => c.column === pkey);
 		if (!pkeyColumn) continue;
 		statements.push(
-			`CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (` +
-				`${quoteIdent(pkey)} ${clientColumnType(pkeyColumn.type)} PRIMARY KEY);`
+			`CREATE TABLE IF NOT EXISTS ${quoteSqlIdentifier(table)} (` +
+				`${quoteSqlIdentifier(pkey)} ${clientColumnType(pkeyColumn.type)} PRIMARY KEY);`
 		);
 		for (const column of columns) {
 			if (column.column === pkey) continue;
 			statements.push(
-				`ALTER TABLE ${quoteIdent(table)} ADD COLUMN IF NOT EXISTS ` +
-					`${quoteIdent(column.column)} ${clientColumnType(column.type)};`
+				`ALTER TABLE ${quoteSqlIdentifier(table)} ADD COLUMN IF NOT EXISTS ` +
+					`${quoteSqlIdentifier(column.column)} ${clientColumnType(column.type)};`
 			);
 		}
 	}
@@ -182,12 +183,6 @@ function clientColumnType(type: string): string {
 	return type;
 }
 
-function quoteIdent(identifier: string): string {
-	if (!/^[a-z_][a-z0-9_]*$/i.test(identifier)) {
-		throw error(400, `Unsafe SQL identifier: ${identifier}`);
-	}
-	return `"${identifier}"`;
-}
 
 // ---------------------------------------------------------------------------
 // shape — POST { collection, cursor?, pageSize? } → { rows, nextCursor, watermark, cursor? }

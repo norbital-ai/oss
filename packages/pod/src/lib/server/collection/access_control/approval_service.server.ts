@@ -26,6 +26,7 @@ import { approvalRequestFromRow, parseApprovalStepStacks } from '$lib/shared/app
 import { withCollectionTransaction } from '../collection_transaction.server.js';
 import { emitSyncOutboxRow, type SyncOutboxAction } from '../sync/sync-outbox.server.js';
 import { announceVisibilityChange } from '../sync/visibility-deltas.server.js';
+import { quoteSqlIdentifier } from '../sql-identifier.server.js';
 
 const requestorMutationRefSchema = z.tuple([z.object({ record_id: z.string() }).strict()]);
 
@@ -117,9 +118,6 @@ function collectionTableName(collectionName: string): string {
 	return collectionName;
 }
 
-function quoteIdent(identifier: string): string {
-	return `"${identifier.replace(/"/g, '""')}"`;
-}
 
 /**
  * Take the decision under a row lock, so two approvers cannot both win.
@@ -209,7 +207,7 @@ async function readRecordFeedState(
 	const tenantDb = getWorkspace({ provision: true }).tenantDb;
 	const result = await tenantDb.query<{ row_version: number | null }>(
 		`SELECT norbital_row_version AS row_version
-		   FROM ${quoteIdent(collectionTableName(collectionName))}
+		   FROM ${quoteSqlIdentifier(collectionTableName(collectionName))}
 		  WHERE norbital_id = $1::uuid`,
 		[recordId]
 	);
@@ -267,7 +265,7 @@ async function clearApprovalStamp(ref: ApprovalLockedRecordRef): Promise<void> {
 	const tenantDb = getWorkspace({ provision: true }).tenantDb;
 	const tableName = collectionTableName(ref.collection_name);
 	await tenantDb.query(
-		`UPDATE ${quoteIdent(tableName)}
+		`UPDATE ${quoteSqlIdentifier(tableName)}
 		    SET norbital_approval_id = NULL,
 		        norbital_updated_at = CURRENT_TIMESTAMP
 		  WHERE norbital_id = $1::uuid`,
@@ -295,23 +293,23 @@ async function restoreRecordBeforeApproval(
 	// Without a temporal history table there is no prior version to roll back to: drop the row
 	// (a rejected create/update leaves nothing; a rejected delete cannot be resurrected).
 	if (!(await tableExists(historyTableName))) {
-		await tenantDb.query(`DELETE FROM ${quoteIdent(tableName)} WHERE norbital_id = $1::uuid`, [
+		await tenantDb.query(`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`, [
 			ref.record_id
 		]);
 		return;
 	}
 
 	const columns = await getMutableTableColumns(tableName); // excludes norbital_sys_period
-	const quotedColumns = columns.map(quoteIdent);
+	const quotedColumns = columns.map(quoteSqlIdentifier);
 
 	// A rejected DELETE must bring the row back. Re-insert its final pre-delete state from history,
 	// opening a fresh live period and clearing the (now-resolved) approval stamp so it is current
 	// again. Runs inside the terminal transition, so _ops_guard and _approval_lock_gate both allow it.
 	if (ref.lock_type === 'record_delete') {
 		const reinserted = await tenantDb.query(
-			`INSERT INTO ${quoteIdent(tableName)} (${quotedColumns.join(', ')}, norbital_sys_period)
+			`INSERT INTO ${quoteSqlIdentifier(tableName)} (${quotedColumns.join(', ')}, norbital_sys_period)
 			 SELECT ${quotedColumns.join(', ')}, tstzrange(now(), NULL, '[)')::text
-			   FROM ${quoteIdent(historyTableName)}
+			   FROM ${quoteSqlIdentifier(historyTableName)}
 			  WHERE norbital_id = $1::uuid
 			  ORDER BY upper(norbital_sys_period) DESC NULLS LAST, norbital_row_version DESC
 			  LIMIT 1
@@ -320,13 +318,13 @@ async function restoreRecordBeforeApproval(
 		);
 		if ((reinserted.rowCount ?? 0) > 0) {
 			await tenantDb.query(
-				`UPDATE ${quoteIdent(tableName)} SET norbital_approval_id = NULL WHERE norbital_id = $1::uuid`,
+				`UPDATE ${quoteSqlIdentifier(tableName)} SET norbital_approval_id = NULL WHERE norbital_id = $1::uuid`,
 				[ref.record_id]
 			);
 			return;
 		}
 		// No history row to resurrect from: the delete simply stands.
-		await tenantDb.query(`DELETE FROM ${quoteIdent(tableName)} WHERE norbital_id = $1::uuid`, [
+		await tenantDb.query(`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`, [
 			ref.record_id
 		]);
 		return;
@@ -340,14 +338,14 @@ async function restoreRecordBeforeApproval(
 			column !== 'norbital_row_version'
 	);
 	const updateAssignments = restoreColumns.map(
-		(column) => `${quoteIdent(column)} = baseline.${quoteIdent(column)}`
+		(column) => `${quoteSqlIdentifier(column)} = baseline.${quoteSqlIdentifier(column)}`
 	);
 	const restored = await tenantDb.query(
-		`UPDATE ${quoteIdent(tableName)} AS live
+		`UPDATE ${quoteSqlIdentifier(tableName)} AS live
 		    SET ${updateAssignments.join(', ')}
 		   FROM (
 		          SELECT ${quotedColumns.join(', ')}
-		            FROM ${quoteIdent(historyTableName)}
+		            FROM ${quoteSqlIdentifier(historyTableName)}
 		           WHERE norbital_id = $1::uuid
 		             AND norbital_approval_id IS DISTINCT FROM $2::uuid
 		           ORDER BY upper(norbital_sys_period) DESC NULLS LAST, norbital_row_version DESC
@@ -357,7 +355,7 @@ async function restoreRecordBeforeApproval(
 		[ref.record_id, approvalRequestId]
 	);
 	if ((restored.rowCount ?? 0) > 0) return;
-	await tenantDb.query(`DELETE FROM ${quoteIdent(tableName)} WHERE norbital_id = $1::uuid`, [
+	await tenantDb.query(`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`, [
 		ref.record_id
 	]);
 }

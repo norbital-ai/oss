@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { TCollectionActionContext } from './approval_scope_types.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { isUnconditionalPolicyWhere } from './policy_sql.server.js';
+import { quoteSqlIdentifier } from '../sql-identifier.server.js';
 
 const recordSchema = z.record(z.string(), z.unknown());
 
@@ -107,9 +108,6 @@ function matchesWhereOnRecord(where: unknown, record: Record<string, unknown>): 
 	return true;
 }
 
-function quoteIdentifier(identifier: string): string {
-	return `"${identifier.replaceAll('"', '""')}"`;
-}
 
 async function matchesSqlCondition(
 	sqlExpression: string,
@@ -124,7 +122,7 @@ async function matchesSqlCondition(
 	const params: unknown[] = [];
 	const virtualColumns = Object.values(getColumns(table)).map((column) => {
 		params.push(record[column.name] ?? null);
-		return `$${params.length}::${column.getSQLType()} AS ${quoteIdentifier(column.name)}`;
+		return `$${params.length}::${column.getSQLType()} AS ${quoteSqlIdentifier(column.name)}`;
 	});
 	const boundExpression = sqlExpression.replace(/\$\{([^}]+)\}/g, (_match, path: string) => {
 		params.push(resolveScopePath(context.scope, path.trim()));

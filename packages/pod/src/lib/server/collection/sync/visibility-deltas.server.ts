@@ -20,6 +20,7 @@
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 import { emitSyncOutboxRow } from './sync-outbox.server.js';
+import { quoteSqlIdentifier } from '../sql-identifier.server.js';
 
 /**
  * Most rows a single release may announce.
@@ -31,12 +32,6 @@ import { emitSyncOutboxRow } from './sync-outbox.server.js';
  */
 const MAX_ANNOUNCED_PER_RELEASE = 5_000;
 
-function quoteIdent(identifier: string): string {
-	if (!/^[a-z_][a-z0-9_]*$/i.test(identifier)) {
-		throw new Error(`Unsafe SQL identifier: ${identifier}`);
-	}
-	return `"${identifier}"`;
-}
 
 /**
  * Every record whose visibility may have changed because `recordId` in `collection` was released,
@@ -70,12 +65,12 @@ export async function announceVisibilityChange(
 		// rather than assumed to be its primary key: a relationship may join on any column.
 		const affected = await ctx.tenantDb
 			.query<{ id: string; version: number | null }>(
-				`SELECT other.${quoteIdent(pkey)}::text AS id,
-				        other.${quoteIdent(SYSTEM_COLUMN_NAMES.ROW_VERSION)} AS version
-				   FROM ${quoteIdent(related.table)} other
-				   JOIN ${quoteIdent(collection)} released
-				     ON other.${quoteIdent(related.joinColumn)} = released.${quoteIdent(related.localField)}
-				  WHERE released.${quoteIdent(pkey)} = $1::uuid
+				`SELECT other.${quoteSqlIdentifier(pkey)}::text AS id,
+				        other.${quoteSqlIdentifier(SYSTEM_COLUMN_NAMES.ROW_VERSION)} AS version
+				   FROM ${quoteSqlIdentifier(related.table)} other
+				   JOIN ${quoteSqlIdentifier(collection)} released
+				     ON other.${quoteSqlIdentifier(related.joinColumn)} = released.${quoteSqlIdentifier(related.localField)}
+				  WHERE released.${quoteSqlIdentifier(pkey)} = $1::uuid
 				  LIMIT $2`,
 				[recordId, MAX_ANNOUNCED_PER_RELEASE - announced]
 			)
