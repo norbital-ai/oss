@@ -1,20 +1,40 @@
 <script lang="ts">
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
+	import { getInitializedWorkspaceClient } from '$lib/runtime/client.js';
+	import { toPanelMessage, withPendingEcho } from './transcript.js';
 
 	/**
-	 * A message as the panel renders it.
+	 * The transcript is read from the replica, not accumulated here.
 	 *
-	 * The transcript arrives as `chat_message` rows whose `parts` hold one `AiMessage`, so the panel
-	 * reads the stored message rather than a view model derived from it — there is no second shape to
-	 * keep in step with the loop.
+	 * The loop writes each `AiMessage` to `chat_message` as it goes, and that collection replicates to
+	 * its session's owner like any other — so the same live query the rest of the shell uses shows the
+	 * conversation as it is written, including a reply that arrived from a channel or from this user's
+	 * other tab. A local array could only ever show what *this* panel sent, which is what it did.
 	 */
-	type PanelMessage = { readonly role: string; readonly content: string };
-
-	let messages = $state<PanelMessage[]>([]);
 	let draft = $state('');
 	let runId = $state<string | undefined>(undefined);
+	let chatId = $state<string | undefined>(undefined);
 	let pending = $state(false);
+	/** The prompt in flight, echoed until its stored row arrives. Null once nothing is outstanding. */
+	let echo = $state<string | null>(null);
 	let failure = $state<string | null>(null);
+
+	const transcript = $derived.by(() => {
+		if (!chatId) return undefined;
+		// A panel rendered outside a mounted workspace has no replica to read either way; it still
+		// sends, and still shows the echo and the reply it gets back.
+		try {
+			return getInitializedWorkspaceClient().db.chat_message?.findMany({
+				where: { chat_id: chatId },
+				orderBy: { seq: 'asc' },
+				limit: 500
+			});
+		} catch {
+			return undefined;
+		}
+	});
+	const stored = $derived((transcript?.current ?? []).flatMap(toPanelMessage));
+	const messages = $derived(withPendingEcho(stored, echo));
 
 	const canSend = $derived(draft.trim().length > 0 && !pending);
 
@@ -24,8 +44,9 @@
 		pending = true;
 		failure = null;
 		// Shown immediately: the round trip runs the whole agent loop, which can take seconds, and a
-		// prompt that vanishes with no echo reads as a dropped message.
-		messages = [...messages, { role: 'user', content: message }];
+		// prompt that vanishes with no echo reads as a dropped message. It is replaced by the stored
+		// row the moment that row replicates, so there is never a moment showing both.
+		echo = message;
 		draft = '';
 		try {
 			const result = await getWorkspaceRemoteTransport().agentChat({
@@ -33,10 +54,12 @@
 				...(runId ? { runId } : {})
 			});
 			runId = result.runId;
-			messages = [...messages, { role: 'assistant', content: result.text }];
+			chatId = result.chatId ?? chatId;
+			// No local append: the loop already stored the reply, and the replica is where this panel
+			// reads it from. Appending it here is how a second tab's messages went missing.
 		} catch (cause) {
-			// The optimistic echo stays. Removing it would discard what the person typed, and they may
-			// want to copy it before retrying.
+			// The echo stays. Removing it would discard what the person typed, and they may want to
+			// copy it before retrying.
 			failure = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			pending = false;
@@ -53,7 +76,7 @@
 
 <section class="agent-chat" aria-label="Workspace agent">
 	<ol class="transcript">
-		{#each messages as message, index (index)}
+		{#each messages as message (message.key)}
 			<li class="message" data-role={message.role}>
 				<span class="role">{message.role}</span>
 				<p class="content">{message.content}</p>
