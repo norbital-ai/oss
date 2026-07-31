@@ -8,7 +8,10 @@ import {
 	defineRuntimeRegistry
 } from '../../src/lib/authoring/filesystem.js';
 import { defineRuntimeWorkspace } from '../../src/lib/authoring/workspace/define-workspace.js';
-import { defineConnection } from '../../src/lib/authoring/integrations/integrations.js';
+import {
+	defineConnection,
+	type HttpConnection
+} from '../../src/lib/authoring/integrations/integrations.js';
 import { buildNorbitalManifest } from '../../src/lib/manifest/index.js';
 
 const connection = () =>
@@ -54,7 +57,7 @@ function workspace(options: {
 	});
 }
 
-const sendBinding = (conn: ReturnType<typeof connection>, path: string) => ({
+const sendBinding = (conn: HttpConnection, path: string) => ({
 	registry: {
 		connection: conn,
 		send: { upsert: { request: { method: 'POST', path }, on: 'create' } }
