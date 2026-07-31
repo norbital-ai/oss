@@ -1,5 +1,11 @@
 import { PodSyncClient, type PgliteLike } from './pod-sync-client.js';
-import { enableClientSync, getClientSync, type ClientSync } from './client-sync.js';
+import {
+	announceClientSyncReady,
+	disableClientSync,
+	enableClientSync,
+	getClientSync,
+	type ClientSync
+} from './client-sync.js';
 import type { SyncBootstrap, SyncFetch } from './types.js';
 import { withTimeout } from '@norbital-ai/std';
 
@@ -301,6 +307,10 @@ async function openReplica(bootstrap: SyncBootstrap): Promise<ClientSync | null>
 				})
 				.catch(() => undefined);
 		}
+		// A cold load's reads resolved from the server before this existed, so they registered no
+		// collection and subscribed to nothing — a surface mounted once, like the notification bell,
+		// would sit on that first answer forever. Re-running them is what makes the page live.
+		if (!replicaHoldsRows) announceClientSyncReady();
 		return sync;
 	} catch (err) {
 		console.error('[pod-sync] client bootstrap failed; using server transport', err);

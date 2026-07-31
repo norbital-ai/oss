@@ -14,6 +14,7 @@ import {
 	reconcileServerRow,
 	setLocalSchema,
 	setSyncInvalidator,
+	setSyncReadyInvalidator,
 	syncMutate,
 	type LocalCollectionSchema
 } from '$lib/client/sync/client-sync.js';
@@ -213,6 +214,10 @@ async function settleApprovalSync(receipt: unknown): Promise<void> {
 // Client-sync (when active) drives reactive invalidation through the same seam: a diff applied to
 // the local replica re-fires exactly the cached reads for that collection.
 setSyncInvalidator(invalidateCollectionQueries);
+// And once, when a replica opens on a device that had none: those reads answered from the server
+// before there was anywhere local to register, so re-running them is what puts the page on the
+// stream at all. See `announceClientSyncReady`.
+setSyncReadyInvalidator(invalidateAllCollectionQueries);
 
 const PKEY = 'norbital_id';
 

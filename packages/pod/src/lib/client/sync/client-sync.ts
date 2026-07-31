@@ -48,9 +48,31 @@ export type ClientSync = {
 
 let active: ClientSync | undefined;
 let invalidateAll: (collection: string) => void = () => {};
+let invalidateEverything: () => void = () => {};
 
 export function setSyncInvalidator(fn: (collection: string) => void): void {
 	invalidateAll = fn;
+}
+
+/** Re-run every cached collection read. See `announceClientSyncReady`. */
+export function setSyncReadyInvalidator(fn: () => void): void {
+	invalidateEverything = fn;
+}
+
+/**
+ * The replica just opened on a device that had nothing.
+ *
+ * A read only registers its collection when it takes the local path, and a cold read does not: the
+ * replica was still opening, so it went to the server and returned. Nothing is registered, so
+ * nothing is subscribed, so nothing on screen is live — a mounted surface would keep showing that
+ * first server answer until something unrelated re-ran it. Re-running the reads that already
+ * resolved is what registers their collections and starts the stream carrying them.
+ *
+ * Only on a cold open. A warm device waits for the replica before its first read (see
+ * `clientSyncReady`), so its collections are registered by that read and there is nothing to redo.
+ */
+export function announceClientSyncReady(): void {
+	invalidateEverything();
 }
 
 export function enableClientSync(
