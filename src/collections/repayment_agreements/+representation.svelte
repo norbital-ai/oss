@@ -96,7 +96,9 @@
 				</div>
 			{/if}
 
-			<Column span="all"><Field name="schedule" label="Repayment schedule" /></Column>
+			<Grid gap="md" minimum="compact">
+				<Column span="all"><Field name="schedule" label="Repayment schedule" /></Column>
+			</Grid>
 		</Stack>
 	{/snippet}
 </CollectionForm>
