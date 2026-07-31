@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { tick } from 'svelte';
+	import { tick, type Snippet } from 'svelte';
 	import * as Avatar from '#lib/avatar';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
@@ -21,13 +21,15 @@
 		onNavigate,
 		onPrefetch,
 		onOrganizationChange,
-		onSignOut
+		onSignOut,
+		notifications
 	}: {
 		model: WorkspaceNavigationModel;
 		onNavigate?: (href: string) => void;
 		onPrefetch?: (href: string) => void;
 		onOrganizationChange?: (organizationId: string) => void | Promise<void>;
 		onSignOut?: () => void | Promise<void>;
+		notifications?: Snippet<[{ expanded: boolean }]>;
 	} = $props();
 
 	let switchingOrganizationId = $state<string | null>(null);
@@ -183,6 +185,9 @@
 
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-2 text-xs">
 	<Sidebar.Menu class="gap-2">
+		{#if notifications}
+			<Sidebar.MenuItem>{@render notifications({ expanded: displayExpanded })}</Sidebar.MenuItem>
+		{/if}
 		{#if displayExpanded}
 			<div class="px-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 				Account

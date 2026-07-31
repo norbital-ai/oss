@@ -34,6 +34,7 @@
 	import { WorkspaceFileUploadClient } from '$lib/client/workspace-file-upload.svelte.js';
 	import { workspaceRuntimeOperations, type WorkspaceAppLoader } from './client.js';
 	import BillingBanner from './billing-banner.svelte';
+	import NotificationsMenu from './notifications-menu.svelte';
 	import { createPodCollectionTableNavigation } from './collection-table-navigation.js';
 	import {
 		appAccessAllowed,
@@ -228,7 +229,11 @@
 	{/if}
 {/snippet}
 
-<WorkspaceShell model={navigationModel} onNavigate={navigate}>
+{#snippet notifications({ expanded }: { expanded: boolean })}
+	<NotificationsMenu {workspaceApi} userId={data.user.norbital_id} {expanded} onNavigate={navigate} />
+{/snippet}
+
+<WorkspaceShell model={navigationModel} onNavigate={navigate} {notifications}>
 	<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 		<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
 		{#if currentPath === '/'}
