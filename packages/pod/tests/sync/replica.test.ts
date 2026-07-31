@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PgliteWorkerBridge } from '$lib/client/sync/pglite-worker-bridge.js';
+import { PgliteWorkerBridge } from '$lib/client/sync/replica.js';
 
 function sharedWorkerChannel(): {
 	worker: Pick<SharedWorker, 'port' | 'onerror'>;

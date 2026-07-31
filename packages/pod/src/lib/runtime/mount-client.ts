@@ -3,7 +3,7 @@ import type { CollectionSurfaceRegistry } from '@norbital-ai/ui/collection-table
 import type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';
 import PodApp from './pod-app.svelte';
 import { initializeWorkspaceClient } from './client.js';
-import { bootstrapClientSync } from '../client/sync/browser-bootstrap.js';
+import { bootstrapClientSync } from '../client/sync/replica.js';
 import { setStorageScope } from '@norbital-ai/ui/storage-scope';
 import { warmAllCollections } from '../client/sync/client-sync.js';
 import type { TenantWorkspaceShellData } from '../client/workspace_shell_types.js';

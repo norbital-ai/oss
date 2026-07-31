@@ -16,7 +16,7 @@ import {
 	syncMutate,
 	type LocalCollectionSchema
 } from '$lib/client/sync/client-sync.js';
-import { clientSyncReady } from '$lib/client/sync/browser-bootstrap.js';
+import { clientSyncReady } from '$lib/client/sync/replica.js';
 import { isSearchableCollectionField } from '@norbital-ai/platform-utils/collection';
 import { mutationRejectionMessage } from '$lib/client/sync/mutation-rejection.js';
 import type { WireMutation } from '$lib/client/sync/types.js';

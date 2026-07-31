@@ -79,8 +79,15 @@
 </script>
 
 {#if switchingOrganization}
+	<!--
+		Fully opaque, not `bg-background/90`. At 90% the table's gridlines and the outgoing
+		organization's records stayed legible underneath, so the switch read as a dimmed version of
+		where you just were rather than a departure from it — and the data showing through belongs to
+		the organization you are leaving, which is the last thing that should linger on screen.
+		The blur is a backstop for any surface that paints outside this layer's background.
+	-->
 	<div
-		class="fixed inset-0 z-50 grid place-items-center bg-background/90"
+		class="fixed inset-0 z-50 grid place-items-center bg-background backdrop-blur-sm"
 		role="status"
 		aria-live="polite"
 		aria-label={`Switching to ${switchingOrganization.name}`}

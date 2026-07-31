@@ -666,13 +666,19 @@
 {/snippet}
 
 {#snippet renderLoadingSkeleton()}
-	<div class="w-full">
+	<!--
+		A loading surface, not a half-drawn table. This used to repeat the grid's own chrome —
+		`border-b` per row, `border-r` per cell — so the skeleton rendered gridlines around empty
+		cells and read as a table that had failed to fill in rather than one still arriving. It is
+		now one opaque block of pulsing bars: the structure returns when the data does.
+	-->
+	<div class="w-full bg-card">
 		{#each Array(20) as _, i (i)}
-			<div class="relative border-b" style="height: {ROW_HEIGHT}px;">
+			<div class="relative" style="height: {ROW_HEIGHT}px;">
 				<div class={getPinnedLayerClass()} style="width: {pinnedWidth}px;">
 					{#each pinnedLayouts as layout (layout.id)}
 						<div
-							class={cn('absolute top-0 h-full items-center p-2.5', !borderless && 'border-r')}
+							class="absolute top-0 flex h-full items-center bg-card p-2.5"
 							style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 						>
 							<Skeleton class="h-4 w-full" />
@@ -680,14 +686,14 @@
 					{/each}
 				</div>
 				<div
-					class="absolute top-0 h-full"
+					class="absolute top-0 h-full bg-card"
 					style="left: {pinnedWidth}px; width: {scrollTotalWidth}px;"
 				>
 					{#each virtualCols as vi (scrollLayouts[vi.index]?.id ?? `idx:${vi.index}`)}
 						{@const layout = scrollLayouts[vi.index]}
 						{#if layout}
 							<div
-								class={cn('absolute top-0 h-full items-center p-2.5', !borderless && 'border-r')}
+								class="absolute top-0 flex h-full items-center p-2.5"
 								style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 							>
 								<Skeleton class="h-4 w-full" />
