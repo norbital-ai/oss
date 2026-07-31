@@ -79,9 +79,13 @@
 				Saving one re-runs the stitch.
 			</p>
 		</div>
+		<!-- Both tables read project_documents, so each names its own view: the -->
+		<!-- default is one view per collection, and it is also the key column -->
+		<!-- state persists under. -->
 		<CollectionTable
 			{client}
 			collection="project_documents"
+			view="reclamation_projects:project_documents:reconstruction"
 			query={{
 				where: { project_id: { eq: projectId }, category: { eq: 'reconstruction' } },
 				limit: 50
@@ -114,6 +118,7 @@
 		<CollectionTable
 			{client}
 			collection="project_documents"
+			view="reclamation_projects:project_documents:tender"
 			query={{
 				where: { project_id: { eq: projectId }, category: { in: ['tender', 'reference'] } },
 				limit: 100
