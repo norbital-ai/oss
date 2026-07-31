@@ -28,26 +28,51 @@ function searchTokens(value: string): string[] {
 	return value.match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
-function editDistanceAtMost(left: string, right: string, limit: number): boolean {
+/** Levenshtein distance. Small inputs only — names, identifiers, search tokens. */
+export function editDistance(left: string, right: string): number {
 	const leftCharacters = [...left];
 	const rightCharacters = [...right];
-	if (Math.abs(leftCharacters.length - rightCharacters.length) > limit) return false;
 	let previous = Array.from({ length: rightCharacters.length + 1 }, (_, index) => index);
 	for (const [leftIndex, leftCharacter] of leftCharacters.entries()) {
 		const current = [leftIndex + 1];
-		let rowMinimum = current[0] ?? 0;
 		for (const [rightIndex, rightCharacter] of rightCharacters.entries()) {
-			const insertion = (current[rightIndex] ?? 0) + 1;
-			const deletion = (previous[rightIndex + 1] ?? 0) + 1;
-			const substitution = (previous[rightIndex] ?? 0) + Number(leftCharacter !== rightCharacter);
-			const distance = Math.min(insertion, deletion, substitution);
-			current.push(distance);
-			rowMinimum = Math.min(rowMinimum, distance);
+			current.push(
+				Math.min(
+					(current[rightIndex] ?? 0) + 1,
+					(previous[rightIndex + 1] ?? 0) + 1,
+					(previous[rightIndex] ?? 0) + Number(leftCharacter !== rightCharacter)
+				)
+			);
 		}
-		if (rowMinimum > limit) return false;
 		previous = current;
 	}
-	return (previous.at(-1) ?? limit + 1) <= limit;
+	return previous.at(-1) ?? rightCharacters.length;
+}
+
+function editDistanceAtMost(left: string, right: string, limit: number): boolean {
+	if (Math.abs([...left].length - [...right].length) > limit) return false;
+	return editDistance(left, right) <= limit;
+}
+
+/**
+ * The candidate nearest to `value`, when one is close enough that a typo or a rename is the likely
+ * cause — otherwise undefined.
+ *
+ * Shared so every "that is not a known X" diagnostic suggests names the same way: the compiler's
+ * orphaned-role-directory check and the seed executor's unknown-column abort both read better as
+ * "did you mean Y?" than as a bare rejection.
+ */
+export function nearestName(
+	value: string,
+	candidates: Iterable<string>,
+	maxDistance = 2
+): string | undefined {
+	let best: { readonly name: string; readonly distance: number } | undefined;
+	for (const candidate of candidates) {
+		const distance = editDistance(value, candidate);
+		if (!best || distance < best.distance) best = { name: candidate, distance };
+	}
+	return best && best.distance <= maxDistance ? best.name : undefined;
 }
 
 function searchTokenMatches(candidate: string, query: string): boolean {

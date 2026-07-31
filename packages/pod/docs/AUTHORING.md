@@ -87,11 +87,21 @@ The surface is designed so that mistakes surface at their cause rather than down
 - **A malformed cron expression fails at startup**, naming the automation, rather than never firing.
 - **A workspace refuses to boot when a facility it needs is absent** — schedules that silently never
   fire are worse than a process that will not start.
+- **A seed payload key that is not a column aborts the seed.** A `+seed.ts` record is a plain record,
+  so a typo or a column the model renamed cannot be caught by the compiler. It is caught before the
+  first write instead: `pod seed` names the step, the key, how many rows carry it and the closest real
+  column, then writes nothing — not even the `clearBefore` deletes. This used to be a silent drop, and
+  a seed that wrote `user_name` instead of `name` produced a tenant full of users with a NULL name that
+  nobody could sign in as, reporting success the whole way.
 - **There is one way to do each thing.** No parallel mechanism to choose between, and no
   configuration that only matters in one deployment.
 
 Where a foot-gun cannot be removed, it is named. `intervalQueue()` is a timer with no durability, so it
 is an explicit opt-in rather than a default — a deployment running on one says so in its own config.
+The seed check has one exemption for the same reason: a **sidecar** key is one the caller consumes
+itself before the plan is executed (Core reads `document_asset.metadata.seed_asset` to upload the file
+first), and it must be declared as `collection.key` exactly, with a written reason, which the executor
+prints on every run.
 
 **One known limit.** A `before` hook that returns a _spread_ — `{ ...input, no_such_column: 'x' }` —
 compiles, because TypeScript does not apply excess-property checking to an object literal built from a

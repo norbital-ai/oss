@@ -20,6 +20,11 @@ export type CompiledSeedPlan = {
 	readonly version: 1;
 	readonly clearBefore?: ReadonlyArray<string>;
 	readonly mutations: ReadonlyArray<{
+		/**
+		 * The authoring step this batch came from, carried through purely so the executor can name it
+		 * when it refuses a payload. Optional because a plan may be assembled by hand.
+		 */
+		readonly step_id?: SeedStepId;
 		readonly collection_name: string;
 		readonly payloads: ReadonlyArray<Record<string, unknown>>;
 	}>;
@@ -179,6 +184,7 @@ export function compiledSeedPlanFromManifest(manifest: SeedManifest): CompiledSe
 		version: 1,
 		...(manifest.clearBefore?.length ? { clearBefore: [...manifest.clearBefore] } : {}),
 		mutations: manifest.steps.map((step) => ({
+			step_id: step.id,
 			collection_name: step.collection,
 			payloads: [...step.payloads]
 		}))

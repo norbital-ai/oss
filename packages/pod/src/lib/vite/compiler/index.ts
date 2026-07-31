@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import path from 'node:path';
 import { sourceDiagnostic } from './diagnostics.js';
 import { safeParse } from '@norbital-ai/std/json';
+import { nearestName } from '@norbital-ai/std/string';
 import { extractAppMetadata } from './app-metadata.js';
 import type {
 	DiagnosticSnapshot,
@@ -785,23 +786,6 @@ const KNOWN_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set([
 	'remotes'
 ]);
 
-/** Edit distance, capped — only used to decide whether to suggest a name. */
-function editDistance(left: string, right: string): number {
-	let previous = Array.from({ length: right.length + 1 }, (_unused, index) => index);
-	for (let i = 1; i <= left.length; i += 1) {
-		const current = [i];
-		for (let j = 1; j <= right.length; j += 1) {
-			current[j] = Math.min(
-				(previous[j] ?? 0) + 1,
-				(current[j - 1] ?? 0) + 1,
-				(previous[j - 1] ?? 0) + (left[i - 1] === right[j - 1] ? 0 : 1)
-			);
-		}
-		previous = current;
-	}
-	return previous[right.length] ?? right.length;
-}
-
 /**
  * Refuse a role declaration sitting in a directory nothing reads.
  *
@@ -826,11 +810,8 @@ function validateRoleDirectories(
 			(file) => path.basename(file).startsWith('+') && !file.endsWith('.tool.ts')
 		);
 		if (orphans.length === 0) continue;
-		const nearest = [...KNOWN_SOURCE_DIRECTORIES]
-			.map((known) => ({ known, distance: editDistance(entry.name, known) }))
-			.sort((left, right) => left.distance - right.distance)[0];
-		const suggestion =
-			nearest && nearest.distance <= 2 ? ` Did you mean src/${nearest.known}?` : '';
+		const nearest = nearestName(entry.name, KNOWN_SOURCE_DIRECTORIES);
+		const suggestion = nearest ? ` Did you mean src/${nearest}?` : '';
 		diagnostics.push(
 			topologyDiagnostic(
 				relativePath(root, orphans[0] ?? directory),
