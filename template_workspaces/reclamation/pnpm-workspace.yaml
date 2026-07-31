@@ -1,3 +1,6 @@
+allowBuilds:
+  esbuild: set this to true or false
+
 # Only these exact, reviewed first-party releases bypass the minimum-release-age gate.
 #
 # Pinned by version on purpose, and deliberately not by a scope-wide wildcard. The gate's value
