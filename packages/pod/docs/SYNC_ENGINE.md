@@ -139,9 +139,43 @@ complexity when the server maintains them. **Takeaway: a "shape" that is really 
 paginated `SELECT`, with liveness delivered by a separate global stream, is a shape in name
 only.** It buys nothing and costs a cold start per UI state.
 
+**Zero (Rocicorp).** The query is the sync unit, and — this is the part worth copying — every
+result carries its own completeness. `resultType` is `'complete'` (all data present),
+`'unknown'` (some is missing locally) or `'error'`. Their documented UI rule is to show "not
+found" only when `resultType === 'complete'` *and* the row is absent, precisely so a cold page
+does not flash 404 while the server answers. **Takeaway: never let the UI infer completeness
+from emptiness.** A partial result and an empty one look identical unless the engine says which
+it is.
+
 Pod's server has a **single global change feed** (`sync_outbox`, tailed by `(xid, seq)`). Given
 that, the correct client sync unit is the **collection**, not the query shape. That is the
 central design decision below.
+
+### 2.1 Where Pod landed relative to them
+
+| Problem | Electric | Zero | Pod |
+| --- | --- | --- | --- |
+| Partial replication | server-maintained shape (table + where + columns) | per-query | per-collection, byte-budgeted |
+| Resume position | `offset` (starts `-1`) + shape `handle` | per-query | `(xid, seq)` cursor on one global feed |
+| Position no longer valid | **HTTP 409** + `{"headers":{"control":"must-refetch"}}` | re-sync | `event: reset` on the stream (§3.8a) |
+| Caught up | `up-to-date` control message | `resultType: 'complete'` | catch-up completes → `synced` |
+| Partial result reaches the UI | shape is complete by construction | **yes, labelled `'unknown'`** | **no — declined, server answers** |
+
+The first four rows are the same design under different names, which is reassuring: the
+compaction boundary and its reset are not an invention here, they are the standard answer.
+
+The last row is a real divergence and worth stating as a choice. Zero shows partial results and
+labels them; Pod refuses to answer locally unless it can prove the answer is complete (§3.2).
+Both are honest — what neither does is present a partial result as a whole one. Pod's version
+costs a round trip on a windowed collection; Zero's costs an extra concept every caller has to
+handle correctly. Pod's is the safer default for a workspace where a filtered list quietly
+missing rows is a correctness bug, not a cosmetic one.
+
+**The improvement this comparison points at** is adopting Zero's labelling *in addition* to the
+current behaviour: return the local rows immediately with `complete: false`, let the table render
+them, and swap in the server's answer when it lands. That is strictly better than a spinner and
+strictly better than silence — but it adds a concept to every read site, so it is a deliberate
+next step rather than a tweak.
 
 ---
 
