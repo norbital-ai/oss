@@ -715,6 +715,8 @@ export function buildSurfaces(model: StitchedModel): SiteSurfaces {
 
 	const seabedMesh = buildSeabedMesh(model, model.settings.maxSeabedVertices ?? 600_000);
 	if (seabedMesh) meshes.push(seabedMesh);
+	const subGradeMesh = buildSubGradeMesh(model, sampler, cell);
+	if (subGradeMesh) meshes.push(subGradeMesh);
 	const structureMesh = buildStructureMesh(model, sampler, cell);
 	if (structureMesh) meshes.push(structureMesh);
 	const landMesh = buildExistingLandMesh(model);
@@ -750,6 +752,114 @@ export function buildSurfaces(model: StitchedModel): SiteSurfaces {
  * one the volumes were integrated against. It is only thinned when the survey is
  * dense enough to blow the vertex budget, and the applied step is reported.
  */
+/**
+ * The ground dug out below the existing bed.
+ *
+ * A section that drops a sand key or a rock trench below the seabed is
+ * describing excavation: the works are keyed into the bed rather than resting
+ * on it, and along an armoured face that key is what stops the toe walking. The
+ * integrator has always measured it — it is in `excavation` and in the sand key
+ * line — but the drawn solid stopped dead at the bed, so the one part of the
+ * design that is *underneath* everything else was the part you could not see.
+ *
+ * Drawn as the trench itself: the invert, and the walls up to the bed.
+ */
+function buildSubGradeMesh(
+	model: StitchedModel,
+	sampler: ReturnType<typeof createSampler>,
+	cell: number
+): SurfaceMesh | null {
+	if (!sampler.subGradeAt) return null;
+	const spanX = Math.max(1, sampler.maxX - sampler.minX);
+	const spanY = Math.max(1, sampler.maxY - sampler.minY);
+	const reach = Math.ceil(sampler.seawardReachM / cell + 1) * cell;
+	const minX = sampler.minX - reach;
+	const minY = sampler.minY - reach;
+	const columns = Math.max(2, Math.round((spanX + 2 * reach) / cell) + 1);
+	const rows = Math.max(2, Math.round((spanY + 2 * reach) / cell) + 1);
+	if (columns * rows > 4_000_000) return null;
+
+	type Dig = { readonly invert: number; readonly bed: number };
+	const grid: (Dig | null)[] = new Array(columns * rows).fill(null);
+	const at = (ix: number, iy: number) => ({ x: minX + ix * cell, y: minY + iy * cell });
+
+	let any = false;
+	for (let iy = 0; iy < rows; iy++) {
+		for (let ix = 0; ix < columns; ix++) {
+			const { x, y } = at(ix, iy);
+			const bands = sampler.subGradeAt(x, y);
+			if (bands.length === 0) continue;
+			const bed = sampler.bedAt(x, y);
+			// The deepest invert is the floor of the excavation; shallower bands sit
+			// inside it and would only z-fight with their own trench walls.
+			let invert = Infinity;
+			for (const band of bands) invert = Math.min(invert, band.invertM);
+			if (!Number.isFinite(invert) || invert >= bed) continue;
+			grid[iy * columns + ix] = { invert, bed };
+			any = true;
+		}
+	}
+	if (!any) return null;
+
+	const builder = new MeshBuilder();
+	const cache = new Map<string, number>();
+	const vertex = (ix: number, iy: number, z: number, tag: string): number => {
+		const key = `${tag}:${ix}:${iy}`;
+		const cached = cache.get(key);
+		if (cached !== undefined) return cached;
+		const { x, y } = at(ix, iy);
+		const index = builder.vertex(x, y, z);
+		cache.set(key, index);
+		return index;
+	};
+
+	for (let iy = 0; iy < rows - 1; iy++) {
+		for (let ix = 0; ix < columns - 1; ix++) {
+			const a = grid[iy * columns + ix];
+			const b = grid[iy * columns + ix + 1];
+			const c = grid[(iy + 1) * columns + ix + 1];
+			const d = grid[(iy + 1) * columns + ix];
+			if (!a || !b || !c || !d) continue;
+			// Floor of the trench.
+			builder.quad(
+				vertex(ix, iy, a.invert, 'floor'),
+				vertex(ix, iy + 1, d.invert, 'floor'),
+				vertex(ix + 1, iy + 1, c.invert, 'floor'),
+				vertex(ix + 1, iy, b.invert, 'floor')
+			);
+		}
+	}
+
+	// Walls wherever the trench stops, from its invert up to the existing bed.
+	for (let iy = 0; iy < rows; iy++) {
+		for (let ix = 0; ix < columns; ix++) {
+			const current = grid[iy * columns + ix];
+			if (!current) continue;
+			const right = ix + 1 < columns ? grid[iy * columns + ix + 1] : null;
+			const down = iy + 1 < rows ? grid[(iy + 1) * columns + ix] : null;
+			if (down && !right && ix + 1 < columns) {
+				builder.quad(
+					vertex(ix, iy, current.bed, 'bed'),
+					vertex(ix, iy + 1, down.bed, 'bed'),
+					vertex(ix, iy + 1, down.invert, 'floor'),
+					vertex(ix, iy, current.invert, 'floor')
+				);
+			}
+			if (right && !down && iy + 1 < rows) {
+				builder.quad(
+					vertex(ix, iy, current.invert, 'floor'),
+					vertex(ix + 1, iy, right.invert, 'floor'),
+					vertex(ix + 1, iy, right.bed, 'bed'),
+					vertex(ix, iy, current.bed, 'bed')
+				);
+			}
+		}
+	}
+
+	if (builder.empty) return null;
+	return builder.finish('subgrade', 'Excavated below the bed', 0x8a6f4a, 1, true);
+}
+
 function buildSeabedMesh(model: StitchedModel, maxVertices: number): SurfaceMesh | null {
 	const { seabed } = model;
 	const step = Math.max(1, Math.ceil(Math.sqrt((seabed.nx * seabed.ny) / maxVertices)));
