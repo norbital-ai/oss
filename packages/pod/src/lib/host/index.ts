@@ -48,6 +48,7 @@ export type {
 	HostMapsBinding,
 	HostMessagingBinding,
 	HostQueue,
+	HostSecretResolver,
 	HostSubject,
 	HostVerifiedSubject,
 	IntegrationDeliveryMessage,
@@ -67,6 +68,16 @@ export type {
  * an agent that does not name one cannot see that it exists. `assertHostAgentTools` is exported for
  * a host that assembles its own startup (Core does): `pod start` already runs it.
  */
+/**
+ * The outbound call a `request` destination describes, made for real.
+ *
+ * Supply it as `integrationDelivery` and every declared HTTP send binding works with no per-host
+ * code: the URL and headers come from the manifest, the credential from `secrets` (`process.env` by
+ * default). A host that needs to route deliveries somewhere else still writes its own function — the
+ * destination arrives on the message either way.
+ */
+export { httpIntegrationDelivery, processEnvSecrets } from './integration-http.js';
+
 export { assertHostAgentTools, hostAgentTools } from './agent-tools.js';
 export type { HostAgentTool } from './agent-tools.js';
 export type {

@@ -1,10 +1,16 @@
-import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
+import type {
+	ManifestIntegrationDestination,
+	ManifestIntegrationOrigin,
+	NorbitalManifest
+} from '@norbital-ai/platform-utils/manifest/types';
 import { parseCron } from '../../host/cron.js';
 import type {
 	HostIntegrationDelivery,
+	HostSecretResolver,
 	IntegrationDeliveryMessage,
 	QueueJob
 } from '../../host/types.js';
+import { processEnvSecrets, resolveSecretHeaders } from '../../host/integration-http.js';
 import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
 
 /** Calls the private runtime host-control entry point. */
@@ -15,6 +21,10 @@ export type WorkspaceJobOptions = {
 	readonly dispatch: RuntimeDispatch;
 	readonly integrationDelivery?: HostIntegrationDelivery;
 	readonly messaging?: HostMessagingBinding;
+	/** Resolves the secret names a declared connection references. Defaults to `process.env`. */
+	readonly secrets?: HostSecretResolver;
+	/** The network the pull jobs use. Injectable so a test can drive them without a socket. */
+	readonly fetch?: typeof globalThis.fetch;
 	readonly organizationId: string;
 	readonly log?: (message: string) => void;
 };
@@ -85,6 +95,30 @@ function assertSchedule(name: string, expression: string): string {
 	return expression;
 }
 
+/**
+ * The event body a `system-event` destination carries.
+ *
+ * A transform is free to return an array or a scalar, but a system event's payload is a record — so
+ * anything else is wrapped under `value` rather than silently dropped or refused. The receiving
+ * binding sees `{ event_id, event, payload }` either way, which is the only shape its import
+ * pipeline was ever written against.
+ */
+function systemEventPayload(payload: unknown, row: ClaimedOutboxRow): Record<string, unknown> {
+	if (payload != null && typeof payload === 'object' && !Array.isArray(payload)) {
+		return payload as Record<string, unknown>;
+	}
+	return { value: payload ?? null, record_id: row.record_id, action: row.action };
+}
+
+/** Where one outbound binding was declared to send, as the manifest recorded it. */
+function outboundDestination(
+	manifest: NorbitalManifest,
+	integrationName: string,
+	bindingName: string
+): ManifestIntegrationDestination | undefined {
+	return manifest.integrations?.[integrationName]?.definition.outbound?.[bindingName]?.destination;
+}
+
 function integrationOutboxJob(options: WorkspaceJobOptions): QueueJob {
 	const deliver = options.integrationDelivery;
 	if (!deliver) throw new Error('Integration outbox job requires an integrationDelivery provider');
@@ -114,13 +148,32 @@ function integrationOutboxJob(options: WorkspaceJobOptions): QueueJob {
 						collectionName: row.collection_name,
 						records: [row.payload]
 					});
+					const destination = outboundDestination(
+						options.manifest,
+						row.integration_name,
+						row.binding_name
+					);
+					// A system event was never going anywhere: it is this workspace talking to itself, and
+					// handing it to `integrationDelivery` asked a host to POST an event somewhere it had no
+					// URL for. Route it back in, and the matching `receive` binding finally has a caller.
+					if (destination?.type === 'system-event') {
+						await options.dispatch({
+							kind: 'system-event',
+							eventId: row.norbital_id,
+							event: destination.event,
+							payload: systemEventPayload(payload, row)
+						});
+						delivered.push(row.norbital_id);
+						continue;
+					}
 					const message: IntegrationDeliveryMessage = {
 						integrationName: row.integration_name,
 						bindingName: row.binding_name,
 						collectionName: row.collection_name,
 						recordId: row.record_id,
 						action: row.action,
-						payload
+						payload,
+						...(destination ? { destination } : {})
 					};
 					await deliver(message);
 					delivered.push(row.norbital_id);
@@ -195,6 +248,113 @@ function notificationOutboxJob(options: WorkspaceJobOptions): QueueJob {
 }
 
 /**
+ * One scheduled `receive` binding: fetch the remote, hand the body to the import pipeline, resume.
+ *
+ * The fetch happens here rather than inside the workspace for the same reason outbound delivery
+ * does — this is the side that holds the credential, and under Core the isolate has no socket at
+ * all. What crosses back in is the response body and nothing else.
+ *
+ * The cursor is read before the call and written after the rows land, so a crash between the two
+ * re-pulls a page rather than skipping one. That direction is deliberate: an import pipeline that
+ * writes the same remote id twice is a collection an author can de-duplicate, and a page silently
+ * skipped is data that never arrives and nothing to notice it by.
+ */
+function integrationPullJob(
+	options: WorkspaceJobOptions,
+	integrationName: string,
+	bindingName: string,
+	origin: Extract<ManifestIntegrationOrigin, { type: 'api-pull' }>,
+	collectionName: string
+): QueueJob {
+	const secrets = options.secrets ?? processEnvSecrets;
+	const call = options.fetch ?? globalThis.fetch;
+	const describe = `Integration ${integrationName}.${bindingName}`;
+	const log = options.log ?? ((message: string) => console.log(message));
+	return {
+		name: `pod:integration-pull:${integrationName}:${bindingName}`,
+		schedule: assertSchedule(describe, origin.schedule),
+		async run() {
+			const stored = (await options.dispatch({
+				kind: 'integration-cursor',
+				action: 'read',
+				integrationName,
+				bindingName
+			})) as { readonly cursor?: string | null };
+			const cursor = stored?.cursor ?? null;
+			const url = new URL(origin.url);
+			if (origin.cursorQuery && cursor) url.searchParams.set(origin.cursorQuery, cursor);
+			try {
+				const response = await call(url, {
+					method: origin.method ?? 'GET',
+					headers: {
+						accept: 'application/json',
+						...resolveSecretHeaders(origin.secretHeaders, secrets, describe)
+					}
+				});
+				if (!response.ok) {
+					throw new Error(`${describe} pull was refused by ${url.origin} — ${response.status}`);
+				}
+				const importData: unknown = await response.json();
+				await options.dispatch({
+					kind: 'integration',
+					direction: 'receive',
+					integrationName,
+					bindingName,
+					collectionName,
+					importData
+				});
+				await options.dispatch({
+					kind: 'integration-cursor',
+					action: 'write',
+					integrationName,
+					bindingName,
+					cursor: origin.nextCursorHeader
+						? (response.headers.get(origin.nextCursorHeader) ?? cursor)
+						: cursor,
+					error: null
+				});
+			} catch (cause) {
+				const reason = cause instanceof Error ? cause.message : String(cause);
+				log(`[pod:queue] ${describe} pull failed: ${reason}`);
+				// The cursor is left where it was, so the next tick retries the same page. Only the
+				// reason is recorded, and only so an operator can see it without reading the log.
+				await options
+					.dispatch({
+						kind: 'integration-cursor',
+						action: 'write',
+						integrationName,
+						bindingName,
+						cursor,
+						error: reason
+					})
+					.catch(() => undefined);
+				throw cause;
+			}
+		}
+	};
+}
+
+/** Every `api-pull` binding in the manifest, as jobs. */
+function integrationPullJobs(options: WorkspaceJobOptions): QueueJob[] {
+	return Object.entries(options.manifest.integrations ?? {}).flatMap(
+		([integrationName, integration]) =>
+			Object.entries(integration.definition.inbound ?? {}).flatMap(([bindingName, binding]) =>
+				binding.origin.type === 'api-pull'
+					? [
+							integrationPullJob(
+								options,
+								integrationName,
+								bindingName,
+								binding.origin,
+								binding.collection
+							)
+						]
+					: []
+			)
+	);
+}
+
+/**
  * Every recurring job this workspace needs, derived from its manifest.
  *
  * The set is host-agnostic on purpose: Core registers it with pgboss and `pod start` hands it to
@@ -220,6 +380,10 @@ export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[]
 
 	if (options.integrationDelivery) jobs.push(integrationOutboxJob(options));
 	if (options.messaging) jobs.push(notificationOutboxJob(options));
+	// Unconditional, unlike the outbox drain: a pull needs no host provider at all, only the
+	// schedule the workspace declared. Gating it on `integrationDelivery` would have made an inbound
+	// binding depend on the outbound facility, which is the confusion that left it unreachable.
+	jobs.push(...integrationPullJobs(options));
 
 	const hasEventAutomations = Object.values(options.manifest.automations ?? {}).some(
 		(automation) => 'collection' in automation.trigger

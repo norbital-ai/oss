@@ -892,7 +892,8 @@ export async function startStandalone(
 			dispatch,
 			organizationId: environment.orgId,
 			...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
-			...(config.messaging ? { messaging: config.messaging } : {})
+			...(config.messaging ? { messaging: config.messaging } : {}),
+			...(config.secrets ? { secrets: config.secrets } : {})
 		});
 		if (config.queue && jobs.length > 0) stopQueue = await config.queue(jobs);
 	} catch (cause) {

@@ -213,14 +213,15 @@ describe('Pod Sync — runtime contract (real runtime + PGlite clients)', () => 
 			    -- correctly refused. They are not candidates for a sync test.
 			    AND c.table_name NOT IN ('invitation', 'host_event_outbox')
 			    -- serverInsert fills every NOT NULL column with a synthetic sample value, which cannot
-			    -- satisfy a foreign key. Any temporal collection proves the instant handling, so pick one
-			    -- that stands alone rather than teaching the helper to resolve references.
+			    -- satisfy a foreign key and collides with itself on a unique one. Any temporal collection
+			    -- proves the instant handling, so pick one that stands alone rather than teaching the
+			    -- helper to resolve references or invent distinct values.
 			    AND NOT EXISTS (
 			      SELECT 1
 			        FROM information_schema.table_constraints tc
 			       WHERE tc.table_schema = c.table_schema
 			         AND tc.table_name = c.table_name
-			         AND tc.constraint_type = 'FOREIGN KEY'
+			         AND tc.constraint_type IN ('FOREIGN KEY', 'UNIQUE')
 			    )
 			  ORDER BY table_name, ordinal_position
 			  LIMIT 1`,

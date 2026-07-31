@@ -76,6 +76,7 @@ const REPLICA_EXCLUDED_TABLES = [
 	'_approval_lock',
 	'_norbital_internal_schema',
 	'integration_outbox',
+	'integration_cursor',
 	'notification_outbox',
 	'__drizzle_migrations',
 	...CLIENT_OPAQUE_COLLECTIONS

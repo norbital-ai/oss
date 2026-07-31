@@ -222,6 +222,14 @@ interface PlatformSystemRows {
 		readonly chat_message_id: string | null;
 		readonly answered_at: string | null;
 	};
+	readonly integration_cursor: SystemRecordFields & {
+		readonly integration_name: string;
+		readonly binding_name: string;
+		readonly binding_key: string;
+		readonly cursor: string | null;
+		readonly last_pulled_at: string | null;
+		readonly last_error: string | null;
+	};
 	readonly document_asset: SystemRecordFields & {
 		readonly owner_user_id: string;
 		readonly file_name: string;
@@ -251,6 +259,7 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'policy',
 	'audit_event',
 	'integration_outbox',
+	'integration_cursor',
 	'notification_outbox',
 	'notification',
 	'document_asset',
@@ -394,6 +403,18 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'error', kind: 'text', nullable: true },
 			{ name: 'chat_message_id', kind: 'uuid', nullable: true },
 			{ name: 'answered_at', kind: 'timestamptz', nullable: true }
+		]
+	},
+	integration_cursor: {
+		name: 'integration_cursor',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'integration_name', kind: 'text', nullable: false },
+			{ name: 'binding_name', kind: 'text', nullable: false },
+			{ name: 'binding_key', kind: 'text', nullable: false },
+			{ name: 'cursor', kind: 'text', nullable: true },
+			{ name: 'last_pulled_at', kind: 'timestamptz', nullable: true },
+			{ name: 'last_error', kind: 'text', nullable: true }
 		]
 	},
 	invitation: {

@@ -7,6 +7,7 @@ import type {
 	HostMessagingBinding,
 	RuntimeFacilityName
 } from '@norbital-ai/platform-utils/runtime/binding';
+import type { ManifestIntegrationDestination } from '@norbital-ai/platform-utils/manifest/types';
 import type { TBaseScope } from '@norbital-ai/platform-utils/scope/types';
 import type { HostAgentTool } from './agent-tools.js';
 import type { HostDbAdapter } from './db.js';
@@ -229,16 +230,37 @@ export type IntegrationDeliveryMessage = {
 	readonly action: string;
 	/** Whatever the binding's `transform` returned — the body to deliver. */
 	readonly payload: unknown;
+	/**
+	 * The binding's declared destination, straight from the manifest.
+	 *
+	 * Carries the URL and the *names* of the headers' secrets, never their values — resolving those is
+	 * the host's half of the bargain, and the whole reason this call happens out here. A host is free
+	 * to ignore it and deliver somewhere of its own choosing; `httpIntegrationDelivery()` is the
+	 * implementation that simply honours it.
+	 *
+	 * `system-event` destinations never arrive here: they are dispatched back into the workspace by
+	 * the outbox job, because they were never going to leave the pod.
+	 */
+	readonly destination?: ManifestIntegrationDestination;
 };
 
 /**
  * Performs the outbound network call for one integration message. Satisfies `integrationDelivery`.
  *
  * This is a host function rather than a binding because it is the step that holds the endpoint and
- * its credential. The workspace decides *what* to send; the host decides *where* and proves it may.
- * Throwing schedules a retry with backoff; returning marks the row delivered.
+ * its credential. The workspace decides *what* to send and declares where; the host makes the call
+ * and proves it may. Throwing schedules a retry with backoff; returning marks the row delivered.
  */
 export type HostIntegrationDelivery = (message: IntegrationDeliveryMessage) => Promise<void>;
+
+/**
+ * Turns a declared secret name into its value. The one place a credential exists in a running pod.
+ *
+ * Standalone reads `process.env`; a host with a real secret store supplies its own. Returning
+ * `undefined` fails the call that needed it, naming the key — a request sent without the header it
+ * declared would come back 401 from somewhere far less informative.
+ */
+export type HostSecretResolver = (name: string) => string | undefined;
 
 /**
  * Validates a host plugin set at startup, so a bad `entry` fails naming the plugin rather than
@@ -297,6 +319,11 @@ export type SelfHostedPodHostConfig = {
 	readonly messaging?: HostMessagingBinding;
 	readonly maps?: HostMapsBinding;
 	readonly integrationDelivery?: HostIntegrationDelivery;
+	/**
+	 * How declared secret names become values, for the calls this host makes on the workspace's
+	 * behalf — outbound integration requests and scheduled pulls. Defaults to `process.env`.
+	 */
+	readonly secrets?: HostSecretResolver;
 	readonly queue?: HostQueue;
 	/**
 	 * Where declared channels receive from. Outbound already goes out through `messaging.sendVia`;

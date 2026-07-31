@@ -45,6 +45,11 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { z } from 'zod';
 import { typeGuard } from '@norbital-ai/std/schema';
 import { runTenantOutbox } from '$lib/server/integrations/tenant-outbox.server.js';
+import {
+	dispatchSystemEvent,
+	importIntegrationRecords,
+	runIntegrationCursor
+} from '$lib/server/integrations/tenant-inbound.server.js';
 import { runNotificationOutbox } from '$lib/server/notifications/notification-outbox.server.js';
 import { pumpRegisteredAutomations } from './automation-dispatch.server.js';
 import { runAgent } from '$lib/server/agent/agent-loop.server.js';
@@ -129,6 +134,22 @@ export const runtimeRunRequestSchema = z.union([
 		eventId: z.string().min(1),
 		event: z.string().min(1),
 		payload: recordSchema
+	}),
+	// Where a scheduled pull got to. Read before the host fetches, written after it lands, so a
+	// restart resumes rather than re-importing everything the remote has ever had.
+	z.object({
+		kind: z.literal('integration-cursor'),
+		action: z.literal('read'),
+		integrationName: z.string().min(1),
+		bindingName: z.string().min(1)
+	}),
+	z.object({
+		kind: z.literal('integration-cursor'),
+		action: z.literal('write'),
+		integrationName: z.string().min(1),
+		bindingName: z.string().min(1),
+		cursor: z.string().nullable().optional(),
+		error: z.string().nullable().optional()
 	}),
 	z.object({
 		kind: z.literal('pipeline'),
@@ -504,61 +525,33 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 			});
 		}
 		case 'integration': {
-			const api = createBeforeApi();
-			return request.direction === 'receive'
-				? runIntegrationReceivePipeline({
-						integrationName: request.integrationName,
-						bindingName: request.bindingName,
-						collectionName: request.collectionName,
-						importData: request.importData,
-						api
-					})
-				: runIntegrationSendPipeline({
-						integrationName: request.integrationName,
-						bindingName: request.bindingName,
-						collectionName: request.collectionName,
-						records: request.records,
-						api
-					});
+			// Inbound writes what the import pipeline produced; outbound only shapes a payload the host
+			// still has to deliver. That asymmetry is the boundary, not an oversight: a `receive` has
+			// nowhere else to land its rows, a `send` has no network here to send them over.
+			if (request.direction === 'receive') {
+				return importIntegrationRecords({
+					integrationName: request.integrationName,
+					bindingName: request.bindingName,
+					collectionName: request.collectionName,
+					importData: request.importData
+				});
+			}
+			return runIntegrationSendPipeline({
+				integrationName: request.integrationName,
+				bindingName: request.bindingName,
+				collectionName: request.collectionName,
+				records: request.records,
+				api: createBeforeApi()
+			});
 		}
-		case 'system-event': {
-			const ctx = getWorkspace({ provision: true });
-			const workspace = getTenantWorkspace();
-			const matchingBindings = Object.entries(workspace.registered.integrationBindings).filter(
-				(
-					entry
-				): entry is [
-					string,
-					Extract<
-						(typeof workspace.registered.integrationBindings)[string],
-						{ direction: 'receive' }
-					>
-				] => entry[1].direction === 'receive' && entry[1].systemEvent === request.event
-			);
-			await Promise.all(
-				matchingBindings.map(async ([bindingKey, binding]) => {
-					const separator = bindingKey.indexOf(':');
-					if (separator < 1) throw new Error(`Invalid integration binding key: ${bindingKey}`);
-					const records = await runIntegrationReceivePipeline({
-						integrationName: bindingKey.slice(0, separator),
-						bindingName: bindingKey.slice(separator + 1),
-						collectionName: binding.collection,
-						importData: {
-							event_id: request.eventId,
-							event: request.event,
-							payload: request.payload
-						},
-						api: createBeforeApi()
-					});
-					await Promise.all(
-						records.map((record) =>
-							createRecord(ctx, binding.collection, record, { isElevated: true })
-						)
-					);
-				})
-			);
-			return { handled: matchingBindings.length };
-		}
+		case 'integration-cursor':
+			return runIntegrationCursor(request);
+		case 'system-event':
+			return dispatchSystemEvent({
+				eventId: request.eventId,
+				event: request.event,
+				payload: request.payload
+			});
 		case 'outbox':
 			return runTenantOutbox(request);
 		case 'notification':

@@ -272,6 +272,31 @@ const _integration_outbox = systemTable(
 	}
 );
 
+/**
+ * Where each `api-pull` binding got to, so a restart resumes instead of re-importing.
+ *
+ * A pull cursor cannot live in the job closure: `pod start` and a Core sandbox both come and go, and
+ * an in-memory cursor silently re-imports the whole remote history every time one does. One row per
+ * binding, keyed by the same `<integration>:<binding>` pair the manifest names it with.
+ */
+const _integration_cursor = systemTable(
+	'integration_cursor',
+	{
+		integration_name: text().notNull(),
+		binding_name: text().notNull(),
+		binding_key: text().notNull().unique(),
+		/** Opaque to Pod: whatever the remote's `nextCursorHeader` last returned. */
+		cursor: text(),
+		last_pulled_at: timestamp({ withTimezone: true }),
+		last_error: text()
+	},
+	{
+		description: 'Resume points for scheduled integration pulls',
+		record_label: 'binding_key',
+		system: true
+	}
+);
+
 const _notification_outbox = systemTable(
 	'notification_outbox',
 	{
@@ -591,6 +616,7 @@ export const team = _team;
 export const policy = _policy;
 export const audit_event = _audit_event;
 export const integration_outbox = _integration_outbox;
+export const integration_cursor = _integration_cursor;
 export const notification_outbox = _notification_outbox;
 export const notification = _notification;
 export const document_asset = _document_asset;
@@ -607,6 +633,7 @@ export const platformTables = {
 	policy,
 	audit_event,
 	integration_outbox,
+	integration_cursor,
 	notification_outbox,
 	notification,
 	document_asset,
@@ -624,6 +651,7 @@ export const systemTables = {
 	policy: { table: policy },
 	audit_event: { table: audit_event },
 	integration_outbox: { table: integration_outbox },
+	integration_cursor: { table: integration_cursor },
 	notification_outbox: { table: notification_outbox },
 	notification: { table: notification },
 	document_asset: { table: document_asset },
