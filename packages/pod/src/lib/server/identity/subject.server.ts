@@ -145,7 +145,12 @@ export async function resolveSubjectToUser(input: {
 		'user',
 		{
 			email,
-			name: input.displayName ?? null,
+			// Never null. `UserInfoSchema.user_name` is a required string, so a user created without a
+			// display name is refused by scope resolution on *every* subsequent request — the person
+			// signs in successfully, gets a valid session, resolves no workspace, and is bounced back to
+			// the login page forever. A provider that proved an address but carries no name (email OTP
+			// is exactly that) must still produce a usable row, so the address stands in for it.
+			name: input.displayName?.trim() || email,
 			status: 'active',
 			role,
 			kind: 'human'

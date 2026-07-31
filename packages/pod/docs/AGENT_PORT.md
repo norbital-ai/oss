@@ -36,9 +36,17 @@ filter every query had to remember.
 | --------------------------------- | -------------------------------------------------------------- |
 | `$lib/tenant_workspace/sandbox/*` | a sandbox is host infrastructure; re-expose as `HostAgentTool` |
 | `$lib/workspace_studio/*`         | a host surface, reached as a host plugin                       |
-| `$lib/billing/*`                  | Core owns the commercial relationship                          |
-| `$lib/live_object/*`              | superseded by Pod's own sync                                   |
-| `@durable-streams/*`              | a socket the tenant cannot hold open                           |
+
+> **`HostAgentTool` does not exist.** It is named in this document as a design intent, not as an API —
+> `grep -rn HostAgentTool packages/*/src` returns nothing. There is currently nowhere for a host tool
+> to be invoked from: `agentTools` are workspace-declared and compiled into the guest, the host-command
+> plane runs host→guest only, and facility bindings cannot carry callbacks. Building that seam is
+> unstarted work, not a rename. Nothing is lost meanwhile — Core's sandbox tools are already wired into
+> the loop its builder agent uses.
+
+| `$lib/billing/*` | Core owns the commercial relationship |
+| `$lib/live_object/*` | superseded by Pod's own sync |
+| `@durable-streams/*` | a socket the tenant cannot hold open |
 
 `tools/coding.tool.ts` and `tools/deployment.tool.ts` follow the sandbox and stay in Core.
 

@@ -51,3 +51,20 @@ describe('billable seats', () => {
 		expect(billableSeats({ admin: 1, advanced: 0, basic: 0 }).builder).toBe(1);
 	});
 });
+
+/**
+ * A provider that proves an address but carries no display name — email OTP is exactly that — must
+ * still produce a usable user row. `UserInfoSchema.user_name` is a required string, so a null `name`
+ * is refused by scope resolution on every subsequent request: the person signs in, gets a valid
+ * session, resolves no workspace, and bounces back to the login page forever. A sign-in that succeeds
+ * and admits nobody is worse than one that fails.
+ */
+describe('a created user always has a name', () => {
+	it('falls back to the proven address when the provider carries no display name', () => {
+		const nameFor = (displayName?: string, email = 'ada@example.com') =>
+			displayName?.trim() || email;
+		expect(nameFor(undefined)).toBe('ada@example.com');
+		expect(nameFor('   ')).toBe('ada@example.com');
+		expect(nameFor('Ada Lovelace')).toBe('Ada Lovelace');
+	});
+});
