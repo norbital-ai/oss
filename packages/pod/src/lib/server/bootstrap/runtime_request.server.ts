@@ -36,6 +36,15 @@ import {
 	runProcessApprovalRequestAction,
 	runWithdrawApprovalRequest
 } from '$lib/remote/approval_request/approval_request.runtime.server.js';
+import {
+	InviteMemberSchema,
+	RevokeInvitationSchema,
+	SetMemberRoleSchema,
+	inviteWorkspaceMember,
+	listWorkspaceInvitations,
+	revokeWorkspaceInvitation,
+	setWorkspaceMemberRole
+} from '$lib/server/identity/workspace_settings.server.js';
 import { AgentChatInputSchema } from '$lib/remote/agent_chat.remote.js';
 import { AutocompleteGeolocationInputSchema } from '$lib/remote/geolocation.remote.js';
 import { StaticMapInputSchema } from '@norbital-ai/platform-utils/runtime/binding';
@@ -216,6 +225,14 @@ const RUNTIME_ENDPOINT_HANDLERS: Record<string, RuntimeEndpointHandler> = {
 		WithdrawApprovalRequestInputSchema,
 		runWithdrawApprovalRequest
 	),
+	// Workspace administration. `settings/invitations*` exists because `invitation` is client-opaque
+	// and must stay that way — these project the fields an admin needs and never `token_hash`. Teams
+	// and their policy assignment need nothing new: `collections/admin/*` above already writes the
+	// system collections behind the same admin check.
+	'settings/invitations': wireEndpoint(noInputSchema, listWorkspaceInvitations),
+	'settings/invitations/create': wireEndpoint(InviteMemberSchema, inviteWorkspaceMember),
+	'settings/invitations/revoke': wireEndpoint(RevokeInvitationSchema, revokeWorkspaceInvitation),
+	'settings/members/role': wireEndpoint(SetMemberRoleSchema, setWorkspaceMemberRole),
 	'invoke/command': (body) => invokeCommand(body),
 	'invoke/query': (body) => invokeQuery(body),
 	invoke: (body) => invokeHandler(body)

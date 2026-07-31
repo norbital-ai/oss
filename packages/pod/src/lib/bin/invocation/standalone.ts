@@ -3,7 +3,10 @@ import type {
 	RuntimeFacilityName,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
-import { requiredRuntimeFacilities } from '@norbital-ai/platform-utils/runtime/binding';
+import {
+	NORBITAL_PUBLIC_URL_HEADER,
+	requiredRuntimeFacilities
+} from '@norbital-ai/platform-utils/runtime/binding';
 import { parseNorbitalManifest } from '@norbital-ai/platform-utils/manifest/parse';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import {
@@ -409,13 +412,19 @@ async function requestBody(request: IncomingMessage): Promise<string | undefined
 	return chunks.length > 0 ? Buffer.concat(chunks).toString('utf8') : undefined;
 }
 
-/** Headers the runtime reads to establish identity. Never forwarded from the client. */
+/**
+ * Headers the runtime reads from the host and never from the client.
+ *
+ * Identity, plus the workspace's public address: an invitation link is minted from it, so a client
+ * that could set it would choose where the invited person is asked to redeem their token.
+ */
 const IDENTITY_HEADERS = [
 	'x-norbital-user-id',
 	'x-norbital-org-id',
 	'x-norbital-org-name',
 	'x-norbital-base-scope-json',
-	'x-norbital-host-token'
+	'x-norbital-host-token',
+	NORBITAL_PUBLIC_URL_HEADER
 ] as const;
 
 async function toWebRequest(
@@ -442,12 +451,17 @@ async function toWebRequest(
  * accidentally pass identity through by forgetting to clear it; the only identity that survives
  * this function is the one it returned.
  */
-async function withHostIdentity(request: Request, identity: HostIdentity): Promise<Request> {
+async function withHostIdentity(
+	request: Request,
+	identity: HostIdentity,
+	publicUrl: string
+): Promise<Request> {
 	const headers = new Headers(request.headers);
 	for (const name of IDENTITY_HEADERS) headers.delete(name);
 	headers.set('x-norbital-user-id', identity.userId);
 	headers.set('x-norbital-org-id', identity.organizationId);
 	headers.set('x-norbital-org-name', identity.organizationName);
+	headers.set(NORBITAL_PUBLIC_URL_HEADER, publicUrl);
 	if (identity.baseScope) {
 		headers.set('x-norbital-base-scope-json', JSON.stringify(identity.baseScope));
 	}
@@ -842,7 +856,7 @@ export async function startStandalone(
 			return;
 		}
 
-		const authenticated = await withHostIdentity(webRequest, resolved);
+		const authenticated = await withHostIdentity(webRequest, resolved, config.publicUrl);
 		await writeWebResponse(await runtime.handlePodRequest(authenticated, bindings), response);
 	};
 	const server = createServer((request, response) => {

@@ -25,6 +25,17 @@ export type HostDbBinding = {
 
 export const NORBITAL_BILLING_HEADER = 'x-norbital-billing-json';
 
+/**
+ * The address a browser reaches this workspace at, as the host knows it.
+ *
+ * A request inside the isolate carries no usable origin — the guest builds it as `http://tenant.local`
+ * — and a proxied deployment's public address is not the port the runtime binds. So an invitation link
+ * cannot be derived from the request, and must not be taken from the client: whoever supplies it
+ * chooses where the invited person types their token. It is therefore a host-set header, stripped from
+ * client input alongside the identity headers.
+ */
+export const NORBITAL_PUBLIC_URL_HEADER = 'x-norbital-public-url';
+
 export type WorkspaceBillingSummary = {
 	readonly status: string;
 	readonly currentPeriodEnd: string | null;

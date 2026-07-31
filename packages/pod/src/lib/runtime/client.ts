@@ -58,7 +58,7 @@ function requestKeyHash(key: string): string {
 	return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-async function post<T>(
+export async function post<T>(
 	path: string,
 	body: unknown,
 	signal?: AbortSignal,

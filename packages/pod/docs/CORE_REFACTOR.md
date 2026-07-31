@@ -59,6 +59,19 @@ Not applicable to `mode: 'core'` directly, but Core must supply the equivalent p
 issues the `provision` command — an invitation link has to be absolute and its token travels by email,
 so there is no request to derive an origin from.
 
+The same is now true of **tenant requests**, because Pod's own settings surface mints invitations
+(`settings/invitations/create`). Inside the isolate a request's URL is `http://tenant.local/...`, so
+Pod refuses (503) rather than guessing.
+
+- **Core action:** set `NORBITAL_PUBLIC_URL_HEADER` (`x-norbital-public-url`,
+  `platform-utils/src/runtime/binding.ts`) on every tenant request, to the address that tenant's
+  browsers use. Until Core does, workspace settings works on `pod start` and its invite button 503s
+  under Core.
+- **Core action:** strip it from client input first, as `pod start` does — it is in
+  `IDENTITY_HEADERS` in `bin/invocation/standalone.ts`. A forged value can only mislead the caller
+  who forged it (the minted link is returned in that same response and sent by nobody else), but the
+  header is host state, not request data, and should be treated like the identity headers beside it.
+
 ### 6. Binding and manifest shapes changed without being written down
 
 Found by typechecking Core against the current Pod. Each one breaks Core today; none were listed.

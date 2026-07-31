@@ -38,7 +38,7 @@ function links(container: HTMLElement): { label: string; href: string; current: 
 	}));
 }
 
-describe('host plugins in the sidebar', () => {
+describe('the system section of the sidebar', () => {
 	it('never puts an admin-only surface in front of a non-admin', () => {
 		const { container, destroy } = mountSidebar({
 			plugins: PLUGINS,
@@ -47,19 +47,25 @@ describe('host plugins in the sidebar', () => {
 		});
 
 		// Not merely unhighlighted: the entry, and with it the host URL, is absent from the markup.
+		// Settings is admin-only too, so it is not here either.
 		expect(links(container)).toEqual([{ label: 'Help centre', href: '/help', current: false }]);
 		expect(container.innerHTML).not.toContain('/studio');
+		expect(container.innerHTML).not.toContain('/settings');
 		destroy();
 	});
 
-	it('gives an admin every surface the host declared', () => {
+	it('gives an admin the pod’s own settings entry and every surface the host declared', () => {
 		const { container, destroy } = mountSidebar({
 			plugins: PLUGINS,
 			isAdmin: true,
 			currentPath: '/'
 		});
 
-		expect(links(container).map((link) => link.label)).toEqual(['Workspace Studio', 'Help centre']);
+		expect(links(container).map((link) => link.label)).toEqual([
+			'Settings',
+			'Workspace Studio',
+			'Help centre'
+		]);
 		destroy();
 	});
 
@@ -67,6 +73,19 @@ describe('host plugins in the sidebar', () => {
 		{ key: 'studio', label: 'Workspace Studio', icon: null, entry: '/studio' },
 		{ key: 'archive', label: 'Studio Archive', icon: null, entry: '/studio-archive' }
 	];
+
+	it('renders the settings entry a standalone pod is administered through', () => {
+		// The case the entry exists for: no host, so no plugins, and this is the only thing in the
+		// section. Sourcing it from `hostPlugins` would have left `pod start` with no way in.
+		const { container, destroy } = mountSidebar({
+			plugins: [],
+			isAdmin: true,
+			currentPath: '/settings'
+		});
+
+		expect(links(container)).toEqual([{ label: 'Settings', href: '/settings', current: true }]);
+		destroy();
+	});
 
 	it('marks the entry the current path is inside, and only that one', () => {
 		const nested = mountSidebar({
@@ -96,11 +115,11 @@ describe('host plugins in the sidebar', () => {
 		sibling.destroy();
 	});
 
-	it('renders nothing at all when the host declared no plugins', () => {
-		const { container, destroy } = mountSidebar({ plugins: [], isAdmin: true, currentPath: '/' });
+	it('renders nothing at all for a member of a workspace with no host surfaces', () => {
+		const { container, destroy } = mountSidebar({ plugins: [], isAdmin: false, currentPath: '/' });
 
-		// Not an empty group with a heading over it: a workspace with no host surfaces should show no
-		// sign that the section exists.
+		// Not an empty group with a heading over it: with nothing this person may open, the section
+		// should show no sign that it exists.
 		expect(container.textContent?.trim()).toBe('');
 		expect(container.querySelector('a')).toBeNull();
 		destroy();

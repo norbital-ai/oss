@@ -61,13 +61,28 @@ describe('buildSystemNavigation', () => {
 		expect(items.map((item) => item.key)).toEqual(['help']);
 	});
 
-	it('shows every surface to an admin', () => {
+	it('shows every surface to an admin, with the pod’s own first', () => {
 		const items = buildSystemNavigation({
 			plugins: [{ key: 'studio', label: 'Studio', icon: null, entry: '/studio', adminOnly: true }],
 			isAdmin: true,
 			currentPath: '/'
 		});
-		expect(items.map((item) => item.key)).toEqual(['studio']);
+		expect(items.map((item) => item.key)).toEqual(['pod-settings', 'studio']);
+	});
+
+	/**
+	 * The case the whole surface exists for: a workspace on `pod start` has no host, so an entry that
+	 * came from `hostPlugins` would not be there at all and nobody could administer the workspace.
+	 */
+	it('gives an admin its settings entry with no host plugins at all', () => {
+		expect(
+			buildSystemNavigation({ plugins: [], isAdmin: true, currentPath: '/' }).map((item) => ({
+				key: item.key,
+				href: item.href
+			}))
+		).toEqual([{ key: 'pod-settings', href: '/settings' }]);
+		// And it is admin-only, in the sidebar as well as in the endpoints behind it.
+		expect(buildSystemNavigation({ plugins: [], isAdmin: false, currentPath: '/' })).toEqual([]);
 	});
 
 	/** A nested host route keeps its sidebar entry highlighted; a sibling prefix must not steal it. */
@@ -77,11 +92,11 @@ describe('buildSystemNavigation', () => {
 		['/studio-archive', false],
 		['/', false]
 	])('marks %s active=%s', (currentPath, active) => {
-		const [item] = buildSystemNavigation({
+		const item = buildSystemNavigation({
 			plugins: [{ key: 'studio', label: 'Studio', icon: null, entry: '/studio' }],
 			isAdmin: true,
 			currentPath
-		});
-		expect(item.active).toBe(active);
+		}).find((entry) => entry.key === 'studio');
+		expect(item?.active).toBe(active);
 	});
 });

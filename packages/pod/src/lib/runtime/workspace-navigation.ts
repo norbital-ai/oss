@@ -27,12 +27,26 @@ export function resolveWorkspaceOrganizationOptions(input: {
 	return [...optionsById.values()];
 }
 
+/** Pod's own administration surface. Rendered by the pod, so it is not a host plugin. */
+export const WORKSPACE_SETTINGS_PATH = '/settings';
+
+function isUnder(currentPath: string, entry: string): boolean {
+	return currentPath === entry || currentPath.startsWith(`${entry}/`);
+}
+
 /**
- * Turns the host's plugin set into sidebar entries.
+ * The system section of the sidebar: Pod's own surfaces, then the host's.
+ *
+ * Settings is listed by the pod itself rather than by a host plugin, and that is the whole point of
+ * it. A workspace started with `pod start` has no host plugins — `data.hostPlugins` is empty — so an
+ * entry added through that path would exist only on a workspace hosted by Core, which is exactly the
+ * workspace that needs it least. Managing users, teams and invitations has to be reachable from a
+ * standalone pod.
  *
  * Host surfaces are links, not apps: the pod never loads their code, so there is no manifest entry,
- * no access grant, and no nesting. `adminOnly` filtering happens here for presentation only — the
- * host route behind each entry authorizes its own requests, since the URL is visible in the markup.
+ * no access grant, and no nesting. `adminOnly` filtering happens here for presentation only — every
+ * route behind these entries, Pod's included, authorizes its own requests, since the URL is visible
+ * in the markup whether or not a link to it is.
  */
 export function buildSystemNavigation(input: {
 	plugins: readonly {
@@ -45,15 +59,29 @@ export function buildSystemNavigation(input: {
 	isAdmin: boolean;
 	currentPath: string;
 }): WorkspaceNavigationItem[] {
-	return input.plugins
-		.filter((plugin) => input.isAdmin || !plugin.adminOnly)
-		.map((plugin) => ({
-			key: plugin.key,
-			label: plugin.label,
-			icon: plugin.icon,
-			href: plugin.entry,
-			active: input.currentPath === plugin.entry || input.currentPath.startsWith(`${plugin.entry}/`)
-		}));
+	const podSurfaces: WorkspaceNavigationItem[] = input.isAdmin
+		? [
+				{
+					key: 'pod-settings',
+					label: 'Settings',
+					icon: 'lucide:settings',
+					href: WORKSPACE_SETTINGS_PATH,
+					active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)
+				}
+			]
+		: [];
+	return [
+		...podSurfaces,
+		...input.plugins
+			.filter((plugin) => input.isAdmin || !plugin.adminOnly)
+			.map((plugin) => ({
+				key: plugin.key,
+				label: plugin.label,
+				icon: plugin.icon,
+				href: plugin.entry,
+				active: isUnder(input.currentPath, plugin.entry)
+			}))
+	];
 }
 
 export function appAccessAllowed(

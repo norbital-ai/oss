@@ -41,8 +41,11 @@
 		buildApplicationNavigation,
 		buildSystemNavigation,
 		resolveApplicationLandingAppId,
-		resolveWorkspaceOrganizationOptions
+		resolveWorkspaceOrganizationOptions,
+		WORKSPACE_SETTINGS_PATH
 	} from './workspace-navigation.js';
+	import WorkspaceSettingsSurface from './workspace-settings-surface.svelte';
+	import { workspaceSettingsApi } from './workspace-settings-api.js';
 
 	let {
 		apps,
@@ -302,6 +305,10 @@
 					</section>
 				</div>
 			</div>
+		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)}
+			<!-- Pod's own administration surface, not a host plugin: a workspace on `pod start` has no
+			     host and still has to be able to add people to itself. -->
+			<WorkspaceSettingsSurface {workspaceApi} user={data.user} api={workspaceSettingsApi} />
 		{:else if activeApp && accessible}
 			<Bound size="full" clip class="flex-1" data-workspace-app-region>
 				<Cover gap="none" top={activeAppBanner}>
