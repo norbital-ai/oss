@@ -431,6 +431,16 @@ Every item below is already listed above with its rationale.
       cheap tier would under-bill silently and nothing in either codebase would contradict it — the
       mistake only ever surfaces on an invoice — so it is pinned by a test. The "≥1 builder seat" rule
       needs no special case: a workspace always has an admin.
+- [x] **C4b. Resolved — billing tier is a function of role, so it stops being stored.** Confirmed with
+      the product owner: a user's tier never diverges from their security role, and billing is levied
+      at the **tenant** level rather than per assigned seat.
+      **Do:** gate `assertBuilderAccess` on the role Pod already resolves (`role !== 'basic'`) and
+      delete `member.billingTier` with its per-user lookup in `billing-access.server.ts`.
+      `billableSeats()` is unchanged — an aggregate census was always the right shape for tenant-level
+      invoicing. The apparent gap was Core using a billing field to answer an access question.
+      _Rejected:_ a Core-side per-user tier table — two systems owning overlapping truth is the drift
+      that produced the seed-key and ops-guard-list defects this session.
+      **This unblocks deleting `member`, the last thing holding the better-auth instance in place.**
 - [ ] **C5.** Supply `hostPlugins` through the host contract. **Correction — and a live defect:**
       `CORE_HOST_PLUGINS` already exists and already ships to pods **in a request header**
       (`ingress.ts`), which is exactly the vector Pod's `HostAppPlugin` refuses: a settable header lets
