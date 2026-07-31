@@ -337,7 +337,17 @@
 			{#each estimate.lines as line (line.substrate)}
 				<div class={line.unpriced ? 'bg-destructive/5 p-3' : 'p-3'}>
 					<Inline align="start" justify="between" gap="sm">
-						<p class="min-w-0 truncate font-medium">{line.label}</p>
+						<Inline align="center" gap="xs" class="min-w-0">
+							<p class="min-w-0 truncate font-medium">{line.label}</p>
+							<InfoHint
+								label={`About ${line.label}`}
+								text={`${substrateDefinition(line.substrate).note} — Measured ${formatQuantity(line.stitchedQuantity, line.unit)} by ${line.method}. ${line.basis}. ${
+									line.unpriced
+										? `No ${currency} rate in the cost matrix, so this line cannot be priced.`
+										: `Priced ${formatQuantity(line.pricedQuantity, line.unit)} × ${formatMoney(line.rate, currency)} = ${formatMoney(line.amount, currency)}.`
+								}`}
+							/>
+						</Inline>
 						<p class="shrink-0 tabular-nums">
 							{line.unpriced ? 'no rate' : formatMoney(line.amount, currency)}
 						</p>
@@ -395,10 +405,12 @@
 			{#each MANUAL_TAKE_OFF as item (item.id)}
 				<div class="p-3">
 					<Inline align="start" justify="between" gap="sm">
-						<dt class="min-w-0 truncate font-medium">{item.label}</dt>
+						<Inline align="center" gap="xs" class="min-w-0">
+							<dt class="min-w-0 truncate font-medium">{item.label}</dt>
+							<InfoHint label={`Why ${item.label} is manual`} text={item.why} />
+						</Inline>
 						<dd class="shrink-0 text-xs text-muted-foreground">{item.unit}</dd>
 					</Inline>
-					<p class="mt-1 text-xs text-muted-foreground">{item.why}</p>
 				</div>
 			{/each}
 		</dl>
