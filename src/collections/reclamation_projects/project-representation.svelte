@@ -237,10 +237,23 @@
 			</span>
 		</Cluster>
 
-		{#if !latestRun}
+		{#if !latestRun && !documentsReady}
 			<p class="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
 				Attach all three reconstruction inputs to build the model. The stitch runs server-side as
 				soon as the project is saved with a floor plan, a survey, and a section sheet.
+			</p>
+		{:else if !latestRun}
+			<!--
+				Attached but never stitched. A seed or an import writes straight to the
+				database and runs no hook, so a project can arrive complete and unbuilt.
+				Saying "attach all three" here, next to three slots that all read
+				`attached`, sends people looking for a missing document.
+			-->
+			<p class="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+				All three inputs are attached and nothing has been stitched yet — press <strong
+					>Build model</strong
+				>. Saving the project stitches it automatically; rows written by a seed or an import bypass
+				that, so they need one build.
 			</p>
 		{:else if latestRun.status === 'failed'}
 			<div class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
