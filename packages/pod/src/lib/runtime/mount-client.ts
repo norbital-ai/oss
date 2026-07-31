@@ -5,6 +5,7 @@ import PodApp from './pod-app.svelte';
 import { initializeWorkspaceClient, resetWorkspaceRuntime } from './client.js';
 import { bootstrapClientSync, teardownClientSync } from '../client/sync/replica.js';
 import { setStorageScope } from '@norbital-ai/ui/storage-scope';
+import { goto } from '../client/router.svelte.js';
 import { warmAllCollections } from '../client/sync/client-sync.js';
 import type { TenantWorkspaceShellData } from '../client/workspace_shell_types.js';
 
@@ -90,6 +91,18 @@ export function mountPodWorkspace(modules: PodWorkspaceClientModules): void {
  *
  * Note the ORDER. Teardown happens before the new shell is fetched, so there is no window in which
  * the new organization's identity is active while the old one's rows are still cached.
+ *
+ * The URL is part of that teardown, and it is the piece that was missed. It lives in module state
+ * too — `router.svelte.ts` holds one `SvelteURL` for the life of the tab — so a switch that only
+ * rebuilt the tree remounted it onto the *previous* organization's route. Two failures followed
+ * from that one omission: the shell resolved its app and sidebar from `/app/<previous-app>/…`, so
+ * neither changed; and any collection surface on that route asked the new workspace client for a
+ * collection the new organization does not have, which is undefined, and rendering it threw. A
+ * hard reload appeared to "fix" it only because the reload landed somewhere the new organization
+ * could actually serve.
+ *
+ * So the switch returns to the root and lets the new manifest decide the landing app, which is the
+ * only route guaranteed to exist in every organization.
  */
 export async function switchOrganization(organizationId: string): Promise<void> {
 	const response = await fetch('/api/auth/organization/set-active', {
@@ -114,6 +127,9 @@ export async function switchOrganization(organizationId: string): Promise<void> 
 	resetWorkspaceRuntime();
 	setStorageScope(null);
 	await teardownClientSync();
+	// Before the remount, not after: the new tree reads the route on its first render, and a tree
+	// that renders the old organization's path never gets a second chance to be right.
+	await goto('/', { replaceState: true });
 
 	mountPodWorkspace(modules);
 }
