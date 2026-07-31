@@ -1,1 +1,0 @@
-ALTER TABLE "cost_estimates" DROP COLUMN "missing_rates";

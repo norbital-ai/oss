@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import InfoHint from './info-hint.svelte';
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { ProfilePoint, StitchedModel } from '../../../lib/reclamation/types.js';
 
@@ -125,14 +126,12 @@
 		</p>
 	{:else}
 		<Stack as="section" gap="sm">
-			<div class="border-b pb-2">
+			<Inline align="center" gap="xs" class="border-b pb-2">
 				<h3 class="text-sm font-semibold">Section as read</h3>
-				<p class="text-xs text-muted-foreground">
-					Replotted from the rows the parser took out of the section sheet, against Chart Datum.
-					Compare it with the drawing: a line at the wrong level, or a layer that is missing here,
-					is an input the engine misread.
-				</p>
-			</div>
+				<InfoHint
+					text="Replotted from the rows the parser took out of the section sheet, against Chart Datum. Compare it with the drawing: a line at the wrong level, or a layer missing here, is an input the engine misread. The engine's interpolation between sections is deliberately not drawn."
+				/>
+			</Inline>
 
 			{#if names.length > 1}
 				<div class="flex flex-wrap gap-1" role="group" aria-label="Section">

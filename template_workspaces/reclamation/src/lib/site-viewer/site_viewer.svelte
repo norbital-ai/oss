@@ -185,19 +185,42 @@
 		frameCamera(current, next);
 	}
 
+	/**
+	 * Depth bias for surfaces that genuinely share a level.
+	 *
+	 * The platform, the adjacent works, and any existing land are all finished to
+	 * the same design level, so they are exactly coplanar and the depth buffer has
+	 * no basis to choose between them — the result is the stippled, flickering
+	 * mottle of z-fighting. Biasing the *depth test* rather than moving the
+	 * geometry keeps every level honest while giving the renderer a stable order:
+	 * the works read on top, context behind them, water behind that.
+	 */
+	const DEPTH_BIAS: Record<string, number> = {
+		platform: 0,
+		crest: 0,
+		armor: 0,
+		existing_land: 2,
+		context: 3,
+		sea: 4
+	};
+
 	function createMesh(THREE: ThreeModule, current: Stage, source: SurfaceMesh) {
 		const geometry = new THREE.BufferGeometry();
 		geometry.setAttribute('position', new THREE.BufferAttribute(source.positions, 3));
 		geometry.setAttribute('normal', new THREE.BufferAttribute(source.normals, 3));
 		geometry.setIndex(new THREE.BufferAttribute(source.indices, 1));
 		geometry.computeBoundingSphere();
+		const bias = DEPTH_BIAS[source.id] ?? 1;
 		const material = new THREE.MeshStandardMaterial({
 			color: source.color,
 			roughness: source.id === 'sea' ? 0.15 : 0.95,
 			metalness: 0,
 			transparent: source.opacity < 1,
 			opacity: source.opacity,
-			side: source.doubleSided ? THREE.DoubleSide : THREE.FrontSide
+			side: source.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+			polygonOffset: bias !== 0,
+			polygonOffsetFactor: bias,
+			polygonOffsetUnits: bias
 		});
 		current.materials.push(material);
 		const mesh = new THREE.Mesh(geometry, material);
@@ -235,15 +258,60 @@
 		current.controls.update();
 	}
 
-	function resetView(): void {
-		if (stage && surfaces) frameCamera(stage, surfaces);
+	/**
+	 * Named viewpoints.
+	 *
+	 * Orbiting to a square-on elevation by hand is fiddly and never quite square,
+	 * which matters when the whole point is comparing a face against a drawing.
+	 * Plan looks straight down; the elevations look along an axis, where the
+	 * exaggerated relief actually reads.
+	 */
+	const VIEWS = ['iso', 'plan', 'north', 'east'] as const;
+	type ViewId = (typeof VIEWS)[number];
+	const VIEW_LABEL: Record<ViewId, string> = {
+		iso: 'Iso',
+		plan: 'Plan',
+		north: 'North',
+		east: 'East'
+	};
+	let view = $state<ViewId>('iso');
+
+	function applyView(next: ViewId): void {
+		view = next;
+		if (!stage || !surfaces) return;
+		const { bounds } = surfaces;
+		const centreX = (bounds.minX + bounds.maxX) / 2;
+		const centreY = (bounds.minY + bounds.maxY) / 2;
+		const centreZ = ((bounds.minZ + bounds.maxZ) / 2) * exaggeration;
+		const radius =
+			Math.max(
+				bounds.maxX - bounds.minX,
+				bounds.maxY - bounds.minY,
+				(bounds.maxZ - bounds.minZ) * exaggeration
+			) / 2;
+		const distance = Math.max(radius * 2.1, 100);
+		stage.controls.target.set(centreX, centreZ, -centreY);
+		const at = {
+			// Straight down, nudged off true vertical so the orbit controls keep a
+			// usable up-vector instead of gimbal-locking.
+			plan: [centreX, centreZ + distance, -centreY + distance * 0.001],
+			north: [centreX, centreZ + distance * 0.12, -centreY + distance],
+			east: [centreX + distance, centreZ + distance * 0.12, -centreY],
+			iso: [centreX - distance * 0.55, centreZ + distance * 0.55, -centreY + distance * 0.7]
+		}[next];
+		stage.camera.position.set(at[0], at[1], at[2]);
+		stage.camera.updateProjectionMatrix();
+		stage.controls.update();
 	}
 
 	function setExaggeration(next: number): void {
 		exaggeration = next;
 		if (!stage) return;
 		stage.group.scale.z = next;
-		if (surfaces) frameCamera(stage, surfaces);
+		// Re-aim the *current* viewpoint. Reframing to the default here would throw
+		// away the angle someone just lined up, which is the one thing they were
+		// changing the exaggeration to look at.
+		applyView(view);
 	}
 
 	let resizeObserver: ResizeObserver | null = null;
@@ -319,6 +387,22 @@
 		<div
 			class="absolute right-3 bottom-3 flex items-center gap-2 rounded-md border bg-background/85 px-2 py-1 text-tiny text-muted-foreground shadow-xs backdrop-blur"
 		>
+			<div class="flex divide-x rounded border" role="group" aria-label="Viewpoint">
+				{#each VIEWS as id (id)}
+					<button
+						type="button"
+						class={[
+							'px-1.5 py-0.5',
+							view === id ? 'bg-brand/15 font-medium text-foreground' : 'hover:bg-muted'
+						]}
+						aria-pressed={view === id}
+						onclick={() => applyView(id)}
+					>
+						{VIEW_LABEL[id]}
+					</button>
+				{/each}
+			</div>
+			<span aria-hidden="true">·</span>
 			<span class="font-medium">Vertical</span>
 			<div class="flex divide-x rounded border" role="group" aria-label="Vertical exaggeration">
 				{#each EXAGGERATIONS as factor (factor)}
@@ -335,8 +419,6 @@
 					</button>
 				{/each}
 			</div>
-			<span aria-hidden="true">·</span>
-			<button type="button" class="font-medium hover:underline" onclick={resetView}>Reset</button>
 			<span aria-hidden="true">·</span>
 			<span class="tabular-nums">
 				{surfaces.triangleCount.toLocaleString()} tri · {surfaces.renderCellM.toFixed(1)} m
