@@ -102,7 +102,8 @@ function claimStdout(): (bytes: Uint8Array, priority?: FramePriority) => Promise
 				}
 				// An always-ready SSE body must release the microtask queue so a new request can
 				// enqueue its binding call or response head before the next stream frame is chosen.
-				if (frame.priority === 'stream') await new Promise<void>((resolve) => setImmediate(resolve));
+				if (frame.priority === 'stream')
+					await new Promise<void>((resolve) => setImmediate(resolve));
 			}
 		} finally {
 			draining = false;
@@ -219,11 +220,7 @@ export function startPodStdioServer(): void {
 						break;
 					}
 					if (value?.length)
-						await write(
-							{ t: 'chunk', id: header.id },
-							value,
-							isEventStream ? 'stream' : 'control'
-						);
+						await write({ t: 'chunk', id: header.id }, value, isEventStream ? 'stream' : 'control');
 				}
 			}
 			await write({ t: 'end', id: header.id });

@@ -115,7 +115,9 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 
 	const runOutbox = async (): Promise<void> => {
 		if (!deliver) return;
-		const rows = claimedRows(await options.dispatch({ kind: 'outbox', action: 'claim', limit: 50 }));
+		const rows = claimedRows(
+			await options.dispatch({ kind: 'outbox', action: 'claim', limit: 50 })
+		);
 		if (rows.length === 0) return;
 
 		const delivered: string[] = [];
@@ -157,7 +159,9 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 			await options.dispatch({ kind: 'outbox', action: 'delivered', ids: delivered });
 		}
 		for (const [reason, group] of failures) {
-			log(`[pod:scheduler] integration delivery failed for ${group.ids.length} message(s): ${reason}`);
+			log(
+				`[pod:scheduler] integration delivery failed for ${group.ids.length} message(s): ${reason}`
+			);
 			await options.dispatch({
 				kind: 'outbox',
 				action: 'failed',
@@ -177,7 +181,9 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 			await runAutomations(new Date());
 			await runOutbox();
 		} catch (cause) {
-			log(`[pod:scheduler] sweep failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+			log(
+				`[pod:scheduler] sweep failed: ${cause instanceof Error ? cause.message : String(cause)}`
+			);
 		} finally {
 			sweeping = false;
 		}

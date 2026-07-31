@@ -42,7 +42,9 @@ describe('leaving a tenant drops everything scoped to it', () => {
 		);
 		expect(declared.length).toBeGreaterThan(0);
 
-		const reset = /export function resetWorkspaceRuntime\(\): void \{[\s\S]*?\n\}/.exec(source)?.[0];
+		const reset = /export function resetWorkspaceRuntime\(\): void \{[\s\S]*?\n\}/.exec(
+			source
+		)?.[0];
 		expect(reset).toBeDefined();
 		for (const name of declared) {
 			expect(reset, `resetWorkspaceRuntime must clear ${name}`).toContain(name!);

@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+	import type { HTMLAttributes } from 'svelte/elements';
+	import type { Snippet } from 'svelte';
 
 	export interface QueueItemDescriptionProps extends WithElementRef<
 		HTMLAttributes<HTMLDivElement>
@@ -24,8 +24,8 @@
 <div
 	bind:this={ref}
 	class={cn(
-		"ml-6 text-xs",
-		completed ? "text-muted-foreground/40 line-through" : "text-muted-foreground",
+		'ml-6 text-xs',
+		completed ? 'text-muted-foreground/40 line-through' : 'text-muted-foreground',
 		className
 	)}
 	{...restProps}

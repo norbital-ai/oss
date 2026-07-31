@@ -145,5 +145,11 @@ export function satisfiedFacilities(
 	return satisfied;
 }
 
-export type { HostAiBinding, HostDbAdapter, HostDbBinding, HostFileStorageBinding, HostMapsBinding };
+export type {
+	HostAiBinding,
+	HostDbAdapter,
+	HostDbBinding,
+	HostFileStorageBinding,
+	HostMapsBinding
+};
 export type { HostNotificationsBinding, RuntimeFacilityRequirement, TBaseScope };

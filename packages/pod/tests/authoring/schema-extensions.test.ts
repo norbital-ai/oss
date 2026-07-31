@@ -110,7 +110,9 @@ describe('workspaceExclusionsDdl', () => {
 	it('rejects an unsafe constraint name', () => {
 		expect(() =>
 			workspaceExclusionsDdl(
-				manifestWith({ t: [{ name: 'bad"; DROP TABLE t; --', elements: [{ expr: 'x', with: '=' }] }] })
+				manifestWith({
+					t: [{ name: 'bad"; DROP TABLE t; --', elements: [{ expr: 'x', with: '=' }] }]
+				})
 			)
 		).toThrow(/snake_case identifier/);
 	});

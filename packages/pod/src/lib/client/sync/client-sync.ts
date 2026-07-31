@@ -263,7 +263,6 @@ export async function absorbServerRows(
 	await sync.client.upsertRows(collection, flat).catch(() => undefined);
 }
 
-
 // ── collection readiness ───────────────────────────────────────────────────────
 
 /**

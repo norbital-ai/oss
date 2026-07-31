@@ -1,6 +1,6 @@
-import { getContext, setContext } from "svelte";
+import { getContext, setContext } from 'svelte';
 
-const CONFIRMATION_CONTEXT_KEY = Symbol("confirmation-context");
+const CONFIRMATION_CONTEXT_KEY = Symbol('confirmation-context');
 
 export type ToolUIPartApproval =
 	| {
@@ -26,12 +26,12 @@ export type ToolUIPartApproval =
 	| undefined;
 
 export type ToolUIPartState =
-	| "input-streaming"
-	| "input-available"
-	| "approval-requested"
-	| "approval-responded"
-	| "output-denied"
-	| "output-available";
+	| 'input-streaming'
+	| 'input-available'
+	| 'approval-requested'
+	| 'approval-responded'
+	| 'output-denied'
+	| 'output-available';
 
 export type ConfirmationContextValue = {
 	approval: ToolUIPartApproval;
@@ -45,7 +45,7 @@ export function setConfirmationContext(value: ConfirmationContextValue) {
 export function getConfirmationContext(): ConfirmationContextValue {
 	const context = getContext<ConfirmationContextValue>(CONFIRMATION_CONTEXT_KEY);
 	if (!context) {
-		throw new Error("Confirmation components must be used within Confirmation");
+		throw new Error('Confirmation components must be used within Confirmation');
 	}
 	return context;
 }

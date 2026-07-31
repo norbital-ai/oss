@@ -331,9 +331,7 @@ export function defineRuntimeCollection(
 ): unknown {
 	const definition = Object.assign(
 		{},
-		...definitions.filter(
-			(value): value is object => typeof value === 'object' && value !== null
-		)
+		...definitions.filter((value): value is object => typeof value === 'object' && value !== null)
 	);
 	return registry.collection(name, definition);
 }

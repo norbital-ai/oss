@@ -56,7 +56,6 @@ async function publishSchemaFor(harness: PodRuntimeHarness, collection: string):
 	);
 }
 
-
 function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch {
 	return (path, init) =>
 		harness.request(
@@ -209,7 +208,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			try {
 				const page = await client.shapeSubscribe({
 					collection,
-					pageSize: 500,
+					pageSize: 500
 				});
 				// The shape returns ALL rows (no filter) — verify the target is present.
 				const target = page.rows.find((r) => r.norbital_id === targetId);
@@ -228,7 +227,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			try {
 				const adminPage = await adminClient.shapeSubscribe({
 					collection,
-					pageSize: 500,
+					pageSize: 500
 				});
 				// Admin always sees the record.
 				expect(adminPage.rows.some((r) => r.norbital_id === id)).toBe(true);
@@ -244,7 +243,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 				try {
 					const page = await memberClient.shapeSubscribe({
 						collection,
-						pageSize: 500,
+						pageSize: 500
 					});
 					memberSawRecords = page.rows.length > 0;
 				} finally {
@@ -364,18 +363,20 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 		}
 		type PgliteLike = Awaited<ReturnType<typeof createClientDb>>;
 
-		it('two clients sharing the same PGlite see each other\'s shape data', async () => {
+		it("two clients sharing the same PGlite see each other's shape data", async () => {
 			const schemaRes = await harness.request({ method: 'GET', path: 'sync/schema' }, admin);
 			const idempotentSchema = await schemaRes.text();
 
 			const sharedDb = await createClientDb();
 			const clientA = new PodSyncClient({
-				db: sharedNoClose(sharedDb), schemaSql: idempotentSchema,
+				db: sharedNoClose(sharedDb),
+				schemaSql: idempotentSchema,
 				fetch: syncFetchFor(harness, admin)
 			});
 			await clientA.bootstrap();
 			const clientB = new PodSyncClient({
-				db: sharedNoClose(sharedDb), schemaSql: idempotentSchema,
+				db: sharedNoClose(sharedDb),
+				schemaSql: idempotentSchema,
 				fetch: syncFetchFor(harness, admin)
 			});
 			await clientB.bootstrap();
@@ -386,7 +387,12 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 				expect(countA).toBe(countB);
 				expect(countA).toBeGreaterThan(0);
 			} finally {
-				try { await clientA.stopStream(); await clientB.stopStream(); } catch { /* ignore */ }
+				try {
+					await clientA.stopStream();
+					await clientB.stopStream();
+				} catch {
+					/* ignore */
+				}
 				await sharedDb.close?.();
 			}
 		});
@@ -397,12 +403,14 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 
 			const sharedDb = await createClientDb();
 			const primary = new PodSyncClient({
-				db: sharedNoClose(sharedDb), schemaSql: idempotentSchema,
+				db: sharedNoClose(sharedDb),
+				schemaSql: idempotentSchema,
 				fetch: syncFetchFor(harness, admin)
 			});
 			await primary.bootstrap();
 			const secondary = new PodSyncClient({
-				db: sharedNoClose(sharedDb), schemaSql: idempotentSchema,
+				db: sharedNoClose(sharedDb),
+				schemaSql: idempotentSchema,
 				fetch: syncFetchFor(harness, admin)
 			});
 			await secondary.bootstrap();
@@ -415,7 +423,12 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 					expect(ok).toBe(true);
 				}
 			} finally {
-				try { await primary.stopStream(); await secondary.stopStream(); } catch { /* ignore */ }
+				try {
+					await primary.stopStream();
+					await secondary.stopStream();
+				} catch {
+					/* ignore */
+				}
 				await sharedDb.close?.();
 			}
 		});

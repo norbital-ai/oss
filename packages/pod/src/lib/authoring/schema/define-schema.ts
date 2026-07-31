@@ -86,7 +86,8 @@ function attachCollectionRegistrar<S extends AnySchema>(
 export function defineSchema<
 	const TTables extends readonly TableDeclaration[],
 	const TConfig extends RelationsBuilderConfig<TSchemaTables>,
-	TSchemaTables extends Record<string, PgTable> = TablesFromDeclarations<TTables> & Record<string, PgTable>
+	TSchemaTables extends Record<string, PgTable> = TablesFromDeclarations<TTables> &
+		Record<string, PgTable>
 >(
 	tables: TTables,
 	relationsBuilder: (helpers: RelationsBuilder<TSchemaTables>) => TConfig,

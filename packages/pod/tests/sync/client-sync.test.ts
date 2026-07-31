@@ -104,9 +104,30 @@ async function seededSync() {
 		{ norbital_id: 'c2', norbital_row_version: 1, name: 'Globex', region: 'south' }
 	]);
 	await client.upsertRows('orders', [
-		{ norbital_id: 'a', norbital_row_version: 1, status: 'open', total: 10, note: 'urgent', customer_id: 'c1' },
-		{ norbital_id: 'b', norbital_row_version: 1, status: 'open', total: 30, note: null, customer_id: 'c2' },
-		{ norbital_id: 'c', norbital_row_version: 1, status: 'closed', total: 20, note: 'later', customer_id: 'c1' }
+		{
+			norbital_id: 'a',
+			norbital_row_version: 1,
+			status: 'open',
+			total: 10,
+			note: 'urgent',
+			customer_id: 'c1'
+		},
+		{
+			norbital_id: 'b',
+			norbital_row_version: 1,
+			status: 'open',
+			total: 30,
+			note: null,
+			customer_id: 'c2'
+		},
+		{
+			norbital_id: 'c',
+			norbital_row_version: 1,
+			status: 'closed',
+			total: 20,
+			note: 'later',
+			customer_id: 'c1'
+		}
 	]);
 	return { sync: enableClientSync(client), client };
 }
@@ -518,7 +539,9 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 			const hit = await localFindFirst(sync, 'orders', { where: { norbital_id: 'a' } });
 			expect(hit && (hit as { status: string }).status).toBe('open');
 			// Absent locally → the row may still exist beyond the window, so ask the server.
-			expect(await localFindFirst(sync, 'orders', { where: { norbital_id: 'zzz' } })).toBeUndefined();
+			expect(
+				await localFindFirst(sync, 'orders', { where: { norbital_id: 'zzz' } })
+			).toBeUndefined();
 		} finally {
 			await client.close();
 		}
@@ -613,10 +636,9 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 		// `synced`, which is exactly the first-load window.
 		const stalledFetch: SyncFetch = async (path) => {
 			if (path.startsWith('sync/shape')) {
-				return new Response(
-					JSON.stringify({ rows: [], nextCursor: 'more', watermark: '0' }),
-					{ headers: { 'content-type': 'application/json' } }
-				);
+				return new Response(JSON.stringify({ rows: [], nextCursor: 'more', watermark: '0' }), {
+					headers: { 'content-type': 'application/json' }
+				});
 			}
 			return new Response('{}', { headers: { 'content-type': 'application/json' } });
 		};

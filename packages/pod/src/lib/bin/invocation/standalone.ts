@@ -500,10 +500,7 @@ export type StandaloneStartOptions = {
  * reports "the hosting platform did not provide the X facility" — the message that tells an author
  * what to configure — instead of failing later inside a binding that does not exist.
  */
-function facilityBindings(
-	config: PodHostConfig,
-	db: HostDbBinding
-): RuntimeFacilityBindings {
+function facilityBindings(config: PodHostConfig, db: HostDbBinding): RuntimeFacilityBindings {
 	return {
 		db,
 		...(config.fileStorage ? { fileStorage: config.fileStorage } : {}),
@@ -565,7 +562,9 @@ export async function startStandalone(
 		);
 		const response = await runtime.handlePodRequest(request, bindings);
 		if (!response.ok) {
-			throw new Error(`Runtime rejected host dispatch (${response.status}): ${await response.text()}`);
+			throw new Error(
+				`Runtime rejected host dispatch (${response.status}): ${await response.text()}`
+			);
 		}
 		return response.json();
 	};

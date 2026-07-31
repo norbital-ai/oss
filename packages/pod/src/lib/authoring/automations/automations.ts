@@ -77,10 +77,10 @@ export function defineAutomation(
 	trigger: AutomationTrigger,
 	spec: AutomationSpec
 ): AutomationDefinition;
-export function defineAutomation<
-	S extends AnySchema,
-	const TTrigger extends AutomationTrigger<S>
->(trigger: TTrigger, handler: AutomationHandler<S, TTrigger>): AutomationDefinition;
+export function defineAutomation<S extends AnySchema, const TTrigger extends AutomationTrigger<S>>(
+	trigger: TTrigger,
+	handler: AutomationHandler<S, TTrigger>
+): AutomationDefinition;
 export function defineAutomation<
 	S extends AnySchema = AnySchema,
 	TTrigger extends AutomationTrigger = AutomationTrigger

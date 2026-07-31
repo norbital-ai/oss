@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+	import type { HTMLAttributes } from 'svelte/elements';
+	import type { Snippet } from 'svelte';
 
 	export interface ConfirmationTitleProps extends WithElementRef<HTMLAttributes<HTMLDivElement>> {
 		children?: Snippet;
@@ -19,6 +19,6 @@
 	}: ConfirmationTitleProps = $props();
 </script>
 
-<AlertDescription bind:ref class={cn("inline", className)} {...restProps}>
+<AlertDescription bind:ref class={cn('inline', className)} {...restProps}>
 	{@render children?.()}
 </AlertDescription>

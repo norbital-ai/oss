@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+	import type { HTMLAttributes } from 'svelte/elements';
+	import type { Snippet } from 'svelte';
 
 	export interface QueueItemContentProps extends WithElementRef<HTMLAttributes<HTMLSpanElement>> {
 		completed?: boolean;
@@ -22,8 +22,8 @@
 <span
 	bind:this={ref}
 	class={cn(
-		"line-clamp-1 grow wrap-break-word",
-		completed ? "text-muted-foreground/50 line-through" : "text-muted-foreground",
+		'line-clamp-1 grow wrap-break-word',
+		completed ? 'text-muted-foreground/50 line-through' : 'text-muted-foreground',
 		className
 	)}
 	{...restProps}

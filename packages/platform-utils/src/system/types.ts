@@ -55,11 +55,13 @@ export type TChatMessagePartState = z.infer<typeof ChatMessagePartStateSchema>;
 export const MutationActionKeySchema = z.enum(['create', 'read', 'update', 'delete']);
 export type TMutationActionKey = z.infer<typeof MutationActionKeySchema>;
 
-const ChannelSchema = z.object({
-	type: z.enum(['email', 'phone', 'wechat', 'telegram', 'whatsapp', 'slack']),
-	verified: z.boolean().default(false),
-	primary: z.boolean().default(false)
-}).catchall(z.unknown());
+const ChannelSchema = z
+	.object({
+		type: z.enum(['email', 'phone', 'wechat', 'telegram', 'whatsapp', 'slack']),
+		verified: z.boolean().default(false),
+		primary: z.boolean().default(false)
+	})
+	.catchall(z.unknown());
 
 export const UserSchema = SystemRecordFieldsSchema.extend({
 	email: z.string(),

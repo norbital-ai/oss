@@ -9,8 +9,4 @@
 	}: DrawerPrimitive.TitleProps = $props();
 </script>
 
-<DrawerPrimitive.Title
-	bind:ref
-	class={cn('text-heading', className)}
-	{...restProps}
-/>
+<DrawerPrimitive.Title bind:ref class={cn('text-heading', className)} {...restProps} />

@@ -41,14 +41,9 @@ function createEvent(request: Request, bindings: RuntimeFacilityBindings): PodRe
 			db: bindings.db,
 			identity: request.headers.get('x-norbital-user-id')?.trim() ?? '',
 			org: {
-				id:
-					request.headers.get('x-norbital-org-id')?.trim() ??
-					process.env.NORBITAL_ORG_ID ??
-					'',
+				id: request.headers.get('x-norbital-org-id')?.trim() ?? process.env.NORBITAL_ORG_ID ?? '',
 				name:
-					request.headers.get('x-norbital-org-name')?.trim() ??
-					process.env.NORBITAL_ORG_NAME ??
-					''
+					request.headers.get('x-norbital-org-name')?.trim() ?? process.env.NORBITAL_ORG_NAME ?? ''
 			},
 			zone: request.headers.get('x-norbital-zone') === 'preview' ? 'preview' : 'live'
 		},
@@ -100,9 +95,7 @@ async function runRequest(event: PodRequestEvent): Promise<Response> {
 		runWithWorkspaceContext(context, async () => {
 			const pathname = new URL(event.request.url).pathname;
 			if (pathname === '/_pod/bootstrap') {
-				const shell = await phase(marks, 'guest_shell', () =>
-					loadTenantWorkspaceShellData(event)
-				);
+				const shell = await phase(marks, 'guest_shell', () => loadTenantWorkspaceShellData(event));
 				return withTimings(json(shell), marks);
 			}
 			if (pathname.startsWith('/_runtime/')) {
@@ -125,6 +118,9 @@ export async function handlePodRequest(
 			return json(caught.body, { status: caught.status });
 		}
 		console.error('[pod-runtime]', caught);
-		return json({ message: caught instanceof Error ? caught.message : String(caught) }, { status: 500 });
+		return json(
+			{ message: caught instanceof Error ? caught.message : String(caught) },
+			{ status: 500 }
+		);
 	}
 }

@@ -36,7 +36,13 @@ export type WireFrame = {
  * client hung up, which is the only way a server-sent-events response ever ends.
  */
 export type HostFrameHeader =
-	| { readonly t: 'request'; readonly id: number; readonly method: string; readonly path: string; readonly headers: Record<string, string> }
+	| {
+			readonly t: 'request';
+			readonly id: number;
+			readonly method: string;
+			readonly path: string;
+			readonly headers: Record<string, string>;
+	  }
 	| { readonly t: 'binding'; readonly id: number; readonly ok: true; readonly value: unknown }
 	| { readonly t: 'binding'; readonly id: number; readonly ok: false; readonly error: string }
 	| { readonly t: 'cancel'; readonly id: number }
@@ -48,11 +54,22 @@ export type HostFrameHeader =
  * client disconnects, so a transport that waited for a complete body would wait forever.
  */
 export type GuestFrameHeader =
-	| { readonly t: 'head'; readonly id: number; readonly status: number; readonly headers: Record<string, string> }
+	| {
+			readonly t: 'head';
+			readonly id: number;
+			readonly status: number;
+			readonly headers: Record<string, string>;
+	  }
 	| { readonly t: 'chunk'; readonly id: number }
 	| { readonly t: 'end'; readonly id: number }
 	| { readonly t: 'error'; readonly id: number; readonly error: string }
-	| { readonly t: 'binding'; readonly id: number; readonly facility: string; readonly method: string; readonly args: readonly unknown[] }
+	| {
+			readonly t: 'binding';
+			readonly id: number;
+			readonly facility: string;
+			readonly method: string;
+			readonly args: readonly unknown[];
+	  }
 	| { readonly t: 'ready' };
 
 export function encodeFrame(header: unknown, body?: Uint8Array | null): Uint8Array {
@@ -93,7 +110,9 @@ export class FrameReader {
 			const headerEnd = FRAME_HEADER_BYTES + headerLength;
 			yield {
 				// stupidity:allow R6b -- frame headers are validated by the switch on `t` at each call site.
-				header: JSON.parse(new TextDecoder().decode(merged.subarray(FRAME_HEADER_BYTES, headerEnd))),
+				header: JSON.parse(
+					new TextDecoder().decode(merged.subarray(FRAME_HEADER_BYTES, headerEnd))
+				),
 				body: merged.slice(headerEnd, 4 + remaining)
 			};
 			this.#buffered = [merged.subarray(4 + remaining)];

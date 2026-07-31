@@ -32,7 +32,6 @@ import { quoteSqlIdentifier } from '../sql-identifier.server.js';
  */
 const MAX_ANNOUNCED_PER_RELEASE = 5_000;
 
-
 /**
  * Every record whose visibility may have changed because `recordId` in `collection` was released,
  * announced on the change feed.

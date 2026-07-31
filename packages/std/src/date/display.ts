@@ -6,10 +6,7 @@ export type FormatInstantOptions = Intl.DateTimeFormatOptions & {
 };
 
 /** Format a stored UTC ISO instant in the viewer's local timezone. */
-export function formatUtcInstantLocal(
-	value: string,
-	options: FormatInstantOptions = {}
-): string {
+export function formatUtcInstantLocal(value: string, options: FormatInstantOptions = {}): string {
 	const { locale = 'en-US', ...intlOptions } = options;
 	return new Intl.DateTimeFormat(locale, intlOptions).format(parseUtcInstant(value));
 }

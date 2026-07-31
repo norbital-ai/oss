@@ -108,7 +108,6 @@ function matchesWhereOnRecord(where: unknown, record: Record<string, unknown>): 
 	return true;
 }
 
-
 async function matchesSqlCondition(
 	sqlExpression: string,
 	context: TMutationActionContext,

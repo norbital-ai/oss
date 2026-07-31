@@ -53,9 +53,7 @@
 	let isInputFocused = $state(false);
 
 	// Keep the focus ring for keyboard navigation. Pointer hover uses a quiet tonal fill.
-	const shouldShowIndicator = $derived(
-		showSearch && inputMode === 'keyboard' && isInputFocused
-	);
+	const shouldShowIndicator = $derived(showSearch && inputMode === 'keyboard' && isInputFocused);
 
 	const hasMultipleRoots = $derived(treeState.rootNodes.length > 1);
 	const activeTabValue = $derived(treeState.rootNodes[treeState.activeRootIndex]?.id || '');

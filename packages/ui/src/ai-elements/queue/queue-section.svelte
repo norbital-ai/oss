@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { cn } from '#lib/utils';
-	import type { Snippet } from "svelte";
-	import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
+	import type { Snippet } from 'svelte';
+	import type { Collapsible as CollapsiblePrimitive } from 'bits-ui';
 
 	export interface QueueSectionProps extends CollapsiblePrimitive.RootProps {
 		children?: Snippet;

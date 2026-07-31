@@ -730,9 +730,7 @@ describe('PodSyncClient (client sync logic)', () => {
 		const columns = Array.from({ length: 39 }, (_value, index) => `field_${index}`);
 		const schema = [
 			`CREATE TABLE IF NOT EXISTS "wide" ("norbital_id" text PRIMARY KEY);`,
-			...columns.map(
-				(column) => `ALTER TABLE "wide" ADD COLUMN IF NOT EXISTS "${column}" text;`
-			)
+			...columns.map((column) => `ALTER TABLE "wide" ADD COLUMN IF NOT EXISTS "${column}" text;`)
 		].join('\n');
 
 		const db = await createClientDb();

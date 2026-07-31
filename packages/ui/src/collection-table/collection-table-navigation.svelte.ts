@@ -85,9 +85,7 @@ export function resolveCollectionTableRecordId(
 	return undefined;
 }
 
-export function createCollectionTableRouteKey(params: {
-	view: string;
-}): string {
+export function createCollectionTableRouteKey(params: { view: string }): string {
 	return `collection-table:${params.view}`;
 }
 

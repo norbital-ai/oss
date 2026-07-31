@@ -61,8 +61,8 @@ on Core, on a self-hosted deployment, and under `pod dev` with no source change.
 
 Pod is **not database-agnostic**, deliberately. The sync engine's exactly-once ordering depends on
 `pg_current_xact_id` and `pg_snapshot_xmin`; workspace exclusions depend on `btree_gist`; the
-standalone binding requires PostgreSQL 18 or newer. `HostDbBinding` is a seam for *where* Postgres
-lives — local, Neon, RDS — not for *which* database it is. Writing an adapter for another engine
+standalone binding requires PostgreSQL 18 or newer. `HostDbBinding` is a seam for _where_ Postgres
+lives — local, Neon, RDS — not for _which_ database it is. Writing an adapter for another engine
 would not work, and the contract should not be read as inviting one.
 
 **`pod.host.ts` is never loaded in hosted mode.** Not overridden — never read. `loadHostConfig` runs
@@ -76,7 +76,7 @@ pod.host.ts ──▶ bindings        Core ──▶ bindings over stdio
                                 pod.host.ts not read
 ```
 
-Nothing about a workspace's *source* is host-specific, and it cannot be: a workspace names only what
+Nothing about a workspace's _source_ is host-specific, and it cannot be: a workspace names only what
 its own compiler can see. What varies between hosts is which facilities are available, and the gate
 reconciles that at startup.
 
@@ -160,23 +160,27 @@ packages/pod/src/lib/
 ```ts
 // pod.host.ts — the only file a self-hoster writes
 import {
-  definePodHost, env,
-  postgresDb, s3FileStorage, notificationProviders, devIdentity
+	definePodHost,
+	env,
+	postgresDb,
+	s3FileStorage,
+	notificationProviders,
+	devIdentity
 } from '@norbital-ai/pod/host';
 
 export default definePodHost({
-  db: postgresDb({ url: env('DATABASE_URL') }),
-  identity: devIdentity({ /* … */ }),
-  fileStorage: s3FileStorage({
-    bucket: env('S3_BUCKET'),
-    region: env('S3_REGION'),
-    endpoint: env('S3_ENDPOINT'),
-    accessKeyId: env('S3_ACCESS_KEY_ID'),
-    secretAccessKey: env('S3_SECRET_ACCESS_KEY'),
-    forcePathStyle: true
-  }),
-  notifications: notificationProviders(smtpEmail({ url: env('SMTP_URL') })),
-  scheduler: { automations: true }
+	db: postgresDb({ url: env('DATABASE_URL') }),
+	identity: devIdentity({/* … */}),
+	fileStorage: s3FileStorage({
+		bucket: env('S3_BUCKET'),
+		region: env('S3_REGION'),
+		endpoint: env('S3_ENDPOINT'),
+		accessKeyId: env('S3_ACCESS_KEY_ID'),
+		secretAccessKey: env('S3_SECRET_ACCESS_KEY'),
+		forcePathStyle: true
+	}),
+	notifications: notificationProviders(smtpEmail({ url: env('SMTP_URL') })),
+	scheduler: { automations: true }
 });
 ```
 
@@ -212,15 +216,15 @@ local file storage, console notifications, a maps placeholder, and the scheduler
 A workspace cannot know its host at author time, so the gate is the only place the answer is
 knowable. It fires at startup, so an author learns at deploy rather than at 6am when the cron fires.
 
-| Facility | Required when | Built-in adapter |
-| --- | --- | --- |
-| `db` | always | `postgresDb` |
-| `fileStorage` | workspace has a file field | `localFileStorage`, `s3FileStorage` |
-| `maps` | workspace has a geolocation field | `stubMaps` (degrades) |
-| `notifications` | workspace declares a non-`system` channel | `notificationProviders(...)` |
-| `ai` | agent automation, or any `api.ai` use | host-supplied |
-| `queue` | automations exist | in-process scheduler |
-| `integrationDelivery` | workspace declares integrations | host-supplied |
+| Facility              | Required when                             | Built-in adapter                    |
+| --------------------- | ----------------------------------------- | ----------------------------------- |
+| `db`                  | always                                    | `postgresDb`                        |
+| `fileStorage`         | workspace has a file field                | `localFileStorage`, `s3FileStorage` |
+| `maps`                | workspace has a geolocation field         | `stubMaps` (degrades)               |
+| `notifications`       | workspace declares a non-`system` channel | `notificationProviders(...)`        |
+| `ai`                  | agent automation, or any `api.ai` use     | host-supplied                       |
+| `queue`               | automations exist                         | in-process scheduler                |
+| `integrationDelivery` | workspace declares integrations           | host-supplied                       |
 
 ---
 
@@ -276,17 +280,17 @@ emits `notifications`, and the gate checks the host's provider set covers the de
 
 ```ts
 export type NotificationProvider = {
-  readonly channel: string;
-  send(input: NotificationDelivery): Promise<{ sent: boolean; reason?: string }>;
+	readonly channel: string;
+	send(input: NotificationDelivery): Promise<{ sent: boolean; reason?: string }>;
 };
 
 export type HostNotificationsBinding = {
-  readonly channels: readonly string[];   // the gate checks coverage against the manifest
-  send(input: NotificationDelivery): Promise<NotificationDeliveryResult>;
+	readonly channels: readonly string[]; // the gate checks coverage against the manifest
+	send(input: NotificationDelivery): Promise<NotificationDeliveryResult>;
 };
 
 export function notificationProviders(
-  ...providers: readonly NotificationProvider[]
+	...providers: readonly NotificationProvider[]
 ): HostNotificationsBinding;
 ```
 
@@ -295,7 +299,7 @@ silently shadowing it would break in-app delivery in a way nobody would find.
 
 **Pod passes a `recipientUserId`, never an address.** The host resolves it to an email, chat id or
 phone number and applies whatever per-user preferences and opt-outs it keeps — the host's data, not
-the tenant's. *Pod says who and what; the host says how to reach them.*
+the tenant's. _Pod says who and what; the host says how to reach them._
 
 On Core this is three changes and none of them touch the send code: wrap each existing sender as a
 `NotificationProvider`, advertise the resulting `channels` array, and add one pg-boss worker beside
@@ -314,14 +318,14 @@ identical on Core and on a self-hosted deployment.
 Conflating these is the easiest mistake to make. They differ in what they operate on, and everything
 else follows.
 
-|  | **Workspace agent** | **Template agent** |
-| --- | --- | --- |
-| Runs in | the tenant runtime (Pod) | the host (Core) |
-| Operates on | tenant **records** | the workspace **source tree** |
-| Job | business automation — triage, draft, summarise | authoring and modifying the template |
-| Network | none, by construction | yes |
-| Tools | Pod built-ins + tenant-defined | `web_fetch`, `code_execution`, `read_file`, `write_file` |
-| Pod contract | the `ai` facility — inference only | none; it never enters the tenant runtime |
+|              | **Workspace agent**                            | **Template agent**                                       |
+| ------------ | ---------------------------------------------- | -------------------------------------------------------- |
+| Runs in      | the tenant runtime (Pod)                       | the host (Core)                                          |
+| Operates on  | tenant **records**                             | the workspace **source tree**                            |
+| Job          | business automation — triage, draft, summarise | authoring and modifying the template                     |
+| Network      | none, by construction                          | yes                                                      |
+| Tools        | Pod built-ins + tenant-defined                 | `web_fetch`, `code_execution`, `read_file`, `write_file` |
+| Pod contract | the `ai` facility — inference only             | none; it never enters the tenant runtime                 |
 
 ```
 ┌─ TENANT RUNTIME ─────────────────┐   ┌─ HOST ─────────────────────────────┐
@@ -346,11 +350,11 @@ Consequently Pod carries **no host-tool plumbing at all** — no `hostTools`, no
 
 ### The workspace agent's tools
 
-| Kind | Source | Declared by |
-| --- | --- | --- |
-| `describe_workspace` | Pod built-in, always on | implicit |
-| `read_collection` / `write_collection` | Pod built-in | `access` + `collections` |
-| Tenant-defined | `+<name>.tool.ts`, anywhere under `src/` | `tools`, compiler-validated |
+| Kind                                   | Source                                   | Declared by                 |
+| -------------------------------------- | ---------------------------------------- | --------------------------- |
+| `describe_workspace`                   | Pod built-in, always on                  | implicit                    |
+| `read_collection` / `write_collection` | Pod built-in                             | `access` + `collections`    |
+| Tenant-defined                         | `+<name>.tool.ts`, anywhere under `src/` | `tools`, compiler-validated |
 
 Data access is a **mode, not a tool list**: `access: 'read' | 'write'` decides whether
 `write_collection` is exposed, and the typed `collections` array bounds what either built-in may
@@ -363,11 +367,11 @@ the same way it finds collections and remotes, so a tool can sit beside the coll
 ```ts
 // src/collections/permits_to_work/+check_permit_registry.tool.ts
 export default defineAgentTool({
-  description: 'Look up a permit and its outstanding conditions.',
-  input: z.object({ permit_no: z.string() }),
-  async run(api, { permit_no }) {
-    return api.db.query.permits_to_work.findFirst({ where: { permit_no } });
-  }
+	description: 'Look up a permit and its outstanding conditions.',
+	input: z.object({ permit_no: z.string() }),
+	async run(api, { permit_no }) {
+		return api.db.query.permits_to_work.findFirst({ where: { permit_no } });
+	}
 });
 ```
 
@@ -424,7 +428,7 @@ The cost is that a turn appears when it completes rather than typing out. Livene
 **Liveness must not be a heartbeat column on `automation_run`.** It is a synced collection, so a
 periodic heartbeat would be an UPDATE per interval carrying a history row, an outbox row, a notify
 and a diff read per connected client. Liveness is derived from the steps instead — one is written
-every turn, so the newest step *is* the heartbeat, and the scheduler sweep fails any running
+every turn, so the newest step _is_ the heartbeat, and the scheduler sweep fails any running
 automation whose latest step is older than the lease. The lease must therefore exceed the slowest
 expected turn. A restart resumes from `max(sequence)`.
 
@@ -450,12 +454,12 @@ rather than waking once per notify.
 Two entry points share one loop, one tool set and one transcript. They differ only in what starts a
 run and whether it accepts input while live.
 
-| | **Declared** | **Interactive** |
-| --- | --- | --- |
-| Started by | a trigger on `defineAutomation` | a user, from the agent view |
-| Bound to | a named automation | nothing — an ad-hoc run |
-| Mid-run input | none | user turns continue the run |
-| Record | `automation_run` | the same table, with no automation name |
+|               | **Declared**                    | **Interactive**                         |
+| ------------- | ------------------------------- | --------------------------------------- |
+| Started by    | a trigger on `defineAutomation` | a user, from the agent view             |
+| Bound to      | a named automation              | nothing — an ad-hoc run                 |
+| Mid-run input | none                            | user turns continue the run             |
+| Record        | `automation_run`                | the same table, with no automation name |
 
 ```
 POST /_runtime/agent/start   → { runId }   start a run, or append a user turn
@@ -471,18 +475,18 @@ the same thing twice.
 
 ```ts
 export type HostAiBinding = {
-  chat(input: {
-    messages: readonly AiMessage[];
-    tools?: readonly AiToolSpec[];
-    outputSchema?: unknown;    // structured output
-    model?: string;
-    profile?: string;          // opaque host extension (Core's agent profiles ride here)
-  }): Promise<{
-    text: string;
-    toolCalls?: readonly { id: string; name: string; input: unknown }[];
-    stopReason: 'end' | 'tool_use' | 'max_tokens' | 'refusal';
-    usage?: unknown;
-  }>;
+	chat(input: {
+		messages: readonly AiMessage[];
+		tools?: readonly AiToolSpec[];
+		outputSchema?: unknown; // structured output
+		model?: string;
+		profile?: string; // opaque host extension (Core's agent profiles ride here)
+	}): Promise<{
+		text: string;
+		toolCalls?: readonly { id: string; name: string; input: unknown }[];
+		stopReason: 'end' | 'tool_use' | 'max_tokens' | 'refusal';
+		usage?: unknown;
+	}>;
 };
 ```
 
@@ -516,28 +520,28 @@ discriminated on `kind`. There is no separate `defineAgent` — the discriminant
 ```ts
 // src/automation/+permit_expiry_watch.ts — deterministic
 export default defineAutomation({ schedule: '0 6 * * *' }, async (api: Api) => {
-  const permits = await api.db.query.permits_to_work.findMany({ limit: 250 });
-  return { summary: { permit_count: permits.length } };
+	const permits = await api.db.query.permits_to_work.findMany({ limit: 250 });
+	return { summary: { permit_count: permits.length } };
 });
 
 // src/automation/+permit_expiry_triage.ts — agent, minimal
 export default defineAutomation(
-  { schedule: '0 6 * * *' },
-  { kind: 'agent', task: 'Summarise permits expiring within 14 days.' }
+	{ schedule: '0 6 * * *' },
+	{ kind: 'agent', task: 'Summarise permits expiring within 14 days.' }
 );
 
 // the same, scoped and explicit
 export default defineAutomation(
-  { schedule: '0 6 * * *' },
-  {
-    kind: 'agent',
-    task: 'Draft a renewal for each permit expiring within 14 days.',
-    systemPrompt: 'You are a compliance officer. Never approve a renewal yourself.',
-    collections: ['permits_to_work', 'permit_renewals'],  // typed: this workspace's collections
-    access: 'write',                                       // 'read' (default) | 'write'
-    tools: ['check_permit_registry'],                      // typed: this workspace's own tools
-    maxIterations: 12
-  }
+	{ schedule: '0 6 * * *' },
+	{
+		kind: 'agent',
+		task: 'Draft a renewal for each permit expiring within 14 days.',
+		systemPrompt: 'You are a compliance officer. Never approve a renewal yourself.',
+		collections: ['permits_to_work', 'permit_renewals'], // typed: this workspace's collections
+		access: 'write', // 'read' (default) | 'write'
+		tools: ['check_permit_registry'], // typed: this workspace's own tools
+		maxIterations: 12
+	}
 );
 ```
 
@@ -588,27 +592,27 @@ my-workspace/
 Everything here was verified against source, not assumed. Numbers are referenced from the takeover
 map and the delivery plan.
 
-| # | Gap | Where | Consequence |
-| --- | --- | --- | --- |
-| 1 | Collection-event automations never fire | `server/run/automation-dispatch.server.ts` has no caller; Core `automation-scheduler.server.ts` registers only `cron_schedule`; `ManifestAutomationTemplate` has no trigger field | `defineAutomation({trigger:{collection,event}})` compiles and is inert |
-| 2 | Agent automations are refused by the runtime | `server/run/tenant_run.ts` — `is not a deterministic automation` | The entire agent surface is unimplemented |
-| 3 | `notification` table is never written | `server/collection/hook-api.server.ts` — `sendNotification` returns `crypto.randomUUID()` | No in-app notifications; the id points at no row; `read_at` unusable |
-| 4 | `notifications` is never a declared facility | `platform-utils/runtime/binding.ts` | A workspace needing email deploys to a host that cannot send it |
-| 5 | `aiInferStructured` / `aiInfer` are not declared either | same | Pass the gate, then 503 at runtime |
-| 6 | Standalone installs no `DatabaseNotifications` | `bin/invocation/standalone.ts`; seam at `sync/db-notifications.server.ts` | `pod dev` sync wakes only on the heartbeat |
-| 7 | Scheduler serialises automations ahead of outbox delivery | `bin/invocation/scheduler.ts` — `sweep()` | One slow automation stalls integration delivery for its duration |
-| 8 | No overlap rule for automations | `bin/invocation/scheduler.ts` | An hourly automation taking 90 minutes overlaps itself |
-| 9 | No token budget for agents | — | `maxIterations` bounds turns, not spend |
-| 10 | Change-triggered automations do not throttle | — | 1,000 record creates start 1,000 runs, each writing records — the dominant feed-load risk |
-| 11 | `web` sits in `AgentToolName` | `authoring/automations/automations.ts` | Belongs to the template agent; must leave the workspace agent's names |
-| 12 | `queue` / `integrationDelivery` are requirements with no binding member | `platform-utils/runtime/binding.ts` | Satisfiable only by host loops, which the contract does not express |
-| 13 | No workspace carries a seed | no template has `src/+seed.ts`; 287 MB lives in `apps/core/seed` | A standalone workspace starts empty |
-| 14 | `presignPut` / `presignGet` unused in OSS | `platform-utils/runtime/binding.ts` | Contract surface nothing exercises |
-| 15 | No agent testing story | — | An author cannot exercise an agent without real inference |
-| 16 | `agent_run_step` has no retention policy | — | Unbounded growth |
-| 17 | The agent plugin is an iframe hosting its own loop, transport, session and data path | `runtime/host-plugin-frame.svelte`; registry in `shared/plugins.ts` | Duplicates what Pod will own; blocks it from using the synced replica and the requestor's scope |
-| 18 | Interactive agent runs are unspecified | `server/run/tenant_run.ts` keys `runAutomation` entirely off `automationName` | No ad-hoc run, no client-callable start, no mid-run user turn — a structural assumption, not a missing parameter |
-| 19 | `buildDiff` has no subscription filter | `server/collection/sync/sync-endpoints.server.ts` | Every outbox row costs a policy-scoped read per connected client, subscribed or not |
+| #   | Gap                                                                                  | Where                                                                                                                                                                             | Consequence                                                                                                      |
+| --- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 1   | Collection-event automations never fire                                              | `server/run/automation-dispatch.server.ts` has no caller; Core `automation-scheduler.server.ts` registers only `cron_schedule`; `ManifestAutomationTemplate` has no trigger field | `defineAutomation({trigger:{collection,event}})` compiles and is inert                                           |
+| 2   | Agent automations are refused by the runtime                                         | `server/run/tenant_run.ts` — `is not a deterministic automation`                                                                                                                  | The entire agent surface is unimplemented                                                                        |
+| 3   | `notification` table is never written                                                | `server/collection/hook-api.server.ts` — `sendNotification` returns `crypto.randomUUID()`                                                                                         | No in-app notifications; the id points at no row; `read_at` unusable                                             |
+| 4   | `notifications` is never a declared facility                                         | `platform-utils/runtime/binding.ts`                                                                                                                                               | A workspace needing email deploys to a host that cannot send it                                                  |
+| 5   | `aiInferStructured` / `aiInfer` are not declared either                              | same                                                                                                                                                                              | Pass the gate, then 503 at runtime                                                                               |
+| 6   | Standalone installs no `DatabaseNotifications`                                       | `bin/invocation/standalone.ts`; seam at `sync/db-notifications.server.ts`                                                                                                         | `pod dev` sync wakes only on the heartbeat                                                                       |
+| 7   | Scheduler serialises automations ahead of outbox delivery                            | `bin/invocation/scheduler.ts` — `sweep()`                                                                                                                                         | One slow automation stalls integration delivery for its duration                                                 |
+| 8   | No overlap rule for automations                                                      | `bin/invocation/scheduler.ts`                                                                                                                                                     | An hourly automation taking 90 minutes overlaps itself                                                           |
+| 9   | No token budget for agents                                                           | —                                                                                                                                                                                 | `maxIterations` bounds turns, not spend                                                                          |
+| 10  | Change-triggered automations do not throttle                                         | —                                                                                                                                                                                 | 1,000 record creates start 1,000 runs, each writing records — the dominant feed-load risk                        |
+| 11  | `web` sits in `AgentToolName`                                                        | `authoring/automations/automations.ts`                                                                                                                                            | Belongs to the template agent; must leave the workspace agent's names                                            |
+| 12  | `queue` / `integrationDelivery` are requirements with no binding member              | `platform-utils/runtime/binding.ts`                                                                                                                                               | Satisfiable only by host loops, which the contract does not express                                              |
+| 13  | No workspace carries a seed                                                          | no template has `src/+seed.ts`; 287 MB lives in `apps/core/seed`                                                                                                                  | A standalone workspace starts empty                                                                              |
+| 14  | `presignPut` / `presignGet` unused in OSS                                            | `platform-utils/runtime/binding.ts`                                                                                                                                               | Contract surface nothing exercises                                                                               |
+| 15  | No agent testing story                                                               | —                                                                                                                                                                                 | An author cannot exercise an agent without real inference                                                        |
+| 16  | `agent_run_step` has no retention policy                                             | —                                                                                                                                                                                 | Unbounded growth                                                                                                 |
+| 17  | The agent plugin is an iframe hosting its own loop, transport, session and data path | `runtime/host-plugin-frame.svelte`; registry in `shared/plugins.ts`                                                                                                               | Duplicates what Pod will own; blocks it from using the synced replica and the requestor's scope                  |
+| 18  | Interactive agent runs are unspecified                                               | `server/run/tenant_run.ts` keys `runAutomation` entirely off `automationName`                                                                                                     | No ad-hoc run, no client-callable start, no mid-run user turn — a structural assumption, not a missing parameter |
+| 19  | `buildDiff` has no subscription filter                                               | `server/collection/sync/sync-endpoints.server.ts`                                                                                                                                 | Every outbox row costs a policy-scoped read per connected client, subscribed or not                              |
 
 **Already fixed during this work:** `automation_run` was written unelevated, so every scheduled
 automation reported failure after running successfully — the run executed, the bookkeeping write was
@@ -671,7 +675,7 @@ deprecated-but-still-working surfaces. When a subsystem is replaced, the thing i
 in the same change — not marked deprecated, not kept "just in case", not left reachable through an
 older entry point.
 
-The reason is specific rather than stylistic: nearly every gap in section 6 is something that *looks*
+The reason is specific rather than stylistic: nearly every gap in section 6 is something that _looks_
 implemented and is not. A dead dispatcher, a table nothing writes, an authoring form that type-checks
 and never runs. Leaving replaced code in place is how that class of defect is created, and this
 migration touches exactly the areas where it already happened.

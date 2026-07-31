@@ -30,7 +30,11 @@
 
 <svelte:element
 	this={as}
-	class={cn(className, 'min-w-0 overflow-clip [&>img]:size-full [&>img]:object-cover', ratioClasses[ratio])}
+	class={cn(
+		className,
+		'min-w-0 overflow-clip [&>img]:size-full [&>img]:object-cover',
+		ratioClasses[ratio]
+	)}
 	data-layout="frame"
 	{...restProps}
 >

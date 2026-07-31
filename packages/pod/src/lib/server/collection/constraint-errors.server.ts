@@ -50,7 +50,8 @@ function columnsFromDetail(detail: unknown): string[] {
 function columnsFromConstraint(constraint: unknown, table: unknown): string[] {
 	if (typeof constraint !== 'string') return [];
 	let name = constraint;
-	if (typeof table === 'string' && name.startsWith(`${table}_`)) name = name.slice(table.length + 1);
+	if (typeof table === 'string' && name.startsWith(`${table}_`))
+		name = name.slice(table.length + 1);
 	name = name.replace(/_(unique|key|pkey|fkey|check|idx)$/, '');
 	return name ? [name] : [];
 }

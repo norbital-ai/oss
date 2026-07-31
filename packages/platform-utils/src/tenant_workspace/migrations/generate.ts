@@ -15,7 +15,9 @@ export interface GenerateDrizzleMigrationInput {
 }
 
 /** Generate a Drizzle migration from the supplied workspace and framework schema files. */
-export async function generateDrizzleMigration(input: GenerateDrizzleMigrationInput): Promise<void> {
+export async function generateDrizzleMigration(
+	input: GenerateDrizzleMigrationInput
+): Promise<void> {
 	const drizzlePackageEntry = fileURLToPath(import.meta.resolve('drizzle-kit'));
 	const drizzleBin = path.join(drizzlePackageEntry, '..', 'bin.cjs');
 	const sourceDir = path.resolve(input.sourceDir);

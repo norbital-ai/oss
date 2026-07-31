@@ -19,8 +19,7 @@ export type LayoutGap = 'none' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export type LayoutPad = Exclude<LayoutGap, 'xl'>;
 
 export type ColumnParentContext =
-	| { readonly kind: 'grid' }
-	| { readonly kind: 'columns'; readonly count: () => number };
+	{ readonly kind: 'grid' } | { readonly kind: 'columns'; readonly count: () => number };
 
 export const COLUMN_PARENT_CONTEXT = Symbol('norbital-column-parent');
 

@@ -250,7 +250,9 @@ export function createRecord(
 	input: Record<string, unknown>,
 	options?: { isElevated?: boolean }
 ): Promise<Record<string, unknown>> {
-	return withConstraintErrors(collection, () => createRecordUnguarded(ctx, collection, input, options));
+	return withConstraintErrors(collection, () =>
+		createRecordUnguarded(ctx, collection, input, options)
+	);
 }
 
 async function createRecordUnguarded(
@@ -359,7 +361,9 @@ export function createMany(
 	inputs: readonly Record<string, unknown>[],
 	options?: { isElevated?: boolean }
 ): Promise<Record<string, unknown>[]> {
-	return withConstraintErrors(collection, () => createManyUnguarded(ctx, collection, inputs, options));
+	return withConstraintErrors(collection, () =>
+		createManyUnguarded(ctx, collection, inputs, options)
+	);
 }
 
 async function createManyUnguarded(
