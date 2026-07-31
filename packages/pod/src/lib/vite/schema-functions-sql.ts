@@ -227,12 +227,28 @@ export const SCHEMA_POST_DDL_SQL = dedent`
     -- The change feed announces itself. Postgres queues NOTIFY inside the transaction and
     -- delivers it at COMMIT, which is exactly the moment a row becomes real — so a listener
     -- wakes on the commit instead of asking repeatedly whether one happened. An idle
-    -- workspace therefore issues no queries at all, and a busy one wakes once per commit.
-    -- The payload is the seq so a listener can tell whether it is already past this row.
+    -- workspace therefore issues no queries at all.
+    --
+    -- Once per STATEMENT, not once per row. A bulk write is a single INSERT that appends
+    -- thousands of outbox rows, and per-row notification turned that into thousands of
+    -- deliveries — every one of them fanned out to every open stream on this database, each
+    -- waking to run the same catch-up query against the same committed state. The wake-ups
+    -- carry no information the first already carried: the feed is read from a cursor, so one
+    -- listener pass drains everything the statement wrote.
+    --
+    -- The transition table gives the statement's rows in one place. The payload is the highest
+    -- seq it appended, which is the only value that stays correct under coalescing — a listener
+    -- past it is past every row in the batch. Nothing reads the payload today; it is there so a
+    -- listener that wants to skip a catch-up can, without changing the trigger.
     CREATE OR REPLACE FUNCTION _norbital_sync_notify() RETURNS trigger
     LANGUAGE plpgsql AS $sync_notify$
+    DECLARE
+      latest_seq BIGINT;
     BEGIN
-      PERFORM pg_notify('norbital_sync', NEW.seq::text);
+      SELECT MAX(seq) INTO latest_seq FROM _norbital_sync_inserted;
+      IF latest_seq IS NOT NULL THEN
+        PERFORM pg_notify('norbital_sync', latest_seq::text);
+      END IF;
       RETURN NULL;
     END;
     $sync_notify$;
@@ -240,7 +256,8 @@ export const SCHEMA_POST_DDL_SQL = dedent`
     DROP TRIGGER IF EXISTS _norbital_sync_notify ON sync_outbox;
     CREATE TRIGGER _norbital_sync_notify
       AFTER INSERT ON sync_outbox
-      FOR EACH ROW EXECUTE FUNCTION _norbital_sync_notify();
+      REFERENCING NEW TABLE AS _norbital_sync_inserted
+      FOR EACH STATEMENT EXECUTE FUNCTION _norbital_sync_notify();
 
     CREATE TABLE IF NOT EXISTS _approval_lock (
       norbital_id UUID PRIMARY KEY DEFAULT uuidv7(),
