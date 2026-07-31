@@ -1,6 +1,9 @@
 import { eq, getColumns } from 'drizzle-orm';
 import { integration_cursor } from '@norbital-ai/platform-utils/system/workspace-schema';
-import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
+import {
+	getWorkspace,
+	type ProvisionedContext
+} from '$lib/server/bootstrap/workspace_store.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { createRecord, updateRecord } from '$lib/server/collection/collection_ops.server.js';
 import { createBeforeApi } from '$lib/server/collection/hook-api.server.js';
@@ -110,6 +113,66 @@ async function claimInboundEvent(params: {
 	return claimed.rows[0]?.norbital_id ?? null;
 }
 
+// ── retention ──────────────────────────────────────────────────────────────────
+//
+// The ledger is a duplicate defence, and a duplicate defence is only useful for as long as a
+// provider might redeliver. Past that it is a row per delivery, kept forever, on a table nothing
+// reads — the table grows with tenant age instead of with anything anyone can act on.
+
+/**
+ * How long a claimed delivery stays in the ledger.
+ *
+ * This is the deduplication window, so it has to outlast every retry policy pointed at it: Stripe
+ * gives up after about three days, most others within one. A month leaves an order of magnitude of
+ * headroom, which matters because pruning a row is exactly the same as forgetting the delivery — a
+ * redelivery after the cut would import a second copy. Same shape as `pruneSyncOutbox`, deliberately.
+ */
+const INBOUND_RETENTION_DAYS = 30;
+
+/** Never prune below this many recent receipts, however old they are. */
+const INBOUND_RETENTION_FLOOR_ROWS = 1_000;
+
+/** How often a runtime bothers to sweep. The work is idempotent; this only limits churn. */
+const INBOUND_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+let lastInboundPruneAt = 0;
+
+/**
+ * Drop inbound receipts past their retention.
+ *
+ * The floor is expressed as "keep the newest N of the ones already outside the window", the same way
+ * the sync outbox expresses it, so a quiet tenant whose every receipt is old still keeps a usable
+ * duplicate window rather than being emptied by the clock alone. One statement, so a concurrent claim
+ * cannot see a half-swept table.
+ */
+export async function pruneInboundEvents(
+	ctx: Pick<ProvisionedContext, 'tenantDb'>,
+	options?: { force?: boolean }
+): Promise<{ deleted: number }> {
+	if (!options?.force && Date.now() - lastInboundPruneAt < INBOUND_PRUNE_INTERVAL_MS) {
+		return { deleted: 0 };
+	}
+	lastInboundPruneAt = Date.now();
+
+	const result = await ctx.tenantDb.query<{ deleted: string }>({
+		text: `WITH old AS (
+		         SELECT norbital_id
+		           FROM integration_inbound_event
+		          WHERE norbital_created_at < now() - ($1 || ' days')::interval
+		          ORDER BY norbital_created_at DESC, norbital_id DESC
+		         OFFSET $2
+		       ),
+		       removed AS (
+		         DELETE FROM integration_inbound_event
+		          WHERE norbital_id IN (SELECT norbital_id FROM old)
+		      RETURNING norbital_id
+		       )
+		       SELECT count(*)::text AS deleted FROM removed`,
+		values: [String(INBOUND_RETENTION_DAYS), INBOUND_RETENTION_FLOOR_ROWS]
+	});
+	return { deleted: Number(result.rows[0]?.deleted ?? 0) };
+}
+
 async function settleInboundEvent(
 	receiptId: string,
 	values: Record<string, unknown>
@@ -148,6 +211,12 @@ export async function importIntegrationRecords(params: {
 			})
 		: null;
 	if (params.eventId && !receiptId) return { imported: 0, status: 'duplicate' };
+	// Swept from the one path that writes the table, exactly as sync retention is swept from the one
+	// path that reads its feed. Detached and swallowed: a delivery already claimed must not fail
+	// because housekeeping did.
+	if (receiptId) {
+		void pruneInboundEvents(getWorkspace({ provision: true })).catch(() => undefined);
+	}
 
 	let records: Awaited<ReturnType<typeof runIntegrationReceivePipeline>>;
 	try {

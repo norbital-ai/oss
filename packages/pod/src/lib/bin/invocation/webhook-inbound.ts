@@ -9,7 +9,9 @@ import type {
 import { processEnvSecrets } from '../../host/integration-http.js';
 import {
 	DEFAULT_WEBHOOK_SIGNATURE_HEADER,
-	verifyWebhookSignature
+	verifyWebhookSignature,
+	webhookSignatureTimestamp,
+	webhookTimestampIsFresh
 } from '../../host/webhooks.js';
 import type { RuntimeDispatch } from './jobs.js';
 
@@ -49,6 +51,8 @@ export type WebhookInboundOptions = {
 	/** Turns the declared secret name into its value. Defaults to `process.env`. */
 	readonly secrets?: HostSecretResolver;
 	readonly log?: (message: string) => void;
+	/** The clock the replay window is measured against. Defaults to `Date.now`. */
+	readonly now?: () => number;
 };
 
 /**
@@ -69,6 +73,7 @@ export function webhookInboundDeliverer(
 ): (delivery: WebhookInboundDelivery) => Promise<WebhookInboundResult> {
 	const secrets = options.secrets ?? processEnvSecrets;
 	const log = options.log ?? ((message: string) => console.warn(message));
+	const now = options.now ?? (() => Date.now());
 
 	return async (delivery) => {
 		const integration = options.manifest.integrations?.[delivery.integrationName];
@@ -93,12 +98,39 @@ export function webhookInboundDeliverer(
 			const header = (
 				origin.authentication.signatureHeader ?? DEFAULT_WEBHOOK_SIGNATURE_HEADER
 			).toLowerCase();
+			const signature = delivery.headers[header];
+			const scheme = origin.authentication.timestamp;
+			// The timestamp is read before the digest because it is *part of* the signed string, not a
+			// separate claim to be checked afterwards. A delivery that carries none under a binding that
+			// declares the scheme is refused here rather than quietly verified against the body alone —
+			// falling back would let a sender pick the weaker scheme by omitting one field.
+			let value: string | undefined;
+			if (scheme) {
+				value = webhookSignatureTimestamp({ scheme, headers: delivery.headers, signature });
+				if (!value) {
+					return { status: 'rejected', reason: 'delivery carries no signature timestamp' };
+				}
+			}
 			const verified = verifyWebhookSignature({
 				body: delivery.body,
-				signature: delivery.headers[header],
-				secret
+				signature,
+				secret,
+				...(scheme && value ? { timestamp: { ...scheme, value } } : {})
 			});
 			if (!verified) return { status: 'rejected', reason: 'signature did not verify' };
+			// Freshness is judged only once the signature holds. A stranger probing the endpoint learns
+			// nothing about the window, and the timestamp being inside the signed string is what makes it
+			// trustworthy enough to compare against at all — an unsigned one is just a number they chose.
+			if (scheme && value) {
+				const fresh = webhookTimestampIsFresh({
+					value,
+					...(scheme.toleranceSeconds != null
+						? { toleranceSeconds: scheme.toleranceSeconds }
+						: {}),
+					nowMs: now()
+				});
+				if (!fresh) return { status: 'rejected', reason: 'delivery is outside the replay window' };
+			}
 		}
 
 		let importData: unknown;
@@ -106,6 +138,26 @@ export function webhookInboundDeliverer(
 			importData = JSON.parse(delivery.body);
 		} catch {
 			return { status: 'rejected', reason: 'body is not JSON' };
+		}
+
+		if (origin.events) {
+			if (!origin.eventType) {
+				// Same answer as an unresolvable secret, for the same reason: the binding declared a
+				// restriction this host cannot evaluate, and importing everything would be the restriction
+				// silently meaning nothing. `defineWorkspace` refuses this at build time; a manifest that
+				// reaches here with it is one that went around the compiler.
+				log(
+					`[pod:webhook] ${describe} narrows events but declares no eventType; every delivery is refused`
+				);
+				return { status: 'rejected', reason: 'event narrowing is not evaluable' };
+			}
+			const eventType = webhookEventType(delivery, importData, origin.eventType);
+			if (!eventType) {
+				return { status: 'rejected', reason: 'delivery names no event type' };
+			}
+			if (!origin.events.includes(eventType)) {
+				return { status: 'rejected', reason: `event type "${eventType}" is not declared here` };
+			}
 		}
 
 		const outcome = (await options.dispatch({
@@ -139,6 +191,28 @@ export function webhookInboundDeliverer(
  * — which is exactly the ledger being present and useless. Two genuinely distinct events with
  * byte-identical bodies would collide, which is why a provider that sends an id should declare it.
  */
+/**
+ * What this delivery says it is, read from wherever the binding declared it lives.
+ *
+ * Only one source is consulted — the declared one. Trying a header and then a body field would let a
+ * delivery choose which of the two the filter sees, so an absent value is an absent value and the
+ * caller refuses on it. A path walks plain objects only: an array index or a non-string leaf is not
+ * an event name, and coercing one would invent a value the provider never sent.
+ */
+function webhookEventType(
+	delivery: WebhookInboundDelivery,
+	body: unknown,
+	source: { readonly header: string } | { readonly path: string }
+): string | undefined {
+	if ('header' in source) return delivery.headers[source.header.toLowerCase()]?.trim() || undefined;
+	let cursor: unknown = body;
+	for (const segment of source.path.split('.')) {
+		if (typeof cursor !== 'object' || cursor === null || Array.isArray(cursor)) return undefined;
+		cursor = (cursor as Record<string, unknown>)[segment];
+	}
+	return typeof cursor === 'string' ? cursor.trim() || undefined : undefined;
+}
+
 function webhookEventId(delivery: WebhookInboundDelivery, header: string | undefined): string {
 	const declared = header ? delivery.headers[header.toLowerCase()]?.trim() : undefined;
 	if (declared) return declared;

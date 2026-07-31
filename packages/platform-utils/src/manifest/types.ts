@@ -175,6 +175,41 @@ const connectionSchema = z.union([
 		.strict()
 ]);
 
+/**
+ * Where a delivery's event type is read from, so `events` is a filter rather than a comment.
+ *
+ * Providers disagree and there is no shape to sniff: GitHub sends `x-github-event`, Stripe puts
+ * `type` in the body. Declaring which one — and never guessing — is what keeps a binding declared for
+ * `charge.succeeded` from accepting a `charge.refunded` because the header happened to be absent.
+ */
+const webhookEventTypeSchema = z.union([
+	z.object({ header: nonEmpty }).strict(),
+	z.object({ path: nonEmpty }).strict()
+]);
+
+/**
+ * The timestamp half of a signature scheme that covers more than the raw body.
+ *
+ * Declared, never inferred. Stripe signs `<timestamp>.<body>` and sends `t=<timestamp>,v1=<hmac>` in
+ * one header; a provider that sends the timestamp in a header of its own is the same scheme with
+ * `header` set. A binding that declares none of this keeps signing the raw body exactly as before,
+ * which is why the field is optional rather than defaulted.
+ */
+const webhookSignatureTimestampSchema = z
+	.object({
+		/** Header the timestamp is read from. Omit when it travels inside the signature header. */
+		header: nonEmpty.optional(),
+		/** Element label the timestamp is read from inside the signature header. Defaults to `t`. */
+		field: nonEmpty.optional(),
+		/** Element label the digest is read from inside the signature header. Defaults to `v1`. */
+		signatureField: nonEmpty.optional(),
+		/** What sits between the timestamp and the body in the signed string. Defaults to `.`. */
+		separator: z.string().optional(),
+		/** How far from now a delivery may claim to be, in seconds. Defaults to 300. */
+		toleranceSeconds: z.number().int().positive().optional()
+	})
+	.strict();
+
 const inboundBindingSchema = z
 	.object({
 		collection: nonEmpty,
@@ -185,11 +220,13 @@ const inboundBindingSchema = z
 				.object({
 					type: z.literal('webhook'),
 					events: z.array(nonEmpty).optional(),
+					eventType: webhookEventTypeSchema.optional(),
 					authentication: z
 						.object({
 							type: z.literal('hmac-sha256'),
 							secret: secretReferenceSchema,
-							signatureHeader: nonEmpty.optional()
+							signatureHeader: nonEmpty.optional(),
+							timestamp: webhookSignatureTimestampSchema.optional()
 						})
 						.strict()
 						.optional(),

@@ -301,11 +301,43 @@ and needs no other configuration — and Pod verifies the signature against the 
 the delivery crosses in, so a listener cannot skip the check. A workspace that declares a webhook and
 a host that supplies no listener is a startup warning, not a silent no-op.
 
+**Providers that sign more than the body declare a `timestamp`.** Stripe signs `<timestamp>.<body>`
+and sends `stripe-signature: t=<timestamp>,v1=<hmac>`; every default here is that scheme, so declaring
+it empty is enough. A provider that sends the timestamp in a header of its own sets `header`, and one
+that joins the two differently sets `separator`.
+
+```ts
+webhook: {
+	authentication: {
+		type: 'hmac-sha256',
+		secret: { env: 'STRIPE_WEBHOOK_SECRET' },
+		signatureHeader: 'stripe-signature',
+		timestamp: { toleranceSeconds: 300 }
+	},
+	events: ['charge.succeeded'],
+	eventType: { path: 'type' }
+}
+```
+
+Declaring it is also what buys a **replay window**. The timestamp is inside the signed string, so it
+cannot be edited without breaking the digest, and a delivery further than `toleranceSeconds` from now
+— in either direction — is refused. Five minutes is the default. A binding that declares no
+`timestamp` signs the raw body exactly as before and has no window: a captured delivery stays valid
+for the life of the secret, which is the reason to declare one.
+
+**`events` is a filter, and it needs `eventType` to be one.** `eventType` names where the delivery
+writes its own type — `{ header: 'x-github-event' }` or a dotted path into the body — and only that
+source is read, so a delivery cannot pick which of two the filter sees. A delivery whose type is
+absent or undeclared is rejected before it reaches the pipeline. Declaring `events` without
+`eventType` is a build error rather than a narrowing that silently accepts everything.
+
 Every delivery is claimed in `integration_inbound_event` before its import runs, keyed on the declared
 event id and falling back to a digest of the raw body. A provider that redelivers is normal, so the
 second arrival loses one insert instead of importing the page again. `input` is parsed before the
 pipeline, which is what makes a malformed payload a refusal with nothing written rather than a
-half-import; the host answers the sender accordingly instead of inviting a retry.
+half-import; the host answers the sender accordingly instead of inviting a retry. Receipts are swept
+after 30 days, keeping the newest thousand however old they are — long past any provider's retry
+horizon, because forgetting a receipt is the same as being willing to import it again.
 
 ## Secrets
 

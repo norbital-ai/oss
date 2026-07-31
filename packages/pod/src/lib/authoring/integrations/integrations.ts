@@ -22,12 +22,37 @@ export function defineConnection<const T extends HttpConnection>(connection: T):
 	return connection;
 }
 
+/**
+ * The timestamp half of a provider's signature scheme, when it signs more than the raw body.
+ *
+ * Stripe sends `stripe-signature: t=<timestamp>,v1=<hmac>` and signs `<timestamp>.<body>`; declaring
+ * `timestamp: {}` is enough for that, because every default here is Stripe's. A provider that sends
+ * the timestamp in a header of its own sets `header`. Declaring this is also what makes a replay
+ * window possible at all — a body-only signature carries no time to compare against.
+ */
+export interface WebhookSignatureTimestamp {
+	/** Header the timestamp is read from. Omit when it travels inside the signature header. */
+	readonly header?: string;
+	/** Element label the timestamp is read from inside the signature header. Defaults to `t`. */
+	readonly field?: string;
+	/** Element label the digest is read from inside the signature header. Defaults to `v1`. */
+	readonly signatureField?: string;
+	/** What sits between the timestamp and the body in the signed string. Defaults to `.`. */
+	readonly separator?: string;
+	/** How far from now a delivery may claim to be, in seconds. Defaults to 300. */
+	readonly toleranceSeconds?: number;
+}
+
 export interface WebhookTrigger {
+	/** Event types this binding accepts. Requires `eventType`, or Pod cannot tell what arrived. */
 	readonly events?: readonly string[];
+	/** Where the delivery's event type is read from: a header, or a dotted path into the body. */
+	readonly eventType?: { readonly header: string } | { readonly path: string };
 	readonly authentication?: {
 		readonly type: 'hmac-sha256';
 		readonly secret: PrivateEnvReference;
 		readonly signatureHeader?: string;
+		readonly timestamp?: WebhookSignatureTimestamp;
 	};
 	readonly eventIdHeader?: string;
 }

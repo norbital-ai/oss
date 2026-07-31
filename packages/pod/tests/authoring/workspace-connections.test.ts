@@ -134,6 +134,75 @@ describe('a connection declared in +integrations.ts', () => {
 	});
 });
 
+/**
+ * A webhook binding's declarations have to be things Pod can act on, checked where the author is.
+ *
+ * `events` used to compile into a manifest nothing read: a binding could say it accepted exactly
+ * `charge.succeeded` and take every event the provider sent. Enforcing it needs to know where the
+ * type is written, and no shape is safe to sniff, so the pair is required together.
+ */
+describe('a webhook receive binding', () => {
+	const WEBHOOK_ENV = { REPORTS_SECRET: { description: 'HMAC secret' } };
+
+	const receiving = (webhook: Record<string, unknown>) => ({
+		reports: { receive: { rfi: { webhook } } }
+	});
+
+	it('refuses a narrowing it has no way to evaluate', () => {
+		expect(() =>
+			workspace({
+				quotes: receiving({
+					events: ['charge.succeeded'],
+					authentication: {
+						type: 'hmac-sha256',
+						secret: { env: 'REPORTS_SECRET' },
+						signatureHeader: 'x-signature'
+					}
+				}),
+				env: { private: WEBHOOK_ENV }
+			})
+		).toThrow(/narrows `events` but declares no `eventType`/);
+	});
+
+	it('compiles the narrowing and the timestamp scheme into a manifest the strict schema accepts', () => {
+		const ws = workspace({
+			quotes: receiving({
+				events: ['charge.succeeded'],
+				eventType: { path: 'type' },
+				authentication: {
+					type: 'hmac-sha256',
+					secret: { env: 'REPORTS_SECRET' },
+					signatureHeader: 'stripe-signature',
+					timestamp: { toleranceSeconds: 120 }
+				}
+			}),
+			env: { private: WEBHOOK_ENV }
+		});
+		const definition = ws.integrations[0]?.definition as {
+			inbound: Record<string, { origin: Record<string, unknown> }>;
+		};
+		expect(definition.inbound['quotes.receive.rfi']?.origin).toMatchObject({
+			type: 'webhook',
+			events: ['charge.succeeded'],
+			eventType: { path: 'type' },
+			authentication: {
+				type: 'hmac-sha256',
+				secret: { type: 'secret', name: 'REPORTS_SECRET' },
+				signatureHeader: 'stripe-signature',
+				timestamp: { toleranceSeconds: 120 }
+			}
+		});
+		const parsed = NorbitalManifestSchema.safeParse(
+			buildNorbitalManifest({
+				collections: {},
+				secrets: ws.secrets,
+				integrations: ws.integrations
+			})
+		);
+		expect(parsed.error?.message ?? 'ok').toBe('ok');
+	});
+});
+
 /** Both directions are checked, so a reference and its declaration cannot drift apart silently. */
 describe('private environment declarations', () => {
 	it('refuses a reference to a name src/+env.ts does not declare', () => {

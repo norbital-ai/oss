@@ -337,9 +337,18 @@ function registerIntegrations(
 						event: binding.systemEvent.event
 					};
 				} else if (binding.webhook) {
+					// A narrowing nobody can evaluate is worse than none: it reads as a guarantee and
+					// filters nothing. Refusing here means the author learns at build time, not from a
+					// binding quietly accepting every event type the provider ever sends.
+					if (binding.webhook.events && !binding.webhook.eventType) {
+						throw new Error(
+							`Collection "${behavior.name}" integration "${integrationName}" receive binding "${bindingName}" narrows \`events\` but declares no \`eventType\`; add \`eventType: { header: '...' }\` or \`eventType: { path: '...' }\` so Pod can tell what arrived`
+						);
+					}
 					origin = {
 						type: 'webhook',
 						events: binding.webhook.events,
+						eventType: binding.webhook.eventType,
 						authentication: binding.webhook.authentication
 							? {
 									type: 'hmac-sha256',
@@ -347,7 +356,8 @@ function registerIntegrations(
 										binding.webhook.authentication.secret,
 										requirements
 									),
-									signatureHeader: binding.webhook.authentication.signatureHeader
+									signatureHeader: binding.webhook.authentication.signatureHeader,
+									timestamp: binding.webhook.authentication.timestamp
 								}
 							: undefined,
 						eventId: binding.webhook.eventIdHeader
