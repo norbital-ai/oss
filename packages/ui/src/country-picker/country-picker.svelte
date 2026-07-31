@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Combobox } from '#lib/combobox';
+	import { Inline } from '#lib/layout';
 	import { COUNTRY_CODES, COUNTRY_NAMES } from './country-data';
 
 	const countryCode = COUNTRY_CODES;
@@ -32,10 +33,10 @@
 
 {#snippet countryOptionLabel(props: string)}
 	{@const name = countryNames[props.toUpperCase()] ?? props}
-	<div class="flex items-center gap-2">
+	<Inline gap="sm">
 		<Icon icon={`flag:${props.toLowerCase()}-1x1`} class="h-4 w-6 rounded" />
 		<span>{name}</span>
-	</div>
+	</Inline>
 {/snippet}
 
 <Combobox

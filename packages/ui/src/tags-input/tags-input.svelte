@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '#lib/button';
 	import * as Command from '#lib/command';
+	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { humanize } from '@norbital-ai/std';
 	import { isEqual } from 'es-toolkit/predicate';
@@ -239,10 +240,8 @@
 </script>
 
 {#if isSelectingColor}
-	<div class="w-full rounded-md border border-input bg-background p-2">
-		<div class="mb-2">
-			<p class="text-xs font-medium">Select a color for "{String(validatedInput)}"</p>
-		</div>
+	<Stack gap="sm" class="rounded-md border border-input bg-background p-2">
+		<p class="text-xs font-medium">Select a color for "{String(validatedInput)}"</p>
 
 		<Command.Root
 			shouldFilter={false}
@@ -258,23 +257,21 @@
 				class="text-xs"
 			>
 				{#snippet prefix()}
-					<div class="pr-1 text-muted-foreground">
-						<svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zM21 5H9M21 9H9M21 13H9M21 17H9"
-							></path>
-						</svg>
-					</div>
+					<svg class="h-3 w-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zM21 5H9M21 9H9M21 13H9M21 17H9"
+						></path>
+					</svg>
 				{/snippet}
 			</Command.Input>
 
 			<Command.List class="max-h-[200px]" itemHeight={28} gap={2}>
 				{#snippet itemSnippet({ item })}
 					{@const color = item._color as TagColor}
-					<div class="flex cursor-pointer flex-row items-center justify-start gap-2 px-2 py-1">
+					<Inline gap="sm" class="cursor-pointer px-2 py-1">
 						<div
 							class={cn('h-3 w-3 rounded-full border', {
 								'border-yellow-700 bg-yellow-200': color === 'yellow',
@@ -290,14 +287,14 @@
 							})}
 						></div>
 						<span class="text-xs">{humanize(color)}</span>
-					</div>
+					</Inline>
 				{/snippet}
 				{#if colorItems.length === 0}
 					<Command.Empty class="text-xs">No colors found.</Command.Empty>
 				{/if}
 			</Command.List>
 
-			<div class="mt-2 flex justify-end gap-2">
+			<Inline justify="end" gap="sm" class="mt-2">
 				<Button
 					variant="secondary"
 					size="sm"
@@ -307,9 +304,9 @@
 				>
 					Back
 				</Button>
-			</div>
+			</Inline>
 		</Command.Root>
-	</div>
+	</Stack>
 {:else}
 	<div
 		class={cn(

@@ -1,17 +1,7 @@
-export class HttpError extends Error {
-	readonly status: number;
-	readonly body: Record<string, unknown>;
+import { PodHttpError } from '$lib/runtime/http.js';
 
-	constructor(status: number, body: string | Record<string, unknown>) {
-		const normalized =
-			typeof body === 'string'
-				? { message: body }
-				: { message: typeof body.message === 'string' ? body.message : 'Error', ...body };
-		super(String(normalized.message));
-		this.status = status;
-		this.body = normalized;
-	}
-}
+/** Collection failures share the runtime HTTP base so expected 4xx responses are not logged as 500s. */
+export class HttpError extends PodHttpError {}
 
 export function error(status: number, body: string | Record<string, unknown>): never {
 	throw new HttpError(status, body);

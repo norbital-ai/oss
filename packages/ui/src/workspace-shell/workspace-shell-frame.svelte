@@ -24,6 +24,7 @@
 
 <script lang="ts">
 	import * as Sidebar from '#lib/sidebar';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { PersistedState } from 'runed';
 
@@ -76,15 +77,17 @@
 	</Sidebar.Root>
 
 	<Sidebar.Inset as="main" class={cn(insetClass, 'h-dvh min-h-0 min-w-0 overflow-clip')}>
-		<header
-			class="flex h-[calc(3.25rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b bg-background px-[max(0.75rem,env(safe-area-inset-left))] pt-[env(safe-area-inset-top)] md:hidden"
+		<Inline
+			as="header"
+			gap="sm"
+			class="h-[calc(3.25rem+env(safe-area-inset-top))] shrink-0 border-b bg-background px-[max(0.75rem,env(safe-area-inset-left))] pt-[env(safe-area-inset-top)] md:hidden"
 		>
 			<Sidebar.Trigger aria-label={`Open ${navigationLabel.toLowerCase()}`} class="size-11" />
 			<p class="min-w-0 flex-1 truncate text-sm font-medium">{mobileTitle}</p>
 			{#if mobileActions}
-				<div class="flex shrink-0 items-center gap-1">{@render mobileActions()}</div>
+				<Inline gap="xs" class="shrink-0">{@render mobileActions()}</Inline>
 			{/if}
-		</header>
+		</Inline>
 		<div
 			class={cn(
 				contentClass,

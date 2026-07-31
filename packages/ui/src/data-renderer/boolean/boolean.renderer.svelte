@@ -3,6 +3,7 @@
 	import { Button } from '#lib/button';
 	import { Checkbox } from '#lib/checkbox';
 	import { Combobox } from '#lib/combobox';
+	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '../data-renderer.types.js';
 
@@ -36,34 +37,32 @@
 </script>
 
 {#if field.array}
-	<div class={className}>
-		<div class="space-y-2">
-			{#each values as checked, index (index)}
-				<div class="flex h-8 items-center gap-2">
-					<div class="flex min-w-0 flex-1 items-center gap-2">
-						<Checkbox
-							id={id ? `${id}-${index}` : undefined}
-							aria-label={`Boolean value ${index + 1}`}
-							{checked}
-							{disabled}
-							onCheckedChange={(next) => updateArrayItem(index, next)}
-						/>
-						<span class="text-sm">{checked ? 'Yes' : 'No'}</span>
-					</div>
-					<Button
-						type="button"
-						variant="outline"
-						size="icon"
-						class="shrink-0"
-						aria-label="Remove boolean value"
+	<Stack gap="sm" class={className}>
+		{#each values as checked, index (index)}
+			<Inline gap="sm" class="h-8">
+				<Inline gap="sm" class="min-w-0 flex-1">
+					<Checkbox
+						id={id ? `${id}-${index}` : undefined}
+						aria-label={`Boolean value ${index + 1}`}
+						{checked}
 						{disabled}
-						onclick={() => removeArrayItem(index)}
-					>
-						<Icon icon="lucide:x" class="size-4" />
-					</Button>
-				</div>
-			{/each}
-		</div>
+						onCheckedChange={(next) => updateArrayItem(index, next)}
+					/>
+					<span class="text-sm">{checked ? 'Yes' : 'No'}</span>
+				</Inline>
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="shrink-0"
+					aria-label="Remove boolean value"
+					{disabled}
+					onclick={() => removeArrayItem(index)}
+				>
+					<Icon icon="lucide:x" class="size-4" />
+				</Button>
+			</Inline>
+		{/each}
 		<Button
 			type="button"
 			variant="outline"
@@ -75,7 +74,7 @@
 			<Icon icon="lucide:plus" class="size-4" />
 			Add value
 		</Button>
-	</div>
+	</Stack>
 {:else if field.nullable}
 	<Combobox
 		{options}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn, type WithElementRef } from '#lib/utils';
+	import { Stack } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
@@ -46,13 +47,13 @@
 		{:else if singleErrorMessage}
 			{singleErrorMessage}
 		{:else if isMultipleErrors}
-			<ul class="ml-4 flex list-disc flex-col gap-1">
+			<Stack as="ul" gap="xs" class="ml-4 list-disc">
 				{#each errors ?? [] as error, index (index)}
 					{#if error?.message}
 						<li>{error.message}</li>
 					{/if}
 				{/each}
-			</ul>
+			</Stack>
 		{/if}
 	</div>
 {/if}

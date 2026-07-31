@@ -73,7 +73,7 @@
 
 {#snippet overview()}
 	<Stack gap="lg">
-		<section class="space-y-3" aria-labelledby="roster-summary-heading">
+		<Stack as="section" gap="sm" aria-labelledby="roster-summary-heading">
 			<div>
 				<h2 id="roster-summary-heading" class="text-lg font-semibold">This month's roster</h2>
 				<p class="text-sm text-muted-foreground">
@@ -81,18 +81,19 @@
 					from the company holidays and the term's rest day rather than stored.
 				</p>
 			</div>
+			<!-- stupidity:allow UI10 -- 1px hairline gutters via bg-border are not on the gap scale -->
 			<Columns count={2} gap="none" class="gap-px rounded-lg border bg-border">
-				<div class="bg-card p-4">
+				<Stack gap="none" class="bg-card p-4">
 					<p class="text-xs font-medium text-muted-foreground">Rostered days ({currentMonth})</p>
-					<p class="mt-2 text-2xl font-semibold tabular-nums">{monthEntries.length}</p>
-				</div>
-				<div class="bg-card p-4">
+					<p class="text-2xl font-semibold tabular-nums">{monthEntries.length}</p>
+				</Stack>
+				<Stack gap="none" class="bg-card p-4">
 					<p class="text-xs font-medium text-muted-foreground">People on a roster</p>
-					<p class="mt-2 text-2xl font-semibold tabular-nums">{rosteredPeople}</p>
-				</div>
+					<p class="text-2xl font-semibold tabular-nums">{rosteredPeople}</p>
+				</Stack>
 			</Columns>
-		</section>
-		<section class="space-y-3" aria-labelledby="shift-usage-heading">
+		</Stack>
+		<Stack as="section" gap="sm" aria-labelledby="shift-usage-heading">
 			<h3 id="shift-usage-heading" class="text-sm font-semibold">Shift usage</h3>
 			<div class="rounded-lg border">
 				{#if rosterQuery.loading || shiftsQuery.loading}
@@ -119,7 +120,7 @@
 					</table>
 				{/if}
 			</div>
-		</section>
+		</Stack>
 	</Stack>
 {/snippet}
 

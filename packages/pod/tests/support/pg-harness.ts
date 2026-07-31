@@ -12,13 +12,15 @@ const LABEL = 'norbital-pg-harness';
 /** Records the owning process, so a reaper can tell a live run from an abandoned one. */
 const OWNER_LABEL = 'norbital-pg-owner';
 
-/** True when a Docker daemon is reachable — suites skip gracefully otherwise. */
-export function dockerAvailable(): boolean {
+/** Fail collection immediately when a real-Postgres suite cannot reach Docker. */
+export function requireDocker(): void {
 	try {
 		execFileSync('docker', ['info'], { stdio: 'ignore' });
-		return true;
-	} catch {
-		return false;
+	} catch (cause) {
+		throw new Error(
+			'Docker is required for Pod integration tests; refusing to report a green run with the real-Postgres suites skipped.',
+			{ cause }
+		);
 	}
 }
 

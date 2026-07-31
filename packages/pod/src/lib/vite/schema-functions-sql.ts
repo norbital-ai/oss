@@ -224,6 +224,22 @@ export const SCHEMA_POST_DDL_SQL = dedent`
       VALUES (TRUE)
       ON CONFLICT (singleton) DO NOTHING;
 
+    -- How far the automation dispatcher has consumed the change feed.
+    --
+    -- Collection-event automations are effects, so they must fire exactly once off committed
+    -- state, and a host restart must not re-run everything the feed still holds. The cursor is the
+    -- same (xid, seq) pair the sync stream uses and is advanced only after a batch has dispatched,
+    -- so a crash mid-batch repeats that batch rather than skipping it.
+    CREATE TABLE IF NOT EXISTS _norbital_automation_cursor (
+      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+      xid TEXT NOT NULL DEFAULT '0',
+      seq TEXT NOT NULL DEFAULT '0',
+      pumped_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO _norbital_automation_cursor (singleton)
+      VALUES (TRUE)
+      ON CONFLICT (singleton) DO NOTHING;
+
     -- The change feed announces itself. Postgres queues NOTIFY inside the transaction and
     -- delivers it at COMMIT, which is exactly the moment a row becomes real — so a listener
     -- wakes on the commit instead of asking repeatedly whether one happened. An idle

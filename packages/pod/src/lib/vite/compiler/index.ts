@@ -204,8 +204,13 @@ function authoredLayoutDiagnostics(
 		const component = tag[1];
 		const attributes = tag[2] ?? '';
 		const attributesOffset = (tag.index ?? 0) + tag[0].indexOf(attributes);
+		// Attribute names only: quoted values (text, class, icon names) must never be scanned
+		// for prop names. Blanking quotes keeps every byte offset intact for diagnostics.
+		const attributeNames = attributes.replace(/"[^"]*"|'[^']*'/g, (quoted) =>
+			' '.repeat(quoted.length)
+		);
 		if (LAYOUT_PRIMITIVES.has(component)) {
-			const styleAttribute = attributes.match(/\bstyle(?=\s*=|:)/);
+			const styleAttribute = attributeNames.match(/\bstyle(?=\s*=|:)/);
 			if (styleAttribute) {
 				diagnostics.push(
 					sourceDiagnostic(
@@ -218,7 +223,9 @@ function authoredLayoutDiagnostics(
 				);
 			}
 		}
-		for (const attribute of attributes.matchAll(/\b(?:fill|grow|contentClass)(?=\s*=|\s|\/?>)/g)) {
+		for (const attribute of attributeNames.matchAll(
+			/\b(?:fill|grow|contentClass)(?=\s*=|\s|\/?>)/g
+		)) {
 			if (attribute[0] === 'contentClass' && component !== 'Tabs') continue;
 			diagnostics.push(
 				sourceDiagnostic(

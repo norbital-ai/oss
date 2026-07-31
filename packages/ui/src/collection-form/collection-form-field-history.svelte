@@ -6,6 +6,7 @@
 	import Icon from '@iconify/svelte';
 	import { formatDataValue } from '../data-renderer/index.js';
 	import { Label } from '#lib/label';
+	import { Inline, Scroll, Stack } from '#lib/layout';
 	import { StructuredValue } from '#lib/structured-value';
 	import { Tooltip } from '#lib/tooltip';
 	import { collectionFieldHistory } from './collection-form-history.js';
@@ -36,16 +37,20 @@
 
 {#snippet HistoryValue(entryValue: unknown)}
 	{#if entryValue != null && typeof entryValue === 'object'}
-		<div class="max-h-32 overflow-auto rounded-md border bg-muted/30 p-2">
+		<Scroll
+			axis="both"
+			name="History value"
+			class="max-h-32 rounded-md border bg-muted/30 p-2"
+		>
 			<StructuredValue value={entryValue} />
-		</div>
+		</Scroll>
 	{:else}
 		<p class="break-words text-sm text-foreground">{formatDataValue(field, entryValue)}</p>
 	{/if}
 {/snippet}
 
 {#if available}
-	<div class="inline-flex min-w-0 items-center gap-1">
+	<Inline gap="xs" class="min-w-0">
 		<Label for={fieldId} class="text-sm leading-none font-medium">{label}</Label>
 		<Tooltip
 			delayDuration={200}
@@ -75,58 +80,62 @@
 				</div>
 				{#if dirty}
 					<div class="border-b bg-brand/5 px-3 py-2.5 text-left">
-						<div class="mb-1 flex items-center gap-1.5 text-xs font-medium text-brand">
+						<Inline gap="xs" class="mb-1 text-xs font-medium text-brand">
 							<span class="size-1.5 rounded-full bg-brand"></span>
 							Unsaved local value
-						</div>
+						</Inline>
 						{@render HistoryValue(value)}
 					</div>
 				{/if}
-				<div class="max-h-64 overflow-y-auto px-3 py-3 text-left">
-					<p class="mb-3 text-xs font-medium text-muted-foreground">Saved timeline</p>
-					{#if loading}
-						<div class="flex items-center gap-2 text-xs text-muted-foreground" role="status">
-							<Icon icon="lucide:loader-circle" class="size-3.5 animate-spin" />
-							Loading history…
-						</div>
-					{:else if error}
-						<p class="text-xs text-destructive" role="alert">History could not be loaded.</p>
-					{:else if fieldHistory.length === 0}
-						<p class="text-xs text-muted-foreground">No saved history yet.</p>
-					{:else}
-						<ol aria-label={`${label} saved history`}>
-							{#each fieldHistory as entry, index (`${entry.version}:${entry.validFrom}`)}
-								<li class="relative grid grid-cols-[0.75rem_1fr] gap-2 pb-4 last:pb-0">
-									<div class="flex justify-center">
-										<span class="relative z-10 mt-1 size-2 rounded-full bg-muted-foreground"></span>
-										{#if index < fieldHistory.length - 1}
-											<span class="absolute top-3 bottom-0 w-px bg-border"></span>
-										{/if}
-									</div>
-									<div class="min-w-0">
-										<div class="flex items-baseline justify-between gap-2">
-											<p class="text-xs font-medium text-foreground">
-												{entry.validTo === null
-													? 'Current saved value'
-													: `Version ${entry.version}`}
-											</p>
-											<time
-												class="shrink-0 text-tiny text-muted-foreground"
-												datetime={entry.validFrom}
-											>
-												{formatDataValue(timestampField, entry.validFrom)}
-											</time>
-										</div>
-										<div class="mt-1">{@render HistoryValue(entry.value)}</div>
-									</div>
-								</li>
-							{/each}
-						</ol>
-					{/if}
-				</div>
+				<Scroll axis="y" name="Field history" class="max-h-64 px-3 py-3 text-left">
+					<Stack gap="sm">
+						<p class="text-xs font-medium text-muted-foreground">Saved timeline</p>
+						{#if loading}
+							<Inline gap="sm" class="text-xs text-muted-foreground" role="status">
+								<Icon icon="lucide:loader-circle" class="size-3.5 animate-spin" />
+								Loading history…
+							</Inline>
+						{:else if error}
+							<p class="text-xs text-destructive" role="alert">History could not be loaded.</p>
+						{:else if fieldHistory.length === 0}
+							<p class="text-xs text-muted-foreground">No saved history yet.</p>
+						{:else}
+							<ol aria-label={`${label} saved history`}>
+								{#each fieldHistory as entry, index (`${entry.version}:${entry.validFrom}`)}
+									<li class="relative pb-4 last:pb-0">
+										<Inline align="start" gap="sm">
+											<div class="flex w-3 shrink-0 justify-center">
+												<span class="relative z-10 mt-1 size-2 rounded-full bg-muted-foreground"></span>
+												{#if index < fieldHistory.length - 1}
+													<span class="absolute top-3 bottom-0 w-px bg-border"></span>
+												{/if}
+											</div>
+											<div class="min-w-0">
+												<Inline align="baseline" justify="between" gap="sm">
+													<p class="text-xs font-medium text-foreground">
+														{entry.validTo === null
+															? 'Current saved value'
+															: `Version ${entry.version}`}
+													</p>
+													<time
+														class="shrink-0 text-tiny text-muted-foreground"
+														datetime={entry.validFrom}
+													>
+														{formatDataValue(timestampField, entry.validFrom)}
+													</time>
+												</Inline>
+												<div class="mt-1">{@render HistoryValue(entry.value)}</div>
+											</div>
+										</Inline>
+									</li>
+								{/each}
+							</ol>
+						{/if}
+					</Stack>
+				</Scroll>
 			{/snippet}
 		</Tooltip>
-	</div>
+	</Inline>
 {:else}
 	<Label for={fieldId}>{label}</Label>
 {/if}

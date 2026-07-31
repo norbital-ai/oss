@@ -5,9 +5,10 @@
 	import * as Carousel from '#lib/carousel';
 	import type { TComboboxProps, TOption } from '#lib/combobox';
 	import { Combobox } from '#lib/combobox';
-	import { StaticMap } from '#lib/static-map';
-	import { resource } from 'runed';
-	import type { TGeolocationPickerValue } from './geolocation.utils.js';
+import { StaticMap } from '#lib/static-map';
+import { Cluster, Inline, Stack } from '#lib/layout';
+import { resource } from 'runed';
+import type { TGeolocationPickerValue } from './geolocation.utils.js';
 
 	type LocationOption = TOption<TGeolocationPickerValue, Record<string, never>>;
 
@@ -173,7 +174,7 @@
 </script>
 
 {#snippet locationOptionLabel(value: TGeolocationPickerValue)}
-	<div class="flex w-full min-w-0 items-center gap-2">
+	<Inline gap="sm">
 		<div class="shrink-0">
 			{#if value.geometry}
 				<Icon icon="lucide:map-pin" class="h-4 w-4 text-success" />
@@ -181,7 +182,7 @@
 				<Icon icon="lucide:map-pin-off" class="h-4 w-4 text-orange-500" />
 			{/if}
 		</div>
-		<div class="flex min-w-0 flex-1 items-center gap-2 text-start">
+		<Inline gap="sm" class="flex-1 text-start">
 			<span class="truncate text-left text-xs font-normal transition-all">
 				{value.formatted_address}
 			</span>
@@ -190,14 +191,14 @@
 					>No coordinates</span
 				>
 			{/if}
-		</div>
-	</div>
+		</Inline>
+	</Inline>
 {/snippet}
 
 {#snippet selectionDisplay(value: (TGeolocationPickerValue | TGeolocationPickerValue[]) | null)}
 	{@const addresses: TGeolocationPickerValue[] = Array.isArray(value) ? value : value ? [value] : []}
 	{#if addresses.length > 0}
-		<div class="flex w-full min-w-0 flex-row items-center gap-1 truncate">
+		<Inline gap="xs" class="truncate">
 			{#each addresses.slice(0, 2) as geoValue (geoValue.formatted_address)}
 				<Badge variant="outline" class="flex max-w-[200px] items-center gap-1 px-2 py-0.5">
 					<Icon
@@ -226,7 +227,7 @@
 					<span class="text-xs">+{addresses.length - 2} more</span>
 				</Badge>
 			{/if}
-		</div>
+		</Inline>
 	{:else}
 		<span class="text-xs font-normal text-muted-foreground transition-all">{searchPlaceholder}</span
 		>
@@ -234,8 +235,8 @@
 {/snippet}
 
 {#snippet readonlySingleItem(location: TGeolocationPickerValue)}
-	<div class="space-y-4">
-		<div class="flex items-center gap-3 rounded-md bg-muted/40 p-3">
+	<Stack gap="md">
+		<Inline gap="md" class="rounded-md bg-muted/40 p-3">
 			<Icon
 				icon={location.geometry ? 'lucide:map-pin' : 'lucide:map-pin-off'}
 				class={location.geometry ? 'h-5 w-5 text-success' : 'h-5 w-5 text-orange-500'}
@@ -246,14 +247,14 @@
 					{location.geometry ? formatCoordinates(location.geometry) : 'No coordinates available'}
 				</p>
 			</div>
-		</div>
+		</Inline>
 
 		{#if location.geometry}
-			<div class="flex h-full flex-col space-y-2 p-2">
-				<div class="flex items-center gap-2 text-sm font-medium text-secondary-foreground">
+			<Stack gap="sm" class="h-full p-2">
+				<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 					<Icon icon="lucide:map" class="h-4 w-4" />
 					Location map
-				</div>
+				</Inline>
 				<StaticMap
 					markers={[
 						{ latitude: location.geometry.lat, longitude: location.geometry.lon, label: 'A' }
@@ -261,15 +262,15 @@
 					ariaLabel={`Map of ${location.formatted_address}`}
 					class="h-[12.5rem]"
 				/>
-			</div>
+			</Stack>
 		{/if}
 
-		<div class="flex h-full flex-col space-y-2 p-2">
-			<div class="flex items-center gap-2 text-sm font-medium text-secondary-foreground">
+		<Stack gap="sm" class="h-full p-2">
+			<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 				<Icon icon="lucide:info" class="h-4 w-4" />
 				Location Details
-			</div>
-			<div class="ml-6 space-y-1">
+			</Inline>
+			<Stack gap="xs" class="pl-6">
 				<p class="font-mono text-xs text-muted-foreground">
 					{#if location.geometry}
 						Lat: {location.geometry.lat.toFixed(6)}°
@@ -282,42 +283,50 @@
 					{/if}
 				</p>
 
-				<div class="flex flex-wrap gap-2 pt-2">
+				<Cluster gap="sm" class="pt-2">
 					{#if location.geometry}
-						<span
-							class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-1 text-xs text-success-foreground"
+						<Inline
+							as="span"
+							gap="xs"
+							class="rounded-full bg-success/10 px-2 py-1 text-xs text-success-foreground"
 						>
 							<Icon icon="lucide:check" class="h-3 w-3" />
 							Geocoded
-						</span>
+						</Inline>
 					{:else}
-						<span
-							class="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-1 text-xs text-orange-800"
+						<Inline
+							as="span"
+							gap="xs"
+							class="rounded-full bg-orange-100 px-2 py-1 text-xs text-orange-800"
 						>
 							<Icon icon="lucide:alert-triangle" class="h-3 w-3" />
 							No Coordinates
-						</span>
+						</Inline>
 					{/if}
 
-					<span
-						class="inline-flex items-center gap-1 rounded-full bg-brand-100 px-2 py-1 text-xs text-brand-700"
+					<Inline
+						as="span"
+						gap="xs"
+						class="rounded-full bg-brand-100 px-2 py-1 text-xs text-brand-700"
 					>
 						<Icon icon="lucide:map" class="h-3 w-3" />
 						{getLocationTypeName(location.type)}
-					</span>
+					</Inline>
 
 					{#if location.srid === 4326}
-						<span
-							class="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-1 text-xs text-purple-800"
+						<Inline
+							as="span"
+							gap="xs"
+							class="rounded-full bg-purple-100 px-2 py-1 text-xs text-purple-800"
 						>
 							<Icon icon="lucide:satellite" class="h-3 w-3" />
 							GPS Compatible
-						</span>
+						</Inline>
 					{/if}
-				</div>
-			</div>
-		</div>
-	</div>
+				</Cluster>
+			</Stack>
+		</Stack>
+	</Stack>
 {/snippet}
 
 {#snippet readonlyContent()}
@@ -370,8 +379,8 @@
 />
 
 {#snippet emptyPlaceholder()}
-	<div class="flex items-center justify-start gap-2 text-xs text-muted-foreground">
+	<Inline gap="sm" class="text-xs text-muted-foreground">
 		<Icon icon="lucide:map-pin-off" class="h-6 w-6" />
 		<p>No locations selected</p>
-	</div>
+	</Inline>
 {/snippet}

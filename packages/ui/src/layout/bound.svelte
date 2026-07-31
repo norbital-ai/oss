@@ -7,6 +7,7 @@
 		as?: LayoutElement;
 		size?: BoundSize;
 		pad?: LayoutPad;
+		inset?: boolean;
 		clip?: boolean;
 		children: Snippet;
 	}
@@ -14,12 +15,13 @@
 
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { PAD_CLASSES } from './layout.shared.js';
+	import { INSET_CLASS, PAD_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',
 		size = 'standard',
 		pad = 'none',
+		inset = false,
 		clip = false,
 		class: className,
 		children,
@@ -39,11 +41,12 @@
 		className,
 		'min-h-0 min-w-0 [container-type:inline-size]',
 		sizeClasses[size],
-		PAD_CLASSES[pad],
+		inset ? INSET_CLASS : PAD_CLASSES[pad],
 		clip && 'overflow-clip'
 	)}
 	data-layout="bound"
 	data-bound-clip={clip || undefined}
+	data-bound-inset={inset || undefined}
 	{...restProps}
 >
 	{@render children()}

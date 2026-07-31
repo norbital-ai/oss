@@ -4,6 +4,7 @@
 	 * @description Tree-based dropdown menu for selecting metadata items to mention
 	 */
 	import Icon from '@iconify/svelte';
+	import { Scroll } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import { onMount } from 'svelte';
@@ -228,6 +229,7 @@
 	);
 </script>
 
+<!-- stupidity:allow UI5 -- popover content boundary -->
 <div
 	class="flex max-h-[min(28rem,70vh)] w-[min(34rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border bg-popover p-1 shadow-deep"
 	role="menu"
@@ -239,7 +241,7 @@
 		<span class="text-xs font-medium text-muted-foreground">Reference</span>
 		<span class="text-tiny text-muted-foreground/70">↑↓ navigate · Enter add</span>
 	</div>
-	<div class="h-full w-full overflow-auto" bind:this={scrollContainerRef}>
+	<Scroll axis="y" name="Mention tree" bind:ref={scrollContainerRef}>
 		<!-- Tree Content with scrolling -->
 		{#if visibleItems.length === 0}
 			<div class="p-4 text-center text-xs text-muted-foreground">No items found</div>
@@ -318,5 +320,5 @@
 				</div>
 			{/each}
 		{/if}
-	</div>
+	</Scroll>
 </div>

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
-import { startPostgres, dockerAvailable, type PgHarness } from '../support/pg-harness.js';
+import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema } from '../support/pod-schema.js';
 import { loadRecordHistorySnapshots } from '$lib/server/collection/record_history.server.js';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
 import { SCHEMA_POST_DDL_SQL } from '$lib/vite/schema-functions-sql.js';
 
-const hasDocker = await dockerAvailable();
+requireDocker();
 
 /** A minimal ProvisionedContext whose tenantDb routes every query to one pg runner. */
 function ctxOn(runner: Pool | PoolClient): ProvisionedContext {
@@ -42,7 +42,7 @@ async function insertOrder(pool: Pool, status: string): Promise<string> {
 	return id;
 }
 
-describe.skipIf(!hasDocker)('Pod temporal versioning (trigger, real Postgres)', () => {
+describe('Pod temporal versioning (trigger, real Postgres)', () => {
 	let pg: PgHarness;
 	let pool: Pool;
 

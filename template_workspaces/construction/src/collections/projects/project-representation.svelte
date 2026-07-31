@@ -257,9 +257,9 @@
 {/snippet}
 {#snippet deliveryPulse()}
 	<Stack as="aside" gap="md" class="border-t pt-4">
-		<div>
+		<Stack gap="md">
 			<p class="text-tiny uppercase tracking-wide text-muted-foreground">Delivery pulse</p>
-			<dl class="mt-3 divide-y text-sm">
+			<dl class="divide-y text-sm">
 				<Inline as="div" justify="between" class="py-2">
 					<dt>Work fronts</dt>
 					<dd class="font-medium tabular-nums">{sitesQuery.current?.length ?? 0}</dd>
@@ -273,12 +273,12 @@
 					<dd class="font-medium tabular-nums">{documents.length}</dd>
 				</Inline>
 			</dl>
-		</div>
+		</Stack>
 		{#if record.description}
-			<div>
+			<Stack gap="sm">
 				<p class="text-tiny uppercase tracking-wide text-muted-foreground">Scope</p>
-				<p class="mt-2 text-sm leading-normal">{record.description}</p>
-			</div>
+				<p class="text-sm leading-normal">{record.description}</p>
+			</Stack>
 		{/if}
 	</Stack>
 {/snippet}
@@ -366,7 +366,7 @@
 				</div>
 			{:else}
 				<Bound size="standard" clip>
-					<Scroll axis="x" name="Manpower allocation" class="h-full pb-2">
+					<Scroll axis="x" name="Manpower allocation" class="pb-2">
 						<Inline align="start" gap="md">
 							{#each sitesQuery.current ?? [] as site (site.norbital_id)}
 								{@const siteAssignments = assignments.filter(

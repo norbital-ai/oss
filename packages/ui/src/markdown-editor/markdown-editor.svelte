@@ -8,6 +8,7 @@
 	import StarterKit from '@tiptap/starter-kit';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import * as Command from '#lib/command';
+	import { Inline } from '#lib/layout';
 	import * as ToggleGroup from '#lib/toggle-group';
 	import { cn } from '#lib/utils';
 	import { createFileAttachmentExtension } from './extensions/attachment/attachment-extension.svelte';
@@ -531,8 +532,8 @@
 					<div class="-mx-1 my-1 h-px bg-border"></div>
 				{:else}
 					{@const cmdItem = item._item as CommandItem}
-					<div class="flex w-full items-center justify-between gap-3 px-2 py-1.5">
-						<div class="flex min-w-0 items-center gap-2.5">
+					<Inline justify="between" gap="md" class="px-2 py-1.5">
+						<Inline gap="sm" class="min-w-0">
 							<Icon icon={cmdItem.icon} class="size-4 shrink-0 text-muted-foreground" />
 							<div class="min-w-0 text-left">
 								<div class="truncate text-sm text-foreground">{cmdItem.title}</div>
@@ -540,11 +541,11 @@
 									<div class="truncate text-xs text-muted-foreground">{cmdItem.description}</div>
 								{/if}
 							</div>
-						</div>
+						</Inline>
 						{#if cmdItem.shortcut}
 							<span class="text-xs text-muted-foreground">{cmdItem.shortcut}</span>
 						{/if}
-					</div>
+					</Inline>
 				{/if}
 			{/snippet}
 			{#if commandItems.filter((i) => i._type === 'item').length === 0}

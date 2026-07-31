@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Scroll } from '#lib/layout';
 	import { pixelDrag } from '#lib/utils/pixel-drag.js';
 	import { assignLanes, dateToPixels, isMultiDayEvent, isSameDay } from '../utils.js';
 	import type { CalendarEvent, CalendarView, CreateSlot, EventRenderContext } from '../types.js';
@@ -89,7 +90,7 @@
 	const overlay = $derived(getOverlayRect());
 </script>
 
-<div class={cn('relative flex-1 overflow-y-auto bg-background', className)}>
+<Scroll axis="y" name="Day events" class={cn('relative bg-background', className)}>
 	<div style="height: {totalHeight}px; position: relative">
 		{#each Array.from({ length: endHour - startHour + 1 }) as _, i (i)}
 			<div
@@ -176,4 +177,4 @@
 			></div>
 		{/if}
 	</div>
-</div>
+</Scroll>

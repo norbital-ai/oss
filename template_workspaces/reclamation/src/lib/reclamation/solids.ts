@@ -35,6 +35,8 @@ type Accumulator = {
 	maxFillDepth: number;
 	structureDisplacement: number;
 	excavation: number;
+	/** Dug to reach a trench invert the section draws — specified, not a surprise. */
+	trenchExcavation: number;
 	/** Volume per substrate coming from below-grade bands read off the section. */
 	subGrade: Map<string, number>;
 	/** Total material placed — the sum the substrate lines must reconstruct. */
@@ -107,6 +109,7 @@ export function integrateSite(model: StitchedModel): {
 		maxFillDepth: 0,
 		structureDisplacement: 0,
 		excavation: 0,
+		trenchExcavation: 0,
 		subGrade: new Map<string, number>(),
 		placed: 0,
 		cells: 0
@@ -199,13 +202,17 @@ export function integrateSite(model: StitchedModel): {
 		const ceiling = works ? Math.min(bed, works.z) : bed;
 		for (const band of bands) {
 			if (band.substrate === 'geofabric') continue;
-			const depth = ceiling - band.invertM;
+			// A band the section drew a top for is bounded by that top: a 1 m rock
+			// blanket stays 1 m thick over a bed standing well above its invert,
+			// instead of being read as a trench dug down from that bed.
+			const roof = band.topM === undefined ? ceiling : Math.min(ceiling, band.topM);
+			const depth = roof - band.invertM;
 			if (depth <= 0) continue;
 			totals.subGrade.set(
 				band.substrate,
 				(totals.subGrade.get(band.substrate) ?? 0) + depth * area
 			);
-			totals.excavation += depth * area;
+			totals.trenchExcavation += depth * area;
 			totals.placed += depth * area;
 		}
 	};
@@ -331,6 +338,7 @@ export function integrateSite(model: StitchedModel): {
 		integrationCellM: cell,
 		structureDisplacementM3: totals.structureDisplacement,
 		excavationM3: totals.excavation,
+		trenchExcavationM3: totals.trenchExcavation,
 		placedVolumeM3: totals.placed
 	};
 

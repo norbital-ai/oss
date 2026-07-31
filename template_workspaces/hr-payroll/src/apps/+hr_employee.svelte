@@ -3,7 +3,7 @@
 	import { getPlatformStateContext } from '@norbital-ai/pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
-	import { Cluster, Cover, Grid } from '@norbital-ai/ui/layout';
+	import { Cluster, Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { watch } from 'runed';
@@ -140,13 +140,13 @@
 
 {#snippet contextGate()}
 	{#if needsEmploymentChoice}
-		<div class="space-y-3 rounded-xl border bg-card p-4 shadow-sm">
-			<div class="space-y-1">
+		<Stack gap="sm" class="rounded-xl border bg-card p-4 shadow-sm">
+			<Stack gap="none">
 				<p class="text-sm font-medium">Choose the employment you are working in</p>
 				<p class="text-sm text-muted-foreground">
 					Your requests, time, loans, and payslips will be scoped to this employment.
 				</p>
-			</div>
+			</Stack>
 			<label class="grid gap-1.5 text-sm font-medium">
 				Working as
 				<Combobox
@@ -156,16 +156,16 @@
 					emptyPlaceholder="No matching employment"
 				/>
 			</label>
-		</div>
+		</Stack>
 	{:else if activeEmployments.length > 1 && selectedEmployment}
 		<Cluster class="rounded-xl border bg-card p-4 shadow-sm" gap="md" align="end" justify="between">
-			<div class="space-y-1">
+			<Stack gap="none">
 				<p class="text-sm font-medium">Working in</p>
 				<p class="text-sm text-muted-foreground">
 					{companyById.get(selectedEmployment.company_id)?.name ?? 'Company'} · Employee
 					{selectedEmployment.employee_number}
 				</p>
-			</div>
+			</Stack>
 			<label class="grid w-full gap-1.5 text-sm font-medium">
 				Switch employment
 				<Combobox
@@ -180,7 +180,7 @@
 {/snippet}
 
 {#snippet home()}
-	<div class="space-y-4">
+	<Stack gap="md">
 		{@render contextGate()}
 		{#if employeeQuery.loading}
 			<div
@@ -189,34 +189,33 @@
 			></div>
 		{:else if employeeQuery.current}
 			<section class="rounded-lg border bg-card shadow-card" aria-labelledby="my-profile-heading">
-				<header
-					class="flex flex-wrap items-start justify-between gap-4 border-b bg-muted/30 px-5 py-4"
-				>
-					<div>
+				<Cluster align="start" justify="between" gap="md" class="border-b bg-muted/30 px-5 py-4">
+					<Stack gap="none">
 						<p class="text-tiny font-medium uppercase tracking-wide text-muted-foreground">
 							My profile
 						</p>
-						<h2 id="my-profile-heading" class="mt-1 text-heading">
+						<h2 id="my-profile-heading" class="text-heading">
 							{employeeQuery.current.name}
 						</h2>
-						<p class="mt-1 text-sm text-muted-foreground">
+						<p class="text-sm text-muted-foreground">
 							{company?.name ?? 'No active company'}{activeEmployment
 								? ` · Employee ${activeEmployment.employee_number}`
 								: ''}
 						</p>
-					</div>
+					</Stack>
 					{#if nextPayDate}
-						<div class="text-right">
+						<Stack gap="none" class="text-right">
 							<p class="text-xs font-medium text-muted-foreground">Next payday</p>
-							<p class="mt-1 text-lg font-semibold tabular-nums">
+							<p class="text-lg font-semibold tabular-nums">
 								{daysToPayday === 0 ? 'Today' : `${daysToPayday} days`}
 							</p>
 							<p class="text-xs text-muted-foreground">
 								{new Date(`${nextPayDate}T00:00:00.000Z`).toLocaleDateString()}
 							</p>
-						</div>
+						</Stack>
 					{/if}
-				</header>
+				</Cluster>
+				<!-- stupidity:allow UI10 -- 1px hairline gutters via bg-border are not on the gap scale -->
 				<Grid class="gap-px bg-border" gap="none" minimum="compact">
 					<div class="bg-card px-5 py-4">
 						<p class="text-xs font-medium text-muted-foreground">Email</p>
@@ -235,11 +234,12 @@
 				</Grid>
 			</section>
 		{/if}
-	</div>
+	</Stack>
 {/snippet}
 
 {#snippet time()}
-	<Cover gap="md" top={contextGate}>
+	<Stack gap="md">
+		{@render contextGate()}
 		<CollectionTable
 			{client}
 			collection="time_entries"
@@ -262,11 +262,12 @@
 				<p class="mt-1 text-sm text-muted-foreground">{entry.state}</p>
 			{/snippet}
 		</CollectionTable>
-	</Cover>
+	</Stack>
 {/snippet}
 
 {#snippet leave()}
-	<Cover gap="md" top={contextGate}>
+	<Stack gap="md">
+		{@render contextGate()}
 		<CollectionTable
 			{client}
 			collection="leave_requests"
@@ -291,11 +292,12 @@
 				<Column name="days" label="Days" render={({ value }) => formatNumeric(value)} />
 			{/snippet}
 		</CollectionTable>
-	</Cover>
+	</Stack>
 {/snippet}
 
 {#snippet claims()}
-	<Cover gap="md" top={contextGate}>
+	<Stack gap="md">
+		{@render contextGate()}
 		<CollectionTable
 			{client}
 			collection="component_entries"
@@ -325,11 +327,12 @@
 				/>
 			{/snippet}
 		</CollectionTable>
-	</Cover>
+	</Stack>
 {/snippet}
 
 {#snippet loans()}
-	<Cover gap="md" top={contextGate}>
+	<Stack gap="md">
+		{@render contextGate()}
 		<CollectionTable
 			{client}
 			collection="repayment_agreements"
@@ -355,11 +358,12 @@
 				<Column name="disbursed_on" label="Disbursed" />
 			{/snippet}
 		</CollectionTable>
-	</Cover>
+	</Stack>
 {/snippet}
 
 {#snippet payslips()}
-	<Cover gap="md" top={contextGate}>
+	<Stack gap="md">
+		{@render contextGate()}
 		<CollectionTable
 			{client}
 			collection="payslips"
@@ -397,7 +401,7 @@
 				</p>
 			{/snippet}
 		</CollectionTable>
-	</Cover>
+	</Stack>
 {/snippet}
 
 {#snippet pageHeading()}

@@ -4,6 +4,7 @@
 	import type { Snippet } from 'svelte';
 	import * as CardPrimitive from '#lib/card';
 	import { Checkbox } from '#lib/checkbox';
+	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { Sortable } from '#lib/sortable';
 	import { badgeColorClass } from '../collection-table/collection-card-colors.js';
 	import { cn } from '#lib/utils';
@@ -150,21 +151,27 @@
 	}
 </script>
 
-<section
-	class="kanban-lane bg-muted/40 flex h-full min-h-0 w-full snap-start flex-col rounded-sm p-3"
-	data-kanban-lane-section={lane}
-	data-kanban-destination={lane}
->
-	<header class="mb-3 flex shrink-0 items-center justify-between text-sm font-medium">
-		<span class="flex min-w-0 items-center gap-1.5">
+{#snippet laneHeader()}
+	<Inline justify="between" gap="xs" class="text-sm font-medium">
+		<Inline gap="xs" class="min-w-0">
 			{#if color}
 				<span class={cn('inline-block size-2 shrink-0 rounded-full', badgeColorClass(color))}
 				></span>
 			{/if}
 			<span class="truncate">{laneLabel}</span>
-		</span>
+		</Inline>
 		<span class="text-muted-foreground">{recordIds.length}</span>
-	</header>
+	</Inline>
+{/snippet}
+
+<Cover
+	as="section"
+	gap="sm"
+	class="kanban-lane bg-muted/40 min-h-0 snap-start rounded-sm p-3"
+	data-kanban-lane-section={lane}
+	data-kanban-destination={lane}
+	top={laneHeader}
+>
 	<p id={instructionId} class="sr-only">
 		Press Enter to open a card. Press Space to pick it up, then Left or Right Arrow to move it
 		between lanes. Press Escape to cancel.
@@ -189,12 +196,14 @@
 		element={sortableElement}
 	>
 		{#snippet child({ draggedItemId })}
-			<div
-				bind:this={sortableElement}
+			<Scroll
+				axis="y"
+				name={laneLabel}
+				bind:ref={sortableElement}
 				data-kanban-lane={lane}
-				class="grid min-h-0 min-w-0 flex-1 auto-rows-max content-start gap-2 overflow-x-hidden overflow-y-auto"
 			>
-				{#each recordIds as recordId (recordId)}
+				<Stack gap="sm">
+					{#each recordIds as recordId (recordId)}
 					<div
 						data-sortable-id={recordId}
 						data-sortable-disabled={!movable || pendingRecordIds.has(recordId) ? 'true' : undefined}
@@ -253,17 +262,19 @@
 						</CardPrimitive.Root>
 					</div>
 				{:else}
-					<div
-						class="flex min-h-32 flex-col items-center justify-center rounded-sm border border-dashed border-border bg-background/50 p-5 text-center"
+					<Stack
+						gap="xs"
+						class="min-h-32 items-center justify-center rounded-sm border border-dashed border-border bg-background/50 p-5 text-center"
 					>
-						<Icon icon="lucide:inbox" class="mb-2 size-5 text-muted-foreground" />
+						<Icon icon="lucide:inbox" class="size-5 text-muted-foreground" />
 						<p class="text-sm font-medium">No {humanize(lane).toLowerCase()} jobs</p>
-						<p class="mt-1 text-xs text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							This lane is clear for the selected view.
 						</p>
-					</div>
+					</Stack>
 				{/each}
-			</div>
+				</Stack>
+			</Scroll>
 		{/snippet}
 	</Sortable.Root>
-</section>
+</Cover>

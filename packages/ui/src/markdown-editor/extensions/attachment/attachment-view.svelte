@@ -20,6 +20,7 @@
 	import AttachmentPreviewPdf from './attachment-preview-pdf.svelte';
 	import AttachmentPreviewCsv from './attachment-preview-csv.svelte';
 	import AttachmentPreviewText from './attachment-preview-text.svelte';
+	import { Inline, Stack } from '#lib/layout';
 
 	let {
 		editor,
@@ -214,13 +215,13 @@
 	</div>
 {/snippet}
 {#snippet Loader()}
-	<div class="flex items-center gap-2 text-muted-foreground">
+	<Inline gap="sm" class="text-muted-foreground">
 		<Icon icon="lucide:loader-2" class="h-4 w-4 animate-spin" />
 		<span class="flex-1 truncate">
 			{stage ? UPLOAD_STAGE_MESSAGES[stage] : UPLOAD_STAGE_MESSAGES.uploading}
 			{fileName}
 		</span>
-		<div class="flex shrink-0 gap-0.5">
+		<Inline gap="xs" class="shrink-0">
 			<div
 				class={cn(
 					'h-1.5 w-3 rounded-full',
@@ -236,7 +237,7 @@
 			<div
 				class={cn('h-1.5 w-3 rounded-full', stage === 'summarizing' ? 'bg-brand' : 'bg-secondary')}
 			></div>
-		</div>
+		</Inline>
 		{#if stage && isActiveUploadStage(stage)}
 			<Button
 				variant="ghost"
@@ -248,10 +249,10 @@
 				<Icon icon="lucide:x" width="16" height="16" />
 			</Button>
 		{/if}
-	</div>
+	</Inline>
 {/snippet}
 {#snippet Error()}
-	<div class="flex items-center gap-2 text-destructive">
+	<Inline gap="sm" class="text-destructive">
 		<Icon icon="lucide:alert-circle" width="16" height="16" />
 		<span>Error uploading {fileName}</span>
 		<Button
@@ -263,10 +264,10 @@
 		>
 			<Icon icon="lucide:x" width="16" height="16" />
 		</Button>
-	</div>
+	</Inline>
 {/snippet}
 {#snippet Aborted()}
-	<div class="flex items-center gap-2 text-muted-foreground">
+	<Inline gap="sm" class="text-muted-foreground">
 		<Icon icon="lucide:slash" width="16" height="16" />
 		<span>Cancelled {fileName}</span>
 		<Button
@@ -278,13 +279,11 @@
 		>
 			<Icon icon="lucide:x" width="16" height="16" />
 		</Button>
-	</div>
+	</Inline>
 {/snippet}
 {#snippet Preview()}
-	<div class="flex flex-row items-center justify-start gap-4">
-		<div class="text-muted-foreground">
-			<Icon icon={previewIcon} width="16" height="16" />
-		</div>
+	<Inline gap="md">
+	<Icon icon={previewIcon} width="16" height="16" class="text-muted-foreground" />
 		<div class="min-w-0 flex-1 text-start">
 			<div class="font-medium wrap-break-word">{fileName}</div>
 			<div class="text-xs text-muted-foreground">{formatFileSize(fileSize)}</div>
@@ -312,18 +311,18 @@
 					</button>
 				{/snippet}
 				{#snippet content()}
-					<div class="space-y-1">
+					<Stack gap="xs">
 						{#if metadata?.structure_hint}
 							<div class="text-xs font-medium text-foreground">{metadata.structure_hint}</div>
 						{/if}
 						{#if metadata?.summary}
 							<div class="text-xs text-muted-foreground">{metadata.summary}</div>
 						{/if}
-					</div>
+					</Stack>
 				{/snippet}
 			</Tooltip>
 		{/if}
-	</div>
+	</Inline>
 {/snippet}
 
 <Popover.Root>
@@ -338,43 +337,41 @@
 			{@render Container(Preview)}
 		</Popover.Trigger>
 		<Popover.Content align="start" sameWidth={true} sideOffset={6}>
-			<div class="mt-3 w-full border-t pt-3">
-				<ScrollArea orientation="both" class="w-full">
-					{#if preview.loading}
-						<div class="flex items-center justify-center p-4">
-							<div class="flex h-5 w-5 animate-spin items-center justify-center">
-								<Icon icon="eos-icons:loading" />
-							</div>
-							<span class="ml-2">Loading preview...</span>
+			<ScrollArea orientation="both" class="w-full border-t pt-3">
+				{#if preview.loading}
+					<Inline justify="center" gap="sm" class="p-4">
+						<div class="flex h-5 w-5 animate-spin items-center justify-center">
+							<Icon icon="eos-icons:loading" />
 						</div>
-					{:else if preview.error}
-						<div class="p-4 text-center text-destructive">
-							<Icon icon="lucide:alert-circle" width="16" height="16" class="mr-1 inline" />
-							<span>Failed to load preview: {preview.error}</span>
-						</div>
-					{:else if preview.content}
-						{#if preview.content.type === 'image'}
-							<AttachmentPreviewImage src={fileUrl} alt={fileName} />
-						{:else if preview.content.type === 'pdf'}
-							<AttachmentPreviewPdf dataUrl={preview.content.dataUrl} {fileName} {fileUrl} />
-						{:else if preview.content.type === 'csv'}
-							<AttachmentPreviewCsv
-								headers={preview.content.headers}
-								data={preview.content.data}
-								totalRows={preview.content.totalRows}
-								errors={preview.content.errors}
-							/>
-						{:else if preview.content.type === 'markdown'}
-							<AttachmentPreviewText
-								variant="markdown"
-								renderedHtml={preview.content.renderedHtml}
-							/>
-						{:else if preview.content.type === 'text'}
-							<AttachmentPreviewText variant="plain" content={preview.content.content} />
-						{/if}
+						<span>Loading preview...</span>
+					</Inline>
+				{:else if preview.error}
+					<div class="p-4 text-center text-destructive">
+						<Icon icon="lucide:alert-circle" width="16" height="16" class="mr-1 inline" />
+						<span>Failed to load preview: {preview.error}</span>
+					</div>
+				{:else if preview.content}
+					{#if preview.content.type === 'image'}
+						<AttachmentPreviewImage src={fileUrl} alt={fileName} />
+					{:else if preview.content.type === 'pdf'}
+						<AttachmentPreviewPdf dataUrl={preview.content.dataUrl} {fileName} {fileUrl} />
+					{:else if preview.content.type === 'csv'}
+						<AttachmentPreviewCsv
+							headers={preview.content.headers}
+							data={preview.content.data}
+							totalRows={preview.content.totalRows}
+							errors={preview.content.errors}
+						/>
+					{:else if preview.content.type === 'markdown'}
+						<AttachmentPreviewText
+							variant="markdown"
+							renderedHtml={preview.content.renderedHtml}
+						/>
+					{:else if preview.content.type === 'text'}
+						<AttachmentPreviewText variant="plain" content={preview.content.content} />
 					{/if}
-				</ScrollArea>
-			</div>
+				{/if}
+			</ScrollArea>
 		</Popover.Content>
 	{/if}
 </Popover.Root>

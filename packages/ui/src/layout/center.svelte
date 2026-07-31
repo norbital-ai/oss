@@ -29,7 +29,7 @@
 
 <svelte:element
 	this={as}
-	class={cn(className, 'mx-auto w-full min-w-0', measureClasses[measure])}
+	class={cn(className, 'mx-auto min-h-0 w-full min-w-0', measureClasses[measure])}
 	data-layout="center"
 	{...restProps}
 >

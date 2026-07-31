@@ -2,6 +2,7 @@
 	import { client } from '$pod/client';
 	import type { Row } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
+	import { Stack } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import { watch } from 'runed';
 
@@ -84,34 +85,32 @@
 
 <CollectionForm {client} collection="contractor_profiles" {recordId} defaultValues={record}>
 	{#snippet children({ Field })}
-		<div class="grid gap-6">
-			<div>
+		<Stack gap="lg">
+			<Stack gap="none">
 				<h3 id="contractor-profile-heading" class="text-sm font-semibold">Company and access</h3>
 				<p class="text-sm text-muted-foreground">
 					The linked portal user receives assignments; certification holdings control eligibility.
 				</p>
-			</div>
-			<div class="grid gap-4">
+			</Stack>
+			<Stack gap="md">
 				<Field name="company_name" />
 				<Field name="user_id" label="Portal user" />
-				<fieldset class="grid gap-1.5">
+				<Stack as="fieldset" gap="xs">
 					<legend class="text-sm font-medium">Certifications held</legend>
-					<div>
-						<RelationshipRenderer
-							target="certification_types"
-							value={selectedCertificationIds}
-							multiple
-							options={{
-								label: (certification) => String(certification.name ?? certification.norbital_id),
-								where: { active: { eq: true } },
-								orderBy: { name: 'asc' },
-								limit: 250
-							}}
-							placeholder="Select certifications…"
-							disabled={certificationSaving || certificationsQuery.loading}
-							onValueChange={(value) => void updateCertifications(value)}
-						/>
-					</div>
+					<RelationshipRenderer
+						target="certification_types"
+						value={selectedCertificationIds}
+						multiple
+						options={{
+							label: (certification) => String(certification.name ?? certification.norbital_id),
+							where: { active: { eq: true } },
+							orderBy: { name: 'asc' },
+							limit: 250
+						}}
+						placeholder="Select certifications…"
+						disabled={certificationSaving || certificationsQuery.loading}
+						onValueChange={(value) => void updateCertifications(value)}
+					/>
 					<p class="text-xs text-muted-foreground">
 						{certificationSaving
 							? 'Saving certification links…'
@@ -120,8 +119,8 @@
 					{#if certificationError}
 						<p class="text-xs text-destructive" role="alert">{certificationError}</p>
 					{/if}
-				</fieldset>
-			</div>
-		</div>
+				</Stack>
+			</Stack>
+		</Stack>
 	{/snippet}
 </CollectionForm>

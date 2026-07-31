@@ -34,9 +34,7 @@ export {
 	coercePolygon,
 	decodeText,
 	griddedSurveyFromPoints,
-	parseCsv,
 	parseJson,
-	parseProfileCsv,
 	parseXyz
 } from './parse.js';
 

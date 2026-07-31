@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Shimmer } from '../shimmer';
 	import { CollapsibleTrigger } from '#lib/collapsible';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { Collapsible as CollapsiblePrimitive } from 'bits-ui';
 	import type { Snippet } from 'svelte';
@@ -29,8 +30,9 @@
 	</CollapsibleTrigger>
 {:else}
 	<CollapsibleTrigger class={cn('group', className)} {...restProps}>
-		<div
-			class="flex w-full cursor-pointer items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+		<Inline
+			gap="sm"
+			class="cursor-pointer text-sm text-muted-foreground transition-colors hover:text-foreground"
 		>
 			<Icon icon="lucide:search" class="size-4" />
 			{#if shimmer}
@@ -44,6 +46,6 @@
 				icon="lucide:chevron-down"
 				class="size-4 transition-transform group-data-[state=open]:rotate-180"
 			/>
-		</div>
+		</Inline>
 	</CollapsibleTrigger>
 {/if}

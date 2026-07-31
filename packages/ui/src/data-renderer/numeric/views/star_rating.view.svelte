@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { Inline, Stack } from '#lib/layout';
 	import { Star, StarRating } from '#lib/star-rating';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '../../data-renderer.types.js';
@@ -37,7 +38,7 @@
 </script>
 
 {#snippet rating(ratingValue: number, readonly: boolean, onChange?: (next: number) => void)}
-	<div class="flex min-w-0 items-center gap-2">
+	<Inline gap="sm">
 		<StarRating
 			value={normalized(ratingValue)}
 			{max}
@@ -55,13 +56,13 @@
 		<span class="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
 			{normalized(ratingValue)}/{max}
 		</span>
-	</div>
+	</Inline>
 {/snippet}
 
 {#if field.array}
-	<div class={cn('space-y-2', className)}>
+	<Stack gap="sm" class={className}>
 		{#each values as item, index (index)}
-			<div class="flex min-h-8 items-center justify-between gap-3">
+			<Inline justify="between" gap="md" class="min-h-8">
 				{@render rating(item, mode === 'display', (next) => updateArrayItem(index, next))}
 				{#if mode === 'edit'}
 					<Button
@@ -76,7 +77,7 @@
 						<Icon icon="lucide:x" class="size-4" />
 					</Button>
 				{/if}
-			</div>
+			</Inline>
 		{/each}
 		{#if values.length === 0 && mode === 'display'}
 			<span class="text-sm text-muted-foreground">{placeholder}</span>
@@ -92,7 +93,7 @@
 				Add rating
 			</Button>
 		{/if}
-	</div>
+	</Stack>
 {:else if scalarValue == null && mode === 'display'}
 	<span class={cn('text-sm text-muted-foreground', className)}>{placeholder}</span>
 {:else}

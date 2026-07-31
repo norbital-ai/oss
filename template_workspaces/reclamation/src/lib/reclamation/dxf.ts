@@ -7,8 +7,8 @@
  * 3D solids are ignored — an ignored entity is reported rather than guessed at,
  * so nothing silently disappears from the model.
  *
- * DWG is a different, proprietary binary format. Export it to DXF (or digitise
- * it to the JSON/CSV schemas) before uploading.
+ * Native DWG is decoded by the server-side LibreDWG normaliser and then mapped
+ * into this same entity model before extraction.
  */
 
 export type DxfEntityType = 'LWPOLYLINE' | 'POLYLINE' | 'LINE' | 'POINT' | 'TEXT' | 'MTEXT';

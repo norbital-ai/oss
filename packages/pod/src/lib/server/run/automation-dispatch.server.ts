@@ -71,35 +71,64 @@ export async function dispatchChangeToAutomations(
 	return names;
 }
 
+/** Where the dispatcher left off, durable so a restart neither re-runs nor skips effects. */
+async function readAutomationCursor(ctx: ProvisionedContext): Promise<OutboxCursor> {
+	const result = await ctx.tenantDb.query<{ xid: string; seq: string }>(
+		`SELECT xid, seq FROM _norbital_automation_cursor WHERE singleton = TRUE`
+	);
+	const row = result.rows[0];
+	return row ? { xid: row.xid, seq: row.seq } : OUTBOX_CURSOR_START;
+}
+
+async function writeAutomationCursor(ctx: ProvisionedContext, cursor: OutboxCursor): Promise<void> {
+	await ctx.tenantDb.query(
+		`UPDATE _norbital_automation_cursor
+		    SET xid = $1, seq = $2, pumped_at = CURRENT_TIMESTAMP
+		  WHERE singleton = TRUE`,
+		[cursor.xid, cursor.seq]
+	);
+}
+
 /**
- * Pump: drain the change feed and dispatch automations, advancing the safe-watermark cursor. A
- * worker calls this on the outbox tail (the same feed the sync stream consumes). Exactly-once
- * relative to the cursor; the record is fetched fresh so the automation sees committed state.
+ * Drain the change feed and dispatch collection-event automations, then advance the durable cursor.
+ *
+ * This is the driver the declared `{ trigger: { collection, event } }` form depends on: without a
+ * host calling it, such an automation is matched by nothing and never runs. Effects fire post-commit
+ * off the authoritative feed, never on an optimistic client preview, and the record is re-read so
+ * the automation sees committed state. The cursor advances only after the batch has dispatched, so
+ * a crash repeats a batch rather than losing it.
  */
 export async function pumpAutomations(
 	ctx: ProvisionedContext,
-	cursor: OutboxCursor = OUTBOX_CURSOR_START,
 	limit = 200
-): Promise<OutboxCursor> {
+): Promise<{ readonly cursor: OutboxCursor; readonly dispatched: number }> {
+	const cursor = await readAutomationCursor(ctx);
 	const batch = await readSyncOutboxBatch(ctx, cursor, limit);
+	if (batch.rows.length === 0) return { cursor, dispatched: 0 };
+	let dispatched = 0;
 	for (const row of batch.rows) {
 		if (row.action === 'delete') {
-			await dispatchChangeToAutomations(ctx, {
-				collection: row.collection,
-				action: 'delete',
-				record: { norbital_id: row.recordId }
-			});
+			dispatched += (
+				await dispatchChangeToAutomations(ctx, {
+					collection: row.collection,
+					action: 'delete',
+					record: { norbital_id: row.recordId }
+				})
+			).length;
 			continue;
 		}
 		const record = await fetchRecord(ctx, row.collection, row.recordId);
 		if (!record) continue;
-		await dispatchChangeToAutomations(ctx, {
-			collection: row.collection,
-			action: row.action === 'create' ? 'create' : 'update',
-			record
-		});
+		dispatched += (
+			await dispatchChangeToAutomations(ctx, {
+				collection: row.collection,
+				action: row.action === 'create' ? 'create' : 'update',
+				record
+			})
+		).length;
 	}
-	return batch.cursor;
+	await writeAutomationCursor(ctx, batch.cursor);
+	return { cursor: batch.cursor, dispatched };
 }
 
 async function fetchRecord(

@@ -1,6 +1,7 @@
 <script lang="ts" generics="T, TAdditionalProps extends Record<string, unknown> = {}">
 	import Icon from '@iconify/svelte';
 	import { Checkbox } from '#lib/checkbox';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { TComboboxCommandItem } from './index.js';
 
@@ -48,12 +49,12 @@
 		)}
 		style="height: {itemHeight}px;"
 	>
-		<div class="flex min-w-0 grow items-center gap-2 text-left">
+		<Inline gap="sm" class="grow text-left">
 			{#if item._option.icon}
 				<Icon icon={item._option.icon} class="size-3.5 shrink-0 text-muted-foreground" />
 			{/if}
 			<div class="min-w-0 flex-1">
-				<div class="flex min-w-0 items-center gap-1.5">
+				<Inline gap="xs">
 					<div class={cn('min-w-0 truncate', compactTextClass)}>
 						{#if typeof item._option.label !== 'string'}
 							{@render item._option.label(
@@ -71,14 +72,14 @@
 							{item._option.badge}
 						</span>
 					{/if}
-				</div>
+				</Inline>
 				{#if item._option.description}
 					<div class="truncate text-tiny leading-3 text-muted-foreground">
 						{item._option.description}
 					</div>
 				{/if}
 			</div>
-		</div>
+		</Inline>
 		{#if multiple}
 			<Checkbox checked={selected} tabindex={-1} aria-hidden="true" class="scale-75" />
 		{:else if selected}
@@ -94,7 +95,7 @@
 		)}
 		style="height: {itemHeight}px;"
 	>
-		<div class="flex min-w-0 items-center gap-2">
+		<Inline gap="sm">
 			<Icon icon="lucide:list-checks" class="size-3.5 shrink-0 text-muted-foreground" />
 			<div class="min-w-0">
 				<div class="truncate font-medium">{item.label}</div>
@@ -102,7 +103,7 @@
 					{item._selectedCount} of {item._totalCount} selected
 				</div>
 			</div>
-		</div>
+		</Inline>
 		<Checkbox
 			checked={item._allSelected}
 			indeterminate={item._selectedCount > 0 && !item._allSelected}

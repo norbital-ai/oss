@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Input } from '#lib/input';
+	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '../../data-renderer.types.js';
 
@@ -49,35 +50,33 @@
 		{formatted}
 	</span>
 {:else if field.array}
-	<div class={className}>
-		<div class="space-y-2">
-			{#each values as item, index (index)}
-				<div class="flex items-center gap-2">
-					<Input
-						id={id ? `${id}-${index}` : undefined}
-						aria-label={`Value ${index + 1}`}
-						type="number"
-						{step}
-						value={String(item)}
-						{placeholder}
-						{disabled}
-						class="min-w-0 flex-1"
-						onchange={(event) => updateArrayItem(index, event.currentTarget)}
-					/>
-					<Button
-						type="button"
-						variant="outline"
-						size="icon"
-						class="shrink-0"
-						aria-label="Remove value"
-						{disabled}
-						onclick={() => onValueChange?.(values.filter((_, itemIndex) => itemIndex !== index))}
-					>
-						<Icon icon="lucide:x" class="size-4" />
-					</Button>
-				</div>
-			{/each}
-		</div>
+	<Stack gap="sm" class={className}>
+		{#each values as item, index (index)}
+			<Inline gap="sm">
+				<Input
+					id={id ? `${id}-${index}` : undefined}
+					aria-label={`Value ${index + 1}`}
+					type="number"
+					{step}
+					value={String(item)}
+					{placeholder}
+					{disabled}
+					class="min-w-0 flex-1"
+					onchange={(event) => updateArrayItem(index, event.currentTarget)}
+				/>
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="shrink-0"
+					aria-label="Remove value"
+					{disabled}
+					onclick={() => onValueChange?.(values.filter((_, itemIndex) => itemIndex !== index))}
+				>
+					<Icon icon="lucide:x" class="size-4" />
+				</Button>
+			</Inline>
+		{/each}
 		<Button
 			type="button"
 			variant="outline"
@@ -89,7 +88,7 @@
 			<Icon icon="lucide:plus" class="size-4" />
 			Add value
 		</Button>
-	</div>
+	</Stack>
 {:else}
 	<Input
 		{id}

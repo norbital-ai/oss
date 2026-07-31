@@ -3,6 +3,7 @@
 	 * Kanban Provider - Main container component                           *
 	 *************************************************************************/
 	import { fly } from 'svelte/transition';
+	import { Inline, Scroll } from '#lib/layout';
 	import type {
 		KanbanCardMove,
 		TCardSnippet,
@@ -69,23 +70,27 @@
 </script>
 
 <!-- Board-wide horizontal scroll with full height ----------------------->
-<div class="flex h-full gap-3 overflow-x-auto overflow-y-hidden p-3">
-	{#each localState as column, index (column._id)}
-		<div class="flex h-full min-h-0" in:slideIn={{ columnId: column._id, index }}>
-			<KanbanColumn
-				{column}
-				{cardSnippet}
-				{onCardMove}
-				{onLoadMore}
-				{itemHeight}
-				{minColumnWidth}
-				{groupName}
-				{sortable}
+<Scroll axis="x" name="Kanban board" class="p-3">
+	<Inline gap="md" align="stretch" class="h-full">
+		{#each localState as column, index (column._id)}
+			<Inline gap="none" align="stretch" class="h-full">
+				<div class="flex h-full" in:slideIn={{ columnId: column._id, index }}>
+					<KanbanColumn
+					{column}
+					{cardSnippet}
+					{onCardMove}
+					{onLoadMore}
+					{itemHeight}
+					{minColumnWidth}
+					{groupName}
+					{sortable}
 				{sortWithinColumn}
 				{dragHandleClass}
-				{columnHeaderActionSnippet}
-				{columnTitleSnippet}
-			/>
-		</div>
-	{/each}
-</div>
+					{columnHeaderActionSnippet}
+					{columnTitleSnippet}
+				/>
+				</div>
+			</Inline>
+		{/each}
+	</Inline>
+</Scroll>

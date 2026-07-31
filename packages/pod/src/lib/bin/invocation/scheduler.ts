@@ -82,7 +82,11 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 	const log = options.log ?? ((message: string) => console.log(message));
 	const automations = options.automations ? scheduledAutomations(options.manifest, log) : [];
 	const deliver = options.integrationDelivery;
-	if (automations.length === 0 && !deliver) return { stop: () => {} };
+	// Collection-event automations are discovered from the change feed rather than from a schedule,
+	// so enabling automations at all means this host has to drain them. Without the drain a
+	// `{ trigger: { collection, event } }` automation is declared, typed, and never runs.
+	const pumpEvents = options.automations === true;
+	if (automations.length === 0 && !pumpEvents && !deliver) return { stop: () => {} };
 
 	const lastRunMinute = new Map<string, number>();
 	let sweeping = false;
@@ -111,6 +115,13 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 				);
 			}
 		}
+	};
+
+	const runEventAutomations = async (): Promise<void> => {
+		if (!pumpEvents) return;
+		// One batch per sweep. A backlog drains over successive sweeps instead of holding the loop,
+		// which keeps a bulk import from starving integration delivery behind it.
+		await options.dispatch({ kind: 'automation', action: 'pump' });
 	};
 
 	const runOutbox = async (): Promise<void> => {
@@ -179,6 +190,7 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 		sweeping = true;
 		try {
 			await runAutomations(new Date());
+			await runEventAutomations();
 			await runOutbox();
 		} catch (cause) {
 			log(
@@ -195,7 +207,9 @@ export function startScheduler(options: SchedulerOptions): Scheduler {
 	void sweep();
 
 	log(
-		`[pod:scheduler] started (${automations.length} scheduled automation(s)${deliver ? ', integration delivery on' : ''})`
+		`[pod:scheduler] started (${automations.length} scheduled automation(s)${
+			pumpEvents ? ', change-feed automations on' : ''
+		}${deliver ? ', integration delivery on' : ''})`
 	);
 	return { stop: () => clearInterval(timer) };
 }

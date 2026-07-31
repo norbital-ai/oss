@@ -2,6 +2,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
+	import { Stack } from '#lib/layout';
 
 	let {
 		title = 'No items found',
@@ -18,9 +19,10 @@
 	} = $props();
 </script>
 
-<div
+<Stack
+	gap="md"
 	class={cn(
-		'flex min-h-[400px] flex-col justify-center space-y-4 p-8',
+		'min-h-[400px] justify-center p-8',
 		align === 'left' ? 'items-start text-left' : 'items-center text-center',
 		containerClass
 	)}
@@ -33,14 +35,14 @@
 		</div>
 	{/if}
 
-	<div class="space-y-2">
+	<Stack gap="sm">
 		<h3 class={cn('text-section', titleClass)}>{title}</h3>
 		<p class={cn('text-sm text-muted-foreground', descriptionClass)}>{description}</p>
-	</div>
+	</Stack>
 
 	{#if children}
-		<div class="mt-2 w-full">
+		<div class="w-full">
 			{@render children()}
 		</div>
 	{/if}
-</div>
+</Stack>

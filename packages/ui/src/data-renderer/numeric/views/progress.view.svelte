@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Input } from '#lib/input';
+	import { Inline, Stack } from '#lib/layout';
 	import { Root as Progress } from '#lib/progress';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '../../data-renderer.types.js';
@@ -50,18 +51,18 @@
 </script>
 
 {#snippet progress(progressValue: number)}
-	<div class="flex min-w-0 flex-1 items-center gap-3">
+	<Inline gap="md" class="min-w-0 flex-1">
 		<Progress value={visualValue(progressValue)} max={denominator} class="min-w-20 flex-1" />
 		<span class="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
 			{formatter.format(progressValue)} / {formatter.format(denominator)}
 		</span>
-	</div>
+	</Inline>
 {/snippet}
 
 {#if field.array}
-	<div class={cn('space-y-2', className)}>
+	<Stack gap="sm" class={className}>
 		{#each values as item, index (index)}
-			<div class="flex min-h-8 items-center gap-3">
+			<Inline gap="md" class="min-h-8">
 				{#if mode === 'edit'}
 					<Input
 						id={id ? `${id}-${index}` : undefined}
@@ -90,7 +91,7 @@
 						<Icon icon="lucide:x" class="size-4" />
 					</Button>
 				{/if}
-			</div>
+			</Inline>
 		{/each}
 		{#if values.length === 0 && mode === 'display'}
 			<span class="text-sm text-muted-foreground">{placeholder}</span>
@@ -106,11 +107,11 @@
 				Add progress
 			</Button>
 		{/if}
-	</div>
+	</Stack>
 {:else if scalarValue == null && mode === 'display'}
 	<span class={cn('text-sm text-muted-foreground', className)}>{placeholder}</span>
 {:else if mode === 'edit'}
-	<div class={cn('flex items-center gap-3', className)}>
+	<Inline gap="md" class={className}>
 		<Input
 			{id}
 			type="number"
@@ -124,7 +125,7 @@
 			oninput={(event) => onValueChange?.(parsed(event.currentTarget))}
 		/>
 		{@render progress(scalarValue ?? 0)}
-	</div>
+	</Inline>
 {:else}
 	<div class={className}>{@render progress(scalarValue ?? 0)}</div>
 {/if}

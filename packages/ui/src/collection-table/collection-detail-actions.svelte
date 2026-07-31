@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { Inline } from '#lib/layout';
 
 	let {
 		fullScreen,
@@ -13,7 +14,7 @@
 	} = $props();
 </script>
 
-<div class="flex shrink-0 items-center justify-end gap-1">
+<Inline justify="end" gap="xs" class="shrink-0">
 	<Button
 		type="button"
 		variant="ghost"
@@ -34,4 +35,4 @@
 	>
 		<Icon icon="lucide:x" class="size-4" />
 	</Button>
-</div>
+</Inline>

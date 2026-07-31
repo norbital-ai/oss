@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Inline, Stack } from '#lib/layout';
 	import { Shimmer } from '../shimmer';
 	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
@@ -134,13 +135,13 @@
 		<Icon {icon} class={cn('size-3.5', iconStyles[status])} />
 		<div class={cn('absolute top-6 bottom-0 left-1/2 -mx-px w-px', connectorStyles[status])}></div>
 	</div>
-	<div class="flex-1 space-y-1.5">
+	<Stack gap="sm" class="flex-1">
 		{#if shimmer}
 			<Shimmer content_length={label.length}>
 				{label}
 			</Shimmer>
 		{:else}
-			<div class="flex min-h-4 items-center gap-2">
+			<Inline gap="sm" class="min-h-4">
 				{#if description}
 					<Tooltip delayDuration={150} side="top" sideOffset={8} contentClass="max-w-72">
 						{#snippet trigger({ props })}
@@ -159,15 +160,15 @@
 				{:else}
 					<div class="min-w-0 flex-1 leading-4 font-medium">{label}</div>
 				{/if}
-				<div class="flex shrink-0 items-center gap-1">
+				<Inline gap="xs" class="shrink-0">
 					{#if headerActions}
 						{@render headerActions(headerActionArgs)}
 					{/if}
-				</div>
-			</div>
+				</Inline>
+			</Inline>
 		{/if}
 		{#if children}
 			{@render children()}
 		{/if}
-	</div>
+	</Stack>
 </div>

@@ -40,7 +40,7 @@
 
 <svelte:element
 	this={as}
-	class={cn(className, 'min-w-0', spanClass)}
+	class={cn(className, 'min-h-0 min-w-0', spanClass)}
 	data-layout="column"
 	{...restProps}
 >

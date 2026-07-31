@@ -8,6 +8,7 @@
 	import { onDestroy } from 'svelte';
 	import { Button, buttonVariants } from '#lib/button';
 	import { Input } from '#lib/input';
+	import { Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
 	import CollectionTableFilter from './collection-table-filter.svelte';
@@ -77,7 +78,7 @@
 				searchInputElement?.focus();
 			}}
 		>
-			<div class="flex items-center gap-2">
+			<Inline gap="sm">
 				<Input
 					bind:ref={searchInputElement}
 					type="search"
@@ -93,7 +94,7 @@
 						>Clear</Button
 					>
 				{/if}
-			</div>
+			</Inline>
 		</Popover.Content>
 	</Popover.Root>
 {/if}

@@ -38,6 +38,7 @@
 		integratedCells: 0,
 		integrationCellM: 0,
 		structureDisplacementM3: 0,
+		trenchExcavationM3: 0,
 		excavationM3: 0,
 		placedVolumeM3: 0
 	};
@@ -148,7 +149,7 @@
 			kind: 'cross_section',
 			label: 'Cross sections',
 			field: 'cross_section_document',
-			hint: 'Profile CSV with station, level, and layer per point.'
+			hint: 'Authored DWG/DXF, or the vector tender PDF retained for calibrated normalisation.'
 		}
 	] as const;
 
@@ -296,13 +297,13 @@
 {/snippet}
 
 {#snippet documentsTab()}
-	<Scroll name="Project documents" class="h-full pr-1">
+	<Scroll name="Project documents" class="pr-1">
 		<DocumentsPanel {projectId} {slots} provenance={report?.documents ?? []} />
 	</Scroll>
 {/snippet}
 
 {#snippet modelTab()}
-	<Scroll name="Model layers and checks" class="h-full pr-1">
+	<Scroll name="Model layers and checks" class="pr-1">
 		{#if latestReady}
 			<ModelPanel {layers} {visible} onToggle={toggleLayer} {stats} {metrics} {report} />
 		{:else}
@@ -312,9 +313,9 @@
 {/snippet}
 
 {#snippet sectionsTab()}
-	<Scroll name="Sections as read" class="h-full pr-1">
+	<Scroll name="Sections as read" class="pr-1">
 		{#if model}
-			<SectionPanel {model} />
+			<SectionPanel {model} {report} />
 		{:else}
 			<p class="p-3 text-sm text-muted-foreground">Build the model to plot its sections.</p>
 		{/if}
@@ -322,7 +323,7 @@
 {/snippet}
 
 {#snippet costTab()}
-	<Scroll name="Cost simulation" class="h-full pr-1">
+	<Scroll name="Cost simulation" class="pr-1">
 		{#if latestReady && quantities.length > 0}
 			<CostPanel
 				{model}
@@ -343,7 +344,7 @@
 {/snippet}
 
 {#snippet leftPane()}
-	<Stack gap="sm" class="h-full min-h-0">
+	<Stack gap="sm" class="h-full">
 		{@render header()}
 		<!--
 			`flex-1 min-h-0`, not the default `h-full`: this is a flex child sitting

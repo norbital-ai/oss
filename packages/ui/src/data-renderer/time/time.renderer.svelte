@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Input } from '#lib/input';
+	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '../data-renderer.types.js';
 
@@ -45,15 +46,16 @@
 </script>
 
 {#if field.array}
-	<div class={cn('grid min-w-0 gap-2', className)}>
+	<Stack gap="sm" class={className}>
 		{#each times as entry, index (`${entry}-${index}`)}
-			<div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+			<Inline gap="sm">
 				<Input
 					type="time"
 					step={60}
 					value={entry}
 					aria-label="Time"
 					{disabled}
+					class="min-w-0 flex-1"
 					oninput={(event) => updateTime(index, event.currentTarget.value)}
 				/>
 				<Button
@@ -66,7 +68,7 @@
 				>
 					<Icon icon="radix-icons:cross-1" class="size-4" />
 				</Button>
-			</div>
+			</Inline>
 		{/each}
 		<Button
 			type="button"
@@ -78,7 +80,7 @@
 			<Icon icon="radix-icons:plus" class="size-4" />
 			Add time
 		</Button>
-	</div>
+	</Stack>
 {:else}
 	<Input
 		{id}

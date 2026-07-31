@@ -26,7 +26,7 @@ export type SyncDiff = {
 	readonly seq: string;
 	/** Writing transaction id. `(xid, seq)` together are the resume cursor; advancing `seq` alone
 	 *  leaves a stale `xid` behind and replays the whole feed on every reconnect. */
-	readonly xid?: string;
+	readonly xid: string;
 	readonly collection: string;
 	readonly action: 'insert' | 'update' | 'delete' | 'leave';
 	readonly id: string;

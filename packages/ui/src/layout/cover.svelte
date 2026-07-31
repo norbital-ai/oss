@@ -26,24 +26,32 @@
 		children,
 		...restProps
 	}: CoverProps = $props();
+
+	const rowTemplate = $derived(
+		[top ? 'auto' : null, 'minmax(0,1fr)', bottom ? 'auto' : null]
+			.filter((row) => row !== null)
+			.join('_')
+	);
 </script>
 
 <svelte:element
 	this={as}
 	class={cn(
 		className,
-		'grid h-full max-h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-clip',
+		'grid h-full max-h-full min-h-0 min-w-0 overflow-clip',
+		rowTemplate && `[grid-template-rows:${rowTemplate}]`,
 		GAP_CLASSES[gap],
 		PAD_CLASSES[pad]
 	)}
 	data-layout="cover"
 	{...restProps}
 >
-	<div class="min-w-0 shrink-0">
-		{#if top}{@render top()}{/if}
-	</div>
+	{#if top}
+		<div class="min-w-0 shrink-0">{@render top()}</div>
+	{/if}
+	<!-- stupidity:allow UI5 -- the Cover primitive owns this clip region -->
 	<div class="min-h-0 min-w-0 overflow-clip">{@render children()}</div>
-	<div class="min-w-0 shrink-0">
-		{#if bottom}{@render bottom()}{/if}
-	</div>
+	{#if bottom}
+		<div class="min-w-0 shrink-0">{@render bottom()}</div>
+	{/if}
 </svelte:element>

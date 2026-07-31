@@ -8,6 +8,7 @@
 	import { Button, buttonVariants } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import { DataRenderer } from '../data-renderer/index.js';
+	import { Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { toast } from 'svelte-sonner';
 	import type {
@@ -187,149 +188,149 @@
 {/snippet}
 
 {#snippet actionsMenu()}
-	<div class="flex items-start justify-between gap-3 border-b px-4 py-3">
+	<Inline align="start" justify="between" gap="md" class="border-b px-4 py-3">
 		<div class="min-w-0">
 			<p class="text-sm font-semibold">Collection actions</p>
 			<p class="mt-0.5 text-xs text-muted-foreground">
 				Run configured pipelines or change selected records.
 			</p>
 		</div>
-	</div>
-	<div class="p-2">
-		<Accordion.Root type="multiple" bind:value={expandedSections}>
-			{#if importPipelines.length > 0}
-				<Accordion.Item value="import">
-					<Accordion.Trigger class="px-2 hover:no-underline">
-						<span class="flex min-w-0 items-center gap-3">
-							<Icon icon="lucide:upload" class="size-4 shrink-0" />
-							<span>Import</span>
-							<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-								{importPipelines.length}
-							</span>
+	</Inline>
+	<Accordion.Root type="multiple" bind:value={expandedSections} class="p-2">
+		{#if importPipelines.length > 0}
+			<Accordion.Item value="import">
+				<Accordion.Trigger class="px-2 hover:no-underline">
+					<Inline gap="md">
+						<Icon icon="lucide:upload" class="size-4 shrink-0" />
+						<span>Import</span>
+						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+							{importPipelines.length}
 						</span>
-					</Accordion.Trigger>
-					<Accordion.Content class="px-1">{@render pipelinePanel('import')}</Accordion.Content>
-				</Accordion.Item>
-			{/if}
-			{#if exportPipelines.length > 0}
-				<Accordion.Item value="export">
-					<Accordion.Trigger class="px-2 hover:no-underline">
-						<span class="flex min-w-0 items-center gap-3">
-							<Icon icon="lucide:download" class="size-4 shrink-0" />
-							<span>Export</span>
-							<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-								{exportPipelines.length}
-							</span>
+					</Inline>
+				</Accordion.Trigger>
+				<Accordion.Content class="px-1">{@render pipelinePanel('import')}</Accordion.Content>
+			</Accordion.Item>
+		{/if}
+		{#if exportPipelines.length > 0}
+			<Accordion.Item value="export">
+				<Accordion.Trigger class="px-2 hover:no-underline">
+					<Inline gap="md">
+						<Icon icon="lucide:download" class="size-4 shrink-0" />
+						<span>Export</span>
+						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+							{exportPipelines.length}
 						</span>
-					</Accordion.Trigger>
-					<Accordion.Content class="px-1">{@render pipelinePanel('export')}</Accordion.Content>
-				</Accordion.Item>
-			{/if}
-			{#if integrations.length > 0}
-				<Accordion.Item value="integrations">
-					<Accordion.Trigger class="px-2 hover:no-underline">
-						<span class="flex min-w-0 items-center gap-3">
-							<Icon icon="lucide:plug-zap" class="size-4 shrink-0" />
-							<span>Integrations</span>
-							<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-								{integrations.length}
-							</span>
+					</Inline>
+				</Accordion.Trigger>
+				<Accordion.Content class="px-1">{@render pipelinePanel('export')}</Accordion.Content>
+			</Accordion.Item>
+		{/if}
+		{#if integrations.length > 0}
+			<Accordion.Item value="integrations">
+				<Accordion.Trigger class="px-2 hover:no-underline">
+					<Inline gap="md">
+						<Icon icon="lucide:plug-zap" class="size-4 shrink-0" />
+						<span>Integrations</span>
+						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+							{integrations.length}
 						</span>
-					</Accordion.Trigger>
-					<Accordion.Content class="px-1">
-						<CollectionTableIntegrationsPanel {integrations} />
-					</Accordion.Content>
-				</Accordion.Item>
-			{/if}
-			{#if updateSelected}
-				<Accordion.Item value="bulk-update">
-					<Accordion.Trigger class="px-2 hover:no-underline">
-						<span class="flex min-w-0 items-center gap-3">
-							<Icon icon="lucide:list-restart" class="size-4 shrink-0" />
-							<span>Bulk update</span>
-							<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-								{selectedRows.length}
-							</span>
+					</Inline>
+				</Accordion.Trigger>
+				<Accordion.Content class="px-1">
+					<CollectionTableIntegrationsPanel {integrations} />
+				</Accordion.Content>
+			</Accordion.Item>
+		{/if}
+		{#if updateSelected}
+			<Accordion.Item value="bulk-update">
+				<Accordion.Trigger class="px-2 hover:no-underline">
+					<Inline gap="md">
+						<Icon icon="lucide:list-restart" class="size-4 shrink-0" />
+						<span>Bulk update</span>
+						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+							{selectedRows.length}
 						</span>
-					</Accordion.Trigger>
-					<Accordion.Content class="px-1">
-						<div class="space-y-4 rounded-md border bg-muted/30 p-3">
-							<div class="space-y-1.5">
-								<p class="text-xs font-medium">1. Choose a field</p>
-								<Combobox
-									options={fieldOptions}
-									value={selectedFieldName}
-									searchable={fieldOptions.length > 8}
-									emptyPlaceholder="Select a primitive or linked field"
-									ariaLabel="Choose a field to update"
-									disabled={disabled || selectedRows.length === 0}
-									onValueChange={chooseField}
+					</Inline>
+				</Accordion.Trigger>
+				<Accordion.Content class="px-1">
+					<Stack gap="md" class="rounded-md border bg-muted/30 p-3">
+						<Stack gap="xs">
+							<p class="text-xs font-medium">1. Choose a field</p>
+							<Combobox
+								options={fieldOptions}
+								value={selectedFieldName}
+								searchable={fieldOptions.length > 8}
+								emptyPlaceholder="Select a primitive or linked field"
+								ariaLabel="Choose a field to update"
+								disabled={disabled || selectedRows.length === 0}
+								onValueChange={chooseField}
+							/>
+						</Stack>
+						{#if selectedField}
+							<Stack gap="xs">
+								<label class="text-xs font-medium" for="collection-bulk-update-value">
+									2. Set the new value
+								</label>
+								<DataRenderer
+									id="collection-bulk-update-value"
+									field={selectedField}
+									value={bulkValue}
+									mode="edit"
+									disabled={disabled || pendingOperation != null}
+									onValueChange={(value) => {
+										bulkValue = value;
+										bulkValueTouched = true;
+									}}
 								/>
-							</div>
-							{#if selectedField}
-								<div class="space-y-1.5">
-									<label class="text-xs font-medium" for="collection-bulk-update-value">
-										2. Set the new value
-									</label>
-									<DataRenderer
-										id="collection-bulk-update-value"
-										field={selectedField}
-										value={bulkValue}
-										mode="edit"
-										disabled={disabled || pendingOperation != null}
-										onValueChange={(value) => {
-											bulkValue = value;
-											bulkValueTouched = true;
-										}}
-									/>
-								</div>
-							{/if}
-							<div class="flex items-center justify-between gap-3 border-t pt-3">
-								<p class="text-xs text-muted-foreground">{selectionLabel}</p>
-								<Button
-									type="button"
-									size="sm"
-									disabled={disabled || pendingOperation != null || !canSubmitUpdate}
-									onclick={() => void reviewBulkOperation('update')}
-								>
-									3. Review update
-								</Button>
-							</div>
-						</div>
-					</Accordion.Content>
-				</Accordion.Item>
-			{/if}
-			{#if deleteSelected}
-				<Accordion.Item value="delete">
-					<Accordion.Trigger class="px-2 text-destructive hover:no-underline">
-						<span class="flex min-w-0 items-center gap-3">
-							<Icon icon="lucide:trash-2" class="size-4 shrink-0" />
-							<span>Delete records</span>
-							<span class="rounded-full bg-destructive/10 px-2 py-0.5 text-xs">
-								{selectedRows.length}
-							</span>
-						</span>
-					</Accordion.Trigger>
-					<Accordion.Content class="px-1">
-						<div
-							class="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3"
-						>
-							<p class="text-xs text-muted-foreground">Delete {selectionLabel}.</p>
+							</Stack>
+						{/if}
+						<Inline justify="between" gap="md" class="border-t pt-3">
+							<p class="text-xs text-muted-foreground">{selectionLabel}</p>
 							<Button
 								type="button"
-								variant="destructive"
 								size="sm"
-								disabled={disabled || pendingOperation != null || selectedRows.length === 0}
-								onclick={() => void reviewBulkOperation('delete')}
+								disabled={disabled || pendingOperation != null || !canSubmitUpdate}
+								onclick={() => void reviewBulkOperation('update')}
 							>
-								Review deletion
+								3. Review update
 							</Button>
-						</div>
-					</Accordion.Content>
-				</Accordion.Item>
-			{/if}
-		</Accordion.Root>
-	</div>
+						</Inline>
+					</Stack>
+				</Accordion.Content>
+			</Accordion.Item>
+		{/if}
+		{#if deleteSelected}
+			<Accordion.Item value="delete">
+				<Accordion.Trigger class="px-2 text-destructive hover:no-underline">
+					<Inline gap="md">
+						<Icon icon="lucide:trash-2" class="size-4 shrink-0" />
+						<span>Delete records</span>
+						<span class="rounded-full bg-destructive/10 px-2 py-0.5 text-xs">
+							{selectedRows.length}
+						</span>
+					</Inline>
+				</Accordion.Trigger>
+				<Accordion.Content class="px-1">
+					<Inline
+						justify="between"
+						gap="md"
+						class="rounded-md border border-destructive/30 bg-destructive/5 p-3"
+					>
+						<p class="text-xs text-muted-foreground">Delete {selectionLabel}.</p>
+						<Button
+							type="button"
+							variant="destructive"
+							size="sm"
+							disabled={disabled || pendingOperation != null || selectedRows.length === 0}
+							onclick={() => void reviewBulkOperation('delete')}
+						>
+							Review deletion
+						</Button>
+					</Inline>
+				</Accordion.Content>
+			</Accordion.Item>
+		{/if}
+	</Accordion.Root>
 {/snippet}
 
 <AlertDialog.Root bind:open={confirmUpdateOpen}>
@@ -371,7 +372,7 @@
 	</AlertDialog.Content>
 </AlertDialog.Root>
 
-<div class="flex min-w-0 items-center gap-1">
+<Inline gap="xs" class="min-w-0">
 	<Popover.Root bind:open={actionsOpen}>
 		<Popover.Trigger
 			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
@@ -395,11 +396,11 @@
 			type="button"
 			variant="ghost"
 			size="sm"
-			class="ml-auto h-8"
+			class="h-8"
 			disabled={disabled || selectionControls.totalRows === 0}
 			onclick={selectionControls.toggleAll}
 		>
 			{selectionControls.allSelected ? 'Clear all' : 'Select all'}
 		</Button>
 	{/if}
-</div>
+</Inline>

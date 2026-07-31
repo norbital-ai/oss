@@ -3,6 +3,7 @@
 	import * as Alert from '#lib/alert';
 	import { Button } from '#lib/button';
 	import { Input } from '#lib/input';
+	import { Cluster, Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { Separator } from '#lib/separator';
 	import { Skeleton } from '#lib/skeleton';
 	import { Sortable } from '#lib/sortable';
@@ -387,64 +388,152 @@
 		return num.toLocaleString();
 	}
 
-	const gridTemplateRows = $derived(
-		leftActions || rightActions ? 'auto minmax(0, 1fr) auto' : 'minmax(0, 1fr) auto'
-	);
 	const selectedCount = $derived(
 		Object.values(tableApi.rowSelection.current).filter(Boolean).length
 	);
 </script>
 
-<div
-	class={cn('h-full min-h-0 w-full min-w-0 overflow-hidden', className, 'grid')}
-	style="grid-template-rows: {gridTemplateRows};"
+{#snippet actionsRow()}
+	<Cluster
+		gap="sm"
+		align="center"
+		justify={leftActions ? 'between' : 'end'}
+		data-collection-grid-toolbar
+	>
+		{#if leftActions}
+			<Scroll axis="x" name="Collection toolbar" class="min-w-0 flex-1">
+				<Inline gap="sm" class="h-full min-w-0">
+					{#each leftActions as action}
+						{@render action({ table: tableApi })}
+					{/each}
+				</Inline>
+			</Scroll>
+		{/if}
+		{#if rightActions}
+			<Inline gap="xs" class="shrink-0">
+				{#each rightActions as action}
+					{@render action({ table: tableApi })}
+				{/each}
+			</Inline>
+		{/if}
+	</Cluster>
+{/snippet}
+
+<Cover
+	as="div"
+	gap={leftActions || rightActions ? 'sm' : 'none'}
+	class={cn('h-full w-full', className)}
 	role="grid"
 	aria-rowcount={tableApi.totalRows}
 	aria-colcount={layouts.length}
 	aria-busy={isLoading}
+	top={leftActions || rightActions ? actionsRow : undefined}
+	bottom={pagination}
 >
-	{#if leftActions || rightActions}
-		<div class="flex h-min min-w-0 flex-wrap items-center gap-x-2 gap-y-2 pb-3">
-			{#if leftActions}
-				<div
-					class="flex min-w-0 flex-1 basis-[12rem] items-center gap-2 overflow-x-auto overflow-y-visible overscroll-x-contain"
-				>
-					{#each leftActions as action}
-						{@render action({ table: tableApi })}
-					{/each}
-				</div>
-			{:else}
-				<div class="flex-1"></div>
-			{/if}
-			{#if rightActions}
-				<div class="ml-auto flex shrink-0 items-center space-x-1">
-					{#each rightActions as action}
-						{@render action({ table: tableApi })}
-					{/each}
-				</div>
-			{/if}
-		</div>
-	{/if}
-
-	<div
-		class={cn(
-			'relative flex min-h-0 w-full flex-col overflow-hidden rounded-md bg-card',
-			!borderless && 'border'
-		)}
+	<Cover
+		as="div"
+		gap="none"
+		class={cn('relative h-full min-h-0 w-full rounded-md bg-card', !borderless && 'border')}
+		top={renderTableHeader}
 	>
-		{@render renderTableHeader()}
-		<div
-			bind:this={bodyScrollElement}
-			class="relative min-h-0 flex-1 overflow-auto"
+		<Scroll
+			axis="both"
+			name="Collection table rows"
+			bind:ref={bodyScrollElement}
+			class="relative"
 			data-collection-grid-scroll-owner
 			onscroll={syncScrollState}
 		>
 			{@render renderTableBody()}
-		</div>
-	</div>
+		</Scroll>
+	</Cover>
+</Cover>
 
-	{@render renderPagination()}
-</div>
+{#snippet pagination()}
+	{@const pageCountLocal = pageCount}
+	{@const shouldHide =
+		hidePaginationWhenSinglePage && tableApi.pagination.current.pageIndex === 0 && !hasNextPage}
+	{@const hasBR = bottomRightActions && bottomRightActions.length > 0}
+
+	{#if !shouldHide}
+		<Cluster
+			gap="md"
+			justify="between"
+			align="center"
+			class="shrink-0 p-1 text-xs text-muted-foreground"
+		>
+			<Cluster gap="sm">
+				{#if enableSelection}
+					<span
+						class="whitespace-nowrap"
+						title="{selectedCount.toLocaleString()} of {tableApi.totalRows.toLocaleString()} selected"
+					>
+						{formatNumber(selectedCount)} / {formatNumber(tableApi.totalRows)} selected
+					</span>
+					<Separator orientation="vertical" class="h-4" />
+				{/if}
+				<Tooltip delayDuration={0} text={disabled ? 'Page size is disabled' : undefined}>
+					{#snippet trigger({ props })}
+						<Inline gap="xs" {...props}>
+							<Input
+								type="number"
+								class={cn('h-6 w-14 text-xs', pageSizeError && 'border-red-500')}
+								max={500}
+								min={1}
+								value={tableApi.pagination.current.pageSize}
+								oninput={handlePageSizeInput}
+								{disabled}
+							/>
+							<span class="text-xs text-muted-foreground">/ page</span>
+						</Inline>
+					{/snippet}
+				</Tooltip>
+			</Cluster>
+
+			<Inline gap="sm" justify="center">
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="size-8"
+					aria-label="Previous page"
+					disabled={disabled || tableApi.pagination.current.pageIndex === 0}
+					onclick={onPreviousPage}
+				>
+					<Icon icon="lucide:chevron-left" class="size-4" />
+				</Button>
+				<span class="min-w-20 text-center tabular-nums">
+					Page {tableApi.pagination.current.pageIndex + 1} of {pageCountLocal}
+				</span>
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="size-8"
+					aria-label="Next page"
+					disabled={disabled || !hasNextPage}
+					onclick={onNextPage}
+				>
+					<Icon icon="lucide:chevron-right" class="size-4" />
+				</Button>
+			</Inline>
+
+			{#if hasBR}
+				<Inline gap="xs" justify="end">
+					{#each bottomRightActions as action}
+						{@render action({ table: tableApi })}
+					{/each}
+				</Inline>
+			{/if}
+		</Cluster>
+	{:else if bottomRightActions}
+		<Inline gap="xs" justify="end">
+			{#each bottomRightActions as action}
+				{@render action({ table: tableApi })}
+			{/each}
+		</Inline>
+	{/if}
+{/snippet}
 
 {#snippet renderTableHeader()}
 	<div
@@ -462,6 +551,7 @@
 			</div>
 
 			<!-- Scrollable columns -->
+			<!-- stupidity:allow UI5 -- virtualizer column pane clips its own viewport -->
 			<div class="absolute top-0 right-0 h-full overflow-hidden" style="left: {pinnedWidth}px;">
 				<div
 					class="relative h-full"
@@ -526,9 +616,10 @@
 					? 'descending'
 					: 'none'}
 
-	<div
+	<Inline
 		{...sortableProps || {}}
-		class={cn('group absolute top-0 flex h-full items-center bg-muted/80', {
+		gap="none"
+		class={cn('group absolute top-0 h-full bg-muted/80', {
 			'border-r': !borderless,
 			[String(sortableProps?.class || '')]: true
 		})}
@@ -540,7 +631,7 @@
 		aria-label={headerLabel}
 	>
 		{#if isCheckbox}
-			<div class="flex w-full items-center justify-center p-2.5">
+			<Inline gap="none" justify="center" class="p-2.5">
 				{#if headerContent instanceof RenderComponentConfig}
 					{@const { component: Component, props } = headerContent}
 					<Component {...props} />
@@ -550,11 +641,12 @@
 				{:else}
 					{String(headerContent ?? '')}
 				{/if}
-			</div>
+			</Inline>
 		{:else}
-			<div
+			<Inline
+				gap="none"
 				class={cn(
-					'flex h-full min-w-0 flex-1 items-center overflow-hidden px-3 text-left text-[13px] font-medium',
+					'h-full min-w-0 flex-1 overflow-hidden px-3 text-left text-[13px] font-medium',
 					headerSortableHandlerClass,
 					{
 						'cursor-grab': columnReorderEnabled,
@@ -573,9 +665,9 @@
 						{headerLabel}
 					</span>
 				{/if}
-			</div>
+			</Inline>
 
-			<div class="absolute inset-y-0 right-0 flex items-center">
+			<Inline gap="none" class="absolute inset-y-0 right-0">
 				{#if inst.enableSorting && sortingEnabled}
 					<button
 						type="button"
@@ -611,7 +703,7 @@
 				{#if !disabled}
 					<CollectionTableColumnActions {inst} table={tableApi} />
 				{/if}
-			</div>
+			</Inline>
 
 			{@const canResize = layout.canResize && !disabled}
 			{@const isResizing = resizer.activeColumnId === inst.id}
@@ -644,7 +736,7 @@
 				</button>
 			{/if}
 		{/if}
-	</div>
+	</Inline>
 {/snippet}
 
 {#snippet renderTableBody()}
@@ -677,12 +769,13 @@
 			<div class="relative" style="height: {ROW_HEIGHT}px;">
 				<div class={getPinnedLayerClass()} style="width: {pinnedWidth}px;">
 					{#each pinnedLayouts as layout (layout.id)}
-						<div
-							class="absolute top-0 flex h-full items-center bg-card p-2.5"
+						<Inline
+							gap="none"
+							class="absolute top-0 h-full bg-card p-2.5"
 							style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 						>
 							<Skeleton class="h-4 w-full" />
-						</div>
+						</Inline>
 					{/each}
 				</div>
 				<div
@@ -692,12 +785,13 @@
 					{#each virtualCols as vi (scrollLayouts[vi.index]?.id ?? `idx:${vi.index}`)}
 						{@const layout = scrollLayouts[vi.index]}
 						{#if layout}
-							<div
-								class="absolute top-0 flex h-full items-center p-2.5"
+							<Inline
+								gap="none"
+								class="absolute top-0 h-full p-2.5"
 								style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 							>
 								<Skeleton class="h-4 w-full" />
-							</div>
+							</Inline>
 						{/if}
 					{/each}
 				</div>
@@ -707,27 +801,27 @@
 {/snippet}
 
 {#snippet renderError()}
-	<div class="flex min-h-48 items-center justify-center p-8">
+	<Inline justify="center" align="center" class="min-h-48 p-8">
 		<Alert.Root variant="destructive" class="max-w-md">
 			<Icon icon="lucide:alert-circle" class="h-4 w-4" />
 			<Alert.Title>Something went wrong</Alert.Title>
 			<Alert.Description class="mt-2">{error}</Alert.Description>
 		</Alert.Root>
-	</div>
+	</Inline>
 {/snippet}
 
 {#snippet renderEmptyState()}
-	<div class="flex min-h-48 items-center justify-center p-4">
+	<Inline justify="center" align="center" class="min-h-48 p-4">
 		{#if emptyPlaceholder}
 			{@render emptyPlaceholder()}
 		{:else}
-			<div class="text-center text-muted-foreground">
+			<Stack gap="xs" class="text-center text-muted-foreground">
 				<Icon icon="lucide:inbox" class="mx-auto h-6 w-6 text-muted-foreground" />
-				<p class="mt-2 text-sm font-medium">No results found</p>
+				<p class="text-sm font-medium">No results found</p>
 				<p class="text-xs text-muted-foreground">Try adjusting your search or filters</p>
-			</div>
+			</Stack>
 		{/if}
-	</div>
+	</Inline>
 {/snippet}
 
 {#snippet renderDataRows()}
@@ -931,6 +1025,7 @@
 	</div>
 
 	<!-- scrollable cells -->
+	<!-- stupidity:allow UI5 -- virtualizer column pane clips its own viewport -->
 	<div
 		class="absolute top-0 h-full overflow-hidden"
 		style="left: {pinnedWidth}px; width: {scrollTotalWidth}px;"
@@ -965,13 +1060,9 @@
 		{@const value = inst.accessor ? inst.accessor(rowObj) : row[inst.id]}
 		{@const hasRowControls = enableRowExpansion || enableRowReordering}
 
-		<div
-			class={cn(
-				'absolute top-0 flex h-full items-center',
-				!borderless && 'border-r',
-				bgClass,
-				isPinned && 'bg-card'
-			)}
+		<Inline
+			gap="none"
+			class={cn('absolute top-0 h-full', !borderless && 'border-r', bgClass, isPinned && 'bg-card')}
 			style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 			role="gridcell"
 			aria-colindex={layout.index + 1}
@@ -999,9 +1090,10 @@
 				{/if}
 			{/if}
 
-			<div
+			<Inline
+				gap="none"
 				class={cn(
-					'flex min-w-0 flex-1 items-center overflow-hidden px-3.5 py-1.5 text-xs',
+					'min-w-0 flex-1 overflow-hidden px-3.5 py-1.5 text-xs',
 					layout.id === firstDataColumnId && hasRowControls && 'pl-10',
 					layout.isCheckbox && 'justify-center'
 				)}
@@ -1020,92 +1112,7 @@
 				{:else}
 					<span class="truncate">{String(value ?? '')}</span>
 				{/if}
-			</div>
-		</div>
-	{/if}
-{/snippet}
-
-{#snippet renderPagination()}
-	{@const pageCountLocal = pageCount}
-	{@const shouldHide =
-		hidePaginationWhenSinglePage && tableApi.pagination.current.pageIndex === 0 && !hasNextPage}
-	{@const hasBR = bottomRightActions && bottomRightActions.length > 0}
-
-	{#if !shouldHide}
-		<div
-			class="w-full shrink-0 p-1 text-xs text-muted-foreground lg:grid lg:items-center lg:gap-4 {hasBR
-				? 'lg:grid-cols-3'
-				: 'lg:grid-cols-2'}"
-		>
-			<div class="flex flex-wrap items-center gap-2 lg:gap-1">
-				{#if enableSelection}
-					<span
-						class="whitespace-nowrap"
-						title="{selectedCount.toLocaleString()} of {tableApi.totalRows.toLocaleString()} selected"
-					>
-						{formatNumber(selectedCount)} / {formatNumber(tableApi.totalRows)} selected
-					</span>
-					<Separator orientation="vertical" class="h-4" />
-				{/if}
-				<Tooltip delayDuration={0} text={disabled ? 'Page size is disabled' : undefined}>
-					{#snippet trigger({ props })}
-						<div {...props} class="flex items-center gap-1">
-							<Input
-								type="number"
-								class={cn('h-6 w-14 text-xs', pageSizeError && 'border-red-500')}
-								max={500}
-								min={1}
-								value={tableApi.pagination.current.pageSize}
-								oninput={handlePageSizeInput}
-								{disabled}
-							/>
-							<span class="text-xs text-muted-foreground">/ page</span>
-						</div>
-					{/snippet}
-				</Tooltip>
-			</div>
-
-			<div class="flex items-center justify-center gap-2 lg:justify-end">
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					class="size-8"
-					aria-label="Previous page"
-					disabled={disabled || tableApi.pagination.current.pageIndex === 0}
-					onclick={onPreviousPage}
-				>
-					<Icon icon="lucide:chevron-left" class="size-4" />
-				</Button>
-				<span class="min-w-20 text-center tabular-nums">
-					Page {tableApi.pagination.current.pageIndex + 1} of {pageCountLocal}
-				</span>
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					class="size-8"
-					aria-label="Next page"
-					disabled={disabled || !hasNextPage}
-					onclick={onNextPage}
-				>
-					<Icon icon="lucide:chevron-right" class="size-4" />
-				</Button>
-			</div>
-
-			{#if hasBR}
-				<div class="flex items-center justify-center gap-1 lg:justify-end">
-					{#each bottomRightActions as action}
-						{@render action({ table: tableApi })}
-					{/each}
-				</div>
-			{/if}
-		</div>
-	{:else if bottomRightActions}
-		<div class="flex items-center justify-end gap-1">
-			{#each bottomRightActions as action}
-				{@render action({ table: tableApi })}
-			{/each}
-		</div>
+			</Inline>
+		</Inline>
 	{/if}
 {/snippet}

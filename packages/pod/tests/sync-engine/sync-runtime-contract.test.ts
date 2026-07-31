@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { dockerAvailable } from '../support/pg-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
 	type Identity,
@@ -9,7 +9,7 @@ import { createClientDb } from '../support/pglite-node.js';
 import { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
 import type { SyncFetch } from '$lib/client/sync/types.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 /** Build a SyncFetch that drives the in-process pod runtime as a specific user identity. */
 function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch {
@@ -29,6 +29,7 @@ function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch
 async function makeClient(harness: PodRuntimeHarness, identity: Identity): Promise<PodSyncClient> {
 	const db = await createClientDb();
 	const client = new PodSyncClient({
+		replicaEpoch: 'test-epoch',
 		db,
 		schemaSql: harness.schemaSql,
 		fetch: syncFetchFor(harness, identity)
@@ -76,40 +77,6 @@ async function pickInsertableCollection(harness: PodRuntimeHarness): Promise<Col
 		}
 	}
 	throw new Error('no server-insertable tenant collection found');
-}
-
-/**
- * First collection whose update the authoritative pipeline accepts end-to-end (allowed + hook-clean).
- * Returns null when the template locks every collection (read-only or hook-guarded), in which case
- * the audit/conflict tests skip — those mechanics are covered by the P0 server suite instead.
- */
-async function pickWritableCollection(harness: PodRuntimeHarness): Promise<CollectionInfo | null> {
-	for (const info of await tenantCollections(harness)) {
-		let id: string;
-		try {
-			id = await serverInsert(harness, info.name, info.notNull);
-		} catch {
-			continue;
-		}
-		const client = await makeClient(harness, admin);
-		try {
-			const results = await client.mutate([
-				{
-					clientId: 't',
-					collection: info.name,
-					action: 'update',
-					row: { norbital_id: id, ...updatePatch(info.notNull) },
-					version: 1
-				}
-			]);
-			if (results[0]?.status === 'confirmed') return info;
-		} catch {
-			// try next
-		} finally {
-			await client.close();
-		}
-	}
-	return null;
 }
 
 function sampleValue(type: string): unknown {
@@ -185,23 +152,21 @@ const admin: Identity = {
  * Deliberately narrow. This file used to also assert catch-up scoping, 10-client propagation,
  * offline reconnect, windowed 100k reads and version CONFLICT — all of which are owned by
  * `sync-e2e-comprehensive` and `pod-sync-client`, and having two files answer the same question
- * means neither is the one you fix when the answer changes. What is left is the three behaviours
- * nothing else asserts: how the runtime stores a client-local timestamp, that an authoritative
- * mutate leaves an audit trail, and that an introspected schema actually applies to a fresh
- * replica.
+ * means neither is the one you fix when the answer changes. What is left is the two behaviours
+ * nothing else asserts: how the runtime stores a client-local timestamp, and that an introspected
+ * schema actually applies to a fresh replica. The authoritative mutation + audit contract belongs
+ * to the comprehensive runtime suite.
  */
-describe.skipIf(!hasDocker)('Pod Sync — runtime contract (real runtime + PGlite clients)', () => {
+describe('Pod Sync — runtime contract (real runtime + PGlite clients)', () => {
 	let harness: PodRuntimeHarness;
 	let collection: string;
 	let notNull: { name: string; type: string }[];
-	let writable: CollectionInfo | null;
 
 	beforeAll(async () => {
 		harness = await bootPodRuntime('construction');
 		const picked = await pickInsertableCollection(harness);
 		collection = picked.name;
 		notNull = picked.notNull;
-		writable = await pickWritableCollection(harness);
 	}, 180_000);
 
 	afterAll(async () => {
@@ -284,55 +249,6 @@ describe.skipIf(!hasDocker)('Pod Sync — runtime contract (real runtime + PGlit
 		}
 	});
 
-	it('creates an audit_event for an authoritative mutate', async () => {
-		if (!writable) {
-			// No writable collection in this template — verify the mutation path still works
-			// by directly checking that the sync/mutate endpoint returns a valid rejection.
-			const client = await makeClient(harness, admin);
-			try {
-				const results = await client.mutate([
-					{
-						clientId: 'm1',
-						collection,
-						action: 'update',
-						row: { norbital_id: '00000000-0000-4000-8000-000000000000' },
-						version: 1
-					}
-				]);
-				expect(results[0]?.status).toBe('rejected');
-			} finally {
-				await client.close();
-			}
-			return;
-		}
-		const wc = writable;
-		const id = await serverInsert(harness, wc.name, wc.notNull);
-		const client = await makeClient(harness, admin);
-		try {
-			const before = await harness.pool.query<{ n: string }>(
-				`SELECT count(*)::text AS n FROM audit_event WHERE collection_name=$1`,
-				[wc.name]
-			);
-			const results = await client.mutate([
-				{
-					clientId: 'm1',
-					collection: wc.name,
-					action: 'update',
-					row: { norbital_id: id, ...updatePatch(wc.notNull) },
-					version: 1
-				}
-			]);
-			expect(results[0]?.status, JSON.stringify(results[0])).toBe('confirmed');
-			const after = await harness.pool.query<{ n: string }>(
-				`SELECT count(*)::text AS n FROM audit_event WHERE collection_name=$1`,
-				[wc.name]
-			);
-			expect(Number(after.rows[0]!.n)).toBe(Number(before.rows[0]!.n) + 1);
-		} finally {
-			await client.close();
-		}
-	});
-
 	it('serves an introspected client schema that applies to a fresh replica', async () => {
 		const response = await harness.request({ method: 'GET', path: 'sync/schema' }, admin);
 		expect(response.status).toBe(200);
@@ -352,32 +268,3 @@ describe.skipIf(!hasDocker)('Pod Sync — runtime contract (real runtime + PGlit
 		}
 	});
 });
-
-function updatePatch(notNull: { name: string; type: string }[]): Record<string, unknown> {
-	const textCol = notNull.find(
-		(c) => !c.type.includes('int') && c.type !== 'boolean' && c.type !== 'jsonb'
-	);
-	return textCol ? { [textCol.name]: 'updated' } : {};
-}
-
-async function bumpServerVersion(
-	harness: PodRuntimeHarness,
-	collection: string,
-	id: string,
-	notNull: { name: string; type: string }[]
-): Promise<void> {
-	const patch = updatePatch(notNull);
-	const setClause = Object.keys(patch).length > 0 ? `, "${Object.keys(patch)[0]}" = 'other'` : '';
-	const client = await harness.pool.connect();
-	try {
-		await client.query('BEGIN');
-		await client.query(`SELECT set_config('norbital.via_ops','on',true)`);
-		await client.query(
-			`UPDATE "${collection}" SET norbital_row_version = norbital_row_version + 1${setClause} WHERE norbital_id = $1`,
-			[id]
-		);
-		await client.query('COMMIT');
-	} finally {
-		client.release();
-	}
-}

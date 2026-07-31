@@ -33,28 +33,6 @@
 		report: StitchReport | null;
 	} = $props();
 
-	/** One group per source, so the tag is stated once instead of on every row. */
-	const SOURCE_LABEL: Record<string, string> = {
-		default: 'Assumed by default',
-		cross_section: 'Read from the cross sections',
-		floor_plan: 'Read from the floor plan',
-		bathymetry: 'Read from the survey'
-	};
-	const assumptionGroups = $derived.by(() => {
-		type Assumption = NonNullable<typeof report>['assumptions'][number];
-		const groups = new Map<string, Assumption[]>();
-		for (const assumption of report?.assumptions ?? []) {
-			const list = groups.get(assumption.source) ?? [];
-			list.push(assumption);
-			groups.set(assumption.source, list);
-		}
-		return [...groups.entries()].map(([source, entries]) => ({
-			source,
-			label: SOURCE_LABEL[source] ?? source.replace('_', ' '),
-			entries
-		}));
-	});
-
 	const errors = $derived((report?.warnings ?? []).filter((entry) => entry.severity === 'error'));
 	const cautions = $derived(
 		(report?.warnings ?? []).filter((entry) => entry.severity === 'warning')
@@ -157,12 +135,19 @@
 		<Stack as="section" gap="sm">
 			<div class="border-b pb-2">
 				<h3 class="text-sm font-semibold">
-					Assumptions and checks
-					<span class="ml-1 font-normal text-muted-foreground">
-						({report.assumptions.length} assumed · {report.warnings.length} flagged)
-					</span>
+					Checks
+					{#if report.warnings.length > 0}
+						<span class="ml-1 font-normal text-muted-foreground"
+							>({report.warnings.length} flagged)</span
+						>
+					{/if}
 				</h3>
 			</div>
+			{#if report.warnings.length === 0}
+				<p class="text-sm text-muted-foreground">
+					No document conflicts or extraction errors were flagged.
+				</p>
+			{/if}
 
 			{#each [...errors, ...cautions, ...notices] as warning (warning.code + warning.message)}
 				<div
@@ -174,32 +159,6 @@
 				>
 					<p class="font-mono text-tiny uppercase tracking-wide opacity-70">{warning.code}</p>
 					<p class="mt-1">{warning.message}</p>
-				</div>
-			{/each}
-
-			<!--
-				Grouped by where the assumption came from, one line each, with the
-				detail and the consequence on the icon. Fifteen accordions in a flat
-				list is a wall to scroll past, and every row repeated its own source
-				tag; the group heading carries that once.
-			-->
-			{#each assumptionGroups as group (group.source)}
-				<div>
-					<p class="mb-1 text-xs font-medium text-muted-foreground">
-						{group.label}
-						<span class="font-normal">({group.entries.length})</span>
-					</p>
-					<ul class="divide-y rounded-md border bg-card">
-						{#each group.entries as assumption (assumption.id)}
-							<li class="flex items-center gap-2 px-3 py-1.5 text-sm">
-								<span class="min-w-0 flex-1 truncate">{assumption.title}</span>
-								<InfoHint
-									label={`About: ${assumption.title}`}
-									text={`${assumption.detail} — If it is wrong: ${assumption.effect}`}
-								/>
-							</li>
-						{/each}
-					</ul>
 				</div>
 			{/each}
 

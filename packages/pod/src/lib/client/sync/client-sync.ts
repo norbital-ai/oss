@@ -263,6 +263,22 @@ export async function absorbServerRows(
 	await sync.client.upsertRows(collection, flat).catch(() => undefined);
 }
 
+/**
+ * Replace one cached record with an authoritative point read, or evict it when that read says the
+ * record is gone/outside policy. This is the bounded fallback for a command receipt whose outbox
+ * watermark could not be observed in time; ordinary convergence continues to use the feed.
+ */
+export async function reconcileServerRow(
+	sync: ClientSync,
+	collection: string,
+	id: string,
+	row: Record<string, unknown> | null
+): Promise<void> {
+	if (row) await absorbServerRows(sync, collection, [row]);
+	else await sync.client.deleteRow(collection, id);
+	sync.client.notifyCollection(collection);
+}
+
 // ── collection readiness ───────────────────────────────────────────────────────
 
 /**
@@ -300,7 +316,7 @@ async function ensureCollections(
 
 	await sync.registry.restore();
 	await Promise.all([...needed].map((name) => sync.registry.register(name)));
-	return [...needed].every((name) => sync.registry.has(name));
+	return [...needed].every((name) => sync.registry.has(name) && sync.registry.isFresh(name));
 }
 
 // ── relation hydration ─────────────────────────────────────────────────────────

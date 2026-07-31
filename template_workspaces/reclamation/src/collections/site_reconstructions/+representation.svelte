@@ -40,7 +40,7 @@
 </script>
 
 {#snippet detail()}
-	<Scroll name="Reconstruction detail" class="h-full pr-1">
+	<Scroll name="Reconstruction detail" class="pr-1">
 		<Stack gap="lg" class="pb-4">
 			<Stack as="header" gap="xs" class="border-b pb-4">
 				<h2 class="text-heading">Revision {number(record?.revision)}</h2>

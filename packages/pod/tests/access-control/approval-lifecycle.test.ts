@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
-import { startPostgres, dockerAvailable, type PgHarness } from '../support/pg-harness.js';
+import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema, seedApprovalRequest } from '../support/pod-schema.js';
 
-const hasDocker = await dockerAvailable();
+requireDocker();
 
 const APPROVAL_A = '99999999-9999-4999-8999-999999999999';
 
@@ -60,7 +60,7 @@ async function lock(client: PoolClient, type: string, id: string): Promise<void>
 	);
 }
 
-describe.skipIf(!hasDocker)('Pod approval lifecycle (real Postgres triggers)', () => {
+describe('Pod approval lifecycle (real Postgres triggers)', () => {
 	let pg: PgHarness;
 	let pool: Pool;
 

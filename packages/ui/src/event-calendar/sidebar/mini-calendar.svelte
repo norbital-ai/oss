@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { buttonVariants } from '#lib/button';
+	import { Inline } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 
 	let {
@@ -64,7 +65,7 @@
 </script>
 
 <div class={cn('p-3 bg-card rounded-lg border border-border shadow-card', className)}>
-	<div class="flex items-center justify-between mb-2">
+	<Inline justify="between" gap="sm" class="pb-2">
 		<button
 			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
 			onclick={goPrevMonth}
@@ -98,7 +99,7 @@
 				stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg
 			>
 		</button>
-	</div>
+	</Inline>
 
 	<div class="grid grid-cols-7 text-center mb-1">
 		{#each weekDays as day}

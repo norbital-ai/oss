@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { dockerAvailable } from '../support/pg-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
 	type Identity,
@@ -22,7 +22,7 @@ import { pickCollection, serverInsert, type ProbeCollection } from '../support/c
  * and this test moves it under a live stream rather than a reconnecting one.
  */
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 const admin: Identity = {
 	userId: '22222222-2222-4222-8222-222222222222',
@@ -75,7 +75,7 @@ function frameReader(response: Response) {
 	};
 }
 
-describe.skipIf(!hasDocker)('change feed resets a cursor below the compaction boundary', () => {
+describe('change feed resets a cursor below the compaction boundary', () => {
 	let harness: PodRuntimeHarness;
 	let collection: ProbeCollection;
 

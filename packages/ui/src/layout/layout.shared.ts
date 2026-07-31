@@ -1,9 +1,19 @@
 import type { HTMLAttributes } from 'svelte/elements';
 
-export type LayoutAttributes = Omit<HTMLAttributes<HTMLElement>, 'children' | 'style'>;
+export type LayoutAttributes = Omit<HTMLAttributes<HTMLDivElement>, 'children'>;
+/**
+ * The elements a layout primitive may render as.
+ *
+ * The list is a whitelist of flow and inline *containers*, which is what keeps `as` from becoming a
+ * way to render a layout primitive as a heading, a button, or anything else that carries behaviour
+ * or typography of its own. Semantic sectioning elements belong here — the point of `as` is to let a
+ * region be a `<section>` or an `<article>` without giving up the primitive's layout.
+ */
 export type LayoutElement =
 	| 'div'
+	| 'span'
 	| 'section'
+	| 'article'
 	| 'main'
 	| 'aside'
 	| 'header'
@@ -11,6 +21,8 @@ export type LayoutElement =
 	| 'nav'
 	| 'form'
 	| 'fieldset'
+	| 'figure'
+	| 'figcaption'
 	| 'dl'
 	| 'ol'
 	| 'ul'
@@ -39,3 +51,10 @@ export const PAD_CLASSES: Record<LayoutPad, string> = {
 	md: 'p-4',
 	lg: 'p-6'
 };
+
+/** The one app inset: content regions. The only legal consumer is the single inset owner. */
+export const INSET_CLASS = 'px-4 py-2 sm:px-6';
+/** Full-bleed chrome with its own vertical rhythm (`PageHeader`). */
+export const INSET_X_CLASS = 'px-4 sm:px-6';
+/** Chrome that draws its own background and so cannot pad itself (tab list). */
+export const INSET_MX_CLASS = 'mx-4 sm:mx-6';

@@ -155,8 +155,10 @@
 	{/if}
 
 	{#if !ready || errorMessage || markers.length === 0}
-		<div
-			class="absolute inset-x-4 top-4 z-20 flex items-start gap-3 rounded-md border border-border bg-background/95 p-3 shadow-sm backdrop-blur"
+		<Inline
+			align="start"
+			gap="md"
+			class="absolute inset-x-4 top-4 z-20 rounded-md border border-border bg-background/95 p-3 shadow-sm backdrop-blur"
 			role={errorMessage ? 'alert' : undefined}
 		>
 			<Icon
@@ -175,6 +177,6 @@
 					{errorMessage ?? emptyDescription}
 				</p>
 			</div>
-		</div>
+		</Inline>
 	{/if}
 </section>

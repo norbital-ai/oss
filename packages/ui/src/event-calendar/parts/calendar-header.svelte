@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { cn } from '#lib/utils';
 	import { buttonVariants } from '#lib/button';
+	import { Inline } from '#lib/layout';
 	import { navigateView } from '../utils.js';
 	import type { CalendarView } from '../types.js';
 
@@ -91,31 +92,33 @@
 		className
 	)}
 >
-	<div class="flex items-center gap-1">
-		<button
-			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-			onclick={goPrev}
-			aria-label="Previous"
-		>
-			<Icon icon="lucide:chevron-left" class="size-4" />
-		</button>
-		<button
-			class={cn(buttonVariants({ variant: 'ghost' }), 'h-7 px-2.5 text-xs font-medium')}
-			onclick={goToday}
-		>
-			Today
-		</button>
-		<button
-			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-			onclick={goNext}
-			aria-label="Next"
-		>
-			<Icon icon="lucide:chevron-right" class="size-4" />
-		</button>
-		<span class="ml-2 text-sm font-semibold text-foreground select-none">
+	<Inline gap="md">
+		<Inline gap="xs">
+			<button
+				class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+				onclick={goPrev}
+				aria-label="Previous"
+			>
+				<Icon icon="lucide:chevron-left" class="size-4" />
+			</button>
+			<button
+				class={cn(buttonVariants({ variant: 'ghost' }), 'h-7 px-2.5 text-xs font-medium')}
+				onclick={goToday}
+			>
+				Today
+			</button>
+			<button
+				class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+				onclick={goNext}
+				aria-label="Next"
+			>
+				<Icon icon="lucide:chevron-right" class="size-4" />
+			</button>
+		</Inline>
+		<span class="text-sm font-semibold text-foreground select-none">
 			{titleForView()}
 		</span>
-	</div>
+	</Inline>
 
 	<div class="flex items-center">
 		<div class="flex border border-border rounded-sm bg-muted/40 p-0.5">

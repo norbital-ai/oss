@@ -8,6 +8,7 @@
 	import Icon from '@iconify/svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import Button, { buttonVariants } from '../button/button.svelte';
+	import { Inline, Stack } from '#lib/layout';
 
 	// ============================================================================
 	// COMPONENT PROPS
@@ -255,20 +256,21 @@
 		<Popover.Trigger class={cn('w-full', className)} {style}>
 			{#if multiple && validProgress.length > 1}
 				<!-- Multiple progress bars stacked -->
-				<div
-					class="space-y-2 rounded-md border border-input bg-background p-2 shadow-xs transition-colors hover:bg-accent"
+				<Stack
+					gap="sm"
+					class="rounded-md border border-input bg-background p-2 shadow-xs transition-colors hover:bg-accent"
 				>
 					{#each validProgress as progress, index (index)}
-						<div class="flex items-center gap-2">
+						<Inline gap="sm">
 							<span class="w-8 text-xs text-muted-foreground">#{index + 1}</span>
 							<Progress value={progress} class="h-2 flex-1" />
 							<span class="w-10 text-xs">{progress}%</span>
-						</div>
+						</Inline>
 					{/each}
-				</div>
+				</Stack>
 			{:else}
 				<!-- Single progress bar -->
-				<div class="flex items-center gap-2">
+				<Inline gap="sm">
 					<Progress
 						value={currentSingleValue || 0}
 						class={cn('h-3 flex-1 cursor-pointer', !hasValue && 'opacity-50')}
@@ -276,38 +278,38 @@
 					<span class="w-12 text-xs text-secondary-foreground">
 						{hasValue ? `${currentSingleValue}%` : '0%'}
 					</span>
-				</div>
+				</Inline>
 			{/if}
 		</Popover.Trigger>
 
 		<Popover.Content class="w-80 p-4" align="start">
-			<div class="space-y-3">
-				<div class="flex items-center gap-2">
+			<Stack gap="sm">
+				<Inline gap="sm">
 					<Icon icon="lucide:trending-up" class="h-5 w-5 text-brand" />
 					<h4 class="font-semibold text-foreground">Progress Details</h4>
-				</div>
+				</Inline>
 
 				{#if hasValidProgress}
-					<div class="space-y-2">
+					<Stack gap="sm">
 						{#each validProgress as progress, index (index)}
-							<div class="flex items-center justify-between rounded-md bg-muted/40 p-3">
+							<Inline justify="between" gap="sm" class="rounded-md bg-muted/40 p-3">
 								<span class="text-sm font-medium">
 									{multiple ? `Progress #${index + 1}` : 'Current Progress'}
 								</span>
-								<div class="flex items-center gap-2">
+								<Inline gap="sm">
 									<Progress value={progress} class="h-2 w-20" />
 									<span class="text-sm font-semibold">{progress}%</span>
-								</div>
-							</div>
+								</Inline>
+							</Inline>
 						{/each}
-					</div>
+					</Stack>
 				{:else}
 					<div class="py-4 text-center">
 						<Icon icon="lucide:trending-up" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
 						<p class="text-sm text-muted-foreground">No progress assigned</p>
 					</div>
 				{/if}
-			</div>
+			</Stack>
 		</Popover.Content>
 	</Popover.Root>
 
@@ -363,26 +365,26 @@
 		</Popover.Trigger>
 
 		<Popover.Content class="p-0" align="start" sideOffset={4}>
-			<div class="space-y-4 p-1">
+			<Stack gap="md" class="p-1">
 				{#if editingProgress.length === 0}
 					<!-- Empty state -->
-					<div class="p-4 py-8 text-center">
-						<Icon icon="lucide:trending-up" class="mx-auto mb-3 h-12 w-12 text-muted-foreground" />
-						<h4 class="mb-1 font-medium text-foreground">No progress configured</h4>
-						<p class="mb-4 text-sm text-muted-foreground">
+					<Stack gap="sm" class="p-4 py-8 text-center">
+						<Icon icon="lucide:trending-up" class="mx-auto h-12 w-12 text-muted-foreground" />
+						<h4 class="font-medium text-foreground">No progress configured</h4>
+						<p class="text-sm text-muted-foreground">
 							Add your first progress value to get started
 						</p>
 						<Button variant="outline" onclick={addProgress} class="border-dashed" {disabled}>
 							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
 							Add first progress
 						</Button>
-					</div>
+					</Stack>
 				{:else}
 					<!-- Progress list -->
-					<div class="space-y-3 p-4">
+					<Stack gap="sm" class="p-4">
 						{#each editingProgress as progress, index (index)}
 							{@const entryState = getEntryState(progress)}
-							<div class="flex items-center gap-3">
+							<Inline gap="md">
 								<!-- Visual indicator for entry state -->
 								<div class="flex shrink-0">
 									{#if entryState === 'valid'}
@@ -393,7 +395,7 @@
 								</div>
 
 								<!-- Progress Input -->
-								<div class="flex flex-1 items-center gap-2">
+								<Inline gap="sm" class="flex-1">
 									<span class="w-8 text-sm text-muted-foreground">#{index + 1}</span>
 
 									<!-- Draggable Progress Bar -->
@@ -420,7 +422,7 @@
 
 									<span class="w-12 text-sm font-medium text-secondary-foreground">{progress}%</span
 									>
-								</div>
+								</Inline>
 
 								<!-- Remove button -->
 								{#if editingProgress.length > 1}
@@ -434,7 +436,7 @@
 										<Icon icon="lucide:x" class="h-4 w-4" />
 									</Button>
 								{/if}
-							</div>
+							</Inline>
 						{/each}
 
 						<!-- Add button -->
@@ -447,9 +449,9 @@
 							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
 							Add progress
 						</Button>
-					</div>
+					</Stack>
 				{/if}
-			</div>
+			</Stack>
 		</Popover.Content>
 	</Popover.Root>
 
@@ -457,9 +459,9 @@
 	<!-- SINGLE EDIT MODE: Simple progress picker -->
 	<!-- ============================================================================ -->
 {:else}
-	<div class={cn('space-y-3', className)} {style}>
+	<Stack gap="sm" class={className} {style}>
 		<!-- Single draggable progress bar -->
-		<div class="flex items-center gap-3">
+		<Inline gap="md">
 			<!-- Draggable Progress Bar -->
 			<div
 				class="flex-1 cursor-pointer select-none"
@@ -497,6 +499,6 @@
 					<Icon icon="lucide:x" class="h-4 w-4" />
 				</Button>
 			{/if}
-		</div>
-	</div>
+		</Inline>
+	</Stack>
 {/if}

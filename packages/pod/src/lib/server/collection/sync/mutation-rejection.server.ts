@@ -1,4 +1,4 @@
-import { HttpError } from '../http_error.js';
+import { isPodHttpError } from '$lib/runtime/http.js';
 
 /** The rejection half of a `/_runtime/sync/mutate` result, without the `clientId`/`status` frame. */
 export type MutationRejection = {
@@ -24,7 +24,7 @@ export type MutationRejection = {
  * because only a deliberately authored message is ever put in the field the UI reads.
  */
 export function mutationRejection(err: unknown): MutationRejection {
-	if (!(err instanceof HttpError)) return { reason: 'INTERNAL_ERROR' };
+	if (!isPodHttpError(err)) return { reason: 'INTERNAL_ERROR' };
 
 	const code = typeof err.body.code === 'string' ? err.body.code : undefined;
 	const reason = code ?? (err.status === 403 ? 'PERMISSION_DENIED' : `HTTP_${err.status}`);
@@ -44,5 +44,5 @@ export function mutationRejection(err: unknown): MutationRejection {
 
 /** True when the failure is the server's own, not an answer written for the caller. */
 export function isUnexpectedMutationError(err: unknown): boolean {
-	return !(err instanceof HttpError) || err.status >= 500;
+	return !isPodHttpError(err) || err.status >= 500;
 }

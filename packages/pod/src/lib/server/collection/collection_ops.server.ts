@@ -248,7 +248,7 @@ export function createRecord(
 	ctx: ProvisionedContext,
 	collection: string,
 	input: Record<string, unknown>,
-	options?: { isElevated?: boolean }
+	options?: { isElevated?: boolean; recordId?: string }
 ): Promise<Record<string, unknown>> {
 	return withConstraintErrors(collection, () =>
 		createRecordUnguarded(ctx, collection, input, options)
@@ -259,7 +259,7 @@ async function createRecordUnguarded(
 	ctx: ProvisionedContext,
 	collection: string,
 	input: Record<string, unknown>,
-	options?: { isElevated?: boolean }
+	options?: { isElevated?: boolean; recordId?: string }
 ): Promise<Record<string, unknown>> {
 	const behavior = getWorkspaceCollection(collection);
 	if (!options?.isElevated && !allowsMutation(behavior, 'create')) {
@@ -275,6 +275,7 @@ async function createRecordUnguarded(
 			payload = hookResult;
 		}
 	}
+	if (options?.recordId) payload[SYSTEM_COLUMN_NAMES.PKEY] = options.recordId;
 
 	const metadata = collectionMetadata(ctx, collection);
 	const mutationContext = {

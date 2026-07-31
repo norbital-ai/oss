@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { switchOrganization } from './mount-client.js';
+	import { switchOrganization } from './organization-switch.js';
 	import Icon from '@iconify/svelte';
 	import { onDestroy } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -37,7 +37,7 @@
 	} from '@norbital-ai/ui/workspace-shell';
 	import { FEATURE_COLOR_STYLES, type FeatureColorKey } from '@norbital-ai/ui/feature-colors';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Bound, Cover } from '@norbital-ai/ui/layout';
+	import { Bound, Center, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon, productIconNameFromReference } from '@norbital-ai/ui/product-icon';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { WorkspaceFileUploadClient } from '$lib/client/workspace-file-upload.svelte.js';
@@ -298,6 +298,7 @@
 
 {#snippet activeAppBanner()}
 	{#if activeAppManifest?.banner}
+		<!-- stupidity:allow UI5 -- organization hero banner clips its backdrop image -->
 		<div class="relative h-[clamp(8rem,24vh,18rem)] w-full overflow-clip border-b bg-muted">
 			<img src={activeAppManifest.banner} alt="" class="size-full object-cover" />
 		</div>
@@ -326,11 +327,11 @@
 		window.location.assign('/login');
 	}}
 >
-	<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+	<Bound size="full" clip class="relative flex-1">
 		<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
 		{#each mountedHostPlugins as plugin (plugin.key)}
 			<div
-				class={activeHostPlugin?.key === plugin.key ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}
+				class={activeHostPlugin?.key === plugin.key ? 'h-full min-h-0 min-w-0' : 'hidden'}
 				aria-hidden={activeHostPlugin?.key === plugin.key ? undefined : 'true'}
 				inert={activeHostPlugin?.key === plugin.key ? undefined : true}
 			>
@@ -343,129 +344,130 @@
 			</div>
 		{/each}
 		{#if currentPath === '/'}
-			<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-				<div class="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 sm:p-6 lg:p-8">
-					<header class="flex flex-col gap-1">
-						<h1 class="text-base font-semibold text-foreground">{data.organization.name}</h1>
-						<p class="text-xs text-muted-foreground">
-							Pick an application or platform tool to get started.
-						</p>
-					</header>
+			<Scroll name="Workspace overview" axis="y">
+				<Center measure="wide" class="p-4 sm:p-6 lg:p-8">
+					<Stack gap="xl">
+						<Stack as="header" gap="xs">
+							<h1 class="text-base font-semibold text-foreground">{data.organization.name}</h1>
+							<p class="text-xs text-muted-foreground">
+								Pick an application or platform tool to get started.
+							</p>
+						</Stack>
 
-					<section class="flex min-w-0 flex-col gap-2">
-						<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							Applications
-						</h2>
-						{#if overviewApplications.length === 0}
-							<div
-								class="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed p-8"
-							>
-								<Icon icon="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
-								<span class="text-xs text-muted-foreground">No applications yet</span>
-								<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
-									Use Workspace Studio to author apps in the tenant workspace.
-								</span>
-							</div>
-						{:else}
-							<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-								{#each overviewApplications as app (app.key)}
-									<a
-										href={app.href}
-										class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-										onclick={(event) => {
-											event.preventDefault();
-											navigate(app.href);
-										}}
-									>
-										{#if app.thumbnail}
-											<div class="aspect-[16/9] w-full overflow-hidden border-b bg-muted">
-												<img
-													src={app.thumbnail}
-													alt=""
-													loading="lazy"
-													decoding="async"
-													class="size-full object-cover"
-												/>
-											</div>
-										{/if}
-										<div class="flex items-start gap-2.5 p-3">
-											<div
-												class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
-											>
-												<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
-											</div>
-											<div class="min-w-0 flex-1">
-												<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
-												{#if app.description}
-													<p class="mt-0.5 line-clamp-2 text-micro leading-4 text-muted-foreground">
-														{app.description}
-													</p>
-												{/if}
-											</div>
-										</div>
-									</a>
-								{/each}
-							</div>
-						{/if}
-					</section>
-
-					{#if navigationModel.system.length > 0}
-						<section class="flex min-w-0 flex-col gap-2">
+						<Stack gap="xs">
 							<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-								Platform
+								Applications
 							</h2>
-							<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-								{#each navigationModel.system as item (item.key)}
-									{@const featureStyles = FEATURE_COLOR_STYLES[pluginFeatureKey(item.key)]}
-									{@const productIconName = productIconNameFromReference(item.icon)}
-									<a
-										href={item.href}
-										class="group min-w-0 rounded-lg border bg-card p-3 shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-										onclick={(event) => {
-											event.preventDefault();
-											navigate(item.href);
-										}}
-									>
-										<div class="flex items-start gap-2.5">
-											<div
-												class={cn(
-													'flex size-8 shrink-0 items-center justify-center rounded-md border shadow-xs',
-													featureStyles.iconWrapperClass
-												)}
-											>
-												{#if productIconName}
-													<ProductIcon
-														name={productIconName}
-														class={cn('size-4', featureStyles.iconClass)}
+							{#if overviewApplications.length === 0}
+								<Stack
+									gap="xs"
+									class="items-center justify-center rounded-lg border border-dashed p-8"
+								>
+									<Icon icon="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
+									<span class="text-xs text-muted-foreground">No applications yet</span>
+									<span class="max-w-72 text-center text-micro text-muted-foreground">
+										Use Workspace Studio to author apps in the tenant workspace.
+									</span>
+								</Stack>
+							{:else}
+								<Grid minimum="card" gap="sm">
+									{#each overviewApplications as app (app.key)}
+										<a
+											href={app.href}
+											class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+											onclick={(event) => {
+												event.preventDefault();
+												navigate(app.href);
+											}}
+										>
+											{#if app.thumbnail}
+												<div class="aspect-[16/9] w-full overflow-hidden border-b bg-muted">
+													<img
+														src={app.thumbnail}
+														alt=""
+														loading="lazy"
+														decoding="async"
+														class="size-full object-cover"
 													/>
-												{:else}
-													<IconWrapper
-														name={item.icon ?? featureStyles.icon}
-														class={cn('size-4', featureStyles.iconClass)}
-													/>
-												{/if}
-											</div>
-											<div class="min-w-0 flex-1">
-												<p class="truncate text-xs font-semibold text-foreground">{item.label}</p>
-												<p class="mt-0.5 line-clamp-2 text-micro leading-4 text-muted-foreground">
-													{platformDescriptions[item.key] ?? 'Platform tool provided by the host.'}
-												</p>
-											</div>
-										</div>
-									</a>
-								{/each}
-							</div>
-						</section>
-					{/if}
-				</div>
-			</div>
+												</div>
+											{/if}
+											<Inline align="start" gap="sm" class="p-3">
+												<div
+													class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
+												>
+													<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
+												</div>
+												<Stack gap="none" class="flex-1">
+													<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
+													{#if app.description}
+														<p class="line-clamp-2 text-micro leading-4 text-muted-foreground">
+															{app.description}
+														</p>
+													{/if}
+												</Stack>
+											</Inline>
+										</a>
+									{/each}
+								</Grid>
+							{/if}
+						</Stack>
+
+						{#if navigationModel.system.length > 0}
+							<Stack gap="xs">
+								<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+									Platform
+								</h2>
+								<Grid minimum="card" gap="sm">
+									{#each navigationModel.system as item (item.key)}
+										{@const featureStyles = FEATURE_COLOR_STYLES[pluginFeatureKey(item.key)]}
+										{@const productIconName = productIconNameFromReference(item.icon)}
+										<a
+											href={item.href}
+											class="group min-w-0 rounded-lg border bg-card p-3 shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+											onclick={(event) => {
+												event.preventDefault();
+												navigate(item.href);
+											}}
+										>
+											<Inline align="start" gap="sm">
+												<div
+													class={cn(
+														'flex size-8 shrink-0 items-center justify-center rounded-md border shadow-xs',
+														featureStyles.iconWrapperClass
+													)}
+												>
+													{#if productIconName}
+														<ProductIcon
+															name={productIconName}
+															class={cn('size-4', featureStyles.iconClass)}
+														/>
+													{:else}
+														<IconWrapper
+															name={item.icon ?? featureStyles.icon}
+															class={cn('size-4', featureStyles.iconClass)}
+														/>
+													{/if}
+												</div>
+												<Stack gap="none" class="flex-1">
+													<p class="truncate text-xs font-semibold text-foreground">{item.label}</p>
+													<p class="line-clamp-2 text-micro leading-4 text-muted-foreground">
+														{platformDescriptions[item.key] ??
+															'Platform tool provided by the host.'}
+													</p>
+												</Stack>
+											</Inline>
+										</a>
+									{/each}
+								</Grid>
+							</Stack>
+						{/if}
+					</Stack>
+				</Center>
+			</Scroll>
 		{:else if !activeHostPlugin && activeApp && accessible}
-			<Bound size="full" clip class="flex-1" data-workspace-app-region>
+			<Bound size="full" clip data-workspace-app-region>
 				<Cover gap="none" top={activeAppBanner}>
-					<div
-						data-workspace-app-surface
-						class="h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:pod-app] [container-type:inline-size]"
-					>
+					<Bound size="full" clip data-workspace-app-surface class="[container-name:pod-app]">
 						{#await activeApp}
 							<div class="grid h-full min-h-0 place-items-center text-sm text-muted-foreground">
 								Loading application…
@@ -477,7 +479,7 @@
 								{error instanceof Error ? error.message : String(error)}
 							</div>
 						{/await}
-					</div>
+					</Bound>
 				</Cover>
 			</Bound>
 		{:else if !activeHostPlugin && appName && !accessible}
@@ -489,7 +491,7 @@
 				Workspace application not found
 			</div>
 		{/if}
-	</div>
+	</Bound>
 </WorkspaceShell>
 
 <Sheet.Root open={detailSheetOpen} onOpenChange={(open) => !open && closeDetailSheet()}>
@@ -509,7 +511,7 @@
 			closeDetailSheet();
 		}}
 	>
-		<Bound size="full" clip class="relative w-full">
+		<Bound size="full" clip class="relative">
 			<DetailSurfaceStack
 				stack={detailStack}
 				resolveSurface={(routeKey: string, parentRouteKey?: string) =>

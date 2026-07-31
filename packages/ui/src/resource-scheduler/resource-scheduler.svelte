@@ -5,6 +5,7 @@
 	import Icon from '@iconify/svelte';
 	import { Checkbox } from '#lib/checkbox';
 	import { cn } from '#lib/utils';
+	import { Cover, Inline, Scroll } from '#lib/layout';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import type {
 		ResourceSchedulerChange,
@@ -74,7 +75,7 @@
 	const rangeStart = $derived(days[0]?.start ?? anchorDate);
 	const rangeEnd = $derived(days.at(-1)?.end ?? anchorDate);
 	const selected = $derived(new Set(selectedItemIds));
-	let bodyElement: HTMLDivElement | null = $state(null);
+	let bodyElement: HTMLElement | null = $state(null);
 	let headerTimelineElement: HTMLDivElement | null = $state(null);
 	let drag: DragState | null = $state(null);
 
@@ -301,17 +302,13 @@
 	}
 </script>
 
-<div
-	class={cn(
-		'grid min-h-64 min-w-0 grid-rows-[40px_1fr] overflow-hidden rounded-md border bg-card',
-		className
-	)}
->
+{#snippet schedulerHeader()}
 	<div
-		class="grid border-b bg-muted/80"
+		class="grid h-10 border-b bg-muted/80"
 		style={`grid-template-columns:${resourceWidth}px minmax(0,1fr)`}
 	>
 		<div class="z-20 flex items-center border-r px-3 text-xs font-semibold">{resourceLabel}</div>
+		<!-- stupidity:allow UI5 -- scheduler header timeline clips to the header row -->
 		<div bind:this={headerTimelineElement} class="overflow-hidden">
 			<div class="flex h-full" style={`width:${timelineWidth}px`}>
 				{#each days as day (day.key)}
@@ -325,8 +322,21 @@
 			</div>
 		</div>
 	</div>
+{/snippet}
 
-	<div bind:this={bodyElement} class="relative min-h-0 overflow-auto" onscroll={syncHeaderScroll}>
+<Cover
+	as="div"
+	gap="none"
+	class={cn('min-h-64 min-w-0 rounded-md border bg-card', className)}
+	top={schedulerHeader}
+>
+	<Scroll
+		axis="both"
+		name="Resource schedule"
+		class="relative"
+		bind:ref={bodyElement}
+		onscroll={syncHeaderScroll}
+	>
 		<div
 			class="relative"
 			style={`height:${virtualizer.totalSize}px;width:${totalWidth}px;min-width:100%`}
@@ -346,8 +356,9 @@
 						onpointerup={finishCreate}
 						onpointercancel={() => (drag = null)}
 					>
-						<div
-							class="sticky left-0 z-20 flex h-full items-center gap-2 border-r bg-card px-3"
+						<Inline
+							gap="sm"
+							class="sticky left-0 z-20 h-full border-r bg-card px-3"
 							style={`width:${resourceWidth}px`}
 						>
 							{#if onSelectionChange}
@@ -368,7 +379,7 @@
 										</p>{/if}
 								{/if}
 							</div>
-						</div>
+						</Inline>
 
 						<div
 							class="absolute inset-y-0"
@@ -402,48 +413,51 @@
 												{/if}
 											{/if}
 										</button>
-										<div class="mt-1 flex min-w-0 items-center gap-1 overflow-hidden">
-											{#each visibleItems as item (item.id)}
-												<button
-													type="button"
-													class={cn(
-														'flex h-7 min-w-0 touch-none items-center gap-1 rounded-sm border bg-background px-1.5 text-micro shadow-xs focus-visible:ring-2 focus-visible:ring-ring',
-														item.editable === false
-															? 'cursor-default text-muted-foreground'
-															: 'cursor-grab active:cursor-grabbing',
-														selected.has(item.id) && 'ring-2 ring-ring'
-													)}
-													data-scheduler-item={item.id}
-													aria-pressed={selected.has(item.id)}
-													aria-disabled={item.editable === false}
-													title={item.lockedReason ?? item.label}
-													disabled={disabled || item.disabled}
-													onclick={(event) => {
-														event.stopPropagation();
-														onItemActivate?.(item);
-													}}
-													onkeydown={(event) => handleItemKeydown(event, item)}
-													onpointerdown={(event) => beginItemDrag(event, item, 'move')}
-													onpointermove={updateItemDrag}
-													onpointerup={() => finishItemDrag(item)}
-													onpointercancel={() => (drag = null)}
-												>
-													{#if item.editable === false}<Icon
-															icon="lucide:lock-keyhole"
-															class="size-3 shrink-0"
-														/>{/if}
-													<span class="truncate">
-														{#if itemContent}{@render itemContent(item)}{:else}{item.label}{/if}
-													</span>
-												</button>
-											{/each}
-											{#if overflow > 0}
-												<button
-													type="button"
-													class="h-7 shrink-0 rounded-sm px-1 text-micro font-medium text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-													onclick={() => onCellActivate?.(cell)}>+{overflow}</button
-												>
-											{/if}
+										<!-- stupidity:allow UI5 -- scheduler day-cell chip row clips to the cell -->
+										<div class="min-w-0 overflow-hidden">
+											<Inline gap="xs" class="mt-1">
+												{#each visibleItems as item (item.id)}
+													<button
+														type="button"
+														class={cn(
+															'flex h-7 min-w-0 touch-none items-center gap-1 rounded-sm border bg-background px-1.5 text-micro shadow-xs focus-visible:ring-2 focus-visible:ring-ring',
+															item.editable === false
+																? 'cursor-default text-muted-foreground'
+																: 'cursor-grab active:cursor-grabbing',
+															selected.has(item.id) && 'ring-2 ring-ring'
+														)}
+														data-scheduler-item={item.id}
+														aria-pressed={selected.has(item.id)}
+														aria-disabled={item.editable === false}
+														title={item.lockedReason ?? item.label}
+														disabled={disabled || item.disabled}
+														onclick={(event) => {
+															event.stopPropagation();
+															onItemActivate?.(item);
+														}}
+														onkeydown={(event) => handleItemKeydown(event, item)}
+														onpointerdown={(event) => beginItemDrag(event, item, 'move')}
+														onpointermove={updateItemDrag}
+														onpointerup={() => finishItemDrag(item)}
+														onpointercancel={() => (drag = null)}
+													>
+														{#if item.editable === false}<Icon
+																icon="lucide:lock-keyhole"
+																class="size-3 shrink-0"
+															/>{/if}
+														<span class="truncate">
+															{#if itemContent}{@render itemContent(item)}{:else}{item.label}{/if}
+														</span>
+													</button>
+												{/each}
+												{#if overflow > 0}
+													<button
+														type="button"
+														class="h-7 shrink-0 rounded-sm px-1 text-micro font-medium text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+														onclick={() => onCellActivate?.(cell)}>+{overflow}</button
+													>
+												{/if}
+											</Inline>
 										</div>
 									</div>
 								{/each}
@@ -526,5 +540,5 @@
 				{/if}
 			{/each}
 		</div>
-	</div>
-</div>
+	</Scroll>
+</Cover>

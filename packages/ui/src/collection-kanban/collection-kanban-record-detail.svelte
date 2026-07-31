@@ -10,6 +10,7 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { resolveRecordLabel } from '@norbital-ai/platform-utils/manifest/context';
 	import { humanize } from '@norbital-ai/std/string';
+	import { Grid } from '#lib/layout';
 	import { CollectionForm } from '../collection-form/index.js';
 	import { DataRenderer } from '../data-renderer/index.js';
 	import CollectionRecordDetailEmpty from '../collection-table/collection-record-detail-empty.svelte';
@@ -87,7 +88,7 @@
 	{#if approvalLoading}
 		<p class="text-sm text-muted-foreground">Loading approval payload…</p>
 	{:else if approvalRequest}
-		<dl class="grid gap-4 sm:grid-cols-2">
+		<Grid as="dl" minimum="card" gap="md">
 			{#each Object.entries(approvalRequest) as [key, value] (key)}
 				<div class="min-w-0 border-b pb-3">
 					<dt class="text-xs font-medium text-muted-foreground">{humanize(key)}</dt>
@@ -96,7 +97,7 @@
 					</dd>
 				</div>
 			{/each}
-		</dl>
+		</Grid>
 	{:else}
 		<CollectionRecordDetailEmpty
 			icon="lucide:shield-check"
@@ -108,7 +109,7 @@
 
 {#snippet rawDetails()}
 	{#if activeRecord}
-		<dl class="grid gap-3 sm:grid-cols-2">
+		<Grid as="dl" minimum="card" gap="sm">
 			{#each definition.fields as field (field.name)}
 				<div class="min-w-0 rounded-lg border bg-card p-4">
 					<dt class="text-xs font-medium text-muted-foreground">
@@ -119,7 +120,7 @@
 					</dd>
 				</div>
 			{/each}
-		</dl>
+		</Grid>
 	{/if}
 {/snippet}
 

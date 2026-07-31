@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Scroll, Stack } from '#lib/layout';
 	import { pixelDrag } from '#lib/utils/pixel-drag.js';
 	import {
 		assignLanes,
@@ -130,10 +131,10 @@
 	const overlayWidth = $derived(colWidth - 4);
 </script>
 
-<div class={cn('flex flex-col flex-1 min-h-0', className)}>
+<Stack gap="none" class={cn('flex-1', className)}>
 	<AllDaySection {events} columnCount={7} {colWidth} onbarclick={onboxclick} {eventContent} />
 
-	<div class="flex-1 overflow-y-auto bg-background relative">
+	<Scroll axis="y" name="Week events" class="bg-background relative">
 		<div style="height: {totalHeight}px; position: relative; min-width: {7 * colWidth}px">
 			{#each Array.from({ length: 7 }) as _, col (col)}
 				{@const colDate = getColumnDate(weekStart, col)}
@@ -250,5 +251,5 @@
 				></div>
 			{/if}
 		</div>
-	</div>
-</div>
+	</Scroll>
+</Stack>

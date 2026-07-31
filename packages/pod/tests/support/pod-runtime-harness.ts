@@ -10,6 +10,27 @@ import { startPostgres, type PgHarness } from './pg-harness.js';
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js');
 
+function runPodCommand(command: 'build' | 'migrate', cwd: string, env: NodeJS.ProcessEnv): void {
+	try {
+		execFileSync('node', [POD_BIN, command], {
+			cwd,
+			env,
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'pipe']
+		});
+	} catch (cause) {
+		const failure = cause as { stdout?: string | Buffer; stderr?: string | Buffer };
+		const detail = [failure.stdout, failure.stderr]
+			.map((value) => value?.toString().trim())
+			.filter(Boolean)
+			.join('\n');
+		throw new Error(
+			`pod ${command} failed for ${path.relative(REPO_ROOT, cwd)}${detail ? `\n${detail}` : ''}`,
+			{ cause }
+		);
+	}
+}
+
 export type TenantRequestInit = {
 	readonly method: 'GET' | 'POST';
 	readonly path: string; // e.g. "sync/subscribe"
@@ -36,7 +57,16 @@ export type PodRuntimeHarness = {
 	stop(): Promise<void>;
 };
 
-type HandleTenantRequest = (request: Request, bindings: { db: HostDbBinding }) => Promise<Response>;
+type HandleTenantRequest = (request: Request, bindings: RuntimeBindings) => Promise<Response>;
+
+/**
+ * What the host grants this runtime.
+ *
+ * `db` is always bound. Everything else is opt-in per test, which is the point: a facility the
+ * host did not grant must fail at the point of use, and a test that silently received one would
+ * be proving the wrong thing.
+ */
+export type RuntimeBindings = { db: HostDbBinding } & Record<string, unknown>;
 
 type HostDbBinding = {
 	query(
@@ -176,9 +206,15 @@ async function loadSchemaSql(templateRoot: string): Promise<string> {
 /**
  * Boot a full pod runtime in-process against a throwaway Postgres 18: build + migrate the template,
  * load the built `handleTenantRequest`, and expose an authed `request()` that drives `/_runtime/*`
- * with a forged base scope (no HTTP server, no facility gate — only the `db` facility is bound).
+ * with a forged base scope (no HTTP server, no facility gate).
+ *
+ * `db` is the only facility bound by default. Pass `facilities` to grant more; a test that wants to
+ * prove what happens without one simply does not name it.
  */
-export async function bootPodRuntime(template = 'construction'): Promise<PodRuntimeHarness> {
+export async function bootPodRuntime(
+	template = 'construction',
+	options?: { readonly facilities?: Readonly<Record<string, unknown>> }
+): Promise<PodRuntimeHarness> {
 	const templateRoot = path.join(REPO_ROOT, 'template_workspaces', template);
 	const pg: PgHarness = await startPostgres();
 	const env = {
@@ -198,11 +234,11 @@ export async function bootPodRuntime(template = 'construction'): Promise<PodRunt
 	// down on the way out rather than leaving it — and its data volume — behind.
 	let handleTenantRequest: HandleTenantRequest;
 	let pool: Pool;
-	let binding: ReturnType<typeof createPgBinding>;
+	let bindings: RuntimeBindings;
 	let schemaSql: string;
 	try {
-		execFileSync('node', [POD_BIN, 'build'], { cwd: templateRoot, env, stdio: 'ignore' });
-		execFileSync('node', [POD_BIN, 'migrate'], { cwd: templateRoot, env, stdio: 'ignore' });
+		runPodCommand('build', templateRoot, env);
+		runPodCommand('migrate', templateRoot, env);
 
 		const runtimePath = path.join(
 			templateRoot,
@@ -221,7 +257,7 @@ export async function bootPodRuntime(template = 'construction'): Promise<PodRunt
 		handleTenantRequest = runtimeModule.handlePodRequest;
 
 		pool = new Pool({ connectionString: pg.connectionString, max: 12 });
-		binding = createPgBinding(pool);
+		bindings = { db: createPgBinding(pool), ...(options?.facilities ?? {}) };
 		schemaSql = await loadSchemaSql(templateRoot);
 	} catch (err) {
 		pg.stop();
@@ -249,11 +285,11 @@ export async function bootPodRuntime(template = 'construction'): Promise<PodRunt
 				signal: init.signal,
 				...(init.body ? { body: init.body } : {})
 			});
-			return handleTenantRequest(request, { db: binding });
+			return handleTenantRequest(request, bindings);
 		},
 		async serveHttp(identity) {
 			const server = createServer((req, res) => {
-				void handleNodeRequest(req, res, identity, handleTenantRequest, binding).catch(
+				void handleNodeRequest(req, res, identity, handleTenantRequest, bindings).catch(
 					(cause: unknown) => {
 						if (!res.headersSent) res.statusCode = 500;
 						res.end(String(cause));
@@ -280,7 +316,7 @@ async function handleNodeRequest(
 	res: ServerResponse,
 	identity: Identity,
 	handle: HandleTenantRequest,
-	binding: HostDbBinding
+	bindings: RuntimeBindings
 ): Promise<void> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -299,7 +335,7 @@ async function handleNodeRequest(
 			? {}
 			: { body: Buffer.concat(chunks) })
 	});
-	const response = await handle(request, { db: binding });
+	const response = await handle(request, bindings);
 	res.statusCode = response.status;
 	response.headers.forEach((value, name) => res.setHeader(name, value));
 	if (!response.body) {

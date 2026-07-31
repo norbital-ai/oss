@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '../workspace-shell/workspace-shell.types.js';
 	import type { FileTreeEntry, FileTreeEntryBadge, FileTreePresencePeer } from './file-tree.types';
@@ -116,7 +117,7 @@
 
 	const deleteClass = $derived(
 		cn(
-			'mr-1 shrink-0 self-center rounded p-1 opacity-0 transition-opacity group-hover/file-row:opacity-100',
+			'shrink-0 self-center rounded p-1 opacity-0 transition-opacity group-hover/file-row:opacity-100',
 			isDark
 				? 'text-[#858585] hover:bg-[#3c3c3c] hover:text-[#f85149]'
 				: 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive',
@@ -126,8 +127,10 @@
 	);
 </script>
 
-<div
-	class="group/file-row relative flex w-full min-w-0 items-stretch"
+<Inline
+	gap="xs"
+	align="stretch"
+	class="group/file-row relative min-w-0"
 	data-file-tree-selected={isSelected ? 'true' : undefined}
 	role="treeitem"
 	aria-selected={isSelected}
@@ -163,7 +166,7 @@
 
 		{#snippet collaborators()}
 			{#if presencePeers.length > 0}
-				<span class="flex shrink-0 items-center gap-0.5" aria-label="Active collaborators">
+				<Inline as="span" gap="xs" class="shrink-0" aria-label="Active collaborators">
 					{#each presencePeers.slice(0, 3) as peer, index (`${peer.label}:${index}`)}
 						<span
 							class="size-2 rounded-full ring-1 ring-background"
@@ -174,7 +177,7 @@
 					{#if overflowCount > 0}
 						<span class={overflowClass}>+{overflowCount}</span>
 					{/if}
-				</span>
+				</Inline>
 			{/if}
 		{/snippet}
 
@@ -204,4 +207,4 @@
 			<Icon icon="lucide:trash-2" class="size-3.5" />
 		</button>
 	{/if}
-</div>
+</Inline>

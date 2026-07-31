@@ -129,6 +129,16 @@ export const runtimeRunRequestSchema = z.union([
 			triggeredBy: AutomationRunTriggerSchema.optional()
 		})
 		.strict(),
+	// The host's drain of collection-event automations. Cron automations name themselves; these are
+	// discovered from the change feed, so the host asks the runtime to advance rather than guessing
+	// which automation to run.
+	z
+		.object({
+			kind: z.literal('automation'),
+			action: z.literal('pump'),
+			limit: z.number().int().positive().max(1000).optional()
+		})
+		.strict(),
 	z.object({
 		kind: z.literal('outbox'),
 		action: z.literal('claim'),
@@ -393,11 +403,16 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 				collectionName: request.collectionName,
 				context: request.context
 			});
-		case 'automation':
+		case 'automation': {
+			if ('action' in request) {
+				const { pumpAutomations } = await import('./automation-dispatch.server.js');
+				return pumpAutomations(getWorkspace({ provision: true }), request.limit);
+			}
 			return runAutomation({
 				automationName: request.automationName,
 				triggeredBy: request.triggeredBy
 			});
+		}
 		case 'integration': {
 			const api = createBeforeApi();
 			return request.direction === 'receive'

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { downloadCollectionExport } from '@norbital-ai/pod/client';
-	import { Cover, Grid } from '@norbital-ai/ui/layout';
+	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
@@ -110,23 +110,23 @@
 
 {#snippet overview()}
 	<Grid minimum="card">
-		<section class="space-y-4" aria-labelledby="payroll-cycles-heading">
-			<div class="flex flex-wrap items-end justify-between gap-3">
-				<div>
+		<Stack as="section" gap="md" aria-labelledby="payroll-cycles-heading">
+			<Inline align="end" justify="between" gap="md">
+				<Stack gap="xs">
 					<h2 id="payroll-cycles-heading" class="text-lg font-semibold">Payroll cycles</h2>
 					<p class="text-sm text-muted-foreground">
 						Pay dates from each company's pay day. Late means the pay date passed without a paid
 						run.
 					</p>
-				</div>
-				<p class="text-sm text-muted-foreground">
+				</Stack>
+				<p class="shrink-0 text-sm text-muted-foreground">
 					{#if lateCount > 0}
 						<span class="font-medium text-destructive">{lateCount} late</span>
 						·
 					{/if}
 					{draftRunCount} draft run{draftRunCount === 1 ? '' : 's'}
 				</p>
-			</div>
+			</Inline>
 			<div class="rounded-lg border">
 				{#if companiesQuery.loading || payrollRunsQuery.loading}
 					<div class="p-5 text-sm text-muted-foreground">Loading payroll cycles…</div>
@@ -182,8 +182,8 @@
 					</table>
 				{/if}
 			</div>
-		</section>
-		<div class="space-y-4">
+		</Stack>
+		<Stack gap="md">
 			<ApprovalSummaryTable
 				title="Payroll decisions"
 				asOfDate={analytics.as_of_date}
@@ -191,7 +191,7 @@
 				pendingLabel="Yet to approve"
 				note="Draft runs and runs held by an approval request count as yet to approve; paid runs count as approved. Speed is the mean completed workflow duration this year."
 			/>
-		</div>
+		</Stack>
 	</Grid>
 {/snippet}
 
@@ -272,10 +272,10 @@
 			<Column name="pay_date" label="Pay date" />
 		{/snippet}
 		{#snippet ListCard(run)}
-			<div class="flex items-start justify-between gap-3">
+			<Inline align="start" justify="between" gap="sm">
 				<p class="truncate font-medium">{run.period}</p>
 				<span class="shrink-0 text-xs text-muted-foreground">{run.lifecycle}</span>
-			</div>
+			</Inline>
 			<p class="mt-1 truncate text-sm text-muted-foreground">
 				{companyNamesById.get(run.company_id) ?? 'Company'} · pays {run.pay_date}
 			</p>

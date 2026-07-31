@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
-import { startPostgres, dockerAvailable, type PgHarness } from '../support/pg-harness.js';
+import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema } from '../support/pod-schema.js';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
 import type { TScopeRequestor } from '$lib/shared/scope.js';
@@ -19,7 +19,7 @@ import type { TScopeRequestor } from '$lib/shared/scope.js';
  * row under the lock, decide from that — is what makes the second write see the first.
  */
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
@@ -58,6 +58,7 @@ function contextOn(client: PoolClient): ProvisionedContext {
 	} as unknown as TenantDbClient;
 	return {
 		tenantDb,
+		manifestCtx: { getRelationshipsForCollection: () => [] },
 		baseScope: { requestor: { norbital_id: USER_ID, team_members: [{ norbital_id: TEAM_ID }] } }
 	} as unknown as ProvisionedContext;
 }
@@ -82,7 +83,7 @@ function pendingStep(id: string, name: string): Step {
 	};
 }
 
-describe.skipIf(!hasDocker)('Approval decisions are computed from the locked row', () => {
+describe('Approval decisions are computed from the locked row', () => {
 	let pg: PgHarness;
 	let pool: Pool;
 	let client: PoolClient;

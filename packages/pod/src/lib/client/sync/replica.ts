@@ -1,10 +1,5 @@
 import { PodSyncClient, type PgliteLike } from './pod-sync-client.js';
-import {
-	disableClientSync,
-	enableClientSync,
-	getClientSync,
-	type ClientSync
-} from './client-sync.js';
+import { enableClientSync, getClientSync, type ClientSync } from './client-sync.js';
 import type { SyncBootstrap, SyncFetch } from './types.js';
 import { withTimeout } from '@norbital-ai/std';
 
@@ -116,8 +111,8 @@ type ReplicaMode = 'shared' | 'tab';
  * How long to wait for the cross-tab replica before falling back to a tab-local one.
  *
  * A cold boot here is PGlite's WASM download plus IndexedDB open inside a worker that is starting
- * for the first time, and it competes with whatever the page is doing — an organization switch is
- * unmounting and remounting a tree while this runs. The bound exists so a genuinely broken
+ * for the first time, and it competes with whatever the page is doing. The bound exists so a
+ * genuinely broken
  * SharedWorker cannot hang the workspace, not to police a slow one, so it is generous.
  */
 const SHARED_WORKER_BOOTSTRAP_TIMEOUT_MS = 30_000;
@@ -247,22 +242,6 @@ export function clientSyncReady(): Promise<ClientSync | null> {
 	return bootstrapping ?? Promise.resolve(null);
 }
 
-/**
- * Close this tenant's replica and forget everything remembered about it.
- *
- * The bootstrap promise and the warm bit are per-tenant: carried into another organization they
- * would hand it the previous tenant's database handle and its "this device already has rows"
- * answer. The PGlite connection is closed rather than dropped so the SharedWorker port does not
- * leak for the life of the tab.
- */
-export async function teardownClientSync(): Promise<void> {
-	const sync = getClientSync();
-	bootstrapping = null;
-	replicaHoldsRows = false;
-	disableClientSync();
-	await sync?.client.close().catch(() => undefined);
-}
-
 export function bootstrapClientSync(
 	bootstrap: SyncBootstrap | null | undefined
 ): Promise<ClientSync | null> {
@@ -292,6 +271,7 @@ async function openReplica(bootstrap: SyncBootstrap): Promise<ClientSync | null>
 		// Adopt persisted per-collection state before the first read so a warm reload answers
 		// locally at frame 1 instead of re-downloading collections it already has.
 		await sync.registry.restore();
+		const restoredCollections = sync.registry.size > 0;
 
 		// Record that this device is worth waiting for next time. If the replica came back with
 		// collections already resident it is warm now; otherwise the first completed catch-up says
@@ -307,6 +287,20 @@ async function openReplica(bootstrap: SyncBootstrap): Promise<ClientSync | null>
 		// Connect immediately. The old three-second delay left every change in that window to be
 		// picked up only by the next reconnect.
 		client.startStream();
+		if (restoredCollections) {
+			// Persisted residency proves completeness only at its saved cursor. Until the live feed
+			// crosses the head observed for this document, reads use the authoritative server tier;
+			// otherwise returning to an identity can render rows created while it was signed out as
+			// absent. A failure to establish the barrier leaves the replica server-first, which is
+			// slower and correct rather than faster and wrong.
+			void client
+				.serverSequence()
+				.then((sequence) => client.waitForSequence(sequence, { timeoutMs: 30_000 }))
+				.then((fresh) => {
+					if (fresh) sync.registry.markRestoredFresh();
+				})
+				.catch(() => undefined);
+		}
 		return sync;
 	} catch (err) {
 		console.error('[pod-sync] client bootstrap failed; using server transport', err);

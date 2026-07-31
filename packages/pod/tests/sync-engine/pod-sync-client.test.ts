@@ -56,7 +56,7 @@ function mockTransport(handlers: {
 
 async function makeClient(fetch: SyncFetch): Promise<PodSyncClient> {
 	const db = await createClientDb();
-	const client = new PodSyncClient({ db, schemaSql: SCHEMA, fetch });
+	const client = new PodSyncClient({ replicaEpoch: 'test-epoch', db, schemaSql: SCHEMA, fetch });
 	await client.bootstrap();
 	return client;
 }
@@ -297,6 +297,25 @@ describe('PodSyncClient (client sync logic)', () => {
 		}
 	});
 
+	it('resolves command barriers only after the replica crosses their feed sequence', async () => {
+		const client = await makeClient(mockTransport({}).fetch);
+		try {
+			const waiting = client.waitForSequence('12', { timeoutMs: 1_000 });
+			await client.applyDiff({
+				seq: '12',
+				xid: '44',
+				collection: 'orders',
+				action: 'delete',
+				id: 'gone',
+				version: 1
+			});
+			expect(await waiting).toBe(true);
+			expect(await client.waitForSequence('not-a-sequence')).toBe(false);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it('collapses repeated row versions within one streamed batch', async () => {
 		const client = await makeClient(mockTransport({}).fetch);
 		try {
@@ -451,7 +470,9 @@ describe('PodSyncClient (client sync logic)', () => {
 			await client.stopStream();
 
 			expect(streamUrl).toContain('cursor=');
-			const cursorJson = Buffer.from(streamUrl.split('cursor=')[1]!, 'base64url').toString('utf8');
+			const encodedCursor = new URL(`http://pod.local/${streamUrl}`).searchParams.get('cursor');
+			expect(encodedCursor).not.toBeNull();
+			const cursorJson = Buffer.from(encodedCursor!, 'base64url').toString('utf8');
 			const cursor = JSON.parse(cursorJson);
 			expect(cursor.xid).toBe('100');
 			expect(cursor.seq).toBe('42');
@@ -533,6 +554,172 @@ describe('PodSyncClient (client sync logic)', () => {
 		}
 	});
 
+	it('shows a create locally with its final UUIDv7 before the server confirms it', async () => {
+		let release: (() => void) | undefined;
+		let sentId: string | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const fetch: SyncFetch = async (path, init) => {
+			if (!path.startsWith('sync/mutate')) return new Response('not found', { status: 404 });
+			const body = JSON.parse(init.body!) as {
+				mutations: Array<{ clientId: string; row: Record<string, unknown> }>;
+			};
+			sentId = String(body.mutations[0]!.row.norbital_id);
+			await gate;
+			return jsonResponse({
+				results: [
+					{
+						clientId: body.mutations[0]!.clientId,
+						status: 'confirmed',
+						serverId: sentId,
+						row: {
+							...body.mutations[0]!.row,
+							norbital_row_version: 1,
+							status: 'server-normalized'
+						}
+					}
+				]
+			});
+		};
+		const client = await makeClient(fetch);
+		try {
+			const pending = client.mutate([
+				{ clientId: 'create-1', collection: 'orders', action: 'create', row: { status: 'draft' } }
+			]);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(sentId).toMatch(
+				/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+			);
+			expect(await client.localRow('orders', sentId!)).toMatchObject({ status: 'draft' });
+
+			release!();
+			await pending;
+			expect(await client.localRow('orders', sentId!)).toMatchObject({
+				norbital_id: sentId,
+				norbital_row_version: 1,
+				status: 'server-normalized'
+			});
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('removes an optimistic create when the server rejects it', async () => {
+		let sentId: string | undefined;
+		const { fetch } = mockTransport({
+			mutate: (body) => {
+				const mutation = body.mutations[0] as {
+					clientId: string;
+					row: Record<string, unknown>;
+				};
+				sentId = String(mutation.row.norbital_id);
+				return {
+					results: [
+						{ clientId: mutation.clientId, status: 'rejected', reason: 'PERMISSION_DENIED' }
+					]
+				};
+			}
+		});
+		const client = await makeClient(fetch);
+		try {
+			const result = await client.mutate([
+				{
+					clientId: 'create-rejected',
+					collection: 'orders',
+					action: 'create',
+					row: { status: 'x' }
+				}
+			]);
+			expect(result[0]?.status).toBe('rejected');
+			expect(await client.localRow('orders', sentId!)).toBeNull();
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('sends only subscribed collections on the stream connection', async () => {
+		const { fetch, calls } = mockTransport({
+			shape: () => shapePage([]),
+			stream: () => []
+		});
+		const client = await makeClient(fetch);
+		try {
+			await client.shapeSubscribe({ collection: 'orders' });
+			client.startStream();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const streamCall = calls.find((call) => call.startsWith('sync/stream?'));
+			expect(streamCall).toBeDefined();
+			expect(new URL(`http://pod.local/${streamCall}`).searchParams.getAll('collection')).toEqual([
+				'orders'
+			]);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('persists cursor-only progress for filtered-out collections', async () => {
+		let collectionChanges = 0;
+		const fetch: SyncFetch = async (path) => {
+			if (!path.startsWith('sync/stream')) return new Response('not found', { status: 404 });
+			return new Response('event: cursor\ndata: {"xid":"30","seq":"52"}\n\n', {
+				headers: { 'content-type': 'text/event-stream' }
+			});
+		};
+		const client = await makeClient(fetch);
+		const stop = client.onChange(() => (collectionChanges += 1));
+		try {
+			client.startStream();
+			for (let attempt = 0; attempt < 20; attempt++) {
+				const cursor = await client.queryLocal<{ value: string }>(
+					`SELECT value FROM _pod_meta WHERE key = 'cursor'`
+				);
+				if (cursor[0] && JSON.parse(cursor[0].value).seq === '52') break;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			const cursor = await client.queryLocal<{ value: string }>(
+				`SELECT value FROM _pod_meta WHERE key = 'cursor'`
+			);
+			expect(JSON.parse(cursor[0]!.value)).toEqual({ xid: '30', seq: '52' });
+			// Cursor-only frames are bookkeeping and must not invalidate collection queries.
+			expect(collectionChanges).toBe(0);
+		} finally {
+			stop();
+			await client.close();
+		}
+	});
+
+	it('discards scoped rows and resumes after a policy scope-reset event', async () => {
+		let reset!: () => void;
+		const resetObserved = new Promise<void>((resolve) => {
+			reset = resolve;
+		});
+		const fetch: SyncFetch = async (path) => {
+			if (!path.startsWith('sync/stream')) return new Response('not found', { status: 404 });
+			return new Response('event: scope-reset\ndata: {"xid":"22","seq":"41"}\n\n', {
+				headers: { 'content-type': 'text/event-stream' }
+			});
+		};
+		const client = await makeClient(fetch);
+		client.onReset(reset);
+		try {
+			await client.upsertRow('orders', {
+				norbital_id: 'visible-before-policy-edit',
+				norbital_row_version: 1,
+				status: 'open'
+			});
+			client.startStream();
+			await resetObserved;
+			expect(await client.count('orders')).toBe(0);
+			const cursor = await client.queryLocal<{ value: string }>(
+				`SELECT value FROM _pod_meta WHERE key = 'cursor'`
+			);
+			expect(JSON.parse(cursor[0]!.value)).toEqual({ xid: '22', seq: '41' });
+		} finally {
+			await client.close();
+		}
+	});
+
 	it('rolls a rejected delete back into the replica', async () => {
 		const { fetch } = mockTransport({
 			mutate: (body) => ({
@@ -555,53 +742,6 @@ describe('PodSyncClient (client sync logic)', () => {
 			]);
 			const restored = await client.localRow('orders', 'x');
 			expect(restored?.status).toBe('open');
-		} finally {
-			await client.close();
-		}
-	});
-
-	it('discards the replica when the server feed restarts (db reset)', async () => {
-		const db = await createClientDb();
-		let watermark = '500';
-		const fetch: SyncFetch = async (path) => {
-			if (path.startsWith('sync/shape')) {
-				return jsonResponse({ rows: [], nextCursor: null, watermark });
-			}
-			return new Response('not found', { status: 404 });
-		};
-		const client = new PodSyncClient({ db, schemaSql: SCHEMA, fetch });
-		await client.bootstrap();
-		try {
-			// A session that has streamed up to seq 500.
-			await client.applyDiff({
-				seq: '500',
-				xid: '900',
-				collection: 'orders',
-				action: 'insert',
-				id: 'old',
-				version: 1,
-				row: { norbital_id: 'old', norbital_row_version: 1, status: 'open' }
-			});
-			await client.recordSyncState('orders', true, 1);
-			expect(await client.count('orders')).toBe(1);
-
-			// The database is reset: the outbox restarts, so its watermark is now *behind* ours.
-			// A TRUNCATE emits no delete diffs, so without this check the stale row would survive
-			// forever and the UI would keep showing records that no longer exist.
-			watermark = '3';
-			const reset = new PodSyncClient({ db, schemaSql: SCHEMA, fetch });
-			await reset.bootstrap();
-			let notified = false;
-			reset.onReset(() => {
-				notified = true;
-			});
-			await reset.shapeSubscribe({ collection: 'orders' });
-
-			expect(notified).toBe(true);
-			expect(await reset.count('orders')).toBe(0);
-			expect((await reset.loadSyncState()).size).toBe(0);
-			// Both clients share one PGlite; the outer close() owns it.
-			await reset.stopStream();
 		} finally {
 			await client.close();
 		}
@@ -655,7 +795,12 @@ describe('PodSyncClient (client sync logic)', () => {
 			`CREATE TABLE IF NOT EXISTS "orders" ("norbital_id" text PRIMARY KEY);`,
 			`ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "status" text;`
 		].join('\n');
-		const client = new PodSyncClient({ db, schemaSql: base, fetch: mockTransport({}).fetch });
+		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
+			db,
+			schemaSql: base,
+			fetch: mockTransport({}).fetch
+		});
 		await client.bootstrap();
 		await client.upsertRow('orders', { norbital_id: 'a', status: 'open' });
 
@@ -663,6 +808,7 @@ describe('PodSyncClient (client sync logic)', () => {
 		// a wipe here would re-download everything on every schema change.
 		const widened = `${base}\nALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "total" integer;`;
 		const reloaded = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
 			db,
 			schemaSql: widened,
 			fetch: mockTransport({}).fetch
@@ -685,7 +831,12 @@ describe('PodSyncClient (client sync logic)', () => {
 			`CREATE TABLE IF NOT EXISTS "customers" ("norbital_id" text PRIMARY KEY);`,
 			`ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS "name" text;`
 		].join('\n');
-		const client = new PodSyncClient({ db, schemaSql: base, fetch: mockTransport({}).fetch });
+		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
+			db,
+			schemaSql: base,
+			fetch: mockTransport({}).fetch
+		});
 		await client.bootstrap();
 		await client.upsertRow('orders', { norbital_id: 'a', status: 'open' });
 		await client.upsertRow('customers', { norbital_id: 'c', name: 'Acme' });
@@ -700,6 +851,7 @@ describe('PodSyncClient (client sync logic)', () => {
 			`ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS "name" text;`
 		].join('\n');
 		const reloaded = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
 			db,
 			schemaSql: narrowed,
 			fetch: mockTransport({}).fetch
@@ -734,7 +886,12 @@ describe('PodSyncClient (client sync logic)', () => {
 		].join('\n');
 
 		const db = await createClientDb();
-		const client = new PodSyncClient({ db, schemaSql: schema, fetch: mockTransport({}).fetch });
+		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
+			db,
+			schemaSql: schema,
+			fetch: mockTransport({}).fetch
+		});
 		await client.bootstrap();
 		try {
 			const rows = Array.from({ length: 1000 }, (_value, index) => ({

@@ -3,7 +3,7 @@
 	import { Button } from '#lib/button';
 	import DateView from './date.view.svelte';
 	import { Input } from '#lib/input';
-	import { cn } from '#lib/utils';
+	import { Inline, Stack } from '#lib/layout';
 	import { fromLocalDateTimeParts, toLocalDateTimeParts } from '../timestamp.utils.js';
 
 	let {
@@ -66,11 +66,14 @@
 	}
 </script>
 
-<div class={cn('grid min-w-0 gap-2', className)}>
+<Stack gap="sm" class={className}>
 	{#each values as entry, index (`${entry}-${index}`)}
 		{@const parts = toLocalDateTimeParts(entry)}
-		<div
-			class="flex min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs focus-within:ring-2 focus-within:ring-ring"
+		<!-- stupidity:allow UI10 -- input-group chip boundary -->
+		<Inline
+			align="stretch"
+			gap="none"
+			class="min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs focus-within:ring-2 focus-within:ring-ring"
 		>
 			<DateView
 				value={entry}
@@ -107,12 +110,15 @@
 					<Icon icon="radix-icons:cross-1" class="size-4" />
 				</Button>
 			{/if}
-		</div>
+		</Inline>
 	{/each}
 
 	{#if values.length === 0 && !multiple}
-		<div
-			class="flex min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs"
+		<!-- stupidity:allow UI10 -- input-group chip boundary -->
+		<Inline
+			align="stretch"
+			gap="none"
+			class="min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs"
 		>
 			<DateView
 				value={null}
@@ -136,7 +142,7 @@
 					disabled
 				/>
 			</div>
-		</div>
+		</Inline>
 	{/if}
 
 	{#if multiple}
@@ -151,4 +157,4 @@
 			Add date and time
 		</Button>
 	{/if}
-</div>
+</Stack>

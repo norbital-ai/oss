@@ -11,6 +11,7 @@ import {
 	localCount,
 	localFindFirst,
 	localFindMany,
+	reconcileServerRow,
 	setLocalSchema,
 	setSyncInvalidator,
 	syncMutate,
@@ -176,6 +177,37 @@ function invalidateAllCollectionQueries(): void {
 	findHistoryQueries.invalidate('history:');
 	findGroupedQueries.invalidate('db:');
 	countQueries.invalidate('db:');
+}
+
+type ApprovalSyncReceipt = {
+	readonly sync_sequence?: unknown;
+	readonly affected_record?: unknown;
+};
+
+/**
+ * Approval commands commit outside `sync/mutate`, so their HTTP response carries an outbox
+ * watermark. Do not resolve the UI action until the local replica has crossed that watermark.
+ * If a damaged/blocked stream misses the bounded wait, reconcile the root record with one
+ * authoritative point read; this avoids both a global refetch and a stale command result.
+ */
+async function settleApprovalSync(receipt: unknown): Promise<void> {
+	const sync = getClientSync();
+	if (!sync) return;
+	const parsed =
+		receipt && typeof receipt === 'object' ? (receipt as ApprovalSyncReceipt) : undefined;
+	const sequence = parsed?.sync_sequence;
+	if (typeof sequence === 'string' && (await sync.client.waitForSequence(sequence))) return;
+
+	const affected = parsed?.affected_record;
+	if (!affected || typeof affected !== 'object') return;
+	const collection = Reflect.get(affected, 'collection');
+	const id = Reflect.get(affected, 'id');
+	if (typeof collection !== 'string' || typeof id !== 'string') return;
+	const row = await post<Record<string, unknown> | null>('collections/findFirst', {
+		collection,
+		where: { norbital_id: { eq: id } }
+	});
+	await reconcileServerRow(sync, collection, id, row);
 }
 
 // Client-sync (when active) drives reactive invalidation through the same seam: a diff applied to
@@ -495,16 +527,20 @@ export function createWorkspaceCollectionClient(
 		approvals: {
 			findMany: approvalRequests,
 			process: async ({ approvalRequestId, action, comments }) => {
-				await transport.processApprovalRequestAction({
+				const receipt = await transport.processApprovalRequestAction({
 					approval_request_id: approvalRequestId,
 					action,
 					comments: comments ?? null,
 					isSupercede: false
 				});
+				await settleApprovalSync(receipt);
 				invalidateAllCollectionQueries();
 			},
 			withdraw: async (approvalRequestId) => {
-				await transport.withdrawApprovalRequest({ approval_request_id: approvalRequestId });
+				const receipt = await transport.withdrawApprovalRequest({
+					approval_request_id: approvalRequestId
+				});
+				await settleApprovalSync(receipt);
 				invalidateAllCollectionQueries();
 			}
 		}
@@ -569,29 +605,6 @@ function publishLocalSchema(
 	}
 
 	setLocalSchema(schema);
-}
-
-/**
- * Forget every piece of workspace state this module holds, so the next organization starts clean.
- *
- * Enumerated deliberately, and kept next to the declarations it clears. Each of these is a module
- * global that outlives a component tree, and every one of them is scoped to a single tenant: the
- * six query caches hold that tenant's rows, and the collection client is built from its manifest.
- * A switch that missed any one of them would show the previous organization's data to the next —
- * which is why the switch reloaded the page for so long rather than trust a partial teardown.
- */
-export function resetWorkspaceRuntime(): void {
-	for (const manager of [
-		findManyQueries,
-		findFirstQueries,
-		findHistoryQueries,
-		findGroupedQueries,
-		countQueries,
-		invokeQueries
-	]) {
-		manager.clear();
-	}
-	initializedWorkspaceClient = undefined;
 }
 
 export function initializeWorkspaceClient(

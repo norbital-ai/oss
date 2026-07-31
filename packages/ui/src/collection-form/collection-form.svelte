@@ -13,7 +13,7 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { Button } from '#lib/button';
 	import { FormState, type FormSchema } from '#lib/form';
-	import { Grid, Scroll, Stack } from '#lib/layout';
+	import { Cluster, Cover, Grid, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import {
@@ -276,91 +276,95 @@
 	onDestroy(() => form.destroy());
 </script>
 
-<form
-	class={cn('flex h-full max-h-full min-h-0 w-full min-w-0 flex-col overflow-clip', className)}
-	aria-busy={loading || form.isSubmitting}
-	onsubmit={submit}
->
-	<Stack gap="none" class="h-full min-h-0">
-		<Scroll name={`${String(collection)} form fields`} class="flex-1">
-			<div class="min-w-0 pb-4">
-				{#if loading}
-					<div class="grid gap-4" aria-label="Loading form">
-						<CollectionFormSkeleton rows={skeletonRows} />
-					</div>
-				{:else if children}
-					{@render children({
-						Field: CollectionFormField,
-						form: {
-							values: () => Object.fromEntries(Object.entries(form.getData())),
-							setValues: (values) => {
-								for (const [name, value] of Object.entries(values)) {
-									form.setValue(name, value as never);
-								}
-							}
-						}
-					})}
-				{:else}
-					<!-- Auto field emission (RFC V.4a): intrinsic Grid, full-width spans per field kind. -->
-					<Grid minimum="card">
-						{#each autoFields as field (field.name)}
-							<div class={isFullWidthFormField(field.kind) ? 'col-span-full' : ''}>
-								<CollectionFormField name={field.name} />
-							</div>
-						{/each}
-					</Grid>
-				{/if}
-			</div>
-		</Scroll>
-		<footer class="shrink-0 border-t pt-4" aria-label="Form actions">
-			{#if form.errorMessage}
-				<p class="mb-3 text-sm text-destructive" role="alert">{form.errorMessage}</p>
+{#snippet formFooter()}
+	<Stack as="footer" gap="sm" class="border-t" aria-label="Form actions">
+		{#if form.errorMessage}
+			<p class="text-sm text-destructive" role="alert">{form.errorMessage}</p>
+		{/if}
+		{#each form.errors.formErrors as message, index (`${index}:${message}`)}
+			<p class="text-sm text-destructive" role="alert">{message}</p>
+		{/each}
+		{#if Object.keys(form.errors.fieldErrors).length > 0}
+			<p class="text-sm text-destructive" role="alert">
+				Fix the highlighted fields before saving.
+			</p>
+		{/if}
+		<Cluster gap="xs" align="center">
+			<Button
+				type="submit"
+				disabled={loading ||
+					form.disabled ||
+					form.isSubmitting ||
+					Boolean(recordId && !form.isDirty)}
+			>
+				{form.isSubmitting ? 'Saving…' : (submitLabel ?? (recordId ? 'Save changes' : 'Create'))}
+			</Button>
+			<Button
+				type="button"
+				variant="outline"
+				disabled={loading || form.disabled || form.isSubmitting || !form.isDirty}
+				onclick={clear}>Clear</Button
+			>
+			{#if form.isDirty}
+				<span class="text-xs text-muted-foreground" role="status">
+					{dirtyFieldCount} unsaved {dirtyFieldCount === 1 ? 'field' : 'fields'}
+				</span>
 			{/if}
-			{#each form.errors.formErrors as message, index (`${index}:${message}`)}
-				<p class="mb-3 text-sm text-destructive" role="alert">{message}</p>
-			{/each}
-			{#if Object.keys(form.errors.fieldErrors).length > 0}
-				<p class="mb-3 text-sm text-destructive" role="alert">
-					Fix the highlighted fields before saving.
-				</p>
-			{/if}
-			<div class="flex flex-wrap items-center justify-start gap-2">
+			{#if deleteAction}
 				<Button
-					type="submit"
+					type="button"
+					variant="destructive"
+					class="sm:ml-auto"
 					disabled={loading ||
 						form.disabled ||
 						form.isSubmitting ||
-						Boolean(recordId && !form.isDirty)}
+						deleting ||
+						deleteAction.disabled}
+					onclick={() => void deleteRecord()}
 				>
-					{form.isSubmitting ? 'Saving…' : (submitLabel ?? (recordId ? 'Save changes' : 'Create'))}
+					{deleting ? 'Deleting…' : (deleteAction.label ?? 'Delete')}
 				</Button>
-				<Button
-					type="button"
-					variant="outline"
-					disabled={loading || form.disabled || form.isSubmitting || !form.isDirty}
-					onclick={clear}>Clear</Button
-				>
-				{#if form.isDirty}
-					<span class="text-xs text-muted-foreground" role="status">
-						{dirtyFieldCount} unsaved {dirtyFieldCount === 1 ? 'field' : 'fields'}
-					</span>
-				{/if}
-				{#if deleteAction}
-					<Button
-						type="button"
-						variant="destructive"
-						class="sm:ml-auto"
-						disabled={loading ||
-							form.disabled ||
-							form.isSubmitting ||
-							deleting ||
-							deleteAction.disabled}
-						onclick={() => void deleteRecord()}
-					>
-						{deleting ? 'Deleting…' : (deleteAction.label ?? 'Delete')}
-					</Button>
-				{/if}
-			</div>
-		</footer>
+			{/if}
+		</Cluster>
 	</Stack>
-</form>
+{/snippet}
+
+<Cover
+	as="form"
+	gap="md"
+	class={cn('max-h-full min-w-0 overflow-clip', className)}
+	aria-busy={loading || form.isSubmitting}
+	onsubmit={submit}
+	bottom={formFooter}
+>
+	<Scroll name={`${String(collection)} form fields`}>
+		<div class="min-w-0 pb-4">
+			{#if loading}
+				<Stack gap="md" aria-label="Loading form">
+					<CollectionFormSkeleton rows={skeletonRows} />
+				</Stack>
+			{:else if children}
+				{@render children({
+					Field: CollectionFormField,
+					form: {
+						values: () => Object.fromEntries(Object.entries(form.getData())),
+						setValues: (values) => {
+							for (const [name, value] of Object.entries(values)) {
+								form.setValue(name, value as never);
+							}
+						}
+					}
+				})}
+			{:else}
+				<!-- Auto field emission (RFC V.4a): intrinsic Grid, full-width spans per field kind. -->
+				<Grid minimum="card">
+					{#each autoFields as field (field.name)}
+						<div class={isFullWidthFormField(field.kind) ? 'col-span-full' : ''}>
+							<CollectionFormField name={field.name} />
+						</div>
+					{/each}
+				</Grid>
+			{/if}
+		</div>
+	</Scroll>
+</Cover>

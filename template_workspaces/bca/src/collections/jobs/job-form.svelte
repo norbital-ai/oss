@@ -4,7 +4,7 @@
 	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { MatrixRenderer, type MatrixColumn } from '@norbital-ai/ui/data-renderer/matrix';
-	import { Column, Grid } from '@norbital-ai/ui/layout';
+	import { Column, Grid, Stack } from '@norbital-ai/ui/layout';
 	import { watch } from 'runed';
 
 	interface CertificationRequirementRow {
@@ -39,11 +39,13 @@
 	let {
 		record = null,
 		defaultValues,
-		onAfterSubmit
+		onAfterSubmit,
+		class: className
 	}: {
 		record?: Row | null;
 		defaultValues?: Partial<Row>;
 		onAfterSubmit?: (record: Row) => void | Promise<void>;
+		class?: string;
 	} = $props();
 
 	const recordId = $derived(record?.norbital_id);
@@ -165,6 +167,7 @@
 	defaultValues={formDefaults}
 	submitLabel={recordId ? undefined : 'Create job'}
 	{onAfterSubmit}
+	class={className}
 >
 	{#snippet children({ Field })}
 		<Grid minimum="panel">
@@ -177,7 +180,7 @@
 			</Column>
 		</Grid>
 		{#if recordId}
-			<section aria-labelledby="job-certifications-heading" class="grid gap-3">
+			<Stack as="section" gap="sm" aria-labelledby="job-certifications-heading">
 				<div>
 					<h3 id="job-certifications-heading" class="text-sm font-semibold">
 						Required certifications
@@ -202,7 +205,7 @@
 				{#if certificationError}
 					<p class="text-xs text-destructive" role="alert">{certificationError}</p>
 				{/if}
-			</section>
+			</Stack>
 		{/if}
 	{/snippet}
 </CollectionForm>

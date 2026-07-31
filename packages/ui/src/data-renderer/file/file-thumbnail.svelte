@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { formatFileSize } from '#lib/utils';
 	import { AspectRatio } from '#lib/aspect-ratio';
+	import { Stack } from '#lib/layout';
 	import type { FileValue as TFileValue } from '#lib/file-value';
 
 	interface Props {
@@ -66,13 +67,13 @@
 				loading="lazy"
 			/>
 		{:else}
-			<div class="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+			<Stack gap="sm" class="h-full items-center justify-center p-4 text-center">
 				<div class="text-2xl">
 					{getFileIcon(category)}
 				</div>
 				<span class="text-sm font-medium wrap-break-word text-foreground">{file_value.name}</span>
 				<span class="text-xs text-muted-foreground">{formatFileSize(file_value.size)}</span>
-			</div>
+			</Stack>
 		{/if}
 	</AspectRatio>
 </div>

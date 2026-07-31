@@ -387,10 +387,9 @@ export function searchRelations(collection: string): LocalRelationship[] {
  * Local search over the collection's own text fields plus the text of its directly related
  * records, matching the server's field selection.
  *
- * Divergence worth knowing: the server also does trigram (typo-tolerant) matching through
- * pg_trgm, which PGlite does not ship. Local search is substring-only, so for a *misspelled*
- * term it is a strict subset of the server's answer. That is why local search is only used for
- * resident collections — where a windowed collection is involved the server owns search outright.
+ * Search is case-insensitive literal substring matching on both client and server. Keeping one
+ * definition is a correctness requirement: a collection must not change results merely because
+ * it crossed the residency budget and moved from local execution to the server.
  */
 function buildSearch(scope: Scope, search: string, build: Build): string | null {
 	const pattern = `%${escapeLikePattern(search)}%`;

@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from 'pg';
-import { dockerAvailable, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
 import { workspaceExclusionsDdl } from '$lib/vite/workspace-exclusions-sql.js';
 import { SCHEMA_FUNCTIONS_SQL } from '$lib/vite/schema-functions-sql.js';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
+
+requireDocker();
 
 /**
  * The emitted DDL has to survive contact with a real server: `EXCLUDE USING gist` over mixed
@@ -47,7 +49,7 @@ function row(componentType: number, start: string, end: string): string {
 		VALUES (${componentType}, 1, '{"start":"${start}T00:00:00.000Z","end":"${end}T00:00:00.000Z"}')`;
 }
 
-describe.skipIf(!dockerAvailable())('exclusion DDL on a real server', () => {
+describe('exclusion DDL on a real server', () => {
 	let pg: PgHarness;
 	let client: Client;
 

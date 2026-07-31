@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Bound, Stack } from '@norbital-ai/ui/layout';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 
 	let {
@@ -16,7 +17,7 @@
 	let status = $state<'loading' | 'ready' | 'failed'>('loading');
 </script>
 
-<div class="relative flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden">
+<Bound size="full" clip class="relative flex-1">
 	<iframe
 		src={`${entry}${search}`}
 		title={label}
@@ -31,16 +32,17 @@
 	></iframe>
 
 	{#if status === 'loading'}
-		<div
-			class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/95 text-muted-foreground"
+		<Stack
+			gap="xs"
+			class="absolute inset-0 z-10 items-center justify-center bg-background/95 text-muted-foreground"
 			role="status"
 		>
 			<Spinner class="size-5" />
 			<span class="text-xs font-medium">Loading {label}…</span>
-		</div>
+		</Stack>
 	{:else if status === 'failed'}
 		<div class="absolute inset-0 z-10 grid place-items-center bg-background p-4">
 			<p class="text-xs font-medium text-destructive">Failed to load {label}</p>
 		</div>
 	{/if}
-</div>
+</Bound>

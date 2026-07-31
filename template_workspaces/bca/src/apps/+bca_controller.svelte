@@ -224,12 +224,13 @@
 {#snippet mapMarkerContent(_marker: StaticMapMarker, index: number)}
 	{@const point = mapPoints[index]}
 	{#if point}
-		<div class="w-64 space-y-3">
-			<div>
+		<!-- stupidity:allow UI10 -- the map marker popover is width-constrained by the map overlay, not by a primitive -->
+		<Stack gap="sm" class="w-64">
+			<Stack gap="none">
 				<h3 class="text-sm font-medium">{point.name}</h3>
-				<p class="mt-0.5 text-xs text-muted-foreground">{point.label}</p>
-			</div>
-			<ul class="space-y-2 border-t border-border pt-3">
+				<p class="text-xs text-muted-foreground">{point.label}</p>
+			</Stack>
+			<Stack as="ul" gap="xs" class="border-t border-border pt-3">
 				{#each point.assignments as assignment (assignment.id)}
 					<li class="text-xs">
 						<p class="font-medium">{assignment.job}</p>
@@ -238,8 +239,8 @@
 						</p>
 					</li>
 				{/each}
-			</ul>
-		</div>
+			</Stack>
+		</Stack>
 	{/if}
 {/snippet}
 
@@ -263,7 +264,7 @@
 							onclick={() => setDispatchDay(today)}>Today</Button
 						>
 					</Inline>
-					<div class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+					<Inline gap="xs">
 						<Button
 							variant="outline"
 							size="icon"
@@ -291,7 +292,7 @@
 						>
 							<Icon icon="lucide:chevron-right" class="size-4" />
 						</Button>
-					</div>
+					</Inline>
 				</Stack>
 			{/snippet}
 			{#snippet end()}
@@ -437,15 +438,14 @@
 				exists.
 			</Sheet.Description>
 		</Sheet.Header>
-		<div class="p-5">
-			<JobForm
-				defaultValues={{ scheduled_for: dispatchDay }}
-				onAfterSubmit={async () => {
-					await refreshDispatch();
-					createJobOpen = false;
-				}}
-			/>
-		</div>
+		<JobForm
+			class="p-5"
+			defaultValues={{ scheduled_for: dispatchDay }}
+			onAfterSubmit={async () => {
+				await refreshDispatch();
+				createJobOpen = false;
+			}}
+		/>
 	</Sheet.Content>
 </Sheet.Root>
 
@@ -457,10 +457,11 @@
 				Choose an unassigned job on {dispatchDay}; only qualified contractors are offered.
 			</Sheet.Description>
 		</Sheet.Header>
-		<div class="p-5">
-			<form
-				class="space-y-5"
-				onsubmit={(event) => {
+		<Stack
+			as="form"
+			gap="md"
+			class="p-5"
+			onsubmit={(event) => {
 					event.preventDefault();
 					void createAssignment();
 				}}
@@ -519,7 +520,6 @@
 				>
 					{assignment.saving ? 'Assigning…' : 'Assign contractor'}
 				</Button>
-			</form>
-		</div>
+			</Stack>
 	</Sheet.Content>
 </Sheet.Root>

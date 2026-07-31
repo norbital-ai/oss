@@ -3,6 +3,7 @@
 	import type { CalendarEvent, CalendarView, CreateSlot, EventRenderContext } from './types.js';
 	import type { Snippet } from 'svelte';
 	import { watch } from 'runed';
+	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import CalendarHeader from './parts/calendar-header.svelte';
 	import TimeAxis from './parts/time-axis.svelte';
 	import ColumnHeaders from './parts/column-headers.svelte';
@@ -138,12 +139,7 @@
 	const columnCount = $derived(view === 'day' ? 1 : 7);
 </script>
 
-<div
-	class={cn(
-		'flex flex-col h-full bg-card rounded-lg border border-border shadow-card overflow-hidden',
-		className
-	)}
->
+{#snippet calendarHeader()}
 	<CalendarHeader
 		{view}
 		date={currentDate}
@@ -152,23 +148,30 @@
 		ondatechange={handleDateChange}
 		{readonly}
 	/>
+{/snippet}
 
-	<div class="flex flex-1 min-h-0">
+<Cover
+	as="div"
+	gap="none"
+	class={cn('bg-card rounded-lg border border-border shadow-card', className)}
+	top={calendarHeader}
+>
+	<Inline gap="none" align="stretch" class="h-full">
 		{#if children}
 			{@render children()}
 		{/if}
 
-		<div class="flex flex-col flex-1 min-h-0 overflow-hidden">
+		<Stack gap="none" class="flex-1">
 			{#if showColumnHeaders}
 				<ColumnHeaders {view} date={currentDate} {columnCount} colWidth={activeColWidth} />
 			{/if}
 
-			<div class="flex flex-1 min-h-0 overflow-hidden">
+			<Inline gap="none" align="stretch" class="flex-1">
 				{#if showTimeAxis}
 					<TimeAxis {startHour} {endHour} {hourHeight} stepMinutes={60} />
 				{/if}
 
-				<div class="flex-1 min-w-0 overflow-auto">
+				<Scroll axis="both" name="Calendar grid">
 					{#if view === 'day'}
 						<DayView
 							date={currentDate}
@@ -209,11 +212,11 @@
 							{readonly}
 						/>
 					{/if}
-				</div>
-			</div>
-		</div>
-	</div>
-</div>
+				</Scroll>
+			</Inline>
+		</Stack>
+	</Inline>
+</Cover>
 
 {#if selectedEvent && eventEditor && editorCtx}
 	<Popover.Popover

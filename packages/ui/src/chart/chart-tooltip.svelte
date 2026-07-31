@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn, type WithElementRef, type WithoutChildren } from '#lib/utils';
+	import { Stack } from '#lib/layout';
 	import { getChartContext, Tooltip as TooltipPrimitive } from 'layerchart';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -95,7 +96,7 @@
 		{#if !nestLabel}
 			{@render TooltipLabel()}
 		{/if}
-		<div class="grid gap-1.5">
+		<Stack gap="xs">
 			{#each tooltipData.series as item, i (item.key + i)}
 				{@const key = `${nameKey || item.key || item.label || 'value'}`}
 				{@const itemConfig = getPayloadConfigFromPayload(chart.config, item, key)}
@@ -134,14 +135,14 @@
 								nestLabel ? 'items-end' : 'items-center'
 							)}
 						>
-							<div class="grid gap-1.5">
+							<Stack gap="xs">
 								{#if nestLabel}
 									{@render TooltipLabel()}
 								{/if}
 								<span class="text-muted-foreground">
 									{itemConfig?.label || item.label}
 								</span>
-							</div>
+							</Stack>
 							{#if item.value !== undefined}
 								<span class="font-mono font-medium text-foreground tabular-nums">
 									{item.value.toLocaleString()}
@@ -151,6 +152,6 @@
 					{/if}
 				</div>
 			{/each}
-		</div>
+		</Stack>
 	</div>
 </TooltipPrimitive.Root>

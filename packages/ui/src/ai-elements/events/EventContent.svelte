@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { CollapsibleContent } from '#lib/collapsible';
+	import { Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { Collapsible as CollapsiblePrimitive } from 'bits-ui';
 	import type { Snippet } from 'svelte';
@@ -19,7 +20,7 @@
 	)}
 	{...restProps}
 >
-	<div class="mt-4 space-y-2 border-l-2 border-muted pl-4">
+	<Stack gap="sm" class="mt-4 border-l-2 border-muted pl-4">
 		{@render children?.()}
-	</div>
+	</Stack>
 </CollapsibleContent>

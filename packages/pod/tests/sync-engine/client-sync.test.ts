@@ -96,7 +96,12 @@ const residentFetch: SyncFetch = async (path) => {
 async function seededSync() {
 	installSchema();
 	const db = await createClientDb();
-	const client = new PodSyncClient({ db, schemaSql: SCHEMA, fetch: residentFetch });
+	const client = new PodSyncClient({
+		replicaEpoch: 'test-epoch',
+		db,
+		schemaSql: SCHEMA,
+		fetch: residentFetch
+	});
 	await client.bootstrap();
 
 	await client.upsertRows('customers', [
@@ -156,7 +161,12 @@ async function windowedSync() {
 		}
 		return new Response('{}', { headers: { 'content-type': 'application/json' } });
 	};
-	const client = new PodSyncClient({ db, schemaSql: SCHEMA, fetch: windowedFetch });
+	const client = new PodSyncClient({
+		replicaEpoch: 'test-epoch',
+		db,
+		schemaSql: SCHEMA,
+		fetch: windowedFetch
+	});
 	await client.bootstrap();
 	await client.upsertRows('customers', [
 		{ norbital_id: 'c1', norbital_row_version: 1, name: 'Acme', region: 'north' }
@@ -642,7 +652,12 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 			}
 			return new Response('{}', { headers: { 'content-type': 'application/json' } });
 		};
-		const client = new PodSyncClient({ db, schemaSql: SCHEMA, fetch: stalledFetch });
+		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
+			db,
+			schemaSql: SCHEMA,
+			fetch: stalledFetch
+		});
 		await client.bootstrap();
 		const sync = enableClientSync(client);
 		try {
@@ -666,6 +681,40 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 			expect(sync.registry.hasSynced('customers')).toBe(true);
 			expect(await localFindMany(sync, 'customers', {})).toEqual({ rows: [], nextCursor: null });
 			expect(await localCount(sync, 'customers', {})).toBe(0);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('declines every restored answer until the document live-head barrier is crossed', async () => {
+		installSchema();
+		const db = await createClientDb();
+		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
+			db,
+			schemaSql: SCHEMA,
+			fetch: residentFetch
+		});
+		await client.bootstrap();
+		await client.upsertRow('orders', {
+			norbital_id: 'stale',
+			norbital_row_version: 1,
+			status: 'old'
+		});
+		await client.recordSyncState('orders', true, 1);
+		const sync = enableClientSync(client);
+		try {
+			await sync.registry.restore();
+			expect(await localFindMany(sync, 'orders', {})).toBeNull();
+			expect(
+				await localFindFirst(sync, 'orders', { where: { norbital_id: { eq: 'stale' } } })
+			).toBeUndefined();
+			expect(await localCount(sync, 'orders', {})).toBeNull();
+
+			sync.registry.markRestoredFresh();
+			expect(
+				await localFindFirst(sync, 'orders', { where: { norbital_id: { eq: 'stale' } } })
+			).toMatchObject({ norbital_id: 'stale', status: 'old' });
 		} finally {
 			await client.close();
 		}

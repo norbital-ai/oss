@@ -3,7 +3,7 @@
 	import type { Snippet } from 'svelte';
 	import * as Sheet from '#lib/sheet';
 	import { Tabs, type TabConfig } from '#lib/tabs';
-	import { Scroll } from '#lib/layout';
+	import { Bound, Inline, Scroll } from '#lib/layout';
 
 	let {
 		title,
@@ -53,8 +53,10 @@
 </script>
 
 {#snippet detailHeader({ list }: { list: Snippet })}
-	<header
-		class="flex min-w-0 shrink-0 items-center gap-3 border-b bg-background px-4 py-2.5 sm:px-5"
+	<Inline
+		as="header"
+		gap="md"
+		class="shrink-0 border-b bg-background px-4 py-2.5 sm:px-5"
 	>
 		<div class="min-w-0 flex-1">
 			<Sheet.Description class="truncate text-micro leading-4 text-muted-foreground">
@@ -62,21 +64,21 @@
 			</Sheet.Description>
 			<Sheet.Title class="truncate text-sm leading-5 font-semibold">{title}</Sheet.Title>
 		</div>
-		<div class="flex shrink-0 items-center gap-2">
+		<Inline gap="sm" class="shrink-0">
 			{@render list()}
 			{#if actions}
 				{@render actions()}
 			{/if}
-		</div>
-	</header>
+		</Inline>
+	</Inline>
 {/snippet}
 
 {#snippet unavailableState()}
 	{#if loading}
-		<div class="flex items-center gap-2 p-6 text-sm text-muted-foreground" role="status">
+		<Inline gap="sm" class="p-6 text-sm text-muted-foreground" role="status">
 			<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
 			Loading record…
-		</div>
+		</Inline>
 	{:else if error}
 		<div class="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-4" role="alert">
 			<p class="text-sm font-medium text-destructive">Record could not be loaded</p>
@@ -90,13 +92,13 @@
 {/snippet}
 
 {#snippet uiContent()}
-	<div class="h-full min-h-0 overflow-clip p-5 sm:p-6">
+	<Bound size="full" clip class="p-5 sm:p-6">
 		{#if loading || error || !found}
 			{@render unavailableState()}
 		{:else}
 			{@render ui()}
 		{/if}
-	</div>
+	</Bound>
 {/snippet}
 
 {#snippet approvalContent()}

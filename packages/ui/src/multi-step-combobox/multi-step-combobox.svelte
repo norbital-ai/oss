@@ -15,6 +15,7 @@
 		type TInfiniteLoadingConfig
 	} from '#lib/command';
 	import { Input } from '#lib/input';
+	import { Bound, Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
 	import { isEqual } from 'es-toolkit/predicate';
@@ -678,7 +679,7 @@
 		aria-multiselectable={false}
 		style={`max-height: ${panelHeight}px;`}
 	>
-		<div class="flex w-full gap-0" style={`height: ${panelHeight}px;`}>
+		<Inline align="stretch" gap="none" style={`height: ${panelHeight}px;`}>
 			{#if showSelectionsSidebar}
 				<MultiStepSelectionSidebar
 					selections={normalizedLocalSelections}
@@ -696,7 +697,7 @@
 			{/if}
 
 			{#if currentSelection && stepKeys.length > 0}
-				<div class="min-w-0 flex-1 overflow-hidden">
+				<Bound size="full" clip class="flex-1">
 					<Command.Root
 						filter={buildCustomFilterFn(filteredOptions)}
 						shouldFilter={false}
@@ -714,7 +715,7 @@
 							onNext={goToNextStep}
 						/>
 
-						<div class="flex h-full w-full flex-1 flex-col overflow-hidden p-2">
+						<Bound size="full" clip pad="sm" class="flex-1">
 							{#if isCustomStep && isCustom(currentStepDef) && currentStepKey}
 								{@render currentStepDef.render({
 									value: currentSelection?.[currentStepKey],
@@ -773,18 +774,18 @@
 											)}
 											style={`height: ${itemHeight}px;`}
 										>
-											<div class="flex min-w-0 flex-1 items-center gap-2 text-xs">
-												<div class="min-w-0 flex-1 px-2">
-													{#if typeof option.label === 'string'}
-														<span
-															class="truncate text-secondary-foreground dark:text-muted-foreground"
-															>{option.label}</span
-														>
-													{:else}
-														{@render option.label(option.value, { compact: false })}
-													{/if}
-												</div>
+										<Inline gap="sm" class="min-w-0 flex-1 text-xs">
+											<div class="min-w-0 flex-1 px-2">
+												{#if typeof option.label === 'string'}
+													<span
+														class="truncate text-secondary-foreground dark:text-muted-foreground"
+														>{option.label}</span
+													>
+												{:else}
+													{@render option.label(option.value, { compact: false })}
+												{/if}
 											</div>
+										</Inline>
 											{#if selected}
 												<div
 													class="absolute right-2 flex h-4 w-4 items-center justify-center rounded-full bg-brand-100 dark:bg-brand-900"
@@ -812,16 +813,16 @@
 									{/if}
 								</Command.List>
 							{/if}
-						</div>
+					</Bound>
 					</Command.Root>
-				</div>
+				</Bound>
 			{:else}
-				<div class="flex flex-1 items-center justify-center p-4 text-xs text-muted-foreground">
+				<Inline justify="center" gap="none" class="flex-1 p-4 text-xs text-muted-foreground">
 					{multiple
 						? 'Select or create a selection to get started.'
 						: 'Create a selection to get started.'}
-				</div>
+				</Inline>
 			{/if}
-		</div>
+		</Inline>
 	</Popover.Content>
 </Popover.Root>

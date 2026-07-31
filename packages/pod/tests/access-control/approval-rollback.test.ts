@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
-import { startPostgres, dockerAvailable, type PgHarness } from '../support/pg-harness.js';
+import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema } from '../support/pod-schema.js';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
 import type { TScopeRequestor } from '$lib/shared/scope.js';
@@ -19,7 +19,7 @@ import type { TScopeRequestor } from '$lib/shared/scope.js';
  * and assert both halves — the row's final state and the feed row that announces it.
  */
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
@@ -59,6 +59,7 @@ function contextOn(client: PoolClient): ProvisionedContext {
 	} as unknown as TenantDbClient;
 	return {
 		tenantDb,
+		manifestCtx: { getRelationshipsForCollection: () => [] },
 		// The approving user's teams — all `processAction` reads off the workspace.
 		baseScope: { requestor: { norbital_id: USER_ID, team_members: [{ norbital_id: TEAM_ID }] } }
 	} as unknown as ProvisionedContext;
@@ -67,7 +68,7 @@ function contextOn(client: PoolClient): ProvisionedContext {
 type OutboxRow = { collection: string; record_id: string; action: string };
 type HistoryRow = { status: string; approval: string | null; row_version: number };
 
-describe.skipIf(!hasDocker)('Approval terminal transitions (real Postgres triggers)', () => {
+describe('Approval terminal transitions (real Postgres triggers)', () => {
 	let pg: PgHarness;
 	let pool: Pool;
 	let client: PoolClient;

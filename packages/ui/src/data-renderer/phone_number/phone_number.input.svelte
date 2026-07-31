@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Combobox, type TOption } from '#lib/combobox';
 	import { Input } from '#lib/input';
+	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { CountryCode } from 'libphonenumber-js/min';
 	import { watch } from 'runed';
@@ -90,10 +91,10 @@
 
 {#snippet countryDisplay(selectedCountry: CountryCode)}
 	{@const option = countries.find((item) => item.country === selectedCountry)}
-	<span class="flex min-w-0 items-center gap-1.5">
+	<Inline as="span" gap="xs">
 		<span aria-hidden="true">{option?.flag}</span>
 		<span class="font-mono text-xs tabular-nums">+{option?.callingCode}</span>
-	</span>
+	</Inline>
 {/snippet}
 
 <div class={cn('min-w-0 space-y-1.5', className)}>

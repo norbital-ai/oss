@@ -3,7 +3,7 @@
 	 * This is the root component for the tree view.
 	 * It provides global styling and handles indentation settings.
 	 */
-	import { cn } from '#lib/utils';
+	import { Stack } from '#lib/layout';
 	import type { Snippet } from 'svelte';
 
 	type Props = {
@@ -23,6 +23,6 @@
 	}: Props = $props();
 </script>
 
-<div class={cn('flex flex-col', className)}>
+<Stack gap="none" class={className}>
 	{@render children?.()}
-</div>
+</Stack>

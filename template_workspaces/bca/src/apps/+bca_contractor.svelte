@@ -37,7 +37,7 @@
 {/snippet}
 
 <Cover as="main" top={pageHeading}>
-	<Bound size="full" pad="none" class="px-4 py-2 sm:px-6">
+	<Bound size="full" inset>
 		{#if contractorQuery.error}
 			<p class="text-sm text-destructive">Could not load your contractor profile.</p>
 		{:else if contractorQuery.loading}

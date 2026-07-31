@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Scroll, Stack } from '#lib/layout';
 	import {
 		assignLanes,
 		endOfMonth,
@@ -66,7 +67,7 @@
 	}
 </script>
 
-<div class={cn('flex-1 overflow-y-auto bg-background p-2', className)}>
+<Scroll axis="y" name="Month events" class={cn('bg-background p-2', className)}>
 	<div
 		class="grid h-full"
 		style="grid-template-columns: repeat(7, 1fr); grid-template-rows: repeat({weekCount}, 1fr)"
@@ -98,7 +99,7 @@
 					{day.getDate()}
 				</span>
 
-				<div class="flex flex-col gap-0.5 mt-0.5 min-w-0">
+				<Stack gap="xs" class="mt-0.5 min-w-0">
 					{#each dayEvents.slice(0, MAX_PILLS) as event}
 						<EventPill {event} onclick={onpillclick} />
 					{/each}
@@ -108,8 +109,8 @@
 							+{overflow} more
 						</span>
 					{/if}
-				</div>
+				</Stack>
 			</button>
 		{/each}
 	</div>
-</div>
+</Scroll>

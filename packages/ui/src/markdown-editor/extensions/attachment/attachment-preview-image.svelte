@@ -2,6 +2,7 @@
 	let { src, alt }: { src: string | null; alt: string } = $props();
 </script>
 
+<!-- stupidity:allow UI5 -- attachment media crop -->
 <div class="w-full overflow-hidden rounded bg-background p-2 shadow">
 	{#if src}
 		<img {src} {alt} class="max-h-96 w-full object-contain" />

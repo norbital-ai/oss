@@ -7,6 +7,7 @@
  */
 
 import type { RawDocument, StitchOverrides } from '../../../lib/reclamation/extract.js';
+import { normalizeDrawing } from '../../../lib/reclamation/normalize-drawing.server.js';
 import { sha256Hex } from '../../../lib/reclamation/hash.js';
 import { DEFAULT_STITCH_SETTINGS, stitch } from '../../../lib/reclamation/stitch.js';
 import type { DocumentKind, StitchSettings } from '../../../lib/reclamation/types.js';
@@ -247,6 +248,16 @@ export async function runStitchForProject(
 	try {
 		documents = await loadDocuments(project, driver);
 		additional = await loadExtras(extras, driver);
+		const normalized = await Promise.all(
+			(Object.keys(documents) as DocumentKind[]).map(
+				async (kind) => [kind, await normalizeDrawing(documents[kind])] as const
+			)
+		);
+		documents = Object.fromEntries(normalized) as Record<DocumentKind, RawDocument>;
+		additional = {
+			sections: await Promise.all(additional.sections.map(normalizeDrawing)),
+			bathymetry: additional.bathymetry
+		};
 	} catch (error) {
 		await driver.writeReconstruction({
 			project_id: project.norbital_id,

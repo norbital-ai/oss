@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -21,7 +22,7 @@
 	let { caption, children, class: className, ...restProps }: TimelineImageProps = $props();
 </script>
 
-<div class={cn('mt-2 space-y-2', className)} {...restProps}>
+<Stack gap="sm" class={cn('mt-2', className)} {...restProps}>
 	<div
 		class="relative flex max-h-88 items-center justify-center overflow-hidden rounded-lg bg-muted p-3"
 	>
@@ -30,4 +31,4 @@
 	{#if caption}
 		<p class="text-xs text-muted-foreground">{caption}</p>
 	{/if}
-</div>
+</Stack>

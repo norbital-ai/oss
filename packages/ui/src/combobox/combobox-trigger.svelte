@@ -233,6 +233,7 @@
 			</div>
 		</Popover.Trigger>
 		{#if !readonly}
+			<!-- stupidity:allow UI6 -- absolutely-positioned clear/chevron decoration -->
 			<div
 				class="pointer-events-none absolute top-1/2 right-1 flex -translate-y-1/2 items-center justify-center gap-1"
 			>

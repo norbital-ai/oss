@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { cn, formatFileSize } from '#lib/utils';
 	import { useId } from 'bits-ui';
+	import { Inline, Scroll, Stack } from '#lib/layout';
 	import { isActiveUploadStage, UPLOAD_STAGE_MESSAGES } from '../file-upload/index.js';
 	import type { FileValue as TFileValue } from '../file-value/index.js';
 	import { Spinner } from '../spinner/index.js';
@@ -160,10 +161,10 @@
 </script>
 
 {#if readonly}
-	<div class={cn('flex flex-col gap-2', className)}>
+	<Stack gap="sm" class={className}>
 		{#if uploadedFiles.length > 0}
 			{#each uploadedFiles as file (file.url)}
-				<div class="flex items-center gap-2 rounded border border-border bg-background p-2">
+				<Inline gap="sm" class="rounded border border-border bg-background p-2">
 					<div class="flex h-6 w-6 shrink-0 items-center justify-center">
 						{#if file.type.startsWith('image/') && file.url}
 							<img src={file.url} alt={file.name} class="h-6 w-6 rounded object-cover" />
@@ -182,14 +183,14 @@
 							iconClass="h-3.5 w-3.5"
 						/>
 					{/if}
-				</div>
+				</Inline>
 			{/each}
 		{:else}
 			<div class="text-sm text-muted-foreground">No files attached.</div>
 		{/if}
-	</div>
+	</Stack>
 {:else}
-	<div class={cn('flex w-full flex-col', className)}>
+	<Stack gap="none" class={cn('w-full', className)}>
 		<label
 			ondragover={(e) => {
 				if (canUpload) e.preventDefault();
@@ -229,8 +230,8 @@
 					</div>
 				</div>
 			{:else}
-				<div class="flex h-full flex-col">
-					<div class="flex items-center justify-between border-b border-border px-3 py-2">
+				<Stack gap="none" class="h-full">
+					<Inline gap="sm" justify="between" class="border-b border-border px-3 py-2">
 						<span class="text-xs text-secondary-foreground">Total files ({allFiles.length})</span>
 						{#if canUpload}
 							<button
@@ -246,9 +247,9 @@
 								Add
 							</button>
 						{/if}
-					</div>
-					<div class="flex-1 overflow-y-auto p-2">
-						<div class="space-y-2">
+					</Inline>
+					<Scroll axis="y" name="Uploaded files" class="p-2">
+						<Stack gap="sm">
 							{#each allFiles as item (item.id)}
 								{@const file = item.isUploaded ? item.result : item.file}
 								{@const fileName = file?.name || 'Unknown file'}
@@ -256,7 +257,7 @@
 								{@const fileType = file?.type || 'application/octet-stream'}
 								{@const fileUrl = item.result?.url}
 
-								<div class="flex items-center gap-2 rounded border border-border bg-background p-2">
+								<Inline gap="sm" class="rounded border border-border bg-background p-2">
 									<div class="flex h-8 w-8 shrink-0 items-center justify-center">
 										{#if fileType.startsWith('image/') && fileUrl}
 											<img src={fileUrl} alt={fileName} class="h-8 w-8 rounded object-cover" />
@@ -265,37 +266,37 @@
 										{/if}
 									</div>
 
-									<div class="min-w-0 flex-1 flex-col">
+									<Stack gap="none" class="min-w-0 flex-1">
 										<div class="truncate text-start text-sm font-medium text-foreground">
 											{fileName}
 										</div>
-										<div class="flex items-center gap-2 text-xs text-muted-foreground">
+										<Inline gap="sm" class="text-xs text-muted-foreground">
 											<span>{formatFileSize(fileSize)}</span>
 											{#if isActiveUploadStage(item.stage)}
-												<span class="flex items-center gap-1 text-brand">
+												<Inline as="span" gap="xs" class="text-brand">
 													<Spinner class="h-3 w-3" />
 													{UPLOAD_STAGE_MESSAGES[item.stage]}
-												</span>
+												</Inline>
 											{:else if item.stage === 'error'}
-												<span class="flex items-center gap-1 text-destructive">
+												<Inline as="span" gap="xs" class="text-destructive">
 													<Icon icon="lucide:alert-circle" class="h-3 w-3" />
 													{UPLOAD_STAGE_MESSAGES[item.stage]}
-												</span>
+												</Inline>
 											{:else if item.stage === 'aborted'}
-												<span class="flex items-center gap-1 text-muted-foreground">
+												<Inline as="span" gap="xs" class="text-muted-foreground">
 													<Icon icon="lucide:slash" class="h-3 w-3" />
 													{UPLOAD_STAGE_MESSAGES[item.stage]}
-												</span>
+												</Inline>
 											{:else if item.stage === 'complete'}
-												<span class="flex items-center gap-1 text-green-600">
+												<Inline as="span" gap="xs" class="text-green-600">
 													<Icon icon="lucide:check" class="h-3 w-3" />
 													{UPLOAD_STAGE_MESSAGES[item.stage]}
-												</span>
+												</Inline>
 											{/if}
-										</div>
-									</div>
+										</Inline>
+									</Stack>
 
-									<div class="flex items-center gap-1">
+									<Inline gap="xs">
 										{#if item.isUploaded && item.result?.metadata}
 											<FileMetadataTooltip
 												metadata={item.result.metadata}
@@ -333,12 +334,12 @@
 												<Icon icon="lucide:x" class="h-3 w-3" />
 											</button>
 										{/if}
-									</div>
-								</div>
+									</Inline>
+								</Inline>
 							{/each}
-						</div>
-					</div>
-				</div>
+						</Stack>
+					</Scroll>
+				</Stack>
 			{/if}
 			<input
 				{...rest}
@@ -351,5 +352,5 @@
 				class="pointer-events-none absolute inset-0 h-full w-full cursor-pointer opacity-0"
 			/>
 		</label>
-	</div>
+	</Stack>
 {/if}

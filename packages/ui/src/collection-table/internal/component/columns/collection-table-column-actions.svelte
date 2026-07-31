@@ -7,6 +7,7 @@
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
 	import { Indicator } from '#lib/indicator';
+	import { Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { Separator } from '#lib/separator';
 	import { cn } from '#lib/utils';
@@ -39,7 +40,7 @@
 		</Popover.Trigger>
 
 		<Popover.Content align="start" class="flex flex-col gap-2 p-2 py-4">
-			<div class="flex flex-col gap-1">
+			<Stack gap="xs">
 				<div class="px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
 					Display
 				</div>
@@ -83,7 +84,7 @@
 						</button>
 					{/each}
 				{/if}
-			</div>
+			</Stack>
 
 			{#if inst.enableResizing}
 				<div class="mt-1">
@@ -91,7 +92,7 @@
 					<div class="px-2 pt-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
 						Sizing
 					</div>
-					<div class="flex flex-col">
+					<Stack gap="none">
 						<button
 							class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
 							onclick={() => {
@@ -117,7 +118,7 @@
 							<Icon icon="lucide:scan-line" class="mr-2 h-3.5 w-3.5" />
 							Fit all
 						</button>
-					</div>
+					</Stack>
 				</div>
 			{/if}
 		</Popover.Content>

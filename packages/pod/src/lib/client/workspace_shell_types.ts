@@ -38,8 +38,8 @@ export type TenantWorkspaceShellData = {
 	 * its first reads to the server.
 	 *
 	 * `replicaStamp` is `<organizationId>:<userId>`. It names the local database, which is what
-	 * keeps one tenant's rows out of another's: switching organizations reloads the page onto a
-	 * different stamp, so a different replica.
+	 * keeps one tenant's rows out of another's. An organization switch asks Core for a new document;
+	 * the selected tenant then boots against its own stamp and replica.
 	 */
 	readonly sync: {
 		readonly schemaSql: string;

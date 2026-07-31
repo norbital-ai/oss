@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { humanize } from '@norbital-ai/std/string';
+	import { Scroll } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	let {
@@ -41,7 +42,7 @@
 		{:else}
 			{@const columns = recordColumns(item)}
 			{#if columns}
-				<div class="overflow-x-auto rounded-md border bg-muted/20">
+				<Scroll axis="x" name="Value table" class="rounded-md border bg-muted/20">
 					<table class="w-full border-collapse text-left text-xs">
 						<thead class="bg-muted/40 text-muted-foreground">
 							<tr>
@@ -64,7 +65,7 @@
 							{/each}
 						</tbody>
 					</table>
-				</div>
+				</Scroll>
 			{:else}
 				<ol class="divide-y rounded-md border bg-muted/20">
 					{#each item as entry, index (index)}
@@ -80,6 +81,7 @@
 		{:else}
 			<dl class="divide-y rounded-md border bg-muted/20">
 				{#each entries as [key, entry] (key)}
+					<!-- stupidity:allow UI6 -- structured dl entry row needs explicit responsive key/value tracks -->
 					<div class="grid min-w-0 gap-1 px-3 py-2.5 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-3">
 						<dt class="text-xs font-medium text-muted-foreground">{humanize(key)}</dt>
 						<dd class="min-w-0 break-words">{@render renderValue(entry)}</dd>

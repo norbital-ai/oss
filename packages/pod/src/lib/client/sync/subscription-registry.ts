@@ -49,6 +49,8 @@ export const DEFAULT_RESIDENCY_BYTES = 1_073_741_824; // 1 GiB
 type CollectionMeta = {
 	/** Rows are local and safe to read. */
 	ready: boolean;
+	/** The saved cursor has crossed the server head observed for this document. */
+	fresh: boolean;
 	/**
 	 * A catch-up has run to completion at least once on this device.
 	 *
@@ -119,11 +121,13 @@ export class SubscriptionRegistry {
 			.catch(() => new Map<string, CollectionSyncState>())
 			.then((persisted) => {
 				for (const [collection, state] of persisted) {
+					this.client.subscribeCollection?.(collection);
 					if (this.meta.has(collection)) continue;
 					// `_pod_sync_state` is only written when a catch-up completes, so anything restored
 					// from it has genuinely synced at least once.
 					this.meta.set(collection, {
 						ready: true,
+						fresh: false,
 						synced: true,
 						resident: state.resident,
 						rows: state.rows,
@@ -150,7 +154,22 @@ export class SubscriptionRegistry {
 
 	/** True when every policy-visible row of the collection is local. */
 	isResident(collection: string): boolean {
-		return this.meta.get(collection)?.resident ?? false;
+		const entry = this.meta.get(collection);
+		return Boolean(entry?.fresh && entry.resident);
+	}
+
+	/** A restored row is not safe until the live cursor catches the head seen at document boot. */
+	isFresh(collection: string): boolean {
+		return this.meta.get(collection)?.fresh ?? false;
+	}
+
+	/** Promote restored state after the ordered feed crosses the bootstrap head. */
+	markRestoredFresh(): void {
+		for (const [collection, entry] of this.meta) {
+			if (entry.fresh) continue;
+			this.meta.set(collection, { ...entry, fresh: true });
+			this.client.notifyCollection(collection);
+		}
 	}
 
 	/**
@@ -158,6 +177,7 @@ export class SubscriptionRegistry {
 	 * reads immediately while any remaining pages fill in behind it.
 	 */
 	async register(collection: string): Promise<void> {
+		this.client.subscribeCollection?.(collection);
 		return this.catchUp(collection);
 	}
 
@@ -218,6 +238,7 @@ export class SubscriptionRegistry {
 				if (!this.meta.get(collection)?.ready) {
 					this.meta.set(collection, {
 						ready: true,
+						fresh: true,
 						synced: false,
 						resident: false,
 						rows,
@@ -260,7 +281,14 @@ export class SubscriptionRegistry {
 			return;
 		}
 
-		this.meta.set(collection, { ready: true, synced: trustworthy, resident, rows, bytes });
+		this.meta.set(collection, {
+			ready: true,
+			fresh: true,
+			synced: trustworthy,
+			resident,
+			rows,
+			bytes
+		});
 		// Only a trustworthy stop is persisted. Recording an untrustworthy one would make the next
 		// reload restore it as synced and re-introduce the empty-table-over-real-data state.
 		if (trustworthy) {

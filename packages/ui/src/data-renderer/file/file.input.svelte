@@ -5,6 +5,7 @@
 	import * as Carousel from '#lib/carousel';
 	import type { IFileUploadClient } from '#lib/file-upload';
 	import { isActiveUploadStage, UPLOAD_STAGE_MESSAGES } from '#lib/file-upload';
+	import { Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { FileMetadataTooltip } from '#lib/file-value';
 	import FileThumbnail from './file-thumbnail.svelte';
@@ -247,7 +248,8 @@
 
 {#snippet triggerContent()}
 	{#if hasValidFiles}
-		<div class="flex items-center gap-2">
+		<Inline gap="sm">
+			<!-- stupidity:allow UI6 stupidity:allow UI7 -- fixed-size avatar stack overlaps its chips -->
 			<div class="flex items-center -space-x-1">
 				{#each displayFiles as file (file.norbital_id)}
 					<div class="h-5 w-5 overflow-hidden rounded-full border border-border">
@@ -262,7 +264,7 @@
 					</div>
 				{/if}
 			</div>
-		</div>
+		</Inline>
 	{:else}
 		<Icon
 			icon="lucide:paperclip"
@@ -303,8 +305,8 @@
 			<Carousel.Content>
 				{#each editingFiles as file, index (file.norbital_id)}
 					<Carousel.Item>
-						<div class="space-y-4">
-							<div class="flex items-center gap-3 rounded-md bg-muted/40 p-3">
+						<Stack gap="md">
+							<Inline gap="md" class="rounded-md bg-muted/40 p-3">
 								<div class="h-12 w-12 overflow-hidden rounded-lg">
 									<FileThumbnail file_value={file} ratio={1} size="small" class="h-full w-full" />
 								</div>
@@ -327,21 +329,21 @@
 								>
 									<Icon icon="lucide:download" class="h-4 w-4" />
 								</Button>
-							</div>
+							</Inline>
 
-							<div class="flex h-full flex-col space-y-2 p-2">
-								<div class="flex items-center gap-2 text-sm font-medium text-secondary-foreground">
+							<Stack gap="sm" class="h-full p-2">
+								<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 									<Icon icon="lucide:eye" class="h-4 w-4" />
 									File Preview
-								</div>
+								</Inline>
 								<FileThumbnail
 									file_value={file}
 									ratio={16 / 9}
 									size="medium"
 									class="h-full w-full p-8"
 								/>
-							</div>
-						</div>
+							</Stack>
+						</Stack>
 					</Carousel.Item>
 				{/each}
 			</Carousel.Content>
@@ -351,19 +353,19 @@
 			{/if}
 		</Carousel.Root>
 	{:else}
-		<div class="py-8 text-center text-muted-foreground">
-			<Icon icon="lucide:paperclip" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+		<Stack gap="sm" class="items-center py-8 text-center text-muted-foreground">
+			<Icon icon="lucide:paperclip" class="size-8 text-muted-foreground" />
 			<p class="text-sm">No files attached</p>
-		</div>
+		</Stack>
 	{/if}
 {/snippet}
 
 {#snippet editableView()}
 	{#if multiple && editingFiles.length === 0}
-		<div class="p-4 py-8 text-center">
-			<Icon icon="lucide:upload-cloud" class="mx-auto mb-3 h-12 w-12 text-muted-foreground" />
-			<h4 class="mb-1 font-medium text-foreground">No files selected</h4>
-			<p class="mb-4 text-sm text-muted-foreground">Upload your first file to get started</p>
+		<Stack gap="sm" class="items-center p-4 py-8 text-center">
+			<Icon icon="lucide:upload-cloud" class="size-12 text-muted-foreground" />
+			<h4 class="font-medium text-foreground">No files selected</h4>
+			<p class="text-sm text-muted-foreground">Upload your first file to get started</p>
 			<Button
 				variant="outline"
 				onclick={openFileBrowser}
@@ -377,13 +379,13 @@
 					Add first file
 				{/if}
 			</Button>
-		</div>
+		</Stack>
 	{:else}
-		<div class="space-y-3 p-4">
+		<Stack gap="sm" class="p-4">
 			{#if client.uploads.length > 0}
 				{#each client.uploads as pending (pending.id)}
-					<div class="flex items-center gap-2">
-						<div class="flex flex-1 items-center gap-3 rounded-lg border p-2">
+					<Inline gap="sm">
+						<Inline gap="md" class="flex-1 rounded-lg border p-2">
 							<div class="h-8 w-8 overflow-hidden rounded bg-muted"></div>
 							<div class="min-w-0 flex-1">
 								<p class="truncate text-sm font-medium">{pending.file.name}</p>
@@ -394,7 +396,7 @@
 									<p class="truncate text-xs text-destructive">{pending.error}</p>
 								{/if}
 							</div>
-						</div>
+						</Inline>
 
 						{#if isActiveUploadStage(pending.stage)}
 							<Button
@@ -419,13 +421,13 @@
 								<Icon icon="lucide:x" class="h-4 w-4" />
 							</Button>
 						{/if}
-					</div>
+					</Inline>
 				{/each}
 			{/if}
 
 			{#each editingFiles as file, index (index)}
-				<div class="flex items-center gap-2">
-					<div class="flex flex-1 items-center gap-3 rounded-lg border p-2">
+				<Inline gap="sm">
+					<Inline gap="md" class="flex-1 rounded-lg border p-2">
 						<div class="h-8 w-8 overflow-hidden rounded">
 							<FileThumbnail file_value={file} ratio={1} size="small" class="h-full w-full" />
 						</div>
@@ -433,7 +435,7 @@
 							<p class="truncate text-sm font-medium">{file.name}</p>
 							<p class="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
 						</div>
-					</div>
+					</Inline>
 
 					{#if file.metadata}
 						<FileMetadataTooltip
@@ -452,7 +454,7 @@
 					>
 						<Icon icon="lucide:x" class="h-4 w-4" />
 					</Button>
-				</div>
+				</Inline>
 			{/each}
 
 			{#if (multiple && editingFiles.length < maxFiles) || (!multiple && editingFiles.length === 0)}
@@ -472,15 +474,15 @@
 			{/if}
 
 			<!-- File constraints info -->
-			<div class="space-y-1 border-t pt-2 text-xs text-muted-foreground">
+			<Stack gap="xs" class="border-t pt-2 text-xs text-muted-foreground">
 				<div>
 					Max {maxFiles} file{maxFiles !== 1 ? 's' : ''} • {formatFileSize(maxFileSize)} limit
 				</div>
 				<div>
 					Accepts: {accept.length > 3 ? `${accept.slice(0, 3).join(', ')}...` : accept.join(', ')}
 				</div>
-			</div>
-		</div>
+			</Stack>
+		</Stack>
 	{/if}
 {/snippet}
 
@@ -507,12 +509,12 @@
 		{@render triggerContent()}
 	</Popover.Trigger>
 	<Popover.Content sameWidth={true} class="p-0" align="start" sideOffset={4}>
-		<div class="space-y-4 p-1">
+		<Stack gap="md" class="p-1">
 			{#if readonly}
 				{@render readonlyView()}
 			{:else}
 				{@render editableView()}
 			{/if}
-		</div>
+		</Stack>
 	</Popover.Content>
 </Popover.Root>

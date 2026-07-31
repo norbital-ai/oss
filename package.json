@@ -7,9 +7,9 @@
 		"node": ">=26.0.0"
 	},
 	"scripts": {
-		"build": "turbo build",
+		"build": "turbo build --concurrency=1",
 		"lint": "turbo lint",
-		"test": "turbo test",
+		"test": "turbo test --concurrency=1",
 		"packages:build": "pnpm --filter @norbital-ai/pod... build",
 		"check": "pnpm packages:build && pnpm templates:sync && pnpm lint && pnpm test && pnpm test:scripts && pnpm build && pnpm templates:check && pnpm templates:lock:check && pnpm publication:check",
 		"format": "prettier --write .",
@@ -20,6 +20,7 @@
 		"test:scripts": "node --test scripts/tests/*.test.mjs",
 		"publication:check": "node scripts/validate-package-publication.mjs",
 		"templates:sync": "node scripts/sync-templates.mjs",
+		"deps:sync": "node scripts/sync-injected-deps.mjs",
 		"templates:check": "node scripts/project-templates.mjs --check",
 		"templates:lock": "node scripts/lock-templates.mjs",
 		"templates:lock:check": "node scripts/lock-templates.mjs --check",

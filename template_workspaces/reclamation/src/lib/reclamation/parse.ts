@@ -5,7 +5,7 @@
  * into numbers; `extract.ts` decides what those numbers are.
  */
 
-import type { Point2, ProfilePoint, SeabedGrid } from './types.js';
+import type { Point2, SeabedGrid } from './types.js';
 
 export type Xyz = { readonly x: number; readonly y: number; readonly z: number };
 
@@ -161,66 +161,6 @@ export function griddedSurveyFromPoints(
 		requestedSpacingM: requestedSpacing,
 		appliedSpacingM: spacing
 	};
-}
-
-export type CsvTable = {
-	readonly header: readonly string[];
-	readonly rows: readonly (readonly string[])[];
-};
-
-export function parseCsv(text: string): CsvTable {
-	const lines = text.split(/\r?\n/).filter((line) => line.trim() !== '' && !line.startsWith('#'));
-	if (lines.length === 0) return { header: [], rows: [] };
-	const split = (line: string): string[] => line.split(/[,;\t]/).map((cell) => cell.trim());
-	const first = split(lines[0]);
-	const headerLooksNumeric = first.every((cell) => isNumeric(cell));
-	const header = headerLooksNumeric ? [] : first.map((cell) => cell.toLowerCase());
-	const rows = (headerLooksNumeric ? lines : lines.slice(1)).map(split);
-	return { header, rows };
-}
-
-function columnIndex(header: readonly string[], ...candidates: readonly string[]): number {
-	for (const candidate of candidates) {
-		const index = header.indexOf(candidate);
-		if (index >= 0) return index;
-	}
-	return -1;
-}
-
-/**
- * Parse section profiles from CSV.
- *
- * Columns: `station_m`, `z_cd_m` (or `z_m`), `layer`, and an optional `profile`
- * column carrying the section id. Without a `profile` column every row belongs
- * to the single section named by `defaultProfileId`.
- */
-export function parseProfileCsv(
-	text: string,
-	defaultProfileId: string
-): Record<string, ProfilePoint[]> {
-	const table = parseCsv(text);
-	const header = table.header;
-	const stationColumn = header.length ? columnIndex(header, 'station_m', 'station', 's_m', 's') : 0;
-	const zColumn = header.length ? columnIndex(header, 'z_cd_m', 'z_m', 'z', 'level_m') : 1;
-	const layerColumn = header.length ? columnIndex(header, 'layer', 'material', 'label') : 2;
-	const profileColumn = header.length
-		? columnIndex(header, 'profile', 'section', 'section_id')
-		: -1;
-
-	const profiles: Record<string, ProfilePoint[]> = {};
-	for (const row of table.rows) {
-		const station = Number(row[stationColumn >= 0 ? stationColumn : 0]);
-		const z = Number(row[zColumn >= 0 ? zColumn : 1]);
-		if (!Number.isFinite(station) || !Number.isFinite(z)) continue;
-		const layer = (layerColumn >= 0 ? (row[layerColumn] ?? '') : '').trim() || 'grade';
-		const profileId =
-			(profileColumn >= 0 ? (row[profileColumn] ?? '') : '').trim() || defaultProfileId;
-		(profiles[profileId] ??= []).push({ stationM: station, zCdM: z, layer: layer.toLowerCase() });
-	}
-	for (const points of Object.values(profiles)) {
-		points.sort((a, b) => a.stationM - b.stationM);
-	}
-	return profiles;
 }
 
 /** Read a closed or open ring of `[x, y]` pairs out of arbitrary JSON. */

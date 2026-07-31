@@ -8,6 +8,7 @@
 	import Button, { buttonVariants } from '../button/button.svelte';
 	import StarRating from './star-rating.svelte';
 	import Star from './star-rating-star.svelte';
+	import { Inline, Stack } from '#lib/layout';
 
 	// ============================================================================
 	// COMPONENT PROPS
@@ -182,20 +183,20 @@
 		</Popover.Trigger>
 
 		<Popover.Content class="w-80 p-4" align="start">
-			<div class="space-y-3">
-				<div class="flex items-center gap-2">
+			<Stack gap="sm">
+				<Inline gap="sm">
 					<Icon icon="lucide:star" class="h-5 w-5 text-yellow-500" />
 					<h4 class="font-semibold text-foreground">Rating Details</h4>
-				</div>
+				</Inline>
 
 				{#if hasValidRatings}
-					<div class="space-y-2">
+					<Stack gap="sm">
 						{#each validRatings as rating, index (index)}
-							<div class="flex items-center justify-between rounded-md bg-muted/40 p-3">
+							<Inline justify="between" gap="sm" class="rounded-md bg-muted/40 p-3">
 								<span class="text-sm font-medium">
 									{multiple ? `Rating #${index + 1}` : 'Current Rating'}
 								</span>
-								<div class="flex items-center gap-2">
+								<Inline gap="sm">
 									<StarRating value={rating} readonly class="text-yellow-400">
 										{#snippet children({ items })}
 											{#each items as item (item.index)}
@@ -204,17 +205,17 @@
 										{/snippet}
 									</StarRating>
 									<span class="text-sm font-semibold">{rating}/5</span>
-								</div>
-							</div>
+								</Inline>
+							</Inline>
 						{/each}
-					</div>
+					</Stack>
 				{:else}
 					<div class="py-4 text-center">
 						<Icon icon="lucide:star" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
 						<p class="text-sm text-muted-foreground">No ratings assigned</p>
 					</div>
 				{/if}
-			</div>
+			</Stack>
 		</Popover.Content>
 	</Popover.Root>
 
@@ -270,24 +271,24 @@
 		</Popover.Trigger>
 
 		<Popover.Content class="p-0" align="start" sideOffset={4}>
-			<div class="space-y-4 p-1">
+			<Stack gap="md" class="p-1">
 				{#if coercedRatings.length === 0}
 					<!-- Empty state -->
-					<div class="p-4 py-8 text-center">
-						<Icon icon="lucide:star" class="mx-auto mb-3 h-12 w-12 text-muted-foreground" />
-						<h4 class="mb-1 font-medium text-foreground">No ratings configured</h4>
-						<p class="mb-4 text-sm text-muted-foreground">Add your first rating to get started</p>
+					<Stack gap="sm" class="p-4 py-8 text-center">
+						<Icon icon="lucide:star" class="mx-auto h-12 w-12 text-muted-foreground" />
+						<h4 class="font-medium text-foreground">No ratings configured</h4>
+						<p class="text-sm text-muted-foreground">Add your first rating to get started</p>
 						<Button variant="outline" onclick={addRating} class="border-dashed" {disabled}>
 							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
 							Add first rating
 						</Button>
-					</div>
+					</Stack>
 				{:else}
 					<!-- Ratings list -->
-					<div class="space-y-3 p-4">
+					<Stack gap="sm" class="p-4">
 						{#each coercedRatings as rating, index (index)}
 							{@const entryState = getEntryState(rating)}
-							<div class="flex items-center gap-3">
+							<Inline gap="md">
 								<!-- Visual indicator for entry state -->
 								<div class="flex shrink-0">
 									{#if entryState === 'valid'}
@@ -298,7 +299,7 @@
 								</div>
 
 								<!-- Star Rating Input -->
-								<div class="flex-1">
+								<Inline gap="sm" class="flex-1">
 									<StarRating
 										value={rating || undefined}
 										onValueChange={(newRating) => updateRating(index, newRating)}
@@ -315,9 +316,9 @@
 										{/snippet}
 									</StarRating>
 									{#if rating > 0}
-										<span class="ml-2 text-sm text-muted-foreground">{rating}/5</span>
+										<span class="text-sm text-muted-foreground">{rating}/5</span>
 									{/if}
-								</div>
+								</Inline>
 
 								<!-- Remove button -->
 								{#if coercedRatings.length > 1}
@@ -331,7 +332,7 @@
 										<Icon icon="lucide:x" class="h-4 w-4" />
 									</Button>
 								{/if}
-							</div>
+							</Inline>
 						{/each}
 
 						<!-- Add button -->
@@ -344,9 +345,9 @@
 							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
 							Add rating
 						</Button>
-					</div>
+					</Stack>
 				{/if}
-			</div>
+			</Stack>
 		</Popover.Content>
 	</Popover.Root>
 
@@ -354,8 +355,8 @@
 	<!-- SINGLE EDIT MODE: Simple star picker -->
 	<!-- ============================================================================ -->
 {:else}
-	<div class={cn('space-y-2', className)} {style}>
-		<div class="flex items-center gap-3">
+	<Stack gap="sm" class={className} {style}>
+		<Inline gap="md">
 			<!-- Star Rating Component -->
 			<StarRating
 				allowHalf={true}
@@ -389,6 +390,6 @@
 					<Icon icon="lucide:x" class="h-4 w-4" />
 				</Button>
 			{/if}
-		</div>
-	</div>
+		</Inline>
+	</Stack>
 {/if}

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '@norbital-ai/ui/button';
 	import { Input } from '@norbital-ai/ui/input';
-	import { Stack } from '@norbital-ai/ui/layout';
+	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { watch } from 'runed';
 	import { specialAmountsSchema, type SpecialAmounts } from './+definition.js';
 	import type { RendererProps } from './$types.js';
@@ -71,7 +71,7 @@
 			<p class="text-sm text-muted-foreground">No special-rule amounts.</p>
 		{/if}
 		{#each rows as row, index (row.id)}
-			<div class="flex items-end gap-2">
+			<Inline align="end" gap="xs">
 				<label class="grid flex-1 gap-1.5 text-sm font-medium">
 					Rule
 					<Input
@@ -111,17 +111,15 @@
 				>
 					Remove
 				</Button>
-			</div>
+			</Inline>
 		{/each}
-		<div>
-			<Button
-				variant="outline"
-				size="sm"
-				{disabled}
-				onclick={() => commit([...rows, { id: crypto.randomUUID(), rule: '', amount: 0 }])}
-			>
-				Add rule amount
-			</Button>
-		</div>
+		<Button
+			variant="outline"
+			size="sm"
+			{disabled}
+			onclick={() => commit([...rows, { id: crypto.randomUUID(), rule: '', amount: 0 }])}
+		>
+			Add rule amount
+		</Button>
 	</Stack>
 {/if}

@@ -19,6 +19,14 @@ type TCollectionHookEventData = {
 	data?: unknown;
 };
 
+type ApprovalSyncReceipt = {
+	readonly message: string;
+	/** Highest committed feed sequence after the terminal transition and its lifecycle hook. */
+	readonly sync_sequence: string;
+	/** Root record used for a bounded authoritative fallback if the live feed cannot catch up. */
+	readonly affected_record?: { readonly collection: string; readonly id: string };
+};
+
 function approvalRequestOrThrow(value: unknown): TApprovalRequest {
 	try {
 		return approvalRequestFromRow(value);
@@ -86,7 +94,7 @@ export async function runProcessApprovalRequestAction({
 	action,
 	comments,
 	isSupercede
-}: ProcessApprovalRequestActionInput): Promise<{ message: string }> {
+}: ProcessApprovalRequestActionInput): Promise<ApprovalSyncReceipt> {
 	const { getWorkspace } = await import('$lib/server/bootstrap/workspace_store.js');
 	const { loadApprovalRequestRow } =
 		await import('$lib/server/collection/access_control/approval_service.server.js');
@@ -123,20 +131,49 @@ export async function runProcessApprovalRequestAction({
 		event: actionHook.event
 	});
 
-	return { message: 'Action processed successfully' };
+	return approvalSyncReceipt('Action processed successfully', updatedRequest);
 }
 
 export async function runWithdrawApprovalRequest({
 	approval_request_id
-}: WithdrawApprovalRequestInput): Promise<{ message: string }> {
+}: WithdrawApprovalRequestInput): Promise<ApprovalSyncReceipt> {
 	const { getWorkspace } = await import('$lib/server/bootstrap/workspace_store.js');
 	const { withdrawApprovalRequest } =
 		await import('$lib/server/collection/access_control/approval_service.server.js');
-	approvalRequestOrThrow(
+	const updatedRequest = approvalRequestOrThrow(
 		await withdrawApprovalRequest(
 			approval_request_id,
 			getWorkspace({ provision: true }).baseScope.requestor
 		)
 	);
-	return { message: 'Approval request withdrawn successfully' };
+	return approvalSyncReceipt('Approval request withdrawn successfully', updatedRequest);
+}
+
+/**
+ * A command response is not complete while the caller's replica still shows the state from before
+ * the command. Returning the committed outbox watermark lets the client wait on the same ordered
+ * feed that every other tab consumes; the root id is only a bounded fallback for a broken stream.
+ */
+async function approvalSyncReceipt(
+	message: string,
+	approvalRequest: TApprovalRequest
+): Promise<ApprovalSyncReceipt> {
+	const { getWorkspace } = await import('$lib/server/bootstrap/workspace_store.js');
+	const { currentOutboxWatermark } =
+		await import('$lib/server/collection/sync/outbox-tailer.server.js');
+	const root = (approvalRequest.locked_record_refs ?? []).find(
+		(ref) => ref.collection_name === approvalRequest.collection_name
+	);
+	return {
+		message,
+		sync_sequence: await currentOutboxWatermark(getWorkspace({ provision: true })),
+		...(root
+			? {
+					affected_record: {
+						collection: root.collection_name,
+						id: root.record_id
+					}
+				}
+			: {})
+	};
 }

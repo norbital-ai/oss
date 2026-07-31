@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
+	import { Stack } from '#lib/layout';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
@@ -38,11 +39,11 @@
 				{@render icon()}
 			</div>
 		{/if}
-		<div class="space-y-1">
+		<Stack gap="xs">
 			<h3 class="text-sm font-medium">{title}</h3>
 			{#if description}
 				<p class="text-muted-foreground text-sm">{description}</p>
 			{/if}
-		</div>
+		</Stack>
 	{/if}
 </div>

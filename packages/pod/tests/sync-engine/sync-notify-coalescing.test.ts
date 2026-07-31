@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Client, Pool } from 'pg';
-import { startPostgres, dockerAvailable, type PgHarness } from '../support/pg-harness.js';
+import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema } from '../support/pod-schema.js';
 
 /**
@@ -15,9 +15,9 @@ import { applyPodSchema } from '../support/pod-schema.js';
  * statement and one commit, and it was announcing itself a few thousand times.
  */
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
-describe.skipIf(!hasDocker)('change-feed notifications are coalesced per statement', () => {
+describe('change-feed notifications are coalesced per statement', () => {
 	let pg: PgHarness;
 	let pool: Pool;
 	let listener: Client;

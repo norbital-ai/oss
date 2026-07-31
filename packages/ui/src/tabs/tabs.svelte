@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { IconWrapper } from '#lib/icon-wrapper';
+	import { Cluster, Inline, INSET_MX_CLASS } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import { Tabs as TabsPrimitive } from 'bits-ui';
@@ -67,7 +68,7 @@
 		layout ?? (variant === 'default' && listClass == null ? 'responsive' : 'horizontal')
 	);
 	const resolvedListClass = $derived(
-		listClass ?? (variant === 'default' ? 'mx-4 mb-0 sm:mx-6' : undefined)
+		listClass ?? (variant === 'default' ? INSET_MX_CLASS : undefined)
 	);
 </script>
 
@@ -91,14 +92,14 @@
 			{:else if configTab?.label !== undefined && isSnippet(configTab.label)}
 				{@render configTab.label()}
 			{:else}
-				<span class="inline-flex items-center justify-center gap-1.5">
+				<Inline as="span" gap="xs" justify="center">
 					{#if tab.icon}
 						<IconWrapper name={tab.icon} class={tab.label ? 'size-3.5' : 'size-4'} />
 					{/if}
 					{#if tab.label}
 						{tab.label}
 					{/if}
-				</span>
+				</Inline>
 			{/if}
 		{/snippet}
 	</TabsList>
@@ -110,7 +111,7 @@
 <TabsPrimitive.Root
 	class={cn(
 		showContent
-			? 'grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-clip'
+			? 'grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2 overflow-clip'
 			: 'min-w-0 shrink-0',
 		className
 	)}
@@ -124,9 +125,9 @@
 	{#if header}
 		{@render header({ list: tabList })}
 	{:else if listPrefix || listSuffix}
-		<div class="flex flex-wrap items-center gap-2">
+		<Cluster gap="sm" align="center">
 			{@render tabList()}
-		</div>
+		</Cluster>
 	{:else}
 		{@render tabList()}
 	{/if}

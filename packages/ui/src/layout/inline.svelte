@@ -44,7 +44,7 @@
 	this={as}
 	class={cn(
 		className,
-		'flex min-w-0 flex-row flex-nowrap',
+		'flex min-h-0 min-w-0 flex-row flex-nowrap',
 		GAP_CLASSES[gap],
 		alignClasses[align],
 		justifyClasses[justify]

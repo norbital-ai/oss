@@ -6,6 +6,7 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import { Combobox } from '#lib/combobox';
+	import { Cluster } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import { getCollectionClientContext } from '#lib/collection-runtime';
@@ -152,7 +153,7 @@
 
 {#snippet optionFilters()}
 	{#if filterFields.length > 0}
-		<div class="flex flex-wrap gap-1.5 border-b border-border px-2 pb-2">
+		<Cluster gap="xs" class="border-b border-border px-2 pb-2">
 			{#each filterFields as field (field)}
 				<input
 					class="h-7 min-w-24 flex-1 rounded-md border border-border bg-background px-2 text-xs"
@@ -162,7 +163,7 @@
 						(activeFilters = { ...activeFilters, [field]: event.currentTarget.value })}
 				/>
 			{/each}
-		</div>
+		</Cluster>
 	{/if}
 {/snippet}
 

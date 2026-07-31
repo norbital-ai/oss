@@ -45,6 +45,7 @@
 				<div
 					class="absolute inset-x-1.5 top-2 bottom-2 rounded-lg border border-border/70 bg-muted/45"
 				></div>
+				<!-- stupidity:allow UI5 -- loading window is a decorative clip boundary -->
 				<div
 					class="workspace-loader-window absolute inset-x-0 top-0 bottom-4 overflow-hidden rounded-lg border border-border bg-card shadow-card"
 				>

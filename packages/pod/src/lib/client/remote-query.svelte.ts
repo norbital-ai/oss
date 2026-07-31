@@ -153,19 +153,6 @@ export class RemoteQueryResourceManager<T> {
 		return new ReactiveRemoteQuery(resource);
 	}
 
-	/**
-	 * Forget every cached resource and family seed.
-	 *
-	 * Only for leaving the tenant these results belong to. `invalidate` re-runs a query against the
-	 * same workspace; this drops the results outright, because after an organization switch they
-	 * describe records the next organization must never see.
-	 */
-	clear(): void {
-		for (const resource of this.resources.values()) resource.controller?.abort();
-		this.resources.clear();
-		this.families.clear();
-	}
-
 	invalidate(keyPrefix: string): void {
 		for (const [key, resource] of this.resources) {
 			if (key.startsWith(keyPrefix)) resource.start();

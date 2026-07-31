@@ -20,6 +20,7 @@
 	import { formatUtcInstantLocal, parseUtcInstant } from '@norbital-ai/std/date';
 	import { type DateRange } from 'bits-ui';
 	import type { Snippet } from 'svelte';
+	import { Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { RangeCalendar } from '#lib/range-calendar';
 	import type { TimeRange } from '#lib/time-range';
@@ -263,22 +264,24 @@
 
 {#snippet RangeBadge(range: StringDateRange, index: number, isActive: boolean = false)}
 	{@const status = getRangeStatus(range)}
-	<div
+	<Inline
+		justify="between"
+		gap="sm"
+		class="rounded-lg border px-3 py-2 text-sm transition-all
+       {isActive && !cantMutate ? 'border-brand bg-brand-100' : 'border-border bg-background'}
+       {status === 'complete' ? 'shadow-sm' : 'border-dashed'}
+       {multi && !isActive && !cantMutate ? 'cursor-pointer hover:bg-muted' : ''}"
 		role="button"
-		tabindex="0"
+		tabindex={0}
 		onkeydown={(e) => {
 			if (e.key === 'Enter' || e.key === ' ') {
 				e.preventDefault();
 				if (multi && !isActive && !cantMutate) setActiveRange(index);
 			}
 		}}
-		class="flex items-center justify-between rounded-lg border px-3 py-2 text-sm transition-all
-       {isActive && !cantMutate ? 'border-brand bg-brand-100' : 'border-border bg-background'}
-       {status === 'complete' ? 'shadow-sm' : 'border-dashed'}
-       {multi && !isActive && !cantMutate ? 'cursor-pointer hover:bg-muted' : ''}"
 		onclick={multi && !isActive && !cantMutate ? () => setActiveRange(index) : undefined}
 	>
-		<div class="flex min-w-0 flex-1 items-center gap-2">
+		<Inline gap="sm" class="flex-1">
 			<div
 				class="h-2 w-2 shrink-0 rounded-full
                {status === 'complete'
@@ -290,9 +293,9 @@
 			<span class="truncate {status === 'empty' ? 'text-muted-foreground' : 'text-foreground'}">
 				{formatRange(range)}
 			</span>
-		</div>
+		</Inline>
 		{#if !cantMutate && multi}
-			<div class="flex shrink-0 items-center gap-1">
+			<Inline gap="xs">
 				<button
 					type="button"
 					onclick={(e) => {
@@ -304,9 +307,9 @@
 				>
 					<Icon icon="lucide:x" class="h-3 w-3" />
 				</button>
-			</div>
+			</Inline>
 		{/if}
-	</div>
+	</Inline>
 {/snippet}
 
 {#snippet TriggerContent()}
@@ -322,7 +325,7 @@
 			{/if}
 		</span>
 	{:else if multi}
-		<div class="flex min-w-0 flex-1 items-center gap-2">
+		<Inline gap="sm" class="flex-1">
 			<span class="shrink-0 rounded-full bg-brand-100 px-2 py-0.5 text-xs text-brand-700">
 				{ranges.length} range{ranges.length !== 1 ? 's' : ''}
 			</span>
@@ -334,7 +337,7 @@
 					• +{ranges.length - maxTriggerRanges} more
 				{/if}
 			</span>
-		</div>
+		</Inline>
 	{:else}
 		<span class="flex-1 truncate text-left text-xs font-normal">{formatRange(ranges[0])}</span>
 	{/if}
@@ -342,42 +345,42 @@
 
 {#snippet RangeListSidebar()}
 	{#if multi}
-		<div class="min-w-[280px] border-l border-border bg-muted">
-			<div class="p-4">
-				<div class="mb-4 flex items-center justify-between">
-					<h4 class="text-sm font-semibold text-foreground">Selected Ranges ({ranges.length})</h4>
-					{#if hasSelection && !cantMutate}
-						<button
-							type="button"
-							onclick={clearAllRanges}
-							class="text-xs font-medium text-destructive hover:text-destructive-foreground"
-						>
-							Clear all
-						</button>
-					{/if}
-				</div>
-				<div class="mb-4 max-h-[300px] space-y-2 overflow-y-auto">
+		<Stack gap="md" class="min-w-[280px] border-l border-border bg-muted p-4">
+			<Inline justify="between" gap="sm">
+				<h4 class="text-sm font-semibold text-foreground">Selected Ranges ({ranges.length})</h4>
+				{#if hasSelection && !cantMutate}
+					<button
+						type="button"
+						onclick={clearAllRanges}
+						class="text-xs font-medium text-destructive hover:text-destructive-foreground"
+					>
+						Clear all
+					</button>
+				{/if}
+			</Inline>
+			<Scroll axis="y" name="Selected ranges" class="max-h-[300px]">
+				<Stack gap="sm">
 					{#each ranges as range, index}
 						{@render RangeBadge(range, index, index === activeRangeIndex)}
 					{/each}
 					{#if ranges.length === 0}
-						<div class="py-8 text-center text-muted-foreground">
-							<Icon icon="lucide:calendar" class="mx-auto mb-2 h-8 w-8" />
+						<Stack gap="sm" class="items-center py-8 text-center text-muted-foreground">
+							<Icon icon="lucide:calendar" class="size-8" />
 							<p class="text-sm">No ranges selected</p>
-						</div>
+						</Stack>
 					{/if}
-				</div>
-				<button
-					type="button"
-					onclick={addNewRange}
-					disabled={cantMutate}
-					class="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-brand-300 hover:text-brand disabled:cursor-not-allowed disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
-				>
-					<Icon icon="lucide:plus" class="h-4 w-4" />
-					Add new range
-				</button>
-			</div>
-		</div>
+				</Stack>
+			</Scroll>
+			<button
+				type="button"
+				onclick={addNewRange}
+				disabled={cantMutate}
+				class="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-brand-300 hover:text-brand disabled:cursor-not-allowed disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
+			>
+				<Icon icon="lucide:plus" class="h-4 w-4" />
+				Add new range
+			</button>
+		</Stack>
 	{/if}
 {/snippet}
 
@@ -414,8 +417,8 @@
 	</div>
 
 	<Popover.Content class="w-auto p-0 shadow-lg" {align} sameWidth={false}>
-		<div class="flex">
-			<div class="p-4">
+		<Inline align="stretch" gap="none">
+			<Stack gap="md" class="p-4">
 				<RangeCalendar
 					value={activeDateRange}
 					onValueChange={handleDateChange}
@@ -449,22 +452,21 @@
 					{isDateUnavailable}
 				/>
 				{#if allowTime && activeDateRange.start}
-					<div class="mt-4 border-t border-border pt-4">
-						<TimeView
-							{isSameDay}
-							hasEnd={Boolean(activeDateRange.end)}
-							value={activeTimes}
-							granularity={timeGranularity}
-							{hourCycle}
-							disabled={cantMutate}
-							onStartChange={(time) => handleTimeChange({ isStart: true, time })}
-							onEndChange={(time) => handleTimeChange({ isEnd: true, time })}
-							onRangeChange={(range) => handleTimeChange({ range })}
-						/>
-					</div>
+					<TimeView
+						class="border-t border-border pt-4"
+						{isSameDay}
+						hasEnd={Boolean(activeDateRange.end)}
+						value={activeTimes}
+						granularity={timeGranularity}
+						{hourCycle}
+						disabled={cantMutate}
+						onStartChange={(time) => handleTimeChange({ isStart: true, time })}
+						onEndChange={(time) => handleTimeChange({ isEnd: true, time })}
+						onRangeChange={(range) => handleTimeChange({ range })}
+					/>
 				{/if}
-			</div>
+			</Stack>
 			{@render RangeListSidebar()}
-		</div>
+		</Inline>
 	</Popover.Content>
 </Popover.Root>

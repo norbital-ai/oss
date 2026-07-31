@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Checkbox } from '#lib/checkbox';
+	import { Inline } from '#lib/layout';
 	import type { Snippet } from 'svelte';
 	import { getSelectionCardContext } from './selection-card-root.svelte';
 
@@ -53,7 +54,7 @@
 	aria-pressed={isSelected(value)}
 	aria-disabled={disabled}
 >
-	<div class="flex grow gap-3">
+	<Inline gap="md" class="grow">
 		<div class="flex flex-col">
 			<span class="text-sm font-medium">
 				{@render header()}
@@ -62,7 +63,7 @@
 				{@render body()}
 			</span>
 		</div>
-	</div>
+	</Inline>
 	<Checkbox
 		checked={isSelected(value)}
 		class="pointer-events-none mt-1"

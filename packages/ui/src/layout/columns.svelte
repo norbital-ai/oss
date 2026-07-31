@@ -36,7 +36,7 @@
 
 <svelte:element
 	this={as}
-	class={cn(className, 'grid min-w-0', GAP_CLASSES[gap], countClasses[count])}
+	class={cn(className, 'grid min-h-0 min-w-0', GAP_CLASSES[gap], countClasses[count])}
 	data-layout="columns"
 	data-columns={count}
 	{...restProps}

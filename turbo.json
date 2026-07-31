@@ -20,7 +20,12 @@
 			"dependsOn": ["^build", "^lint"]
 		},
 		"test": {
-			"dependsOn": ["^build", "^test"]
+			// A package's own build, not just its dependencies'. Pod's runtime harness executes
+			// `build/bin/invocation/index.js` to build a template, and platform-utils asserts over its
+			// build output — so without this, `turbo test` runs those suites against whatever `build/`
+			// happens to be there. Worse, `build` opens with `rm -rf build`, so an unordered pair
+			// deletes the binary a running test is executing.
+			"dependsOn": ["^build", "build", "^test"]
 		}
 	}
 }

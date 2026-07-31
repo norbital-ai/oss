@@ -5,6 +5,7 @@
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import * as DropdownMenu from '#lib/dropdown-menu';
+	import { Inline } from '#lib/layout';
 	import * as Sidebar from '#lib/sidebar';
 	import { Spinner } from '#lib/spinner';
 	import { ThemeToggle } from '#lib/theme-toggle';
@@ -92,10 +93,10 @@
 		aria-live="polite"
 		aria-label={`Switching to ${switchingOrganization.name}`}
 	>
-		<div class="flex items-center gap-3 text-sm font-medium">
+		<Inline gap="md" class="text-sm font-medium">
 			<Spinner class="size-4" />
 			<span>Switching to {switchingOrganization.name}</span>
-		</div>
+		</Inline>
 	</div>
 {/if}
 
@@ -113,10 +114,10 @@
 {#snippet organizationSelection(organizationId: string)}
 	{@const organization =
 		model.organizations.find((entry) => entry.id === organizationId) ?? model.activeOrganization}
-	<div class="flex min-w-0 items-center gap-2">
+	<Inline gap="sm" class="min-w-0">
 		{@render organizationAvatar(organization)}
 		{#if displayExpanded}<span class="min-w-0 flex-1 truncate">{organization.name}</span>{/if}
-	</div>
+	</Inline>
 {/snippet}
 
 {#snippet organizationSwitcher()}
@@ -146,7 +147,7 @@
 <Sidebar.Indicator />
 
 <Sidebar.Header class="gap-0 p-2">
-	<div class="flex h-8 items-center gap-0.5">
+	<Inline gap="xs" class="h-8">
 		{#if displayExpanded}
 			<div class="min-w-0 flex-1">{@render organizationSwitcher()}</div>
 			<ThemeToggle class="size-8 shrink-0" />
@@ -160,10 +161,10 @@
 				{@render organizationSwitcher()}
 			</div>
 		{/if}
-	</div>
+	</Inline>
 </Sidebar.Header>
 
-<Sidebar.Content class="overflow-x-hidden text-xs">
+<Sidebar.Content class="text-xs">
 	<WorkspaceSidebarNavigationSection
 		label="Platform"
 		items={model.system}

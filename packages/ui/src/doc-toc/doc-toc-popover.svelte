@@ -1,7 +1,8 @@
 <script lang="ts">
-	import * as Collapsible from '#lib/collapsible';
-	import { cn } from '#lib/utils';
-	import Icon from '@iconify/svelte';
+import * as Collapsible from '#lib/collapsible';
+import { cn } from '#lib/utils';
+import { Inline } from '#lib/layout';
+import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
 	import { findLastActiveDocTocIndex, getActiveDocTocItem } from './anchor-observer';
 	import DocTocItem from './doc-toc-item.svelte';
@@ -74,17 +75,21 @@
 				</Collapsible.Trigger>
 
 				<Collapsible.Content class="w-full">
+					<!-- stupidity:allow UI5 -- popover content boundary -->
 					<div
 						class="w-full overflow-hidden rounded-xl border border-border bg-background/95 shadow-lg backdrop-blur-sm"
 					>
-						<div
-							class="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2.5"
-						>
-							<p class="text-micro font-semibold tracking-[0.08em] text-muted-foreground uppercase">
-								{title}
-							</p>
-							<span class="truncate text-xs text-muted-foreground">{activeLabel}</span>
-						</div>
+					<Inline
+						justify="between"
+						gap="sm"
+						class="border-b border-border/60 px-3 py-2.5"
+					>
+						<p class="text-micro font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+							{title}
+						</p>
+						<span class="truncate text-xs text-muted-foreground">{activeLabel}</span>
+					</Inline>
+						<!-- stupidity:allow UI5 -- popover content boundary -->
 						<div class="max-h-[min(50dvh,20rem)] overflow-hidden">
 							<DocTocScrollArea bind:scrollElement class="max-h-[min(50dvh,20rem)] px-3 pt-2 pb-3">
 								<DocTocItems>

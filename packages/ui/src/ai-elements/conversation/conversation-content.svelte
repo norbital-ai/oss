@@ -3,12 +3,13 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
-	export interface ConversationContentProps extends WithElementRef<HTMLAttributes<HTMLDivElement>> {
+	export interface ConversationContentProps extends WithElementRef<HTMLAttributes<HTMLElement>> {
 		children?: Snippet;
 	}
 </script>
 
 <script lang="ts">
+	import { Scroll, Stack } from '#lib/layout';
 	import { getStickToBottomContext } from './stick-to-bottom-context.svelte.js';
 	import { watch } from 'runed';
 
@@ -32,19 +33,18 @@
 	);
 </script>
 
-<!--
-  Scroller is the overflow root; content is the sized box ResizeObserver watches.
-  Layout/spacing classes go on content so space-y / gap still apply to messages.
--->
-<div
-	bind:this={ref}
-	class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
+<Scroll
+	axis="y"
+	name="Conversation messages"
+	class="min-h-0 min-w-0 flex-1"
+	bind:ref={ref}
 	{...restProps}
 >
-	<div
+	<Stack
+		gap="xl"
 		data-stick-to-bottom-content
-		class={cn('flex min-h-min min-w-0 w-full max-w-full flex-col gap-8 p-4', className)}
+		class={cn('min-h-min min-w-0 w-full max-w-full p-4', className)}
 	>
 		{@render children?.()}
-	</div>
-</div>
+	</Stack>
+</Scroll>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { Inline, Stack } from '#lib/layout';
 	import type { DataRendererProps } from '../data-renderer.types.js';
 	import PhoneInput from './phone_number.input.svelte';
 
@@ -32,33 +33,31 @@
 </script>
 
 {#if field.array}
-	<div class={className}>
-		<div class="space-y-2">
-			{#each values as phone, index (`${index}-${phone}`)}
-				<div class="flex items-start gap-2">
-					<PhoneInput
-						id={id ? `${id}-${index}` : undefined}
-						value={phone}
-						placeholder={phonePlaceholder}
-						{locale}
-						{disabled}
-						class="min-w-0 flex-1"
-						onValueChange={(next) => updateAt(index, next)}
-					/>
-					<Button
-						type="button"
-						variant="outline"
-						size="icon"
-						class="shrink-0"
-						aria-label="Remove phone number"
-						{disabled}
-						onclick={() => removeAt(index)}
-					>
-						<Icon icon="lucide:x" />
-					</Button>
-				</div>
-			{/each}
-		</div>
+	<Stack gap="sm" class={className}>
+		{#each values as phone, index (`${index}-${phone}`)}
+			<Inline align="start" gap="sm">
+				<PhoneInput
+					id={id ? `${id}-${index}` : undefined}
+					value={phone}
+					placeholder={phonePlaceholder}
+					{locale}
+					{disabled}
+					class="min-w-0 flex-1"
+					onValueChange={(next) => updateAt(index, next)}
+				/>
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="shrink-0"
+					aria-label="Remove phone number"
+					{disabled}
+					onclick={() => removeAt(index)}
+				>
+					<Icon icon="lucide:x" />
+				</Button>
+			</Inline>
+		{/each}
 		<Button
 			type="button"
 			variant="outline"
@@ -70,7 +69,7 @@
 			<Icon icon="lucide:plus" />
 			Add phone number
 		</Button>
-	</div>
+	</Stack>
 {:else}
 	<PhoneInput
 		{id}

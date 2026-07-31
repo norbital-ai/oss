@@ -167,11 +167,11 @@
 
 	const listLayoutClasses: Record<TabListLayout, string> = {
 		horizontal:
-			'relative mb-2 flex max-w-full flex-nowrap items-center overflow-x-auto overflow-y-hidden overscroll-x-contain',
+			'relative flex max-w-full flex-nowrap items-center overflow-x-auto overflow-y-hidden overscroll-x-contain',
 		vertical: 'relative mr-2 flex w-full flex-col items-stretch',
 		/** Horizontal with overflow scroll on narrow containers (never stacks vertically). */
 		responsive:
-			'relative mb-2 flex w-full max-w-full flex-nowrap items-center overflow-x-auto overflow-y-hidden overscroll-x-contain'
+			'relative flex w-full max-w-full flex-nowrap items-center overflow-x-auto overflow-y-hidden overscroll-x-contain'
 	};
 
 	const listHeightClasses = $derived.by(() => {

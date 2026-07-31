@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Badge } from '#lib/badge';
 	import { Button } from '#lib/button';
+	import { Inline } from '#lib/layout';
 
 	let {
 		currentStepIndex,
@@ -25,7 +26,7 @@
 </script>
 
 <div class="flex h-11 items-center justify-between border-b px-4">
-	<div class="flex items-center gap-2">
+	<Inline gap="sm">
 		<Button
 			variant="ghost"
 			size="icon"
@@ -49,5 +50,5 @@
 		>
 			<Icon icon="lucide:chevron-right" class="h-4 w-4" />
 		</Button>
-	</div>
+	</Inline>
 </div>

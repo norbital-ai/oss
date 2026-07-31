@@ -14,6 +14,7 @@
 	const emblaCtx = getEmblaContext('<Carousel.Content/>')();
 </script>
 
+<!-- stupidity:allow UI5 -- carousel viewport crop -->
 <div
 	data-slot="carousel-content"
 	class="overflow-hidden"

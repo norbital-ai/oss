@@ -8,6 +8,7 @@
 	 * - Null-safe placeholders (never Command.Item)
 	 *********************************************************************/
 	import Icon from '@iconify/svelte';
+	import { Inline, Stack } from '#lib/layout';
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
 	import { groupBy } from 'es-toolkit/array';
@@ -379,32 +380,34 @@
 {/snippet}
 
 {#snippet loadingState()}
-	<div class={cn('flex items-center justify-center p-3', compactTextClass)}>
-		<Spinner class="mr-2 h-3 w-3" />
+	<Inline justify="center" gap="sm" class={cn('p-3', compactTextClass)}>
+		<Spinner class="h-3 w-3" />
 		Loading options...
-	</div>
+	</Inline>
 {/snippet}
 
 {#snippet errorState()}
-	<div
-		class={cn('flex flex-col items-center gap-2 p-3 text-destructive', compactTextClass)}
+	<Stack
+		gap="sm"
+		class={cn('items-center p-3 text-destructive', compactTextClass)}
 		role="alert"
 	>
 		<Icon icon="lucide:alert-circle" class="h-4 w-4" />
 		<span>Error: {error}</span>
-	</div>
+	</Stack>
 {/snippet}
 
 {#snippet emptyState()}
-	<div
+	<Stack
+		gap="sm"
 		class={cn(
-			'flex flex-col items-center gap-2 p-3 text-center text-muted-foreground',
+			'items-center p-3 text-center text-muted-foreground',
 			compactTextClass
 		)}
 	>
 		<Icon icon="lucide:inbox" class="h-4 w-4 text-muted-foreground" />
 		<span class="font-normal">{emptyMessage}</span>
-	</div>
+	</Stack>
 {/snippet}
 
 {#if isReadonlySimple}

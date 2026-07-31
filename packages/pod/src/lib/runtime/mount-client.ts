@@ -1,11 +1,10 @@
-import { mount, unmount, type Component } from 'svelte';
+import { mount, type Component } from 'svelte';
 import type { CollectionSurfaceRegistry } from '@norbital-ai/ui/collection-table';
 import type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';
 import PodApp from './pod-app.svelte';
-import { initializeWorkspaceClient, resetWorkspaceRuntime } from './client.js';
-import { bootstrapClientSync, teardownClientSync } from '../client/sync/replica.js';
+import { initializeWorkspaceClient } from './client.js';
+import { bootstrapClientSync } from '../client/sync/replica.js';
 import { setStorageScope } from '@norbital-ai/ui/storage-scope';
-import { goto } from '../client/router.svelte.js';
 import { warmAllCollections } from '../client/sync/client-sync.js';
 import type { TenantWorkspaceShellData } from '../client/workspace_shell_types.js';
 
@@ -16,10 +15,6 @@ import type { TenantWorkspaceShellData } from '../client/workspace_shell_types.j
  * navigating a few seconds later already finds the next collection local.
  */
 const WARM_START_DELAY_MS = 1_500;
-
-/** The live tree and what it was built from, so an organization switch can rebuild it. */
-let mounted: ReturnType<typeof mount> | null = null;
-let mountedModules: PodWorkspaceClientModules | null = null;
 
 export interface PodWorkspaceClientModules {
 	readonly apps: Readonly<Record<string, () => Promise<Component>>>;
@@ -62,7 +57,7 @@ export function mountPodWorkspace(modules: PodWorkspaceClientModules): void {
 			return { data, workspaceApi };
 		}
 	);
-	mounted = mount(PodApp, {
+	mount(PodApp, {
 		target: document.body,
 		props: {
 			apps: modules.apps,
@@ -71,65 +66,4 @@ export function mountPodWorkspace(modules: PodWorkspaceClientModules): void {
 			shellData
 		}
 	});
-	mountedModules = modules;
-}
-
-/**
- * Move this tab to another organization without reloading the document.
- *
- * The switch used to be `window.location.assign('/')`, which is correct by construction and slow
- * for it: the bundle is parsed and executed again to reach a screen the browser was already
- * showing. What made the reload necessary was module state — six query caches, the collection
- * client, the published schema, the replica handle and its warm bit all outlive a component tree,
- * and all of them belong to one tenant. Any of them carried across would show the previous
- * organization's records to the next.
- *
- * So the teardown is explicit and total rather than avoided: close the replica, clear the caches,
- * drop the schema, unmount the tree. Then mount again exactly as a cold load would, which is why
- * this reuses `mountPodWorkspace` instead of reproducing it — there is one description of how a
- * workspace starts, and a switch is just another start.
- *
- * Note the ORDER. Teardown happens before the new shell is fetched, so there is no window in which
- * the new organization's identity is active while the old one's rows are still cached.
- *
- * The URL is part of that teardown, and it is the piece that was missed. It lives in module state
- * too — `router.svelte.ts` holds one `SvelteURL` for the life of the tab — so a switch that only
- * rebuilt the tree remounted it onto the *previous* organization's route. Two failures followed
- * from that one omission: the shell resolved its app and sidebar from `/app/<previous-app>/…`, so
- * neither changed; and any collection surface on that route asked the new workspace client for a
- * collection the new organization does not have, which is undefined, and rendering it threw. A
- * hard reload appeared to "fix" it only because the reload landed somewhere the new organization
- * could actually serve.
- *
- * So the switch returns to the root and lets the new manifest decide the landing app, which is the
- * only route guaranteed to exist in every organization.
- */
-export async function switchOrganization(organizationId: string): Promise<void> {
-	const response = await fetch('/api/auth/organization/set-active', {
-		method: 'POST',
-		credentials: 'include',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ organizationId })
-	});
-	if (!response.ok) throw new Error('Unable to switch workspace');
-
-	const modules = mountedModules;
-	const tree = mounted;
-	if (!modules || !tree) {
-		// Nothing was mounted through this module, so there is no state here to trust. Fall back to
-		// the reload, which is always correct.
-		window.location.assign('/');
-		return;
-	}
-
-	await unmount(tree);
-	mounted = null;
-	resetWorkspaceRuntime();
-	setStorageScope(null);
-	await teardownClientSync();
-	// Before the remount, not after: the new tree reads the route on its first render, and a tree
-	// that renders the old organization's path never gets a second chance to be right.
-	await goto('/', { replaceState: true });
-
-	mountPodWorkspace(modules);
 }

@@ -5,7 +5,7 @@ import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime
 import { handleNorbitalRuntimeRequest } from '$lib/server/bootstrap/runtime_request.server.js';
 import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';
 import { NORBITAL_BASE_SCOPE_HEADER } from '$lib/server/bootstrap/host_base_scope.js';
-import { error, json, PodHttpError } from './http.js';
+import { error, isPodHttpError, json } from './http.js';
 import { runWithRequestEvent, type PodRequestEvent } from './request-context.js';
 import { loadTenantWorkspaceShellData } from './shell-data.server.js';
 import { toRuntimeWorkspace } from '$lib/authoring/workspace/workspace-runtime.js';
@@ -114,7 +114,7 @@ export async function handlePodRequest(
 	try {
 		return await runWithRequestEvent(event, () => runRequest(event));
 	} catch (caught) {
-		if (caught instanceof PodHttpError) {
+		if (isPodHttpError(caught)) {
 			return json(caught.body, { status: caught.status });
 		}
 		console.error('[pod-runtime]', caught);

@@ -5,6 +5,7 @@
 	 * - Sortable drag-and-drop once a lane is fully loaded
 	 */
 	import * as Card from '#lib/card';
+	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { Skeleton } from '#lib/skeleton';
 	import { Sortable } from '#lib/sortable';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
@@ -133,48 +134,30 @@
 	}
 </script>
 
-<div
-	class="flex min-h-0 flex-1 shrink-0 flex-col"
-	style="min-width: {minColumnWidth}px; width: {minColumnWidth}px;"
->
-	<div class="mb-2 flex items-center gap-1 px-1">
-		{#if columnTitleSnippet}
-			<div class="min-w-0">
-				{@render columnTitleSnippet({
-					columnId: column._id,
-					title: column.title,
-					column
-				})}
-			</div>
-		{:else}
-			<h2 class="text-sm font-semibold">{column.title}</h2>
-		{/if}
-		{#if column.totalCount !== undefined}
-			<span class="text-xs text-muted-foreground tabular-nums">{column.totalCount}</span>
-		{:else if column.items.length > 0}
-			<span class="text-xs text-muted-foreground tabular-nums">{column.items.length}</span>
-		{/if}
-		{#if columnHeaderActionSnippet}
-			<div class="ml-auto flex items-center">
-				{@render columnHeaderActionSnippet({ columnId: column._id })}
-			</div>
-		{/if}
-	</div>
-	<div
-		bind:this={containerRef}
-		class="flex flex-1 flex-col overflow-auto overflow-x-hidden rounded-md px-0.5"
-	>
-		{#if column.isLoading && column.items.length === 0}
-			<div class="w-full space-y-2" transition:fade={{ duration: 150 }}>
-				{#each Array.from({ length: 4 }) as _, index (index)}
-					{@render CardSkeleton()}
-				{/each}
-			</div>
-		{:else if column.items.length === 0}
-			<div class="flex h-full items-center justify-center p-4 text-muted-foreground">
-				<p>No items in this column</p>
-			</div>
-		{:else if canSort}
+<div class="min-w-0 flex-1 shrink-0" style="min-width: {minColumnWidth}px; width: {minColumnWidth}px;">
+	<Cover as="div" gap="sm" top={columnHeader}>
+		<Scroll
+			axis="y"
+			name={`${column.title} column`}
+			bind:ref={containerRef}
+			class="rounded-md px-0.5"
+		>
+			{#if column.isLoading && column.items.length === 0}
+				<div class="w-full" transition:fade={{ duration: 150 }}>
+					<Stack gap="sm">
+						{#each Array.from({ length: 4 }) as _, index (index)}
+							{@render CardSkeleton()}
+						{/each}
+					</Stack>
+				</div>
+			{:else if column.items.length === 0}
+				<Stack
+					gap="none"
+					class="h-full items-center justify-center p-4 text-muted-foreground"
+				>
+					<p>No items in this column</p>
+				</Stack>
+			{:else if canSort}
 			<Sortable.Root
 				items={sortableIds}
 				sortableGroup={groupName}
@@ -239,8 +222,35 @@
 				</div>
 			</div>
 		{/if}
-	</div>
+		</Scroll>
+	</Cover>
 </div>
+
+{#snippet columnHeader()}
+	<Inline gap="xs" class="px-1">
+		{#if columnTitleSnippet}
+			<div class="min-w-0">
+				{@render columnTitleSnippet({
+					columnId: column._id,
+					title: column.title,
+					column
+				})}
+			</div>
+		{:else}
+			<h2 class="text-sm font-semibold">{column.title}</h2>
+		{/if}
+		{#if column.totalCount !== undefined}
+			<span class="text-xs text-muted-foreground tabular-nums">{column.totalCount}</span>
+		{:else if column.items.length > 0}
+			<span class="text-xs text-muted-foreground tabular-nums">{column.items.length}</span>
+		{/if}
+		{#if columnHeaderActionSnippet}
+			<div class="ml-auto">
+				{@render columnHeaderActionSnippet({ columnId: column._id })}
+			</div>
+		{/if}
+	</Inline>
+{/snippet}
 
 {#snippet KanbanCard({
 	card,
@@ -256,15 +266,17 @@
 
 {#snippet CardSkeleton()}
 	<Card.Root class="rounded-md" style="height: {itemHeight}px;">
-		<Card.Content class="flex h-full animate-pulse flex-col space-y-2 p-3">
-			<Skeleton class="h-4 w-3/4 rounded" />
-			<Skeleton class="h-3 w-full rounded" />
-			<Skeleton class="h-3 w-2/3 rounded" />
-			<div class="flex-1"></div>
-			<div class="flex gap-2">
-				<Skeleton class="h-5 w-12 rounded" />
-				<Skeleton class="h-5 w-16 rounded" />
-			</div>
+		<Card.Content class="h-full animate-pulse p-3">
+			<Stack gap="sm" class="h-full">
+				<Skeleton class="h-4 w-3/4 rounded" />
+				<Skeleton class="h-3 w-full rounded" />
+				<Skeleton class="h-3 w-2/3 rounded" />
+				<div class="flex-1"></div>
+				<Inline gap="sm">
+					<Skeleton class="h-5 w-12 rounded" />
+					<Skeleton class="h-5 w-16 rounded" />
+				</Inline>
+			</Stack>
 		</Card.Content>
 	</Card.Root>
 {/snippet}

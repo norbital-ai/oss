@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Tooltip } from '#lib/tooltip';
+	import { Stack } from '#lib/layout';
 	import type { FileMetadata } from './file-value.types.js';
 
 	let {
@@ -35,14 +36,14 @@
 			</button>
 		{/snippet}
 		{#snippet content()}
-			<div class="space-y-1">
+			<Stack gap="xs">
 				{#if metadata.structure_hint}
 					<div class="text-xs font-medium text-foreground">{metadata.structure_hint}</div>
 				{/if}
 				{#if metadata.summary}
 					<div class="text-xs text-muted-foreground">{metadata.summary}</div>
 				{/if}
-			</div>
+			</Stack>
 		{/snippet}
 	</Tooltip>
 {/if}

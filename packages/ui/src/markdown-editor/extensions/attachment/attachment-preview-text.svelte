@@ -11,13 +11,11 @@
 </script>
 
 {#if variant === 'markdown'}
-	<div class="markdown-preview w-full rounded bg-background p-4 shadow">
-		<div class="prose max-w-none">
-			{@html renderedHtml}
-		</div>
+	<div class="markdown-preview prose w-full max-w-none rounded bg-background p-4 shadow">
+		{@html renderedHtml}
 	</div>
 {:else}
-	<div class="text-preview w-full rounded bg-background p-4 shadow">
-		<pre class="text-sm whitespace-pre-wrap">{content}</pre>
-	</div>
+	<pre class="text-preview w-full rounded bg-background p-4 text-sm whitespace-pre-wrap shadow">
+		{content}
+	</pre>
 {/if}

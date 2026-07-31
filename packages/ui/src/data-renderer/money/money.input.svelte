@@ -4,6 +4,7 @@
 	import { Button, buttonVariants } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import * as InputGroup from '#lib/input-group';
+	import { Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
@@ -150,15 +151,15 @@
 
 {#snippet moneyFields()}
 	{#if multiple && drafts.length === 0}
-		<div class="rounded-md border border-dashed p-5 text-center">
-			<Icon icon="lucide:banknote" class="mx-auto size-8 text-muted-foreground" />
-			<p class="mt-2 text-sm font-medium">No amounts configured</p>
-			<p class="mt-1 text-xs text-muted-foreground">Add a monetary value to get started.</p>
-		</div>
+		<Stack gap="sm" class="items-center rounded-md border border-dashed p-5 text-center">
+			<Icon icon="lucide:banknote" class="size-8 text-muted-foreground" />
+			<p class="text-sm font-medium">No amounts configured</p>
+			<p class="text-xs text-muted-foreground">Add a monetary value to get started.</p>
+		</Stack>
 	{/if}
 
 	{#each drafts as draft, index (index)}
-		<div class="flex min-w-0 items-center gap-2">
+		<Inline gap="sm" class="min-w-0">
 			<InputGroup.Root class="min-w-0 w-full flex-1 overflow-hidden">
 				<InputGroup.Addon align="inline-start" class="border-r border-input pr-1">
 					<Combobox
@@ -197,7 +198,7 @@
 					<Icon icon="lucide:x" class="size-4" />
 				</Button>
 			{/if}
-		</div>
+		</Inline>
 	{/each}
 
 	{#if multiple}
@@ -236,8 +237,8 @@
 				<Icon icon="lucide:chevrons-up-down" class="size-4 shrink-0 text-muted-foreground" />
 			</Popover.Trigger>
 
-			<Popover.Content sameWidth={true} minWidth={360} align="start" class="space-y-3 p-3">
-				{@render moneyFields()}
+			<Popover.Content sameWidth={true} minWidth={360} align="start" class="p-3">
+				<Stack gap="sm">{@render moneyFields()}</Stack>
 			</Popover.Content>
 		</Popover.Root>
 	</div>

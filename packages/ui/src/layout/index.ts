@@ -15,4 +15,11 @@ export {
 	type SplitRatio
 } from './split.svelte';
 export { default as Stack, type StackProps } from './stack.svelte';
-export type { LayoutElement, LayoutGap, LayoutPad } from './layout.shared.js';
+export {
+	INSET_CLASS,
+	INSET_MX_CLASS,
+	INSET_X_CLASS,
+	type LayoutElement,
+	type LayoutGap,
+	type LayoutPad
+} from './layout.shared.js';

@@ -9,6 +9,7 @@
 	import { buttonVariants } from '#lib/button';
 	import { formatDistance } from 'date-fns/formatDistance';
 	import { Calendar } from '#lib/calendar';
+	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn, parseUtcInstantZoned } from '#lib/utils';
 	import YearView from './year.view.svelte';
@@ -227,7 +228,7 @@
 			</span>
 		{:else}
 			<!-- Show badges for multiple dates (original behavior) -->
-			<div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+			<Cluster gap="xs" class="flex-1">
 				{#each selectedDateStrings.slice(0, maxTriggerBadges) as dateStr}
 					{@render DateBadge(dateStr, false, 'sm')}
 				{/each}
@@ -238,7 +239,7 @@
 						+{selectedDateStrings.length - maxTriggerBadges} more
 					</span>
 				{/if}
-			</div>
+			</Cluster>
 		{/if}
 	{:else}
 		<!-- Single date selection -->
@@ -255,28 +256,30 @@
 
 {#snippet SelectedDatesSidebar()}
 	{#if multi && hasSelection}
-		<div class="min-w-[220px] border-l border-border bg-muted">
-			<div class="p-3">
-				<div class="mb-3 flex items-center justify-between">
-					<h4 class="text-xs font-normal text-foreground transition-all hover:font-medium">
-						Selected Dates ({selectedDateStrings.length})
-					</h4>
-					<button
-						type="button"
-						onclick={clearAllDates}
-						disabled={cantMutate}
-						class="text-xs font-normal text-destructive transition-all hover:font-medium hover:text-destructive-foreground disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:text-muted-foreground"
-						aria-label="Clear all selected dates"
-					>
-						Clear all
-					</button>
-				</div>
-				<div class="max-h-[280px] space-y-2 overflow-y-auto">
+		<Stack gap="sm" class="min-w-[220px] border-l border-border bg-muted p-3">
+			<Inline justify="between" gap="sm">
+				<h4 class="text-xs font-normal text-foreground transition-all hover:font-medium">
+					Selected Dates ({selectedDateStrings.length})
+				</h4>
+				<button
+					type="button"
+					onclick={clearAllDates}
+					disabled={cantMutate}
+					class="text-xs font-normal text-destructive transition-all hover:font-medium hover:text-destructive-foreground disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:text-muted-foreground"
+					aria-label="Clear all selected dates"
+				>
+					Clear all
+				</button>
+			</Inline>
+			<Scroll axis="y" name="Selected dates" class="max-h-[280px]">
+				<Stack gap="sm">
 					{#each selectedDateStrings as dateStr}
-						<div
-							class="flex items-center justify-between rounded-lg border border-brand-200 bg-background px-3 py-2 shadow-sm"
+						<Inline
+							justify="between"
+							gap="sm"
+							class="rounded-lg border border-brand-200 bg-background px-3 py-2 shadow-sm"
 						>
-							<div class="min-w-0 flex-1">
+							<Stack gap="none" class="min-w-0 flex-1">
 								<div
 									class="truncate text-xs font-normal text-foreground transition-all hover:font-medium"
 								>
@@ -289,25 +292,25 @@
 										{formatDateRelative(dateStr)}
 									</div>
 								{/if}
-							</div>
+							</Stack>
 							<button
 								type="button"
 								onclick={() => removeDate(dateStr)}
 								disabled={cantMutate}
-								class="ml-2 shrink-0 text-brand transition-colors hover:text-brand-700 disabled:cursor-not-allowed disabled:text-muted-foreground"
+								class="shrink-0 text-brand transition-colors hover:text-brand-700 disabled:cursor-not-allowed disabled:text-muted-foreground"
 								aria-label="Remove {formatDateForDisplay(dateStr)}"
 							>
 								<Icon icon="radix-icons:cross-1" class="h-4 w-4" />
 							</button>
-						</div>
+						</Inline>
 					{/each}
-				</div>
-			</div>
-		</div>
+				</Stack>
+			</Scroll>
+		</Stack>
 	{/if}
 {/snippet}
 
-<div class="w-full">
+<Stack gap="sm">
 	<Popover.Root open={popoverOpen} onOpenChange={(open) => (popoverOpen = open)}>
 		<div class={cn('group relative w-full', className)} {style}>
 			<Popover.Trigger
@@ -344,7 +347,7 @@
 		</div>
 
 		<Popover.Content class="w-auto p-0 shadow-lg" {align} sameWidth={false}>
-			<div class="flex">
+			<Inline align="stretch" gap="none">
 				<div class={variant === 'year' ? 'w-64 p-3' : 'p-4'}>
 					{#if variant === 'year'}
 						<YearView {selectedYear} {minYear} {maxYear} onSelect={handleYearChange} />
@@ -365,12 +368,12 @@
 					{/if}
 				</div>
 				{@render SelectedDatesSidebar()}
-			</div>
+			</Inline>
 		</Popover.Content>
 	</Popover.Root>
 
 	{#if multi && hasSelection && !popoverOpen && !relativeTime}
-		<div class="mt-2 flex flex-wrap gap-1">
+		<Cluster gap="xs">
 			{#each selectedDateStrings.slice(0, maxBelowBadges) as dateStr}
 				{@render DateBadge(dateStr, true, 'md')}
 			{/each}
@@ -381,6 +384,6 @@
 					+{selectedDateStrings.length - maxBelowBadges} more
 				</span>
 			{/if}
-		</div>
+		</Cluster>
 	{/if}
-</div>
+</Stack>

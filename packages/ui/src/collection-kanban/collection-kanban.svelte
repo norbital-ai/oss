@@ -17,7 +17,7 @@
 	import { resolveRecordLabel } from '@norbital-ai/platform-utils/manifest/context';
 	import { humanize } from '@norbital-ai/std/string';
 	import { watch } from 'runed';
-	import { Inline, Stack } from '#lib/layout';
+	import { Cover, Grid, Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onMount } from 'svelte';
 	import { getCollectionSurfaceRuntime } from '#lib/collection-runtime';
@@ -489,12 +489,9 @@
 	/>
 {/if}
 
-<div
-	class="collection-kanban flex h-full min-h-[24rem] w-full min-w-0 flex-col"
-	data-dragging={activeDrag != null}
->
-	<div class="mb-2 flex min-w-0 shrink-0 items-center gap-1">
-		<div class="min-w-0 flex-1">
+{#snippet kanbanToolbar()}
+	<Stack gap="xs">
+		<Inline gap="xs" justify="between">
 			<CollectionTableOperations
 				collectionName={String(collection)}
 				{exportPipelines}
@@ -509,32 +506,44 @@
 				disabled={actionsDisabled}
 				{refresh}
 			/>
-		</div>
-		<CollectionQueryControls
-			{definition}
-			collections={workspaceClient.collections}
-			align="end"
-			searchPlaceholder="Search records…"
-			onSearchChange={(search) => (boardQuery.search = search)}
-			onFilterChange={(filters) => (boardQuery.filters = filters)}
-		/>
-	</div>
-	{#if moveError}
-		<p role="alert" class="mb-2 shrink-0 text-sm text-destructive">{moveError}</p>
-	{/if}
-	<div
-		class={cn(
-			'grid min-h-0 w-full min-w-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden overscroll-x-contain scroll-smooth',
-			activeDrag ? 'snap-none' : 'snap-x snap-mandatory',
-			className
-		)}
-		style={`grid-template-columns: repeat(${resolvedColumnCount}, minmax(min(18rem, 100%), 1fr)); grid-template-rows: repeat(${resolvedRowCount}, minmax(0, 1fr));`}
+			<CollectionQueryControls
+				{definition}
+				collections={workspaceClient.collections}
+				align="end"
+				searchPlaceholder="Search records…"
+				onSearchChange={(search) => (boardQuery.search = search)}
+				onFilterChange={(filters) => (boardQuery.filters = filters)}
+			/>
+		</Inline>
+		{#if moveError}
+			<p role="alert" class="shrink-0 text-sm text-destructive">{moveError}</p>
+		{/if}
+	</Stack>
+{/snippet}
+
+<Cover
+	as="div"
+	gap="sm"
+	class="collection-kanban min-h-[24rem] min-w-0"
+	data-dragging={activeDrag != null}
+	top={kanbanToolbar}
+>
+	<Scroll
+		axis="x"
+		name="Kanban lanes"
+		class={cn('scroll-smooth', activeDrag ? 'snap-none' : 'snap-x snap-mandatory', className)}
 	>
-		<CollectionKanbanSkeleton
-			loading={!boardQuery.hasLoaded && (query?.loading ?? true)}
-			empty={groups.length === 0}
-			lanes={lanes?.length ?? 3}
-		/>
+		<Grid
+			minimum="compact"
+			gap="md"
+			class="content-start"
+			style={`grid-template-columns: repeat(${resolvedColumnCount}, minmax(min(18rem, 100%), 1fr)); grid-template-rows: repeat(${resolvedRowCount}, minmax(0, 1fr));`}
+		>
+			<CollectionKanbanSkeleton
+				loading={!boardQuery.hasLoaded && (query?.loading ?? true)}
+				empty={groups.length === 0}
+				lanes={lanes?.length ?? 3}
+			/>
 		{#each groups as [lane, records], index (lane)}
 			<CollectionKanbanLane
 				{lane}
@@ -559,5 +568,6 @@
 			/>
 		{/each}
 		{#if query?.error}<p class="text-sm text-destructive">{query.error.message}</p>{/if}
-	</div>
-</div>
+		</Grid>
+	</Scroll>
+</Cover>

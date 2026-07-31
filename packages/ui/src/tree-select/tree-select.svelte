@@ -4,6 +4,7 @@
 	import { Button } from '#lib/button';
 	import { Checkbox } from '#lib/checkbox';
 	import { Input } from '#lib/input';
+	import { Inline, Stack } from '#lib/layout';
 	import { ScrollArea } from '#lib/scroll-area';
 	import { cn } from '#lib/utils';
 	import { Tabs as TabsPrimitive } from 'bits-ui';
@@ -342,7 +343,7 @@
 
 {#snippet renderNodeContent(node: TreeNode)}
 	{@const matchInfo = treeState.matchInfo.get(node.id)}
-	<div class={cn('flex h-7 grow items-center justify-start', { 'opacity-50': node.disabled })}>
+	<Inline gap="sm" class={cn('h-7 grow', { 'opacity-50': node.disabled })}>
 		<div class="flex h-7 w-4 items-center justify-center">
 			{#if isParentNode(node)}
 				<Icon
@@ -359,8 +360,10 @@
 				aria-hidden="true"
 			/>
 		</div>
-		<span
-			class="ml-2 flex grow flex-row truncate text-start text-xs text-secondary-foreground dark:text-muted-foreground"
+		<Inline
+			as="span"
+			gap="none"
+			class="grow truncate text-start text-xs text-secondary-foreground dark:text-muted-foreground"
 		>
 			{#if matchInfo}
 				<span class="flex w-min flex-row">
@@ -376,7 +379,7 @@
 			{#if isRequiredChildNode(node)}
 				<span class="ml-0.5 text-xs text-rose-500 dark:text-rose-400">*</span>
 			{/if}
-		</span>
+		</Inline>
 		{#if !multiple && !isParentNode(node) && node.isSelected}
 			<div
 				class="absolute right-2 flex h-4 w-4 items-center justify-center rounded-full bg-brand-100 dark:bg-brand-900"
@@ -388,7 +391,7 @@
 				/>
 			</div>
 		{/if}
-	</div>
+	</Inline>
 {/snippet}
 
 {#snippet renderTreeNode(node: TreeNode, isLast: boolean)}
@@ -491,22 +494,22 @@
 	</TabsContent>
 {/snippet}
 
-<div class={cn('relative flex flex-col space-y-2', containerClass)} data-input-mode={inputMode}>
+<Stack gap="sm" class={cn('relative', containerClass)} data-input-mode={inputMode}>
 	{#if hasMultipleRoots}
 		<TabsPrimitive.Root class="relative" value={activeTabValue} onValueChange={handleRootTabChange}>
 			<TabsList class="py-0" tabs={rootTabItems}>
 				{#snippet itemSnippet({ tab })}
-					<span class="flex items-center gap-2">
+					<Inline as="span" gap="sm">
 						{#if tab.value === 'scope.existing' || tab.value === 'default'}
 							<Icon icon="lucide:database" aria-hidden="true" />
 						{:else}
 							<Icon icon="lucide:file-pen" aria-hidden="true" />
 						{/if}
 						{tab.label}
-					</span>
+					</Inline>
 				{/snippet}
 			</TabsList>
-			<div class="mt-2 flex flex-row items-center gap-2">
+			<Inline gap="sm" class="mt-2">
 				{#if showSearch}
 					<div class="relative flex-1 p-1">
 						<Input
@@ -531,7 +534,7 @@
 					{@const rootNode = treeState.activeRootNode}
 					{@render renderAction(rootNode.action, rootNode)}
 				{/if}
-			</div>
+			</Inline>
 			{#each treeState.rootNodes as rootNode (rootNode.id)}
 				{@render renderRootTabContent(rootNode)}
 			{/each}
@@ -539,7 +542,7 @@
 	{/if}
 
 	{#if !hasMultipleRoots}
-		<div class="flex flex-row items-center gap-2">
+		<Inline gap="sm">
 			{#if showSearch}
 				<div class="relative flex-1 p-1">
 					<Input
@@ -565,7 +568,7 @@
 				{@const rootNode = treeState.activeRootNode}
 				{@render renderAction(rootNode.action, rootNode)}
 			{/if}
-		</div>
+		</Inline>
 		<ScrollArea class="flex-1" bind:viewportRef={scrollViewportRef}>
 			<div
 				class="relative flex flex-1 flex-col bg-transparent"
@@ -586,4 +589,4 @@
 			</div>
 		</ScrollArea>
 	{/if}
-</div>
+</Stack>

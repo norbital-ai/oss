@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Indicator } from '#lib/indicator';
+	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { SelectionDraft, StepsConfig } from './types.js';
@@ -45,13 +46,14 @@
 	const MISSING_SEP = ', ';
 </script>
 
-<aside class="w-[280px] shrink-0 overflow-hidden border-r bg-background">
-	<div class="flex h-full flex-col">
-		<div class="flex h-11 items-center justify-between border-b px-3">
-			<div class="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+<!-- stupidity:allow UI5 -- popover panel boundary -->
+	<aside class="w-[280px] shrink-0 overflow-hidden border-r bg-background">
+	<Stack gap="none" class="h-full">
+		<Inline gap="none" justify="between" class="h-11 border-b px-3">
+			<Inline gap="sm" class="text-xs font-semibold text-muted-foreground">
 				<Icon icon="lucide:list-tree" class="h-3.5 w-3.5" />
 				<span>{multiple ? 'Selections' : 'Selection'}</span>
-			</div>
+			</Inline>
 			{#if multiple && !disabled}
 				<Button
 					variant="outline"
@@ -61,8 +63,9 @@
 				>
 					<Icon icon="lucide:plus" class="mr-1 h-3 w-3" /> New
 				</Button>
-			{/if}
-		</div>
+				{/if}
+		</Inline>
+		<!-- stupidity:allow UI9 -- listbox scroll body of the popover panel; Scroll cannot carry role="listbox" -->
 		<ul role="listbox" aria-label={ariaLabel} class="flex-1 overflow-auto px-2 py-2">
 			{#if selections.length === 0}
 				<li
@@ -91,10 +94,10 @@
 					>
 						<div class="min-w-0 flex-1">
 							{#if !complete}
-								<div class="flex items-center gap-1 text-micro font-medium text-yellow-800">
+								<Inline gap="xs" class="text-micro font-medium text-yellow-800">
 									<Icon icon="lucide:alert-triangle" class="h-3 w-3" />
 									Partial selection
-								</div>
+								</Inline>
 								{#if missing.length > 0}
 									<div class="mt-1 text-micro text-yellow-700">
 										Missing: {missing.map(String).join(MISSING_SEP)}
@@ -102,16 +105,17 @@
 								{/if}
 							{/if}
 							{#if hasValues}
-								<div
+								<Cluster
+									gap="xs"
 									class={cn(
-										'flex flex-wrap items-center gap-1 text-micro',
+										'text-micro',
 										complete ? 'text-foreground/80' : 'mt-1 text-muted-foreground'
 									)}
 								>
 									{#each stepKeys as stepKey, keyIndex}
 										{@render stepValueLabel(selection, stepKey, keyIndex, sepClass, fbClass)}
 									{/each}
-								</div>
+								</Cluster>
 							{/if}
 						</div>
 						<Indicator
@@ -138,5 +142,5 @@
 				{/each}
 			{/if}
 		</ul>
-	</div>
+	</Stack>
 </aside>

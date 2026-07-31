@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
-import { startPostgres, dockerAvailable, type PgHarness } from '../support/pg-harness.js';
+import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema, seedApprovalRequest } from '../support/pod-schema.js';
 
 /**
@@ -17,10 +17,10 @@ import { applyPodSchema, seedApprovalRequest } from '../support/pod-schema.js';
  * row it just loaded, the way `withdrawApprovalRequest` and `processAction` do.
  */
 
-const hasDocker = await dockerAvailable();
+requireDocker();
 const APPROVAL_A = '11111111-1111-4111-8111-111111111111';
 
-describe.skipIf(!hasDocker)('approval_request upsert requires the identity columns', () => {
+describe('approval_request upsert requires the identity columns', () => {
 	let pg: PgHarness;
 	let pool: Pool;
 

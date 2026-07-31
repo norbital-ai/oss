@@ -30,7 +30,7 @@
 	import { cn, renderSnippet, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { DataRenderer } from '../data-renderer/index.js';
 	import { formatDataValue } from '../data-renderer/index.js';
-	import { Inline, Stack } from '#lib/layout';
+	import { Cluster, Grid, Inline, Stack, Bound } from '#lib/layout';
 	import { CollectionForm } from '../collection-form/index.js';
 	import {
 		collectionRecordId,
@@ -883,19 +883,19 @@
 			{/snippet}
 			{#snippet content()}
 				{#if description}<p>{description}</p>{/if}
-				{#if query?.where}
-					<div class="space-y-1.5">
-						<p class="font-medium">Applied by this view</p>
-						<ul class="space-y-1">
-							{#each prefilterDescriptions as filterDescription}
-								<li class="flex items-start gap-1.5 text-xs">
-									<Icon icon="lucide:filter" class="mt-0.5 size-3 shrink-0 opacity-70" />
-									<span>{filterDescription}</span>
-								</li>
-							{/each}
-						</ul>
-					</div>
-				{/if}
+			{#if query?.where}
+				<Stack gap="xs">
+					<p class="font-medium">Applied by this view</p>
+					<Stack as="ul" gap="xs">
+						{#each prefilterDescriptions as filterDescription}
+							<Inline as="li" align="start" gap="xs" class="text-xs">
+								<Icon icon="lucide:filter" class="mt-0.5 size-3 shrink-0 opacity-70" />
+								<span>{filterDescription}</span>
+							</Inline>
+						{/each}
+					</Stack>
+				</Stack>
+			{/if}
 			{/snippet}
 		</Tooltip>
 	{/if}
@@ -1005,7 +1005,7 @@
 {/snippet}
 
 {#snippet approvalDetails()}
-	<div class="space-y-4">
+	<Stack gap="md">
 		{#if queries.approval?.loading || approvalRequest}
 			<div class="rounded-lg border bg-muted/30 p-4">
 				<p class="text-sm font-medium">Approval request</p>
@@ -1013,7 +1013,7 @@
 			</div>
 		{/if}
 		{#if approvalRequest}
-			<dl class="grid gap-3 rounded-lg border p-4 sm:grid-cols-2">
+			<Grid as="dl" minimum="card" gap="sm" class="rounded-lg border p-4">
 				{#each Object.entries(approvalRequest) as [key, value] (key)}
 					<div class="min-w-0">
 						<dt class="text-xs font-medium text-muted-foreground">{humanize(key)}</dt>
@@ -1022,7 +1022,7 @@
 						</dd>
 					</div>
 				{/each}
-			</dl>
+			</Grid>
 		{:else if !queries.approval?.loading}
 			<CollectionRecordDetailEmpty
 				icon="lucide:shield-check"
@@ -1031,7 +1031,7 @@
 			/>
 		{/if}
 		{#if approvalRequest?.status === 'ONGOING'}
-			<div class="flex flex-wrap gap-2">
+			<Cluster gap="sm">
 				<Button disabled={approvalActionPending} onclick={() => void processApproval('APPROVED')}>
 					Approve
 				</Button>
@@ -1046,14 +1046,14 @@
 				<Button variant="ghost" disabled={approvalActionPending} onclick={withdrawApproval}
 					>Withdraw request</Button
 				>
-			</div>
+			</Cluster>
 		{/if}
-	</div>
+	</Stack>
 {/snippet}
 
 {#snippet rawDetails()}
 	{#if activeRecord}
-		<dl class="grid gap-3 sm:grid-cols-2">
+		<Grid as="dl" minimum="card" gap="sm">
 			{#each definition.fields as field (field.name)}
 				<div class="min-w-0 rounded-lg border bg-card p-4">
 					<dt class="text-xs font-medium text-muted-foreground">
@@ -1061,17 +1061,16 @@
 					</dt>
 					<dd class="mt-1 text-sm">
 						{#if field.kind === 'json'}
-							<pre
-								class="overflow-auto whitespace-pre-wrap break-words font-mono text-xs">{formatRawStructuredValue(
-									Reflect.get(activeRecord, field.name)
-								)}</pre>
+							<pre class="whitespace-pre-wrap break-words font-mono text-xs">{formatRawStructuredValue(
+								Reflect.get(activeRecord, field.name)
+							)}</pre>
 						{:else}
 							<DataRenderer {field} value={Reflect.get(activeRecord, field.name)} mode="display" />
 						{/if}
 					</dd>
 				</div>
 			{/each}
-		</dl>
+		</Grid>
 	{/if}
 {/snippet}
 
@@ -1103,67 +1102,63 @@
 	{/key}
 {/if}
 
-<div class="collection-table-container h-full min-h-[24rem] w-full min-w-0">
-	<div
-		class="collection-table-responsive h-full min-h-0 w-full min-w-0"
-		data-collection-table-surface
-	>
-		<div class="collection-table-wide h-full min-h-0" data-collection-layout="wide">
-			<CollectionGrid
-				table={tableApi}
-				{disabled}
-				class={className}
-				isLoading={tableLoading}
-				error={errorMessage}
-				enableSelection={effectiveSelectable}
-				onRowActivate={openRecord}
-				getRowLeadingAccent={approvalAccent}
-				{activeRecordId}
-				rowActions={gridRowActions}
-				leftActions={[tableToolbar]}
-				rightActions={[toolbarTools]}
-				stickyRowActions={true}
-				hasNextPage={Boolean(queries.rows?.nextCursor)}
-				onPreviousPage={previousPage}
-				onNextPage={nextPage}
-				{emptyPlaceholder}
-			/>
-		</div>
+<!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
+<Bound
+	size="full"
+	class="collection-table-responsive min-h-[24rem]"
+	data-collection-table-surface
+>
+	<CollectionGrid
+		table={tableApi}
+		{disabled}
+		class={cn('collection-table-wide', className)}
+		isLoading={tableLoading}
+		error={errorMessage}
+		enableSelection={effectiveSelectable}
+		onRowActivate={openRecord}
+		getRowLeadingAccent={approvalAccent}
+		{activeRecordId}
+		rowActions={gridRowActions}
+		leftActions={[tableToolbar]}
+		rightActions={[toolbarTools]}
+		stickyRowActions={true}
+		hasNextPage={Boolean(queries.rows?.nextCursor)}
+		onPreviousPage={previousPage}
+		onNextPage={nextPage}
+		{emptyPlaceholder}
+	/>
 
-		<div class="collection-table-narrow h-full min-h-0" data-collection-layout="narrow">
-			<CollectionTableList
-				rows={listRows}
-				loading={tableLoading}
-				error={errorMessage}
-				selectable={effectiveSelectable}
-				{disabled}
-				class={className}
-				pageIndex={tableApi.pagination.current.pageIndex}
-				{pageCount}
-				hasNextPage={Boolean(queries.rows?.nextCursor)}
-				toolbar={tableToolbar}
-				{toolbarTools}
-				ListCard={ListCard ?? autoListCard}
-				{emptyPlaceholder}
-				{rowActions}
-				{recordTitle}
-				{activeRecordId}
-				recordHref={(record) =>
-					recordDetailHref({
-						record,
-						__collectionTableRowId: String(Reflect.get(record, recordIdField))
-					})}
-				onOpen={(record) =>
-					openRecord({
-						record,
-						__collectionTableRowId: String(Reflect.get(record, recordIdField))
-					})}
-				onPreviousPage={previousPage}
-				onNextPage={nextPage}
-			/>
-		</div>
-	</div>
-</div>
+	<CollectionTableList
+		rows={listRows}
+		loading={tableLoading}
+		error={errorMessage}
+		selectable={effectiveSelectable}
+		{disabled}
+		class={cn('collection-table-narrow', className)}
+		pageIndex={tableApi.pagination.current.pageIndex}
+		{pageCount}
+		hasNextPage={Boolean(queries.rows?.nextCursor)}
+		toolbar={tableToolbar}
+		{toolbarTools}
+		ListCard={ListCard ?? autoListCard}
+		{emptyPlaceholder}
+		{rowActions}
+		{recordTitle}
+		{activeRecordId}
+		recordHref={(record) =>
+			recordDetailHref({
+				record,
+				__collectionTableRowId: String(Reflect.get(record, recordIdField))
+			})}
+		onOpen={(record) =>
+			openRecord({
+				record,
+				__collectionTableRowId: String(Reflect.get(record, recordIdField))
+			})}
+		onPreviousPage={previousPage}
+		onNextPage={nextPage}
+	/>
+</Bound>
 
 <Sheet.Root bind:open={createOpen}>
 	<Sheet.Content flush class="sm:max-w-xl">
@@ -1227,14 +1222,6 @@
 </Dialog.Root>
 
 <style>
-	.collection-table-container {
-		container-type: inline-size;
-	}
-
-	.collection-table-responsive {
-		min-width: 0;
-	}
-
 	.collection-table-narrow {
 		display: none;
 	}

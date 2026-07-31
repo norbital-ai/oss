@@ -12,7 +12,7 @@
 </script>
 
 <script lang="ts">
-	import { Cluster, Split, Stack } from '#lib/layout';
+	import { Cluster, INSET_X_CLASS, Split, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	let {
@@ -44,7 +44,7 @@
 {/snippet}
 
 <header
-	class={cn(className, 'border-b border-border px-4 py-4 sm:px-6')}
+	class={cn(className, INSET_X_CLASS, 'border-b border-border py-4')}
 	data-page-header
 	{...restProps}
 >

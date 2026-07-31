@@ -4,7 +4,7 @@
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Cover, Grid } from '@norbital-ai/ui/layout';
+	import { Cover, Grid, Stack } from '@norbital-ai/ui/layout';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
 	import { formatEntryOrigin, formatNumeric } from '../../lib/ui/display-formatters.js';
 	import { todayKey } from '../../lib/ui/calendar.js';
@@ -94,7 +94,7 @@
 
 {#snippet overview()}
 	<Grid gap="xl" minimum="panel">
-		<div class="space-y-4">
+		<Stack gap="md">
 			<div>
 				<h2 class="text-lg font-semibold">Reimbursement claims</h2>
 				<p class="text-sm text-muted-foreground">
@@ -109,7 +109,7 @@
 				summary={analytics.summary}
 				note="Counts use the claim's incurred date from its origin variant. Approval speed is shown only when completed workflow history exists; imported records do not invent a duration."
 			/>
-		</div>
+		</Stack>
 		<div class="min-w-0 rounded-lg border bg-card p-4 shadow-card">
 			<Display spec={claimTrendChart} class="min-h-[18rem]" />
 		</div>

@@ -610,7 +610,7 @@
 			{/if}
 		</div>
 
-		<Inline align="center" gap="sm" class="pointer-events-auto ml-auto shrink-0">
+		<Inline align="center" gap="sm" class="pointer-events-auto ml-auto">
 			{#if interactionLocked}
 				<div
 					class="hidden rounded-md border border-border/80 bg-background/90 px-2 py-1 text-[11px] text-muted-foreground shadow-sm sm:block"

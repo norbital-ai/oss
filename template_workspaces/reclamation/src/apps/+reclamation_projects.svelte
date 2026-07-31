@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Bound, Cover, Inline } from '@norbital-ai/ui/layout';
+	import { Cover, Inline } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 </script>
@@ -78,20 +78,18 @@
 {/snippet}
 
 <Cover as="main" top={pageHeading}>
-	<Bound size="full" pad="none" class="px-4 py-2 sm:px-6">
-		<Tabs
-			lazyLoad={false}
-			variant="underline"
-			animate={false}
-			config={[
-				{ name: 'projects', label: 'Projects', icon: 'lucide:waves', content: projects },
-				{
-					name: 'reconstructions',
-					label: 'Reconstructions',
-					icon: 'lucide:box',
-					content: reconstructions
-				}
-			] satisfies TabConfig[]}
-		/>
-	</Bound>
+	<Tabs
+		lazyLoad={false}
+		variant="underline"
+		animate={false}
+		config={[
+			{ name: 'projects', label: 'Projects', icon: 'lucide:waves', content: projects },
+			{
+				name: 'reconstructions',
+				label: 'Reconstructions',
+				icon: 'lucide:box',
+				content: reconstructions
+			}
+		] satisfies TabConfig[]}
+	/>
 </Cover>

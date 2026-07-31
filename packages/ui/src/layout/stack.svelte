@@ -18,7 +18,7 @@
 
 <svelte:element
 	this={as}
-	class={cn(className, 'flex min-w-0 flex-col', GAP_CLASSES[gap])}
+	class={cn(className, 'flex min-h-0 min-w-0 flex-col', GAP_CLASSES[gap])}
 	data-layout="stack"
 	{...restProps}
 >

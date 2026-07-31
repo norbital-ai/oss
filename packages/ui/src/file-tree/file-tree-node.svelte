@@ -113,6 +113,7 @@
 		data-file-tree-collapse=""
 		style:grid-template-rows={open ? '1fr' : '0fr'}
 	>
+		<!-- stupidity:allow UI5 -- collapse-animation wrapper clips during height transitions -->
 		<div class="overflow-hidden min-h-0">
 			{#if children.length > 0}
 				{#each children as child (child.path)}

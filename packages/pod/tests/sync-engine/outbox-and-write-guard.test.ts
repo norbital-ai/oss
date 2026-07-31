@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Client, Pool } from 'pg';
-import { startPostgres, dockerAvailable, type PgHarness } from '../support/pg-harness.js';
+import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema } from '../support/pod-schema.js';
 import {
 	readSyncOutboxBatch,
@@ -8,13 +8,7 @@ import {
 } from '$lib/server/collection/sync/outbox-tailer.server.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 
-const hasDocker = dockerAvailable();
-if (!hasDocker) {
-	// eslint-disable-next-line no-console
-	console.warn(
-		'[outbox-and-write-guard] Docker not available — skipping real-Postgres sync tests.'
-	);
-}
+requireDocker();
 
 /** Minimal ProvisionedContext shim: the tailer only ever calls ctx.tenantDb.query. */
 function makeCtx(pool: Pool): ProvisionedContext {
@@ -42,7 +36,7 @@ async function insertOrderViaOps(pool: Pool, status: string): Promise<string> {
 	}
 }
 
-describe.skipIf(!hasDocker)('Pod Sync P0 (real Postgres)', () => {
+describe('Pod Sync P0 (real Postgres)', () => {
 	let harness: PgHarness;
 	let pool: Pool;
 

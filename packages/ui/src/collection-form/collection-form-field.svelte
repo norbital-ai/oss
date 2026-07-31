@@ -28,6 +28,7 @@
 <script lang="ts" generics="TFieldName extends string">
 	import { humanize } from '@norbital-ai/std/string';
 	import { DataRenderer } from '../data-renderer/index.js';
+	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import type { CollectionFormFieldProps } from './collection-form.types.js';
@@ -64,7 +65,7 @@
 		data-invalid={errors.length > 0 ? 'true' : undefined}
 		aria-describedby={errors.length > 0 ? errorId : undefined}
 	>
-		<div class="flex shrink-0 items-center gap-2">
+		<Inline gap="sm" class="shrink-0">
 			<CollectionFormFieldHistory
 				{field}
 				{fieldId}
@@ -84,7 +85,7 @@
 					title="Unsaved change"
 				></span>
 			{/if}
-		</div>
+		</Inline>
 		<div class="min-h-0 min-w-0 flex-1">
 			{#if Renderer}
 				<Renderer
@@ -108,11 +109,16 @@
 			{/if}
 		</div>
 		{#if errors.length > 0}
-			<div id={errorId} class="grid shrink-0 gap-1 text-sm text-destructive" role="alert">
+			<Stack
+				id={errorId}
+				gap="xs"
+				class="shrink-0 text-sm text-destructive"
+				role="alert"
+			>
 				{#each errors as message, index (`${index}:${message}`)}
 					<p>{message}</p>
 				{/each}
-			</div>
+			</Stack>
 		{/if}
 	</div>
 {/if}

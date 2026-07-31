@@ -81,6 +81,7 @@
 		type TCreateColumnProps
 	} from '../../collection-table/internal/index.js';
 	import { collectionTableColumnCanSort } from '../../collection-table/collection-table.types.js';
+	import { Bound, Scroll, Stack } from '#lib/layout';
 	import { cn, renderSnippet } from '#lib/utils';
 	import { watch } from 'runed';
 	type TableRow = Record<string, unknown> & { __matrixRowId: string };
@@ -323,15 +324,16 @@
 	<div class="p-4 text-sm text-muted-foreground">{emptyMessage}</div>
 {/snippet}
 
-<div
+<Stack
+	gap="none"
 	class={cn(
-		'matrix-renderer flex min-h-0 w-full min-w-0 flex-col overflow-hidden bg-card',
+		'matrix-renderer min-h-0 w-full overflow-hidden bg-card',
 		bounded ? 'max-h-[min(70dvh,36rem)] flex-1' : 'max-h-none',
 		className
 	)}
 	data-data-matrix-surface
 >
-	<div class="matrix-renderer-wide flex min-h-0 flex-1 flex-col overflow-hidden">
+	<Bound size="full" clip class="matrix-renderer-wide">
 		<CollectionGrid
 			class="min-h-0 flex-1"
 			table={tableApi}
@@ -349,12 +351,12 @@
 			rowActions={gridRowActions}
 			{emptyPlaceholder}
 		/>
-	</div>
-	<div
-		class={cn(
-			'matrix-renderer-narrow min-h-0 flex-1',
-			bounded ? 'overflow-y-auto overscroll-y-contain' : 'overflow-visible'
-		)}
+	</Bound>
+	<Scroll
+		axis="y"
+		name="Matrix rows"
+		class={cn('matrix-renderer-narrow min-h-0 flex-1', bounded ? 'overscroll-y-contain' : undefined)}
+		style={bounded ? undefined : 'overflow: visible'}
 	>
 		{#if displayRows.length === 0}
 			{@render emptyPlaceholder()}
@@ -362,6 +364,7 @@
 			<div class="divide-y divide-border">
 				{#each displayRows as tableRow (tableRow.__matrixRowId)}
 					{@const source = resolveSource(tableRow)}
+					<!-- stupidity:allow UI5 -- per-row clip for the swipe-action overlay is an audited row boundary -->
 					<section class="matrix-renderer-narrow-row group relative overflow-hidden">
 						{#if source && showRowActionsColumn}
 							{@const rowDisabled = isRowDisabled?.(source.row, source.index) === true}
@@ -389,23 +392,24 @@
 								{/if}
 							</div>
 						{/if}
-						<div
-							class="matrix-renderer-narrow-row-content relative z-10 space-y-3 bg-card px-3 py-3"
+						<Stack
+							gap="sm"
+							class="matrix-renderer-narrow-row-content relative z-10 bg-card px-3 py-3"
 						>
 							{#each columns as column (column.key)}
-								<div class="grid min-w-0 gap-1">
+								<Stack gap="xs">
 									<p class="text-tiny font-medium uppercase tracking-wide text-muted-foreground">
 										{column.label}
 									</p>
 									{@render matrixCellEditor(tableRow, column, false)}
-								</div>
+								</Stack>
 							{/each}
-						</div>
+						</Stack>
 					</section>
 				{/each}
 			</div>
 		{/if}
-	</div>
+	</Scroll>
 	{#if allowAddRows && createRow}
 		<div class="shrink-0 border-t border-border px-2 py-1">
 			<button
@@ -419,7 +423,7 @@
 			</button>
 		</div>
 	{/if}
-</div>
+</Stack>
 
 <style>
 	.matrix-renderer {

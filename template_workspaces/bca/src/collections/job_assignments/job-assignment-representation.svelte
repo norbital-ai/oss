@@ -2,7 +2,16 @@
 	import { client } from '$pod/client';
 	import type { Row } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
-	import { Column, Cover, Frame, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import {
+		Cluster,
+		Column,
+		Cover,
+		Frame,
+		Grid,
+		Inline,
+		Scroll,
+		Stack
+	} from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { formatFileSize } from '@norbital-ai/ui/utils';
 	import Icon from '@iconify/svelte';
@@ -203,18 +212,18 @@
 			</Inline>
 			<Stack gap="sm">
 				{#each variationsQuery.current ?? [] as variation (variation.norbital_id)}
-					<article class="rounded-md border border-border bg-card p-3">
-						<div class="flex items-start justify-between gap-3">
+					<Stack as="section" gap="sm" class="rounded-md border border-border bg-card p-3">
+						<Inline align="start" justify="between" gap="sm">
 							<div>
 								<p class="text-sm font-medium">{variation.title}</p>
 								<p class="mt-1 text-sm text-muted-foreground">{variation.description}</p>
 							</div>
 							<span class="shrink-0 text-sm font-medium">{formatMoney(variation.amount)}</span>
-						</div>
-						<p class="mt-2 text-xs text-muted-foreground">
+						</Inline>
+						<p class="text-xs text-muted-foreground">
 							Requested {formatSingaporeInstant(variation.requested_at)}
 						</p>
-					</article>
+					</Stack>
 				{:else}
 					<div
 						class="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground"
@@ -266,22 +275,22 @@
 									/>
 								</Frame>
 							</a>
-							<figcaption class="space-y-2 p-3">
-								<div class="flex items-start gap-2">
+							<Stack as="section" gap="sm" class="p-3">
+								<Inline align="start" gap="xs">
 									<Icon
 										icon={photo.flags.length > 0 ? 'lucide:scan-warning' : 'lucide:image-check'}
 										class={photo.flags.length > 0
 											? 'mt-0.5 size-4 shrink-0 text-destructive'
 											: 'mt-0.5 size-4 shrink-0 text-success'}
 									/>
-									<div class="min-w-0">
+									<Stack gap="none" class="min-w-0">
 										<p class="truncate text-sm font-medium">{photo.name}</p>
 										<p class="text-xs text-muted-foreground">
 											{photo.source} · {photo.capturedAt}
 										</p>
-									</div>
-								</div>
-								<div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+									</Stack>
+								</Inline>
+								<Cluster justify="between" gap="xs" class="text-xs">
 									<span
 										class={photo.flags.length > 0 ? 'text-destructive' : 'text-muted-foreground'}
 									>
@@ -292,8 +301,8 @@
 											{formatFileSize(photo.fileSize)}
 										</span>
 									{/if}
-								</div>
-							</figcaption>
+								</Cluster>
+							</Stack>
 						</figure>
 					{:else}
 						<Column span="all">

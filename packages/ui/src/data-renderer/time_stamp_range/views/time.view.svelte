@@ -2,6 +2,7 @@
 	import type { Time } from '@internationalized/date';
 	import { TimeField } from '#lib/time-field';
 	import { TimeRangeField, type TimeRange } from '#lib/time-range';
+	import { cn } from '#lib/utils';
 
 	let {
 		isSameDay,
@@ -12,7 +13,8 @@
 		disabled,
 		onStartChange,
 		onEndChange,
-		onRangeChange
+		onRangeChange,
+		class: className
 	}: {
 		isSameDay: boolean;
 		hasEnd: boolean;
@@ -23,6 +25,7 @@
 		onStartChange: (time: Time | undefined) => void;
 		onEndChange: (time: Time | undefined) => void;
 		onRangeChange: (range: TimeRange<Time> | undefined) => void;
+		class?: string;
 	} = $props();
 </script>
 
@@ -34,14 +37,14 @@
 		{granularity}
 		{hourCycle}
 		{disabled}
-		class="w-full"
+		class={cn('w-full', className)}
 		inputClass="h-8 text-xs border-border focus-within:border-brand focus-within:ring-1 focus-within:ring-brand"
 		labelClass="text-xs font-medium text-secondary-foreground"
 		segmentClass="text-xs hover:bg-muted focus:bg-brand-100 focus:text-brand-900"
 		separatorClass="text-muted-foreground"
 	/>
 {:else}
-	<div class="grid gap-4 {hasEnd ? 'grid-cols-2' : 'grid-cols-1'}">
+	<div class={cn('grid gap-4', hasEnd ? 'grid-cols-2' : 'grid-cols-1', className)}>
 		<TimeField
 			label="Start Time"
 			value={value.start}

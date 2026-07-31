@@ -22,6 +22,7 @@
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Inline } from '#lib/layout';
 	import { cn, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { Dialog as BitsDialog } from 'bits-ui';
 	import { PersistedState } from 'runed';
@@ -244,8 +245,11 @@
 			{/if}
 
 			{#if shouldShowActions}
-				<section
-					class="relative flex w-full shrink-0 flex-row items-center space-x-2 overflow-hidden"
+				<!-- stupidity:allow UI10 -- sheet header action strip clips overflowing actions -->
+				<Inline
+					as="section"
+					gap="sm"
+					class="relative shrink-0 overflow-hidden"
 				>
 					{#each actions as action (action)}
 						{#if action instanceof RenderComponentConfig}
@@ -258,7 +262,7 @@
 							{@render action()}
 						{/if}
 					{/each}
-				</section>
+				</Inline>
 			{/if}
 
 			{@render children()}

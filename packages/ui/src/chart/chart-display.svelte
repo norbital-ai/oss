@@ -7,6 +7,7 @@
 	import ChartContainer from './chart-container.svelte';
 	import ChartSkeleton from './chart-skeleton.svelte';
 	import ChartTooltip from './chart-tooltip.svelte';
+	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import { AreaChart, BarChart, LineChart, PieChart } from 'layerchart';
 
 	interface Props {
@@ -90,9 +91,9 @@
 {#snippet tooltip()}
 	<ChartTooltip hideLabel />
 {/snippet}
-<div class={`dynamic-ui-chart-display flex h-full min-h-0 w-full flex-col ${className}`}>
+<Stack gap="md" class={`dynamic-ui-chart-display h-full w-full ${className}`}>
 	{#if spec.title || spec.description}
-		<div class="mb-4 shrink-0">
+		<div class="shrink-0">
 			{#if spec.title}
 				<h3 class="text-sm font-semibold tracking-tight text-foreground">{spec.title}</h3>
 			{/if}
@@ -123,7 +124,7 @@
 			value: entry.value,
 			color: chartConfig[entry.key]?.color ?? getSeriesColor(index, spec.config[entry.key])
 		}))}
-		<div class="flex min-h-0 flex-1 flex-col">
+		<Stack gap="none" class="flex-1">
 			<div class="flex min-h-0 flex-1 items-center justify-center">
 				<ChartContainer
 					config={chartConfig}
@@ -149,20 +150,23 @@
 					/>
 				</ChartContainer>
 			</div>
-			<div
-				class="mt-3 flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-muted-foreground"
+			<Cluster
+				gap="sm"
+				align="center"
+				justify="center"
+				class="shrink-0 text-xs text-muted-foreground"
 			>
 				{#each data as entry (entry.key)}
-					<div class="flex items-center gap-2">
+					<Inline gap="sm">
 						<span
 							class="inline-block h-2.5 w-2.5 rounded-[3px]"
 							style={`background-color: ${entry.color};`}
 						></span>
 						<span>{entry.label}</span>
-					</div>
+					</Inline>
 				{/each}
-			</div>
-		</div>
+			</Cluster>
+		</Stack>
 	{:else if isCartesianChartSpec(spec)}
 		{@const series = spec.series.map((key, index) => ({
 			key,
@@ -170,11 +174,7 @@
 			value: key,
 			color: chartConfig[key]?.color ?? getSeriesColor(index, spec.config[key])
 		}))}
-		<div
-			class="max-w-full overflow-x-auto overflow-y-hidden overscroll-x-contain"
-			role="region"
-			aria-label={`Scrollable chart: ${spec.title ?? 'Data chart'}`}
-		>
+		<Scroll axis="x" name={`Scrollable chart: ${spec.title ?? 'Data chart'}`} class="max-">
 			<ChartContainer
 				config={chartConfig}
 				class="h-[clamp(14rem,45dvh,18rem)] min-w-full"
@@ -247,12 +247,12 @@
 					/>
 				{/if}
 			</ChartContainer>
-		</div>
+		</Scroll>
 	{/if}
-</div>
+</Stack>
 
 <style>
-	.dynamic-ui-chart-display :global(.lc-layout-svg-g) {
+	:global(.dynamic-ui-chart-display .lc-layout-svg-g) {
 		fill: initial !important;
 	}
 </style>

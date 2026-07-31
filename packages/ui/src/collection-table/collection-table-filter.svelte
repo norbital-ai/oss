@@ -5,6 +5,7 @@
 	import { Combobox } from '#lib/combobox';
 	import { DataRenderer } from '../data-renderer/index.js';
 	import { Indicator } from '#lib/indicator';
+	import { Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { TreeCombobox } from '#lib/tree-combobox';
 	import {
@@ -131,11 +132,11 @@
 		{/snippet}
 	</Popover.Trigger>
 	<Popover.Content align="start" class="w-[min(calc(100vw-1rem),42rem)] max-w-full p-0">
-		<header class="flex items-center justify-between border-b px-3 py-2">
-			<div>
+		<Inline justify="between" gap="sm" class="border-b px-3 py-2">
+			<Stack gap="none">
 				<p class="text-xs font-medium">Filters</p>
 				<p class="text-micro text-muted-foreground">All conditions must match.</p>
-			</div>
+			</Stack>
 			{#if filters.length > 0}<Button
 					type="button"
 					variant="ghost"
@@ -143,14 +144,16 @@
 					class="h-7 text-xs"
 					onclick={clear}>Clear all</Button
 				>{/if}
-		</header>
-		<div class="max-h-80 min-w-0 space-y-2 overflow-y-auto p-3">
-			{#if filters.length === 0}
-				<p class="py-2 text-center text-xs text-muted-foreground">No filters applied.</p>
-			{/if}
+		</Inline>
+		<Scroll axis="y" name="Applied filters" class="max-h-80 min-w-0 p-3">
+			<Stack gap="xs">
+				{#if filters.length === 0}
+					<p class="py-2 text-center text-xs text-muted-foreground">No filters applied.</p>
+				{/if}
 			{#each filters as filter (filter.id)}
 				{@const field = selectedField(filter)}
 				{@const operatorOptions = field ? collectionFilterOperatorOptions(field.field) : []}
+				<!-- stupidity:allow UI6 -- filter-builder row grid needs explicit responsive tracks and placements the auto-fit Grid cannot express -->
 				<div
 					class="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_2rem]"
 				>
@@ -205,7 +208,8 @@
 					>
 				</div>
 			{/each}
-		</div>
+			</Stack>
+		</Scroll>
 		<footer class="border-t p-2">
 			<Button
 				type="button"

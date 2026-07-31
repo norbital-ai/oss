@@ -4,6 +4,7 @@
 	 * It renders a simple non-collapsible row in the tree.
 	 */
 	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -15,6 +16,6 @@
 	let { content, class: className, ...rest }: Props = $props();
 </script>
 
-<div class={cn('flex w-full place-items-center gap-1 pl-[3px]', className)} {...rest}>
+<Inline gap="xs" class={cn('w-full pl-[3px]', className)} {...rest}>
 	{@render content()}
-</div>
+</Inline>

@@ -1,5 +1,8 @@
+const POD_HTTP_ERROR = Symbol.for('@norbital-ai/pod/http-error');
+
 export class PodHttpError extends Error {
 	readonly body: Readonly<Record<string, unknown>>;
+	readonly [POD_HTTP_ERROR] = true;
 
 	constructor(
 		readonly status: number,
@@ -13,6 +16,22 @@ export class PodHttpError extends Error {
 		this.name = 'PodHttpError';
 		this.body = normalized;
 	}
+}
+
+/**
+ * Runtime bundles can contain an authoring copy and a server copy of Pod. `instanceof` compares
+ * constructor identity and therefore misclassifies an intentional refusal thrown by the authoring
+ * copy as an internal fault in the server copy. A global-symbol brand preserves the trust marker
+ * without accepting arbitrary Error-shaped values.
+ */
+export function isPodHttpError(value: unknown): value is PodHttpError {
+	if (!value || typeof value !== 'object') return false;
+	return (
+		Reflect.get(value, POD_HTTP_ERROR) === true &&
+		Number.isInteger(Reflect.get(value, 'status')) &&
+		Reflect.get(value, 'body') != null &&
+		typeof Reflect.get(value, 'body') === 'object'
+	);
 }
 
 export function error(status: number, body: string | Readonly<Record<string, unknown>>): never {
