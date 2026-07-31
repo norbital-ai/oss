@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, readdir, rmdir, stat } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { symlink } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -39,6 +40,15 @@ export type PodRuntimeHarness = {
 	readonly orgName: string;
 	readonly pool: Pool;
 	request(init: TenantRequestInit, identity: Identity): Promise<Response>;
+	/**
+	 * The trusted host's private control plane — the same entry point `pod start` and Core call.
+	 *
+	 * Jobs reach the workspace only through here (`workspaceJobs` is handed a `dispatch` that is
+	 * exactly this), so a test that drives a drain by calling its runner directly would be testing
+	 * the runner rather than the job. Deliberately separate from `request`: nothing a tenant
+	 * identity can reach may claim outbox rows.
+	 */
+	hostCommand(command: unknown): Promise<unknown>;
 	/** Serve the runtime over a real HTTP socket (forging `identity` on every request). */
 	serveHttp(identity: Identity): Promise<{ url: string; close: () => Promise<void> }>;
 	stop(): Promise<void>;
@@ -48,6 +58,12 @@ type HandleTenantRequest = (
 	request: Request,
 	bindings: RuntimeFacilityBindings
 ) => Promise<Response>;
+
+type HandleHostCommand = (
+	command: unknown,
+	bindings: RuntimeFacilityBindings,
+	identity: { userId: string; organizationId: string; organizationName: string }
+) => Promise<unknown>;
 
 type TestHostDbBinding = {
 	query(
@@ -216,6 +232,48 @@ async function loadSchemaSql(templateRoot: string): Promise<string> {
 }
 
 /**
+ * Copy a template into `.test-workspaces/` and write the caller's extra sources over it.
+ *
+ * Inside the repo, because pnpm resolves the injected `@norbital-ai/*` copies through relative
+ * symlinks that do not survive a move outside it. The copy is taken under the shared build lock:
+ * without it the snapshot can catch another suite's `.norbital` mid-write, which fails the copy's
+ * build for a reason that has nothing to do with the test.
+ */
+async function materializeOverlay(
+	templateRoot: string,
+	sources: Readonly<Record<string, string>>
+): Promise<string> {
+	const parent = path.join(REPO_ROOT, '.test-workspaces');
+	await mkdir(parent, { recursive: true });
+	const root = await mkdtemp(path.join(parent, 'overlay-'));
+	const skipped = [
+		'node_modules',
+		path.join('.norbital', 'build'),
+		path.join('.norbital', 'dist'),
+		// Held by us for the duration of this very copy, and a copied lock is a lock nobody releases.
+		path.join('.norbital', '.test-build-lock')
+	];
+	await withTemplateBuildLock(templateRoot, async () => {
+		await cp(templateRoot, root, {
+			recursive: true,
+			filter: (source) => {
+				const relative = path.relative(templateRoot, source);
+				return !skipped.some(
+					(entry) => relative === entry || relative.startsWith(`${entry}${path.sep}`)
+				);
+			}
+		});
+	});
+	await symlink(path.join(templateRoot, 'node_modules'), path.join(root, 'node_modules'));
+	for (const [relative, contents] of Object.entries(sources)) {
+		const file = path.join(root, relative);
+		await mkdir(path.dirname(file), { recursive: true });
+		await writeFile(file, contents);
+	}
+	return root;
+}
+
+/**
  * Boot a full pod runtime in-process against a throwaway Postgres 18: build + migrate the template,
  * load the built `handleTenantRequest`, and expose an authed `request()` that drives `/_runtime/*`
  * with a forged base scope (no HTTP server, no facility gate — only the `db` facility is bound).
@@ -227,11 +285,30 @@ export type PodRuntimeTestFacilities = {
 	readonly messaging?: HostMessagingBinding;
 };
 
+export type PodRuntimeBootOptions = {
+	/**
+	 * Extra workspace source files, keyed by path relative to the workspace root.
+	 *
+	 * Supplying any of these boots from a private copy of the template rather than the template
+	 * itself, because the shared templates are what every other suite builds and a test that edits
+	 * one changes their subject. The copy borrows the template's `node_modules` by symlink (pnpm's
+	 * links inside it are relative, so they still resolve) and keeps its existing migrations, so a
+	 * file that adds no columns costs a rebuild and no migration.
+	 */
+	readonly sources?: Readonly<Record<string, string>>;
+};
+
 export async function bootPodRuntime(
 	template = 'construction',
-	facilities: PodRuntimeTestFacilities = {}
+	facilities: PodRuntimeTestFacilities = {},
+	options: PodRuntimeBootOptions = {}
 ): Promise<PodRuntimeHarness> {
-	const templateRoot = path.join(REPO_ROOT, 'template_workspaces', template);
+	const sharedTemplateRoot = path.join(REPO_ROOT, 'template_workspaces', template);
+	const sources = options.sources ?? {};
+	const usesOverlay = Object.keys(sources).length > 0;
+	const templateRoot = usesOverlay
+		? await materializeOverlay(sharedTemplateRoot, sources)
+		: sharedTemplateRoot;
 	const pg: PgHarness = await startPostgres();
 	const env = {
 		...process.env,
@@ -249,13 +326,13 @@ export async function bootPodRuntime(
 	// Everything past this point can fail (a bad build, a failed migration). Tear the container
 	// down on the way out rather than leaving it — and its data volume — behind.
 	let handleTenantRequest: HandleTenantRequest;
+	let handleHostCommand: HandleHostCommand;
 	let pool: Pool;
 	let binding: ReturnType<typeof createPgBinding>;
 	let schemaSql: string;
 	try {
-		({ handleTenantRequest, pool, binding, schemaSql } = await withTemplateBuildLock(
-			templateRoot,
-			async () => {
+		({ handleTenantRequest, handleHostCommand, pool, binding, schemaSql } =
+			await withTemplateBuildLock(templateRoot, async () => {
 				execFileSync('node', [POD_BIN, 'build'], { cwd: templateRoot, env, stdio: 'ignore' });
 				execFileSync('node', [POD_BIN, 'migrate'], { cwd: templateRoot, env, stdio: 'ignore' });
 
@@ -269,22 +346,24 @@ export async function bootPodRuntime(
 				);
 				const runtimeModule = (await import(pathToFileURL(runtimePath).href)) as {
 					handlePodRequest?: HandleTenantRequest;
+					handlePodHostCommand?: HandleHostCommand;
 				};
-				if (!runtimeModule.handlePodRequest) {
-					throw new Error('built pod runtime is missing handlePodRequest');
+				if (!runtimeModule.handlePodRequest || !runtimeModule.handlePodHostCommand) {
+					throw new Error('built pod runtime is missing its request/host-command entry points');
 				}
 				const loadedPool = new Pool({ connectionString: pg.connectionString, max: 12 });
 				const loadedBinding = createPgBinding(loadedPool);
 				return {
 					handleTenantRequest: runtimeModule.handlePodRequest,
+					handleHostCommand: runtimeModule.handlePodHostCommand,
 					pool: loadedPool,
 					binding: loadedBinding,
 					schemaSql: await loadSchemaSql(templateRoot)
 				};
-			}
-		));
+			}));
 	} catch (err) {
 		pg.stop();
+		if (usesOverlay) await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
 		throw err;
 	}
 
@@ -311,6 +390,13 @@ export async function bootPodRuntime(
 			});
 			return handleTenantRequest(request, { db: binding, ...facilities });
 		},
+		hostCommand(command) {
+			return handleHostCommand(
+				command,
+				{ db: binding, ...facilities },
+				{ userId: ADMIN_ID, organizationId: ORG_ID, organizationName: ORG_NAME }
+			);
+		},
 		async serveHttp(identity) {
 			const server = createServer((req, res) => {
 				void handleNodeRequest(req, res, identity, handleTenantRequest, {
@@ -331,6 +417,7 @@ export async function bootPodRuntime(
 		async stop() {
 			await pool.end().catch(() => undefined);
 			pg.stop();
+			if (usesOverlay) await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
 		}
 	};
 }
