@@ -1,4 +1,28 @@
 import dedent from 'dedent';
+import { SYSTEM_COLLECTION_NAMES } from '@norbital-ai/platform-utils/system/collections';
+
+/**
+ * Tables the ops guard exempts, as SQL literals.
+ *
+ * Derived from `SYSTEM_COLLECTION_NAMES` rather than restated. Two hand-copied versions of this list
+ * had already drifted: adding a system collection meant remembering to edit SQL in a template literal,
+ * and forgetting produced no compile error — only a runtime guard that rejected a legitimate write.
+ * The internal tables below are not collections, so they are the only part that stays literal.
+ */
+const INTERNAL_TABLES = [
+	'_approval_lock',
+	'_norbital_internal_schema',
+	'_norbital_sync_epoch',
+	'_norbital_automation_cursor',
+	'__drizzle_migrations',
+	'sync_outbox'
+] as const;
+
+const guardExemptTables = (extra: readonly string[] = []): string =>
+	[...new Set([...SYSTEM_COLLECTION_NAMES, ...INTERNAL_TABLES, ...extra])]
+		.sort()
+		.map((name) => `'${name}'`)
+		.join(', ');
 
 export const SCHEMA_FUNCTIONS_SQL = dedent`
     CREATE SCHEMA IF NOT EXISTS norbital_auth;
@@ -497,15 +521,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
           AND c.relkind = 'r'
           AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-	            'audit_event', '_approval_lock', '_norbital_internal_schema',
-	            '_norbital_sync_epoch', '_norbital_automation_cursor',
-	            '__drizzle_migrations', 'sync_outbox', 'approval_request', 'requestor',
-	            'automation_run', 'chat_session', 'chat_turn', 'chat_message', 'user', 'team', 'policy', 'integration_outbox',
-	            'notification_outbox', 'notification', 'document_asset', 'team_members',
-	            'invitation', 'host_event_outbox',
-	            -- Channel state is claimed with ON CONFLICT DO NOTHING, which is the deduplication
-	            -- itself and cannot be expressed through collection_ops.
-	            'channel_conversation', 'channel_inbound_message'
+            ${guardExemptTables()}
           )
           AND EXISTS (
             SELECT 1
@@ -542,9 +558,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
           AND c.relkind = 'r'
           AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-            'audit_event', 'chat_session', 'chat_turn', 'chat_message', 'sync_outbox', '_approval_lock',
-            '_norbital_internal_schema', '_norbital_sync_epoch',
-            '_norbital_automation_cursor', '__drizzle_migrations', 'host_event_outbox'
+            ${guardExemptTables()}
           )
           AND EXISTS (
             SELECT 1
