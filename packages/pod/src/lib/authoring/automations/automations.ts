@@ -62,6 +62,20 @@ export type AgentAutomationSpec = {
 	readonly collections?: readonly WorkspaceCollectionName[];
 	readonly access?: 'read' | 'write';
 	readonly tools?: readonly WorkspaceAgentToolName[];
+	/**
+	 * Host tools this agent may call — the opt-in, and the whole of it.
+	 *
+	 * A host tool runs in the host process with the host's credentials, so it is offered to nothing by
+	 * default: naming it here is the only way an agent ever sees one. That keeps a host capability at
+	 * least as constrained as a workspace one, which `tools` already narrows the same way, and it puts
+	 * the decision in workspace source where it appears in a diff.
+	 *
+	 * Plain `string` rather than a generated union, because these names belong to the *host*: which
+	 * tools exist depends on where the workspace is deployed, and the compiler cannot know. The
+	 * cross-reference is checked at startup instead — `assertHostAgentTools` refuses a workspace that
+	 * names a tool its host does not supply, and refuses a host tool that shadows a workspace one.
+	 */
+	readonly hostTools?: readonly string[];
 	readonly profile?: string;
 	readonly maxIterations?: number;
 	readonly maxTokens?: number;

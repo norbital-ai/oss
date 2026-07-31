@@ -153,6 +153,40 @@ export type HostMessagingBinding = {
 	sendVia(transport: string, message: TransportMessage): Promise<TransportSendResult>;
 };
 
+/**
+ * One host-supplied agent tool, described for the model.
+ *
+ * Plain data — name, description, JSON Schema — so it survives the structured clone that carries a
+ * binding result into the isolate. It is deliberately the same shape as `AiToolSpec`: the agent loop
+ * puts host tools and workspace tools into one list, because the model is offered one list.
+ */
+export type HostAgentToolSpec = AiToolSpec;
+
+/**
+ * Tools the *host* implements, offered to a tenant's agent.
+ *
+ * This is the one facility whose method set is not the interesting part: the *tools* are, and they
+ * differ per host. So the binding is fixed at two methods and the tool set is discovered by calling
+ * one of them. That is what makes it expressible at all — `facilityProxy` answers a property get
+ * with a call forwarder, so a binding cannot carry a map of host functions, but it can carry a
+ * `list()` that returns their descriptions and a `run()` that names one.
+ *
+ * `run` receives the model's raw input and returns whatever the tool produced. Both cross by
+ * structured clone, so a tool that returns a function or a class instance returns nothing usable —
+ * the same rule every other binding lives under.
+ *
+ * Note what is *absent*: the guest passes no caller identity. A tenant isolate's claim about who is
+ * asking is not something the host can verify, so a host tool authorizes against what the host
+ * already knows — which tenant this container belongs to — and never against an assertion that
+ * arrived over this wire.
+ */
+export type HostAgentToolBinding = {
+	/** The tools this host exposes. A method, not a field — see the note on `RuntimeFacilityBindings`. */
+	list(): Promise<readonly HostAgentToolSpec[]>;
+	/** Run one host tool by name. The host validates `input`; the guest never sees the implementation. */
+	run(name: string, input: unknown): Promise<unknown>;
+};
+
 export type StaticMapMarker = {
 	readonly latitude: number;
 	readonly longitude: number;
@@ -219,10 +253,18 @@ export type RuntimeFacilityBindings = {
 	readonly ai?: HostAiBinding;
 	readonly messaging?: HostMessagingBinding;
 	readonly maps?: HostMapsBinding;
+	readonly agentTools?: HostAgentToolBinding;
 };
 
 export type RuntimeFacilityName =
-	'db' | 'fileStorage' | 'integrationDelivery' | 'queue' | 'ai' | 'maps' | 'messaging';
+	| 'db'
+	| 'fileStorage'
+	| 'integrationDelivery'
+	| 'queue'
+	| 'ai'
+	| 'maps'
+	| 'messaging'
+	| 'agentTools';
 
 /**
  * Facilities implied by the portable workspace manifest, independent of a particular host.
@@ -257,6 +299,12 @@ export function requiredRuntimeFacilities(
 	const automations = Object.values(manifest.automations ?? {});
 	if (automations.length > 0) required.add('queue');
 	if (automations.some((automation) => automation.spec?.kind === 'agent')) required.add('ai');
+	// An agent that names a host tool has nothing to call without one. Same reasoning as `ai`: the
+	// workspace declared a dependency on something only the host can supply, so a host that supplies
+	// none must refuse the workspace rather than fail at the first run.
+	if (automations.some((automation) => (automation.spec?.hostTools ?? []).length > 0)) {
+		required.add('agentTools');
+	}
 
 	return [...required];
 }

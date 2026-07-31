@@ -35,6 +35,7 @@ import {
 	type HostVerifiedSubject,
 	type SelfHostedPodHostConfig
 } from '../../host/types.js';
+import { assertHostAgentTools, hostAgentTools } from '../../host/agent-tools.js';
 import { cookieSession, subjectHmac } from '../../host/session.js';
 import { emailOtpIdentity } from '../../host/email-otp.js';
 import { assertChannelTransportsAreSupported } from '../../authoring/channels/channels.js';
@@ -641,7 +642,10 @@ function facilityBindings(
 		...(config.fileStorage ? { fileStorage: config.fileStorage } : {}),
 		...(config.ai ? { ai: config.ai } : {}),
 		...(config.messaging ? { messaging: config.messaging } : {}),
-		...(config.maps ? { maps: config.maps } : {})
+		...(config.maps ? { maps: config.maps } : {}),
+		...(config.agentTools && config.agentTools.length > 0
+			? { agentTools: hostAgentTools(config.agentTools) }
+			: {})
 	};
 }
 
@@ -681,6 +685,10 @@ export async function startStandalone(
 		manifest.channels ?? {},
 		new Set(config.messaging ? await config.messaging.listTransports() : [])
 	);
+	// The other cross-reference the host owns: a host tool that shadows a workspace one, or an agent
+	// naming a host tool nobody supplies. Both are silent at runtime — a shadowed workspace tool keeps
+	// compiling and simply stops being what runs — so they are settled here, before the first run.
+	assertHostAgentTools(config.agentTools ?? [], manifest);
 	// Validated before anything is served: an unusable `entry` must name its plugin here rather than
 	// render into every session's sidebar.
 	const hostPlugins = config.hostPlugins ?? [];

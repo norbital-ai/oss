@@ -59,6 +59,21 @@ export type {
 	TBaseScope
 } from './types.js';
 
+/**
+ * Agent tools the host implements.
+ *
+ * The counterpart to a workspace's `defineAgentTool`: same idea, other side of the isolate. Put them
+ * on `agentTools` in `definePodHost` and an agent that names one in its `hostTools` can call it —
+ * an agent that does not name one cannot see that it exists. `assertHostAgentTools` is exported for
+ * a host that assembles its own startup (Core does): `pod start` already runs it.
+ */
+export { assertHostAgentTools, hostAgentTools } from './agent-tools.js';
+export type { HostAgentTool } from './agent-tools.js';
+export type {
+	HostAgentToolBinding,
+	HostAgentToolSpec
+} from '@norbital-ai/platform-utils/runtime/binding';
+
 // Database
 export { postgresDb, PostgresHostDbBinding } from './db.js';
 export type { HostDbConnection, PostgresDbOptions } from './db.js';

@@ -8,6 +8,7 @@ import type {
 	RuntimeFacilityName
 } from '@norbital-ai/platform-utils/runtime/binding';
 import type { TBaseScope } from '@norbital-ai/platform-utils/scope/types';
+import type { HostAgentTool } from './agent-tools.js';
 import type { HostDbAdapter } from './db.js';
 
 /**
@@ -302,6 +303,14 @@ export type SelfHostedPodHostConfig = {
 	 * this is the other half, and without it a channel can send but never be spoken to.
 	 */
 	readonly channels?: HostChannelListener;
+	/**
+	 * Tools this host implements and offers to tenant agents. Satisfies `agentTools`.
+	 *
+	 * Registering one exposes it to nothing: an agent reaches a host tool only if its spec names it in
+	 * `hostTools`. Validated at startup against the workspace manifest, so a name that shadows a
+	 * workspace tool — or an agent naming a tool that is not here — fails before the process listens.
+	 */
+	readonly agentTools?: readonly HostAgentTool[];
 	/** Host-owned surfaces linked into the workspace sidebar. Validated at startup. */
 	readonly hostPlugins?: readonly HostAppPlugin[];
 };
@@ -330,6 +339,7 @@ export function satisfiedFacilities(
 	if (config.messaging) satisfied.add('messaging');
 	if (config.queue) satisfied.add('queue');
 	if (config.integrationDelivery) satisfied.add('integrationDelivery');
+	if (config.agentTools && config.agentTools.length > 0) satisfied.add('agentTools');
 	return satisfied;
 }
 

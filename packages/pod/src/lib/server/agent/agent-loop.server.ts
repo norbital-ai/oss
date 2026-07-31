@@ -117,7 +117,51 @@ function jsonSchema(definition: AgentToolDefinition): unknown {
 	return z.toJSONSchema(definition.input);
 }
 
-function toolSpecs(spec: AgentAutomationSpec): AiToolSpec[] {
+/**
+ * What one run may call, resolved once.
+ *
+ * `hostTools` is a *set*, not a list to search: dispatch has to ask "is this name a host tool this
+ * run was granted" and nothing else. Resolving it up front is also what makes the host's `list()` one
+ * call per run rather than one per tool call.
+ */
+type ResolvedTools = {
+	readonly specs: readonly AiToolSpec[];
+	readonly hostTools: ReadonlySet<string>;
+};
+
+/**
+ * The host tools this run may call, described for the model.
+ *
+ * Default deny, and the deny is structural: nothing is added unless `spec.hostTools` names it. A host
+ * tool runs in the host process holding host credentials, so it is not something an agent should
+ * inherit by being an agent — the workspace has to have said so, in source, per agent.
+ *
+ * The shadow check is repeated here rather than left to `assertHostAgentTools` at startup. That gate
+ * is the one that produces a good message at a good time, but it belongs to the host, and Core is a
+ * host this package does not run. A collision that slipped past it must still fail loudly before any
+ * model call, not resolve to whichever branch of `executeTool` is reached first.
+ */
+async function hostToolSpecs(
+	spec: AgentAutomationSpec,
+	taken: ReadonlySet<string>
+): Promise<readonly AiToolSpec[]> {
+	const named = spec.hostTools ?? [];
+	if (named.length === 0) return [];
+	const binding = requireRuntimeFacility('agentTools');
+	const available = new Map((await binding.list()).map((tool) => [tool.name, tool]));
+	return named.map((name) => {
+		const tool = available.get(name);
+		if (!tool) throw new Error(`Agent references unknown host tool: ${name}`);
+		if (taken.has(name)) {
+			throw new Error(
+				`Host tool ${name} collides with a workspace tool of the same name; the agent cannot tell them apart`
+			);
+		}
+		return { name: tool.name, description: tool.description, inputSchema: tool.inputSchema };
+	});
+}
+
+async function resolveTools(spec: AgentAutomationSpec): Promise<ResolvedTools> {
 	const collections = allowedCollections(spec);
 	const tools: AiToolSpec[] = [
 		{
@@ -144,8 +188,11 @@ function toolSpecs(spec: AgentAutomationSpec): AiToolSpec[] {
 		if (!definition) throw new Error(`Agent references unknown tenant tool: ${name}`);
 		tools.push({ name, description: definition.description, inputSchema: jsonSchema(definition) });
 	}
+	const taken = new Set(tools.map((tool) => tool.name));
+	const hostSpecs = await hostToolSpecs(spec, taken);
+	tools.push(...hostSpecs);
 	void collections;
-	return tools;
+	return { specs: tools, hostTools: new Set(hostSpecs.map((tool) => tool.name)) };
 }
 
 const MUTATION_METHODS = new Set(['create', 'update', 'delete']);
@@ -186,6 +233,7 @@ function agentToolApi(spec: AgentAutomationSpec): BeforeApi {
 
 async function executeTool(
 	spec: AgentAutomationSpec,
+	resolved: ResolvedTools,
 	call: AiToolCall
 ): Promise<Record<string, unknown>> {
 	const ctx = getWorkspace({ provision: true });
@@ -221,6 +269,13 @@ async function executeTool(
 		}
 		await deleteRecord(ctx, input.collection, input.id);
 		return { deletedId: input.id };
+	}
+	// Host tools before workspace tools, and gated on the set this run resolved rather than on the raw
+	// spec: a name only reaches here if `resolveTools` both found it on the host and proved it shadows
+	// nothing, so the two branches can never both claim one call.
+	if (resolved.hostTools.has(call.name)) {
+		const binding = requireRuntimeFacility('agentTools');
+		return objectValue(await binding.run(call.name, call.input));
 	}
 	const definition = getTenantWorkspace().registered.agentTools[call.name];
 	if (!definition || !(spec.tools ?? []).includes(call.name)) {
@@ -410,7 +465,8 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 	if (messages.length === 0) throw new Error('Agent run requires an input message');
 
 	const ai = requireRuntimeFacility('ai');
-	const tools = toolSpecs(options.spec);
+	const resolved = await resolveTools(options.spec);
+	const tools = resolved.specs;
 	const maxIterations = options.spec.maxIterations ?? 8;
 	let consumedTokens = 0;
 	let finalText = '';
@@ -464,7 +520,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			for (const call of calls) {
 				let output: Record<string, unknown>;
 				try {
-					output = await executeTool(options.spec, call);
+					output = await executeTool(options.spec, resolved, call);
 				} catch (cause) {
 					output = {
 						error: cause instanceof Error ? cause.message : String(cause)

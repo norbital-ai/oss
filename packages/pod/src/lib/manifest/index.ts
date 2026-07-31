@@ -119,6 +119,7 @@ function buildAutomationEntries(
 				collections?: string[];
 				access?: 'read' | 'write';
 				tools?: string[];
+				hostTools?: string[];
 				profile?: string;
 				maxIterations?: number;
 				maxTokens?: number;
@@ -143,6 +144,7 @@ function buildAutomationEntries(
 						...(tpl.spec.collections ? { collections: tpl.spec.collections } : {}),
 						...(tpl.spec.access ? { access: tpl.spec.access } : {}),
 						...(tpl.spec.tools ? { tools: tpl.spec.tools } : {}),
+						...(tpl.spec.hostTools ? { hostTools: tpl.spec.hostTools } : {}),
 						...(tpl.spec.profile ? { profile: tpl.spec.profile } : {}),
 						...(tpl.spec.maxIterations ? { maxIterations: tpl.spec.maxIterations } : {}),
 						...(tpl.spec.maxTokens ? { maxTokens: tpl.spec.maxTokens } : {})
@@ -211,6 +213,26 @@ function buildHandlerEntries(
 			name: handler.name ?? key,
 			description: handler.description ?? null
 		};
+	}
+	return out;
+}
+
+/**
+ * Workspace agent tool names, flattened into the manifest so a host can see the namespace it shares.
+ *
+ * Only name and description travel: the implementation is compiled into the guest bundle and the
+ * host never loads it. What a host cannot otherwise know is which names are already taken, and it
+ * has to know that before it registers tools of its own — an agent is offered one flat list, so two
+ * tools called the same thing make the model's call unresolvable.
+ */
+function buildAgentToolEntries(
+	agentTools: Record<string, unknown> | undefined
+): NorbitalManifest['agentTools'] {
+	if (!agentTools || Object.keys(agentTools).length === 0) return undefined;
+	const out: Record<string, ManifestHandlerEntry> = {};
+	for (const [key, raw] of Object.entries(agentTools)) {
+		const tool = raw as { description?: string | null };
+		out[key] = { name: key, description: tool.description ?? null };
 	}
 	return out;
 }
@@ -306,6 +328,7 @@ export function buildNorbitalManifest(workspace: {
 		relationships: workspace.relationships ?? {},
 		apps: buildAppEntries(workspace.registered?.apps),
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
+		agentTools: buildAgentToolEntries(workspace.registered?.agentTools),
 		automations: buildAutomationEntries(workspace.registered?.automations),
 		policies: buildPolicyEntries(workspace.registered?.policies),
 		channels: buildChannelEntries(workspace.registered?.channels),

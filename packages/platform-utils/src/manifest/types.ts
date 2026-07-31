@@ -94,6 +94,14 @@ export const ManifestAutomationAgentSpecSchema = z
 		collections: z.array(nonEmpty).optional(),
 		access: z.enum(['read', 'write']).optional(),
 		tools: z.array(nonEmpty).optional(),
+		/**
+		 * Host tools this agent may call, named in the host's namespace rather than the workspace's.
+		 *
+		 * Carried in the manifest for the same reason `channels[].transport` is: the host never loads
+		 * the workspace bundle, so a name that lives only in source is invisible to it, and a host tool
+		 * that does not exist would otherwise surface as an agent that silently reaches nothing.
+		 */
+		hostTools: z.array(nonEmpty).optional(),
 		profile: nonEmpty.optional(),
 		maxIterations: z.number().int().positive().optional(),
 		maxTokens: z.number().int().positive().optional()
@@ -338,6 +346,15 @@ export const NorbitalManifestSchema = z
 		channels: z.record(z.string(), ManifestChannelSchema).optional(),
 		apps: z.record(z.string(), ManifestAppSchema).optional(),
 		handlers: z.record(z.string(), ManifestHandlerEntrySchema).optional(),
+		/**
+		 * Workspace-declared agent tools, by name.
+		 *
+		 * Only the names and descriptions — the implementations are compiled into the guest bundle and
+		 * are none of the host's business. What the host needs is the *namespace*: an agent is offered
+		 * one flat tool list, so a host tool sharing a name with one of these is an ambiguity, and the
+		 * host can only see the collision if the manifest says which names are taken.
+		 */
+		agentTools: z.record(z.string(), ManifestHandlerEntrySchema).optional(),
 		automations: z.record(z.string(), ManifestAutomationSchema),
 		env: z
 			.object({
