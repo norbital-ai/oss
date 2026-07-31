@@ -1,7 +1,7 @@
-import { watch } from "runed";
-import { setContext, getContext } from "svelte";
+import { watch } from 'runed';
+import { setContext, getContext } from 'svelte';
 
-const STICK_TO_BOTTOM_CONTEXT_KEY = Symbol("stick-to-bottom-context");
+const STICK_TO_BOTTOM_CONTEXT_KEY = Symbol('stick-to-bottom-context');
 
 /**
  * Stick-to-bottom for streaming chat.
@@ -43,14 +43,14 @@ class StickToBottomContext {
 	}
 
 	/** Explicit latch + jump (scroll button / initial mount). */
-	scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+	scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
 		if (!this.#element) return;
 		this.#stuck = true;
-		if (behavior === "smooth") {
+		if (behavior === 'smooth') {
 			this.#isPinning = true;
 			this.#element.scrollTo({
 				top: this.#element.scrollHeight,
-				behavior: "smooth",
+				behavior: 'smooth'
 			});
 			// Smooth animation emits many scroll events; clear pinning when it settles near bottom.
 			const start = performance.now();
@@ -164,12 +164,12 @@ class StickToBottomContext {
 
 		this.#lastScrollTop = this.#element.scrollTop;
 
-		this.#element.addEventListener("scroll", this.#handleScroll, { passive: true });
-		this.#element.addEventListener("wheel", this.#handleWheel, { passive: true });
-		this.#element.addEventListener("touchstart", this.#handleTouchStart, { passive: true });
+		this.#element.addEventListener('scroll', this.#handleScroll, { passive: true });
+		this.#element.addEventListener('wheel', this.#handleWheel, { passive: true });
+		this.#element.addEventListener('touchstart', this.#handleTouchStart, { passive: true });
 
 		const content = this.#element.querySelector(
-			"[data-stick-to-bottom-content]"
+			'[data-stick-to-bottom-content]'
 		) as HTMLElement | null;
 		if (content) {
 			// Prefer content observer only — root + content both firing duplicates pins.
@@ -193,9 +193,9 @@ class StickToBottomContext {
 		this.#rootResizeObserver?.disconnect();
 
 		if (this.#element) {
-			this.#element.removeEventListener("scroll", this.#handleScroll);
-			this.#element.removeEventListener("wheel", this.#handleWheel);
-			this.#element.removeEventListener("touchstart", this.#handleTouchStart);
+			this.#element.removeEventListener('scroll', this.#handleScroll);
+			this.#element.removeEventListener('wheel', this.#handleWheel);
+			this.#element.removeEventListener('touchstart', this.#handleTouchStart);
 		}
 
 		this.#contentResizeObserver = null;
@@ -212,7 +212,7 @@ export function setStickToBottomContext(): StickToBottomContext {
 export function getStickToBottomContext(): StickToBottomContext {
 	const context = getContext<StickToBottomContext>(STICK_TO_BOTTOM_CONTEXT_KEY);
 	if (!context) {
-		throw new Error("StickToBottomContext must be used within a Conversation component");
+		throw new Error('StickToBottomContext must be used within a Conversation component');
 	}
 	return context;
 }

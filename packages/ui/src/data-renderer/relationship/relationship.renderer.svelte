@@ -135,7 +135,9 @@
 
 	// Never "loading" once something is displayable: a value already labelled must not flash.
 	const loading = $derived(
-		Boolean(optionsQuery?.loading || (label == null && selectedIds.length > 0 && valueQuery?.loading))
+		Boolean(
+			optionsQuery?.loading || (label == null && selectedIds.length > 0 && valueQuery?.loading)
+		)
 	);
 	const error = $derived(optionsQuery?.error?.message ?? valueQuery?.error?.message ?? null);
 

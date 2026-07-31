@@ -10,9 +10,4 @@
 	}: AlertDialogPrimitive.TitleProps = $props();
 </script>
 
-<AlertDialogPrimitive.Title
-	bind:ref
-	class={cn('text-heading', className)}
-	{level}
-	{...restProps}
-/>
+<AlertDialogPrimitive.Title bind:ref class={cn('text-heading', className)} {level} {...restProps} />

@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+	import type { HTMLAttributes } from 'svelte/elements';
+	import type { Snippet } from 'svelte';
 
 	export interface QueueItemFileProps extends WithElementRef<HTMLAttributes<HTMLSpanElement>> {
 		children?: Snippet;
@@ -21,7 +21,7 @@
 
 <span
 	bind:this={ref}
-	class={cn("bg-muted flex items-center gap-1 rounded border px-2 py-1 text-xs", className)}
+	class={cn('bg-muted flex items-center gap-1 rounded border px-2 py-1 text-xs', className)}
 	{...restProps}
 >
 	<Icon icon="lucide:paperclip" class="size-3" />

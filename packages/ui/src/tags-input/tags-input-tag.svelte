@@ -2,16 +2,7 @@
 	import { cn } from '#lib/utils';
 
 	type TagColor =
-		| 'red'
-		| 'orange'
-		| 'yellow'
-		| 'green'
-		| 'blue'
-		| 'purple'
-		| 'pink'
-		| 'brown'
-		| 'grey'
-		| 'black';
+		'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'pink' | 'brown' | 'grey' | 'black';
 
 	let {
 		value,

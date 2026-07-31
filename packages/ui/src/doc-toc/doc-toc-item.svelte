@@ -30,9 +30,7 @@
 	watch(
 		() => [itemId, toc.observedItems, linkElement, scrollElement] as const,
 		([id, observed, link, container]) => {
-			const isActive = id
-				? (observed.find((entry) => entry.id === id)?.active ?? false)
-				: false;
+			const isActive = id ? (observed.find((entry) => entry.id === id)?.active ?? false) : false;
 			if (isActive && link && container) {
 				scrollDocTocLinkIntoView(link, container);
 			}

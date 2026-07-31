@@ -142,7 +142,7 @@ only.** It buys nothing and costs a cold start per UI state.
 **Zero (Rocicorp).** The query is the sync unit, and — this is the part worth copying — every
 result carries its own completeness. `resultType` is `'complete'` (all data present),
 `'unknown'` (some is missing locally) or `'error'`. Their documented UI rule is to show "not
-found" only when `resultType === 'complete'` *and* the row is absent, precisely so a cold page
+found" only when `resultType === 'complete'` _and_ the row is absent, precisely so a cold page
 does not flash 404 while the server answers. **Takeaway: never let the UI infer completeness
 from emptiness.** A partial result and an empty one look identical unless the engine says which
 it is.
@@ -153,13 +153,13 @@ central design decision below.
 
 ### 2.1 Where Pod landed relative to them
 
-| Problem | Electric | Zero | Pod |
-| --- | --- | --- | --- |
-| Partial replication | server-maintained shape (table + where + columns) | per-query | per-collection, byte-budgeted |
-| Resume position | `offset` (starts `-1`) + shape `handle` | per-query | `(xid, seq)` cursor on one global feed |
-| Position no longer valid | **HTTP 409** + `{"headers":{"control":"must-refetch"}}` | re-sync | `event: reset` on the stream (§3.8a) |
-| Caught up | `up-to-date` control message | `resultType: 'complete'` | catch-up completes → `synced` |
-| Partial result reaches the UI | shape is complete by construction | **yes, labelled `'unknown'`** | **no — declined, server answers** |
+| Problem                       | Electric                                                | Zero                          | Pod                                    |
+| ----------------------------- | ------------------------------------------------------- | ----------------------------- | -------------------------------------- |
+| Partial replication           | server-maintained shape (table + where + columns)       | per-query                     | per-collection, byte-budgeted          |
+| Resume position               | `offset` (starts `-1`) + shape `handle`                 | per-query                     | `(xid, seq)` cursor on one global feed |
+| Position no longer valid      | **HTTP 409** + `{"headers":{"control":"must-refetch"}}` | re-sync                       | `event: reset` on the stream (§3.8a)   |
+| Caught up                     | `up-to-date` control message                            | `resultType: 'complete'`      | catch-up completes → `synced`          |
+| Partial result reaches the UI | shape is complete by construction                       | **yes, labelled `'unknown'`** | **no — declined, server answers**      |
 
 The first four rows are the same design under different names, which is reassuring: the
 compaction boundary and its reset are not an invention here, they are the standard answer.
@@ -171,7 +171,7 @@ costs a round trip on a windowed collection; Zero's costs an extra concept every
 handle correctly. Pod's is the safer default for a workspace where a filtered list quietly
 missing rows is a correctness bug, not a cosmetic one.
 
-**The improvement this comparison points at** is adopting Zero's labelling *in addition* to the
+**The improvement this comparison points at** is adopting Zero's labelling _in addition_ to the
 current behaviour: return the local rows immediately with `complete: false`, let the table render
 them, and swap in the server's answer when it lands. That is strictly better than a spinner and
 strictly better than silence — but it adds a concept to every read site, so it is a deliberate
@@ -317,14 +317,14 @@ query that already has rows never returns to loading, however much work is still
 it.
 
 "This query" is doing the work in that sentence. A new query inherits its first rows from its
-**family**, and a family is one *slice* of a collection: same collection, same operation, same
+**family**, and a family is one _slice_ of a collection: same collection, same operation, same
 position. Re-shaping that slice inherits; moving to another slice does not.
 
-| what changed | inherits? | what the user sees |
-| --- | --- | --- |
-| filter, sort, search term | yes — same slice, re-shaped | old rows, then new rows. No blank, no spinner |
-| **page** | **no — different records** | **loader, until that page arrives** |
-| nothing (revisit) | the resource itself is reused | rows, instantly |
+| what changed              | inherits?                     | what the user sees                            |
+| ------------------------- | ----------------------------- | --------------------------------------------- |
+| filter, sort, search term | yes — same slice, re-shaped   | old rows, then new rows. No blank, no spinner |
+| **page**                  | **no — different records**    | **loader, until that page arrives**           |
+| nothing (revisit)         | the resource itself is reused | rows, instantly                               |
 
 ```
 FIRST VISIT to a collection
@@ -415,7 +415,7 @@ The change feed is append-only: one row per write, forever. That is what makes s
 client says "everything after position N" and gets only what changed — and it is also why the
 table would grow for the life of the tenant if nothing removed anything.
 
-Deleting old rows on its own is *worse* than the growth. A client whose cursor points into the
+Deleting old rows on its own is _worse_ than the growth. A client whose cursor points into the
 deleted range asks to resume from a position that no longer exists, the server finds nothing after
 it, and the client concludes it is up to date. It is not: it has silently and permanently missed
 everything that was pruned, and no error is raised anywhere.
@@ -431,10 +431,10 @@ sync_outbox:   [ pruned ............ ] [ 8,421 | 8,422 | ... | 12,004 ]
 
 Every resume is then one comparison:
 
-| client cursor | answer |
-| --- | --- |
-| **above** the boundary | resumable — send the diffs since it |
-| **at or below** it | the changes you missed are gone → **reset** |
+| client cursor          | answer                                      |
+| ---------------------- | ------------------------------------------- |
+| **above** the boundary | resumable — send the diffs since it         |
+| **at or below** it     | the changes you missed are gone → **reset** |
 
 A reset is `event: reset` on the stream. The client drops its entire local database and rebuilds
 from a full download. Expensive, and correct — and it only reaches a device that has been away
@@ -456,7 +456,7 @@ nobody opens costs nothing to keep bounded.
 ### 3.8b Visibility changes are deltas too
 
 A payroll run's payslips become readable the moment the run is approved — and not one payslip row
-is written. The feed carries rows that *changed*, so nothing in it describes them.
+is written. The feed carries rows that _changed_, so nothing in it describes them.
 
 The client used to compensate by re-reading collections after every approval. That is a scan
 standing in for a delta, and a guess besides: a client cannot know which rows changed side.

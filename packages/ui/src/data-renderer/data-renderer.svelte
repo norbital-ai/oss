@@ -81,7 +81,6 @@
 		field.kind === 'json' ||
 			(value != null && typeof value === 'object' && !BUILTIN_DISPLAY_KINDS.has(field.kind))
 	);
-
 </script>
 
 {#if customRenderer}
@@ -140,7 +139,6 @@
 				: null}
 		multiple={field.array ?? false}
 		options={fileOptions}
-
 		{placeholder}
 		{disabled}
 		readonly={mode === 'display'}

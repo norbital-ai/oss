@@ -183,7 +183,6 @@ function clientColumnType(type: string): string {
 	return type;
 }
 
-
 // ---------------------------------------------------------------------------
 // shape — POST { collection, cursor?, pageSize? } → { rows, nextCursor, watermark, cursor? }
 //
@@ -412,11 +411,19 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 			// this client missed have been pruned. Saying so is the whole reason the boundary is
 			// durable — the alternative is resuming from the start of a truncated feed and leaving
 			// the replica quietly missing everything that was discarded.
-			if (isCursorTooOld(startCursor.seq, await syncCompactionBoundary(ctx))) {
+			//
+			// Checked before every read, not only at connect. Falling behind retention is not
+			// something only a *reconnecting* client can do: a stream stays open while its client
+			// stops draining it — a sleeping laptop holding the socket, a tab throttled to a halt —
+			// and the cursor sits still while an hourly prune walks past it. The read that follows
+			// would then quietly skip the pruned range and deliver the rest, which is precisely the
+			// silently-wrong replica the boundary exists to prevent. One primary-key lookup per
+			// iteration; the loop already issues a batch read next.
+			const cursorTooOld = async (): Promise<boolean> => {
+				if (!isCursorTooOld(cursor.seq, await syncCompactionBoundary(ctx))) return false;
 				send(`event: reset\ndata: {"reason":"cursor_too_old"}\n\n`);
-				controller.close();
-				return;
-			}
+				return true;
+			};
 
 			try {
 				// `settling` counts down only while we have been told a row exists but the
@@ -425,6 +432,7 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 				let settling = HORIZON_SETTLE_ATTEMPTS;
 				// stupidity:allow A6 -- this is the long-lived SSE pump, bounded by the abort signal.
 				while (!signal.aborted) {
+					if (await cursorTooOld()) break;
 					const batch = await runWithWorkspaceContext(ctx, () => readSyncOutboxBatch(ctx, cursor));
 					if (batch.rows.length > 0) {
 						// Resolve the batch concurrently, then write it as one chunk.

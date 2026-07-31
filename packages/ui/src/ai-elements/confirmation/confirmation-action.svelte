@@ -10,13 +10,13 @@
 
 	let {
 		class: className,
-		variant = "default",
-		size = "sm",
+		variant = 'default',
+		size = 'sm',
 		children,
 		...restProps
 	}: ConfirmationActionProps = $props();
 </script>
 
-<Button class={cn("h-8 px-3 text-sm", className)} type="button" {variant} {size} {...restProps}>
+<Button class={cn('h-8 px-3 text-sm', className)} type="button" {variant} {size} {...restProps}>
 	{@render children?.()}
 </Button>

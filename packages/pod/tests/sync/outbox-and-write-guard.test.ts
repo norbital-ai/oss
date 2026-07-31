@@ -11,7 +11,9 @@ import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.j
 const hasDocker = dockerAvailable();
 if (!hasDocker) {
 	// eslint-disable-next-line no-console
-	console.warn('[pod-sync-p0] Docker not available — skipping real-Postgres sync tests.');
+	console.warn(
+		'[outbox-and-write-guard] Docker not available — skipping real-Postgres sync tests.'
+	);
 }
 
 /** Minimal ProvisionedContext shim: the tailer only ever calls ctx.tenantDb.query. */

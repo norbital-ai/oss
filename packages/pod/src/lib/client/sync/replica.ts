@@ -109,7 +109,20 @@ export class PgliteWorkerBridge implements PgliteLike {
 	}
 }
 
-function replicaDataDir(replicaStamp: string, mode: 'shared' | 'tab'): string {
+/** Which of this origin's two replica databases a tab ended up on. */
+type ReplicaMode = 'shared' | 'tab';
+
+/**
+ * How long to wait for the cross-tab replica before falling back to a tab-local one.
+ *
+ * A cold boot here is PGlite's WASM download plus IndexedDB open inside a worker that is starting
+ * for the first time, and it competes with whatever the page is doing — an organization switch is
+ * unmounting and remounting a tree while this runs. The bound exists so a genuinely broken
+ * SharedWorker cannot hang the workspace, not to police a slow one, so it is generous.
+ */
+const SHARED_WORKER_BOOTSTRAP_TIMEOUT_MS = 30_000;
+
+function replicaDataDir(replicaStamp: string, mode: ReplicaMode): string {
 	return `idb://norbital-pod-sync-${mode}-${encodeURIComponent(replicaStamp)}`;
 }
 
@@ -130,10 +143,20 @@ async function createDirectPglite(dataDir: string): Promise<PgliteLike> {
 	return (await PGlite.create(dataDir)) as unknown as PgliteLike; // stupidity: boundary-cast — PGlite's concrete generic query result satisfies the narrower replica interface.
 }
 
-async function createBrowserPglite(schemaSql: string, replicaStamp: string): Promise<PgliteLike> {
+/**
+ * Open this tenant's replica, and say which of the two databases was opened.
+ *
+ * The mode is not a detail. `shared` and `tab` are separate IndexedDB databases with separate
+ * contents, so "this device already holds the rows" is only ever true *of one of them*. A caller
+ * that does not know which one it got cannot know whether waiting for it is the fast path.
+ */
+async function createBrowserPglite(
+	schemaSql: string,
+	replicaStamp: string
+): Promise<{ db: PgliteLike; mode: ReplicaMode }> {
 	if (typeof SharedWorker === 'undefined') {
 		console.warn('[pod-sync] SharedWorker is not supported; using a tab-local replica');
-		return createDirectPglite(replicaDataDir(replicaStamp, 'tab'));
+		return { db: await createDirectPglite(replicaDataDir(replicaStamp, 'tab')), mode: 'tab' };
 	}
 	let worker: SharedWorker | undefined;
 	try {
@@ -144,14 +167,14 @@ async function createBrowserPglite(schemaSql: string, replicaStamp: string): Pro
 		const bridge = new PgliteWorkerBridge(worker);
 		await withTimeout(
 			() => bridge.bootstrap(schemaSql, replicaDataDir(replicaStamp, 'shared')),
-			10_000,
+			SHARED_WORKER_BOOTSTRAP_TIMEOUT_MS,
 			'SharedWorker PGlite bootstrap'
 		);
-		return bridge;
+		return { db: bridge, mode: 'shared' };
 	} catch (error) {
 		worker?.port.close();
 		console.warn('[pod-sync] SharedWorker bootstrap failed; using a tab-local replica', error);
-		return createDirectPglite(replicaDataDir(replicaStamp, 'tab'));
+		return { db: await createDirectPglite(replicaDataDir(replicaStamp, 'tab')), mode: 'tab' };
 	}
 }
 
@@ -169,13 +192,23 @@ async function createBrowserPglite(schemaSql: string, replicaStamp: string): Pro
  */
 const WARM_MARK_PREFIX = 'norbital-sync-warm:';
 
-function warmMarkKey(replicaStamp: string): string {
-	return `${WARM_MARK_PREFIX}${replicaStamp}`;
+/**
+ * Keyed by replica MODE as well as identity, because the mark is a claim about one database.
+ *
+ * `shared` and `tab` are different IndexedDB databases. A single mark for both meant a tab that
+ * failed over to the tab-local replica inherited the shared replica's "this device has the rows"
+ * answer — and then `clientSyncReady` waited on an empty database for a full catch-up instead of
+ * reading from the server. That is the worst of both: the slow path, chosen for being the fast one.
+ */
+function warmMarkKey(replicaStamp: string, mode: ReplicaMode): string {
+	return `${WARM_MARK_PREFIX}${mode}:${replicaStamp}`;
 }
 
-function readWarmMark(bootstrap: SyncBootstrap): boolean {
+function readWarmMark(bootstrap: SyncBootstrap, mode: ReplicaMode): boolean {
 	try {
-		return localStorage.getItem(warmMarkKey(bootstrap.replicaStamp)) === bootstrap.replicaEpoch;
+		return (
+			localStorage.getItem(warmMarkKey(bootstrap.replicaStamp, mode)) === bootstrap.replicaEpoch
+		);
 	} catch {
 		// Private mode, blocked storage: treat as cold. Being wrong here costs a round trip, never
 		// correctness — the replica is still opened and still takes over once it is ready.
@@ -183,9 +216,9 @@ function readWarmMark(bootstrap: SyncBootstrap): boolean {
 	}
 }
 
-function writeWarmMark(bootstrap: SyncBootstrap): void {
+function writeWarmMark(bootstrap: SyncBootstrap, mode: ReplicaMode): void {
 	try {
-		localStorage.setItem(warmMarkKey(bootstrap.replicaStamp), bootstrap.replicaEpoch);
+		localStorage.setItem(warmMarkKey(bootstrap.replicaStamp, mode), bootstrap.replicaEpoch);
 	} catch {
 		// Nothing to do — the next load simply starts cold again.
 	}
@@ -236,7 +269,9 @@ export function bootstrapClientSync(
 	const existing = getClientSync();
 	if (existing) return Promise.resolve(existing);
 	if (typeof window === 'undefined' || !bootstrap) return Promise.resolve(null);
-	replicaHoldsRows = readWarmMark(bootstrap);
+	// Answered before the replica opens, so it has to assume the mode it is about to attempt.
+	// `openReplica` corrects it if the attempt falls back to the other database.
+	replicaHoldsRows = readWarmMark(bootstrap, 'shared');
 	return (bootstrapping ??= openReplica(bootstrap));
 }
 
@@ -246,7 +281,10 @@ async function openReplica(bootstrap: SyncBootstrap): Promise<ClientSync | null>
 	try {
 		// Tabs for the same organization and user share one catch-up. A different identity gets a
 		// different replica, so policy-scoped residency can never be reused as another user.
-		const db = await createBrowserPglite(schemaSql, replicaStamp);
+		const { db, mode } = await createBrowserPglite(schemaSql, replicaStamp);
+		// The mode assumed in `bootstrapClientSync` may not be the one we got. Re-answer against the
+		// database actually open, so a fallback stops claiming rows it does not have.
+		replicaHoldsRows = readWarmMark(bootstrap, mode);
 
 		const client = new PodSyncClient({ db, schemaSql, replicaEpoch, fetch: browserSyncFetch });
 		await client.bootstrap();
@@ -258,11 +296,11 @@ async function openReplica(bootstrap: SyncBootstrap): Promise<ClientSync | null>
 		// Record that this device is worth waiting for next time. If the replica came back with
 		// collections already resident it is warm now; otherwise the first completed catch-up says
 		// so. A reset mints a new epoch, which retires the old mark rather than trusting it.
-		if (sync.registry.size > 0) writeWarmMark(bootstrap);
+		if (sync.registry.size > 0) writeWarmMark(bootstrap, mode);
 		else {
 			const stop = client.onChange(() => {
 				stop();
-				writeWarmMark(bootstrap);
+				writeWarmMark(bootstrap, mode);
 			});
 		}
 

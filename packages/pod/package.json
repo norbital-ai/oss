@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/pod",
-	"version": "0.0.10",
+	"version": "0.0.11",
 	"description": "Tenant workspace authoring SDK, runtime, and Vite plugin for Norbital.",
 	"type": "module",
 	"license": "SEE LICENSE IN LICENSE",
@@ -81,7 +81,6 @@
 		"@standard-schema/spec": "^1.1.0",
 		"@sveltejs/vite-plugin-svelte": "^7.2.0",
 		"@tailwindcss/vite": "^4.3.3",
-		"@typescript/native-preview": "7.0.0-dev.20260707.2",
 		"dedent": "^1.7.2",
 		"drizzle-kit": "catalog:",
 		"drizzle-orm": "catalog:",
@@ -99,7 +98,6 @@
 		"@types/pg": "^8.20.0",
 		"mode-watcher": "^1.1.0",
 		"prettier": "^3.9.5",
-		"runed": "catalog:",
 		"svelte": "catalog:",
 		"typescript": "catalog:",
 		"vite": "catalog:",

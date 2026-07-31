@@ -30,8 +30,7 @@ export function getCollectionClientContext(): CollectionClient<ErasedCollectionR
 }
 
 export function getOptionalCollectionClientContext():
-	| CollectionClient<ErasedCollectionRegistry>
-	| undefined {
+	CollectionClient<ErasedCollectionRegistry> | undefined {
 	return hasContext(COLLECTION_CLIENT_CONTEXT)
 		? getContext<CollectionClientGetter>(COLLECTION_CLIENT_CONTEXT)()
 		: undefined;

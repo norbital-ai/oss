@@ -69,7 +69,9 @@
 <div class={cn('grid min-w-0 gap-2', className)}>
 	{#each values as entry, index (`${entry}-${index}`)}
 		{@const parts = toLocalDateTimeParts(entry)}
-		<div class="flex min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs focus-within:ring-2 focus-within:ring-ring">
+		<div
+			class="flex min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs focus-within:ring-2 focus-within:ring-ring"
+		>
 			<DateView
 				value={entry}
 				multi={false}
@@ -109,7 +111,9 @@
 	{/each}
 
 	{#if values.length === 0 && !multiple}
-		<div class="flex min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs">
+		<div
+			class="flex min-w-0 overflow-hidden rounded-md border border-input bg-background shadow-xs"
+		>
 			<DateView
 				value={null}
 				multi={false}

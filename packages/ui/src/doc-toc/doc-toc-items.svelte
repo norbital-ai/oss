@@ -16,6 +16,15 @@
 
 	const toc = getDocTocState()();
 
+	/**
+	 * Bound rather than written inline on the element. A `style:` directive's value is parsed as one
+	 * token, and this string is long enough that Prettier wraps it — which splits the directive
+	 * across lines and stops the component compiling. Keeping it here is also the only way the
+	 * formatter and the compiler can both be satisfied without an ignore comment.
+	 */
+	const TRACK_CLIP_PATH =
+		'polygon(0 var(--track-top, 0), 100% var(--track-top, 0), 100% var(--track-bottom, 0), 0 var(--track-bottom, 0))';
+
 	let containerElement = $state<HTMLDivElement | null>(null);
 	let positions = $state<DocTocPosition[]>([]);
 
@@ -42,7 +51,7 @@
 			class="pointer-events-none absolute inset-y-0 inset-s-0 w-px bg-primary transition-[clip-path] duration-150 ease-out"
 			style:--track-top="{trackBounds.top}px"
 			style:--track-bottom="{trackBounds.bottom}px"
-			style:clip-path="polygon(0 var(--track-top, 0), 100% var(--track-top, 0), 100% var(--track-bottom, 0), 0 var(--track-bottom, 0))"
+			style:clip-path={TRACK_CLIP_PATH}
 			aria-hidden="true"
 		></div>
 	{/if}

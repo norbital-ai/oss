@@ -1,7 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { HostFileStorageBinding, PresignResult } from '@norbital-ai/platform-utils/runtime/binding';
+import type {
+	HostFileStorageBinding,
+	PresignResult
+} from '@norbital-ai/platform-utils/runtime/binding';
 
 /** The route `pod start` serves presigned objects from. */
 export const STORAGE_ROUTE_PREFIX = '/_pod/storage/';

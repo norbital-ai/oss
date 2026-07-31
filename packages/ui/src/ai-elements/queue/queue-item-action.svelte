@@ -1,9 +1,9 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { Snippet } from "svelte";
+	import type { Snippet } from 'svelte';
 	import type { ButtonProps } from '#lib/button';
 
-	export interface QueueItemActionProps extends Omit<ButtonProps, "variant" | "size"> {
+	export interface QueueItemActionProps extends Omit<ButtonProps, 'variant' | 'size'> {
 		children?: Snippet;
 	}
 </script>
@@ -22,7 +22,7 @@
 <Button
 	bind:ref
 	class={cn(
-		"text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground size-auto rounded p-1 opacity-0 transition-opacity group-hover:opacity-100",
+		'text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground size-auto rounded p-1 opacity-0 transition-opacity group-hover:opacity-100',
 		className
 	)}
 	size="icon"

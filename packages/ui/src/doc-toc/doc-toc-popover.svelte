@@ -77,7 +77,9 @@
 					<div
 						class="w-full overflow-hidden rounded-xl border border-border bg-background/95 shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2.5">
+						<div
+							class="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2.5"
+						>
 							<p class="text-micro font-semibold tracking-[0.08em] text-muted-foreground uppercase">
 								{title}
 							</p>

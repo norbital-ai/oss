@@ -8,9 +8,9 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
-	import { getStickToBottomContext } from "./stick-to-bottom-context.svelte.js";
-	import { fly } from "svelte/transition";
-	import { backOut } from "svelte/easing";
+	import { getStickToBottomContext } from './stick-to-bottom-context.svelte.js';
+	import { fly } from 'svelte/transition';
+	import { backOut } from 'svelte/easing';
 
 	let { class: className, onclick, ...restProps }: ConversationScrollButtonProps = $props();
 
@@ -33,18 +33,18 @@
 		in:fly={{
 			duration: 300,
 			y: 10,
-			easing: backOut,
+			easing: backOut
 		}}
 		out:fly={{
 			duration: 200,
 			y: 10,
-			easing: backOut,
+			easing: backOut
 		}}
 		class="absolute bottom-4 left-[50%] translate-x-[-50%]"
 	>
 		<Button
 			class={cn(
-				"bg-background/80 border-border/50 hover:bg-background/90 rounded-full shadow-lg backdrop-blur-sm hover:shadow-xl",
+				'bg-background/80 border-border/50 hover:bg-background/90 rounded-full shadow-lg backdrop-blur-sm hover:shadow-xl',
 				className
 			)}
 			onclick={handleScrollToBottom}

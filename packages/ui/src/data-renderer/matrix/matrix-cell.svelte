@@ -17,7 +17,9 @@
 	const className = $derived(
 		cn('w-full min-w-0', borderless && 'border-0 bg-transparent shadow-none')
 	);
-	const relationTarget = $derived(column.relationOptions ? (column.field.relation?.target ?? null) : null);
+	const relationTarget = $derived(
+		column.relationOptions ? (column.field.relation?.target ?? null) : null
+	);
 	const value = $derived(row[column.key]);
 </script>
 

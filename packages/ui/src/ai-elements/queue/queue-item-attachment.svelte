@@ -1,11 +1,9 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+	import type { HTMLAttributes } from 'svelte/elements';
+	import type { Snippet } from 'svelte';
 
-	export interface QueueItemAttachmentProps extends WithElementRef<
-		HTMLAttributes<HTMLDivElement>
-	> {
+	export interface QueueItemAttachmentProps extends WithElementRef<HTMLAttributes<HTMLDivElement>> {
 		children?: Snippet;
 	}
 </script>
@@ -19,6 +17,6 @@
 	}: QueueItemAttachmentProps = $props();
 </script>
 
-<div bind:this={ref} class={cn("mt-1 flex flex-wrap gap-2", className)} {...restProps}>
+<div bind:this={ref} class={cn('mt-1 flex flex-wrap gap-2', className)} {...restProps}>
 	{@render children?.()}
 </div>

@@ -60,10 +60,12 @@ export function localCollection(collection: string): LocalCollectionSchema | und
 	return schema.get(collection);
 }
 
-export function localRelationship(collection: string, relation: string): LocalRelationship | undefined {
+export function localRelationship(
+	collection: string,
+	relation: string
+): LocalRelationship | undefined {
 	return schema.get(collection)?.relationships.find((entry) => entry.name === relation);
 }
-
 
 // ── SQL construction ───────────────────────────────────────────────────────────
 

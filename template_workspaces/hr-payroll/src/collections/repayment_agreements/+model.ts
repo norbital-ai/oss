@@ -14,7 +14,13 @@ export default defineModel(
 		pay_component_id: uuid().notNull(),
 		reference: text().notNull(),
 		principal: numeric().notNull(),
-		disbursed_on: date().notNull(),
+		// Nullable because a loan is frequently evidenced by its recovery, not its payment. Employer
+		// loan trackers state the amount lent and the instalment schedule — both required above — and
+		// routinely omit the date the money left. Requiring it here did not make that date exist; it
+		// made the agreement unrepresentable, so the instalments were seeded as payroll deductions
+		// against no agreement at all. An unknown disbursement date is a smaller lie than a missing
+		// loan, and the only alternative is inventing one.
+		disbursed_on: date(),
 		repay_by: date().notNull(),
 		schedule: custom('repayment_schedule').notNull(),
 		effective_range: dateRange().notNull()

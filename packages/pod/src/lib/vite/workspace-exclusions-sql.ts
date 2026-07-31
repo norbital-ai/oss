@@ -1,4 +1,7 @@
-import type { ManifestExclusion, NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
+import type {
+	ManifestExclusion,
+	NorbitalManifest
+} from '@norbital-ai/platform-utils/manifest/types';
 
 /**
  * Dollar-quote tag for the generated DO blocks. Nothing we interpolate may contain it,

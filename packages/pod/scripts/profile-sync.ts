@@ -30,29 +30,84 @@ import type { ShapeResponse, SyncFetch } from '../src/lib/client/sync/types.js';
 
 type CollectionSpec = { name: string; rows: number; columns: string[] };
 
-const SYSTEM_COLUMNS = ['norbital_id', 'norbital_row_version', 'norbital_created_at', 'norbital_updated_at'];
+const SYSTEM_COLUMNS = [
+	'norbital_id',
+	'norbital_row_version',
+	'norbital_created_at',
+	'norbital_updated_at'
+];
 
 const HR_WORKLOAD: CollectionSpec[] = [
 	{ name: 'companies', rows: 2, columns: ['name', 'registration_number', 'address'] },
 	{ name: 'company_holidays', rows: 37, columns: ['company_id', 'holiday_date', 'name'] },
-	{ name: 'shift_definitions', rows: 13, columns: ['code', 'start_time', 'end_time', 'break_minutes'] },
+	{
+		name: 'shift_definitions',
+		rows: 13,
+		columns: ['code', 'start_time', 'end_time', 'break_minutes']
+	},
 	{ name: 'leave_types', rows: 20, columns: ['code', 'name', 'entitlement_days', 'is_paid'] },
 	{ name: 'pay_components', rows: 61, columns: ['code', 'name', 'kind', 'taxable', 'formula'] },
 	{
 		name: 'employees',
 		rows: 324,
 		columns: [
-			'name', 'date_of_birth', 'gender', 'marital_status', 'spouse_status', 'nationality',
-			'identity_number', 'dependents_count', 'email', 'phone', 'address', 'user_id'
+			'name',
+			'date_of_birth',
+			'gender',
+			'marital_status',
+			'spouse_status',
+			'nationality',
+			'identity_number',
+			'dependents_count',
+			'email',
+			'phone',
+			'address',
+			'user_id'
 		]
 	},
-	{ name: 'employments', rows: 318, columns: ['employee_id', 'company_id', 'start_date', 'end_date', 'status', 'job_title'] },
-	{ name: 'employment_terms', rows: 320, columns: ['employment_id', 'effective_from', 'basic_salary', 'currency', 'pay_frequency'] },
-	{ name: 'employment_statutory_facts', rows: 1666, columns: ['employment_id', 'fact_code', 'fact_value', 'effective_from'] },
-	{ name: 'leave_requests', rows: 1316, columns: ['employment_id', 'leave_type_id', 'start_date', 'end_date', 'days', 'status', 'reason'] },
-	{ name: 'leave_ledger', rows: 2178, columns: ['employment_id', 'leave_type_id', 'entry_date', 'delta_days', 'reason'] },
-	{ name: 'component_entries', rows: 595, columns: ['employment_id', 'pay_component_id', 'period', 'amount', 'currency'] },
-	{ name: 'repayment_agreements', rows: 0, columns: ['employment_id', 'principal', 'instalments', 'status'] },
+	{
+		name: 'employments',
+		rows: 318,
+		columns: ['employee_id', 'company_id', 'start_date', 'end_date', 'status', 'job_title']
+	},
+	{
+		name: 'employment_terms',
+		rows: 320,
+		columns: ['employment_id', 'effective_from', 'basic_salary', 'currency', 'pay_frequency']
+	},
+	{
+		name: 'employment_statutory_facts',
+		rows: 1666,
+		columns: ['employment_id', 'fact_code', 'fact_value', 'effective_from']
+	},
+	{
+		name: 'leave_requests',
+		rows: 1316,
+		columns: [
+			'employment_id',
+			'leave_type_id',
+			'start_date',
+			'end_date',
+			'days',
+			'status',
+			'reason'
+		]
+	},
+	{
+		name: 'leave_ledger',
+		rows: 2178,
+		columns: ['employment_id', 'leave_type_id', 'entry_date', 'delta_days', 'reason']
+	},
+	{
+		name: 'component_entries',
+		rows: 595,
+		columns: ['employment_id', 'pay_component_id', 'period', 'amount', 'currency']
+	},
+	{
+		name: 'repayment_agreements',
+		rows: 0,
+		columns: ['employment_id', 'principal', 'instalments', 'status']
+	},
 	{
 		name: 'roster_entries',
 		rows: 20_728,
@@ -69,14 +124,10 @@ const TABLE_PAGE = 50; // rows a CollectionTable asks for
 function buildSchemaSql(): string {
 	const statements: string[] = [];
 	for (const spec of HR_WORKLOAD) {
-		statements.push(
-			`CREATE TABLE IF NOT EXISTS "${spec.name}" ("norbital_id" text PRIMARY KEY);`
-		);
+		statements.push(`CREATE TABLE IF NOT EXISTS "${spec.name}" ("norbital_id" text PRIMARY KEY);`);
 		for (const column of [...SYSTEM_COLUMNS.slice(1), ...spec.columns]) {
 			const type = column === 'norbital_row_version' ? 'integer' : 'text';
-			statements.push(
-				`ALTER TABLE "${spec.name}" ADD COLUMN IF NOT EXISTS "${column}" ${type};`
-			);
+			statements.push(`ALTER TABLE "${spec.name}" ADD COLUMN IF NOT EXISTS "${column}" ${type};`);
 		}
 	}
 	return statements.join('\n');
@@ -149,7 +200,12 @@ function sleep(ms: number): Promise<void> {
 
 type Phase = { label: string; ms: number; detail?: string };
 
-async function timed<T>(phases: Phase[], label: string, fn: () => Promise<T>, detail?: string): Promise<T> {
+async function timed<T>(
+	phases: Phase[],
+	label: string,
+	fn: () => Promise<T>,
+	detail?: string
+): Promise<T> {
 	const started = performance.now();
 	const value = await fn();
 	phases.push({ label, ms: performance.now() - started, detail });

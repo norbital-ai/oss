@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+	import type { HTMLAttributes } from 'svelte/elements';
+	import type { Snippet } from 'svelte';
 
 	export interface ConversationProps extends WithElementRef<HTMLAttributes<HTMLDivElement>> {
 		children?: Snippet;
@@ -17,8 +17,8 @@
 	let {
 		class: className,
 		children,
-		initial = "smooth",
-		resize = "smooth",
+		initial = 'smooth',
+		resize = 'smooth',
 		ref = $bindable(null),
 		...restProps
 	}: ConversationProps = $props();
@@ -28,7 +28,7 @@
 
 <div
 	bind:this={ref}
-	class={cn("relative flex h-full flex-col overflow-hidden", className)}
+	class={cn('relative flex h-full flex-col overflow-hidden', className)}
 	role="log"
 	{...restProps}
 >

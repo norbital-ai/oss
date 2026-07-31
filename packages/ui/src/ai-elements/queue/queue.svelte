@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '#lib/utils';
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+	import type { HTMLAttributes } from 'svelte/elements';
+	import type { Snippet } from 'svelte';
 
 	export interface QueueProps extends WithElementRef<HTMLAttributes<HTMLDivElement>> {
 		children?: Snippet;
@@ -16,7 +16,7 @@
 <div
 	bind:this={ref}
 	class={cn(
-		"border-border bg-background flex flex-col gap-2 rounded-xl border px-3 pt-2 pb-2 shadow-xs",
+		'border-border bg-background flex flex-col gap-2 rounded-xl border px-3 pt-2 pb-2 shadow-xs',
 		className
 	)}
 	{...restProps}

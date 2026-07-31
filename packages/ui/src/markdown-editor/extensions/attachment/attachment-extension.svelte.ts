@@ -1,5 +1,8 @@
 import type { IFileUploadClient, UploadStage } from '../../../file-upload/index.js';
-import type { AllowedFileType as TAllowedFileType, FileMetadata as TFileMetadata } from '../../../file-value/index.js';
+import type {
+	AllowedFileType as TAllowedFileType,
+	FileMetadata as TFileMetadata
+} from '../../../file-value/index.js';
 import { safeParse } from '@norbital-ai/std';
 import type { Command, CommandProps, NodeViewRenderer, NodeViewRendererProps } from '@tiptap/core';
 import { Node, mergeAttributes } from '@tiptap/core';

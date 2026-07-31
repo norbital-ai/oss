@@ -356,11 +356,7 @@
 						{#if preview.content.type === 'image'}
 							<AttachmentPreviewImage src={fileUrl} alt={fileName} />
 						{:else if preview.content.type === 'pdf'}
-							<AttachmentPreviewPdf
-								dataUrl={preview.content.dataUrl}
-								{fileName}
-								fileUrl={fileUrl}
-							/>
+							<AttachmentPreviewPdf dataUrl={preview.content.dataUrl} {fileName} {fileUrl} />
 						{:else if preview.content.type === 'csv'}
 							<AttachmentPreviewCsv
 								headers={preview.content.headers}

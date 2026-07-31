@@ -575,43 +575,43 @@
 				{/if}
 			</div>
 
-		<div class="absolute inset-y-0 right-0 flex items-center">
-			{#if inst.enableSorting && sortingEnabled}
-				<button
-					type="button"
-					aria-label={dir === 'asc'
-						? `Sort ${headerLabel} descending`
-						: dir === 'desc'
-							? `Clear sort for ${headerLabel}`
-							: `Sort ${headerLabel} ascending`}
-					title={dir === 'asc'
-						? 'Sort descending'
-						: dir === 'desc'
-							? 'Clear sort'
-							: 'Sort ascending'}
-					onclick={() => handleSort(inst)}
-					class={cn(
-						'flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-opacity duration-150 hover:bg-muted focus:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
-						isSorted
-							? 'opacity-100'
-							: 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
-					)}
-				>
-					<Icon
-						icon={dir === 'desc'
-							? 'lucide:arrow-down'
-							: dir === 'asc'
-								? 'lucide:arrow-up'
-								: 'lucide:arrow-up-down'}
-						class="h-3.5 w-3.5 text-muted-foreground"
-					/>
-				</button>
-			{/if}
+			<div class="absolute inset-y-0 right-0 flex items-center">
+				{#if inst.enableSorting && sortingEnabled}
+					<button
+						type="button"
+						aria-label={dir === 'asc'
+							? `Sort ${headerLabel} descending`
+							: dir === 'desc'
+								? `Clear sort for ${headerLabel}`
+								: `Sort ${headerLabel} ascending`}
+						title={dir === 'asc'
+							? 'Sort descending'
+							: dir === 'desc'
+								? 'Clear sort'
+								: 'Sort ascending'}
+						onclick={() => handleSort(inst)}
+						class={cn(
+							'flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-opacity duration-150 hover:bg-muted focus:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
+							isSorted
+								? 'opacity-100'
+								: 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+						)}
+					>
+						<Icon
+							icon={dir === 'desc'
+								? 'lucide:arrow-down'
+								: dir === 'asc'
+									? 'lucide:arrow-up'
+									: 'lucide:arrow-up-down'}
+							class="h-3.5 w-3.5 text-muted-foreground"
+						/>
+					</button>
+				{/if}
 
-			{#if !disabled}
-				<CollectionTableColumnActions {inst} table={tableApi} />
-			{/if}
-		</div>
+				{#if !disabled}
+					<CollectionTableColumnActions {inst} table={tableApi} />
+				{/if}
+			</div>
 
 			{@const canResize = layout.canResize && !disabled}
 			{@const isResizing = resizer.activeColumnId === inst.id}

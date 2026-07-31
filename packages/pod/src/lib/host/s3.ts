@@ -139,7 +139,10 @@ export function s3FileStorage(options: S3FileStorageOptions): HostFileStorageBin
 		const { stamp, dateStamp } = amzDate(now);
 		const url = objectUrl(key);
 		url.searchParams.set('X-Amz-Algorithm', 'AWS4-HMAC-SHA256');
-		url.searchParams.set('X-Amz-Credential', `${options.accessKeyId}/${credentialScope(dateStamp)}`);
+		url.searchParams.set(
+			'X-Amz-Credential',
+			`${options.accessKeyId}/${credentialScope(dateStamp)}`
+		);
 		url.searchParams.set('X-Amz-Date', stamp);
 		url.searchParams.set('X-Amz-Expires', String(Math.max(1, Math.min(ttlSeconds, 604_800))));
 		url.searchParams.set('X-Amz-SignedHeaders', 'host');

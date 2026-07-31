@@ -39,7 +39,11 @@ describe('constraint violations become answers a person can act on', () => {
 
 	it('falls back to the constraint name when the driver gives no detail line', () => {
 		const { rejection } = rejectionFor(
-			driverError({ code: '23505', constraint: 'employees_identity_number_unique', table: 'employees' })
+			driverError({
+				code: '23505',
+				constraint: 'employees_identity_number_unique',
+				table: 'employees'
+			})
 		);
 		expect(rejection.detail).toBe('Another record already uses this identity number.');
 	});
@@ -53,8 +57,12 @@ describe('constraint violations become answers a person can act on', () => {
 
 	it('explains a dangling reference and a missing required value', () => {
 		expect(
-			rejectionFor(driverError({ code: '23503', detail: 'Key (company_id)=(7) is not present in table "companies".' }))
-				.rejection.detail
+			rejectionFor(
+				driverError({
+					code: '23503',
+					detail: 'Key (company_id)=(7) is not present in table "companies".'
+				})
+			).rejection.detail
 		).toBe('The company id refers to a record that no longer exists.');
 
 		const notNull = rejectionFor(driverError({ code: '23502', column: 'start_date' }));

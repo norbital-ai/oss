@@ -9,8 +9,4 @@
 	}: DialogPrimitive.TitleProps = $props();
 </script>
 
-<DialogPrimitive.Title
-	bind:ref
-	class={cn('text-heading', className)}
-	{...restProps}
-/>
+<DialogPrimitive.Title bind:ref class={cn('text-heading', className)} {...restProps} />
