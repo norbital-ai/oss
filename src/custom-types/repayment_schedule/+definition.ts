@@ -1,15 +1,15 @@
 import { defineCustomType } from '@norbital-ai/pod/authoring';
 import { z } from 'zod/mini';
 
-/**
- * The instalment plan of a repayment agreement. There is no state column anywhere —
- * "settled" is `SUM(instalments) >= principal`, derived at read time.
- */
-export const repaymentScheduleSchema = z.strictObject({
-	instalment_amount: z.number().check(z.positive()),
-	count: z.int().check(z.positive()),
-	first_period: z.string().check(z.regex(/^\d{4}-\d{2}$/))
+/** One loan has one schedule containing N independently editable repayment instalments. */
+export const repaymentScheduleEntrySchema = z.strictObject({
+	due_date: z.iso.date(),
+	amount: z.number().check(z.positive())
 });
+
+export const repaymentScheduleSchema = z
+	.array(repaymentScheduleEntrySchema)
+	.check(z.minLength(1), z.maxLength(600));
 
 export type RepaymentSchedule = z.infer<typeof repaymentScheduleSchema>;
 

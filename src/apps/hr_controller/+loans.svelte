@@ -8,11 +8,18 @@
 
 	/**
 	 * There is no `state` and no `outstanding` column on an agreement — settled is
-	 * `SUM(instalments) >= principal`, derived here from the instalment entries themselves.
+	 * `SUM(instalments linked through PAID payslips) >= principal`, derived from provenance.
 	 */
 	const instalmentsQuery = client.db.component_entries.findMany({
 		where: { norbital_approval_id: { isNull: true } },
 		limit: 2000
+	});
+	const lineSourcesQuery = client.db.payslip_line_sources.findMany({ limit: 5000 });
+	const linesQuery = client.db.payslip_lines.findMany({ limit: 5000 });
+	const payslipsQuery = client.db.payslips.findMany({ limit: 2000 });
+	const runsQuery = client.db.payroll_runs.findMany({
+		where: { norbital_approval_id: { isNull: true } },
+		limit: 1000
 	});
 	// A relation column holds a uuid. These reference sets load once per page and the label is
 	// resolved from memory rather than by mounting a lookup per row; a miss falls back to the raw id
@@ -42,8 +49,30 @@
 		)
 	);
 	const repaidByAgreement = $derived.by(() => {
+		const payslipIdByLine = new Map(
+			(linesQuery.current ?? []).map((line) => [line.norbital_id, line.payslip_id])
+		);
+		const runIdByPayslip = new Map(
+			(payslipsQuery.current ?? []).map((payslip) => [payslip.norbital_id, payslip.payroll_run_id])
+		);
+		const paidRunIds = new Set(
+			(runsQuery.current ?? [])
+				.filter((run) => run.lifecycle === 'PAID')
+				.map((run) => run.norbital_id)
+		);
+		const paidEntryIds = new Set<string>();
+		for (const link of lineSourcesQuery.current ?? []) {
+			const source = link.source;
+			if (
+				source?.kind !== 'COMPONENT_ENTRY' ||
+				!paidRunIds.has(runIdByPayslip.get(payslipIdByLine.get(link.payslip_line_id) ?? '') ?? '')
+			)
+				continue;
+			paidEntryIds.add(source.entry_id);
+		}
 		const totals = new Map<string, number>();
 		for (const entry of instalmentsQuery.current ?? []) {
+			if (!paidEntryIds.has(entry.norbital_id)) continue;
 			const origin = entryOriginSchema.safeParse(entry.origin);
 			if (!origin.success || origin.data.kind !== 'INSTALMENT') continue;
 			const amount = Number(entry.amount);
@@ -84,7 +113,7 @@
 		{client}
 		collection="repayment_agreements"
 		title="Repayment agreements"
-		description="Open an agreement to review its schedule and the instalment entries it has generated."
+		description="Outstanding falls only when a scheduled entry is linked through a paid payslip."
 		query={{ orderBy: { disbursed_on: 'desc' } }}
 		searchPlaceholder="Search agreements…"
 	>
@@ -113,6 +142,7 @@
 				render={({ value }) => formatRepaymentSchedule(value)}
 			/>
 			<Column name="disbursed_on" label="Disbursed" />
+			<Column name="repay_by" label="Repay by" />
 			<Column name="effective_range" label="Effective" />
 		{/snippet}
 		{#snippet ListCard(agreement)}
