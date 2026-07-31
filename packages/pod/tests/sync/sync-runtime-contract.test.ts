@@ -179,7 +179,18 @@ const admin: Identity = {
 	role: 'admin'
 };
 
-describe.skipIf(!hasDocker)('Pod Sync — end-to-end (real runtime + PGlite clients)', () => {
+/**
+ * Server-side sync behaviour that only a real runtime can show.
+ *
+ * Deliberately narrow. This file used to also assert catch-up scoping, 10-client propagation,
+ * offline reconnect, windowed 100k reads and version CONFLICT — all of which are owned by
+ * `sync-e2e-comprehensive` and `pod-sync-client`, and having two files answer the same question
+ * means neither is the one you fix when the answer changes. What is left is the three behaviours
+ * nothing else asserts: how the runtime stores a client-local timestamp, that an authoritative
+ * mutate leaves an audit trail, and that an introspected schema actually applies to a fresh
+ * replica.
+ */
+describe.skipIf(!hasDocker)('Pod Sync — runtime contract (real runtime + PGlite clients)', () => {
 	let harness: PodRuntimeHarness;
 	let collection: string;
 	let notNull: { name: string; type: string }[];
@@ -195,24 +206,6 @@ describe.skipIf(!hasDocker)('Pod Sync — end-to-end (real runtime + PGlite clie
 
 	afterAll(async () => {
 		await harness?.stop();
-	});
-
-	it('shape catch-up returns complete, policy-scoped rows', async () => {
-		const id = await serverInsert(harness, collection, notNull);
-		const client = await makeClient(harness, admin);
-		try {
-			const response = await client.shapeSubscribe({
-				collection,
-				pageSize: 500
-			});
-			const rows = response.rows;
-			const row = rows.find((r) => r.norbital_id === id);
-			expect(row, `shape rows: ${JSON.stringify(rows[0] ?? {})}`).toBeDefined();
-			expect(row?.norbital_row_version).toBeDefined();
-			expect(await client.localVersion(collection, id)).not.toBeNull();
-		} finally {
-			await client.close();
-		}
 	});
 
 	it('stores client-local timestamps as UTC instants and filters the replica by that instant', async () => {
@@ -291,35 +284,6 @@ describe.skipIf(!hasDocker)('Pod Sync — end-to-end (real runtime + PGlite clie
 		}
 	});
 
-	it('propagates a committed change to all subscribed clients (10 clients)', async () => {
-		const clients: PodSyncClient[] = [];
-		for (let i = 0; i < 10; i++) clients.push(await makeClient(harness, admin));
-		try {
-			for (const client of clients) {
-				await client.shapeSubscribe({ collection, pageSize: 500 });
-				client.startStream();
-			}
-			const baseline = await Promise.all(clients.map((c) => c.count(collection)));
-
-			const id = await serverInsert(harness, collection, notNull);
-
-			// Every client's live stream must converge to include the new row.
-			for (let i = 0; i < clients.length; i++) {
-				const client = clients[i]!;
-				const converged = await waitFor(
-					async () => (await client.localVersion(collection, id)) !== null
-				);
-				expect(
-					converged,
-					`client ${i} did not receive the change; lastError=${String(client.lastError)}`
-				).toBe(true);
-				expect(await client.count(collection)).toBe((baseline[i] ?? 0) + 1);
-			}
-		} finally {
-			await Promise.all(clients.map((c) => c.close()));
-		}
-	});
-
 	it('creates an audit_event for an authoritative mutate', async () => {
 		if (!writable) {
 			// No writable collection in this template — verify the mutation path still works
@@ -364,95 +328,6 @@ describe.skipIf(!hasDocker)('Pod Sync — end-to-end (real runtime + PGlite clie
 				[wc.name]
 			);
 			expect(Number(after.rows[0]!.n)).toBe(Number(before.rows[0]!.n) + 1);
-		} finally {
-			await client.close();
-		}
-	});
-
-	it('rejects a stale (version-conflicting) update as CONFLICT', async () => {
-		if (!writable) {
-			// No writable collection — conflict detection is covered by pod-sync-client unit tests.
-			// Verify the mutate endpoint correctly responds to a known-missing record.
-			const client = await makeClient(harness, admin);
-			try {
-				const stale = await client.mutate([
-					{
-						clientId: 'c1',
-						collection,
-						action: 'update',
-						row: { norbital_id: '00000000-0000-4000-8000-000000000000' },
-						version: 1
-					}
-				]);
-				expect(stale[0]?.status).toBe('rejected');
-			} finally {
-				await client.close();
-			}
-			return;
-		}
-		const wc = writable;
-		const client = await makeClient(harness, admin);
-		try {
-			const id = await serverInsert(harness, wc.name, wc.notNull);
-			await bumpServerVersion(harness, wc.name, id, wc.notNull);
-			const stale = await client.mutate([
-				{
-					clientId: 'c1',
-					collection: wc.name,
-					action: 'update',
-					row: { norbital_id: id, ...updatePatch(wc.notNull) },
-					version: 1
-				}
-			]);
-			expect(stale[0]?.status).toBe('rejected');
-			expect((stale[0] as { reason: string }).reason).toBe('CONFLICT');
-		} finally {
-			await client.close();
-		}
-	});
-
-	it('syncs back after reconnecting from offline', async () => {
-		const client = await makeClient(harness, admin);
-		try {
-			await client.shapeSubscribe({ collection, pageSize: 500 });
-			client.startStream();
-			// Go offline for reads: stop the stream, then a change lands on the server.
-			await client.stopStream();
-			const id = await serverInsert(harness, collection, notNull);
-			expect(await client.localVersion(collection, id)).toBeNull();
-			// Reconnect: the stream resumes from the saved cursor and replays the missed diff.
-			client.startStream();
-			const caughtUp = await waitFor(
-				async () => (await client.localVersion(collection, id)) !== null
-			);
-			expect(caughtUp).toBe(true);
-		} finally {
-			await client.close();
-		}
-	});
-
-	it('handles a 100k-row collection locally (windowed read stays correct)', async () => {
-		const db = await createClientDb();
-		const client = new PodSyncClient({
-			db,
-			schemaSql: harness.schemaSql,
-			fetch: syncFetchFor(harness, admin)
-		});
-		await client.bootstrap();
-		try {
-			// Bulk-load 100k rows straight into the local replica (as a large closure would).
-			const cols = ['norbital_id', ...notNull.map((c) => `"${c.name}"`.replace(/"/g, ''))];
-			const selectExprs = ['gen_random_uuid()', ...notNull.map((c) => literalFor(c.type))];
-			await db.exec(`INSERT INTO "${collection}" (${cols.map((c) => `"${c}"`).join(',')})
-				SELECT ${selectExprs.join(',')} FROM generate_series(1, 100000)`);
-			expect(await client.count(collection)).toBe(100_000);
-			const started = Date.now();
-			const windowed = await client.queryLocal<{ norbital_id: string }>(
-				`SELECT norbital_id FROM "${collection}" ORDER BY norbital_id LIMIT 50`
-			);
-			const elapsed = Date.now() - started;
-			expect(windowed.length).toBe(50);
-			expect(elapsed).toBeLessThan(1000);
 		} finally {
 			await client.close();
 		}
