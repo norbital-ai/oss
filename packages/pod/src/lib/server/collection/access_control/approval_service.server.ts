@@ -308,7 +308,7 @@ async function restoreRecordBeforeApproval(
 	if (ref.lock_type === 'record_delete') {
 		const reinserted = await tenantDb.query(
 			`INSERT INTO ${quoteSqlIdentifier(tableName)} (${quotedColumns.join(', ')}, norbital_sys_period)
-			 SELECT ${quotedColumns.join(', ')}, tstzrange(now(), NULL, '[)')::text
+			 SELECT ${quotedColumns.join(', ')}, tstzrange(now(), NULL, '[)')
 			   FROM ${quoteSqlIdentifier(historyTableName)}
 			  WHERE norbital_id = $1::uuid
 			  ORDER BY upper(norbital_sys_period) DESC NULLS LAST, norbital_row_version DESC
