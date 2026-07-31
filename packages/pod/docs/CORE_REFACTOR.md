@@ -267,8 +267,10 @@ what the row no longer needs to mean: policies became declarations, so a team's 
 `team.policy_id` pointing at a row reconciled from `+<name>.policy.ts` at migrate. The surface is a
 `PolicyName` picker, not a policy editor.
 
-Until the agent port lands, Core's `lib/agent/**` stays authoritative and the deletions above do not
-apply to it.
+The agent port has landed, so `lib/agent/**` is no longer authoritative and the deletions above do
+apply — with one division that is easy to get backwards. Core keeps `lib/agent/tools/`: the sandbox
+is a host capability, and reaching it is the one thing Pod cannot do from inside a tenant. Core does
+not keep the loop or the transcript store. See C6.
 
 ---
 
@@ -511,6 +513,14 @@ Every item below is already listed above with its rationale.
       anyone put an arbitrary link, under Core's label, into a tenant's sidebar. Shapes differ too
       (`route`/`requiredCapability` vs `entry`/`adminOnly`). Move it off the header.
 - [ ] **C6.** Re-expose sandbox tools as `HostAgentTool`; delete `lib/agent/**` the port replaced.
+      **This item was wrongly declared blocked, and the retraction matters more than the item.** A
+      later audit concluded Core's agent code was "0% deletable" because the loop served the builder
+      agent, which "stays in Core by design". That is not the design. Core does not own the builder
+      agent; it supplies access to the sandbox — modify files, run code — and that is a host
+      capability, which is precisely what this item already said. `lib/agent/tools/` (`coding.tool.ts`,
+      `deployment.tool.ts`, ~1,800 lines) is Core's. `agent.server.ts` (~1,100) and `store.server.ts`
+      (~870) are a second loop and a second transcript store beside Pod's — the same duplicated
+      authority that produced the `eventId` webhook bug and the double pull scheduler.
       The Pod side is built — put them on `agentTools` in the tenant's host config, bind
       `HostAgentToolBinding` alongside `db`/`ai` in `resolveRuntimeBindings` (it is a normal facility
       and crosses on the existing proxy), and run `assertHostAgentTools(tools, manifest)` before a

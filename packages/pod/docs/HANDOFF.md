@@ -98,11 +98,23 @@ custom-type schemas.
    the `ai` binding taught tool calling, which it had never supported. `apps/core/docs/POD_MIGRATION.md`
    is the reader-by-reader record, and `CORE_REFACTOR.md`'s checklist marks what is left.
 
-   Two conclusions there ran against expectation and are worth reading before revisiting them:
+   One conclusion there ran against expectation and is worth reading before revisiting it:
    `live_object` and `@durable-streams` are **not** superseded by Pod's sync — sync runs inside the
    tenant microVM over the _tenant_ database, and every consumer is a Core-plane surface over Core's
-   _system_ database, which has no outbox. And Core's ~40 agent components are not deletable: that loop
-   serves the **builder** agent over the sandbox, which stays in Core by design.
+   _system_ database, which has no outbox.
+
+   **A second one was simply wrong, and is corrected here.** This file claimed Core's agent components
+   "are not deletable: that loop serves the builder agent over the sandbox, which stays in Core by
+   design." Core does **not** own the builder agent. It supplies _access to the sandbox_ — modify
+   files, run code — and nothing more. The loop is Pod's, the same loop that serves a tenant agent,
+   and the sandbox is a set of host tools like any other host capability.
+
+   The contract for that already exists and is already used: `HostAgentTool` / `hostAgentTools` /
+   `HostAgentToolBinding`, exported from `@norbital-ai/pod/host`. Core's `lib/agent/tools/`
+   (`coding.tool.ts`, `deployment.tool.ts`) is the part it legitimately owns; `agent.server.ts`,
+   `store.server.ts` and `chat.remote.ts` are a second loop and a second transcript store beside
+   Pod's, which is the same duplicated-authority shape that produced the webhook and pull-scheduler
+   bugs. Treat "Core's agent is not deletable" as retracted wherever it still appears.
 
 ## Rendering: what a component test here proves, and what it does not
 
