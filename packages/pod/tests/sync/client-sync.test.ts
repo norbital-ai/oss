@@ -524,25 +524,47 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 		}
 	});
 
-	it('serves a full page locally but defers when the page runs short', async () => {
+	it('defers every page of a windowed collection, however full it looks', async () => {
 		const { sync, client } = await windowedSync();
 		try {
 			await client.upsertRows('orders', [
 				{ norbital_id: 'b', norbital_row_version: 1, status: 'open', total: 20, customer_id: 'c1' },
 				{ norbital_id: 'c', norbital_row_version: 1, status: 'open', total: 30, customer_id: 'c1' }
 			]);
-			// A full page is answerable: those rows are real and in order.
-			const full = await localFindMany(sync, 'orders', {
-				orderBy: { norbital_id: 'asc' },
-				limit: 2
-			});
-			expect(full!.rows.map((r) => r.norbital_id)).toEqual(['a', 'b']);
-			expect(full!.nextCursor).not.toBeNull();
 
-			// A short page might be the window's edge rather than the end of the data.
+			// A full page used to be served locally on the theory that the window is a prefix of the
+			// collection. It is — but only under the catch-up's own order and no filter. Under any
+			// other sort, or any predicate, a matching row outside the window sorts into this page
+			// and is silently absent from it, and the user cannot tell. The old code did not make
+			// that distinction: it served a full page for every order and every filter.
+			expect(
+				await localFindMany(sync, 'orders', { orderBy: { norbital_id: 'asc' }, limit: 2 })
+			).toBeNull();
+			expect(
+				await localFindMany(sync, 'orders', { orderBy: { total: 'desc' }, limit: 2 })
+			).toBeNull();
+			expect(
+				await localFindMany(sync, 'orders', { where: { status: 'open' }, limit: 2 })
+			).toBeNull();
+
+			// A short page was already deferred — it may be the window's edge, not the end of data.
 			expect(
 				await localFindMany(sync, 'orders', { orderBy: { norbital_id: 'asc' }, limit: 50 })
 			).toBeNull();
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('still answers a pinned primary-key read from a window, which is what keeps it feeling local', async () => {
+		const { sync, client } = await windowedSync();
+		try {
+			// `norbital_id` is unique, so a full set of hits is the complete answer no matter how much
+			// of the collection is missing. Opening a record and filling relationship cells both look
+			// like this, which is why the window is worth having at all.
+			const pinned = await localFindMany(sync, 'orders', { where: { norbital_id: 'a' } });
+			expect(pinned!.rows.map((r) => r.norbital_id)).toEqual(['a']);
+			expect(pinned!.nextCursor).toBeNull();
 		} finally {
 			await client.close();
 		}

@@ -157,24 +157,37 @@ export async function localFindMany(
 	const hydrated = await hydrateRelations(sync, collection, rows, query.with);
 	if (hydrated === null) return null;
 
-	if (hasMore) {
-		const cursor = encodeLocalCursor(rows[rows.length - 1]!, normalizeOrder(query.orderBy));
-		return { rows: hydrated, nextCursor: cursor };
+	// One rule decides whether this answer may be served: can the replica PROVE it is the same
+	// answer the server would give? Anything less is a partial result presented as a complete one,
+	// which is worse than a round trip — the user cannot tell that rows are missing.
+	//
+	// Exactly two things constitute proof.
+	//
+	// 1. The collection is resident: every policy-visible row is local, so any filter, sort or page
+	//    over it is computed on the same data the server holds.
+	//
+	// 2. The query pins primary keys and all of them resolved. `norbital_id` is unique, so a full
+	//    set of hits IS the complete answer however much else is missing. This is the common read —
+	//    opening a record, filling a relationship cell — and keeping it local is why a windowed
+	//    collection still feels instant.
+	//
+	// Note what is deliberately NOT proof: a page that came back full. It is tempting, because a
+	// full page looks like a complete page, but on a partially-synced collection a matching row
+	// that sorts earlier may simply not have arrived yet — and the user would be shown page 1 of a
+	// filter with rows silently absent from it. Search is refused earlier for the same reason.
+	if (sync.registry.isResident(collection)) {
+		if (hasMore) {
+			const cursor = encodeLocalCursor(rows[rows.length - 1]!, normalizeOrder(query.orderBy));
+			return { rows: hydrated, nextCursor: cursor };
+		}
+		return { rows: hydrated, nextCursor: null };
 	}
-	// Nothing local, and this collection has never finished a catch-up: the rows may simply not
-	// have arrived. Answering "empty" here is what renders a populated table as "no records" during
-	// a first sync. Let the server say whether it is really empty — until it does, the query has no
-	// value and reports itself as loading, which is the honest state.
-	if (hydrated.length === 0 && !sync.registry.hasSynced(collection)) return null;
-	// The result ran out. That is the end of the data only when the whole collection is local —
-	// inside a window it may just be the window's edge, so let the server answer.
-	if (sync.registry.isResident(collection)) return { rows: hydrated, nextCursor: null };
-	// ...unless the query pinned primary keys and every one of them resolved. `norbital_id` is
-	// unique, so a full set of hits *is* the complete answer no matter how much else is missing.
-	// This is the common read — opening a record, resolving relationship cells — so it matters
-	// that a windowed collection still serves it locally.
+
 	const pinned = pinnedKeyCount(query.where);
 	if (pinned !== null && rows.length === pinned) return { rows: hydrated, nextCursor: null };
+
+	// Not provable. The server answers, and the query reports itself as loading until it does —
+	// which is the honest state, and the one the loader is for.
 	return null;
 }
 

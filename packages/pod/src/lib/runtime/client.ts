@@ -84,6 +84,29 @@ async function post<T>(
 	return payload as T;
 }
 
+/**
+ * The group of reads a new query may inherit its first rows from.
+ *
+ * A family is one SLICE of a collection: same collection, same operation, same position. Re-shaping
+ * that slice — a filter, a sort, a search term — stays in the family, so the new key shows the
+ * previous answer until its own lands instead of blanking the table. Those answers are reasonable
+ * stand-ins for each other.
+ *
+ * A different page is not. Page 2's rows are not an approximation of page 3's, they are other
+ * records, and inheriting them would show the old page under the new heading with no loader —
+ * reporting data as arrived when it has not. So the cursor is part of the family, and moving to a
+ * page this device has not got yet starts with nothing, which is exactly when a loader is honest.
+ *
+ * Keyset cursors are opaque, so this only has to distinguish them, never interpret them.
+ */
+export function remoteQueryFamily(keyPrefix: string, path: string, body: unknown): string {
+	const after =
+		body && typeof body === 'object' && typeof (body as { after?: unknown }).after === 'string'
+			? (body as { after: string }).after
+			: '';
+	return `${keyPrefix}${path}:${after}`;
+}
+
 function query<T>(
 	manager: RemoteQueryResourceManager<T>,
 	keyPrefix: string,
@@ -93,10 +116,7 @@ function query<T>(
 	absorb?: (value: T) => void
 ): ReactiveRemoteQuery<T> {
 	const key = remoteQueryKey(keyPrefix, path, body);
-	// The family is the prefix shared by every variation of this read — same collection, same
-	// operation. Changing a filter, sort, page or search term stays inside it, so the new key can
-	// display the previous result until its own lands instead of blanking the surface.
-	const family = `${keyPrefix}${path}`;
+	const family = remoteQueryFamily(keyPrefix, path, body);
 	return manager.query(
 		key,
 		async (signal) => {

@@ -278,36 +278,49 @@ Rules that follow, and they are the anti-blink rules:
 
 ### 3.5a When the loader appears
 
-One rule: **`loading` means there is nothing to show.** Not "a request is in flight" — a query that
-already has rows never returns to loading, however much work is still happening behind it.
+One rule: **`loading` means this query has nothing to show.** Not "a request is in flight" — a
+query that already has rows never returns to loading, however much work is still happening behind
+it.
 
-Everything else follows from that, plus one sizing decision: a read waits for the *first* catch-up
-page only, and that page is a screen's worth of rows (250), not a bulk transfer (5,000).
+"This query" is doing the work in that sentence. A new query inherits its first rows from its
+**family**, and a family is one *slice* of a collection: same collection, same operation, same
+position. Re-shaping that slice inherits; moving to another slice does not.
+
+| what changed | inherits? | what the user sees |
+| --- | --- | --- |
+| filter, sort, search term | yes — same slice, re-shaped | old rows, then new rows. No blank, no spinner |
+| **page** | **no — different records** | **loader, until that page arrives** |
+| nothing (revisit) | the resource itself is reused | rows, instantly |
 
 ```
 FIRST VISIT to a collection
    |
-   |-- 0ms ....... query starts, nothing local yet
-   |-- ~100ms .... loader appears (only if still empty)
-   |-- ~1 RTT .... first page lands: 250 rows        --> LOADER GONE, table renders
+   |-- 0ms ....... nothing local yet
+   |-- ~100ms .... loader appears (only while still empty)
+   |-- ~1 RTT .... first page: 250 rows            --> LOADER GONE, table renders
    |
-   `-- afterwards: pages 2..N at 5,000 rows, in the background.
-                   Each re-runs the query silently. Rows are already on screen, so
-                   `current` is never undefined, so `loading` is never set again.
-                                                     --> NO LOADER, EVER AGAIN
+   `-- then ...... pages 2..N at 5,000, in the background.
+                   Each re-runs the query silently: rows are already on screen, so
+                   `current` is never undefined and `loading` is never set again.
 
-REVISIT / REFRESH (replica already holds the collection)
+PAGING FORWARD to a page not yet held
    |
-   `-- ~0ms ...... answered from PGlite              --> NO LOADER AT ALL
+   |-- new family, nothing inherited              --> LOADER, honestly
+   `-- page arrives (local if the catch-up got there first, else one round trip)
+
+REVISIT / REFRESH, or paging back to a page already held
+   |
+   `-- answered from PGlite                        --> NO LOADER
 ```
 
-The bug this replaced: the read awaited the whole first page at 5,000 rows, so opening a table of
-100 attendance rows sat behind tens of thousands the screen was never going to display. Same data
-and same eventual state, but the user watched a spinner measuring work they had not asked for.
+Two bugs this replaced, both of which reported the wrong thing to the user:
 
-The other half is in §3.5: `loading` is set on a 100ms timer and only while `current` is still
-undefined, and a new query key is seeded with its family's previous value. So changing a filter or
-turning a page shows the old rows until the new ones arrive rather than blanking to a spinner.
+- The read awaited the whole first catch-up page at 5,000 rows, so a table of 100 attendance rows
+  sat behind tens of thousands the screen was never going to show — a spinner measuring work
+  nobody asked for.
+- Every variation of a read shared one family, pagination included, so page 3 inherited page 2's
+  rows and rendered them under a page-3 heading with no loader at all: data reported as arrived
+  when it had not been fetched.
 
 ### 3.6 Relations resolve locally
 

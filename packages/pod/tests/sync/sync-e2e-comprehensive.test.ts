@@ -776,13 +776,13 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 				});
 				expect(pinned!.rows.map((r) => r.norbital_id)).toEqual([seed!.norbital_id]);
 
-				// A full page from inside the window is served locally too.
-				const page = await localFindMany(sync, collection, {
-					orderBy: { norbital_id: 'asc' },
-					limit: 25
-				});
-				expect(page!.rows.length).toBe(25);
-				expect(page!.nextCursor).not.toBeNull();
+				// A full page is NOT served from a window, however complete it looks. The window is a
+				// prefix only under the catch-up's own order with no predicate; under any other sort
+				// or filter a matching row outside it belongs on this page and would be silently
+				// missing. The server answers, and folds its rows back in as it goes.
+				expect(
+					await localFindMany(sync, collection, { orderBy: { norbital_id: 'asc' }, limit: 25 })
+				).toBeNull();
 			} finally {
 				await client.close();
 				disableClientSync();
