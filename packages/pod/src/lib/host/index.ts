@@ -96,6 +96,27 @@ export {
 } from './webhooks.js';
 export type { HttpWebhookListenerOptions } from './webhooks.js';
 
+/**
+ * The delivery half, for a host that owns the socket itself.
+ *
+ * `httpWebhookListener` is the whole answer for a host that can open a port. Core cannot: a tenant is
+ * a scale-to-zero microsandbox child with no listener of its own, so Core receives on its own route
+ * and has to hand the result inward across the host-command plane.
+ *
+ * Exported because the alternative is what actually happened — Core reimplemented this, and its copy
+ * dropped `eventId`, so Pod's `integration_inbound_event` ledger never deduped and every provider
+ * retry re-imported the same rows. Two implementations of one wire protocol is not a boundary, it is
+ * a place for them to disagree; the second one was wrong for months without saying so.
+ *
+ * Same reasoning as `workspaceJobs`: Pod owns what the contract means, the host owns where the bytes
+ * came from.
+ */
+export {
+	declaredWebhookBindings,
+	webhookInboundDeliverer
+} from '../bin/invocation/webhook-inbound.js';
+export type { WebhookInboundOptions } from '../bin/invocation/webhook-inbound.js';
+
 export { assertHostAgentTools, hostAgentTools } from './agent-tools.js';
 export type { HostAgentTool } from './agent-tools.js';
 export type {

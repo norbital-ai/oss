@@ -167,13 +167,24 @@ the active-path match fails exactly the tests that assert them, and nothing else
 ```bash
 podman machine start                      # the test suite needs a Docker-compatible socket
 pnpm packages:build && pnpm deps:sync     # injected template copies go stale silently
-pnpm lint && pnpm vitest run --no-file-parallelism   # 403 passing, 0 skipped
+pnpm lint && pnpm vitest run --no-file-parallelism   # 432 passing, 0 skipped
 ```
 
 Two rules the numbers depend on. Run the suite with `--no-file-parallelism`: the container-backed e2e
 files contend for resources otherwise, and different ones fail each run. And never run `svelte-check`
 concurrently with `oxlint` — that reports ~222 spurious "cannot find module" errors while the symlinks
 are demonstrably intact, so a baseline taken that way is fiction.
+
+**The two worktrees are coupled, and it looks like a flaky test.** The Core worktree resolves
+`@norbital-ai/*` through symlinks into _this_ worktree's `packages/`, and `pnpm packages:build` runs
+`rm -rf build && tsc`. So while a build is in flight here, Core's suite fails over there — on the same
+commit, with nothing wrong. Observed in one sitting: 249/249, then 247 with 2 failures, then 222 with
+6, then 249/249 again.
+
+The tell is the **total**, not the failures: a changing test count means files failed to load, not that
+assertions broke. `ERR_MODULE_NOT_FOUND` on `@norbital-ai/std/build/index.js` is the usual shape.
+Check `ls packages/std/build` here, then re-run there. Do not go looking for a regression, and do not
+take a Core baseline while a build is running in this worktree.
 
 `pnpm deps:sync` is not optional: a rebuilt package is invisible to a template until it is
 re-injected, so a correct change looks broken. (Templates resolve `@norbital-ai/*` through relative
