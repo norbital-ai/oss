@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '@norbital-ai/ui/button';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import InfoHint from './info-hint.svelte';
 	import {
 		DEFAULT_LEVERS,
 		MANUAL_TAKE_OFF,
@@ -297,10 +298,12 @@
 	<!-- Commercial levers: these change only what is priced. -->
 	<Stack as="section" gap="sm">
 		<Inline justify="between" align="center" gap="sm" class="border-b pb-2">
-			<div class="min-w-0">
+			<Inline align="center" gap="xs" class="min-w-0">
 				<h3 class="text-sm font-semibold">Commercial levers</h3>
-				<p class="text-xs text-muted-foreground">Priced only — the solid does not move.</p>
-			</div>
+				<InfoHint
+					text="These change only what is priced, and recompute instantly. The solid does not move, so the measured quantities are untouched."
+				/>
+			</Inline>
 			<Button size="sm" variant="ghost" onclick={() => (levers = { ...DEFAULT_LEVERS })}>
 				Reset
 			</Button>
@@ -382,12 +385,12 @@
 
 	<!-- What this estimate deliberately does not contain. -->
 	<Stack as="section" gap="sm">
-		<div class="border-b pb-2">
+		<Inline align="center" gap="xs" class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Priced separately — manual take-off</h3>
-			<p class="text-xs text-muted-foreground">
-				Not derivable from the documents. Excluded from the total above.
-			</p>
-		</div>
+			<InfoHint
+				text="Work a plan, a survey, and a section do not contain — the rate depends on method, material, or a structural drawing rather than on shape. The total above excludes all of it."
+			/>
+		</Inline>
 		<dl class="divide-y rounded-md border bg-card text-sm">
 			{#each MANUAL_TAKE_OFF as item (item.id)}
 				<div class="p-3">

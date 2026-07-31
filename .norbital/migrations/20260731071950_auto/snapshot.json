@@ -1,8 +1,8 @@
 {
 	"version": "8",
 	"dialect": "postgres",
-	"id": "72bcf520-5ff4-4e23-a35a-937912cd3704",
-	"prevIds": ["bd56aa34-7815-4219-bbe0-fecc3b1e8a15"],
+	"id": "ffbc2e12-4cf3-4835-94f7-ba3a5ad7509b",
+	"prevIds": ["00000000-0000-0000-0000-000000000000"],
 	"ddl": [
 		{
 			"isRlsEnabled": false,
@@ -381,19 +381,6 @@
 			"generated": null,
 			"identity": null,
 			"name": "lines_json",
-			"entityType": "columns",
-			"schema": "public",
-			"table": "cost_estimates"
-		},
-		{
-			"type": "text",
-			"typeSchema": null,
-			"notNull": false,
-			"dimensions": 1,
-			"default": null,
-			"generated": null,
-			"identity": null,
-			"name": "missing_rates",
 			"entityType": "columns",
 			"schema": "public",
 			"table": "cost_estimates"

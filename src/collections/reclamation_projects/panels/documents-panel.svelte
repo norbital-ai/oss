@@ -2,6 +2,7 @@
 	import { client } from '$pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import InfoHint from './info-hint.svelte';
 	import type { DocumentProvenance } from '../../../lib/reclamation/types.js';
 
 	/**
@@ -33,12 +34,12 @@
 
 <Stack gap="lg" class="pb-4">
 	<Stack as="section" gap="sm">
-		<div class="border-b pb-2">
+		<Inline align="center" gap="xs" class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Reconstruction inputs</h3>
-			<p class="text-xs text-muted-foreground">
-				All three required. Edit the project record to attach or replace one.
-			</p>
-		</div>
+			<InfoHint
+				text="All three are required. Elevations come from the sections, plan extents from the floor plan, and the existing bed from the survey. Edit the project record to attach or replace one."
+			/>
+		</Inline>
 		<div class="divide-y rounded-md border bg-card">
 			{#each slots as slot (slot.kind)}
 				{@const source = provenance.find((entry) => entry.kind === slot.kind)}
@@ -70,13 +71,12 @@
 	</Stack>
 
 	<Stack as="section" gap="sm">
-		<div class="border-b pb-2">
+		<Inline align="center" gap="xs" class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Further reconstruction documents</h3>
-			<p class="text-xs text-muted-foreground">
-				Extra sections and surveys that also feed the model. Another section replaces a stretch of
-				interpolation with measurement. Saving one re-runs the stitch.
-			</p>
-		</div>
+			<InfoHint
+				text="Extra section sheets and surveys that also feed the model. Another perimeter section is the most useful thing you can add: it replaces a stretch of interpolation with measurement. Saving one re-runs the stitch."
+			/>
+		</Inline>
 		<!-- Both tables read project_documents, so each names its own view: the -->
 		<!-- default is one view per collection, and it is also the key column -->
 		<!-- state persists under. -->
@@ -106,12 +106,12 @@
 	</Stack>
 
 	<Stack as="section" gap="sm">
-		<div class="border-b pb-2">
+		<Inline align="center" gap="xs" class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Tender and reference</h3>
-			<p class="text-xs text-muted-foreground">
-				Filed, never parsed. Nothing here changes a quantity.
-			</p>
-		</div>
+			<InfoHint
+				text="Filed against the project and never parsed: tender returns, correspondence, permits, method statements. Nothing here can change a quantity."
+			/>
+		</Inline>
 		<CollectionTable
 			{client}
 			collection="project_documents"

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import InfoHint from './info-hint.svelte';
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { SiteLayer, SiteViewerStats } from '../../../lib/site-viewer/site_viewer.types.js';
 	import type { ReconstructionMetrics, StitchReport } from '../../../lib/reclamation/types.js';
@@ -45,12 +46,12 @@
 
 <Stack gap="lg" class="pb-4">
 	<Stack as="section" gap="sm">
-		<div class="border-b pb-2">
+		<Inline align="center" gap="xs" class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Layers</h3>
-			<p class="text-xs text-muted-foreground">
-				Switch one off to look inside the solid. Nothing is recalculated.
-			</p>
-		</div>
+			<InfoHint
+				text="Switch a layer off to look inside the solid. Visibility changes the live scene only — nothing is recalculated and no volume moves."
+			/>
+		</Inline>
 		{#if layers.length === 0}
 			<p class="text-sm text-muted-foreground">Building the surfaces…</p>
 		{:else}

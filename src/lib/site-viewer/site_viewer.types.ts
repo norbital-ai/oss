@@ -63,6 +63,9 @@ export interface ThreeColor {
 }
 
 export interface ThreeMaterial {
+	polygonOffset?: boolean;
+	polygonOffsetFactor?: number;
+	polygonOffsetUnits?: number;
 	color: ThreeColor;
 	opacity: number;
 	transparent: boolean;

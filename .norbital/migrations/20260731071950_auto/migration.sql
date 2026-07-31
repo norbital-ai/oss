@@ -20,7 +20,6 @@ CREATE TABLE "cost_estimates" (
 	"contingency" jsonb,
 	"total" jsonb,
 	"lines_json" text,
-	"missing_rates" text[],
 	"priced_at" timestamp with time zone,
 	"notes" text
 );
@@ -39,6 +38,28 @@ CREATE TABLE "cost_rates" (
 	"rate_basis" text,
 	"source" text,
 	"validity_range" jsonb,
+	"notes" text
+);
+--> statement-breakpoint
+CREATE TABLE "project_documents" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" text DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text) NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"title" text NOT NULL,
+	"project_id" uuid NOT NULL,
+	"category" text NOT NULL,
+	"document_role" text,
+	"document_file" uuid NOT NULL,
+	"document_number" text,
+	"discipline" text,
+	"revision" text,
+	"issued_on" date,
+	"issued_by" text,
+	"status" text,
+	"tags" text[],
 	"notes" text
 );
 --> statement-breakpoint
@@ -81,23 +102,14 @@ CREATE TABLE "site_reconstructions" (
 	"engine_version" text,
 	"failure_reason" text,
 	"platform_area_m2" numeric,
-	"works_footprint_m2" numeric,
-	"armor_face_area_m2" numeric,
-	"shoreline_length_m" numeric,
+	"placed_volume_m3" numeric,
 	"mean_fill_depth_m" numeric,
-	"max_fill_depth_m" numeric,
-	"integration_cell_m" numeric,
-	"structure_displacement_m3" numeric,
 	"excavation_m3" numeric,
-	"rock_armor_m3" numeric,
-	"geofabric_m2" numeric,
-	"dredged_rock_m3" numeric,
-	"sand_key_m3" numeric,
-	"sand_fill_m3" numeric,
-	"dredged_fill_m3" numeric,
+	"integration_cell_m" numeric,
 	"assumption_count" numeric,
 	"warning_count" numeric,
 	"model_json" text,
+	"metrics_json" text,
 	"quantities_json" text,
 	"report_json" text
 );
@@ -311,6 +323,17 @@ CREATE INDEX "cost_rates_unit_search_trgm_idx" ON "cost_rates" USING gin ("unit"
 CREATE INDEX "cost_rates_rate_basis_search_trgm_idx" ON "cost_rates" USING gin ("rate_basis" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "cost_rates_source_search_trgm_idx" ON "cost_rates" USING gin ("source" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "cost_rates_notes_search_trgm_idx" ON "cost_rates" USING gin ("notes" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_project_id_index" ON "project_documents" ("project_id");--> statement-breakpoint
+CREATE INDEX "project_documents_category_index" ON "project_documents" ("category");--> statement-breakpoint
+CREATE INDEX "project_documents_title_search_trgm_idx" ON "project_documents" USING gin ("title" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_category_search_trgm_idx" ON "project_documents" USING gin ("category" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_document_role_search_trgm_idx" ON "project_documents" USING gin ("document_role" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_document_number_search_trgm_idx" ON "project_documents" USING gin ("document_number" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_discipline_search_trgm_idx" ON "project_documents" USING gin ("discipline" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_revision_search_trgm_idx" ON "project_documents" USING gin ("revision" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_issued_by_search_trgm_idx" ON "project_documents" USING gin ("issued_by" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_status_search_trgm_idx" ON "project_documents" USING gin ("status" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "project_documents_notes_search_trgm_idx" ON "project_documents" USING gin ("notes" gin_trgm_ops);--> statement-breakpoint
 CREATE UNIQUE INDEX "reclamation_projects_project_code_index" ON "reclamation_projects" ("project_code");--> statement-breakpoint
 CREATE INDEX "reclamation_projects_project_name_search_trgm_idx" ON "reclamation_projects" USING gin ("project_name" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "reclamation_projects_project_code_search_trgm_idx" ON "reclamation_projects" USING gin ("project_code" gin_trgm_ops);--> statement-breakpoint
@@ -329,6 +352,7 @@ CREATE INDEX "site_reconstructions_status_search_trgm_idx" ON "site_reconstructi
 CREATE INDEX "site_reconstructions_engine_version_search_trgm_idx" ON "site_reconstructions" USING gin ("engine_version" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "site_reconstructions_failure_reason_search_trgm_idx" ON "site_reconstructions" USING gin ("failure_reason" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "site_reconstructions_model_json_search_trgm_idx" ON "site_reconstructions" USING gin ("model_json" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "site_reconstructions_metrics_json_search_trgm_idx" ON "site_reconstructions" USING gin ("metrics_json" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "site_reconstructions_quantities_json_search_trgm_idx" ON "site_reconstructions" USING gin ("quantities_json" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "site_reconstructions_report_json_search_trgm_idx" ON "site_reconstructions" USING gin ("report_json" gin_trgm_ops);--> statement-breakpoint
 CREATE INDEX "approval_request_label_search_trgm_idx" ON "approval_request" USING gin ("label" gin_trgm_ops);--> statement-breakpoint
@@ -373,6 +397,7 @@ CREATE INDEX "user_role_search_trgm_idx" ON "user" USING gin ("role" gin_trgm_op
 CREATE INDEX "user_kind_search_trgm_idx" ON "user" USING gin ("kind" gin_trgm_ops);--> statement-breakpoint
 ALTER TABLE "cost_estimates" ADD CONSTRAINT "cost_estimates_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");--> statement-breakpoint
 ALTER TABLE "cost_estimates" ADD CONSTRAINT "cost_estimates_reconstruction_id_site_reconstructions_fk" FOREIGN KEY ("reconstruction_id") REFERENCES "site_reconstructions"("norbital_id");--> statement-breakpoint
+ALTER TABLE "project_documents" ADD CONSTRAINT "project_documents_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");--> statement-breakpoint
 ALTER TABLE "site_reconstructions" ADD CONSTRAINT "site_reconstructions_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");--> statement-breakpoint
 ALTER TABLE "audit_event" ADD CONSTRAINT "audit_event_actor_id_user_norbital_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "user"("norbital_id");--> statement-breakpoint
 ALTER TABLE "mutation_log" ADD CONSTRAINT "mutation_log_actor_id_user_norbital_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "user"("norbital_id");--> statement-breakpoint

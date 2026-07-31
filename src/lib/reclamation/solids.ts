@@ -423,14 +423,42 @@ class MeshBuilder {
  */
 function triangulatePolygon(polygon: readonly Point2[]): readonly (readonly number[])[] {
 	if (polygon.length < 3) return [];
-	const ring = polygon.map((_, index) => index);
 
 	const area = (a: Point2, b: Point2, c: Point2): number =>
 		(b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-	let signed = 0;
+
+	/**
+	 * Drop vertices that carry no shape.
+	 *
+	 * A traced coastline arrives with runs of nearly collinear points. Clipping
+	 * an ear off such a run yields a triangle with real length and no height —
+	 * one measured at 169,000:1 on the Tuas outline — which shades as a bright
+	 * needle and reads as a spike radiating out of the surface. They contribute
+	 * nothing to the area either, so the honest move is not to create them.
+	 */
+	const kept: number[] = [];
 	for (let index = 0; index < polygon.length; index++) {
-		const [x0, y0] = polygon[index];
-		const [x1, y1] = polygon[(index + 1) % polygon.length];
+		const previous = polygon[(index + polygon.length - 1) % polygon.length];
+		const current = polygon[index];
+		const next = polygon[(index + 1) % polygon.length];
+		if (current[0] === previous[0] && current[1] === previous[1]) continue;
+		const longest = Math.max(
+			Math.hypot(current[0] - previous[0], current[1] - previous[1]),
+			Math.hypot(next[0] - current[0], next[1] - current[1])
+		);
+		// Twice the triangle's area over its longest edge is its height. Below a
+		// millimetre the corner is a straight line as far as any surface goes.
+		const height = Math.abs(area(previous, current, next)) / Math.max(longest, 1e-9);
+		if (height < 1e-3) continue;
+		kept.push(index);
+	}
+	if (kept.length < 3) return [];
+
+	const ring = [...kept];
+	let signed = 0;
+	for (let index = 0; index < ring.length; index++) {
+		const [x0, y0] = polygon[ring[index]];
+		const [x1, y1] = polygon[ring[(index + 1) % ring.length]];
 		signed += x0 * y1 - x1 * y0;
 	}
 	// Work anticlockwise so a positive cross product means a convex corner.
@@ -439,10 +467,26 @@ function triangulatePolygon(polygon: readonly Point2[]): readonly (readonly numb
 	const inside = (a: Point2, b: Point2, c: Point2, p: Point2): boolean =>
 		area(a, b, p) >= 0 && area(b, c, p) >= 0 && area(c, a, p) >= 0;
 
+	/** Squared aspect of a candidate ear: lower is a rounder, better triangle. */
+	const badness = (a: Point2, b: Point2, c: Point2): number => {
+		const doubleArea = Math.abs(area(a, b, c));
+		if (doubleArea < 1e-12) return Infinity;
+		const longest = Math.max(
+			Math.hypot(b[0] - a[0], b[1] - a[1]),
+			Math.hypot(c[0] - b[0], c[1] - b[1]),
+			Math.hypot(a[0] - c[0], a[1] - c[1])
+		);
+		return (longest * longest) / doubleArea;
+	};
+
 	const triangles: number[][] = [];
 	let guard = ring.length * ring.length;
 	while (ring.length > 3 && guard-- > 0) {
-		let clipped = false;
+		// Take the *best* ear available, not the first one found. Clipping the
+		// first valid ear walks around the ring shaving slivers off one end;
+		// choosing the roundest keeps the whole triangulation well shaped.
+		let bestIndex = -1;
+		let bestScore = Infinity;
 		for (let index = 0; index < ring.length; index++) {
 			const ia = ring[(index + ring.length - 1) % ring.length];
 			const ib = ring[index];
@@ -455,12 +499,18 @@ function triangulatePolygon(polygon: readonly Point2[]): readonly (readonly numb
 				(other) => other !== ia && other !== ib && other !== ic && inside(a, b, c, polygon[other])
 			);
 			if (contains) continue;
-			triangles.push([ia, ib, ic]);
-			ring.splice(index, 1);
-			clipped = true;
-			break;
+			const score = badness(a, b, c);
+			if (score < bestScore) {
+				bestScore = score;
+				bestIndex = index;
+			}
 		}
-		if (!clipped) break;
+		if (bestIndex < 0) break;
+		const ia = ring[(bestIndex + ring.length - 1) % ring.length];
+		const ib = ring[bestIndex];
+		const ic = ring[(bestIndex + 1) % ring.length];
+		triangles.push([ia, ib, ic]);
+		ring.splice(bestIndex, 1);
 	}
 	if (ring.length === 3) triangles.push([ring[0], ring[1], ring[2]]);
 	return triangles;
