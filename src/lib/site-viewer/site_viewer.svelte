@@ -136,6 +136,11 @@
 		controls.enableDamping = true;
 		controls.dampingFactor = 0.08;
 		controls.maxPolarAngle = Math.PI / 2.02;
+		// Pan on a right-drag as well as through the on-screen control, and pan in
+		// the screen plane rather than the ground plane so dragging up moves the
+		// model up rather than pushing it away.
+		controls.enablePan = true;
+		controls.screenSpacePanning = true;
 
 		scene.add(new THREE.HemisphereLight(0xdfe7ef, 0x39433b, 1.05));
 		const sun = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -354,6 +359,41 @@
 		applyClipping();
 	}
 
+	/**
+	 * Pan, on screen.
+	 *
+	 * OrbitControls pans on a right-drag or a two-finger gesture, which is
+	 * discoverable only if you already know it — with a trackpad and a left
+	 * button the model appears to orbit and zoom and nothing else. These move the
+	 * camera and its target together along the screen axes, so the view slides
+	 * without rotating.
+	 */
+	function pan(dx: number, dy: number): void {
+		if (!stage) return;
+		const { camera, controls } = stage;
+		const target = controls.target;
+		const fx = target.x - camera.position.x;
+		const fy = target.y - camera.position.y;
+		const fz = target.z - camera.position.z;
+		const distance = Math.hypot(fx, fy, fz) || 1;
+		// Screen right = forward × world up; screen up = right × forward.
+		const rx = fz / distance;
+		const rz = -fx / distance;
+		const rLength = Math.hypot(rx, rz) || 1;
+		const rightX = rx / rLength;
+		const rightZ = rz / rLength;
+		const upX = -(fx / distance) * (fy / distance);
+		const upY = Math.hypot(fx, fz) / distance;
+		const upZ = -(fz / distance) * (fy / distance);
+		const step = distance * 0.12;
+		const mx = rightX * dx * step + upX * dy * step;
+		const my = upY * dy * step;
+		const mz = rightZ * dx * step + upZ * dy * step;
+		camera.position.set(camera.position.x + mx, camera.position.y + my, camera.position.z + mz);
+		controls.target.set(target.x + mx, target.y + my, target.z + mz);
+		controls.update();
+	}
+
 	function setExaggeration(next: number): void {
 		exaggeration = next;
 		if (!stage) return;
@@ -437,6 +477,43 @@
 		<div
 			class="absolute right-3 bottom-3 flex items-center gap-2 rounded-md border bg-background/85 px-2 py-1 text-tiny text-muted-foreground shadow-xs backdrop-blur"
 		>
+			<div class="grid grid-cols-3 gap-px" role="group" aria-label="Pan">
+				<span></span>
+				<button
+					type="button"
+					class="rounded px-1 hover:bg-muted"
+					aria-label="Pan up"
+					onclick={() => pan(0, 1)}>↑</button
+				>
+				<span></span>
+				<button
+					type="button"
+					class="rounded px-1 hover:bg-muted"
+					aria-label="Pan left"
+					onclick={() => pan(-1, 0)}>←</button
+				>
+				<button
+					type="button"
+					class="rounded px-1 hover:bg-muted"
+					aria-label="Centre"
+					onclick={() => applyView(view)}>·</button
+				>
+				<button
+					type="button"
+					class="rounded px-1 hover:bg-muted"
+					aria-label="Pan right"
+					onclick={() => pan(1, 0)}>→</button
+				>
+				<span></span>
+				<button
+					type="button"
+					class="rounded px-1 hover:bg-muted"
+					aria-label="Pan down"
+					onclick={() => pan(0, -1)}>↓</button
+				>
+				<span></span>
+			</div>
+			<span aria-hidden="true">·</span>
 			<div class="flex divide-x rounded border" role="group" aria-label="Viewpoint">
 				{#each VIEWS as id (id)}
 					<button
