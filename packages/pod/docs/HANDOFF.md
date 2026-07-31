@@ -27,7 +27,7 @@ swept into a commit. Both were caught and reverted, both were avoidable.
   bindings cross that boundary by structured clone, so **they cannot carry callbacks** — that is why
   `integrationDelivery` and `HostQueue` live on the host config rather than in the bindings.
 
-## What landed in OSS (23 commits)
+## What landed in OSS (80 commits)
 
 **Security.** OTP verification was unbounded — `/login/code` never rate-limited while `POST /login`
 handed the challenge cookie to whoever asked, for any address. Now five guesses, keyed by the challenge
@@ -67,7 +67,7 @@ custom-type schemas.
    land in one transaction, `workspaceJobs`' drain hands the delivery to the host's `messaging`
    binding over the private control plane, a refusal retries, and the row replicates to its
    recipient and to nobody else. The shell renders it (`runtime/notifications-menu.svelte`), live
-   through the sync engine; that component's *rendering* is unverified for want of a browser runner.
+   through the sync engine; that component's _rendering_ is unverified for want of a browser runner.
    Automations and hooks still have no manual end-to-end pass.
 4. **Channels route, thinly.** Inbound → agent under the declared policy → reply over the transport,
    proven end to end against real Postgres. Inbound is host-driven (`channels` on the host config),
@@ -77,7 +77,20 @@ custom-type schemas.
 5. **Agent UI is one panel**, not Core's ~40 components. It reads its transcript from the replica
    now, so a reply from a channel or another tab appears without a refresh. Rendering is unverified —
    no jsdom or browser runner in this package.
-6. **Core is untouched.** Everything in `CORE_REFACTOR.md` is outstanding.
+6. **Core has been migrated too**, in `worktrees/core-pod-architecture` (41 commits, 231 tests, 23
+   svelte-check errors against `origin/master`'s own 43). Landed: better-auth deleted and both tenant
+   and ops sign-in rebuilt on Pod's `cookieSession` + `emailOtpIdentity`; roles migrated to
+   `admin|advanced|basic`; policies reconciled at the migrate seam with the seed steps deleted; host
+   plugins moved off a request header onto the `configure` frame; a `host-command` frame sender, so
+   automations run at all — they had been POSTing a route that does not exist; the routing index; and
+   the `ai` binding taught tool calling, which it had never supported. `apps/core/docs/POD_MIGRATION.md`
+   is the reader-by-reader record, and `CORE_REFACTOR.md`'s checklist marks what is left.
+
+   Two conclusions there ran against expectation and are worth reading before revisiting them:
+   `live_object` and `@durable-streams` are **not** superseded by Pod's sync — sync runs inside the
+   tenant microVM over the _tenant_ database, and every consumer is a Core-plane surface over Core's
+   _system_ database, which has no outbox. And Core's ~40 agent components are not deletable: that loop
+   serves the **builder** agent over the sandbox, which stays in Core by design.
 
 ## Ground rules that earned their keep
 
@@ -96,8 +109,13 @@ custom-type schemas.
 ```bash
 podman machine start                      # the test suite needs a Docker-compatible socket
 pnpm packages:build && pnpm deps:sync     # injected template copies go stale silently
-pnpm lint && pnpm vitest run              # 262 passing, 0 skipped
+pnpm lint && pnpm vitest run --no-file-parallelism   # 371 passing, 0 skipped
 ```
+
+Two rules the numbers depend on. Run the suite with `--no-file-parallelism`: the container-backed e2e
+files contend for resources otherwise, and different ones fail each run. And never run `svelte-check`
+concurrently with `oxlint` — that reports ~222 spurious "cannot find module" errors while the symlinks
+are demonstrably intact, so a baseline taken that way is fiction.
 
 `pnpm deps:sync` is not optional: templates resolve `@norbital-ai/*` through physical copies, so a
 rebuilt package is invisible until it is re-injected — a correct change looks broken.
