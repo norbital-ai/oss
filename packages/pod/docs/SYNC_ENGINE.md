@@ -329,6 +329,60 @@ design is right, and the client must not undermine it:
   collections. A per-collection fetch must never overwrite a single global cursor — later
   catch-ups would drag it backwards or forwards past changes the client never applied.
 
+### 3.8a The feed is bounded, and says so when it cuts
+
+The change feed is append-only: one row per write, forever. That is what makes sync cheap — a
+client says "everything after position N" and gets only what changed — and it is also why the
+table would grow for the life of the tenant if nothing removed anything.
+
+Deleting old rows on its own is *worse* than the growth. A client whose cursor points into the
+deleted range asks to resume from a position that no longer exists, the server finds nothing after
+it, and the client concludes it is up to date. It is not: it has silently and permanently missed
+everything that was pruned, and no error is raised anywhere.
+
+So the deletion leaves a mark. `_norbital_sync_compaction.pruned_through_seq` is a durable,
+monotonic record of how far the log has been cut:
+
+```
+sync_outbox:   [ pruned ............ ] [ 8,421 | 8,422 | ... | 12,004 ]
+                                        ^                            ^
+                    pruned_through_seq = 8,420              newest change
+```
+
+Every resume is then one comparison:
+
+| client cursor | answer |
+| --- | --- |
+| **above** the boundary | resumable — send the diffs since it |
+| **at or below** it | the changes you missed are gone → **reset** |
+
+A reset is `tooOld: true` on `shape` and `event: reset` on `stream`. The client drops its entire
+local database and rebuilds from a full download. Expensive, and correct — and it only reaches a
+device that has been away longer than the retention window.
+
+**Why a stored column and not `min(seq)`.** `min(seq)` works right up until the table is pruned
+empty, at which point there is no minimum left and every stale cursor looks valid again. The
+boundary has to outlive the rows it describes.
+
+**The settings.** Retention is 7 days, and never below the newest 1,000 rows. Seven days is the
+offline budget: away for less, you resume cheaply; away for longer, you rebuild. The row floor
+stops a quiet tenant having its whole feed pruned merely because nothing happened for a week. The
+sweep runs opportunistically inside `shape` (rate-limited to hourly per runtime), so a tenant
+nobody opens costs nothing to keep bounded.
+
+### 3.8b Visibility changes are deltas too
+
+A payroll run's payslips become readable the moment the run is approved — and not one payslip row
+is written. The feed carries rows that *changed*, so nothing in it describes them.
+
+The client used to compensate by re-reading collections after every approval. That is a scan
+standing in for a delta, and a guess besides: a client cannot know which rows changed side.
+
+The server can. The manifest says which records point at the released one, so on a terminal
+approval each of them is announced on the feed. `buildDiff` then re-evaluates each against each
+client's own policy and sends `insert` to whoever can now see it and `leave` to whoever cannot.
+Ordinary delta sync, no scan, no client-side special case.
+
 ### 3.9 Writes are optimistic; the server is still the authority
 
 The write path is unchanged in _authority_: every mutation goes through `collection_ops` on the
@@ -440,6 +494,13 @@ Honest list of what this design does not yet do.
   expensive server-side. Maintaining counts incrementally from the diff stream is the fix.
 - **No live-query dependency tracking.** Re-evaluation is per collection, so a change to any row
   of a collection re-runs every query over it. Cheap locally, but not free at high diff rates.
+- **A first-ever catch-up is still a full scan.** Resuming a collection the device already holds
+  reads the feed (§3.8a), but the *initial* download keyset-scans the collection. That is
+  unavoidable for a genuinely cold replica; what is not yet done is serving it from a compacted
+  snapshot rather than the live table.
+- **Visibility deltas are announced for approvals only.** §3.8b fires when an approval releases a
+  record. A policy edit that changes who can see what does not announce anything, so clients pick
+  it up on their next full catch-up rather than immediately.
 
 ---
 

@@ -39,6 +39,7 @@ export type EmploymentTerms = WorkspaceRow<'employment_terms'>;
 export type StatutoryFact = WorkspaceRow<'employment_statutory_facts'>;
 export type Agreement = WorkspaceRow<'repayment_agreements'>;
 export type ComponentEntry = WorkspaceRow<'component_entries'>;
+export type LeaveRequest = WorkspaceRow<'leave_requests'>;
 
 /** One person's whole input to the run. */
 export type EmploymentBundle = {
@@ -157,6 +158,7 @@ export async function gatherRun(options: {
 		termRows,
 		factRows,
 		entryRows,
+		requestRows,
 		ledgerRows,
 		timeRows,
 		rosterRows,
@@ -169,6 +171,7 @@ export async function gatherRun(options: {
 		query.employment_terms.findMany({ where: inEmployments, limit: PAGE_LIMIT }),
 		query.employment_statutory_facts.findMany({ where: inEmployments, limit: PAGE_LIMIT }),
 		query.component_entries.findMany({ where: inEmployments, limit: PAGE_LIMIT }),
+		query.leave_requests.findMany({ where: inEmployments, limit: PAGE_LIMIT }),
 		query.leave_ledger.findMany({
 			where: { employment_id: { in: employmentIds } },
 			limit: PAGE_LIMIT
@@ -199,6 +202,7 @@ export async function gatherRun(options: {
 	assertComplete(termRows, 'employment terms');
 	assertComplete(factRows, 'statutory facts');
 	assertComplete(entryRows, 'component entries');
+	assertComplete(requestRows, 'leave requests');
 	assertComplete(ledgerRows, 'leave ledger rows');
 	assertComplete(timeRows, 'time entries');
 	assertComplete(rosterRows, 'roster entries');
@@ -208,10 +212,26 @@ export async function gatherRun(options: {
 	const termsByEmployment = groupBy(live(termRows), (row) => row.employment_id);
 	const factsByEmployment = groupBy(live(factRows), (row) => row.employment_id);
 	const entriesByEmployment = groupBy(live(entryRows), (row) => row.employment_id);
-	// Ledger rows are read unfiltered: a settled balance is only visible ones, but a *projected*
-	// balance and the carry-forward recursion both need the pending rows too, so the predicate is
-	// applied where the question is asked rather than here.
-	const ledgerByEmployment = groupBy(ledgerRows, (row) => row.employment_id);
+	/**
+	 * An approved leave request already is the complete TAKEN movement: person, type, date, days
+	 * and source id. Derive that movement directly so payroll never depends on a second seeded copy
+	 * that can drift. The ledger remains for movements that are not requests — ADJUSTMENT and
+	 * ENCASHMENT. Historical TAKEN projection rows are ignored, preventing double counting.
+	 */
+	const movementRows = ledgerRows.filter((row) => row.kind !== 'TAKEN');
+	const takenRows: (LedgerRow & { readonly employment_id: string })[] = live(requestRows).map(
+		(request) => ({
+			norbital_id: request.norbital_id,
+			employment_id: request.employment_id,
+			leave_type_id: request.leave_type_id,
+			entry_date: request.from_date,
+			kind: 'TAKEN',
+			days: -Math.abs(Number(request.days)),
+			source_id: request.norbital_id,
+			norbital_approval_id: null
+		})
+	);
+	const ledgerByEmployment = groupBy([...movementRows, ...takenRows], (row) => row.employment_id);
 	const timeByEmployment = groupBy(live(timeRows), (row) => row.employment_id);
 	const rosterByEmployment = groupBy(live(rosterRows), (row) => row.employment_id);
 	const agreementsByEmployment = groupBy(live(agreementRows), (row) => row.employment_id);

@@ -14,7 +14,7 @@ export default defineModel(
 	},
 	{
 		description:
-			'A person asking for time off. There is no state column — the request and its ledger rows are written together and locked by the same platform approval stamp.',
+			'A person asking for time off. Once approved, this record itself is the TAKEN leave movement; payroll links deductions directly to it.',
 		recordLabel: ['from_date', 'to_date'],
 		icon: 'lucide:calendar-off'
 	}

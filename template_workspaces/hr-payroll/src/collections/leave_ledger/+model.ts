@@ -12,7 +12,7 @@ export default defineModel(
 	},
 	{
 		description:
-			'Insert-only ledger of leave movements. days is the one signed quantity in the schema; accrual, carry-forward and expiry are derived at read time, never stored.',
+			'Insert-only non-request leave movements such as adjustments and encashments. TAKEN is retained only for historical compatibility; payroll derives it from approved leave requests.',
 		recordLabel: ['entry_date', 'kind', 'days'],
 		icon: 'lucide:list-ordered',
 		indexes: [{ columns: ['employment_id', 'leave_type_id', 'entry_date'] }]

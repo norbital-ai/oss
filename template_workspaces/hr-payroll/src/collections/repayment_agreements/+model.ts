@@ -15,12 +15,13 @@ export default defineModel(
 		reference: text().notNull(),
 		principal: numeric().notNull(),
 		disbursed_on: date().notNull(),
+		repay_by: date().notNull(),
 		schedule: custom('repayment_schedule').notNull(),
 		effective_range: dateRange().notNull()
 	},
 	{
 		description:
-			'A staff loan, salary advance or overpayment recovery — one agreement to deduct a principal over time. There is no state and no outstanding column: settled is SUM(instalments) >= principal.',
+			'A staff loan, salary advance or overpayment recovery. Its explicit schedule is the source of N payroll instalment entries; a paid-payslip linkage locks the consumed entry.',
 		recordLabel: 'reference',
 		icon: 'lucide:handshake'
 	}

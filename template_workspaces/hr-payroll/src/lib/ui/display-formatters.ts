@@ -129,13 +129,14 @@ export function formatRepaymentSchedule(value: unknown): string {
 	const parsed = repaymentScheduleSchema.safeParse(value);
 	if (!parsed.success) return 'Invalid schedule';
 	const schedule = parsed.data;
-	return `${schedule.count} × ${DECIMAL.format(schedule.instalment_amount)} from ${schedule.first_period}`;
+	const total = schedule.reduce((sum, entry) => sum + entry.amount, 0);
+	return `${schedule.length} instalment${schedule.length === 1 ? '' : 's'} · ${DECIMAL.format(total)}`;
 }
 
 /** Total the schedule commits to repay — the denominator of "settled". */
 export function repaymentScheduleTotal(value: unknown): number | null {
 	const parsed = repaymentScheduleSchema.safeParse(value);
-	return parsed.success ? parsed.data.instalment_amount * parsed.data.count : null;
+	return parsed.success ? parsed.data.reduce((sum, entry) => sum + entry.amount, 0) : null;
 }
 
 export function formatHolidayScope(value: unknown): string {
