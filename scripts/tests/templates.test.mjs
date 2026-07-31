@@ -49,17 +49,41 @@ describe('template discovery', () => {
 		}
 	});
 
-	it('trusts only the exact first-party v0.0.1 package release before the age gate', () => {
-		const expected = [
-			'@norbital-ai/config@0.0.1',
-			'@norbital-ai/platform-utils@0.0.1',
-			'@norbital-ai/pod@0.0.1',
-			'@norbital-ai/std@0.0.1',
-			'@norbital-ai/ui@0.0.1'
-		];
+	/**
+	 * Every first-party version a template actually depends on must be named in its release-age
+	 * exemption, and named exactly.
+	 *
+	 * Derived from the template's own dependencies rather than a hardcoded version list. A literal
+	 * list turns this into a version pin that fails on every release and says nothing about the
+	 * property being protected — which is that publishing a package means admitting it here
+	 * deliberately, one line per reviewed release.
+	 *
+	 * The wildcard check is the other half. A scope-wide exemption would defeat the gate in exactly
+	 * the case it exists for: a stolen publish credential, whose release would then install the
+	 * moment it appeared.
+	 */
+	it('exempts each first-party version a template depends on, and only by exact version', () => {
 		for (const template of discoverTemplates()) {
+			const manifest = JSON.parse(
+				readFileSync(path.join(template.directory, 'package.json'), 'utf8')
+			);
+			const dependencies = {
+				...(manifest.dependencies ?? {}),
+				...(manifest.devDependencies ?? {})
+			};
+			const firstParty = Object.entries(dependencies).filter(([name]) =>
+				name.startsWith('@norbital-ai/')
+			);
+			assert.ok(firstParty.length > 0, `${template.key} declares no first-party dependencies`);
+
 			const policy = readFileSync(path.join(template.directory, 'pnpm-workspace.yaml'), 'utf8');
-			for (const release of expected) assert.match(policy, new RegExp(`'${release}'`));
+			for (const [name, version] of firstParty) {
+				assert.match(
+					policy,
+					new RegExp(`'${name}@${String(version).replace(/[.+*?^$()[\]{}|\\]/g, '\\$&')}'`),
+					`${template.key} depends on ${name}@${version} but does not exempt it`
+				);
+			}
 			assert.doesNotMatch(policy, /@norbital-ai\/\*/);
 		}
 	});
