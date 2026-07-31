@@ -19,11 +19,12 @@ import type { Policy } from './$types.js';
  * The exceptions are written out below the generated blocks, which is where the interesting part of
  * any permission set lives. See `src/lib/policy_grants.ts` for why the groups are functions.
  *
- * The three gated grants carry their approval configs **verbatim** — same `norbital_id`, same step
- * id, same `teams_that_can_approve`. Those ids are not decorative: an existing `approval_request`
- * resolves its `approval_config_id` by scanning grants for a matching `norbital_id`, so reissuing one
- * would leave every in-flight and historical request unable to name the flow that produced it.
- * Dropping the gate would be worse still — a reviewed payroll run would quietly become a direct write.
+ * The three gated grants carry their approval config and step **ids** verbatim. Those ids are not
+ * decorative: an existing `approval_request` resolves its `approval_config_id` by scanning grants for
+ * a matching `norbital_id`, so reissuing one would leave every in-flight and historical request unable
+ * to name the flow that produced it. Dropping the gate would be worse still — a reviewed payroll run
+ * would quietly become a direct write. The approver **teams** are named rather than carried, and are
+ * resolved to this tenant's ids at reconcile; see `src/lib/policy_grants.ts`.
  *
  * `apps: ['hr_controller']` names the app *group*, as the seed did. Eight apps sit under it and
  * `appAccessAllowed` matches a group prefix, so this is one grant rather than eight — and, unlike
