@@ -41,6 +41,47 @@ it lives in source and shows up in a diff. Who holds it changes at runtime, so `
 and `team.policy_id` stay database rows. Reconciliation matches policies by key and never deletes an
 undeclared row or flips `is_active` — a deploy must not revoke access nobody asked to revoke.
 
+**A gated grant names its approvers by team name.** A write can be routed through approval instead of
+applied directly, and the teams that may approve it are named by `team.name`:
+
+```ts
+{
+	collection: 'variation_requests',
+	action: 'create',
+	where: ownVariation,
+	approval: {
+		id: '019f6f10-0001-7000-8000-000000000003',
+		name: 'BCA variation approval',
+		steps: [
+			{
+				id: '019f6f10-0001-7000-8000-000000000103',
+				name: 'BCA controller review',
+				approvers: ['BCA Controllers'],
+				description: 'Controller verifies scope change and photo evidence.'
+			}
+		]
+	}
+}
+```
+
+A name, not a `team.norbital_id`: a team is a runtime row, so an id belongs to one particular database
+and cannot be declared. `pod migrate` resolves the names against the tenant it is reconciling.
+
+Three things follow, and they are the reason the shape is what it is:
+
+- **`id` on the flow and on each step is carried, never regenerated.** An in-flight `approval_request`
+  resolves against those ids; a fresh one strands every request already raised.
+- **A name no team holds is refused**, naming the policy, the grant and the team, and the migration
+  rolls back. The alternative — storing the grant with `approval_config: null` — reads to the guard as
+  a direct write, which is a permission change nobody reviewed.
+- **On a tenant with no teams at all**, the reference is deferred rather than refused, because
+  `pod migrate` legitimately runs before anything seeds a team. The gate is still stored, so the write
+  is still blocked; it simply has no approvers until the teams exist. Reconciliation is idempotent, and
+  `pod seed` reconciles again once it has created them.
+
+`steps` and `approvers` are non-empty in the type. A flow with no steps resolves as already-approved,
+and a step with no approvers is one nobody can act on — neither reads like a mistake in a diff.
+
 ### 2. Type safety — the generated types are the contract
 
 Every role directory gets a `$types.d.ts`. Import from it and the workspace's own schema is bound:

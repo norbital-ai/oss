@@ -265,12 +265,37 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
       existing rows rather than orphaning `team.policy_id`. Verified by booting standalone: migrate
       logged `policies reconciled (2 created, 0 updated)` and all seven `$sql` strings read back out of
       jsonb byte-for-byte identical to the seed.
-- [ ] **A2a. Approvals drag a Core seed UUID into public template source.** A gated grant carries
-      `teams_that_can_approve`, which holds `team.norbital_id` — and teams have no declarative
-      counterpart, so the id is unchecked by anything and unsatisfiable under `pod start`, where no team
-      rows exist. `approval` is typed `Record<string, unknown> | null`, so its shape is not checked
-      either: a misspelled key compiles and fails at request time with a 400. Either teams become
-      declarable or approvals need a name-based reference.
+- [x] **A2a. Done — an approval names its approvers by team name, resolved at reconcile.** The same
+      answer `team.policy_id` already uses: the declaration names something stable and reconciliation
+      binds the id. `approval` is now a typed shape (`id`, `name`, `where?`, `supercededBy?`, `steps`,
+      each step `id`, `name`, `approvers`, `description?`, `where?`, `steps?`) rather than
+      `Record<string, unknown>`, so a misspelled key is a compile error in the policy file and a
+      `ManifestPolicyApprovalSchema` failure for a manifest arriving from anywhere else.
+      `reconcileDeclaredPolicies` translates it to the stored `approval_config` and resolves
+      `approvers` → `teams_that_can_approve` against the tenant. Config and step **ids** are still
+      carried verbatim (A4b's collisions included) — an in-flight `approval_request` resolves against
+      them.
+      **Three outcomes, deliberately different.** A name matching one team resolves. A name matching
+      none, on a tenant that *has* teams, throws naming the policy, the grant and the team, and the
+      migration rolls back — storing `approval_config: null` would read to the guard as a direct write.
+      A name matching none on a tenant with **no teams at all** is deferred, not refused: `pod migrate`
+      legitimately precedes any seed, and refusing there would make `pod start` impossible. The gate is
+      still stored and still blocks the write; it loses only its approvers, which fails closed. It is
+      warned about by name and returned as `unresolvedApproverTeams`, and `pod seed` now reconciles
+      again immediately after seeding, which is the moment the teams first exist. An ambiguous name is
+      refused too — `team.name` has no unique constraint, and picking one would choose an approver by
+      row order.
+      **Verified by booting both templates standalone.** `bca`: migrate on an empty database warned for
+      both gated grants and stored them with `teams_that_can_approve: []` and the config/step ids
+      intact; creating team `BCA Controllers` and re-migrating bound
+      `019f6f10-0002-7000-8000-000000000001` — byte-identical to the uuid that used to be hardcoded;
+      renaming the team made `pod migrate` exit 1 with the named error and left the stored grants
+      untouched; a duplicate team name was refused as ambiguous. `hr-payroll`: all **eleven** approval
+      configs resolved across the three named teams, with every config and step id unchanged.
+      **Left for Core.** Core provisions a tenant as migrate-then-seed, so its first reconcile runs
+      before its teams exist and lands the deferral. Core must reconcile again after the template seed
+      — the same seam `resolveSeedPolicyReferences` already runs at — or its gated grants stay stored
+      without approvers until the next deploy re-migrates.
 - [ ] **A2b. The `RAW` guard does not run in the way policies are actually written.** A1 records that
       `definePolicy` refuses a function-valued condition, and it does — but every policy file in this
       repository is `export default { … } satisfies Policy`, which never calls it. Nothing else on the
