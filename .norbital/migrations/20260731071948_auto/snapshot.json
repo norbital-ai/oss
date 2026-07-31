@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "7b243326-4fe1-41a0-8617-bfc8ed3ff4fc",
+  "id": "758bfcb5-1ef2-4fbf-9d45-3345a01c4b3a",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
@@ -4356,6 +4356,19 @@
       "generated": null,
       "identity": null,
       "name": "disbursed_on",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "repayment_agreements"
+    },
+    {
+      "type": "date",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "repay_by",
       "entityType": "columns",
       "schema": "public",
       "table": "repayment_agreements"

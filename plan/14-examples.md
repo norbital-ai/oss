@@ -160,7 +160,8 @@ Nihon's pay components:
 | OT_2_0                 | OVERTIME           | OVERTIME → REST_DAY beyond normal       |
 | PH_DAY                 | VARIABLE_ALLOWANCE | OVERTIME → PUBLIC_HOLIDAY from 0        |
 | OT_3_0                 | OVERTIME           | OVERTIME → PUBLIC_HOLIDAY beyond normal |
-| OT_INCENTIVE           | OVERTIME           | hours above the 4 h/day cap             |
+| OT_EXCESS_*            | OVERTIME           | derived 12 h/day or 104 h/month surplus |
+| PINCEN (report output) | —                  | sum of derived statutory-excess lines   |
 | BONUS                  | BONUS              | ENTRY                                   |
 | NPL                    | UNPAID_ABSENCE     | FORMULA                                 |
 | MEDICAL                | REIMBURSEMENT      | ENTRY                                   |

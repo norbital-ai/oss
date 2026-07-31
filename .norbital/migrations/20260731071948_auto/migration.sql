@@ -384,6 +384,7 @@ CREATE TABLE "repayment_agreements" (
 	"reference" text NOT NULL,
 	"principal" numeric NOT NULL,
 	"disbursed_on" date NOT NULL,
+	"repay_by" date NOT NULL,
 	"schedule" jsonb NOT NULL,
 	"effective_range" jsonb NOT NULL
 );

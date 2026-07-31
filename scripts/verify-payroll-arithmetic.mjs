@@ -1106,7 +1106,7 @@ check(
 check('an absent policy column is the plain calendar', readSettlementPolicy({}), PLAIN_CALENDAR);
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
-// The ordinary rate of pay, and the 4 h/day split.
+// The ordinary rate of pay and statutory OT controls.
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 const terms = {
 	base_salary: { value: 3451, currency: 'MYR' },
@@ -1361,7 +1361,7 @@ check(
 	1
 );
 check(
-	'the remaining two hours are routed to incentive OT',
+	'the remaining two hours are routed to statutory excess',
 	monthlyClassified.find((entry) => entry.day.date === '2026-01-16')?.excessHours,
 	2
 );
@@ -1380,7 +1380,7 @@ check(
 	0.5
 );
 check(
-	'less than half an hour beyond 12 does not create a fractional incentive unit',
+	'less than half an hour beyond 12 does not create a fractional excess unit',
 	classifyOvertimeByCalendarMonth({
 		days: [{ ...sixHourDay, hours: 4, totalWorkHours: 12.4 }],
 		dailyWorkLimit: 12,

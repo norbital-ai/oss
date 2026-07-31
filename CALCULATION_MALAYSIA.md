@@ -127,9 +127,9 @@ daily excess = floor(max(0, actual work hours − 12), 0.5 hour)
 retained OT  = payable OT − daily excess
 ```
 
-The value of the excess moves to the statutory-excess incentive OT component at the same legal
-rate. A payroll warning identifies the employee, date and actual work hours. Reclassification pays
-the work; it does not cure an hours-of-work breach.
+The value of the excess moves to the derived statutory-excess component at the same legal rate. A
+payroll warning identifies the employee, date and actual work hours. Reclassification pays the
+work; it does not cure an hours-of-work breach.
 
 Example:
 
@@ -138,7 +138,7 @@ normal hours       = 8.5
 actual work        = 13.0
 payable OT         = 4.5
 retained OT        = 3.5
-incentive OT       = 1.0
+statutory excess   = 1.0
 ```
 
 An 11-hour rest-day shift is below 12 actual hours. Its full statutory rest-day award remains OT;
@@ -157,11 +157,21 @@ The counter:
 - counts the whole qualifying OT quantity even when daily excess is separately reclassified.
 
 The engine reads the full calendar months touched by a payroll cutoff, classifies dated OT in
-chronological order, and moves only the portion above 104 hours to statutory-excess incentive OT.
-Warnings identify the actual calendar month. This monthly control is independent of the 12-hour
-daily control.
+chronological order, and moves only the portion above 104 hours to the derived statutory-excess
+component. Warnings identify the actual calendar month. This monthly control is independent of the
+12-hour daily control.
 
 The 21st–20th attendance window never resets or substitutes for the calendar-month counter.
+It only decides which dated work is paid in the run. The 104-hour test is a forward-running
+threshold, so later work cannot retroactively turn an earlier hour into excess; a blanket
+one-month payment lag is neither required nor present.
+
+### PINCEN is an expected output
+
+Nihon's source `PINCEN` amount is never seeded. The run derives statutory excess from time entries
+and the 12-hour/104-hour controls, exports the result as incentive OT, and only then compares it with
+the source `PINCEN` value. A difference is a calculation or source-policy variance to investigate;
+copying the expected amount into an `ENTRY` would invalidate the reconciliation.
 
 ## 6. Settlement windows
 
@@ -245,7 +255,7 @@ Payroll calculation:
 - floors dated OT down to half-hour units;
 - emits warnings for work above 12 actual hours;
 - emits calendar-month warnings for regulated OT above 104 hours;
-- pays statutory excess through incentive OT at the same legal value;
+- pays statutory excess through its derived component at the same legal value;
 - preserves source provenance for every generated payroll line.
 
 ## Official references

@@ -9,14 +9,15 @@
 		"sync:watch": "pod sync --watch",
 		"build": "vite build && node scripts/verify-built-xlsx.mjs",
 		"format": "prettier --write .",
-		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json"
+		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json",
+		"test": "node scripts/verify-overtime-controls.mjs && node --experimental-strip-types --test src/collections/repayment_agreements/repayment-schedule.test.ts"
 	},
 	"dependencies": {
 		"@iconify/svelte": "^5.2.2",
-		"@norbital-ai/platform-utils": "0.0.5",
-		"@norbital-ai/pod": "0.0.5",
-		"@norbital-ai/std": "0.0.5",
-		"@norbital-ai/ui": "0.0.5",
+		"@norbital-ai/platform-utils": "0.0.7",
+		"@norbital-ai/pod": "0.0.7",
+		"@norbital-ai/std": "0.0.7",
+		"@norbital-ai/ui": "0.0.7",
 		"exceljs": "4.4.0",
 		"mode-watcher": "^1.1.0",
 		"runed": "^0.37.1",
