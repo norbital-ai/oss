@@ -97,7 +97,7 @@ Two things still block a host from driving it, and both are Core-side:
 | better-auth entirely — the `organization` plugin, `emailOTP`, redis session storage, the drizzle adapter     | Pod owns authentication                                |
 | System-DB `invitation`, `session`, `account`, `verification` tables                                          | Pod owns the directory and credentials                 |
 | `lib/access_control/auth/*` — `auth.server`, `auth.client`, `auth_redis`, `cookies`, `session`, `encryption` | superseded                                             |
-| `(auth)/login`, `(auth)/accept-invite`, `(auth)/email-otp/callback`, `(auth)/link/[token]`                   | Pod ships these pages as runtime surfaces              |
+| `(auth)/login`, `(auth)/accept-invite`, `(auth)/email-otp/callback`                                          | Pod ships these pages as runtime surfaces              |
 | `org_settings/members_pane.svelte`                                                                           | membership moves to Pod's tenant configuration surface |
 | `lib/agent/**` except channel transports and the sandbox tools                                               | Pod owns the agent loop (in progress — see below)      |
 | `routes/(workspace)/_components/agent/**`, `routes/api/agent/**`                                             | ditto                                                  |
@@ -293,7 +293,7 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
 - [x] **A4. Done.** Three policies in `template_workspaces/hr-payroll/src/policies/` — `HR` (79 grants),
       `Management` (35), `Employee` (26, 14 of them conditional) — with the collection groups kept as
       generation, in `src/lib/policy_grants.ts`. Booted standalone: `policies reconciled (3 created,
-    0 updated)`, grant counts 79/35/26 exactly matching the seed, every `$sql` string stored with its
+  0 updated)`, grant counts 79/35/26 exactly matching the seed, every `$sql` string stored with its
       literal `${requestor.email}` token, and **all eleven approval steps read back with the seed's
       `norbital_id`, derived step id, and `teams_that_can_approve` unchanged**.
       Two things the port surfaced, both recorded below as A4a and A4b. A third was fixed on the way:
