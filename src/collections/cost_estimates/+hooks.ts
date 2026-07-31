@@ -132,7 +132,6 @@ async function price(estimate: EstimateInput, api: HookApi): Promise<Record<stri
 		contingency: { value: result.contingency, currency },
 		total: { value: result.total, currency },
 		lines_json: JSON.stringify(result.lines),
-		missing_rates: [],
 		priced_at: new Date().toISOString()
 	};
 }
