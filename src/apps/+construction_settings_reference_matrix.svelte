@@ -20,7 +20,7 @@
 {/snippet}
 
 <Cover as="main" top={pageHeading}>
-	<Bound size="full" pad="none" class="px-4 py-2 sm:px-6">
+	<Bound size="full" inset>
 		<CollectionTable {client} collection="bim_reference_matrix">
 			{#snippet columns({ Column })}
 				<Column name="reference_name" />
