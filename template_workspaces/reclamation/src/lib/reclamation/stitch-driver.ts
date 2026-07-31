@@ -3,8 +3,11 @@
  *
  * The project hooks, the document hooks, and the rebuild command all need the
  * same four capabilities. They differ only in how the runtime lets them write:
- * an `after` hook has `db.mutate`, a remote handler has `db.<collection>.create`.
- * That single difference is the argument; nothing else is repeated.
+ * an `after` hook is elevated and writes through `db.mutate`, while a remote
+ * command handler gets the ordinary API and writes through
+ * `db.site_reconstructions.create` — which exists only because that collection
+ * declares a `create` behaviour. That single difference is the argument;
+ * nothing else is repeated.
  */
 
 import type {
