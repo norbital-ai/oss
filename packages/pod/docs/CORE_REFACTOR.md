@@ -509,20 +509,45 @@ Unit and e2e coverage did not catch total auth failure in standalone. These are 
 - [x] **D1. Done, and it found that outbound integrations never ran.** `toRuntimeWorkspace()` dropped
       `integrations`/`secrets`, so no outbox row was ever written and the facility gate was a no-op.
       Fixed; covered by `tests/standalone/integration-delivery-e2e.test.ts`, verified non-vacuous by
-      stashing the fix. **Two gaps remain open — integrations are not finished:**
-- [ ] **D1a. An HTTP `request` destination cannot be built from a filesystem workspace.** A `send`
-      binding needs a `connection` registered in `defineWorkspace`'s `connections` input, but the
-      compiler never emits `connections` or `env.private` — `PodStructure` has no field for them and no
-      source file is scanned. Declaring one inline in `+integrations.ts` fails with "uses an
-      unregistered connection"; omitting it fails with "requires a connection". `AUTHORING.md` says
-      `+integrations.ts` is where the connection is declared, so the surface and the doc disagree. The
-      same gap blocks `authentication`. Only a `systemEvent` destination is reachable today.
-- [ ] **D1b. The inbound half has no consumers at all.** Nothing dispatches
-      `{kind:'integration', direction:'receive'}` or `{kind:'system-event'}`; the handlers in
-      `tenant_run.ts` are unreachable. No HTTP route accepts a `webhook` origin or verifies its HMAC,
-      and `workspaceJobs()` builds jobs only from automations, so a `pull` binding's `schedule` never
-      fires. A `receive` binding can never run, and a `send` with a `systemEvent` destination never
-      reaches its matching `receive` — it is only handed to the host as an outbound delivery.
+      stashing the fix. **Two gaps followed; both are now closed except inbound webhooks:**
+- [x] **D1a. Resolved — a connection is declared where the doc always said it was.** The rule was
+      object _identity_: a `connection` was accepted only if the same object was also in
+      `defineWorkspace`'s `connections` input, which the compiler never emitted. Two collections in two
+      files cannot share one object without a third file to hold it, so the rule demanded a registry
+      with nowhere to live, and both doors were locked ("unregistered connection" / "requires a
+      connection"). Connections are now compared **by value** and `connections` is deleted rather than
+      filled in. `src/+env.ts` declares the private names, checked in both directions — an
+      undeclared reference and an unreferenced declaration are both build errors.
+      **Found on the way:** `connectionSecretHeaders` emitted a `secretHeaderPrefixes` map that the
+      `.strict()` manifest schema rejects, so even a hand-written connection could not have produced a
+      valid manifest. `Bearer ` is now a `prefix` on the secret reference.
+      `httpIntegrationDelivery()` performs the declared call; no host writes a fetch.
+- [x] **D1b (a) and (c). Resolved — the inbound half has callers.** `workspaceJobs()` now builds a job
+      per `api-pull` binding on its declared cron schedule, unconditionally rather than behind
+      `integrationDelivery` (an inbound binding depending on the outbound facility is roughly how it
+      came to be forgotten). The fetch is host-side, where the credential and the socket are; the
+      response body crosses in and the `receive` dispatch **writes** what the import pipeline returned,
+      which it never did before. Resume points live in `integration_cursor`, one row per binding, read
+      before the call and written after the rows land. A `systemEvent` destination no longer leaves the
+      pod: the outbox job routes it back in to every matching `receive` and settles the row on that.
+      Proved end to end in `tests/standalone/integration-delivery-e2e.test.ts` against a real socket,
+      and shown non-vacuous by running it with the wrong secret — the send fails on the header, the
+      pull times out with no rows, and the cursor assertion fails, each for its own reason.
+- [ ] **D1b (b). Webhooks are still not delivered, and that is the whole remaining gap.** A `webhook`
+      receive binding compiles and validates and receives nothing. `pod start` now warns at startup
+      naming the bindings, so it is loud rather than silent, but the mechanism is absent.
+      **What it needs, in the shape channels set (commit `ec13137`):** a `HostWebhookListener` on
+      `SelfHostedPodHostConfig`, shaped like `HostChannelListener` — host-process code handed a
+      `deliver` function, returning a stop function. Inbound must **not** become a public Pod route:
+      verifying `hmac-sha256` means holding the transport's secret, and a tenant holds none; under Core
+      the isolate has no socket at all. Three pieces are missing, not one: the listener type and its
+      standalone wiring; an HMAC verification helper the host calls before `deliver` (the manifest
+      already carries `authentication.secret` and `signatureHeader` as references); and a dedup ledger
+      keyed on the `eventId` header, claimed _before_ the import runs, exactly as
+      `channel_inbound_message` is — a provider that redelivers is normal, and without the ledger every
+      redelivery imports the page again.
+      **Do not build it without an end-to-end test**; the two directions above were both wired,
+      type-checked, and completely inert before anyone ran them.
 - [ ] **D2.** Notifications: trigger one from a hook and confirm delivery.
 - [ ] **D3.** Automations: scheduled and event-triggered, both observed firing.
 - [ ] **D4.** Hooks: `before` mutation and `after` derived write.

@@ -873,6 +873,23 @@ export async function startStandalone(
 		return outcome;
 	};
 
+	// A webhook binding compiles, validates, and receives nothing: no route accepts one and no host
+	// listener exists to hand it over. Saying so once at startup is the difference between a known gap
+	// and an integration that looks wired and is not — the same reason the channel warning below
+	// exists. See D1b in docs/CORE_REFACTOR.md.
+	const webhookBindings = Object.entries(manifest.integrations ?? {}).flatMap(
+		([integrationName, integration]) =>
+			Object.entries(integration.definition.inbound ?? {})
+				.filter(([, binding]) => binding.origin.type === 'webhook')
+				.map(([bindingName]) => `${integrationName}.${bindingName}`)
+	);
+	if (webhookBindings.length > 0) {
+		console.warn(
+			`[pod] webhook receive bindings are declared but nothing delivers to them: ${webhookBindings.join(', ')}. ` +
+				'Inbound webhooks are not implemented; a pull or system-event binding is the working alternative.'
+		);
+	}
+
 	const declaredChannels = Object.keys(manifest.channels ?? {});
 	if (declaredChannels.length > 0 && !config.channels) {
 		// Not fatal: a host may drive inbound from outside this process. But a workspace that declares a

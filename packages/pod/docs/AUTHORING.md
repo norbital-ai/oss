@@ -31,6 +31,8 @@ declaration to drift from the thing it declares.
 | `src/policies/+field_agent.policy.ts`                        | policy `field_agent`                       |
 | `src/**/+find_supplier.tool.ts`                              | agent tool `find_supplier`                 |
 | `src/custom-types/money/+definition.ts` + `+renderer.svelte` | custom type `money`                        |
+| `src/collections/work_orders/+integrations.ts`               | its inbound and outbound bindings          |
+| `src/+env.ts`                                                | the names this workspace needs from a host |
 
 Adding a file adds the thing. Deleting it removes the thing. Renaming it renames the thing. A role
 file whose name Pod does not recognise is a compile error rather than a file that silently does
@@ -177,7 +179,8 @@ Does it need a credential, an outbound socket, a mailer, a model, or a clock?
         messaging, queue, integrationDelivery). The set is closed — there is no authoring surface
         for a new one, because Core must satisfy it generically for every tenant.
       · a call to one specific third party      → an integration: `+integrations.ts` declares the
-        connection and the credential *reference*; `integrationDelivery` makes the call host-side.
+        connection and the credential *reference*, `src/+env.ts` declares the name;
+        `integrationDelivery` makes the call host-side.
 
 Does it need business logic with typed input and output?
   → a remote: `src/remotes/+<name>.ts`.
@@ -186,20 +189,83 @@ Is it authentication, permissions, audit, history, or sync?
   → Pod already owns it. Do not write it.
 ```
 
-## Secrets
+## Integrations — talking to one specific third party
 
-A workspace never holds a secret value, only a reference:
+`src/collections/<name>/+integrations.ts` declares both directions for one collection. The connection
+is written here, next to the bindings that use it:
 
 ```ts
-connection: {
+import { defineConnection } from '@norbital-ai/pod/authoring';
+import type { Integrations } from './$types.js';
+
+const billing = defineConnection({
 	baseUrl: 'https://api.stripe.com',
 	authentication: { type: 'bearer', token: { env: 'STRIPE_KEY' } }
-}
+});
+
+export default {
+	stripe: {
+		connection: billing,
+		send: {
+			upsert: {
+				request: { method: 'POST', path: '/v1/customers' },
+				on: 'create',
+				transform: ({ output }) => output[0]?.attachments[0]?.content
+			}
+		},
+		receive: {
+			invoices: {
+				pull: { schedule: '*/15 * * * *', path: '/v1/invoices', cursorQuery: 'starting_after' }
+			}
+		}
+	}
+} satisfies Integrations;
 ```
 
-The reference compiles into the manifest; the host resolves it at call time. Tenant code runs in an
-isolate with no network under Core, so it could not make the authenticated call even if it held the
-key.
+Two collections may name the same integration; they must then declare the same connection, which is
+compared by value, so writing it twice is fine and disagreeing is a build error.
+
+**Outbound.** A mutation matching `on` writes a row to a transactional outbox in the same transaction,
+so a delivery is never queued for a write that rolled back. The host drains it: the collection's
+`export` pipeline runs, the binding's `transform` shapes the result, and the declared destination —
+URL, method, headers, and the _names_ of the secret headers — goes to `integrationDelivery` with it.
+`httpIntegrationDelivery()` is the built-in implementation and needs no per-host configuration. A
+failure retries with capped backoff and dead-letters after ten attempts.
+
+**Inbound.** A `pull` binding is a job on its declared cron schedule: the host fetches with the
+connection's credential, hands the body to the collection's `import` pipeline, and writes the rows it
+returns. The resume point lives in `integration_cursor`, read before the call and written after the
+rows land, so a restart resumes and a crash re-pulls a page rather than skipping one.
+
+**`systemEvent` is a workspace talking to itself.** A `send` with a `systemEvent` destination never
+leaves the pod; it reaches every `receive` binding waiting on that exact event name. A receive waiting
+on an event nothing emits is refused at startup, naming the binding — the two halves are matched by
+string, and a typo used to produce silence rather than an error.
+
+**`webhook` is declared but not yet delivered.** Nothing calls a webhook binding today; see
+[CORE_REFACTOR.md](./CORE_REFACTOR.md) D1b. `pod start` warns at startup rather than leaving it silent.
+
+## Secrets
+
+A workspace never holds a secret value, only a reference — and it declares the names it will
+reference in `src/+env.ts`:
+
+```ts
+import { defineEnv } from '@norbital-ai/pod/authoring';
+
+export default defineEnv({
+	private: { STRIPE_KEY: { description: 'Stripe restricted API key' } }
+});
+```
+
+The declaration is checked in both directions: referencing a name that is not here fails the build,
+and declaring a name nothing references fails too — `manifest.secrets` is what an operator provisions
+against, so an unreferenced entry asks for a credential no code path reads. Between them, a reference
+spelled differently from the declaration cannot reach production as a 401.
+
+The reference compiles into the manifest; the host resolves it at call time (`process.env` under
+`pod start`, its own secret store elsewhere). Tenant code runs in an isolate with no network under
+Core, so it could not make the authenticated call even if it held the key.
 
 ## The two deployments are the same workspace
 

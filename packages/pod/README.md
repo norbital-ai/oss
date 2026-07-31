@@ -83,7 +83,8 @@ workspace/
 │   ├── remotes/
 │   │   └── +<lower_snake_case>.ts
 │   ├── **/+<lower_snake_case>.tool.ts          agent tool, anywhere under src
-│   └── +seed.ts                                optional
+│   ├── +seed.ts                                optional
+│   └── +env.ts                                 optional
 ├── .norbital/
 │   └── migrations/                             committed
 ├── package.json
@@ -419,13 +420,21 @@ XLSX, JSON, text, or binary attachments.
 
 Collection `+integrations.ts` files define tenant-side integration behavior:
 
-- inbound webhook, pull, or system-event triggers;
+- the `connection` — a base URL and a _reference_ to the credential that reaches it;
+- inbound pull or system-event triggers (`webhook` is declarable but not yet delivered);
 - outbound mutation events;
 - the transformation from a record event to a delivery payload.
 
+Two collections may name the same integration; they must declare the same connection, compared by
+value. Every `{ env: 'NAME' }` reference must be declared in `src/+env.ts`, and every name declared
+there must be referenced — both directions are build errors.
+
 Tenant integration code decides what is accepted and what is sent. It does not hold endpoint
-credentials or perform the final outbound network request. Delivery is claimed from a durable
-outbox, retried with backoff, and handed to the host's `integrationDelivery` function.
+credentials or perform any network request. Outbound delivery is claimed from a durable outbox,
+retried with backoff, and handed to the host's `integrationDelivery` function together with the
+declared destination; `httpIntegrationDelivery()` is the built-in implementation of it. Inbound pulls
+are host-driven jobs on the binding's cron schedule, resuming from `integration_cursor`. A
+`systemEvent` destination never leaves the pod and reaches the `receive` bindings waiting on it.
 
 ## Automations, AI, and agent tools
 
