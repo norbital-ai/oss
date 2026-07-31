@@ -581,8 +581,7 @@ export function measureEmployment(options: {
 			? undefined
 			: (entriesByComponent.get(calculatedArrears.payComponentId) ?? []).find(
 					(entry) =>
-						cents(entrySign(entry, entryById) * Number(entry.amount)) ===
-						calculatedArrears.amount
+						cents(entrySign(entry, entryById) * Number(entry.amount)) === calculatedArrears.amount
 				);
 	const arrears = explicitArrearsEntry == null ? calculatedArrears : null;
 
