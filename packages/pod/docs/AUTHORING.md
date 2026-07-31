@@ -13,6 +13,38 @@ the three owns it: is it a property of this workspace (declare it), a credential
 clock (the host supplies it), or behaviour every workspace shares (Pod already owns it, and you should
 not be writing it).
 
+## The pillars, and where the line falls
+
+Eight things a workspace declares. Everything to the right of the line is supplied, not written — and
+the set of facilities is closed, so there is no authoring surface for a ninth.
+
+```text
+      YOU DECLARE (in src/)                POD OWNS                THE HOST SUPPLIES
+ ──────────────────────────────── │ ──────────────────────── │ ────────────────────────
+  collections/  +model.ts         │  authentication          │  db          (required)
+                +hooks.ts         │  sessions, invitations   │  fileStorage
+                +integrations.ts  │  policy enforcement      │  ai
+                +pipelines.ts     │  approvals + audit       │  maps
+  policies/     +<n>.policy.ts    │  temporal history        │  messaging
+  channels/     +<n>.channel.ts   │  sync + local replica    │  queue
+  automation/   +<n>.ts           │  the agent loop          │  integrationDelivery
+  remotes/      +<n>.ts           │  collection operations   │  agentTools
+  apps/         +<n>.svelte       │                          │
+  custom-types/ +definition.ts    │  ── you never write ──   │  declared in pod.host.ts,
+  **/+<n>.tool.ts                 │     any of this          │  never in the workspace
+  +env.ts       (names, not values)
+ ──────────────────────────────── │ ──────────────────────── │ ────────────────────────
+   compiles into the manifest          runs on every host        differs per deployment
+```
+
+The same bundle runs on Core and on `pod start`; only `pod.host.ts` differs. That is the test for
+whether something belongs on the left: if moving hosts would change it, it is not workspace source.
+
+A worked example of each pillar lives in the [README](../README.md) — models, hooks, relationships,
+apps, custom types, remotes, policies, channels, automations, agent tools, and integrations. The
+templates in [template_workspaces](../../../template_workspaces/) are the executable version of the
+same thing, and are conformance fixtures as well as examples.
+
 ## Four principles
 
 ### 1. Declarative — the filesystem is the registry
@@ -29,6 +61,7 @@ declaration to drift from the thing it declares.
 | `src/automation/+daily_digest.ts`                            | automation `daily_digest`                  |
 | `src/remotes/+dashboard_summary.ts`                          | remote `dashboard_summary`                 |
 | `src/policies/+field_agent.policy.ts`                        | policy `field_agent`                       |
+| `src/channels/+sales_desk.channel.ts`                        | channel `sales_desk`                       |
 | `src/**/+find_supplier.tool.ts`                              | agent tool `find_supplier`                 |
 | `src/custom-types/money/+definition.ts` + `+renderer.svelte` | custom type `money`                        |
 | `src/collections/work_orders/+integrations.ts`               | its inbound and outbound bindings          |
