@@ -176,6 +176,49 @@ export type QueueJob = {
  */
 export type HostQueue = (jobs: readonly QueueJob[]) => Promise<() => void>;
 
+/** One message a host received on a transport and is handing to the workspace. */
+export type ChannelInboundMessage = {
+	/** The declared channel this arrived on — the filename in `src/channels/+<key>.channel.ts`. */
+	readonly channel: string;
+	/** Transport-native conversation address: a chat id, a phone number, a thread id. */
+	readonly conversationId: string;
+	/**
+	 * The transport's own message id.
+	 *
+	 * Deduplication is keyed on it, so it must be the provider's identifier and not one the host
+	 * invented per attempt — a fresh id per redelivery defeats the ledger and runs the agent twice.
+	 */
+	readonly messageId: string;
+	readonly text: string;
+	/** Who sent it, in the transport's own terms. They may have no workspace user at all. */
+	readonly sender?: { readonly id: string; readonly displayName?: string };
+};
+
+export type ChannelInboundResult = {
+	/** `duplicate` means the message was already handled and no agent ran. */
+	readonly status: 'answered' | 'duplicate' | 'silent';
+	readonly text?: string;
+	/** Whether the reply actually left over the transport. */
+	readonly delivered?: boolean;
+};
+
+/**
+ * Where a channel's inbound messages come from. Host-process code, like `HostQueue`.
+ *
+ * Pod deliberately serves no inbound HTTP route for channels. Proving a message really came from
+ * Telegram means checking Telegram's secret, and the credential belongs to whoever holds the wire —
+ * which is never the tenant, and under Core is never even a process with a socket. So the host
+ * authenticates the wire its own way and calls `deliver`; the workspace is handed something already
+ * proven, and there is no public endpoint that could be persuaded to speak for a stranger.
+ *
+ * Called once at startup with the delivery function and returns a function that stops listening. A
+ * host that drives channels some other way (Core, through its own control-plane sender) simply does
+ * not supply this.
+ */
+export type HostChannelListener = (
+	deliver: (message: ChannelInboundMessage) => Promise<ChannelInboundResult>
+) => Promise<() => void>;
+
 /** One claimed outbox row, already transformed by the workspace's outbound pipeline. */
 export type IntegrationDeliveryMessage = {
 	readonly integrationName: string;
@@ -254,6 +297,11 @@ export type SelfHostedPodHostConfig = {
 	readonly maps?: HostMapsBinding;
 	readonly integrationDelivery?: HostIntegrationDelivery;
 	readonly queue?: HostQueue;
+	/**
+	 * Where declared channels receive from. Outbound already goes out through `messaging.sendVia`;
+	 * this is the other half, and without it a channel can send but never be spoken to.
+	 */
+	readonly channels?: HostChannelListener;
 	/** Host-owned surfaces linked into the workspace sidebar. Validated at startup. */
 	readonly hostPlugins?: readonly HostAppPlugin[];
 };

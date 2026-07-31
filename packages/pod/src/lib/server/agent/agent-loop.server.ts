@@ -43,6 +43,25 @@ type AgentRunOptions = {
 	readonly spec: AgentAutomationSpec;
 	readonly input?: string;
 	readonly runId?: string;
+	/**
+	 * Continue an existing transcript instead of one keyed to this run.
+	 *
+	 * An automation's transcript begins and ends with its run, so the session can be derived from the
+	 * run id. A channel conversation is the other shape: it outlives every run, and the second message
+	 * from the same chat has to see the first. Passing the session says which transcript this run
+	 * appends to, and the run row stays what it always was — the record of one turn.
+	 */
+	readonly sessionId?: string;
+	/**
+	 * How many trailing messages of an existing transcript to replay. Ignored without `sessionId`.
+	 *
+	 * A channel conversation has no end, so replaying all of it would grow every prompt until the
+	 * model refused it. The window is trimmed to start at a `user` message: cutting between an
+	 * assistant's tool call and its result leaves an orphaned result, which providers reject.
+	 */
+	readonly historyLimit?: number;
+	/** Extra `chat_message` columns for the input message only — where it came from, and from whom. */
+	readonly inputMetadata?: Record<string, unknown>;
 };
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -239,37 +258,74 @@ async function ensureRunSession(runId: string, ownerUserId: string): Promise<str
 }
 
 /**
- * Replay a run's transcript.
+ * Replay a transcript.
  *
  * Each row stores one `AiMessage` verbatim, so replay is a read rather than a reconstruction — the
  * previous shape spread a single assistant turn across `tool_call` rows and rebuilt it on load, which
  * meant the stored form and the in-memory form could disagree.
+ *
+ * Keyed by run for an automation and by session for a channel: the two differ only in which rows are
+ * "this conversation so far", which is exactly what the `WHERE` decides.
  */
-async function loadMessages(runId: string): Promise<{ messages: AiMessage[]; sequence: number }> {
+async function loadMessages(
+	scope: { readonly runId: string } | { readonly sessionId: string; readonly limit?: number }
+): Promise<{ messages: AiMessage[]; sequence: number }> {
 	const ctx = getWorkspace({ provision: true });
-	const result = await ctx.tenantDb.query<{ seq: number; parts: AiMessage[] | null }>({
-		text: `SELECT m.seq, m.parts
-		         FROM chat_message m
-		         JOIN chat_session s ON s.norbital_id = m.chat_id
-		        WHERE s.automation_run_id = $1::uuid
-		        ORDER BY m.seq`,
-		values: [runId]
-	});
+	// A window is only meaningful for a session — a run's transcript is bounded by the run itself.
+	const query =
+		'runId' in scope
+			? {
+					text: `SELECT m.seq, m.parts
+					         FROM chat_message m
+					         JOIN chat_session s ON s.norbital_id = m.chat_id
+					        WHERE s.automation_run_id = $1::uuid
+					        ORDER BY m.seq`,
+					values: [scope.runId]
+				}
+			: {
+					text: `SELECT seq, parts FROM (
+					         SELECT seq, parts FROM chat_message
+					          WHERE chat_id = $1::uuid
+					          ORDER BY seq DESC
+					          LIMIT $2
+					       ) recent ORDER BY seq`,
+					values: [scope.sessionId, scope.limit ?? 40]
+				};
+	const result = await ctx.tenantDb.query<{ seq: number; parts: AiMessage[] | null }>(query);
 	const messages: AiMessage[] = [];
-	let sequence = 0;
 	for (const row of result.rows) {
-		sequence = Math.max(sequence, row.seq);
 		const message = row.parts?.[0];
 		if (message) messages.push(message);
 	}
-	return { messages, sequence };
+	// The next sequence number comes from the whole transcript, never from the window: numbering from
+	// the window would reuse sequence numbers and reorder the stored conversation.
+	const highest =
+		'runId' in scope
+			? { rows: [{ seq: result.rows.at(-1)?.seq ?? 0 }] }
+			: await ctx.tenantDb.query<{ seq: number }>({
+					text: `SELECT COALESCE(MAX(seq), 0) AS seq FROM chat_message WHERE chat_id = $1::uuid`,
+					values: [scope.sessionId]
+				});
+	if ('sessionId' in scope) {
+		// Start the window at a user message. A window that opens on a `tool` result carries a result
+		// whose call was cut away, and a provider rejects the whole request rather than ignoring it.
+		const start = messages.findIndex((message) => message.role === 'user');
+		messages.splice(0, start === -1 ? messages.length : start);
+	}
+	return { messages, sequence: Number(highest.rows[0]?.seq ?? 0) };
 }
 
-export async function runAgent(options: AgentRunOptions): Promise<{
+export type AgentRunResult = {
 	readonly runId: string;
 	readonly status: 'success';
 	readonly text: string;
-}> {
+	/** The transcript this run appended to — the caller's own session, or the one keyed to the run. */
+	readonly sessionId: string | null;
+	/** The stored id of the input message, so a caller can point its own row at the transcript. */
+	readonly inputMessageId: string | null;
+};
+
+export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult> {
 	const ctx = getWorkspace({ provision: true });
 	const ownerUserId = ctx.baseScope.requestor.norbital_id;
 	const startedAt = new Date().toISOString();
@@ -314,14 +370,24 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 			{ isElevated: true }
 		);
 	}
-	const restored = await loadMessages(runId);
+	const restored = await loadMessages(
+		options.sessionId
+			? {
+					sessionId: options.sessionId,
+					...(options.historyLimit ? { limit: options.historyLimit } : {})
+				}
+			: { runId }
+	);
 	let sequence = restored.sequence;
 	const messages: AiMessage[] = [...restored.messages];
-	let sessionId: string | null = null;
-	const persist = async (message: AiMessage, usage?: Record<string, unknown>): Promise<void> => {
+	let sessionId: string | null = options.sessionId ?? null;
+	const persist = async (
+		message: AiMessage,
+		extra?: Record<string, unknown>
+	): Promise<string | null> => {
 		sessionId ??= await ensureRunSession(runId, ownerUserId);
 		sequence += 1;
-		await createRecord(
+		const record = await createRecord(
 			ctx,
 			'chat_message',
 			{
@@ -329,15 +395,17 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 				role: message.role,
 				seq: sequence,
 				parts: [message],
-				...(usage ? { usage } : {})
+				...(extra ?? {})
 			},
 			{ isElevated: true }
 		);
+		return typeof record.norbital_id === 'string' ? record.norbital_id : null;
 	};
 	const initial = options.input ?? (messages.length === 0 ? options.spec.task : undefined);
+	let inputMessageId: string | null = null;
 	if (initial) {
 		messages.push({ role: 'user', content: initial });
-		await persist({ role: 'user', content: initial });
+		inputMessageId = await persist({ role: 'user', content: initial }, options.inputMetadata);
 	}
 	if (messages.length === 0) throw new Error('Agent run requires an input message');
 
@@ -368,7 +436,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 				messages.push({ role: 'assistant', content: result.text });
 				await persist(
 					{ role: 'assistant', content: result.text },
-					result.usage ? objectValue(result.usage) : undefined
+					result.usage ? { usage: objectValue(result.usage) } : undefined
 				);
 			}
 			const calls = result.toolCalls ?? [];
@@ -391,7 +459,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 					},
 					{ isElevated: true }
 				);
-				return { runId, status: 'success', text: finalText };
+				return { runId, status: 'success', text: finalText, sessionId, inputMessageId };
 			}
 			for (const call of calls) {
 				let output: Record<string, unknown>;
@@ -433,7 +501,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{
 export async function startInteractiveAgent(input: {
 	readonly message: string;
 	readonly runId?: string;
-}): Promise<{ readonly runId: string; readonly status: 'success'; readonly text: string }> {
+}): Promise<AgentRunResult> {
 	return runAgent({
 		automationName: null,
 		runId: input.runId,

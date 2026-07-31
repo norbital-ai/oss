@@ -355,8 +355,10 @@ const _team_members = systemTable(
  * Ported from Core's `chat_session`, minus `organization_id`: a pod database *is* one tenant, so a
  * tenancy column here would be a constant on every row and a filter every query had to remember.
  *
- * The channel columns are plain ids rather than references — the channel tables are a later step of
- * the agent port, and a foreign key to a table that does not exist yet would block the migration.
+ * `platform` and `external_thread_id` carry the transport and the conversation a channel session
+ * answers; `channel_conversation` holds the same pair under a unique key and is what the lookup goes
+ * through. The remaining `*_id` columns are Core's shape for rows Pod deliberately does not have —
+ * a channel is *declared*, so there is no `channel_config` or `agent_profile` table to reference.
  */
 const _chat_session = systemTable(
 	'chat_session',
@@ -450,6 +452,82 @@ const _chat_message = systemTable(
 	{ description: 'Agent messages', record_label: 'role', system: true }
 );
 
+/**
+ * One external conversation, bound to the transcript that answers it.
+ *
+ * A channel is declared in source (`src/channels/+<key>.channel.ts`), so there is deliberately no
+ * per-tenant channel *configuration* row here — the credential that holds the wire open belongs to the
+ * host, and the policy the agent answers under belongs to the declaration. What has to be stored is
+ * only the part neither of them knows: which `chat_session` a given external conversation continues,
+ * so a second message from the same chat resumes the transcript instead of starting a new one.
+ *
+ * `binding_key` is `<channel_key>:<external_conversation_id>` and carries the uniqueness, because the
+ * pair is what must be unique and a composite unique index is not expressible through `systemTable`.
+ * The two parts are stored beside it so a query can read them without parsing the key.
+ */
+const _channel_conversation = systemTable(
+	'channel_conversation',
+	{
+		/** The declared channel this conversation arrived on. */
+		channel_key: text().notNull(),
+		/** Copied from the declaration at bind time, so a transport rename is visible as drift. */
+		transport: text().notNull(),
+		/** Transport-native address — a Telegram chat id, a phone number, a thread id. */
+		external_conversation_id: text().notNull(),
+		binding_key: text().notNull().unique(),
+		chat_id: uuid()
+			.references(() => _chat_session.norbital_id, { onDelete: 'cascade' })
+			.notNull(),
+		last_inbound_at: timestamp({ withTimezone: true }),
+		last_outbound_at: timestamp({ withTimezone: true })
+	},
+	{
+		description: 'Channel conversations',
+		record_label: 'external_conversation_id',
+		system: true
+	}
+);
+
+/**
+ * One inbound message from a transport, and the record that it was already handled.
+ *
+ * Transports redeliver. Telegram replays an update whose webhook answered non-2xx, WhatsApp replays on
+ * reconnect, and a host queue that retries a failed job replays everything in it — so without a
+ * ledger the same customer question runs the agent twice, bills twice, and answers twice. `receipt_key`
+ * is `<channel_key>:<external_conversation_id>:<external_message_id>` and is claimed by an
+ * `ON CONFLICT DO NOTHING` insert *before* the agent runs, which is what makes the duplicate cheap:
+ * the second delivery loses the race for the row and returns without spending a token.
+ *
+ * Claiming first also means a run that crashes is not retried automatically. That is the deliberate
+ * side: an agent turn has side effects, and replaying one silently is worse than leaving a `failed`
+ * row for an operator to see.
+ */
+const _channel_inbound_message = systemTable(
+	'channel_inbound_message',
+	{
+		channel_key: text().notNull(),
+		conversation_id: uuid()
+			.references(() => _channel_conversation.norbital_id, { onDelete: 'cascade' })
+			.notNull(),
+		external_conversation_id: text().notNull(),
+		external_message_id: text().notNull(),
+		receipt_key: text().notNull().unique(),
+		/** Transport-native sender id. The person behind it may have no user row at all. */
+		sender_external_id: text(),
+		sender_display_name: text(),
+		/** `received`, `answered`, or `failed`. */
+		status: text().notNull().default('received'),
+		error: text(),
+		chat_message_id: uuid().references(() => _chat_message.norbital_id, { onDelete: 'set null' }),
+		answered_at: timestamp({ withTimezone: true })
+	},
+	{
+		description: 'Channel inbound messages',
+		record_label: 'external_message_id',
+		system: true
+	}
+);
+
 const _invitation = systemTable(
 	'invitation',
 	{
@@ -503,6 +581,8 @@ export const requestor = _requestor;
 export const chat_session = _chat_session;
 export const chat_turn = _chat_turn;
 export const chat_message = _chat_message;
+export const channel_conversation = _channel_conversation;
+export const channel_inbound_message = _channel_inbound_message;
 export const invitation = _invitation;
 export const host_event_outbox = _host_event_outbox;
 export const automation_run = _automation_run;
@@ -550,7 +630,9 @@ export const systemTables = {
 	team_members: { table: team_members },
 	chat_session: { table: chat_session },
 	chat_turn: { table: chat_turn },
-	chat_message: { table: chat_message }
+	chat_message: { table: chat_message },
+	channel_conversation: { table: channel_conversation },
+	channel_inbound_message: { table: channel_inbound_message }
 } satisfies Record<SystemCollectionName, { table: PgTable }>;
 
 export const platformRelations = defineRelations(platformTables, (r) => ({

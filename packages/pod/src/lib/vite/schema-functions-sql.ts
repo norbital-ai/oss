@@ -502,7 +502,10 @@ export const SCHEMA_POST_DDL_SQL = dedent`
 	            '__drizzle_migrations', 'sync_outbox', 'approval_request', 'requestor',
 	            'automation_run', 'chat_session', 'chat_turn', 'chat_message', 'user', 'team', 'policy', 'integration_outbox',
 	            'notification_outbox', 'notification', 'document_asset', 'team_members',
-	            'invitation', 'host_event_outbox'
+	            'invitation', 'host_event_outbox',
+	            -- Channel state is claimed with ON CONFLICT DO NOTHING, which is the deduplication
+	            -- itself and cannot be expressed through collection_ops.
+	            'channel_conversation', 'channel_inbound_message'
           )
           AND EXISTS (
             SELECT 1

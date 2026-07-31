@@ -32,6 +32,9 @@ export {
 	satisfiedFacilities
 } from './types.js';
 export type {
+	ChannelInboundMessage,
+	ChannelInboundResult,
+	HostChannelListener,
 	HostAiBinding,
 	HostAppPlugin,
 	HostDbAdapter,
@@ -89,6 +92,18 @@ export {
 	type NotificationProvider
 } from './facilities.js';
 
+/**
+ * The one built-in transport: Telegram, both halves.
+ *
+ * `transport` goes into `messagingProviders` and carries replies out; `listen` goes into `channels`
+ * and brings messages in. Telegram is here rather than left to every host because it is the only
+ * wire cheap enough to build in — long polling means no public endpoint, no webhook secret, and no
+ * signature model. WhatsApp stays host-supplied: it needs a socket, `node:fs` auth state, and a
+ * pairing flow, none of which belong in a package a scale-to-zero tenant runs behind.
+ */
+export { telegramBot, telegramInboundMessage } from './telegram.js';
+export type { TelegramBotOptions } from './telegram.js';
+
 // Queue. Pod ships no durable implementation: a real queue is the host's to choose, and the
 // `intervalQueue` below is explicitly the development one.
 export { intervalQueue } from './interval-queue.js';
@@ -117,6 +132,20 @@ export type {
 	PolicyReconcileClient,
 	PolicyReconcileResult
 } from '../server/bootstrap/policy_reconcile.server.js';
+
+/**
+ * Give every declared channel the workspace user its agent answers as.
+ *
+ * Runs at the same migrate seam as `reconcileDeclaredPolicies` and immediately after it, because the
+ * principal's team points at a declared policy. A host that skips it leaves inbound channel messages
+ * failing with "channel has no principal" — nothing else creates those rows.
+ */
+export {
+	reconcileDeclaredChannels,
+	channelPrincipalEmail,
+	channelPrincipalTeamName
+} from '../server/bootstrap/channel_reconcile.server.js';
+export type { ChannelReconcileResult } from '../server/bootstrap/channel_reconcile.server.js';
 
 export { workspaceJobs } from '../bin/invocation/jobs.js';
 

@@ -27,6 +27,8 @@ import {
 	isIdentityDescriptor,
 	isVerifiedSubject,
 	satisfiedFacilities,
+	type ChannelInboundMessage,
+	type ChannelInboundResult,
 	type HostAppPlugin,
 	type HostIdentity,
 	type HostIdentityProvider,
@@ -42,6 +44,7 @@ import {
 	reconcileDeclaredPolicies,
 	type PolicyReconcileClient
 } from '../../server/bootstrap/policy_reconcile.server.js';
+import { reconcileDeclaredChannels } from '../../server/bootstrap/channel_reconcile.server.js';
 
 const STANDALONE_BUILD_DIRECTORY = path.join('.norbital', 'build');
 const REQUIRED_ENVIRONMENT = [
@@ -283,6 +286,18 @@ export async function migrateStandalone(
 		if (reconciled.created + reconciled.updated > 0) {
 			console.log(
 				`[pod] policies reconciled (${reconciled.created} created, ${reconciled.updated} updated).`
+			);
+		}
+		// After the policies, because a channel principal's team points at one: a channel declaring a
+		// policy this deploy also introduces must find it already there.
+		const channels = await reconcileDeclaredChannels(
+			// stupidity: boundary-cast -- node-postgres satisfies the narrow query contract reconciliation needs.
+			client as unknown as PolicyReconcileClient,
+			manifest
+		);
+		if (channels.created + channels.updated > 0) {
+			console.log(
+				`[pod] channel principals reconciled (${channels.created} created, ${channels.updated} updated).`
 			);
 		}
 		await bootstrapStandaloneAdmin(client, environment);
@@ -813,6 +828,37 @@ export async function startStandalone(
 		});
 	});
 
+	/**
+	 * Hand one already-authenticated inbound message to the workspace.
+	 *
+	 * It goes over the private control plane rather than `handlePodRequest` for the same reason job
+	 * dispatch does: nothing a tenant request can reach may run the agent as a channel principal.
+	 */
+	const deliverChannelInbound = async (
+		message: ChannelInboundMessage
+	): Promise<ChannelInboundResult> => {
+		const outcome = (await dispatch({
+			kind: 'channel',
+			action: 'inbound',
+			channel: message.channel,
+			conversationId: message.conversationId,
+			messageId: message.messageId,
+			text: message.text,
+			...(message.sender ? { sender: message.sender } : {})
+		})) as ChannelInboundResult;
+		return outcome;
+	};
+
+	const declaredChannels = Object.keys(manifest.channels ?? {});
+	if (declaredChannels.length > 0 && !config.channels) {
+		// Not fatal: a host may drive inbound from outside this process. But a workspace that declares a
+		// channel and never receives on it looks identical to a broken transport, so say it once.
+		console.warn(
+			`[pod] channels declared but this host supplies no inbound listener: ${declaredChannels.join(', ')}. ` +
+				'Replies can be sent; nothing will arrive. Set `channels` in pod.host.ts.'
+		);
+	}
+
 	// The job set is built even with no queue configured, so an invalid cron expression still fails
 	// at startup naming the automation rather than at the first tick that never comes.
 	let stopQueue: () => void = () => {};
@@ -831,6 +877,18 @@ export async function startStandalone(
 		throw cause;
 	}
 
+	let stopChannels: () => void = () => {};
+	if (config.channels) {
+		try {
+			stopChannels = await config.channels(deliverChannelInbound);
+		} catch (cause) {
+			stopQueue();
+			await closeDatabaseNotifications();
+			await binding.close();
+			throw cause;
+		}
+	}
+
 	try {
 		await listen(server, environment);
 		console.log(describeHost(config, identity, source));
@@ -845,6 +903,7 @@ export async function startStandalone(
 			process.once('SIGTERM', resolve);
 		});
 	} finally {
+		stopChannels();
 		stopQueue();
 		await closeDatabaseNotifications();
 		await new Promise<void>((resolve, reject) => {

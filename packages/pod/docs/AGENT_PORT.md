@@ -44,10 +44,13 @@ filter every query had to remember.
 
 ## Still owed
 
-**Channel delivery.** Authoring a channel does not yet route anything. Core's channel runtime is
-~2,500 lines across `channel-manager`, `channel-history`, `automation`, and `pending-channel-message`,
-all of it against Core's system DB. It needs the same rewrite the chat tables got, plus per-transport
-tables of its own.
+**Channel delivery — the thin path exists; the rest of Core's runtime does not.** A declared channel
+now routes: inbound → agent under the declared policy → reply over `messaging.sendVia`, on two tenant
+collections (`channel_conversation`, `channel_inbound_message`) and a host-driven inbound seam
+(`SelfHostedPodHostConfig.channels`). Telegram is built in over long polling; WhatsApp is
+host-supplied. What Core has and this does not: the provider-history archive and its media pipeline,
+external-sender-to-user linking with the pending-message hold, attachments, inbound batching, session
+commands, and group semantics. See B3 in [CORE_REFACTOR.md](./CORE_REFACTOR.md) for the full list.
 
 **The rest of the agent UI.** Core has roughly 40 components carrying streaming, subagent trees, todo
 panels, and file upload. They depend on `@durable-streams` and `@tanstack/ai`; the panel here is a

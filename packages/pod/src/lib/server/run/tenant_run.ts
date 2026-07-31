@@ -48,6 +48,10 @@ import { runTenantOutbox } from '$lib/server/integrations/tenant-outbox.server.j
 import { runNotificationOutbox } from '$lib/server/notifications/notification-outbox.server.js';
 import { pumpRegisteredAutomations } from './automation-dispatch.server.js';
 import { runAgent } from '$lib/server/agent/agent-loop.server.js';
+import {
+	ChannelInboundSchema,
+	deliverChannelMessage
+} from '$lib/server/channels/channel-delivery.server.js';
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 
 const recordSchema = z.record(z.string(), z.unknown());
@@ -189,6 +193,10 @@ export const runtimeRunRequestSchema = z.union([
 		kind: z.literal('automation-events'),
 		limit: z.number().int().min(1).max(1000).optional()
 	}),
+	// A channel message the host already authenticated on its own wire. Deliberately reachable only
+	// here: Pod holds no transport credential, so it cannot verify a webhook signature, and a public
+	// inbound route would be a way to make the agent answer as anyone.
+	ChannelInboundSchema,
 	z.object({ kind: z.literal('getManifest') }),
 	// Identity work the host cannot do for itself: it holds the credential, Pod holds the directory.
 	z.object({
@@ -557,6 +565,8 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 			return runNotificationOutbox(request);
 		case 'automation-events':
 			return pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
+		case 'channel':
+			return deliverChannelMessage(request);
 		case 'getManifest':
 			return getTenantManifest();
 		case 'identity': {

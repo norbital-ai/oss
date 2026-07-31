@@ -203,3 +203,17 @@ names its `transport` in source, so it is knowable before anything is served —
 prevents is silence rather than an error: a wrong name means the channel simply never carries
 anything, noticed only when somebody expected a reply. A workspace naming a transport its host does
 not supply refuses to boot, naming the channel and listing the transports that are available.
+
+Delivery has two halves and they are not symmetric. The **reply** leaves through the `messaging`
+facility (`sendVia`), so it needs nothing from the workspace beyond the transport name. The **inbound**
+half is host-process code — `channels` in `pod.host.ts`, a function handed `deliver` that returns a
+stop function, exactly like `queue`. Pod serves no inbound HTTP route for channels on purpose:
+proving a message really came from Telegram means checking Telegram's secret, and the credential
+belongs to whoever holds the wire open, which is never the tenant. `telegramBot()` supplies both
+halves for Telegram over long polling; a host declaring a channel and supplying no listener is warned
+at startup, because a channel that can only speak looks exactly like a broken one.
+
+The channel's `policy` is what the agent answers under. `pod migrate` gives each declared channel a
+`kind='agent'` user in a team holding that policy, and delivery runs as that user — so the sender,
+who may have no user row at all, never borrows anyone's permissions, and the agent's reads are
+narrowed by the same guard a signed-in person's are.

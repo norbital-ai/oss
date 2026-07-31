@@ -372,8 +372,41 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
       that channel is, and changing source to suit the weakest host would have made the declaration a
       lie. The generosity is confined to the Core development emulation; `pod start` checks against a
       real `pod.host.ts`.
-- [ ] **B3.** Port channel delivery (~2,500 lines: `channel-manager`, `channel-history`, `automation`,
-      `pending-channel-message`) onto tenant collections. Telegram built in; WhatsApp host-supplied.
+- [x] **B3. Done for one wire, end to end. Deliberately much smaller than Core's ~2,500 lines.** A
+      declared channel now delivers: inbound message → agent turn under the declared policy → reply
+      back over the same transport.
+      **Two tenant collections**, registered in all four places: `channel_conversation` binds
+      `<channel>:<external conversation>` to a `chat_session` (unique on `binding_key`, because a
+      composite unique index is not expressible through `systemTable`), and
+      `channel_inbound_message` is the deduplication ledger, claimed with `ON CONFLICT DO NOTHING`
+      **before** the model is called, so a redelivery costs one failed insert rather than a second
+      agent run, a second bill, and a second answer. `organization_id` is dropped throughout.
+      **Inbound is host-driven, not a route.** `SelfHostedPodHostConfig.channels` is a
+      `HostChannelListener`, host-process code exactly like `HostQueue`: it is handed a `deliver`
+      function and returns a stop function. Pod serves **no** public inbound endpoint for channels —
+      verifying a webhook means holding the transport's secret, the credential belongs to whoever
+      holds the wire, and a tenant holds none. Delivery reaches the runtime over the private
+      host-command plane (`{ kind: 'channel', action: 'inbound' }`), which `handlePodRequest` cannot
+      reach, so no tenant request can make the agent answer as a channel.
+      **The policy is the point, and it is enforced.** `reconcileDeclaredChannels` (exported from
+      `@norbital-ai/pod/host`, run beside `reconcileDeclaredPolicies` at migrate) gives each channel a
+      `kind='agent'` user in a team holding the declared policy. Delivery re-enters the workspace
+      under that principal through the ordinary `resolveRequestorBaseScope`, so a channel gets the
+      same enforcement a signed-in user gets — proven by an agent tool call being refused on a
+      collection the policy does not grant.
+      **Outbound** is `messaging.sendVia(transport, message)` from inside the runtime.
+      **Telegram is built in**, both halves: `telegramBot()` returns a `MessagingTransport` and a
+      `HostChannelListener`. It long-polls `getUpdates` rather than taking a webhook — an outbound
+      authenticated call exposes nothing and needs no public URL, which is why it was cheap enough to
+      build in at all. The offset is not persisted: Telegram redelivers what it was not acknowledged
+      for, and the inbound ledger recognises the replay. WhatsApp stays host-supplied.
+      **Not ported, and not pretended:** no `channel_message_archive` / `channel_history_sync` (the
+      provider-history sync and its media pipeline), no `channel_contact` (linking an external sender
+      to a workspace user, and the pending-message hold that goes with it), no attachments, no
+      inbound batching or session commands, no group-vs-DM distinction, no streaming. Transcript
+      replay is a fixed 40-message window trimmed to start at a `user` message, not a summarising
+      compactor. A failed turn leaves a `failed` receipt and is **not** retried — an agent turn has
+      side effects, and replaying one silently is worse than a row somebody has to look at.
 
 ### C. Core absorbs the breaking changes
 

@@ -200,6 +200,28 @@ interface PlatformSystemRows {
 		readonly notification_category: string | null;
 		readonly read_at: string | null;
 	};
+	readonly channel_conversation: SystemRecordFields & {
+		readonly channel_key: string;
+		readonly transport: string;
+		readonly external_conversation_id: string;
+		readonly binding_key: string;
+		readonly chat_id: string;
+		readonly last_inbound_at: string | null;
+		readonly last_outbound_at: string | null;
+	};
+	readonly channel_inbound_message: SystemRecordFields & {
+		readonly channel_key: string;
+		readonly conversation_id: string;
+		readonly external_conversation_id: string;
+		readonly external_message_id: string;
+		readonly receipt_key: string;
+		readonly sender_external_id: string | null;
+		readonly sender_display_name: string | null;
+		readonly status: string;
+		readonly error: string | null;
+		readonly chat_message_id: string | null;
+		readonly answered_at: string | null;
+	};
 	readonly document_asset: SystemRecordFields & {
 		readonly owner_user_id: string;
 		readonly file_name: string;
@@ -222,6 +244,8 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'chat_session',
 	'chat_turn',
 	'chat_message',
+	'channel_conversation',
+	'channel_inbound_message',
 	'user',
 	'team',
 	'policy',
@@ -340,6 +364,36 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'source_conversation_id', kind: 'text', nullable: true },
 			{ name: 'source_message_id', kind: 'text', nullable: true },
 			{ name: 'source_deleted_at', kind: 'timestamptz', nullable: true }
+		]
+	},
+	channel_conversation: {
+		name: 'channel_conversation',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'channel_key', kind: 'text', nullable: false },
+			{ name: 'transport', kind: 'text', nullable: false },
+			{ name: 'external_conversation_id', kind: 'text', nullable: false },
+			{ name: 'binding_key', kind: 'text', nullable: false },
+			{ name: 'chat_id', kind: 'uuid', nullable: false },
+			{ name: 'last_inbound_at', kind: 'timestamptz', nullable: true },
+			{ name: 'last_outbound_at', kind: 'timestamptz', nullable: true }
+		]
+	},
+	channel_inbound_message: {
+		name: 'channel_inbound_message',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'channel_key', kind: 'text', nullable: false },
+			{ name: 'conversation_id', kind: 'uuid', nullable: false },
+			{ name: 'external_conversation_id', kind: 'text', nullable: false },
+			{ name: 'external_message_id', kind: 'text', nullable: false },
+			{ name: 'receipt_key', kind: 'text', nullable: false },
+			{ name: 'sender_external_id', kind: 'text', nullable: true },
+			{ name: 'sender_display_name', kind: 'text', nullable: true },
+			{ name: 'status', kind: 'text', nullable: false },
+			{ name: 'error', kind: 'text', nullable: true },
+			{ name: 'chat_message_id', kind: 'uuid', nullable: true },
+			{ name: 'answered_at', kind: 'timestamptz', nullable: true }
 		]
 	},
 	invitation: {

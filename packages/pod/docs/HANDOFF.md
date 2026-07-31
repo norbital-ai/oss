@@ -58,8 +58,11 @@ custom-type schemas.
    [CORE_REFACTOR.md](./CORE_REFACTOR.md).
 2. **Integrations are unverified.** No round trip to a real external API has been run.
 3. **Notifications / automations / hooks** have unit and e2e coverage but no manual end-to-end pass.
-4. **Channels do not route.** Authoring exists; delivery does not. Needs the `messaging` facility
-   rename plus `transports`, which also blocks transport validation.
+4. **Channels route, thinly.** Inbound → agent under the declared policy → reply over the transport,
+   proven end to end against real Postgres. Inbound is host-driven (`channels` on the host config),
+   never a public route — Pod holds no transport credential and cannot verify a webhook. Telegram is
+   built in over long polling. Core's archive, contact-linking, attachments, and batching are not
+   ported; see B3 in [CORE_REFACTOR.md](./CORE_REFACTOR.md).
 5. **Agent UI is one panel**, not Core's ~40 components. Rendering is unverified — no jsdom or browser
    runner in this package.
 6. **Core is untouched.** Everything in `CORE_REFACTOR.md` is outstanding.
