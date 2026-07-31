@@ -47,7 +47,7 @@ describe('policy conditions must survive storage', () => {
 				client,
 				manifestWith({ $sql: '"owner_id" = ${requestor.norbital_id}' })
 			)
-		).resolves.toEqual({ created: 1, updated: 0 });
+		).resolves.toMatchObject({ created: 1, updated: 0 });
 	});
 
 	it('stores an ordinary field condition carrying a scope placeholder', async () => {
@@ -56,6 +56,6 @@ describe('policy conditions must survive storage', () => {
 				client,
 				manifestWith({ owner_id: { eq: '${requestor.norbital_id}' } })
 			)
-		).resolves.toEqual({ created: 1, updated: 0 });
+		).resolves.toMatchObject({ created: 1, updated: 0 });
 	});
 });

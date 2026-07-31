@@ -241,18 +241,63 @@ export const ManifestIntegrationSchema = z
 	.strict();
 
 /**
- * One access grant, exactly as the runtime policy engine already consumes it.
+ * One step of a declared approval flow, in the **authoring** shape — not the stored one.
  *
- * Deliberately the same shape the `policy.grants` column holds: the engine is unchanged, and the only
- * thing that moves is where the rows come from. Declaring them in source means a grant is reviewable
- * in a diff and a typo is a compile error, instead of a row somebody has to remember to seed.
+ * `approvers` holds `team.name`, and that is the whole point of the entry existing: the stored
+ * `teams_that_can_approve` holds `team.norbital_id`, which a declaration cannot know because a team is
+ * a runtime row. Reconciliation resolves the names against the tenant it is writing to.
+ *
+ * `.strict()` and the `min(1)`s are the checks the loose `Record<string, unknown>` had none of: a
+ * misspelled key used to reach jsonb intact and fail at request time with a 400 that named nothing,
+ * and an empty approver list used to store a step nobody could ever act on.
+ */
+type ManifestPolicyApprovalStepShape = {
+	id: string;
+	name: string;
+	approvers: string[];
+	description?: string | null;
+	where?: Record<string, unknown>;
+	steps?: ManifestPolicyApprovalStepShape[];
+};
+
+export const ManifestPolicyApprovalStepSchema: z.ZodType<ManifestPolicyApprovalStepShape> = z
+	.object({
+		id: nonEmpty,
+		name: nonEmpty,
+		approvers: z.array(nonEmpty).min(1),
+		description: z.string().nullable().optional(),
+		where: z.record(z.string(), z.unknown()).optional(),
+		// `z.lazy`, not a getter: `.strict()` reads the shape eagerly, and a getter referring to the
+		// const it is being assigned to throws at module load.
+		steps: z.lazy(() => z.array(ManifestPolicyApprovalStepSchema)).optional()
+	})
+	.strict();
+
+/** A declared approval flow, in the authoring shape. See {@link ManifestPolicyApprovalStepSchema}. */
+export const ManifestPolicyApprovalSchema = z
+	.object({
+		id: nonEmpty,
+		name: nonEmpty,
+		where: z.record(z.string(), z.unknown()).optional(),
+		supercededBy: z.array(nonEmpty).optional(),
+		steps: z.array(ManifestPolicyApprovalStepSchema).min(1)
+	})
+	.strict();
+
+/**
+ * One access grant, as declared — `where`/`approval`, which reconciliation translates into the
+ * `conditions`/`approval_config` the runtime policy engine consumes.
+ *
+ * `where` is deliberately the shape the `policy.grants` column holds, so the engine is unchanged and
+ * the only thing that moves is where the rows come from. `approval` is not: it names teams by name,
+ * and the ids only exist per tenant.
  */
 export const ManifestPolicyGrantSchema = z
 	.object({
 		collection: nonEmpty,
 		action: z.enum(['create', 'read', 'update', 'delete']),
 		where: z.record(z.string(), z.unknown()).optional(),
-		approval: z.record(z.string(), z.unknown()).nullable().optional()
+		approval: ManifestPolicyApprovalSchema.nullable().optional()
 	})
 	.strict();
 
@@ -381,4 +426,8 @@ export type ManifestSecretRequirement = DeepReadonly<
 	z.infer<typeof ManifestSecretRequirementSchema>
 >;
 export type ManifestIntegration = DeepReadonly<z.infer<typeof ManifestIntegrationSchema>>;
+export type ManifestPolicyApproval = DeepReadonly<z.infer<typeof ManifestPolicyApprovalSchema>>;
+export type ManifestPolicyApprovalStep = DeepReadonly<
+	z.infer<typeof ManifestPolicyApprovalStepSchema>
+>;
 export type NorbitalManifest = DeepReadonly<z.infer<typeof NorbitalManifestSchema>>;

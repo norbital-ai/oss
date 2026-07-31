@@ -369,6 +369,22 @@ export async function seedStandalone(
 			log: (message) => console.log(message),
 			client: seedClient
 		});
+		// Reconcile again, because the seed is where teams come from.
+		//
+		// An approval names its approvers by `team.name`, and at `pod migrate` there is no team to
+		// resolve against — the gates land stored but without approvers. This is the first moment the
+		// teams exist, so binding them here is what closes that window rather than leaving it to the
+		// operator to remember a second migrate.
+		const reconciled = await reconcileDeclaredPolicies(
+			// stupidity: boundary-cast -- node-postgres satisfies the narrow query contract reconciliation needs.
+			client as unknown as PolicyReconcileClient,
+			await loadStandaloneManifest(root)
+		);
+		if (reconciled.created + reconciled.updated > 0) {
+			console.log(
+				`[pod] policies re-reconciled against seeded teams (${reconciled.updated} updated).`
+			);
+		}
 	});
 }
 

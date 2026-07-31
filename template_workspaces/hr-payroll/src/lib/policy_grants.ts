@@ -100,17 +100,22 @@ export const employeeReferenceGrants = (...actions: Action[]): readonly Grant[] 
 ];
 
 /**
- * Team ids the approval steps route to.
+ * Teams the approval steps route to, named by `team.name`.
  *
- * These are `team.norbital_id` values carried over from Core's seed verbatim. Teams are runtime rows
- * with no declarative counterpart, so nothing in this repository can check them and `pod start` —
- * which seeds no teams — leaves these flows unsatisfiable. Tracked as **A2a** in
- * `packages/pod/docs/CORE_REFACTOR.md`. Reissuing them is not an option: an approval step is resolved
- * by id, so a fresh one strands every request already in flight.
+ * These used to be `team.norbital_id` values carried over from Core's seed verbatim — private
+ * identifiers from one database, sitting in a public template, checked by nothing and unsatisfiable
+ * anywhere that seed had not run. A team is a runtime row, so its id cannot be declared; its name can.
+ * Reconciliation binds the name to this tenant's id and refuses a name with no team behind it.
+ *
+ * The config and step **ids** are still carried verbatim, and that is a different thing: an in-flight
+ * `approval_request` resolves against them, so a fresh one strands every request already raised.
  */
-const HQ_PAYROLL_HR_TEAM_ID = '019efa4d-0a10-7a01-8b01-000000000003';
-const HR_MANAGER_TEAM_ID = '019ef5bc-9b2d-715a-a6e5-d805af89ba1c';
-const L1_MANAGER_TEAM_ID = '019ef5bc-9b2e-739e-9ca3-41427346eafe';
+const HQ_PAYROLL_HR_TEAM = 'HQ Payroll HR';
+const HR_MANAGER_TEAM = 'HR Manager';
+const L1_MANAGER_TEAM = 'L1 Manager';
+
+/** The approval shape, taken from the grant that holds it so there is nothing to keep in step. */
+type Approval = NonNullable<Grant['approval']>;
 
 /**
  * The seed derived each step id from its config id by replacing the last character with `9`. Kept, so
@@ -121,81 +126,65 @@ function stepId(configId: string): string {
 }
 
 /** Attendance becomes a payroll source, so the direct manager sees it before it can become one. */
-export function timeEntryApproval(configId: string) {
+export function timeEntryApproval(configId: string): Approval {
 	return {
-		norbital_id: configId,
-		approval_name: 'Time entry approval',
-		supercede_teams: [],
-		conditions: {},
-		approval_step_nodes: [
+		id: configId,
+		name: 'Time entry approval',
+		steps: [
 			{
 				id: stepId(configId),
 				name: 'Direct manager review',
-				teams_that_can_approve: [L1_MANAGER_TEAM_ID],
+				approvers: [L1_MANAGER_TEAM],
 				description:
-					'The employee direct manager reviews attendance before it can become a payroll source.',
-				conditions: {},
-				nextSteps: []
+					'The employee direct manager reviews attendance before it can become a payroll source.'
 			}
 		]
 	};
 }
 
 /** Leave goes to the requester's direct manager. */
-export function leaveApproval(configId: string) {
+export function leaveApproval(configId: string): Approval {
 	return {
-		norbital_id: configId,
-		approval_name: 'Leave approval',
-		supercede_teams: [],
-		conditions: {},
-		approval_step_nodes: [
+		id: configId,
+		name: 'Leave approval',
+		steps: [
 			{
 				id: stepId(configId),
 				name: 'Direct manager review',
-				teams_that_can_approve: [L1_MANAGER_TEAM_ID],
-				description: 'The employee direct manager reviews the leave request.',
-				conditions: {},
-				nextSteps: []
+				approvers: [L1_MANAGER_TEAM],
+				description: 'The employee direct manager reviews the leave request.'
 			}
 		]
 	};
 }
 
 /** A claim is money, so it skips the line manager and goes straight to HQ Payroll HR. */
-export function claimApproval(configId: string) {
+export function claimApproval(configId: string): Approval {
 	return {
-		norbital_id: configId,
-		approval_name: 'Claim approval',
-		supercede_teams: [],
-		conditions: {},
-		approval_step_nodes: [
+		id: configId,
+		name: 'Claim approval',
+		steps: [
 			{
 				id: stepId(configId),
 				name: 'HQ Payroll HR review',
-				teams_that_can_approve: [HQ_PAYROLL_HR_TEAM_ID],
-				description: 'HQ Payroll HR performs the final claim review.',
-				conditions: {},
-				nextSteps: []
+				approvers: [HQ_PAYROLL_HR_TEAM],
+				description: 'HQ Payroll HR performs the final claim review.'
 			}
 		]
 	};
 }
 
 /** Opening a run commits every payslip under it, so an HR Manager reconciles it first. */
-export function payrollRunApproval(configId: string) {
+export function payrollRunApproval(configId: string): Approval {
 	return {
-		norbital_id: configId,
-		approval_name: 'Payroll run approval',
-		supercede_teams: [],
-		conditions: {},
-		approval_step_nodes: [
+		id: configId,
+		name: 'Payroll run approval',
+		steps: [
 			{
 				id: stepId(configId),
 				name: 'HR Manager review',
-				teams_that_can_approve: [HR_MANAGER_TEAM_ID],
-				description: 'An HR Manager reconciles the run before payslips become final.',
-				conditions: {},
-				nextSteps: []
+				approvers: [HR_MANAGER_TEAM],
+				description: 'An HR Manager reconciles the run before payslips become final.'
 			}
 		]
 	};

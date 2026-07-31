@@ -1,5 +1,8 @@
 import type { Policy } from './$types.js';
 
+/** The approval shape, taken from the grant that holds it so there is nothing to keep in step. */
+type Approval = NonNullable<Policy['grants'][number]['approval']>;
+
 /**
  * The contractor: their own profile, the jobs they were assigned, and nothing else.
  *
@@ -105,25 +108,24 @@ const ownEvidence = {
  * existing `approval_request` is resolved by scanning grants for a matching `norbital_id`, so a new id
  * would leave every in-flight and historical request unable to name the flow that produced it.
  *
- * `teams_that_can_approve` holds `team.norbital_id` values. Teams are runtime rows with no declarative
- * counterpart, so this is the one place a declaration has to name something it cannot check.
+ * The approver is named by `team.name`, not by `team.norbital_id`. A team is a runtime row, so its id
+ * exists per tenant and belongs to whichever database seeded it — hardcoding one here put a private
+ * identifier in a public template and made the flow unsatisfiable anywhere else, with nothing to say
+ * so. Reconciliation resolves the name against the tenant it is reconciling and refuses a name that
+ * has no team.
  */
-const controllerTeamId = '019f6f10-0002-7000-8000-000000000001';
+const controllerTeam = 'BCA Controllers';
 
-function variationApproval(configId: string, stepId: string) {
+function variationApproval(configId: string, stepId: string): Approval {
 	return {
-		norbital_id: configId,
-		approval_name: 'BCA variation approval',
-		supercede_teams: [],
-		conditions: {},
-		approval_step_nodes: [
+		id: configId,
+		name: 'BCA variation approval',
+		steps: [
 			{
 				id: stepId,
 				name: 'BCA controller review',
-				teams_that_can_approve: [controllerTeamId],
-				description: 'Controller verifies scope change and selected photo evidence.',
-				conditions: {},
-				nextSteps: []
+				approvers: [controllerTeam],
+				description: 'Controller verifies scope change and selected photo evidence.'
 			}
 		]
 	};

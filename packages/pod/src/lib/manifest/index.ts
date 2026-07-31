@@ -15,6 +15,7 @@ import type {
 	ManifestHandlerEntry,
 	ManifestHookEntry,
 	ManifestPipelineEntry,
+	ManifestPolicyApproval,
 	ManifestRelationship,
 	NorbitalManifest
 } from '@norbital-ai/platform-utils/manifest/types';
@@ -218,8 +219,10 @@ function buildHandlerEntries(
  * Policy definitions, flattened into the manifest so the runtime can reconcile `policy` rows from it.
  *
  * The authoring shape uses `where`/`approval`; the stored grant uses `conditions`/`approval_config`.
- * Translating here rather than in the engine keeps the runtime unchanged — the only thing that moved
- * is where the rows come from.
+ * Both translations happen at reconcile, which is also where `approval.approvers` — team *names* —
+ * become `teams_that_can_approve` ids, because that resolution needs the tenant database. The
+ * manifest therefore carries the authoring shape verbatim, and `ManifestPolicyApprovalSchema`
+ * validates it here rather than leaving a misspelled key to fail at request time.
  */
 function buildPolicyEntries(
 	policies: Record<string, unknown> | undefined
@@ -235,7 +238,7 @@ function buildPolicyEntries(
 				collection?: string;
 				action?: string;
 				where?: Record<string, unknown>;
-				approval?: Record<string, unknown> | null;
+				approval?: ManifestPolicyApproval | null;
 			}[];
 		};
 		out[key] = {

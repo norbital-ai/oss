@@ -48,6 +48,62 @@ export type PolicyWhere<Row extends Record<string, unknown>> = Omit<SchemaWhere<
 	readonly RAW?: never;
 };
 
+/**
+ * One step of an approval flow: who has to say yes before the mutation lands.
+ *
+ * `approvers` names **teams by `team.name`**, never by id. A team is a runtime row — it is created by
+ * a seed or by an operator, so a declaration cannot know its `norbital_id`, and the ids that used to
+ * be written here came out of one particular database's seed. Reconciliation resolves the names
+ * against the tenant it is reconciling; the same declaration therefore works on every tenant, and a
+ * name nobody can resolve is named in an error instead of landing as an ungated write.
+ *
+ * The list is a non-empty tuple on purpose. A step with no approvers is a step no one can act on,
+ * which does not read like a mistake in a diff but permanently wedges every write it gates.
+ */
+export type PolicyApprovalStep = {
+	/**
+	 * Stable identity for this step.
+	 *
+	 * An in-flight `approval_request` stores the step ids it is waiting on, so reissuing one strands
+	 * the request: it points at a step the config no longer has. Ids are carried, not regenerated.
+	 */
+	readonly id: string;
+	readonly name: string;
+	/** Teams that may act on this step, by `team.name`. Resolved to ids at reconcile. */
+	readonly approvers: readonly [string, ...string[]];
+	readonly description?: string | null;
+	/** Narrows when this step applies, against the mutation being gated. Omitted means always. */
+	readonly where?: Record<string, unknown>;
+	/** Steps that follow this one. Omitted means this step is the last. */
+	readonly steps?: readonly PolicyApprovalStep[];
+};
+
+/**
+ * An approval flow: the thing a gated grant routes a mutation through instead of applying it.
+ *
+ * Typed as a shape rather than `Record<string, unknown>` because the failure mode of the loose form
+ * is silent — a misspelled key was simply carried into jsonb, and the flow then failed at request
+ * time with a 400 that named nothing. Written out, a wrong key is a compile error in the policy file
+ * and a manifest validation error for anything that arrives from elsewhere.
+ */
+export type PolicyApproval = {
+	/**
+	 * Stable identity for this flow. Carried, not regenerated — see {@link PolicyApprovalStep.id};
+	 * `approval_request.approval_config_id` resolves against it.
+	 */
+	readonly id: string;
+	readonly name: string;
+	/** Narrows when this flow applies, against the mutation being gated. Omitted means always. */
+	readonly where?: Record<string, unknown>;
+	/** Teams that may close the flow outright, by `team.name`. Resolved to ids at reconcile. */
+	readonly supercededBy?: readonly string[];
+	/**
+	 * Non-empty on purpose: a flow with no steps resolves as already-approved, so the gate would be
+	 * declared and then not exist.
+	 */
+	readonly steps: readonly [PolicyApprovalStep, ...PolicyApprovalStep[]];
+};
+
 type PolicyGrantFor<S extends AnySchema, C extends PolicyCollection<S>> = {
 	readonly collection: C;
 	readonly action: PolicyAction;
@@ -55,8 +111,13 @@ type PolicyGrantFor<S extends AnySchema, C extends PolicyCollection<S>> = {
 	/**
 	 * Route matching mutations through an approval flow instead of applying them directly. Reads cannot
 	 * be gated, so this is only meaningful on `create`, `update`, and `delete`.
+	 *
+	 * Not typed away on `read`, because `PolicyGrant` is a union distributed over collections and a
+	 * second discriminant on `action` would stop a grant built by a helper (`{ collection, action }`
+	 * with `action` union-typed) from being assignable to any member. Reconciliation refuses it
+	 * instead, at the point where it would otherwise be silently dropped.
 	 */
-	readonly approval?: Record<string, unknown> | null;
+	readonly approval?: PolicyApproval | null;
 };
 
 /**

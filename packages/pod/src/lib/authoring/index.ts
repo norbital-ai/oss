@@ -68,7 +68,13 @@ export { defineAgentTool, type AgentToolDefinition } from './automations/agent-t
 export { defineChannel } from './channels/channels.js';
 export type { ChannelDefinition } from './channels/channels.js';
 export { definePolicy } from './policies/policies.js';
-export type { PolicyAction, PolicyDefinition, PolicyGrant } from './policies/policies.js';
+export type {
+	PolicyAction,
+	PolicyApproval,
+	PolicyApprovalStep,
+	PolicyDefinition,
+	PolicyGrant
+} from './policies/policies.js';
 export { defineCommandHandler, defineQueryHandler } from './automations/handlers.js';
 export type { TExportAction, TExportManifest, TFileAttachment } from './automations/pipelines.js';
 export type {
