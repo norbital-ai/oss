@@ -33,6 +33,28 @@
 		report: StitchReport | null;
 	} = $props();
 
+	/** One group per source, so the tag is stated once instead of on every row. */
+	const SOURCE_LABEL: Record<string, string> = {
+		default: 'Assumed by default',
+		cross_section: 'Read from the cross sections',
+		floor_plan: 'Read from the floor plan',
+		bathymetry: 'Read from the survey'
+	};
+	const assumptionGroups = $derived.by(() => {
+		type Assumption = NonNullable<typeof report>['assumptions'][number];
+		const groups = new Map<string, Assumption[]>();
+		for (const assumption of report?.assumptions ?? []) {
+			const list = groups.get(assumption.source) ?? [];
+			list.push(assumption);
+			groups.set(assumption.source, list);
+		}
+		return [...groups.entries()].map(([source, entries]) => ({
+			source,
+			label: SOURCE_LABEL[source] ?? source.replace('_', ' '),
+			entries
+		}));
+	});
+
 	const errors = $derived((report?.warnings ?? []).filter((entry) => entry.severity === 'error'));
 	const cautions = $derived(
 		(report?.warnings ?? []).filter((entry) => entry.severity === 'warning')
@@ -140,9 +162,6 @@
 						({report.assumptions.length} assumed · {report.warnings.length} flagged)
 					</span>
 				</h3>
-				<p class="text-xs text-muted-foreground">
-					Every value the documents did not state outright, and every place two documents disagree.
-				</p>
 			</div>
 
 			{#each [...errors, ...cautions, ...notices] as warning (warning.code + warning.message)}
@@ -158,23 +177,31 @@
 				</div>
 			{/each}
 
-			<div class="divide-y rounded-md border bg-card">
-				{#each report.assumptions as assumption (assumption.id)}
-					<details class="p-3">
-						<summary class="cursor-pointer text-sm font-medium">
-							{assumption.title}
-							<span class="ml-1 text-xs font-normal text-muted-foreground">
-								({assumption.source.replace('_', ' ')})
-							</span>
-						</summary>
-						<p class="mt-2 text-sm text-muted-foreground">{assumption.detail}</p>
-						<p class="mt-2 text-sm">
-							<span class="font-medium">If it is wrong:</span>
-							{assumption.effect}
-						</p>
-					</details>
-				{/each}
-			</div>
+			<!--
+				Grouped by where the assumption came from, one line each, with the
+				detail and the consequence on the icon. Fifteen accordions in a flat
+				list is a wall to scroll past, and every row repeated its own source
+				tag; the group heading carries that once.
+			-->
+			{#each assumptionGroups as group (group.source)}
+				<div>
+					<p class="mb-1 text-xs font-medium text-muted-foreground">
+						{group.label}
+						<span class="font-normal">({group.entries.length})</span>
+					</p>
+					<ul class="divide-y rounded-md border bg-card">
+						{#each group.entries as assumption (assumption.id)}
+							<li class="flex items-center gap-2 px-3 py-1.5 text-sm">
+								<span class="min-w-0 flex-1 truncate">{assumption.title}</span>
+								<InfoHint
+									label={`About: ${assumption.title}`}
+									text={`${assumption.detail} — If it is wrong: ${assumption.effect}`}
+								/>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/each}
 
 			{#if report.layerClassification && report.layerClassification.length > 0}
 				<details class="rounded-md border bg-card p-3">

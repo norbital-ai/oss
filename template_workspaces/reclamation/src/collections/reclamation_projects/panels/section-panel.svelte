@@ -2,6 +2,7 @@
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import InfoHint from './info-hint.svelte';
 	import { cn } from '@norbital-ai/ui/utils';
+	import { sampleSeabed } from '../../../lib/reclamation/math.js';
 	import type { ProfilePoint, StitchedModel } from '../../../lib/reclamation/types.js';
 
 	/**
@@ -50,23 +51,70 @@
 	};
 
 	/**
-	 * Points in file order, split into runs of one layer. A section sheet is a
-	 * sequence of levelled points along a chainage, so consecutive points sharing
-	 * a layer are one line; a change of layer starts another.
+	 * The design surface is one line, not a point per label.
+	 *
+	 * A section sheet levels the finished profile at every change of grade and
+	 * labels each of those points — toe, high water, crest, platform. They are
+	 * not separate objects: joined in chainage order they *are* the drawn
+	 * surface. Grouping by label instead left most layers holding a single point,
+	 * which is why the plot showed dots and almost no lines.
+	 *
+	 * Anything below grade — a key trench, a rock blanket invert — is its own
+	 * line, because it is a different surface at the same chainage.
 	 */
-	const runs = $derived(
-		points.reduce<{ layer: string; points: ProfilePoint[] }[]>((acc, point) => {
-			const last = acc.at(-1);
-			if (last && last.layer === point.layer) last.points.push(point);
-			else acc.push({ layer: point.layer, points: [point] });
-			return acc;
-		}, [])
+	const surfaceLine = $derived(
+		points
+			.filter((point) => {
+				const role = roleOf(point.layer);
+				return role === 'surface' || role === 'toe' || role === 'platform';
+			})
+			.slice()
+			.sort((a, b) => a.stationM - b.stationM)
 	);
+
+	const belowGradeLines = $derived.by(() => {
+		const byLayer = new Map<string, ProfilePoint[]>();
+		for (const point of points) {
+			const role = roleOf(point.layer);
+			if (role === 'surface' || role === 'toe' || role === 'platform') continue;
+			const list = byLayer.get(point.layer) ?? [];
+			list.push(point);
+			byLayer.set(point.layer, list);
+		}
+		return [...byLayer.entries()].map(([layer, list]) => ({
+			layer,
+			points: list.slice().sort((a, b) => a.stationM - b.stationM)
+		}));
+	});
+
+	/**
+	 * The existing bed along this cut, sampled from the survey.
+	 *
+	 * A section without the ground it sits on cannot be checked against the
+	 * drawing: the whole question is where the design meets the seabed. Sampled
+	 * along the plan line of this cut where the floor plan gives one.
+	 */
+	const bedLine = $derived.by(() => {
+		const cut = model.plan.sectionCuts?.find((entry) => entry.profileId === active);
+		if (!cut || cut.line.length < 2 || surfaceLine.length === 0) return [];
+		const [from, to] = [cut.line[0], cut.line[cut.line.length - 1]];
+		const minS = surfaceLine[0].stationM;
+		const maxS = surfaceLine[surfaceLine.length - 1].stationM;
+		const steps = 80;
+		const samples: { stationM: number; zCdM: number }[] = [];
+		for (let index = 0; index <= steps; index++) {
+			const t = index / steps;
+			const x = from[0] + (to[0] - from[0]) * t;
+			const y = from[1] + (to[1] - from[1]) * t;
+			samples.push({ stationM: minS + (maxS - minS) * t, zCdM: sampleSeabed(model.seabed, x, y) });
+		}
+		return samples;
+	});
 
 	const extent = $derived.by(() => {
 		if (points.length === 0) return null;
-		const stations = points.map((p) => p.stationM);
-		const levels = points.map((p) => p.zCdM);
+		const stations = [...points.map((p) => p.stationM), ...bedLine.map((p) => p.stationM)];
+		const levels = [...points.map((p) => p.zCdM), ...bedLine.map((p) => p.zCdM)];
 		const minS = Math.min(...stations);
 		const maxS = Math.max(...stations);
 		const minZ = Math.min(...levels, 0);
@@ -81,9 +129,9 @@
 		};
 	});
 
-	const W = 520;
-	const H = 260;
-	const PAD = { left: 42, right: 12, top: 12, bottom: 28 };
+	const W = 560;
+	const H = 340;
+	const PAD = { left: 46, right: 14, top: 14, bottom: 30 };
 
 	const sx = $derived((station: number): number =>
 		extent
@@ -221,30 +269,92 @@
 							{fmt(extent.maxS)} m
 						</text>
 
-						<!-- The drawn layers -->
-						{#each runs as run, index (index)}
-							{#if run.points.length > 1}
+						<!-- Existing bed, and the fill that sits on it -->
+						{#if bedLine.length > 1 && surfaceLine.length > 1}
+							<path
+								d={`M ${surfaceLine.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`).join(' L ')} L ${[
+									...bedLine
+								]
+									.reverse()
+									.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`)
+									.join(' L ')} Z`}
+								fill="currentColor"
+								class="text-amber-700/15"
+							/>
+						{/if}
+						{#if bedLine.length > 1}
+							<polyline
+								points={bedLine.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`).join(' ')}
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-dasharray="6 3"
+								class="text-stone-500"
+							/>
+							<text
+								x={sx(bedLine[0].stationM) + 4}
+								y={sy(bedLine[0].zCdM) - 5}
+								class="fill-stone-500 text-[9px]"
+							>
+								existing bed
+							</text>
+						{/if}
+
+						<!-- Below-grade lines: trenches and blanket inverts -->
+						{#each belowGradeLines as line (line.layer)}
+							{#if line.points.length > 1}
 								<polyline
-									points={run.points.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`).join(' ')}
+									points={line.points.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`).join(' ')}
 									fill="none"
-									stroke={ROLE_COLOR[roleOf(run.layer)] ?? ROLE_COLOR.unclassified}
-									stroke-width="2"
-									stroke-linejoin="round"
+									stroke={ROLE_COLOR[roleOf(line.layer)] ?? ROLE_COLOR.unclassified}
+									stroke-width="3"
 									stroke-linecap="round"
 								/>
 							{/if}
-							{#each run.points as point, pointIndex (pointIndex)}
+							{#each line.points as point, index (index)}
 								<circle
 									cx={sx(point.stationM)}
 									cy={sy(point.zCdM)}
-									r="2.4"
-									fill={ROLE_COLOR[roleOf(run.layer)] ?? ROLE_COLOR.unclassified}
+									r="3"
+									fill={ROLE_COLOR[roleOf(line.layer)] ?? ROLE_COLOR.unclassified}
 								>
-									<title>
-										{run.layer} · station {fmt(point.stationM)} m · {fmt(point.zCdM, 2)} m CD
-									</title>
+									<title>{line.layer} · {fmt(point.stationM)} m · {fmt(point.zCdM, 2)} m CD</title>
 								</circle>
 							{/each}
+						{/each}
+
+						<!-- The design surface: one continuous profile, as drawn -->
+						{#if surfaceLine.length > 1}
+							<polyline
+								points={surfaceLine.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`).join(' ')}
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2.6"
+								stroke-linejoin="round"
+								stroke-linecap="round"
+								class="text-foreground"
+							/>
+						{/if}
+						{#each surfaceLine as point, index (index)}
+							<circle
+								cx={sx(point.stationM)}
+								cy={sy(point.zCdM)}
+								r="3"
+								fill={ROLE_COLOR[roleOf(point.layer)] ?? ROLE_COLOR.unclassified}
+								stroke="currentColor"
+								stroke-width="1"
+								class="text-background"
+							>
+								<title>{point.layer} · {fmt(point.stationM)} m · {fmt(point.zCdM, 2)} m CD</title>
+							</circle>
+							<text
+								x={sx(point.stationM)}
+								y={sy(point.zCdM) - 8}
+								text-anchor="middle"
+								class="fill-muted-foreground text-[8px]"
+							>
+								{point.layer}
+							</text>
 						{/each}
 					</svg>
 					<figcaption class="mt-1 text-tiny text-muted-foreground tabular-nums">
