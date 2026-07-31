@@ -3,6 +3,7 @@
 	import InfoHint from './info-hint.svelte';
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { SiteLayer, SiteViewerStats } from '../../../lib/site-viewer/site_viewer.types.js';
+	import { SURFACE_NOTE } from '../../../lib/site-viewer/surface-notes.js';
 	import type { ReconstructionMetrics, StitchReport } from '../../../lib/reclamation/types.js';
 
 	/**
@@ -70,6 +71,11 @@
 							<span class="size-3 shrink-0 rounded-[3px] border" style={`background:${layer.color}`}
 							></span>
 							<span class="min-w-0 flex-1 truncate">{layer.label}</span>
+							{#if SURFACE_NOTE[layer.id]}
+								<span class="shrink-0" title={SURFACE_NOTE[layer.id]}>
+									<InfoHint label={`About ${layer.label}`} text={SURFACE_NOTE[layer.id]} />
+								</span>
+							{/if}
 							<span class="shrink-0 text-xs tabular-nums text-muted-foreground">
 								{number(layer.triangles / 1000, 1)}k tri
 							</span>
