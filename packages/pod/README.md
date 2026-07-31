@@ -80,6 +80,10 @@ workspace/
 │   │       └── +<lower_snake_case>.svelte
 │   ├── automation/
 │   │   └── +<lower_snake_case>.ts
+│   ├── policies/
+│   │   └── +<lower_snake_case>.policy.ts       a role, as code
+│   ├── channels/
+│   │   └── +<lower_snake_case>.channel.ts      a conversational entry point
 │   ├── remotes/
 │   │   └── +<lower_snake_case>.ts
 │   ├── **/+<lower_snake_case>.tool.ts          agent tool, anywhere under src
@@ -102,6 +106,8 @@ Names come from paths. There is no registry file to maintain:
 - `src/collections/work_orders/+model.ts` defines collection `work_orders`;
 - `src/apps/operations/+dispatch_board.svelte` defines app `dispatch_board`;
 - `src/automation/+daily_digest.ts` defines automation `daily_digest`;
+- `src/policies/+sales_rep.policy.ts` defines policy `sales_rep`;
+- `src/channels/+sales_desk.channel.ts` defines channel `sales_desk`;
 - `src/remotes/+dashboard_summary.ts` defines remote `dashboard_summary`;
 - `src/lib/tools/+find_supplier.tool.ts` defines agent tool `find_supplier`.
 
@@ -324,6 +330,60 @@ with `Bound` and `Scroll`.
 The compiler rejects private virtual imports and framework internals from authored application code.
 Applications use `$pod/client` and public packages only.
 
+## Authoring policies
+
+A policy is a role, written as code. One file per role in `src/policies/`, flat, named
+`+<lower_snake_case>.policy.ts`. The filename is the identity — there is no registry and no id to
+keep in sync.
+
+```ts
+// src/policies/+sales_rep.policy.ts
+import type { Policy } from './$types.js';
+
+export default {
+	name: 'Sales representative',
+	description: 'Owns their own quotes; reads shared accounts and product data.',
+	apps: ['crm_sales'],
+	grants: [
+		{ collection: 'accounts', action: 'read' },
+		{ collection: 'products', action: 'read' },
+
+		// Scoped to the requestor. `${requestor.norbital_id}` binds at evaluation time against the
+		// request scope, so this reads *their* quotes, not every quote that has an owner.
+		{
+			collection: 'quotes',
+			action: 'read',
+			where: { owner_id: { eq: '${requestor.norbital_id}' } }
+		},
+		{ collection: 'quotes', action: 'create' },
+		{
+			collection: 'quotes',
+			action: 'update',
+			where: { owner_id: { eq: '${requestor.norbital_id}' } }
+		}
+	]
+} satisfies Policy;
+```
+
+Everything cross-referenced here is checked at compile time. `collection` is a `CollectionName`, so a
+renamed collection breaks this file rather than silently granting nothing; `apps` are `AppName`s; and
+`where` is typed against that collection's row, so renaming `owner_id` is a type error rather than a
+filter that matches nothing.
+
+`where` accepts the query operators, minus one: **`RAW` is not in the type.** A raw fragment is a
+function, and a policy crosses into storage as JSON — the function is dropped, the conditions arrive
+empty, and an empty condition set reads as _unconditional_. A grant that was meant to narrow would
+have widened to everything. `PolicyWhere` removes `RAW` outright so the mistake cannot be written.
+
+Policies reconcile into `policy` rows when you migrate, so a fresh database has them and a change to
+a role shows up in a diff. A team points at one through `team.policy_id`. Assigning a person to a
+team is runtime administration, not authoring — that is the workspace settings surface, not this
+file.
+
+Two more things follow from a role being a file rather than seed data. Admin short-circuits every
+grant, so a policy describes what a non-admin may do. And the generated `PolicyName` union is what a
+channel references, which is why a channel cannot name a role that does not exist.
+
 ## The generated client
 
 The compiler creates `$pod/client` with exact collection, relation, mutation-input, remote, and app
@@ -512,6 +572,69 @@ Pod owns the agent loop, input validation, collection allowlists, read/write mod
 tool execution. The host's AI binding only supplies model chat. Each completed step is appended to
 `agent_run_step` and reaches clients through ordinary sync; reconnect and catch-up therefore use the
 same durable path as every other record. Agent transcripts are policy-scoped and append-only.
+
+## Authoring channels
+
+A channel is a conversational way in: someone messages a transport, the agent answers under a named
+policy, and the reply goes back out. One file per entry point in `src/channels/`, named
+`+<lower_snake_case>.channel.ts`.
+
+```ts
+// src/channels/+sales_desk.channel.ts
+import type { Channel } from './$types.js';
+
+export default {
+	transport: 'telegram',
+	policy: 'sales_rep',
+	description: 'Customer-facing sales enquiries',
+	task: 'Answer questions about quotes and accounts for this customer.'
+} satisfies Channel;
+```
+
+`policy` is a `PolicyName`, and that is the whole point of the design: a channel runs the agent
+**under a declared role**, so a stranger messaging the bot reaches exactly what a sales rep may
+reach and nothing else. A channel is not a way around the permission model, and naming a role that
+does not exist does not compile.
+
+What the workspace does **not** declare is the credential:
+
+```
+message ─▶ [ host process ]  ── proves the wire (bot secret) ──▶ deliver()
+                 ▲                                                  │
+         botToken lives here                                        ▼
+         (pod.host.ts, never                              [ tenant workspace ]
+          the workspace bundle)                      agent runs under `policy`
+                 ▲                                                  │
+                 └──────────── messaging.sendVia ◀── reply ─────────┘
+```
+
+Pod serves **no inbound HTTP route** for channels, deliberately. Proving a message really came from
+Telegram means checking Telegram's secret, and that credential belongs to whoever holds the wire —
+never the tenant, and under Core never even a process with a socket. So the host authenticates the
+wire its own way and calls `deliver`; the workspace is handed something already proven, and there is
+no public endpoint that could be persuaded to speak for a stranger.
+
+The host side is one line, and it is where the token goes:
+
+```ts
+// pod.host.ts
+import { definePodHost, messagingProviders, telegramBot } from '@norbital-ai/pod/host';
+
+// Both halves of one wire: `transport` carries replies out, `listen` brings messages in.
+const desk = telegramBot({ botToken: process.env.TELEGRAM_BOT_TOKEN!, channel: 'sales_desk' });
+
+export default definePodHost({
+	mode: 'self-hosted',
+	db: postgresDb({ url: process.env.DATABASE_URL! }),
+	// `identity` and `publicUrl` are required too — see Identity below.
+	messaging: messagingProviders({ transports: [desk.transport] }),
+	channels: desk.listen
+});
+```
+
+Telegram is built in over long polling, which is why it needs no public URL. A host that drives
+channels another way — Core, through its own control plane — simply does not supply `channels`. The
+workspace file above is unchanged either way.
 
 ## Seed data
 
