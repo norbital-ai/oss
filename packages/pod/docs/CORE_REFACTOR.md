@@ -511,12 +511,12 @@ Every item below is already listed above with its rationale.
       _Rejected:_ a Core-side per-user tier table — two systems owning overlapping truth is the drift
       that produced the seed-key and ops-guard-list defects this session.
       **This unblocks deleting `member`, the last thing holding the better-auth instance in place.**
-- [ ] **C5.** Supply `hostPlugins` through the host contract. **Correction — and a live defect:**
-      `CORE_HOST_PLUGINS` already exists and already ships to pods **in a request header**
-      (`ingress.ts`), which is exactly the vector Pod's `HostAppPlugin` refuses: a settable header lets
-      anyone put an arbitrary link, under Core's label, into a tenant's sidebar. Shapes differ too
-      (`route`/`requiredCapability` vs `entry`/`adminOnly`). Move it off the header.
-- [ ] **C6.** Re-expose sandbox tools as `HostAgentTool`; delete `lib/agent/**` the port replaced.
+- [x] **C5.** Supply `hostPlugins` through the host contract. **Resolved:**
+      `CORE_HOST_PLUGINS` previously shipped to pods in a request header, letting a caller inject an
+      arbitrary link under Core's label. It now crosses only the trusted `configure` frame using
+      Pod's `entry`/`adminOnly` shape. Host entries use full-document navigation so `/agent` receives
+      the normal Pod bootstrap and replica setup.
+- [x] **C6.** Re-expose sandbox tools as `HostAgentTool`; delete `lib/agent/**` the port replaced.
       **This item was wrongly declared blocked, and the retraction matters more than the item.** A
       later audit concluded Core's agent code was "0% deletable" because the loop served the builder
       agent, which "stays in Core by design". That is not the design. Core does not own the builder
@@ -531,7 +531,10 @@ Every item below is already listed above with its rationale.
       tenant accepts traffic, next to `assertChannelTransportsAreSupported`. Skipping that check is
       not cosmetic: it is what stops a Core tool from silently shadowing a workspace tool of the same
       name. A workspace still has to opt in per agent (`spec.hostTools`), so nothing is exposed by
-      Core registering a tool.
+      Core registering a tool. Core now keeps only the tool implementations, one-turn inference, and
+      encrypted transport credentials/listeners. Pod owns `/agent`, the loop, all runs and messages,
+      and all transcript persistence. The duplicate Core UI/routes/schema/provider archives and the
+      Durable Streams service are deleted.
 - [ ] **C7.** Replace Core's inline Google maps with Pod's `googleMaps()`.
 - [ ] **C8.** Rebuild `(ops)/ops` on `cookieSession` + `emailOtpIdentity` with its own `operator`
       table. There is a **second** copy of the ops email allowlist in `ingress.ts` that must go too.

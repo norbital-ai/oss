@@ -25,10 +25,10 @@ messages, so they share `chat_session`; `automation_run_id` marks which is which
 `agent_run_step` was a bespoke decomposition (`kind`/`role`/`content`/`tool_*`) rebuilt on read, so the
 stored form and the in-memory form could disagree. Storing the message means replay is a read.
 
-**The tenant database, not a system one.** Core keeps agent state in a system database shared across
-tenants. Pod has none, so this was a rewrite rather than a copy — and it is why `organization_id`
-disappeared: a pod database _is_ one tenant, so that column would be a constant on every row and a
-filter every query had to remember.
+**The tenant database, not a system one.** The retired Core implementation kept agent state in its
+system database. The port moved that state into Pod rather than copying the old shape — and it is why
+`organization_id` disappeared: a pod database _is_ one tenant, so that column would be a constant on
+every row and a filter every query had to remember. Core now stores no agent transcript.
 
 ## What deliberately stayed in Core
 
@@ -37,7 +37,7 @@ filter every query had to remember.
 | `$lib/tenant_workspace/sandbox/*` | a sandbox is host infrastructure; re-expose as `HostAgentTool` |
 | `$lib/workspace_studio/*`         | a host surface, reached as a host plugin                       |
 | `$lib/billing/*`                  | Core owns the commercial relationship                          |
-| `$lib/live_object/*`              | Core-plane realtime for Core's own system data                 |
+| `$lib/live_object/*`              | Core-plane realtime for Core's own non-agent system data       |
 
 `tools/coding.tool.ts` and `tools/deployment.tool.ts` follow the sandbox and stay in Core. They reach
 a tenant's agent through the seam below.

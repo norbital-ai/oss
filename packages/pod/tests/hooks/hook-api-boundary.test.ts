@@ -23,11 +23,12 @@ const hookApiSource = fileURLToPath(
 	new URL('../../src/lib/server/collection/hook-api.server.ts', import.meta.url)
 );
 
-/** A stand-in carrying one legitimate field plus capabilities that must not survive narrowing. */
+/** A stand-in carrying the legitimate fields plus capabilities that must not survive narrowing. */
 function capabilityRichApi() {
 	return {
 		db: { marker: 'db' },
 		readFileAsset: () => 'asset',
+		sendNotification: () => Promise.resolve({ notificationId: 'notification_1' }),
 		// Everything below exists on the real builtin API or its elevated variant.
 		fetch: () => 'network',
 		requireRuntimeFacility: () => 'facility',
@@ -37,18 +38,18 @@ function capabilityRichApi() {
 }
 
 describe('hook API boundary', () => {
-	it('narrows the before-hook API to exactly db and readFileAsset', () => {
+	it('narrows the before-hook API to exactly the declared hook capabilities', () => {
 		const restricted = restrictBeforeHookApi(
 			capabilityRichApi() as unknown as Parameters<typeof restrictBeforeHookApi>[0]
 		);
-		expect(Object.keys(restricted).sort()).toEqual(['db', 'readFileAsset']);
+		expect(Object.keys(restricted).sort()).toEqual(['db', 'readFileAsset', 'sendNotification']);
 	});
 
-	it('narrows the after-hook API to exactly db and readFileAsset', () => {
+	it('narrows the after-hook API to exactly the declared hook capabilities', () => {
 		const restricted = restrictAfterHookApi(
 			capabilityRichApi() as unknown as Parameters<typeof restrictAfterHookApi>[0]
 		);
-		expect(Object.keys(restricted).sort()).toEqual(['db', 'readFileAsset']);
+		expect(Object.keys(restricted).sort()).toEqual(['db', 'readFileAsset', 'sendNotification']);
 	});
 
 	it('carries the real db through rather than a copy, so behaviours are not silently dropped', () => {

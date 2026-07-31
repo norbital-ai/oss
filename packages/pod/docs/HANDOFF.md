@@ -27,7 +27,7 @@ swept into a commit. Both were caught and reverted, both were avoidable.
   bindings cross that boundary by structured clone, so **they cannot carry callbacks** — that is why
   `integrationDelivery` and `HostQueue` live on the host config rather than in the bindings.
 
-## What landed in OSS (80 commits)
+## What landed in OSS (109 commits)
 
 **Security.** OTP verification was unbounded — `/login/code` never rate-limited while `POST /login`
 handed the challenge cookie to whoever asked, for any address. Now five guesses, keyed by the challenge
@@ -68,13 +68,14 @@ custom-type schemas.
    still missing around webhooks is narrower than it was: signature schemes over anything but the raw
    body, replay windows, `events` narrowing, and any pruning of the inbound ledger. See D1b in
    [CORE_REFACTOR.md](./CORE_REFACTOR.md).
-3. **Notifications are proven; automations and hooks are not.** `notification-e2e` drives the whole
+3. **Notifications, automations, and mutation hooks are proven.** `notification-e2e` drives the whole
    chain against real Postgres — a hook calls `sendNotification`, the in-app row and the outbox row
    land in one transaction, `workspaceJobs`' drain hands the delivery to the host's `messaging`
    binding over the private control plane, a refusal retries, and the row replicates to its
    recipient and to nobody else. The shell renders it (`runtime/notifications-menu.svelte`), live
-   through the sync engine, and that rendering is now mounted and asserted — see **Rendering** below
-   for what that does and does not settle. Automations and hooks still have no manual end-to-end pass.
+   through the sync engine. `automation-hooks-e2e` covers create/update/delete and bulk variants,
+   rollback, policy-gated approvals and withdrawals, lock release, stamp clearing, and hook timing
+   against real Postgres.
 4. **Channels route, thinly.** Inbound → agent under the declared policy → reply over the transport,
    proven end to end against real Postgres. Inbound is host-driven (`channels` on the host config),
    never a public route — Pod holds no transport credential and cannot verify a webhook. Telegram is
@@ -83,7 +84,7 @@ custom-type schemas.
 5. **Agent UI is one panel**, not Core's ~40 components. It reads its transcript from the replica
    now, so a reply from a channel or another tab appears without a refresh — which is proven by
    mounting the panel, not only by typechecking it. See **Rendering** below.
-6. **Core has been migrated too**, in `worktrees/core-pod-architecture` (42 commits, 246 tests, 23
+6. **Core has been migrated too**, in `worktrees/core-pod-architecture` (53 commits, 257 tests, 19
    svelte-check errors — measure Core's with `--tsconfig ./tsconfig.check.json`, never
    `./tsconfig.json`, whose `include: ["**/*"]` overrides the inherited one and, because TS globs skip
    dot-directories, drops `.svelte-kit/env.d.ts` and reports ~7425 phantom errors). Landed:
@@ -98,23 +99,11 @@ custom-type schemas.
    the `ai` binding taught tool calling, which it had never supported. `apps/core/docs/POD_MIGRATION.md`
    is the reader-by-reader record, and `CORE_REFACTOR.md`'s checklist marks what is left.
 
-   One conclusion there ran against expectation and is worth reading before revisiting it:
-   `live_object` and `@durable-streams` are **not** superseded by Pod's sync — sync runs inside the
-   tenant microVM over the _tenant_ database, and every consumer is a Core-plane surface over Core's
-   _system_ database, which has no outbox.
-
-   **A second one was simply wrong, and is corrected here.** This file claimed Core's agent components
-   "are not deletable: that loop serves the builder agent over the sandbox, which stays in Core by
-   design." Core does **not** own the builder agent. It supplies _access to the sandbox_ — modify
-   files, run code — and nothing more. The loop is Pod's, the same loop that serves a tenant agent,
-   and the sandbox is a set of host tools like any other host capability.
-
-   The contract for that already exists and is already used: `HostAgentTool` / `hostAgentTools` /
-   `HostAgentToolBinding`, exported from `@norbital-ai/pod/host`. Core's `lib/agent/tools/`
-   (`coding.tool.ts`, `deployment.tool.ts`) is the part it legitimately owns; `agent.server.ts`,
-   `store.server.ts` and `chat.remote.ts` are a second loop and a second transcript store beside
-   Pod's, which is the same duplicated-authority shape that produced the webhook and pull-scheduler
-   bugs. Treat "Core's agent is not deletable" as retracted wherever it still appears.
+   C6 is resolved. Core advertises Pod's `/agent` route and provides `HostAgentTool` implementations,
+   one-turn inference, and encrypted channel credentials/listeners. Pod owns the loop, tool dispatch,
+   sessions, runs, messages, channel conversations, UI, and every transcript row. Core's duplicate
+   agent UI/routes/loop/system tables and the Durable Streams service are deleted. `live_object`
+   remains only for Core's own host-plane activity; it is not an agent transcript transport.
 
 ## Rendering: what a component test here proves, and what it does not
 

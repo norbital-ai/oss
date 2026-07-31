@@ -13,5 +13,6 @@ migration-safe typed table per collection backed by PostgreSQL's `temporal_table
 file/agent records carry first-class requestor ownership. Schema migrations can proceed while
 approvals are active because rollback reads the current typed history shape.
 
-This is a clean break: raw tenant network access, host application plugins, the split inference
-surface, and obsolete system collections are removed.
+This is a clean break: raw tenant network access, request-header host-plugin injection, the split
+inference surface, and obsolete system collections are removed. Trusted hosts may still advertise
+explicit application routes through the host contract.

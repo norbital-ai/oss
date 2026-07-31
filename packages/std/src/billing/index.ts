@@ -348,7 +348,6 @@ export {
 	BILLING_RESOURCE_UNITS,
 	BILLING_SOURCE_CATALOGUE,
 	BILLING_SOURCE_IDS,
-	durableStreamByteOffset,
 	integrateBillingObservation,
 	isUsageBillableSubscriptionStatus,
 	type BillingAllocationMethod,

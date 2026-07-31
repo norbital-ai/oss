@@ -25,7 +25,6 @@ export const BILLING_SOURCE_IDS = [
 	'tenant_container',
 	'core_shared',
 	'redis_shared',
-	'durable_streams',
 	'workspace_source',
 	'runtime_files',
 	'checkpoint_cache',
@@ -76,14 +75,6 @@ export const BILLING_SOURCE_CATALOGUE = {
 		allocation: 'shared_equal',
 		billable: true,
 		description: 'Redis CPU, RAM, and persistence divided equally across ready tenants.'
-	},
-	durable_streams: {
-		label: 'Durable Streams',
-		placement: 'bare_metal',
-		allocation: 'shared_weighted',
-		billable: true,
-		description:
-			'Stream bytes attributed directly by organization; shared CPU and RAM weighted by stream bytes.'
 	},
 	workspace_source: {
 		label: 'Workspace source',
@@ -281,15 +272,4 @@ export function integrateBillingObservation(
 			? Math.round(mib * intervalSeconds)
 			: Math.round(mib * (intervalSeconds / 60));
 	return { intervalSeconds, quantity, counterReset: false };
-}
-
-/** Parse the byte component of a Durable Streams `Stream-Next-Offset`. */
-export function durableStreamByteOffset(offset: string): number {
-	const match = /^\d+_(\d+)$/.exec(offset);
-	if (!match) throw new Error(`Invalid Durable Streams offset: ${offset}`);
-	const bytes = Number(match[1]);
-	if (!Number.isSafeInteger(bytes) || bytes < 0) {
-		throw new Error(`Unsafe Durable Streams byte offset: ${offset}`);
-	}
-	return bytes;
 }
