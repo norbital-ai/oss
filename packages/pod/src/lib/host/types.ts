@@ -221,6 +221,67 @@ export type HostChannelListener = (
 	deliver: (message: ChannelInboundMessage) => Promise<ChannelInboundResult>
 ) => Promise<() => void>;
 
+/** One `webhook` receive binding this workspace declares, as a listener needs to see it. */
+export type DeclaredWebhookBinding = {
+	readonly integrationName: string;
+	/** The manifest's binding id, e.g. `invoices.receive.paid`. */
+	readonly bindingName: string;
+	readonly collectionName: string;
+	/** Whether the workspace declared an HMAC secret. A listener may want to refuse to expose one without. */
+	readonly signed: boolean;
+	/** The header the signature is read from, when one is declared. */
+	readonly signatureHeader?: string;
+	/** The header the provider's event id is read from, when one is declared. */
+	readonly eventIdHeader?: string;
+	/** The event names the workspace declared an interest in, if it narrowed them. */
+	readonly events?: readonly string[];
+};
+
+/**
+ * One webhook delivery a host received on its own socket and is handing to the workspace.
+ *
+ * `body` is the raw text exactly as it arrived, not a parsed object: an HMAC covers bytes, and
+ * re-serialising JSON reorders keys and loses whitespace, so a round-tripped body verifies against
+ * nothing. Parsing happens after the signature has been checked, which is also the right order.
+ */
+export type WebhookInboundDelivery = {
+	readonly integrationName: string;
+	readonly bindingName: string;
+	readonly body: string;
+	/** Every header as received, lower-cased. The signature and the event id are read from here. */
+	readonly headers: Readonly<Record<string, string>>;
+};
+
+export type WebhookInboundResult = {
+	/**
+	 * `duplicate` means the event id was already claimed and nothing was imported. `rejected` means the
+	 * delivery never reached the workspace at all — an unknown binding, a bad signature, a body that is
+	 * not JSON. `refused` means it reached the binding and the binding's `input` schema turned it down.
+	 */
+	readonly status: 'imported' | 'duplicate' | 'rejected' | 'refused';
+	readonly imported?: number;
+	/** Why, for the host's log and its HTTP status. Never sent to the caller of a public endpoint. */
+	readonly reason?: string;
+};
+
+/**
+ * Where a workspace's declared webhooks arrive. Host-process code, exactly like `HostChannelListener`.
+ *
+ * Pod deliberately serves no inbound webhook route. Proving a delivery really came from the provider
+ * means verifying an HMAC over its secret, and that credential belongs to whoever holds the wire —
+ * never the tenant, and under Core never even a process with a socket. So the host owns the endpoint,
+ * and `deliver` carries the raw body across; Pod's own wiring verifies the signature against the
+ * secret the manifest names before anything reaches the workspace.
+ *
+ * Called once at startup with the delivery function and the bindings this workspace declares — the
+ * second argument is what lets a listener mount one route per binding instead of hardcoding names it
+ * could misspell. Returns a function that stops listening.
+ */
+export type HostWebhookListener = (
+	deliver: (delivery: WebhookInboundDelivery) => Promise<WebhookInboundResult>,
+	bindings: readonly DeclaredWebhookBinding[]
+) => Promise<() => void>;
+
 /** One claimed outbox row, already transformed by the workspace's outbound pipeline. */
 export type IntegrationDeliveryMessage = {
 	readonly integrationName: string;
@@ -330,6 +391,14 @@ export type SelfHostedPodHostConfig = {
 	 * this is the other half, and without it a channel can send but never be spoken to.
 	 */
 	readonly channels?: HostChannelListener;
+	/**
+	 * Where declared `webhook` receive bindings arrive. Without it a webhook binding compiles,
+	 * validates, and receives nothing — `pod start` says so at startup rather than leaving it silent.
+	 *
+	 * `httpWebhookListener()` is the built-in implementation: it opens one endpoint per binding on a
+	 * port of its own. The signature is verified by Pod's wiring, not by the listener.
+	 */
+	readonly webhooks?: HostWebhookListener;
 	/**
 	 * Tools this host implements and offers to tenant agents. Satisfies `agentTools`.
 	 *

@@ -35,6 +35,10 @@ export type {
 	ChannelInboundMessage,
 	ChannelInboundResult,
 	HostChannelListener,
+	HostWebhookListener,
+	DeclaredWebhookBinding,
+	WebhookInboundDelivery,
+	WebhookInboundResult,
 	HostAiBinding,
 	HostAppPlugin,
 	HostDbAdapter,
@@ -77,6 +81,20 @@ export type {
  * destination arrives on the message either way.
  */
 export { httpIntegrationDelivery, processEnvSecrets } from './integration-http.js';
+
+/**
+ * The inbound half of an integration, on a socket this host owns.
+ *
+ * `httpWebhookListener` mounts one endpoint per declared `webhook` binding; `verifyWebhookSignature`
+ * is the check Pod runs before any delivery reaches the workspace, exported for a host that receives
+ * on a wire of its own and wants the same constant-time comparison rather than a hand-rolled one.
+ */
+export {
+	DEFAULT_WEBHOOK_SIGNATURE_HEADER,
+	httpWebhookListener,
+	verifyWebhookSignature
+} from './webhooks.js';
+export type { HttpWebhookListenerOptions } from './webhooks.js';
 
 export { assertHostAgentTools, hostAgentTools } from './agent-tools.js';
 export type { HostAgentTool } from './agent-tools.js';

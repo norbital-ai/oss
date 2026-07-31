@@ -41,6 +41,7 @@ import { emailOtpIdentity } from '../../host/email-otp.js';
 import { assertChannelTransportsAreSupported } from '../../authoring/channels/channels.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from './host-config.js';
 import { workspaceJobs } from './jobs.js';
+import { declaredWebhookBindings, webhookInboundDeliverer } from './webhook-inbound.js';
 import {
 	reconcileDeclaredPolicies,
 	type PolicyReconcileClient
@@ -873,20 +874,39 @@ export async function startStandalone(
 		return outcome;
 	};
 
-	// A webhook binding compiles, validates, and receives nothing: no route accepts one and no host
-	// listener exists to hand it over. Saying so once at startup is the difference between a known gap
-	// and an integration that looks wired and is not — the same reason the channel warning below
-	// exists. See D1b in docs/CORE_REFACTOR.md.
-	const webhookBindings = Object.entries(manifest.integrations ?? {}).flatMap(
-		([integrationName, integration]) =>
-			Object.entries(integration.definition.inbound ?? {})
-				.filter(([, binding]) => binding.origin.type === 'webhook')
-				.map(([bindingName]) => `${integrationName}.${bindingName}`)
-	);
-	if (webhookBindings.length > 0) {
+	/**
+	 * Hand one webhook delivery to the workspace, once its signature has been checked.
+	 *
+	 * The verification is inside `webhookInboundDeliverer`, not in the listener, so a host that writes
+	 * its own endpoint cannot accidentally skip it. Like the channel path, it crosses the private
+	 * control plane rather than `handlePodRequest`: an integration writes collections elevated, and
+	 * nothing a tenant request can reach may do that.
+	 */
+	const webhookBindings = declaredWebhookBindings(manifest);
+	const deliverWebhookInbound = webhookInboundDeliverer({
+		manifest,
+		dispatch,
+		...(config.secrets ? { secrets: config.secrets } : {})
+	});
+	if (webhookBindings.length > 0 && !config.webhooks) {
+		// Not fatal: a host may own the endpoint outside this process and call `deliver` itself. But a
+		// declared webhook with nothing listening is indistinguishable from a provider that never fires,
+		// so say it once — the same reason the channel warning below exists.
 		console.warn(
-			`[pod] webhook receive bindings are declared but nothing delivers to them: ${webhookBindings.join(', ')}. ` +
-				'Inbound webhooks are not implemented; a pull or system-event binding is the working alternative.'
+			`[pod] webhook receive bindings are declared but this host supplies no listener: ${webhookBindings
+				.map((webhook) => `${webhook.integrationName}.${webhook.bindingName}`)
+				.join(', ')}. Nothing will arrive. Set \`webhooks\` in pod.host.ts.`
+		);
+	}
+	const unsigned = webhookBindings.filter((webhook) => !webhook.signed);
+	if (config.webhooks && unsigned.length > 0) {
+		// A binding with no `signature` accepts whatever the listener hands over. That is legitimate when
+		// the host authenticates the wire some other way — mutual TLS, a private network — and a mistake
+		// otherwise, and the two look identical from here.
+		console.warn(
+			`[pod] webhook bindings declare no signature and are accepted unverified: ${unsigned
+				.map((webhook) => `${webhook.integrationName}.${webhook.bindingName}`)
+				.join(', ')}. Declare \`signature\` unless this host proves the sender itself.`
 		);
 	}
 
@@ -931,6 +951,19 @@ export async function startStandalone(
 		}
 	}
 
+	let stopWebhooks: () => void = () => {};
+	if (config.webhooks) {
+		try {
+			stopWebhooks = await config.webhooks(deliverWebhookInbound, webhookBindings);
+		} catch (cause) {
+			stopChannels();
+			stopQueue();
+			await closeDatabaseNotifications();
+			await binding.close();
+			throw cause;
+		}
+	}
+
 	try {
 		await listen(server, environment);
 		console.log(describeHost(config, identity, source));
@@ -945,6 +978,7 @@ export async function startStandalone(
 			process.once('SIGTERM', resolve);
 		});
 	} finally {
+		stopWebhooks();
 		stopChannels();
 		stopQueue();
 		await closeDatabaseNotifications();
