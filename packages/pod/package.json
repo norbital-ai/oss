@@ -80,11 +80,11 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
+		"@electric-sql/pglite": "^0.3.16",
 		"@internationalized/date": "^3.12.2",
 		"@norbital-ai/platform-utils": "workspace:*",
 		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
-		"@electric-sql/pglite": "^0.3.16",
 		"@standard-schema/spec": "^1.1.0",
 		"@sveltejs/vite-plugin-svelte": "^7.2.0",
 		"@tailwindcss/vite": "^4.3.3",
@@ -92,8 +92,8 @@
 		"drizzle-kit": "catalog:",
 		"drizzle-orm": "catalog:",
 		"pg": "^8.22.0",
-		"svelte-sonner": "^1.1.1",
 		"svelte-check": "^4.7.3",
+		"svelte-sonner": "^1.1.1",
 		"tailwindcss": "^4.3.3",
 		"uuid": "^14.0.1"
 	},
@@ -103,6 +103,7 @@
 		"@sveltejs/package": "^2.5.8",
 		"@types/node": "^26.1.1",
 		"@types/pg": "^8.20.0",
+		"happy-dom": "^20.11.1",
 		"mode-watcher": "^1.1.0",
 		"prettier": "^3.9.5",
 		"svelte": "catalog:",
