@@ -78,6 +78,8 @@ export interface PodStructure {
 	readonly policies: readonly DiscoveredWorkspaceRole[];
 	readonly channels: readonly DiscoveredWorkspaceRole[];
 	readonly seed: string | null;
+	/** `src/+env.ts`, if declared — the public and private names this workspace asks its host for. */
+	readonly env: string | null;
 	readonly diagnostics: readonly StructuralDiagnostic[];
 }
 

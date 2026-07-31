@@ -977,19 +977,22 @@ async function discoverChannels(
 	return channels.sort((left, right) => compareText(left.id, right.id));
 }
 
+/** Flat `src/+<name>.ts` declarations the compiler reads. Anything else there is a mistake. */
+const WORKSPACE_ROOT_DECLARATIONS: ReadonlySet<string> = new Set(['+seed.ts', '+env.ts']);
+
 async function discoverSeed(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
 	inventory: SourceInventory
-): Promise<string | null> {
+): Promise<{ readonly seed: string | null; readonly env: string | null }> {
 	const sourceDirectory = path.join(root, 'src');
-	if (!inventory.hasDirectory(sourceDirectory)) return null;
+	if (!inventory.hasDirectory(sourceDirectory)) return { seed: null, env: null };
 	for (const entry of inventory.entries(sourceDirectory)) {
 		if (
 			entry.isFile() &&
 			entry.name.startsWith('+') &&
 			entry.name.endsWith('.ts') &&
-			entry.name !== '+seed.ts' &&
+			!WORKSPACE_ROOT_DECLARATIONS.has(entry.name) &&
 			!entry.name.endsWith('.tool.ts')
 		) {
 			// Facilities are the host's contract, not a tenant role. The generic "unknown role" message
@@ -1006,7 +1009,10 @@ async function discoverSeed(
 			);
 		}
 	}
-	return inventory.hasFile(path.join(sourceDirectory, '+seed.ts')) ? 'src/+seed.ts' : null;
+	return {
+		seed: inventory.hasFile(path.join(sourceDirectory, '+seed.ts')) ? 'src/+seed.ts' : null,
+		env: inventory.hasFile(path.join(sourceDirectory, '+env.ts')) ? 'src/+env.ts' : null
+	};
 }
 
 async function validateCustomTypeReferences(
@@ -1069,16 +1075,17 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		diagnostics,
 		inventory
 	);
-	const [apps, automations, remotes, agentTools, policies, channels, seed] = await Promise.all([
-		discoverApps(absoluteRoot, diagnostics, inventory),
-		discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics, inventory),
-		discoverWorkspaceRoles(absoluteRoot, 'remotes', diagnostics, inventory),
-		discoverAgentTools(absoluteRoot, diagnostics, inventory),
-		discoverPolicies(absoluteRoot, diagnostics, inventory),
-		discoverChannels(absoluteRoot, diagnostics, inventory),
-		discoverSeed(absoluteRoot, diagnostics, inventory),
-		validateAuthoredSource(absoluteRoot, diagnostics, inventory)
-	]);
+	const [apps, automations, remotes, agentTools, policies, channels, rootDeclarations] =
+		await Promise.all([
+			discoverApps(absoluteRoot, diagnostics, inventory),
+			discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics, inventory),
+			discoverWorkspaceRoles(absoluteRoot, 'remotes', diagnostics, inventory),
+			discoverAgentTools(absoluteRoot, diagnostics, inventory),
+			discoverPolicies(absoluteRoot, diagnostics, inventory),
+			discoverChannels(absoluteRoot, diagnostics, inventory),
+			discoverSeed(absoluteRoot, diagnostics, inventory),
+			validateAuthoredSource(absoluteRoot, diagnostics, inventory)
+		]);
 	validateRoleDirectories(absoluteRoot, diagnostics, inventory);
 	diagnostics.sort(
 		(left, right) =>
@@ -1098,7 +1105,8 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		agentTools,
 		policies,
 		channels,
-		seed,
+		seed: rootDeclarations.seed,
+		env: rootDeclarations.env,
 		diagnostics
 	};
 }
@@ -1275,6 +1283,9 @@ function renderWorkspace(
 	if (structure.seed) {
 		imports.push(`import seed from ${JSON.stringify(generatedImport(structure.seed))};`);
 	}
+	if (structure.env) {
+		imports.push(`import env from ${JSON.stringify(generatedImport(structure.env))};`);
+	}
 	const automations = structure.automations
 		.map((automation, index) => `{ ...automation${index}, name: ${JSON.stringify(automation.id)} }`)
 		.join(', ');
@@ -1294,7 +1305,7 @@ function renderWorkspace(
 		.map((channel, index) => `\t\t${JSON.stringify(channel.id)}: channel${index}`)
 		.join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(
@@ -1523,6 +1534,7 @@ export async function compilePodFilesystem(
 			channels: [],
 			agentTools: [],
 			seed: null,
+			env: null,
 			diagnostics: [diagnostic]
 		};
 		return {

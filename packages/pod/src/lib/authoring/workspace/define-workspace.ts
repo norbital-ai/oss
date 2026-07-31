@@ -24,6 +24,7 @@ import type { InvokeMap } from './invoke-api-types.js';
 import type { WorkspaceClient } from '$lib/client/workspace-client.js';
 import type { CollectionType } from '@norbital-ai/platform-utils/collection';
 import type { BeforeApi } from './hook-api.js';
+import type { WorkspaceEnvDeclaration } from '../env.js';
 import {
 	buildCollectionsRecord,
 	buildTypedWorkspaceClient,
@@ -32,8 +33,7 @@ import {
 import type {
 	HttpConnection,
 	PrivateEnvReference,
-	RegisteredIntegration,
-	WorkspaceConnections
+	RegisteredIntegration
 } from '../integrations/integrations.js';
 
 type InvokeMapInput = InvokeMap;
@@ -79,13 +79,8 @@ export type DefineWorkspaceInput<
 	readonly invoke?: InvokeMapInput;
 	readonly meta?: WorkspaceMeta;
 	readonly seed?: import('@norbital-ai/platform-utils/seed/plan').WorkspaceSeedDefinition;
-	readonly connections?: WorkspaceConnections;
-	readonly env?: {
-		readonly public?: Readonly<
-			Record<string, { readonly description: string; readonly default?: string }>
-		>;
-		readonly private?: Readonly<Record<string, { readonly description: string }>>;
-	};
+	/** `src/+env.ts` — the names this workspace needs from its host, never the values. */
+	readonly env?: WorkspaceEnvDeclaration;
 };
 
 type CollectionsRecord<S extends AnySchema, T extends readonly WorkspaceCollectionEntry<S>[]> = {
@@ -202,11 +197,23 @@ function registerConnectionSecret(
 	requirements: Record<string, { description: string; required?: boolean }>
 ) {
 	if (!requirements[reference.env]) {
-		throw new Error(`Connection references undeclared private environment key "${reference.env}"`);
+		const declared = Object.keys(requirements).sort();
+		throw new Error(
+			`Integration references undeclared private environment key "${reference.env}". ` +
+				`Add it to the \`private\` block of src/+env.ts.` +
+				(declared.length > 0 ? ` Declared: ${declared.join(', ')}.` : '')
+		);
 	}
 	return { type: 'secret' as const, name: reference.env };
 }
 
+/**
+ * The connection's credential as request headers — the value stays a reference.
+ *
+ * `Bearer ` travels as a `prefix` on the reference rather than as a parallel map, because it is one
+ * header value: the scheme is public, the token is not, and splitting them across two maps produced
+ * a manifest the schema rejected.
+ */
 function connectionSecretHeaders(
 	connection: HttpConnection,
 	requirements: Record<string, { description: string; required?: boolean }>
@@ -216,9 +223,11 @@ function connectionSecretHeaders(
 	if (authentication.type === 'bearer') {
 		return {
 			secretHeaders: {
-				authorization: registerConnectionSecret(authentication.token, requirements)
-			},
-			secretHeaderPrefixes: { authorization: 'Bearer ' }
+				authorization: {
+					...registerConnectionSecret(authentication.token, requirements),
+					prefix: 'Bearer '
+				}
+			}
 		};
 	}
 	return {
@@ -228,16 +237,27 @@ function connectionSecretHeaders(
 	};
 }
 
+/**
+ * Refuse two collections that claim the same integration name with different endpoints.
+ *
+ * Compared by value rather than by object identity. Identity was the rule until it made an HTTP
+ * destination unbuildable from the filesystem: two collections in two files cannot share one object
+ * unless a third file exists to hold it, so declaring a connection where the doc says to declare it —
+ * in `+integrations.ts` — always failed as "unregistered". By value, the same connection written
+ * twice is the same connection, and a genuine disagreement still fails naming the integration.
+ */
+function sameConnection(left: HttpConnection, right: HttpConnection): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function registerIntegrations(
 	behaviors: readonly AnyCollectionBehavior[],
-	connections: WorkspaceConnections,
 	privateEnv: Readonly<Record<string, { readonly description: string }>> | undefined
 ): {
 	integrations: readonly RegisteredIntegration[];
 	secrets: Readonly<Record<string, { description: string; required?: boolean }>> | undefined;
 	integrationBindings: Record<string, RegisteredIntegrationRuntimeBinding>;
 } {
-	const registeredConnections = new Set(Object.values(connections));
 	const requirements: Record<string, { description: string; required?: boolean }> = {
 		...(privateEnv ?? {})
 	};
@@ -295,18 +315,16 @@ function registerIntegrations(
 	for (const behavior of behaviors) {
 		for (const [integrationName, integration] of Object.entries(behavior.integrations ?? {})) {
 			const connection = integration.connection;
-			if (connection && !registeredConnections.has(connection)) {
-				throw new Error(
-					`Collection "${behavior.name}" integration "${integrationName}" uses an unregistered connection`
-				);
-			}
-			if (
-				integrationConnections.has(integrationName) &&
-				integrationConnections.get(integrationName) !== connection
-			) {
-				throw new Error(
-					`Integration "${integrationName}" must use the same connection across collections`
-				);
+			if (integrationConnections.has(integrationName)) {
+				const previous = integrationConnections.get(integrationName);
+				const agrees =
+					previous === connection ||
+					(previous != null && connection != null && sameConnection(previous, connection));
+				if (!agrees) {
+					throw new Error(
+						`Integration "${integrationName}" must use the same connection across collections`
+					);
+				}
 			}
 			integrationConnections.set(integrationName, connection);
 			const definition = definitionFor(integrationName, connection);
@@ -411,11 +429,52 @@ function registerIntegrations(
 	const integrations = [...definitions].map(([name, definition]) => ({ name, definition }));
 	for (const integration of integrations)
 		validateJsonValue(integration.definition, `Integration "${integration.name}"`, new Set());
+	assertDeclaredSecretsAreReferenced(requirements, integrations);
 	return {
 		integrations,
 		secrets: Object.keys(requirements).length > 0 ? requirements : undefined,
 		integrationBindings
 	};
+}
+
+/** Every `{ type: 'secret', name }` reference reachable in a compiled integration definition. */
+function referencedSecretNames(value: unknown, found: Set<string>): Set<string> {
+	if (value == null || typeof value !== 'object') return found;
+	if (Array.isArray(value)) {
+		for (const entry of value) referencedSecretNames(entry, found);
+		return found;
+	}
+	const record = value as Record<string, unknown>;
+	if (record.type === 'secret' && typeof record.name === 'string') found.add(record.name);
+	for (const entry of Object.values(record)) referencedSecretNames(entry, found);
+	return found;
+}
+
+/**
+ * Refuse a private-env key nothing references.
+ *
+ * `manifest.secrets` is what a host provisions against, so an unreferenced key asks an operator for a
+ * credential no code path will ever read — and, worse, hides the real mistake, which is almost always
+ * a reference spelled differently from the declaration. The opposite direction already fails in
+ * `registerConnectionSecret`; this closes the loop so the two sets have to match exactly.
+ */
+export function assertDeclaredSecretsAreReferenced(
+	requirements: Readonly<Record<string, unknown>>,
+	integrations: readonly RegisteredIntegration[]
+): void {
+	const declared = Object.keys(requirements);
+	if (declared.length === 0) return;
+	const referenced = referencedSecretNames(
+		integrations.map((integration) => integration.definition),
+		new Set<string>()
+	);
+	const unused = declared.filter((name) => !referenced.has(name)).sort();
+	if (unused.length === 0) return;
+	throw new Error(
+		`src/+env.ts declares private environment key(s) nothing references: ${unused.join(', ')}. ` +
+			'Reference them from an integration connection or webhook signature, or remove them — a ' +
+			'declared secret becomes something the host is asked to provision.'
+	);
 }
 
 /**
@@ -479,11 +538,7 @@ export function defineWorkspace<
 		}
 	}
 
-	const registration = registerIntegrations(
-		behaviorList,
-		input.connections ?? {},
-		input.env?.private
-	);
+	const registration = registerIntegrations(behaviorList, input.env?.private);
 
 	const relationships = deriveManifestRelationships(schema.relations);
 

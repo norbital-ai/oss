@@ -77,6 +77,7 @@ export type {
 } from './policies/policies.js';
 export { defineCommandHandler, defineQueryHandler } from './automations/handlers.js';
 export type { TExportAction, TExportManifest, TFileAttachment } from './automations/pipelines.js';
+export { defineConnection } from './integrations/integrations.js';
 export type {
 	CollectionIntegrationDefinition,
 	CollectionMutationEvent,
@@ -86,7 +87,8 @@ export type {
 	IntegrationRequest,
 	PrivateEnvReference,
 	PullTrigger,
-	WebhookTrigger,
-	WorkspaceConnections
+	WebhookTrigger
 } from './integrations/integrations.js';
+export { defineEnv } from './env.js';
+export type { WorkspaceEnvDeclaration } from './env.js';
 export type { AfterApi, AfterHookApi, BeforeApi, HookApi } from './workspace/hook-api.js';

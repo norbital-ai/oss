@@ -11,7 +11,16 @@ export interface HttpConnection {
 		| { readonly type: 'header'; readonly header: string; readonly value: PrivateEnvReference };
 }
 
-export type WorkspaceConnections = Readonly<Record<string, HttpConnection>>;
+/**
+ * Identity function for a connection declared in `+integrations.ts`.
+ *
+ * It exists for inference and for the reader: a `connection` is the one place a workspace names a
+ * third party and the *reference* to the credential that reaches it, and `defineConnection` makes
+ * that a declaration rather than an object literal buried in a binding.
+ */
+export function defineConnection<const T extends HttpConnection>(connection: T): T {
+	return connection;
+}
 
 export interface WebhookTrigger {
 	readonly events?: readonly string[];

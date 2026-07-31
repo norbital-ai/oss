@@ -137,6 +137,22 @@ const secretReferenceSchema = z
 	})
 	.strict();
 
+/**
+ * A header whose value is a secret the host resolves, optionally behind a fixed prefix.
+ *
+ * `prefix` exists because `authorization: Bearer <token>` is one header value, not two things: the
+ * scheme is public and belongs in the manifest, the token is not and must stay a reference. Encoding
+ * it as a parallel `secretHeaderPrefixes` map — which is what the workspace compiler used to emit —
+ * did not survive `.strict()` here, so no connection could ever have produced a valid manifest.
+ */
+const secretHeaderSchema = z
+	.object({
+		type: z.literal('secret'),
+		name: nonEmpty,
+		prefix: nonEmpty.optional()
+	})
+	.strict();
+
 const connectionSchema = z.union([
 	z.object({ type: z.literal('connection'), name: nonEmpty }).strict(),
 	z
@@ -186,7 +202,7 @@ const inboundBindingSchema = z
 					schedule: nonEmpty,
 					url: z.url(),
 					method: z.enum(['GET', 'POST']).optional(),
-					secretHeaders: z.record(z.string(), secretReferenceSchema).optional(),
+					secretHeaders: z.record(z.string(), secretHeaderSchema).optional(),
 					cursorQuery: z.string().optional(),
 					nextCursorHeader: nonEmpty.optional()
 				})
@@ -203,7 +219,7 @@ const integrationDestinationSchema = z.discriminatedUnion('type', [
 			url: z.url(),
 			method: z.enum(['POST', 'PUT', 'PATCH', 'DELETE']),
 			headers: stringRecord.optional(),
-			secretHeaders: z.record(z.string(), secretReferenceSchema).optional()
+			secretHeaders: z.record(z.string(), secretHeaderSchema).optional()
 		})
 		.strict(),
 	z
@@ -443,6 +459,16 @@ export type ManifestSecretRequirement = DeepReadonly<
 	z.infer<typeof ManifestSecretRequirementSchema>
 >;
 export type ManifestIntegration = DeepReadonly<z.infer<typeof ManifestIntegrationSchema>>;
+/** Where one outbound binding sends. The host reads this to know the URL it is being asked for. */
+export type ManifestIntegrationDestination = DeepReadonly<
+	z.infer<typeof integrationDestinationSchema>
+>;
+/** One inbound binding's source, including the `api-pull` shape the pull job drives. */
+export type ManifestIntegrationOrigin = DeepReadonly<
+	z.infer<typeof inboundBindingSchema>['origin']
+>;
+/** A header value the host resolves from its own secret store. Never a value, always a name. */
+export type ManifestSecretHeader = DeepReadonly<z.infer<typeof secretHeaderSchema>>;
 export type ManifestPolicyApproval = DeepReadonly<z.infer<typeof ManifestPolicyApprovalSchema>>;
 export type ManifestPolicyApprovalStep = DeepReadonly<
 	z.infer<typeof ManifestPolicyApprovalStepSchema>
