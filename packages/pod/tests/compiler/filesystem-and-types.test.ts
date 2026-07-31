@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { compilePodFilesystem, discoverPodFilesystem } from '../../src/lib/vite/compiler/index.js';
@@ -467,5 +467,36 @@ export default { transport: 'telegram', policy: 'support_agentt' } satisfies Cha
 		await write(root, 'src/channels/+Support Inbox.channel.ts', `export default {};`);
 		const structure = await discoverPodFilesystem(root);
 		expect(structure.diagnostics.map((d) => d.code)).toContain('CHANNEL_NAME_INVALID');
+	});
+
+	/**
+	 * `src/` is a whitelist of two flat declarations, and everything else there is a mistake. Before
+	 * `+env.ts` was one of them, a workspace declaring its private environment names was told it had
+	 * an unknown workspace role — while a connection referencing one of those names was refused for
+	 * being undeclared. Both ends of that had to move together.
+	 */
+	it('discovers src/+env.ts and compiles it into the workspace', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/+env.ts',
+			`import { defineEnv } from '@norbital-ai/pod/authoring';
+export default defineEnv({ private: { REGISTRY_KEY: { description: 'Registry API key' } } });`
+		);
+		const structure = await discoverPodFilesystem(root);
+		expect(structure.diagnostics).toEqual([]);
+		expect(structure.env).toBe('src/+env.ts');
+
+		await compilePodFilesystem({ root });
+		const generated = await readFile(path.join(root, '.norbital/generated/workspace.ts'), 'utf8');
+		expect(generated).toContain('import env from "../../src/+env.js";');
+		expect(generated).toContain('\tenv\n});');
+	});
+
+	it('still refuses a flat src/+<name>.ts that declares nothing', async () => {
+		const root = await workspace();
+		await write(root, 'src/+environment.ts', `export default {};`);
+		const structure = await discoverPodFilesystem(root);
+		expect(structure.diagnostics.map((d) => d.code)).toContain('WORKSPACE_ROLE_UNKNOWN');
 	});
 });
