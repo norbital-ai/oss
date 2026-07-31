@@ -54,8 +54,11 @@ custom-type schemas.
 
 ## What is NOT done
 
-1. **Templates still get policies from Core's seed.** Only `crm` declares one. See the checklist in
-   [CORE_REFACTOR.md](./CORE_REFACTOR.md).
+1. ~~**Templates still get policies from Core's seed.** Only `crm` declares one.~~ **Done.** All five
+   templates declare their own: 10 `+<name>.policy.ts` files, and each template's
+   `.norbital/generated/authoring-types.ts` carries the `PolicyName` union built from them
+   (`bca` 2, `construction` 3, `crm` 1, `hr-payroll` 3, `reclamation` 1). Core's
+   `seed/<template>/steps/policies.ts` are deleted.
 2. **Integrations work in both directions.** A `+integrations.ts` connection compiles into the
    manifest, an HTTP `send` reaches a real socket with the connection's credential resolved host-side,
    a `pull` binding runs on its schedule and lands rows, a `systemEvent` send reaches its matching
@@ -80,8 +83,14 @@ custom-type schemas.
 5. **Agent UI is one panel**, not Core's ~40 components. It reads its transcript from the replica
    now, so a reply from a channel or another tab appears without a refresh — which is proven by
    mounting the panel, not only by typechecking it. See **Rendering** below.
-6. **Core has been migrated too**, in `worktrees/core-pod-architecture` (41 commits, 231 tests, 23
-   svelte-check errors against `origin/master`'s own 43). Landed: better-auth deleted and both tenant
+6. **Core has been migrated too**, in `worktrees/core-pod-architecture` (42 commits, 246 tests, 23
+   svelte-check errors — measure Core's with `--tsconfig ./tsconfig.check.json`, never
+   `./tsconfig.json`, whose `include: ["**/*"]` overrides the inherited one and, because TS globs skip
+   dot-directories, drops `.svelte-kit/env.d.ts` and reports ~7425 phantom errors). Landed:
+   Core-side inbound webhook and channel listeners calling Pod's own verifier over the
+   `host-command` plane, replacing Core's parallel `IntegrationRuntime.ingestWebhook` — two dedupe
+   authorities for one binding, of which Core's dropped `eventId` so every provider retry
+   re-imported. Also: better-auth deleted and both tenant
    and ops sign-in rebuilt on Pod's `cookieSession` + `emailOtpIdentity`; roles migrated to
    `admin|advanced|basic`; policies reconciled at the migrate seam with the seed steps deleted; host
    plugins moved off a request header onto the `configure` frame; a `host-command` frame sender, so
