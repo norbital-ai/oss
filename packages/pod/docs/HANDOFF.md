@@ -169,6 +169,17 @@ are demonstrably intact, so a baseline taken that way is fiction.
 `pnpm deps:sync` is not optional: templates resolve `@norbital-ai/*` through physical copies, so a
 rebuilt package is invisible until it is re-injected — a correct change looks broken.
 
+**Never run `pnpm` with a working directory inside `template_workspaces/<name>`.** It triggers an
+install that prunes that template's `node_modules/@norbital-ai/` entries, and then fails against
+`npm.pkg.github.com`. The template is left resolving nothing, or — worse — silently falling through
+to the hoisted copy at the repository root, so only some imports break.
+
+The recovery is `pnpm deps:sync`, from the repository root. `pnpm install` does **not** fix it: the
+lockfile has not changed, so pnpm answers "Already up to date" and repairs nothing, `--force`
+included. `deps:sync` re-creates each declared entry as a relative link into `packages/`, then
+verifies that every template can resolve everything it declares and fails loudly naming the template
+and packages if not. It is idempotent, so running it when nothing is wrong costs nothing.
+
 For a manual standalone run, copy a template into `.test-workspaces/` (**inside** the repo, so pnpm's
 relative symlinks resolve), write a `pod.host.ts` with `emailOtp` + `consoleNotifications('email')` +
 `secureCookies: false`, then `build`, `migrate`, `start`. The login code prints to the log.

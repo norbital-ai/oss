@@ -26,6 +26,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { auditTemplate, restoreTemplate } from './lib/injected-deps.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -82,3 +83,37 @@ if (missing.length > 0) {
 	// because "no copy found" and "copy refreshed" are indistinguishable from a count alone.
 	console.log(`[deps:sync] no injected copy found for: ${missing.join(', ')}`);
 }
+
+// Refreshing can only rewrite copies that still exist. Repair pruned direct entries, then prove every
+// template can resolve each @norbital-ai package it declares.
+const packagesRoot = path.join(repoRoot, 'packages');
+const pruned = [];
+const unbuilt = [];
+const recovered = [];
+for (const template of templates) {
+	const key = path.basename(template);
+	const { restored } = restoreTemplate(template, packagesRoot);
+	if (restored.length > 0) recovered.push(`${key}: ${restored.join(', ')}`);
+
+	const report = auditTemplate(template);
+	if (report.missing.length > 0) pruned.push(`${key}: ${report.missing.join(', ')}`);
+	if (report.unbuilt.length > 0) unbuilt.push(`${key}: ${report.unbuilt.join(', ')}`);
+}
+
+if (recovered.length > 0) {
+	console.log(`Restored pruned entries:\n  ${recovered.join('\n  ')}`);
+}
+if (unbuilt.length > 0) {
+	console.error(
+		`These packages resolve but carry no build output:\n  ${unbuilt.join('\n  ')}\n` +
+			'Build them first: `pnpm packages:build`.'
+	);
+}
+if (pruned.length > 0) {
+	console.error(
+		`These templates cannot resolve @norbital-ai packages they declare:\n  ${pruned.join('\n  ')}`
+	);
+}
+if (pruned.length > 0 || unbuilt.length > 0) process.exit(1);
+
+console.log(`${templates.length} templates resolve every @norbital-ai package they declare.`);
