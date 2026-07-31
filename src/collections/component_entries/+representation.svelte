@@ -80,8 +80,8 @@
 	);
 
 	/**
-	 * The payslip id, but only once a line has actually claimed this entry. A drafted run that has
-	 * not reached this entry yet must not read as though it had.
+	 * A human consumption label, but only once a line has actually claimed this entry. A drafted run
+	 * that has not reached this entry yet must not read as though it had.
 	 */
 	const consumedByPayslip = $derived.by((): string => {
 		if (!record) return '—';
@@ -89,7 +89,7 @@
 		if (loading) return 'Loading…';
 		if (!payslip) return '—';
 		const claimed = linesConsumingEntry(sourcesQuery?.current ?? [], record.norbital_id);
-		return claimed.length > 0 ? payslip.norbital_id : '—';
+		return claimed.length > 0 ? `Paid in ${run?.period ?? 'a payroll run'}` : '—';
 	});
 </script>
 
@@ -97,9 +97,7 @@
 	<Column span="all">
 		<div class="rounded-md border border-border bg-muted/20 p-3">
 			<span class="text-xs text-muted-foreground">Payroll consumption</span>
-			<span aria-live="polite" class="mt-1 block break-all font-mono text-xs">
-				{consumedByPayslip}
-			</span>
+			<span aria-live="polite" class="mt-1 block text-sm">{consumedByPayslip}</span>
 		</div>
 	</Column>
 </Grid>

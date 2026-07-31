@@ -42,56 +42,56 @@
 {:else}
 	<Stack gap="sm" class="rounded-md border border-border bg-muted/20 p-3">
 		<Table.Root class="rounded-md border border-border bg-background">
-				<Table.Header>
+			<Table.Header>
+				<Table.Row>
+					<Table.Head class="w-12">#</Table.Head>
+					<Table.Head>Due date</Table.Head>
+					<Table.Head>Amount</Table.Head>
+					<Table.Head class="w-20"><span class="sr-only">Action</span></Table.Head>
+				</Table.Row>
+			</Table.Header>
+			<Table.Body>
+				{#each schedule as entry, index}
 					<Table.Row>
-						<Table.Head class="w-12">#</Table.Head>
-						<Table.Head>Due date</Table.Head>
-						<Table.Head>Amount</Table.Head>
-						<Table.Head class="w-20"><span class="sr-only">Action</span></Table.Head>
+						<Table.Cell class="text-xs tabular-nums text-muted-foreground">
+							{index + 1}
+						</Table.Cell>
+						<Table.Cell>
+							<Input
+								type="date"
+								value={entry.due_date}
+								{disabled}
+								oninput={(event) => update(index, { due_date: event.currentTarget.value })}
+							/>
+						</Table.Cell>
+						<Table.Cell>
+							<Input
+								type="number"
+								min="0.01"
+								step="0.01"
+								value={entry.amount}
+								{disabled}
+								oninput={(event) => {
+									const amount = event.currentTarget.valueAsNumber;
+									if (Number.isFinite(amount)) update(index, { amount });
+								}}
+							/>
+						</Table.Cell>
+						<Table.Cell>
+							<Button
+								type="button"
+								size="sm"
+								variant="ghost"
+								disabled={disabled || schedule.length === 1}
+								onclick={() => emit(schedule.filter((_entry, position) => position !== index))}
+							>
+								Remove
+							</Button>
+						</Table.Cell>
 					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each schedule as entry, index}
-						<Table.Row>
-							<Table.Cell class="text-xs tabular-nums text-muted-foreground">
-								{index + 1}
-							</Table.Cell>
-							<Table.Cell>
-								<Input
-									type="date"
-									value={entry.due_date}
-									{disabled}
-									oninput={(event) => update(index, { due_date: event.currentTarget.value })}
-								/>
-							</Table.Cell>
-							<Table.Cell>
-								<Input
-									type="number"
-									min="0.01"
-									step="0.01"
-									value={entry.amount}
-									{disabled}
-									oninput={(event) => {
-										const amount = event.currentTarget.valueAsNumber;
-										if (Number.isFinite(amount)) update(index, { amount });
-									}}
-								/>
-							</Table.Cell>
-							<Table.Cell>
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									disabled={disabled || schedule.length === 1}
-									onclick={() => emit(schedule.filter((_entry, position) => position !== index))}
-								>
-									Remove
-								</Button>
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
+				{/each}
+			</Table.Body>
+		</Table.Root>
 		<Cluster justify="between" gap="sm">
 			<Button
 				type="button"
