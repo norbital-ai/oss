@@ -43,8 +43,6 @@ export default defineModel(
 		total: custom('money'),
 		/** `CostLine[]` — one entry per substrate, with quantity, rate, and basis. */
 		lines_json: text(),
-		/** Substrates with no rate row; those lines price at zero. */
-		missing_rates: text().array(),
 		priced_at: timestamp(),
 		notes: text()
 	},

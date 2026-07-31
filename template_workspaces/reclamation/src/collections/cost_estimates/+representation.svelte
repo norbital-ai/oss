@@ -103,12 +103,6 @@
 					</dd>
 				</Inline>
 			</dl>
-			{#if (record?.missing_rates?.length ?? 0) > 0}
-				<p class="text-xs text-destructive">
-					No usable {currency} rate for: {record?.missing_rates?.join(', ')}. Those lines price at
-					zero.
-				</p>
-			{/if}
 		</Stack>
 	{/if}
 </Stack>
