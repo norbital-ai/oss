@@ -45,17 +45,6 @@ function toStepStacks(ar: { approval_step_nodes: unknown }): TApprovalRequestSte
 	return parseApprovalStepStacks(ar.approval_step_nodes);
 }
 
-async function loadApprovalRequestStatus(
-	approvalRequestId: string
-): Promise<TApprovalRequestStatus | null> {
-	const tenantDb = getWorkspace({ provision: true }).tenantDb;
-	const result = await tenantDb.query<{ status: TApprovalRequestStatus }>(
-		`SELECT status FROM approval_request WHERE norbital_id = $1::uuid`,
-		[approvalRequestId]
-	);
-	return result.rows[0]?.status ?? null;
-}
-
 function requestorMutationRef(requestor: unknown): [{ record_id: string }] {
 	return requestorMutationRefSchema.parse(requestor);
 }
@@ -118,54 +107,64 @@ function collectionTableName(collectionName: string): string {
 	return collectionName;
 }
 
-
 /**
- * Take the decision under a row lock, so two approvers cannot both win.
+ * Lock the request, then read it — in that order, and inside the writing transaction.
  *
- * The caller already refuses a request in a terminal state, but that check is an ordinary read
- * taken before this transaction opens. Two people pressing Approve at the same moment therefore
- * both saw `ONGOING`, both passed, and both wrote — stamping the step twice and, on a final step,
- * driving the terminal transition twice. Rare, and the worst possible place for a lost update.
+ * Locking is not enough on its own. A caller that decides from a row it read *before* the lock is
+ * deciding from a snapshot: two people pressing Approve at the same moment both saw the same
+ * pending step, both computed a flow that stamps it, and the second write silently replaced the
+ * first. The status guard alone does not catch that, because on any multi-step flow neither
+ * decision is terminal. Nor does it catch the worse one — a requestor revising the record restarts
+ * the request with a new flow and a recomputed lock set, and an approver holding the pre-revision
+ * snapshot overwrites both, approving content nobody reviewed and releasing the wrong records.
  *
- * `FOR UPDATE` inside the transaction that performs the write closes it: the second caller blocks
- * until the first commits, then reads the status the first produced and is refused. The check and
- * the write are finally the same atomic act rather than two hopeful ones.
- *
- * A row that does not exist yet is a brand-new request, which has nothing to lose a race to.
+ * So the locked row is what the decision is built from. `FOR UPDATE` serializes the callers; the
+ * re-read after it means the second caller sees exactly what the first committed and either
+ * refuses (terminal) or decides against the real current flow.
  */
-async function assertNotAlreadyDecided(
+async function lockApprovalRequest(
 	tenantDb: ReturnType<typeof getWorkspace>['tenantDb'],
-	approvalRequestId: unknown
-): Promise<void> {
-	if (typeof approvalRequestId !== 'string') return;
+	approvalRequestId: string
+): Promise<TApprovalRequest> {
 	const locked = await tenantDb.query<{ status: TApprovalRequestStatus }>(
 		`SELECT status FROM approval_request WHERE norbital_id = $1::uuid FOR UPDATE`,
 		[approvalRequestId]
 	);
 	const status = locked.rows[0]?.status;
-	if (status && TERMINAL_STATES.includes(status)) {
+	if (!status) throw error(404, 'Approval request not found');
+	if (TERMINAL_STATES.includes(status)) {
 		throw error(
 			409,
 			'Cannot modify approval request: it has already reached a terminal state. ' +
 				'Once approved or rejected, the decision is final.'
 		);
 	}
+	return loadApprovalRequest(approvalRequestId);
 }
 
+/**
+ * Run one approval transition: lock the request, build the new state from the locked row, write it,
+ * and — on a terminal status — release the records in the same transaction.
+ *
+ * `buildTransition` receives the locked row and must derive everything it writes from it. Nothing
+ * read before this call may reach the record it returns; that is the whole point of the lock.
+ */
 async function persistApprovalTransition(
-	record: Record<string, unknown>
+	approvalRequestId: string,
+	buildTransition: (
+		locked: TApprovalRequest
+	) => Record<string, unknown> | Promise<Record<string, unknown>>
 ): Promise<TApprovalRequest> {
 	const workspace = getWorkspace({ provision: true });
 	const tenantDb = workspace.tenantDb;
 	return withCollectionTransaction(workspace, async () => {
-		await assertNotAlreadyDecided(tenantDb, record.norbital_id);
-		const approvalRequest = await persistApprovalRequest(record);
+		const locked = await lockApprovalRequest(tenantDb, approvalRequestId);
+		const approvalRequest = await persistApprovalRequest(await buildTransition(locked));
 		if (approvalRequest.status !== 'APPROVED' && approvalRequest.status !== 'REJECTED') {
 			return approvalRequest;
 		}
 
 		await tenantDb.query(`SELECT set_config('norbital.approval_terminal_transition', 'on', true)`);
-		const approvalRequestId = approvalRequest.norbital_id;
 		// stupidity:allow A6 -- terminal record changes must finish before their locks are released.
 		for (const ref of approvalRequest.locked_record_refs ?? []) {
 			const before = await readRecordFeedState(ref.collection_name, ref.record_id);
@@ -293,9 +292,10 @@ async function restoreRecordBeforeApproval(
 	// Without a temporal history table there is no prior version to roll back to: drop the row
 	// (a rejected create/update leaves nothing; a rejected delete cannot be resurrected).
 	if (!(await tableExists(historyTableName))) {
-		await tenantDb.query(`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`, [
-			ref.record_id
-		]);
+		await tenantDb.query(
+			`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`,
+			[ref.record_id]
+		);
 		return;
 	}
 
@@ -324,9 +324,10 @@ async function restoreRecordBeforeApproval(
 			return;
 		}
 		// No history row to resurrect from: the delete simply stands.
-		await tenantDb.query(`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`, [
-			ref.record_id
-		]);
+		await tenantDb.query(
+			`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`,
+			[ref.record_id]
+		);
 		return;
 	}
 
@@ -355,9 +356,10 @@ async function restoreRecordBeforeApproval(
 		[ref.record_id, approvalRequestId]
 	);
 	if ((restored.rowCount ?? 0) > 0) return;
-	await tenantDb.query(`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`, [
-		ref.record_id
-	]);
+	await tenantDb.query(
+		`DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE norbital_id = $1::uuid`,
+		[ref.record_id]
+	);
 }
 
 async function releaseApprovalLocks(approvalRequestId: string): Promise<void> {
@@ -825,23 +827,24 @@ export async function restartApprovalRequestForRevision(params: {
 export async function autoResolveApprovalRequest(
 	approvalRequestId: string
 ): Promise<TApprovalRequest> {
-	const existing = await loadApprovalRequest(approvalRequestId);
-	const approvalStepNodes = [...toStepStacks(existing), []];
-	// The identity columns are carried through from the row just loaded, not omitted as
-	// "unchanged". The write is an UPSERT, and Postgres enforces NOT NULL on the proposed tuple
-	// *before* it looks for the conflict — so a partial column list makes the statement fail on
-	// `organization_id` even though the row it would have updated already has one.
-	return persistApprovalTransition({
-		norbital_id: existing.norbital_id,
-		requestor: Reflect.get(existing, 'requestor'),
-		label: existing.label,
-		approval_config_id: existing.approval_config_id,
-		collection_name: existing.collection_name,
-		organization_id: existing.organization_id,
-		status: deriveRequestStatus(approvalStepNodes),
-		approval_step_nodes: approvalStepNodes,
-		locked_record_refs: existing.locked_record_refs ?? [],
-		norbital_updated_at: new Date().toISOString()
+	return persistApprovalTransition(approvalRequestId, (existing) => {
+		const approvalStepNodes = [...toStepStacks(existing), []];
+		// The identity columns are carried through from the locked row, not omitted as "unchanged".
+		// The write is an UPSERT, and Postgres enforces NOT NULL on the proposed tuple *before* it
+		// looks for the conflict — so a partial column list makes the statement fail on
+		// `organization_id` even though the row it would have updated already has one.
+		return {
+			norbital_id: existing.norbital_id,
+			requestor: Reflect.get(existing, 'requestor'),
+			label: existing.label,
+			approval_config_id: existing.approval_config_id,
+			collection_name: existing.collection_name,
+			organization_id: existing.organization_id,
+			status: deriveRequestStatus(approvalStepNodes),
+			approval_step_nodes: approvalStepNodes,
+			locked_record_refs: existing.locked_record_refs ?? [],
+			norbital_updated_at: new Date().toISOString()
+		};
 	});
 }
 
@@ -854,38 +857,39 @@ export async function withdrawApprovalRequest(
 	approvalRequestId: string,
 	user: TScopeRequestor
 ): Promise<TApprovalRequest> {
-	const existing = await loadApprovalRequest(approvalRequestId);
-	if (TERMINAL_STATES.includes(existing.status)) {
-		throw error(400, 'Cannot withdraw: the request has already reached a terminal state.');
-	}
-	const requestorRef = requestorMutationRef(Reflect.get(existing, 'requestor'));
-	const requestorId = requestorRef[0].record_id;
-	if (requestorId !== user.norbital_id) {
-		throw error(403, 'Only the requestor can withdraw their own approval request.');
-	}
+	return persistApprovalTransition(approvalRequestId, (existing) => {
+		// Authorization is decided from the locked row too. The requestor of record can be rewritten
+		// by a revision restart, so a check taken before the lock could admit someone who is no
+		// longer the requestor — or refuse someone who now is.
+		const requestorRef = requestorMutationRef(Reflect.get(existing, 'requestor'));
+		const requestorId = requestorRef[0].record_id;
+		if (requestorId !== user.norbital_id) {
+			throw error(403, 'Only the requestor can withdraw their own approval request.');
+		}
 
-	const currentFlow = getCurrentFlow(existing);
-	const flowHistory = toStepStacks(existing).slice(0, -1);
-	const pendingStep = getCurrentPendingStep(existing);
-	const rejectedFlow = currentFlow.map((step) =>
-		!pendingStep || step.id === pendingStep.id
-			? updateStepWithAction(step, 'REJECTED', user.norbital_id, 'Withdrawn by requestor')
-			: step
-	);
-	const approvalStepNodes = [...flowHistory, rejectedFlow];
+		const currentFlow = getCurrentFlow(existing);
+		const flowHistory = toStepStacks(existing).slice(0, -1);
+		const pendingStep = getCurrentPendingStep(existing);
+		const rejectedFlow = currentFlow.map((step) =>
+			!pendingStep || step.id === pendingStep.id
+				? updateStepWithAction(step, 'REJECTED', user.norbital_id, 'Withdrawn by requestor')
+				: step
+		);
+		const approvalStepNodes = [...flowHistory, rejectedFlow];
 
-	return persistApprovalTransition({
-		norbital_id: existing.norbital_id,
-		requestor: Reflect.get(existing, 'requestor'),
-		label: existing.label,
-		approval_config_id: existing.approval_config_id,
-		collection_name: existing.collection_name,
-		organization_id: existing.organization_id,
-		status: deriveRequestStatus(approvalStepNodes),
-		approval_step_nodes: approvalStepNodes,
-		locked_record_refs: existing.locked_record_refs ?? [],
-		closed_at: new Date().toISOString(),
-		norbital_updated_at: new Date().toISOString()
+		return {
+			norbital_id: existing.norbital_id,
+			requestor: Reflect.get(existing, 'requestor'),
+			label: existing.label,
+			approval_config_id: existing.approval_config_id,
+			collection_name: existing.collection_name,
+			organization_id: existing.organization_id,
+			status: deriveRequestStatus(approvalStepNodes),
+			approval_step_nodes: approvalStepNodes,
+			locked_record_refs: existing.locked_record_refs ?? [],
+			closed_at: new Date().toISOString(),
+			norbital_updated_at: new Date().toISOString()
+		};
 	});
 }
 
@@ -893,6 +897,9 @@ export async function withdrawApprovalRequest(
  * Records an approver action (approve / reject / request-for-change) on the current pending step.
  * The DB derives `status` from the step nodes; terminal record restoration/finalization and lock
  * release commit atomically with that status. This never replays a stored payload.
+ *
+ * `approvalRequest` names which request to act on and nothing else — the flow acted upon is the one
+ * read under the lock, not the one the caller was holding.
  */
 export async function processAction(
 	action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE',
@@ -902,63 +909,51 @@ export async function processAction(
 	isSupercede: boolean,
 	comments?: string
 ): Promise<TApprovalRequest> {
-	const rowStatus = await loadApprovalRequestStatus(approvalRequest.norbital_id);
-	if (!rowStatus) {
-		throw error(404, 'Approval request not found');
-	}
-	if (TERMINAL_STATES.includes(rowStatus)) {
-		throw error(
-			400,
-			'Cannot modify approval request: it has already reached a terminal state. ' +
-				'Once approved or rejected, the decision is final.'
-		);
-	}
+	return persistApprovalTransition(approvalRequest.norbital_id, (existing) => {
+		const currentFlow = getCurrentFlow(existing);
+		const flowHistory = toStepStacks(existing).slice(0, -1);
 
-	const existing = await loadApprovalRequestRow(approvalRequest.norbital_id);
-	if (!existing) {
-		throw error(404, 'Approval request not found');
-	}
-
-	const currentFlow = getCurrentFlow(existing);
-	const flowHistory = toStepStacks(existing).slice(0, -1);
-
-	let updatedFlow: TApprovalRequestStepNode[];
-	if (isSupercede) {
-		if (!approvalConfig.supercede_teams.some((group: string) => isUserInGroup(group))) {
-			throw new Error('No permissions to supercede.');
-		}
-		updatedFlow = currentFlow.map((step) =>
-			updateStepWithAction(step, action, user.norbital_id, comments)
-		);
-	} else {
-		const currentPendingStep = getCurrentPendingStep(existing);
-		if (!currentPendingStep) {
-			throw new Error('No pending approval steps found. The request may already be completed.');
-		}
-		if (!canUserApprove(currentPendingStep)) {
-			throw new Error(
-				`You're not authorized to approve the current pending step '${currentPendingStep.name}'. ` +
-					`This step requires approval from: ${currentPendingStep.teams_that_can_approve.join(', ')}.`
+		let updatedFlow: TApprovalRequestStepNode[];
+		if (isSupercede) {
+			if (!approvalConfig.supercede_teams.some((group: string) => isUserInGroup(group))) {
+				throw new Error('No permissions to supercede.');
+			}
+			updatedFlow = currentFlow.map((step) =>
+				updateStepWithAction(step, action, user.norbital_id, comments)
+			);
+		} else {
+			// Read off the locked flow, not the one the caller was shown. Whoever committed first may
+			// have advanced the request past this step — or replaced the flow outright with a revision
+			// restart — and the step this decision lands on has to be the one that is pending now.
+			const currentPendingStep = getCurrentPendingStep(existing);
+			if (!currentPendingStep) {
+				throw new Error('No pending approval steps found. The request may already be completed.');
+			}
+			if (!canUserApprove(currentPendingStep)) {
+				throw new Error(
+					`You're not authorized to approve the current pending step '${currentPendingStep.name}'. ` +
+						`This step requires approval from: ${currentPendingStep.teams_that_can_approve.join(', ')}.`
+				);
+			}
+			updatedFlow = currentFlow.map((step) =>
+				step.id === currentPendingStep.id
+					? updateStepWithAction(step, action, user.norbital_id, comments)
+					: step
 			);
 		}
-		updatedFlow = currentFlow.map((step) =>
-			step.id === currentPendingStep.id
-				? updateStepWithAction(step, action, user.norbital_id, comments)
-				: step
-		);
-	}
-	const approvalStepNodes = [...flowHistory, updatedFlow];
+		const approvalStepNodes = [...flowHistory, updatedFlow];
 
-	return persistApprovalTransition({
-		norbital_id: existing.norbital_id,
-		requestor: Reflect.get(existing, 'requestor'),
-		label: existing.label,
-		approval_config_id: existing.approval_config_id,
-		collection_name: existing.collection_name,
-		organization_id: existing.organization_id,
-		status: deriveRequestStatus(approvalStepNodes),
-		approval_step_nodes: approvalStepNodes,
-		locked_record_refs: existing.locked_record_refs ?? [],
-		norbital_updated_at: new Date().toISOString()
+		return {
+			norbital_id: existing.norbital_id,
+			requestor: Reflect.get(existing, 'requestor'),
+			label: existing.label,
+			approval_config_id: existing.approval_config_id,
+			collection_name: existing.collection_name,
+			organization_id: existing.organization_id,
+			status: deriveRequestStatus(approvalStepNodes),
+			approval_step_nodes: approvalStepNodes,
+			locked_record_refs: existing.locked_record_refs ?? [],
+			norbital_updated_at: new Date().toISOString()
+		};
 	});
 }
