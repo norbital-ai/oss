@@ -67,16 +67,16 @@ custom-type schemas.
    land in one transaction, `workspaceJobs`' drain hands the delivery to the host's `messaging`
    binding over the private control plane, a refusal retries, and the row replicates to its
    recipient and to nobody else. The shell renders it (`runtime/notifications-menu.svelte`), live
-   through the sync engine; that component's _rendering_ is unverified for want of a browser runner.
-   Automations and hooks still have no manual end-to-end pass.
+   through the sync engine, and that rendering is now mounted and asserted — see **Rendering** below
+   for what that does and does not settle. Automations and hooks still have no manual end-to-end pass.
 4. **Channels route, thinly.** Inbound → agent under the declared policy → reply over the transport,
    proven end to end against real Postgres. Inbound is host-driven (`channels` on the host config),
    never a public route — Pod holds no transport credential and cannot verify a webhook. Telegram is
    built in over long polling. Core's archive, contact-linking, attachments, and batching are not
    ported; see B3 in [CORE_REFACTOR.md](./CORE_REFACTOR.md).
 5. **Agent UI is one panel**, not Core's ~40 components. It reads its transcript from the replica
-   now, so a reply from a channel or another tab appears without a refresh. Rendering is unverified —
-   no jsdom or browser runner in this package.
+   now, so a reply from a channel or another tab appears without a refresh — which is proven by
+   mounting the panel, not only by typechecking it. See **Rendering** below.
 6. **Core has been migrated too**, in `worktrees/core-pod-architecture` (41 commits, 231 tests, 23
    svelte-check errors against `origin/master`'s own 43). Landed: better-auth deleted and both tenant
    and ops sign-in rebuilt on Pod's `cookieSession` + `emailOtpIdentity`; roles migrated to
@@ -91,6 +91,52 @@ custom-type schemas.
    tenant microVM over the _tenant_ database, and every consumer is a Core-plane surface over Core's
    _system_ database, which has no outbox. And Core's ~40 agent components are not deletable: that loop
    serves the **builder** agent over the sandbox, which stays in Core by design.
+
+## Rendering: what a component test here proves, and what it does not
+
+`packages/pod` has a second vitest project, `components`, running in **happy-dom**. Both projects run
+under one `pnpm vitest run`; the node project keeps its real Postgres and its serial execution
+untouched. happy-dom rather than a browser runner because the alternative is a Playwright download and
+a second test command, for three surfaces whose open questions are all about data flow.
+
+The replica is faked at the live-query seam (`tests/support/fake-replica.svelte.ts`) rather than by
+standing up a database. The fake answers **late** — the first load and every write afterwards are
+delivered a turn after they are asked for — because a query that already holds its rows at mount would
+let every assertion pass against a component that read once and never listened again, which is the
+exact failure these three exist to rule out.
+
+**Covered.**
+
+- **Agent panel** (`tests/components/agent-chat-panel.test.ts`). The prompt appears before anything is
+  awaited; the stored row replaces the echo instead of duplicating it; a failed send keeps the echo so
+  the person can copy it; and a reply written by the loop, plus a turn sent from another tab, both
+  appear with nothing touched locally. That last is the bug the panel was rewritten for.
+- **Notification bell** (`tests/components/notifications-menu.test.ts`). The unread count is the
+  replica's, including one raised while the menu was already open; marking all read issues one
+  mutation per row and the count follows the replica back down rather than being cleared by the click;
+  another recipient's notification never appears.
+- **Host plugins in the sidebar** (`tests/components/system-navigation.test.ts`).
+  `buildSystemNavigation` is mounted through the shell's own section component: an `adminOnly` entry is
+  absent from the markup for a non-admin, `aria-current` follows the current path, and no plugins
+  renders no section at all. `/studio-archive` is checked alongside `/studio/collections`, because a
+  plain prefix match passes the first and quietly fails the second.
+
+Each claim was checked by mutation: breaking the re-fire, the `where` filter, the `adminOnly` filter or
+the active-path match fails exactly the tests that assert them, and nothing else.
+
+**Not covered, and a DOM-only runner cannot cover it.**
+
+- **Layout and CSS.** happy-dom computes no styles and no geometry. Nothing here would notice a popover
+  rendering off-screen, a truncated label, an unreadable contrast ratio, or the sidebar's collapsed and
+  expanded widths.
+- **The accessibility tree.** The tests read `aria-label` and `aria-current` as attributes. What a
+  screen reader announces, focus order, and whether the popover traps focus are not observed.
+- **Real event semantics.** Clicks are dispatched, not performed — no hit testing, no pointer capture,
+  no scrolling, no IME. `ResizeObserver` is a no-op stub and `@iconify/svelte` is stubbed so the suite
+  does not fetch glyphs over the network.
+- **The shell itself.** `pod-shell.svelte` is still mounted nowhere. The navigation test covers the
+  section it feeds, not the shell's composition of it, and the manual standalone walkthrough remains
+  the only thing that has run the whole page.
 
 ## Ground rules that earned their keep
 
@@ -109,7 +155,7 @@ custom-type schemas.
 ```bash
 podman machine start                      # the test suite needs a Docker-compatible socket
 pnpm packages:build && pnpm deps:sync     # injected template copies go stale silently
-pnpm lint && pnpm vitest run --no-file-parallelism   # 371 passing, 0 skipped
+pnpm lint && pnpm vitest run --no-file-parallelism   # 400 passing, 0 skipped
 ```
 
 Two rules the numbers depend on. Run the suite with `--no-file-parallelism`: the container-backed e2e
