@@ -111,6 +111,83 @@
 		return samples;
 	});
 
+	/**
+	 * The substrate bands, constructed the way the engine measures them.
+	 *
+	 * A section sheet is layered — armour over geofabric over core, sand over
+	 * dredged fill at the material change, a key trench under the toe. Drawing
+	 * only the outline and the bed gives one solid body, which is exactly what
+	 * the volumes are *not*: they are split by substrate, and this is where you
+	 * check that the split is where the drawing puts it.
+	 *
+	 * Each band is derived from the same parameters the integrator uses, so a
+	 * band drawn here and a quantity priced there cannot disagree.
+	 */
+	const bands = $derived.by(() => {
+		if (surfaceLine.length < 2 || !extent) return [];
+		const out: { id: string; label: string; color: string; opacity: number; path: string }[] = [];
+
+		// Armour blanket: the design face, offset down by its own thickness measured
+		// perpendicular to the slope, over the stretch the face actually occupies.
+		const thickness = model.params.dimensionsM.armorThickness ?? 0;
+		if (thickness > 0 && model.params.seawardFaceKind === 'revetment') {
+			const face = surfaceLine.filter((point) => point.zCdM < model.params.levelsM.platform + 0.01);
+			if (face.length >= 2) {
+				const under = face.map((point, index) => {
+					const previous = face[Math.max(0, index - 1)];
+					const next = face[Math.min(face.length - 1, index + 1)];
+					const run = next.stationM - previous.stationM;
+					const rise = next.zCdM - previous.zCdM;
+					// Vertical drop equivalent to a perpendicular thickness on this slope.
+					const factor = run === 0 ? 1 : Math.hypot(run, rise) / Math.abs(run);
+					return { stationM: point.stationM, zCdM: point.zCdM - thickness * factor };
+				});
+				out.push({
+					id: 'armour',
+					label: 'Rock armour',
+					color: '#5c6470',
+					opacity: 0.55,
+					path: `M ${face.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`).join(' L ')} L ${[...under]
+						.reverse()
+						.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`)
+						.join(' L ')} Z`
+				});
+			}
+		}
+
+		// Material change: sand above, dredged or excavated fill below.
+		const interim = model.params.levelsM.interim;
+		if (typeof interim === 'number' && bedLine.length > 1) {
+			const clip = (z: number): number => Math.max(z, interim);
+			out.push({
+				id: 'sand_fill',
+				label: 'Sand fill (above the material change)',
+				color: '#d8c79a',
+				opacity: 0.5,
+				path: `M ${surfaceLine.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`).join(' L ')} L ${[
+					...bedLine
+				]
+					.reverse()
+					.map((p) => `${sx(p.stationM)},${sy(clip(p.zCdM))}`)
+					.join(' L ')} Z`
+			});
+			out.push({
+				id: 'dredged_fill',
+				label: 'Dredged fill (below the material change)',
+				color: '#a9946a',
+				opacity: 0.5,
+				path: `M ${bedLine.map((p) => `${sx(p.stationM)},${sy(clip(p.zCdM))}`).join(' L ')} L ${[
+					...bedLine
+				]
+					.reverse()
+					.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`)
+					.join(' L ')} Z`
+			});
+		}
+
+		return out;
+	});
+
 	const extent = $derived.by(() => {
 		if (points.length === 0) return null;
 		const stations = [...points.map((p) => p.stationM), ...bedLine.map((p) => p.stationM)];
@@ -269,8 +346,14 @@
 							{fmt(extent.maxS)} m
 						</text>
 
-						<!-- Existing bed, and the fill that sits on it -->
-						{#if bedLine.length > 1 && surfaceLine.length > 1}
+						<!-- The body, split by substrate the way the volumes are -->
+						{#each bands as band (band.id)}
+							<path d={band.path} fill={band.color} opacity={band.opacity}>
+								<title>{band.label}</title>
+							</path>
+						{/each}
+						{#if bands.length === 0 && bedLine.length > 1 && surfaceLine.length > 1}
+							<!-- No material change given: one body is then the honest drawing. -->
 							<path
 								d={`M ${surfaceLine.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`).join(' L ')} L ${[
 									...bedLine
@@ -279,7 +362,7 @@
 									.map((p) => `${sx(p.stationM)},${sy(p.zCdM)}`)
 									.join(' L ')} Z`}
 								fill="currentColor"
-								class="text-amber-700/15"
+								class="text-amber-700/20"
 							/>
 						{/if}
 						{#if bedLine.length > 1}
@@ -292,8 +375,9 @@
 								class="text-stone-500"
 							/>
 							<text
-								x={sx(bedLine[0].stationM) + 4}
-								y={sy(bedLine[0].zCdM) - 5}
+								x={sx(bedLine[bedLine.length - 1].stationM) - 4}
+								y={sy(bedLine[bedLine.length - 1].zCdM) + 12}
+								text-anchor="end"
 								class="fill-stone-500 text-[9px]"
 							>
 								existing bed
@@ -335,6 +419,12 @@
 								class="text-foreground"
 							/>
 						{/if}
+						<!--
+						No text at the points. Three levelled points inside twenty metres
+						of chainage — crest_seaward, armor_crest, crest_landward — overlap
+						into an unreadable smear at any plot width that fits a panel. The
+						identity is on hover, in the legend, and in the table below.
+					-->
 						{#each surfaceLine as point, index (index)}
 							<circle
 								cx={sx(point.stationM)}
@@ -347,14 +437,6 @@
 							>
 								<title>{point.layer} · {fmt(point.stationM)} m · {fmt(point.zCdM, 2)} m CD</title>
 							</circle>
-							<text
-								x={sx(point.stationM)}
-								y={sy(point.zCdM) - 8}
-								text-anchor="middle"
-								class="fill-muted-foreground text-[8px]"
-							>
-								{point.layer}
-							</text>
 						{/each}
 					</svg>
 					<figcaption class="mt-1 text-tiny text-muted-foreground tabular-nums">

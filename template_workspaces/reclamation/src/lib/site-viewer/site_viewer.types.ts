@@ -134,6 +134,8 @@ export interface ThreeRenderer {
 }
 
 export interface ThreeControls {
+	enablePan: boolean;
+	screenSpacePanning: boolean;
 	target: ThreeVector3;
 	enableDamping: boolean;
 	dampingFactor: number;
