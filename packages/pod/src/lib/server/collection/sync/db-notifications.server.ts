@@ -22,8 +22,8 @@ export type DatabaseNotifications = {
 
 let notifications: DatabaseNotifications | null = null;
 
-/** Installed once by the runtime entry point. */
-export function setDatabaseNotifications(source: DatabaseNotifications): void {
+/** Install or clear the current host-provided commit notification source. */
+export function setDatabaseNotifications(source: DatabaseNotifications | null): void {
 	notifications = source;
 }
 
@@ -35,9 +35,7 @@ export function setDatabaseNotifications(source: DatabaseNotifications): void {
 export function waitForSyncNotification(signal: AbortSignal): Promise<void> {
 	if (signal.aborted) return Promise.resolve();
 	const source = notifications;
-	// Standalone runs the pod runtime in-process with its own Postgres and no host to push
-	// notifications in. Resolving immediately would spin, so wait for the abort instead: the
-	// caller's keep-alive timer still fires and the stream stays correct, just not push-driven.
+	// A host that does not install push notifications falls back to the caller's keep-alive.
 	if (!source)
 		return new Promise((resolve) =>
 			signal.addEventListener('abort', () => resolve(), { once: true })
