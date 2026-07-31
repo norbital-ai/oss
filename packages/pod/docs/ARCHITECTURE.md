@@ -284,6 +284,28 @@ binding reaches a tenant runtime through a proxy that answers every property get
 forwarder, so a data field on a binding is a function inside a hosted isolate and an array only
 under `pod start`.
 
+Due-ness is the database's clock: `available_at` defaults to the database's `now()` and the claim
+compares against `now()` too, so a queued notification is never hidden by the gap between a runtime
+process and its database.
+
+### In-app
+
+The `notification` collection replicates like any other. The permission guard scopes it to
+`recipient_user_id`, so a browser holds only its own; `notification_outbox` is excluded from the
+replica DDL entirely, since a browser can act on none of it.
+
+The workspace shell renders the bell (`runtime/notifications-menu.svelte`), supplied to
+`WorkspaceShell` as a snippet — the shell component has no data layer, and what is unread is a
+question only the runtime holding the replica can answer. It is live through the sync engine and
+nothing else: the read is the ordinary cached `findMany`, and a diff applied to the replica re-fires
+exactly it. There is no poll and no second stream.
+
+Marking read is the one write no policy grants. A system collection has no author to declare it
+mutable, and no author would think to write a grant for "seen" — so it is a named exception
+(`SELF_SERVICE_WRITE_COLLECTIONS`), narrow on three axes: this collection, this recipient, and a
+payload touching nothing but `read_at`. It is decided against the row already loaded rather than as
+a reduced condition, because the mutation path applies those to nothing.
+
 ## Agents
 
 Pod owns the workspace-agent loop. The host AI facility performs model inference only:

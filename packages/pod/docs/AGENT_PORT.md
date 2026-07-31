@@ -147,5 +147,17 @@ Steps 1–5 are covered end to end against real Postgres — `agent-transcript-e
 prove transcript shape, sequence continuity, replay across turns, and cross-user rejection.
 
 Step 6 is not. There is no component test infrastructure in this package — no jsdom, no browser runner
-— so the panel is covered by `svelte-check` and by its one data dependency being proven end to end.
-Rendering is unverified, and that gap is worth closing before anyone relies on it.
+— so the panel is covered by `svelte-check`, by unit tests over the two pure parts it has
+(`runtime/agent/transcript.ts`), and by its data dependency being proven end to end. Rendering is
+unverified, and that gap is worth closing before anyone relies on it.
+
+The panel no longer keeps a message array. It reads `chat_message` from the replica through the same
+live query the rest of the shell uses, so a reply written by the loop from a channel — or by the
+same person in another tab — appears without a refresh. `conversation-replication-e2e` proves the
+data half: all four conversation collections reach a client replica, sessions and messages are
+scoped by session ownership, `automation_run` by `requested_by_user_id`, and a continuation arrives
+on an open stream with nobody else's rows alongside it.
+
+`chat_turn` replicates and is never written: the loop stores each `AiMessage` verbatim, so replay is
+a read and a turn row has nothing left to hold. The table remains from Core's model; deleting it is
+a migration nobody has needed yet.

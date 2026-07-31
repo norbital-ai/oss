@@ -3,10 +3,10 @@
 Written to be read cold. Two worktrees, one branch name, one goal: Core and OSS on the new standards,
 transitional debt pruned, and the result actually working.
 
-| Worktree                                | Repo                    | Branch                             | Base       |
-| --------------------------------------- | ----------------------- | ---------------------------------- | ---------- |
-| `worktrees/pod-architecture`            | `norbital-ai/oss`       | `codex/pod-architecture-greenfield` | `origin/main`   |
-| `worktrees/core-pod-architecture`       | `norbital-ai/norbital`  | `codex/pod-architecture-greenfield` | `origin/master` |
+| Worktree                          | Repo                   | Branch                              | Base            |
+| --------------------------------- | ---------------------- | ----------------------------------- | --------------- |
+| `worktrees/pod-architecture`      | `norbital-ai/oss`      | `codex/pod-architecture-greenfield` | `origin/main`   |
+| `worktrees/core-pod-architecture` | `norbital-ai/norbital` | `codex/pod-architecture-greenfield` | `origin/master` |
 
 **Work only inside the worktrees.** Stage explicitly — `git add <paths>`, never `git add -A`. Two
 incidents this session: a stray commit into the wrong repo, and 49k lines of a copied test workspace
@@ -56,15 +56,27 @@ custom-type schemas.
 
 1. **Templates still get policies from Core's seed.** Only `crm` declares one. See the checklist in
    [CORE_REFACTOR.md](./CORE_REFACTOR.md).
-2. **Integrations are unverified.** No round trip to a real external API has been run.
-3. **Notifications / automations / hooks** have unit and e2e coverage but no manual end-to-end pass.
+2. **Integrations work in both directions, except inbound webhooks.** A `+integrations.ts` connection
+   compiles into the manifest, an HTTP `send` reaches a real socket with the connection's credential
+   resolved host-side, a `pull` binding runs on its schedule and lands rows, and a `systemEvent` send
+   reaches its matching `receive`. All four are proven in
+   `packages/pod/tests/standalone/integration-delivery-e2e.test.ts` and shown non-vacuous. A `webhook`
+   binding still receives nothing — `pod start` warns; see D1b in [CORE_REFACTOR.md](./CORE_REFACTOR.md).
+3. **Notifications are proven; automations and hooks are not.** `notification-e2e` drives the whole
+   chain against real Postgres — a hook calls `sendNotification`, the in-app row and the outbox row
+   land in one transaction, `workspaceJobs`' drain hands the delivery to the host's `messaging`
+   binding over the private control plane, a refusal retries, and the row replicates to its
+   recipient and to nobody else. The shell renders it (`runtime/notifications-menu.svelte`), live
+   through the sync engine; that component's *rendering* is unverified for want of a browser runner.
+   Automations and hooks still have no manual end-to-end pass.
 4. **Channels route, thinly.** Inbound → agent under the declared policy → reply over the transport,
    proven end to end against real Postgres. Inbound is host-driven (`channels` on the host config),
    never a public route — Pod holds no transport credential and cannot verify a webhook. Telegram is
    built in over long polling. Core's archive, contact-linking, attachments, and batching are not
    ported; see B3 in [CORE_REFACTOR.md](./CORE_REFACTOR.md).
-5. **Agent UI is one panel**, not Core's ~40 components. Rendering is unverified — no jsdom or browser
-   runner in this package.
+5. **Agent UI is one panel**, not Core's ~40 components. It reads its transcript from the replica
+   now, so a reply from a channel or another tab appears without a refresh. Rendering is unverified —
+   no jsdom or browser runner in this package.
 6. **Core is untouched.** Everything in `CORE_REFACTOR.md` is outstanding.
 
 ## Ground rules that earned their keep
