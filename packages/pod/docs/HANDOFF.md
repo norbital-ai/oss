@@ -56,12 +56,15 @@ custom-type schemas.
 
 1. **Templates still get policies from Core's seed.** Only `crm` declares one. See the checklist in
    [CORE_REFACTOR.md](./CORE_REFACTOR.md).
-2. **Integrations work in both directions, except inbound webhooks.** A `+integrations.ts` connection
-   compiles into the manifest, an HTTP `send` reaches a real socket with the connection's credential
-   resolved host-side, a `pull` binding runs on its schedule and lands rows, and a `systemEvent` send
-   reaches its matching `receive`. All four are proven in
-   `packages/pod/tests/standalone/integration-delivery-e2e.test.ts` and shown non-vacuous. A `webhook`
-   binding still receives nothing — `pod start` warns; see D1b in [CORE_REFACTOR.md](./CORE_REFACTOR.md).
+2. **Integrations work in both directions.** A `+integrations.ts` connection compiles into the
+   manifest, an HTTP `send` reaches a real socket with the connection's credential resolved host-side,
+   a `pull` binding runs on its schedule and lands rows, a `systemEvent` send reaches its matching
+   `receive`, and a signed `webhook` delivery arrives on a listener the host owns and lands rows
+   through the declared binding. All five are proven in
+   `packages/pod/tests/standalone/integration-delivery-e2e.test.ts` and shown non-vacuous. What is
+   still missing around webhooks is narrower than it was: signature schemes over anything but the raw
+   body, replay windows, `events` narrowing, and any pruning of the inbound ledger. See D1b in
+   [CORE_REFACTOR.md](./CORE_REFACTOR.md).
 3. **Notifications are proven; automations and hooks are not.** `notification-e2e` drives the whole
    chain against real Postgres — a hook calls `sendNotification`, the in-app row and the outbox row
    land in one transaction, `workspaceJobs`' drain hands the delivery to the host's `messaging`

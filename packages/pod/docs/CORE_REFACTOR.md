@@ -509,7 +509,7 @@ Unit and e2e coverage did not catch total auth failure in standalone. These are 
 - [x] **D1. Done, and it found that outbound integrations never ran.** `toRuntimeWorkspace()` dropped
       `integrations`/`secrets`, so no outbox row was ever written and the facility gate was a no-op.
       Fixed; covered by `tests/standalone/integration-delivery-e2e.test.ts`, verified non-vacuous by
-      stashing the fix. **Two gaps followed; both are now closed except inbound webhooks:**
+      stashing the fix. **Two gaps followed; both are now closed:**
 - [x] **D1a. Resolved — a connection is declared where the doc always said it was.** The rule was
       object _identity_: a `connection` was accepted only if the same object was also in
       `defineWorkspace`'s `connections` input, which the compiler never emitted. Two collections in two
@@ -533,21 +533,30 @@ Unit and e2e coverage did not catch total auth failure in standalone. These are 
       Proved end to end in `tests/standalone/integration-delivery-e2e.test.ts` against a real socket,
       and shown non-vacuous by running it with the wrong secret — the send fails on the header, the
       pull times out with no rows, and the cursor assertion fails, each for its own reason.
-- [ ] **D1b (b). Webhooks are still not delivered, and that is the whole remaining gap.** A `webhook`
-      receive binding compiles and validates and receives nothing. `pod start` now warns at startup
-      naming the bindings, so it is loud rather than silent, but the mechanism is absent.
-      **What it needs, in the shape channels set (commit `ec13137`):** a `HostWebhookListener` on
-      `SelfHostedPodHostConfig`, shaped like `HostChannelListener` — host-process code handed a
-      `deliver` function, returning a stop function. Inbound must **not** become a public Pod route:
-      verifying `hmac-sha256` means holding the transport's secret, and a tenant holds none; under Core
-      the isolate has no socket at all. Three pieces are missing, not one: the listener type and its
-      standalone wiring; an HMAC verification helper the host calls before `deliver` (the manifest
-      already carries `authentication.secret` and `signatureHeader` as references); and a dedup ledger
-      keyed on the `eventId` header, claimed _before_ the import runs, exactly as
-      `channel_inbound_message` is — a provider that redelivers is normal, and without the ledger every
-      redelivery imports the page again.
-      **Do not build it without an end-to-end test**; the two directions above were both wired,
-      type-checked, and completely inert before anyone ran them.
+- [x] **D1b (b). Resolved — a declared webhook now has somewhere to arrive.** All three missing pieces
+      exist, in the shape channels set (`ec13137`). `SelfHostedPodHostConfig.webhooks` takes a
+      `HostWebhookListener`, shaped exactly like `HostChannelListener`: host-process code handed a
+      `deliver` function, returning a stop function, reaching the runtime over the private host-command
+      plane. It is deliberately **not** a Pod route, and `httpWebhookListener()` is the built-in wire —
+      one endpoint per declared binding, derived from the manifest, so a misspelled binding is a 404.
+      The HMAC check lives in `webhookInboundDeliverer`, not in the listener: a security step a caller
+      can forget is one that will eventually be forgotten, so every delivery is verified against the
+      secret the manifest names before it crosses in. The body travels as raw text, because a
+      re-serialised JSON object verifies against nothing, and the compare is `timingSafeEqual`.
+      `integration_inbound_event` is the ledger, claimed **before** the import, keyed on the declared
+      `eventIdHeader` and falling back to a digest of the body. A payload the binding's `input` schema
+      turns down now comes back as a *result* rather than a throw — nothing has been written when it
+      happens — so a host can tell its sender "never again" instead of "retry"; the pull job turns that
+      refusal back into the failure it is, since it has no sender to answer.
+      Proved in `tests/standalone/integration-delivery-e2e.test.ts` against a real socket, and shown
+      non-vacuous three times over: stubbing the HMAC compare to `true` imports the forgery, dropping
+      the event id lands the replay as a second row, and removing the binding's `input` accepts the
+      malformed payload with a 200.
+      **Not built, and not faked:** signature schemes over anything but the raw body (Stripe signs
+      `<timestamp>.<body>`) — a host wanting one writes its own listener and verifies before `deliver`;
+      timestamp/replay-window checks; `events` narrowing, which is carried into
+      `DeclaredWebhookBinding` and filtered by nobody; and any pruning of the ledger, which grows one
+      row per delivery forever.
 - [ ] **D2.** Notifications: trigger one from a hook and confirm delivery.
 - [ ] **D3.** Automations: scheduled and event-triggered, both observed firing.
 - [ ] **D4.** Hooks: `before` mutation and `after` derived write.

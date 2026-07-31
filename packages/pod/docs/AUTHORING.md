@@ -242,8 +242,37 @@ leaves the pod; it reaches every `receive` binding waiting on that exact event n
 on an event nothing emits is refused at startup, naming the binding — the two halves are matched by
 string, and a typo used to produce silence rather than an error.
 
-**`webhook` is declared but not yet delivered.** Nothing calls a webhook binding today; see
-[CORE_REFACTOR.md](./CORE_REFACTOR.md) D1b. `pod start` warns at startup rather than leaving it silent.
+**`webhook` is the push half, and it is not a Pod route.** A binding declares where the signature and
+the event id are found, and the _name_ of the signing secret:
+
+```ts
+receive: {
+	rfi: {
+		webhook: {
+			authentication: {
+				type: 'hmac-sha256',
+				secret: { env: 'REPORTS_WEBHOOK_SECRET' },
+				signatureHeader: 'x-reports-signature'
+			},
+			eventIdHeader: 'x-reports-event-id'
+		},
+		input: z.object({ rfi: z.object({ number: z.string(), title: z.string() }) })
+	}
+}
+```
+
+The endpoint belongs to the host, not to the workspace: verifying an HMAC means holding the sender's
+secret, a tenant holds none, and under Core the isolate has no socket to be signed at. A host supplies
+`webhooks` in `pod.host.ts` — `httpWebhookListener({ port })` mounts one route per declared binding
+and needs no other configuration — and Pod verifies the signature against the named secret _before_
+the delivery crosses in, so a listener cannot skip the check. A workspace that declares a webhook and
+a host that supplies no listener is a startup warning, not a silent no-op.
+
+Every delivery is claimed in `integration_inbound_event` before its import runs, keyed on the declared
+event id and falling back to a digest of the raw body. A provider that redelivers is normal, so the
+second arrival loses one insert instead of importing the page again. `input` is parsed before the
+pipeline, which is what makes a malformed payload a refusal with nothing written rather than a
+half-import; the host answers the sender accordingly instead of inviting a retry.
 
 ## Secrets
 
