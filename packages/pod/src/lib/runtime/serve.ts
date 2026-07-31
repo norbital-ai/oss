@@ -1,5 +1,3 @@
-// fallow-ignore-file unused-file -- reached only through the generated server entry, which
-// re-exports startPodStdioServer as a source string in vite/index.ts (invisible to static analysis).
 /**
  * The tenant runtime guest loop.
  *
