@@ -203,6 +203,24 @@
 		void goto(href);
 	}
 
+	/**
+	 * Sign out through Pod's own endpoint.
+	 *
+	 * The sidebar renders this control `disabled` when no handler is passed, so omitting it did not
+	 * break anything visibly — it simply left a workspace nobody could sign out of, which matters now
+	 * that Pod owns authentication rather than deferring to a host's `/api/auth/sign-out`.
+	 *
+	 * POST, because `/logout` refuses anything else: a cross-site `<img src="/logout">` would otherwise
+	 * end a session on sight. The endpoint clears the cookie and answers with a redirect, but this is
+	 * `fetch`, so nothing follows it on the caller's behalf — the assignment below is what actually
+	 * leaves the page, and it is a full document load so the replica is torn down with the session.
+	 */
+	async function onSignOut(): Promise<void> {
+		const response = await fetch('/logout', { method: 'POST', credentials: 'include' });
+		if (!response.ok && !response.redirected) throw new Error('Unable to sign out');
+		window.location.assign('/login');
+	}
+
 	onDestroy(() => platformState.destroy());
 </script>
 
@@ -236,7 +254,7 @@
 	<NotificationsMenu {workspaceApi} userId={data.user.norbital_id} {expanded} onNavigate={navigate} />
 {/snippet}
 
-<WorkspaceShell model={navigationModel} onNavigate={navigate} {notifications}>
+<WorkspaceShell model={navigationModel} onNavigate={navigate} {notifications} {onSignOut}>
 	<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 		<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
 		{#if currentPath === '/'}

@@ -48,7 +48,6 @@ export type TenantWorkspaceShellData = {
 	readonly baseScope?: TBaseScope;
 	readonly userOrganizations?: readonly UserOrganizationInfo[];
 	readonly billing?: WorkspaceBillingSummary;
-	readonly signOut?: () => Promise<void>;
 	/**
 	 * App names the requestor may open. `null` means unrestricted admin access.
 	 * Resolved from policies assigned to the requestor's teams.
