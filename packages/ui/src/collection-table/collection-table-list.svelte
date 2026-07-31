@@ -62,11 +62,7 @@
 
 {#snippet listToolbar()}
 	<Cluster gap="sm" align="center" justify="between">
-		<Scroll
-			axis="x"
-			name="Collection toolbar"
-			class="collection-table-list-toolbar min-w-0 flex-1"
-		>
+		<Scroll axis="x" name="Collection toolbar" class="collection-table-list-toolbar min-w-0 flex-1">
 			<Inline gap="xs">
 				{@render toolbar()}
 			</Inline>
@@ -87,11 +83,7 @@
 	aria-busy={loading}
 	bottom={listPagination}
 >
-	<Scroll
-		axis="y"
-		name="Collection records"
-		class="rounded-md border bg-card"
-	>
+	<Scroll axis="y" name="Collection records" class="rounded-md border bg-card">
 		{#if loading}
 			<div class="divide-y" aria-label="Loading records">
 				{#each Array(8) as _, index (index)}
@@ -130,11 +122,7 @@
 						align="stretch"
 						class={cn(
 							'relative min-w-0 bg-card transition-colors',
-							isDetailActive
-								? 'bg-accent/50'
-								: row.selected
-									? 'bg-accent/40'
-									: 'hover:bg-muted/40'
+							isDetailActive ? 'bg-accent/50' : row.selected ? 'bg-accent/40' : 'hover:bg-muted/40'
 						)}
 						data-detail-active={isDetailActive ? 'true' : undefined}
 						aria-current={isDetailActive ? 'true' : undefined}

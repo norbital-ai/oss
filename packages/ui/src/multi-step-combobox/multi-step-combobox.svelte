@@ -774,18 +774,18 @@
 											)}
 											style={`height: ${itemHeight}px;`}
 										>
-										<Inline gap="sm" class="min-w-0 flex-1 text-xs">
-											<div class="min-w-0 flex-1 px-2">
-												{#if typeof option.label === 'string'}
-													<span
-														class="truncate text-secondary-foreground dark:text-muted-foreground"
-														>{option.label}</span
-													>
-												{:else}
-													{@render option.label(option.value, { compact: false })}
-												{/if}
-											</div>
-										</Inline>
+											<Inline gap="sm" class="min-w-0 flex-1 text-xs">
+												<div class="min-w-0 flex-1 px-2">
+													{#if typeof option.label === 'string'}
+														<span
+															class="truncate text-secondary-foreground dark:text-muted-foreground"
+															>{option.label}</span
+														>
+													{:else}
+														{@render option.label(option.value, { compact: false })}
+													{/if}
+												</div>
+											</Inline>
 											{#if selected}
 												<div
 													class="absolute right-2 flex h-4 w-4 items-center justify-center rounded-full bg-brand-100 dark:bg-brand-900"
@@ -813,7 +813,7 @@
 									{/if}
 								</Command.List>
 							{/if}
-					</Bound>
+						</Bound>
 					</Command.Root>
 				</Bound>
 			{:else}

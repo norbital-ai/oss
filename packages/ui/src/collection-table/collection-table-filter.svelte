@@ -150,64 +150,64 @@
 				{#if filters.length === 0}
 					<p class="py-2 text-center text-xs text-muted-foreground">No filters applied.</p>
 				{/if}
-			{#each filters as filter (filter.id)}
-				{@const field = selectedField(filter)}
-				{@const operatorOptions = field ? collectionFilterOperatorOptions(field.field) : []}
-				<!-- stupidity:allow UI6 -- filter-builder row grid needs explicit responsive tracks and placements the auto-fit Grid cannot express -->
-				<div
-					class="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_2rem]"
-				>
-					<div class="col-start-1 min-w-0 w-full sm:col-auto">
-						<TreeCombobox
-							rootItems={fieldTree}
-							value={filter.field ?? undefined}
-							placeholder="Choose a field"
-							searchPlaceholder="Search fields…"
-							ariaLabel="Choose a filter field"
-							allowCleared={false}
-							{disabled}
-							onValueChange={(nextField) => nextField && setField(filter.id, nextField)}
-						/>
-					</div>
-					{#if field}
-						<Combobox
-							options={[...operatorOptions]}
-							value={filter.operator}
-							searchable={false}
-							class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
-							onValueChange={(operator) => operator && setOperator(filter.id, operator)}
-						/>
-					{:else}
-						<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto"
-							>Choose a field</span
-						>
-					{/if}
-					{#if field && filter.operator && collectionFilterOperatorNeedsValue(filter.operator)}
-						{#key `${field.value}:${filter.operator}`}
-							<DataRenderer
-								field={collectionFilterOperandField(field.field, filter.operator)}
-								value={filter.value}
-								mode="edit"
-								class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
-								onValueChange={(value) => setValue(filter.id, value)}
-							/>
-						{/key}
-					{:else}
-						<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto">
-							{field && filter.operator ? 'No value needed' : 'Choose an operator'}
-						</span>
-					{/if}
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon"
-						class="col-start-2 row-start-1 size-8 sm:col-start-4"
-						aria-label="Remove filter"
-						onclick={() => removeFilter(filter.id)}
-						><Icon icon="lucide:x" class="size-3.5" /></Button
+				{#each filters as filter (filter.id)}
+					{@const field = selectedField(filter)}
+					{@const operatorOptions = field ? collectionFilterOperatorOptions(field.field) : []}
+					<!-- stupidity:allow UI6 -- filter-builder row grid needs explicit responsive tracks and placements the auto-fit Grid cannot express -->
+					<div
+						class="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_2rem]"
 					>
-				</div>
-			{/each}
+						<div class="col-start-1 min-w-0 w-full sm:col-auto">
+							<TreeCombobox
+								rootItems={fieldTree}
+								value={filter.field ?? undefined}
+								placeholder="Choose a field"
+								searchPlaceholder="Search fields…"
+								ariaLabel="Choose a filter field"
+								allowCleared={false}
+								{disabled}
+								onValueChange={(nextField) => nextField && setField(filter.id, nextField)}
+							/>
+						</div>
+						{#if field}
+							<Combobox
+								options={[...operatorOptions]}
+								value={filter.operator}
+								searchable={false}
+								class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
+								onValueChange={(operator) => operator && setOperator(filter.id, operator)}
+							/>
+						{:else}
+							<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto"
+								>Choose a field</span
+							>
+						{/if}
+						{#if field && filter.operator && collectionFilterOperatorNeedsValue(filter.operator)}
+							{#key `${field.value}:${filter.operator}`}
+								<DataRenderer
+									field={collectionFilterOperandField(field.field, filter.operator)}
+									value={filter.value}
+									mode="edit"
+									class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
+									onValueChange={(value) => setValue(filter.id, value)}
+								/>
+							{/key}
+						{:else}
+							<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto">
+								{field && filter.operator ? 'No value needed' : 'Choose an operator'}
+							</span>
+						{/if}
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							class="col-start-2 row-start-1 size-8 sm:col-start-4"
+							aria-label="Remove filter"
+							onclick={() => removeFilter(filter.id)}
+							><Icon icon="lucide:x" class="size-3.5" /></Button
+						>
+					</div>
+				{/each}
 			</Stack>
 		</Scroll>
 		<footer class="border-t p-2">

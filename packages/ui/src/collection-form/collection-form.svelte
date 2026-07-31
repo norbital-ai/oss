@@ -285,9 +285,7 @@
 			<p class="text-sm text-destructive" role="alert">{message}</p>
 		{/each}
 		{#if Object.keys(form.errors.fieldErrors).length > 0}
-			<p class="text-sm text-destructive" role="alert">
-				Fix the highlighted fields before saving.
-			</p>
+			<p class="text-sm text-destructive" role="alert">Fix the highlighted fields before saving.</p>
 		{/if}
 		<Cluster gap="xs" align="center">
 			<Button

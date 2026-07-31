@@ -544,30 +544,30 @@
 				empty={groups.length === 0}
 				lanes={lanes?.length ?? 3}
 			/>
-		{#each groups as [lane, records], index (lane)}
-			<CollectionKanbanLane
-				{lane}
-				label={laneLabel(lane)}
-				color={laneMeta.get(lane)?.color}
-				recordIds={records
-					.map((record) => Reflect.get(record, recordIdField))
-					.filter((id) => id != null)
-					.map(String)}
-				previousLane={groups[index - 1]?.[0]}
-				nextLane={groups[index + 1]?.[0]}
-				movable={canMove}
-				selectable={effectiveSelectable}
-				{selectedRecordIds}
-				{pendingRecordIds}
-				renderCard={kanbanCard}
-				onOpen={openRecordById}
-				onToggleSelection={toggleSelection}
-				onMove={(move) => void moveRecord(move)}
-				onDragStart={(recordId, lane) => (activeDrag = { recordId, lane })}
-				onDragEnd={() => (activeDrag = null)}
-			/>
-		{/each}
-		{#if query?.error}<p class="text-sm text-destructive">{query.error.message}</p>{/if}
+			{#each groups as [lane, records], index (lane)}
+				<CollectionKanbanLane
+					{lane}
+					label={laneLabel(lane)}
+					color={laneMeta.get(lane)?.color}
+					recordIds={records
+						.map((record) => Reflect.get(record, recordIdField))
+						.filter((id) => id != null)
+						.map(String)}
+					previousLane={groups[index - 1]?.[0]}
+					nextLane={groups[index + 1]?.[0]}
+					movable={canMove}
+					selectable={effectiveSelectable}
+					{selectedRecordIds}
+					{pendingRecordIds}
+					renderCard={kanbanCard}
+					onOpen={openRecordById}
+					onToggleSelection={toggleSelection}
+					onMove={(move) => void moveRecord(move)}
+					onDragStart={(recordId, lane) => (activeDrag = { recordId, lane })}
+					onDragEnd={() => (activeDrag = null)}
+				/>
+			{/each}
+			{#if query?.error}<p class="text-sm text-destructive">{query.error.message}</p>{/if}
 		</Grid>
 	</Scroll>
 </Cover>

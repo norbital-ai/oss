@@ -5,10 +5,10 @@
 	import * as Carousel from '#lib/carousel';
 	import type { TComboboxProps, TOption } from '#lib/combobox';
 	import { Combobox } from '#lib/combobox';
-import { StaticMap } from '#lib/static-map';
-import { Cluster, Inline, Stack } from '#lib/layout';
-import { resource } from 'runed';
-import type { TGeolocationPickerValue } from './geolocation.utils.js';
+	import { StaticMap } from '#lib/static-map';
+	import { Cluster, Inline, Stack } from '#lib/layout';
+	import { resource } from 'runed';
+	import type { TGeolocationPickerValue } from './geolocation.utils.js';
 
 	type LocationOption = TOption<TGeolocationPickerValue, Record<string, never>>;
 

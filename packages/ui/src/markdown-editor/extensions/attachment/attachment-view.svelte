@@ -283,7 +283,7 @@
 {/snippet}
 {#snippet Preview()}
 	<Inline gap="md">
-	<Icon icon={previewIcon} width="16" height="16" class="text-muted-foreground" />
+		<Icon icon={previewIcon} width="16" height="16" class="text-muted-foreground" />
 		<div class="min-w-0 flex-1 text-start">
 			<div class="font-medium wrap-break-word">{fileName}</div>
 			<div class="text-xs text-muted-foreground">{formatFileSize(fileSize)}</div>
@@ -363,10 +363,7 @@
 							errors={preview.content.errors}
 						/>
 					{:else if preview.content.type === 'markdown'}
-						<AttachmentPreviewText
-							variant="markdown"
-							renderedHtml={preview.content.renderedHtml}
-						/>
+						<AttachmentPreviewText variant="markdown" renderedHtml={preview.content.renderedHtml} />
 					{:else if preview.content.type === 'text'}
 						<AttachmentPreviewText variant="plain" content={preview.content.content} />
 					{/if}

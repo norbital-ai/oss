@@ -11,6 +11,7 @@
 		type CollectionSurfaceRegistry
 	} from '@norbital-ai/ui/collection-table';
 	import { DataRenderer } from '@norbital-ai/ui/data-renderer';
+	import { Grid } from '@norbital-ai/ui/layout';
 	import type { DetailStackEntry } from '$lib/client/detail/detail_stack.js';
 	import { resolveRecordDetailFields } from './collection-record-detail-fields.js';
 
@@ -63,7 +64,7 @@
 </script>
 
 {#snippet schemaDetails()}
-	<dl class="grid gap-3 sm:grid-cols-2">
+	<Grid as="dl" gap="sm" minimum="compact">
 		{#each fields as field (field.name)}
 			<div class:sm:col-span-2={field.kind === 'json'} class="min-w-0 rounded-lg border p-4">
 				<dt class="mb-1 text-xs font-medium text-muted-foreground">
@@ -74,7 +75,7 @@
 				</dd>
 			</div>
 		{/each}
-	</dl>
+	</Grid>
 {/snippet}
 
 {#snippet uiDetails()}

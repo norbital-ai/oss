@@ -11,6 +11,7 @@
 	import type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';
 	import PodShell from './pod-shell.svelte';
 	import { ModeWatcher } from 'mode-watcher';
+	import { Inline, Stack } from '@norbital-ai/ui/layout';
 
 	let {
 		apps,
@@ -37,7 +38,7 @@
 
 {#await shellData}
 	<div class="grid h-dvh w-screen place-items-center bg-background text-foreground">
-		<div class="flex -translate-y-4 flex-col items-center gap-7" role="status" aria-live="polite">
+		<Stack gap="lg" class="-translate-y-4 items-center" role="status" aria-live="polite">
 			<div class="relative h-24 w-32" aria-hidden="true">
 				<div
 					class="absolute inset-x-3 top-4 bottom-0 rounded-lg border border-border/50 bg-muted/25"
@@ -49,23 +50,23 @@
 				<div
 					class="workspace-loader-window absolute inset-x-0 top-0 bottom-4 overflow-hidden rounded-lg border border-border bg-card shadow-card"
 				>
-					<div class="flex h-6 items-center gap-1.5 border-b border-border/70 px-3">
+					<Inline gap="xs" class="h-6 border-b border-border/70 px-3">
 						<span class="size-1.5 rounded-full bg-muted-foreground/45"></span>
 						<span class="h-1.5 w-12 rounded-full bg-muted-foreground/30"></span>
 						<span class="ml-auto h-1.5 w-5 rounded-full bg-muted-foreground/25"></span>
-					</div>
-					<div class="flex flex-col gap-1.5 px-3 py-2.5">
+					</Inline>
+					<Stack gap="xs" class="px-3 py-2.5">
 						<span class="h-1 w-20 rounded-full bg-muted-foreground/35"></span>
 						<span class="h-1 w-14 rounded-full bg-muted-foreground/30"></span>
 						<span class="h-1 w-16 rounded-full bg-muted-foreground/30"></span>
 						<span class="h-1 w-10 rounded-full bg-muted-foreground/25"></span>
 						<span class="h-1 w-24 rounded-full bg-muted-foreground/35"></span>
 						<span class="h-1 w-12 rounded-full bg-muted-foreground/25"></span>
-					</div>
+					</Stack>
 				</div>
 			</div>
 			<p class="text-[15px] font-semibold tracking-[-0.01em]">Preparing your workspace…</p>
-		</div>
+		</Stack>
 	</div>
 {:then initialized}
 	<PodShell

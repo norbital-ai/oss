@@ -883,19 +883,19 @@
 			{/snippet}
 			{#snippet content()}
 				{#if description}<p>{description}</p>{/if}
-			{#if query?.where}
-				<Stack gap="xs">
-					<p class="font-medium">Applied by this view</p>
-					<Stack as="ul" gap="xs">
-						{#each prefilterDescriptions as filterDescription}
-							<Inline as="li" align="start" gap="xs" class="text-xs">
-								<Icon icon="lucide:filter" class="mt-0.5 size-3 shrink-0 opacity-70" />
-								<span>{filterDescription}</span>
-							</Inline>
-						{/each}
+				{#if query?.where}
+					<Stack gap="xs">
+						<p class="font-medium">Applied by this view</p>
+						<Stack as="ul" gap="xs">
+							{#each prefilterDescriptions as filterDescription}
+								<Inline as="li" align="start" gap="xs" class="text-xs">
+									<Icon icon="lucide:filter" class="mt-0.5 size-3 shrink-0 opacity-70" />
+									<span>{filterDescription}</span>
+								</Inline>
+							{/each}
+						</Stack>
 					</Stack>
-				</Stack>
-			{/if}
+				{/if}
 			{/snippet}
 		</Tooltip>
 	{/if}
@@ -1061,9 +1061,10 @@
 					</dt>
 					<dd class="mt-1 text-sm">
 						{#if field.kind === 'json'}
-							<pre class="whitespace-pre-wrap break-words font-mono text-xs">{formatRawStructuredValue(
-								Reflect.get(activeRecord, field.name)
-							)}</pre>
+							<pre
+								class="whitespace-pre-wrap break-words font-mono text-xs">{formatRawStructuredValue(
+									Reflect.get(activeRecord, field.name)
+								)}</pre>
 						{:else}
 							<DataRenderer {field} value={Reflect.get(activeRecord, field.name)} mode="display" />
 						{/if}
@@ -1103,11 +1104,7 @@
 {/if}
 
 <!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
-<Bound
-	size="full"
-	class="collection-table-responsive min-h-[24rem]"
-	data-collection-table-surface
->
+<Bound size="full" class="collection-table-responsive min-h-[24rem]" data-collection-table-surface>
 	<CollectionGrid
 		table={tableApi}
 		{disabled}

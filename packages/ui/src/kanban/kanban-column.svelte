@@ -134,7 +134,10 @@
 	}
 </script>
 
-<div class="min-w-0 flex-1 shrink-0" style="min-width: {minColumnWidth}px; width: {minColumnWidth}px;">
+<div
+	class="min-w-0 flex-1 shrink-0"
+	style="min-width: {minColumnWidth}px; width: {minColumnWidth}px;"
+>
 	<Cover as="div" gap="sm" top={columnHeader}>
 		<Scroll
 			axis="y"
@@ -151,77 +154,78 @@
 					</Stack>
 				</div>
 			{:else if column.items.length === 0}
-				<Stack
-					gap="none"
-					class="h-full items-center justify-center p-4 text-muted-foreground"
-				>
+				<Stack gap="none" class="h-full items-center justify-center p-4 text-muted-foreground">
 					<p>No items in this column</p>
 				</Stack>
 			{:else if canSort}
-			<Sortable.Root
-				items={sortableIds}
-				sortableGroup={groupName}
-				handle={dragHandleClass}
-				sort={sortWithinColumn}
-				onSort={handleSortIds}
-				element={sortableColumn}
-			>
-				{#snippet child({ draggedItemId })}
+				<Sortable.Root
+					items={sortableIds}
+					sortableGroup={groupName}
+					handle={dragHandleClass}
+					sort={sortWithinColumn}
+					onSort={handleSortIds}
+					element={sortableColumn}
+				>
+					{#snippet child({ draggedItemId })}
+						<div
+							bind:this={sortableColumn}
+							data-column-id={column._id}
+							class="norbital-kanban-column flex flex-col"
+							style="gap: {ITEM_GAP}px;"
+						>
+							{#each column.items as item (item._id)}
+								<Sortable.Item id={item._id} isDragging={draggedItemId === item._id}>
+									{#snippet child({ props })}
+										<div {...props} class="relative box-border w-full {props.class}">
+											{@render KanbanCard({ card: item, columnId: column._id, cardSnippet })}
+										</div>
+									{/snippet}
+								</Sortable.Item>
+							{/each}
+						</div>
+					{/snippet}
+				</Sortable.Root>
+			{:else}
+				<div
+					role="list"
+					class="relative w-full [overflow-anchor:none]"
+					style="height: {totalSize}px"
+				>
 					<div
-						bind:this={sortableColumn}
 						data-column-id={column._id}
-						class="norbital-kanban-column flex flex-col"
-						style="gap: {ITEM_GAP}px;"
+						class="norbital-kanban-column"
+						style="position: absolute; inset: 0; transform: translateY({paddingTop}px);"
 					>
-						{#each column.items as item (item._id)}
-							<Sortable.Item id={item._id} isDragging={draggedItemId === item._id}>
-								{#snippet child({ props })}
-									<div {...props} class="relative box-border w-full {props.class}">
+						{#each virtualRows as row (row.key)}
+							{@const item = column.items[row.index]}
+							{#if item}
+								<div
+									data-index={row.index}
+									class="relative box-border w-full"
+									style="height: {rowSize}px; padding-bottom: {ITEM_GAP}px;"
+								>
+									<div class="relative h-full w-full">
 										{@render KanbanCard({ card: item, columnId: column._id, cardSnippet })}
 									</div>
-								{/snippet}
-							</Sortable.Item>
-						{/each}
-					</div>
-				{/snippet}
-			</Sortable.Root>
-		{:else}
-			<div role="list" class="relative w-full [overflow-anchor:none]" style="height: {totalSize}px">
-				<div
-					data-column-id={column._id}
-					class="norbital-kanban-column"
-					style="position: absolute; inset: 0; transform: translateY({paddingTop}px);"
-				>
-					{#each virtualRows as row (row.key)}
-						{@const item = column.items[row.index]}
-						{#if item}
-							<div
-								data-index={row.index}
-								class="relative box-border w-full"
-								style="height: {rowSize}px; padding-bottom: {ITEM_GAP}px;"
-							>
-								<div class="relative h-full w-full">
-									{@render KanbanCard({ card: item, columnId: column._id, cardSnippet })}
 								</div>
-							</div>
-						{:else}
-							<div
-								data-index={row.index}
-								class="relative box-border flex w-full items-center justify-center"
-								style="height: {rowSize}px; padding-bottom: {ITEM_GAP}px;"
-							>
-								{@render loadMoreIndicator({
-									loading: (column.isLoading ?? false) || (column.isFetchingNextPage ?? false)
-								})}
-							</div>
+							{:else}
+								<div
+									data-index={row.index}
+									class="relative box-border flex w-full items-center justify-center"
+									style="height: {rowSize}px; padding-bottom: {ITEM_GAP}px;"
+								>
+									{@render loadMoreIndicator({
+										loading: (column.isLoading ?? false) || (column.isFetchingNextPage ?? false)
+									})}
+								</div>
+							{/if}
+						{/each}
+						{#if paddingBottom > 0}
+							<div style="height: {paddingBottom}px;"></div>
 						{/if}
-					{/each}
-					{#if paddingBottom > 0}
-						<div style="height: {paddingBottom}px;"></div>
-					{/if}
+					</div>
 				</div>
-			</div>
-		{/if}
+			{/if}
 		</Scroll>
 	</Cover>
 </div>

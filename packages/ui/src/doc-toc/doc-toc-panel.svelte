@@ -31,9 +31,7 @@
 			className
 		)}
 	>
-		<h3
-			class="text-micro font-semibold tracking-[0.08em] text-muted-foreground uppercase"
-		>
+		<h3 class="text-micro font-semibold tracking-[0.08em] text-muted-foreground uppercase">
 			<Inline as="span" gap="xs">
 				<Icon icon="lucide:text" class="size-3.5 shrink-0" aria-hidden="true" />
 				{title}

@@ -37,7 +37,7 @@
 	axis="y"
 	name="Conversation messages"
 	class="min-h-0 min-w-0 flex-1"
-	bind:ref={ref}
+	bind:ref
 	{...restProps}
 >
 	<Stack

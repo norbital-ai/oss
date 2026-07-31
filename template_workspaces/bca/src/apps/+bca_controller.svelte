@@ -462,64 +462,63 @@
 			gap="md"
 			class="p-5"
 			onsubmit={(event) => {
-					event.preventDefault();
-					void createAssignment();
-				}}
+				event.preventDefault();
+				void createAssignment();
+			}}
+		>
+			<label class="grid gap-1.5 text-sm">
+				<span class="font-medium">Job and site</span>
+				<Combobox
+					options={assignJobOptions}
+					bind:value={assignment.jobId}
+					emptyPlaceholder="Select unassigned job…"
+					searchPlaceholder="Search unassigned jobs…"
+					clientConfig={{
+						isLoading: assignJobsQuery.loading,
+						error: assignJobsQuery.error?.message ?? null
+					}}
+				/>
+			</label>
+
+			<label class="grid gap-1.5 text-sm">
+				<span class="font-medium">Contractor</span>
+				<Combobox
+					options={assignContractorOptions}
+					bind:value={assignment.contractorId}
+					emptyPlaceholder="Select qualified contractor…"
+					searchPlaceholder="Search qualified contractors…"
+					clientConfig={{
+						isLoading:
+							assignContractorsQuery.loading ||
+							Boolean(assignRequirementsQuery?.loading) ||
+							Boolean(assignContractorCertificationQuery?.loading),
+						error: assignContractorsQuery.error?.message ?? null
+					}}
+					disabled={!assignSelectedJob}
+				/>
+			</label>
+
+			{#if assignSelectedJob && assignQualifiedContractors.length === 0}
+				<p class="text-sm text-destructive" role="alert">
+					No contractor holds every required certification for this job.
+				</p>
+			{/if}
+			{#if assignment.error}
+				<p class="text-sm text-destructive" role="alert">{assignment.error}</p>
+			{/if}
+			{#if (assignJobsQuery.current ?? []).length === 0 && !assignJobsQuery.loading}
+				<p class="text-sm text-muted-foreground">
+					There are no unassigned jobs on {dispatchDay}. Create a job first or choose another date.
+				</p>
+			{/if}
+
+			<Button
+				type="submit"
+				class="w-full"
+				disabled={!assignment.jobId || !assignment.contractorId || assignment.saving}
 			>
-				<label class="grid gap-1.5 text-sm">
-					<span class="font-medium">Job and site</span>
-					<Combobox
-						options={assignJobOptions}
-						bind:value={assignment.jobId}
-						emptyPlaceholder="Select unassigned job…"
-						searchPlaceholder="Search unassigned jobs…"
-						clientConfig={{
-							isLoading: assignJobsQuery.loading,
-							error: assignJobsQuery.error?.message ?? null
-						}}
-					/>
-				</label>
-
-				<label class="grid gap-1.5 text-sm">
-					<span class="font-medium">Contractor</span>
-					<Combobox
-						options={assignContractorOptions}
-						bind:value={assignment.contractorId}
-						emptyPlaceholder="Select qualified contractor…"
-						searchPlaceholder="Search qualified contractors…"
-						clientConfig={{
-							isLoading:
-								assignContractorsQuery.loading ||
-								Boolean(assignRequirementsQuery?.loading) ||
-								Boolean(assignContractorCertificationQuery?.loading),
-							error: assignContractorsQuery.error?.message ?? null
-						}}
-						disabled={!assignSelectedJob}
-					/>
-				</label>
-
-				{#if assignSelectedJob && assignQualifiedContractors.length === 0}
-					<p class="text-sm text-destructive" role="alert">
-						No contractor holds every required certification for this job.
-					</p>
-				{/if}
-				{#if assignment.error}
-					<p class="text-sm text-destructive" role="alert">{assignment.error}</p>
-				{/if}
-				{#if (assignJobsQuery.current ?? []).length === 0 && !assignJobsQuery.loading}
-					<p class="text-sm text-muted-foreground">
-						There are no unassigned jobs on {dispatchDay}. Create a job first or choose another
-						date.
-					</p>
-				{/if}
-
-				<Button
-					type="submit"
-					class="w-full"
-					disabled={!assignment.jobId || !assignment.contractorId || assignment.saving}
-				>
-					{assignment.saving ? 'Assigning…' : 'Assign contractor'}
-				</Button>
-			</Stack>
+				{assignment.saving ? 'Assigning…' : 'Assign contractor'}
+			</Button>
+		</Stack>
 	</Sheet.Content>
 </Sheet.Root>

@@ -53,11 +53,7 @@
 </script>
 
 {#snippet detailHeader({ list }: { list: Snippet })}
-	<Inline
-		as="header"
-		gap="md"
-		class="shrink-0 border-b bg-background px-4 py-2.5 sm:px-5"
-	>
+	<Inline as="header" gap="md" class="shrink-0 border-b bg-background px-4 py-2.5 sm:px-5">
 		<div class="min-w-0 flex-1">
 			<Sheet.Description class="truncate text-micro leading-4 text-muted-foreground">
 				{description}

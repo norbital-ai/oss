@@ -37,11 +37,7 @@
 
 {#snippet HistoryValue(entryValue: unknown)}
 	{#if entryValue != null && typeof entryValue === 'object'}
-		<Scroll
-			axis="both"
-			name="History value"
-			class="max-h-32 rounded-md border bg-muted/30 p-2"
-		>
+		<Scroll axis="both" name="History value" class="max-h-32 rounded-md border bg-muted/30 p-2">
 			<StructuredValue value={entryValue} />
 		</Scroll>
 	{:else}
@@ -105,7 +101,8 @@
 									<li class="relative pb-4 last:pb-0">
 										<Inline align="start" gap="sm">
 											<div class="flex w-3 shrink-0 justify-center">
-												<span class="relative z-10 mt-1 size-2 rounded-full bg-muted-foreground"></span>
+												<span class="relative z-10 mt-1 size-2 rounded-full bg-muted-foreground"
+												></span>
 												{#if index < fieldHistory.length - 1}
 													<span class="absolute top-3 bottom-0 w-px bg-border"></span>
 												{/if}

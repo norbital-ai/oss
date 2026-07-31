@@ -196,83 +196,78 @@
 		element={sortableElement}
 	>
 		{#snippet child({ draggedItemId })}
-			<Scroll
-				axis="y"
-				name={laneLabel}
-				bind:ref={sortableElement}
-				data-kanban-lane={lane}
-			>
+			<Scroll axis="y" name={laneLabel} bind:ref={sortableElement} data-kanban-lane={lane}>
 				<Stack gap="sm">
 					{#each recordIds as recordId (recordId)}
-					<div
-						data-sortable-id={recordId}
-						data-sortable-disabled={!movable || pendingRecordIds.has(recordId) ? 'true' : undefined}
-						class={cn(
-							'sortable-item min-w-0 overflow-hidden',
-							(!movable || pendingRecordIds.has(recordId)) && 'sortable-disabled',
-							draggedItemId === recordId && 'sortable-dragging'
-						)}
-					>
-						<CardPrimitive.Root
+						<div
+							data-sortable-id={recordId}
+							data-sortable-disabled={!movable || pendingRecordIds.has(recordId)
+								? 'true'
+								: undefined}
 							class={cn(
-								'group relative h-32 w-full min-w-0 overflow-hidden rounded-sm transition-colors',
-								selectedRecordIds.has(recordId) && 'bg-accent/60 ring-1 ring-ring'
+								'sortable-item min-w-0 overflow-hidden',
+								(!movable || pendingRecordIds.has(recordId)) && 'sortable-disabled',
+								draggedItemId === recordId && 'sortable-dragging'
 							)}
-							role="button"
-							tabindex={0}
-							aria-describedby={instructionId}
-							aria-pressed={keyboardPickedId === recordId}
-							data-selected={selectedRecordIds.has(recordId) ? 'true' : undefined}
-							aria-busy={pendingRecordIds.has(recordId)}
-							onclick={() => onOpen(recordId)}
-							onkeydown={(event) => handleCardKeydown(event, recordId)}
 						>
-							<CardPrimitive.Content
-								class="h-full min-w-0 overflow-x-hidden overflow-y-auto p-3 text-sm"
+							<CardPrimitive.Root
+								class={cn(
+									'group relative h-32 w-full min-w-0 overflow-hidden rounded-sm transition-colors',
+									selectedRecordIds.has(recordId) && 'bg-accent/60 ring-1 ring-ring'
+								)}
+								role="button"
+								tabindex={0}
+								aria-describedby={instructionId}
+								aria-pressed={keyboardPickedId === recordId}
+								data-selected={selectedRecordIds.has(recordId) ? 'true' : undefined}
+								aria-busy={pendingRecordIds.has(recordId)}
+								onclick={() => onOpen(recordId)}
+								onkeydown={(event) => handleCardKeydown(event, recordId)}
 							>
-								{@render renderCard(recordId)}
-							</CardPrimitive.Content>
-							{#if selectable}
-								<Checkbox
-									class={cn(
-										"pointer-events-none absolute top-2 right-2 z-10 size-3.5 cursor-pointer bg-background/95 opacity-0 shadow-xs transition-opacity duration-150 before:absolute before:-inset-2 before:content-[''] group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 motion-reduce:transition-none [&>div]:size-3.5 [&_svg]:size-3",
-										selectedRecordIds.has(recordId) && 'pointer-events-auto opacity-100'
-									)}
-									onclick={(event) => event.stopPropagation()}
-									aria-label="Select card"
-									checked={selectedRecordIds.has(recordId)}
-									disabled={pendingRecordIds.has(recordId)}
-									onCheckedChange={() => onToggleSelection(recordId)}
-								/>
-							{/if}
-							{#if movable}
-								<button
-									type="button"
-									class={cn(
-										'kanban-drag-handle pointer-events-none absolute top-2 left-2 z-10 flex size-7 cursor-grab touch-none items-center justify-center rounded-sm border border-border bg-background/95 text-muted-foreground opacity-0 shadow-xs transition-opacity duration-150 hover:bg-muted group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 active:cursor-grabbing motion-reduce:transition-none',
-										(keyboardPickedId === recordId || draggedItemId === recordId) &&
-											'pointer-events-auto opacity-100'
-									)}
-									aria-label="Drag card"
-									onclick={(event) => event.stopPropagation()}
+								<CardPrimitive.Content
+									class="h-full min-w-0 overflow-x-hidden overflow-y-auto p-3 text-sm"
 								>
-									<Icon icon="lucide:grip-vertical" class="size-3.5" />
-								</button>
-							{/if}
-						</CardPrimitive.Root>
-					</div>
-				{:else}
-					<Stack
-						gap="xs"
-						class="min-h-32 items-center justify-center rounded-sm border border-dashed border-border bg-background/50 p-5 text-center"
-					>
-						<Icon icon="lucide:inbox" class="size-5 text-muted-foreground" />
-						<p class="text-sm font-medium">No {humanize(lane).toLowerCase()} jobs</p>
-						<p class="text-xs text-muted-foreground">
-							This lane is clear for the selected view.
-						</p>
-					</Stack>
-				{/each}
+									{@render renderCard(recordId)}
+								</CardPrimitive.Content>
+								{#if selectable}
+									<Checkbox
+										class={cn(
+											"pointer-events-none absolute top-2 right-2 z-10 size-3.5 cursor-pointer bg-background/95 opacity-0 shadow-xs transition-opacity duration-150 before:absolute before:-inset-2 before:content-[''] group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 motion-reduce:transition-none [&>div]:size-3.5 [&_svg]:size-3",
+											selectedRecordIds.has(recordId) && 'pointer-events-auto opacity-100'
+										)}
+										onclick={(event) => event.stopPropagation()}
+										aria-label="Select card"
+										checked={selectedRecordIds.has(recordId)}
+										disabled={pendingRecordIds.has(recordId)}
+										onCheckedChange={() => onToggleSelection(recordId)}
+									/>
+								{/if}
+								{#if movable}
+									<button
+										type="button"
+										class={cn(
+											'kanban-drag-handle pointer-events-none absolute top-2 left-2 z-10 flex size-7 cursor-grab touch-none items-center justify-center rounded-sm border border-border bg-background/95 text-muted-foreground opacity-0 shadow-xs transition-opacity duration-150 hover:bg-muted group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 active:cursor-grabbing motion-reduce:transition-none',
+											(keyboardPickedId === recordId || draggedItemId === recordId) &&
+												'pointer-events-auto opacity-100'
+										)}
+										aria-label="Drag card"
+										onclick={(event) => event.stopPropagation()}
+									>
+										<Icon icon="lucide:grip-vertical" class="size-3.5" />
+									</button>
+								{/if}
+							</CardPrimitive.Root>
+						</div>
+					{:else}
+						<Stack
+							gap="xs"
+							class="min-h-32 items-center justify-center rounded-sm border border-dashed border-border bg-background/50 p-5 text-center"
+						>
+							<Icon icon="lucide:inbox" class="size-5 text-muted-foreground" />
+							<p class="text-sm font-medium">No {humanize(lane).toLowerCase()} jobs</p>
+							<p class="text-xs text-muted-foreground">This lane is clear for the selected view.</p>
+						</Stack>
+					{/each}
 				</Stack>
 			</Scroll>
 		{/snippet}

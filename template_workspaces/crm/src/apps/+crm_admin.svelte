@@ -130,35 +130,35 @@
 			</div>
 		</Grid>
 		<table class="w-full rounded-lg border text-sm">
-				<thead>
-					<tr class="border-b bg-muted/50">
-						<th class="px-4 py-2 text-left font-medium">Order</th>
-						<th class="px-4 py-2 text-left font-medium">Currency</th>
-						<th class="px-4 py-2 text-right font-medium">Invoiced</th>
-						<th class="px-4 py-2 text-right font-medium">Paid</th>
-						<th class="px-4 py-2 text-left font-medium">Status</th>
+			<thead>
+				<tr class="border-b bg-muted/50">
+					<th class="px-4 py-2 text-left font-medium">Order</th>
+					<th class="px-4 py-2 text-left font-medium">Currency</th>
+					<th class="px-4 py-2 text-right font-medium">Invoiced</th>
+					<th class="px-4 py-2 text-right font-medium">Paid</th>
+					<th class="px-4 py-2 text-left font-medium">Status</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each revenue.current?.orders ?? [] as order (order.id)}
+					<tr class="border-b last:border-0">
+						<td class="px-4 py-2 font-medium">{order.doc_no}</td>
+						<td class="px-4 py-2">{order.currency}</td>
+						<td class="px-4 py-2 text-right tabular-nums">{order.gross.toLocaleString()}</td>
+						<td class="px-4 py-2 text-right tabular-nums">{order.paid.toLocaleString()}</td>
+						<td class="px-4 py-2">
+							<span
+								class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {paymentStatusBadge(
+									order.status
+								)}"
+							>
+								{order.status}
+							</span>
+						</td>
 					</tr>
-				</thead>
-				<tbody>
-					{#each revenue.current?.orders ?? [] as order (order.id)}
-						<tr class="border-b last:border-0">
-							<td class="px-4 py-2 font-medium">{order.doc_no}</td>
-							<td class="px-4 py-2">{order.currency}</td>
-							<td class="px-4 py-2 text-right tabular-nums">{order.gross.toLocaleString()}</td>
-							<td class="px-4 py-2 text-right tabular-nums">{order.paid.toLocaleString()}</td>
-							<td class="px-4 py-2">
-								<span
-									class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {paymentStatusBadge(
-										order.status
-									)}"
-								>
-									{order.status}
-								</span>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
+				{/each}
+			</tbody>
+		</table>
 	</Stack>
 {/snippet}
 

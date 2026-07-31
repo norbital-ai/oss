@@ -25,9 +25,7 @@
 </script>
 
 <Collapsible.Root bind:open>
-	<Collapsible.Trigger
-		class={cn('flex w-full place-items-center items-center gap-1', className)}
-	>
+	<Collapsible.Trigger class={cn('flex w-full place-items-center items-center gap-1', className)}>
 		{@render content?.({ open: open ?? false })}
 	</Collapsible.Trigger>
 	<Collapsible.Content class="ml-3.75 border-l">

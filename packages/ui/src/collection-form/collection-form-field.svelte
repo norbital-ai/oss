@@ -109,12 +109,7 @@
 			{/if}
 		</div>
 		{#if errors.length > 0}
-			<Stack
-				id={errorId}
-				gap="xs"
-				class="shrink-0 text-sm text-destructive"
-				role="alert"
-			>
+			<Stack id={errorId} gap="xs" class="shrink-0 text-sm text-destructive" role="alert">
 				{#each errors as message, index (`${index}:${message}`)}
 					<p>{message}</p>
 				{/each}

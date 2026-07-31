@@ -47,7 +47,7 @@
 </script>
 
 <!-- stupidity:allow UI5 -- popover panel boundary -->
-	<aside class="w-[280px] shrink-0 overflow-hidden border-r bg-background">
+<aside class="w-[280px] shrink-0 overflow-hidden border-r bg-background">
 	<Stack gap="none" class="h-full">
 		<Inline gap="none" justify="between" class="h-11 border-b px-3">
 			<Inline gap="sm" class="text-xs font-semibold text-muted-foreground">
@@ -63,7 +63,7 @@
 				>
 					<Icon icon="lucide:plus" class="mr-1 h-3 w-3" /> New
 				</Button>
-				{/if}
+			{/if}
 		</Inline>
 		<!-- stupidity:allow UI9 -- listbox scroll body of the popover panel; Scroll cannot carry role="listbox" -->
 		<ul role="listbox" aria-label={ariaLabel} class="flex-1 overflow-auto px-2 py-2">

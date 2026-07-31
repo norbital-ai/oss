@@ -5,6 +5,7 @@
 	import type { Action } from 'svelte/action';
 	import { fromAction } from 'svelte/attachments';
 	import { cn } from '#lib/utils';
+	import { Inline } from '#lib/layout';
 	import * as Popover from '../popover';
 	import type { StaticMapMarker } from './static-map.types.js';
 

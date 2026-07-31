@@ -387,11 +387,7 @@
 {/snippet}
 
 {#snippet errorState()}
-	<Stack
-		gap="sm"
-		class={cn('items-center p-3 text-destructive', compactTextClass)}
-		role="alert"
-	>
+	<Stack gap="sm" class={cn('items-center p-3 text-destructive', compactTextClass)} role="alert">
 		<Icon icon="lucide:alert-circle" class="h-4 w-4" />
 		<span>Error: {error}</span>
 	</Stack>
@@ -400,10 +396,7 @@
 {#snippet emptyState()}
 	<Stack
 		gap="sm"
-		class={cn(
-			'items-center p-3 text-center text-muted-foreground',
-			compactTextClass
-		)}
+		class={cn('items-center p-3 text-center text-muted-foreground', compactTextClass)}
 	>
 		<Icon icon="lucide:inbox" class="h-4 w-4 text-muted-foreground" />
 		<span class="font-normal">{emptyMessage}</span>

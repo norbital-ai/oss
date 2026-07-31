@@ -14,7 +14,7 @@
 <Scroll
 	axis="y"
 	name="Sidebar"
-	bind:ref={ref}
+	bind:ref
 	data-slot="sidebar-content"
 	data-sidebar="content"
 	class={cn(

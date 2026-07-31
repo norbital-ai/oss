@@ -12,12 +12,7 @@
 {#if loading && empty}
 	<div class="contents" aria-busy="true" aria-label="Loading board">
 		{#each Array.from({ length: lanes }) as _, lane (lane)}
-			<Cover
-				as="section"
-				gap="sm"
-				class="min-h-0 rounded-sm bg-muted/40 p-3"
-				aria-hidden="true"
-			>
+			<Cover as="section" gap="sm" class="min-h-0 rounded-sm bg-muted/40 p-3" aria-hidden="true">
 				{#snippet top()}
 					<Inline justify="between" gap="sm" class="shrink-0">
 						<Skeleton class="h-4 w-24" />

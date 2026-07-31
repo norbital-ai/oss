@@ -76,19 +76,19 @@
 			<Inline gap="none" align="stretch" class="h-full">
 				<div class="flex h-full" in:slideIn={{ columnId: column._id, index }}>
 					<KanbanColumn
-					{column}
-					{cardSnippet}
-					{onCardMove}
-					{onLoadMore}
-					{itemHeight}
-					{minColumnWidth}
-					{groupName}
-					{sortable}
-				{sortWithinColumn}
-				{dragHandleClass}
-					{columnHeaderActionSnippet}
-					{columnTitleSnippet}
-				/>
+						{column}
+						{cardSnippet}
+						{onCardMove}
+						{onLoadMore}
+						{itemHeight}
+						{minColumnWidth}
+						{groupName}
+						{sortable}
+						{sortWithinColumn}
+						{dragHandleClass}
+						{columnHeaderActionSnippet}
+						{columnTitleSnippet}
+					/>
 				</div>
 			</Inline>
 		{/each}

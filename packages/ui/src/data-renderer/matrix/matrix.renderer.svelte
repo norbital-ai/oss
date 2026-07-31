@@ -355,7 +355,10 @@
 	<Scroll
 		axis="y"
 		name="Matrix rows"
-		class={cn('matrix-renderer-narrow min-h-0 flex-1', bounded ? 'overscroll-y-contain' : undefined)}
+		class={cn(
+			'matrix-renderer-narrow min-h-0 flex-1',
+			bounded ? 'overscroll-y-contain' : undefined
+		)}
 		style={bounded ? undefined : 'overflow: visible'}
 	>
 		{#if displayRows.length === 0}
