@@ -245,9 +245,7 @@
 		<Inline justify="between" align="center" gap="sm" class="border-b pb-2">
 			<div class="min-w-0">
 				<h3 class="text-sm font-semibold">Design simulation</h3>
-				<p class="text-xs text-muted-foreground">
-					Changes the solid. Re-measured through the same engine the server used.
-				</p>
+				<p class="text-xs text-muted-foreground">Changes the solid, then re-measures it.</p>
 			</div>
 			<Button size="sm" variant="ghost" onclick={resetDesign}>As drawn</Button>
 		</Inline>
@@ -301,7 +299,7 @@
 		<Inline justify="between" align="center" gap="sm" class="border-b pb-2">
 			<div class="min-w-0">
 				<h3 class="text-sm font-semibold">Commercial levers</h3>
-				<p class="text-xs text-muted-foreground">Applied to the measured quantities.</p>
+				<p class="text-xs text-muted-foreground">Priced only — the solid does not move.</p>
 			</div>
 			<Button size="sm" variant="ghost" onclick={() => (levers = { ...DEFAULT_LEVERS })}>
 				Reset
@@ -387,7 +385,7 @@
 		<div class="border-b pb-2">
 			<h3 class="text-sm font-semibold">Priced separately — manual take-off</h3>
 			<p class="text-xs text-muted-foreground">
-				Work a plan, a survey, and a section do not contain. The total above excludes all of it.
+				Not derivable from the documents. Excluded from the total above.
 			</p>
 		</div>
 		<dl class="divide-y rounded-md border bg-card text-sm">

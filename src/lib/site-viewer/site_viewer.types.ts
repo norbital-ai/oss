@@ -89,6 +89,7 @@ export interface ThreeObject3D {
 	visible: boolean;
 	position: ThreeVector3;
 	rotation: { x: number; y: number; z: number };
+	scale: { x: number; y: number; z: number; set(x: number, y: number, z: number): unknown };
 	add(child: ThreeObject3D): this;
 	remove(child: ThreeObject3D): this;
 	clear(): this;
