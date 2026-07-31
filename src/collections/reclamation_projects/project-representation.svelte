@@ -325,7 +325,15 @@
 {#snippet leftPane()}
 	<Stack gap="sm" class="h-full min-h-0">
 		{@render header()}
+		<!--
+			`flex-1 min-h-0`, not the default `h-full`: this is a flex child sitting
+			below the header, so a full-height tab body means header + 100% and the
+			column overflows with nothing bounding it. The panels' own `Scroll` then
+			grows to fit instead of scrolling, and anything past the fold — Save as
+			estimate, the manual take-off register — is clipped and unreachable.
+		-->
 		<Tabs
+			class="min-h-0 flex-1"
 			lazyLoad={false}
 			variant="underline"
 			animate={false}
