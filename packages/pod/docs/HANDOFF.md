@@ -158,7 +158,7 @@ the active-path match fails exactly the tests that assert them, and nothing else
 ```bash
 podman machine start                      # the test suite needs a Docker-compatible socket
 pnpm packages:build && pnpm deps:sync     # injected template copies go stale silently
-pnpm lint && pnpm vitest run --no-file-parallelism   # 400 passing, 0 skipped
+pnpm lint && pnpm vitest run --no-file-parallelism   # 403 passing, 0 skipped
 ```
 
 Two rules the numbers depend on. Run the suite with `--no-file-parallelism`: the container-backed e2e
@@ -166,8 +166,11 @@ files contend for resources otherwise, and different ones fail each run. And nev
 concurrently with `oxlint` — that reports ~222 spurious "cannot find module" errors while the symlinks
 are demonstrably intact, so a baseline taken that way is fiction.
 
-`pnpm deps:sync` is not optional: templates resolve `@norbital-ai/*` through physical copies, so a
-rebuilt package is invisible until it is re-injected — a correct change looks broken.
+`pnpm deps:sync` is not optional: a rebuilt package is invisible to a template until it is
+re-injected, so a correct change looks broken. (Templates resolve `@norbital-ai/*` through relative
+links into `packages/`, not through physical copies — this file claimed copies for a long time.
+Check with `ls -la template_workspaces/<t>/node_modules/@norbital-ai/` rather than trusting either
+claim.)
 
 **Never run `pnpm` with a working directory inside `template_workspaces/<name>`.** It triggers an
 install that prunes that template's `node_modules/@norbital-ai/` entries, and then fails against
@@ -179,6 +182,18 @@ lockfile has not changed, so pnpm answers "Already up to date" and repairs nothi
 included. `deps:sync` re-creates each declared entry as a relative link into `packages/`, then
 verifies that every template can resolve everything it declares and fails loudly naming the template
 and packages if not. It is idempotent, so running it when nothing is wrong costs nothing.
+
+**`pnpm templates:lock:check` is not hermetic, and a failure there usually says nothing about your
+change.** It resolves each template's `package.json` in a temp directory against the live registry and
+diffs the result against the committed lockfile — but it copies _only_ `package.json`, leaving behind
+the `pnpm-workspace.yaml` that carries the minimum-release-age gate. The committed lockfiles were
+generated with that gate; the comparison is generated without it. So the check goes red the moment any
+transitive dependency publishes, with no commit involved.
+
+Observed inside a single session: all five templates reported `up to date`, and thirty minutes later
+all five reported drift. The whole difference was `enhanced-resolve` 5.24.4 → 5.24.5, a third-party
+patch release. Before believing this check, reproduce one template's resolve by hand and read the diff
+— if the only delta is a version of something nobody here depends on directly, it is the gate, not you.
 
 For a manual standalone run, copy a template into `.test-workspaces/` (**inside** the repo, so pnpm's
 relative symlinks resolve), write a `pod.host.ts` with `emailOtp` + `consoleNotifications('email')` +

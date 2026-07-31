@@ -235,9 +235,22 @@ Listed so Core does not plan against something that is not there.
 |                                                                             | State                                           |
 | --------------------------------------------------------------------------- | ----------------------------------------------- |
 | Agent runtime port (loop, store, transcript, chat, channel authoring, UI)   | **done** — see [AGENT_PORT.md](./AGENT_PORT.md) |
-| `+<name>.channel.ts` authoring and the `messaging` facility rename          | **not started**                                 |
+| `+<name>.channel.ts` authoring and the `messaging` facility rename          | **done** — `ChannelName` is generated           |
 | `HostAppPlugin` / `buildSystemNavigation`                                   | **done** — Core can send `configure`            |
 | Tenant configuration sidebar (teams, users, invitations, policy assignment) | **not started**                                 |
+
+The channel row read "not started" long after it shipped. It is done: `authoring/channels/channels.ts`
+holds the declaration, `crm` declares `+sales_desk.channel.ts`, and the compiler emits
+`ChannelName = "sales_desk"` into `.norbital/generated/authoring-types.ts`. A status table that
+understates what exists is not harmlessly conservative — Core plans against it, and would have rebuilt
+something already there.
+
+The sidebar row is accurate, and it is the last authoring gap. `mintInvitation` is reachable only over
+the host-command plane (`tenant_run.ts`, `identity` → `invite`), so Core's ops can invite a user and a
+workspace admin under `pod start` cannot — teams, members and invitations are seed-or-SQL only. Note
+what the row no longer needs to mean: policies became declarations, so a team's policy is a
+`team.policy_id` pointing at a row reconciled from `+<name>.policy.ts` at migrate. The surface is a
+`PolicyName` picker, not a policy editor.
 
 Until the agent port lands, Core's `lib/agent/**` stays authoritative and the deletions above do not
 apply to it.
@@ -545,7 +558,7 @@ Unit and e2e coverage did not catch total auth failure in standalone. These are 
       re-serialised JSON object verifies against nothing, and the compare is `timingSafeEqual`.
       `integration_inbound_event` is the ledger, claimed **before** the import, keyed on the declared
       `eventIdHeader` and falling back to a digest of the body. A payload the binding's `input` schema
-      turns down now comes back as a *result* rather than a throw — nothing has been written when it
+      turns down now comes back as a _result_ rather than a throw — nothing has been written when it
       happens — so a host can tell its sender "never again" instead of "retry"; the pull job turns that
       refusal back into the failure it is, since it has no sender to answer.
       Proved in `tests/standalone/integration-delivery-e2e.test.ts` against a real socket, and shown
