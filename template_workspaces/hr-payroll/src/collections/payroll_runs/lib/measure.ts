@@ -570,7 +570,21 @@ export function measureEmployment(options: {
 	// run, because there may not have been one.
 	//
 	// The recursion is one level deep by construction: the derived bundle owes nothing itself.
-	const arrears = measureArrears(options);
+	const calculatedArrears = measureArrears(options);
+	// A source payroll instruction can state the same late-joiner back pay that the settlement
+	// policy is able to derive. The source entry is authoritative evidence and already produces a
+	// fully linked line below; adding the identical derived line would pay it twice and leave that
+	// duplicate without record provenance. Only suppress the derived copy when the current period
+	// contains an exact same-component, same-amount entry.
+	const explicitArrearsEntry =
+		calculatedArrears == null
+			? undefined
+			: (entriesByComponent.get(calculatedArrears.payComponentId) ?? []).find(
+					(entry) =>
+						cents(entrySign(entry, entryById) * Number(entry.amount)) ===
+						calculatedArrears.amount
+				);
+	const arrears = explicitArrearsEntry == null ? calculatedArrears : null;
 
 	// ── walk the catalogue in type sequence ────────────────────────────────────────────────────
 	const lines: MeasuredLine[] = [];

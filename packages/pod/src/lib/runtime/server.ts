@@ -57,8 +57,37 @@ function createEvent(request: Request, bindings: RuntimeFacilityBindings): PodRe
 	};
 }
 
+/**
+ * Guest-side phase timings, surfaced as `Server-Timing` on the response.
+ *
+ * Core already reports how long the whole guest call took (`tenant_invoke`), which is enough to
+ * know the guest is slow and useless for knowing why. These segments split that number, so a slow
+ * workspace load can be attributed without adding logging or attaching a profiler to a microVM.
+ */
+async function phase<T>(marks: string[], name: string, run: () => Promise<T>): Promise<T> {
+	const startedAt = performance.now();
+	try {
+		return await run();
+	} finally {
+		marks.push(`${name};dur=${(performance.now() - startedAt).toFixed(1)}`);
+	}
+}
+
+function withTimings(response: Response, marks: readonly string[]): Response {
+	if (marks.length === 0) return response;
+	const headers = new Headers(response.headers);
+	const existing = headers.get('server-timing');
+	headers.set('server-timing', [existing, marks.join(', ')].filter(Boolean).join(', '));
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers
+	});
+}
+
 async function runRequest(event: PodRequestEvent): Promise<Response> {
-	const context = await buildCtx(event);
+	const marks: string[] = [];
+	const context = await phase(marks, 'guest_context', () => buildCtx(event));
 	if (!context) {
 		const hasHostIdentity =
 			Boolean(event.locals.identity) ||
@@ -71,10 +100,13 @@ async function runRequest(event: PodRequestEvent): Promise<Response> {
 		runWithWorkspaceContext(context, async () => {
 			const pathname = new URL(event.request.url).pathname;
 			if (pathname === '/_pod/bootstrap') {
-				return json(await loadTenantWorkspaceShellData(event));
+				const shell = await phase(marks, 'guest_shell', () =>
+					loadTenantWorkspaceShellData(event)
+				);
+				return withTimings(json(shell), marks);
 			}
 			if (pathname.startsWith('/_runtime/')) {
-				return handleNorbitalRuntimeRequest(event);
+				return withTimings(await handleNorbitalRuntimeRequest(event), marks);
 			}
 			error(404, `Unknown Pod route: ${pathname}`);
 		})
