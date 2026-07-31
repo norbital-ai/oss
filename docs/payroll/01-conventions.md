@@ -1,5 +1,7 @@
 # 01 — Conventions
 
+This is a canonical chapter of the payroll architecture.
+
 Three rules every later chapter obeys: where a fact lives, how approval works, and how variation is
 modelled.
 

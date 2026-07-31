@@ -1,5 +1,7 @@
 # 03 — Component types and the grid
 
+This is a canonical chapter of the payroll architecture.
+
 The centre of the design: a closed list of what kinds of pay exist, and a grid saying what each kind
 is chargeable under.
 

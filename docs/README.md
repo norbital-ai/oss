@@ -28,6 +28,7 @@ be traced and reconciled instead of copied from a legacy system.
 ## Start points
 
 - [Workspace README](../README.md) — the engine, eight-step run, approval model, and verification.
-- [`plan/`](../plan/) — the detailed design chapters; begin with conventions and the type/treatment grid.
+- [Payroll architecture](./PAYROLL_ARCHITECTURE.md) — the canonical design and chapter index.
+- [Malaysia calculation](./CALCULATION_MALAYSIA.md) — the country-specific arithmetic reference.
 - `src/collections/payroll_runs/lib/` — settlement implementation.
 - `scripts/verify-payroll-arithmetic.mjs` — arithmetic invariants independent of the database.

@@ -1,5 +1,7 @@
 # 10 — Payslip and reporting
 
+This is a canonical chapter of the payroll architecture.
+
 Everything downstream of a run reads three tables. There is no separate reporting model and no
 year-to-date store.
 

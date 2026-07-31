@@ -1,5 +1,7 @@
 # 06 — Time and overtime
 
+This is a canonical chapter of the payroll architecture.
+
 Clocks become hours; hours become money. Overtime is the one place payroll depends on what actually
 happened rather than what was agreed.
 

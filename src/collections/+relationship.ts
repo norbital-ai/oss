@@ -12,7 +12,7 @@ import { cascade } from '@norbital-ai/pod/authoring';
  *   - `leave_ledger.source_id`         → a leave request, or an encashment
  *   - `payslip_line_sources.source`    → entry_id | time_entry_id | leave_request_id
  * Referential integrity for those is checked in `+hooks.ts` (validation gate A3), not by the
- * database. See plan/12-validation.md A3.
+ * database. See docs/payroll/12-validation.md A3.
  */
 export default ((r) => ({
 	jurisdictions: {

@@ -1,5 +1,7 @@
 # 09 — Repayment agreements
 
+This is a canonical chapter of the payroll architecture.
+
 A staff loan, a salary advance and an overpayment recovery are the same object: an agreement to deduct
 a principal over time. Payroll never reads the agreement; it reads the entries the agreement
 generated.

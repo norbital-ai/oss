@@ -1,5 +1,7 @@
 # 14 — Examples
 
+This is a canonical chapter of the payroll architecture.
+
 Four parts: one Malaysian payslip in full, the cases that usually need special code, the same engine
 in Singapore and Indonesia, and things going wrong.
 

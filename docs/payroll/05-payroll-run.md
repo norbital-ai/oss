@@ -1,5 +1,7 @@
 # 05 — The payroll run
 
+This is a canonical chapter of the payroll architecture.
+
 Eight steps, the same eight for every country.
 
 ---
