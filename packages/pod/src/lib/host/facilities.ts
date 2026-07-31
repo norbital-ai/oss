@@ -19,7 +19,10 @@ export type NotificationProvider = {
  */
 export type MessagingTransport = {
 	readonly transport: string;
-	send(message: TransportMessage): Promise<TransportSendResult>;
+	send(
+		message: TransportMessage,
+		context: { readonly channel: string }
+	): Promise<TransportSendResult>;
 };
 
 /**
@@ -70,12 +73,12 @@ export function messagingProviders(input: {
 		listTransports() {
 			return Promise.resolve(transportNames);
 		},
-		sendVia(name, message) {
+		sendVia(channel, name, message) {
 			const transport = byTransport.get(name);
 			if (!transport) {
 				return Promise.resolve({ sent: false, reason: `No transport named ${name}` });
 			}
-			return transport.send(message);
+			return transport.send(message, { channel });
 		}
 	};
 }
@@ -112,9 +115,9 @@ export function consoleMessaging(input: {
 		})),
 		transports: [...new Set(input.transports ?? [])].sort().map((transport) => ({
 			transport,
-			send(message: TransportMessage) {
+			send(message: TransportMessage, context: { readonly channel: string }) {
 				console.log(
-					`[pod:messaging] via=${transport} conversation=${message.conversationId}\n${message.text}`
+					`[pod:messaging] channel=${context.channel} via=${transport} conversation=${message.conversationId}\n${message.text}`
 				);
 				return Promise.resolve({ sent: true });
 			}

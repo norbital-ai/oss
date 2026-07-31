@@ -150,7 +150,18 @@ export type HostMessagingBinding = {
 	send(input: NotificationDelivery): Promise<NotificationDeliveryResult>;
 	/** The transports this host can carry a declared channel over. */
 	listTransports(): Promise<readonly string[]>;
-	sendVia(transport: string, message: TransportMessage): Promise<TransportSendResult>;
+	/**
+	 * Send on the exact declared channel that produced the reply.
+	 *
+	 * `transport` alone is not an address: a workspace may declare two Telegram channels backed by
+	 * two different host credentials. Carrying the declaration key keeps credential selection in the
+	 * host without making the tenant aware of a token or provider-specific config id.
+	 */
+	sendVia(
+		channel: string,
+		transport: string,
+		message: TransportMessage
+	): Promise<TransportSendResult>;
 };
 
 /**

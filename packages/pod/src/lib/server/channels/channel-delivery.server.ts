@@ -258,7 +258,7 @@ export async function deliverChannelMessage(
 			// An empty answer is not an error and must not be sent: transports reject an empty body, and
 			// a run that only called tools legitimately has nothing to say.
 			const delivered = text
-				? await messaging.sendVia(channel.transport, {
+				? await messaging.sendVia(command.channel, channel.transport, {
 						conversationId: command.conversationId,
 						text
 					})

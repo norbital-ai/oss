@@ -30,6 +30,31 @@ export function resolveWorkspaceOrganizationOptions(input: {
 /** Pod's own administration surface. Rendered by the pod, so it is not a host plugin. */
 export const WORKSPACE_SETTINGS_PATH = '/settings';
 
+/**
+ * Host-plugin entries cross out of Pod's in-memory router.
+ *
+ * A host route can happen to share this origin, but it is still served by a different application
+ * boundary. Treating it as a Pod SPA route only changes `history` and leaves the current Pod shell
+ * trying to render a route it does not own.
+ */
+export function isHostPluginEntry(
+	href: string,
+	plugins: readonly { readonly entry: string }[]
+): boolean {
+	return plugins.some((plugin) => plugin.entry === href);
+}
+
+/** A Pod-owned agent surface exists only when the host explicitly registers that exact entry. */
+export function hostAuthorizesAgentSurface(
+	currentPath: string,
+	plugins: readonly { readonly key: string; readonly entry: string }[]
+): boolean {
+	return (
+		currentPath === '/agent' &&
+		plugins.some((plugin) => plugin.key === 'agent' && plugin.entry === '/agent')
+	);
+}
+
 function isUnder(currentPath: string, entry: string): boolean {
 	return currentPath === entry || currentPath.startsWith(`${entry}/`);
 }

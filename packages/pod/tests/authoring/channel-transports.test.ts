@@ -61,14 +61,40 @@ describe('channel transports', () => {
 	 * a data field, let alone a record of functions.
 	 */
 	it('reads the host transports back through the binding that crosses the isolate', async () => {
+		const deliveries: { channel: string; conversationId: string }[] = [];
 		const binding = messagingProviders({
-			transports: [{ transport: 'telegram', send: async () => ({ sent: true }) }]
+			transports: [
+				{
+					transport: 'telegram',
+					send: async (message, context) => {
+						deliveries.push({
+							channel: context.channel,
+							conversationId: message.conversationId
+						});
+						return { sent: true };
+					}
+				}
+			]
 		});
 		expect(await binding.listTransports()).toEqual(['telegram']);
-		expect(await binding.sendVia('telegram', { conversationId: '42', text: 'hi' })).toEqual({
+		expect(
+			await binding.sendVia('sales_desk', 'telegram', { conversationId: '42', text: 'hi' })
+		).toEqual({
 			sent: true
 		});
-		expect(await binding.sendVia('sms', { conversationId: '42', text: 'hi' })).toEqual({
+		expect(
+			await binding.sendVia('support_desk', 'telegram', {
+				conversationId: '84',
+				text: 'hello'
+			})
+		).toEqual({ sent: true });
+		expect(deliveries).toEqual([
+			{ channel: 'sales_desk', conversationId: '42' },
+			{ channel: 'support_desk', conversationId: '84' }
+		]);
+		expect(
+			await binding.sendVia('sales_desk', 'sms', { conversationId: '42', text: 'hi' })
+		).toEqual({
 			sent: false,
 			reason: 'No transport named sms'
 		});

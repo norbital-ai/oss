@@ -40,12 +40,15 @@
 		appAccessAllowed,
 		buildApplicationNavigation,
 		buildSystemNavigation,
+		hostAuthorizesAgentSurface,
+		isHostPluginEntry,
 		resolveApplicationLandingAppId,
 		resolveWorkspaceOrganizationOptions,
 		WORKSPACE_SETTINGS_PATH
 	} from './workspace-navigation.js';
 	import WorkspaceSettingsSurface from './workspace-settings-surface.svelte';
 	import { workspaceSettingsApi } from './workspace-settings-api.js';
+	import AgentChatPanel from './agent/agent-chat-panel.svelte';
 
 	let {
 		apps,
@@ -189,6 +192,9 @@
 			thumbnail: manifestContext.findApp(item.key)?.thumbnail ?? null
 		}))
 	);
+	const agentSurfaceAllowed = $derived(
+		hostAuthorizesAgentSurface(currentPath, data.hostPlugins ?? [])
+	);
 
 	function closeDetailSheet(): void {
 		if (detailSheetOpen) platformState.navigation.pop(page.url);
@@ -200,6 +206,10 @@
 	}
 
 	function navigate(href: string): void {
+		if (isHostPluginEntry(href, data.hostPlugins ?? [])) {
+			window.location.assign(href);
+			return;
+		}
 		void goto(href);
 	}
 
@@ -251,7 +261,12 @@
 {/snippet}
 
 {#snippet notifications({ expanded }: { expanded: boolean })}
-	<NotificationsMenu {workspaceApi} userId={data.user.norbital_id} {expanded} onNavigate={navigate} />
+	<NotificationsMenu
+		{workspaceApi}
+		userId={data.user.norbital_id}
+		{expanded}
+		onNavigate={navigate}
+	/>
 {/snippet}
 
 <WorkspaceShell model={navigationModel} onNavigate={navigate} {notifications} {onSignOut}>
@@ -327,6 +342,10 @@
 			<!-- Pod's own administration surface, not a host plugin: a workspace on `pod start` has no
 			     host and still has to be able to add people to itself. -->
 			<WorkspaceSettingsSurface {workspaceApi} user={data.user} api={workspaceSettingsApi} />
+		{:else if agentSurfaceAllowed}
+			<Bound size="full" clip class="flex-1 p-4 sm:p-6">
+				<AgentChatPanel />
+			</Bound>
 		{:else if activeApp && accessible}
 			<Bound size="full" clip class="flex-1" data-workspace-app-region>
 				<Cover gap="none" top={activeAppBanner}>
