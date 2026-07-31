@@ -189,6 +189,28 @@ export const SCHEMA_POST_DDL_SQL = dedent`
       xid xid8 NOT NULL DEFAULT pg_current_xact_id()
     );
     CREATE INDEX IF NOT EXISTS sync_outbox_xid_seq_idx ON sync_outbox (xid, seq);
+    -- Retention prunes by age, so the sweep needs to find old rows without a full scan.
+    CREATE INDEX IF NOT EXISTS sync_outbox_occurred_at_idx ON sync_outbox (occurred_at);
+
+    -- The compaction boundary: every change at or below \`pruned_through_seq\` has been discarded.
+    --
+    -- An unbounded change feed is not an option — it grows for the life of the tenant — but
+    -- pruning it without recording where creates a far worse failure than growth. A client whose
+    -- cursor points into the pruned range would resume from a feed that no longer contains its
+    -- changes, see no error, and stay silently and permanently wrong. \`min(seq)\` cannot answer
+    -- this either: prune the table empty and there is no minimum left to compare against.
+    --
+    -- So the boundary is durable and monotonic, and a cursor at or below it is answered with a
+    -- reset instead of a diff: the replica is discarded and rebuilt. This is the same contract
+    -- Electric states as its compaction boundary, and it is what makes retention safe.
+    CREATE TABLE IF NOT EXISTS _norbital_sync_compaction (
+      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+      pruned_through_seq BIGINT NOT NULL DEFAULT 0,
+      pruned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO _norbital_sync_compaction (singleton)
+      VALUES (TRUE)
+      ON CONFLICT (singleton) DO NOTHING;
 
     -- A durable identity for this physical tenant database. It survives ordinary migrations and
     -- deploys, but a restore/re-provision/reset creates a fresh value. Clients persist the last

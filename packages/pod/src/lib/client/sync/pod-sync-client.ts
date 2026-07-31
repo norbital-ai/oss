@@ -9,6 +9,7 @@ import type {
 	SyncCursor,
 	SyncDiff,
 	SyncFetch,
+	ShapeRequestWithResume,
 	WireMutation
 } from './types.js';
 import { encodeBase64Url } from './base64url.js';
@@ -85,6 +86,12 @@ const syncDiffSchema = z.object({
 
 /** One SSE frame → its diff, or null when the frame is a comment/heartbeat or malformed. */
 function parseSseFrame(frame: string): SyncDiff | null {
+	// The server has pruned past this client's resume point. Nothing in the frame is a diff; the
+	// only correct response is to throw away the replica and rebuild, which the stream loop does
+	// by rethrowing this as a distinguishable error.
+	if (frame.split('\n').some((line) => line.trim() === 'event: reset')) {
+		throw new SyncResetRequired();
+	}
 	if (frame.split('\n').some((line) => line.trim() === 'event: error')) {
 		const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
 		const detail = dataLine?.slice('data:'.length).trim();
@@ -104,6 +111,14 @@ function parseSseFrame(frame: string): SyncDiff | null {
 
 function encodeStreamCursor(cursor: SyncCursor): string {
 	return encodeBase64Url(JSON.stringify(cursor));
+}
+
+/** The server can no longer resume this replica; it has to be discarded and rebuilt. */
+export class SyncResetRequired extends Error {
+	constructor() {
+		super('sync cursor is older than the server retention window');
+		this.name = 'SyncResetRequired';
+	}
 }
 
 export class PodSyncClient {
@@ -324,8 +339,28 @@ export class PodSyncClient {
 	 * paging loop (see SubscriptionRegistry) because only the client knows how many rows it has
 	 * already accumulated against its cap.
 	 */
-	async shapeSubscribe(request: ShapeRequest): Promise<ShapeResponse> {
+	async shapeSubscribe(request: ShapeRequestWithResume): Promise<ShapeResponse> {
 		const response = await this.postJson<ShapeResponse>('shape', request);
+
+		// The resume point is behind the server's compaction boundary: the changes this replica
+		// missed no longer exist, so nothing short of rebuilding it can be correct.
+		if (response.tooOld) {
+			await this.discardReplica();
+			for (const listener of this.resetListeners) listener();
+			return response;
+		}
+
+		// A resumed answer carries changes, not rows — applying them is the whole point of asking
+		// to resume rather than re-downloading a collection the device already holds.
+		if (response.resumed) {
+			const diffs = response.diffs ?? [];
+			if (diffs.length > 0) {
+				const touched = await this.applyDiffs(diffs);
+				for (const collection of touched) this.notifyCollection(collection);
+			}
+			return response;
+		}
+
 		await this.detectServerReset(response.watermark);
 		if (response.rows.length > 0) {
 			await this.upsertRows(request.collection, response.rows);
@@ -340,6 +375,22 @@ export class PodSyncClient {
 			await this.writeMeta('cursor', JSON.stringify(this.cursor));
 		}
 		return response;
+	}
+
+	/**
+	 * Ask the server for what changed in one collection since this replica last finished syncing it,
+	 * instead of downloading the collection again.
+	 *
+	 * Returns `resumed: false` when the server declined (no resume point, or it answered with rows),
+	 * and `tooOld: true` when the resume point is behind the server's compaction boundary — in which
+	 * case `shapeSubscribe` has already discarded the replica and announced the reset.
+	 */
+	async resumeCollection(collection: string): Promise<{ resumed: boolean; tooOld: boolean }> {
+		if (!this.cursorInitialized || this.cursor.seq === '0') {
+			return { resumed: false, tooOld: false };
+		}
+		const response = await this.shapeSubscribe({ collection, since: this.cursor.seq });
+		return { resumed: response.resumed === true, tooOld: response.tooOld === true };
 	}
 
 	// ── stream: keep the replica live ───────────────────────────────────────────
@@ -377,8 +428,18 @@ export class PodSyncClient {
 				await this.consumeSse(response.body, signal);
 			} catch (err) {
 				if (signal.aborted) return;
-				this.lastError = err;
-				console.error('[pod-sync] stream iteration failed', err);
+				// The feed no longer reaches back to where this replica left off. Reconnecting would
+				// resume from a truncated feed and leave the replica quietly missing whatever was
+				// pruned, so rebuild instead: drop everything, tell the registry to forget what it
+				// believed was resident, and let the next read catch up from scratch.
+				if (err instanceof SyncResetRequired) {
+					await this.discardReplica().catch(() => undefined);
+					for (const listener of this.resetListeners) listener();
+					this.lastError = undefined;
+				} else {
+					this.lastError = err;
+					console.error('[pod-sync] stream iteration failed', err);
+				}
 			}
 			// Always pause before reconnecting, including after a *clean* end of stream. A proxy
 			// timeout or a server restart closes the stream without an error, and reconnecting

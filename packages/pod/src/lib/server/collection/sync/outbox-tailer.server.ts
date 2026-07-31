@@ -129,6 +129,100 @@ export async function outboxCursorForSeq(
 	return row ? { xid: String(row.xid), seq: String(row.seq) } : OUTBOX_CURSOR_START;
 }
 
+// ── retention ──────────────────────────────────────────────────────────────────
+//
+// The feed is bounded by age, and the boundary of what was discarded is durable. Those two facts
+// are one feature: pruning without recording the boundary turns a client whose cursor fell behind
+// into a silently, permanently wrong replica, because it resumes from a feed that no longer holds
+// its changes and nothing tells it so.
+
+/**
+ * How long a change stays readable.
+ *
+ * This is the offline budget: a client away for less than this resumes by delta, and one away for
+ * longer rebuilds from scratch. A week covers a holiday and keeps the table proportional to write
+ * volume rather than to tenant age.
+ */
+const RETENTION_DAYS = 7;
+
+/** Never prune below this many recent rows, however old they are. */
+const RETENTION_FLOOR_ROWS = 1_000;
+
+/** How often a runtime bothers to sweep. The work is idempotent; this only limits churn. */
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+let lastPruneAt = 0;
+
+/**
+ * Everything at or below this seq has been discarded. A client cursor at or below it cannot be
+ * resumed and must rebuild.
+ */
+export async function syncCompactionBoundary(ctx: ProvisionedContext): Promise<string> {
+	const result = await ctx.tenantDb.query<{ seq: string }>(
+		`SELECT pruned_through_seq::text AS seq FROM _norbital_sync_compaction WHERE singleton = TRUE`
+	);
+	return result.rows[0]?.seq ?? '0';
+}
+
+/**
+ * Drop changes past their retention, and advance the boundary to match.
+ *
+ * Order matters: the boundary is raised in the same statement batch that deletes, and to the
+ * highest seq actually removed. Advancing it further than what was deleted would reject clients
+ * that could still have been served; advancing it less would leave clients resuming into a hole.
+ */
+export async function pruneSyncOutbox(
+	ctx: ProvisionedContext,
+	options?: { force?: boolean }
+): Promise<{ deleted: number; boundary: string }> {
+	if (!options?.force && Date.now() - lastPruneAt < PRUNE_INTERVAL_MS) {
+		return { deleted: 0, boundary: await syncCompactionBoundary(ctx) };
+	}
+	lastPruneAt = Date.now();
+
+	// The floor is expressed as "keep the newest N", so the cut is the highest seq that is both
+	// older than the retention window and outside that floor. A single statement so a concurrent
+	// reader cannot observe rows gone before the boundary moved.
+	const result = await ctx.tenantDb.query<{ seq: string | null; deleted: string }>(
+		`WITH cut AS (
+		   SELECT max(seq) AS seq
+		     FROM (
+		       SELECT seq
+		         FROM sync_outbox
+		        WHERE occurred_at < now() - ($1 || ' days')::interval
+		        ORDER BY seq DESC
+		        OFFSET $2
+		     ) old
+		 ),
+		 removed AS (
+		   DELETE FROM sync_outbox
+		    WHERE seq <= (SELECT seq FROM cut)
+		    RETURNING seq
+		 ),
+		 advanced AS (
+		   UPDATE _norbital_sync_compaction
+		      SET pruned_through_seq = GREATEST(pruned_through_seq, COALESCE((SELECT seq FROM cut), 0)),
+		          pruned_at = CURRENT_TIMESTAMP
+		    WHERE singleton = TRUE
+		    RETURNING pruned_through_seq
+		 )
+		 SELECT (SELECT pruned_through_seq::text FROM advanced) AS seq,
+		        (SELECT count(*)::text FROM removed) AS deleted`,
+		[String(RETENTION_DAYS), RETENTION_FLOOR_ROWS]
+	);
+	const row = result.rows[0];
+	return { deleted: Number(row?.deleted ?? 0), boundary: row?.seq ?? '0' };
+}
+
+/** Whether a client's resume point still exists in the feed. */
+export function isCursorTooOld(cursorSeq: string, boundary: string): boolean {
+	try {
+		return BigInt(cursorSeq || '0') < BigInt(boundary || '0');
+	} catch {
+		return false;
+	}
+}
+
 /** The current safe watermark seq: the largest `seq` whose xid is below the horizon. */
 export async function currentOutboxWatermark(ctx: ProvisionedContext): Promise<string> {
 	const result = await ctx.tenantDb.query<{ seq: string | null }>(

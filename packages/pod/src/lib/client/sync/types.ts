@@ -49,6 +49,22 @@ export type ShapeResponse = {
 	readonly watermark: string;
 	/** Full (xid, seq) cursor for the SSE stream to resume from. Set on the first page. */
 	readonly cursor?: SyncCursor;
+	/**
+	 * The compaction boundary: every change at or below this seq has been pruned from the feed.
+	 * A replica whose cursor is at or below it cannot be resumed and must be rebuilt.
+	 */
+	readonly minSeq?: string;
+	/** This client's resume point is below the boundary. Discard the replica and start again. */
+	readonly tooOld?: boolean;
+	/** The response is a delta from the feed rather than a page of rows. */
+	readonly resumed?: boolean;
+	/** Changes since the requested resume point, present when `resumed`. */
+	readonly diffs?: SyncDiff[];
+};
+
+export type ShapeRequestWithResume = ShapeRequest & {
+	/** Ask the server to answer from the change feed since this seq instead of re-sending rows. */
+	readonly since?: string | null;
 };
 
 // ── persisted per-collection sync state ────────────────────────────────────────

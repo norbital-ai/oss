@@ -35,6 +35,7 @@ import {
 	resolveCollectionReadPermission
 } from './access_control/permission/collection_permission.guard.server.js';
 import { error } from './http_error.js';
+import { withConstraintErrors } from './constraint-errors.server.js';
 import { getCurrentPermissionBypassKey } from './access_control/permission/permission_bypass_key.server.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import {
@@ -243,7 +244,16 @@ export async function findGrouped(
 	return directFindGrouped(ctx, collection, { ...query, where: baseWhere, limit });
 }
 
-export async function createRecord(
+export function createRecord(
+	ctx: ProvisionedContext,
+	collection: string,
+	input: Record<string, unknown>,
+	options?: { isElevated?: boolean }
+): Promise<Record<string, unknown>> {
+	return withConstraintErrors(collection, () => createRecordUnguarded(ctx, collection, input, options));
+}
+
+async function createRecordUnguarded(
 	ctx: ProvisionedContext,
 	collection: string,
 	input: Record<string, unknown>,
@@ -343,7 +353,16 @@ export async function createRecord(
 	return created;
 }
 
-export async function createMany(
+export function createMany(
+	ctx: ProvisionedContext,
+	collection: string,
+	inputs: readonly Record<string, unknown>[],
+	options?: { isElevated?: boolean }
+): Promise<Record<string, unknown>[]> {
+	return withConstraintErrors(collection, () => createManyUnguarded(ctx, collection, inputs, options));
+}
+
+async function createManyUnguarded(
 	ctx: ProvisionedContext,
 	collection: string,
 	inputs: readonly Record<string, unknown>[],
@@ -536,7 +555,19 @@ async function resolveApprovalRevision(params: {
 	};
 }
 
-export async function updateRecord(
+export function updateRecord(
+	ctx: ProvisionedContext,
+	collection: string,
+	recordId: string,
+	input: Record<string, unknown>,
+	options?: { isElevated?: boolean; expectedVersion?: number }
+): Promise<Record<string, unknown>> {
+	return withConstraintErrors(collection, () =>
+		updateRecordUnguarded(ctx, collection, recordId, input, options)
+	);
+}
+
+async function updateRecordUnguarded(
 	ctx: ProvisionedContext,
 	collection: string,
 	recordId: string,
@@ -961,7 +992,16 @@ async function loadRecordsById(
  * Failure is all-or-nothing: a denied, locked, missing or hook-rejected record rolls the whole
  * transaction back, matching {@link createMany} and {@link updateMany}.
  */
-export async function deleteMany(
+export function deleteMany(
+	ctx: ProvisionedContext,
+	collection: string,
+	ids: readonly string[],
+	options?: { isElevated?: boolean }
+): Promise<void> {
+	return withConstraintErrors(collection, () => deleteManyUnguarded(ctx, collection, ids, options));
+}
+
+async function deleteManyUnguarded(
 	ctx: ProvisionedContext,
 	collection: string,
 	ids: readonly string[],

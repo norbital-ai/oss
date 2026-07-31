@@ -25,6 +25,7 @@ import { error } from '../http_error.js';
 import { approvalRequestFromRow, parseApprovalStepStacks } from '$lib/shared/approval.js';
 import { withCollectionTransaction } from '../collection_transaction.server.js';
 import { emitSyncOutboxRow, type SyncOutboxAction } from '../sync/sync-outbox.server.js';
+import { announceVisibilityChange } from '../sync/visibility-deltas.server.js';
 
 const requestorMutationRefSchema = z.tuple([z.object({ record_id: z.string() }).strict()]);
 
@@ -120,12 +121,46 @@ function quoteIdent(identifier: string): string {
 	return `"${identifier.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Take the decision under a row lock, so two approvers cannot both win.
+ *
+ * The caller already refuses a request in a terminal state, but that check is an ordinary read
+ * taken before this transaction opens. Two people pressing Approve at the same moment therefore
+ * both saw `ONGOING`, both passed, and both wrote — stamping the step twice and, on a final step,
+ * driving the terminal transition twice. Rare, and the worst possible place for a lost update.
+ *
+ * `FOR UPDATE` inside the transaction that performs the write closes it: the second caller blocks
+ * until the first commits, then reads the status the first produced and is refused. The check and
+ * the write are finally the same atomic act rather than two hopeful ones.
+ *
+ * A row that does not exist yet is a brand-new request, which has nothing to lose a race to.
+ */
+async function assertNotAlreadyDecided(
+	tenantDb: ReturnType<typeof getWorkspace>['tenantDb'],
+	approvalRequestId: unknown
+): Promise<void> {
+	if (typeof approvalRequestId !== 'string') return;
+	const locked = await tenantDb.query<{ status: TApprovalRequestStatus }>(
+		`SELECT status FROM approval_request WHERE norbital_id = $1::uuid FOR UPDATE`,
+		[approvalRequestId]
+	);
+	const status = locked.rows[0]?.status;
+	if (status && TERMINAL_STATES.includes(status)) {
+		throw error(
+			409,
+			'Cannot modify approval request: it has already reached a terminal state. ' +
+				'Once approved or rejected, the decision is final.'
+		);
+	}
+}
+
 async function persistApprovalTransition(
 	record: Record<string, unknown>
 ): Promise<TApprovalRequest> {
 	const workspace = getWorkspace({ provision: true });
 	const tenantDb = workspace.tenantDb;
 	return withCollectionTransaction(workspace, async () => {
+		await assertNotAlreadyDecided(tenantDb, record.norbital_id);
 		const approvalRequest = await persistApprovalRequest(record);
 		if (approvalRequest.status !== 'APPROVED' && approvalRequest.status !== 'REJECTED') {
 			return approvalRequest;
@@ -146,6 +181,17 @@ async function persistApprovalTransition(
 				ref.record_id,
 				before,
 				await readRecordFeedState(ref.collection_name, ref.record_id)
+			);
+			// The released record's own change is on the feed now. What is not is every record whose
+			// *visibility* moved because of it — a run's payslips become readable when the run is
+			// approved without a single payslip row being written. Announcing them here keeps that a
+			// delta instead of something each client has to go looking for.
+			await announceVisibilityChange(workspace, ref.collection_name, ref.record_id).catch(
+				(cause: unknown) => {
+					// Never fail the approval over an announcement. A missed announcement costs a stale
+					// client until its next catch-up; a failed approval costs the decision itself.
+					console.error('[sync] visibility announcement failed', cause);
+				}
 			);
 		}
 		await releaseApprovalLocks(approvalRequestId);

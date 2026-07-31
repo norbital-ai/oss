@@ -196,6 +196,26 @@ export class SubscriptionRegistry {
 	}
 
 	private async runCatchUp(collection: string, onFirstPage: () => void): Promise<void> {
+		// A collection this device already synced asks the server for what changed rather than for
+		// the collection again. The server answers from the change feed when it still reaches back
+		// that far, and tells us to rebuild when it does not.
+		if (this.meta.get(collection)?.synced) {
+			// Wrapped in a resolved promise on purpose: a client that predates `resumeCollection`
+			// throws synchronously, which a bare `.catch()` never sees, and the throw would escape
+			// this whole catch-up and leave the collection unregistered.
+			const resumed = await Promise.resolve()
+				.then(() => this.client.resumeCollection(collection))
+				.catch(() => ({ resumed: false, tooOld: false }));
+			if (resumed.tooOld) {
+				this.meta.clear();
+			} else if (resumed.resumed) {
+				onFirstPage();
+				this.client.notifyCollection(collection);
+				this.client.startStream();
+				return;
+			}
+		}
+
 		let cursor: string | null = null;
 		let rows = 0;
 		let bytes = 0;
