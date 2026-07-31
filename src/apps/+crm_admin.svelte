@@ -129,8 +129,7 @@
 				</p>
 			</div>
 		</Grid>
-		<div class="rounded-lg border">
-			<table class="w-full text-sm">
+		<table class="w-full rounded-lg border text-sm">
 				<thead>
 					<tr class="border-b bg-muted/50">
 						<th class="px-4 py-2 text-left font-medium">Order</th>
@@ -160,7 +159,6 @@
 					{/each}
 				</tbody>
 			</table>
-		</div>
 	</Stack>
 {/snippet}
 

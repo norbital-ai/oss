@@ -2,7 +2,7 @@
 	import { client } from '$pod/client';
 	import { CollectionKanban } from '@norbital-ai/ui/collection-kanban';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Cover, Stack } from '@norbital-ai/ui/layout';
+	import { Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 
@@ -43,7 +43,7 @@
 
 {#snippet pipeline()}
 	<Stack gap="md">
-		<div class="flex items-center gap-3">
+		<Inline gap="sm">
 			<label for="owner-filter" class="text-sm text-muted-foreground whitespace-nowrap">
 				Owner
 			</label>
@@ -66,7 +66,7 @@
 					Clear
 				</button>
 			{/if}
-		</div>
+		</Inline>
 		<CollectionKanban {client} collection="quotes" groupBy="status" lanes={quoteLanes} rows={2}>
 			{#snippet Card(quote)}
 				<Stack gap="xs">
