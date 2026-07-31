@@ -32,6 +32,11 @@ export type Identity = {
 	readonly userName: string;
 	readonly email: string;
 	readonly role: TUserRole;
+	/** Teams the trusted host resolved for this requestor. */
+	readonly teamMembers?: readonly {
+		readonly id: string;
+		readonly name: string;
+	}[];
 };
 
 export type PodRuntimeHarness = {
@@ -192,7 +197,13 @@ function baseScope(identity: Identity): string {
 			email: identity.email,
 			role: identity.role,
 			user_status: 'active',
-			team_members: [],
+			team_members: (identity.teamMembers ?? []).map((team) => ({
+				norbital_id: team.id,
+				name: team.name,
+				description: null,
+				parent_id: null,
+				is_active: true
+			})),
 			avatar_url: null,
 			deactivated_at: null
 		},
