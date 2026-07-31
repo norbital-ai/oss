@@ -147,6 +147,45 @@ async function workflowMetadataReadFallback(
 }
 
 /**
+ * The one write a member may make without any policy granting it: dismissing their own notification.
+ *
+ * A notification is addressed to a person, and marking it read is that person saying "seen" — there
+ * is no workspace decision in it for a policy to express, and no tenant author would think to write
+ * a grant for it. Without this the bell renders an unread count that can never go down for exactly
+ * the users who are not admins.
+ *
+ * Deliberately narrow on all three axes, because the mutation path does NOT apply a
+ * `reducedCondition` to its WHERE (only reads do) — a residual filter here would look like a scope
+ * and enforce nothing. So the decision is made against the row already loaded: this collection,
+ * this recipient, and a payload that touches nothing but `read_at`. Rewriting the subject of a
+ * notification you received is not a thing you get to do.
+ */
+/**
+ * System collections carrying a self-service write, checked by `collection_ops` before the
+ * mutation pipeline starts.
+ *
+ * A tenant author declares which of *their* collections may be written; nobody declares a system
+ * one, so `allowsMutation` refuses every write to `notification` before this guard is consulted.
+ * This names the exception; `selfServiceWriteAllowed` below decides whether a given write is it.
+ * The two must be read together — this set opens the door, that function is the whole of the lock.
+ */
+export const SELF_SERVICE_WRITE_COLLECTIONS: ReadonlySet<string> = new Set(['notification']);
+
+export function selfServiceWriteAllowed(
+	collectionName: string,
+	actionType: Exclude<PolicyActionKey, 'read'>,
+	context: TCollectionActionContext
+): boolean {
+	if (collectionName !== 'notification' || actionType !== 'update') return false;
+	if (context.type !== 'update') return false;
+	const requestorId = getWorkspace({ provision: true }).baseScope.requestor.norbital_id;
+	if (context.scope.original_record?.recipient_user_id !== requestorId) return false;
+	return Object.keys(context.payload).every(
+		(field) => field === 'read_at' || field.startsWith('norbital_')
+	);
+}
+
+/**
  * Collections no client may read or write, at any role.
  *
  * These hold credential material and host-facing plumbing: `invitation` carries single-use token
@@ -222,7 +261,8 @@ export async function resolveCollectionMutationPermission(params: {
 	actionType: Exclude<PolicyActionKey, 'read'>;
 }): Promise<TCollectionPermissionScopeOutput> {
 	const { scope, actionType } = params;
-	assertClientReachable(scope.collectionMetadata.collection_name);
+	const collectionName = scope.collectionMetadata.collection_name;
+	assertClientReachable(collectionName);
 	const policyGrants = await resolvePolicyGrants(scope, actionType);
 	if (policyGrants.length === 0) {
 		if (scope.approvalServiceBypassKey) {
@@ -232,7 +272,10 @@ export async function resolveCollectionMutationPermission(params: {
 			}) as TCollectionPermissionScopeOutput;
 		}
 		const workspace = getWorkspace({ provision: true });
-		if (workspace.baseScope.requestor.role !== 'admin') {
+		if (
+			workspace.baseScope.requestor.role !== 'admin' &&
+			!selfServiceWriteAllowed(collectionName, actionType, scope.context)
+		) {
 			throw error(403, 'Unauthorized: No policy grants this operation');
 		}
 		return Object.assign({}, scope, {

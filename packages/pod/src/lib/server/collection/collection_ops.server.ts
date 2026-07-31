@@ -32,7 +32,9 @@ import type {
 } from './access_control/approval_scope_types.js';
 import {
 	resolveCollectionMutationPermission,
-	resolveCollectionReadPermission
+	resolveCollectionReadPermission,
+	selfServiceWriteAllowed,
+	SELF_SERVICE_WRITE_COLLECTIONS
 } from './access_control/permission/collection_permission.guard.server.js';
 import { error } from './http_error.js';
 import { withConstraintErrors } from './constraint-errors.server.js';
@@ -577,7 +579,16 @@ async function updateRecordUnguarded(
 	options?: { isElevated?: boolean; expectedVersion?: number }
 ): Promise<Record<string, unknown>> {
 	const behavior = getWorkspaceCollection(collection);
-	if (!options?.isElevated && !allowsMutation(behavior, 'update')) {
+	// A system collection has no author to declare it mutable, so this gate refuses one outright —
+	// right for every system collection but the ones carrying a self-service write. Membership here
+	// only gets the write as far as the payload being known; whether it is *the* self-service write
+	// is decided below, once there is a payload and an original record to decide it against.
+	const authorDeclaredMutable = allowsMutation(behavior, 'update');
+	if (
+		!options?.isElevated &&
+		!authorDeclaredMutable &&
+		!SELF_SERVICE_WRITE_COLLECTIONS.has(collection)
+	) {
 		throw error(403, `Collection "${collection}" does not allow update`);
 	}
 
@@ -615,6 +626,12 @@ async function updateRecordUnguarded(
 
 	let gatedConfig: TResolvedApprovalConfig | null = null;
 	if (!options?.isElevated) {
+		// An undeclared collection got this far only because it carries a self-service write. This is
+		// where that claim is tested — including for an admin, whose role short-circuits the policy
+		// deny but does not turn a notification into an editable record.
+		if (!authorDeclaredMutable && !selfServiceWriteAllowed(collection, 'update', mutationContext)) {
+			throw error(403, `Collection "${collection}" does not allow update`);
+		}
 		const decision = await resolveCollectionMutationPermission({
 			scope: {
 				approvalServiceBypassKey: getCurrentPermissionBypassKey(),
