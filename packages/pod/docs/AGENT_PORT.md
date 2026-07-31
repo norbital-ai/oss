@@ -37,8 +37,7 @@ filter every query had to remember.
 | `$lib/tenant_workspace/sandbox/*` | a sandbox is host infrastructure; re-expose as `HostAgentTool` |
 | `$lib/workspace_studio/*`         | a host surface, reached as a host plugin                       |
 | `$lib/billing/*`                  | Core owns the commercial relationship                          |
-| `$lib/live_object/*`              | superseded by Pod's own sync                                   |
-| `@durable-streams/*`              | a socket the tenant cannot hold open                           |
+| `$lib/live_object/*`              | Core-plane realtime for Core's own system data                 |
 
 `tools/coding.tool.ts` and `tools/deployment.tool.ts` follow the sandbox and stay in Core. They reach
 a tenant's agent through the seam below.
@@ -131,9 +130,11 @@ host-supplied. What Core has and this does not: the provider-history archive and
 external-sender-to-user linking with the pending-message hold, attachments, inbound batching, session
 commands, and group semantics. See B3 in [CORE_REFACTOR.md](./CORE_REFACTOR.md) for the full list.
 
-**The rest of the agent UI.** Core has roughly 40 components carrying streaming, subagent trees, todo
-panels, and file upload. They depend on `@durable-streams` and `@tanstack/ai`; the panel here is a
-working chat surface, not a replacement for them.
+**The old Core agent UI.** Its roughly 40 components, stream routes, loop and system-database
+transcript store were a second implementation and are deleted. Core advertises `/agent` as a host
+plugin entry, but that path is rendered by this Pod shell and this panel; Core contributes only its
+host tools. A full document navigation into the route gives the panel Pod's normal bootstrap and
+replica rather than trying to initialize tenant state inside a Core component.
 
 **Nothing further on the collection allowlist.** An earlier note here called it an ad-hoc placeholder
 needing policy-driven replacement; reading it again, that overstated the problem. `read_collection`
@@ -146,10 +147,10 @@ for one. It is a correct belt-and-braces, so it stays.
 Steps 1–5 are covered end to end against real Postgres — `agent-transcript-e2e` and `agent-chat-e2e`
 prove transcript shape, sequence continuity, replay across turns, and cross-user rejection.
 
-Step 6 is not. There is no component test infrastructure in this package — no jsdom, no browser runner
-— so the panel is covered by `svelte-check`, by unit tests over the two pure parts it has
-(`runtime/agent/transcript.ts`), and by its data dependency being proven end to end. Rendering is
-unverified, and that gap is worth closing before anyone relies on it.
+Step 6 is covered in the package's happy-dom component project. `agent-chat-panel.test.ts` proves the
+pending echo, replacement by the stored row, failure preservation, and live rows written by another
+tab. `system-navigation.test.ts` proves `/agent` is rendered only for the exact host registration and
+that host entries leave the in-memory Pod router.
 
 The panel no longer keeps a message array. It reads `chat_message` from the replica through the same
 live query the rest of the shell uses, so a reply written by the loop from a channel — or by the

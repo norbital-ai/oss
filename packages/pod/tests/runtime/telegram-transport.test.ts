@@ -114,7 +114,10 @@ describe('telegramBot', () => {
 	it('sends a reply to the conversation it came from', async () => {
 		const bot = telegramBot({ botToken: TOKEN, channel: 'sales_desk', apiBaseUrl: api.baseUrl });
 		expect(bot.transport.transport).toBe('telegram');
-		const result = await bot.transport.send({ conversationId: '-100987', text: 'Ten is £40.' });
+		const result = await bot.transport.send(
+			{ conversationId: '-100987', text: 'Ten is £40.' },
+			{ channel: 'sales_desk' }
+		);
 		expect(result.sent).toBe(true);
 		expect(api.sent.at(-1)).toEqual({ chat_id: '-100987', text: 'Ten is £40.' });
 	});
@@ -125,7 +128,10 @@ describe('telegramBot', () => {
 			channel: 'sales_desk',
 			apiBaseUrl: api.baseUrl
 		});
-		const result = await bot.transport.send({ conversationId: '1', text: 'hello' });
+		const result = await bot.transport.send(
+			{ conversationId: '1', text: 'hello' },
+			{ channel: 'sales_desk' }
+		);
 		expect(result.sent).toBe(false);
 		expect(result.reason).toContain('404');
 	});

@@ -19,6 +19,7 @@ export type NotificationProvider = {
  */
 export type MessagingTransport = {
 	readonly transport: string;
+	/** `context.channel` selects this workspace declaration's host-side credential/configuration. */
 	send(
 		message: TransportMessage,
 		context: { readonly channel: string }

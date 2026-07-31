@@ -57,7 +57,11 @@ async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 /** What the host's `telegram` transport actually put on the wire. */
-type SentMessage = { readonly conversationId: string; readonly text: string };
+type SentMessage = {
+	readonly channel: string;
+	readonly conversationId: string;
+	readonly text: string;
+};
 
 type Sink = {
 	readonly url: string;
@@ -69,8 +73,8 @@ type Sink = {
  * The far end of the transport.
  *
  * Outbound has to leave the Pod process over a socket for this to prove anything: the reply is
- * produced inside the runtime, handed to `messaging.sendVia('telegram', …)`, and only then does the
- * host's transport POST it here. A received body is proof the whole chain ran.
+ * produced inside the runtime, handed to `messaging.sendVia('sales_desk', 'telegram', …)`, and only
+ * then does the host's transport POST it here. A received body is proof the whole chain ran.
  */
 async function startSink(): Promise<Sink> {
 	const sent: SentMessage[] = [];
@@ -172,11 +176,11 @@ export default definePodHost({
 		transports: [
 			{
 				transport: 'telegram',
-				send: async (message) => {
+				send: async (message, context) => {
 					const response = await fetch(\`\${env('POD_TEST_SINK_URL')}/sent\`, {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify(message)
+						body: JSON.stringify({ ...message, channel: context.channel })
 					});
 					if (!response.ok) return { sent: false, reason: \`sink answered \${response.status}\` };
 					return { sent: true };
@@ -330,6 +334,7 @@ describe.skipIf(!hasDocker)('Pod standalone channel delivery — E2E', () => {
 		expect(outcome.delivered).toBe(true);
 
 		expect(sink.sent).toHaveLength(1);
+		expect(sink.sent[0]?.channel).toBe(CHANNEL);
 		expect(sink.sent[0]?.conversationId).toBe(CONVERSATION);
 		// The agent's own words left the process over the transport, not a canned acknowledgement.
 		expect(sink.sent[0]?.text).toContain('answering=Do you have a quote for us?');

@@ -394,7 +394,7 @@ second transport. `automation_run.status` and the newest step provide liveness.
 Interactive runs use the same loop and transcript:
 
 ```text
-POST /_runtime/agent/start { message, runId? }
+POST /_runtime/remotes/agentChat { message, runId? }
 ```
 
 ## Automations and the queue
