@@ -4,7 +4,6 @@ import type {
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import {
-	NORBITAL_PUBLIC_URL_HEADER,
 	requiredRuntimeFacilities
 } from '@norbital-ai/platform-utils/runtime/binding';
 import { parseNorbitalManifest } from '@norbital-ai/platform-utils/manifest/parse';
@@ -423,8 +422,7 @@ const IDENTITY_HEADERS = [
 	'x-norbital-org-id',
 	'x-norbital-org-name',
 	'x-norbital-base-scope-json',
-	'x-norbital-host-token',
-	NORBITAL_PUBLIC_URL_HEADER
+	'x-norbital-host-token'
 ] as const;
 
 async function toWebRequest(
@@ -461,7 +459,6 @@ async function withHostIdentity(
 	headers.set('x-norbital-user-id', identity.userId);
 	headers.set('x-norbital-org-id', identity.organizationId);
 	headers.set('x-norbital-org-name', identity.organizationName);
-	headers.set(NORBITAL_PUBLIC_URL_HEADER, publicUrl);
 	if (identity.baseScope) {
 		headers.set('x-norbital-base-scope-json', JSON.stringify(identity.baseScope));
 	}

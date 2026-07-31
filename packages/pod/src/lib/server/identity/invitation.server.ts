@@ -8,27 +8,43 @@ const DEFAULT_TTL_HOURS = 72;
 
 export type MintedInvitation = {
 	readonly invitationId: string;
-	/** The absolute accept URL. Returned so a caller can send it; never persisted. */
-	readonly acceptUrl: string;
+	/**
+	 * The accept path, origin-relative: `/accept-invite?token=…`.
+	 *
+	 * Relative rather than absolute because minting does not know the origin and should not have to
+	 * guess. Inside a tenant isolate the request URL is `http://tenant.local/…`, and behind a proxy
+	 * the bound port is not the public address either — so the only honest answers are "the host told
+	 * us" or "whoever is going to send this knows". A caller that needs an absolute link either has a
+	 * configured `publicUrl` (see `absoluteAcceptUrl`) or is a browser, which knows its own origin
+	 * better than any configuration does.
+	 *
+	 * Carries the plaintext token, so it is returned and never persisted: a caller that logs it has
+	 * re-created the credential the stored digest exists to remove.
+	 */
+	readonly acceptPath: string;
 };
 
-function acceptUrl(publicUrl: string, token: string): string {
-	const base = publicUrl.replace(/\/+$/, '');
-	return `${base}/accept-invite?token=${encodeURIComponent(token)}`;
+/**
+ * Absolute link, for a sender with no browser — an email has no `location.origin`.
+ *
+ * `publicUrl` is the host's claim about where this workspace is reachable, so this is only correct
+ * where such a claim exists. Anything rendered to the person who asked should compose the origin on
+ * the client instead.
+ */
+export function absoluteAcceptUrl(publicUrl: string, acceptPath: string): string {
+	return `${publicUrl.replace(/\/+$/, '')}${acceptPath}`;
 }
 
 /**
- * Create a pending invitation and return its one-time accept URL.
+ * Create a pending invitation and return its one-time accept path.
  *
  * Only the digest is stored, so the plaintext exists in exactly one place — the message this returns
- * a link for. That is also why the URL is returned rather than written anywhere: a caller that logs
- * it has re-created the credential the hash was meant to remove.
+ * a link for.
  */
 export async function mintInvitation(input: {
 	readonly email: string;
 	readonly role?: string;
 	readonly invitedByUserId?: string | null;
-	readonly publicUrl: string;
 	readonly ttlHours?: number;
 }): Promise<MintedInvitation> {
 	const ctx = getWorkspace({ provision: true });
@@ -58,7 +74,7 @@ export async function mintInvitation(input: {
 	const invitationId = record.norbital_id;
 	if (typeof invitationId !== 'string') throw new Error('Created invitation has no id');
 
-	return { invitationId, acceptUrl: acceptUrl(input.publicUrl, token) };
+	return { invitationId, acceptPath: `/accept-invite?token=${encodeURIComponent(token)}` };
 }
 
 /**
@@ -105,11 +121,11 @@ export async function provisionFoundingInvitation(input: {
 	});
 	if (existing.rows[0]) return { delivered: false };
 
-	const invitation = await mintInvitation({
-		email,
-		role: 'admin',
-		publicUrl: input.publicUrl
-	});
+	const invitation = await mintInvitation({ email, role: 'admin' });
+	// The one caller that genuinely needs an absolute link: this one arrives by email, and an email
+	// has no origin to compose against. `publicUrl` is the provisioning host's own claim, which is why
+	// it is required here and nowhere else.
+	const acceptUrl = absoluteAcceptUrl(input.publicUrl, invitation.acceptPath);
 
 	// Required, not best-effort: a founding invitation nobody receives leaves a tenant that can never
 	// be entered, so a missing messaging facility must fail provisioning loudly.
@@ -120,8 +136,8 @@ export async function provisionFoundingInvitation(input: {
 		channel: channels[0] ?? 'email',
 		recipientUserId: email,
 		subject: `Your ${ctx.baseScope.organization.name} workspace is ready`,
-		message: `Open your workspace to finish setting it up: ${invitation.acceptUrl}`,
-		cta: { label: 'Accept invitation', url: invitation.acceptUrl }
+		message: `Open your workspace to finish setting it up: ${acceptUrl}`,
+		cta: { label: 'Accept invitation', url: acceptUrl }
 	});
 	if (!result.sent) {
 		throw new Error(

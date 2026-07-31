@@ -16,9 +16,7 @@
  * presentation choice; the URL and the endpoint are reachable by any signed-in session, and inviting
  * a user or changing a role is exactly the surface a non-admin would use to promote themselves.
  */
-import { NORBITAL_PUBLIC_URL_HEADER } from '@norbital-ai/platform-utils/runtime/binding';
 import { UserRoleSchema } from '@norbital-ai/platform-utils/system/types';
-import { getRequestEvent } from '$lib/runtime/request-context.js';
 import { error } from '$lib/runtime/http.js';
 import { ensureOrganizationAdmin, getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { deleteRecord, updateRecord } from '$lib/server/collection/collection_ops.server.js';
@@ -44,31 +42,6 @@ export type WorkspaceInvitationSummary = {
 	readonly created_at: string;
 	readonly expires_at: string;
 };
-
-/**
- * Where a browser reaches this workspace, according to whoever is hosting it.
- *
- * Not derived from the request: inside a tenant isolate its URL is `http://tenant.local/...`, and
- * behind a proxy the bound port is not the public address either. Not taken from the client, because
- * the value ends up inside a redeemable link — a caller who chose it would choose where an invited
- * person is asked to type their token. `pod start` sets this header from the host configuration's
- * `publicUrl` and strips it from client input alongside the identity headers; a host that sets nothing
- * gets a refusal rather than an invitation nobody can accept.
- *
- * The blast radius if some host forgets to strip it is small but not zero: the link is returned in
- * this same response and sent by nobody else, so a forged value misleads only the caller who forged
- * it. That is a reason to keep it that way, not a reason to accept the value from a client.
- */
-function workspacePublicUrl(): string {
-	const supplied = getRequestEvent().request.headers.get(NORBITAL_PUBLIC_URL_HEADER)?.trim();
-	if (!supplied) {
-		throw error(
-			503,
-			'This host has not told the workspace its public URL, so no invitation link can be minted.'
-		);
-	}
-	return supplied;
-}
 
 function invitationStatus(row: {
 	consumed_at: string | null;
@@ -121,18 +94,28 @@ export async function listWorkspaceInvitations(): Promise<readonly WorkspaceInvi
  *
  * The plaintext token exists in exactly one place — this response — so the caller is the one who
  * delivers it. Nothing is logged and nothing is persisted but the digest.
+ *
+ * Returns an **origin-relative** path, and the browser composes the absolute link. This used to
+ * demand the origin from the host over a header, which meant the workspace could not mint an
+ * invitation under a host that had not been taught to send one. The header was answering a question
+ * the caller already knew the answer to: the administrator is looking at this workspace right now, so
+ * their `location.origin` is by definition an origin that reaches it — more reliably than a
+ * configured value, which can be stale, or wrong behind a custom domain.
+ *
+ * Nothing is trusted from the client either way. The path is built here from a token minted here; the
+ * client only prefixes where it already is. A caller who lies to itself about its own origin gets a
+ * link it cannot use, which is not an attack on anyone else.
  */
 export async function inviteWorkspaceMember(
 	input: z.infer<typeof InviteMemberSchema>
-): Promise<{ readonly invitationId: string; readonly acceptUrl: string; readonly email: string }> {
+): Promise<{ readonly invitationId: string; readonly acceptPath: string; readonly email: string }> {
 	ensureOrganizationAdmin('Only workspace admins can invite people');
 	const email = input.email.trim().toLowerCase();
 	const invitedBy = getWorkspace({ provision: true }).baseScope.requestor.norbital_id;
 	const minted = await mintInvitation({
 		email,
 		role: input.role,
-		invitedByUserId: invitedBy,
-		publicUrl: workspacePublicUrl()
+		invitedByUserId: invitedBy
 	});
 	return { ...minted, email };
 }

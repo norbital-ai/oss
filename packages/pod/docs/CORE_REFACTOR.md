@@ -59,18 +59,20 @@ Not applicable to `mode: 'core'` directly, but Core must supply the equivalent p
 issues the `provision` command — an invitation link has to be absolute and its token travels by email,
 so there is no request to derive an origin from.
 
-The same is now true of **tenant requests**, because Pod's own settings surface mints invitations
-(`settings/invitations/create`). Inside the isolate a request's URL is `http://tenant.local/...`, so
-Pod refuses (503) rather than guessing.
+**No Core action.** This briefly grew a second requirement — the settings surface mints invitations
+too, so it demanded the same origin from Core over an `x-norbital-public-url` header and answered 503
+until Core sent one. That header is gone, along with the requirement.
 
-- **Core action:** set `NORBITAL_PUBLIC_URL_HEADER` (`x-norbital-public-url`,
-  `platform-utils/src/runtime/binding.ts`) on every tenant request, to the address that tenant's
-  browsers use. Until Core does, workspace settings works on `pod start` and its invite button 503s
-  under Core.
-- **Core action:** strip it from client input first, as `pod start` does — it is in
-  `IDENTITY_HEADERS` in `bin/invocation/standalone.ts`. A forged value can only mislead the caller
-  who forged it (the minted link is returned in that same response and sent by nobody else), but the
-  header is host state, not request data, and should be treated like the identity headers beside it.
+The question it was asking had a better answer. A minted link goes back to the administrator who
+asked for it, in the response to their own click — and that browser is already looking at an address
+that reaches this workspace. So `settings/invitations/create` returns an **origin-relative**
+`acceptPath` and the browser composes the origin. That is not merely less configuration: a browser's
+own location is truer than a configured value, which can be stale or simply wrong behind a custom
+domain, and it is not client input in any meaningful sense — the path and its token are minted
+server-side, and a caller that lies to itself about where it is gets a link only it cannot use.
+
+`publicUrl` survives in exactly one place, `provisionFoundingInvitation`, and for a reason that does
+not generalise: that link is **emailed**, and an email has no origin to compose against.
 
 ### 6. Binding and manifest shapes changed without being written down
 

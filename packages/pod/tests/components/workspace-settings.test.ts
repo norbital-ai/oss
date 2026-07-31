@@ -41,7 +41,7 @@ class FakeSettingsApi implements WorkspaceSettingsApi {
 		];
 		return this.#late({
 			invitationId: 'invitation-new',
-			acceptUrl: `https://workspace.example.test/accept-invite?token=plaintext-${input.email}`,
+			acceptPath: `https://workspace.example.test/accept-invite?token=plaintext-${input.email}`,
 			email: input.email
 		});
 	}

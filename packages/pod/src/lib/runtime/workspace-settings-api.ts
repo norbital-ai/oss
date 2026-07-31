@@ -15,7 +15,7 @@ import type { WorkspaceInvitation, WorkspaceSettingsApi } from './workspace-sett
 export const workspaceSettingsApi: WorkspaceSettingsApi = {
 	listInvitations: () => post<readonly WorkspaceInvitation[]>('settings/invitations', {}),
 	invite: (input) =>
-		post<{ invitationId: string; acceptUrl: string; email: string }>(
+		post<{ invitationId: string; acceptPath: string; email: string }>(
 			'settings/invitations/create',
 			input
 		),

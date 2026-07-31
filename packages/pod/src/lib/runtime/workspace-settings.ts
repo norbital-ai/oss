@@ -28,7 +28,7 @@ export type WorkspaceSettingsApi = {
 	invite(input: {
 		email: string;
 		role: TUserRole;
-	}): Promise<{ invitationId: string; acceptUrl: string; email: string }>;
+	}): Promise<{ invitationId: string; acceptPath: string; email: string }>;
 	revokeInvitation(invitationId: string): Promise<{ revoked: boolean }>;
 	setMemberRole(userId: string, role: TUserRole): Promise<unknown>;
 	createTeam(name: string): Promise<unknown>;

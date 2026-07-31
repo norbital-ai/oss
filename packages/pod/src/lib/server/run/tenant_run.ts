@@ -17,6 +17,7 @@ import {
 } from '$lib/server/identity/subject.server.js';
 import {
 	inviteeEmailForToken,
+	absoluteAcceptUrl,
 	mintInvitation,
 	provisionFoundingInvitation
 } from '$lib/server/identity/invitation.server.js';
@@ -573,12 +574,18 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 				return { email: await inviteeEmailForToken(request.token) };
 			}
 			if (request.action === 'invite') {
-				return mintInvitation({
+				// The host-command path, unlike the settings surface, has no browser to compose an origin
+				// against — `pod invite` prints the link to a terminal — so it builds an absolute one from
+				// the `publicUrl` the host already had to configure.
+				const minted = await mintInvitation({
 					email: request.email,
 					...(request.role ? { role: request.role } : {}),
-					...(request.invitedByUserId ? { invitedByUserId: request.invitedByUserId } : {}),
-					publicUrl: request.publicUrl
+					...(request.invitedByUserId ? { invitedByUserId: request.invitedByUserId } : {})
 				});
+				return {
+					invitationId: minted.invitationId,
+					acceptUrl: absoluteAcceptUrl(request.publicUrl, minted.acceptPath)
+				};
 			}
 			return resolveSubjectToUser({
 				email: request.email,

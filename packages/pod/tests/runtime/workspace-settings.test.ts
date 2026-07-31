@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { NORBITAL_PUBLIC_URL_HEADER } from '@norbital-ai/platform-utils/runtime/binding';
 import { hashToken } from '$lib/host/session.js';
 import { dockerAvailable } from '../support/pg-harness.js';
 import {
@@ -25,7 +24,6 @@ const member: Identity = {
 	role: 'basic'
 };
 
-const PUBLIC_URL = 'https://workspace.example.test';
 
 type Json = Record<string, unknown>;
 
@@ -33,21 +31,12 @@ describe.skipIf(!hasDocker)('Pod workspace settings — identity administration'
 	let harness: PodRuntimeHarness;
 
 	/** One settings call, exactly as the browser makes it: a POST with the host's public URL attached. */
-	async function call(
-		path: string,
-		body: unknown,
-		identity: Identity,
-		options: { publicUrl?: string | null } = {}
-	): Promise<Response> {
-		const publicUrl = options.publicUrl === undefined ? PUBLIC_URL : options.publicUrl;
+	async function call(path: string, body: unknown, identity: Identity): Promise<Response> {
 		return harness.request(
 			{
 				method: 'POST',
 				path,
-				headers: {
-					'content-type': 'application/json',
-					...(publicUrl ? { [NORBITAL_PUBLIC_URL_HEADER]: publicUrl } : {})
-				},
+				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body)
 			},
 			identity
@@ -90,10 +79,12 @@ describe.skipIf(!hasDocker)('Pod workspace settings — identity administration'
 			)
 		);
 		expect(created.status, created.body).toBe(200);
-		const minted = JSON.parse(created.body) as { invitationId: string; acceptUrl: string };
-		expect(minted.acceptUrl.startsWith(`${PUBLIC_URL}/accept-invite?token=`)).toBe(true);
+		const minted = JSON.parse(created.body) as { invitationId: string; acceptPath: string };
+		// Origin-relative on purpose: the browser that asked composes the origin, because it is already
+		// looking at an address that reaches this workspace.
+		expect(minted.acceptPath.startsWith('/accept-invite?token=')).toBe(true);
 
-		const token = new URL(minted.acceptUrl).searchParams.get('token') ?? '';
+		const token = new URL(minted.acceptPath, 'https://example.invalid').searchParams.get('token') ?? '';
 		const stored = await harness.pool.query<{ token_hash: string; email: string }>(
 			`SELECT token_hash, email FROM invitation WHERE norbital_id = $1::uuid`,
 			[minted.invitationId]
@@ -171,20 +162,22 @@ describe.skipIf(!hasDocker)('Pod workspace settings — identity administration'
 		expect(role.rows[0]?.role).toBe('basic');
 	});
 
-	it('will not mint a link when the host has not said where the workspace is', async () => {
-		// Not derivable from the request — inside an isolate its URL is `http://tenant.local`. A guess
-		// here is an invitation nobody can redeem, so this refuses instead.
-		const response = await call(
-			'settings/invitations/create',
-			{ email: 'nowhere@example.test', role: 'basic' },
-			admin,
-			{ publicUrl: null }
+	it('mints a link with no host-supplied origin at all', async () => {
+		// The point of the relative path. This endpoint used to demand the origin over a header, so a
+		// host that had not been taught to send one could not invite anybody — under Core the button
+		// answered 503. Nothing here supplies an origin, and it still works.
+		const response = await payload(
+			await call('settings/invitations/create', { email: 'nowhere@example.test', role: 'basic' }, admin)
 		);
-		expect(response.status).toBe(503);
-		const orphan = await harness.pool.query(
+		expect(response.status, response.body).toBe(200);
+		const minted = JSON.parse(response.body) as { acceptPath: string };
+		expect(minted.acceptPath.startsWith('/accept-invite?token=')).toBe(true);
+		expect(minted.acceptPath).not.toContain('://');
+
+		const stored = await harness.pool.query(
 			`SELECT norbital_id FROM invitation WHERE email = 'nowhere@example.test'`
 		);
-		expect(orphan.rowCount).toBe(0);
+		expect(stored.rowCount).toBe(1);
 	});
 
 	it('revokes a pending invitation and leaves nothing to redeem', async () => {

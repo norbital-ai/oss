@@ -140,7 +140,12 @@
 			const minted = await api.invite({ email, role: inviteRole });
 			// The plaintext token exists only in this response, so it is shown to the administrator who
 			// asked rather than stored anywhere.
-			mintedLink = { email: minted.email, acceptUrl: minted.acceptUrl };
+			//
+			// The server returns an origin-relative path and the origin is composed here. This browser is
+			// already looking at the workspace, so where it is IS an address that reaches it — which is
+			// truer than any value a host could have been configured with, and needs no host to have been
+			// configured at all.
+			mintedLink = { email: minted.email, acceptUrl: `${location.origin}${minted.acceptPath}` };
 			inviteEmail = '';
 			await loadInvitations();
 		});
