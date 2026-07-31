@@ -13,12 +13,10 @@ minimumReleaseAgeExclude:
   - '@norbital-ai/config@0.0.1'
   - '@norbital-ai/platform-utils@0.0.1'
   - '@norbital-ai/pod@0.0.1'
-  - '@norbital-ai/pod@0.0.2'
-  - '@norbital-ai/pod@0.0.3'
+  - '@norbital-ai/pod@0.0.4'
   - '@norbital-ai/std@0.0.1'
   - '@norbital-ai/ui@0.0.1'
-  - '@norbital-ai/ui@0.0.2'
-  - '@norbital-ai/ui@0.0.3'
+  - '@norbital-ai/ui@0.0.4'
 
 # Host tools execute from this depset, while tenant builds execute in a Linux/musl microVM.
 # Include both host-native and guest-native optional packages on macOS, Windows, and Linux hosts.
