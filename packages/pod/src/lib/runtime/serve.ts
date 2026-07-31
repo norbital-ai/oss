@@ -28,6 +28,7 @@ import type {
 	HostAiBinding,
 	HostDbBinding,
 	HostFileStorageBinding,
+	HostAgentToolBinding,
 	HostMapsBinding,
 	HostMessagingBinding,
 	RuntimeFacilityBindings
@@ -182,7 +183,8 @@ export function startPodStdioServer(): void {
 		fileStorage: facility<HostFileStorageBinding>('fileStorage'),
 		ai: facility<HostAiBinding>('ai'),
 		messaging: facility<HostMessagingBinding>('messaging'),
-		maps: facility<HostMapsBinding>('maps')
+		maps: facility<HostMapsBinding>('maps'),
+		agentTools: facility<HostAgentToolBinding>('agentTools')
 	};
 
 	// Core owns the LISTEN connection (one per tenant database, shared by every container on it)

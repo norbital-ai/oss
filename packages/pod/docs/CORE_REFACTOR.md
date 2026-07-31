@@ -73,6 +73,17 @@ Found by typechecking Core against the current Pod. Each one breaks Core today; 
 | manifest `automations`      | lost `enabled`, `cron_schedule`, `created_by_user_id`, `description` |
 | manifest automation `spec`  | lost `agentProfileId`                                                |
 
+### 8. Core's `ai` binding predates tool calling
+
+`resolveRuntimeBindings` implements the pre-`AiChatResult` shape: it ignores `input.tools` and returns
+neither `toolCalls` nor `stopReason`. Pod's agent loop therefore cannot emit a tool call **of any
+kind** on Core — workspace tools and host tools alike. Four of Core's outstanding svelte-check errors
+in `bindings.ts` have been reporting exactly this.
+
+This blocks the agent end to end under Core, so it also blocks D6. It was not previously listed here.
+
+---
+
 ### 7. `queue` needs more than a binding
 
 `workspaceJobs()` is now exported from `@norbital-ai/pod/host` — it previously was not, which made

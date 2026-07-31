@@ -144,3 +144,32 @@ describe('facility bindings across the isolate boundary', () => {
 		expect(noFacilityCarriesADataField).toBe(true);
 	});
 });
+
+/**
+ * Two places assemble `RuntimeFacilityBindings`: `serve.ts` for a hosted guest, and the standalone
+ * runner. They must offer the same facilities, and nothing made them.
+ *
+ * `agentTools` shipped present in the standalone assembly and absent from the guest one, so host tools
+ * worked under `pod start` and 503'd under Core — invisible to every test here, because every test
+ * here goes through standalone. The type is the guard: a facility added to `RuntimeFacilityBindings`
+ * and not to both assemblies should not compile.
+ */
+describe('both binding assemblies offer every facility', () => {
+	it('names every optional facility, so a new one cannot be added to only one assembler', () => {
+		// Fails to compile if `RuntimeFacilityBindings` gains a member absent from this list.
+		const covered: Record<Exclude<keyof RuntimeFacilityBindings, 'db'>, true> = {
+			fileStorage: true,
+			ai: true,
+			messaging: true,
+			maps: true,
+			agentTools: true
+		};
+		expect(Object.keys(covered).sort()).toEqual([
+			'agentTools',
+			'ai',
+			'fileStorage',
+			'maps',
+			'messaging'
+		]);
+	});
+});
