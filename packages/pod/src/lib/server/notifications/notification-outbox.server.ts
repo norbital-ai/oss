@@ -21,16 +21,23 @@ export async function runNotificationOutbox(request: NotificationOutboxRequest) 
 	const columns = getColumns(notification_outbox);
 	if (request.action === 'claim') {
 		const limit = Math.min(Math.max(request.limit ?? 50, 1), 200);
+		// Due-ness is the database's clock, not this process's.
+		//
+		// `available_at` defaults to the database's `now()`, so comparing it against a `Date` minted
+		// here hides a freshly queued row for however far the two clocks disagree — measured at ~130ms
+		// between a container and its host. The drain is continuous, so the row went out a tick later
+		// and nothing was lost; but "delivered once the clocks agree" is not a property worth keeping
+		// when one side of the comparison is all it takes to be rid of it.
+		const dbNow = sql`now()`;
+		const leaseExpired = sql`now() - make_interval(secs => ${CLAIM_LEASE_MS / 1000})`;
 		return db.transaction(async (tx) => {
-			const now = new Date();
-			const expired = new Date(now.getTime() - CLAIM_LEASE_MS);
 			const rows = await tx
 				.select()
 				.from(notification_outbox)
 				.where(
 					or(
-						and(inArray(columns.status, ['pending', 'failed']), lte(columns.available_at, now)),
-						and(eq(columns.status, 'processing'), lte(columns.claimed_at, expired))
+						and(inArray(columns.status, ['pending', 'failed']), lte(columns.available_at, dbNow)),
+						and(eq(columns.status, 'processing'), lte(columns.claimed_at, leaseExpired))
 					)
 				)
 				.orderBy(columns.available_at)
@@ -42,7 +49,7 @@ export async function runNotificationOutbox(request: NotificationOutboxRequest) 
 				.update(notification_outbox)
 				.set({
 					status: 'processing',
-					claimed_at: now,
+					claimed_at: dbNow,
 					attempts: sql`${columns.attempts} + 1`
 				})
 				.where(inArray(columns.norbital_id, ids));
