@@ -293,7 +293,7 @@ The `norbital_hr` row previously read "1 policy (generated)". It is three — `H
 - [x] **A4. Done.** Three policies in `template_workspaces/hr-payroll/src/policies/` — `HR` (79 grants),
       `Management` (35), `Employee` (26, 14 of them conditional) — with the collection groups kept as
       generation, in `src/lib/policy_grants.ts`. Booted standalone: `policies reconciled (3 created,
-  0 updated)`, grant counts 79/35/26 exactly matching the seed, every `$sql` string stored with its
+0 updated)`, grant counts 79/35/26 exactly matching the seed, every `$sql` string stored with its
       literal `${requestor.email}` token, and **all eleven approval steps read back with the seed's
       `norbital_id`, derived step id, and `teams_that_can_approve` unchanged**.
       Two things the port surfaced, both recorded below as A4a and A4b. A third was fixed on the way:
