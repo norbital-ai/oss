@@ -20,12 +20,12 @@ would need a settled period re-run; Malaysia does not.
 
 The source label “back pay” does not decide whether a row is an input.
 
-| cause | treatment |
-| ----- | --------- |
+| cause                                                      | treatment                                                                                                                                                             |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | employee joined after the payroll attendance window closed | derive the prior month's prorated basic salary from `hire_date`, effective employment terms and the company settlement policy; do not seed the source back-pay amount |
-| late approval or payment of earlier overtime | retain the source instruction as an input on an overtime-typed component because attendance alone does not prove approval timing |
-| a closed-period salary, allowance or statutory correction | retain the source instruction as an input on a component with the same economic type as the corrected amount |
-| prior-year statutory adjustment | retain the supplied amount; the current year's inputs cannot reconstruct a closed year's filed liability |
+| late approval or payment of earlier overtime               | retain the source instruction as an input on an overtime-typed component because attendance alone does not prove approval timing                                      |
+| a closed-period salary, allowance or statutory correction  | retain the source instruction as an input on a component with the same economic type as the corrected amount                                                          |
+| prior-year statutory adjustment                            | retain the supplied amount; the current year's inputs cannot reconstruct a closed year's filed liability                                                              |
 
 A source payroll output may be used to prove a derived late-joiner amount, but copying that amount
 into `component_entries` would make the employee receive it twice. For example, a monthly employee
