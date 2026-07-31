@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Bound, Cover, Inline } from '@norbital-ai/ui/layout';
+	import { Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { SUBSTRATES } from '../lib/reclamation/cost.js';
@@ -67,7 +67,7 @@
 {/snippet}
 
 {#snippet catalogue()}
-	<Bound size="full" pad="none" class="px-4 py-2 sm:px-6">
+	<Stack gap="md">
 		<div class="divide-y rounded-md border bg-card text-sm">
 			{#each SUBSTRATES as substrate (substrate.id)}
 				<div class="p-3">
@@ -81,12 +81,12 @@
 				</div>
 			{/each}
 		</div>
-		<p class="mt-3 max-w-[70ch] text-xs text-muted-foreground">
+		<p class="max-w-[70ch] text-xs text-muted-foreground">
 			The catalogue is fixed by the engine: a substrate exists because the solid can measure it. A
 			rate row without a matching substrate is never priced, and a substrate without a rate row
 			prices at zero and is listed on the estimate as a missing rate.
 		</p>
-	</Bound>
+	</Stack>
 {/snippet}
 
 {#snippet pageHeading()}

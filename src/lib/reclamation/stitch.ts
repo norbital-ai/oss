@@ -138,6 +138,9 @@ export function stitch(input: StitchInput): StitchResult {
 	const { quantities, metrics } = integrateSite(model);
 
 	const filled = metrics.placedVolumeM3;
+	// Only the unexplained cut is worth a warning. A sand key trench is dug on
+	// purpose, and reporting it here as "the design sits below the bed" sent the
+	// reader looking for a datum error that was not there.
 	if (metrics.excavationM3 > Math.max(1000, filled * 0.01)) {
 		ledger.warn(
 			'design-below-bed',

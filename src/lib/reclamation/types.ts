@@ -33,13 +33,15 @@ export type StructureCategory = 'pre_existing' | 'new_works';
 
 export type DocumentKind = 'floor_plan' | 'bathymetry' | 'cross_section';
 
-export type DocumentFormat = 'dxf' | 'xyz' | 'csv' | 'json' | 'unsupported';
+export type DocumentFormat = 'dwg' | 'dxf' | 'pdf' | 'xyz' | 'csv' | 'json' | 'unsupported';
 
 /** One point on a section polyline: `(station, z, layer)`. */
 export type ProfilePoint = {
 	readonly stationM: number;
 	readonly zCdM: number;
 	readonly layer: string;
+	/** Source CAD entity. Points with the same id belong to one authored segment. */
+	readonly segmentId?: string;
 };
 
 /** Regular height field sampled from the bathymetric / topographic survey. */
@@ -258,6 +260,11 @@ export type ReconstructionMetrics = {
 	readonly structureDisplacementM3: number;
 	/** Volume where the design surface lies below the surveyed bed (a cut). */
 	readonly excavationM3: number;
+	/**
+	 * Volume dug to reach a trench invert the section draws — a sand key or a
+	 * rock foundation. Specified work, reported apart from an unexplained cut.
+	 */
+	readonly trenchExcavationM3: number;
 	/**
 	 * Total material placed. The integrated substrate lines sum to exactly this,
 	 * so a take-off can be reconciled without multiplying rounded metrics.

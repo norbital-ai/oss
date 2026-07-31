@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '@iconify/svelte';
 	import { Bound, Inline } from '@norbital-ai/ui/layout';
 	import { onDestroy } from 'svelte';
 	import { watch } from 'runed';
@@ -65,7 +66,7 @@
 		frame: number;
 	};
 
-	let container = $state<HTMLDivElement | null>(null);
+	let container = $state<HTMLButtonElement | null>(null);
 	let status = $state<'idle' | 'building' | 'ready' | { error: string }>('idle');
 	let surfaces = $state<SiteSurfaces | null>(null);
 	let stage: Stage | null = null;
@@ -111,7 +112,7 @@
 		return value || fallback;
 	}
 
-	async function mountStage(node: HTMLDivElement): Promise<void> {
+	async function mountStage(node: HTMLButtonElement): Promise<void> {
 		const [THREE, { OrbitControls }] = await runtime;
 		const renderer = new THREE.WebGLRenderer({
 			antialias: true,
@@ -394,6 +395,18 @@
 		controls.update();
 	}
 
+	function navigateByKeyboard(event: KeyboardEvent): void {
+		const direction = {
+			ArrowUp: [0, 1],
+			ArrowDown: [0, -1],
+			ArrowLeft: [-1, 0],
+			ArrowRight: [1, 0]
+		}[event.key];
+		if (!direction) return;
+		event.preventDefault();
+		pan(direction[0], direction[1]);
+	}
+
 	function setExaggeration(next: number): void {
 		exaggeration = next;
 		if (!stage) return;
@@ -449,11 +462,14 @@
 </script>
 
 <Bound size="full" clip class="relative">
-	<div
+	<button
+		type="button"
 		bind:this={container}
-		class="h-full w-full"
+		class="block h-full w-full appearance-none border-0 bg-transparent p-0 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
+		aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
+		onkeydown={navigateByKeyboard}
 		aria-label={label ?? 'Reclamation site model'}
-	></div>
+	></button>
 
 	{#if status === 'building' || status === 'idle'}
 		<Inline
@@ -475,45 +491,65 @@
 
 	{#if surfaces && status === 'ready'}
 		<div
-			class="absolute right-3 bottom-3 flex items-center gap-2 rounded-md border bg-background/85 px-2 py-1 text-tiny text-muted-foreground shadow-xs backdrop-blur"
+			class="absolute bottom-3 left-3 grid grid-cols-3 gap-0.5 rounded-md border bg-background/90 p-1 text-muted-foreground shadow-sm"
+			role="group"
+			aria-label="Move view"
 		>
-			<div class="grid grid-cols-3 gap-px" role="group" aria-label="Pan">
-				<span></span>
-				<button
-					type="button"
-					class="rounded px-1 hover:bg-muted"
-					aria-label="Pan up"
-					onclick={() => pan(0, 1)}>↑</button
-				>
-				<span></span>
-				<button
-					type="button"
-					class="rounded px-1 hover:bg-muted"
-					aria-label="Pan left"
-					onclick={() => pan(-1, 0)}>←</button
-				>
-				<button
-					type="button"
-					class="rounded px-1 hover:bg-muted"
-					aria-label="Centre"
-					onclick={() => applyView(view)}>·</button
-				>
-				<button
-					type="button"
-					class="rounded px-1 hover:bg-muted"
-					aria-label="Pan right"
-					onclick={() => pan(1, 0)}>→</button
-				>
-				<span></span>
-				<button
-					type="button"
-					class="rounded px-1 hover:bg-muted"
-					aria-label="Pan down"
-					onclick={() => pan(0, -1)}>↓</button
-				>
-				<span></span>
-			</div>
-			<span aria-hidden="true">·</span>
+			<span></span>
+			<button
+				type="button"
+				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
+				aria-label="Move up"
+				aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
+				onkeydown={navigateByKeyboard}
+				onclick={() => pan(0, 1)}
+			>
+				<Icon icon="lucide:arrow-up" class="size-4" />
+			</button>
+			<span></span>
+			<button
+				type="button"
+				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
+				aria-label="Move left"
+				onkeydown={navigateByKeyboard}
+				onclick={() => pan(-1, 0)}
+			>
+				<Icon icon="lucide:arrow-left" class="size-4" />
+			</button>
+			<button
+				type="button"
+				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
+				aria-label="Centre view"
+				onkeydown={navigateByKeyboard}
+				onclick={() => applyView(view)}
+			>
+				<Icon icon="lucide:focus" class="size-4" />
+			</button>
+			<button
+				type="button"
+				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
+				aria-label="Move right"
+				onkeydown={navigateByKeyboard}
+				onclick={() => pan(1, 0)}
+			>
+				<Icon icon="lucide:arrow-right" class="size-4" />
+			</button>
+			<span></span>
+			<button
+				type="button"
+				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
+				aria-label="Move down"
+				onkeydown={navigateByKeyboard}
+				onclick={() => pan(0, -1)}
+			>
+				<Icon icon="lucide:arrow-down" class="size-4" />
+			</button>
+			<span></span>
+		</div>
+
+		<div
+			class="absolute right-3 bottom-3 flex max-w-[calc(100%-7.5rem)] flex-wrap items-center justify-end gap-2 rounded-md border bg-background/90 px-2 py-1 text-tiny text-muted-foreground shadow-sm"
+		>
 			<div class="flex divide-x rounded border" role="group" aria-label="Viewpoint">
 				{#each VIEWS as id (id)}
 					<button

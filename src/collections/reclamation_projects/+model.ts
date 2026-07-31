@@ -29,7 +29,15 @@ export default defineModel(
 		}),
 		/** Section sheet profiles: levels, slopes, crest and armour dimensions. */
 		cross_section_document: file({
-			mimeTypes: ['text/csv', 'text/plain', 'image/vnd.dxf', 'application/dxf', 'application/json']
+			mimeTypes: [
+				'image/vnd.dwg',
+				'application/acad',
+				'application/x-autocad',
+				'image/vnd.dxf',
+				'application/dxf',
+				'application/pdf',
+				'application/json'
+			]
 		}),
 
 		/** How geometry is carried between two section cuts. */

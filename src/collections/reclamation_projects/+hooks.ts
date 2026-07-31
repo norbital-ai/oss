@@ -1,5 +1,6 @@
 import { PROJECT_STITCH_COLUMNS, stitchDriver } from '../../lib/reclamation/stitch-driver.js';
 import { parseOverrides, runStitchForProject } from './lib/run-stitch.js';
+import { refuse } from '@norbital-ai/pod/authoring';
 import type { Hooks } from './$types.js';
 
 /**
@@ -20,14 +21,18 @@ function validateTuning(input: {
 	render_cell_m?: number | null;
 	stitch_overrides?: string | null;
 }): void {
-	parseOverrides(input.stitch_overrides);
+	try {
+		parseOverrides(input.stitch_overrides);
+	} catch (cause) {
+		refuse(cause instanceof Error ? cause.message : String(cause));
+	}
 	for (const [label, value] of [
 		['Integration cell', input.integration_cell_m],
 		['Render cell', input.render_cell_m]
 	] as const) {
 		if (value == null) continue;
 		if (!Number.isFinite(value) || value < 0.5 || value > 100) {
-			throw new Error(`${label} size must be between 0.5 m and 100 m.`);
+			refuse(`${label} size must be between 0.5 m and 100 m.`);
 		}
 	}
 }

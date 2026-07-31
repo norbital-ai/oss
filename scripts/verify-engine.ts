@@ -8,18 +8,41 @@ import { stitch } from '../src/lib/reclamation/stitch.js';
 import { buildSurfaces, integrateSite } from '../src/lib/reclamation/solids.js';
 import { applySimulation, baseSimulation } from '../src/lib/reclamation/simulation.js';
 import { buildEstimate, DEFAULT_LEVERS, unpricedMessage } from '../src/lib/reclamation/cost.js';
-import type { RawDocument } from '../src/lib/reclamation/extract.js';
+import { extractSections, Ledger, type RawDocument } from '../src/lib/reclamation/extract.js';
 
 type P = [number, number];
 const enc = new TextEncoder();
-const doc = (kind: RawDocument['kind'], fileName: string, body: string): RawDocument => ({
-	kind,
-	assetId: null,
-	fileName,
-	mimeType: null,
-	bytes: enc.encode(body),
-	sha256: 'x'.repeat(64)
-});
+function profileFixture(body: string): string {
+	const rows = body.trim().split(/\r?\n/);
+	const header =
+		rows
+			.shift()
+			?.split(',')
+			.map((value) => value.trim()) ?? [];
+	const profiles: Record<string, [number, number, string][]> = {};
+	for (const row of rows) {
+		const values = row.split(',').map((value) => value.trim());
+		const read = (name: string) => values[header.indexOf(name)];
+		const profile = read('profile') || 'section-1';
+		const station = Number(read('station_m'));
+		const level = Number(read('z_cd_m'));
+		if (!Number.isFinite(station) || !Number.isFinite(level)) continue;
+		(profiles[profile] ??= []).push([station, level, read('layer') || 'grade']);
+	}
+	return JSON.stringify({ profiles });
+}
+const doc = (kind: RawDocument['kind'], fileName: string, body: string): RawDocument => {
+	const sectionFixture =
+		kind === 'cross_section' && /^(?:profile,)?station_m,z_cd_m,layer/m.test(body);
+	return {
+		kind,
+		assetId: null,
+		fileName,
+		mimeType: null,
+		bytes: enc.encode(sectionFixture ? profileFixture(body) : body),
+		sha256: 'x'.repeat(64)
+	};
+};
 const flatBed = (x0: number, x1: number, y0: number, y1: number, sp: number, z: number) => {
 	const rows = ['X Y Z'];
 	for (let y = y0; y <= y1; y += sp) for (let x = x0; x <= x1; x += sp) rows.push(`${x} ${y} ${z}`);
@@ -83,7 +106,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 					plan({ works_outline: square, seaward_edges: ringOf(square) })
 				),
 				bathymetry: doc('bathymetry', 'b.xyz', flatBed(-200, L + 200, -200, L + 200, 25, -D)),
-				cross_section: doc('cross_section', 's.csv', sec)
+				cross_section: doc('cross_section', 's.json', sec)
 			},
 			{ dimensionsM: { armorThickness: 0 }, seawardFaceKind: 'caisson' },
 			{ integrationCellM: cell, maxCells: 4e6 }
@@ -125,7 +148,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 				plan({ works_outline: square, seaward_edges: ringOf(square) })
 			),
 			bathymetry: doc('bathymetry', 'b.xyz', flatBed(-200, L + 200, -200, L + 200, 25, -D)),
-			cross_section: doc('cross_section', 's.csv', sec)
+			cross_section: doc('cross_section', 's.json', sec)
 		},
 		{ dimensionsM: { armorThickness: 1.5 } },
 		{ integrationCellM: 2, maxCells: 4e6 }
@@ -171,7 +194,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 				plan({ works_outline: square, seaward_edges: ringOf(square) })
 			),
 			bathymetry: doc('bathymetry', 'b.xyz', flatBed(-300, L + 300, -300, L + 300, 25, -D)),
-			cross_section: doc('cross_section', 's.csv', sec)
+			cross_section: doc('cross_section', 's.json', sec)
 		},
 		{ dimensionsM: { armorThickness: t } },
 		{ integrationCellM: 1.5, maxCells: 6e6 }
@@ -214,7 +237,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 			bathymetry: doc('bathymetry', 'b.xyz', flatBed(200, 1800, 400, 1600, 20, -10)),
 			cross_section: doc(
 				'cross_section',
-				's.csv',
+				's.json',
 				['station_m,z_cd_m,layer', '0,-10,toe', '30,4,crest_seaward', '900,4,platform'].join('\n')
 			)
 		},
@@ -257,7 +280,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 			bathymetry: doc('bathymetry', 'b.xyz', rows.join('\n')),
 			cross_section: doc(
 				'cross_section',
-				's.csv',
+				's.json',
 				['station_m,z_cd_m,layer', '0,-14,toe', `0,${P0},quay_crest`, `${L},${P0},platform`].join(
 					'\n'
 				)
@@ -289,7 +312,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 			bathymetry: doc('bathymetry', 'b.xyz', bed),
 			cross_section: doc(
 				'cross_section',
-				's.csv',
+				's.json',
 				['station_m,z_cd_m,layer', '0,-12,grade', '36,6,grade', '400,6,grade'].join('\n')
 			)
 		});
@@ -315,7 +338,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 			bathymetry: doc('bathymetry', 'b.xyz', bed),
 			cross_section: doc(
 				'cross_section',
-				's.csv',
+				's.json',
 				['station_m,z_cd_m,layer', '0,-12,toe', '36,6,crest_seaward', '400,6,platform'].join('\n')
 			)
 		},
@@ -377,7 +400,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 						return bedAt(i[0], i[1]);
 					})
 				),
-				cross_section: doc('cross_section', 's.csv', sec)
+				cross_section: doc('cross_section', 's.json', sec)
 			},
 			{ dimensionsM: { armorThickness: 1.5 } }
 		);
@@ -434,7 +457,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 			'b.xyz',
 			xyz({ x0: -100, x1: 1300, y0: -100, y1: 700 }, 20, () => -16)
 		),
-		cross_section: doc('cross_section', 's.csv', sec)
+		cross_section: doc('cross_section', 's.json', sec)
 	};
 	let refused = false;
 	try {
@@ -530,7 +553,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 			'b.xyz',
 			xyz({ x0: -200, x1: 2200, y0: -200, y1: 2000 }, 20, (x) => -8 - 0.006 * x)
 		),
-		cross_section: doc('cross_section', 's.csv', sec)
+		cross_section: doc('cross_section', 's.json', sec)
 	});
 	check(
 		'I. comb plan, three sections, blended',
@@ -569,7 +592,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 						plan({ works_outline: ring, seaward_edges: ringOf(ring) })
 					),
 					bathymetry: doc('bathymetry', 'b.xyz', flatBed(500, 2500, 500, 2500, 25, toe - 1)),
-					cross_section: doc('cross_section', 's.csv', sec)
+					cross_section: doc('cross_section', 's.json', sec)
 				},
 				{ dimensionsM: { armorThickness: 1 } }
 			);
@@ -611,7 +634,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 				plan({ works_outline: square, seaward_edges: ringOf(square) })
 			),
 			bathymetry: doc('bathymetry', 'b.xyz', flatBed(-200, L + 200, -200, L + 200, 25, -D)),
-			cross_section: doc('cross_section', 's.csv', sec)
+			cross_section: doc('cross_section', 's.json', sec)
 		},
 		{ dimensionsM: { armorThickness: 1.2 } }
 	);
@@ -682,7 +705,7 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 				plan({ works_outline: square, seaward_edges: ringOf(square) })
 			),
 			bathymetry: doc('bathymetry', 'b.xyz', flatBed(-300, L + 300, -300, L + 300, 25, -D)),
-			cross_section: doc('cross_section', 's.csv', sec)
+			cross_section: doc('cross_section', 's.json', sec)
 		},
 		{ dimensionsM: { armorThickness: 1.5 } },
 		{ integrationCellM: 2, maxCells: 4e6 }
@@ -715,6 +738,173 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 		'L. deepening the sand key invert digs more',
 		k2 > k1 * 1.3,
 		`${Math.round(k1).toLocaleString()} → ${Math.round(k2).toLocaleString()} m³ at 2 m deeper`
+	);
+}
+
+/* ---------- M. authored CAD section identity and entity boundaries ---------- */
+{
+	const cad = [
+		'0',
+		'SECTION',
+		'2',
+		'ENTITIES',
+		'0',
+		'LINE',
+		'8',
+		'SECTION_1-1__toe',
+		'10',
+		'0',
+		'20',
+		'-15',
+		'11',
+		'61.5',
+		'21',
+		'5.5',
+		'0',
+		'LINE',
+		'8',
+		'SECTION_4-4__tbund',
+		'10',
+		'0',
+		'20',
+		'-9',
+		'11',
+		'42',
+		'21',
+		'4.8',
+		'0',
+		'ENDSEC',
+		'0',
+		'EOF'
+	].join('\n');
+	const extracted = extractSections(doc('cross_section', 'sections.dxf', cad), new Ledger());
+	check(
+		'M. CAD layers identify sections automatically',
+		Object.keys(extracted.profiles).join(',') === '1-1,4-4',
+		`decoded ${Object.keys(extracted.profiles).join(' and ')}`
+	);
+	check(
+		'M. CAD entity boundaries survive extraction',
+		extracted.profiles['1-1'][0].segmentId === extracted.profiles['1-1'][1].segmentId &&
+			extracted.profiles['1-1'][0].layer === 'toe',
+		'one authored LINE remains one render segment with its semantic layer'
+	);
+}
+
+/* ------- N. a plotted tender sheet is placed from its own callouts ------- */
+{
+	/**
+	 * The sheet under test is deliberately awkward, because real ones are: two
+	 * sections at different plotting scales, sitting at different places on the
+	 * page, with a sheet border across the lot and a note that states a level
+	 * without being drawn at it.
+	 */
+	const entities: string[] = [];
+	const line = (layer: string, x0: number, y0: number, x1: number, y1: number): void => {
+		entities.push(
+			'0',
+			'LINE',
+			'8',
+			layer,
+			'10',
+			String(x0),
+			'20',
+			String(y0),
+			'11',
+			String(x1),
+			'21',
+			String(y1)
+		);
+	};
+	const text = (layer: string, x: number, y: number, value: string): void => {
+		entities.push(
+			'0',
+			'TEXT',
+			'8',
+			layer,
+			'10',
+			String(x),
+			'20',
+			String(y),
+			'40',
+			'2.5',
+			'1',
+			value
+		);
+	};
+
+	// Sheet border: spans everything, and must not fuse the two sections.
+	entities.push('0', 'LWPOLYLINE', '8', 'C-SHET-BRDR', '90', '5', '70', '0');
+	for (const [x, y] of [
+		[10, 10],
+		[830, 10],
+		[830, 580],
+		[10, 580],
+		[10, 10]
+	]) {
+		entities.push('10', String(x), '20', String(y));
+	}
+
+	// Section A-A, plotted 1:500 (2 mm per metre), origin at (100, 400).
+	const a = (station: number, level: number): [number, number] => [
+		100 + station * 2,
+		400 + level * 2
+	];
+	line('C-REVT-TOE', ...a(0, -17), ...a(67.5, 5.5));
+	line('C-REVT-CRST', ...a(67.5, 5.5), ...a(87.5, 5.5));
+	line('C-REVT-PLAT', ...a(87.5, 5.5), ...a(160, 5.5));
+	text('C-ANNO-LEVL', ...a(120, 5.5), 'FINAL PLATFORM LEVEL +5.5m CD');
+	text('C-ANNO-LEVL', ...a(30, -17), 'TOE OF REVETMENT -17.0m CD');
+	text('C-ANNO-LEVL', ...a(120, 0), 'UP TO 0.0m CD (INTERIM LEVEL)');
+	// A sentence that mentions a level while sitting nowhere near it.
+	text('C-ANNO-TEXT', ...a(20, -30), 'OR HIGHER THAN -17.0m CD AS STIPULATED');
+	text('C-ANNO-TEXT', ...a(40, -8), '1V : 3H');
+	text('C-ANNO-TITL', ...a(0, -36), 'SECTION A - A : TYPICAL REVETMENT');
+
+	// Section B-B, plotted 1:1000 (1 mm per metre), origin at (150, 150).
+	const b = (station: number, level: number): [number, number] => [150 + station, 150 + level];
+	line('C-BUND-FACE', ...b(0, -12), ...b(72, 5.5));
+	line('C-BUND-CRST', ...b(72, 5.5), ...b(172, 5.5));
+	text('C-ANNO-LEVL', ...b(120, 5.5), 'FINAL PLATFORM LEVEL +5.5m CD');
+	text('C-ANNO-LEVL', ...b(120, 0), 'UP TO 0.0m CD (INTERIM LEVEL)');
+	text('C-ANNO-TITL', ...b(0, -30), 'SECTION B - B : ACROSS EXISTING BUND');
+
+	const sheet = ['0', 'SECTION', '2', 'ENTITIES', ...entities, '0', 'ENDSEC', '0', 'EOF'].join(
+		'\n'
+	);
+	const read = extractSections(doc('cross_section', 'tender-sheet.dxf', sheet), new Ledger());
+	const ids = Object.keys(read.profiles).sort().join(',');
+	check(
+		'N. sections on a sheet are found by their titles',
+		ids === 'A-A,B-B',
+		`grouped into ${ids || 'nothing'}`
+	);
+
+	const calibration = new Map((read.calibrations ?? []).map((entry) => [entry.id, entry]));
+	const aa = calibration.get('A-A');
+	const bb = calibration.get('B-B');
+	check(
+		'N. each section recovers its own plotting scale',
+		aa?.plottingScale === 500 && bb?.plottingScale === 1000,
+		`A-A 1:${aa?.plottingScale}, B-B 1:${bb?.plottingScale} from one sheet`
+	);
+	check(
+		'N. a note that states a level is not mistaken for one',
+		aa !== undefined && aa.calloutsSeen === 4 && aa.calloutsUsed === 3 && aa.residualM < 1e-6,
+		`${aa?.calloutsUsed} of ${aa?.calloutsSeen} callouts agreed, residual ${aa?.residualM.toFixed(6)} m`
+	);
+
+	const toe = read.profiles['A-A'].find((point) => point.layer === 'toe');
+	// `C-REVT-CRST` is resolved to the canonical `crest` role, not left as `crst`.
+	const crest = read.profiles['A-A'].filter((point) => point.layer === 'crest');
+	check(
+		'N. plotted geometry comes back on station and level',
+		toe !== undefined &&
+			Math.abs(toe.stationM) < 1e-6 &&
+			Math.abs(toe.zCdM + 17) < 1e-6 &&
+			crest.length > 0 &&
+			Math.abs(Math.min(...crest.map((point) => point.stationM)) - 67.5) < 1e-6,
+		'toe at station 0.0 / -17.00 m CD, crest at station 67.5 — the drawn values'
 	);
 }
 

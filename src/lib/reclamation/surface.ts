@@ -43,6 +43,14 @@ export type SubGradeBand = {
 	readonly substrate: string;
 	readonly stations: readonly number[];
 	readonly invert: readonly number[];
+	/**
+	 * Upper surface, where the section draws the band as a band rather than as a
+	 * single invert line. A rock blanket is drawn with both faces and is a stated
+	 * thickness; a sand key trench is drawn as an invert and is dug to it from
+	 * whatever the bed happens to be. Without this the two read the same, and a
+	 * blanket over a bed that stands well above its invert comes out metres thick.
+	 */
+	readonly top?: readonly number[];
 	readonly minStation: number;
 	readonly maxStation: number;
 };
@@ -121,15 +129,26 @@ export function topSurfaceFromProfile(
 	}
 	const subGrade: SubGradeBand[] = [];
 	for (const [layer, entry] of bandsByLayer) {
-		const sorted = entry.points.slice().sort((a, b) => a.stationM - b.stationM);
-		if (sorted.length < 2) continue;
+		// One level per station is an invert line. Two is a band, and the pair
+		// gives its thickness directly.
+		const byStation = new Map<number, number[]>();
+		for (const point of entry.points) {
+			const key = Math.round(point.stationM * 1e6) / 1e6;
+			byStation.set(key, [...(byStation.get(key) ?? []), point.zCdM]);
+		}
+		const stations = [...byStation.keys()].sort((a, b) => a - b);
+		if (stations.length < 2) continue;
+		const invert = stations.map((station) => Math.min(...(byStation.get(station) as number[])));
+		const top = stations.map((station) => Math.max(...(byStation.get(station) as number[])));
+		const drawnAsBand = stations.some((station, index) => top[index] - invert[index] > 1e-6);
 		subGrade.push({
 			layer,
 			substrate: entry.substrate,
-			stations: sorted.map((point) => point.stationM),
-			invert: sorted.map((point) => point.zCdM),
-			minStation: sorted[0].stationM,
-			maxStation: sorted[sorted.length - 1].stationM
+			stations,
+			invert,
+			...(drawnAsBand ? { top } : {}),
+			minStation: stations[0],
+			maxStation: stations[stations.length - 1]
 		});
 	}
 	const seawardReach = subGrade.reduce(
@@ -152,8 +171,25 @@ export function topSurfaceFromProfile(
 
 /** Invert level of a band at a station, or `undefined` outside its extent. */
 export function sampleBandInvert(band: SubGradeBand, station: number): number | undefined {
+	return sampleBandLevel(band, station, band.invert, 'lower');
+}
+
+/** Top of a band at a station, where the section drew one. */
+export function sampleBandTop(band: SubGradeBand, station: number): number | undefined {
+	return band.top ? sampleBandLevel(band, station, band.top, 'upper') : undefined;
+}
+
+function sampleBandLevel(
+	band: SubGradeBand,
+	station: number,
+	levels: readonly number[],
+	// Where a vertical face gives two levels at one station, an invert takes the
+	// lower and a top takes the upper.
+	face: 'lower' | 'upper'
+): number | undefined {
 	if (station < band.minStation - 1e-9 || station > band.maxStation + 1e-9) return undefined;
-	const { stations, invert } = band;
+	const { stations } = band;
+	const invert = levels;
 	let low = 0;
 	let high = stations.length - 1;
 	while (high - low > 1) {
@@ -162,7 +198,10 @@ export function sampleBandInvert(band: SubGradeBand, station: number): number | 
 		else high = middle;
 	}
 	const span = stations[high] - stations[low];
-	if (span <= 1e-9) return Math.min(invert[low], invert[high]);
+	if (span <= 1e-9)
+		return face === 'lower'
+			? Math.min(invert[low], invert[high])
+			: Math.max(invert[low], invert[high]);
 	return lerp(invert[low], invert[high], (station - stations[low]) / span);
 }
 
@@ -476,7 +515,7 @@ export type SiteSampler = {
 	subGradeAt(
 		x: number,
 		y: number
-	): readonly { substrate: string; layer: string; invertM: number }[];
+	): readonly { substrate: string; layer: string; invertM: number; topM?: number }[];
 };
 
 function closedRing(points: readonly Point2[]): Point2[] {
@@ -547,11 +586,17 @@ export function createSampler(model: StitchedModel): SiteSampler {
 			// a blend, so a trench invert is never interpolated into existence
 			// between two sections that disagree about it.
 			const surface = nearestSurface(field, arcM);
-			const bands: { substrate: string; layer: string; invertM: number }[] = [];
+			const bands: { substrate: string; layer: string; invertM: number; topM?: number }[] = [];
 			for (const band of surface.subGrade) {
 				const invert = sampleBandInvert(band, stationM);
 				if (invert === undefined) continue;
-				bands.push({ substrate: band.substrate, layer: band.layer, invertM: invert });
+				const top = sampleBandTop(band, stationM);
+				bands.push({
+					substrate: band.substrate,
+					layer: band.layer,
+					invertM: invert,
+					...(top === undefined ? {} : { topM: top })
+				});
 			}
 			return bands;
 		},

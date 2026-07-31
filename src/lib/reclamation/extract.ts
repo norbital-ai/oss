@@ -33,6 +33,7 @@ import {
 	CAISSON_PROFILE_LAYERS,
 	classifyProfiles,
 	isSurfaceLayer,
+	subgradeSubstrate,
 	type LayerOverrides,
 	type ProfileClassification
 } from './profile-layers.js';
@@ -41,10 +42,10 @@ import {
 	decodeText,
 	griddedSurveyFromPoints,
 	parseJson,
-	parseProfileCsv,
 	parseXyz,
 	type Xyz
 } from './parse.js';
+import { readSectionSheet, type SectionCalibration } from './sheet.js';
 import type {
 	DocumentFormat,
 	DocumentKind,
@@ -110,6 +111,8 @@ export type RawDocument = {
 	readonly mimeType: string | null;
 	readonly bytes: Uint8Array;
 	readonly sha256: string;
+	/** Native CAD decoded before the deterministic stitch runs. */
+	readonly decodedCad?: DxfDocument;
 };
 
 /**
@@ -166,7 +169,9 @@ export class Ledger {
 
 export function detectFormat(document: RawDocument): DocumentFormat {
 	const name = (document.fileName ?? '').toLowerCase();
+	if (name.endsWith('.dwg')) return 'dwg';
 	if (name.endsWith('.dxf')) return 'dxf';
+	if (name.endsWith('.pdf')) return 'pdf';
 	if (name.endsWith('.xyz') || name.endsWith('.pts') || name.endsWith('.txt')) return 'xyz';
 	if (name.endsWith('.json') || name.endsWith('.geojson')) return 'json';
 	if (name.endsWith('.csv') || name.endsWith('.tsv')) return 'csv';
@@ -204,30 +209,62 @@ export type SectionExtraction = {
 	readonly annotations: readonly string[];
 	readonly format: DocumentFormat;
 	readonly summary: string;
+	/** How each section on the sheet was placed on station and level. */
+	readonly calibrations?: readonly SectionCalibration[];
 };
 
-function profilesFromDxf(document: DxfDocument): {
+/**
+ * Read the section drawing.
+ *
+ * The sheet reader does the work: it groups the geometry into sections and
+ * recovers each one's scale, datum and station origin from the drawing's own
+ * callouts. A drawing already authored on station and level has no callouts to
+ * recover, and calibrates to the identity — so there is one path, not two.
+ */
+function profilesFromDxf(
+	document: DxfDocument,
+	ledger: Ledger
+): {
 	profiles: Record<string, ProfilePoint[]>;
 	annotations: string[];
+	calibrations: readonly SectionCalibration[];
 } {
-	const profiles: Record<string, ProfilePoint[]> = {};
-	const annotations: string[] = [];
-	for (const entity of document.entities) {
-		if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
-			if (entity.text) annotations.push(entity.text);
-			continue;
+	const reading = readSectionSheet(document);
+	for (const calibration of reading.calibrations) {
+		const scale = calibration.plottingScale
+			? `plotted at about 1:${calibration.plottingScale}`
+			: 'drawn at full size';
+		if (calibration.calloutsUsed >= 2) {
+			ledger.assume({
+				id: `sheet-calibration-${calibration.id}`,
+				title: `Section "${calibration.id}" placed from its own level callouts`,
+				detail:
+					`${scale}. ${calibration.calloutsUsed} of ${calibration.calloutsSeen} level callout(s) on the section agreed on one datum ` +
+					`to within ${calibration.residualM.toFixed(3)} m, and station zero was taken from the ${
+						calibration.stationOrigin === 'toe-layer'
+							? 'toe drawn on the section'
+							: calibration.stationOrigin === 'toe-note'
+								? 'toe note on the section'
+								: 'seaward-most point drawn'
+					}.`,
+				effect:
+					'Every level and station on this section rests on that fit. A callout that names the wrong line moves the whole section on the datum, which shows up as fill depths that disagree with the survey.',
+				source: 'cross_section'
+			});
 		}
-		if (entity.type !== 'LWPOLYLINE' && entity.type !== 'POLYLINE' && entity.type !== 'LINE') {
-			continue;
-		}
-		const profileId = entity.layer.trim() || 'section';
-		const points = (profiles[profileId] ??= []);
-		for (const [x, y] of entity.vertices) {
-			points.push({ stationM: x, zCdM: y, layer: profileId.toLowerCase() });
+		for (const note of calibration.notes) {
+			// A section with no toe is not a fault of the sheet reader: a section
+			// drawn across an internal bund has no toe to find, and a perimeter
+			// section that lacks one is already required by `deriveParameters`.
+			if (calibration.stationOrigin === 'first-point' && note.startsWith('no toe')) continue;
+			ledger.warn(`sheet-${calibration.id}`, `Section "${calibration.id}": ${note}.`);
 		}
 	}
-	for (const points of Object.values(profiles)) points.sort((a, b) => a.stationM - b.stationM);
-	return { profiles, annotations };
+	return {
+		profiles: reading.profiles,
+		annotations: reading.annotations,
+		calibrations: reading.calibrations
+	};
 }
 
 function profilesFromJson(payload: Record<string, unknown>): Record<string, ProfilePoint[]> {
@@ -269,10 +306,20 @@ function profilesFromJson(payload: Record<string, unknown>): Record<string, Prof
 
 export function extractSections(document: RawDocument, ledger: Ledger): SectionExtraction {
 	const format = detectFormat(document);
+	if (format === 'csv') {
+		throw new Error(
+			`Cross-section document "${document.fileName ?? 'upload'}" is a CSV profile table. ` +
+				'CSV reconstructions are no longer accepted; supply the authored DWG, DXF, or vector PDF drawing.'
+		);
+	}
+	if ((format === 'dwg' || format === 'pdf') && !document.decodedCad) {
+		throw new Error(
+			`Cross-section document "${document.fileName ?? 'upload'}" is ${format.toUpperCase()}, but its vector geometry was not normalised before stitching.`
+		);
+	}
 	if (format === 'unsupported') {
 		throw new Error(
-			`Cross-section document "${document.fileName ?? 'upload'}" is not a DXF, CSV, or JSON export. ` +
-				'DWG and PDF sheets have to be exported to DXF or digitised to the profile CSV schema first.'
+			`Cross-section document "${document.fileName ?? 'upload'}" is not an authored DWG, DXF, vector PDF, or structured JSON drawing.`
 		);
 	}
 	const text = decodeText(document.bytes);
@@ -291,39 +338,25 @@ export function extractSections(document: RawDocument, ledger: Ledger): SectionE
 		};
 	}
 
-	if (format === 'dxf') {
-		const parsed = parseDxf(text);
-		const { profiles, annotations } = profilesFromDxf(parsed);
+	if (format === 'dxf' || format === 'dwg' || format === 'pdf') {
+		const parsed = document.decodedCad ?? parseDxf(text);
+		const { profiles, annotations, calibrations } = profilesFromDxf(parsed, ledger);
 		if (Object.keys(profiles).length === 0) {
 			throw new Error('Cross-section DXF contained no polyline geometry.');
 		}
-		ledger.assume({
-			id: 'section-dxf-layer-per-profile',
-			title: 'One DXF layer holds one section profile',
-			detail:
-				'Each polyline layer in the section DXF was read as one profile, with the polyline X read as station (0 at the seaward toe, increasing landward) and Y read as elevation on the project datum.',
-			effect:
-				'If the sheet places several sections on one layer, or draws them at a paper offset rather than in station/elevation space, the profiles are stitched at the wrong station and the solid is misplaced along the shore-normal axis.',
-			source: 'cross_section'
-		});
+		const placed = calibrations.filter((entry) => entry.calloutsUsed >= 2).length;
 		return {
 			profiles,
 			annotations,
 			format,
-			summary: `${Object.keys(profiles).length} section profile(s) from DXF layers`
+			calibrations,
+			summary:
+				`${Object.keys(profiles).length} section profile(s) from authored CAD entities` +
+				(placed > 0 ? `, ${placed} placed from its own level callouts` : '')
 		};
 	}
 
-	const profiles = parseProfileCsv(text, 'section-1');
-	if (Object.keys(profiles).length === 0) {
-		throw new Error('Cross-section CSV contained no `station_m,z_cd_m,layer` rows.');
-	}
-	return {
-		profiles,
-		annotations: [],
-		format,
-		summary: `${Object.keys(profiles).length} section profile(s) from CSV`
-	};
+	throw new Error(`Cross-section format ${format} is not supported.`);
 }
 
 /* -------------------------------------------------------------- parameters */
@@ -342,6 +375,26 @@ function pointOnLayer(
 		if (found) return found;
 	}
 	return undefined;
+}
+
+/**
+ * The lowest point drawn on one of `layers`.
+ *
+ * A layer that names a toe names the *bottom* of a face, and a face is drawn as
+ * a polyline running down to it — so the first vertex by station is the crest,
+ * not the toe. Taking the lowest vertex reads the toe wherever the face happens
+ * to be drawn seaward-to-landward or the other way about.
+ */
+function lowestOnLayer(
+	points: readonly ProfilePoint[],
+	...layers: readonly string[]
+): ProfilePoint | undefined {
+	let lowest: ProfilePoint | undefined;
+	for (const point of points) {
+		if (!layers.includes(point.layer)) continue;
+		if (!lowest || point.zCdM < lowest.zCdM) lowest = point;
+	}
+	return lowest;
 }
 
 /**
@@ -450,8 +503,11 @@ export function deriveParameters(
 			: Math.max(...surface.map((point) => point.zCdM));
 
 	const annotationText = sections.annotations.join(' | ');
+	// The callout has to name armour. Matching a bare `rock` read the sheet note
+	// "placement of dredged rock shall not be thicker than 1.00m" — which governs
+	// a foundation blanket, not the armour layer — as the armour thickness.
 	const armorAnnotation = annotationText.match(
-		/(?:armou?r|rock)[^|]*?(\d+(?:\.\d+)?)\s*m(?:\s*(?:thk|thick))?/i
+		/armou?r[^|]{0,80}?(\d+(?:\.\d+)?)\s*m\b(?:\s*(?:thk|thick))?/i
 	);
 	const seaLevelPoint = pointOnLayer(perimeter, 'sea', 'swl', 'mwl');
 	const interimPoint = pointOnLayer(perimeter, 'interim');
@@ -496,23 +552,46 @@ export function deriveParameters(
 	const slopes: Record<string, SlopeRatio> = {};
 	if (seawardFromProfile) slopes.seaward = seawardFromProfile;
 
-	const bundToe = pointOnLayer(perimeter, 'bund_landward_toe', 'inner_fill');
+	const bundToe = lowestOnLayer(perimeter, 'bund_landward_toe', 'inner_fill');
 	if (crestLandward && bundToe) {
 		const inner = slopeFromSegment(crestLandward, bundToe);
 		if (inner) slopes.inner_fill = inner;
 	}
 	const sandKeyPoints = perimeter.filter((point) => point.layer.includes('sand_key'));
+	// The trench invert is the deepest point drawn on the layer, not its first:
+	// a battered trench starts at the bed and only reaches its invert further in.
+	const sandKeyInvert =
+		sandKeyPoints.length > 0 ? Math.min(...sandKeyPoints.map((point) => point.zCdM)) : undefined;
 	if (sandKeyPoints.length >= 2 && toePoint) {
 		const width = Math.abs(
 			sandKeyPoints[sandKeyPoints.length - 1].stationM - sandKeyPoints[0].stationM
 		);
-		const depth = Math.abs(toePoint.zCdM - sandKeyPoints[0].zCdM);
+		const depth = Math.abs(toePoint.zCdM - (sandKeyInvert as number));
 		ledger.assume({
 			id: 'sand-key-trench',
 			title: `Sand key read as a ${width.toFixed(1)} m × ${depth.toFixed(1)} m trench`,
 			detail:
 				'The `sand_key` points on the section were read as the trench footprint under the toe, and priced as a rectangular prism along the perimeter. No side batter is assumed: none is dimensioned, and none is needed for a prism.',
 			effect: 'A trench with battered sides holds less, so the sand key line is an upper bound.',
+			source: 'cross_section'
+		});
+	}
+	const bandedLayers = [
+		...new Set(
+			perimeter
+				.filter((point) => !isSurfaceLayer(point.layer, layerOverrides))
+				.filter((point) => subgradeSubstrate(point.layer, layerOverrides?.subgrade))
+				.map((point) => point.layer)
+		)
+	];
+	if (bandedLayers.length > 0) {
+		ledger.assume({
+			id: 'sub-grade-bands-dug-to-invert',
+			title: `Below-grade bands (${bandedLayers.join(', ')}) are dug against the surveyed bed`,
+			detail:
+				'Each band is measured between two elevations on the same datum: down from whichever is lower, the surveyed bed or the design surface, to the invert the section draws. Where the section draws the band with both faces, the dig also stops at its drawn top, so a blanket keeps the thickness it was drawn at.',
+			effect:
+				'A band drawn with only an invert follows the bed, so a bed that is deeper than the survey shows digs less and one that is shallower digs more. A band drawn with both faces cannot exceed its drawn thickness however the bed lies.',
 			source: 'cross_section'
 		});
 	}
@@ -608,7 +687,12 @@ export function deriveParameters(
 	}
 
 	const dredgedRockThickness = overrides.dimensionsM?.dredgedRockThickness ?? 0;
-	if (dredgedRockThickness === 0) {
+	// A section that draws the rock foundation states it by drawing it; the
+	// thickness dimension is only needed when nothing is drawn.
+	const dredgedRockDrawn = perimeter.some(
+		(point) => subgradeSubstrate(point.layer, layerOverrides?.subgrade) === 'dredged_rock'
+	);
+	if (dredgedRockThickness === 0 && !dredgedRockDrawn) {
 		ledger.assume({
 			id: 'no-dredged-rock',
 			title: 'No dredged rock foundation modelled',
@@ -626,7 +710,7 @@ export function deriveParameters(
 			: 0);
 	const sandKeyDepth =
 		overrides.dimensionsM?.sandKeyDepth ??
-		(sandKeyPoints.length >= 1 ? Math.abs(toe - sandKeyPoints[0].zCdM) : 0);
+		(sandKeyInvert !== undefined ? Math.abs(toe - sandKeyInvert) : 0);
 
 	// Typology follows the shape of the face, not the armour line: a face can be
 	// unquantified — thickness unknown — and still be a rock slope.

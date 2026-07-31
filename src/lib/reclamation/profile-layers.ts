@@ -13,6 +13,60 @@
 
 import type { ProfilePoint } from './types.js';
 
+/**
+ * Canonical role for a drawing office's own layer name.
+ *
+ * Nobody names a layer `crest_seaward`. Real tender sets use discipline codes —
+ * `C-REVT-TOE`, `C-RECL-PLAT`, `SEC1-SANDKEY` — and the engineering role is one
+ * token inside them. Matching whole tokens rather than substrings keeps that
+ * cheap and safe: a layer has to actually contain the word `toe`, not merely
+ * have those three letters somewhere in it.
+ *
+ * A layer with no recognised token keeps its own name, so nothing is silently
+ * renamed, and `profileLayers` in the project overrides still has the last word.
+ */
+const ROLE_TOKENS: readonly (readonly [string, readonly string[]])[] = [
+	['crest_seaward', ['crest seaward', 'crestseaward', 'crst sea', 'seaward crest']],
+	['armor_crest', ['armor crest', 'armour crest', 'armr crst', 'crest armor', 'crest armour']],
+	['crest_landward', ['crest landward', 'crestlandward', 'crst land', 'landward crest']],
+	['bund_landward_toe', ['bund landward toe', 'inner toe', 'landward toe', 'rear toe']],
+	['sand_key', ['sand key', 'sandkey', 'sndkey', 'snd key']],
+	[
+		'dredged_rock',
+		['dredged rock', 'dredgedrock', 'foundation rock', 'rock foundation', 'bedding']
+	],
+	['geofabric', ['geofabric', 'geotextile', 'geotex']],
+	['seabed', ['seabed', 'sea bed', 'existing bed', 'bed level', 'dredged level']],
+	['existing_ground', ['existing ground', 'existing land', 'ground level', 'existing profile']],
+	['interim', ['interim']],
+	['sea', ['sea level', 'water level', 'swl', 'mwl']],
+	['platform', ['platform', 'plat', 'pltf', 'deck', 'recl']],
+	['crest', ['crest', 'crst']],
+	['toe', ['toe']],
+	['hwm', ['hwm', 'hwl', 'mhws']]
+];
+
+export function canonicalRole(layer: string): string {
+	const tokens = layer
+		.trim()
+		.toLowerCase()
+		.split(/[^a-z0-9]+/)
+		.filter(Boolean);
+	if (tokens.length === 0) return layer.trim().toLowerCase();
+	const joined = tokens.join(' ');
+	for (const [role, aliases] of ROLE_TOKENS) {
+		for (const alias of aliases) {
+			const parts = alias.split(' ');
+			if (parts.length === 1) {
+				if (tokens.includes(parts[0])) return role;
+				continue;
+			}
+			if (joined.includes(alias)) return role;
+		}
+	}
+	return layer.trim().toLowerCase();
+}
+
 /** Layers that describe an internal interface or a cut, not the finished top. */
 export const NON_SURFACE_PROFILE_LAYERS = [
 	'seabed',
@@ -31,6 +85,26 @@ export const NON_SURFACE_PROFILE_LAYERS = [
 	'soil_improvement_limit',
 	'geofabric',
 	'geotextile'
+] as const;
+
+/**
+ * Reference lines: levels a section draws to be read, not surfaces to be built.
+ *
+ * A water line and a material-change line are horizontal rules that run right
+ * across the sheet, so taking them as finished ground would drag the design
+ * surface down to them and extend the works out to wherever the draughtsman
+ * stopped the line. They are matched exactly rather than by substring, because
+ * `sea` is a substring of `crest_seaward`.
+ */
+export const REFERENCE_PROFILE_LAYERS = [
+	'sea',
+	'sea_level',
+	'swl',
+	'mwl',
+	'water',
+	'water_level',
+	'interim',
+	'interim_level'
 ] as const;
 
 /** Layers that mean the perimeter is an earth-retaining wall, not a rock slope. */
@@ -89,6 +163,7 @@ function matches(layer: string, keywords: readonly string[]): boolean {
 export function isSurfaceLayer(layer: string, overrides?: LayerOverrides): boolean {
 	if (overrides?.surface?.some((entry) => layer === entry.toLowerCase())) return true;
 	if (overrides?.internal?.some((entry) => layer === entry.toLowerCase())) return false;
+	if ((REFERENCE_PROFILE_LAYERS as readonly string[]).includes(layer)) return false;
 	return !matches(layer, NON_SURFACE_PROFILE_LAYERS);
 }
 
