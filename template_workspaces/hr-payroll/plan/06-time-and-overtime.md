@@ -171,13 +171,14 @@ Ordinary day, shift 8 h, worked 10.5 h:
 
 ## 7. Caps
 
-| cap                                        | level                                 | consequence                                                                                           |
-| ------------------------------------------ | ------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| company classification cap — Nihon 4 h/day | `pay_components`                      | hours above it are **not** discarded; they route to a second component at the same statutory multiple |
-| statutory limit — MY 104 h/month           | `overtime_limits`, `on_exceed = WARN` | a compliance warning on the run, never a silent truncation                                            |
+| control                                | level                                  | consequence                                                                                  |
+| -------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| statutory boundary — MY 12 h total/day | `OVERTIME_EXCESS` component definition | the half-hour-floored surplus is reclassified at the same legal value; it is never discarded |
+| statutory limit — MY 104 h/month       | `overtime_limits`, `on_exceed = WARN`  | ordinary/off-day OT above the calendar-month limit is reclassified and warned                |
 
-Six hours of ordinary-day overtime at Nihon: 4.0 h → `OT_1_5`, 2.0 h → `OT_INCENTIVE`. Discarding
-hours must never happen; the employee worked them.
+An 11-hour working day is below the 12-hour boundary even when it contains more than four OT hours.
+A 13-hour working day moves exactly 1.0 hour to statutory excess. Nihon's source `PINCEN` is a
+post-run comparison value, not an input and not evidence of a company four-hour rule.
 
 ---
 

@@ -161,9 +161,9 @@ RM4,700 band; 4,788.45 lands in `max: 4,800` → **23.75 / 83.15**.
 ### B1. Six overtime inputs (chapter 06 is under-modelled)
 
 Chapter 06 models a time entry as `clock_in · clock_out · break_minutes · state`. The working engine
-reads six more facts. Implementing chapter 06 literally would pay overtime **on unauthorised days, on
-no-overtime shifts, through unpaid breaks, and beyond the statutory 4 h/day ceiling that makes it
-lawful** — i.e. not merely different, but _less correct_ than what it replaces.
+reads six more facts. Implementing chapter 06 literally would pay overtime **on unauthorised days,
+on no-overtime shifts, through unpaid breaks, and without identifying work beyond the 12-hour daily
+boundary** — i.e. not merely different, but _less correct_ than what it replaces.
 
 | restored                                           | why                                                                                                                                                             |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -177,18 +177,19 @@ lawful** — i.e. not merely different, but _less correct_ than what it replaces
 Two of these — `designation` and `pays_overtime` — **already existed in the committed migration
 history**. The plan dropped columns that had shipped.
 
-### B2. Incentive overtime had no home in the model
+### B2. Statutory overtime excess had no home in the model
 
-Malaysia caps overtime at 4 h/day (EA 1955 + Limitation of Overtime Work Regulations 1980). Beyond
-that it is not payable _as overtime_, so the engine **reclassifies** the excess: same money, different
-component type, therefore a different EPF treatment.
+Malaysia generally limits total work to 12 hours in a day and ordinary/off-day overtime to 104
+hours in a calendar month. The engine **reclassifies** the corresponding excess: same statutory
+value, separately identified component, and no discarded work. Nihon's source `PINCEN` is the
+post-run expected output used to test that derivation and is never an input.
 
 The plan could not express this. `overtime_limits.on_exceed` is `WARN | BLOCK` — neither reclassifies;
 `definition.OVERTIME` is `{rule, minimum}` with no overflow target; and the partial unique index
 permits exactly one component per rule.
 
 **Resolution:** the split happens **upstream, in the measurement layer** — one clock becomes capped
-`overtime_entries` plus `incentive_overtime_entries` (`units = excess × multiplier`, valued at
+`overtime_entries` plus statutory-excess entries (`units = excess × multiplier`, valued at
 ordinary hourly). The overflow is a separate measured quantity, not a second `OVERTIME`-source
 component, so the unique index is never contended. The target is a new `OVERTIME_EXCESS` arm on
 `component_definition` — placed on the _company_ side, because putting it on `overtime_limits` would

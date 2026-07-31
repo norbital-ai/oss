@@ -211,8 +211,6 @@ async function handleShape(
 		collection?: string;
 		cursor?: string | null;
 		pageSize?: number;
-		/** Resume point from a previous sync of this collection, if the client has one. */
-		since?: string | null;
 	};
 
 	if (typeof body.collection !== 'string') throw error(400, 'shape requires a collection');
@@ -221,21 +219,6 @@ async function handleShape(
 	// every client makes, it is rate-limited internally, and a tenant nobody opens does not need
 	// its feed trimmed.
 	void pruneSyncOutbox(ctx).catch(() => undefined);
-
-	// A client that already holds this collection asks to resume rather than re-download. That is
-	// only answerable while its resume point is still in the feed — past the compaction boundary
-	// the changes it missed no longer exist, and the honest answer is "start again" rather than a
-	// page of rows that silently omits them.
-	if (typeof body.since === 'string' && body.since !== '' && body.since !== '0') {
-		const boundary = await syncCompactionBoundary(ctx);
-		if (isCursorTooOld(body.since, boundary)) {
-			return jsonResponse(
-				{ rows: [], nextCursor: null, watermark: '0', tooOld: true, minSeq: boundary },
-				headers
-			);
-		}
-		return jsonResponse(await resumeShape(ctx, body.collection, body.since, boundary), headers);
-	}
 
 	const requestedSize =
 		typeof body.pageSize === 'number' && body.pageSize > 0
@@ -263,56 +246,10 @@ async function handleShape(
 			rows: page.rows,
 			nextCursor: page.nextCursor,
 			watermark: watermark ?? '0',
-			minSeq: await syncCompactionBoundary(ctx),
 			...(cursor ? { cursor } : {})
 		},
 		headers
 	);
-}
-
-/**
- * Answer a resume request from the change feed instead of re-reading the collection.
- *
- * A full keyset scan re-sends every row the client already has to discover the handful that
- * changed; reading the feed sends only what changed. Rows that left policy scope come back as
- * `leave` through the same `buildDiff` the stream uses, so a resume and a live update cannot
- * disagree about what a client may see.
- */
-async function resumeShape(
-	ctx: ProvisionedContext,
-	collection: string,
-	since: string,
-	boundary: string
-): Promise<{
-	rows: Record<string, unknown>[];
-	nextCursor: null;
-	watermark: string;
-	minSeq: string;
-	diffs: SyncDiff[];
-	resumed: true;
-}> {
-	const from = await outboxCursorForSeq(ctx, since);
-	const diffs: SyncDiff[] = [];
-	let cursor = from;
-	// Bounded: a resume that would out-grow a fresh download is not worth serving, and the caller
-	// falls back to a full shape when it sees `resumed` with a full batch and more to come.
-	for (let batch = 0; batch < 20; batch += 1) {
-		const next = await readSyncOutboxBatch(ctx, cursor, 500);
-		if (next.rows.length === 0) break;
-		for (const row of next.rows) {
-			if (row.collection !== collection) continue;
-			diffs.push(await buildDiff(ctx, row));
-		}
-		cursor = next.cursor;
-	}
-	return {
-		rows: [],
-		nextCursor: null,
-		watermark: cursor.seq,
-		minSeq: boundary,
-		diffs,
-		resumed: true
-	};
 }
 
 // ---------------------------------------------------------------------------

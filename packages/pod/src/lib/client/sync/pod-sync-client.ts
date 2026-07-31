@@ -9,7 +9,6 @@ import type {
 	SyncCursor,
 	SyncDiff,
 	SyncFetch,
-	ShapeRequestWithResume,
 	WireMutation
 } from './types.js';
 import { encodeBase64Url } from './base64url.js';
@@ -339,28 +338,8 @@ export class PodSyncClient {
 	 * paging loop (see SubscriptionRegistry) because only the client knows how many rows it has
 	 * already accumulated against its cap.
 	 */
-	async shapeSubscribe(request: ShapeRequestWithResume): Promise<ShapeResponse> {
+	async shapeSubscribe(request: ShapeRequest): Promise<ShapeResponse> {
 		const response = await this.postJson<ShapeResponse>('shape', request);
-
-		// The resume point is behind the server's compaction boundary: the changes this replica
-		// missed no longer exist, so nothing short of rebuilding it can be correct.
-		if (response.tooOld) {
-			await this.discardReplica();
-			for (const listener of this.resetListeners) listener();
-			return response;
-		}
-
-		// A resumed answer carries changes, not rows — applying them is the whole point of asking
-		// to resume rather than re-downloading a collection the device already holds.
-		if (response.resumed) {
-			const diffs = response.diffs ?? [];
-			if (diffs.length > 0) {
-				const touched = await this.applyDiffs(diffs);
-				for (const collection of touched) this.notifyCollection(collection);
-			}
-			return response;
-		}
-
 		await this.detectServerReset(response.watermark);
 		if (response.rows.length > 0) {
 			await this.upsertRows(request.collection, response.rows);
@@ -375,22 +354,6 @@ export class PodSyncClient {
 			await this.writeMeta('cursor', JSON.stringify(this.cursor));
 		}
 		return response;
-	}
-
-	/**
-	 * Ask the server for what changed in one collection since this replica last finished syncing it,
-	 * instead of downloading the collection again.
-	 *
-	 * Returns `resumed: false` when the server declined (no resume point, or it answered with rows),
-	 * and `tooOld: true` when the resume point is behind the server's compaction boundary — in which
-	 * case `shapeSubscribe` has already discarded the replica and announced the reset.
-	 */
-	async resumeCollection(collection: string): Promise<{ resumed: boolean; tooOld: boolean }> {
-		if (!this.cursorInitialized || this.cursor.seq === '0') {
-			return { resumed: false, tooOld: false };
-		}
-		const response = await this.shapeSubscribe({ collection, since: this.cursor.seq });
-		return { resumed: response.resumed === true, tooOld: response.tooOld === true };
 	}
 
 	// ── stream: keep the replica live ───────────────────────────────────────────

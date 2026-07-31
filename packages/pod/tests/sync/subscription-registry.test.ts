@@ -46,9 +46,6 @@ function stubClient(options?: {
 			return options?.page?.(request, index) ?? lastPage();
 		},
 		loadSyncState: async () => options?.persisted ?? new Map<string, CollectionSyncState>(),
-		// The real client asks to resume before re-downloading. These tests are about the paging
-		// loop, so the stub always declines and every case exercises the full catch-up.
-		resumeCollection: async () => ({ resumed: false, tooOld: false }),
 		recordSyncState: async (collection: string, resident: boolean, rows: number) => {
 			recorded.push({ collection, resident, rows });
 		},
@@ -94,55 +91,6 @@ describe('SubscriptionRegistry', () => {
 		await registry.register('customers');
 		expect(calls.length).toBe(2);
 		expect(registry.size).toBe(2);
-	});
-
-	it('resumes from the feed instead of re-downloading a collection it already synced', async () => {
-		const { client, calls } = stubClient();
-		// The real client answers a resume when its cursor is still inside the retention window.
-		(client as unknown as { resumeCollection: () => Promise<unknown> }).resumeCollection =
-			async () => ({ resumed: true, tooOld: false });
-		const registry = new SubscriptionRegistry(client);
-
-		await registry.register('orders');
-		await settle();
-		const afterFirstSync = calls.length;
-
-		await registry.refresh(['orders']);
-		await settle();
-
-		// A resumed refresh costs no shape page at all: the changes came from the change feed.
-		expect(calls.length).toBe(afterFirstSync);
-		expect(registry.hasSynced('orders')).toBe(true);
-	});
-
-	it('re-reads from scratch when the server says the cursor is too old', async () => {
-		const { client, calls } = stubClient();
-		(client as unknown as { resumeCollection: () => Promise<unknown> }).resumeCollection =
-			async () => ({ resumed: false, tooOld: true });
-		const registry = new SubscriptionRegistry(client);
-
-		await registry.register('orders');
-		await settle();
-		const afterFirstSync = calls.length;
-
-		await registry.refresh(['orders']);
-		await settle();
-
-		// Past the compaction boundary a resume is impossible, so the collection is downloaded
-		// again rather than left resuming into a hole.
-		expect(calls.length).toBeGreaterThan(afterFirstSync);
-	});
-
-	it('refreshes resident collections when policy visibility changes', async () => {
-		const { client, calls } = stubClient();
-		const registry = new SubscriptionRegistry(client);
-
-		await registry.register('orders');
-		await settle();
-		await registry.refresh(['orders']);
-		await settle();
-
-		expect(calls.map((call) => call.collection)).toEqual(['orders', 'orders']);
 	});
 
 	it('marks a fully-fetched collection resident and persists that', async () => {

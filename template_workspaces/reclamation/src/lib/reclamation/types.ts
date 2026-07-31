@@ -296,7 +296,9 @@ export type SurfaceId =
 	| 'structure'
 	| 'lagoon'
 	| 'existing_land'
-	| 'context';
+	| 'context'
+	/** Below-seabed trenches: the ground dug out before any fill is placed. */
+	| 'subgrade';
 
 /** THREE-free mesh payload. Transferred from the worker, wrapped by the viewer. */
 export type SurfaceMesh = {

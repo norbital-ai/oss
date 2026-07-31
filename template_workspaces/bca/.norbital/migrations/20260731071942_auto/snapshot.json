@@ -1,62 +1,62 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "d68a29b8-2abc-4ec3-a7c7-727eb15d0224",
+  "id": "f603e787-74a7-4a5b-adb1-33c8d7a19339",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
   "ddl": [
     {
       "isRlsEnabled": false,
-      "name": "accounts",
+      "name": "certification_types",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "activities",
+      "name": "contractor_certifications",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "contacts",
+      "name": "contractor_profiles",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "customer_prices",
+      "name": "job_assignments",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "payment_records",
+      "name": "job_certification_requirements",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "products",
+      "name": "jobs",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "projects",
+      "name": "photo_evidence",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "quote_lines",
+      "name": "sites",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "quotes",
+      "name": "variation_requests",
       "entityType": "tables",
       "schema": "public"
     },
@@ -149,7 +149,7 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "certification_types"
     },
     {
       "type": "timestamp with time zone",
@@ -162,7 +162,7 @@
       "name": "norbital_created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "certification_types"
     },
     {
       "type": "timestamp with time zone",
@@ -175,7 +175,7 @@
       "name": "norbital_updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "certification_types"
     },
     {
       "type": "text",
@@ -188,7 +188,7 @@
       "name": "norbital_sys_period",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "certification_types"
     },
     {
       "type": "integer",
@@ -201,7 +201,7 @@
       "name": "norbital_row_version",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
+      "table": "certification_types"
     },
     {
       "type": "uuid",
@@ -214,852 +214,7 @@
       "name": "norbital_approval_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "industry",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "website",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "phone",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "currency",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "active",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "regarding_type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "regarding_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "subject",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "description",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "due_date",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "completed_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "owner_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "account_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "first_name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "last_name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "email",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "title",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "department",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "active",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "account_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "unit_price",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "currency",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "valid_from",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "valid_until",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "active",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "quote_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "amount",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "payment_date",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "method",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "reference",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "notes",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_sys_period",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "norbital_row_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "norbital_approval_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
+      "table": "certification_types"
     },
     {
       "type": "text",
@@ -1072,7 +227,7 @@
       "name": "code",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "certification_types"
     },
     {
       "type": "text",
@@ -1085,7 +240,33 @@
       "name": "name",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "certification_types"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "category",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "certification_types"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "issuing_body",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "certification_types"
     },
     {
       "type": "text",
@@ -1098,98 +279,7 @@
       "name": "description",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "grade",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "mfi",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "density",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "supplier",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "unit",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "unit_price",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "price_updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
+      "table": "certification_types"
     },
     {
       "type": "boolean",
@@ -1202,7 +292,7 @@
       "name": "active",
       "entityType": "columns",
       "schema": "public",
-      "table": "products"
+      "table": "certification_types"
     },
     {
       "type": "uuid",
@@ -1215,7 +305,7 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "contractor_certifications"
     },
     {
       "type": "timestamp with time zone",
@@ -1228,7 +318,7 @@
       "name": "norbital_created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "contractor_certifications"
     },
     {
       "type": "timestamp with time zone",
@@ -1241,7 +331,7 @@
       "name": "norbital_updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "contractor_certifications"
     },
     {
       "type": "text",
@@ -1254,7 +344,7 @@
       "name": "norbital_sys_period",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "contractor_certifications"
     },
     {
       "type": "integer",
@@ -1267,7 +357,7 @@
       "name": "norbital_row_version",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "contractor_certifications"
     },
     {
       "type": "uuid",
@@ -1280,33 +370,7 @@
       "name": "norbital_approval_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "description",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "projects"
+      "table": "contractor_certifications"
     },
     {
       "type": "uuid",
@@ -1316,10 +380,244 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "account_id",
+      "name": "contractor_profile_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "contractor_certifications"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "certification_type_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_certifications"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_profiles"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_profiles"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_profiles"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_profiles"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_profiles"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_profiles"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_profiles"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "company_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contractor_profiles"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "job_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "contractor_profile_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "dispatched_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
     },
     {
       "type": "text",
@@ -1332,46 +630,72 @@
       "name": "status",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "job_assignments"
     },
     {
-      "type": "date",
+      "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "start_date",
+      "name": "completed_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "job_assignments"
     },
     {
-      "type": "date",
+      "type": "jsonb",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "end_date",
+      "name": "amount_charged",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "job_assignments"
     },
     {
-      "type": "uuid",
+      "type": "jsonb",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "owner_id",
+      "name": "location",
       "entityType": "columns",
       "schema": "public",
-      "table": "projects"
+      "table": "job_assignments"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "summary",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_message_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "job_assignments"
     },
     {
       "type": "uuid",
@@ -1384,7 +708,7 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "job_certification_requirements"
     },
     {
       "type": "timestamp with time zone",
@@ -1397,7 +721,7 @@
       "name": "norbital_created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "job_certification_requirements"
     },
     {
       "type": "timestamp with time zone",
@@ -1410,7 +734,7 @@
       "name": "norbital_updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "job_certification_requirements"
     },
     {
       "type": "text",
@@ -1423,7 +747,7 @@
       "name": "norbital_sys_period",
       "entityType": "columns",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "job_certification_requirements"
     },
     {
       "type": "integer",
@@ -1436,7 +760,7 @@
       "name": "norbital_row_version",
       "entityType": "columns",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "job_certification_requirements"
     },
     {
       "type": "uuid",
@@ -1449,7 +773,7 @@
       "name": "norbital_approval_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "job_certification_requirements"
     },
     {
       "type": "uuid",
@@ -1459,10 +783,10 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "quote_id",
+      "name": "job_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "job_certification_requirements"
     },
     {
       "type": "uuid",
@@ -1472,114 +796,10 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "product_id",
+      "name": "certification_type_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_code",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_unit",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "quantity",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "unit_price",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "discount_pct",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "tax_rate",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "line_total",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quote_lines"
+      "table": "job_certification_requirements"
     },
     {
       "type": "uuid",
@@ -1592,7 +812,7 @@
       "name": "norbital_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "type": "timestamp with time zone",
@@ -1605,7 +825,7 @@
       "name": "norbital_created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "type": "timestamp with time zone",
@@ -1618,7 +838,7 @@
       "name": "norbital_updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "type": "text",
@@ -1631,7 +851,7 @@
       "name": "norbital_sys_period",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "type": "integer",
@@ -1644,7 +864,7 @@
       "name": "norbital_row_version",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "type": "uuid",
@@ -1657,20 +877,7 @@
       "name": "norbital_approval_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "doc_no",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "type": "uuid",
@@ -1680,23 +887,10 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "account_id",
+      "name": "site_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "contact_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "type": "text",
@@ -1709,7 +903,33 @@
       "name": "title",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "nature",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "jobs"
+    },
+    {
+      "type": "date",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "scheduled_for",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "jobs"
     },
     {
       "type": "text",
@@ -1722,129 +942,12 @@
       "name": "status",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "type": "text",
       "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "currency",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
       "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "tax_inclusive",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "date",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "valid_until",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "net",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "tax",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "gross",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "owner_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "confirmed_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "fulfilled_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -1852,7 +955,72 @@
       "name": "description",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
     },
     {
       "type": "uuid",
@@ -1862,10 +1030,10 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "project_id",
+      "name": "norbital_approval_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "photo_evidence"
     },
     {
       "type": "uuid",
@@ -1875,10 +1043,244 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "revision_of",
+      "name": "job_assignment_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "photo_evidence"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "variation_request_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "document_asset_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sha256",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "perceptual_hash",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 1,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "flags",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 1,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "matched_evidence_ids",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "location",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "client_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "house_type",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sites"
     },
     {
       "type": "numeric",
@@ -1888,10 +1290,166 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "revision_number",
+      "name": "floor_area_sqm",
       "entityType": "columns",
       "schema": "public",
-      "table": "quotes"
+      "table": "sites"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)'::text)",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "job_assignment_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "requested_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "title",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "description",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "amount",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_message_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "variation_requests"
     },
     {
       "type": "uuid",
@@ -3935,665 +3493,6 @@
       "table": "user"
     },
     {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "accounts_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "industry",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "accounts_industry_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "website",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "accounts_website_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "phone",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "accounts_phone_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "currency",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "accounts_currency_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "address",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "accounts_address_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "accounts"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "regarding_type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "regarding_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "activities_regarding_type_regarding_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "owner_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "activities_owner_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "due_date",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "activities_due_date_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "regarding_type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "activities_regarding_type_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "activities_type_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "subject",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "activities_subject_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "description",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "activities_description_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "activities"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "account_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "contacts_account_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "first_name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_first_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "last_name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_last_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "email",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_email_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "title",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_title_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "department",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "contacts_department_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "contacts"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "account_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "product_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "customer_prices_account_id_product_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "account_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "customer_prices_account_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "product_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "customer_prices_product_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "currency",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "customer_prices_currency_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "customer_prices"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "quote_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "payment_records_quote_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "payment_date",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "payment_records_payment_date_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "method",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "payment_records_method_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "reference",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "payment_records_reference_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "notes",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "payment_records_notes_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "payment_records"
-    },
-    {
       "nameExplicit": false,
       "columns": [
         {
@@ -4609,31 +3508,10 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "products_code_index",
+      "name": "certification_types_code_index",
       "entityType": "indexes",
       "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "grade",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "products_grade_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
+      "table": "certification_types"
     },
     {
       "nameExplicit": true,
@@ -4654,10 +3532,10 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "products_code_search_trgm_idx",
+      "name": "certification_types_code_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "products"
+      "table": "certification_types"
     },
     {
       "nameExplicit": true,
@@ -4678,10 +3556,58 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "products_name_search_trgm_idx",
+      "name": "certification_types_name_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "products"
+      "table": "certification_types"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "category",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "certification_types_category_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "certification_types"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "issuing_body",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "certification_types_issuing_body_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "certification_types"
     },
     {
       "nameExplicit": true,
@@ -4702,385 +3628,23 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "products_description_search_trgm_idx",
+      "name": "certification_types_description_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "grade",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_grade_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "mfi",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_mfi_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "density",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_density_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "supplier",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_supplier_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "unit",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "products_unit_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "products"
+      "table": "certification_types"
     },
     {
       "nameExplicit": false,
       "columns": [
         {
-          "value": "account_id",
+          "value": "contractor_profile_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "projects_account_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
+        },
         {
-          "value": "owner_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "projects_owner_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "status",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "projects_status_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "projects_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "description",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "projects_description_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "status",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "projects_status_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "projects"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "quote_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quote_lines_quote_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "product_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quote_lines_product_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "product_code",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "quote_lines_product_code_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "product_name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "quote_lines_product_name_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "product_unit",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "quote_lines_product_unit_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quote_lines"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "doc_no",
+          "value": "certification_type_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -5092,121 +3656,37 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "quotes_doc_no_index",
+      "name": "contractor_certifications_contractor_profile_id_certification_type_id_index",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "contractor_certifications"
     },
     {
       "nameExplicit": false,
       "columns": [
         {
-          "value": "account_id",
+          "value": "user_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
         }
       ],
-      "isUnique": false,
+      "isUnique": true,
       "where": null,
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "quotes_account_id_index",
+      "name": "contractor_profiles_user_id_index",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "owner_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quotes_owner_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "status",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quotes_status_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "project_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quotes_project_id_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        {
-          "value": "revision_of",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "quotes_revision_of_index",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
+      "table": "contractor_profiles"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "doc_no",
+          "value": "company_name",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -5221,10 +3701,173 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "quotes_doc_no_search_trgm_idx",
+      "name": "contractor_profiles_company_name_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "contractor_profiles"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "source_message_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "job_assignments_source_message_id_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "job_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "job_assignments_job_id_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "contractor_profile_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "job_assignments_contractor_profile_id_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "job_assignments_status_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "summary",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "job_assignments_summary_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "source_message_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "job_assignments_source_message_id_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "job_assignments"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "job_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "certification_type_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "job_certification_requirements_job_id_certification_type_id_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "job_certification_requirements"
     },
     {
       "nameExplicit": true,
@@ -5245,10 +3888,34 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "quotes_title_search_trgm_idx",
+      "name": "jobs_title_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "nature",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "jobs_nature_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "jobs"
     },
     {
       "nameExplicit": true,
@@ -5269,34 +3936,10 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "quotes_status_search_trgm_idx",
+      "name": "jobs_status_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "currency",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": {
-            "name": "gin_trgm_ops",
-            "default": false
-          }
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "gin",
-      "concurrently": false,
-      "name": "quotes_currency_search_trgm_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
     },
     {
       "nameExplicit": true,
@@ -5317,10 +3960,310 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
-      "name": "quotes_description_search_trgm_idx",
+      "name": "jobs_description_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
-      "table": "quotes"
+      "table": "jobs"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "source_key",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "photo_evidence_source_key_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "sha256",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "photo_evidence_sha256_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "perceptual_hash",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "photo_evidence_perceptual_hash_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "source_key",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "photo_evidence_source_key_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "sha256",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "photo_evidence_sha256_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "perceptual_hash",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "photo_evidence_perceptual_hash_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "photo_evidence"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "sites_name_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "client_name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "sites_client_name_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "house_type",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "sites_house_type_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "sites"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        {
+          "value": "source_message_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "variation_requests_source_message_id_index",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "title",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "variation_requests_title_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "description",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "variation_requests_description_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "variation_requests"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "source_message_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "variation_requests_source_message_id_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "variation_requests"
     },
     {
       "nameExplicit": true,
@@ -6285,240 +5228,172 @@
     {
       "nameExplicit": true,
       "columns": [
-        "owner_id"
+        "contractor_profile_id"
       ],
       "schemaTo": "public",
-      "tableTo": "user",
+      "tableTo": "contractor_profiles",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "activities_owner_id_user_fk",
+      "name": "contractor_certifications_contractor_profile_id_contractor_profiles_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "activities"
+      "table": "contractor_certifications"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "account_id"
+        "certification_type_id"
       ],
       "schemaTo": "public",
-      "tableTo": "accounts",
+      "tableTo": "certification_types",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "contacts_account_id_accounts_fk",
+      "name": "contractor_certifications_certification_type_id_certification_types_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "contacts"
+      "table": "contractor_certifications"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "account_id"
+        "job_id"
       ],
       "schemaTo": "public",
-      "tableTo": "accounts",
+      "tableTo": "jobs",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "customer_prices_account_id_accounts_fk",
+      "name": "job_assignments_job_id_jobs_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "customer_prices"
+      "table": "job_assignments"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "product_id"
+        "contractor_profile_id"
       ],
       "schemaTo": "public",
-      "tableTo": "products",
+      "tableTo": "contractor_profiles",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "customer_prices_product_id_products_fk",
+      "name": "job_assignments_contractor_profile_id_contractor_profiles_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "customer_prices"
+      "table": "job_assignments"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "quote_id"
+        "job_id"
       ],
       "schemaTo": "public",
-      "tableTo": "quotes",
+      "tableTo": "jobs",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "payment_records_quote_id_quotes_fk",
+      "name": "job_certification_requirements_job_id_jobs_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "payment_records"
+      "table": "job_certification_requirements"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "account_id"
+        "certification_type_id"
       ],
       "schemaTo": "public",
-      "tableTo": "accounts",
+      "tableTo": "certification_types",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "projects_account_id_accounts_fk",
+      "name": "job_certification_requirements_certification_type_id_certification_types_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "projects"
+      "table": "job_certification_requirements"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "owner_id"
+        "site_id"
       ],
       "schemaTo": "public",
-      "tableTo": "user",
+      "tableTo": "sites",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "projects_owner_id_user_fk",
+      "name": "jobs_site_id_sites_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "projects"
+      "table": "jobs"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "quote_id"
+        "job_assignment_id"
       ],
       "schemaTo": "public",
-      "tableTo": "quotes",
+      "tableTo": "job_assignments",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "quote_lines_quote_id_quotes_fk",
+      "name": "photo_evidence_job_assignment_id_job_assignments_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "photo_evidence"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "product_id"
+        "variation_request_id"
       ],
       "schemaTo": "public",
-      "tableTo": "products",
+      "tableTo": "variation_requests",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "quote_lines_product_id_products_fk",
+      "name": "photo_evidence_variation_request_id_variation_requests_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "quote_lines"
+      "table": "photo_evidence"
     },
     {
       "nameExplicit": true,
       "columns": [
-        "account_id"
+        "job_assignment_id"
       ],
       "schemaTo": "public",
-      "tableTo": "accounts",
+      "tableTo": "job_assignments",
       "columnsTo": [
         "norbital_id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "quotes_account_id_accounts_fk",
+      "name": "variation_requests_job_assignment_id_job_assignments_fk",
       "entityType": "fks",
       "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "contact_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "contacts",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quotes_contact_id_contacts_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "owner_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "user",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quotes_owner_id_user_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "project_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "projects",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quotes_project_id_projects_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quotes"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        "revision_of"
-      ],
-      "schemaTo": "public",
-      "tableTo": "quotes",
-      "columnsTo": [
-        "norbital_id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "quotes_revision_of_quotes_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "quotes"
+      "table": "variation_requests"
     },
     {
       "nameExplicit": false,
@@ -6661,9 +5536,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "accounts_pkey",
+      "name": "certification_types_pkey",
       "schema": "public",
-      "table": "accounts",
+      "table": "certification_types",
       "entityType": "pks"
     },
     {
@@ -6671,9 +5546,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "activities_pkey",
+      "name": "contractor_certifications_pkey",
       "schema": "public",
-      "table": "activities",
+      "table": "contractor_certifications",
       "entityType": "pks"
     },
     {
@@ -6681,9 +5556,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "contacts_pkey",
+      "name": "contractor_profiles_pkey",
       "schema": "public",
-      "table": "contacts",
+      "table": "contractor_profiles",
       "entityType": "pks"
     },
     {
@@ -6691,9 +5566,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "customer_prices_pkey",
+      "name": "job_assignments_pkey",
       "schema": "public",
-      "table": "customer_prices",
+      "table": "job_assignments",
       "entityType": "pks"
     },
     {
@@ -6701,9 +5576,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "payment_records_pkey",
+      "name": "job_certification_requirements_pkey",
       "schema": "public",
-      "table": "payment_records",
+      "table": "job_certification_requirements",
       "entityType": "pks"
     },
     {
@@ -6711,9 +5586,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "products_pkey",
+      "name": "jobs_pkey",
       "schema": "public",
-      "table": "products",
+      "table": "jobs",
       "entityType": "pks"
     },
     {
@@ -6721,9 +5596,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "projects_pkey",
+      "name": "photo_evidence_pkey",
       "schema": "public",
-      "table": "projects",
+      "table": "photo_evidence",
       "entityType": "pks"
     },
     {
@@ -6731,9 +5606,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "quote_lines_pkey",
+      "name": "sites_pkey",
       "schema": "public",
-      "table": "quote_lines",
+      "table": "sites",
       "entityType": "pks"
     },
     {
@@ -6741,9 +5616,9 @@
         "norbital_id"
       ],
       "nameExplicit": false,
-      "name": "quotes_pkey",
+      "name": "variation_requests_pkey",
       "schema": "public",
-      "table": "quotes",
+      "table": "variation_requests",
       "entityType": "pks"
     },
     {

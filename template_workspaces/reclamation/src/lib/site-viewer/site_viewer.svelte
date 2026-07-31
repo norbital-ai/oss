@@ -12,6 +12,7 @@
 		ThreeMaterial,
 		ThreeModule,
 		ThreeObject3D,
+		ThreePlane,
 		ThreeRenderer
 	} from './site_viewer.types.js';
 
@@ -29,6 +30,19 @@
 	 */
 	let exaggeration = $state(1);
 	const EXAGGERATIONS = [1, 3, 5, 10, 20] as const;
+
+	/**
+	 * A cutting plane, so the solid can be opened.
+	 *
+	 * Everything interesting about a reclamation is underneath something: the
+	 * armour blanket under the crest, the key trench under the armour, the bed
+	 * under all of it. Hiding layers shows you what is there one at a time but
+	 * never how they meet. Sweeping a plane through the model cuts it where you
+	 * want it and leaves the relationships intact.
+	 */
+	let clipping = $state(false);
+	let clipAt = $state(0.5);
+	let clipPlane: ThreePlane | null = null;
 
 	const runtime: Promise<
 		[
@@ -84,6 +98,7 @@
 				renderCellM: built.renderCellM
 			});
 			if (stage) applySurfaces(stage, built);
+			applyClipping();
 			status = 'ready';
 		} catch (error) {
 			status = { error: error instanceof Error ? error.message : String(error) };
@@ -136,7 +151,11 @@
 		group.scale.z = exaggeration;
 		scene.add(group);
 
+		renderer.localClippingEnabled = true;
+		clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+
 		stage = { THREE, renderer, scene, camera, controls, group, materials: [], frame: 0 };
+		applyClipping();
 		if (surfaces) applySurfaces(stage, surfaces);
 
 		const observer = new ResizeObserver(() => {
@@ -217,7 +236,9 @@
 			metalness: 0,
 			transparent: source.opacity < 1,
 			opacity: source.opacity,
-			side: source.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+			// Double-sided throughout: a cutting plane opens shells, and a
+			// single-sided surface simply vanishes when it is cut into.
+			side: THREE.DoubleSide,
 			polygonOffset: bias !== 0,
 			polygonOffsetFactor: bias,
 			polygonOffsetUnits: bias
@@ -302,6 +323,35 @@
 		stage.camera.position.set(at[0], at[1], at[2]);
 		stage.camera.updateProjectionMatrix();
 		stage.controls.update();
+	}
+
+	/**
+	 * The plane cuts along the seaward axis, which is the direction a section is
+	 * taken in. Its position is expressed as a fraction of the site so the control
+	 * means the same thing whatever the site's coordinates happen to be.
+	 */
+	function applyClipping(): void {
+		if (!stage || !clipPlane) return;
+		if (!clipping || !surfaces) {
+			stage.renderer.clippingPlanes = [];
+			return;
+		}
+		const { bounds } = surfaces;
+		const y = bounds.minY + (bounds.maxY - bounds.minY) * clipAt;
+		// World Z is the negated engineering Y after the group's rotation.
+		clipPlane.normal.set(0, 0, -1);
+		clipPlane.constant = -y;
+		stage.renderer.clippingPlanes = [clipPlane];
+	}
+
+	function setClipping(next: boolean): void {
+		clipping = next;
+		applyClipping();
+	}
+
+	function setClipAt(next: number): void {
+		clipAt = next;
+		applyClipping();
 	}
 
 	function setExaggeration(next: number): void {
@@ -419,6 +469,30 @@
 					</button>
 				{/each}
 			</div>
+			<span aria-hidden="true">·</span>
+			<button
+				type="button"
+				class={[
+					'rounded px-1.5 py-0.5',
+					clipping ? 'bg-brand/15 font-medium text-foreground' : 'hover:bg-muted'
+				]}
+				aria-pressed={clipping}
+				onclick={() => setClipping(!clipping)}
+			>
+				Cut
+			</button>
+			{#if clipping}
+				<input
+					type="range"
+					class="w-24 accent-brand"
+					min="0"
+					max="1"
+					step="0.005"
+					value={clipAt}
+					aria-label="Cut position"
+					oninput={(event) => setClipAt(Number(event.currentTarget.value))}
+				/>
+			{/if}
 			<span aria-hidden="true">·</span>
 			<span class="tabular-nums">
 				{surfaces.triangleCount.toLocaleString()} tri · {surfaces.renderCellM.toFixed(1)} m

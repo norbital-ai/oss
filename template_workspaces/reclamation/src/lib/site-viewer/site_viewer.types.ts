@@ -62,6 +62,12 @@ export interface ThreeColor {
 	set(value: number | string): this;
 }
 
+export interface ThreePlane {
+	constant: number;
+	normal: { set(x: number, y: number, z: number): unknown };
+	set(normal: unknown, constant: number): unknown;
+}
+
 export interface ThreeMaterial {
 	polygonOffset?: boolean;
 	polygonOffsetFactor?: number;
@@ -116,6 +122,8 @@ export interface ThreeCamera extends ThreeObject3D {
 }
 
 export interface ThreeRenderer {
+	localClippingEnabled: boolean;
+	clippingPlanes: unknown[];
 	domElement: HTMLCanvasElement;
 	shadowMap: { enabled: boolean; type: number };
 	setSize(width: number, height: number): void;
@@ -153,6 +161,7 @@ export interface ThreeModule {
 	Group: new () => ThreeObject3D;
 	Color: new (value?: number | string) => ThreeColor;
 	Vector3: new (x?: number, y?: number, z?: number) => ThreeVector3;
+	Plane: new (normal?: unknown, constant?: number) => ThreePlane;
 	AmbientLight: new (color: number, intensity: number) => ThreeObject3D;
 	DirectionalLight: new (color: number, intensity: number) => ThreeObject3D;
 	HemisphereLight: new (sky: number, ground: number, intensity: number) => ThreeObject3D;

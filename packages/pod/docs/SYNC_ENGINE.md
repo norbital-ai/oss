@@ -276,6 +276,39 @@ Rules that follow, and they are the anti-blink rules:
    guarantees a recreate-with-`undefined` on the next read — a blink caused entirely by the
    cache. Eviction is for unsubscribed resources only.
 
+### 3.5a When the loader appears
+
+One rule: **`loading` means there is nothing to show.** Not "a request is in flight" — a query that
+already has rows never returns to loading, however much work is still happening behind it.
+
+Everything else follows from that, plus one sizing decision: a read waits for the *first* catch-up
+page only, and that page is a screen's worth of rows (250), not a bulk transfer (5,000).
+
+```
+FIRST VISIT to a collection
+   |
+   |-- 0ms ....... query starts, nothing local yet
+   |-- ~100ms .... loader appears (only if still empty)
+   |-- ~1 RTT .... first page lands: 250 rows        --> LOADER GONE, table renders
+   |
+   `-- afterwards: pages 2..N at 5,000 rows, in the background.
+                   Each re-runs the query silently. Rows are already on screen, so
+                   `current` is never undefined, so `loading` is never set again.
+                                                     --> NO LOADER, EVER AGAIN
+
+REVISIT / REFRESH (replica already holds the collection)
+   |
+   `-- ~0ms ...... answered from PGlite              --> NO LOADER AT ALL
+```
+
+The bug this replaced: the read awaited the whole first page at 5,000 rows, so opening a table of
+100 attendance rows sat behind tens of thousands the screen was never going to display. Same data
+and same eventual state, but the user watched a spinner measuring work they had not asked for.
+
+The other half is in §3.5: `loading` is set on a 100ms timer and only while `current` is still
+undefined, and a new query key is seeded with its family's previous value. So changing a filter or
+turning a page shows the old rows until the new ones arrive rather than blanking to a spinner.
+
 ### 3.6 Relations resolve locally
 
 Once collections are the sync unit, the target collection of a relation is already local, so
@@ -356,9 +389,12 @@ Every resume is then one comparison:
 | **above** the boundary | resumable — send the diffs since it |
 | **at or below** it | the changes you missed are gone → **reset** |
 
-A reset is `tooOld: true` on `shape` and `event: reset` on `stream`. The client drops its entire
-local database and rebuilds from a full download. Expensive, and correct — and it only reaches a
-device that has been away longer than the retention window.
+A reset is `event: reset` on the stream. The client drops its entire local database and rebuilds
+from a full download. Expensive, and correct — and it only reaches a device that has been away
+longer than the retention window.
+
+The check lives on the stream alone because the stream is the only thing that resumes. `shape`
+bootstraps from nothing and has no cursor to be too old.
 
 **Why a stored column and not `min(seq)`.** `min(seq)` works right up until the table is pruned
 empty, at which point there is no minimum left and every stale cursor looks valid again. The
@@ -494,10 +530,11 @@ Honest list of what this design does not yet do.
   expensive server-side. Maintaining counts incrementally from the diff stream is the fix.
 - **No live-query dependency tracking.** Re-evaluation is per collection, so a change to any row
   of a collection re-runs every query over it. Cheap locally, but not free at high diff rates.
-- **A first-ever catch-up is still a full scan.** Resuming a collection the device already holds
-  reads the feed (§3.8a), but the *initial* download keyset-scans the collection. That is
-  unavoidable for a genuinely cold replica; what is not yet done is serving it from a compacted
-  snapshot rather than the live table.
+- **A catch-up is always a full scan.** `shape` bootstraps a collection by keyset-scanning it;
+  staying current afterwards is the stream's job (§3.8a), and a client that falls behind the
+  compaction boundary rebuilds rather than resuming. That split keeps the two mechanisms
+  non-overlapping, at the cost of a cold collection always paying a full download — serving it
+  from a compacted snapshot instead of the live table is the improvement not yet made.
 - **Visibility deltas are announced for approvals only.** §3.8b fires when an approval releases a
   record. A policy edit that changes who can see what does not announce anything, so clients pick
   it up on their next full catch-up rather than immediately.

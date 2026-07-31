@@ -54,14 +54,16 @@ without an explicit answer for every country.
 
 The distinction the whole design rests on.
 
-| Seeded — what happened                                                                               | Derived — everything that follows                                                                                                        |
-| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| base salary, employee profile, clocks, rosters, leave, claims, loans, plus the catalogue and the law | overtime hours and money, incentive overtime, contribution bases and amounts, gross, deductions, net, employer cost, every leave balance |
+| Seeded — what happened                                                                               | Derived — everything that follows                                                                                                                |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| base salary, employee profile, clocks, rosters, leave, claims, loans, plus the catalogue and the law | overtime hours and money, PINCEN/statutory OT excess, contribution bases and amounts, gross, deductions, net, employer cost, every leave balance |
 
 No calculated value is ever seeded, and the generator **enforces** it: a `component_entries` row may
 only point at a component whose `definition.source` is `ENTRY`. `payroll_runs`, `payslips`,
-`payslip_lines` and `payslip_contributions` are not seeded at all. Overtime and incentive components
-exist in the catalogue as _definitions_; their values come from the clocks on every run.
+`payslip_lines` and `payslip_contributions` are not seeded at all. Derived overtime and statutory
+excess components exist in the catalogue as _definitions_; their values come from the clocks on
+every run. Nihon's source `PINCEN` amount is expected-output evidence used only after calculation;
+it is never a component entry or another operational input.
 
 Leave balances, claim caps and loan outstanding are likewise derived at read time. **Nothing in this
 workspace runs on a schedule.**
@@ -129,11 +131,14 @@ These are inputs to the reconciliation, not conclusions that may be tuned when a
    overtime at 1.5×, the stepped rest-day award, and the public-holiday award. Total work is
    generally limited to 12 hours in one day, while overtime under section 60A(4) is limited to 104
    hours in one month. Rest-day and public-holiday work is excluded from that 104-hour counter.
-5. **Incentive OT is an excess-work classification, not extra money.** The same statutory value
-   moves to incentive OT when total work exceeds 12 hours in a day or ordinary/off-day OT exceeds
-   104 hours in its calendar month. This payroll treatment does not make excess work lawful.
+5. **PINCEN is calculated, never seeded.** The same statutory value moves from OT to the derived
+   excess components when total work exceeds 12 hours in a day or ordinary/off-day OT exceeds 104
+   hours in its calendar month. Their exported sum is compared with Nihon's source `PINCEN` after
+   the run. A source `PINCEN` amount must never be copied into a component entry.
 6. **The 104-hour counter is calendar-month based.** The settlement cutoff never resets it; rest-day
-   and public-holiday work is excluded.
+   and public-holiday work is excluded. Because the counter is chronological, a dated hour can be
+   classified as soon as it is worked; the law does not require delaying every excess payment until
+   the next calendar month.
 7. **Cutoffs are component- and cadence-specific.** Nihon monthly salary covers the calendar month,
    while OT and ordinary NPL cover the 21st of the previous month through the 20th. OPSPH monthly OT,
    night shift and NPL use that same 21st–20th window. OPSPH semi-monthly OT and night shift use the

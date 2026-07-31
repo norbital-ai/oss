@@ -11,6 +11,20 @@ import type { CollectionSyncState } from './types.js';
 const PAGE_SIZE = 5000;
 
 /**
+ * Rows in the *first* catch-up page.
+ *
+ * A read waits for this page and no further, so this — not PAGE_SIZE — is the unit the loading
+ * spinner measures. Sized to a screen's worth of rows rather than a bulk transfer: at the full
+ * 5,000 a table showing 100 attendance rows sat behind tens of thousands the screen was never
+ * going to display, and the user watched a loader for work they had not asked for.
+ *
+ * Every page after it uses PAGE_SIZE and runs in the background, invisibly. The query already has
+ * rows by then, so re-running it against the fuller replica swaps data in without ever returning
+ * to a loading state — `loading` means "nothing to show", and by then there is something.
+ */
+const FIRST_PAGE_SIZE = 250;
+
+/**
  * How many bytes of collection data this replica may hold, across every collection.
  *
  * A collection that fits is fully local within a few round trips; one that does not is *windowed*
@@ -144,31 +158,11 @@ export class SubscriptionRegistry {
 	 * reads immediately while any remaining pages fill in behind it.
 	 */
 	async register(collection: string): Promise<void> {
-		return this.catchUp(collection, false);
+		return this.catchUp(collection);
 	}
 
-	/**
-	 * Re-read named collections after a policy decision changes what this identity may see.
-	 *
-	 * Outbox diffs describe rows that changed; they cannot describe an unchanged child row that
-	 * merely became visible because its parent was approved. A fresh shape supplies those rows
-	 * without discarding the still-valid local working set.
-	 *
-	 * Only collections this replica already holds are re-read — registering a new one here would
-	 * download a collection nobody has asked for. Callers pass the collections that can actually be
-	 * affected (see `relatedCollections`); re-reading everything meant a single approval refetched
-	 * the whole workspace.
-	 */
-	async refresh(collections: readonly string[]): Promise<void> {
-		await Promise.all(
-			collections
-				.filter((collection) => this.meta.get(collection)?.ready)
-				.map((collection) => this.catchUp(collection, true))
-		);
-	}
-
-	private async catchUp(collection: string, force: boolean): Promise<void> {
-		if (!force && this.meta.get(collection)?.ready) return;
+	private async catchUp(collection: string): Promise<void> {
+		if (this.meta.get(collection)?.ready) return;
 		const existing = this.inFlight.get(collection);
 		if (existing) return existing;
 
@@ -196,26 +190,6 @@ export class SubscriptionRegistry {
 	}
 
 	private async runCatchUp(collection: string, onFirstPage: () => void): Promise<void> {
-		// A collection this device already synced asks the server for what changed rather than for
-		// the collection again. The server answers from the change feed when it still reaches back
-		// that far, and tells us to rebuild when it does not.
-		if (this.meta.get(collection)?.synced) {
-			// Wrapped in a resolved promise on purpose: a client that predates `resumeCollection`
-			// throws synchronously, which a bare `.catch()` never sees, and the throw would escape
-			// this whole catch-up and leave the collection unregistered.
-			const resumed = await Promise.resolve()
-				.then(() => this.client.resumeCollection(collection))
-				.catch(() => ({ resumed: false, tooOld: false }));
-			if (resumed.tooOld) {
-				this.meta.clear();
-			} else if (resumed.resumed) {
-				onFirstPage();
-				this.client.notifyCollection(collection);
-				this.client.startStream();
-				return;
-			}
-		}
-
 		let cursor: string | null = null;
 		let rows = 0;
 		let bytes = 0;
@@ -229,7 +203,11 @@ export class SubscriptionRegistry {
 
 		try {
 			for (;;) {
-				const page = await this.client.shapeSubscribe({ collection, cursor, pageSize: PAGE_SIZE });
+				const page = await this.client.shapeSubscribe({
+					collection,
+					cursor,
+					pageSize: firstPage ? FIRST_PAGE_SIZE : PAGE_SIZE
+				});
 				rows += page.rows.length;
 				bytes += approximateBytes(page.rows);
 

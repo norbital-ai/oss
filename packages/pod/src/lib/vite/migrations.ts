@@ -64,10 +64,24 @@ export async function generatePodMigrations(input: {
 			commandOutput.includes('Interactive prompts require a TTY') ||
 			commandOutput.includes('missing_hints')
 		) {
-			console.warn(
-				'[pod] drizzle generation skipped: schema changes require manual migration resolution'
+			// Loud, not a warning. This branch used to `return`, which reported success: the schema
+			// had changed, no migration was written, and everything downstream agreed the build was
+			// fine. The compiler emitted the new column, `pod check` passed, the manifest listed it,
+			// and the tenant database never got it — so the first query naming that column failed at
+			// runtime with a bare "column does not exist", far from the step that skipped.
+			//
+			// A migration that cannot be generated is a build failure. The workspace author has to
+			// resolve it, and the two ways are named here because the error drizzle prints does not
+			// say either of them.
+			throw new Error(
+				'Schema changes need a migration drizzle cannot generate without being asked a question ' +
+					'(usually a new NOT NULL column on a table that already has rows, or a rename it cannot ' +
+					'tell from a drop-and-add).\n\n' +
+					'Resolve it one of two ways:\n' +
+					'  • give the column a default, or make it nullable, so the change is unambiguous; or\n' +
+					'  • run `pod migrate --custom <name>` and write the migration by hand.\n\n' +
+					`drizzle-kit said:\n${commandOutput.trim()}`
 			);
-			return;
 		}
 		throw caught;
 	}
