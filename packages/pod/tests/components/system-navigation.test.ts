@@ -1,0 +1,108 @@
+import { describe, expect, it } from 'vitest';
+import { WorkspaceSidebarNavigationSection } from '@norbital-ai/ui/workspace-shell';
+import { buildSystemNavigation } from '$lib/runtime/workspace-navigation.js';
+import SidebarHarness from '../support/sidebar-harness.svelte';
+import { render } from '../support/component.js';
+
+const PLUGINS = [
+	{ key: 'studio', label: 'Workspace Studio', icon: null, entry: '/studio', adminOnly: true },
+	{ key: 'help', label: 'Help centre', icon: null, entry: '/help' }
+];
+
+/**
+ * The sidebar as the shell builds it.
+ *
+ * `pod-shell.svelte` hands `buildSystemNavigation`'s output straight to the shell's navigation model
+ * as `model.system`, and the shell renders each section through this component. Mounting the section
+ * with the real output is what makes the filtering below a claim about what a person sees, rather
+ * than about the shape of an array.
+ */
+function mountSidebar(input: Parameters<typeof buildSystemNavigation>[0]): {
+	container: HTMLElement;
+	destroy(): void;
+} {
+	return render(
+		SidebarHarness as never,
+		{
+			component: WorkspaceSidebarNavigationSection,
+			props: { label: 'System', items: buildSystemNavigation(input), open: true }
+		} as never
+	);
+}
+
+function links(container: HTMLElement): { label: string; href: string; current: boolean }[] {
+	return [...container.querySelectorAll('a')].map((node) => ({
+		label: node.textContent?.trim() ?? '',
+		href: node.getAttribute('href') ?? '',
+		current: node.getAttribute('aria-current') === 'page'
+	}));
+}
+
+describe('host plugins in the sidebar', () => {
+	it('never puts an admin-only surface in front of a non-admin', () => {
+		const { container, destroy } = mountSidebar({
+			plugins: PLUGINS,
+			isAdmin: false,
+			currentPath: '/'
+		});
+
+		// Not merely unhighlighted: the entry, and with it the host URL, is absent from the markup.
+		expect(links(container)).toEqual([{ label: 'Help centre', href: '/help', current: false }]);
+		expect(container.innerHTML).not.toContain('/studio');
+		destroy();
+	});
+
+	it('gives an admin every surface the host declared', () => {
+		const { container, destroy } = mountSidebar({
+			plugins: PLUGINS,
+			isAdmin: true,
+			currentPath: '/'
+		});
+
+		expect(links(container).map((link) => link.label)).toEqual(['Workspace Studio', 'Help centre']);
+		destroy();
+	});
+
+	const siblings = [
+		{ key: 'studio', label: 'Workspace Studio', icon: null, entry: '/studio' },
+		{ key: 'archive', label: 'Studio Archive', icon: null, entry: '/studio-archive' }
+	];
+
+	it('marks the entry the current path is inside, and only that one', () => {
+		const nested = mountSidebar({
+			plugins: siblings,
+			isAdmin: false,
+			currentPath: '/studio/collections'
+		});
+		// A nested host route keeps its entry current, and `aria-current` is the whole of what says so
+		// to a screen reader.
+		expect(links(nested.container)).toEqual([
+			{ label: 'Workspace Studio', href: '/studio', current: true },
+			{ label: 'Studio Archive', href: '/studio-archive', current: false }
+		]);
+		nested.destroy();
+
+		// The other direction is the one a plain prefix test gets wrong: `/studio-archive` starts with
+		// `/studio` and is a different surface entirely, so the shorter entry must not claim it.
+		const sibling = mountSidebar({
+			plugins: siblings,
+			isAdmin: false,
+			currentPath: '/studio-archive'
+		});
+		expect(links(sibling.container)).toEqual([
+			{ label: 'Workspace Studio', href: '/studio', current: false },
+			{ label: 'Studio Archive', href: '/studio-archive', current: true }
+		]);
+		sibling.destroy();
+	});
+
+	it('renders nothing at all when the host declared no plugins', () => {
+		const { container, destroy } = mountSidebar({ plugins: [], isAdmin: true, currentPath: '/' });
+
+		// Not an empty group with a heading over it: a workspace with no host surfaces should show no
+		// sign that the section exists.
+		expect(container.textContent?.trim()).toBe('');
+		expect(container.querySelector('a')).toBeNull();
+		destroy();
+	});
+});

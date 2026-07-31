@@ -16,6 +16,38 @@ if (!('ResizeObserver' in globalThis)) {
 	} as unknown as typeof ResizeObserver;
 }
 
+/**
+ * Node 26 declares a global `localStorage` that is undefined unless the process was started with
+ * `--localstorage-file`, and that declaration wins over the one happy-dom installs. `mode-watcher`
+ * reads it at import time, so a sidebar that only wanted a theme preference takes the whole module
+ * graph down with it. An in-memory store is what a fresh browser profile has anyway.
+ */
+function memoryStorage(): Storage {
+	const entries = new Map<string, string>();
+	return {
+		get length() {
+			return entries.size;
+		},
+		clear: () => entries.clear(),
+		getItem: (key: string) => entries.get(key) ?? null,
+		key: (index: number) => [...entries.keys()][index] ?? null,
+		removeItem: (key: string) => void entries.delete(key),
+		setItem: (key: string, value: string) => void entries.set(key, String(value))
+	};
+}
+
+for (const name of ['localStorage', 'sessionStorage'] as const) {
+	let present = false;
+	try {
+		present = Boolean(globalThis[name]);
+	} catch {
+		present = false;
+	}
+	if (!present) {
+		Object.defineProperty(globalThis, name, { value: memoryStorage(), configurable: true });
+	}
+}
+
 afterEach(() => {
 	document.body.replaceChildren();
 });
