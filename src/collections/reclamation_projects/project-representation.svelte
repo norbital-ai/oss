@@ -55,6 +55,8 @@
 		})
 	);
 	const ratesQuery = client.db.cost_rates.findMany({ limit: 100 });
+	type ReconstructionRow = NonNullable<(typeof runsQuery)['current']>[number];
+	let commandReconstruction = $state<ReconstructionRow | null>(null);
 	watch(
 		() => projectId,
 		(nextId) => {
@@ -67,7 +69,16 @@
 		{ lazy: true }
 	);
 
-	const runs = $derived(runsQuery.current ?? []);
+	const runs = $derived.by(() => {
+		const replicated = runsQuery.current ?? [];
+		if (
+			!commandReconstruction ||
+			replicated.some((run) => run.norbital_id === commandReconstruction?.norbital_id)
+		) {
+			return replicated;
+		}
+		return [commandReconstruction, ...replicated];
+	});
 	const latestRun = $derived(runs[0]);
 	const latestReady = $derived(runs.find((run) => run.status === 'ready'));
 
@@ -176,10 +187,11 @@
 				project_id: projectId,
 				force
 			});
-			// Invocations run outside this query object's mutation path. Pull the completed
-			// reconstruction immediately so the model and cost tabs do not wait behind an
-			// unrelated replica invalidation backlog before showing the result we just built.
-			await runsQuery.refresh();
+			commandReconstruction = result.reconstruction ?? null;
+			// Invocations run outside this query object's local mutation path. The authoritative row
+			// above makes the result visible immediately; refresh lets ordinary replica convergence
+			// replace it without waiting for an unrelated render.
+			void runsQuery.refresh();
 			rebuildMessage =
 				result.outcome === 'stitched'
 					? 'Reconstruction rebuilt.'

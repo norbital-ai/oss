@@ -36,6 +36,13 @@ export default defineCommandHandler({
 			),
 			{ force: force === true }
 		);
-		return { outcome };
+		// The command commits outside the client's local mutation path. Return the row that this
+		// invocation just made authoritative so the mounted model can render it immediately while
+		// the ordinary sync stream catches up in the background.
+		const reconstruction = await api.db.query.site_reconstructions.findFirst({
+			where: { project_id: { eq: project_id } },
+			orderBy: { revision: 'desc' }
+		});
+		return { outcome, reconstruction };
 	}
 });
