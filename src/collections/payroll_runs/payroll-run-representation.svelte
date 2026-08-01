@@ -75,7 +75,7 @@
 						Period {record.period} · {payslipCountQuery.current ?? 0} payslips
 					</p>
 				</Stack>
-				<Inline gap="xs" justify="end" class="shrink-0">
+				<Inline gap="xs" justify="end" shrink={false}>
 					<span class="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
 						{record.lifecycle}
 					</span>
