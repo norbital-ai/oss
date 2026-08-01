@@ -23,3 +23,6 @@ An organization switch evicts the workspace instead of covering it. The request 
 host, the host has to warm the target runtime, and only then does the document navigate; for that
 whole window the previous organization's records stayed mounted under a translucent overlay and were
 still legible beneath the new organization's name.
+
+`Center` gains `measure="narrow"`. A login card or a single form has no measure to ask for between
+`reading` and the full width, so call sites wrote `mx-auto max-w-lg` and rebuilt `Center` by hand.

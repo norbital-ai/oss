@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
 
-	export type CenterMeasure = 'reading' | 'wide' | 'full';
+	export type CenterMeasure = 'narrow' | 'reading' | 'wide' | 'full';
 	export interface CenterProps extends LayoutAttributes {
 		as?: LayoutElement;
 		measure?: CenterMeasure;
@@ -21,6 +21,8 @@
 		...restProps
 	}: CenterProps = $props();
 	const measureClasses: Record<CenterMeasure, string> = {
+		// A single card or form — an access page, a confirmation, an empty state.
+		narrow: 'max-w-lg',
 		reading: 'max-w-[var(--measure)]',
 		wide: 'max-w-7xl',
 		full: 'max-w-none'
