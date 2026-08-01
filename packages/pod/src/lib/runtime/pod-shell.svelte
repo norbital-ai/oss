@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { switchOrganization } from './organization-switch.js';
+	import { isSwitchingOrganization, switchOrganization } from './organization-switch.js';
 	import Icon from '@iconify/svelte';
 	import { onDestroy } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -328,168 +328,185 @@
 	}}
 >
 	<Bound size="full" clip class="relative flex-1">
-		<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
-		{#each mountedHostPlugins as plugin (plugin.key)}
-			<div
-				class={activeHostPlugin?.key === plugin.key ? 'h-full min-h-0 min-w-0' : 'hidden'}
-				aria-hidden={activeHostPlugin?.key === plugin.key ? undefined : 'true'}
-				inert={activeHostPlugin?.key === plugin.key ? undefined : true}
-			>
-				<HostPluginFrame
-					entry={plugin.entry}
-					label={plugin.label}
-					pluginKey={plugin.key}
-					search={searchForHostPlugin(plugin.key)}
-				/>
-			</div>
-		{/each}
-		{#if currentPath === '/'}
-			<Scroll name="Workspace overview" axis="y">
-				<Center measure="wide" class="p-4 sm:p-6 lg:p-8">
-					<Stack gap="xl">
-						<Stack as="header" gap="xs">
-							<h1 class="text-base font-semibold text-foreground">{data.organization.name}</h1>
-							<p class="text-xs text-muted-foreground">
-								Pick an application or platform tool to get started.
-							</p>
-						</Stack>
+		{#if isSwitchingOrganization()}
+			<!--
+				Evicted, not covered. Until the replacement document arrives this is still the previous
+				organization's mounted app, and an overlay leaves its records readable underneath while
+				the switcher already reads as the new organization.
+			-->
+			<Bound size="full" clip>
+				<div class="grid h-full min-h-0 place-items-center text-sm text-muted-foreground">
+					Switching workspace…
+				</div>
+			</Bound>
+		{:else}
+			<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
+			{#each mountedHostPlugins as plugin (plugin.key)}
+				<div
+					class={activeHostPlugin?.key === plugin.key ? 'h-full min-h-0 min-w-0' : 'hidden'}
+					aria-hidden={activeHostPlugin?.key === plugin.key ? undefined : 'true'}
+					inert={activeHostPlugin?.key === plugin.key ? undefined : true}
+				>
+					<HostPluginFrame
+						entry={plugin.entry}
+						label={plugin.label}
+						pluginKey={plugin.key}
+						search={searchForHostPlugin(plugin.key)}
+					/>
+				</div>
+			{/each}
+			{#if currentPath === '/'}
+				<Scroll name="Workspace overview" axis="y">
+					<Center measure="wide" class="p-4 sm:p-6 lg:p-8">
+						<Stack gap="xl">
+							<Stack as="header" gap="xs">
+								<h1 class="text-base font-semibold text-foreground">{data.organization.name}</h1>
+								<p class="text-xs text-muted-foreground">
+									Pick an application or platform tool to get started.
+								</p>
+							</Stack>
 
-						<Stack gap="xs">
-							<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-								Applications
-							</h2>
-							{#if overviewApplications.length === 0}
-								<Stack
-									gap="xs"
-									class="items-center justify-center rounded-lg border border-dashed p-8"
-								>
-									<Icon icon="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
-									<span class="text-xs text-muted-foreground">No applications yet</span>
-									<span class="max-w-72 text-center text-micro text-muted-foreground">
-										Use Workspace Studio to author apps in the tenant workspace.
-									</span>
-								</Stack>
-							{:else}
-								<Grid minimum="card" gap="sm">
-									{#each overviewApplications as app (app.key)}
-										<a
-											href={app.href}
-											class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-											onclick={(event) => {
-												event.preventDefault();
-												navigate(app.href);
-											}}
-										>
-											{#if app.thumbnail}
-												<div class="aspect-[16/9] w-full overflow-hidden border-b bg-muted">
-													<img
-														src={app.thumbnail}
-														alt=""
-														loading="lazy"
-														decoding="async"
-														class="size-full object-cover"
-													/>
-												</div>
-											{/if}
-											<Inline align="start" gap="sm" class="p-3">
-												<div
-													class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
-												>
-													<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
-												</div>
-												<Stack gap="none" class="flex-1">
-													<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
-													{#if app.description}
-														<p class="line-clamp-2 text-micro leading-4 text-muted-foreground">
-															{app.description}
-														</p>
-													{/if}
-												</Stack>
-											</Inline>
-										</a>
-									{/each}
-								</Grid>
-							{/if}
-						</Stack>
-
-						{#if navigationModel.system.length > 0}
 							<Stack gap="xs">
 								<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-									Platform
+									Applications
 								</h2>
-								<Grid minimum="card" gap="sm">
-									{#each navigationModel.system as item (item.key)}
-										{@const featureStyles = FEATURE_COLOR_STYLES[pluginFeatureKey(item.key)]}
-										{@const productIconName = productIconNameFromReference(item.icon)}
-										<a
-											href={item.href}
-											class="group min-w-0 rounded-lg border bg-card p-3 shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-											onclick={(event) => {
-												event.preventDefault();
-												navigate(item.href);
-											}}
-										>
-											<Inline align="start" gap="sm">
-												<div
-													class={cn(
-														'flex size-8 shrink-0 items-center justify-center rounded-md border shadow-xs',
-														featureStyles.iconWrapperClass
-													)}
-												>
-													{#if productIconName}
-														<ProductIcon
-															name={productIconName}
-															class={cn('size-4', featureStyles.iconClass)}
+								{#if overviewApplications.length === 0}
+									<Stack
+										gap="xs"
+										class="items-center justify-center rounded-lg border border-dashed p-8"
+									>
+										<Icon icon="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
+										<span class="text-xs text-muted-foreground">No applications yet</span>
+										<span class="max-w-72 text-center text-micro text-muted-foreground">
+											Use Workspace Studio to author apps in the tenant workspace.
+										</span>
+									</Stack>
+								{:else}
+									<Grid minimum="card" gap="sm">
+										{#each overviewApplications as app (app.key)}
+											<a
+												href={app.href}
+												class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+												onclick={(event) => {
+													event.preventDefault();
+													navigate(app.href);
+												}}
+											>
+												{#if app.thumbnail}
+													<div class="aspect-[16/9] w-full overflow-hidden border-b bg-muted">
+														<img
+															src={app.thumbnail}
+															alt=""
+															loading="lazy"
+															decoding="async"
+															class="size-full object-cover"
 														/>
-													{:else}
-														<IconWrapper
-															name={item.icon ?? featureStyles.icon}
-															class={cn('size-4', featureStyles.iconClass)}
-														/>
-													{/if}
-												</div>
-												<Stack gap="none" class="flex-1">
-													<p class="truncate text-xs font-semibold text-foreground">{item.label}</p>
-													<p class="line-clamp-2 text-micro leading-4 text-muted-foreground">
-														{platformDescriptions[item.key] ??
-															'Platform tool provided by the host.'}
-													</p>
-												</Stack>
-											</Inline>
-										</a>
-									{/each}
-								</Grid>
+													</div>
+												{/if}
+												<Inline align="start" gap="sm" class="p-3">
+													<div
+														class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
+													>
+														<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
+													</div>
+													<Stack gap="none" class="flex-1">
+														<p class="truncate text-xs font-semibold text-foreground">
+															{app.label}
+														</p>
+														{#if app.description}
+															<p class="line-clamp-2 text-micro leading-4 text-muted-foreground">
+																{app.description}
+															</p>
+														{/if}
+													</Stack>
+												</Inline>
+											</a>
+										{/each}
+									</Grid>
+								{/if}
 							</Stack>
-						{/if}
-					</Stack>
-				</Center>
-			</Scroll>
-		{:else if !activeHostPlugin && activeApp && accessible}
-			<Bound size="full" clip data-workspace-app-region>
-				<Cover gap="none" top={activeAppBanner}>
-					<Bound size="full" clip data-workspace-app-surface class="[container-name:pod-app]">
-						{#await activeApp}
-							<div class="grid h-full min-h-0 place-items-center text-sm text-muted-foreground">
-								Loading application…
-							</div>
-						{:then ActiveApp}
-							<ActiveApp />
-						{:catch error}
-							<div class="grid h-full min-h-0 place-items-center p-6 text-sm text-destructive">
-								{error instanceof Error ? error.message : String(error)}
-							</div>
-						{/await}
-					</Bound>
-				</Cover>
-			</Bound>
-		{:else if !activeHostPlugin && appName && !accessible}
-			<div class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-destructive">
-				Access denied
-			</div>
-		{:else if !activeHostPlugin}
-			<div class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-muted-foreground">
-				Workspace application not found
-			</div>
+
+							{#if navigationModel.system.length > 0}
+								<Stack gap="xs">
+									<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+										Platform
+									</h2>
+									<Grid minimum="card" gap="sm">
+										{#each navigationModel.system as item (item.key)}
+											{@const featureStyles = FEATURE_COLOR_STYLES[pluginFeatureKey(item.key)]}
+											{@const productIconName = productIconNameFromReference(item.icon)}
+											<a
+												href={item.href}
+												class="group min-w-0 rounded-lg border bg-card p-3 shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+												onclick={(event) => {
+													event.preventDefault();
+													navigate(item.href);
+												}}
+											>
+												<Inline align="start" gap="sm">
+													<div
+														class={cn(
+															'flex size-8 shrink-0 items-center justify-center rounded-md border shadow-xs',
+															featureStyles.iconWrapperClass
+														)}
+													>
+														{#if productIconName}
+															<ProductIcon
+																name={productIconName}
+																class={cn('size-4', featureStyles.iconClass)}
+															/>
+														{:else}
+															<IconWrapper
+																name={item.icon ?? featureStyles.icon}
+																class={cn('size-4', featureStyles.iconClass)}
+															/>
+														{/if}
+													</div>
+													<Stack gap="none" class="flex-1">
+														<p class="truncate text-xs font-semibold text-foreground">
+															{item.label}
+														</p>
+														<p class="line-clamp-2 text-micro leading-4 text-muted-foreground">
+															{platformDescriptions[item.key] ??
+																'Platform tool provided by the host.'}
+														</p>
+													</Stack>
+												</Inline>
+											</a>
+										{/each}
+									</Grid>
+								</Stack>
+							{/if}
+						</Stack>
+					</Center>
+				</Scroll>
+			{:else if !activeHostPlugin && activeApp && accessible}
+				<Bound size="full" clip data-workspace-app-region>
+					<Cover gap="none" top={activeAppBanner}>
+						<Bound size="full" clip data-workspace-app-surface class="[container-name:pod-app]">
+							{#await activeApp}
+								<div class="grid h-full min-h-0 place-items-center text-sm text-muted-foreground">
+									Loading application…
+								</div>
+							{:then ActiveApp}
+								<ActiveApp />
+							{:catch error}
+								<div class="grid h-full min-h-0 place-items-center p-6 text-sm text-destructive">
+									{error instanceof Error ? error.message : String(error)}
+								</div>
+							{/await}
+						</Bound>
+					</Cover>
+				</Bound>
+			{:else if !activeHostPlugin && appName && !accessible}
+				<div class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-destructive">
+					Access denied
+				</div>
+			{:else if !activeHostPlugin}
+				<div class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-muted-foreground">
+					Workspace application not found
+				</div>
+			{/if}
 		{/if}
 	</Bound>
 </WorkspaceShell>

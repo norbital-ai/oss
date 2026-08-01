@@ -27,10 +27,22 @@
 		...restProps
 	}: CoverProps = $props();
 
+	/**
+	 * The row template is an inline style, not a Tailwind arbitrary value.
+	 *
+	 * Tailwind generates CSS by scanning source text, so a class assembled at runtime —
+	 * `` `[grid-template-rows:${rowTemplate}]` `` — names a rule that was never emitted. Cover then
+	 * rendered as a bare `grid` with implicit auto rows, which is why a header would not stay at the
+	 * top, the middle would not take the remaining height, and a footer would not pin to the bottom.
+	 * Nothing errored; the layout was simply the browser's default.
+	 */
 	const rowTemplate = $derived(
 		[top ? 'auto' : null, 'minmax(0,1fr)', bottom ? 'auto' : null]
 			.filter((row) => row !== null)
-			.join('_')
+			.join(' ')
+	);
+	const { style: styleProp, ...attributes } = $derived(
+		restProps as { style?: string } & Record<string, unknown>
 	);
 </script>
 
@@ -39,12 +51,12 @@
 	class={cn(
 		className,
 		'grid h-full max-h-full min-h-0 min-w-0 overflow-clip',
-		rowTemplate && `[grid-template-rows:${rowTemplate}]`,
 		GAP_CLASSES[gap],
 		PAD_CLASSES[pad]
 	)}
+	style={`grid-template-rows: ${rowTemplate};${styleProp ? ` ${styleProp}` : ''}`}
 	data-layout="cover"
-	{...restProps}
+	{...attributes}
 >
 	{#if top}
 		<div class="min-w-0 shrink-0">{@render top()}</div>
