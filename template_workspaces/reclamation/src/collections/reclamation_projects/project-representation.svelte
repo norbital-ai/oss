@@ -176,6 +176,10 @@
 				project_id: projectId,
 				force
 			});
+			// Invocations run outside this query object's mutation path. Pull the completed
+			// reconstruction immediately so the model and cost tabs do not wait behind an
+			// unrelated replica invalidation backlog before showing the result we just built.
+			await runsQuery.refresh();
 			rebuildMessage =
 				result.outcome === 'stitched'
 					? 'Reconstruction rebuilt.'
