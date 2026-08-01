@@ -2,4 +2,4 @@
 
 ## 0.0.1
 
-- Initial baseline release.
+- Initial public release.

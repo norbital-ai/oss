@@ -21,7 +21,6 @@
 		"publication:check": "node scripts/validate-package-publication.mjs",
 		"deps:sync": "node scripts/sync-injected-deps.mjs",
 		"templates:sync": "node scripts/sync-templates.mjs",
-		"deps:sync": "node scripts/sync-injected-deps.mjs",
 		"templates:check": "node scripts/project-templates.mjs --check",
 		"templates:lock": "node scripts/lock-templates.mjs",
 		"templates:lock:check": "node scripts/lock-templates.mjs --check",

@@ -2,4 +2,4 @@
 
 ## 0.0.1
 
-- Initial baseline release of shared runtime helpers.
+- Initial public release of shared runtime helpers.
