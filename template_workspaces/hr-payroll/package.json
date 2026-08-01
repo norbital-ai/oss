@@ -15,9 +15,9 @@
 	"dependencies": {
 		"@iconify/svelte": "^5.2.2",
 		"@norbital-ai/platform-utils": "0.0.12",
-		"@norbital-ai/pod": "0.0.13",
+		"@norbital-ai/pod": "0.0.14",
 		"@norbital-ai/std": "0.0.11",
-		"@norbital-ai/ui": "0.0.13",
+		"@norbital-ai/ui": "0.0.14",
 		"exceljs": "4.4.0",
 		"mode-watcher": "^1.1.0",
 		"runed": "^0.37.1",
