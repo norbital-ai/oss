@@ -1,14 +1,56 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const MIGRATION_SCHEMA_FINGERPRINT = '.schema-fingerprint.json';
-const MIGRATION_SCHEMA_FINGERPRINT_VERSION = 1;
+const MIGRATION_SCHEMA_FINGERPRINT_VERSION = 2;
+const STATIC_MODULE_SPECIFIER = /\b(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/g;
 
 export interface MigrationFingerprint {
-	readonly schemaVersion: 1;
+	readonly schemaVersion: 2;
 	readonly schemaSha256: string;
 	readonly historySha256: string;
+}
+
+function resolveLocalModule(importer: string, specifier: string): string | undefined {
+	if (!specifier.startsWith('.')) return undefined;
+	const exact = path.resolve(path.dirname(importer), specifier);
+	const candidates = [exact];
+	if (exact.endsWith('.js')) candidates.push(`${exact.slice(0, -3)}.ts`);
+	else if (exact.endsWith('.mjs')) candidates.push(`${exact.slice(0, -4)}.mts`);
+	else if (exact.endsWith('.cjs')) candidates.push(`${exact.slice(0, -4)}.cts`);
+	else if (path.extname(exact) === '') {
+		candidates.push(
+			`${exact}.ts`,
+			`${exact}.js`,
+			path.join(exact, 'index.ts'),
+			path.join(exact, 'index.js')
+		);
+	}
+	return candidates.find((candidate) => existsSync(candidate));
+}
+
+async function schemaDependencyContents(entryFile: string): Promise<Buffer[]> {
+	const contents: Buffer[] = [];
+	const visited = new Set<string>();
+	const visit = async (file: string): Promise<void> => {
+		const absolute = path.resolve(file);
+		if (visited.has(absolute)) return;
+		visited.add(absolute);
+		const source = await readFile(absolute);
+		contents.push(source);
+		const imports = [...source.toString('utf8').matchAll(STATIC_MODULE_SPECIFIER)]
+			.map((match) => match[1])
+			.filter((specifier): specifier is string => specifier != null)
+			.sort();
+		for (const specifier of imports) {
+			const dependency = resolveLocalModule(absolute, specifier);
+			if (dependency) await visit(dependency);
+		}
+	};
+	await visit(entryFile);
+	return contents;
 }
 
 async function migrationHistoryFiles(
@@ -38,8 +80,11 @@ export async function migrationFingerprint(
 	schemaHash.update(`norbital-pod-migrations-v${MIGRATION_SCHEMA_FINGERPRINT_VERSION}\0`);
 	for (const [index, file] of schemaFiles.entries()) {
 		schemaHash.update(`${index}\0`);
-		schemaHash.update(await readFile(file));
-		schemaHash.update('\0');
+		for (const [dependencyIndex, contents] of (await schemaDependencyContents(file)).entries()) {
+			schemaHash.update(`${dependencyIndex}\0`);
+			schemaHash.update(contents);
+			schemaHash.update('\0');
+		}
 	}
 	const historyHash = createHash('sha256');
 	for (const file of (await migrationHistoryFiles(migrationsRoot)).sort((a, b) =>

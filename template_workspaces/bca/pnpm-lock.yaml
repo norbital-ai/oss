@@ -366,7 +366,7 @@ packages:
     resolution: {integrity: sha512-LCQN8zLwzPj0lM/o+XQuKx/GoMZ6Cz1AhPdTQKH5yBcOb3VktZzVVvYopRAXhjHTLE+/fgPsd/LxBabwo2LifA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/f0fd6f410e873b5283fd49dab4c29da89af72164}
 
   '@norbital-ai/pod@0.0.1':
-    resolution: {integrity: sha512-0Ee2DRAqFwMEizR87vk6Avm0Iu+1gbdLVjX+tlg3hgYhasF669/kwVYWe+fugdU/aNK3OFZIMIyjV8dPI0nsJg==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/877047e7e0d8b3a741c37ce449204650254be051}
+    resolution: {integrity: sha512-zxRU4k+X/7BFYmjaxKme0u5D3mmjM0mIXbl4G4YWB01CzGX+UQ8yUaaCICZ4LWLq1q5a0ch32dQ7cpmDTZFs9g==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/62a62327635234851db0e687ce48e40c78dcd4d8}
     hasBin: true
     peerDependencies:
       '@iconify/svelte': ^5.2.2

@@ -199,6 +199,16 @@ export type {
 } from '../server/bootstrap/policy_reconcile.server.js';
 
 /**
+ * Generate authored workspace migrations through Pod's schema boundary.
+ *
+ * Hosts may provide the editor and the build sandbox, but Pod owns the migration semantics. In
+ * particular, this projection keeps every typed temporal-history table in lockstep with its live
+ * collection. Calling drizzle-kit directly from a host produces only the live-table half and is not
+ * a valid Pod migration.
+ */
+export { generatePodMigrations } from '../vite/migrations.js';
+
+/**
  * Give every declared channel the workspace user its agent answers as.
  *
  * Runs at the same migrate seam as `reconcileDeclaredPolicies` and immediately after it, because the

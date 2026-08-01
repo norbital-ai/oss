@@ -51,6 +51,16 @@ describe('migration fingerprint', () => {
 		expect(await migrationFingerprint([schema], migrations)).not.toEqual(fingerprint);
 	});
 
+	it('invalidates when an imported model changes behind a stable generated entry module', async () => {
+		const { root, schema, migrations } = await fixture();
+		const model = path.join(root, 'model.ts');
+		await writeFile(schema, "export { model } from './model.js';\n");
+		await writeFile(model, "export const model = { status: 'text' };\n");
+		const fingerprint = await migrationFingerprint([schema], migrations);
+		await writeFile(model, "export const model = { status: 'text', reference: 'text' };\n");
+		expect(await migrationFingerprint([schema], migrations)).not.toEqual(fingerprint);
+	});
+
 	it('invalidates when versioned migration history changes', async () => {
 		const { schema, migrations, migration } = await fixture();
 		const fingerprint = await migrationFingerprint([schema], migrations);
