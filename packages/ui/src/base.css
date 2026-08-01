@@ -466,6 +466,54 @@
 		@apply my-4;
 	}
 
+	/* ---- Reading scale ---- */
+	/*
+		The rules above are document-editor typography: an `h1` at `text-4xl lg:text-5xl` under a
+		full-width rule, an `h2` at `text-3xl` under another, and `my-4` between paragraphs. That is
+		right for a document being written and badly wrong for a chat transcript, where the same
+		markdown arrives inside a pane a few hundred pixels wide — a model writing `## Cause` got a
+		heading larger than the page title and a horizontal rule across the reply. `.tiptap-reading`
+		puts headings back on the app's own type scale and tightens the block rhythm to match the
+		surrounding UI. It only ever narrows: no new colours, no new families.
+	*/
+	.tiptap-reading h1,
+	.tiptap-reading h2,
+	.tiptap-reading h3,
+	.tiptap-reading h4,
+	.tiptap-reading h5,
+	.tiptap-reading h6 {
+		@apply mt-4 mb-2 border-0 pb-0;
+	}
+	.tiptap-reading h1 {
+		@apply text-subhead;
+	}
+	.tiptap-reading h2 {
+		@apply text-heading;
+	}
+	.tiptap-reading h3,
+	.tiptap-reading h4 {
+		@apply text-base;
+	}
+	.tiptap-reading h5,
+	.tiptap-reading h6 {
+		@apply text-sm text-muted-foreground;
+	}
+	.tiptap-reading p {
+		@apply my-2;
+	}
+	.tiptap-reading ul,
+	.tiptap-reading ol,
+	.tiptap-reading blockquote,
+	.tiptap-reading pre {
+		@apply my-2;
+	}
+	.tiptap-reading > :first-child {
+		@apply mt-0;
+	}
+	.tiptap-reading > :last-child {
+		@apply mb-0;
+	}
+
 	.tiptap blockquote {
 		@apply my-4 border-l-4 border-border pl-4 text-muted-foreground;
 	}

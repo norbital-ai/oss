@@ -4,9 +4,18 @@
 
 	let {
 		content,
+		scale = 'document',
 		class: className
 	}: {
 		content: string;
+		/**
+		 * `document` is editor typography — the scale a page of prose is written at.
+		 *
+		 * `reading` is for markdown that arrives inside the UI rather than as the page: a chat
+		 * reply, a tool result, a preview pane. The document scale puts an `h2` at `text-3xl` under
+		 * a full-width rule, which inside a chat pane is larger than the page title.
+		 */
+		scale?: 'document' | 'reading';
 		class?: string;
 	} = $props();
 
@@ -39,7 +48,13 @@
 	});
 </script>
 
-<div class={cn('tiptap min-w-0 max-w-full outline-none', className)}>
+<div
+	class={cn(
+		'tiptap min-w-0 max-w-full outline-none',
+		scale === 'reading' && 'tiptap-reading',
+		className
+	)}
+>
 	{#each blocks as html, index (index)}
 		<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 		{@html html}
