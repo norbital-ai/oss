@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import InfoHint from './info-hint.svelte';
 	import type {
@@ -120,7 +120,7 @@
 			{/if}
 
 			{#if names.length > 1}
-				<div class="flex flex-wrap gap-1" role="group" aria-label="Section">
+				<Cluster gap="xs" role="group" aria-label="Section">
 					{#each names as name (name)}
 						<button
 							type="button"
@@ -134,11 +134,16 @@
 							{name}
 						</button>
 					{/each}
-				</div>
+				</Cluster>
 			{/if}
 
 			{#if extent}
-				<figure class="overflow-x-auto rounded-md border bg-card p-2">
+				<Scroll
+					as="figure"
+					axis="x"
+					name={`Section ${active}`}
+					class="rounded-md border bg-card p-2"
+				>
 					<svg
 						viewBox={`0 0 ${W} ${H}`}
 						class="block h-auto min-w-[36rem] w-full"
@@ -214,28 +219,28 @@
 							class="fill-muted-foreground text-[9px] tabular-nums">{fmt(extent.maxS)} m</text
 						>
 					</svg>
-					<figcaption class="mt-1 text-tiny text-muted-foreground tabular-nums">
+					<p class="mt-1 text-tiny text-muted-foreground tabular-nums">
 						{points.length} decoded points · true scale (1:1 horizontal to vertical)
-					</figcaption>
-				</figure>
+					</p>
+				</Scroll>
 
-				<ul class="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+				<Cluster as="ul" gap="md" class="text-xs">
 					{#each layerLegend as layer (layer)}
-						<li class="flex items-center gap-1.5">
+						<Inline as="li" gap="xs">
 							<span
 								class="size-2.5 rounded-[2px]"
 								style={`background:${ROLE_COLOR[roleOf(layer)] ?? ROLE_COLOR.unclassified}`}
 							></span>
 							<span class="truncate">{layer}</span>
-						</li>
+						</Inline>
 					{/each}
-				</ul>
+				</Cluster>
 			{/if}
 		</Stack>
 
 		<Stack as="section" gap="sm">
 			<h3 class="border-b pb-2 text-sm font-semibold">Decoded coordinates</h3>
-			<div class="overflow-x-auto rounded-md border bg-card">
+			<Scroll axis="x" name="Decoded coordinates" class="rounded-md border bg-card">
 				<table class="w-full text-xs">
 					<thead class="border-b text-muted-foreground">
 						<tr>
@@ -256,7 +261,7 @@
 						{/each}
 					</tbody>
 				</table>
-			</div>
+			</Scroll>
 		</Stack>
 	{/if}
 </Stack>
