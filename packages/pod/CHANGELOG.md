@@ -1,5 +1,12 @@
 # @norbital-ai/pod
 
+## 0.0.14
+
+### Patch Changes
+
+- Updated dependencies [39edc50]
+  - @norbital-ai/ui@0.0.14
+
 ## 0.0.13
 
 ### Patch Changes
