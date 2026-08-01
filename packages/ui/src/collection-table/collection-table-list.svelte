@@ -125,6 +125,7 @@
 							isDetailActive ? 'bg-accent/50' : row.selected ? 'bg-accent/40' : 'hover:bg-muted/40'
 						)}
 						data-detail-active={isDetailActive ? 'true' : undefined}
+						data-record-id={row.id}
 						aria-current={isDetailActive ? 'true' : undefined}
 						role="listitem"
 					>

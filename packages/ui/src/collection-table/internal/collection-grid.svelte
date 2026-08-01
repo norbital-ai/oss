@@ -875,6 +875,7 @@
 									<div
 										{...props}
 										data-index={vi.index}
+										data-record-id={rowId}
 										data-detail-active={isDetailActive ? 'true' : undefined}
 										role="row"
 										aria-rowindex={tableApi.pagination.current.pageIndex *
