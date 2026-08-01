@@ -6,6 +6,10 @@
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		pad?: LayoutPad;
+		/** Take the remaining space along the parent's main axis. */
+		grow?: boolean;
+		/** Allow this region to shrink when its parent is constrained. */
+		shrink?: boolean;
 		top?: Snippet;
 		bottom?: Snippet;
 		children: Snippet;
@@ -20,6 +24,8 @@
 		as = 'div',
 		gap = 'md',
 		pad = 'none',
+		grow = false,
+		shrink = true,
 		top,
 		bottom,
 		class: className,
@@ -52,7 +58,9 @@
 		className,
 		'grid h-full max-h-full min-h-0 min-w-0 overflow-clip',
 		GAP_CLASSES[gap],
-		PAD_CLASSES[pad]
+		PAD_CLASSES[pad],
+		grow && 'flex-1',
+		!shrink && 'shrink-0'
 	)}
 	style={`grid-template-rows: ${rowTemplate};${styleProp ? ` ${styleProp}` : ''}`}
 	data-layout="cover"

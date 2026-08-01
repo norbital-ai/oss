@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Column, Columns, Inline, Stack } from '@norbital-ai/ui/layout';
 	import InfoHint from './info-hint.svelte';
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { SiteLayer, SiteViewerStats } from '../../../lib/site-viewer/site_viewer.types.js';
@@ -95,54 +95,52 @@
 
 	<Stack as="section" gap="sm">
 		<h3 class="border-b pb-2 text-sm font-semibold">Measured from the solid</h3>
-		<dl class="grid grid-cols-2 gap-3 text-sm">
-			<div>
+		<Columns as="dl" count={2} gap="md" class="text-sm">
+			<Column>
 				<dt class="text-xs text-muted-foreground">Platform area</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
 					{number(metrics.platformAreaM2 / 10_000, 1)} ha
 				</dd>
-			</div>
-			<div>
+			</Column>
+			<Column>
 				<dt class="text-xs text-muted-foreground">Works footprint</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
 					{number(metrics.worksFootprintM2 / 10_000, 1)} ha
 				</dd>
-			</div>
-			<div>
+			</Column>
+			<Column>
 				<dt class="text-xs text-muted-foreground">Seaward perimeter</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">{number(metrics.shorelineLengthM)} m</dd>
-			</div>
-			<div>
+			</Column>
+			<Column>
 				<dt class="text-xs text-muted-foreground">Mean / max fill depth</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
 					{number(metrics.meanFillDepthM, 2)} / {number(metrics.maxFillDepthM, 2)} m
 				</dd>
-			</div>
-			<div>
+			</Column>
+			<Column>
 				<dt class="text-xs text-muted-foreground">Existing bund displaced</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
 					{number(metrics.structureDisplacementM3)} m³
 				</dd>
-			</div>
-			<div>
+			</Column>
+			<Column>
 				<dt class="text-xs text-muted-foreground">Below the surveyed bed</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">{number(metrics.excavationM3)} m³</dd>
-			</div>
-		</dl>
+			</Column>
+		</Columns>
 	</Stack>
 
 	{#if report}
 		<Stack as="section" gap="sm">
-			<div class="border-b pb-2">
-				<h3 class="text-sm font-semibold">
-					Checks
-					{#if report.warnings.length > 0}
-						<span class="ml-1 font-normal text-muted-foreground"
-							>({report.warnings.length} flagged)</span
-						>
-					{/if}
-				</h3>
-			</div>
+			<h3 class="border-b pb-2 text-sm font-semibold">
+				Checks
+				{#if report.warnings.length > 0}
+					<span class="ml-1 font-normal text-muted-foreground"
+						>({report.warnings.length} flagged)</span
+					>
+				{/if}
+			</h3>
 			{#if report.warnings.length === 0}
 				<p class="text-sm text-muted-foreground">
 					No document conflicts or extraction errors were flagged.
@@ -167,24 +165,28 @@
 					<summary class="cursor-pointer text-sm font-medium">
 						How each section layer was read
 					</summary>
-					<ul class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-						{#each report.layerClassification as entry (entry.layer)}
-							<li class="flex items-center justify-between gap-2">
-								<span class="truncate font-mono">{entry.layer}</span>
-								<span
-									class={entry.role === 'surface'
-										? 'shrink-0 text-muted-foreground'
-										: 'shrink-0 text-amber-600'}
-								>
-									{entry.role}
-								</span>
-							</li>
-						{/each}
-					</ul>
-					<p class="mt-2 text-xs text-muted-foreground">
-						A layer read as <span class="font-medium">internal</span> is excluded from the finished
-						surface. Correct any of these with <code>profileLayers</code> in the project overrides.
-					</p>
+					<Stack gap="sm" class="pt-2">
+						<Columns as="ul" count={2} gap="sm" class="text-xs">
+							{#each report.layerClassification as entry (entry.layer)}
+								<Column as="li">
+									<Inline justify="between" gap="sm">
+										<span class="truncate font-mono">{entry.layer}</span>
+										<span
+											class={entry.role === 'surface'
+												? 'shrink-0 text-muted-foreground'
+												: 'shrink-0 text-amber-600'}
+										>
+											{entry.role}
+										</span>
+									</Inline>
+								</Column>
+							{/each}
+						</Columns>
+						<p class="text-xs text-muted-foreground">
+							A layer read as <span class="font-medium">internal</span> is excluded from the
+							finished surface. Correct any of these with <code>profileLayers</code> in the project overrides.
+						</p>
+					</Stack>
 				</details>
 			{/if}
 		</Stack>

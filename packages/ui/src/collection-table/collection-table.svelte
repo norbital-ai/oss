@@ -965,6 +965,7 @@
 			</p>
 		</Stack>
 		{#if badge}
+			<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 			<span
 				class={cn(
 					'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-xs font-medium',
@@ -1104,6 +1105,7 @@
 {/if}
 
 <!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
+<!-- stupidity:allow UI15 -- the table keeps a usable empty/loading viewport before rows establish intrinsic height -->
 <Bound size="full" class="collection-table-responsive min-h-[24rem]" data-collection-table-surface>
 	<CollectionGrid
 		table={tableApi}

@@ -71,9 +71,9 @@
 
 <!-- Board-wide horizontal scroll with full height ----------------------->
 <Scroll axis="x" name="Kanban board" class="p-3">
-	<Inline gap="md" align="stretch" class="h-full">
+	<Inline gap="md" align="stretch" fill>
 		{#each localState as column, index (column._id)}
-			<Inline gap="none" align="stretch" class="h-full">
+			<Inline gap="none" align="stretch" fill>
 				<div class="flex h-full" in:slideIn={{ columnId: column._id, index }}>
 					<KanbanColumn
 						{column}

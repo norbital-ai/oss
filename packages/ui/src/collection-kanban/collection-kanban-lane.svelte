@@ -167,7 +167,7 @@
 <Cover
 	as="section"
 	gap="sm"
-	class="kanban-lane bg-muted/40 min-h-0 snap-start rounded-sm p-3"
+	class="kanban-lane bg-muted/40 snap-start rounded-sm p-3"
 	data-kanban-lane-section={lane}
 	data-kanban-destination={lane}
 	top={laneHeader}
@@ -261,7 +261,9 @@
 					{:else}
 						<Stack
 							gap="xs"
-							class="min-h-32 items-center justify-center rounded-sm border border-dashed border-border bg-background/50 p-5 text-center"
+							align="center"
+							justify="center"
+							class="min-h-32 rounded-sm border border-dashed border-border bg-background/50 p-5 text-center"
 						>
 							<Icon icon="lucide:inbox" class="size-5 text-muted-foreground" />
 							<p class="text-sm font-medium">No {humanize(lane).toLowerCase()} jobs</p>

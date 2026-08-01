@@ -234,7 +234,7 @@
 	<Stack gap="sm">
 		<div>
 			<h3 class="text-heading">Coordination model</h3>
-			<p class="mt-1 max-w-[70ch] text-sm text-muted-foreground">
+			<p class="max-w-[70ch] text-sm text-muted-foreground">
 				Review the issued IFC model beside the live coordination register.
 			</p>
 		</div>
@@ -347,7 +347,7 @@
 		<Stack gap="lg">
 			<Stack gap="xs">
 				<h3 class="text-heading">Manpower allocation</h3>
-				<p class="mt-1 max-w-[70ch] text-sm text-muted-foreground">
+				<p class="max-w-[70ch] text-sm text-muted-foreground">
 					Each lane is a project work front. Cards show the worker, work package, role, and planned
 					daily hours.
 				</p>

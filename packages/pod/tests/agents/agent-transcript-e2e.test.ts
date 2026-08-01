@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
-import { dockerAvailable } from '../support/pg-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 const admin: Identity = {
 	userId: '22222222-2222-4222-8222-222222222222',
 	userName: 'IT Admin',
@@ -23,7 +23,7 @@ const member: Identity = {
 	role: 'basic'
 };
 
-describe.skipIf(!hasDocker)('Pod AI and automation transcript — runtime E2E', () => {
+describe('Pod AI and automation transcript — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	let calls = 0;
 	const ai: HostAiBinding = {
@@ -149,13 +149,11 @@ describe.skipIf(!hasDocker)('Pod AI and automation transcript — runtime E2E', 
 				: [];
 		// Their own message is visible — so the guard is filtering, not just refusing.
 		expect(otherShape.status).toBe(200);
-		expect(
-			otherRows.filter((row) => row.chat_id === ownSession.rows[0]?.norbital_id)
-		).toHaveLength(1);
+		expect(otherRows.filter((row) => row.chat_id === ownSession.rows[0]?.norbital_id)).toHaveLength(
+			1
+		);
 		// The automation's session belongs to the admin, and must not appear.
-		expect(
-			otherRows.filter((row) => row.chat_id === session.rows[0]?.norbital_id)
-		).toHaveLength(0);
+		expect(otherRows.filter((row) => row.chat_id === session.rows[0]?.norbital_id)).toHaveLength(0);
 
 		const run = await harness.pool.query<{ status: string }>(
 			`SELECT status FROM automation_run WHERE norbital_id = $1::uuid`,

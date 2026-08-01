@@ -228,7 +228,7 @@
 			</span>
 		{:else}
 			<!-- Show badges for multiple dates (original behavior) -->
-			<Cluster gap="xs" class="flex-1">
+			<Cluster gap="xs" grow>
 				{#each selectedDateStrings.slice(0, maxTriggerBadges) as dateStr}
 					{@render DateBadge(dateStr, false, 'sm')}
 				{/each}
@@ -279,7 +279,7 @@
 							gap="sm"
 							class="rounded-lg border border-brand-200 bg-background px-3 py-2 shadow-sm"
 						>
-							<Stack gap="none" class="min-w-0 flex-1">
+							<Stack gap="none" grow class="min-w-0">
 								<div
 									class="truncate text-xs font-normal text-foreground transition-all hover:font-medium"
 								>

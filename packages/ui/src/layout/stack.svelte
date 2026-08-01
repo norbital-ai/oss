@@ -20,6 +20,8 @@
 		grow?: boolean;
 		/** Fill the parent's height, so `justify` has room to distribute. */
 		fill?: boolean;
+		/** Allow this region to shrink when its parent is constrained. */
+		shrink?: boolean;
 		children: Snippet;
 	}
 </script>
@@ -35,6 +37,7 @@
 		justify = 'start',
 		grow = false,
 		fill = false,
+		shrink = true,
 		class: className,
 		children,
 		...restProps
@@ -63,7 +66,8 @@
 		alignClasses[align],
 		justifyClasses[justify],
 		grow && 'flex-1',
-		fill && 'h-full'
+		fill && 'h-full',
+		!shrink && 'shrink-0'
 	)}
 	data-layout="stack"
 	{...restProps}

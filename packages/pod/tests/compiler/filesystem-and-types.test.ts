@@ -81,6 +81,40 @@ afterEach(async () => {
 });
 
 describe('Pod filesystem compiler conformance', () => {
+	it('accepts geometry only on the layout primitives that own it', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/apps/+home.svelte',
+			`<svelte:head><title>Home</title></svelte:head>
+<Stack fill grow shrink={false}><Inline fill grow><Cluster grow /></Inline></Stack>
+<Bound grow shrink={false} /><Cover grow /><Scroll name="Rows" grow />`
+		);
+
+		let structure = await discoverPodFilesystem(root);
+		expect(
+			structure.diagnostics.filter((diagnostic) => diagnostic.code === 'LAYOUT_PROP_UNKNOWN')
+		).toEqual([]);
+
+		await write(
+			root,
+			'src/apps/+home.svelte',
+			`<svelte:head><title>Home</title></svelte:head>
+<Grid fill /><Center grow /><Widget shrink={false} /><Tabs contentClass="h-full" />`
+		);
+		structure = await discoverPodFilesystem(root);
+		expect(
+			structure.diagnostics
+				.filter((diagnostic) => diagnostic.code === 'LAYOUT_PROP_UNKNOWN')
+				.map((diagnostic) => diagnostic.message)
+		).toEqual([
+			'fill is not a supported layout prop; parents own geometry',
+			'grow is not a supported layout prop; parents own geometry',
+			'shrink is not a supported layout prop; parents own geometry',
+			'contentClass is not a supported layout prop; parents own geometry'
+		]);
+	});
+
 	it('discovers agent tools anywhere under src without confusing neighboring role compilers', async () => {
 		const root = await workspace();
 		const structure = await discoverPodFilesystem(root);

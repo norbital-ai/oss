@@ -11,6 +11,7 @@
 	let { children, class: className, ...restProps }: EventItemFileProps = $props();
 </script>
 
+<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <div
 	class={cn(
 		'inline-flex items-center gap-1 rounded-md border bg-secondary px-1.5 py-0.5 text-xs text-foreground',

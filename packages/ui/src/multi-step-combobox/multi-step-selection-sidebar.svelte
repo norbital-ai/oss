@@ -48,7 +48,7 @@
 
 <!-- stupidity:allow UI5 -- popover panel boundary -->
 <aside class="w-[280px] shrink-0 overflow-hidden border-r bg-background">
-	<Stack gap="none" class="h-full">
+	<Stack gap="none" fill>
 		<Inline gap="none" justify="between" class="h-11 border-b px-3">
 			<Inline gap="sm" class="text-xs font-semibold text-muted-foreground">
 				<Icon icon="lucide:list-tree" class="h-3.5 w-3.5" />
@@ -80,6 +80,7 @@
 					{@const hasValues = stepKeys.some((key) => selection[key] != null)}
 					{@const sepClass = 'opacity-40'}
 					{@const fbClass = complete ? 'opacity-70' : 'opacity-60'}
+					<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 					<li
 						role="option"
 						aria-selected={idx === currentSelectionIndex}

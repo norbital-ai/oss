@@ -25,6 +25,7 @@
 </script>
 
 {#if shouldShow}
+	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div
 		bind:this={ref}
 		class={cn('flex items-center justify-end gap-2 self-end', className)}

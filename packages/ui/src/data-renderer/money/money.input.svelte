@@ -151,7 +151,7 @@
 
 {#snippet moneyFields()}
 	{#if multiple && drafts.length === 0}
-		<Stack gap="sm" class="items-center rounded-md border border-dashed p-5 text-center">
+		<Stack gap="sm" align="center" class="rounded-md border border-dashed p-5 text-center">
 			<Icon icon="lucide:banknote" class="size-8 text-muted-foreground" />
 			<p class="text-sm font-medium">No amounts configured</p>
 			<p class="text-xs text-muted-foreground">Add a monetary value to get started.</p>

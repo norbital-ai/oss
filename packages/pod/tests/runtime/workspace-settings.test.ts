@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hashToken } from '$lib/host/session.js';
-import { dockerAvailable } from '../support/pg-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 /** The harness's own admin id, so the forged scope and the `user` row are the same person. */
 const admin: Identity = {
@@ -24,10 +24,9 @@ const member: Identity = {
 	role: 'basic'
 };
 
-
 type Json = Record<string, unknown>;
 
-describe.skipIf(!hasDocker)('Pod workspace settings — identity administration', () => {
+describe('Pod workspace settings — identity administration', () => {
 	let harness: PodRuntimeHarness;
 
 	/** One settings call, exactly as the browser makes it: a POST with the host's public URL attached. */
@@ -84,7 +83,8 @@ describe.skipIf(!hasDocker)('Pod workspace settings — identity administration'
 		// looking at an address that reaches this workspace.
 		expect(minted.acceptPath.startsWith('/accept-invite?token=')).toBe(true);
 
-		const token = new URL(minted.acceptPath, 'https://example.invalid').searchParams.get('token') ?? '';
+		const token =
+			new URL(minted.acceptPath, 'https://example.invalid').searchParams.get('token') ?? '';
 		const stored = await harness.pool.query<{ token_hash: string; email: string }>(
 			`SELECT token_hash, email FROM invitation WHERE norbital_id = $1::uuid`,
 			[minted.invitationId]
@@ -167,7 +167,11 @@ describe.skipIf(!hasDocker)('Pod workspace settings — identity administration'
 		// host that had not been taught to send one could not invite anybody — under Core the button
 		// answered 503. Nothing here supplies an origin, and it still works.
 		const response = await payload(
-			await call('settings/invitations/create', { email: 'nowhere@example.test', role: 'basic' }, admin)
+			await call(
+				'settings/invitations/create',
+				{ email: 'nowhere@example.test', role: 'basic' },
+				admin
+			)
 		);
 		expect(response.status, response.body).toBe(200);
 		const minted = JSON.parse(response.body) as { acceptPath: string };

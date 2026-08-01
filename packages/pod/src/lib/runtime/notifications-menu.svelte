@@ -7,6 +7,7 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import * as Popover from '@norbital-ai/ui/popover';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
+	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { toNotificationRow, unreadBadge, type NotificationRow } from './notifications.js';
 
@@ -94,9 +95,7 @@
 		{#snippet child({ props })}
 			<Sidebar.MenuButton
 				{...props}
-				aria-label={unread.length > 0
-					? `Notifications, ${unread.length} unread`
-					: 'Notifications'}
+				aria-label={unread.length > 0 ? `Notifications, ${unread.length} unread` : 'Notifications'}
 				class={cn(
 					'relative rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',
 					expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'
@@ -118,13 +117,8 @@
 			</Sidebar.MenuButton>
 		{/snippet}
 	</Popover.Trigger>
-	<Popover.Content
-		side={expanded ? 'top' : 'right'}
-		align="start"
-		sideOffset={8}
-		class="w-80 p-0"
-	>
-		<div class="flex items-center justify-between gap-2 border-b px-3 py-2">
+	<Popover.Content side={expanded ? 'top' : 'right'} align="start" sideOffset={8} class="w-80 p-0">
+		<Inline justify="between" gap="sm" class="border-b px-3 py-2">
 			<p class="text-xs font-medium">Notifications</p>
 			{#if unread.length > 0}
 				<Button
@@ -137,20 +131,20 @@
 					Mark all read
 				</Button>
 			{/if}
-		</div>
+		</Inline>
 
 		{#if failure}
 			<p class="border-b px-3 py-2 text-tiny text-destructive" role="alert">{failure}</p>
 		{/if}
 
-		<div class="max-h-96 overflow-y-auto overscroll-contain">
+		<Scroll name="Notifications" class="max-h-96">
 			{#if rows.length === 0}
-				<div class="flex flex-col items-center gap-1 px-3 py-8 text-center">
+				<Stack align="center" gap="xs" class="px-3 py-8 text-center">
 					<Icon icon="lucide:bell-off" class="size-6 text-muted-foreground" />
 					<span class="text-tiny text-muted-foreground">
 						{query?.loading ? 'Loading…' : 'Nothing here yet'}
 					</span>
-				</div>
+				</Stack>
 			{:else}
 				<ul class="divide-y">
 					{#each rows as row (row.norbital_id)}
@@ -163,28 +157,28 @@
 								)}
 								onclick={() => openNotification(row)}
 							>
-								<span class="flex w-full min-w-0 items-center gap-1.5">
+								<Inline as="span" gap="xs">
 									{#if row.read_at === null}
 										<span class="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true"
 										></span>
 									{/if}
 									<span class="min-w-0 flex-1 truncate text-xs font-medium">{row.subject}</span>
-								</span>
+								</Inline>
 								<span class="line-clamp-2 text-tiny text-muted-foreground">{row.message}</span>
-								<span class="flex w-full items-center gap-2 text-micro text-muted-foreground">
+								<Inline as="span" gap="sm" class="text-micro text-muted-foreground">
 									<span>{whenReceived(row)}</span>
 									{#if row.cta_url}
-										<span class="ml-auto inline-flex items-center gap-0.5 text-primary">
+										<Inline as="span" gap="xs" class="ml-auto text-primary">
 											{row.cta_label ?? 'Open'}
 											<Icon icon="lucide:arrow-right" class="size-3" />
-										</span>
+										</Inline>
 									{/if}
-								</span>
+								</Inline>
 							</button>
 						</li>
 					{/each}
 				</ul>
 			{/if}
-		</div>
+		</Scroll>
 	</Popover.Content>
 </Popover.Root>

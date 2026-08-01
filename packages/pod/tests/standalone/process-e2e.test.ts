@@ -3,9 +3,9 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { dockerAvailable, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js');
 
@@ -50,7 +50,7 @@ async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
 	await new Promise<void>((resolve) => child.once('exit', () => resolve()));
 }
 
-describe.skipIf(!hasDocker)('Pod standalone process — E2E', () => {
+describe('Pod standalone process — E2E', () => {
 	let pg: PgHarness;
 	let root: string;
 	let environment: NodeJS.ProcessEnv;

@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { HostFileStorageBinding } from '@norbital-ai/platform-utils/runtime/binding';
-import { dockerAvailable } from '../support/pg-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 const admin: Identity = {
 	userId: '22222222-2222-4222-8222-222222222222',
 	userName: 'IT Admin',
@@ -35,7 +35,7 @@ function memoryStorage(objects: Map<string, Uint8Array>): HostFileStorageBinding
 	};
 }
 
-describe.skipIf(!hasDocker)('Pod file storage — runtime E2E', () => {
+describe('Pod file storage — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	const objects = new Map<string, Uint8Array>();
 

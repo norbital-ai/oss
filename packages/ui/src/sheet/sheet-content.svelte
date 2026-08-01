@@ -246,7 +246,7 @@
 
 			{#if shouldShowActions}
 				<!-- stupidity:allow UI10 -- sheet header action strip clips overflowing actions -->
-				<Inline as="section" gap="sm" class="relative shrink-0 overflow-hidden">
+				<Inline as="section" gap="sm" shrink={false} class="relative overflow-hidden">
 					{#each actions as action (action)}
 						{#if action instanceof RenderComponentConfig}
 							{@const { component: Component, props } = action}

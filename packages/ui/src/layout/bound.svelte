@@ -9,6 +9,10 @@
 		pad?: LayoutPad;
 		inset?: boolean;
 		clip?: boolean;
+		/** Take the remaining space along the parent's main axis. */
+		grow?: boolean;
+		/** Allow this region to shrink when its parent is constrained. */
+		shrink?: boolean;
 		children: Snippet;
 	}
 </script>
@@ -23,6 +27,8 @@
 		pad = 'none',
 		inset = false,
 		clip = false,
+		grow = false,
+		shrink = true,
 		class: className,
 		children,
 		...restProps
@@ -42,7 +48,9 @@
 		'min-h-0 min-w-0 [container-type:inline-size]',
 		sizeClasses[size],
 		inset ? INSET_CLASS : PAD_CLASSES[pad],
-		clip && 'overflow-clip'
+		clip && 'overflow-clip',
+		grow && 'flex-1',
+		!shrink && 'shrink-0'
 	)}
 	data-layout="bound"
 	data-bound-clip={clip || undefined}

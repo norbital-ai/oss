@@ -61,6 +61,14 @@ const LAYOUT_PRIMITIVES = new Set([
 	'Bound',
 	'Scroll'
 ]);
+const LAYOUT_GEOMETRY_PROPS = new Map<string, ReadonlySet<string>>([
+	['Stack', new Set(['fill', 'grow', 'shrink'])],
+	['Inline', new Set(['fill', 'grow', 'shrink'])],
+	['Cluster', new Set(['fill', 'grow', 'shrink'])],
+	['Bound', new Set(['grow', 'shrink'])],
+	['Cover', new Set(['grow', 'shrink'])],
+	['Scroll', new Set(['grow', 'shrink'])]
+]);
 const COMPONENT_TAG_PATTERN = /<([A-Z][\w.]*)\b([^>]*?)(?:\/?>)/gs;
 const STATIC_CLASS_PATTERN = /\bclass\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 const RAW_CLIP_CLASS_PATTERN = /\boverflow(?:-[xy])?-hidden\b/;
@@ -170,9 +178,10 @@ function authoredLayoutDiagnostics(
 			}
 		}
 		for (const attribute of attributeNames.matchAll(
-			/\b(?:fill|grow|contentClass)(?=\s*=|\s|\/?>)/g
+			/\b(?:fill|grow|shrink|contentClass)(?=\s*=|\s|\/?>)/g
 		)) {
 			if (attribute[0] === 'contentClass' && component !== 'Tabs') continue;
+			if (LAYOUT_GEOMETRY_PROPS.get(component)?.has(attribute[0])) continue;
 			diagnostics.push(
 				sourceDiagnostic(
 					source,

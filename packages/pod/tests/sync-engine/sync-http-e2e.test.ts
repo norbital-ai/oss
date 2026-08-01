@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { dockerAvailable } from '../support/pg-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
 	type Identity,
@@ -16,7 +16,7 @@ import {
 	type ProbeCollection
 } from '../support/collection-probe.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 const admin: Identity = {
 	userId: '22222222-2222-4222-8222-222222222222',
@@ -39,7 +39,7 @@ function httpSyncFetch(baseUrl: string): SyncFetch {
 		});
 }
 
-describe.skipIf(!hasDocker)('Pod Sync — standalone HTTP transport (real socket + SSE)', () => {
+describe('Pod Sync — standalone HTTP transport (real socket + SSE)', () => {
 	let harness: PodRuntimeHarness;
 	let server: { url: string; close: () => Promise<void> };
 	let collection: ProbeCollection;
@@ -58,6 +58,7 @@ describe.skipIf(!hasDocker)('Pod Sync — standalone HTTP transport (real socket
 	it('propagates a committed change over the network via the SSE stream', async () => {
 		const db = await createClientDb();
 		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
 			db,
 			schemaSql: harness.schemaSql,
 			fetch: httpSyncFetch(server.url)
@@ -93,6 +94,7 @@ describe.skipIf(!hasDocker)('Pod Sync — standalone HTTP transport (real socket
 
 		const db = await createClientDb();
 		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
 			db,
 			schemaSql: harness.schemaSql,
 			fetch: httpSyncFetch(server.url)

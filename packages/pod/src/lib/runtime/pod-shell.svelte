@@ -30,7 +30,7 @@
 	} from '@norbital-ai/ui/data-renderer';
 	import { WorkspaceShell, type WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Bound, Cover } from '@norbital-ai/ui/layout';
+	import { Bound, Center, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { WorkspaceFileUploadClient } from '$lib/client/workspace-file-upload.svelte.js';
 	import { workspaceRuntimeOperations, type WorkspaceAppLoader } from './client.js';
 	import BillingBanner from './billing-banner.svelte';
@@ -270,84 +270,91 @@
 {/snippet}
 
 <WorkspaceShell model={navigationModel} onNavigate={navigate} {notifications} {onSignOut}>
-	<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+	<Bound size="full" clip grow>
 		<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
 		{#if currentPath === '/'}
-			<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-				<div class="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 sm:p-6 lg:p-8">
-					<header class="flex flex-col gap-1">
-						<h1 class="text-base font-semibold text-foreground">{data.organization.name}</h1>
-						<p class="text-xs text-muted-foreground">Pick an application to get started.</p>
-					</header>
+			<Scroll name="Workspace overview" inset>
+				<Center measure="wide">
+					<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
+						<Stack as="header" gap="xs">
+							<h1 class="text-base font-semibold text-foreground">{data.organization.name}</h1>
+							<p class="text-xs text-muted-foreground">Pick an application to get started.</p>
+						</Stack>
 
-					<section class="flex min-w-0 flex-col gap-2">
-						<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							Applications
-						</h2>
-						{#if overviewApplications.length === 0}
-							<div
-								class="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed p-8"
-							>
-								<Icon icon="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
-								<span class="text-xs text-muted-foreground">No applications yet</span>
-								<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
-									Author an app in the tenant workspace source to make it available here.
-								</span>
-							</div>
-						{:else}
-							<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-								{#each overviewApplications as app (app.key)}
-									<a
-										href={app.href}
-										class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-										onclick={(event) => {
-											event.preventDefault();
-											navigate(app.href);
-										}}
-									>
-										{#if app.thumbnail}
-											<div class="aspect-[16/9] w-full overflow-hidden border-b bg-muted">
-												<img
-													src={app.thumbnail}
-													alt=""
-													loading="lazy"
-													decoding="async"
-													class="size-full object-cover"
-												/>
-											</div>
-										{/if}
-										<div class="flex items-start gap-2.5 p-3">
-											<div
-												class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
-											>
-												<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
-											</div>
-											<div class="min-w-0 flex-1">
-												<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
-												{#if app.description}
-													<p class="mt-0.5 line-clamp-2 text-micro leading-4 text-muted-foreground">
-														{app.description}
-													</p>
-												{/if}
-											</div>
-										</div>
-									</a>
-								{/each}
-							</div>
-						{/if}
-					</section>
-				</div>
-			</div>
+						<Stack as="section" gap="sm">
+							<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+								Applications
+							</h2>
+							{#if overviewApplications.length === 0}
+								<Stack
+									align="center"
+									justify="center"
+									gap="xs"
+									class="rounded-lg border border-dashed p-8"
+								>
+									<Icon icon="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
+									<span class="text-xs text-muted-foreground">No applications yet</span>
+									<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
+										Author an app in the tenant workspace source to make it available here.
+									</span>
+								</Stack>
+							{:else}
+								<Grid gap="md" minimum="card">
+									{#each overviewApplications as app (app.key)}
+										<a
+											href={app.href}
+											class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+											onclick={(event) => {
+												event.preventDefault();
+												navigate(app.href);
+											}}
+										>
+											{#if app.thumbnail}
+												<div class="aspect-[16/9] w-full overflow-hidden border-b bg-muted">
+													<img
+														src={app.thumbnail}
+														alt=""
+														loading="lazy"
+														decoding="async"
+														class="size-full object-cover"
+													/>
+												</div>
+											{/if}
+											<Inline align="start" gap="sm" class="p-3">
+												<div
+													class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
+												>
+													<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
+												</div>
+												<div class="min-w-0 flex-1">
+													<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
+													{#if app.description}
+														<p
+															class="mt-0.5 line-clamp-2 text-micro leading-4 text-muted-foreground"
+														>
+															{app.description}
+														</p>
+													{/if}
+												</div>
+											</Inline>
+										</a>
+									{/each}
+								</Grid>
+							{/if}
+						</Stack>
+					</Stack>
+				</Center>
+			</Scroll>
 		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)}
 			<!-- Pod's own administration surface, not a host plugin: a workspace on `pod start` has no
 			     host and still has to be able to add people to itself. -->
 			<WorkspaceSettingsSurface {workspaceApi} user={data.user} api={workspaceSettingsApi} />
 		{:else if agentSurfaceAllowed}
-			<Bound size="full" clip class="flex-1 p-4 sm:p-6">
+			<Bound size="full" clip grow class="p-4 sm:p-6">
 				<AgentChatPanel />
 			</Bound>
 		{:else if activeApp && accessible}
-			<Bound size="full" clip class="flex-1" data-workspace-app-region>
+			<Bound size="full" clip grow data-workspace-app-region>
 				<Cover gap="none" top={activeAppBanner}>
 					<div
 						data-workspace-app-surface
@@ -376,7 +383,7 @@
 				Workspace application not found
 			</div>
 		{/if}
-	</div>
+	</Bound>
 </WorkspaceShell>
 
 <Sheet.Root open={detailSheetOpen} onOpenChange={(open) => !open && closeDetailSheet()}>
@@ -396,7 +403,7 @@
 			closeDetailSheet();
 		}}
 	>
-		<Bound size="full" clip class="relative w-full">
+		<Bound size="full" clip class="relative">
 			<DetailSurfaceStack
 				stack={detailStack}
 				resolveSurface={(routeKey: string, parentRouteKey?: string) =>

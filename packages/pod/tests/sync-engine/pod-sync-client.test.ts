@@ -262,6 +262,7 @@ describe('PodSyncClient (client sync logic)', () => {
 		try {
 			await client.applyDiff({
 				seq: '1',
+				xid: '1',
 				collection: 'orders',
 				action: 'insert',
 				id: 'a',
@@ -271,6 +272,7 @@ describe('PodSyncClient (client sync logic)', () => {
 			expect(await client.count('orders')).toBe(1);
 			await client.applyDiff({
 				seq: '2',
+				xid: '2',
 				collection: 'orders',
 				action: 'update',
 				id: 'a',
@@ -286,6 +288,7 @@ describe('PodSyncClient (client sync logic)', () => {
 			).toBe('closed');
 			await client.applyDiff({
 				seq: '3',
+				xid: '3',
 				collection: 'orders',
 				action: 'leave',
 				id: 'a',
@@ -410,6 +413,7 @@ describe('PodSyncClient (client sync logic)', () => {
 			for (let index = 0; index < 50; index++) {
 				burst.push({
 					seq: String(index + 1),
+					xid: '1',
 					collection: 'orders',
 					action: 'insert',
 					id: `row-${index}`,
@@ -418,7 +422,14 @@ describe('PodSyncClient (client sync logic)', () => {
 				});
 			}
 			// The last row is created and then removed inside the same burst: order decides.
-			burst.push({ seq: '51', collection: 'orders', action: 'delete', id: 'row-49', version: 1 });
+			burst.push({
+				seq: '51',
+				xid: '1',
+				collection: 'orders',
+				action: 'delete',
+				id: 'row-49',
+				version: 1
+			});
 
 			const touched = await client.applyDiffs(burst);
 

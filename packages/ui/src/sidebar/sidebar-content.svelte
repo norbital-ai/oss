@@ -11,16 +11,17 @@
 	}: WithElementRef<HTMLAttributes<HTMLElement>> = $props();
 </script>
 
+<!-- stupidity:allow UI10 -- collapsed icon mode intentionally disables this component's scroll overflow -->
 <Scroll
 	axis="y"
 	name="Sidebar"
+	layout="stack"
+	gap="sm"
+	grow
 	bind:ref
 	data-slot="sidebar-content"
 	data-sidebar="content"
-	class={cn(
-		'flex min-h-0 flex-1 flex-col gap-2 group-data-[collapsible=icon]:overflow-hidden',
-		className
-	)}
+	class={cn('group-data-[collapsible=icon]:overflow-hidden', className)}
 	{...restProps}
 >
 	{@render children?.()}

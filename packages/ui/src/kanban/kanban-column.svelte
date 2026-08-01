@@ -154,7 +154,7 @@
 					</Stack>
 				</div>
 			{:else if column.items.length === 0}
-				<Stack gap="none" class="h-full items-center justify-center p-4 text-muted-foreground">
+				<Stack gap="none" fill align="center" justify="center" class="p-4 text-muted-foreground">
 					<p>No items in this column</p>
 				</Stack>
 			{:else if canSort}
@@ -271,7 +271,7 @@
 {#snippet CardSkeleton()}
 	<Card.Root class="rounded-md" style="height: {itemHeight}px;">
 		<Card.Content class="h-full animate-pulse p-3">
-			<Stack gap="sm" class="h-full">
+			<Stack gap="sm" fill>
 				<Skeleton class="h-4 w-3/4 rounded" />
 				<Skeleton class="h-3 w-full rounded" />
 				<Skeleton class="h-3 w-2/3 rounded" />

@@ -142,7 +142,7 @@ describe('SubscriptionRegistry', () => {
 		]);
 	});
 
-	it('restores persisted state so a reload reads locally without re-fetching', async () => {
+	it('holds restored state behind the live-cursor freshness barrier without re-fetching', async () => {
 		const persisted = new Map<string, CollectionSyncState>([
 			[
 				'orders',
@@ -154,10 +154,15 @@ describe('SubscriptionRegistry', () => {
 
 		await registry.restore();
 		expect(registry.has('orders')).toBe(true);
-		expect(registry.isResident('orders')).toBe(true);
+		expect(registry.isFresh('orders')).toBe(false);
+		expect(registry.isResident('orders')).toBe(false);
 
 		await registry.register('orders');
 		expect(calls.length).toBe(0);
+
+		registry.markRestoredFresh();
+		expect(registry.isFresh('orders')).toBe(true);
+		expect(registry.isResident('orders')).toBe(true);
 	});
 
 	it('leaves a collection unregistered when catch-up fails, so the next read retries', async () => {

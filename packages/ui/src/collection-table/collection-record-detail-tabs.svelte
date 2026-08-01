@@ -53,14 +53,14 @@
 </script>
 
 {#snippet detailHeader({ list }: { list: Snippet })}
-	<Inline as="header" gap="md" class="shrink-0 border-b bg-background px-4 py-2.5 sm:px-5">
+	<Inline as="header" gap="md" shrink={false} class="border-b bg-background px-4 py-2.5 sm:px-5">
 		<div class="min-w-0 flex-1">
 			<Sheet.Description class="truncate text-micro leading-4 text-muted-foreground">
 				{description}
 			</Sheet.Description>
 			<Sheet.Title class="truncate text-sm leading-5 font-semibold">{title}</Sheet.Title>
 		</div>
-		<Inline gap="sm" class="shrink-0">
+		<Inline gap="sm" shrink={false}>
 			{@render list()}
 			{#if actions}
 				{@render actions()}

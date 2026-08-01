@@ -20,7 +20,7 @@
 </script>
 
 {#if integrations.length === 0}
-	<Stack gap="sm" class="min-h-32 items-center justify-center px-5 py-8 text-center">
+	<Stack gap="sm" align="center" justify="center" class="min-h-32 px-5 py-8 text-center">
 		<p class="text-sm font-medium">No integrations configured</p>
 		<p class="max-w-xs text-xs text-muted-foreground">
 			This collection is not currently connected to an external integration.

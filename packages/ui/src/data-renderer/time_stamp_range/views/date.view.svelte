@@ -281,7 +281,7 @@
 		}}
 		onclick={multi && !isActive && !cantMutate ? () => setActiveRange(index) : undefined}
 	>
-		<Inline gap="sm" class="flex-1">
+		<Inline gap="sm" grow>
 			<div
 				class="h-2 w-2 shrink-0 rounded-full
                {status === 'complete'
@@ -325,7 +325,7 @@
 			{/if}
 		</span>
 	{:else if multi}
-		<Inline gap="sm" class="flex-1">
+		<Inline gap="sm" grow>
 			<span class="shrink-0 rounded-full bg-brand-100 px-2 py-0.5 text-xs text-brand-700">
 				{ranges.length} range{ranges.length !== 1 ? 's' : ''}
 			</span>
@@ -364,7 +364,7 @@
 						{@render RangeBadge(range, index, index === activeRangeIndex)}
 					{/each}
 					{#if ranges.length === 0}
-						<Stack gap="sm" class="items-center py-8 text-center text-muted-foreground">
+						<Stack gap="sm" align="center" class="py-8 text-center text-muted-foreground">
 							<Icon icon="lucide:calendar" class="size-8" />
 							<p class="text-sm">No ranges selected</p>
 						</Stack>

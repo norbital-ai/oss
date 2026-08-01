@@ -67,7 +67,7 @@
 				loading="lazy"
 			/>
 		{:else}
-			<Stack gap="sm" class="h-full items-center justify-center p-4 text-center">
+			<Stack gap="sm" fill align="center" justify="center" class="p-4 text-center">
 				<div class="text-2xl">
 					{getFileIcon(category)}
 				</div>

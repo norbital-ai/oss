@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { dockerAvailable } from '../support/pg-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
 	type Identity,
@@ -17,7 +17,7 @@ import {
 } from '$lib/client/sync/client-sync.js';
 import type { SyncFetch } from '$lib/client/sync/types.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 /** Mirrors PAGE_SIZE in subscription-registry: the most a single catch-up page can add. */
 const SHAPE_PAGE_SIZE = 5000;
@@ -73,6 +73,7 @@ function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch
 async function makeClient(harness: PodRuntimeHarness, identity: Identity): Promise<PodSyncClient> {
 	const db = await createClientDb();
 	const client = new PodSyncClient({
+		replicaEpoch: 'test-epoch',
 		db,
 		schemaSql: harness.schemaSql,
 		fetch: syncFetchFor(harness, identity)
@@ -144,7 +145,7 @@ const member: Identity = {
 	role: 'basic'
 };
 
-describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
+describe('Pod Sync — comprehensive E2E', () => {
 	let harness: PodRuntimeHarness;
 	let collection: string;
 	let notNull: { name: string; type: string }[];
@@ -408,12 +409,14 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 
 			const sharedDb = await createClientDb();
 			const clientA = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db: sharedNoClose(sharedDb),
 				schemaSql: idempotentSchema,
 				fetch: syncFetchFor(harness, admin)
 			});
 			await clientA.bootstrap();
 			const clientB = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db: sharedNoClose(sharedDb),
 				schemaSql: idempotentSchema,
 				fetch: syncFetchFor(harness, admin)
@@ -442,12 +445,14 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 
 			const sharedDb = await createClientDb();
 			const primary = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db: sharedNoClose(sharedDb),
 				schemaSql: idempotentSchema,
 				fetch: syncFetchFor(harness, admin)
 			});
 			await primary.bootstrap();
 			const secondary = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db: sharedNoClose(sharedDb),
 				schemaSql: idempotentSchema,
 				fetch: syncFetchFor(harness, admin)
@@ -515,6 +520,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 		it('100k local rows queried in under 200ms', async () => {
 			const db = await createClientDb();
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db,
 				schemaSql: harness.schemaSql,
 				fetch: syncFetchFor(harness, admin)
@@ -546,6 +552,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 		it('returns a bounded page and a cursor only when more rows follow', async () => {
 			const db = await createClientDb();
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db,
 				schemaSql: harness.schemaSql,
 				fetch: syncFetchFor(harness, admin)
@@ -570,6 +577,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 		it('registers the collection on first read and answers locally', async () => {
 			const db = await createClientDb();
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db,
 				schemaSql: harness.schemaSql,
 				fetch: syncFetchFor(harness, admin)
@@ -595,6 +603,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			let shapeRequests = 0;
 			const fetch = syncFetchFor(harness, admin);
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db,
 				schemaSql: harness.schemaSql,
 				fetch: (path, init) => {
@@ -625,6 +634,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 		it('counts locally once the collection is resident', async () => {
 			const db = await createClientDb();
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db,
 				schemaSql: harness.schemaSql,
 				fetch: syncFetchFor(harness, admin)
@@ -642,7 +652,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			}
 		});
 
-		it('survives a reload: a warm replica answers without re-fetching the collection', async () => {
+		it('survives a reload: a fresh warm replica answers without re-fetching', async () => {
 			const fetch = syncFetchFor(harness, admin);
 			let shapeRequests = 0;
 			const countingFetch: typeof fetch = (path, init) => {
@@ -654,6 +664,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			// starts with an empty in-memory registry and must recover its state from the replica.
 			const storage = await createClientDb();
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db: storage,
 				schemaSql: harness.schemaSql,
 				fetch: countingFetch
@@ -668,6 +679,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			disableClientSync();
 
 			const reloaded = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db: storage,
 				schemaSql: harness.schemaSql,
 				fetch: countingFetch
@@ -675,6 +687,11 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			await reloaded.bootstrap();
 			sync = enableClientSync(reloaded);
 			try {
+				await sync.registry.restore();
+				reloaded.startStream();
+				const head = await reloaded.serverSequence();
+				expect(await reloaded.waitForSequence(head, { timeoutMs: 5_000 })).toBe(true);
+				sync.registry.markRestoredFresh();
 				const result = await localFindMany(sync, collection, { limit: 10 });
 				expect(result).not.toBeNull();
 				// The whole point: the second load re-downloads nothing.
@@ -769,6 +786,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			let shapeRequests = 0;
 			const fetch = syncFetchFor(harness, admin);
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db,
 				schemaSql: harness.schemaSql,
 				fetch: (path, init) => {
@@ -813,6 +831,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			requireFixture(context);
 			const db = await createClientDb();
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db,
 				schemaSql: harness.schemaSql,
 				fetch: syncFetchFor(harness, admin)
@@ -857,6 +876,7 @@ describe.skipIf(!hasDocker)('Pod Sync — comprehensive E2E', () => {
 			requireFixture(context);
 			const db = await createClientDb();
 			const client = new PodSyncClient({
+				replicaEpoch: 'test-epoch',
 				db,
 				schemaSql: harness.schemaSql,
 				fetch: syncFetchFor(harness, admin)

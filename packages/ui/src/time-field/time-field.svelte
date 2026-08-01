@@ -70,6 +70,7 @@
 	errorMessageId={error ? `${name}-error` : undefined}
 	{...restProps}
 >
+	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div class={cn('flex w-full flex-col gap-1.5', className)}>
 		{#if label}
 			<TimeField.Label

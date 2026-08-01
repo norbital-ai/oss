@@ -249,7 +249,7 @@
 {#snippet triggerContent()}
 	{#if hasValidFiles}
 		<Inline gap="sm">
-			<!-- stupidity:allow UI6 stupidity:allow UI7 -- fixed-size avatar stack overlaps its chips -->
+			<!-- stupidity:allow UI6; stupidity:allow UI7; stupidity:allow UI13 -- overlapping file avatars are a deliberate visual pile, not a reusable sibling rhythm -->
 			<div class="flex items-center -space-x-1">
 				{#each displayFiles as file (file.norbital_id)}
 					<div class="h-5 w-5 overflow-hidden rounded-full border border-border">
@@ -331,7 +331,7 @@
 								</Button>
 							</Inline>
 
-							<Stack gap="sm" class="h-full p-2">
+							<Stack gap="sm" fill class="p-2">
 								<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 									<Icon icon="lucide:eye" class="h-4 w-4" />
 									File Preview
@@ -353,7 +353,7 @@
 			{/if}
 		</Carousel.Root>
 	{:else}
-		<Stack gap="sm" class="items-center py-8 text-center text-muted-foreground">
+		<Stack gap="sm" align="center" class="py-8 text-center text-muted-foreground">
 			<Icon icon="lucide:paperclip" class="size-8 text-muted-foreground" />
 			<p class="text-sm">No files attached</p>
 		</Stack>
@@ -362,7 +362,7 @@
 
 {#snippet editableView()}
 	{#if multiple && editingFiles.length === 0}
-		<Stack gap="sm" class="items-center p-4 py-8 text-center">
+		<Stack gap="sm" align="center" class="p-4 py-8 text-center">
 			<Icon icon="lucide:upload-cloud" class="size-12 text-muted-foreground" />
 			<h4 class="font-medium text-foreground">No files selected</h4>
 			<p class="text-sm text-muted-foreground">Upload your first file to get started</p>
@@ -385,7 +385,7 @@
 			{#if client.uploads.length > 0}
 				{#each client.uploads as pending (pending.id)}
 					<Inline gap="sm">
-						<Inline gap="md" class="flex-1 rounded-lg border p-2">
+						<Inline gap="md" grow class="rounded-lg border p-2">
 							<div class="h-8 w-8 overflow-hidden rounded bg-muted"></div>
 							<div class="min-w-0 flex-1">
 								<p class="truncate text-sm font-medium">{pending.file.name}</p>
@@ -427,7 +427,7 @@
 
 			{#each editingFiles as file, index (index)}
 				<Inline gap="sm">
-					<Inline gap="md" class="flex-1 rounded-lg border p-2">
+					<Inline gap="md" grow class="rounded-lg border p-2">
 						<div class="h-8 w-8 overflow-hidden rounded">
 							<FileThumbnail file_value={file} ratio={1} size="small" class="h-full w-full" />
 						</div>

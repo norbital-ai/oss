@@ -7,6 +7,12 @@
 		gap?: LayoutGap;
 		align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch';
 		justify?: 'start' | 'center' | 'end' | 'between';
+		/** Take the remaining space along the parent's main axis. */
+		grow?: boolean;
+		/** Fill the parent's height. */
+		fill?: boolean;
+		/** Allow this region to shrink when its parent is constrained. */
+		shrink?: boolean;
 		children: Snippet;
 	}
 </script>
@@ -20,6 +26,9 @@
 		gap = 'sm',
 		align = 'center',
 		justify = 'start',
+		grow = false,
+		fill = false,
+		shrink = true,
 		class: className,
 		children,
 		...restProps
@@ -47,7 +56,10 @@
 		'flex min-h-0 min-w-0 flex-row flex-nowrap',
 		GAP_CLASSES[gap],
 		alignClasses[align],
-		justifyClasses[justify]
+		justifyClasses[justify],
+		grow && 'flex-1',
+		fill && 'h-full',
+		!shrink && 'shrink-0'
 	)}
 	data-layout="inline"
 	{...restProps}

@@ -131,7 +131,7 @@
 	const overlayWidth = $derived(colWidth - 4);
 </script>
 
-<Stack gap="none" class={cn('flex-1', className)}>
+<Stack gap="none" grow class={className}>
 	<AllDaySection {events} columnCount={7} {colWidth} onbarclick={onboxclick} {eventContent} />
 
 	<Scroll axis="y" name="Week events" class="bg-background relative">

@@ -395,7 +395,7 @@
 								</div>
 
 								<!-- Progress Input -->
-								<Inline gap="sm" class="flex-1">
+								<Inline gap="sm" grow>
 									<span class="w-8 text-sm text-muted-foreground">#{index + 1}</span>
 
 									<!-- Draggable Progress Bar -->

@@ -387,7 +387,7 @@
 {/snippet}
 
 {#snippet errorState()}
-	<Stack gap="sm" class={cn('items-center p-3 text-destructive', compactTextClass)} role="alert">
+	<Stack gap="sm" align="center" class={cn('p-3 text-destructive', compactTextClass)} role="alert">
 		<Icon icon="lucide:alert-circle" class="h-4 w-4" />
 		<span>Error: {error}</span>
 	</Stack>
@@ -396,7 +396,8 @@
 {#snippet emptyState()}
 	<Stack
 		gap="sm"
-		class={cn('items-center p-3 text-center text-muted-foreground', compactTextClass)}
+		align="center"
+		class={cn('p-3 text-center text-muted-foreground', compactTextClass)}
 	>
 		<Icon icon="lucide:inbox" class="h-4 w-4 text-muted-foreground" />
 		<span class="font-normal">{emptyMessage}</span>
@@ -404,6 +405,7 @@
 {/snippet}
 
 {#if isReadonlySimple}
+	<!-- stupidity:allow UI5 -- this leaf component owns a local clip or scroll boundary required by its interaction contract -->
 	<div
 		class={cn(
 			'flex w-full items-center justify-start rounded-md p-1 pl-2',

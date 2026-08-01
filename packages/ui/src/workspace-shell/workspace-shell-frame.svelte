@@ -77,15 +77,17 @@
 	</Sidebar.Root>
 
 	<Sidebar.Inset as="main" class={cn(insetClass, 'h-dvh min-h-0 min-w-0 overflow-clip')}>
+		<!-- stupidity:allow UI15 -- mobile shell chrome includes the device safe-area inset by definition -->
 		<Inline
 			as="header"
 			gap="sm"
-			class="h-[calc(3.25rem+env(safe-area-inset-top))] shrink-0 border-b bg-background px-[max(0.75rem,env(safe-area-inset-left))] pt-[env(safe-area-inset-top)] md:hidden"
+			shrink={false}
+			class="h-[calc(3.25rem+env(safe-area-inset-top))] border-b bg-background px-[max(0.75rem,env(safe-area-inset-left))] pt-[env(safe-area-inset-top)] md:hidden"
 		>
 			<Sidebar.Trigger aria-label={`Open ${navigationLabel.toLowerCase()}`} class="size-11" />
 			<p class="min-w-0 flex-1 truncate text-sm font-medium">{mobileTitle}</p>
 			{#if mobileActions}
-				<Inline gap="xs" class="shrink-0">{@render mobileActions()}</Inline>
+				<Inline gap="xs" shrink={false}>{@render mobileActions()}</Inline>
 			{/if}
 		</Inline>
 		<div

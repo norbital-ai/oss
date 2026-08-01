@@ -343,7 +343,7 @@
 
 {#snippet renderNodeContent(node: TreeNode)}
 	{@const matchInfo = treeState.matchInfo.get(node.id)}
-	<Inline gap="sm" class={cn('h-7 grow', { 'opacity-50': node.disabled })}>
+	<Inline gap="sm" grow class={cn('h-7', { 'opacity-50': node.disabled })}>
 		<div class="flex h-7 w-4 items-center justify-center">
 			{#if isParentNode(node)}
 				<Icon
@@ -363,7 +363,8 @@
 		<Inline
 			as="span"
 			gap="none"
-			class="grow truncate text-start text-xs text-secondary-foreground dark:text-muted-foreground"
+			grow
+			class="truncate text-start text-xs text-secondary-foreground dark:text-muted-foreground"
 		>
 			{#if matchInfo}
 				<span class="flex w-min flex-row">
@@ -453,6 +454,7 @@
 				{/if}
 			</div>
 			{#if multiple}
+				<!-- stupidity:allow UI7 -- this leaf component owns responsive or internal spacing as part of its public DOM contract -->
 				<div class={cn('ml-2 flex-none', { 'opacity-50': node.disabled })}>
 					<Checkbox
 						indeterminate={isParentNode(node) && node.isIndeterminate}

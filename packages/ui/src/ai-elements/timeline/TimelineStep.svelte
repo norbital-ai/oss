@@ -120,6 +120,7 @@
 	);
 </script>
 
+<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <div
 	bind:this={element}
 	data-timeline-step
@@ -135,7 +136,7 @@
 		<Icon {icon} class={cn('size-3.5', iconStyles[status])} />
 		<div class={cn('absolute top-6 bottom-0 left-1/2 -mx-px w-px', connectorStyles[status])}></div>
 	</div>
-	<Stack gap="sm" class="flex-1">
+	<Stack gap="sm" grow>
 		{#if shimmer}
 			<Shimmer content_length={label.length}>
 				{label}
@@ -160,7 +161,7 @@
 				{:else}
 					<div class="min-w-0 flex-1 leading-4 font-medium">{label}</div>
 				{/if}
-				<Inline gap="xs" class="shrink-0">
+				<Inline gap="xs" shrink={false}>
 					{#if headerActions}
 						{@render headerActions(headerActionArgs)}
 					{/if}

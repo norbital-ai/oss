@@ -156,17 +156,17 @@
 	class={cn('bg-card rounded-lg border border-border shadow-card', className)}
 	top={calendarHeader}
 >
-	<Inline gap="none" align="stretch" class="h-full">
+	<Inline gap="none" align="stretch" fill>
 		{#if children}
 			{@render children()}
 		{/if}
 
-		<Stack gap="none" class="flex-1">
+		<Stack gap="none" grow>
 			{#if showColumnHeaders}
 				<ColumnHeaders {view} date={currentDate} {columnCount} colWidth={activeColWidth} />
 			{/if}
 
-			<Inline gap="none" align="stretch" class="flex-1">
+			<Inline gap="none" align="stretch" grow>
 				{#if showTimeAxis}
 					<TimeAxis {startHour} {endHour} {hourHeight} stepMinutes={60} />
 				{/if}

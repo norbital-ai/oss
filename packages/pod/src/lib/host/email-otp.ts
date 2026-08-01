@@ -21,6 +21,14 @@ export type EmailOtpIdentityOptions = {
 	/** Max code requests per address per window. Defaults to 5 per 15 minutes. */
 	readonly maxRequestsPerWindow?: number;
 	/**
+	 * Supplies the six-digit code. Defaults to a cryptographically random value.
+	 *
+	 * This seam exists for an isolated test harness or a loopback-only development host. A deployed
+	 * host should omit it; Pod validates the result but cannot decide whether a fixed code is safe in
+	 * the environment that embeds it.
+	 */
+	readonly generateCode?: () => string;
+	/**
 	 * Send the challenge cookie over HTTPS only. Defaults to `true`.
 	 *
 	 * Set false only for a loopback development bind. A `Secure` cookie is silently discarded over
@@ -159,7 +167,10 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 	 * address but succeeded for another turns the form into an existence oracle.
 	 */
 	async function issueCode(email: string): Promise<Response> {
-		const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+		const code = options.generateCode?.() ?? String(randomInt(0, 1_000_000)).padStart(6, '0');
+		if (!/^\d{6}$/.test(code)) {
+			throw new Error('emailOtpIdentity generateCode must return exactly six digits');
+		}
 		const expiry = Date.now() + ttl;
 		const mac = challenge(options.secret, email, code, expiry);
 		await options.deliver({ email, code }).catch((cause: unknown) => {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Stack } from '#lib/layout';
+	import { Center, Stack } from '#lib/layout';
 
 	let { icon, title, description }: { icon: string; title: string; description: string } = $props();
 </script>
@@ -12,5 +12,7 @@
 		<Icon {icon} class="size-4 text-muted-foreground" aria-hidden="true" />
 	</div>
 	<p class="text-sm font-medium">{title}</p>
-	<p class="mx-auto max-w-md text-sm leading-6 text-muted-foreground">{description}</p>
+	<Center measure="narrow">
+		<p class="text-sm leading-6 text-muted-foreground">{description}</p>
+	</Center>
 </Stack>

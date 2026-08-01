@@ -62,7 +62,7 @@
 
 {#snippet listToolbar()}
 	<Cluster gap="sm" align="center" justify="between">
-		<Scroll axis="x" name="Collection toolbar" class="collection-table-list-toolbar min-w-0 flex-1">
+		<Scroll axis="x" name="Collection toolbar" grow class="collection-table-list-toolbar min-w-0">
 			<Inline gap="xs">
 				{@render toolbar()}
 			</Inline>
@@ -78,7 +78,7 @@
 <Cover
 	as="div"
 	gap="sm"
-	class={cn('collection-table-list h-full w-full', className)}
+	class={cn('collection-table-list', className)}
 	top={listToolbar}
 	aria-busy={loading}
 	bottom={listPagination}

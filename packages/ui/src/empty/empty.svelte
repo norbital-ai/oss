@@ -19,13 +19,12 @@
 	} = $props();
 </script>
 
+<!-- stupidity:allow UI15 -- the empty-state minimum prevents a short result set from collapsing the surface -->
 <Stack
 	gap="md"
-	class={cn(
-		'min-h-[400px] justify-center p-8',
-		align === 'left' ? 'items-start text-left' : 'items-center text-center',
-		containerClass
-	)}
+	justify="center"
+	align={align === 'left' ? 'start' : 'center'}
+	class={cn('min-h-[400px] p-8', align === 'left' ? 'text-left' : 'text-center', containerClass)}
 >
 	{#if !hideIcon}
 		<div

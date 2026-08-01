@@ -23,9 +23,11 @@ function html(body: string, status = 200): Response {
 		headers: {
 			'content-type': 'text/html; charset=utf-8',
 			// These pages carry a credential form; nothing about them should be cached or framed.
+			// Keep only the origin in referrers. `no-referrer` also makes Chromium submit a form with
+			// `Origin: null`, which production frameworks correctly reject as a cross-site POST.
 			'cache-control': 'no-store',
 			'x-frame-options': 'DENY',
-			'referrer-policy': 'no-referrer'
+			'referrer-policy': 'strict-origin'
 		}
 	});
 }

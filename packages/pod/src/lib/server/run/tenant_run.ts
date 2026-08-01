@@ -521,8 +521,7 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 			});
 		case 'automation': {
 			if ('action' in request) {
-				const { pumpAutomations } = await import('./automation-dispatch.server.js');
-				return pumpAutomations(getWorkspace({ provision: true }), request.limit);
+				return pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
 			}
 			return runAutomation({
 				automationName: request.automationName

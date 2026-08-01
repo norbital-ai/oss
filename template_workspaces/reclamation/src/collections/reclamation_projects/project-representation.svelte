@@ -344,7 +344,7 @@
 {/snippet}
 
 {#snippet leftPane()}
-	<Stack gap="sm" class="h-full">
+	<Stack gap="sm" fill>
 		{@render header()}
 		<!--
 			`flex-1 min-h-0`, not the default `h-full`: this is a flex child sitting
@@ -395,7 +395,8 @@
 			<Inline
 				align="center"
 				justify="center"
-				class="h-full px-8 text-center text-sm text-muted-foreground"
+				fill
+				class="px-8 text-center text-sm text-muted-foreground"
 			>
 				No solid to show yet. Attach the floor plan, the bathymetric survey, and the section sheet;
 				the reconstruction hook builds the model on save.

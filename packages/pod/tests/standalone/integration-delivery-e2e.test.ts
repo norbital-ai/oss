@@ -5,10 +5,11 @@ import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { Client } from 'pg';
+import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { dockerAvailable, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js');
 
@@ -470,7 +471,7 @@ async function writeWorkspace(root: string, sinkUrl: string): Promise<void> {
 	await writeFile(path.join(root, 'pod.host.ts'), HOST_SOURCE);
 }
 
-describe.skipIf(!hasDocker)('Pod standalone integrations — E2E, both directions', () => {
+describe('Pod standalone integrations — E2E, both directions', () => {
 	let pg: PgHarness;
 	let root: string;
 	let sink: Sink;
@@ -546,7 +547,11 @@ describe.skipIf(!hasDocker)('Pod standalone integrations — E2E, both direction
 								clientId: 'integration-delivery-test',
 								collection: SENDING,
 								action: 'create',
-								row: { certification_name: certificationName, certification_code: 'WAH-1' }
+								row: {
+									norbital_id: uuidv7(),
+									certification_name: certificationName,
+									certification_code: 'WAH-1'
+								}
 							}
 						]
 					})

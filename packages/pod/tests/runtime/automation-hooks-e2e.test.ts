@@ -1,10 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import { workspaceJobs } from '$lib/bin/invocation/jobs.js';
-import { dockerAvailable } from '../support/pg-harness.js';
-import { bootPodRuntime, type Identity, type PodRuntimeHarness } from '../support/pod-runtime-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
+import {
+	bootPodRuntime,
+	type Identity,
+	type PodRuntimeHarness
+} from '../support/pod-runtime-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 const admin: Identity = {
 	userId: '22222222-2222-4222-8222-222222222222',
@@ -213,7 +217,7 @@ function approvalGrant(action: keyof typeof APPROVAL_CONFIG_IDS): Record<string,
 	};
 }
 
-describe.skipIf(!hasDocker)('Pod automations and hooks — E2E', () => {
+describe('Pod automations and hooks — E2E', () => {
 	let harness: PodRuntimeHarness;
 	let manifest: NorbitalManifest;
 

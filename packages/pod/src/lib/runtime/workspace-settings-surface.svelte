@@ -5,6 +5,7 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { UserRoleSchema, type TUserRole } from '@norbital-ai/platform-utils/system/types';
 	import { Button } from '@norbital-ai/ui/button';
+	import { Center, Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import {
 		toMemberRow,
 		toPolicyRow,
@@ -200,242 +201,255 @@
 </script>
 
 {#if !isAdmin}
-	<div
-		class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-destructive"
+	<Stack
+		grow
+		fill
+		align="center"
+		justify="center"
+		class="p-6 text-sm text-destructive"
 		data-testid="settings-denied"
 	>
 		Workspace settings are for admins
-	</div>
+	</Stack>
 {:else}
-	<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-		<div class="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
-			<header class="flex flex-col gap-1">
-				<h1 class="text-base font-semibold text-foreground">Workspace settings</h1>
-				<p class="text-xs text-muted-foreground">
-					Who is in this workspace, which teams they are in, and who has been invited.
-				</p>
-			</header>
+	<Scroll name="Workspace settings" inset grow>
+		<Center measure="wide">
+			<Stack gap="lg" class="py-2 sm:py-4 lg:py-6">
+				<Stack as="header" gap="xs">
+					<h1 class="text-base font-semibold text-foreground">Workspace settings</h1>
+					<p class="text-xs text-muted-foreground">
+						Who is in this workspace, which teams they are in, and who has been invited.
+					</p>
+				</Stack>
 
-			<nav class="flex items-center gap-1 border-b" aria-label="Workspace settings sections">
-				{#each SECTIONS as entry (entry.key)}
-					<button
-						type="button"
-						role="tab"
-						aria-selected={section === entry.key}
-						class="-mb-px border-b-2 px-3 py-1.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring {section ===
-						entry.key
-							? 'border-primary text-foreground'
-							: 'border-transparent text-muted-foreground hover:text-foreground'}"
-						onclick={() => (section = entry.key)}
+				<Inline as="nav" gap="xs" class="border-b" aria-label="Workspace settings sections">
+					{#each SECTIONS as entry (entry.key)}
+						<button
+							type="button"
+							role="tab"
+							aria-selected={section === entry.key}
+							class="-mb-px border-b-2 px-3 py-1.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring {section ===
+							entry.key
+								? 'border-primary text-foreground'
+								: 'border-transparent text-muted-foreground hover:text-foreground'}"
+							onclick={() => (section = entry.key)}
+						>
+							{entry.label}
+						</button>
+					{/each}
+				</Inline>
+
+				{#if failure}
+					<p
+						class="rounded-md border border-destructive/40 px-3 py-2 text-tiny text-destructive"
+						role="alert"
 					>
-						{entry.label}
-					</button>
-				{/each}
-			</nav>
+						{failure}
+					</p>
+				{/if}
 
-			{#if failure}
-				<p
-					class="rounded-md border border-destructive/40 px-3 py-2 text-tiny text-destructive"
-					role="alert"
-				>
-					{failure}
-				</p>
-			{/if}
-
-			{#if section === 'members'}
-				<section class="flex flex-col gap-2" data-testid="settings-members">
-					{#if members.length === 0}
-						<p
-							class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground"
-						>
-							{memberQuery?.loading ? 'Loading…' : 'No members yet'}
-						</p>
-					{:else}
-						<ul class="divide-y rounded-lg border">
-							{#each members as member (member.norbital_id)}
-								<li class="flex items-center gap-3 px-3 py-2" data-testid="member-row">
-									<div class="min-w-0 flex-1">
-										<p class="truncate text-xs font-medium text-foreground">
-											{member.name || member.email}
-										</p>
-										<p class="truncate text-micro text-muted-foreground" data-testid="member-email">
-											{member.email}
-										</p>
-									</div>
-									<span class="text-micro text-muted-foreground">{member.status}</span>
-									<select
-										class={FIELD}
-										aria-label={`Role for ${member.email}`}
-										disabled={busy}
-										value={member.role}
-										onchange={(event) => changeRole(member.norbital_id, event.currentTarget.value)}
-									>
-										{#each ROLES as role (role)}
-											<option value={role}>{role}</option>
-										{/each}
-									</select>
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				</section>
-			{:else if section === 'teams'}
-				<section class="flex flex-col gap-3" data-testid="settings-teams">
-					<form class="flex items-center gap-2" onsubmit={createTeam}>
-						<input
-							class="{FIELD} min-w-0 flex-1"
-							placeholder="New team name"
-							aria-label="New team name"
-							value={teamName}
-							oninput={(event) => (teamName = event.currentTarget.value)}
-						/>
-						<Button type="submit" class="h-8 px-3 text-tiny" disabled={busy}>Add team</Button>
-					</form>
-					{#if teams.length === 0}
-						<p
-							class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground"
-						>
-							{teamQuery?.loading ? 'Loading…' : 'No teams yet'}
-						</p>
-					{:else}
-						<ul class="divide-y rounded-lg border">
-							{#each teams as team (team.norbital_id)}
-								<li class="flex flex-col gap-2 px-3 py-2" data-testid="team-row">
-									<div class="flex items-center gap-3">
-										<p class="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-											{team.name}
-										</p>
-										<!-- A picker over the policies this workspace declares, never an editor: a policy
-										     is authored as `+<name>.policy.ts` and reconciled at migrate, so the only
-										     runtime decision is which one a team holds. -->
+				{#if section === 'members'}
+					<Stack as="section" gap="sm" data-testid="settings-members">
+						{#if members.length === 0}
+							<p
+								class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground"
+							>
+								{memberQuery?.loading ? 'Loading…' : 'No members yet'}
+							</p>
+						{:else}
+							<ul class="divide-y rounded-lg border">
+								{#each members as member (member.norbital_id)}
+									<Inline as="li" gap="md" class="px-3 py-2" data-testid="member-row">
+										<div class="min-w-0 flex-1">
+											<p class="truncate text-xs font-medium text-foreground">
+												{member.name || member.email}
+											</p>
+											<p
+												class="truncate text-micro text-muted-foreground"
+												data-testid="member-email"
+											>
+												{member.email}
+											</p>
+										</div>
+										<span class="text-micro text-muted-foreground">{member.status}</span>
 										<select
 											class={FIELD}
-											aria-label={`Policy for ${team.name}`}
+											aria-label={`Role for ${member.email}`}
 											disabled={busy}
-											value={team.policy_id ?? ''}
+											value={member.role}
 											onchange={(event) =>
-												assignPolicy(team.norbital_id, event.currentTarget.value)}
+												changeRole(member.norbital_id, event.currentTarget.value)}
 										>
-											<option value="">No policy</option>
-											{#each policies as policy (policy.norbital_id)}
-												<option value={policy.norbital_id}>
-													{policy.name}{policy.is_active ? '' : ' (inactive)'}
-												</option>
+											{#each ROLES as role (role)}
+												<option value={role}>{role}</option>
 											{/each}
 										</select>
-									</div>
-									<div class="flex flex-wrap items-center gap-1.5">
-										{#each teamMembers(team) as entry (entry.membershipId)}
-											<span
-												class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-micro"
-												data-testid="team-member"
+									</Inline>
+								{/each}
+							</ul>
+						{/if}
+					</Stack>
+				{:else if section === 'teams'}
+					<Stack as="section" gap="md" data-testid="settings-teams">
+						<Inline as="form" gap="sm" onsubmit={createTeam}>
+							<input
+								class="{FIELD} min-w-0 flex-1"
+								placeholder="New team name"
+								aria-label="New team name"
+								value={teamName}
+								oninput={(event) => (teamName = event.currentTarget.value)}
+							/>
+							<Button type="submit" class="h-8 px-3 text-tiny" disabled={busy}>Add team</Button>
+						</Inline>
+						{#if teams.length === 0}
+							<p
+								class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground"
+							>
+								{teamQuery?.loading ? 'Loading…' : 'No teams yet'}
+							</p>
+						{:else}
+							<ul class="divide-y rounded-lg border">
+								{#each teams as team (team.norbital_id)}
+									<Stack as="li" gap="sm" class="px-3 py-2" data-testid="team-row">
+										<Inline gap="md">
+											<p class="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+												{team.name}
+											</p>
+											<!-- A picker over the policies this workspace declares, never an editor: a policy
+										     is authored as `+<name>.policy.ts` and reconciled at migrate, so the only
+										     runtime decision is which one a team holds. -->
+											<select
+												class={FIELD}
+												aria-label={`Policy for ${team.name}`}
+												disabled={busy}
+												value={team.policy_id ?? ''}
+												onchange={(event) =>
+													assignPolicy(team.norbital_id, event.currentTarget.value)}
 											>
-												{entry.member.email}
-												<button
-													type="button"
-													class="text-muted-foreground hover:text-destructive"
-													aria-label={`Remove ${entry.member.email} from ${team.name}`}
-													disabled={busy}
-													onclick={() => removeMember(entry.membershipId)}
+												<option value="">No policy</option>
+												{#each policies as policy (policy.norbital_id)}
+													<option value={policy.norbital_id}>
+														{policy.name}{policy.is_active ? '' : ' (inactive)'}
+													</option>
+												{/each}
+											</select>
+										</Inline>
+										<Cluster gap="xs">
+											{#each teamMembers(team) as entry (entry.membershipId)}
+												<Inline
+													as="span"
+													gap="xs"
+													class="rounded-full border px-2 py-0.5 text-micro"
+													data-testid="team-member"
 												>
-													×
-												</button>
-											</span>
-										{:else}
-											<span class="text-micro text-muted-foreground">Nobody in this team yet</span>
-										{/each}
-										<!-- Membership is what a policy actually reaches a person through: a team with a
-										     policy and no members grants nothing. -->
-										<select
-											class="{FIELD} ml-auto"
-											aria-label={`Add someone to ${team.name}`}
-											disabled={busy}
-											value=""
-											onchange={(event) => {
-												addMember(team.norbital_id, event.currentTarget.value);
-												event.currentTarget.value = '';
-											}}
-										>
-											<option value="">Add member…</option>
-											{#each joinable(team) as candidate (candidate.norbital_id)}
-												<option value={candidate.norbital_id}>{candidate.email}</option>
+													{entry.member.email}
+													<button
+														type="button"
+														class="text-muted-foreground hover:text-destructive"
+														aria-label={`Remove ${entry.member.email} from ${team.name}`}
+														disabled={busy}
+														onclick={() => removeMember(entry.membershipId)}
+													>
+														×
+													</button>
+												</Inline>
+											{:else}
+												<span class="text-micro text-muted-foreground">Nobody in this team yet</span
+												>
 											{/each}
-										</select>
-									</div>
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				</section>
-			{:else}
-				<section class="flex flex-col gap-3" data-testid="settings-invitations">
-					<form class="flex items-center gap-2" onsubmit={invite}>
-						<input
-							class="{FIELD} min-w-0 flex-1"
-							type="email"
-							placeholder="person@example.com"
-							aria-label="Invitation email"
-							value={inviteEmail}
-							oninput={(event) => (inviteEmail = event.currentTarget.value)}
-						/>
-						<select
-							class={FIELD}
-							aria-label="Invitation role"
-							value={inviteRole}
-							onchange={(event) => {
-								const parsed = UserRoleSchema.safeParse(event.currentTarget.value);
-								if (parsed.success) inviteRole = parsed.data;
-							}}
-						>
-							{#each ROLES as role (role)}
-								<option value={role}>{role}</option>
-							{/each}
-						</select>
-						<Button type="submit" class="h-8 px-3 text-tiny" disabled={busy}>Invite</Button>
-					</form>
+											<!-- Membership is what a policy actually reaches a person through: a team with a
+										     policy and no members grants nothing. -->
+											<select
+												class="{FIELD} ml-auto"
+												aria-label={`Add someone to ${team.name}`}
+												disabled={busy}
+												value=""
+												onchange={(event) => {
+													addMember(team.norbital_id, event.currentTarget.value);
+													event.currentTarget.value = '';
+												}}
+											>
+												<option value="">Add member…</option>
+												{#each joinable(team) as candidate (candidate.norbital_id)}
+													<option value={candidate.norbital_id}>{candidate.email}</option>
+												{/each}
+											</select>
+										</Cluster>
+									</Stack>
+								{/each}
+							</ul>
+						{/if}
+					</Stack>
+				{:else}
+					<Stack as="section" gap="md" data-testid="settings-invitations">
+						<Inline as="form" gap="sm" onsubmit={invite}>
+							<input
+								class="{FIELD} min-w-0 flex-1"
+								type="email"
+								placeholder="person@example.com"
+								aria-label="Invitation email"
+								value={inviteEmail}
+								oninput={(event) => (inviteEmail = event.currentTarget.value)}
+							/>
+							<select
+								class={FIELD}
+								aria-label="Invitation role"
+								value={inviteRole}
+								onchange={(event) => {
+									const parsed = UserRoleSchema.safeParse(event.currentTarget.value);
+									if (parsed.success) inviteRole = parsed.data;
+								}}
+							>
+								{#each ROLES as role (role)}
+									<option value={role}>{role}</option>
+								{/each}
+							</select>
+							<Button type="submit" class="h-8 px-3 text-tiny" disabled={busy}>Invite</Button>
+						</Inline>
 
-					{#if mintedLink}
-						<p
-							class="rounded-md border bg-muted/40 px-3 py-2 text-tiny break-all text-foreground"
-							data-testid="minted-invitation"
-						>
-							Send this link to {mintedLink.email}: {mintedLink.acceptUrl}
-						</p>
-					{/if}
+						{#if mintedLink}
+							<p
+								class="rounded-md border bg-muted/40 px-3 py-2 text-tiny break-all text-foreground"
+								data-testid="minted-invitation"
+							>
+								Send this link to {mintedLink.email}: {mintedLink.acceptUrl}
+							</p>
+						{/if}
 
-					{#if invitations.length === 0}
-						<p
-							class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground"
-						>
-							{invitationsLoaded ? 'Nobody is waiting on an invitation' : 'Loading…'}
-						</p>
-					{:else}
-						<ul class="divide-y rounded-lg border">
-							{#each invitations as invitation (invitation.norbital_id)}
-								<li class="flex items-center gap-3 px-3 py-2" data-testid="invitation-row">
-									<div class="min-w-0 flex-1">
-										<p class="truncate text-xs font-medium text-foreground">{invitation.email}</p>
-										<p class="truncate text-micro text-muted-foreground">
-											{invitation.role} · {invitation.status}
-										</p>
-									</div>
-									{#if invitation.status === 'pending'}
-										<Button
-											type="button"
-											variant="ghost"
-											class="h-6 px-2 text-tiny"
-											disabled={busy}
-											onclick={() => revoke(invitation.norbital_id)}
-										>
-											Revoke
-										</Button>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				</section>
-			{/if}
-		</div>
-	</div>
+						{#if invitations.length === 0}
+							<p
+								class="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground"
+							>
+								{invitationsLoaded ? 'Nobody is waiting on an invitation' : 'Loading…'}
+							</p>
+						{:else}
+							<ul class="divide-y rounded-lg border">
+								{#each invitations as invitation (invitation.norbital_id)}
+									<Inline as="li" gap="md" class="px-3 py-2" data-testid="invitation-row">
+										<div class="min-w-0 flex-1">
+											<p class="truncate text-xs font-medium text-foreground">{invitation.email}</p>
+											<p class="truncate text-micro text-muted-foreground">
+												{invitation.role} · {invitation.status}
+											</p>
+										</div>
+										{#if invitation.status === 'pending'}
+											<Button
+												type="button"
+												variant="ghost"
+												class="h-6 px-2 text-tiny"
+												disabled={busy}
+												onclick={() => revoke(invitation.norbital_id)}
+											>
+												Revoke
+											</Button>
+										{/if}
+									</Inline>
+								{/each}
+							</ul>
+						{/if}
+					</Stack>
+				{/if}
+			</Stack>
+		</Center>
+	</Scroll>
 {/if}

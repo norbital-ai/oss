@@ -160,6 +160,7 @@
 	{/if}
 {/snippet}
 
+<!-- stupidity:allow UI9 -- this local clip boundary contains, rather than duplicates, the descendant scroll owner -->
 <div
 	bind:this={rootEl}
 	class={cn(

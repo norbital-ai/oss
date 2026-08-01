@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
-import { dockerAvailable } from '../support/pg-harness.js';
-import { bootPodRuntime, type Identity, type PodRuntimeHarness } from '../support/pod-runtime-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
+import {
+	bootPodRuntime,
+	type Identity,
+	type PodRuntimeHarness
+} from '../support/pod-runtime-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 const member: Identity = {
 	userId: '44444444-4444-4444-8444-444444444444',
 	userName: 'Chat Member',
@@ -18,7 +22,7 @@ const member: Identity = {
  * transcript, and replicates through ordinary sync — the point of the port is that there is not a
  * second agent implementation for the chat case.
  */
-describe.skipIf(!hasDocker)('Pod agent chat — runtime E2E', () => {
+describe('Pod agent chat — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	const seen: string[][] = [];
 	const ai: HostAiBinding = {

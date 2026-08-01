@@ -313,6 +313,7 @@
 		</Command.Root>
 	</Stack>
 {:else}
+	<!-- stupidity:allow UI5; stupidity:allow UI6 -- this leaf component owns a local clip or scroll boundary required by its interaction contract; this leaf component root is the reusable layout boundary being defined -->
 	<div
 		class={cn(
 			'flex h-8 w-full flex-nowrap items-center gap-1 overflow-x-auto overflow-y-hidden rounded-md border border-input bg-background px-1.5 py-0 shadow-xs',

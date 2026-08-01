@@ -26,6 +26,7 @@
 	}: ConversationEmptyStateProps = $props();
 </script>
 
+<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <div
 	bind:this={ref}
 	class={cn('flex size-full flex-col items-center justify-center gap-3 p-8 text-center', className)}

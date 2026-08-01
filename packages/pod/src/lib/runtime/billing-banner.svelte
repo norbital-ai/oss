@@ -65,6 +65,7 @@
 </script>
 
 {#if notice && !dismissed}
+	<!-- stupidity:allow UI15 -- this fixed toast anchor follows the mobile shell safe area, not content sizing -->
 	<Inline
 		justify="end"
 		class="pointer-events-none fixed inset-x-3 top-[calc(3.25rem+env(safe-area-inset-top)+0.75rem)] z-50 sm:inset-x-auto sm:right-4 sm:w-[min(34rem,calc(100vw-2rem))] md:top-4"

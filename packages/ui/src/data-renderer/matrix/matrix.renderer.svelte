@@ -324,11 +324,13 @@
 	<div class="p-4 text-sm text-muted-foreground">{emptyMessage}</div>
 {/snippet}
 
+<!-- stupidity:allow UI10 -- the responsive matrix clips the inactive wide/narrow renderer at its surface boundary -->
 <Stack
 	gap="none"
+	grow={bounded}
 	class={cn(
-		'matrix-renderer min-h-0 w-full overflow-hidden bg-card',
-		bounded ? 'max-h-[min(70dvh,36rem)] flex-1' : 'max-h-none',
+		'matrix-renderer min-h-0 overflow-hidden bg-card',
+		bounded ? 'max-h-[min(70dvh,36rem)]' : 'max-h-none',
 		className
 	)}
 	data-data-matrix-surface
@@ -355,10 +357,8 @@
 	<Scroll
 		axis="y"
 		name="Matrix rows"
-		class={cn(
-			'matrix-renderer-narrow min-h-0 flex-1',
-			bounded ? 'overscroll-y-contain' : undefined
-		)}
+		grow
+		class={cn('matrix-renderer-narrow min-h-0', bounded ? 'overscroll-y-contain' : undefined)}
 		style={bounded ? undefined : 'overflow: visible'}
 	>
 		{#if displayRows.length === 0}

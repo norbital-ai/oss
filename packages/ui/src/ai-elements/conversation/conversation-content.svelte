@@ -33,17 +33,11 @@
 	);
 </script>
 
-<Scroll
-	axis="y"
-	name="Conversation messages"
-	class="min-h-0 min-w-0 flex-1"
-	bind:ref
-	{...restProps}
->
+<Scroll axis="y" name="Conversation messages" grow class="min-h-0 min-w-0" bind:ref {...restProps}>
 	<Stack
 		gap="xl"
 		data-stick-to-bottom-content
-		class={cn('min-h-min min-w-0 w-full max-w-full p-4', className)}
+		class={cn('min-h-min min-w-0 max-w-full p-4', className)}
 	>
 		{@render children?.()}
 	</Stack>

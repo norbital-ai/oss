@@ -14,6 +14,7 @@ function provider(
 		readonly maxRequestsPerWindow?: number;
 		readonly ttlSeconds?: number;
 		readonly deliverFails?: boolean;
+		readonly generateCode?: () => string;
 	} = {}
 ) {
 	const sent = options.sent ?? [];
@@ -25,6 +26,7 @@ function provider(
 		...(options.maxRequestsPerWindow ? { maxRequestsPerWindow: options.maxRequestsPerWindow } : {}),
 		...(options.ttlSeconds ? { ttlSeconds: options.ttlSeconds } : {}),
 		...(options.inviteeEmailForToken ? { inviteeEmailForToken: options.inviteeEmailForToken } : {}),
+		...(options.generateCode ? { generateCode: options.generateCode } : {}),
 		deliver: async (input) => {
 			if (options.deliverFails) throw new Error('provider is down');
 			sent.push(input);
@@ -88,6 +90,7 @@ describe('emailOtpIdentity', () => {
 	it('serves the login page with no session, so it is reachable before authentication', async () => {
 		const response = await provider().handleRoute?.(get('/login'));
 		expect(response?.status).toBe(200);
+		expect(response?.headers.get('referrer-policy')).toBe('strict-origin');
 		expect(await response?.text()).toContain('Send sign-in code');
 	});
 
@@ -134,6 +137,22 @@ describe('emailOtpIdentity', () => {
 		const sent: Sent[] = [];
 		await provider({ sent }).handleRoute?.(form('/login', { email: '  BOB@Example.COM ' }));
 		expect(sent[0]?.email).toBe('bob@example.com');
+	});
+
+	it('lets an isolated host make its sign-in code deterministic', async () => {
+		const sent: Sent[] = [];
+		await provider({ sent, generateCode: () => '123456' }).handleRoute?.(
+			form('/login', { email: 'bob@example.com' })
+		);
+		expect(sent[0]?.code).toBe('123456');
+	});
+
+	it('rejects a host code generator that does not return six digits', async () => {
+		await expect(
+			provider({ generateCode: () => 'fixed' }).handleRoute?.(
+				form('/login', { email: 'bob@example.com' })
+			)
+		).rejects.toThrow(/exactly six digits/);
 	});
 
 	it('refuses a wrong code', async () => {

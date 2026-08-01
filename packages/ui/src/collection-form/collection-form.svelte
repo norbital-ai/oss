@@ -330,7 +330,7 @@
 <Cover
 	as="form"
 	gap="md"
-	class={cn('max-h-full min-w-0 overflow-clip', className)}
+	class={className}
 	aria-busy={loading || form.isSubmitting}
 	onsubmit={submit}
 	bottom={formFooter}

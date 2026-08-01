@@ -91,7 +91,7 @@
 {#snippet tooltip()}
 	<ChartTooltip hideLabel />
 {/snippet}
-<Stack gap="md" class={`dynamic-ui-chart-display h-full w-full ${className}`}>
+<Stack gap="md" fill class={`dynamic-ui-chart-display ${className}`}>
 	{#if spec.title || spec.description}
 		<div class="shrink-0">
 			{#if spec.title}
@@ -124,7 +124,7 @@
 			value: entry.value,
 			color: chartConfig[entry.key]?.color ?? getSeriesColor(index, spec.config[entry.key])
 		}))}
-		<Stack gap="none" class="flex-1">
+		<Stack gap="none" grow>
 			<div class="flex min-h-0 flex-1 items-center justify-center">
 				<ChartContainer
 					config={chartConfig}
@@ -154,7 +154,8 @@
 				gap="sm"
 				align="center"
 				justify="center"
-				class="shrink-0 text-xs text-muted-foreground"
+				shrink={false}
+				class="text-xs text-muted-foreground"
 			>
 				{#each data as entry (entry.key)}
 					<Inline gap="sm">

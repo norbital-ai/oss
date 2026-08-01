@@ -40,7 +40,7 @@
 	<Stack gap="sm" class={className}>
 		{#each values as checked, index (index)}
 			<Inline gap="sm" class="h-8">
-				<Inline gap="sm" class="min-w-0 flex-1">
+				<Inline gap="sm" grow class="min-w-0">
 					<Checkbox
 						id={id ? `${id}-${index}` : undefined}
 						aria-label={`Boolean value ${index + 1}`}
@@ -87,6 +87,7 @@
 		onValueChange={(next) => onValueChange?.(next == null ? null : next === 'true')}
 	/>
 {:else}
+	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div class={cn('flex h-8 items-center gap-2', className)}>
 		<Checkbox
 			{id}

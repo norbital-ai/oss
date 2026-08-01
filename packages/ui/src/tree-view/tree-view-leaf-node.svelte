@@ -16,6 +16,6 @@
 	let { content, class: className, ...rest }: Props = $props();
 </script>
 
-<Inline gap="xs" class={cn('w-full pl-[3px]', className)} {...rest}>
+<Inline gap="xs" class={cn('pl-[3px]', className)} {...rest}>
 	{@render content()}
 </Inline>

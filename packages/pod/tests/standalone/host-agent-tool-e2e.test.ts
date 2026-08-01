@@ -4,9 +4,9 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { dockerAvailable, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js');
 
@@ -245,7 +245,7 @@ type TranscriptRow = {
 	}> | null;
 };
 
-describe.skipIf(!hasDocker)('Pod standalone host agent tools — E2E', () => {
+describe('Pod standalone host agent tools — E2E', () => {
 	let pg: PgHarness;
 	let root: string;
 	let environment: NodeJS.ProcessEnv;

@@ -22,11 +22,13 @@
 </script>
 
 {#if toc.items.length > 0}
+	<!-- stupidity:allow UI10; stupidity:allow UI15 -- this responsive document rail owns viewport-relative visibility, clipping, and width -->
 	<Stack
 		as="aside"
 		gap="none"
+		shrink={false}
 		class={cn(
-			'sticky top-14 z-20 hidden h-[calc(100dvh-3.5rem)] min-w-0 shrink-0 self-start overflow-hidden pt-12 ps-4 pe-4 pb-2 xl:flex',
+			'sticky top-14 z-20 hidden h-[calc(100dvh-3.5rem)] min-w-0 self-start overflow-hidden pt-12 ps-4 pe-4 pb-2 xl:flex',
 			widthClass ?? 'w-[268px]',
 			className
 		)}

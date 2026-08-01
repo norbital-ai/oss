@@ -358,7 +358,8 @@
 					>
 						<Inline
 							gap="sm"
-							class="sticky left-0 z-20 h-full border-r bg-card px-3"
+							fill
+							class="sticky left-0 z-20 border-r bg-card px-3"
 							style={`width:${resourceWidth}px`}
 						>
 							{#if onSelectionChange}

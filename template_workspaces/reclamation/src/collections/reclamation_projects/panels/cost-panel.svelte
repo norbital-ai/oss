@@ -403,15 +403,13 @@
 		</Inline>
 		<dl class="divide-y rounded-md border bg-card text-sm">
 			{#each MANUAL_TAKE_OFF as item (item.id)}
-				<div class="p-3">
-					<Inline align="start" justify="between" gap="sm">
-						<Inline align="center" gap="xs" class="min-w-0">
-							<dt class="min-w-0 truncate font-medium">{item.label}</dt>
-							<InfoHint label={`Why ${item.label} is manual`} text={item.why} />
-						</Inline>
-						<dd class="shrink-0 text-xs text-muted-foreground">{item.unit}</dd>
+				<Inline align="start" justify="between" gap="sm" class="p-3">
+					<Inline align="center" gap="xs" class="min-w-0">
+						<dt class="min-w-0 truncate font-medium">{item.label}</dt>
+						<InfoHint label={`Why ${item.label} is manual`} text={item.why} />
 					</Inline>
-				</div>
+					<dd class="shrink-0 text-xs text-muted-foreground">{item.unit}</dd>
+				</Inline>
 			{/each}
 		</dl>
 	</Stack>

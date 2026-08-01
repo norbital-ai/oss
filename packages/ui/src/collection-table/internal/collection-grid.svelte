@@ -401,8 +401,8 @@
 		data-collection-grid-toolbar
 	>
 		{#if leftActions}
-			<Scroll axis="x" name="Collection toolbar" class="min-w-0 flex-1">
-				<Inline gap="sm" class="h-full min-w-0">
+			<Scroll axis="x" name="Collection toolbar" grow class="min-w-0">
+				<Inline gap="sm" fill class="min-w-0">
 					{#each leftActions as action}
 						{@render action({ table: tableApi })}
 					{/each}
@@ -410,7 +410,7 @@
 			</Scroll>
 		{/if}
 		{#if rightActions}
-			<Inline gap="xs" class="shrink-0">
+			<Inline gap="xs" shrink={false}>
 				{#each rightActions as action}
 					{@render action({ table: tableApi })}
 				{/each}
@@ -422,7 +422,7 @@
 <Cover
 	as="div"
 	gap={leftActions || rightActions ? 'sm' : 'none'}
-	class={cn('h-full w-full', className)}
+	class={className}
 	role="grid"
 	aria-rowcount={tableApi.totalRows}
 	aria-colcount={layouts.length}
@@ -433,7 +433,7 @@
 	<Cover
 		as="div"
 		gap="none"
-		class={cn('relative h-full min-h-0 w-full rounded-md bg-card', !borderless && 'border')}
+		class={cn('relative rounded-md bg-card', !borderless && 'border')}
 		top={renderTableHeader}
 	>
 		<Scroll
@@ -460,7 +460,8 @@
 			gap="md"
 			justify="between"
 			align="center"
-			class="shrink-0 p-1 text-xs text-muted-foreground"
+			shrink={false}
+			class="p-1 text-xs text-muted-foreground"
 		>
 			<Cluster gap="sm">
 				{#if enableSelection}
@@ -619,7 +620,8 @@
 	<Inline
 		{...sortableProps || {}}
 		gap="none"
-		class={cn('group absolute top-0 h-full bg-muted/80', {
+		fill
+		class={cn('group absolute top-0 bg-muted/80', {
 			'border-r': !borderless,
 			[String(sortableProps?.class || '')]: true
 		})}
@@ -643,10 +645,13 @@
 				{/if}
 			</Inline>
 		{:else}
+			<!-- stupidity:allow UI10 -- a virtualized header cell clips its label inside an explicitly sized column -->
 			<Inline
 				gap="none"
+				grow
+				fill
 				class={cn(
-					'h-full min-w-0 flex-1 overflow-hidden px-3 text-left text-[13px] font-medium',
+					'min-w-0 overflow-hidden px-3 text-left text-[13px] font-medium',
 					headerSortableHandlerClass,
 					{
 						'cursor-grab': columnReorderEnabled,
@@ -771,7 +776,8 @@
 					{#each pinnedLayouts as layout (layout.id)}
 						<Inline
 							gap="none"
-							class="absolute top-0 h-full bg-card p-2.5"
+							fill
+							class="absolute top-0 bg-card p-2.5"
 							style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 						>
 							<Skeleton class="h-4 w-full" />
@@ -787,7 +793,8 @@
 						{#if layout}
 							<Inline
 								gap="none"
-								class="absolute top-0 h-full p-2.5"
+								fill
+								class="absolute top-0 p-2.5"
 								style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 							>
 								<Skeleton class="h-4 w-full" />
@@ -941,6 +948,7 @@
 													buttons never drift past the row's natural right edge when the
 													row already fits inside the viewport.
 												-->
+												<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 												<div
 													class={cn(
 														'pointer-events-none absolute inset-y-0 z-50 flex items-center gap-0.5',
@@ -1062,7 +1070,8 @@
 
 		<Inline
 			gap="none"
-			class={cn('absolute top-0 h-full', !borderless && 'border-r', bgClass, isPinned && 'bg-card')}
+			fill
+			class={cn('absolute top-0', !borderless && 'border-r', bgClass, isPinned && 'bg-card')}
 			style={`left: ${layout.leftOffset}px; width: ${layout.width}px;`}
 			role="gridcell"
 			aria-colindex={layout.index + 1}
@@ -1090,12 +1099,14 @@
 				{/if}
 			{/if}
 
+			<!-- stupidity:allow UI10 -- a virtualized grid cell clips content at its declared column boundary -->
 			<Inline
 				gap="none"
+				grow
+				justify={layout.isCheckbox ? 'center' : 'start'}
 				class={cn(
-					'min-w-0 flex-1 overflow-hidden px-3.5 py-1.5 text-xs',
-					layout.id === firstDataColumnId && hasRowControls && 'pl-10',
-					layout.isCheckbox && 'justify-center'
+					'min-w-0 overflow-hidden px-3.5 py-1.5 text-xs',
+					layout.id === firstDataColumnId && hasRowControls && 'pl-10'
 				)}
 			>
 				{#if inst.cell}

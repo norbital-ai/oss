@@ -38,7 +38,7 @@
 
 {#await shellData}
 	<div class="grid h-dvh w-screen place-items-center bg-background text-foreground">
-		<Stack gap="lg" class="-translate-y-4 items-center" role="status" aria-live="polite">
+		<Stack gap="lg" align="center" class="-translate-y-4" role="status" aria-live="polite">
 			<div class="relative h-24 w-32" aria-hidden="true">
 				<div
 					class="absolute inset-x-3 top-4 bottom-0 rounded-lg border border-border/50 bg-muted/25"

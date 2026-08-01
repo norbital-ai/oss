@@ -12,10 +12,12 @@
 	} = $props();
 </script>
 
+<!-- stupidity:allow UI15 -- the calendar sidebar is a deliberately fixed navigation rail -->
 <Scroll
 	axis="y"
 	name="Calendar sidebar"
-	class={cn('w-[240px] shrink-0 border-r border-border bg-card/50', className)}
+	shrink={false}
+	class={cn('w-[240px] border-r border-border bg-card/50', className)}
 >
 	{@render children()}
 </Scroll>

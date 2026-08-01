@@ -299,7 +299,7 @@
 								</div>
 
 								<!-- Star Rating Input -->
-								<Inline gap="sm" class="flex-1">
+								<Inline gap="sm" grow>
 									<StarRating
 										value={rating || undefined}
 										onValueChange={(newRating) => updateRating(index, newRating)}

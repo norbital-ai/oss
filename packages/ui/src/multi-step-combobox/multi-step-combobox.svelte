@@ -697,7 +697,7 @@
 			{/if}
 
 			{#if currentSelection && stepKeys.length > 0}
-				<Bound size="full" clip class="flex-1">
+				<Bound size="full" clip grow>
 					<Command.Root
 						filter={buildCustomFilterFn(filteredOptions)}
 						shouldFilter={false}
@@ -715,7 +715,7 @@
 							onNext={goToNextStep}
 						/>
 
-						<Bound size="full" clip pad="sm" class="flex-1">
+						<Bound size="full" clip pad="sm" grow>
 							{#if isCustomStep && isCustom(currentStepDef) && currentStepKey}
 								{@render currentStepDef.render({
 									value: currentSelection?.[currentStepKey],
@@ -774,7 +774,7 @@
 											)}
 											style={`height: ${itemHeight}px;`}
 										>
-											<Inline gap="sm" class="min-w-0 flex-1 text-xs">
+											<Inline gap="sm" grow class="min-w-0 text-xs">
 												<div class="min-w-0 flex-1 px-2">
 													{#if typeof option.label === 'string'}
 														<span
@@ -817,7 +817,7 @@
 					</Command.Root>
 				</Bound>
 			{:else}
-				<Inline justify="center" gap="none" class="flex-1 p-4 text-xs text-muted-foreground">
+				<Inline justify="center" gap="none" grow class="p-4 text-xs text-muted-foreground">
 					{multiple
 						? 'Select or create a selection to get started.'
 						: 'Create a selection to get started.'}

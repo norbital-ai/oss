@@ -124,6 +124,7 @@
 	}
 </script>
 
+<!-- stupidity:allow UI5 -- this leaf component owns a local clip or scroll boundary required by its interaction contract -->
 <div
 	bind:this={ref}
 	class={cn('relative overflow-y-auto', className)}

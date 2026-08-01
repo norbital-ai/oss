@@ -51,7 +51,7 @@
 </script>
 
 {#snippet progress(progressValue: number)}
-	<Inline gap="md" class="min-w-0 flex-1">
+	<Inline gap="md" grow class="min-w-0">
 		<Progress value={visualValue(progressValue)} max={denominator} class="min-w-20 flex-1" />
 		<span class="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
 			{formatter.format(progressValue)} / {formatter.format(denominator)}

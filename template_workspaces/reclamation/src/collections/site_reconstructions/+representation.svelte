@@ -131,11 +131,13 @@
 						{#each report.assumptions as assumption (assumption.id)}
 							<details class="p-3">
 								<summary class="cursor-pointer text-sm font-medium">{assumption.title}</summary>
-								<p class="mt-2 text-sm text-muted-foreground">{assumption.detail}</p>
-								<p class="mt-2 text-sm">
-									<span class="font-medium">If it is wrong:</span>
-									{assumption.effect}
-								</p>
+								<Stack gap="sm" class="pt-2">
+									<p class="text-sm text-muted-foreground">{assumption.detail}</p>
+									<p class="text-sm">
+										<span class="font-medium">If it is wrong:</span>
+										{assumption.effect}
+									</p>
+								</Stack>
 							</details>
 						{/each}
 					</div>
@@ -171,7 +173,8 @@
 			<Inline
 				align="center"
 				justify="center"
-				class="h-full px-8 text-center text-sm text-muted-foreground"
+				fill
+				class="px-8 text-center text-sm text-muted-foreground"
 			>
 				This revision holds no model.
 			</Inline>

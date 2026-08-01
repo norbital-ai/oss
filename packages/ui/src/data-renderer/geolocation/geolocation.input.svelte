@@ -182,7 +182,7 @@
 				<Icon icon="lucide:map-pin-off" class="h-4 w-4 text-orange-500" />
 			{/if}
 		</div>
-		<Inline gap="sm" class="flex-1 text-start">
+		<Inline gap="sm" grow class="text-start">
 			<span class="truncate text-left text-xs font-normal transition-all">
 				{value.formatted_address}
 			</span>
@@ -250,7 +250,7 @@
 		</Inline>
 
 		{#if location.geometry}
-			<Stack gap="sm" class="h-full p-2">
+			<Stack gap="sm" fill class="p-2">
 				<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 					<Icon icon="lucide:map" class="h-4 w-4" />
 					Location map
@@ -265,7 +265,7 @@
 			</Stack>
 		{/if}
 
-		<Stack gap="sm" class="h-full p-2">
+		<Stack gap="sm" fill class="p-2">
 			<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 				<Icon icon="lucide:info" class="h-4 w-4" />
 				Location Details

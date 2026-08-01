@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Bound, Inline } from '@norbital-ai/ui/layout';
+	import { Bound, Cluster, Columns, Inline } from '@norbital-ai/ui/layout';
 	import { onDestroy } from 'svelte';
 	import { watch } from 'runed';
 	import { tessellate } from './geometry-worker.js';
@@ -490,8 +490,10 @@
 	{/if}
 
 	{#if surfaces && status === 'ready'}
-		<div
-			class="absolute bottom-3 left-3 grid grid-cols-3 gap-0.5 rounded-md border bg-background/90 p-1 text-muted-foreground shadow-sm"
+		<Columns
+			count={3}
+			gap="xs"
+			class="absolute bottom-3 left-3 rounded-md border bg-background/90 p-1 text-muted-foreground shadow-sm"
 			role="group"
 			aria-label="Move view"
 		>
@@ -545,10 +547,12 @@
 				<Icon icon="lucide:arrow-down" class="size-4" />
 			</button>
 			<span></span>
-		</div>
+		</Columns>
 
-		<div
-			class="absolute right-3 bottom-3 flex max-w-[calc(100%-7.5rem)] flex-wrap items-center justify-end gap-2 rounded-md border bg-background/90 px-2 py-1 text-tiny text-muted-foreground shadow-sm"
+		<Cluster
+			justify="end"
+			gap="sm"
+			class="absolute right-3 bottom-3 max-w-[calc(100%-7.5rem)] rounded-md border bg-background/90 px-2 py-1 text-tiny text-muted-foreground shadow-sm"
 		>
 			<div class="flex divide-x rounded border" role="group" aria-label="Viewpoint">
 				{#each VIEWS as id (id)}
@@ -610,7 +614,7 @@
 			<span class="tabular-nums">
 				{surfaces.triangleCount.toLocaleString()} tri · {surfaces.renderCellM.toFixed(1)} m
 			</span>
-		</div>
+		</Cluster>
 		{#if exaggeration !== 1}
 			<p
 				class="absolute top-3 left-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-tiny font-medium text-amber-700 shadow-xs backdrop-blur dark:text-amber-300"

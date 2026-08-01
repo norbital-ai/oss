@@ -454,6 +454,7 @@
 			{#if subtitle}<p class="min-w-0 truncate text-sm text-muted-foreground">{subtitle}</p>{/if}
 		</Stack>
 		{#if badge}
+			<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 			<span
 				class={cn(
 					'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-xs font-medium',
@@ -521,10 +522,11 @@
 	</Stack>
 {/snippet}
 
+<!-- stupidity:allow UI15 -- the kanban needs a usable empty-lane drop surface before cards establish intrinsic height -->
 <Cover
 	as="div"
 	gap="sm"
-	class="collection-kanban min-h-[24rem] min-w-0"
+	class="collection-kanban min-h-[24rem]"
 	data-dragging={activeDrag != null}
 	top={kanbanToolbar}
 >

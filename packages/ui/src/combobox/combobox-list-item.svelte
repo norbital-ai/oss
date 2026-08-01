@@ -49,7 +49,7 @@
 		)}
 		style="height: {itemHeight}px;"
 	>
-		<Inline gap="sm" class="grow text-left">
+		<Inline gap="sm" grow class="text-left">
 			{#if item._option.icon}
 				<Icon icon={item._option.icon} class="size-3.5 shrink-0 text-muted-foreground" />
 			{/if}

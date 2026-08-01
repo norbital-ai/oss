@@ -11,6 +11,7 @@
 	}: WithElementRef<HTMLOlAttributes> = $props();
 </script>
 
+<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <ol
 	bind:this={ref}
 	class={cn(

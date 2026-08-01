@@ -58,6 +58,7 @@
 </script>
 
 {#if field}
+	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div
 		class={cn('flex min-h-0 flex-col gap-2', className)}
 		data-collection-field={name}
@@ -65,7 +66,7 @@
 		data-invalid={errors.length > 0 ? 'true' : undefined}
 		aria-describedby={errors.length > 0 ? errorId : undefined}
 	>
-		<Inline gap="sm" class="shrink-0">
+		<Inline gap="sm" shrink={false}>
 			<CollectionFormFieldHistory
 				{field}
 				{fieldId}
@@ -109,7 +110,7 @@
 			{/if}
 		</div>
 		{#if errors.length > 0}
-			<Stack id={errorId} gap="xs" class="shrink-0 text-sm text-destructive" role="alert">
+			<Stack id={errorId} gap="xs" shrink={false} class="text-sm text-destructive" role="alert">
 				{#each errors as message, index (`${index}:${message}`)}
 					<p>{message}</p>
 				{/each}

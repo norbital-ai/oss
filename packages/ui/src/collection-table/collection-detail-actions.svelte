@@ -14,7 +14,7 @@
 	} = $props();
 </script>
 
-<Inline justify="end" gap="xs" class="shrink-0">
+<Inline justify="end" gap="xs" shrink={false}>
 	<Button
 		type="button"
 		variant="ghost"

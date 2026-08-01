@@ -221,7 +221,7 @@
 			{stage ? UPLOAD_STAGE_MESSAGES[stage] : UPLOAD_STAGE_MESSAGES.uploading}
 			{fileName}
 		</span>
-		<Inline gap="xs" class="shrink-0">
+		<Inline gap="xs" shrink={false}>
 			<div
 				class={cn(
 					'h-1.5 w-3 rounded-full',

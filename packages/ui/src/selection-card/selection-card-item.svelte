@@ -54,7 +54,7 @@
 	aria-pressed={isSelected(value)}
 	aria-disabled={disabled}
 >
-	<Inline gap="md" class="grow">
+	<Inline gap="md" grow>
 		<div class="flex flex-col">
 			<span class="text-sm font-medium">
 				{@render header()}

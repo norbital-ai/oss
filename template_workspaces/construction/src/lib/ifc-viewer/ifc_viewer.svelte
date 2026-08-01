@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { getErrorMessage, withTimeout } from '@norbital-ai/std';
 	import { Button } from '@norbital-ai/ui/button';
-	import { Bound, Inline, Scroll } from '@norbital-ai/ui/layout';
+	import { Bound, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { watch } from 'runed';
 	import { convertIfcToFragments } from './ifc_viewer.converter.js';
@@ -589,6 +589,7 @@
 					</Button>
 
 					{#if propertiesOpen}
+						<!-- stupidity:allow UI11 -- this conditional spacer separates the disclosure card without padding its background -->
 						<div class="pt-2">
 							<div class="rounded-md border border-border/80 bg-background/95 p-3 shadow-sm">
 								<p
@@ -662,7 +663,7 @@
 			<p class="mb-1.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
 				Highlights
 			</p>
-			<ul class="space-y-1">
+			<Stack as="ul" gap="xs">
 				{#each normalizedMarkerGroups as group (group.label + group.color + group.expressIds.join(','))}
 					<li>
 						<Inline gap="xs" class="text-[11px] text-foreground">
@@ -675,7 +676,7 @@
 						</Inline>
 					</li>
 				{/each}
-			</ul>
+			</Stack>
 		</div>
 	{/if}
 </Bound>

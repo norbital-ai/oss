@@ -29,7 +29,7 @@
 </script>
 
 {#if pipelines.length === 0}
-	<Stack gap="sm" class="min-h-32 items-center justify-center px-5 py-8 text-center">
+	<Stack gap="sm" align="center" justify="center" class="min-h-32 px-5 py-8 text-center">
 		<Icon
 			icon={kind === 'export' ? 'lucide:download' : 'lucide:upload'}
 			class="size-5 text-muted-foreground"
@@ -56,7 +56,7 @@
 					<div class="min-w-0 flex-1">
 						<p class="text-sm font-medium">{pipeline.label}</p>
 						<Stack gap="sm">
-							<p class="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+							<p class="text-xs leading-relaxed text-muted-foreground">
 								{pipeline.description ?? `${pipeline.label} ${kind} pipeline.`}
 							</p>
 							{#if reason}

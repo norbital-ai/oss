@@ -139,9 +139,7 @@ describe('Conversations and runs replicate to their owner', () => {
 
 	it('puts every conversation collection in the client replica DDL', () => {
 		for (const collection of CONVERSATION_COLLECTIONS) {
-			expect(clientSchemaSql, collection).toContain(
-				`CREATE TABLE IF NOT EXISTS "${collection}" (`
-			);
+			expect(clientSchemaSql, collection).toContain(`CREATE TABLE IF NOT EXISTS "${collection}" (`);
 		}
 	});
 
@@ -191,6 +189,7 @@ describe('Conversations and runs replicate to their owner', () => {
 	it('delivers a reply to an open replica without the panel asking again', async () => {
 		const db = await createClientDb();
 		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
 			db,
 			schemaSql: clientSchemaSql,
 			fetch: syncFetchFor(harness, ada)

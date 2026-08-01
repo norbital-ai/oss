@@ -166,7 +166,7 @@
 
 		{#snippet collaborators()}
 			{#if presencePeers.length > 0}
-				<Inline as="span" gap="xs" class="shrink-0" aria-label="Active collaborators">
+				<Inline as="span" gap="xs" shrink={false} aria-label="Active collaborators">
 					{#each presencePeers.slice(0, 3) as peer, index (`${peer.label}:${index}`)}
 						<span
 							class="size-2 rounded-full ring-1 ring-background"

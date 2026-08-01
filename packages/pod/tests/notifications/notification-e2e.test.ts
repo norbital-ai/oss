@@ -4,7 +4,7 @@ import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/type
 import { workspaceJobs } from '$lib/bin/invocation/jobs.js';
 import { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
 import type { SyncFetch } from '$lib/client/sync/types.js';
-import { dockerAvailable } from '../support/pg-harness.js';
+import { requireDocker } from '../support/pg-harness.js';
 import { createClientDb } from '../support/pglite-node.js';
 import {
 	bootPodRuntime,
@@ -12,7 +12,7 @@ import {
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 const admin: Identity = {
 	userId: '22222222-2222-4222-8222-222222222222',
@@ -122,7 +122,7 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 15_000): P
 	return false;
 }
 
-describe.skipIf(!hasDocker)('Pod notifications — delivery and disclosure E2E', () => {
+describe('Pod notifications — delivery and disclosure E2E', () => {
 	let harness: PodRuntimeHarness;
 	let clientSchemaSql: string;
 	const sent: SentNotification[] = [];
@@ -290,6 +290,7 @@ describe.skipIf(!hasDocker)('Pod notifications — delivery and disclosure E2E',
 	it('reaches an open replica live, without the client asking again', async () => {
 		const db = await createClientDb();
 		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
 			db,
 			schemaSql: clientSchemaSql,
 			fetch: syncFetchFor(harness, recipient)

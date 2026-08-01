@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
-import { dockerAvailable, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 
 /**
@@ -12,7 +12,7 @@ import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.j
  * whose every receipt is old still has a duplicate defence rather than an empty table.
  */
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 /** The columns the sweep reads, exactly as `workspace-schema.ts` declares them. */
 const DDL = `
@@ -31,11 +31,11 @@ const DDL = `
 	);
 `;
 
-describe.skipIf(!hasDocker)('inbound ledger retention', () => {
+describe('inbound ledger retention', () => {
 	let harness: PgHarness;
 	let pool: Pool;
 	let ctx: Pick<ProvisionedContext, 'tenantDb'>;
-	let pruneInboundEvents: typeof import('$lib/server/integrations/tenant-inbound.server.js')['pruneInboundEvents'];
+	let pruneInboundEvents: (typeof import('$lib/server/integrations/tenant-inbound.server.js'))['pruneInboundEvents'];
 
 	beforeAll(async () => {
 		harness = await startPostgres();
@@ -46,14 +46,13 @@ describe.skipIf(!hasDocker)('inbound ledger retention', () => {
 				query: (input: unknown, params?: unknown[]) => {
 					const text = typeof input === 'string' ? input : (input as { text: string }).text;
 					const values =
-						params ?? (typeof input === 'string' ? [] : ((input as { values?: unknown[] }).values ?? []));
+						params ??
+						(typeof input === 'string' ? [] : ((input as { values?: unknown[] }).values ?? []));
 					return pool.query(text, values) as never;
 				}
 			}
 		};
-		({ pruneInboundEvents } = await import(
-			'$lib/server/integrations/tenant-inbound.server.js'
-		));
+		({ pruneInboundEvents } = await import('$lib/server/integrations/tenant-inbound.server.js'));
 	}, 180_000);
 
 	afterAll(async () => {

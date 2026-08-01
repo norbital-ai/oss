@@ -190,7 +190,7 @@
 		{/if}
 	</Stack>
 {:else}
-	<Stack gap="none" class={cn('w-full', className)}>
+	<Stack gap="none" class={className}>
 		<label
 			ondragover={(e) => {
 				if (canUpload) e.preventDefault();
@@ -230,7 +230,7 @@
 					</div>
 				</div>
 			{:else}
-				<Stack gap="none" class="h-full">
+				<Stack gap="none" fill>
 					<Inline gap="sm" justify="between" class="border-b border-border px-3 py-2">
 						<span class="text-xs text-secondary-foreground">Total files ({allFiles.length})</span>
 						{#if canUpload}
@@ -266,7 +266,7 @@
 										{/if}
 									</div>
 
-									<Stack gap="none" class="min-w-0 flex-1">
+									<Stack gap="none" grow class="min-w-0">
 										<div class="truncate text-start text-sm font-medium text-foreground">
 											{fileName}
 										</div>

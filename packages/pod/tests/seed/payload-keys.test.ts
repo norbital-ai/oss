@@ -5,7 +5,7 @@ import {
 	type SeedExecutionPlan,
 	type SeedSidecarKeys
 } from '@norbital-ai/platform-utils/seed/execute';
-import { startPostgres, dockerAvailable, type PgHarness } from '../support/pg-harness.js';
+import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema } from '../support/pod-schema.js';
 
 /**
@@ -21,7 +21,7 @@ import { applyPodSchema } from '../support/pod-schema.js';
  * having run `clearBefore`, which would otherwise trade a silent drift for a wiped tenant.
  */
 
-const hasDocker = dockerAvailable();
+requireDocker();
 
 const ADMIN_ID = '33333333-3333-4333-8333-333333333333';
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
@@ -39,12 +39,11 @@ type SeedRun = {
 	readonly run: () => Promise<void>;
 };
 
-describe.skipIf(!hasDocker)('the seed executor payload key contract (real Postgres)', () => {
+describe('the seed executor payload key contract (real Postgres)', () => {
 	let harness: PgHarness | undefined;
 	let client: Client | undefined;
 
 	beforeAll(async () => {
-		if (!hasDocker) return;
 		harness = await startPostgres();
 		client = new Client({ connectionString: harness.connectionString });
 		await client.connect();
