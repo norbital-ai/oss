@@ -36,6 +36,7 @@
 	import { workspaceRuntimeOperations, type WorkspaceAppLoader } from './client.js';
 	import BillingBanner from './billing-banner.svelte';
 	import NotificationsMenu from './notifications-menu.svelte';
+	import { switchOrganization } from './organization-switch.js';
 	import { createPodCollectionTableNavigation } from './collection-table-navigation.js';
 	import {
 		appAccessAllowed,
@@ -273,7 +274,13 @@
 	/>
 {/snippet}
 
-<WorkspaceShell model={navigationModel} onNavigate={navigate} {notifications} {onSignOut}>
+<WorkspaceShell
+	model={navigationModel}
+	onNavigate={navigate}
+	onOrganizationChange={switchOrganization}
+	{notifications}
+	{onSignOut}
+>
 	<Bound size="full" clip grow>
 		<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
 		{#if currentPath === '/'}
