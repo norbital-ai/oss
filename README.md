@@ -52,8 +52,6 @@ published image. The provider-neutral distribution contract is documented in
 
 ## License
 
-Source-available under the [Apache-2.0 + Commons Clause](./LICENSE). You may
-freely use, modify, and redistribute Norbital OSS, including for your own
-internal company use. You may not sell the software itself or charge for a
-hosted offering, consulting, or support service whose value substantially
-derives from its functionality without a separate license from Norbital.
+Licensed under the [GNU Affero General Public License v3.0](./LICENSE).
+If you modify Norbital OSS and make it available to users over a network,
+AGPLv3 requires you to offer those users the corresponding source code.

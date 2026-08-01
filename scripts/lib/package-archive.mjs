@@ -71,8 +71,8 @@ export function validatePublishedManifest(manifest, directory, expected = {}) {
 	if (expected.version && manifest.version !== expected.version) {
 		fail(`${manifest.name} archive is ${manifest.version}; expected ${expected.version}.`);
 	}
-	if (manifest.license !== 'SEE LICENSE IN LICENSE') {
-		fail(`${manifest.name} must reference the repository license.`);
+	if (manifest.license !== 'AGPL-3.0-only') {
+		fail(`${manifest.name} must declare AGPL-3.0-only.`);
 	}
 	if (manifest.repository?.directory !== `packages/${directory}`) {
 		fail(`${manifest.name} has an invalid repository directory.`);

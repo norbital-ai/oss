@@ -4,7 +4,7 @@
 	"description": "Shared manifests, wire contracts, migrations, and tenant database utilities for Norbital.",
 	"type": "module",
 	"sideEffects": false,
-	"license": "SEE LICENSE IN LICENSE",
+	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/norbital-ai/oss.git",
