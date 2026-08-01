@@ -118,6 +118,16 @@ function buildAutomationEntries(
 		};
 		const trigger = tpl.trigger as { schedule?: string } | undefined;
 		const isSchedule = trigger && 'schedule' in trigger;
+		const nested = (
+			tpl.trigger as { trigger?: { collection?: string; event?: string } } | undefined
+		)?.trigger;
+		const eventTrigger =
+			!isSchedule && typeof nested?.collection === 'string' && typeof nested?.event === 'string'
+				? {
+						collection: nested.collection,
+						event: nested.event as 'created' | 'updated' | 'deleted'
+					}
+				: undefined;
 		const agentSpec =
 			tpl.spec && tpl.spec.kind === 'agent' && typeof tpl.spec.task === 'string'
 				? {
@@ -133,6 +143,7 @@ function buildAutomationEntries(
 			description: '',
 			enabled: true,
 			cron_schedule: isSchedule ? trigger!.schedule! : null,
+			...(eventTrigger ? { event_trigger: eventTrigger } : {}),
 			created_by_user_id: null,
 			...(agentSpec ? { spec: agentSpec } : {})
 		};

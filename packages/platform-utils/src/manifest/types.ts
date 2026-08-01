@@ -95,6 +95,18 @@ export type ManifestAutomationTemplate = {
 	readonly description: string;
 	readonly enabled: boolean;
 	readonly cron_schedule: string | null;
+	/**
+	 * The committed change this automation subscribes to, when it is not on a schedule.
+	 *
+	 * A cron automation names its own time, so a host can schedule it from the manifest alone. A
+	 * collection-event automation is discovered from the change feed instead, and a host that cannot
+	 * see the trigger here has no way to know the tenant needs draining at all — which is how the
+	 * form came to be declared, typed, compiled, and never run.
+	 */
+	readonly event_trigger?: {
+		readonly collection: string;
+		readonly event: 'created' | 'updated' | 'deleted';
+	} | null;
 	readonly created_by_user_id: string | null;
 	readonly config?: {
 		whitelist?: { origins?: string[] | null } | null;

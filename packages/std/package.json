@@ -93,7 +93,7 @@
 		}
 	},
 	"scripts": {
-		"build": "rm -rf build && tsc -p tsconfig.json",
+		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm build",
 		"lint": "tsc -p tsconfig.json --noEmit"
 	},

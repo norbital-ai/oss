@@ -108,6 +108,7 @@ const MANIFEST_AUTOMATION_KEYS = [
 	'description',
 	'enabled',
 	'cron_schedule',
+	'event_trigger',
 	'created_by_user_id',
 	'config',
 	'spec'

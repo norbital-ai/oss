@@ -94,7 +94,7 @@
 		}
 	},
 	"scripts": {
-		"build": "rm -rf build && svelte-package -i src -o build",
+		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {}",
 		"prepack": "pnpm build",
 		"lint": "svelte-check --tsconfig tsconfig.json"
 	},
