@@ -15,7 +15,7 @@ import {
 } from '../schema/collection-behavior.js';
 import type { TableName } from '../schema/types.js';
 import { deriveManifestRelationships } from './derive-relationships.js';
-import type { AutomationDeclaration } from '../automations/automations.js';
+import type { AgentAutomationSpec, AutomationDeclaration } from '../automations/automations.js';
 import type { AgentToolDefinition } from '../automations/agent-tools.js';
 import type { PolicyDeclaration } from '../policies/policies.js';
 import type { ChannelDefinition } from '../channels/channels.js';
@@ -70,6 +70,8 @@ export type DefineWorkspaceInput<
 > = {
 	readonly collections: TCollections;
 	readonly automations?: readonly AutomationDeclaration[];
+	/** `src/+agent.ts` — the permissions and prompt for the Pod-owned interactive agent. */
+	readonly agent?: AgentAutomationSpec;
 	readonly agentTools?: Readonly<Record<string, AgentToolDefinition>>;
 	/** Policy definitions declared in `src/policies`, keyed by filename. */
 	readonly policies?: Readonly<Record<string, PolicyDeclaration>>;
@@ -91,6 +93,7 @@ export type RegisteredWorkspaceState = {
 	readonly inputSchemas: Record<string, { readonly create: z.ZodType; readonly update: z.ZodType }>;
 	readonly pipelines: Record<string, Record<string, unknown>>;
 	readonly automations: Record<string, unknown>;
+	readonly agent: AgentAutomationSpec | null;
 	readonly agentTools: Record<string, AgentToolDefinition>;
 	readonly policies: Record<string, PolicyDeclaration>;
 	readonly channels: Record<string, ChannelDefinition>;
@@ -561,6 +564,7 @@ export function defineWorkspace<
 		inputSchemas,
 		pipelines,
 		automations,
+		agent: input.agent ?? null,
 		agentTools: { ...(input.agentTools ?? {}) },
 		policies: { ...(input.policies ?? {}) },
 		channels: { ...(input.channels ?? {}) },

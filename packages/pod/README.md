@@ -590,6 +590,24 @@ tool execution. The host's AI binding supplies one inference turn at a time. Ord
 values are stored in tenant-owned `chat_message` rows under `chat_session` and reach clients through
 ordinary sync. Agent transcripts are policy-scoped; Core and other hosts store no transcript.
 
+The tenant-workspace agent is configured separately from scheduled automation in `src/+agent.ts`:
+
+```ts
+import type { AgentAutomationSpec } from '@norbital-ai/pod/authoring';
+
+export default {
+	kind: 'agent',
+	task: 'Assist with this workspace.',
+	collections: ['services'],
+	access: 'write',
+	hostTools: ['sandbox_read']
+} satisfies AgentAutomationSpec;
+```
+
+If the file is absent, interactive chat is read-only and receives no host tools. The Pod shell owns
+both its floating tenant-workspace entry point and full `/agent` surface. Assistant and subagent text
+is written as `streaming` tenant rows and arrives through the ordinary replica sync connection.
+
 ## Authoring channels
 
 A channel is a conversational way in: someone messages a transport, the agent answers under a named

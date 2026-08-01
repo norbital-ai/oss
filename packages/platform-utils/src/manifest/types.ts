@@ -408,6 +408,8 @@ export const NorbitalManifestSchema = z
 		 * host can only see the collision if the manifest says which names are taken.
 		 */
 		agentTools: z.record(z.string(), ManifestHandlerEntrySchema).optional(),
+		/** Pod-owned interactive agent permissions, authored by the workspace in `src/+agent.ts`. */
+		agent: ManifestAutomationAgentSpecSchema.optional(),
 		automations: z.record(z.string(), ManifestAutomationSchema),
 		env: z
 			.object({

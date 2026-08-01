@@ -360,7 +360,9 @@ describe('Pod standalone host agent tools — E2E', () => {
 		// What the model was offered: the named host tool alongside the built-ins, and nothing else.
 		// `sandbox_secret` never appears in the tool list at all — it is not merely refused on call.
 		const answer = transcript[4]?.parts?.[0]?.content ?? '';
-		expect(answer).toContain('offered=describe_workspace|read_collection|sandbox_deploy');
+		expect(answer).toContain(
+			'offered=describe_workspace|read_collection|spawn_subagent|sandbox_deploy'
+		);
 		expect(answer).not.toContain('sandbox_secret|');
 		expect(answer).toContain(`deploy=ok(${RECEIPT}:staging)`);
 	}, 120_000);

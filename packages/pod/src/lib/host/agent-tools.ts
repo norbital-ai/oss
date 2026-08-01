@@ -120,6 +120,10 @@ export function assertHostAgentTools(
 	}
 
 	const missing = new Map<string, string[]>();
+	for (const named of manifest.agent?.hostTools ?? []) {
+		if (seen.has(named)) continue;
+		missing.set(named, [...(missing.get(named) ?? []), 'workspace agent']);
+	}
 	for (const [name, automation] of Object.entries(manifest.automations ?? {})) {
 		for (const named of automation.spec?.hostTools ?? []) {
 			if (seen.has(named)) continue;

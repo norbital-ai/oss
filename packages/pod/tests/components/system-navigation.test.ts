@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { WorkspaceSidebarNavigationSection } from '@norbital-ai/ui/workspace-shell';
 import {
 	buildSystemNavigation,
-	hostAuthorizesAgentSurface,
-	isHostPluginEntry
+	isHostPluginEntry,
+	workspaceAuthorizesAgentSurface,
+	workspaceProvidesAgentSurface
 } from '$lib/runtime/workspace-navigation.js';
 import SidebarHarness from '../support/sidebar-harness.svelte';
 import { render } from '../support/component.js';
@@ -50,18 +51,13 @@ describe('the system section of the sidebar', () => {
 		expect(isHostPluginEntry('/app/crm', PLUGINS)).toBe(false);
 	});
 
-	it('renders the Pod agent route only for the exact host registration', () => {
-		expect(
-			hostAuthorizesAgentSurface('/agent', [
-				{ key: 'agent', entry: '/agent' },
-				{ key: 'studio', entry: '/_host/app/workspace-studio' }
-			])
-		).toBe(true);
-		expect(hostAuthorizesAgentSurface('/agent', [])).toBe(false);
-		expect(
-			hostAuthorizesAgentSurface('/agent', [{ key: 'agent', entry: '/_host/app/agent' }])
-		).toBe(false);
-		expect(hostAuthorizesAgentSurface('/agent', [{ key: 'other', entry: '/agent' }])).toBe(false);
+	it('renders the Pod agent route from the workspace manifest without a host registration', () => {
+		const agent = { kind: 'agent' as const };
+		expect(workspaceAuthorizesAgentSurface('/agent', agent)).toBe(true);
+		expect(workspaceAuthorizesAgentSurface('/agent', undefined)).toBe(false);
+		expect(workspaceAuthorizesAgentSurface('/app/hr', agent)).toBe(false);
+		expect(workspaceProvidesAgentSurface(agent)).toBe(true);
+		expect(workspaceProvidesAgentSurface(undefined)).toBe(false);
 	});
 
 	it('never puts an admin-only surface in front of a non-admin', () => {

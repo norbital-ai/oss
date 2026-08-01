@@ -350,6 +350,8 @@ const transport: WorkspaceRemoteTransport = {
 	importPipeline: (input) => post('collections/import', input),
 	agentChat: (input) =>
 		post<{ runId: string; chatId: string | null; text: string }>('remotes/agentChat', input),
+	agentChatStart: (input) =>
+		post<{ runId: string; chatId: string; accepted: true }>('remotes/agentChatStart', input),
 	autocompleteGeolocation: (input) =>
 		post<TGeolocation[]>('remotes/autocompleteGeolocation', input),
 	renderStaticMap: (input) => post('remotes/renderStaticMap', input),

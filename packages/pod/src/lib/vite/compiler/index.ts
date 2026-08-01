@@ -987,15 +987,23 @@ async function discoverChannels(
 }
 
 /** Flat `src/+<name>.ts` declarations the compiler reads. Anything else there is a mistake. */
-const WORKSPACE_ROOT_DECLARATIONS: ReadonlySet<string> = new Set(['+seed.ts', '+env.ts']);
+const WORKSPACE_ROOT_DECLARATIONS: ReadonlySet<string> = new Set([
+	'+agent.ts',
+	'+seed.ts',
+	'+env.ts'
+]);
 
 async function discoverSeed(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
 	inventory: SourceInventory
-): Promise<{ readonly seed: string | null; readonly env: string | null }> {
+): Promise<{
+	readonly agent: string | null;
+	readonly seed: string | null;
+	readonly env: string | null;
+}> {
 	const sourceDirectory = path.join(root, 'src');
-	if (!inventory.hasDirectory(sourceDirectory)) return { seed: null, env: null };
+	if (!inventory.hasDirectory(sourceDirectory)) return { agent: null, seed: null, env: null };
 	for (const entry of inventory.entries(sourceDirectory)) {
 		if (
 			entry.isFile() &&
@@ -1019,6 +1027,7 @@ async function discoverSeed(
 		}
 	}
 	return {
+		agent: inventory.hasFile(path.join(sourceDirectory, '+agent.ts')) ? 'src/+agent.ts' : null,
 		seed: inventory.hasFile(path.join(sourceDirectory, '+seed.ts')) ? 'src/+seed.ts' : null,
 		env: inventory.hasFile(path.join(sourceDirectory, '+env.ts')) ? 'src/+env.ts' : null
 	};
@@ -1114,6 +1123,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		agentTools,
 		policies,
 		channels,
+		agent: rootDeclarations.agent,
 		seed: rootDeclarations.seed,
 		env: rootDeclarations.env,
 		diagnostics
@@ -1295,6 +1305,9 @@ function renderWorkspace(
 	if (structure.env) {
 		imports.push(`import env from ${JSON.stringify(generatedImport(structure.env))};`);
 	}
+	if (structure.agent) {
+		imports.push(`import agent from ${JSON.stringify(generatedImport(structure.agent))};`);
+	}
 	const automations = structure.automations
 		.map((automation, index) => `{ ...automation${index}, name: ${JSON.stringify(automation.id)} }`)
 		.join(', ');
@@ -1314,7 +1327,7 @@ function renderWorkspace(
 		.map((channel, index) => `\t\t${JSON.stringify(channel.id)}: channel${index}`)
 		.join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(
@@ -1538,6 +1551,7 @@ export async function compilePodFilesystem(
 			customTypes: [],
 			apps: [],
 			automations: [],
+			agent: null,
 			remotes: [],
 			policies: [],
 			channels: [],

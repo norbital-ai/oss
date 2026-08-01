@@ -152,6 +152,26 @@ describe('assertHostAgentTools', () => {
 		).not.toThrow();
 	});
 
+	it('validates the Pod-owned interactive agent host tools too', () => {
+		const declared = manifest({
+			agent: {
+				kind: 'agent',
+				task: 'Help in this workspace.',
+				hostTools: ['sandbox_read']
+			}
+		});
+		expect(() => assertHostAgentTools([sandboxEcho], declared)).toThrow(
+			/workspace agent.*names host tool "sandbox_read"/s
+		);
+		expect(() =>
+			assertHostAgentTools([{ ...sandboxEcho, name: 'sandbox_read' }], declared)
+		).not.toThrow();
+		expect(requiredRuntimeFacilities(declared)).toEqual(
+			expect.arrayContaining(['ai', 'agentTools'])
+		);
+		expect(requiredRuntimeFacilities(declared)).not.toContain('queue');
+	});
+
 	/** And the facility gate sees it, so a host with no tools at all refuses the workspace outright. */
 	it('makes agentTools a facility the manifest can require', () => {
 		expect(

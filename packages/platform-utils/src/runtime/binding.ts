@@ -105,9 +105,30 @@ export type AiChatResult = {
 	readonly usage?: unknown;
 };
 
+/** One provider-stream event normalized at the host boundary. */
+export type AiChatStreamEvent =
+	| { readonly type: 'text_delta'; readonly delta: string }
+	| { readonly type: 'tool_call'; readonly call: AiToolCall }
+	| {
+			readonly type: 'finish';
+			readonly stopReason: AiChatResult['stopReason'];
+			readonly usage?: unknown;
+	  };
+
+export type AiChatStreamBatch = {
+	readonly events: readonly AiChatStreamEvent[];
+	readonly done: boolean;
+};
+
 /** Model inference is the host's only AI responsibility; Pod owns the agent loop and tools. */
 export type HostAiBinding = {
 	chat(input: AiChatInput): Promise<AiChatResult>;
+	/** Start one provider turn. The opaque id names transient host memory, never a transcript. */
+	startStream?(input: AiChatInput): Promise<string>;
+	/** Pull the next available event batch; text deltas remain live across the isolate boundary. */
+	readStream?(streamId: string): Promise<AiChatStreamBatch>;
+	/** Release a provider stream when the tenant turn is aborted. */
+	cancelStream?(streamId: string): Promise<void>;
 };
 
 export type NotificationDelivery = {
@@ -309,13 +330,16 @@ export function requiredRuntimeFacilities(
 	}
 	const automations = Object.values(manifest.automations ?? {});
 	if (automations.length > 0) required.add('queue');
-	if (automations.some((automation) => automation.spec?.kind === 'agent')) required.add('ai');
+	if (manifest.agent || automations.some((automation) => automation.spec?.kind === 'agent')) {
+		required.add('ai');
+	}
 	// An agent that names a host tool has nothing to call without one. Same reasoning as `ai`: the
 	// workspace declared a dependency on something only the host can supply, so a host that supplies
 	// none must refuse the workspace rather than fail at the first run.
 	if (automations.some((automation) => (automation.spec?.hostTools ?? []).length > 0)) {
 		required.add('agentTools');
 	}
+	if ((manifest.agent?.hostTools ?? []).length > 0) required.add('agentTools');
 
 	return [...required];
 }

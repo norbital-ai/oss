@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { requireDocker } from '../support/pg-harness.js';
+import { testAiBinding } from '../support/ai-binding.js';
 import {
 	bootPodRuntime,
 	type Identity,
@@ -26,29 +26,28 @@ const member: Identity = {
 describe('Pod AI and automation transcript — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	let calls = 0;
-	const ai: HostAiBinding = {
-		async chat(input) {
-			calls += 1;
-			if (calls === 1) {
-				expect(input.tools?.map((tool) => tool.name)).toEqual([
-					'describe_workspace',
-					'read_collection'
-				]);
-				return {
-					text: '',
-					toolCalls: [{ id: 'tool-1', name: 'describe_workspace', input: {} }],
-					stopReason: 'tool_use',
-					usage: { totalTokens: 10 }
-				};
-			}
-			expect(input.messages.at(-1)).toMatchObject({ role: 'tool', toolCallId: 'tool-1' });
+	const ai = testAiBinding(async (input) => {
+		calls += 1;
+		if (calls === 1) {
+			expect(input.tools?.map((tool) => tool.name)).toEqual([
+				'describe_workspace',
+				'read_collection',
+				'spawn_subagent'
+			]);
 			return {
-				text: 'The workspace is ready.',
-				stopReason: 'end',
-				usage: { totalTokens: 7 }
+				text: '',
+				toolCalls: [{ id: 'tool-1', name: 'describe_workspace', input: {} }],
+				stopReason: 'tool_use',
+				usage: { totalTokens: 10 }
 			};
 		}
-	};
+		expect(input.messages.at(-1)).toMatchObject({ role: 'tool', toolCallId: 'tool-1' });
+		return {
+			text: 'The workspace is ready.',
+			stopReason: 'end',
+			usage: { totalTokens: 7 }
+		};
+	});
 
 	beforeAll(async () => {
 		harness = await bootPodRuntime('construction', { ai });

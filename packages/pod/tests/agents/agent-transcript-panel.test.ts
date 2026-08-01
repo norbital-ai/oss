@@ -34,6 +34,22 @@ describe('agent panel transcript', () => {
 		expect(toPanelMessage({ parts: [{ role: 'user', content: 'orphan' }] })).toEqual([]);
 	});
 
+	it('keeps streaming state for assistant paint and hides machine-only tool results', () => {
+		expect(
+			toPanelMessage({
+				norbital_id: 'm5',
+				status: 'streaming',
+				parts: [{ role: 'assistant', content: 'Partial' }]
+			})
+		).toEqual([{ key: 'm5', role: 'assistant', content: 'Partial', status: 'streaming' }]);
+		expect(
+			toPanelMessage({
+				norbital_id: 'm6',
+				parts: [{ role: 'tool', content: '{"rows":[]}', toolCallId: 'call-1' }]
+			})
+		).toEqual([]);
+	});
+
 	it('echoes a prompt until its stored row arrives, then stops', () => {
 		const stored = [{ key: 'm1', role: 'assistant', content: 'Hello.' }];
 		expect(withPendingEcho(stored, 'What is on site?')).toEqual([

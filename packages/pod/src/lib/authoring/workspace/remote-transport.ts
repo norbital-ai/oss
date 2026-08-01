@@ -14,6 +14,7 @@ export type WorkspaceRemoteTransport = {
 	readonly exportPipeline: PodRemoteOperations['exportPipeline'];
 	readonly importPipeline: PodRemoteOperations['importPipeline'];
 	readonly agentChat: PodRemoteOperations['agentChat'];
+	readonly agentChatStart: PodRemoteOperations['agentChatStart'];
 	readonly autocompleteGeolocation: PodRemoteOperations['autocompleteGeolocation'];
 	readonly renderStaticMap: PodRemoteOperations['renderStaticMap'];
 	readonly processApprovalRequestAction: NonNullable<

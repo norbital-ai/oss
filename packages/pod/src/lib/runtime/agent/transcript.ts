@@ -9,6 +9,7 @@ export type PanelMessage = {
 	readonly key: string;
 	readonly role: string;
 	readonly content: string;
+	readonly status?: string;
 };
 
 /**
@@ -23,7 +24,17 @@ export function toPanelMessage(record: Readonly<Record<string, unknown>>): Panel
 	if (typeof id !== 'string' || !Array.isArray(parts)) return [];
 	const message = parts[0] as Record<string, unknown> | undefined;
 	if (!message || typeof message.role !== 'string') return [];
-	return [{ key: id, role: message.role, content: describeMessage(message) }];
+	// Tool results are machine context. The assistant call immediately before them already names the
+	// action; printing the raw JSON result turns a conversation into a debug console.
+	if (message.role === 'tool') return [];
+	return [
+		{
+			key: id,
+			role: message.role,
+			content: describeMessage(message),
+			...(typeof record.status === 'string' ? { status: record.status } : {})
+		}
+	];
 }
 
 /**
@@ -58,8 +69,6 @@ export function withPendingEcho(
 	pending: string | null
 ): readonly PanelMessage[] {
 	if (pending === null) return messages;
-	const landed = messages.some(
-		(message) => message.role === 'user' && message.content === pending
-	);
+	const landed = messages.some((message) => message.role === 'user' && message.content === pending);
 	return landed ? messages : [...messages, { key: 'pending', role: 'user', content: pending }];
 }

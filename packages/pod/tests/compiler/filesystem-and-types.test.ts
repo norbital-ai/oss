@@ -527,6 +527,25 @@ export default defineEnv({ private: { REGISTRY_KEY: { description: 'Registry API
 		expect(generated).toContain('\tenv\n});');
 	});
 
+	it('discovers src/+agent.ts as the interactive profile instead of a scheduled automation', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/+agent.ts',
+			`import type { AgentAutomationSpec } from '@norbital-ai/pod/authoring';
+export default { kind: 'agent', task: 'Help here.', access: 'write' } satisfies AgentAutomationSpec;`
+		);
+		const structure = await discoverPodFilesystem(root);
+		expect(structure.diagnostics).toEqual([]);
+		expect(structure.agent).toBe('src/+agent.ts');
+		expect(structure.automations.map((automation) => automation.id)).toEqual(['triage']);
+
+		await compilePodFilesystem({ root });
+		const generated = await readFile(path.join(root, '.norbital/generated/workspace.ts'), 'utf8');
+		expect(generated).toContain('import agent from "../../src/+agent.js";');
+		expect(generated).toMatch(/\tmeta: \{[^\n]+\},\n\tagent/);
+	});
+
 	it('still refuses a flat src/+<name>.ts that declares nothing', async () => {
 		const root = await workspace();
 		await write(root, 'src/+environment.ts', `export default {};`);

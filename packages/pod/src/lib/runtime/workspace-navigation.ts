@@ -44,15 +44,17 @@ export function isHostPluginEntry(
 	return plugins.some((plugin) => plugin.entry === href);
 }
 
-/** A Pod-owned agent surface exists only when the host explicitly registers that exact entry. */
-export function hostAuthorizesAgentSurface(
+/** An authored workspace agent is the capability and UI boundary; no host route is required. */
+export function workspaceProvidesAgentSurface(agent: { readonly kind: 'agent' } | undefined): boolean {
+	return agent?.kind === 'agent';
+}
+
+/** The optional full-page route is Pod-owned whenever this workspace authored an agent. */
+export function workspaceAuthorizesAgentSurface(
 	currentPath: string,
-	plugins: readonly { readonly key: string; readonly entry: string }[]
+	agent: { readonly kind: 'agent' } | undefined
 ): boolean {
-	return (
-		currentPath === '/agent' &&
-		plugins.some((plugin) => plugin.key === 'agent' && plugin.entry === '/agent')
-	);
+	return currentPath === '/agent' && workspaceProvidesAgentSurface(agent);
 }
 
 function isUnder(currentPath: string, entry: string): boolean {

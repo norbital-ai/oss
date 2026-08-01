@@ -25,13 +25,19 @@ export type PodRemoteOperations = {
 	 * can read the transcript — which arrives as ordinary synced `chat_message` rows rather than through
 	 * a stream of its own.
 	 */
-	readonly agentChat: (input: {
+	readonly agentChat: (input: { readonly message: string; readonly runId?: string }) => Promise<{
+		readonly runId: string;
+		readonly chatId: string | null;
+		readonly text: string;
+	}>;
+	/** Begin a live turn and return before provider tokens are produced. */
+	readonly agentChatStart: (input: {
 		readonly message: string;
 		readonly runId?: string;
 	}) => Promise<{
 		readonly runId: string;
-		readonly chatId: string | null;
-		readonly text: string;
+		readonly chatId: string;
+		readonly accepted: true;
 	}>;
 	readonly renderStaticMap: (input: {
 		readonly markers: readonly {

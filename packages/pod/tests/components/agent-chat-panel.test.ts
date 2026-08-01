@@ -41,7 +41,7 @@ beforeEach(() => {
 	inFlight = deferred();
 	sent = [];
 	setWorkspaceRemoteTransport({
-		agentChat: (input: { message: string }) => {
+		agentChatStart: (input: { message: string }) => {
 			sent.push(input.message);
 			return inFlight.promise;
 		}
@@ -83,7 +83,9 @@ describe('agent chat panel', () => {
 		// vanishes for those seconds reads as a dropped message.
 		expect(transcript(container)).toEqual([{ role: 'user', content: 'What is on site?' }]);
 		expect(sent).toEqual(['What is on site?']);
-		expect(container.querySelector('button')?.textContent?.trim()).toBe('Thinking…');
+		expect(container.querySelector('[data-testid="agent-send"]')?.textContent?.trim()).toBe(
+			'Working…'
+		);
 		destroy();
 	});
 
@@ -135,7 +137,29 @@ describe('agent chat panel', () => {
 			'Agent unavailable'
 		);
 		// And the composer is usable again rather than stuck mid-send.
-		expect(container.querySelector('button')?.textContent?.trim()).toBe('Send');
+		expect(container.querySelector('[data-testid="agent-send"]')?.textContent?.trim()).toBe('Send');
+		destroy();
+	});
+
+	it('leaves the working state when the root turn completes through live sync', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Check the records');
+		submit(container);
+		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
+		await settle();
+
+		replica.arrive('chat_turn', {
+			norbital_id: 't1',
+			chat_id: 'c1',
+			parent_turn_id: null,
+			subagent_id: null,
+			status: 'succeeded',
+			started_at: '2026-08-01T00:00:00.000Z'
+		});
+		await settle();
+
+		expect(container.querySelector('textarea')?.disabled).toBe(false);
+		expect(container.querySelector('[data-testid="agent-send"]')?.textContent?.trim()).toBe('Send');
 		destroy();
 	});
 

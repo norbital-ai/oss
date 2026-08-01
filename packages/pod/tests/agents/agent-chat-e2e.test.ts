@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { requireDocker } from '../support/pg-harness.js';
+import { testAiBinding } from '../support/ai-binding.js';
 import {
 	bootPodRuntime,
 	type Identity,
@@ -25,16 +25,14 @@ const member: Identity = {
 describe('Pod agent chat — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	const seen: string[][] = [];
-	const ai: HostAiBinding = {
-		async chat(input) {
-			seen.push(input.messages.map((message) => `${message.role}:${message.content}`));
-			return {
-				text: `reply ${seen.length}`,
-				stopReason: 'end',
-				usage: { totalTokens: 3 }
-			};
-		}
-	};
+	const ai = testAiBinding(async (input) => {
+		seen.push(input.messages.map((message) => `${message.role}:${message.content}`));
+		return {
+			text: `reply ${seen.length}`,
+			stopReason: 'end',
+			usage: { totalTokens: 3 }
+		};
+	});
 
 	beforeAll(async () => {
 		harness = await bootPodRuntime('construction', { ai });

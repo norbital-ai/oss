@@ -10,6 +10,7 @@ import {
 import { MANIFEST_VERSION } from '@norbital-ai/platform-utils/manifest/parse';
 import type {
 	ManifestApp,
+	ManifestAutomationAgentSpec,
 	ManifestAutomationTemplate,
 	ManifestCollectionEntry,
 	ManifestHandlerEntry,
@@ -134,28 +135,31 @@ function buildAutomationEntries(
 						event: trigger.trigger.event
 					}
 				: undefined;
-		const agentSpec =
-			tpl.spec && tpl.spec.kind === 'agent' && typeof tpl.spec.task === 'string'
-				? {
-						kind: 'agent' as const,
-						task: tpl.spec.task,
-						...(tpl.spec.model ? { model: tpl.spec.model } : {}),
-						...(tpl.spec.systemPrompt ? { systemPrompt: tpl.spec.systemPrompt } : {}),
-						...(tpl.spec.collections ? { collections: tpl.spec.collections } : {}),
-						...(tpl.spec.access ? { access: tpl.spec.access } : {}),
-						...(tpl.spec.tools ? { tools: tpl.spec.tools } : {}),
-						...(tpl.spec.hostTools ? { hostTools: tpl.spec.hostTools } : {}),
-						...(tpl.spec.profile ? { profile: tpl.spec.profile } : {}),
-						...(tpl.spec.maxIterations ? { maxIterations: tpl.spec.maxIterations } : {}),
-						...(tpl.spec.maxTokens ? { maxTokens: tpl.spec.maxTokens } : {})
-					}
-				: undefined;
+		const agentSpec = buildAgentEntry(tpl.spec);
 		out[key] = {
 			trigger: isSchedule ? { schedule: trigger.schedule! } : eventTrigger!,
 			...(agentSpec ? { spec: agentSpec } : {})
 		};
 	}
 	return out;
+}
+
+function buildAgentEntry(raw: unknown): ManifestAutomationAgentSpec | undefined {
+	const spec = raw as Partial<ManifestAutomationAgentSpec> | null | undefined;
+	if (!spec || spec.kind !== 'agent' || typeof spec.task !== 'string') return undefined;
+	return {
+		kind: 'agent',
+		task: spec.task,
+		...(spec.model ? { model: spec.model } : {}),
+		...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
+		...(spec.collections ? { collections: spec.collections } : {}),
+		...(spec.access ? { access: spec.access } : {}),
+		...(spec.tools ? { tools: spec.tools } : {}),
+		...(spec.hostTools ? { hostTools: spec.hostTools } : {}),
+		...(spec.profile ? { profile: spec.profile } : {}),
+		...(spec.maxIterations ? { maxIterations: spec.maxIterations } : {}),
+		...(spec.maxTokens ? { maxTokens: spec.maxTokens } : {})
+	};
 }
 
 function buildAppEntries(apps: Record<string, unknown> | undefined): Record<string, ManifestApp> {
@@ -329,6 +333,7 @@ export function buildNorbitalManifest(workspace: {
 		apps: buildAppEntries(workspace.registered?.apps),
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
 		agentTools: buildAgentToolEntries(workspace.registered?.agentTools),
+		agent: buildAgentEntry(workspace.registered?.agent),
 		automations: buildAutomationEntries(workspace.registered?.automations),
 		policies: buildPolicyEntries(workspace.registered?.policies),
 		channels: buildChannelEntries(workspace.registered?.channels),

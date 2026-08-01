@@ -16,6 +16,7 @@
 	import CollectionRecordDetailFallback from './collection-record-detail-fallback.svelte';
 	import DetailSurfaceStack from './detail-surface-stack.svelte';
 	import * as Sheet from '@norbital-ai/ui/sheet';
+	import { Button } from '@norbital-ai/ui/button';
 	import {
 		CollectionDetailActions,
 		CollectionDetailPreferences,
@@ -40,10 +41,11 @@
 		appAccessAllowed,
 		buildApplicationNavigation,
 		buildSystemNavigation,
-		hostAuthorizesAgentSurface,
 		isHostPluginEntry,
 		resolveApplicationLandingAppId,
 		resolveWorkspaceOrganizationOptions,
+		workspaceAuthorizesAgentSurface,
+		workspaceProvidesAgentSurface,
 		WORKSPACE_SETTINGS_PATH
 	} from './workspace-navigation.js';
 	import WorkspaceSettingsSurface from './workspace-settings-surface.svelte';
@@ -160,6 +162,7 @@
 	const detailSheetFullScreen = $derived(
 		topDetailFrame ? detailPreferences.isFullScreen(topDetailFrame.collection_name) : false
 	);
+	let agentSheetOpen = $state(false);
 	const navigationModel = $derived.by((): WorkspaceNavigationModel => ({
 		activeOrganization,
 		organizations: resolveWorkspaceOrganizationOptions({
@@ -193,8 +196,9 @@
 		}))
 	);
 	const agentSurfaceAllowed = $derived(
-		hostAuthorizesAgentSurface(currentPath, data.hostPlugins ?? [])
+		workspaceAuthorizesAgentSurface(currentPath, manifestContext.manifest.agent)
 	);
+	const agentAvailable = $derived(workspaceProvidesAgentSurface(manifestContext.manifest.agent));
 
 	function closeDetailSheet(): void {
 		if (detailSheetOpen) platformState.navigation.pop(page.url);
@@ -385,6 +389,46 @@
 		{/if}
 	</Bound>
 </WorkspaceShell>
+
+{#if agentAvailable && !agentSurfaceAllowed && !agentSheetOpen}
+	<Button
+		type="button"
+		aria-label="Open workspace agent"
+		aria-haspopup="dialog"
+		class="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 h-11 gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-6"
+		onclick={() => (agentSheetOpen = true)}
+		data-testid="workspace-agent-trigger"
+	>
+		<Icon icon="lucide:sparkles" class="size-4" />
+		<span>Ask agent</span>
+	</Button>
+{/if}
+
+{#if agentAvailable}
+	<Sheet.Root bind:open={agentSheetOpen}>
+		<Sheet.Content
+			flush
+			contained
+			portalTarget="[data-slot='sidebar-inset']"
+			side="right"
+			class="w-[min(30rem,100%)] sm:max-w-[30rem]"
+			persistenceKey="pod-workspace-agent"
+			preventBackgroundClick="narrow"
+		>
+			<div class="flex h-full min-h-0 flex-col">
+				<Sheet.Header class="shrink-0 border-b px-4 py-3.5 pr-12 text-left sm:px-5">
+					<Sheet.Title class="text-sm font-semibold">Workspace agent</Sheet.Title>
+					<Sheet.Description class="text-xs leading-5 text-muted-foreground">
+						Answers stream here and stay with this tenant workspace.
+					</Sheet.Description>
+				</Sheet.Header>
+				<div class="min-h-0 flex-1">
+					<AgentChatPanel />
+				</div>
+			</div>
+		</Sheet.Content>
+	</Sheet.Root>
+{/if}
 
 <Sheet.Root open={detailSheetOpen} onOpenChange={(open) => !open && closeDetailSheet()}>
 	<Sheet.Content

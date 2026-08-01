@@ -15,6 +15,7 @@ import {
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
 import type {
+	AiChatResult,
 	AiMessage,
 	AiToolCall,
 	AiToolSpec
@@ -62,6 +63,16 @@ type AgentRunOptions = {
 	readonly historyLimit?: number;
 	/** Extra `chat_message` columns for the input message only — where it came from, and from whom. */
 	readonly inputMetadata?: Record<string, unknown>;
+};
+
+type TranscriptWriter = {
+	readonly sessionId: string;
+	persist(
+		message: AiMessage,
+		turnId: string,
+		extra?: Record<string, unknown>
+	): Promise<string | null>;
+	update(messageId: string, values: Record<string, unknown>): Promise<void>;
 };
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -161,7 +172,10 @@ async function hostToolSpecs(
 	});
 }
 
-async function resolveTools(spec: AgentAutomationSpec): Promise<ResolvedTools> {
+async function resolveTools(
+	spec: AgentAutomationSpec,
+	options: { readonly canSpawnSubagent: boolean }
+): Promise<ResolvedTools> {
 	const collections = allowedCollections(spec);
 	const tools: AiToolSpec[] = [
 		{
@@ -175,11 +189,39 @@ async function resolveTools(spec: AgentAutomationSpec): Promise<ResolvedTools> {
 			inputSchema: z.toJSONSchema(readInput)
 		}
 	];
+	if (options.canSpawnSubagent) {
+		tools.push({
+			name: 'spawn_subagent',
+			description:
+				'Spawn one focused subagent for a delegated task. The child uses the same approved data and workspace tools, streams its own transcript, and returns its final answer.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					task: { type: 'string', minLength: 1 }
+				},
+				required: ['task'],
+				additionalProperties: false
+			}
+		});
+	}
 	if ((spec.access ?? 'read') === 'write') {
 		tools.push({
 			name: 'write_collection',
 			description: 'Create, update, or delete records through Pod collection operations.',
-			inputSchema: z.toJSONSchema(writeInput)
+			// OpenAI-compatible providers require function parameters to have an object root.
+			// `z.discriminatedUnion()` emits a root `oneOf`, so advertise the shared envelope here
+			// and keep `writeInput.parse()` below as the stricter per-action execution boundary.
+			inputSchema: {
+				type: 'object',
+				properties: {
+					collection: { type: 'string' },
+					action: { type: 'string', enum: ['create', 'update', 'delete'] },
+					id: { type: 'string', format: 'uuid' },
+					record: { type: 'object', additionalProperties: true }
+				},
+				required: ['collection', 'action'],
+				additionalProperties: false
+			}
 		});
 	}
 	const registered = getTenantWorkspace().registered.agentTools;
@@ -333,14 +375,18 @@ async function loadMessages(
 					text: `SELECT m.seq, m.parts
 					         FROM chat_message m
 					         JOIN chat_session s ON s.norbital_id = m.chat_id
+					    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
 					        WHERE s.automation_run_id = $1::uuid
+					          AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
 					        ORDER BY m.seq`,
 					values: [scope.runId]
 				}
 			: {
 					text: `SELECT seq, parts FROM (
-					         SELECT seq, parts FROM chat_message
-					          WHERE chat_id = $1::uuid
+					         SELECT m.seq, m.parts FROM chat_message m
+					          LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
+					          WHERE m.chat_id = $1::uuid
+					            AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
 					          ORDER BY seq DESC
 					          LIMIT $2
 					       ) recent ORDER BY seq`,
@@ -379,6 +425,327 @@ export type AgentRunResult = {
 	/** The stored id of the input message, so a caller can point its own row at the transcript. */
 	readonly inputMessageId: string | null;
 };
+
+function createTranscriptWriter(input: {
+	readonly sessionId: string;
+	readonly startingSequence: number;
+}): TranscriptWriter {
+	const ctx = getWorkspace({ provision: true });
+	let sequence = input.startingSequence;
+	return {
+		sessionId: input.sessionId,
+		async persist(message, turnId, extra): Promise<string | null> {
+			sequence += 1;
+			const record = await createRecord(
+				ctx,
+				'chat_message',
+				{
+					chat_id: input.sessionId,
+					turn_id: turnId,
+					role: message.role,
+					seq: sequence,
+					parts: [message],
+					...(extra ?? {})
+				},
+				{ isElevated: true }
+			);
+			return typeof record.norbital_id === 'string' ? record.norbital_id : null;
+		},
+		async update(messageId, values): Promise<void> {
+			await updateRecord(ctx, 'chat_message', messageId, values, { isElevated: true });
+		}
+	};
+}
+
+async function createTurn(input: {
+	readonly writer: TranscriptWriter;
+	readonly spec: AgentAutomationSpec;
+	readonly parentTurnId?: string;
+	readonly subagentId?: string;
+}): Promise<string> {
+	const ctx = getWorkspace({ provision: true });
+	const turn = await createRecord(
+		ctx,
+		'chat_turn',
+		{
+			chat_id: input.writer.sessionId,
+			status: 'running',
+			model: input.spec.model ?? 'host-default',
+			...(input.parentTurnId ? { parent_turn_id: input.parentTurnId } : {}),
+			...(input.subagentId ? { subagent_id: input.subagentId } : {})
+		},
+		{ isElevated: true }
+	);
+	if (typeof turn.norbital_id !== 'string') throw new Error('Agent turn has no id');
+	return turn.norbital_id;
+}
+
+async function finishTurn(
+	turnId: string,
+	status: 'succeeded' | 'failed' | 'aborted',
+	error?: string
+): Promise<void> {
+	const ctx = getWorkspace({ provision: true });
+	await updateRecord(
+		ctx,
+		'chat_turn',
+		turnId,
+		{
+			status,
+			heartbeat_at: new Date().toISOString(),
+			ended_at: new Date().toISOString(),
+			error: error ?? null
+		},
+		{ isElevated: true }
+	);
+}
+
+type ProviderTurnResult = {
+	readonly text: string;
+	readonly toolCalls: readonly AiToolCall[];
+	readonly stopReason: AiChatResult['stopReason'];
+	readonly usage?: unknown;
+};
+
+/**
+ * Pull one provider stream through the host boundary and make its text visible in tenant sync.
+ *
+ * The host owns only a short-lived event queue. The first text delta creates the assistant row and
+ * every following batch updates that same row, so the replica observes a real `streaming` ->
+ * `complete` transition without Core retaining a second copy of the conversation.
+ */
+async function streamProviderTurn(input: {
+	readonly messages: readonly AiMessage[];
+	readonly tools: readonly AiToolSpec[];
+	readonly spec: AgentAutomationSpec;
+	readonly writer: TranscriptWriter;
+	readonly turnId: string;
+}): Promise<ProviderTurnResult> {
+	const ctx = getWorkspace({ provision: true });
+	const ai = requireRuntimeFacility('ai');
+	if (!ai.startStream || !ai.readStream || !ai.cancelStream) {
+		const result = await ai.chat({
+			messages: [
+				...(input.spec.systemPrompt
+					? [{ role: 'system' as const, content: input.spec.systemPrompt }]
+					: []),
+				...input.messages
+			],
+			tools: input.tools,
+			...(input.spec.model ? { model: input.spec.model } : {}),
+			...(input.spec.profile ? { profile: input.spec.profile } : {})
+		});
+		if (result.text) {
+			await input.writer.persist({ role: 'assistant', content: result.text }, input.turnId, {
+				status: 'complete',
+				model: input.spec.model ?? null,
+				...(result.usage ? { usage: objectValue(result.usage) } : {})
+			});
+		}
+		return {
+			text: result.text,
+			toolCalls: result.toolCalls ?? [],
+			stopReason: result.stopReason,
+			...(result.usage !== undefined ? { usage: result.usage } : {})
+		};
+	}
+	const streamId = await ai.startStream({
+		messages: [
+			...(input.spec.systemPrompt
+				? [{ role: 'system' as const, content: input.spec.systemPrompt }]
+				: []),
+			...input.messages
+		],
+		tools: input.tools,
+		...(input.spec.model ? { model: input.spec.model } : {}),
+		...(input.spec.profile ? { profile: input.spec.profile } : {})
+	});
+	let text = '';
+	let assistantMessageId: string | null = null;
+	let stopReason: AiChatResult['stopReason'] = 'end';
+	let usage: unknown;
+	const toolCalls: AiToolCall[] = [];
+	let done = false;
+	let lastHeartbeat = Date.now();
+	try {
+		while (!done) {
+			const batch = await ai.readStream(streamId);
+			let textChanged = false;
+			for (const event of batch.events) {
+				if (event.type === 'text_delta') {
+					text += event.delta;
+					textChanged = true;
+				} else if (event.type === 'tool_call') {
+					toolCalls.push(event.call);
+				} else {
+					stopReason = event.stopReason;
+					usage = event.usage;
+				}
+			}
+			if (textChanged) {
+				const message: AiMessage = { role: 'assistant', content: text };
+				if (assistantMessageId) {
+					await input.writer.update(assistantMessageId, { parts: [message], status: 'streaming' });
+				} else {
+					assistantMessageId = await input.writer.persist(message, input.turnId, {
+						status: 'streaming',
+						model: input.spec.model ?? null
+					});
+				}
+			}
+			if (Date.now() - lastHeartbeat >= 5_000) {
+				lastHeartbeat = Date.now();
+				await updateRecord(
+					ctx,
+					'chat_turn',
+					input.turnId,
+					{ heartbeat_at: new Date().toISOString() },
+					{ isElevated: true }
+				);
+			}
+			done = batch.done;
+		}
+		if (assistantMessageId) {
+			await input.writer.update(assistantMessageId, {
+				parts: [{ role: 'assistant', content: text }],
+				status: 'complete',
+				...(usage ? { usage: objectValue(usage) } : {})
+			});
+		}
+		return { text, toolCalls, stopReason, ...(usage !== undefined ? { usage } : {}) };
+	} catch (cause) {
+		await ai.cancelStream(streamId).catch(() => undefined);
+		if (assistantMessageId) {
+			await input.writer
+				.update(assistantMessageId, {
+					parts: [{ role: 'assistant', content: text }],
+					status: 'aborted'
+				})
+				.catch(() => undefined);
+		}
+		throw cause;
+	}
+}
+
+type LoopResult = { readonly text: string; readonly consumedTokens: number };
+
+async function runAgentLoop(input: {
+	readonly spec: AgentAutomationSpec;
+	readonly messages: AiMessage[];
+	readonly writer: TranscriptWriter;
+	readonly turnId: string;
+	readonly depth: number;
+	readonly iterationLimit?: number;
+}): Promise<LoopResult> {
+	const ctx = getWorkspace({ provision: true });
+	const resolved = await resolveTools(input.spec, { canSpawnSubagent: input.depth === 0 });
+	const maxIterations = input.iterationLimit ?? input.spec.maxIterations ?? 8;
+	let consumedTokens = 0;
+	let finalText = '';
+	for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+		const result = await streamProviderTurn({
+			messages: input.messages,
+			tools: resolved.specs,
+			spec: input.spec,
+			writer: input.writer,
+			turnId: input.turnId
+		});
+		consumedTokens += usageTokens(result.usage);
+		if (input.spec.maxTokens && consumedTokens > input.spec.maxTokens) {
+			throw new Error(`Agent token budget exceeded (${input.spec.maxTokens})`);
+		}
+		if (result.text) {
+			finalText = result.text;
+			input.messages.push({ role: 'assistant', content: result.text });
+		}
+		const calls = result.toolCalls;
+		if (calls.length > 0) {
+			const callMessage: AiMessage = { role: 'assistant', content: '', toolCalls: calls };
+			input.messages.push(callMessage);
+			await input.writer.persist(callMessage, input.turnId);
+		}
+		if (calls.length === 0) {
+			if (result.stopReason === 'refusal') throw new Error('AI provider refused the run');
+			return { text: finalText, consumedTokens };
+		}
+		for (const call of calls) {
+			let output: Record<string, unknown>;
+			try {
+				if (call.name === 'spawn_subagent') {
+					if (input.depth !== 0) throw new Error('Subagents cannot spawn another subagent');
+					const task = z.object({ task: z.string().min(1) }).parse(call.input).task;
+					const child = await runSubagent({
+						spec: input.spec,
+						task,
+						writer: input.writer,
+						parentTurnId: input.turnId,
+						subagentId: `subagent:${call.id}`,
+						depth: input.depth + 1
+					});
+					output = { text: child.text, turnId: child.turnId };
+				} else {
+					output = await executeTool(input.spec, resolved, call);
+				}
+			} catch (cause) {
+				output = { error: cause instanceof Error ? cause.message : String(cause) };
+			}
+			const toolMessage: AiMessage = {
+				role: 'tool',
+				content: JSON.stringify(output),
+				toolCallId: call.id
+			};
+			input.messages.push(toolMessage);
+			await input.writer.persist(toolMessage, input.turnId);
+			await updateRecord(
+				ctx,
+				'chat_turn',
+				input.turnId,
+				{ heartbeat_at: new Date().toISOString() },
+				{ isElevated: true }
+			);
+		}
+	}
+	throw new Error(`Agent exceeded maxIterations (${maxIterations})`);
+}
+
+async function runSubagent(input: {
+	readonly spec: AgentAutomationSpec;
+	readonly task: string;
+	readonly writer: TranscriptWriter;
+	readonly parentTurnId: string;
+	readonly subagentId: string;
+	readonly depth: number;
+}): Promise<{ readonly text: string; readonly turnId: string }> {
+	const ctx = getWorkspace({ provision: true });
+	const turnId = await createTurn(input);
+	const prompt: AiMessage = { role: 'user', content: input.task };
+	const promptMessageId = await input.writer.persist(prompt, turnId);
+	if (promptMessageId) {
+		await updateRecord(
+			ctx,
+			'chat_turn',
+			turnId,
+			{ prompt_message_id: promptMessageId },
+			{ isElevated: true }
+		);
+	}
+	try {
+		const result = await runAgentLoop({
+			spec: input.spec,
+			messages: [prompt],
+			writer: input.writer,
+			turnId,
+			depth: input.depth,
+			iterationLimit: Math.min(input.spec.maxIterations ?? 8, 4)
+		});
+		await finishTurn(turnId, 'succeeded');
+		return { text: result.text, turnId };
+	} catch (cause) {
+		const message = cause instanceof Error ? cause.message : String(cause);
+		await finishTurn(turnId, 'failed', message).catch(() => undefined);
+		throw cause;
+	}
+}
 
 export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult> {
 	const ctx = getWorkspace({ provision: true });
@@ -433,112 +800,60 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 				}
 			: { runId }
 	);
-	let sequence = restored.sequence;
 	const messages: AiMessage[] = [...restored.messages];
-	let sessionId: string | null = options.sessionId ?? null;
-	const persist = async (
-		message: AiMessage,
-		extra?: Record<string, unknown>
-	): Promise<string | null> => {
-		sessionId ??= await ensureRunSession(runId, ownerUserId);
-		sequence += 1;
-		const record = await createRecord(
-			ctx,
-			'chat_message',
-			{
-				chat_id: sessionId,
-				role: message.role,
-				seq: sequence,
-				parts: [message],
-				...(extra ?? {})
-			},
-			{ isElevated: true }
-		);
-		return typeof record.norbital_id === 'string' ? record.norbital_id : null;
-	};
+	const sessionId = options.sessionId ?? (await ensureRunSession(runId, ownerUserId));
+	const writer = createTranscriptWriter({
+		sessionId,
+		startingSequence: restored.sequence
+	});
+	const turnId = await createTurn({ writer, spec: options.spec });
 	const initial = options.input ?? (messages.length === 0 ? options.spec.task : undefined);
 	let inputMessageId: string | null = null;
 	if (initial) {
 		messages.push({ role: 'user', content: initial });
-		inputMessageId = await persist({ role: 'user', content: initial }, options.inputMetadata);
+		inputMessageId = await writer.persist(
+			{ role: 'user', content: initial },
+			turnId,
+			options.inputMetadata
+		);
+		if (inputMessageId) {
+			await updateRecord(
+				ctx,
+				'chat_turn',
+				turnId,
+				{ prompt_message_id: inputMessageId },
+				{ isElevated: true }
+			);
+		}
 	}
 	if (messages.length === 0) throw new Error('Agent run requires an input message');
 
-	const ai = requireRuntimeFacility('ai');
-	const resolved = await resolveTools(options.spec);
-	const tools = resolved.specs;
-	const maxIterations = options.spec.maxIterations ?? 8;
-	let consumedTokens = 0;
-	let finalText = '';
 	try {
-		for (let iteration = 0; iteration < maxIterations; iteration += 1) {
-			const result = await ai.chat({
-				messages: [
-					...(options.spec.systemPrompt
-						? [{ role: 'system' as const, content: options.spec.systemPrompt }]
-						: []),
-					...messages
-				],
-				tools,
-				...(options.spec.model ? { model: options.spec.model } : {}),
-				...(options.spec.profile ? { profile: options.spec.profile } : {})
-			});
-			consumedTokens += usageTokens(result.usage);
-			if (options.spec.maxTokens && consumedTokens > options.spec.maxTokens) {
-				throw new Error(`Agent token budget exceeded (${options.spec.maxTokens})`);
-			}
-			if (result.text) {
-				finalText = result.text;
-				messages.push({ role: 'assistant', content: result.text });
-				await persist(
-					{ role: 'assistant', content: result.text },
-					result.usage ? { usage: objectValue(result.usage) } : undefined
-				);
-			}
-			const calls = result.toolCalls ?? [];
-			if (calls.length > 0) {
-				const call_message: AiMessage = { role: 'assistant', content: '', toolCalls: calls };
-				messages.push(call_message);
-				await persist(call_message);
-			}
-			if (calls.length === 0) {
-				if (result.stopReason === 'refusal') throw new Error('AI provider refused the run');
-				await updateRecord(
-					ctx,
-					'automation_run',
-					runId,
-					{
-						status: 'success',
-						output: { text: finalText },
-						error: null,
-						completed_at: new Date().toISOString()
-					},
-					{ isElevated: true }
-				);
-				return { runId, status: 'success', text: finalText, sessionId, inputMessageId };
-			}
-			for (const call of calls) {
-				let output: Record<string, unknown>;
-				try {
-					output = await executeTool(options.spec, resolved, call);
-				} catch (cause) {
-					output = {
-						error: cause instanceof Error ? cause.message : String(cause)
-					};
-				}
-				const tool_message: AiMessage = {
-					role: 'tool',
-					content: JSON.stringify(output),
-					toolCallId: call.id
-				};
-				messages.push(tool_message);
-				await persist(tool_message);
-			}
-		}
-		throw new Error(`Agent exceeded maxIterations (${maxIterations})`);
+		const result = await runAgentLoop({
+			spec: options.spec,
+			messages,
+			writer,
+			turnId,
+			depth: 0
+		});
+		await finishTurn(turnId, 'succeeded');
+		await updateRecord(
+			ctx,
+			'automation_run',
+			runId,
+			{
+				status: 'success',
+				output: { text: result.text },
+				error: null,
+				completed_at: new Date().toISOString()
+			},
+			{ isElevated: true }
+		);
+		return { runId, status: 'success', text: result.text, sessionId, inputMessageId };
 	} catch (cause) {
 		const message = cause instanceof Error ? cause.message : String(cause);
-		await persist({ role: 'system', content: message }).catch(() => undefined);
+		await writer.persist({ role: 'system', content: message }, turnId).catch(() => undefined);
+		await finishTurn(turnId, 'failed', message).catch(() => undefined);
 		await updateRecord(
 			ctx,
 			'automation_run',

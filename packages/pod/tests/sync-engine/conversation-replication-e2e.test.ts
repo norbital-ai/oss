@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
 import type { SyncFetch } from '$lib/client/sync/types.js';
 import { requireDocker } from '../support/pg-harness.js';
 import { createClientDb } from '../support/pglite-node.js';
+import { testAiBinding } from '../support/ai-binding.js';
 import {
 	bootPodRuntime,
 	type Identity,
@@ -110,11 +110,9 @@ describe('Conversations and runs replicate to their owner', () => {
 	let adaChat: { runId: string; chatId: string | null };
 	let graceChat: { runId: string; chatId: string | null };
 
-	const ai: HostAiBinding = {
-		async chat() {
-			return { text: 'Noted.', stopReason: 'end', usage: { totalTokens: 3 } };
-		}
-	};
+	const ai = testAiBinding(async () => {
+		return { text: 'Noted.', stopReason: 'end', usage: { totalTokens: 3 } };
+	});
 
 	beforeAll(async () => {
 		harness = await bootPodRuntime('construction', { ai });
@@ -171,19 +169,14 @@ describe('Conversations and runs replicate to their owner', () => {
 		expect(runs.rows.every((row) => row.requested_by_user_id === ada.userId)).toBe(true);
 	});
 
-	/**
-	 * `chat_turn` replicates, and is empty — Pod's loop does not write one.
-	 *
-	 * It is a Core-era table: the loop stores each `AiMessage` in `chat_message` verbatim, so replay
-	 * is a read and there is nothing left for a turn row to hold. Asserted rather than left implicit,
-	 * so a future port that starts writing turns finds a test that says what changed.
-	 */
-	it('replicates chat_turn, which nothing in Pod writes', async () => {
+	it('replicates completed turns only to the conversation owner', async () => {
 		const turns = await shape(harness, 'chat_turn', ada);
 		expect(turns.status).toBe(200);
-		expect(turns.rows).toEqual([]);
+		expect(turns.rows.length).toBeGreaterThanOrEqual(1);
+		expect(turns.rows.every((row) => row.chat_id === adaChat.chatId)).toBe(true);
+		expect(turns.rows.every((row) => row.status === 'succeeded')).toBe(true);
 		const anyTurn = await harness.pool.query(`SELECT count(*)::int AS n FROM chat_turn`);
-		expect(anyTurn.rows[0]).toEqual({ n: 0 });
+		expect(anyTurn.rows[0]?.n).toBeGreaterThanOrEqual(2);
 	});
 
 	it('delivers a reply to an open replica without the panel asking again', async () => {

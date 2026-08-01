@@ -16,6 +16,7 @@ import {
 	adminDeleteSystemRecord,
 	adminUpdateSystemRecord,
 	agentChat,
+	agentChatStart,
 	autocompleteGeolocation,
 	count,
 	create,
@@ -212,6 +213,7 @@ const RUNTIME_ENDPOINT_HANDLERS: Record<string, RuntimeEndpointHandler> = {
 	'collections/export': wireEndpoint(ExportRecordsWireSchema, exportPipeline),
 	'collections/import': wireEndpoint(ImportRecordsWireSchema, importPipeline),
 	'remotes/agentChat': wireEndpoint(AgentChatInputSchema, agentChat),
+	'remotes/agentChatStart': wireEndpoint(AgentChatInputSchema, agentChatStart),
 	'remotes/autocompleteGeolocation': wireEndpoint(
 		AutocompleteGeolocationInputSchema,
 		autocompleteGeolocation

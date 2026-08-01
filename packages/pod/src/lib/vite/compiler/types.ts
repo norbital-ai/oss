@@ -73,6 +73,8 @@ export interface PodStructure {
 	readonly customTypes: readonly DiscoveredCustomType[];
 	readonly apps: readonly DiscoveredAppNode[];
 	readonly automations: readonly DiscoveredWorkspaceRole[];
+	/** `src/+agent.ts`, if declared — the Pod-owned interactive agent profile. */
+	readonly agent: string | null;
 	readonly remotes: readonly DiscoveredWorkspaceRole[];
 	readonly agentTools: readonly DiscoveredWorkspaceRole[];
 	readonly policies: readonly DiscoveredWorkspaceRole[];

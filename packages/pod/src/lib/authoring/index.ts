@@ -61,6 +61,7 @@ export type {
 export { extract } from './schema/extract.js';
 export {
 	defineAutomation,
+	type AgentAutomationSpec,
 	type AutomationContext,
 	type AutomationTrigger
 } from './automations/automations.js';
