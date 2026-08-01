@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { isSwitchingOrganization, switchOrganization } from './organization-switch.js';
+	import { switchOrganization } from './organization-switch.js';
 	import Icon from '@iconify/svelte';
 	import { onDestroy } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -275,6 +275,20 @@
 		void goto(href);
 	}
 
+	/** Set before the switch request so the workspace is evicted, not covered, during the change. */
+	let switchingOrganization = $state(false);
+
+	async function changeOrganization(organizationId: string): Promise<void> {
+		switchingOrganization = true;
+		try {
+			await switchOrganization(organizationId);
+		} catch (error) {
+			// Refused: this document still serves the organization it already had.
+			switchingOrganization = false;
+			throw error;
+		}
+	}
+
 	onDestroy(() => platformState.destroy());
 </script>
 
@@ -317,7 +331,7 @@
 		navigate(href);
 	}}
 	onPrefetch={prefetchHostPlugin}
-	onOrganizationChange={switchOrganization}
+	onOrganizationChange={changeOrganization}
 	onSignOut={async () => {
 		const response = await fetch('/api/auth/sign-out', {
 			method: 'POST',
@@ -328,7 +342,7 @@
 	}}
 >
 	<Bound size="full" clip class="relative flex-1">
-		{#if isSwitchingOrganization()}
+		{#if switchingOrganization}
 			<!--
 				Evicted, not covered. Until the replacement document arrives this is still the previous
 				organization's mounted app, and an overlay leaves its records readable underneath while
