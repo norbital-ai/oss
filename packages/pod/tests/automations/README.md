@@ -26,14 +26,13 @@ still holds.
 CRM is used because it is the only template declaring a change-feed automation. Construction's are
 all cron, and cron dispatch is the host's loop rather than the runtime's.
 
-## Known gap: the hosted platform does not drive the drain
+## Hosted dispatch boundary
 
-The standalone Pod host pumps the change feed on every scheduler sweep. Core does not: it schedules
-cron automations through pg-boss and has no per-tenant drain, and the workspace manifest does not yet
-project collection-event triggers, so Core cannot tell which tenants would need one. Until that is
-wired, collection-event automations run under the standalone host and in this suite but not on the
-hosted platform. This is written down rather than skipped, because a skipped test would read as
-coverage.
+Pod projects the required recurring work through `workspaceJobs()`, including the durable
+collection-event drain. A standalone host runs those jobs with its local scheduler; Core schedules
+and supervises the same job declarations and invokes their Pod-owned implementations through private
+host commands. The host decides when work runs, but it does not reimplement matching, cursoring, or
+automation execution.
 
 ## Not here
 

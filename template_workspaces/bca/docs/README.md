@@ -14,7 +14,7 @@ matter more than broad project portfolio management.
 | Contractor | Sees assigned work, records progress and location, and submits field evidence. |
 | Supervisor | Reviews flagged location updates, variation requests, and duplicate evidence.  |
 
-## Core guarantees
+## Workspace guarantees
 
 - A job belongs to an existing site and is assigned at most once.
 - An assignment is accepted only when the contractor holds every required certification.

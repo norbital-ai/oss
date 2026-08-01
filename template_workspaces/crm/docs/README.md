@@ -13,7 +13,7 @@ payment recording, and customer activity history—without losing the commercial
 | Operations | Confirms won quotes after ERP handoff, records fulfilment, and manages payment visibility.       |
 | Finance    | Records currency-matched incoming payments and reviews invoiced, paid, and outstanding balances. |
 
-## Core guarantees
+## Workspace guarantees
 
 - Quote lines snapshot product data when created; later catalogue edits do not rewrite history.
 - A sent quote can return to draft to create a linked revision rather than a duplicate deal.

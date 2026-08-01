@@ -1,7 +1,8 @@
 # Pod runtime map
 
-Pod is a standalone Svelte runtime for filesystem-authored tenant workspaces. A workspace is a plain Vite
-root; it has no SvelteKit routes, adapters, configuration, or imports.
+Pod is a host-agnostic Svelte runtime for filesystem-authored tenant workspaces. The same compiled
+artifact runs inside Core or an explicit self-hosted adapter. A workspace is a plain Vite root; it has
+no SvelteKit routes, adapters, configuration, or imports.
 
 ```text
 src/** authoring → .norbital/generated/** → server runtime → HTTP transport → generated client → collection UI
@@ -19,7 +20,9 @@ src/
 ├── custom-types/<name>/{+definition.ts,+renderer.svelte}
 ├── apps/**/+<lower_snake_case>.svelte
 ├── automation/+<lower_snake_case>.ts
+├── **/+<lower_snake_case>.tool.ts
 ├── remotes/+<lower_snake_case>.ts
+├── +facilities.ts
 └── +seed.ts
 ```
 
@@ -27,7 +30,7 @@ Only `+model.ts` is required for each collection; the other collection roles and
 Apps contain static `<svelte:head>` metadata: a literal title, optional description, literal `pod:icon`, and
 optional static thumbnail/banner URLs. The shell owns document scroll; app bodies compose `PageHeader` with
 Pod layout primitives. Local scroll regions are explicit `Bound` + `Scroll` pairs.
-App, automation, and remote IDs come from their `+<lower_snake_case>` filenames.
+App, automation, remote, and agent-tool IDs come from their `+<lower_snake_case>` filenames.
 
 `pod sync` validates the tree and writes one `.norbital/` tree:
 
@@ -49,12 +52,14 @@ Internal platform system-database `.schema.ts` modules are unrelated.
 
 ## Runtime
 
-`runtime/server.ts` owns request context and dispatches `/_runtime/*` operations. `runtime/client.ts` exposes
-the browser API proxy. `runtime/pod-shell.svelte` supplies the frame and Pod router without importing
-SvelteKit.
+`runtime/server.ts` owns request context and dispatches public runtime operations plus private host
+commands. `runtime/client.ts` exposes the browser API proxy. `runtime/pod-shell.svelte` supplies the
+frame, Pod router, and Pod-owned agent UI without importing SvelteKit.
 
-Server handlers, hooks, automations, pipelines, integrations, remotes, and query execution are reachable only
-from the server bundle. The client bundle contains tenant apps, the Pod frame, app loaders, and HTTP proxy.
+Server handlers, hooks, automations, agent loops and tools, pipelines, integrations, remotes, and query
+execution are reachable only from the server bundle. The client bundle contains tenant apps, the Pod
+frame, agent presentation, app loaders, and HTTP proxy. Transcript rows remain tenant data and replicate
+through ordinary sync; a host supplies one-turn AI and optional host tools but stores no transcript.
 
 ## Build
 
