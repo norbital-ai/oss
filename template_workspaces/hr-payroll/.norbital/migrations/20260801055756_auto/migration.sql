@@ -1,26 +1,30 @@
-DROP TABLE "mutation_log";
+DROP TABLE IF EXISTS "mutation_log";
 --> statement-breakpoint
 DROP TABLE IF EXISTS "mutation_log_history";
 --> statement-breakpoint
-DROP INDEX "document_asset_storage_provider_search_trgm_idx";
+DROP INDEX IF EXISTS "document_asset_storage_provider_search_trgm_idx";
 --> statement-breakpoint
-DROP INDEX "document_asset_embedding_model_search_trgm_idx";
+DROP INDEX IF EXISTS "document_asset_embedding_model_search_trgm_idx";
 --> statement-breakpoint
-ALTER TABLE "chat_session" DROP COLUMN "messages";
+ALTER TABLE "chat_session" DROP COLUMN IF EXISTS "messages";
 --> statement-breakpoint
-ALTER TABLE "chat_session" DROP COLUMN "context";
+ALTER TABLE "chat_session_history" DROP COLUMN IF EXISTS "messages";
 --> statement-breakpoint
-ALTER TABLE "document_asset" DROP COLUMN "storage_provider";
+ALTER TABLE "chat_session" DROP COLUMN IF EXISTS "context";
 --> statement-breakpoint
-ALTER TABLE "document_asset_history" DROP COLUMN "storage_provider";
+ALTER TABLE "chat_session_history" DROP COLUMN IF EXISTS "context";
 --> statement-breakpoint
-ALTER TABLE "document_asset" DROP COLUMN "metadata";
+ALTER TABLE "document_asset" DROP COLUMN IF EXISTS "storage_provider";
 --> statement-breakpoint
-ALTER TABLE "document_asset_history" DROP COLUMN "metadata";
+ALTER TABLE "document_asset_history" DROP COLUMN IF EXISTS "storage_provider";
 --> statement-breakpoint
-ALTER TABLE "document_asset" DROP COLUMN "embedding_model";
+ALTER TABLE "document_asset" DROP COLUMN IF EXISTS "metadata";
 --> statement-breakpoint
-ALTER TABLE "document_asset_history" DROP COLUMN "embedding_model";
+ALTER TABLE "document_asset_history" DROP COLUMN IF EXISTS "metadata";
+--> statement-breakpoint
+ALTER TABLE "document_asset" DROP COLUMN IF EXISTS "embedding_model";
+--> statement-breakpoint
+ALTER TABLE "document_asset_history" DROP COLUMN IF EXISTS "embedding_model";
 --> statement-breakpoint
 ALTER TABLE "accrual_bands" ALTER COLUMN "norbital_sys_period" SET DATA TYPE tstzrange USING "norbital_sys_period"::tstzrange;
 --> statement-breakpoint
@@ -272,9 +276,15 @@ ALTER TABLE "automation_run_history" ALTER COLUMN "automation_name" DROP NOT NUL
 --> statement-breakpoint
 ALTER TABLE "chat_session" ALTER COLUMN "norbital_sys_period" SET DATA TYPE tstzrange USING "norbital_sys_period"::tstzrange;
 --> statement-breakpoint
+ALTER TABLE "chat_session_history" ALTER COLUMN "norbital_sys_period" SET DATA TYPE tstzrange USING "norbital_sys_period"::tstzrange;
+--> statement-breakpoint
 ALTER TABLE "chat_session" ALTER COLUMN "norbital_sys_period" SET DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)');
 --> statement-breakpoint
+ALTER TABLE "chat_session_history" ALTER COLUMN "norbital_sys_period" SET DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)');
+--> statement-breakpoint
 ALTER TABLE "chat_session" ALTER COLUMN "title" SET NOT NULL;
+--> statement-breakpoint
+ALTER TABLE "chat_session_history" ALTER COLUMN "title" SET NOT NULL;
 --> statement-breakpoint
 ALTER TABLE "document_asset" ALTER COLUMN "norbital_sys_period" SET DATA TYPE tstzrange USING "norbital_sys_period"::tstzrange;
 --> statement-breakpoint

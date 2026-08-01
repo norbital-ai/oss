@@ -318,21 +318,26 @@
 											<!-- A picker over the policies this workspace declares, never an editor: a policy
 										     is authored as `+<name>.policy.ts` and reconciled at migrate, so the only
 										     runtime decision is which one a team holds. -->
-											<select
-												class={FIELD}
-												aria-label={`Policy for ${team.name}`}
-												disabled={busy}
-												value={team.policy_id ?? ''}
-												onchange={(event) =>
-													assignPolicy(team.norbital_id, event.currentTarget.value)}
-											>
-												<option value="">No policy</option>
-												{#each policies as policy (policy.norbital_id)}
-													<option value={policy.norbital_id}>
-														{policy.name}{policy.is_active ? '' : ' (inactive)'}
-													</option>
-												{/each}
-											</select>
+											<!-- Teams and policies are independent live queries. Recreate the native select
+											     when its options change so a policy id that arrived first is applied once
+											     the matching option exists; otherwise the browser keeps its empty fallback. -->
+											{#key policies.map((policy) => policy.norbital_id).join(':')}
+												<select
+													class={FIELD}
+													aria-label={`Policy for ${team.name}`}
+													disabled={busy}
+													value={team.policy_id ?? ''}
+													onchange={(event) =>
+														assignPolicy(team.norbital_id, event.currentTarget.value)}
+												>
+													<option value="">No policy</option>
+													{#each policies as policy (policy.norbital_id)}
+														<option value={policy.norbital_id}>
+															{policy.name}{policy.is_active ? '' : ' (inactive)'}
+														</option>
+													{/each}
+												</select>
+											{/key}
 										</Inline>
 										<Cluster gap="xs">
 											{#each teamMembers(team) as entry (entry.membershipId)}

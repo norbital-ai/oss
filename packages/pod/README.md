@@ -48,7 +48,7 @@ and process I/O.
 - Node.js and pnpm versions supported by this repository;
 - Svelte 5 and Vite;
 - PostgreSQL 18 or newer for a running workspace;
-- the PostgreSQL `temporal_tables` extension, currently version 1.2.2;
+- PostgreSQL 18 with Pod's provider-portable native history trigger;
 - direct workspace dependencies on `svelte`, `zod`, `runed`, `@iconify/svelte`, and `vite`.
 
 Use one of the executable workspaces in
@@ -126,6 +126,23 @@ export default defineConfig({
 	plugins: [pod()]
 });
 ```
+
+A bundled server dependency that loads a non-JavaScript sidecar at runtime must declare that file
+as part of the immutable server artifact. Sources are absolute build-time paths; targets are
+validated relative to `output/server`:
+
+```ts
+const decoderWasm = decodeURIComponent(
+	new URL('../wasm/decoder.wasm', import.meta.resolve('decoder-package')).pathname
+);
+
+export default defineConfig({
+	plugins: [pod({ serverAssets: [{ source: decoderWasm, target: 'decoder.wasm' }] })]
+});
+```
+
+The deployed runtime does not receive the build depset, so resolving a package sidecar lazily from
+`node_modules` is not a portable substitute.
 
 The authored `tsconfig.json` delegates generated paths and role-local declarations to Pod:
 
@@ -782,7 +799,8 @@ needed for approvals they can participate in. These are server rules, not client
 
 ## Temporal history and migrations
 
-Pod uses PostgreSQL's `temporal_tables` extension. Every tenant collection has a
+Pod uses its own PL/pgSQL temporal-history trigger so managed PostgreSQL providers do not need a
+custom C extension. Every tenant collection has a
 `<collection>_history` table whose business and platform columns mirror the live table. Native
 history queries expose current and historical record versions in the collection's shape, with
 system-period metadata.
@@ -1127,7 +1145,8 @@ The suite is organized by boundary:
 - `tests/standalone` — host loading, facility gates, migrations, seed, queue, restart, and
   runnable/non-runnable artifacts.
 
-PostgreSQL end-to-end tests use disposable PostgreSQL 18 containers with `temporal_tables` 1.2.2.
+PostgreSQL end-to-end tests use disposable stock PostgreSQL 18 containers, matching the extension
+constraints of managed production providers.
 Template builds are executable end-to-end compiler and type fixtures.
 
 The package is published as a normal npm archive. Templates are projected as Git refs named

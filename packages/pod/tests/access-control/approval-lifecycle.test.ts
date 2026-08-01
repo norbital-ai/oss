@@ -9,7 +9,7 @@ const APPROVAL_A = '99999999-9999-4999-8999-999999999999';
 
 /**
  * End-to-end test of the approval-as-a-lock contract at the database level, exercising the real
- * DDL the whole system rests on: temporal_tables (archives every write), _approval_lock_gate
+ * DDL the whole system rests on: Pod's temporal trigger (archives every write), _approval_lock_gate
  * (blocks writes to a locked record), _ops_guard (writes must be authorized), and the
  * approval_terminal_transition bypass used during resolution. Each block issues the exact statement
  * sequence collection_ops (write-then-lock) and approval_service (restore/re-insert) emit, so a

@@ -187,7 +187,7 @@ next step rather than a tweak.
                         │                   history, approvals, versioning)    │
                         │        │                                             │
                         │        ├──▶ tables + <collection>_history          │
-                        │        │    (temporal_tables extension)            │
+                        │        │    (Pod native history trigger)           │
                         │        └──▶ sync_outbox         (trigger-driven)     │
                         │                   │                                  │
                         │            outbox tailer  (xid, seq) ordered,        │

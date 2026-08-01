@@ -1,6 +1,6 @@
 import { type Plugin, type PluginOption } from 'vite';
 import { spawn } from 'node:child_process';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -66,6 +66,38 @@ function podBuildFile(relativePath: string): string {
 
 export interface PodPluginOptions {
 	readonly outDir?: string;
+	/** Non-JavaScript dependency sidecars required by the deployed server bundle. */
+	readonly serverAssets?: readonly PodServerAsset[];
+}
+
+export interface PodServerAsset {
+	/** Absolute build-time path to the source file. */
+	readonly source: string;
+	/** Artifact-relative path below `output/server` (defaults to the source basename). */
+	readonly target?: string;
+}
+
+export async function copyPodServerAssets(
+	serverOutDir: string,
+	assets: readonly PodServerAsset[]
+): Promise<void> {
+	for (const asset of assets) {
+		if (!path.isAbsolute(asset.source)) {
+			throw new Error(`Pod server asset source must be absolute: ${asset.source}`);
+		}
+		const target = path.normalize(asset.target?.trim() || path.basename(asset.source));
+		if (
+			target === '.' ||
+			path.isAbsolute(target) ||
+			target === '..' ||
+			target.startsWith(`..${path.sep}`)
+		) {
+			throw new Error(`Pod server asset target must stay below output/server: ${target}`);
+		}
+		const destination = path.join(serverOutDir, target);
+		await mkdir(path.dirname(destination), { recursive: true });
+		await copyFile(asset.source, destination);
+	}
 }
 
 async function runIsolatedBuild(config: {
@@ -208,6 +240,10 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		);
 		await writeFile(path.join(clientDistRoot, 'package.json'), '{"type":"module"}\n');
 		await mkdir(path.join(artifactRoot, 'output/server'), { recursive: true });
+		await copyPodServerAssets(
+			path.join(artifactRoot, 'output/server'),
+			options.serverAssets ?? []
+		);
 		await writeFile(path.join(artifactRoot, 'output/server/package.json'), '{"type":"module"}\n');
 		const serverModule: unknown = await import(
 			`${pathToFileURL(path.join(artifactRoot, 'output/server/index.js')).href}?build=${Date.now()}`

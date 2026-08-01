@@ -66,7 +66,7 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 
 	it('archives the prior version and bumps the live row on a plain UPDATE', async () => {
 		const id = await insertOrder(pool, 'pending');
-		// A bare UPDATE — temporal_tables archives the row and Pod advances its sync version.
+		// A bare UPDATE — Pod's native trigger archives the row and advances its sync version.
 		await inViaOps(pool, (client) =>
 			client.query(`UPDATE orders SET status = 'shipped' WHERE norbital_id = $1::uuid`, [id]).then()
 		);
@@ -90,6 +90,29 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 			[id]
 		);
 		expect(live.rows[0]).toMatchObject({ status: 'shipped', version: 2, open: true });
+	});
+
+	it('does not invent history for an intermediate state that never committed', async () => {
+		let id = '';
+		await inViaOps(pool, async (client) => {
+			const inserted = await client.query<{ norbital_id: string }>(
+				`INSERT INTO orders (status) VALUES ('draft') RETURNING norbital_id`
+			);
+			id = inserted.rows[0].norbital_id;
+			await client.query(`UPDATE orders SET status = 'ready' WHERE norbital_id = $1::uuid`, [id]);
+		});
+
+		const history = await pool.query(
+			`SELECT 1 FROM orders_history WHERE norbital_id = $1::uuid`,
+			[id]
+		);
+		expect(history.rowCount).toBe(0);
+		const live = await pool.query<{ status: string; version: number }>(
+			`SELECT status, norbital_row_version AS version
+			   FROM orders WHERE norbital_id = $1::uuid`,
+			[id]
+		);
+		expect(live.rows).toEqual([{ status: 'ready', version: 2 }]);
 	});
 
 	it('closes a row version after an older transaction observes a newer committed write', async () => {

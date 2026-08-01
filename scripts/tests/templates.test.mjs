@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
@@ -94,6 +94,92 @@ describe('template discovery', () => {
 			assert.match(policy, /supportedArchitectures:/);
 			for (const architecture of ['current', 'linux', 'x64', 'arm64', 'glibc', 'musl']) {
 				assert.match(policy, new RegExp(`- ${architecture}`), `${template.key}: ${architecture}`);
+			}
+		}
+	});
+
+	it('keeps fresh and upgrade migration lineages internally coherent', () => {
+		for (const template of discoverTemplates()) {
+			const migrationsDir = path.join(template.directory, '.norbital', 'migrations');
+			const migrationSql = readdirSync(migrationsDir, { withFileTypes: true })
+				.filter((entry) => entry.isDirectory())
+				.map((entry) => entry.name)
+				.sort()
+				.map((tag) => ({
+					tag,
+					sql: readFileSync(path.join(migrationsDir, tag, 'migration.sql'), 'utf8')
+				}));
+			const declared = new Map();
+			const declaredIndexes = new Set();
+
+			for (const migration of migrationSql) {
+				for (const match of migration.sql.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)\n\);/g)) {
+					const columns = new Set(
+						[...match[2].matchAll(/^\s*"([^"]+)"\s/gm)].map((column) => column[1])
+					);
+					declared.set(match[1], columns);
+				}
+				for (const match of migration.sql.matchAll(
+					/_norbital_create_history_table\('([^']+)'::regclass, '([^']+)'\)/g
+				)) {
+					const [, liveTable, historyTable] = match;
+					const liveColumns = declared.get(liveTable);
+					if (liveColumns) declared.set(historyTable, new Set(liveColumns));
+				}
+				for (const match of migration.sql.matchAll(
+					/ALTER TABLE "([^"]+)" ADD COLUMN "([^"]+)"/g
+				)) {
+					const [statement, table, column] = match;
+					const columns = declared.get(table);
+					if (!columns) continue;
+					assert.ok(
+						!columns.has(column),
+						`${template.key}/${migration.tag}: ${statement} duplicates the fresh schema`
+					);
+					columns.add(column);
+				}
+				for (const match of migration.sql.matchAll(
+					/CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"([^"]+)"/g
+				)) {
+					declaredIndexes.add(match[1]);
+				}
+				for (const match of migration.sql.matchAll(
+					/ALTER TABLE "([^"]+)" DROP COLUMN (IF EXISTS )?"([^"]+)"/g
+				)) {
+					const [, table, guarded, column] = match;
+					const columns = declared.get(table);
+					assert.ok(
+						guarded || columns?.has(column),
+						`${template.key}/${migration.tag}: a column absent from the fresh lineage must be dropped with IF EXISTS (${table}.${column})`
+					);
+					columns?.delete(column);
+				}
+				for (const match of migration.sql.matchAll(/DROP INDEX (IF EXISTS )?"([^"]+)"/g)) {
+					const [, guarded, index] = match;
+					assert.ok(
+						guarded || declaredIndexes.has(index),
+						`${template.key}/${migration.tag}: an index absent from the fresh lineage must be dropped with IF EXISTS (${index})`
+					);
+					declaredIndexes.delete(index);
+				}
+				for (const match of migration.sql.matchAll(/DROP TABLE (IF EXISTS )?"([^"]+)"/g)) {
+					const [, guarded, table] = match;
+					assert.ok(
+						guarded || declared.has(table),
+						`${template.key}/${migration.tag}: a table absent from the fresh lineage must be dropped with IF EXISTS (${table})`
+					);
+					declared.delete(table);
+				}
+				for (const match of migration.sql.matchAll(
+					/ALTER TABLE "([^"]+)" ((?:ADD|DROP|ALTER|RENAME) COLUMN[^;]+);/g
+				)) {
+					const [, table, columnChange] = match;
+					if (table.endsWith('_history') || !declared.has(`${table}_history`)) continue;
+					assert.ok(
+						migration.sql.includes(`ALTER TABLE "${table}_history" ${columnChange};`),
+						`${template.key}/${migration.tag}: ${table}.${columnChange} is not mirrored to typed history`
+					);
+				}
 			}
 		}
 	});

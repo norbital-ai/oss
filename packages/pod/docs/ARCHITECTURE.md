@@ -149,7 +149,7 @@ validate input
 
 Temporal row state and audit are deliberately separate:
 
-- PostgreSQL's `temporal_tables` extension archives native rows into a typed
+- Pod's provider-portable PL/pgSQL temporal trigger archives native rows into a typed
   `<collection>_history` table. Historical rows therefore have the collection's queryable column
   shape rather than a JSONB envelope. Pod creates the history tuple descriptor from PostgreSQL's
   catalog so array dimensions, types, collations, nullability, and defaults stay native.
@@ -163,8 +163,8 @@ Temporal row state and audit are deliberately separate:
   snapshot or rollback source.
 
 The record, typed temporal snapshot, audit event, and sync row share one transaction; an audit
-failure rolls the entire mutation back. A PostgreSQL installation hosting Pod must provide the
-`temporal_tables` extension before Pod applies its schema.
+failure rolls the entire mutation back. Pod installs the native history function with its schema;
+the PostgreSQL provider needs no custom extension.
 
 ## Filesystem compiler
 

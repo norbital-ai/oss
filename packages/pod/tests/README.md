@@ -14,7 +14,7 @@ the same compiled runtime artifact in both hosted-style and standalone-style har
 | Runtime and host contracts                | `runtime/`                                     | facilities, jobs, identity, inbound delivery and cross-pillar transactions    |
 | Standalone boot/refusal                   | `standalone/`                                  | facility gate and process-level startup contract                              |
 
-Database suites build a pinned PostgreSQL 18 image with `temporal_tables` 1.2.2 and use disposable
+Database suites use stock PostgreSQL 18 and disposable
 containers from it. This exercises the production temporal trigger rather than a test substitute.
 The shared runtime harness serializes template compilation so parallel Vitest workers cannot
 replace one another's build artifact. Docker is required: the full gate fails instead of silently

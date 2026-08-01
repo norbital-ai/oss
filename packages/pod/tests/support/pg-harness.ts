@@ -1,5 +1,4 @@
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
 
 export type PgHarness = {
@@ -7,8 +6,7 @@ export type PgHarness = {
 	stop(): void;
 };
 
-const IMAGE = 'norbital-pod-postgres-temporal:18-1.2.2';
-const IMAGE_CONTEXT = fileURLToPath(new URL('./postgres-temporal', import.meta.url));
+const IMAGE = 'postgres:18-alpine';
 /** Marks every container this harness creates, so strays can be found and reaped. */
 const LABEL = 'norbital-pg-harness';
 /** Records the owning process, so a reaper can tell a live run from an abandoned one. */
@@ -31,9 +29,7 @@ function ensurePostgresImage(): void {
 		execFileSync('docker', ['image', 'inspect', IMAGE], { stdio: 'ignore' });
 		return;
 	} catch {
-		execFileSync('docker', ['build', '--load', '--tag', IMAGE, IMAGE_CONTEXT], {
-			stdio: 'inherit'
-		});
+		execFileSync('docker', ['pull', IMAGE], { stdio: 'inherit' });
 	}
 }
 

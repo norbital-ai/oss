@@ -31,7 +31,6 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
     CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
     CREATE EXTENSION IF NOT EXISTS "pgcrypto";
     CREATE EXTENSION IF NOT EXISTS "pg_trgm";
-    CREATE EXTENSION IF NOT EXISTS "temporal_tables";
     -- Lets a GiST index (and therefore an EXCLUDE ... USING gist) carry plain-equality
     -- members such as uuid/text scalars beside a range member. Without it, an exclusion
     -- of the form \`(tenant_id WITH =, period WITH &&)\` cannot be created at all.
@@ -151,7 +150,7 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
     $$ LANGUAGE plpgsql;
 
     -- Row versions are Pod's optimistic-concurrency token. Temporal row storage belongs to the
-    -- temporal_tables extension; this trigger owns only the independent integer token.
+    -- independent history trigger below; this trigger owns only the integer token.
     CREATE OR REPLACE FUNCTION _norbital_row_version() RETURNS TRIGGER AS $$
     BEGIN
       NEW.norbital_row_version := OLD.norbital_row_version + 1;
@@ -159,9 +158,93 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
     END;
     $$ LANGUAGE plpgsql;
 
+    -- Native temporal history for managed Postgres providers. Norbital used to depend on the
+    -- temporal_tables C extension, which Neon does not offer. This trigger preserves the subset
+    -- of its contract Pod uses: transaction-time periods, one archived prior row per committed
+    -- update/delete, same-transaction coalescing, and one-microsecond conflict adjustment.
+    CREATE OR REPLACE FUNCTION _norbital_versioning() RETURNS TRIGGER AS $norbital_versioning$
+    DECLARE
+      history_table TEXT;
+      existing_range TSTZRANGE;
+      range_lower TIMESTAMPTZ;
+      version_time TIMESTAMPTZ := CURRENT_TIMESTAMP;
+      common_columns TEXT[];
+    BEGIN
+      IF TG_WHEN <> 'BEFORE' OR TG_LEVEL <> 'ROW' THEN
+        RAISE TRIGGER_PROTOCOL_VIOLATED
+          USING MESSAGE = '_norbital_versioning must be fired BEFORE ROW';
+      END IF;
+      IF TG_OP NOT IN ('INSERT', 'UPDATE', 'DELETE') THEN
+        RAISE TRIGGER_PROTOCOL_VIOLATED
+          USING MESSAGE = '_norbital_versioning must be fired for INSERT, UPDATE, or DELETE';
+      END IF;
+      IF TG_NARGS <> 1 THEN
+        RAISE INVALID_PARAMETER_VALUE
+          USING MESSAGE = '_norbital_versioning expects exactly one history-table argument';
+      END IF;
+
+      history_table := TG_ARGV[0];
+      IF TG_OP = 'INSERT' THEN
+        NEW.norbital_sys_period := tstzrange(version_time, NULL, '[)');
+        RETURN NEW;
+      END IF;
+
+      -- The original extension deliberately coalesced a row inserted/updated more than once in
+      -- one transaction: there is no committed intermediate state to archive.
+      IF OLD.xmin::text = (txid_current() % (2^32)::bigint)::text THEN
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+      END IF;
+
+      existing_range := OLD.norbital_sys_period;
+      IF existing_range IS NULL OR isempty(existing_range) OR NOT upper_inf(existing_range) THEN
+        RAISE DATA_EXCEPTION
+          USING MESSAGE = format('invalid norbital_sys_period on relation %I', TG_TABLE_NAME),
+                DETAIL = 'valid periods must be non-empty and unbounded on the high side';
+      END IF;
+      range_lower := lower(existing_range);
+      IF range_lower >= version_time THEN
+        version_time := range_lower + interval '1 microsecond';
+      END IF;
+
+      IF to_regclass(format('%I.%I', TG_TABLE_SCHEMA, history_table)) IS NULL THEN
+        RAISE UNDEFINED_TABLE
+          USING MESSAGE = format('history relation %I.%I does not exist', TG_TABLE_SCHEMA, history_table);
+      END IF;
+
+      -- History and live schemas are validated before triggers are installed. Name columns
+      -- explicitly so future generated columns remain generated instead of being assigned.
+      SELECT array_agg(format('%I', live.attname) ORDER BY live.attnum)
+        INTO common_columns
+        FROM pg_attribute live
+        JOIN pg_attribute history
+          ON history.attrelid = format('%I.%I', TG_TABLE_SCHEMA, history_table)::regclass
+         AND history.attname = live.attname
+         AND NOT history.attisdropped
+       WHERE live.attrelid = TG_RELID
+         AND live.attnum > 0
+         AND NOT live.attisdropped
+         AND live.attname <> 'norbital_sys_period'
+         AND history.attgenerated = '';
+
+      EXECUTE format(
+        'INSERT INTO %I.%I (%s, norbital_sys_period) VALUES ($1.%s, tstzrange($2, $3, ''[)''))',
+        TG_TABLE_SCHEMA,
+        history_table,
+        array_to_string(common_columns, ', '),
+        array_to_string(common_columns, ', $1.')
+      ) USING OLD, range_lower, version_time;
+
+      IF TG_OP = 'UPDATE' THEN
+        NEW.norbital_sys_period := tstzrange(version_time, NULL, '[)');
+        RETURN NEW;
+      END IF;
+      RETURN OLD;
+    END;
+    $norbital_versioning$ LANGUAGE plpgsql;
+
     -- CREATE TABLE ... LIKE loses PostgreSQL's declared array dimensionality metadata
-    -- (attndims). The temporal_tables extension correctly requires the history tuple
-    -- descriptor to match the live relation exactly, so build the history columns from
+    -- (attndims). Native history requires the tuple descriptor to match the live relation
+    -- exactly, so build the history columns from
     -- pg_attribute instead. History is deliberately a data relation: keys, foreign keys,
     -- checks, and uniqueness remain constraints of the current-state table only.
     CREATE OR REPLACE FUNCTION _norbital_create_history_table(
@@ -613,9 +696,8 @@ export const SCHEMA_POST_DDL_SQL = dedent`
         );
         EXECUTE format('DROP TRIGGER IF EXISTS _norbital_versioning ON %I', tbl.table_name);
         EXECUTE format(
-          'CREATE TRIGGER _norbital_versioning BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION versioning(%L, %L, true)',
+          'CREATE TRIGGER _norbital_versioning BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION _norbital_versioning(%L)',
           tbl.table_name,
-          'norbital_sys_period',
           history_table
         );
       END LOOP;

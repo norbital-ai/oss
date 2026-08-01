@@ -1221,16 +1221,19 @@
 </Dialog.Root>
 
 <style>
-	.collection-table-narrow {
+	/* These classes are forwarded to child-component roots. They must be global:
+	   a scoped selector carries this component's Svelte hash, which those roots do
+	   not, and leaves both responsive variants painted on top of each other. */
+	:global(.collection-table-narrow) {
 		display: none;
 	}
 
 	@container (max-width: 47.999rem) {
-		.collection-table-wide {
+		:global(.collection-table-wide) {
 			display: none;
 		}
 
-		.collection-table-narrow {
+		:global(.collection-table-narrow) {
 			display: grid;
 		}
 	}
