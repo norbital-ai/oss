@@ -10,9 +10,9 @@ operations split, server-enforced quote/payment rules, and the places where a re
 extensions. Start with the workflow below, then use the [collections](#collections),
 [apps](#apps), [remotes](#remotes), and [verification](#verification) sections when changing it.
 
-The workspace owns CRM records and sales workflow. Platform `user` identities and policy enforcement
-remain host concerns; accounting, inventory, exchange rates, customer documents, supplier purchasing, and
-external messaging are intentionally outside this template’s current scope.
+The workspace owns CRM records, tenant users, policies, and sales workflow. The host authenticates the
+requestor and supplies external facilities; accounting, inventory, exchange rates, customer documents,
+supplier purchasing, and external messaging are intentionally outside this template’s current scope.
 
 For the template’s goal, users, and extension boundaries, see the [CRM documentation hub](./docs/README.md).
 
