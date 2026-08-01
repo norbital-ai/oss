@@ -163,6 +163,35 @@ describe('agent chat panel', () => {
 		destroy();
 	});
 
+	it('releases the composer when the terminal failure message arrives before turn status', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Read a missing file');
+		submit(container);
+		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
+		await settle();
+
+		replica.arrive('chat_message', {
+			norbital_id: 'm1',
+			chat_id: 'c1',
+			seq: 1,
+			parts: [{ role: 'user', content: 'Read a missing file' }]
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'm2',
+			chat_id: 'c1',
+			seq: 2,
+			parts: [{ role: 'system', content: 'Agent exceeded maxIterations (12)' }]
+		});
+		await settle();
+
+		expect(container.querySelector('textarea')?.disabled).toBe(false);
+		expect(container.querySelector('[data-testid="agent-send"]')?.textContent?.trim()).toBe('Send');
+		expect(container.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
+			'Agent exceeded maxIterations (12)'
+		);
+		destroy();
+	});
+
 	it('shows a message that arrived in the replica with no local action at all', async () => {
 		const { container, destroy } = mountPanel();
 		type(container, 'What is on site?');

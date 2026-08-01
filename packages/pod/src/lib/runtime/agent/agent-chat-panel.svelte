@@ -51,16 +51,23 @@
 		if (!pending) return;
 		const root = [...turnRows].filter((turn) => turn.subagent_id == null).at(-1) as
 			Record<string, unknown> | undefined;
-		if (!root) return;
-		if (root.status === 'succeeded') {
+		const terminalMessage = messages.at(-1);
+		if (root?.status === 'succeeded') {
 			pending = false;
 			failure = null;
-		} else if (root.status === 'failed' || root.status === 'aborted') {
+		} else if (root?.status === 'failed' || root?.status === 'aborted') {
 			pending = false;
 			failure =
 				typeof root.error === 'string' && root.error.trim()
 					? root.error
 					: 'The agent could not finish this response. Try sending it again.';
+		} else if (terminalMessage?.role === 'system') {
+			// The terminal transcript row is inserted before the turn-status update. Either can arrive
+			// first through live sync, so a failed run must release the composer as soon as its durable
+			// error message is visible instead of depending on a second replica event.
+			pending = false;
+			failure =
+				terminalMessage.content.trim() || 'The agent could not finish this response. Try sending it again.';
 		}
 	});
 
