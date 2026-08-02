@@ -76,7 +76,7 @@ function isUnder(currentPath: string, entry: string): boolean {
 }
 
 /**
- * The system section of the sidebar: Pod's own surfaces, then the host's.
+ * The system section of the sidebar: a Settings folder, then standalone host tools.
  *
  * Settings is listed by the pod itself rather than by a host plugin, and that is the whole point of
  * it. A workspace started with `pod start` has no host plugins — `data.hostPlugins` is empty — so an
@@ -84,10 +84,11 @@ function isUnder(currentPath: string, entry: string): boolean {
  * workspace that needs it least. Managing users, teams and invitations has to be reachable from a
  * standalone pod.
  *
- * Host surfaces are links, not apps: the pod never loads their code, so there is no manifest entry,
- * no access grant, and no nesting. `adminOnly` filtering happens here for presentation only — every
- * route behind these entries, Pod's included, authorizes its own requests, since the URL is visible
- * in the markup whether or not a link to it is.
+ * Host surfaces are links, not apps: the pod never loads their code, so there is no manifest entry
+ * or access grant. `placement: settings` lets a host put its own facilities under the Settings
+ * folder without pretending Pod owns them. `adminOnly` filtering happens here for presentation
+ * only — every route behind these entries, Pod's included, authorizes its own requests, since the
+ * URL is visible in the markup whether or not a link to it is.
  */
 export function buildSystemNavigation(input: {
 	plugins: readonly {
@@ -95,36 +96,52 @@ export function buildSystemNavigation(input: {
 		readonly label: string;
 		readonly icon: string | null;
 		readonly entry: string;
+		readonly placement?: 'sidebar' | 'settings';
 		readonly adminOnly?: boolean;
 	}[];
 	isAdmin: boolean;
 	currentPath: string;
 }): WorkspaceNavigationItem[] {
-	const podSurfaces: WorkspaceNavigationItem[] = input.isAdmin
+	const visiblePlugins = input.plugins.filter((plugin) => input.isAdmin || !plugin.adminOnly);
+	const pluginItem = (plugin: (typeof visiblePlugins)[number]): WorkspaceNavigationItem => {
+		const href = hostPluginSurfaceHref(plugin.key);
+		return {
+			key: plugin.key,
+			label: plugin.label,
+			icon: plugin.icon,
+			href,
+			active: isUnder(input.currentPath, href)
+		};
+	};
+	const settingsChildren: WorkspaceNavigationItem[] = [
+		...(input.isAdmin
+			? [
+					{
+						key: 'pod-settings',
+						label: 'Tenant workspace',
+						icon: 'lucide:database',
+						href: WORKSPACE_SETTINGS_PATH,
+						active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)
+					} satisfies WorkspaceNavigationItem
+				]
+			: []),
+		...visiblePlugins.filter((plugin) => plugin.placement === 'settings').map(pluginItem)
+	];
+	const settings: WorkspaceNavigationItem[] = settingsChildren.length
 		? [
 				{
-					key: 'pod-settings',
+					key: 'settings',
 					label: 'Settings',
 					icon: 'lucide:settings',
-					href: WORKSPACE_SETTINGS_PATH,
-					active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)
+					href: settingsChildren[0].href,
+					active: settingsChildren.some((item) => item.active),
+					children: settingsChildren
 				}
 			]
 		: [];
 	return [
-		...podSurfaces,
-		...input.plugins
-			.filter((plugin) => input.isAdmin || !plugin.adminOnly)
-			.map((plugin) => {
-				const href = hostPluginSurfaceHref(plugin.key);
-				return {
-					key: plugin.key,
-					label: plugin.label,
-					icon: plugin.icon,
-					href,
-					active: isUnder(input.currentPath, href)
-				};
-			})
+		...settings,
+		...visiblePlugins.filter((plugin) => plugin.placement !== 'settings').map(pluginItem)
 	];
 }
 

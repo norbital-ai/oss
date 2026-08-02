@@ -36,7 +36,9 @@ render a second conversation history.
 
 ## Host surfaces
 
-Core-hosted plugins such as Workspace Studio or Hosting & Billing are mounted inside the tenant
+Core-hosted plugins are mounted inside the tenant shell without entering the Pod bundle. Host
+facilities such as Core services sit beneath Pod's Settings folder; authoring tools such as Workspace
+Studio remain standalone navigation entries. These surfaces are mounted inside the tenant
 shell at `/__host/<plugin-key>`, so system facilities do not erase workspace navigation. The mounted
 document still authorizes itself. Standalone Pod simply omits host plugins; tenant Settings remains
 fully available.

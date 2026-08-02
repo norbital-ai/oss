@@ -95,11 +95,8 @@ describe('the system section of the sidebar', () => {
 			currentPath: '/'
 		});
 
-		expect(links(container).map((link) => link.label)).toEqual([
-			'Settings',
-			'Workspace Studio',
-			'Help centre'
-		]);
+		expect(links(container).map((link) => link.label)).toEqual(['Workspace Studio', 'Help centre']);
+		expect(container.textContent).toContain('Settings');
 		destroy();
 	});
 
@@ -117,7 +114,9 @@ describe('the system section of the sidebar', () => {
 			currentPath: '/settings'
 		});
 
-		expect(links(container)).toEqual([{ label: 'Settings', href: '/settings', current: true }]);
+		expect(links(container)).toEqual([
+			{ label: 'Tenant workspace', href: '/settings', current: true }
+		]);
 		destroy();
 	});
 

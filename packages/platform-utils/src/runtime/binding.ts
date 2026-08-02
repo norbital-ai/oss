@@ -32,8 +32,8 @@ export type WorkspaceBillingSummary = {
 };
 
 /**
- * A host-owned application the pod shell links into its sidebar — Workspace Studio, organization
- * settings. The pod renders a navigation entry and links to `entry`; it never loads the plugin's
+ * A host-owned application the pod shell links into its navigation — Workspace Studio, Core
+ * services. The pod renders a navigation entry and links to `entry`; it never loads the plugin's
  * code, so a host surface stays a host route and nothing of it enters the workspace bundle.
  *
  * Pure data, so it crosses the isolate boundary by structured clone. It lives here rather than with
@@ -51,8 +51,8 @@ export type HostAppPlugin = {
 	 * would be script injection into every session, and the shell renders this straight into an href.
 	 */
 	readonly entry: string;
-	/** Only `sidebar` today; the field exists so a second placement does not need a contract change. */
-	readonly placement: 'sidebar';
+	/** Top-level platform tool, or a host-owned child of Pod's Settings folder. */
+	readonly placement: 'sidebar' | 'settings';
 	/**
 	 * Show the entry only to workspace admins. Hiding an entry is not authorization — the host route
 	 * behind `entry` must still authorize the request itself, since a URL is guessable.

@@ -24,6 +24,10 @@ describe('assertHostPlugins', () => {
 		).not.toThrow();
 	});
 
+	it('accepts host facilities nested under Pod settings', () => {
+		expect(() => assertHostPlugins([plugin({ placement: 'settings' })])).not.toThrow();
+	});
+
 	/**
 	 * The shell renders `entry` straight into an href, so a `javascript:` entry would be script
 	 * injection into every session of the workspace. Rejecting it at startup is what keeps a
@@ -67,7 +71,8 @@ describe('buildSystemNavigation', () => {
 			isAdmin: true,
 			currentPath: '/'
 		});
-		expect(items.map((item) => item.key)).toEqual(['pod-settings', 'studio']);
+		expect(items.map((item) => item.key)).toEqual(['settings', 'studio']);
+		expect(items[0]?.children?.map((item) => item.key)).toEqual(['pod-settings']);
 	});
 
 	/**
@@ -80,9 +85,30 @@ describe('buildSystemNavigation', () => {
 				key: item.key,
 				href: item.href
 			}))
-		).toEqual([{ key: 'pod-settings', href: '/settings' }]);
+		).toEqual([{ key: 'settings', href: '/settings' }]);
 		// And it is admin-only, in the sidebar as well as in the endpoints behind it.
 		expect(buildSystemNavigation({ plugins: [], isAdmin: false, currentPath: '/' })).toEqual([]);
+	});
+
+	it('groups host-owned settings beneath the Pod-owned settings folder', () => {
+		const items = buildSystemNavigation({
+			plugins: [
+				{
+					key: 'core-services',
+					label: 'Core services',
+					icon: null,
+					entry: '/core-services',
+					placement: 'settings',
+					adminOnly: true
+				},
+				{ key: 'studio', label: 'Studio', icon: null, entry: '/studio' }
+			],
+			isAdmin: true,
+			currentPath: '/__host/core-services'
+		});
+		expect(items.map((item) => item.key)).toEqual(['settings', 'studio']);
+		expect(items[0]).toMatchObject({ key: 'settings', active: true });
+		expect(items[0]?.children?.map((item) => item.key)).toEqual(['pod-settings', 'core-services']);
 	});
 
 	/** A nested host route keeps its sidebar entry highlighted; a sibling prefix must not steal it. */
