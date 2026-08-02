@@ -354,7 +354,7 @@ packages:
     resolution: {integrity: sha512-LCQN8zLwzPj0lM/o+XQuKx/GoMZ6Cz1AhPdTQKH5yBcOb3VktZzVVvYopRAXhjHTLE+/fgPsd/LxBabwo2LifA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/f0fd6f410e873b5283fd49dab4c29da89af72164}
 
   '@norbital-ai/pod@0.0.1':
-    resolution: {integrity: sha512-N+kboHeNuf3fGhJWu+F+H6lEsYQ1/bNxcFKVFpw+G6VsXN4UTeEQ7xXw3toblqbih29dwmO+UteUxT7lyfcuVA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/bf6f0050f64fbef9e2e961847a3f809567c2f80f}
+    resolution: {integrity: sha512-yq8asoxSaVXlR4gfKOxw8wUBOd9yGeL/1iKF6IUeasMoLJKzeJX1JU4taWP1Gm7XjAYUBUxV2WsYcAivdXq+Ig==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/b3917774f48057ca063dc2ad0fc83381966016ef}
     hasBin: true
     peerDependencies:
       '@iconify/svelte': ^5.2.2
@@ -1278,8 +1278,8 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
-  js-yaml@5.2.2:
-    resolution: {integrity: sha512-dayzUzKkJ1MkuUtZglSebU43utNXH0OWQByK9rKOOuYIO8M5TV1y+n8ALMdG0rdzBnfNkOmZEqrURepb0ejqBw==}
+  js-yaml@5.2.3:
+    resolution: {integrity: sha512-n+mUVyUX5bVv7G/G2zyIHOhdxfuU1dY2NOFzTQUWiMUbFss8b57NFlgCCaggU78wSw5KVS9cllzeLyzyR+n5nw==}
     hasBin: true
 
   jsbi@4.3.2:
@@ -2259,7 +2259,7 @@ snapshots:
       '@marcbachmann/cel-js': 8.0.0
       '@standard-schema/spec': 1.1.0
       dedent: 1.7.2
-      js-yaml: 5.2.2
+      js-yaml: 5.2.3
     transitivePeerDependencies:
       - babel-plugin-macros
 
@@ -3030,7 +3030,7 @@ snapshots:
 
   jiti@2.7.0: {}
 
-  js-yaml@5.2.2:
+  js-yaml@5.2.3:
     dependencies:
       argparse: 2.0.1
 
