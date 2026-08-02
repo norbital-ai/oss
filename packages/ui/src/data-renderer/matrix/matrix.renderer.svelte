@@ -5,7 +5,7 @@
 		CollectionRecord,
 		CollectionRelationOptions
 	} from '@norbital-ai/platform-utils/collection';
-	import type { Snippet } from 'svelte';
+	import type { Component, Snippet } from 'svelte';
 
 	export interface MatrixRow {
 		readonly id?: string;
@@ -14,12 +14,25 @@
 
 	type MatrixRowKey<TRow extends MatrixRow> = Extract<keyof TRow, string>;
 
+	export interface MatrixCellRendererProps<TRow extends MatrixRow = MatrixRow> {
+		row: TRow;
+		value: unknown;
+		field: CollectionField;
+		disabled: boolean;
+		onValueChange: (value: unknown) => void;
+		onRowChange: (patch: Record<string, unknown>) => void;
+	}
+
 	export interface MatrixColumn<TRow extends MatrixRow> {
 		key: MatrixRowKey<TRow>;
 		label: string;
 		field: CollectionField;
 		placeholder?: string;
 		relationOptions?: CollectionRelationOptions;
+		/** Render this value as immutable display content inside an otherwise editable matrix. */
+		readOnly?: boolean;
+		/** Specialized cell content for references that cannot be represented by one scalar field. */
+		renderer?: Component<MatrixCellRendererProps<TRow>>;
 		width?: number;
 	}
 

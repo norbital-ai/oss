@@ -56,6 +56,8 @@ export interface CollectionFormRendererOptions {
 export interface CollectionFormRendererProps extends CollectionFormRendererOptions {
 	value: unknown;
 	field: CollectionField;
+	/** Current form record, including unsaved sibling-field values. */
+	row: Record<string, unknown>;
 	onValueChange: (value: unknown) => void;
 }
 

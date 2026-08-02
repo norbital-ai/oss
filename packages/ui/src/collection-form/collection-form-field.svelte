@@ -8,6 +8,7 @@
 	interface CollectionFormFieldContext {
 		collectionName: () => string;
 		field: (name: string) => CollectionField | undefined;
+		row: () => Record<string, unknown>;
 		value: (name: string) => unknown;
 		setValue: (name: string, value: unknown) => void;
 		register: (name: string) => () => void;
@@ -93,6 +94,7 @@
 					{...rendererProps}
 					{field}
 					{value}
+					row={context.row()}
 					{readonly}
 					{disabled}
 					onValueChange={(next) => context.setValue(name, next)}
@@ -103,6 +105,7 @@
 					id={fieldId}
 					{field}
 					{value}
+					row={context.row()}
 					mode={readonly ? 'display' : 'edit'}
 					{disabled}
 					onValueChange={(next) => context.setValue(name, next)}

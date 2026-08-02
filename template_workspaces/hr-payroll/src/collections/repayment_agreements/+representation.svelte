@@ -39,10 +39,10 @@
 	onAfterSubmit={record ? undefined : close}
 >
 	{#snippet children({ Field, form })}
-		<Stack gap="lg">
-			<Grid gap="md" minimum="compact">
+		<Stack gap="md" fill>
+			<Grid gap="md" minimum="compact" class="shrink-0">
 				<Field name="employment_id" label="Employment" />
-				<Field name="pay_component_id" label="Loan recovery component" />
+				<Field name="pay_component_id" label="Payroll deduction type" />
 				<Field name="reference" />
 				<Field name="principal" />
 				<Field name="disbursed_on" label="Disbursed on" />
@@ -53,7 +53,7 @@
 			</Grid>
 
 			{#if !record}
-				<Stack gap="sm" class="rounded-md border border-border bg-muted/20 p-3">
+				<Stack gap="sm" shrink={false} class="rounded-md border border-border p-3">
 					<Stack gap="none">
 						<p class="text-sm font-medium">Provision equal instalments</p>
 						<p class="text-xs text-muted-foreground">
@@ -96,9 +96,7 @@
 				</Stack>
 			{/if}
 
-			<Grid gap="md" minimum="compact">
-				<Column span="all"><Field name="schedule" label="Repayment schedule" /></Column>
-			</Grid>
+			<Field name="schedule" label="Recovery instalments" class="min-h-64 flex-1" />
 		</Stack>
 	{/snippet}
 </CollectionForm>

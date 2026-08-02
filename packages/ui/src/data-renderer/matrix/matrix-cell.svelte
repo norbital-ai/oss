@@ -21,9 +21,20 @@
 		column.relationOptions ? (column.field.relation?.target ?? null) : null
 	);
 	const value = $derived(row[column.key]);
+	const readOnly = $derived(column.readOnly === true);
 </script>
 
-{#if relationTarget}
+{#if column.renderer}
+	{@const Renderer = column.renderer}
+	<Renderer
+		row={row as TRow}
+		{value}
+		field={column.field}
+		disabled={disabled || readOnly}
+		{onValueChange}
+		{onRowChange}
+	/>
+{:else if relationTarget}
 	<!-- The column supplied an option set, so it wants a record picker. Without `relationOptions`
 	     the value is a uuid and renders as text like any other column. -->
 	<RelationshipRenderer
@@ -32,7 +43,9 @@
 		multiple={column.field.array ?? false}
 		options={column.relationOptions}
 		placeholder={column.placeholder}
-		{disabled}
+		disabled={disabled || readOnly}
+		readonly={readOnly}
+		displayOnly={readOnly}
 		class={className}
 		{onValueChange}
 	/>
@@ -41,8 +54,8 @@
 		id={`matrix-${row.__matrixRowId}-${column.key}`}
 		field={column.field}
 		{value}
-		mode="edit"
-		{disabled}
+		mode={readOnly ? 'display' : 'edit'}
+		disabled={disabled || readOnly}
 		placeholder={column.placeholder}
 		{row}
 		class={className}

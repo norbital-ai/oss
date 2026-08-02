@@ -233,6 +233,7 @@
 	setCollectionFormFieldContext({
 		collectionName: () => String(collection),
 		field: (name) => definition.fields.find((candidate) => candidate.name === name),
+		row: () => Object.fromEntries(Object.entries(form.getData())),
 		value: (name) => Reflect.get(form.getData(), name),
 		// Field values are schema-typed at FormState; collection fields pass unknown at the boundary.
 		setValue: (name, value) => form.setValue(name, value as never),
@@ -336,7 +337,7 @@
 	bottom={formFooter}
 >
 	<Scroll name={`${String(collection)} form fields`}>
-		<div class="min-w-0 pb-4">
+		<div class="flex min-h-full min-w-0 flex-col pb-4">
 			{#if loading}
 				<Stack gap="md" aria-label="Loading form">
 					<CollectionFormSkeleton rows={skeletonRows} />
