@@ -23,10 +23,10 @@ minimumReleaseAgeExclude:
 # Include both host-native and guest-native optional packages on macOS, Windows, and Linux hosts.
 supportedArchitectures:
   os:
-    - current
+    - darwin
     - linux
+    - win32
   cpu:
-    - current
     - x64
     - arm64
   libc:

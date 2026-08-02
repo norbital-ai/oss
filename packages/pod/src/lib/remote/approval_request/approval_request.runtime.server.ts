@@ -21,6 +21,8 @@ type TCollectionHookEventData = {
 
 type ApprovalSyncReceipt = {
 	readonly message: string;
+	/** The command's authoritative row, used for immediate read-your-command reconciliation. */
+	readonly approval_request: TApprovalRequest;
 	/** Highest committed feed sequence after the terminal transition and its lifecycle hook. */
 	readonly sync_sequence: string;
 	/** Root record used for a bounded authoritative fallback if the live feed cannot catch up. */
@@ -166,6 +168,7 @@ async function approvalSyncReceipt(
 	);
 	return {
 		message,
+		approval_request: approvalRequest,
 		sync_sequence: await currentOutboxWatermark(getWorkspace({ provision: true })),
 		...(root
 			? {

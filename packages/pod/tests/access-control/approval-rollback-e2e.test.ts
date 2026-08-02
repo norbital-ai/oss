@@ -144,8 +144,13 @@ describe('Withdrawn approval reaches the synced client', () => {
 			expect(response.status, await response.clone().text()).toBe(200);
 			const receipt = (await response.json()) as {
 				sync_sequence: string;
+				approval_request: { norbital_id: string; status: string };
 				affected_record: { collection: string; id: string };
 			};
+			expect(receipt.approval_request).toMatchObject({
+				norbital_id: APPROVAL_ID,
+				status: 'REJECTED'
+			});
 			expect(receipt.affected_record).toEqual({ collection: collection.name, id: recordId });
 
 			// The server row is gone…

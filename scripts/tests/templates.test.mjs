@@ -92,9 +92,18 @@ describe('template discovery', () => {
 		for (const template of discoverTemplates()) {
 			const policy = readFileSync(path.join(template.directory, 'pnpm-workspace.yaml'), 'utf8');
 			assert.match(policy, /supportedArchitectures:/);
-			for (const architecture of ['current', 'linux', 'x64', 'arm64', 'glibc', 'musl']) {
+			for (const architecture of [
+				'darwin',
+				'linux',
+				'win32',
+				'x64',
+				'arm64',
+				'glibc',
+				'musl'
+			]) {
 				assert.match(policy, new RegExp(`- ${architecture}`), `${template.key}: ${architecture}`);
 			}
+			assert.doesNotMatch(policy, /- current/);
 		}
 	});
 

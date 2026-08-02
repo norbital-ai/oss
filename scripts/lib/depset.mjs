@@ -44,8 +44,8 @@ function requirePnpmWorkspace(pnpmWorkspace) {
 		);
 	}
 	for (const [axis, values] of [
-		['os', ['current', 'linux']],
-		['cpu', ['current', 'x64', 'arm64']],
+		['os', ['darwin', 'linux', 'win32']],
+		['cpu', ['x64', 'arm64']],
 		['libc', ['glibc', 'musl']]
 	]) {
 		const section = new RegExp(`${axis}:\\s*\\n((?:\\s+-\\s+[^\\n]+\\n?)+)`).exec(

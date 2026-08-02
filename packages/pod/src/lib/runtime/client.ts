@@ -182,6 +182,7 @@ function invalidateAllCollectionQueries(): void {
 
 type ApprovalSyncReceipt = {
 	readonly sync_sequence?: unknown;
+	readonly approval_request?: unknown;
 	readonly affected_record?: unknown;
 };
 
@@ -196,6 +197,21 @@ async function settleApprovalSync(receipt: unknown): Promise<void> {
 	if (!sync) return;
 	const parsed =
 		receipt && typeof receipt === 'object' ? (receipt as ApprovalSyncReceipt) : undefined;
+	const approvalRequest = parsed?.approval_request;
+	if (approvalRequest && typeof approvalRequest === 'object') {
+		const approvalRequestId = Reflect.get(approvalRequest, 'norbital_id');
+		if (typeof approvalRequestId === 'string') {
+			// A command already returned this authoritative row. Apply it before waiting behind an
+			// unrelated catch-up backlog so the initiating surface has immediate read-your-command
+			// consistency; the ordered feed later repeats the same idempotent upsert for other tabs.
+			await reconcileServerRow(
+				sync,
+				'approval_request',
+				approvalRequestId,
+				approvalRequest as Record<string, unknown>
+			);
+		}
+	}
 	const sequence = parsed?.sync_sequence;
 	if (typeof sequence === 'string' && (await sync.client.waitForSequence(sequence))) return;
 
