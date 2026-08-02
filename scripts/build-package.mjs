@@ -18,7 +18,7 @@
  * two syscalls rather than a whole compile.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, renameSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -49,6 +49,24 @@ try {
 if (!existsSync(staging)) {
 	console.error(`[build] ${command} produced no output at ${path.relative(packageRoot, staging)}`);
 	process.exit(1);
+}
+
+// Packagers create files with ordinary 0644 modes even when the source carried a shebang. npm 11
+// rejects such a target as an invalid `bin` entry and silently removes the command from the
+// published manifest. Restore executable mode from package.json while the output is still staged.
+const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+const binTargets =
+	typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin ?? {});
+for (const target of binTargets) {
+	if (typeof target !== 'string') continue;
+	const relativeTarget = path.relative('build', target.replace(/^\.\//, ''));
+	if (relativeTarget.startsWith('..') || path.isAbsolute(relativeTarget)) continue;
+	const stagedTarget = path.join(staging, relativeTarget);
+	if (!existsSync(stagedTarget)) {
+		console.error(`[build] declared binary was not generated: ${target}`);
+		process.exit(1);
+	}
+	chmodSync(stagedTarget, 0o755);
 }
 
 // Two renames. The old output is moved aside rather than deleted first, so a failure between them
