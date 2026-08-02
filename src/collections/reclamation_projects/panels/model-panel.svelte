@@ -38,6 +38,7 @@
 		(report?.warnings ?? []).filter((entry) => entry.severity === 'warning')
 	);
 	const notices = $derived((report?.warnings ?? []).filter((entry) => entry.severity === 'info'));
+	const assumptions = $derived(report?.assumptions ?? []);
 
 	function number(value: number | null | undefined, digits = 0): string {
 		if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
@@ -134,12 +135,10 @@
 	{#if report}
 		<Stack as="section" gap="sm">
 			<h3 class="border-b pb-2 text-sm font-semibold">
-				Checks
-				{#if report.warnings.length > 0}
-					<span class="ml-1 font-normal text-muted-foreground"
-						>({report.warnings.length} flagged)</span
-					>
-				{/if}
+				Checks and calculation basis
+				<span class="ml-1 font-normal text-muted-foreground">
+					({report.warnings.length} flagged · {assumptions.length} assumed)
+				</span>
 			</h3>
 			{#if report.warnings.length === 0}
 				<p class="text-sm text-muted-foreground">
@@ -159,6 +158,30 @@
 					<p class="mt-1">{warning.message}</p>
 				</div>
 			{/each}
+
+			{#if assumptions.length > 0}
+				<div class="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+					<p class="font-medium">Not directly supplied by the source documents</p>
+					<p class="mt-1 text-xs text-muted-foreground">
+						These assumptions affect the model and its calculated quantities. Verify or replace them
+						before relying on the result.
+					</p>
+				</div>
+				<div class="divide-y rounded-md border bg-card">
+					{#each assumptions as assumption (assumption.id)}
+						<details class="p-3">
+							<summary class="cursor-pointer text-sm font-medium">{assumption.title}</summary>
+							<Stack gap="sm" class="pt-2">
+								<p class="text-sm text-muted-foreground">{assumption.detail}</p>
+								<p class="text-sm">
+									<span class="font-medium">Effect if incorrect:</span>
+									{assumption.effect}
+								</p>
+							</Stack>
+						</details>
+					{/each}
+				</div>
+			{/if}
 
 			{#if report.layerClassification && report.layerClassification.length > 0}
 				<details class="rounded-md border bg-card p-3">

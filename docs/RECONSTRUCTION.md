@@ -299,12 +299,15 @@ Invalid JSON is rejected at write time, before the row lands.
 
 | Setting              | Default | Effect                                                             |
 | -------------------- | ------- | ------------------------------------------------------------------ |
-| `integration_cell_m` | 5 m     | Volume integration grid. Smaller is more exact and slower.         |
-| `render_cell_m`      | 6 m     | Viewer tessellation grid. Smaller is more triangles, same shape.   |
+| `integration_cell_m` | 2.5 m   | Volume integration grid. Smaller is more exact and slower.         |
+| `render_cell_m`      | 3 m     | Viewer tessellation grid. Smaller is more triangles, same shape.   |
 | `interpolation`      | `morph` | `morph` blends between sections; `prismatic` snaps to the nearest. |
-| `maxCells`           | 400 000 | Hard ceiling. Both grids coarsen rather than exceed it.            |
+| `maxCells`           | 1.5 M   | Hard ceiling. Both grids coarsen rather than exceed it.            |
 
 Both cells are clamped to 0.5–100 m at write time.
+The requested size is therefore a target, not a promise: large sites are automatically coarsened
+to the finest cell that fits the ceiling. The effective integration cell is persisted with the
+reconstruction and shown beside the calculated volume.
 
 ## The assumption ledger
 
