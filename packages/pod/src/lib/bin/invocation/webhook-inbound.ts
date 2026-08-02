@@ -124,9 +124,7 @@ export function webhookInboundDeliverer(
 			if (scheme && value) {
 				const fresh = webhookTimestampIsFresh({
 					value,
-					...(scheme.toleranceSeconds != null
-						? { toleranceSeconds: scheme.toleranceSeconds }
-						: {}),
+					...(scheme.toleranceSeconds != null ? { toleranceSeconds: scheme.toleranceSeconds } : {}),
 					nowMs: now()
 				});
 				if (!fresh) return { status: 'rejected', reason: 'delivery is outside the replay window' };

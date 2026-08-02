@@ -58,7 +58,9 @@
 		end: 'justify-end',
 		between: 'justify-between'
 	} as const;
-	const resolvedAlign = $derived(align ?? (layout === 'stack' || layout === 'grid' ? 'stretch' : 'center'));
+	const resolvedAlign = $derived(
+		align ?? (layout === 'stack' || layout === 'grid' ? 'stretch' : 'center')
+	);
 </script>
 
 <svelte:element

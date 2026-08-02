@@ -1,10 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type {
-	DeclaredWebhookBinding,
-	HostWebhookListener,
-	WebhookInboundResult
-} from './types.js';
+import type { DeclaredWebhookBinding, HostWebhookListener, WebhookInboundResult } from './types.js';
 
 /** Where a signature is read from when the workspace declared no header of its own. */
 export const DEFAULT_WEBHOOK_SIGNATURE_HEADER = 'x-signature';
@@ -122,7 +118,9 @@ export function verifyWebhookSignature(params: {
 	const signed = scheme
 		? `${scheme.value}${scheme.separator ?? DEFAULT_SIGNED_PAYLOAD_SEPARATOR}${params.body}`
 		: params.body;
-	const candidates = scheme ? timestampedCandidates(presented, scheme) : labelledCandidates(presented);
+	const candidates = scheme
+		? timestampedCandidates(presented, scheme)
+		: labelledCandidates(presented);
 	const digest = createHmac('sha256', params.secret).update(signed, 'utf8').digest();
 	const expected = [digest.toString('hex'), digest.toString('base64')];
 	// Every pairing is evaluated rather than short-circuited, so how long this takes says nothing about

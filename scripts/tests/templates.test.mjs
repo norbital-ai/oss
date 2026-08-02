@@ -92,15 +92,7 @@ describe('template discovery', () => {
 		for (const template of discoverTemplates()) {
 			const policy = readFileSync(path.join(template.directory, 'pnpm-workspace.yaml'), 'utf8');
 			assert.match(policy, /supportedArchitectures:/);
-			for (const architecture of [
-				'darwin',
-				'linux',
-				'win32',
-				'x64',
-				'arm64',
-				'glibc',
-				'musl'
-			]) {
+			for (const architecture of ['darwin', 'linux', 'win32', 'x64', 'arm64', 'glibc', 'musl']) {
 				assert.match(policy, new RegExp(`- ${architecture}`), `${template.key}: ${architecture}`);
 			}
 			assert.doesNotMatch(policy, /- current/);
@@ -135,9 +127,7 @@ describe('template discovery', () => {
 					const liveColumns = declared.get(liveTable);
 					if (liveColumns) declared.set(historyTable, new Set(liveColumns));
 				}
-				for (const match of migration.sql.matchAll(
-					/ALTER TABLE "([^"]+)" ADD COLUMN "([^"]+)"/g
-				)) {
+				for (const match of migration.sql.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "([^"]+)"/g)) {
 					const [statement, table, column] = match;
 					const columns = declared.get(table);
 					if (!columns) continue;

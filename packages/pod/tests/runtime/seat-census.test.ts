@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { billableSeats, SeatCensusSchema, UserRoleSchema } from '@norbital-ai/platform-utils/system/types';
+import {
+	billableSeats,
+	SeatCensusSchema,
+	UserRoleSchema
+} from '@norbital-ai/platform-utils/system/types';
 
 /**
  * The seat model is a billing contract, so the shape is pinned here rather than only exercised

@@ -240,10 +240,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		);
 		await writeFile(path.join(clientDistRoot, 'package.json'), '{"type":"module"}\n');
 		await mkdir(path.join(artifactRoot, 'output/server'), { recursive: true });
-		await copyPodServerAssets(
-			path.join(artifactRoot, 'output/server'),
-			options.serverAssets ?? []
-		);
+		await copyPodServerAssets(path.join(artifactRoot, 'output/server'), options.serverAssets ?? []);
 		await writeFile(path.join(artifactRoot, 'output/server/package.json'), '{"type":"module"}\n');
 		const serverModule: unknown = await import(
 			`${pathToFileURL(path.join(artifactRoot, 'output/server/index.js')).href}?build=${Date.now()}`

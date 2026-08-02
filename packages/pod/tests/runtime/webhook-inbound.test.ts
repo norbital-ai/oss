@@ -18,9 +18,7 @@ function sign(body: string, secret = SECRET): string {
 }
 
 /** Only the parts of a manifest the inbound path reads. The rest is irrelevant to this file. */
-function manifestWith(
-	origin: Record<string, unknown>
-): NorbitalManifest {
+function manifestWith(origin: Record<string, unknown>): NorbitalManifest {
 	return {
 		integrations: {
 			field_reports: {
@@ -109,9 +107,9 @@ describe('verifyWebhookSignature', () => {
 		expect(verifyWebhookSignature({ body, signature: undefined, secret: SECRET })).toBe(false);
 		expect(verifyWebhookSignature({ body, signature: '', secret: SECRET })).toBe(false);
 		// A prefix of the correct digest: the length check has to reject it rather than throw.
-		expect(
-			verifyWebhookSignature({ body, signature: right.slice(0, 32), secret: SECRET })
-		).toBe(false);
+		expect(verifyWebhookSignature({ body, signature: right.slice(0, 32), secret: SECRET })).toBe(
+			false
+		);
 		// One byte different, same length — the case a naive compare leaks the position of.
 		const flipped = right.slice(0, -1) + (right.at(-1) === '0' ? '1' : '0');
 		expect(verifyWebhookSignature({ body, signature: flipped, secret: SECRET })).toBe(false);
@@ -266,7 +264,10 @@ describe('webhookInboundDeliverer', () => {
 
 	it('verifies before dispatching, and passes the provider event id through', async () => {
 		const dispatched: unknown[] = [];
-		const result = await deliverer(SIGNED, dispatched)({
+		const result = await deliverer(
+			SIGNED,
+			dispatched
+		)({
 			integrationName: 'field_reports',
 			bindingName: 'rfis.receive.rfi',
 			body,
@@ -288,7 +289,10 @@ describe('webhookInboundDeliverer', () => {
 
 	it('dispatches nothing at all when the signature is wrong', async () => {
 		const dispatched: unknown[] = [];
-		const result = await deliverer(SIGNED, dispatched)({
+		const result = await deliverer(
+			SIGNED,
+			dispatched
+		)({
 			integrationName: 'field_reports',
 			bindingName: 'rfis.receive.rfi',
 			body,
@@ -413,9 +417,7 @@ describe('webhookInboundDeliverer', () => {
 		it('rejects a digest that is valid for a different timestamp', async () => {
 			// Correct secret, correct body, correct-for-`at - 60` digest, presented as `t=at`. The only
 			// thing wrong with it is the thing the timestamp is in the signed string to protect.
-			const { result, dispatched } = await deliver(
-				timestamped(body, at, { signedAt: at - 60 })
-			);
+			const { result, dispatched } = await deliver(timestamped(body, at, { signedAt: at - 60 }));
 			expect(result).toEqual({ status: 'rejected', reason: 'signature did not verify' });
 			expect(dispatched).toEqual([]);
 		});
@@ -425,7 +427,10 @@ describe('webhookInboundDeliverer', () => {
 			// The same bytes that imported a moment ago, replayed an hour later. Nothing about the
 			// signature has changed — only the clock has, which is the entire point.
 			const { result, dispatched } = await deliver(captured, nowMs + 3_600_000);
-			expect(result).toEqual({ status: 'rejected', reason: 'delivery is outside the replay window' });
+			expect(result).toEqual({
+				status: 'rejected',
+				reason: 'delivery is outside the replay window'
+			});
 			expect(dispatched).toEqual([]);
 			// And a delivery dated an hour into the future is refused the same way.
 			const forward = await deliver(timestamped(body, at + 3600));

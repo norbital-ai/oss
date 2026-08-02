@@ -3,9 +3,7 @@ import type {
 	RuntimeFacilityName,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
-import {
-	requiredRuntimeFacilities
-} from '@norbital-ai/platform-utils/runtime/binding';
+import { requiredRuntimeFacilities } from '@norbital-ai/platform-utils/runtime/binding';
 import { parseNorbitalManifest } from '@norbital-ai/platform-utils/manifest/parse';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import {

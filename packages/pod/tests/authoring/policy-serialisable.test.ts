@@ -30,9 +30,9 @@ function manifestWith(where: unknown) {
 
 describe('policy conditions must survive storage', () => {
 	it('refuses a callback, naming the path it found', async () => {
-		await expect(
-			reconcileDeclaredPolicies(client, manifestWith({ RAW: () => 1 }))
-		).rejects.toThrow(/function at where\.RAW/);
+		await expect(reconcileDeclaredPolicies(client, manifestWith({ RAW: () => 1 }))).rejects.toThrow(
+			/function at where\.RAW/
+		);
 	});
 
 	it('finds one nested inside AND, not just at the top level', async () => {

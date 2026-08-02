@@ -1,5 +1,15 @@
 import { execFileSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import {
+	cp,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	rmdir,
+	stat,
+	writeFile
+} from 'node:fs/promises';
 import { symlink } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -374,7 +384,8 @@ export async function bootPodRuntime(
 			}));
 	} catch (err) {
 		pg.stop();
-		if (usesOverlay) await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
+		if (usesOverlay)
+			await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
 		throw err;
 	}
 
@@ -428,7 +439,8 @@ export async function bootPodRuntime(
 		async stop() {
 			await pool.end().catch(() => undefined);
 			pg.stop();
-			if (usesOverlay) await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
+			if (usesOverlay)
+				await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
 		}
 	};
 }

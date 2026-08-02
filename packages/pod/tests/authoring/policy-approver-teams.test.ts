@@ -128,8 +128,8 @@ describe('an approval names its approvers by team name', () => {
 
 	it('refuses to gate a read instead of silently dropping the gate', async () => {
 		const client = clientWith([{ id: 'team-uuid-1', name: 'BCA Controllers' }]);
-		await expect(
-			reconcileDeclaredPolicies(client, manifestWith(oneStep, 'read'))
-		).rejects.toThrow(/gates a read on "quotes"/);
+		await expect(reconcileDeclaredPolicies(client, manifestWith(oneStep, 'read'))).rejects.toThrow(
+			/gates a read on "quotes"/
+		);
 	});
 });

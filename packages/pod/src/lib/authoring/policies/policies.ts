@@ -197,7 +197,6 @@ function assertSerialisableWhere(
 	}
 }
 
-
 /**
  * Identity function that exists for its inference; a policy file gets checked on write.
  *
