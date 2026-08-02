@@ -14,7 +14,7 @@ on:
 
 concurrency:
   group: template-refs-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -43,11 +43,8 @@ jobs:
       - name: Validate template catalogue
         run: node scripts/project-templates.mjs --check
 
-      - name: Build public packages
-        run: pnpm packages:build
-
-      - name: Validate clean standalone projections
-        run: node scripts/validate-template-projections.mjs
+      - name: Validate template package policies
+        run: node --test scripts/tests/templates.test.mjs
 
       - name: Project and publish root template refs
         run: |
