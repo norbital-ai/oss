@@ -31,7 +31,22 @@ export type WorkspaceSettingsApi = {
 	}): Promise<{ invitationId: string; acceptPath: string; email: string }>;
 	revokeInvitation(invitationId: string): Promise<{ revoked: boolean }>;
 	setMemberRole(userId: string, role: TUserRole): Promise<unknown>;
-	createTeam(name: string): Promise<unknown>;
+	createTeam(input: {
+		name: string;
+		description?: string | null;
+		parent_id?: string | null;
+		policy_id?: string | null;
+	}): Promise<unknown>;
+	updateTeam(
+		teamId: string,
+		input: {
+			name: string;
+			description?: string | null;
+			parent_id?: string | null;
+			policy_id?: string | null;
+		}
+	): Promise<unknown>;
+	deleteTeam(teamId: string): Promise<unknown>;
 	setTeamPolicy(teamId: string, policyId: string | null): Promise<unknown>;
 	addTeamMember(teamId: string, userId: string): Promise<unknown>;
 	removeTeamMember(membershipId: string): Promise<unknown>;
@@ -56,13 +71,19 @@ export type MemberRow = {
 export type TeamRow = {
 	readonly norbital_id: string;
 	readonly name: string;
+	readonly description: string | null;
+	readonly parent_id: string | null;
 	readonly policy_id: string | null;
 };
 
 export type PolicyRow = {
 	readonly norbital_id: string;
+	readonly key: string;
 	readonly name: string;
+	readonly description: string | null;
 	readonly is_active: boolean;
+	readonly accessible_applications: readonly string[];
+	readonly grants: readonly unknown[];
 };
 
 function text(record: Readonly<Record<string, unknown>>, field: string): string | null {
@@ -89,14 +110,36 @@ export function toTeamRow(record: Readonly<Record<string, unknown>>): TeamRow[] 
 	const id = text(record, 'norbital_id');
 	const name = text(record, 'name');
 	if (!id || !name) return [];
-	return [{ norbital_id: id, name, policy_id: text(record, 'policy_id') }];
+	return [
+		{
+			norbital_id: id,
+			name,
+			description: text(record, 'description'),
+			parent_id: text(record, 'parent_id'),
+			policy_id: text(record, 'policy_id')
+		}
+	];
 }
 
 export function toPolicyRow(record: Readonly<Record<string, unknown>>): PolicyRow[] {
 	const id = text(record, 'norbital_id');
 	const name = text(record, 'name');
 	if (!id || !name) return [];
-	return [{ norbital_id: id, name, is_active: record.is_active !== false }];
+	return [
+		{
+			norbital_id: id,
+			key: text(record, 'key') ?? name,
+			name,
+			description: text(record, 'description'),
+			is_active: record.is_active !== false,
+			accessible_applications: Array.isArray(record.accessible_applications)
+				? record.accessible_applications.filter(
+						(value): value is string => typeof value === 'string'
+					)
+				: [],
+			grants: Array.isArray(record.grants) ? record.grants : []
+		}
+	];
 }
 
 export type TeamMembershipRow = {

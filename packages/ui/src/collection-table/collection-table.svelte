@@ -675,10 +675,19 @@
 				: { status: 'pending' };
 		try {
 			await approvals.process({ approvalRequestId: activeApprovalId, action, comments });
-			await Promise.all([queries.approval?.refresh(), refreshRows()]);
-			toast.success(approvalActionSuccessMessage(action));
 			if (action === 'REQUEST_FOR_CHANGE') changeRequestOpen = false;
 			approvalActionState = { status: 'idle' };
+			toast.success(approvalActionSuccessMessage(action));
+			// The decision is already committed. Keep slow or failed reads from turning a successful
+			// mutation into a stuck dialog and a false "action failed" message; live sync normally wins
+			// this race, while these refreshes are only an immediate consistency assist.
+			void Promise.all([queries.approval?.refresh(), refreshRows()]).catch((error: unknown) => {
+				toast.error(
+					error instanceof Error
+						? `Action completed, but the table did not refresh: ${error.message}`
+						: 'Action completed, but the table did not refresh'
+				);
+			});
 			return true;
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Approval action failed');

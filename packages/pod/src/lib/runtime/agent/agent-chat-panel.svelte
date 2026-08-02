@@ -1,6 +1,8 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
+	import { Combobox } from '@norbital-ai/ui/combobox';
+	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
@@ -14,6 +16,46 @@
 	let echo = $state<string | null>(null);
 	let failure = $state<string | null>(null);
 	let transcriptElement = $state<HTMLOListElement | null>(null);
+	let composingNew = $state(false);
+
+	type SessionRow = {
+		readonly norbital_id: string;
+		readonly automation_run_id: string;
+		readonly title: string;
+	};
+	const sessionQuery = $derived.by(() => {
+		try {
+			return getInitializedWorkspaceClient().db.chat_session?.findMany({
+				orderBy: { norbital_updated_at: 'desc' },
+				limit: 100
+			});
+		} catch {
+			return undefined;
+		}
+	});
+	const sessions = $derived(
+		(sessionQuery?.current ?? []).flatMap((row): SessionRow[] => {
+			if (typeof row.norbital_id !== 'string' || typeof row.automation_run_id !== 'string') {
+				return [];
+			}
+			return [
+				{
+					norbital_id: row.norbital_id,
+					automation_run_id: row.automation_run_id,
+					title: typeof row.title === 'string' && row.title.trim() ? row.title : 'Workspace agent'
+				}
+			];
+		})
+	);
+	const sessionOptions = $derived(
+		sessions.map((session) => ({ value: session.norbital_id, label: session.title }))
+	);
+
+	$effect(() => {
+		if (chatId || composingNew || sessions.length === 0) return;
+		chatId = sessions[0].norbital_id;
+		runId = sessions[0].automation_run_id;
+	});
 
 	/** The tenant replica is the one live channel for both transcript text and turn state. */
 	const transcript = $derived.by(() => {
@@ -67,7 +109,8 @@
 			// error message is visible instead of depending on a second replica event.
 			pending = false;
 			failure =
-				terminalMessage.content.trim() || 'The agent could not finish this response. Try sending it again.';
+				terminalMessage.content.trim() ||
+				'The agent could not finish this response. Try sending it again.';
 		}
 	});
 
@@ -92,10 +135,30 @@
 			});
 			runId = result.runId;
 			chatId = result.chatId;
+			composingNew = false;
 		} catch (cause) {
 			failure = cause instanceof Error ? cause.message : String(cause);
 			pending = false;
 		}
+	}
+
+	function selectConversation(value: string | null): void {
+		if (!value) return;
+		const session = sessions.find((candidate) => candidate.norbital_id === value);
+		if (!session) return;
+		chatId = session.norbital_id;
+		runId = session.automation_run_id;
+		composingNew = false;
+		echo = null;
+		failure = null;
+	}
+
+	function startConversation(): void {
+		chatId = undefined;
+		runId = undefined;
+		composingNew = true;
+		echo = null;
+		failure = null;
 	}
 
 	function onKeydown(event: KeyboardEvent): void {
@@ -113,13 +176,34 @@
 </script>
 
 <section class="flex h-full min-h-0 flex-col bg-background" aria-label="Workspace agent">
+	<Inline as="header" justify="between" gap="sm" class="shrink-0 border-b px-3 py-2.5 sm:px-4">
+		<Combobox
+			options={sessionOptions}
+			value={chatId ?? null}
+			onValueChange={selectConversation}
+			ariaLabel="Conversation thread"
+			searchPlaceholder="Search conversations…"
+			emptyPlaceholder="No conversations yet"
+			class="min-w-0 flex-1"
+			triggerClass="border-0 bg-transparent shadow-none"
+		/>
+		<Button
+			variant="ghost"
+			size="icon"
+			hint="New conversation"
+			aria-label="New conversation"
+			onclick={startConversation}
+		>
+			<Icon icon="lucide:square-pen" class="size-4" />
+		</Button>
+	</Inline>
 	{#if messages.length === 0 && !pending}
 		<div class="grid min-h-0 flex-1 place-items-center overflow-y-auto px-6 py-10">
 			<div class="max-w-sm text-center">
 				<div
-					class="mx-auto mb-4 grid size-11 place-items-center rounded-xl bg-primary/10 text-primary"
+					class="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-card shadow-xs"
 				>
-					<Icon icon="lucide:sparkles" class="size-5" />
+					<IconWrapper name="product:agent" class="size-5 text-foreground" />
 				</div>
 				<h2 class="text-base font-semibold tracking-[-0.015em] text-foreground">
 					Ask about this workspace
@@ -132,7 +216,7 @@
 	{:else}
 		<ol
 			bind:this={transcriptElement}
-			class="flex min-h-0 flex-1 list-none flex-col gap-4 overflow-y-auto px-4 py-5 sm:px-5"
+			class="flex min-h-0 flex-1 list-none flex-col gap-5 overflow-y-auto px-4 py-5 sm:px-5"
 			aria-live="polite"
 			aria-label="Agent conversation"
 		>
@@ -146,12 +230,12 @@
 						{roleLabel(message.role)}
 					</span>
 					<div
-						class={`max-w-[88%] rounded-xl px-3.5 py-2.5 text-sm leading-6 shadow-xs sm:max-w-[80%] ${
+						class={`text-sm leading-6 sm:max-w-[88%] ${
 							message.role === 'user'
-								? 'bg-primary text-primary-foreground'
+								? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-foreground'
 								: message.role === 'assistant'
-									? 'bg-muted text-foreground'
-									: 'bg-destructive/10 text-destructive'
+									? 'w-full text-foreground'
+									: 'w-full rounded-lg bg-destructive/10 px-3.5 py-2.5 text-destructive'
 						}`}
 					>
 						<p class="content m-0 whitespace-pre-wrap break-words">{message.content}</p>
@@ -178,7 +262,7 @@
 		</ol>
 	{/if}
 
-	<div class="shrink-0 border-t bg-background px-3 py-3 sm:px-4">
+	<div class="shrink-0 bg-background px-3 pb-3 sm:px-4 sm:pb-4">
 		{#if failure}
 			<div
 				class="mb-3 flex items-start gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive"
@@ -190,7 +274,7 @@
 		{/if}
 
 		<form
-			class="space-y-2"
+			class="flex min-w-0 flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-card shadow-deep"
 			onsubmit={(event) => {
 				event.preventDefault();
 				void send();
@@ -202,23 +286,23 @@
 				bind:value={draft}
 				onkeydown={onKeydown}
 				placeholder="Ask about records, documents, or this workspace…"
-				rows={2}
-				class="max-h-40 min-h-20 resize-none"
+				rows={1}
+				class="max-h-40 min-h-14 resize-none border-0 bg-transparent px-4 pt-3.5 pb-2 shadow-none focus-visible:ring-0"
 				disabled={pending}
 			/>
-			<Inline justify="between" align="center" gap="sm">
-				<p class="text-tiny text-muted-foreground">Enter to send · Shift + Enter for a new line</p>
+			<Inline justify="end" align="center" gap="sm" class="px-2.5 pb-2.5">
 				<Button
 					type="submit"
 					disabled={!canSend}
-					class="h-9 shrink-0 gap-2 rounded-md px-3"
+					size="icon"
+					class="size-8 shrink-0 rounded-full"
 					data-testid="agent-send"
+					aria-label={pending ? 'Agent is working' : 'Send message'}
 				>
 					<Icon
 						icon={pending ? 'lucide:loader-circle' : 'lucide:arrow-up'}
 						class={pending ? 'size-4 animate-spin' : 'size-4'}
 					/>
-					{pending ? 'Working…' : 'Send'}
 				</Button>
 			</Inline>
 		</form>

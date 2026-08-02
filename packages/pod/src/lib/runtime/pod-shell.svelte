@@ -42,7 +42,8 @@
 		appAccessAllowed,
 		buildApplicationNavigation,
 		buildSystemNavigation,
-		isHostPluginEntry,
+		hostPluginSurfaceHref,
+		resolveHostPluginSurface,
 		resolveApplicationLandingAppId,
 		resolveWorkspaceOrganizationOptions,
 		workspaceAuthorizesAgentSurface,
@@ -200,6 +201,13 @@
 		workspaceAuthorizesAgentSurface(currentPath, manifestContext.manifest.agent)
 	);
 	const agentAvailable = $derived(workspaceProvidesAgentSurface(manifestContext.manifest.agent));
+	const activeHostPlugin = $derived(resolveHostPluginSurface(currentPath, data.hostPlugins ?? []));
+	const hostChannelSettingsHref = $derived(
+		data.hostPlugins?.some((plugin) => plugin.key === 'org-settings')
+			? `${hostPluginSurfaceHref('org-settings')}?section=channels`
+			: null
+	);
+	const declaredChannels = $derived(Object.values(manifestContext.manifest.channels ?? {}));
 
 	function closeDetailSheet(): void {
 		if (detailSheetOpen) platformState.navigation.pop(page.url);
@@ -211,10 +219,6 @@
 	}
 
 	function navigate(href: string): void {
-		if (isHostPluginEntry(href, data.hostPlugins ?? [])) {
-			window.location.assign(href);
-			return;
-		}
 		void goto(href);
 	}
 
@@ -359,11 +363,25 @@
 		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)}
 			<!-- Pod's own administration surface, not a host plugin: a workspace on `pod start` has no
 			     host and still has to be able to add people to itself. -->
-			<WorkspaceSettingsSurface {workspaceApi} user={data.user} api={workspaceSettingsApi} />
+			<WorkspaceSettingsSurface
+				{workspaceApi}
+				user={data.user}
+				api={workspaceSettingsApi}
+				channels={declaredChannels}
+				{hostChannelSettingsHref}
+			/>
 		{:else if agentSurfaceAllowed}
 			<Bound size="full" clip grow class="p-4 sm:p-6">
 				<AgentChatPanel />
 			</Bound>
+		{:else if activeHostPlugin}
+			<iframe
+				title={navigationModel.system.find((item) => item.key === activeHostPlugin.key)?.label ??
+					'Host workspace surface'}
+				src={`${activeHostPlugin.entry}${page.url.search}`}
+				class="h-full min-h-0 w-full border-0 bg-background"
+				data-testid="host-plugin-surface"
+			></iframe>
 		{:else if activeApp && accessible}
 			<Bound size="full" clip grow data-workspace-app-region>
 				<Cover gap="none" top={activeAppBanner}>
@@ -406,7 +424,7 @@
 		onclick={() => (agentSheetOpen = true)}
 		data-testid="workspace-agent-trigger"
 	>
-		<Icon icon="lucide:sparkles" class="size-4" />
+		<IconWrapper name="product:agent" class="size-4" />
 		<span>Ask agent</span>
 	</Button>
 {/if}

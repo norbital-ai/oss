@@ -43,6 +43,8 @@ function readArguments(argv) {
 function resolveLockfile(template) {
 	const registry = (process.env.NORBITAL_PACKAGE_REGISTRY ?? defaultRegistry).trim();
 	const workingDirectory = mkdtempSync(path.join(tmpdir(), `norbital-lock-${template.key}-`));
+	const storeDirectory = path.join(workingDirectory, '.pnpm-store');
+	const cacheDirectory = path.join(workingDirectory, '.pnpm-cache');
 	try {
 		copyFileSync(
 			path.join(template.directory, 'package.json'),
@@ -53,11 +55,24 @@ function resolveLockfile(template) {
 		if (token) npmrc.push(`//${new URL(registry).host}/:_authToken=${token}`);
 		writeFileSync(path.join(workingDirectory, '.npmrc'), `${npmrc.join('\n')}\n`);
 		try {
-			execFileSync('pnpm', ['install', '--lockfile-only', '--ignore-workspace'], {
-				cwd: workingDirectory,
-				encoding: 'utf8',
-				stdio: ['ignore', 'pipe', 'pipe']
-			});
+			execFileSync(
+				'pnpm',
+				[
+					'install',
+					'--lockfile-only',
+					'--ignore-workspace',
+					'--force',
+					'--store-dir',
+					storeDirectory,
+					'--cache-dir',
+					cacheDirectory
+				],
+				{
+					cwd: workingDirectory,
+					encoding: 'utf8',
+					stdio: ['ignore', 'pipe', 'pipe']
+				}
+			);
 		} catch (cause) {
 			const detail = cause?.stderr?.toString().trim() || cause?.stdout?.toString().trim();
 			fail(`Resolving ${template.key} failed${detail ? `:\n${detail}` : ''}`);

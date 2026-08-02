@@ -52,17 +52,27 @@ function interactiveSpec(message: string): AgentAutomationSpec {
 	};
 }
 
-async function prepareConversation(runId?: string): Promise<{ runId: string; chatId: string }> {
+function conversationTitle(message: string): string {
+	const compact = message.trim().replace(/\s+/g, ' ');
+	return compact.length > 72 ? `${compact.slice(0, 69).trimEnd()}…` : compact || 'Workspace agent';
+}
+
+async function prepareConversation(
+	message: string,
+	runId?: string
+): Promise<{ runId: string; chatId: string }> {
 	const ctx = getWorkspace({ provision: true });
 	const ownerUserId = ctx.baseScope.requestor.norbital_id;
-	const createSession = async (automationRunId: string): Promise<{ runId: string; chatId: string }> => {
+	const createSession = async (
+		automationRunId: string
+	): Promise<{ runId: string; chatId: string }> => {
 		const session = await createRecord(
 			ctx,
 			'chat_session',
 			{
 				user_id: ownerUserId,
 				automation_run_id: automationRunId,
-				title: 'Workspace agent',
+				title: conversationTitle(message),
 				visibility: 'personal'
 			},
 			{ isElevated: true }
@@ -156,7 +166,7 @@ export const agentChat = authenticated.command(
 export const agentChatStart = authenticated.command(
 	AgentChatInputSchema,
 	async (input): Promise<AgentChatStartResult> => {
-		const conversation = await prepareConversation(input.runId);
+		const conversation = await prepareConversation(input.message, input.runId);
 		void runAgent({
 			automationName: null,
 			runId: conversation.runId,

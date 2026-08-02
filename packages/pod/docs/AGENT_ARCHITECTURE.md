@@ -16,14 +16,14 @@ channel message ──┘         │                 │
 
 ## Responsibilities
 
-| Pod owns                                              | The host owns                                                                |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Agent loop, streaming, subagents, iteration and token limits | One model-inference turn through `HostAiBinding`                    |
-| Tool selection and dispatch                           | Provider credentials and provider-specific adapters                          |
-| Workspace tools and their scoped API                  | Optional trusted tool implementations exposed through `HostAgentToolBinding` |
-| Runs, sessions, messages and channel conversations    | Transport sockets and encrypted transport credentials                        |
-| Transcript authorization, persistence and replication | Process lifecycle and isolation for the tenant runtime                       |
-| Interactive agent UI, floating entry and `/agent` route | Proxying/mounting the Pod workspace application                              |
+| Pod owns                                                     | The host owns                                                                |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Agent loop, streaming, subagents, iteration and token limits | One model-inference turn through `HostAiBinding`                             |
+| Tool selection and dispatch                                  | Provider credentials and provider-specific adapters                          |
+| Workspace tools and their scoped API                         | Optional trusted tool implementations exposed through `HostAgentToolBinding` |
+| Runs, sessions, messages and channel conversations           | Transport sockets and encrypted transport credentials                        |
+| Transcript authorization, persistence and replication        | Process lifecycle and isolation for the tenant runtime                       |
+| Interactive agent UI, floating entry and `/agent` route      | Proxying/mounting the Pod workspace application                              |
 
 A host must not create a parallel session store, transcript API, loop, or agent UI. A host tool
 returns plain data to Pod; Pod records the call and result as part of its own transcript.
@@ -128,7 +128,9 @@ about a host principal; the host authorizes using the tenant identity already bo
 The Pod shell renders `AgentChatPanel` whenever the workspace manifest contains the agent authored in
 `src/+agent.ts`; it does not wait for a host plugin. The same panel is available from a floating
 tenant-workspace action and from the full `/agent` route, including under standalone `pod start`. It
-calls `agentChatStart`, subscribes as soon as the session identity comes back, and reads
+uses the product agent icon, exposes the requestor's replicated conversation list as a thread
+selector, and keeps a compact composer at the bottom of the panel. It calls `agentChatStart`,
+subscribes as soon as the session identity comes back, and reads
 `chat_message` plus `chat_turn` from the local replica. Partial and completed messages therefore use
 the ordinary sync engine; refresh, reconnect, offline catch-up and multi-tab convergence do not
 require an agent-specific browser stream.

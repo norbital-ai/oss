@@ -13,10 +13,11 @@ workspace layout, generated client, compiler, runtime internals, history, sync, 
 | [Overview](./OVERVIEW.md)                     | Short lifecycle, generated-state, runtime and trust-boundary reference.          |
 | [Architecture](./ARCHITECTURE.md)             | Runtime invariants, deployment targets, facilities, notifications and files.     |
 | [Agent architecture](./AGENT_ARCHITECTURE.md) | Loop, tools, transcripts, channels, UI and the host boundary.                    |
+| [Workspace settings](./WORKSPACE_SETTINGS.md) | Tenant administration, settings authority and channel credential split.          |
 | [Sync engine](./SYNC_ENGINE.md)               | Local replica, live query, optimistic mutation and server transport design.      |
 | [Form system](./FORM_SYSTEM.md)               | Schema-derived forms and collection representation overrides.                    |
 | [Navigation state](./NAVIGATION_STATE.md)     | Application navigation and state conventions.                                    |
 
-Migration diaries, takeover notes and cross-repository refactor checklists are intentionally not
-part of this documentation set. Current contracts belong in the architecture guides; work tracking
-belongs in issues and pull requests.
+Historical migration and cross-repository refactor checklists are intentionally not part of this
+documentation set. Current contracts belong in the architecture guides; work tracking belongs in
+issues and pull requests.

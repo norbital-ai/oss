@@ -87,9 +87,9 @@ describe('buildSystemNavigation', () => {
 
 	/** A nested host route keeps its sidebar entry highlighted; a sibling prefix must not steal it. */
 	it.each([
-		['/studio', true],
-		['/studio/collections', true],
-		['/studio-archive', false],
+		['/__host/studio', true],
+		['/__host/studio/collections', true],
+		['/__host/studio-archive', false],
 		['/', false]
 	])('marks %s active=%s', (currentPath, active) => {
 		const item = buildSystemNavigation({

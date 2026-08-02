@@ -57,8 +57,18 @@ class FakeSettingsApi implements WorkspaceSettingsApi {
 		return this.#late(null);
 	}
 
-	createTeam(name: string) {
-		this.calls.push({ method: 'createTeam', args: [name] });
+	createTeam(input: { name: string }) {
+		this.calls.push({ method: 'createTeam', args: [input] });
+		return this.#late(null);
+	}
+
+	updateTeam(teamId: string, input: { name: string }) {
+		this.calls.push({ method: 'updateTeam', args: [teamId, input] });
+		return this.#late(null);
+	}
+
+	deleteTeam(teamId: string) {
+		this.calls.push({ method: 'deleteTeam', args: [teamId] });
 		return this.#late(null);
 	}
 
@@ -182,33 +192,31 @@ describe('workspace settings surface', () => {
 		destroy();
 	});
 
-	it('offers the policies the workspace declares, and assigns one to a team', async () => {
+	it('renders tenant teams as a tappable SvelteFlow organization chart with a create action', async () => {
 		replica.seed('team', [
-			{ norbital_id: 'team-site', name: 'Site', policy_id: null },
-			{ norbital_id: 'team-office', name: 'Office', policy_id: 'policy-read' }
+			{ norbital_id: 'team-site', name: 'Site', policy_id: null, parent_id: null },
+			{
+				norbital_id: 'team-office',
+				name: 'Office',
+				policy_id: 'policy-read',
+				parent_id: 'team-site'
+			}
 		]);
 		replica.seed('policy', [
-			{ norbital_id: 'policy-read', name: 'Read only', is_active: true },
-			{ norbital_id: 'policy-full', name: 'Full access', is_active: true }
+			{ norbital_id: 'policy-read', key: 'read', name: 'Read only', is_active: true },
+			{ norbital_id: 'policy-full', key: 'full', name: 'Full access', is_active: true }
 		]);
 		const { container, destroy } = mount();
 		tab(container, 'Teams').click();
 		await settle();
 
-		expect(rows(container, 'team-row')).toHaveLength(2);
-		const picker = select(container, 'Policy for Site');
-		// A picker over declared policies, never an editor for their contents.
-		expect([...picker.options].map((option) => option.textContent?.trim())).toEqual([
-			'No policy',
-			'Full access',
-			'Read only'
-		]);
-		expect(select(container, 'Policy for Office').value).toBe('policy-read');
+		expect(container.querySelector('[data-testid="settings-org-chart-canvas"]')).not.toBeNull();
+		expect(rows(container, 'team-node')).toHaveLength(2);
+		expect(container.querySelector('[aria-label="Create team"]')).not.toBeNull();
 
-		picker.value = 'policy-full';
-		picker.dispatchEvent(new Event('change', { bubbles: true }));
+		(container.querySelector('[data-team-id="team-site"]') as HTMLButtonElement | null)?.click();
 		await settle();
-		expect(api.calls).toEqual([{ method: 'setTeamPolicy', args: ['team-site', 'policy-full'] }]);
+		expect(container.querySelector('[aria-label="Edit Site"]')).not.toBeNull();
 		destroy();
 	});
 
@@ -217,7 +225,9 @@ describe('workspace settings surface', () => {
 			member(),
 			member({ norbital_id: 'user-member', email: 'engineer@it.local', role: 'basic' })
 		]);
-		replica.seed('team', [{ norbital_id: 'team-site', name: 'Site', policy_id: null }]);
+		replica.seed('team', [
+			{ norbital_id: 'team-site', name: 'Site', policy_id: null, parent_id: null }
+		]);
 		replica.seed('team_members', [
 			{ norbital_id: 'membership-1', team_id: 'team-site', user_id: 'user-admin' }
 		]);
@@ -225,7 +235,8 @@ describe('workspace settings surface', () => {
 		tab(container, 'Teams').click();
 		await settle();
 
-		expect(rows(container, 'team-member')).toEqual(['admin@it.local ×']);
+		(container.querySelector('[data-team-id="team-site"]') as HTMLButtonElement | null)?.click();
+		await settle();
 		// A policy only reaches a person through membership, so the candidates are the members who are
 		// not in this team yet — offering one who already is would create a duplicate row.
 		const adder = select(container, 'Add someone to Site');
@@ -236,6 +247,10 @@ describe('workspace settings surface', () => {
 
 		adder.value = 'user-member';
 		adder.dispatchEvent(new Event('change', { bubbles: true }));
+		await settle();
+		(
+			container.querySelector('[aria-label="Add member to Site"]') as HTMLButtonElement | null
+		)?.click();
 		await settle();
 		expect(api.calls).toEqual([{ method: 'addTeamMember', args: ['team-site', 'user-member'] }]);
 
@@ -263,10 +278,10 @@ describe('workspace settings surface', () => {
 		tab(container, 'Invitations').click();
 		await settle();
 
-		// They are not in the replica and never will be — this list is the endpoint's answer.
-		expect(rows(container, 'invitation-row')).toEqual([
-			'waiting@example.test basic · pending Revoke'
-		]);
+		// They are not in the replica and never will be. A safe endpoint projection still drives the
+		// same CollectionTable used by the other tenant-administration sections.
+		expect(rows(container, 'invitation-email')).toEqual(['waiting@example.test']);
+		expect(container.textContent).toContain('Invitations');
 
 		const email = container.querySelector('input[aria-label="Invitation email"]');
 		if (!(email instanceof HTMLInputElement)) throw new Error('no email field');
@@ -289,7 +304,7 @@ describe('workspace settings surface', () => {
 		// send rather than being told an email went somewhere.
 		const minted = container.querySelector('[data-testid="minted-invitation"]')?.textContent ?? '';
 		expect(minted).toContain('https://workspace.example.test/accept-invite?token=');
-		expect(rows(container, 'invitation-row')).toHaveLength(2);
+		expect(rows(container, 'invitation-email')).toHaveLength(2);
 
 		const revoke = [...container.querySelectorAll('button')].find(
 			(node) => node.textContent?.trim() === 'Revoke'
@@ -297,7 +312,7 @@ describe('workspace settings surface', () => {
 		revoke?.click();
 		await settle();
 		expect(api.calls.some((call) => call.method === 'revokeInvitation')).toBe(true);
-		expect(rows(container, 'invitation-row')).toHaveLength(1);
+		expect(rows(container, 'invitation-email')).toHaveLength(1);
 		destroy();
 	});
 

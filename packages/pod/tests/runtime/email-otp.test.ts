@@ -91,7 +91,26 @@ describe('emailOtpIdentity', () => {
 		const response = await provider().handleRoute?.(get('/login'));
 		expect(response?.status).toBe(200);
 		expect(response?.headers.get('referrer-policy')).toBe('strict-origin');
-		expect(await response?.text()).toContain('Send sign-in code');
+		const body = await response?.text();
+		expect(body).toContain('Send sign-in code');
+		expect(body).toContain('Norbital');
+		expect(body).toContain('Secure access');
+		expect(body).toContain('background-size: 20px 20px');
+	});
+
+	it('renders the verification step in the same shell with six accessible OTP cells', async () => {
+		const sent: Sent[] = [];
+		const identity = provider({ sent });
+		const response = await identity.handleRoute?.(form('/login', { email: 'ada@example.com' }));
+		expect(response?.status).toBe(200);
+		const body = await response?.text();
+		expect(body).toContain('Norbital');
+		expect(body).toContain('Secure access');
+		expect(body?.match(/id="code-[1-6]"/g)).toHaveLength(6);
+		expect(body?.match(/aria-label="Digit [1-6] of 6"/g)).toHaveLength(6);
+		expect(body).toContain('autocomplete="one-time-code"');
+		expect(body).toContain('name="code"');
+		expect(sent).toHaveLength(1);
 	});
 
 	it('sends an unauthenticated browser to the login page', async () => {

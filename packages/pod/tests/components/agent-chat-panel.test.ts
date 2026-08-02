@@ -83,8 +83,8 @@ describe('agent chat panel', () => {
 		// vanishes for those seconds reads as a dropped message.
 		expect(transcript(container)).toEqual([{ role: 'user', content: 'What is on site?' }]);
 		expect(sent).toEqual(['What is on site?']);
-		expect(container.querySelector('[data-testid="agent-send"]')?.textContent?.trim()).toBe(
-			'Working…'
+		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
+			'Agent is working'
 		);
 		destroy();
 	});
@@ -137,7 +137,9 @@ describe('agent chat panel', () => {
 			'Agent unavailable'
 		);
 		// And the composer is usable again rather than stuck mid-send.
-		expect(container.querySelector('[data-testid="agent-send"]')?.textContent?.trim()).toBe('Send');
+		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
+			'Send message'
+		);
 		destroy();
 	});
 
@@ -159,7 +161,9 @@ describe('agent chat panel', () => {
 		await settle();
 
 		expect(container.querySelector('textarea')?.disabled).toBe(false);
-		expect(container.querySelector('[data-testid="agent-send"]')?.textContent?.trim()).toBe('Send');
+		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
+			'Send message'
+		);
 		destroy();
 	});
 
@@ -185,7 +189,9 @@ describe('agent chat panel', () => {
 		await settle();
 
 		expect(container.querySelector('textarea')?.disabled).toBe(false);
-		expect(container.querySelector('[data-testid="agent-send"]')?.textContent?.trim()).toBe('Send');
+		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
+			'Send message'
+		);
 		expect(container.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
 			'Agent exceeded maxIterations (12)'
 		);
@@ -264,6 +270,36 @@ describe('agent chat panel', () => {
 		expect(transcript(container).map((message) => message.content)).toEqual([
 			'What is on site?',
 			'Belongs to this one.'
+		]);
+		destroy();
+	});
+
+	it('opens the most recent replicated conversation in the thread selector', async () => {
+		replica.seed('chat_session', [
+			{
+				norbital_id: 'c1',
+				automation_run_id: 'r1',
+				title: 'Check the payroll run',
+				norbital_updated_at: '2026-08-02T10:00:00.000Z'
+			}
+		]);
+		replica.seed('chat_message', [
+			{
+				norbital_id: 'm1',
+				chat_id: 'c1',
+				seq: 1,
+				parts: [{ role: 'assistant', content: 'The payroll run is ready.' }]
+			}
+		]);
+
+		const { container, destroy } = mountPanel();
+		await settle();
+
+		expect(container.querySelector('[aria-label="Conversation thread"]')?.textContent).toContain(
+			'Check the payroll run'
+		);
+		expect(transcript(container)).toEqual([
+			{ role: 'assistant', content: 'The payroll run is ready.' }
 		]);
 		destroy();
 	});

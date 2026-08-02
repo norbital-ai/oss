@@ -667,9 +667,9 @@ export default definePodHost({
 });
 ```
 
-Telegram is built in over long polling, which is why it needs no public URL. A host that drives
-channels another way — Core, through its own control plane — simply does not supply `channels`. The
-workspace file above is unchanged either way.
+Telegram is built in over long polling, which is why it needs no public URL. A managed host such as
+Core can register listeners through its private host-command control plane instead of the
+`pod.host.ts` `channels` adapter. The workspace file above is unchanged either way.
 
 ## Seed data
 
@@ -1177,6 +1177,7 @@ changes do not propagate invisibly.
 - [Documentation index](./docs/README.md)
 - [Architecture](./docs/ARCHITECTURE.md) — detailed Pod/host boundary and runtime invariants
 - [Agent architecture](./docs/AGENT_ARCHITECTURE.md) — loop, tools, transcripts, channels, and host boundary
+- [Workspace settings](./docs/WORKSPACE_SETTINGS.md) — tenant administration and the host-credential boundary
 - [Sync engine](./docs/SYNC_ENGINE.md) — replica protocol and correctness rules
 - [Form system](./docs/FORM_SYSTEM.md)
 - [Navigation state](./docs/NAVIGATION_STATE.md)

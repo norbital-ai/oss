@@ -61,6 +61,31 @@ export class FakeReplica {
 	readonly #queries = new Map<string, FakeLiveQuery>();
 	/** Every write the surface issued, in order, so a test can assert the mutation and not just the paint. */
 	readonly writes: { collection: string; id: string; patch: Row }[] = [];
+	/** CollectionTable capability markers and runtime field metadata. */
+	readonly records = {};
+	readonly collections = new Proxy({} as Record<string, unknown>, {
+		get: (_target, collection: string) => ({
+			name: collection,
+			fields: [
+				'norbital_id',
+				'norbital_created_at',
+				'norbital_updated_at',
+				'name',
+				'email',
+				'role',
+				'status',
+				'kind',
+				'event_type',
+				'collection_name',
+				'actor_id',
+				'key',
+				'description',
+				'is_active',
+				'accessible_applications',
+				'grants'
+			].map((name) => ({ name, kind: 'text', nullable: true }))
+		})
+	});
 
 	/** Rows already in the replica before anything mounts — what a device that has synced looks like. */
 	seed(collection: string, rows: readonly Row[]): void {
@@ -83,6 +108,15 @@ export class FakeReplica {
 	#collection(collection: string): Record<string, unknown> {
 		return {
 			findMany: (input: FindManyInput = {}) => this.#findMany(collection, input),
+			count: (input: FindManyInput = {}) => ({
+				get current() {
+					return 0;
+				},
+				loading: false,
+				error: undefined,
+				refresh: async () => undefined,
+				query: input
+			}),
 			update: async (id: string, patch: Row): Promise<void> => {
 				this.writes.push({ collection, id, patch });
 				const rows = this.#rows.get(collection) ?? [];

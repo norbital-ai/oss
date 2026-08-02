@@ -22,7 +22,15 @@ export const workspaceSettingsApi: WorkspaceSettingsApi = {
 	revokeInvitation: (invitationId) =>
 		post<{ revoked: boolean }>('settings/invitations/revoke', { invitation_id: invitationId }),
 	setMemberRole: (userId, role) => post('settings/members/role', { user_id: userId, role }),
-	createTeam: (name) => post('collections/admin/create', { collection: 'team', input: { name } }),
+	createTeam: (input) => post('collections/admin/create', { collection: 'team', input }),
+	updateTeam: (teamId, input) =>
+		post('collections/admin/update', {
+			collection: 'team',
+			record_id: teamId,
+			input
+		}),
+	deleteTeam: (teamId) =>
+		post('collections/admin/delete', { collection: 'team', record_id: teamId }),
 	setTeamPolicy: (teamId, policyId) =>
 		post('collections/admin/update', {
 			collection: 'team',

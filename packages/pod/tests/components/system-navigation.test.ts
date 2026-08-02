@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { WorkspaceSidebarNavigationSection } from '@norbital-ai/ui/workspace-shell';
 import {
 	buildSystemNavigation,
+	hostPluginSurfaceHref,
 	isHostPluginEntry,
+	resolveHostPluginSurface,
 	workspaceAuthorizesAgentSurface,
 	workspaceProvidesAgentSurface
 } from '$lib/runtime/workspace-navigation.js';
@@ -51,6 +53,15 @@ describe('the system section of the sidebar', () => {
 		expect(isHostPluginEntry('/app/crm', PLUGINS)).toBe(false);
 	});
 
+	it('mounts a trusted host entry inside the tenant shell route', () => {
+		expect(hostPluginSurfaceHref('studio')).toBe('/__host/studio');
+		expect(resolveHostPluginSurface('/__host/studio', PLUGINS)).toMatchObject({
+			key: 'studio',
+			entry: '/studio'
+		});
+		expect(resolveHostPluginSurface('/studio', PLUGINS)).toBeNull();
+	});
+
 	it('renders the Pod agent route from the workspace manifest without a host registration', () => {
 		const agent = { kind: 'agent' as const };
 		expect(workspaceAuthorizesAgentSurface('/agent', agent)).toBe(true);
@@ -69,8 +80,10 @@ describe('the system section of the sidebar', () => {
 
 		// Not merely unhighlighted: the entry, and with it the host URL, is absent from the markup.
 		// Settings is admin-only too, so it is not here either.
-		expect(links(container)).toEqual([{ label: 'Help centre', href: '/help', current: false }]);
-		expect(container.innerHTML).not.toContain('/studio');
+		expect(links(container)).toEqual([
+			{ label: 'Help centre', href: '/__host/help', current: false }
+		]);
+		expect(container.innerHTML).not.toContain('/__host/studio');
 		expect(container.innerHTML).not.toContain('/settings');
 		destroy();
 	});
@@ -112,13 +125,13 @@ describe('the system section of the sidebar', () => {
 		const nested = mountSidebar({
 			plugins: siblings,
 			isAdmin: false,
-			currentPath: '/studio/collections'
+			currentPath: '/__host/studio'
 		});
 		// A nested host route keeps its entry current, and `aria-current` is the whole of what says so
 		// to a screen reader.
 		expect(links(nested.container)).toEqual([
-			{ label: 'Workspace Studio', href: '/studio', current: true },
-			{ label: 'Studio Archive', href: '/studio-archive', current: false }
+			{ label: 'Workspace Studio', href: '/__host/studio', current: true },
+			{ label: 'Studio Archive', href: '/__host/archive', current: false }
 		]);
 		nested.destroy();
 
@@ -127,11 +140,11 @@ describe('the system section of the sidebar', () => {
 		const sibling = mountSidebar({
 			plugins: siblings,
 			isAdmin: false,
-			currentPath: '/studio-archive'
+			currentPath: '/__host/archive'
 		});
 		expect(links(sibling.container)).toEqual([
-			{ label: 'Workspace Studio', href: '/studio', current: false },
-			{ label: 'Studio Archive', href: '/studio-archive', current: true }
+			{ label: 'Workspace Studio', href: '/__host/studio', current: false },
+			{ label: 'Studio Archive', href: '/__host/archive', current: true }
 		]);
 		sibling.destroy();
 	});

@@ -29,6 +29,11 @@ export function resolveWorkspaceOrganizationOptions(input: {
 
 /** Pod's own administration surface. Rendered by the pod, so it is not a host plugin. */
 export const WORKSPACE_SETTINGS_PATH = '/settings';
+export const HOST_PLUGIN_SURFACE_PREFIX = '/__host';
+
+export function hostPluginSurfaceHref(pluginKey: string): string {
+	return `${HOST_PLUGIN_SURFACE_PREFIX}/${encodeURIComponent(pluginKey)}`;
+}
 
 /**
  * Host-plugin entries cross out of Pod's in-memory router.
@@ -44,8 +49,17 @@ export function isHostPluginEntry(
 	return plugins.some((plugin) => plugin.entry === href);
 }
 
+export function resolveHostPluginSurface(
+	currentPath: string,
+	plugins: readonly { readonly key: string; readonly entry: string }[]
+): { readonly key: string; readonly entry: string } | null {
+	return plugins.find((plugin) => currentPath === hostPluginSurfaceHref(plugin.key)) ?? null;
+}
+
 /** An authored workspace agent is the capability and UI boundary; no host route is required. */
-export function workspaceProvidesAgentSurface(agent: { readonly kind: 'agent' } | undefined): boolean {
+export function workspaceProvidesAgentSurface(
+	agent: { readonly kind: 'agent' } | undefined
+): boolean {
 	return agent?.kind === 'agent';
 }
 
@@ -101,13 +115,16 @@ export function buildSystemNavigation(input: {
 		...podSurfaces,
 		...input.plugins
 			.filter((plugin) => input.isAdmin || !plugin.adminOnly)
-			.map((plugin) => ({
-				key: plugin.key,
-				label: plugin.label,
-				icon: plugin.icon,
-				href: plugin.entry,
-				active: isUnder(input.currentPath, plugin.entry)
-			}))
+			.map((plugin) => {
+				const href = hostPluginSurfaceHref(plugin.key);
+				return {
+					key: plugin.key,
+					label: plugin.label,
+					icon: plugin.icon,
+					href,
+					active: isUnder(input.currentPath, href)
+				};
+			})
 	];
 }
 
