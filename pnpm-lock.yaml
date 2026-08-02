@@ -439,7 +439,7 @@ packages:
     resolution: {integrity: sha512-LCQN8zLwzPj0lM/o+XQuKx/GoMZ6Cz1AhPdTQKH5yBcOb3VktZzVVvYopRAXhjHTLE+/fgPsd/LxBabwo2LifA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/f0fd6f410e873b5283fd49dab4c29da89af72164}
 
   '@norbital-ai/pod@0.0.1':
-    resolution: {integrity: sha512-zxRU4k+X/7BFYmjaxKme0u5D3mmjM0mIXbl4G4YWB01CzGX+UQ8yUaaCICZ4LWLq1q5a0ch32dQ7cpmDTZFs9g==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/62a62327635234851db0e687ce48e40c78dcd4d8}
+    resolution: {integrity: sha512-N+kboHeNuf3fGhJWu+F+H6lEsYQ1/bNxcFKVFpw+G6VsXN4UTeEQ7xXw3toblqbih29dwmO+UteUxT7lyfcuVA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/bf6f0050f64fbef9e2e961847a3f809567c2f80f}
     hasBin: true
     peerDependencies:
       '@iconify/svelte': ^5.2.2
@@ -453,7 +453,7 @@ packages:
     resolution: {integrity: sha512-AY2zLS+oEZbBrh0s0ePZMUVAzXGDc9XOr3XGxcHgEv83/FcKerNCsMpY2/KR4AvdDzGBx1vxJarEncVq2RshAw==, tarball: https://npm.pkg.github.com/download/@norbital-ai/std/0.0.1/1b2988e0e7c27f250a207a6acec2e5a66084e118}
 
   '@norbital-ai/ui@0.0.1':
-    resolution: {integrity: sha512-udPIbVWdJpbMsCAfS2GKgKZMRWDbnvE8WpnsqYlxLQoE4v3eXDT0XmBvBLoxX4LyqbAk4AyO1dqOqY9DVmm+ZA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/ui/0.0.1/c19c3b1c003114209bbc23c31167e4c5008895b2}
+    resolution: {integrity: sha512-A6kb3nan0Ii05XhSdMPA/MPgwn6nOXhJLIZjEgYz/bTjMkefn6XrBgUyAhdyDMUxuPmb9KehIpbY1cPyOwStfQ==, tarball: https://npm.pkg.github.com/download/@norbital-ai/ui/0.0.1/9a16611b763a6290a35222e65eb2ecd7d75073bf}
     peerDependencies:
       '@norbital-ai/platform-utils': 0.0.1
       '@norbital-ai/std': 0.0.1
@@ -564,6 +564,11 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@svelte-put/shortcut@4.2.0':
+    resolution: {integrity: sha512-hqNLo4yEc++SLgAkZUvuwMxIAsii9qjQtTuzfcYVf3xRxa+0HFcfaWFK7LdU3l+15s9SYVNbPB0qQj9CHFqSuw==}
+    peerDependencies:
+      svelte: ^5.1.0
 
   '@sveltejs/acorn-typescript@1.0.11':
     resolution: {integrity: sha512-LFuZUkjJ9iF7JZye/aG5XM0SFcQ5VyL0oVX4WJ9dc0Va3R3s0OauX1BESVCb+YN/ol8TAfqGDDAQsTG627Y5kw==}
@@ -872,8 +877,26 @@ packages:
   '@types/d3-array@3.2.2':
     resolution: {integrity: sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw==}
 
+  '@types/d3-color@3.1.3':
+    resolution: {integrity: sha512-iO90scth9WAbmgv7ogoq57O9YpKmFBbmoEoCHDB2xMBY0+/KVrqAaCDyCE16dUspeOvIxFFRI+0sEtqDqy2b4A==}
+
   '@types/d3-contour@3.0.6':
     resolution: {integrity: sha512-BjzLgXGnCWjUSYGfH1cpdo41/hgdWETu4YxpezoztawmqsvCeep+8QGfiY6YbDvfgHz/DkjeIkkZVJavB4a3rg==}
+
+  '@types/d3-drag@3.0.7':
+    resolution: {integrity: sha512-HE3jVKlzU9AaMazNufooRJ5ZpWmLIoc90A37WU2JMmeq28w1FQqCZswHZ3xR+SuxYftzHq6WU6KJHvqxKzTxxQ==}
+
+  '@types/d3-interpolate@3.0.4':
+    resolution: {integrity: sha512-mgLPETlrpVV1YRJIglr4Ez47g7Yxjl1lj7YKsiMCb27VJH9W8NVM6Bb9d8kkpG/uAQS5AmbA48q2IAolKKo1MA==}
+
+  '@types/d3-selection@3.0.11':
+    resolution: {integrity: sha512-bhAXu23DJWsrI45xafYpkQ4NtcKMwWnAC/vKrd2l+nxMFuvOT3XMYTIj2opv8vq8AO5Yh7Qac/nSeP/3zjTK0w==}
+
+  '@types/d3-transition@3.0.9':
+    resolution: {integrity: sha512-uZS5shfxzO3rGlu0cC3bjmMFKsXv+SmZZcgp0KD22ts4uGXp5EVYGzu/0YdwZeKmddhcAccYtREJKkPfXkZuCg==}
+
+  '@types/d3-zoom@3.0.8':
+    resolution: {integrity: sha512-iqMC4/YlFCSlO8+2Ii1GGGliCAY4XdeG748w5vQUbevlbDu0zSjH/+jojorQVBK/se0j6DUFNPBGSqD3YWYnDw==}
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
@@ -889,6 +912,14 @@ packages:
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
+
+  '@xyflow/svelte@1.6.2':
+    resolution: {integrity: sha512-wImcz0c4mCa2SYxo5p1YSBqdTBqI4Ky2CYO6XZfNqMIxVr6mB2cdVaduJqHuqTETQuUKv4Gr0eh3Ev3iU8k8fg==}
+    peerDependencies:
+      svelte: ^5.25.0
+
+  '@xyflow/system@0.0.79':
+    resolution: {integrity: sha512-czLyOh91NF0hIzbNzwi8I6GlqG23BHh2435OddfI6uiaLH3xdrdygO93gqgH1Bv9mhy8XPFQJOBn1FTq4LvEWA==}
 
   acorn@8.18.0:
     resolution: {integrity: sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ==}
@@ -963,10 +994,18 @@ packages:
     resolution: {integrity: sha512-rzUyPU/S7rwUflMyLc1ETDeBj0NRuHKKAcvukozwhshr6g6c5d8zh4c2gQjY2bZ0dXeGLWc1PF174P2tVvKhfg==}
     engines: {node: '>=12'}
 
+  d3-drag@3.0.0:
+    resolution: {integrity: sha512-pWbUJLdETVA8lQNJecMxoXfH6x+mO2UQo8rSmZ+QqxcbyA3hfeprFgIT//HW2nlHChWeIIMwS2Fq+gEARkhTkg==}
+    engines: {node: '>=12'}
+
   d3-dsv@3.0.1:
     resolution: {integrity: sha512-UG6OvdI5afDIFP9w4G0mNq50dSOsXHJaRE8arAS5o9ApWnIElp8GZw1Dun8vP8OyHOZ/QJUKUJwxiiCCnUwm+Q==}
     engines: {node: '>=12'}
     hasBin: true
+
+  d3-ease@3.0.1:
+    resolution: {integrity: sha512-wR/XK3D3XcLIZwpbvQwQ5fK+8Ykds1ip7A2Txe0yxncXSdq1L9skcG7blcedkOX+ZcgxGAmLX1FrRGbADwzi0w==}
+    engines: {node: '>=12'}
 
   d3-force@3.0.0:
     resolution: {integrity: sha512-zxV/SsA+U4yte8051P4ECydjD/S+qeYtnaIyAs9tgHCqfguma/aAQDjo85A9Z6EKhBirHRJHXIgJUlffT4wdLg==}
@@ -1021,6 +1060,10 @@ packages:
     resolution: {integrity: sha512-GZW464g1SH7ag3Y7hXjf8RoUuAFIqklOAq3MRl4OaWabTFJY9PN/E1YklhXLh+OQ3fM9yS2nOkCoS+WLZ6kvxQ==}
     engines: {node: '>=12'}
 
+  d3-selection@3.0.0:
+    resolution: {integrity: sha512-fmTRWbNMmsmWq6xJV8D19U/gw/bwrHfNXxrIN+HfZgnzqTHp9jOmKMhsTUjXOJnZOdZY9Q28y4yebKzqDKlxlQ==}
+    engines: {node: '>=12'}
+
   d3-shape@1.3.7:
     resolution: {integrity: sha512-EUkvKjqPFUAZyOlhY5gzCxCeI0Aep04LwIRpsZ/mLFelJiUfnK56jo5JMDSE7yyP2kLSb6LtF+S5chMk7uqPqw==}
 
@@ -1043,8 +1086,18 @@ packages:
     resolution: {integrity: sha512-ndfJ/JxxMd3nw31uyKoY2naivF+r29V+Lc0svZxe1JvvIRmi8hUsrMvdOwgS1o6uBHmiz91geQ0ylPP0aj1VUA==}
     engines: {node: '>=12'}
 
+  d3-transition@3.0.1:
+    resolution: {integrity: sha512-ApKvfjsSR6tg06xrL434C0WydLr7JewBB3V+/39RMHsaXTOG0zmt/OAXeng5M5LBm0ojmxJrpomQVZ1aPvBL4w==}
+    engines: {node: '>=12'}
+    peerDependencies:
+      d3-selection: 2 - 3
+
   d3-tricontour@1.1.0:
     resolution: {integrity: sha512-G7gHKj89n2owmkGb6WX6ixcnQ0Kf/0wpa9VIh9DGdbHu8wdrlaHU4ir3/bFNERl8N8nn4G7e7qbtBG8N9caihQ==}
+    engines: {node: '>=12'}
+
+  d3-zoom@3.0.0:
+    resolution: {integrity: sha512-b8AmV3kfQaqWAuacbPuNbL6vahnOJflOhexLzMMNLga62+/nh0JzvJ0aO/5a5MVgUFGS7Hu1P9P03o3fJkDCyw==}
     engines: {node: '>=12'}
 
   date-fns@4.4.0:
@@ -2278,6 +2331,7 @@ snapshots:
       '@standard-schema/spec': 1.1.0
       '@sveltejs/vite-plugin-svelte': 7.2.0(svelte@5.56.8)(vite@8.2.0(jiti@2.7.0))
       '@tailwindcss/vite': 4.3.3(vite@8.2.0(jiti@2.7.0))
+      '@xyflow/svelte': 1.6.2(svelte@5.56.8)
       dedent: 1.7.2
       drizzle-kit: 1.0.0-rc.4
       drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(pg@8.22.0)(zod@4.4.3)
@@ -2470,6 +2524,10 @@ snapshots:
   '@rolldown/pluginutils@1.0.1': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@svelte-put/shortcut@4.2.0(svelte@5.56.8)':
+    dependencies:
+      svelte: 5.56.8
 
   '@sveltejs/acorn-typescript@1.0.11(acorn@8.18.0)':
     dependencies:
@@ -2761,10 +2819,31 @@ snapshots:
 
   '@types/d3-array@3.2.2': {}
 
+  '@types/d3-color@3.1.3': {}
+
   '@types/d3-contour@3.0.6':
     dependencies:
       '@types/d3-array': 3.2.2
       '@types/geojson': 7946.0.16
+
+  '@types/d3-drag@3.0.7':
+    dependencies:
+      '@types/d3-selection': 3.0.11
+
+  '@types/d3-interpolate@3.0.4':
+    dependencies:
+      '@types/d3-color': 3.1.3
+
+  '@types/d3-selection@3.0.11': {}
+
+  '@types/d3-transition@3.0.9':
+    dependencies:
+      '@types/d3-selection': 3.0.11
+
+  '@types/d3-zoom@3.0.8':
+    dependencies:
+      '@types/d3-interpolate': 3.0.4
+      '@types/d3-selection': 3.0.11
 
   '@types/estree@1.0.9': {}
 
@@ -2777,6 +2856,24 @@ snapshots:
   '@types/trusted-types@2.0.7': {}
 
   '@types/unist@3.0.3': {}
+
+  '@xyflow/svelte@1.6.2(svelte@5.56.8)':
+    dependencies:
+      '@svelte-put/shortcut': 4.2.0(svelte@5.56.8)
+      '@xyflow/system': 0.0.79
+      svelte: 5.56.8
+
+  '@xyflow/system@0.0.79':
+    dependencies:
+      '@types/d3-drag': 3.0.7
+      '@types/d3-interpolate': 3.0.4
+      '@types/d3-selection': 3.0.11
+      '@types/d3-transition': 3.0.9
+      '@types/d3-zoom': 3.0.8
+      d3-drag: 3.0.0
+      d3-interpolate: 3.0.1
+      d3-selection: 3.0.0
+      d3-zoom: 3.0.0
 
   acorn@8.18.0: {}
 
@@ -2845,11 +2942,18 @@ snapshots:
 
   d3-dispatch@3.0.1: {}
 
+  d3-drag@3.0.0:
+    dependencies:
+      d3-dispatch: 3.0.1
+      d3-selection: 3.0.0
+
   d3-dsv@3.0.1:
     dependencies:
       commander: 7.2.0
       iconv-lite: 0.6.3
       rw: 1.3.3
+
+  d3-ease@3.0.1: {}
 
   d3-force@3.0.0:
     dependencies:
@@ -2904,6 +3008,8 @@ snapshots:
       d3-time: 3.1.0
       d3-time-format: 4.1.0
 
+  d3-selection@3.0.0: {}
+
   d3-shape@1.3.7:
     dependencies:
       d3-path: 1.0.9
@@ -2924,10 +3030,27 @@ snapshots:
 
   d3-timer@3.0.1: {}
 
+  d3-transition@3.0.1(d3-selection@3.0.0):
+    dependencies:
+      d3-color: 3.1.0
+      d3-dispatch: 3.0.1
+      d3-ease: 3.0.1
+      d3-interpolate: 3.0.1
+      d3-selection: 3.0.0
+      d3-timer: 3.0.1
+
   d3-tricontour@1.1.0:
     dependencies:
       d3-delaunay: 6.0.4
       d3-scale: 4.0.2
+
+  d3-zoom@3.0.0:
+    dependencies:
+      d3-dispatch: 3.0.1
+      d3-drag: 3.0.0
+      d3-interpolate: 3.0.1
+      d3-selection: 3.0.0
+      d3-transition: 3.0.1(d3-selection@3.0.0)
 
   date-fns@4.4.0: {}
 
