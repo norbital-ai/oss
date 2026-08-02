@@ -14,9 +14,16 @@ import { defaultRegistry } from './lib/depset.mjs';
 import { discoverTemplates, repositoryRoot } from './lib/templates.mjs';
 
 const lockfileName = 'pnpm-lock.yaml';
+const workspaceConfigName = 'pnpm-workspace.yaml';
 
 function fail(message) {
 	throw new Error(message);
+}
+
+function copyTemplateProject(template, workingDirectory) {
+	for (const filename of ['package.json', workspaceConfigName]) {
+		copyFileSync(path.join(template.directory, filename), path.join(workingDirectory, filename));
+	}
 }
 
 function readArguments(argv) {
@@ -46,10 +53,7 @@ function resolveLockfile(template) {
 	const storeDirectory = path.join(workingDirectory, '.pnpm-store');
 	const cacheDirectory = path.join(workingDirectory, '.pnpm-cache');
 	try {
-		copyFileSync(
-			path.join(template.directory, 'package.json'),
-			path.join(workingDirectory, 'package.json')
-		);
+		copyTemplateProject(template, workingDirectory);
 		const npmrc = [`@norbital-ai:registry=${registry}`];
 		const token = process.env.NODE_AUTH_TOKEN?.trim();
 		if (token) npmrc.push(`//${new URL(registry).host}/:_authToken=${token}`);
@@ -94,10 +98,7 @@ function verifyOfflineInstall(template, lockfile, storeDirectory) {
 	const registry = (process.env.NORBITAL_PACKAGE_REGISTRY ?? defaultRegistry).trim();
 	const workingDirectory = mkdtempSync(path.join(tmpdir(), `norbital-verify-${template.key}-`));
 	try {
-		copyFileSync(
-			path.join(template.directory, 'package.json'),
-			path.join(workingDirectory, 'package.json')
-		);
+		copyTemplateProject(template, workingDirectory);
 		writeFileSync(path.join(workingDirectory, lockfileName), lockfile);
 		const npmrc = [`@norbital-ai:registry=${registry}`];
 		const token = process.env.NODE_AUTH_TOKEN?.trim();
