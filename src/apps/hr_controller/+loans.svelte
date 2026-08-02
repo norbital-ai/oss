@@ -3,104 +3,53 @@
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Cover, Inline } from '@norbital-ai/ui/layout';
-	import { entryOriginSchema } from '../../custom-types/entry_origin/+definition.js';
 	import { formatNumeric, formatRepaymentSchedule } from '../../lib/ui/display-formatters.js';
+	import {
+		repaymentProgress,
+		type RepaymentInstalmentLink
+	} from '../../collections/repayment_agreements/lib/repayment-progress.js';
 
 	/**
-	 * There is no `state` and no `outstanding` column on an agreement — settled is
-	 * `SUM(instalments linked through PAID payslips) >= principal`, derived from provenance.
+	 * There is no mutable `state` or `outstanding` column. The table asks for each agreement and its
+	 * direct relations in one nested query; an instalment is paid once a persisted payslip source link
+	 * points back to it.
 	 */
-	const instalmentsQuery = client.db.component_entries.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		columns: { norbital_id: true, amount: true, origin: true },
-		limit: 2000
-	});
-	const lineSourcesQuery = client.db.payslip_line_sources.findMany({
-		columns: { payslip_line_id: true, source: true },
-		limit: 5000
-	});
-	const linesQuery = client.db.payslip_lines.findMany({
-		columns: { norbital_id: true, payslip_id: true },
-		limit: 5000
-	});
-	const payslipsQuery = client.db.payslips.findMany({
-		columns: { norbital_id: true, payroll_run_id: true },
-		limit: 2000
-	});
-	const runsQuery = client.db.payroll_runs.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		columns: { norbital_id: true, lifecycle: true },
-		limit: 1000
-	});
-	// A relation column holds a uuid. These reference sets load once per page and the label is
-	// resolved from memory rather than by mounting a lookup per row; a miss falls back to the raw id
-	// so an unloaded label never reads as missing data.
-	const employmentsQuery = client.db.employments.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		columns: { norbital_id: true, employee_number: true },
-		limit: 1000
-	});
-	const employmentLabelsById = $derived(
-		new Map(
-			(employmentsQuery.current ?? []).map((employment) => [
-				employment.norbital_id,
-				employment.employee_number
-			])
-		)
-	);
-	const payComponentsQuery = client.db.pay_components.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		columns: { norbital_id: true, code: true, name: true },
-		limit: 500
-	});
-	const payComponentLabelsById = $derived(
-		new Map(
-			(payComponentsQuery.current ?? []).map((component) => [
-				component.norbital_id,
-				`${component.code} · ${component.name}`
-			])
-		)
-	);
-	const repaidByAgreement = $derived.by(() => {
-		const payslipIdByLine = new Map(
-			(linesQuery.current ?? []).map((line) => [line.norbital_id, line.payslip_id])
-		);
-		const runIdByPayslip = new Map(
-			(payslipsQuery.current ?? []).map((payslip) => [payslip.norbital_id, payslip.payroll_run_id])
-		);
-		const paidRunIds = new Set(
-			(runsQuery.current ?? [])
-				.filter((run) => run.lifecycle === 'PAID')
-				.map((run) => run.norbital_id)
-		);
-		const paidEntryIds = new Set<string>();
-		for (const link of lineSourcesQuery.current ?? []) {
-			const source = link.source;
-			if (
-				source?.kind !== 'COMPONENT_ENTRY' ||
-				!paidRunIds.has(runIdByPayslip.get(payslipIdByLine.get(link.payslip_line_id) ?? '') ?? '')
-			)
-				continue;
-			paidEntryIds.add(source.entry_id);
-		}
-		const totals = new Map<string, number>();
-		for (const entry of instalmentsQuery.current ?? []) {
-			if (!paidEntryIds.has(entry.norbital_id)) continue;
-			const origin = entryOriginSchema.safeParse(entry.origin);
-			if (!origin.success || origin.data.kind !== 'INSTALMENT') continue;
-			const amount = Number(entry.amount);
-			if (!Number.isFinite(amount)) continue;
-			totals.set(origin.data.agreement_id, (totals.get(origin.data.agreement_id) ?? 0) + amount);
-		}
-		return totals;
-	});
+	type NestedAgreement = {
+		readonly principal: unknown;
+		readonly schedule: unknown;
+		readonly agreement_employment?: { readonly employee_number?: string | null } | null;
+		readonly agreement_pay_component?: {
+			readonly code?: string | null;
+			readonly name?: string | null;
+		} | null;
+		readonly agreement_instalments?: readonly RepaymentInstalmentLink[] | null;
+	};
 
-	function outstandingLabel(agreementId: string, principal: unknown): string {
-		const total = Number(principal);
-		if (!Number.isFinite(total)) return '—';
-		const repaid = repaidByAgreement.get(agreementId) ?? 0;
-		const outstanding = Math.max(0, total - repaid);
-		return outstanding === 0 ? 'Settled' : formatNumeric(outstanding);
+	function nestedAgreement(row: unknown): NestedAgreement {
+		return row as NestedAgreement;
+	}
+
+	function progressLabel(row: unknown): string {
+		const agreement = nestedAgreement(row);
+		const scheduleCount = Array.isArray(agreement.schedule) ? agreement.schedule.length : 0;
+		const progress = repaymentProgress(
+			agreement.principal,
+			scheduleCount,
+			agreement.agreement_instalments ?? []
+		);
+		if (!progress) return '—';
+		if (progress.settled)
+			return `Settled · ${progress.paidInstalments}/${progress.totalInstalments}`;
+		return `${formatNumeric(progress.outstandingAmount)} · ${progress.paidInstalments}/${progress.totalInstalments} paid`;
+	}
+
+	function employmentLabel(row: unknown, fallback: unknown): unknown {
+		return nestedAgreement(row).agreement_employment?.employee_number ?? fallback;
+	}
+
+	function componentLabel(row: unknown, fallback: unknown): unknown {
+		const component = nestedAgreement(row).agreement_pay_component;
+		return component?.code && component.name ? `${component.code} · ${component.name}` : fallback;
 	}
 </script>
 
@@ -117,7 +66,7 @@
 	<PageHeader
 		eyebrow="HR Controller"
 		title="Loans"
-		description="Repayment agreements deduct a principal over time. The outstanding balance is a sum of settled instalments, never a stored column."
+		description="Repayment agreements deduct a principal over time. Outstanding is derived from scheduled instalments linked to payslips, never stored separately."
 	/>
 {/snippet}
 
@@ -127,8 +76,21 @@
 			{client}
 			collection="repayment_agreements"
 			title="Repayment agreements"
-			description="Outstanding falls only when a scheduled entry is linked through a paid payslip."
-			query={{ orderBy: { disbursed_on: 'desc' } }}
+			description="Outstanding falls when a scheduled entry is linked to a payslip."
+			query={{
+				orderBy: { disbursed_on: 'desc' },
+				with: {
+					agreement_employment: { columns: { employee_number: true } },
+					agreement_pay_component: { columns: { code: true, name: true } },
+					agreement_instalments: {
+						where: { norbital_approval_id: { isNull: true } },
+						columns: { amount: true, repayment_sequence: true },
+						with: {
+							entry_payslip_sources: { columns: { norbital_id: true } }
+						}
+					}
+				}
+			}}
 			searchPlaceholder="Search agreements…"
 		>
 			{#snippet columns({ Column })}
@@ -137,18 +99,17 @@
 					name="employment_id"
 					label="Employment"
 					card="subtitle"
-					render={({ value }) => employmentLabelsById.get(String(value)) ?? value}
+					render={({ row, value }) => employmentLabel(row, value)}
 				/>
 				<Column
 					name="pay_component_id"
 					label="Deducted as"
-					render={({ value }) => payComponentLabelsById.get(String(value)) ?? value}
+					render={({ row, value }) => componentLabel(row, value)}
 				/>
 				<Column
 					name="principal"
 					label="Principal · outstanding"
-					render={({ row, value }) =>
-						`${formatNumeric(value)} · ${outstandingLabel(row.norbital_id, row.principal)}`}
+					render={({ row, value }) => `${formatNumeric(value)} · ${progressLabel(row)}`}
 				/>
 				<Column
 					name="schedule"
@@ -168,7 +129,7 @@
 					{formatRepaymentSchedule(agreement.schedule)}
 				</p>
 				<p class="mt-1 text-sm">
-					{outstandingLabel(agreement.norbital_id, agreement.principal)} outstanding
+					{progressLabel(agreement)}
 				</p>
 			{/snippet}
 		</CollectionTable>

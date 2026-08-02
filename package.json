@@ -10,7 +10,7 @@
 		"build": "vite build && node scripts/verify-built-xlsx.mjs",
 		"format": "prettier --write .",
 		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json",
-		"test": "node scripts/verify-overtime-controls.mjs && node --experimental-strip-types --test src/collections/repayment_agreements/repayment-schedule.test.ts"
+		"test": "node scripts/verify-overtime-controls.mjs && node --experimental-strip-types --test src/collections/repayment_agreements/*.test.ts"
 	},
 	"dependencies": {
 		"@iconify/svelte": "^5.2.2",

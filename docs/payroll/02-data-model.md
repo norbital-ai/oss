@@ -305,15 +305,17 @@ type, and all are linked back from the line they produced.
 
 The only door money enters payroll through.
 
-| column             | notes                                                 |
-| ------------------ | ----------------------------------------------------- |
-| `employment_id`    |                                                       |
-| `pay_component_id` | which catalogue row, hence which component type       |
-| `amount`           | a magnitude, never negative                           |
-| `quantity`         | null = the amount is stated directly, not measured    |
-| `event_date`       | when it was incurred                                  |
-| `pay_period`       | resolved settlement period; null for `COMPANY_DIRECT` |
-| `origin`           | variant                                               |
+| column                   | notes                                                        |
+| ------------------------ | ------------------------------------------------------------ |
+| `employment_id`          |                                                              |
+| `pay_component_id`       | which catalogue row, hence which component type              |
+| `amount`                 | a magnitude, never negative                                  |
+| `quantity`               | null = the amount is stated directly, not measured           |
+| `event_date`             | when it was incurred                                         |
+| `pay_period`             | resolved settlement period; null for `COMPANY_DIRECT`        |
+| `origin`                 | variant                                                      |
+| `repayment_agreement_id` | generated, read-only projection of `INSTALMENT.agreement_id` |
+| `repayment_sequence`     | generated, read-only projection of `INSTALMENT.sequence`     |
 
 ```
 origin
@@ -328,7 +330,11 @@ origin
 Proration follows from the variant: `STANDING` prorates by the overlap of its range with the period.
 Nothing else does.
 
-Indexed on `(employment_id, pay_period)` and `(pay_component_id)`.
+The generated projections do not duplicate writable state: `origin` remains the audit source of
+truth, while the projections provide an indexed foreign-key path for nested agreement queries.
+
+Indexed on `(employment_id, pay_period)`, `(pay_component_id)` and non-null
+`(repayment_agreement_id)`.
 
 ### `repayment_agreements`
 
@@ -336,7 +342,7 @@ A staff loan, a salary advance and an overpayment recovery are the same object: 
 a principal over time. It has an identity that outlives any instalment and a balance spanning periods.
 
 `employment_id` · `pay_component_id` · `reference` · `principal` · `disbursed_on` ·
-`schedule { instalment_amount, count, first_period }` · `effective_range`
+`repay_by` · `schedule [{ due_date, amount }]` · `effective_range`
 
 No `state` column: an agreement is settled when its outstanding balance reaches zero, which is a
 `SUM`.

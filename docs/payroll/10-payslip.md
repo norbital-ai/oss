@@ -30,6 +30,12 @@ payslips       Ahmad   gross 4,788.45 · deductions 791.70 · net 4,090.25
 `component_type_id` is copied onto each line, so a payslip renders and a report groups without
 re-resolving configuration that may have changed since.
 
+`payslip_line_sources.source` is the immutable provenance variant. Its three target IDs are also
+exposed as generated, read-only columns (`component_entry_id`, `time_entry_id`,
+`leave_request_id`). Those columns are indexed foreign keys, so payslip detail follows nested
+relations to the consumed records instead of scanning source JSON and issuing one query per target
+collection.
+
 ---
 
 ## 2. Rendering
