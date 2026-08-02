@@ -372,7 +372,6 @@
 		<Tabs
 			class="min-h-0 flex-1"
 			lazyLoad={false}
-			variant="underline"
 			animate={false}
 			config={[
 				{

@@ -80,7 +80,6 @@
 <Cover as="main" top={pageHeading}>
 	<Tabs
 		lazyLoad={false}
-		variant="underline"
 		animate={false}
 		config={[
 			{ name: 'projects', label: 'Projects', icon: 'lucide:waves', content: projects },
