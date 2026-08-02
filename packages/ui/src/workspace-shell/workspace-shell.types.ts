@@ -24,6 +24,8 @@ export interface WorkspaceNavigationItem {
 	readonly icon: string | null;
 	readonly href: string;
 	readonly active: boolean;
+	/** Compact provenance label for a host-supplied navigation surface. */
+	readonly badge?: string;
 	readonly featureColor?: FeatureColorKey;
 	readonly children?: readonly WorkspaceNavigationItem[];
 }

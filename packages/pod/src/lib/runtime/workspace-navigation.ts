@@ -110,7 +110,8 @@ export function buildSystemNavigation(input: {
 			label: plugin.label,
 			icon: plugin.icon,
 			href,
-			active: isUnder(input.currentPath, href)
+			active: isUnder(input.currentPath, href),
+			...(plugin.key.startsWith('core-') ? { badge: 'Core' } : {})
 		};
 	};
 	const settingsChildren: WorkspaceNavigationItem[] = [
@@ -118,7 +119,7 @@ export function buildSystemNavigation(input: {
 			? [
 					{
 						key: 'pod-settings',
-						label: 'Tenant settings',
+						label: 'Tenant workspace',
 						icon: 'lucide:database',
 						href: WORKSPACE_SETTINGS_PATH,
 						active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)

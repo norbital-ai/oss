@@ -1,4 +1,5 @@
 import type { HostAppPlugin } from '../../host/types.js';
+import type { TenantWorkspaceHostPlugin } from '../../client/workspace_shell_types.js';
 
 /**
  * Host-owned sidebar surfaces, set once at startup.
@@ -16,4 +17,26 @@ export function setHostPlugins(next: readonly HostAppPlugin[]): void {
 
 export function getHostPlugins(): readonly HostAppPlugin[] {
 	return plugins;
+}
+
+/**
+ * Project deployment-owned plugins into the browser without losing their navigation placement.
+ *
+ * Filtering and projection live together because `adminOnly` must never reach a non-admin browser,
+ * while `placement` must reach every browser that can see the plugin. Dropping the latter silently
+ * turns a Settings child into a top-level sidebar item even though Core supplied the right contract.
+ */
+export function visibleHostPlugins(
+	configured: readonly HostAppPlugin[],
+	isAdmin: boolean
+): TenantWorkspaceHostPlugin[] {
+	return configured
+		.filter((plugin) => !plugin.adminOnly || isAdmin)
+		.map(({ key, label, icon, entry, placement }) => ({
+			key,
+			label,
+			icon,
+			entry,
+			placement
+		}));
 }

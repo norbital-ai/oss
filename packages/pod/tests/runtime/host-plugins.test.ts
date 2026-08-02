@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assertHostPlugins } from '../../src/lib/host/types.js';
+import { visibleHostPlugins } from '../../src/lib/server/run/host_plugins.js';
 import { buildSystemNavigation } from '../../src/lib/runtime/workspace-navigation.js';
 import type { HostAppPlugin } from '@norbital-ai/platform-utils/runtime/binding';
 
@@ -49,6 +50,35 @@ describe('assertHostPlugins', () => {
 
 	it('rejects an empty key', () => {
 		expect(() => assertHostPlugins([plugin({ key: '  ' })])).toThrow(/must not be empty/);
+	});
+});
+
+describe('visibleHostPlugins', () => {
+	it('preserves Settings placement while removing server-only authorization metadata', () => {
+		expect(
+			visibleHostPlugins(
+				[
+					plugin({
+						key: 'core-transports',
+						placement: 'settings',
+						adminOnly: true
+					})
+				],
+				true
+			)
+		).toEqual([
+			{
+				key: 'core-transports',
+				label: 'Workspace Studio',
+				icon: null,
+				entry: '/studio',
+				placement: 'settings'
+			}
+		]);
+	});
+
+	it('does not project an admin-only surface to a member', () => {
+		expect(visibleHostPlugins([plugin({ adminOnly: true })], false)).toEqual([]);
 	});
 });
 
@@ -109,6 +139,7 @@ describe('buildSystemNavigation', () => {
 		expect(items.map((item) => item.key)).toEqual(['settings', 'studio']);
 		expect(items[0]).toMatchObject({ key: 'settings', active: true });
 		expect(items[0]?.children?.map((item) => item.key)).toEqual(['pod-settings', 'core-services']);
+		expect(items[0]?.children?.find((item) => item.key === 'core-services')?.badge).toBe('Core');
 	});
 
 	/** A nested host route keeps its sidebar entry highlighted; a sibling prefix must not steal it. */

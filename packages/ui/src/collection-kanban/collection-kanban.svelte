@@ -538,7 +538,7 @@
 		<Grid
 			minimum="compact"
 			gap="md"
-			class="content-start"
+			class="h-full content-start pb-1"
 			style={`grid-template-columns: repeat(${resolvedColumnCount}, minmax(min(18rem, 100%), 1fr)); grid-template-rows: repeat(${resolvedRowCount}, minmax(0, 1fr));`}
 		>
 			<CollectionKanbanSkeleton

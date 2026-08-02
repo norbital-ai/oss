@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Badge } from '#lib/badge';
 	import { FEATURE_COLOR_STYLES } from '#lib/feature-colors';
 	import { ProductIcon, productIconNameFromReference } from '#lib/product-icon';
 	import * as Sidebar from '#lib/sidebar';
@@ -90,9 +91,19 @@
 						{/if}
 					</div>
 					{#if open}
-						<span class={cn('min-w-0 flex-1 truncate text-left', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
+						<span
+							data-navigation-label
+							class={cn('min-w-0 flex-1 truncate text-left', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
 							>{item.label}</span
 						>
+						{#if item.badge}
+							<Badge
+								variant="outline"
+								class="mr-4 ml-auto shrink-0 px-1.5 py-0 text-[0.625rem] leading-4 font-medium"
+								data-navigation-badge={item.badge}
+								aria-hidden="true">{item.badge}</Badge
+							>
+						{/if}
 						<div
 							class="pointer-events-none absolute top-1/2 right-1.5 flex size-3.5 -translate-y-1/2 items-center justify-center"
 							aria-hidden="true"
@@ -145,7 +156,20 @@
 							/>
 						{/if}
 					</div>
-					{#if open}<span class={WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}>{item.label}</span>{/if}
+					{#if open}
+						<span
+							data-navigation-label
+							class="min-w-0 flex-1 truncate {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">{item.label}</span
+						>
+						{#if item.badge}
+							<Badge
+								variant="outline"
+								class="ml-auto shrink-0 px-1.5 py-0 text-[0.625rem] leading-4 font-medium"
+								data-navigation-badge={item.badge}
+								aria-hidden="true">{item.badge}</Badge
+							>
+						{/if}
+					{/if}
 				</a>
 			{/snippet}
 		</Sidebar.MenuButton>

@@ -68,7 +68,9 @@
 		layout ?? (variant === 'default' && listClass == null ? 'responsive' : 'horizontal')
 	);
 	const resolvedListClass = $derived(
-		listClass ?? (variant === 'default' ? INSET_MX_CLASS : undefined)
+		// `responsive` lists are width-full. The default chrome also owns horizontal margins, so it
+		// must return to auto width or its 100% width plus both margins overhangs the PageHeader inset.
+		listClass ?? (variant === 'default' ? cn(INSET_MX_CLASS, 'w-auto') : undefined)
 	);
 </script>
 

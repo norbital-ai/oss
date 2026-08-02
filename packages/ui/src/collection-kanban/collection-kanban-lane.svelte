@@ -196,7 +196,13 @@
 		element={sortableElement}
 	>
 		{#snippet child({ draggedItemId })}
-			<Scroll axis="y" name={laneLabel} bind:ref={sortableElement} data-kanban-lane={lane}>
+			<Scroll
+				axis="y"
+				name={laneLabel}
+				class="pr-1 pb-1"
+				bind:ref={sortableElement}
+				data-kanban-lane={lane}
+			>
 				<Stack gap="sm">
 					{#each recordIds as recordId (recordId)}
 						<div

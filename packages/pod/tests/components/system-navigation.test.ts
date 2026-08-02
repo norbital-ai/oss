@@ -39,7 +39,10 @@ function mountSidebar(input: Parameters<typeof buildSystemNavigation>[0]): {
 
 function links(container: HTMLElement): { label: string; href: string; current: boolean }[] {
 	return [...container.querySelectorAll('a')].map((node) => ({
-		label: node.textContent?.trim() ?? '',
+		label:
+			node.querySelector<HTMLElement>('[data-navigation-label]')?.textContent?.trim() ??
+			node.textContent?.trim() ??
+			'',
 		href: node.getAttribute('href') ?? '',
 		current: node.getAttribute('aria-current') === 'page'
 	}));
@@ -100,9 +103,17 @@ describe('the system section of the sidebar', () => {
 		destroy();
 	});
 
-	it('groups each host-owned setting as a distinct child beside tenant settings', () => {
+	it('groups each host-owned setting as a distinct child beside the tenant workspace', () => {
 		const { container, destroy } = mountSidebar({
 			plugins: [
+				{
+					key: 'workspace-studio',
+					label: 'Workspace Studio',
+					icon: null,
+					entry: '/_host/app/workspace-studio',
+					placement: 'sidebar',
+					adminOnly: true
+				},
 				{
 					key: 'core-transports',
 					label: 'Transport credentials',
@@ -133,15 +144,17 @@ describe('the system section of the sidebar', () => {
 		});
 
 		expect(links(container)).toEqual([
-			{ label: 'Tenant settings', href: '/settings', current: false },
+			{ label: 'Tenant workspace', href: '/settings', current: false },
 			{
 				label: 'Transport credentials',
 				href: '/__host/core-transports',
 				current: false
 			},
 			{ label: 'Profile', href: '/__host/core-profile', current: true },
-			{ label: 'Billing', href: '/__host/core-billing', current: false }
+			{ label: 'Billing', href: '/__host/core-billing', current: false },
+			{ label: 'Workspace Studio', href: '/__host/workspace-studio', current: false }
 		]);
+		expect(container.querySelectorAll('[data-navigation-badge="Core"]')).toHaveLength(3);
 		destroy();
 	});
 
@@ -160,7 +173,7 @@ describe('the system section of the sidebar', () => {
 		});
 
 		expect(links(container)).toEqual([
-			{ label: 'Tenant settings', href: '/settings', current: true }
+			{ label: 'Tenant workspace', href: '/settings', current: true }
 		]);
 		destroy();
 	});
