@@ -32,7 +32,26 @@ function html(body: string, status = 200): Response {
 	});
 }
 
-function shell(title: string, inner: string): string {
+export type IdentityPageBranding = {
+	readonly productName?: string;
+	readonly logoUrl?: string;
+};
+
+function slateField(): string {
+	return `<div class="slate-field" aria-hidden="true">${Array.from({ length: 221 }, (_, index) => {
+		const column = index % 17;
+		const row = Math.floor(index / 17);
+		const delay = -((index * 1.37) % 13);
+		const duration = 9 + ((index * 7) % 6);
+		return `<span class="slate-cell" style="--slate-column:${column};--slate-row:${row};--slate-delay:${delay}s;--slate-duration:${duration}s"></span>`;
+	}).join('')}</div>`;
+}
+
+function shell(title: string, inner: string, branding: IdentityPageBranding = {}): string {
+	const productName = branding.productName?.trim() || 'Norbital';
+	const brandMark = branding.logoUrl
+		? `<img src="${escapeHtml(branding.logoUrl)}" alt="" aria-hidden="true" />`
+		: escapeHtml(productName.slice(0, 1).toUpperCase());
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -49,19 +68,21 @@ function shell(title: string, inner: string): string {
     --accent-fg: light-dark(#fff, #1c1b17); --brand: #dc7c37;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; min-height: 100dvh; font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
-    background-color: var(--background); color: var(--foreground);
-    background-image: linear-gradient(color-mix(in srgb, var(--foreground) 4%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--foreground) 4%, transparent) 1px, transparent 1px);
-    background-size: 20px 20px;
-  }
-  .page { width: min(100%, 34rem); min-height: 100dvh; margin: auto; padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); display: grid; grid-template-rows: auto 1fr; }
-  .brand { display: flex; align-items: center; justify-content: space-between; padding-bottom: 32px; }
+  body { margin: 0; min-height: 100dvh; overflow-x: hidden; font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; background: var(--background); color: var(--foreground); }
+  .small-grid, .large-grid, .slate-field, .top-glow { position: fixed; inset: 0; pointer-events: none; }
+  .small-grid { background-image: linear-gradient(rgb(255 255 255 / .035) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / .035) 1px, transparent 1px); background-size: 20px 20px; }
+  .large-grid { --slate-size: max(76px, 6.25vw); background-image: linear-gradient(rgb(255 255 255 / .03) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / .03) 1px, transparent 1px); background-position: center; background-size: var(--slate-size) var(--slate-size); mask-image: radial-gradient(ellipse at center, black 35%, transparent 75%); }
+  .top-glow { bottom: auto; height: 192px; background: radial-gradient(ellipse at top, oklch(0.696 0.185 46.5 / .05), transparent 70%); }
+  .slate-field { --slate-size: max(76px, 6.25vw); display: grid; grid-template-columns: repeat(17, var(--slate-size)); grid-template-rows: repeat(13, var(--slate-size)); place-content: center; mask-image: radial-gradient(ellipse at center, black 35%, transparent 75%); }
+  .slate-cell { grid-column: calc(var(--slate-column) + 1); grid-row: calc(var(--slate-row) + 1); animation: slate-light var(--slate-duration) ease-in-out var(--slate-delay) infinite; }
+  .page { position: relative; width: min(100%, 32rem); min-height: 100dvh; margin: auto; padding: max(24px, env(safe-area-inset-top)) max(32px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(32px, env(safe-area-inset-left)); }
+  .brand { position: absolute; z-index: 2; top: max(24px, env(safe-area-inset-top)); right: max(32px, env(safe-area-inset-right)); left: max(32px, env(safe-area-inset-left)); display: flex; align-items: center; justify-content: space-between; }
   .brand-name { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; font-size: .875rem; font-weight: 650; }
-  .brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 7px; background: var(--card); box-shadow: 0 1px 2px rgb(0 0 0 / .08); font-size: 11px; font-weight: 750; }
+  .brand-mark { width: 32px; height: 32px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: var(--card); box-shadow: 0 1px 2px rgb(0 0 0 / .08); font-size: 11px; font-weight: 750; }
+  .brand-mark img { width: 100%; height: 100%; object-fit: cover; }
   .secure { color: var(--muted); font-size: .6875rem; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
-  .center { display: grid; align-items: center; }
-  main { width: 100%; padding: 28px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: 0 1px 3px rgb(0 0 0 / .08); backdrop-filter: blur(10px); }
+  .center { position: relative; z-index: 1; display: grid; min-height: calc(100dvh - max(48px, env(safe-area-inset-top) + env(safe-area-inset-bottom))); place-items: center; }
+  main { width: 100%; padding: 28px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: 0 1px 3px rgb(0 0 0 / .08); backdrop-filter: blur(10px); }
   h1 { font-size: 1.35rem; line-height: 1.2; letter-spacing: -.02em; margin: 0 0 .55rem; }
   p.sub { margin: 0 0 1.5rem; color: var(--muted); }
   label { display: block; font-size: 0.8125rem; font-weight: 500; margin-bottom: 0.375rem; }
@@ -85,17 +106,20 @@ function shell(title: string, inner: string): string {
   .pin input { height: 48px; padding: 0; text-align: center; font: 600 1.15rem/1 ui-monospace, SFMono-Regular, monospace; }
   .pin-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
   code { font-family: ui-monospace, monospace; font-size: 0.875em; }
-  @media (max-width: 420px) { main { padding: 22px 18px; } .pin { gap: 5px; } .pin input { height: 44px; } }
+  @keyframes slate-light { 0%, 72%, 100% { background: transparent; } 78%, 86% { background: color-mix(in oklch, var(--brand) 14%, transparent); } }
+  @media (max-width: 420px) { .page { padding-right: max(20px, env(safe-area-inset-right)); padding-left: max(20px, env(safe-area-inset-left)); } .brand { right: max(20px, env(safe-area-inset-right)); left: max(20px, env(safe-area-inset-left)); } main { padding: 22px 18px; } .pin { gap: 5px; } .pin input { height: 44px; } }
   @media (prefers-reduced-motion: no-preference) { main { animation: enter .18s ease-out both; } @keyframes enter { from { opacity: 0; transform: translateY(4px); } } }
+  @media (prefers-reduced-motion: reduce) { .slate-cell { animation: none; } .slate-cell:nth-child(11n) { background: color-mix(in oklch, var(--brand) 9%, transparent); } }
 </style>
 </head>
-<body><div class="page"><header class="brand"><a class="brand-name" href="/"><span class="brand-mark">N</span><span>Norbital</span></a><span class="secure">Secure access</span></header><div class="center"><main>${inner}</main></div></div></body>
+<body><div class="small-grid" aria-hidden="true"></div><div class="large-grid" aria-hidden="true"></div><div class="top-glow" aria-hidden="true"></div>${slateField()}<div class="page"><header class="brand"><a class="brand-name" href="/"><span class="brand-mark">${brandMark}</span><span>${escapeHtml(productName)}</span></a><span class="secure">Secure access</span></header><div class="center"><main>${inner}</main></div></div></body>
 </html>`;
 }
 
 export function loginPage(input: {
 	readonly organizationName: string;
 	readonly error?: string;
+	readonly branding?: IdentityPageBranding;
 }): Response {
 	return html(
 		shell(
@@ -109,7 +133,8 @@ ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
   <input id="email" name="email" type="email" autocomplete="email" required autofocus />
   <button type="submit">Send sign-in code</button>
 </form>
-<p class="muted">We'll email you a six-digit code. No password required.</p>`
+	<p class="muted">We'll email you a six-digit code. No password required.</p>`,
+			input.branding
 		),
 		input.error ? 400 : 200
 	);
@@ -118,6 +143,7 @@ ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
 export function codeEntryPage(input: {
 	readonly email: string;
 	readonly error?: string;
+	readonly branding?: IdentityPageBranding;
 }): Response {
 	return html(
 		shell(
@@ -150,7 +176,8 @@ ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
   });
   group.closest('form').addEventListener('submit', (event) => { sync(); if (!/^[0-9]{6}$/.test(hidden.value)) { event.preventDefault(); cells.find((cell) => !cell.value)?.focus(); } });
 })();
-</script>`
+</script>`,
+			input.branding
 		),
 		input.error ? 400 : 200
 	);
@@ -162,7 +189,10 @@ ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
  * The pod mints the invitation token and emails it; the provisioning host never sees it, so it cannot
  * appear in a redirect URL even if someone wanted it to. This page exists to say so.
  */
-export function checkEmailPage(input: { readonly organizationName: string }): Response {
+export function checkEmailPage(input: {
+	readonly organizationName: string;
+	readonly branding?: IdentityPageBranding;
+}): Response {
 	return html(
 		shell(
 			'Check your email',
@@ -172,7 +202,8 @@ export function checkEmailPage(input: { readonly organizationName: string }): Re
 <p>We've sent an invitation link to the address you signed up with. Open it to finish setting up your
 workspace.</p>
 <p class="muted">The link is single-use and expires in three days. Already have access?
-<a href="/login">Sign in</a>.</p>`
+	<a href="/login">Sign in</a>.</p>`,
+			input.branding
 		)
 	);
 }
@@ -181,6 +212,7 @@ export function acceptInvitePage(input: {
 	readonly organizationName: string;
 	readonly token: string | null;
 	readonly error?: string;
+	readonly branding?: IdentityPageBranding;
 }): Response {
 	if (!input.token) {
 		return html(
@@ -190,7 +222,8 @@ export function acceptInvitePage(input: {
 <h1>That link is incomplete</h1>
 <p class="sub">${escapeHtml(input.organizationName)}</p>
 <p>Open the invitation link from your email — it carries a token this page needs.</p>
-<p class="muted"><a href="/login">Sign in instead</a></p>`
+	<p class="muted"><a href="/login">Sign in instead</a></p>`,
+				input.branding
 			),
 			400
 		);
@@ -208,7 +241,8 @@ ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
   <input id="email" name="email" type="email" autocomplete="email" required autofocus />
   <button type="submit">Accept and sign in</button>
 </form>
-<p class="muted">We'll email a code to confirm it's you before creating your account.</p>`
+	<p class="muted">We'll email a code to confirm it's you before creating your account.</p>`,
+			input.branding
 		),
 		input.error ? 400 : 200
 	);

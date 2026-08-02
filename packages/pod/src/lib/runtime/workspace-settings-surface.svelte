@@ -10,7 +10,6 @@
 	import WorkspaceAuditTable from './settings/workspace-audit-table.svelte';
 	import WorkspaceInvitationsTable from './settings/workspace-invitations-table.svelte';
 	import WorkspaceMembersTable from './settings/workspace-members-table.svelte';
-	import WorkspacePoliciesTable from './settings/workspace-policies-table.svelte';
 	import WorkspaceTeamChart from './settings/workspace-team-chart.svelte';
 	import {
 		toMemberRow,
@@ -21,39 +20,27 @@
 		type WorkspaceSettingsApi
 	} from './workspace-settings.js';
 
-	type DeclaredChannel = {
-		readonly key: string;
-		readonly transport: string;
-		readonly policy: string;
-		readonly description?: string | null;
-	};
-
 	let {
 		workspaceApi,
 		user,
-		api,
-		channels = [],
-		hostChannelSettingsHref = null
+		api
 	}: {
 		workspaceApi: CollectionClient<ErasedCollectionRegistry>;
 		user: { readonly role: string | null };
 		api: WorkspaceSettingsApi;
-		channels?: readonly DeclaredChannel[];
-		hostChannelSettingsHref?: string | null;
 	} = $props();
 
 	const isAdmin = $derived(user.role === 'admin');
 	const PAGE = 500;
-	type Section = 'members' | 'teams' | 'invitations' | 'policies' | 'audit' | 'channels';
+	type Section = 'people' | 'teams' | 'audit';
+	type PeopleTab = 'members' | 'invitations';
 	const sections: readonly { key: Section; label: string; icon: string }[] = [
-		{ key: 'members', label: 'Members', icon: 'lucide:users' },
+		{ key: 'people', label: 'People', icon: 'lucide:users' },
 		{ key: 'teams', label: 'Teams', icon: 'lucide:network' },
-		{ key: 'invitations', label: 'Invitations', icon: 'lucide:mail-plus' },
-		{ key: 'policies', label: 'Roles & grants', icon: 'lucide:shield-check' },
-		{ key: 'audit', label: 'Audit log', icon: 'lucide:scroll-text' },
-		{ key: 'channels', label: 'Channels', icon: 'lucide:messages-square' }
+		{ key: 'audit', label: 'Audit log', icon: 'lucide:scroll-text' }
 	];
-	let section = $state<Section>('members');
+	let section = $state<Section>('people');
+	let peopleTab = $state<PeopleTab>('members');
 
 	const memberQuery = $derived(
 		isAdmin
@@ -105,7 +92,8 @@
 	}
 
 	$effect(() => {
-		if (!isAdmin || section !== 'invitations' || invitationsLoaded) return;
+		if (!isAdmin || section !== 'people' || peopleTab !== 'invitations' || invitationsLoaded)
+			return;
 		void run(loadInvitations);
 	});
 
@@ -152,6 +140,7 @@
 				name="Tenant settings navigation"
 				axis="x"
 				layout="inline"
+				align="start"
 				gap="xs"
 				class="shrink-0 border-b bg-card px-2 py-2 md:w-52 md:border-r md:border-b-0 md:px-2 md:py-4"
 				aria-label="Tenant settings"
@@ -200,13 +189,9 @@
 			<Scroll name="Tenant settings" class="min-w-0 flex-1">
 				<Stack gap="lg" class="mx-auto w-full max-w-6xl p-4 sm:p-6">
 					<Stack as="header" gap="xs">
-						<p class="text-micro font-semibold tracking-wide text-muted-foreground uppercase">
-							Tenant-owned configuration
-						</p>
 						<h1 class="text-base font-semibold">Workspace settings</h1>
 						<p class="max-w-2xl text-xs text-muted-foreground">
-							People, access, audit history, and channel declarations remain with this tenant and
-							move with its database.
+							Manage the people, team assignments, and audit history stored in this tenant database.
 						</p>
 					</Stack>
 
@@ -217,61 +202,50 @@
 							{failure}
 						</p>{/if}
 
-					{#if section === 'members'}
-						<WorkspaceMembersTable client={workspaceApi} {busy} onRoleChange={changeRole} />
-					{:else if section === 'teams'}
-						<WorkspaceTeamChart {teams} {members} {memberships} {policies} {api} {busy} {run} />
-					{:else if section === 'invitations'}
-						<WorkspaceInvitationsTable
-							{invitations}
-							loaded={invitationsLoaded}
-							{busy}
-							{mintedLink}
-							onInvite={invite}
-							onRevoke={revoke}
-							onRefresh={loadInvitations}
-						/>
-					{:else if section === 'policies'}
-						<WorkspacePoliciesTable client={workspaceApi} />
-					{:else if section === 'audit'}
-						<WorkspaceAuditTable client={workspaceApi} />
-					{:else}
+					{#if section === 'people'}
 						<Stack gap="md">
-							<div>
-								<h2 class="text-sm font-semibold">Agent channels</h2>
-								<p class="mt-1 text-xs text-muted-foreground">
-									Channel identity, policy, and task are code-declared. Host transport credentials
-									are configured separately and never stored in the tenant database.
-								</p>
-							</div>
-							{#each channels as channel (channel.key)}
-								<Inline gap="md" class="rounded-lg border bg-card p-4">
-									<Icon icon="lucide:message-circle" class="size-4 text-muted-foreground" />
-									<div class="min-w-0 flex-1">
-										<p class="text-xs font-semibold">{channel.key}</p>
-										<p class="mt-1 text-micro text-muted-foreground">
-											{channel.transport} · policy {channel.policy}{channel.description
-												? ` · ${channel.description}`
-												: ''}
-										</p>
-									</div>
-								</Inline>
+							<Inline
+								gap="none"
+								role="tablist"
+								aria-label="People"
+								class="w-fit rounded-md border border-border/70 bg-card p-px"
+							>
+								{#each [{ key: 'members' as const, label: 'Members' }, { key: 'invitations' as const, label: 'Invitations' }] as tab (tab.key)}
+									<button
+										type="button"
+										role="tab"
+										aria-selected={peopleTab === tab.key}
+										class={cn(
+											'h-8 rounded-sm px-3 text-xs font-medium transition-colors',
+											peopleTab === tab.key
+												? 'bg-accent text-foreground shadow-xs'
+												: 'text-muted-foreground hover:text-foreground'
+										)}
+										onclick={() => (peopleTab = tab.key)}
+									>
+										{tab.label}
+									</button>
+								{/each}
+							</Inline>
+
+							{#if peopleTab === 'members'}
+								<WorkspaceMembersTable client={workspaceApi} {busy} onRoleChange={changeRole} />
 							{:else}
-								<p
-									class="rounded-lg border border-dashed p-8 text-center text-xs text-muted-foreground"
-								>
-									No channels are declared in this workspace.
-								</p>
-							{/each}
-							{#if hostChannelSettingsHref}
-								<a
-									href={hostChannelSettingsHref}
-									class="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-accent"
-									><Icon icon="lucide:key-round" class="size-4" />Configure host transport
-									credentials</a
-								>
+								<WorkspaceInvitationsTable
+									{invitations}
+									loaded={invitationsLoaded}
+									{busy}
+									{mintedLink}
+									onInvite={invite}
+									onRevoke={revoke}
+									onRefresh={loadInvitations}
+								/>
 							{/if}
 						</Stack>
+					{:else if section === 'teams'}
+						<WorkspaceTeamChart {teams} {members} {memberships} {policies} {api} {busy} {run} />
+					{:else}
+						<WorkspaceAuditTable client={workspaceApi} />
 					{/if}
 				</Stack>
 			</Scroll>

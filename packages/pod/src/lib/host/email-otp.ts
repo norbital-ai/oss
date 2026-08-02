@@ -1,7 +1,13 @@
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import type { CookieSession } from './session.js';
 import type { HostAuthentication, HostIdentityProvider } from './types.js';
-import { loginPage, codeEntryPage, checkEmailPage, acceptInvitePage } from './identity-pages.js';
+import {
+	loginPage,
+	codeEntryPage,
+	checkEmailPage,
+	acceptInvitePage,
+	type IdentityPageBranding
+} from './identity-pages.js';
 
 export type EmailOtpDeliver = (input: {
 	readonly email: string;
@@ -14,6 +20,8 @@ export type EmailOtpIdentityOptions = {
 	readonly deliver: EmailOtpDeliver;
 	readonly organizationId: string;
 	readonly organizationName: string;
+	/** Optional host branding for the pre-auth shell. */
+	readonly branding?: IdentityPageBranding;
 	/** Signing secret for the stateless code challenge. At least 32 bytes. */
 	readonly secret: string;
 	/** Code lifetime in seconds. Defaults to 10 minutes. */
@@ -115,6 +123,21 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 	}
 	const ttl = (options.ttlSeconds ?? 600) * 1000;
 	const maxRequests = options.maxRequestsPerWindow ?? 5;
+	const brandedLoginPage = (error?: string): Response =>
+		loginPage({
+			organizationName: options.organizationName,
+			...(error ? { error } : {}),
+			branding: options.branding
+		});
+	const brandedCodeEntryPage = (email: string, error?: string): Response =>
+		codeEntryPage({ email, ...(error ? { error } : {}), branding: options.branding });
+	const brandedInvitePage = (token: string | null, error?: string): Response =>
+		acceptInvitePage({
+			organizationName: options.organizationName,
+			token,
+			...(error ? { error } : {}),
+			branding: options.branding
+		});
 	// Per-process, which is the honest scope: it throttles the common case without pretending to be a
 	// distributed limiter. A multi-process deployment should rate-limit at its ingress as well.
 	const attempts = new Map<string, Attempt>();
@@ -179,7 +202,7 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 		// Built by adding a cookie to the page's own response, not by re-wrapping its body: rebuilding
 		// the headers dropped `no-store`, `x-frame-options: DENY`, and `referrer-policy` from the one
 		// page that carries the credential form.
-		const page = codeEntryPage({ email });
+		const page = brandedCodeEntryPage(email);
 		const headers = new Headers(page.headers);
 		headers.append(
 			'set-cookie',
@@ -215,7 +238,7 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 			}
 
 			if (path === '/login' && request.method === 'GET') {
-				return loginPage({ organizationName: options.organizationName });
+				return brandedLoginPage();
 			}
 
 			if (path === '/login' && request.method === 'POST') {
@@ -224,13 +247,10 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 				// The response is identical whether or not the address exists. Anything else turns this
 				// form into an oracle for which people belong to this workspace.
 				if (!isPlausibleEmail(email)) {
-					return loginPage({
-						organizationName: options.organizationName,
-						error: 'Enter a valid email address.'
-					});
+					return brandedLoginPage('Enter a valid email address.');
 				}
 				if (withinRateLimit(email)) return issueCode(email);
-				return codeEntryPage({ email, error: 'Too many requests. Try again shortly.' });
+				return brandedCodeEntryPage(email, 'Too many requests. Try again shortly.');
 			}
 
 			if (path === '/login/code' && request.method === 'POST') {
@@ -238,30 +258,21 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 				const code = String(form.get('code') ?? '').trim();
 				const pending = readChallenge(request);
 				if (!pending || pending.expiry <= Date.now()) {
-					return loginPage({
-						organizationName: options.organizationName,
-						error: 'That code expired. Request a new one.'
-					});
+					return brandedLoginPage('That code expired. Request a new one.');
 				}
 				if (consumed.has(pending.mac)) {
-					return loginPage({
-						organizationName: options.organizationName,
-						error: 'That code was already used. Request a new one.'
-					});
+					return brandedLoginPage('That code was already used. Request a new one.');
 				}
 				// Bounded before the comparison, and keyed by the challenge rather than the address: the
 				// client supplies the cookie, so a per-address counter alone would let a fresh challenge
 				// reset the budget for the same guessing run.
 				if (!withinLimit(verifications, pending.mac, MAX_VERIFICATIONS)) {
 					consumed.set(pending.mac, pending.expiry);
-					return loginPage({
-						organizationName: options.organizationName,
-						error: 'Too many incorrect codes. Request a new one.'
-					});
+					return brandedLoginPage('Too many incorrect codes. Request a new one.');
 				}
 				const expected = challenge(options.secret, pending.email, code, pending.expiry);
 				if (!constantTimeEquals(expected, pending.mac)) {
-					return codeEntryPage({ email: pending.email, error: 'That code is not correct.' });
+					return brandedCodeEntryPage(pending.email, 'That code is not correct.');
 				}
 				// Single-use is enforced here, not by clearing the cookie: the digest stays valid until
 				// expiry, so a client that simply keeps its own cookie could otherwise mint unlimited
@@ -292,10 +303,7 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 			}
 
 			if (path === '/accept-invite' && request.method === 'GET') {
-				return acceptInvitePage({
-					organizationName: options.organizationName,
-					token: url.searchParams.get('token')
-				});
+				return brandedInvitePage(url.searchParams.get('token'));
 			}
 
 			if (path === '/accept-invite' && request.method === 'POST') {
@@ -309,18 +317,10 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 				// and the error is deliberately identical for a bad token and a mismatched address so the
 				// form does not reveal which invitations exist.
 				if (!invited || invited !== claimed) {
-					return acceptInvitePage({
-						organizationName: options.organizationName,
-						token,
-						error: 'That invitation link and email address do not match.'
-					});
+					return brandedInvitePage(token, 'That invitation link and email address do not match.');
 				}
 				if (!withinRateLimit(claimed)) {
-					return acceptInvitePage({
-						organizationName: options.organizationName,
-						token,
-						error: 'Too many requests. Try again shortly.'
-					});
+					return brandedInvitePage(token, 'Too many requests. Try again shortly.');
 				}
 				// From here the flow is an ordinary sign-in. The invitation itself is claimed during
 				// subject resolution on the first authenticated request, which is what keeps the
@@ -329,7 +329,10 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 			}
 
 			if (path === '/check-email') {
-				return checkEmailPage({ organizationName: options.organizationName });
+				return checkEmailPage({
+					organizationName: options.organizationName,
+					branding: options.branding
+				});
 			}
 
 			return null;

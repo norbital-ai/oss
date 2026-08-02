@@ -6,14 +6,16 @@ host; a managed host must not replace it with a parallel system-database adminis
 
 ## Sections and authority
 
-| Section        | Authority                                                   | Behavior                                                                                         |
-| -------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Members        | tenant `user` and `team_members` rows                       | Policy-scoped `CollectionTable`; membership changes emit the normal host event                   |
-| Teams          | tenant `team` and `team_members` rows                       | SvelteFlow hierarchy; create action, tappable nodes and member assignment                        |
-| Invitations    | tenant `invitation` rows and identity commands              | `CollectionTable` over a safe server projection; invitation secrets never enter the replica      |
-| Roles & grants | source-declared policies reconciled to tenant `policy` rows | Read-only effective-policy inspection; definitions change in `src/policies`                      |
-| Audit log      | tenant `audit_event` rows                                   | Policy-scoped `CollectionTable`; no host audit mirror                                            |
-| Channels       | compiled manifest declarations                              | Lists channel key, transport and policy and links to host credential configuration when supplied |
+| Section   | Authority                                     | Behavior                                                                                    |
+| --------- | --------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| People    | tenant `user`, `team_members` and invitations | Members and Invitations tabs; safe table projections never replicate invitation credentials |
+| Teams     | tenant `team` and `team_members` rows         | SvelteFlow hierarchy; create action, tappable nodes, member and declared-policy assignment  |
+| Audit log | tenant `audit_event` rows                     | Policy-scoped `CollectionTable`; no host audit mirror                                       |
+
+Policies and channels are not runtime settings. They are compile-time workspace declarations in
+`src/policies` and `src/channels`, exposed read-only through a host authoring surface's compiled
+Manifest. Settings may assign a declared policy to a tenant-owned team, but it never edits the
+policy or its grants.
 
 The same collection and identity paths used by the rest of Pod back this UI. The surface does not
 bypass policy, hooks, history, audit or sync to make administration convenient.
@@ -28,8 +30,9 @@ Channel configuration has two deliberately separate halves:
   status.
 
 The declared key joins them. Pod owns principals, inbound deduplication, channel conversations,
-agent runs and transcripts in the tenant database. A host can expose a credential-management link,
-but it must not store or render a second conversation history.
+agent runs and transcripts in the tenant database. A host may expose its own credential-management
+surface as a separate plugin, but Settings does not redirect into it and the host must not store or
+render a second conversation history.
 
 ## Host surfaces
 

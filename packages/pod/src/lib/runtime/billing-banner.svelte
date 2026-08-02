@@ -8,10 +8,12 @@
 	let {
 		billing,
 		isAdmin,
+		billingHref,
 		navigate
 	}: {
 		billing?: WorkspaceBillingSummary;
 		isAdmin: boolean;
+		billingHref: string | null;
 		navigate: (href: string) => void;
 	} = $props();
 
@@ -82,13 +84,13 @@
 				<Icon icon="lucide:credit-card" class="size-4" aria-hidden="true" />
 			</div>
 			<p class="min-w-0 flex-1 leading-5">{notice.message}</p>
-			{#if isAdmin}
+			{#if isAdmin && billingHref}
 				<Button
 					type="button"
 					variant="outline"
 					size="sm"
 					class="w-fit shrink-0"
-					onclick={() => navigate('/org-settings?section=billing')}
+					onclick={() => navigate(billingHref)}
 				>
 					{notice.action}
 				</Button>

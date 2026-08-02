@@ -202,12 +202,11 @@
 	);
 	const agentAvailable = $derived(workspaceProvidesAgentSurface(manifestContext.manifest.agent));
 	const activeHostPlugin = $derived(resolveHostPluginSurface(currentPath, data.hostPlugins ?? []));
-	const hostChannelSettingsHref = $derived(
+	const billingSettingsHref = $derived(
 		data.hostPlugins?.some((plugin) => plugin.key === 'org-settings')
-			? `${hostPluginSurfaceHref('org-settings')}?section=channels`
+			? `${hostPluginSurfaceHref('org-settings')}?section=billing`
 			: null
 	);
-	const declaredChannels = $derived(Object.values(manifestContext.manifest.channels ?? {}));
 
 	function closeDetailSheet(): void {
 		if (detailSheetOpen) platformState.navigation.pop(page.url);
@@ -286,7 +285,12 @@
 	{onSignOut}
 >
 	<Bound size="full" clip grow>
-		<BillingBanner billing={data.billing} isAdmin={data.user.role === 'admin'} {navigate} />
+		<BillingBanner
+			billing={data.billing}
+			isAdmin={data.user.role === 'admin'}
+			billingHref={billingSettingsHref}
+			{navigate}
+		/>
 		{#if currentPath === '/'}
 			<Scroll name="Workspace overview" inset>
 				<Center measure="wide">
@@ -363,25 +367,21 @@
 		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)}
 			<!-- Pod's own administration surface, not a host plugin: a workspace on `pod start` has no
 			     host and still has to be able to add people to itself. -->
-			<WorkspaceSettingsSurface
-				{workspaceApi}
-				user={data.user}
-				api={workspaceSettingsApi}
-				channels={declaredChannels}
-				{hostChannelSettingsHref}
-			/>
+			<WorkspaceSettingsSurface {workspaceApi} user={data.user} api={workspaceSettingsApi} />
 		{:else if agentSurfaceAllowed}
 			<Bound size="full" clip grow class="p-4 sm:p-6">
 				<AgentChatPanel />
 			</Bound>
 		{:else if activeHostPlugin}
-			<iframe
-				title={navigationModel.system.find((item) => item.key === activeHostPlugin.key)?.label ??
-					'Host workspace surface'}
-				src={`${activeHostPlugin.entry}${page.url.search}`}
-				class="h-full min-h-0 w-full border-0 bg-background"
-				data-testid="host-plugin-surface"
-			></iframe>
+			{#key activeHostPlugin.key}
+				<iframe
+					title={navigationModel.system.find((item) => item.key === activeHostPlugin.key)?.label ??
+						'Host workspace surface'}
+					src={`${activeHostPlugin.entry}${page.url.search}`}
+					class="h-full min-h-0 w-full border-0 bg-background"
+					data-testid="host-plugin-surface"
+				></iframe>
+			{/key}
 		{:else if activeApp && accessible}
 			<Bound size="full" clip grow data-workspace-app-region>
 				<Cover gap="none" top={activeAppBanner}>

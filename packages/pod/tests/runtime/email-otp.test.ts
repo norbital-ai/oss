@@ -15,6 +15,7 @@ function provider(
 		readonly ttlSeconds?: number;
 		readonly deliverFails?: boolean;
 		readonly generateCode?: () => string;
+		readonly branding?: { readonly productName?: string; readonly logoUrl?: string };
 	} = {}
 ) {
 	const sent = options.sent ?? [];
@@ -27,6 +28,7 @@ function provider(
 		...(options.ttlSeconds ? { ttlSeconds: options.ttlSeconds } : {}),
 		...(options.inviteeEmailForToken ? { inviteeEmailForToken: options.inviteeEmailForToken } : {}),
 		...(options.generateCode ? { generateCode: options.generateCode } : {}),
+		...(options.branding ? { branding: options.branding } : {}),
 		deliver: async (input) => {
 			if (options.deliverFails) throw new Error('provider is down');
 			sent.push(input);
@@ -111,6 +113,23 @@ describe('emailOtpIdentity', () => {
 		expect(body).toContain('autocomplete="one-time-code"');
 		expect(body).toContain('name="code"');
 		expect(sent).toHaveLength(1);
+	});
+
+	it('uses the host brand on both identity steps without trusting its HTML', async () => {
+		const branding = {
+			productName: 'Norbital <Core>',
+			logoUrl: '/assets/logo.svg?x=<unsafe>'
+		};
+		const identity = provider({ branding });
+		const login = await identity.handleRoute?.(get('/login'));
+		const loginBody = await login?.text();
+		expect(loginBody).toContain('Norbital &lt;Core&gt;');
+		expect(loginBody).toContain('src="/assets/logo.svg?x=&lt;unsafe&gt;"');
+
+		const code = await identity.handleRoute?.(form('/login', { email: 'ada@example.com' }));
+		const codeBody = await code?.text();
+		expect(codeBody).toContain('Norbital &lt;Core&gt;');
+		expect(codeBody).toContain('src="/assets/logo.svg?x=&lt;unsafe&gt;"');
 	});
 
 	it('sends an unauthenticated browser to the login page', async () => {
