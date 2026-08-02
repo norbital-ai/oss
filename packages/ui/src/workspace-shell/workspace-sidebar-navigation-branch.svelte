@@ -69,7 +69,6 @@
 					class={cn('min-w-0 flex-1 truncate text-left pe-1', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
 					>{item.label}</span
 				>
-				<!-- div avoids MenuSubButton [&>span]:flex-1 stealing the chevron column -->
 				<div
 					class="pointer-events-none absolute top-1/2 right-1.5 flex size-3.5 -translate-y-1/2 items-center justify-center"
 					aria-hidden="true"

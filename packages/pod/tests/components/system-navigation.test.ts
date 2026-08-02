@@ -155,6 +155,12 @@ describe('the system section of the sidebar', () => {
 			{ label: 'Workspace Studio', href: '/__host/workspace-studio', current: false }
 		]);
 		expect(container.querySelectorAll('[data-navigation-badge="Core"]')).toHaveLength(3);
+		// The badge trails the label it annotates, so the label is the element that gives up room when
+		// the row runs short. Asserting the order keeps that honest without pinning utility classes.
+		for (const badge of container.querySelectorAll('[data-navigation-badge="Core"]')) {
+			expect(badge.textContent?.trim()).toBe('Core');
+			expect(badge.previousElementSibling?.hasAttribute('data-navigation-label')).toBe(true);
+		}
 		destroy();
 	});
 
