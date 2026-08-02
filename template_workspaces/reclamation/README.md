@@ -87,10 +87,12 @@ TypeScript.
 | **Bathymetry**     | The existing bed under the works                                  | `.xyz`, `.csv`, `.dxf` points       |
 | **Cross sections** | Levels, slopes, crest and armour dimensions                       | authored `.dwg`, `.dxf`, or `.json` |
 
-Native DWG entities are decoded with LibreDWG. Vector tender PDFs are detected as vector source
-drawings, but plotted-sheet coordinates are not treated as metres: section recognition and
-dimension-based scale calibration must complete before their paths can enter the geometry engine.
-CSV profile reconstructions are rejected.
+Native DWG entities are decoded with LibreDWG. Vector tender PDFs are currently inspected only to
+confirm that they contain vector drawing operators; they are then rejected with a calibration
+error because plotted-sheet coordinates cannot safely be treated as metres. PDF section-path
+recognition and dimension-based scale calibration are not implemented yet. The demonstration JIWE
+DWG is a traced, re-authored drawing from the tender PDF, not a machine conversion. CSV profile
+reconstructions are rejected.
 
 ## Calibration: what your drawings must carry
 
