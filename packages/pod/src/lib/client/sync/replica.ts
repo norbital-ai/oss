@@ -228,6 +228,21 @@ function writeWarmMark(bootstrap: SyncBootstrap, mode: ReplicaMode): void {
 /** The one in-flight bootstrap, and whether it is worth waiting for. */
 let bootstrapping: Promise<ClientSync | null> | null = null;
 let replicaHoldsRows = false;
+let teardownRegistered = false;
+
+function registerPageTeardown(): void {
+	if (teardownRegistered) return;
+	teardownRegistered = true;
+	window.addEventListener('pagehide', (event) => {
+		// A persisted page is entering the back-forward cache and will resume this exact client.
+		if (event.persisted) return;
+		const sync = getClientSync();
+		bootstrapping = null;
+		replicaHoldsRows = false;
+		disableClientSync();
+		if (sync) void sync.client.close().catch(() => undefined);
+	});
+}
 
 /**
  * Resolve to the local replica when reading from it is the fast path, or to null when it is not.
@@ -254,6 +269,7 @@ export function bootstrapClientSync(
 	const existing = getClientSync();
 	if (existing) return Promise.resolve(existing);
 	if (typeof window === 'undefined' || !bootstrap) return Promise.resolve(null);
+	registerPageTeardown();
 	// Answered before the replica opens, so it has to assume the mode it is about to attempt.
 	// `openReplica` corrects it if the attempt falls back to the other database.
 	replicaHoldsRows = readWarmMark(bootstrap, 'shared');

@@ -528,11 +528,6 @@ export function hasSearch(query: Record<string, unknown>): boolean {
 	return typeof query.search === 'string' && query.search.trim().length > 0;
 }
 
-/** Every collection name the published schema knows about. */
-export function localSchemaCollections(): Iterable<string> {
-	return schema.keys();
-}
-
 /**
  * Forget the published schema.
  *

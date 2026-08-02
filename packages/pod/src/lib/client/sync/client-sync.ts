@@ -13,7 +13,6 @@ import {
 	ident,
 	localCollection,
 	localRelationship,
-	localSchemaCollections,
 	normalizeOrder,
 	readFilters,
 	searchRelations,
@@ -93,26 +92,6 @@ export function enableClientSync(
 
 export function getClientSync(): ClientSync | undefined {
 	return active;
-}
-
-/**
- * Pull every collection the workspace declares into the replica, in the background.
- *
- * Without this the replica only holds what has been looked at: the first visit to any page pays a
- * catch-up for its collections, so "slow the first time" repeats once per page rather than once
- * per device. Warming everything up front turns that into a single cost paid while the user is
- * reading the page they already opened.
- *
- * Sequential, and started only after the foreground has had its turn. The collections a page is
- * waiting on go through `ensureCollections`, which shares the same in-flight map — a warm pass
- * running concurrently would put 40 catch-ups on the wire ahead of the one blocking first paint,
- * and the residency budget would then be spent in arrival order rather than on what is used.
- */
-export async function warmAllCollections(sync: ClientSync): Promise<void> {
-	for (const collection of localSchemaCollections()) {
-		if (sync.registry.hasSynced(collection)) continue;
-		await sync.registry.register(collection).catch(() => undefined);
-	}
 }
 
 export function disableClientSync(): void {

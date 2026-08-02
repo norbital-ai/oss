@@ -121,6 +121,10 @@
 			];
 		})
 	);
+	const evidenceLoading = $derived(
+		directEvidenceQuery.loading ||
+			(evidenceAssetIds.length > 0 && (evidenceAssetsQuery == null || evidenceAssetsQuery.loading))
+	);
 
 	function evidenceSource(source: unknown): string {
 		if (source == null || typeof source !== 'object') return 'Workspace upload';
@@ -245,7 +249,9 @@
 					<p class="text-xs text-muted-foreground">Selected photos and their integrity results.</p>
 				</div>
 				<span class="text-xs tabular-nums text-muted-foreground">
-					{photoCards.length} captured for this assignment
+					{evidenceLoading
+						? 'Loading evidence…'
+						: `${photoCards.length} captured for this assignment`}
 				</span>
 			</Inline>
 			{#if directEvidenceQuery.error || evidenceAssetsQuery?.error}
@@ -255,6 +261,12 @@
 				>
 					Could not load the photographic evidence.
 				</p>
+			{:else if evidenceLoading && photoCards.length === 0}
+				<Grid minimum="card" gap="md" aria-label="Loading photographic evidence">
+					{#each Array(3) as _}
+						<div class="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse"></div>
+					{/each}
+				</Grid>
 			{:else}
 				<Grid minimum="card" gap="md">
 					{#each photoCards as photo (photo.id)}
