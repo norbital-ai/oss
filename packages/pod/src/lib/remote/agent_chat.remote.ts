@@ -130,13 +130,15 @@ const authenticated = Guard.init().use(requireAuthMiddleware());
  * transcript, so a conversation replicates to its owner through ordinary sync rather than needing a
  * streaming channel of its own.
  *
- * The workspace's `src/+agent.ts` profile is where interactive workspace-tool and host-tool access is
- * granted, and where collection reach is *narrowed*. Without it the shell and the compatibility
- * command fall back to a profile carrying the workspace's registered tools and no host tools — but
- * an unset `collections` means `allowedCollections` widens to every tenant collection, not none.
- * That reach is bounded by policy, not by the spec: `read_collection` runs `findMany` unelevated, so
- * a requestor sees only rows they could already read, and `write_collection` is never offered.
- * An authored profile is still the only way to scope an un-authored workspace's agent down.
+ * The fallback profile is the intent, not a hole in it: an agent someone is talking to should reach
+ * what that person reaches. Leaving `collections` unset widens `allowedCollections` to every tenant
+ * collection precisely so the ceiling comes from policy instead of the spec — `read_collection` runs
+ * `findMany` unelevated, so a requestor sees the rows they could already see and nothing more.
+ * `write_collection` is not offered, and no host tool is.
+ *
+ * `src/+agent.ts` is for the case policy cannot cover: a channel with no authenticated requestor to
+ * scope against, such as a public WhatsApp or Telegram surface. There the profile has to supply the
+ * boundary by hand. A workspace whose agent only answers its own signed-in users does not need one.
  */
 export const agentChat = authenticated.command(
 	AgentChatInputSchema,
