@@ -152,9 +152,6 @@
 		<Scroll name="Tenant settings" class="h-full">
 			<Stack gap="lg" class="mx-auto min-h-full w-full max-w-7xl p-4 sm:p-6">
 				<Stack as="header" gap="xs">
-					<p class="text-micro font-semibold tracking-wide text-muted-foreground uppercase">
-						Tenant-owned configuration
-					</p>
 					<h1 class="text-lg font-semibold">Tenant settings</h1>
 					<p class="max-w-2xl text-xs text-muted-foreground">
 						Manage the people, team assignments, and audit history stored in this tenant database.
@@ -172,6 +169,7 @@
 					bind:value={activeTab}
 					animate={false}
 					contentPadding={false}
+					listClass="mx-0 w-full"
 					class="min-h-[32rem]"
 					config={[
 						{ name: 'members', label: 'Members', icon: 'lucide:users', content: membersContent },
