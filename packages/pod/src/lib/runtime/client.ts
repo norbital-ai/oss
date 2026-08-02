@@ -227,6 +227,26 @@ async function settleApprovalSync(receipt: unknown): Promise<void> {
 	await reconcileServerRow(sync, collection, id, row);
 }
 
+/**
+ * A normal collection mutation can also restart an approval request (the requestor revising a
+ * record after changes were requested). The confirmed mutation row names that request, but the
+ * request itself is a transaction side effect and is not part of the optimistic row result.
+ * Reconcile that one authoritative row before returning so the initiating detail has
+ * read-your-mutation consistency even while its live stream is catching up through older events.
+ */
+async function settleMutationApprovalSync(
+	sync: NonNullable<ReturnType<typeof getClientSync>>,
+	row: Record<string, unknown>
+): Promise<void> {
+	const approvalRequestId = Reflect.get(row, 'norbital_approval_id');
+	if (typeof approvalRequestId !== 'string') return;
+	const approvalRequest = await post<Record<string, unknown> | null>('collections/findFirst', {
+		collection: 'approval_request',
+		where: { norbital_id: { eq: approvalRequestId } }
+	});
+	await reconcileServerRow(sync, 'approval_request', approvalRequestId, approvalRequest);
+}
+
 // Client-sync (when active) drives reactive invalidation through the same seam: a diff applied to
 // the local replica re-fires exactly the cached reads for that collection.
 setSyncInvalidator(invalidateCollectionQueries);
@@ -263,6 +283,11 @@ async function runSyncMutation(
 		err.code = rejection?.reason ?? 'MUTATE_FAILED';
 		if (rejection?.currentRow) err.currentRow = rejection.currentRow;
 		throw err;
+	}
+	if (result.row) {
+		// The mutation is already committed. A failed consistency assist must not report the write as
+		// failed; the ordered feed remains the convergence path for this tab and every other device.
+		await settleMutationApprovalSync(sync, result.row).catch(() => undefined);
 	}
 	return result.row ?? {};
 }
