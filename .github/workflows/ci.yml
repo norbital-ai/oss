@@ -39,7 +39,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Check packages and templates
-        run: pnpm check
+        run: pnpm check:ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 

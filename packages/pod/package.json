@@ -75,6 +75,7 @@
 		"prepack": "pnpm build",
 		"lint": "svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
 		"test": "vitest run",
+		"test:ci": "vitest run --exclude 'tests/standalone/**' --exclude 'tests/**/*e2e*.test.ts'",
 		"test:compiler": "vitest run tests/compiler",
 		"test:e2e": "vitest run tests/sync tests/storage tests/runtime tests/standalone",
 		"test:watch": "vitest"
