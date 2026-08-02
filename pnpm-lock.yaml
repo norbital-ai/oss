@@ -436,13 +436,13 @@ importers:
         specifier: 0.0.1
         version: link:../../packages/platform-utils
       '@norbital-ai/pod':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/pod
       '@norbital-ai/std':
         specifier: 0.0.1
         version: link:../../packages/std
       '@norbital-ai/ui':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/ui
       exifr:
         specifier: 7.1.3
@@ -494,13 +494,13 @@ importers:
         specifier: 0.0.1
         version: link:../../packages/platform-utils
       '@norbital-ai/pod':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/pod
       '@norbital-ai/std':
         specifier: 0.0.1
         version: link:../../packages/std
       '@norbital-ai/ui':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/ui
       mode-watcher:
         specifier: ^1.1.0
@@ -540,13 +540,13 @@ importers:
         specifier: 0.0.1
         version: link:../../packages/platform-utils
       '@norbital-ai/pod':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/pod
       '@norbital-ai/std':
         specifier: 0.0.1
         version: link:../../packages/std
       '@norbital-ai/ui':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/ui
       mode-watcher:
         specifier: ^1.1.0
@@ -586,13 +586,13 @@ importers:
         specifier: 0.0.1
         version: link:../../packages/platform-utils
       '@norbital-ai/pod':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/pod
       '@norbital-ai/std':
         specifier: 0.0.1
         version: link:../../packages/std
       '@norbital-ai/ui':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/ui
       exceljs:
         specifier: 4.4.0
@@ -641,13 +641,13 @@ importers:
         specifier: 0.0.1
         version: link:../../packages/platform-utils
       '@norbital-ai/pod':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/pod
       '@norbital-ai/std':
         specifier: 0.0.1
         version: link:../../packages/std
       '@norbital-ai/ui':
-        specifier: 0.0.2
+        specifier: 0.0.3
         version: link:../../packages/ui
       mode-watcher:
         specifier: ^1.1.0
