@@ -56,19 +56,17 @@ export function resolveHostPluginSurface(
 	return plugins.find((plugin) => currentPath === hostPluginSurfaceHref(plugin.key)) ?? null;
 }
 
-/** An authored workspace agent is the capability and UI boundary; no host route is required. */
-export function workspaceProvidesAgentSurface(
-	agent: { readonly kind: 'agent' } | undefined
-): boolean {
-	return agent?.kind === 'agent';
+/**
+ * Every workspace has the safe interactive agent fallback implemented by Pod. An authored agent
+ * profile can add approved tools and instructions, but it is not required for the surface itself.
+ */
+export function workspaceProvidesAgentSurface(): boolean {
+	return true;
 }
 
-/** The optional full-page route is Pod-owned whenever this workspace authored an agent. */
-export function workspaceAuthorizesAgentSurface(
-	currentPath: string,
-	agent: { readonly kind: 'agent' } | undefined
-): boolean {
-	return currentPath === '/agent' && workspaceProvidesAgentSurface(agent);
+/** The optional full-page route is Pod-owned for every workspace. */
+export function workspaceAuthorizesAgentSurface(currentPath: string): boolean {
+	return currentPath === '/agent';
 }
 
 function isUnder(currentPath: string, entry: string): boolean {

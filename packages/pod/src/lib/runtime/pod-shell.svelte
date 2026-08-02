@@ -197,10 +197,8 @@
 			thumbnail: manifestContext.findApp(item.key)?.thumbnail ?? null
 		}))
 	);
-	const agentSurfaceAllowed = $derived(
-		workspaceAuthorizesAgentSurface(currentPath, manifestContext.manifest.agent)
-	);
-	const agentAvailable = $derived(workspaceProvidesAgentSurface(manifestContext.manifest.agent));
+	const agentSurfaceAllowed = $derived(workspaceAuthorizesAgentSurface(currentPath));
+	const agentAvailable = workspaceProvidesAgentSurface();
 	const activeHostPlugin = $derived(resolveHostPluginSurface(currentPath, data.hostPlugins ?? []));
 	const billingSettingsHref = $derived(
 		data.hostPlugins?.some((plugin) => plugin.key === 'core-billing')

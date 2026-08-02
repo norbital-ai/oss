@@ -36,7 +36,8 @@ export type AgentChatStartResult = {
  *
  * Deliberately not caller-supplied. `executeTool` will only run a tool the spec names, so letting a
  * request choose would let it widen its own reach; an authored tool is a surface the workspace already
- * decided to expose.
+ * decided to expose. Workspaces without an authored agent profile draw from this same registry — the
+ * fallback adds no *workspace* tool the workspace did not register.
  */
 function workspaceAgentTools(): readonly string[] {
 	return Object.keys(getTenantWorkspace().registered.agentTools);
@@ -129,9 +130,13 @@ const authenticated = Guard.init().use(requireAuthMiddleware());
  * transcript, so a conversation replicates to its owner through ordinary sync rather than needing a
  * streaming channel of its own.
  *
- * The workspace's `src/+agent.ts` profile is the only place interactive collection, workspace-tool
- * and host-tool access can be granted. Without it the compatibility command receives only Pod's
- * read-only built-ins and the workspace's explicitly registered tools; the shell exposes no agent UI.
+ * The workspace's `src/+agent.ts` profile is where interactive workspace-tool and host-tool access is
+ * granted, and where collection reach is *narrowed*. Without it the shell and the compatibility
+ * command fall back to a profile carrying the workspace's registered tools and no host tools — but
+ * an unset `collections` means `allowedCollections` widens to every tenant collection, not none.
+ * That reach is bounded by policy, not by the spec: `read_collection` runs `findMany` unelevated, so
+ * a requestor sees only rows they could already read, and `write_collection` is never offered.
+ * An authored profile is still the only way to scope an un-authored workspace's agent down.
  */
 export const agentChat = authenticated.command(
 	AgentChatInputSchema,

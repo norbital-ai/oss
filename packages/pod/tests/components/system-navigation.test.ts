@@ -65,13 +65,10 @@ describe('the system section of the sidebar', () => {
 		expect(resolveHostPluginSurface('/studio', PLUGINS)).toBeNull();
 	});
 
-	it('renders the Pod agent route from the workspace manifest without a host registration', () => {
-		const agent = { kind: 'agent' as const };
-		expect(workspaceAuthorizesAgentSurface('/agent', agent)).toBe(true);
-		expect(workspaceAuthorizesAgentSurface('/agent', undefined)).toBe(false);
-		expect(workspaceAuthorizesAgentSurface('/app/hr', agent)).toBe(false);
-		expect(workspaceProvidesAgentSurface(agent)).toBe(true);
-		expect(workspaceProvidesAgentSurface(undefined)).toBe(false);
+	it('provides the safe Pod agent surface without a host or authored profile', () => {
+		expect(workspaceAuthorizesAgentSurface('/agent')).toBe(true);
+		expect(workspaceAuthorizesAgentSurface('/app/hr')).toBe(false);
+		expect(workspaceProvidesAgentSurface()).toBe(true);
 	});
 
 	it('never puts an admin-only surface in front of a non-admin', () => {
