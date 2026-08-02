@@ -16,6 +16,16 @@ if (!('ResizeObserver' in globalThis)) {
 	} as unknown as typeof ResizeObserver;
 }
 
+// The shared Tabs indicator waits for web fonts before measuring its active trigger. happy-dom has
+// neither font loading nor layout, so an already-resolved readiness promise is the exact test double
+// for the only signal the component consumes.
+if (!document.fonts) {
+	Object.defineProperty(document, 'fonts', {
+		value: { ready: Promise.resolve() },
+		configurable: true
+	});
+}
+
 /**
  * Node 26 declares a global `localStorage` that is undefined unless the process was started with
  * `--localstorage-file`, and that declaration wins over the one happy-dom installs. `mode-watcher`

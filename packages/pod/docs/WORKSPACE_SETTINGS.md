@@ -6,11 +6,12 @@ host; a managed host must not replace it with a parallel system-database adminis
 
 ## Sections and authority
 
-| Section   | Authority                                     | Behavior                                                                                    |
-| --------- | --------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| People    | tenant `user`, `team_members` and invitations | Members and Invitations tabs; safe table projections never replicate invitation credentials |
-| Teams     | tenant `team` and `team_members` rows         | SvelteFlow hierarchy; create action, tappable nodes, member and declared-policy assignment  |
-| Audit log | tenant `audit_event` rows                     | Policy-scoped `CollectionTable`; no host audit mirror                                       |
+| Tab         | Authority                             | Behavior                                                                                   |
+| ----------- | ------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Members     | tenant `user` and `team_members`      | Runtime roles and membership; rendered with the shared `CollectionTable`                   |
+| Invitations | tenant invitation service             | Safe projection in the same page; invitation credentials never replicate                   |
+| Teams       | tenant `team` and `team_members` rows | SvelteFlow hierarchy; create action, tappable nodes, member and declared-policy assignment |
+| Audit log   | tenant `audit_event` rows             | Policy-scoped `CollectionTable`; no host audit mirror                                      |
 
 Policies and channels are not runtime settings. They are compile-time workspace declarations in
 `src/policies` and `src/channels`, exposed read-only through a host authoring surface's compiled
@@ -37,8 +38,9 @@ render a second conversation history.
 ## Host surfaces
 
 Core-hosted plugins are mounted inside the tenant shell without entering the Pod bundle. Host
-facilities such as Core services sit beneath Pod's Settings folder; authoring tools such as Workspace
-Studio remain standalone navigation entries. These surfaces are mounted inside the tenant
+facilities sit beneath Pod's Settings folder as separate children. Core currently contributes
+Transport credentials, Profile and Billing; it does not add a second settings menu inside any of
+those pages. Authoring tools such as Workspace Studio remain standalone navigation entries. These surfaces are mounted inside the tenant
 shell at `/__host/<plugin-key>`, so system facilities do not erase workspace navigation. The mounted
 document still authorizes itself. Standalone Pod simply omits host plugins; tenant Settings remains
 fully available.

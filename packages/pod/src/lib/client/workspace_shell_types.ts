@@ -58,7 +58,7 @@ export type TenantWorkspaceShellData = {
 	 */
 	readonly policyGrants: readonly TenantWorkspacePolicyGrant[] | null;
 	/**
-	 * Host-owned navigation surfaces (Workspace Studio, Core services), already filtered to what
+	 * Host-owned navigation surfaces (Workspace Studio, transport credentials, billing, and so on), already filtered to what
 	 * this requestor may see. Empty under a host that supplies none, which is every workspace running
 	 * on `pod start` by default.
 	 */

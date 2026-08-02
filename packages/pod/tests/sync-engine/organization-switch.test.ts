@@ -6,15 +6,29 @@ const podShellSource = readFileSync(
 	new URL('../../src/lib/runtime/pod-shell.svelte', import.meta.url),
 	'utf8'
 );
+const workspaceShellSource = readFileSync(
+	new URL('../../../ui/src/workspace-shell/workspace-shell.svelte', import.meta.url),
+	'utf8'
+);
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('organization switch boundary', () => {
 	it('connects the hosted organization selector to the document switch boundary', () => {
-		expect(podShellSource).toContain("import { switchOrganization } from './organization-switch.js';");
+		expect(podShellSource).toContain(
+			"import { switchOrganization } from './organization-switch.js';"
+		);
 		expect(podShellSource).toMatch(
 			/<WorkspaceShell[\s\S]*onOrganizationChange=\{switchOrganization\}/
 		);
+	});
+
+	it('unmounts the outgoing tenant shell while the host changes organizations', () => {
+		expect(workspaceShellSource).toContain('data-testid="organization-switch-loader"');
+		expect(workspaceShellSource).toMatch(
+			/\{#if switchingOrganization\}[\s\S]*organization-switch-loader[\s\S]*\{:else\}[\s\S]*<WorkspaceShellFrame/
+		);
+		expect(workspaceShellSource).toContain('onOrganizationChange={changeOrganization}');
 	});
 
 	it('lets Core select and serve the complete new workspace document', async () => {

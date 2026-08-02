@@ -12,13 +12,24 @@
 	 */
 	const instalmentsQuery = client.db.component_entries.findMany({
 		where: { norbital_approval_id: { isNull: true } },
+		columns: { norbital_id: true, amount: true, origin: true },
 		limit: 2000
 	});
-	const lineSourcesQuery = client.db.payslip_line_sources.findMany({ limit: 5000 });
-	const linesQuery = client.db.payslip_lines.findMany({ limit: 5000 });
-	const payslipsQuery = client.db.payslips.findMany({ limit: 2000 });
+	const lineSourcesQuery = client.db.payslip_line_sources.findMany({
+		columns: { payslip_line_id: true, source: true },
+		limit: 5000
+	});
+	const linesQuery = client.db.payslip_lines.findMany({
+		columns: { norbital_id: true, payslip_id: true },
+		limit: 5000
+	});
+	const payslipsQuery = client.db.payslips.findMany({
+		columns: { norbital_id: true, payroll_run_id: true },
+		limit: 2000
+	});
 	const runsQuery = client.db.payroll_runs.findMany({
 		where: { norbital_approval_id: { isNull: true } },
+		columns: { norbital_id: true, lifecycle: true },
 		limit: 1000
 	});
 	// A relation column holds a uuid. These reference sets load once per page and the label is
@@ -26,6 +37,7 @@
 	// so an unloaded label never reads as missing data.
 	const employmentsQuery = client.db.employments.findMany({
 		where: { norbital_approval_id: { isNull: true } },
+		columns: { norbital_id: true, employee_number: true },
 		limit: 1000
 	});
 	const employmentLabelsById = $derived(
@@ -38,6 +50,7 @@
 	);
 	const payComponentsQuery = client.db.pay_components.findMany({
 		where: { norbital_approval_id: { isNull: true } },
+		columns: { norbital_id: true, code: true, name: true },
 		limit: 500
 	});
 	const payComponentLabelsById = $derived(

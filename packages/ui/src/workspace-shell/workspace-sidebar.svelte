@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { tick, type Snippet } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import * as Avatar from '#lib/avatar';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
@@ -42,9 +42,6 @@
 			label: organization.name
 		}))
 	);
-	const switchingOrganization = $derived(
-		model.organizations.find((organization) => organization.id === switchingOrganizationId)
-	);
 
 	function organizationFallback(organization: WorkspaceOrganizationOption): string {
 		const words = organization.name.trim().split(/\s+/).filter(Boolean);
@@ -61,12 +58,10 @@
 			return;
 		}
 		switchingOrganizationId = organizationId;
-		await tick();
 		try {
 			await onOrganizationChange(organizationId);
-		} catch (error) {
+		} finally {
 			switchingOrganizationId = null;
-			throw error;
 		}
 	}
 
@@ -80,27 +75,6 @@
 		}
 	}
 </script>
-
-{#if switchingOrganization}
-	<!--
-		Fully opaque, not `bg-background/90`. At 90% the table's gridlines and the outgoing
-		organization's records stayed legible underneath, so the switch read as a dimmed version of
-		where you just were rather than a departure from it — and the data showing through belongs to
-		the organization you are leaving, which is the last thing that should linger on screen.
-		The blur is a backstop for any surface that paints outside this layer's background.
-	-->
-	<div
-		class="fixed inset-0 z-50 grid place-items-center bg-background backdrop-blur-sm"
-		role="status"
-		aria-live="polite"
-		aria-label={`Switching to ${switchingOrganization.name}`}
-	>
-		<Inline gap="md" class="text-sm font-medium">
-			<Spinner class="size-4" />
-			<span>Switching to {switchingOrganization.name}</span>
-		</Inline>
-	</div>
-{/if}
 
 {#snippet organizationAvatar(organization: WorkspaceOrganizationOption)}
 	<Avatar.Root class="size-6 shrink-0">

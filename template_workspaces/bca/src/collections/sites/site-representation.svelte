@@ -150,7 +150,6 @@
 {/snippet}
 
 <Tabs
-	variant="underline"
 	lazyLoad={false}
 	animate={false}
 	config={[

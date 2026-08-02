@@ -320,7 +320,6 @@
 {/snippet}
 
 <Tabs
-	variant="underline"
 	animate={false}
 	config={[
 		{

@@ -100,7 +100,6 @@
 <Cover as="main" top={pageHeading}>
 	<Tabs
 		lazyLoad={false}
-		variant="underline"
 		animate={false}
 		config={[
 			{ name: 'rates', label: 'Unit rates', icon: 'lucide:table-2', content: rates },

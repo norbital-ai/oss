@@ -203,8 +203,8 @@
 	const agentAvailable = $derived(workspaceProvidesAgentSurface(manifestContext.manifest.agent));
 	const activeHostPlugin = $derived(resolveHostPluginSurface(currentPath, data.hostPlugins ?? []));
 	const billingSettingsHref = $derived(
-		data.hostPlugins?.some((plugin) => plugin.key === 'org-settings')
-			? `${hostPluginSurfaceHref('org-settings')}?section=billing`
+		data.hostPlugins?.some((plugin) => plugin.key === 'core-billing')
+			? hostPluginSurfaceHref('core-billing')
 			: null
 	);
 

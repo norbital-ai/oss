@@ -100,6 +100,51 @@ describe('the system section of the sidebar', () => {
 		destroy();
 	});
 
+	it('groups each host-owned setting as a distinct child beside tenant settings', () => {
+		const { container, destroy } = mountSidebar({
+			plugins: [
+				{
+					key: 'core-transports',
+					label: 'Transport credentials',
+					icon: null,
+					entry: '/_host/app/core-transports',
+					placement: 'settings',
+					adminOnly: true
+				},
+				{
+					key: 'core-profile',
+					label: 'Profile',
+					icon: null,
+					entry: '/_host/app/core-profile',
+					placement: 'settings',
+					adminOnly: true
+				},
+				{
+					key: 'core-billing',
+					label: 'Billing',
+					icon: null,
+					entry: '/_host/app/core-billing',
+					placement: 'settings',
+					adminOnly: true
+				}
+			],
+			isAdmin: true,
+			currentPath: '/__host/core-profile'
+		});
+
+		expect(links(container)).toEqual([
+			{ label: 'Tenant settings', href: '/settings', current: false },
+			{
+				label: 'Transport credentials',
+				href: '/__host/core-transports',
+				current: false
+			},
+			{ label: 'Profile', href: '/__host/core-profile', current: true },
+			{ label: 'Billing', href: '/__host/core-billing', current: false }
+		]);
+		destroy();
+	});
+
 	const siblings = [
 		{ key: 'studio', label: 'Workspace Studio', icon: null, entry: '/studio' },
 		{ key: 'archive', label: 'Studio Archive', icon: null, entry: '/studio-archive' }
@@ -115,7 +160,7 @@ describe('the system section of the sidebar', () => {
 		});
 
 		expect(links(container)).toEqual([
-			{ label: 'Tenant workspace', href: '/settings', current: true }
+			{ label: 'Tenant settings', href: '/settings', current: true }
 		]);
 		destroy();
 	});

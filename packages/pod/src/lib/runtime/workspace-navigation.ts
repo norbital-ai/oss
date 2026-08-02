@@ -118,7 +118,7 @@ export function buildSystemNavigation(input: {
 			? [
 					{
 						key: 'pod-settings',
-						label: 'Tenant workspace',
+						label: 'Tenant settings',
 						icon: 'lucide:database',
 						href: WORKSPACE_SETTINGS_PATH,
 						active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)

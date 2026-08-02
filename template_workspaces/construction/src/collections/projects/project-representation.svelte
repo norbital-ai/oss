@@ -547,7 +547,6 @@
 	<Cover gap="md" top={projectSummary}>
 		<Tabs
 			lazyLoad={false}
-			variant="underline"
 			animate={false}
 			config={[
 				{
