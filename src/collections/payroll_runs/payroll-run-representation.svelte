@@ -55,8 +55,10 @@
 			await update(record.norbital_id, {
 				lifecycle: action === 'pay' ? 'PAID' : 'DRAFT'
 			});
-			await refresh();
 			toast.success(action === 'pay' ? 'Payroll marked as paid.' : 'Draft payroll recalculated.');
+			void refresh().catch(() => {
+				toast.error('Payroll updated, but the detail did not refresh.');
+			});
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Payroll update failed.');
 		} finally {
