@@ -12,133 +12,133 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Grid, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { formatNumeric } from '../../lib/ui/display-formatters.js';
-	import {
-		consumedRecordIds,
-		consumedReferenceText,
-		dayKey
-	} from '../../lib/ui/payslip-sources.js';
+	import { consumedReferenceText, dayKey } from '../../lib/ui/payslip-sources.js';
 
 	let { record }: { record: Row } = $props();
 
-	const employmentQuery = $derived(
-		client.db.employments.findFirst({ where: { norbital_id: { eq: record.employment_id } } })
+	type PayslipSummary = {
+		readonly payslip_employment?: {
+			readonly employee_number?: string | null;
+			readonly employment_employee?: { readonly name?: string | null } | null;
+		} | null;
+	};
+	const summaryQuery = $derived(
+		client.db.payslips.findFirst({
+			where: { norbital_id: { eq: record.norbital_id } },
+			columns: { norbital_id: true },
+			with: {
+				payslip_employment: {
+					columns: { employee_number: true },
+					with: { employment_employee: { columns: { name: true } } }
+				}
+			}
+		})
 	);
-	const employment = $derived(employmentQuery.current);
-	const employeeQuery = $derived(
-		employment
-			? client.db.employees.findFirst({ where: { norbital_id: { eq: employment.employee_id } } })
-			: null
-	);
-	const employeeName = $derived(employeeQuery?.current?.name ?? null);
-
-	// A line's component and type columns hold uuids. Both catalogues are small, so they are loaded
-	// once here and the label is resolved from memory rather than by mounting a lookup per row; a
-	// miss falls back to the raw id so an unloaded label never reads as missing data.
-	const payComponentsQuery = client.db.pay_components.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		limit: 500
-	});
-	const payComponentLabelsById = $derived(
-		new Map(
-			(payComponentsQuery.current ?? []).map((component) => [
-				component.norbital_id,
-				`${component.code} · ${component.name}`
-			])
-		)
-	);
-	const componentTypesQuery = client.db.component_types.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		limit: 200
-	});
-	const componentTypeLabelsById = $derived(
-		new Map((componentTypesQuery.current ?? []).map((type) => [type.norbital_id, type.name]))
-	);
+	const summary = $derived(summaryQuery.current as PayslipSummary | null | undefined);
+	const employment = $derived(summary?.payslip_employment ?? null);
+	const employeeName = $derived(employment?.employment_employee?.name ?? null);
 
 	const linesQuery = $derived(
 		client.db.payslip_lines.findMany({
 			where: { payslip_id: { eq: record.norbital_id } },
+			columns: { norbital_id: true },
+			with: {
+				payslip_line_source_line: {
+					columns: { norbital_id: true },
+					with: {
+						entry_payslip_sources: {
+							columns: { description: true, event_date: true }
+						},
+						time_entry_payslip_sources: { columns: { work_date: true } },
+						leave_request_payslip_sources: {
+							columns: { from_date: true, to_date: true }
+						}
+					}
+				}
+			},
 			orderBy: { sequence: 'asc' },
 			limit: 500
 		})
 	);
-	const lineIds = $derived((linesQuery.current ?? []).map((line) => line.norbital_id));
-	const sourcesQuery = $derived(
-		lineIds.length === 0
-			? null
-			: client.db.payslip_line_sources.findMany({
-					where: { payslip_line_id: { in: lineIds } },
-					limit: 2000
-				})
-	);
-	const sourcesLoading = $derived(
-		linesQuery.loading || (sourcesQuery ? sourcesQuery.loading : lineIds.length > 0)
-	);
-	const sourcesError = $derived(linesQuery.error?.message ?? sourcesQuery?.error?.message ?? null);
-	const consumed = $derived(consumedRecordIds(sourcesQuery?.current ?? []));
-
-	const entriesQuery = $derived(
-		consumed.entryIds.length === 0
-			? null
-			: client.db.component_entries.findMany({
-					where: { norbital_id: { in: [...consumed.entryIds] } },
-					limit: 500
-				})
-	);
-	const timeEntriesQuery = $derived(
-		consumed.timeEntryIds.length === 0
-			? null
-			: client.db.time_entries.findMany({
-					where: { norbital_id: { in: [...consumed.timeEntryIds] } },
-					orderBy: { work_date: 'asc' },
-					limit: 500
-				})
-	);
-	const leaveRequestsQuery = $derived(
-		consumed.leaveRequestIds.length === 0
-			? null
-			: client.db.leave_requests.findMany({
-					where: { norbital_id: { in: [...consumed.leaveRequestIds] } },
-					orderBy: { from_date: 'asc' },
-					limit: 500
-				})
+	type NestedSource = {
+		readonly entry_payslip_sources?: {
+			readonly description?: string | null;
+			readonly event_date?: unknown;
+		} | null;
+		readonly time_entry_payslip_sources?: { readonly work_date?: unknown } | null;
+		readonly leave_request_payslip_sources?: {
+			readonly from_date?: unknown;
+			readonly to_date?: unknown;
+		} | null;
+	};
+	type NestedLine = {
+		readonly payslip_line_source_line?: readonly NestedSource[] | null;
+		readonly payslip_line_pay_component?: {
+			readonly code?: string | null;
+			readonly name?: string | null;
+		} | null;
+		readonly payslip_line_component_type?: { readonly name?: string | null } | null;
+	};
+	const sources = $derived(
+		(linesQuery.current as readonly NestedLine[] | null | undefined)?.flatMap(
+			(line) => line.payslip_line_source_line ?? []
+		) ?? []
 	);
 
 	/** A component entry reads as the provenance its author wrote, else the day it happened. */
 	const componentReferences = $derived(
-		(entriesQuery?.current ?? [])
+		sources
+			.flatMap((source) => (source.entry_payslip_sources ? [source.entry_payslip_sources] : []))
 			.map((entry) => entry.description || dayKey(entry.event_date))
 			.toSorted()
 	);
 	const timeEntryReferences = $derived(
-		(timeEntriesQuery?.current ?? []).map((entry) => dayKey(entry.work_date)).toSorted()
+		sources
+			.flatMap((source) =>
+				source.time_entry_payslip_sources ? [source.time_entry_payslip_sources] : []
+			)
+			.map((entry) => dayKey(entry.work_date))
+			.toSorted()
 	);
 	const leaveRequestReferences = $derived(
-		(leaveRequestsQuery?.current ?? [])
+		sources
+			.flatMap((source) =>
+				source.leave_request_payslip_sources ? [source.leave_request_payslip_sources] : []
+			)
 			.map((request) => `${dayKey(request.from_date)} → ${dayKey(request.to_date)}`)
 			.toSorted()
 	);
 
 	const componentText = $derived(
 		consumedReferenceText({
-			loading: sourcesLoading || (entriesQuery?.loading ?? false),
-			error: sourcesError ?? entriesQuery?.error?.message,
+			loading: linesQuery.loading,
+			error: linesQuery.error?.message,
 			references: componentReferences
 		})
 	);
 	const leaveRequestText = $derived(
 		consumedReferenceText({
-			loading: sourcesLoading || (leaveRequestsQuery?.loading ?? false),
-			error: sourcesError ?? leaveRequestsQuery?.error?.message,
+			loading: linesQuery.loading,
+			error: linesQuery.error?.message,
 			references: leaveRequestReferences
 		})
 	);
 	const timeEntryText = $derived(
 		consumedReferenceText({
-			loading: sourcesLoading || (timeEntriesQuery?.loading ?? false),
-			error: sourcesError ?? timeEntriesQuery?.error?.message,
+			loading: linesQuery.loading,
+			error: linesQuery.error?.message,
 			references: timeEntryReferences
 		})
 	);
+
+	function payComponentLabel(row: unknown, fallback: unknown): unknown {
+		const component = (row as NestedLine).payslip_line_pay_component;
+		return component?.code && component.name ? `${component.code} · ${component.name}` : fallback;
+	}
+
+	function componentTypeLabel(row: unknown, fallback: unknown): unknown {
+		return (row as NestedLine).payslip_line_component_type?.name ?? fallback;
+	}
 </script>
 
 <Scroll name="Payslip detail">
@@ -221,6 +221,10 @@
 					query={{
 						where: { payslip_id: { eq: record.norbital_id } },
 						orderBy: { sequence: 'asc' },
+						with: {
+							payslip_line_pay_component: { columns: { code: true, name: true } },
+							payslip_line_component_type: { columns: { name: true } }
+						},
 						limit: 100
 					}}
 				>
@@ -230,13 +234,13 @@
 							name="pay_component_id"
 							label="Component"
 							card="title"
-							render={({ value }) => payComponentLabelsById.get(String(value)) ?? value}
+							render={({ row, value }) => payComponentLabel(row, value)}
 						/>
 						<Column
 							name="component_type_id"
 							label="Type"
 							card="subtitle"
-							render={({ value }) => componentTypeLabelsById.get(String(value)) ?? value}
+							render={({ row, value }) => componentTypeLabel(row, value)}
 						/>
 						<Column name="quantity" render={({ value }) => formatNumeric(value)} />
 						<Column name="rate" render={({ value }) => formatNumeric(value)} />

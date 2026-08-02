@@ -317,6 +317,22 @@ describe('client-sync local query executor', () => {
 		}
 	});
 
+	it('hydrates nested relations recursively', async () => {
+		const { sync, client } = await seededSync();
+		try {
+			const page = await localFindMany(sync, 'orders', {
+				with: { customer: { columns: { name: true }, with: { orders: true } } },
+				orderBy: { norbital_id: 'asc' }
+			});
+			const nestedOrderCounts = page!.rows.map(
+				(row) => ((row.customer as { orders: unknown[] } | null)?.orders ?? []).length
+			);
+			expect(nestedOrderCounts).toEqual([2, 1, 2]);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it('searches locally across own fields and directly related records', async () => {
 		const { sync, client } = await seededSync();
 		try {

@@ -4,13 +4,13 @@ import { cascade } from '@norbital-ai/pod/authoring';
 /**
  * The relation graph. Foreign keys are derived from here, never declared in a `+model.ts`.
  *
- * Five families of reference deliberately have NO relation, because the identifier lives inside a
- * discriminated union and a variant cannot be a foreign key:
+ * Variant identifiers remain in their discriminated unions as audit provenance. High-traffic join
+ * paths use read-only generated projections so they can be indexed and related without creating a
+ * second writable source of truth. The remaining families deliberately have NO relation:
  *   - `accrual_bands.owner`            → jurisdiction_id | company_id
  *   - `leave_types.payroll_effect`     → component_id on the UNPAID arm
- *   - `component_entries.origin`       → agreement_id / reverses_entry_id / evidence_file
+ *   - `component_entries.origin`       → reverses_entry_id / evidence_file
  *   - `leave_ledger.source_id`         → a leave request, or an encashment
- *   - `payslip_line_sources.source`    → entry_id | time_entry_id | leave_request_id
  * Referential integrity for those is checked in `+hooks.ts` (validation gate A3), not by the
  * database. See docs/payroll/12-validation.md A3.
  */
@@ -186,7 +186,12 @@ export default ((r) => ({
 		entry_pay_component: r.one.pay_components({
 			from: r.component_entries.pay_component_id,
 			to: r.pay_components.norbital_id
-		})
+		}),
+		agreement_instalments: r.one.repayment_agreements({
+			from: r.component_entries.repayment_agreement_id,
+			to: r.repayment_agreements.norbital_id
+		}),
+		entry_payslip_sources: r.many.payslip_line_sources()
 	},
 
 	repayment_agreements: {
@@ -197,7 +202,8 @@ export default ((r) => ({
 		agreement_pay_component: r.one.pay_components({
 			from: r.repayment_agreements.pay_component_id,
 			to: r.pay_components.norbital_id
-		})
+		}),
+		agreement_instalments: r.many.component_entries()
 	},
 
 	leave_requests: {
@@ -208,7 +214,8 @@ export default ((r) => ({
 		leave_request_type: r.one.leave_types({
 			from: r.leave_requests.leave_type_id,
 			to: r.leave_types.norbital_id
-		})
+		}),
+		leave_request_payslip_sources: r.many.payslip_line_sources()
 	},
 
 	leave_ledger: {
@@ -239,7 +246,8 @@ export default ((r) => ({
 		time_entry_employment: r.one.employments({
 			from: r.time_entries.employment_id,
 			to: r.employments.norbital_id
-		})
+		}),
+		time_entry_payslip_sources: r.many.payslip_line_sources()
 	},
 
 	payroll_runs: {
@@ -289,7 +297,19 @@ export default ((r) => ({
 				from: r.payslip_line_sources.payslip_line_id,
 				to: r.payslip_lines.norbital_id
 			})
-		)
+		),
+		entry_payslip_sources: r.one.component_entries({
+			from: r.payslip_line_sources.component_entry_id,
+			to: r.component_entries.norbital_id
+		}),
+		time_entry_payslip_sources: r.one.time_entries({
+			from: r.payslip_line_sources.time_entry_id,
+			to: r.time_entries.norbital_id
+		}),
+		leave_request_payslip_sources: r.one.leave_requests({
+			from: r.payslip_line_sources.leave_request_id,
+			to: r.leave_requests.norbital_id
+		})
 	},
 
 	payslip_contributions: {

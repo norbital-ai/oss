@@ -33,12 +33,19 @@ component_entries
       ▼
 payslip_line  Staff loan repayment  167.00
   grid: EXCLUDE from every base · nature DEDUCTION → net −167.00
+      │
+      └── payslip_line_sources { COMPONENT_ENTRY, entry_id }
 ```
 
 The agreement has an identity that outlives any instalment; each entry names it in its `origin`
 variant. Materialising the schedule up front means the outstanding balance, the next instalment and
-the final period are all queries over `component_entries` — no second ledger, no status column to keep
-in sync.
+the final period are all queries over `component_entries` and their payslip source links — no second
+ledger, no status column to keep in sync.
+
+`component_entries.repayment_agreement_id` and `repayment_sequence` are generated, read-only
+projections of the `INSTALMENT` origin. `payslip_line_sources.component_entry_id` is the corresponding
+projection of the `COMPONENT_ENTRY` source. The JSON variants remain the audit record; the generated
+keys add indexes, foreign keys and a direct nested-query path without becoming another writable fact.
 
 A salary advance is an agreement with one instalment. An overpayment recovery is an agreement against
 a recovery component. Same table, same shape.
@@ -48,14 +55,20 @@ a recovery component. Same table, same shape.
 ## 2. Outstanding balance
 
 ```
-paid        = Σ amount WHERE origin.kind = 'INSTALMENT'
-                         AND origin.agreement_id = #12
-                         AND pay_period ≤ the last PAID run
-                         AND not reversed
+paid        = Σ instalment.amount
+              WHERE instalment.repayment_agreement_id = #12
+                AND EXISTS instalment.entry_payslip_sources
 outstanding = principal − paid
 ```
 
-There is no `state` column: an agreement is settled when its outstanding balance reaches zero.
+An instalment is paid when payroll has persisted a source link from a real payslip line to that
+entry. A draft/paid lifecycle comparison is neither necessary nor sufficient: the link is the durable
+evidence that the entry was actually consumed. Duplicate source rows do not double-count a schedule
+sequence.
+
+There is no `state` column: an agreement is settled when every scheduled sequence is linked and its
+outstanding balance is zero. The Loans surface loads the agreement, employment, pay component,
+instalments and their source links as one nested relational query.
 
 ---
 

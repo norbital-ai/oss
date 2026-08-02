@@ -2,82 +2,52 @@
 	/**
 	 * One money event, and whether payroll has already consumed it.
 	 *
-	 * The consumption question is answered from the link rows, not from a column: an entry settles in
-	 * the run for its own `pay_period`, so that run's payslip for this employment is the only
-	 * candidate, and the entry is only truly consumed if one of that payslip's lines wrote a
-	 * `COMPONENT_ENTRY` link back to it. Narrowing to the candidate first keeps this a bounded read
-	 * instead of a scan of every link row in the tenant.
+	 * The consumption question is answered from the entry's nested source links, not inferred from a
+	 * candidate payroll run. The generated relation key exposes the provenance arm without copying
+	 * mutable state, so the whole path to the run is one bounded relational query.
 	 */
 	import { client } from '$pod/client';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
 	import type { RepresentationProps } from './$types.js';
-	import { linesConsumingEntry } from '../../lib/ui/payslip-sources.js';
 
 	let { record, close }: RepresentationProps = $props();
 
-	const employmentQuery = $derived(
+	const consumptionQuery = $derived(
 		record
-			? client.db.employments.findFirst({
-					where: { norbital_id: { eq: record.employment_id } }
-				})
-			: null
-	);
-	const employment = $derived(employmentQuery?.current ?? null);
-
-	// An entry with no pay_period settles outside payroll (COMPANY_DIRECT) and has no payslip.
-	const runQuery = $derived(
-		employment && record?.pay_period
-			? client.db.payroll_runs.findFirst({
-					where: {
-						company_id: { eq: employment.company_id },
-						period: { eq: record.pay_period },
-						norbital_approval_id: { isNull: true }
+			? client.db.component_entries.findFirst({
+					where: { norbital_id: { eq: record.norbital_id } },
+					columns: { norbital_id: true, pay_period: true },
+					with: {
+						entry_payslip_sources: {
+							columns: { norbital_id: true },
+							with: {
+								payslip_line_source_line: {
+									columns: { norbital_id: true },
+									with: {
+										payslip_line_payslip: {
+											columns: { norbital_id: true },
+											with: {
+												payslip_payroll_run: { columns: { period: true } }
+											}
+										}
+									}
+								}
+							}
+						}
 					}
 				})
 			: null
 	);
-	const run = $derived(runQuery?.current ?? null);
-
-	const payslipQuery = $derived(
-		run && record
-			? client.db.payslips.findFirst({
-					where: {
-						payroll_run_id: { eq: run.norbital_id },
-						employment_id: { eq: record.employment_id }
-					}
-				})
-			: null
-	);
-	const payslip = $derived(payslipQuery?.current ?? null);
-
-	const linesQuery = $derived(
-		payslip
-			? client.db.payslip_lines.findMany({
-					where: { payslip_id: { eq: payslip.norbital_id } },
-					limit: 500
-				})
-			: null
-	);
-	const lineIds = $derived((linesQuery?.current ?? []).map((line) => line.norbital_id));
-	const sourcesQuery = $derived(
-		lineIds.length === 0
-			? null
-			: client.db.payslip_line_sources.findMany({
-					where: { payslip_line_id: { in: lineIds } },
-					limit: 2000
-				})
-	);
-
-	const loading = $derived(
-		Boolean(
-			employmentQuery?.loading ||
-			runQuery?.loading ||
-			payslipQuery?.loading ||
-			linesQuery?.loading ||
-			sourcesQuery?.loading
-		)
-	);
+	type ConsumptionRow = {
+		readonly entry_payslip_sources?: readonly {
+			readonly payslip_line_source_line?: {
+				readonly payslip_line_payslip?: {
+					readonly payslip_payroll_run?: { readonly period?: string | null } | null;
+				} | null;
+			} | null;
+		}[];
+	};
 
 	/**
 	 * A human consumption label, but only once a line has actually claimed this entry. A drafted run
@@ -86,10 +56,13 @@
 	const consumedByPayslip = $derived.by((): string => {
 		if (!record) return '—';
 		if (!record.pay_period) return 'Settled outside payroll';
-		if (loading) return 'Loading…';
-		if (!payslip) return '—';
-		const claimed = linesConsumingEntry(sourcesQuery?.current ?? [], record.norbital_id);
-		return claimed.length > 0 ? `Paid in ${run?.period ?? 'a payroll run'}` : '—';
+		if (consumptionQuery?.loading) return 'Loading…';
+		const consumption = consumptionQuery?.current as ConsumptionRow | null | undefined;
+		const source = consumption?.entry_payslip_sources?.[0];
+		if (!source) return '—';
+		const period =
+			source.payslip_line_source_line?.payslip_line_payslip?.payslip_payroll_run?.period;
+		return `Paid in ${period ?? 'a payroll run'}`;
 	});
 </script>
 

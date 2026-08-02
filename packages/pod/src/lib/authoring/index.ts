@@ -3,6 +3,7 @@
 /** Compiler-generated tenant declarations merge exact filesystem-derived authoring names here. */
 export interface WorkspaceAuthoringTypes {}
 
+export { sql } from 'drizzle-orm';
 export { boolean, index, integer, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 export {

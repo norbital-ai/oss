@@ -40,6 +40,18 @@ describe('temporal migration projection', () => {
 		expect(result).not.toContain('orders_history_reference_idx');
 	});
 
+	it('mirrors stored generated projections into temporal history', () => {
+		const sql =
+			`ALTER TABLE "orders" ADD COLUMN "source_id" uuid ` +
+			`GENERATED ALWAYS AS ((payload ->> 'source_id')::uuid) STORED;`;
+
+		const result = mirrorTemporalHistoryDdl(sql, new Set(['orders']));
+		expect(result).toContain(
+			`ALTER TABLE "orders_history" ADD COLUMN "source_id" uuid ` +
+				`GENERATED ALWAYS AS ((payload ->> 'source_id')::uuid) STORED;`
+		);
+	});
+
 	it('renames and drops the typed history relation with its collection', () => {
 		const sql = [
 			'ALTER TABLE "orders" RENAME TO "sales_orders";',

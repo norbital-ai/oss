@@ -220,6 +220,7 @@ Arithmetic identities, not opinions.
 | S12 | no table carries a column meaningless for some of its rows                                                             |
 | S13 | every effective-dated table has an exclusion constraint on its identity plus range overlap                             |
 | S14 | `contribution_treatments` has one row per (type × contribution) per date — generated, never sparse                     |
+| S15 | generated provenance keys are read-only projections of their JSON variant and retain foreign-key integrity             |
 
 ---
 

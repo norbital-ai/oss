@@ -92,6 +92,42 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 		expect(live.rows[0]).toMatchObject({ status: 'shipped', version: 2, open: true });
 	});
 
+	it('archives rows whose temporal schema includes a stored generated projection', async () => {
+		let id = '';
+		try {
+			for (const table of ['orders', 'orders_history']) {
+				await pool.query(
+					`ALTER TABLE ${table} ADD COLUMN payload jsonb NOT NULL ` +
+						`DEFAULT '{"source_id":"11111111-1111-1111-1111-111111111111"}'::jsonb`
+				);
+				await pool.query(
+					`ALTER TABLE ${table} ADD COLUMN source_id uuid GENERATED ALWAYS AS ` +
+						`((payload ->> 'source_id')::uuid) STORED`
+				);
+			}
+
+			id = await insertOrder(pool, 'pending');
+			await inViaOps(pool, (client) =>
+				client
+					.query(`UPDATE orders SET status = 'shipped' WHERE norbital_id = $1::uuid`, [id])
+					.then()
+			);
+			const history = await pool.query<{ source_id: string }>(
+				`SELECT source_id FROM orders_history WHERE norbital_id = $1::uuid`,
+				[id]
+			);
+			expect(history.rows).toEqual([{ source_id: '11111111-1111-1111-1111-111111111111' }]);
+		} finally {
+			for (const table of ['orders', 'orders_history']) {
+				await pool
+					.query(
+						`ALTER TABLE ${table} DROP COLUMN IF EXISTS source_id, DROP COLUMN IF EXISTS payload`
+					)
+					.catch(() => undefined);
+			}
+		}
+	});
+
 	it('does not invent history for an intermediate state that never committed', async () => {
 		let id = '';
 		await inViaOps(pool, async (client) => {
@@ -102,10 +138,9 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 			await client.query(`UPDATE orders SET status = 'ready' WHERE norbital_id = $1::uuid`, [id]);
 		});
 
-		const history = await pool.query(
-			`SELECT 1 FROM orders_history WHERE norbital_id = $1::uuid`,
-			[id]
-		);
+		const history = await pool.query(`SELECT 1 FROM orders_history WHERE norbital_id = $1::uuid`, [
+			id
+		]);
 		expect(history.rowCount).toBe(0);
 		const live = await pool.query<{ status: string; version: number }>(
 			`SELECT status, norbital_row_version AS version

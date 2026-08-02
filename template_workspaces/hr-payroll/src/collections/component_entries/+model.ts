@@ -1,4 +1,13 @@
-import { custom, date, defineModel, numeric, text, uuid } from '@norbital-ai/pod/authoring';
+import {
+	custom,
+	date,
+	defineModel,
+	integer,
+	numeric,
+	sql,
+	text,
+	uuid
+} from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
@@ -14,13 +23,31 @@ export default defineModel(
 		 * which is the machine-readable reason the entry exists.
 		 */
 		description: text(),
-		origin: custom('entry_origin').notNull()
+		origin: custom('entry_origin').notNull(),
+		/**
+		 * Read-only relational projections of the INSTALMENT provenance arm. Keeping the discriminated
+		 * union as the source of truth preserves the audit trail; generated columns make its stable keys
+		 * available to foreign keys and nested queries without a second writable copy.
+		 */
+		repayment_agreement_id: uuid().generatedAlwaysAs(
+			sql`CASE WHEN origin ->> 'kind' = 'INSTALMENT' THEN (origin ->> 'agreement_id')::uuid END`
+		),
+		repayment_sequence: integer().generatedAlwaysAs(
+			sql`CASE WHEN origin ->> 'kind' = 'INSTALMENT' THEN (origin ->> 'sequence')::integer END`
+		)
 	},
 	{
 		description:
 			'The only door money enters payroll through. amount is always a magnitude; direction comes from the component type and a reversal is an origin of kind REVERSAL, never a negative number.',
 		recordLabel: ['event_date', 'amount'],
 		icon: 'lucide:banknote',
-		indexes: [{ columns: ['employment_id', 'pay_period'] }, { columns: ['pay_component_id'] }]
+		indexes: [
+			{ columns: ['employment_id', 'pay_period'] },
+			{ columns: ['pay_component_id'] },
+			{
+				columns: ['repayment_agreement_id'],
+				where: '"repayment_agreement_id" IS NOT NULL'
+			}
+		]
 	}
 );
