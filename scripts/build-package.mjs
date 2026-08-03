@@ -16,11 +16,27 @@
  * So the fix is not more ordering. It is to stop publishing a hole: compile into a staging
  * directory, then swap it in with two renames. A reader can still lose the race, but the window is
  * two syscalls rather than a whole compile.
+ *
+ * The two checks bracketing the compile guard the opposite failure — a build that succeeds against
+ * a hole someone else left. A compiler handed an unbuilt workspace dependency does not stop; it
+ * infers `any` and emits it, exit 0. So the dependency's `build/` is required before the compiler
+ * starts, and the emitted declarations are read back before the swap. Both are a few milliseconds
+ * against a multi-second compile, which is what lets them run on every build rather than only in
+ * CI — including the `prepack` build that produces a publishable tarball.
  */
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	rmSync
+} from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { assertDeclarationEmit } from './lib/declaration-emit.mjs';
 
 const [command, ...commandArguments] = process.argv.slice(2);
 if (!command) {
@@ -32,6 +48,52 @@ const packageRoot = process.cwd();
 const output = path.join(packageRoot, 'build');
 const staging = path.join(packageRoot, 'build.staging');
 const retired = path.join(packageRoot, 'build.retired');
+const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+
+/**
+ * Refuse to compile against a workspace dependency that has not been built.
+ *
+ * pnpm links a `workspace:` dependency as a symlink to the real package directory, so the check is
+ * a `realpath` and a `readdir` per edge. A dependency with no `build` script has nothing to wait
+ * for; one that has a build script but no output is the exact condition that poisons the emit.
+ */
+function assertWorkspaceDependenciesBuilt() {
+	const sections = ['dependencies', 'devDependencies', 'peerDependencies'];
+	const dependencyNames = new Set(
+		sections.flatMap((section) =>
+			Object.entries(manifest[section] ?? {})
+				.filter(([, specifier]) => String(specifier).startsWith('workspace:'))
+				.map(([name]) => name)
+		)
+	);
+	for (const name of [...dependencyNames].sort()) {
+		const link = path.join(packageRoot, 'node_modules', name);
+		if (!existsSync(link)) {
+			console.error(`[build] ${manifest.name} declares ${name} but it is not installed.`);
+			console.error('[build] Run `pnpm install` before building.');
+			process.exit(1);
+		}
+		const dependencyRoot = realpathSync(link);
+		const dependencyManifest = JSON.parse(
+			readFileSync(path.join(dependencyRoot, 'package.json'), 'utf8')
+		);
+		if (!dependencyManifest.scripts?.build) continue;
+		const dependencyOutput = path.join(dependencyRoot, 'build');
+		if (existsSync(dependencyOutput) && readdirSync(dependencyOutput).length > 0) continue;
+		console.error(
+			`[build] ${manifest.name} cannot compile: ${name} has no build output at ` +
+				`${path.relative(packageRoot, dependencyOutput)}.`
+		);
+		console.error(
+			'[build] Compiling anyway would resolve its exports to `any` and emit that as this ' +
+				"package's public types, with exit 0."
+		);
+		console.error('[build] Build dependencies first: `pnpm packages:build`.');
+		process.exit(1);
+	}
+}
+
+assertWorkspaceDependenciesBuilt();
 
 rmSync(staging, { recursive: true, force: true });
 rmSync(retired, { recursive: true, force: true });
@@ -51,10 +113,25 @@ if (!existsSync(staging)) {
 	process.exit(1);
 }
 
+// Read the declarations back before they become `build/`. The precondition above rules out the
+// cause we know of, but it only covers workspace edges; anything else that degrades an inferred
+// type still exits 0, and this is the last point where the output can be discarded instead of
+// swapped in, packed, and published.
+try {
+	assertDeclarationEmit({
+		declarationRoot: staging,
+		packageDirectory: path.basename(packageRoot),
+		label: `${manifest.name} build output`
+	});
+} catch (cause) {
+	console.error(`[build] ${cause.message}`);
+	rmSync(staging, { recursive: true, force: true });
+	process.exit(1);
+}
+
 // Packagers create files with ordinary 0644 modes even when the source carried a shebang. npm 11
 // rejects such a target as an invalid `bin` entry and silently removes the command from the
 // published manifest. Restore executable mode from package.json while the output is still staged.
-const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
 const binTargets =
 	typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin ?? {});
 for (const target of binTargets) {

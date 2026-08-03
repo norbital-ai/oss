@@ -1,6 +1,14 @@
 {
 	"$schema": "https://turbo.build/schema.json",
-	"globalDependencies": ["**/.env.*local"],
+	// Every package's `build` shells out to `scripts/build-package.mjs`, which lives outside all of
+	// them — so edits to it, or to the emit checks it imports, change what a build produces without
+	// changing any package's own inputs. Without these entries turbo replays a cache entry from
+	// before the change and the new check never runs.
+	"globalDependencies": [
+		"**/.env.*local",
+		"scripts/build-package.mjs",
+		"scripts/lib/declaration-emit.mjs"
+	],
 	"globalPassThroughEnv": ["CI"],
 	"tasks": {
 		"build": {
