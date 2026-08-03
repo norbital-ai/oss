@@ -12,7 +12,17 @@
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
 
-	let { message, nested = false }: { message: PanelMessage; nested?: boolean } = $props();
+	/**
+	 * Where this row sits, which decides what a `user` message means.
+	 *
+	 * Inside a subagent it is the task the parent handed down, and labelling it "You" reads as though
+	 * the person typed it. Inside a checkpoint's history it really was the person. Both are nested, so
+	 * a boolean cannot tell them apart.
+	 */
+	let {
+		message,
+		nested = null
+	}: { message: PanelMessage; nested?: 'subagent' | 'history' | null } = $props();
 
 	/** The recap is what the model carries, so it opens first; the raw conversation is one click away. */
 	let checkpointTab = $state<'summary' | 'raw'>('summary');
@@ -32,11 +42,11 @@
 		<details class="group/compaction w-full text-xs" role="note">
 			<!-- stupidity:allow UI6 -- details disclosure summary is a clickable control row. -->
 			<summary
-				class="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0" />
-				<span>Context compacted</span>
-				<span class="text-tiny text-muted-foreground/70">
+				<span class="shrink-0 whitespace-nowrap">Context compacted</span>
+				<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground/70">
 					{message.before.length} message{message.before.length === 1 ? '' : 's'} kept below
 				</span>
 				<Icon
@@ -86,7 +96,7 @@
 							aria-label="Conversation before compaction"
 						>
 							{#each message.before as earlier (earlier.key)}
-								<Self message={earlier} nested />
+								<Self message={earlier} nested="history" />
 							{/each}
 						</ol>
 					{/if}
@@ -102,7 +112,7 @@
 		<details class="group/tool w-full">
 			<!-- stupidity:allow UI6 -- details disclosure summary is a clickable control row. -->
 			<summary
-				class="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs whitespace-nowrap text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon
 					icon={message.icon}
@@ -110,12 +120,14 @@
 						message.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
 					}`}
 				/>
-				<span class="shrink-0 font-medium text-foreground/80">{message.label}</span>
+				<span class="shrink-0 font-medium whitespace-nowrap text-foreground/80"
+					>{message.label}</span
+				>
 				{#if message.detail}
-					<span class="min-w-0 truncate font-mono text-tiny">{message.detail}</span>
+					<span class="min-w-0 flex-1 truncate font-mono text-tiny">{message.detail}</span>
 				{/if}
 				{#if message.children.length > 0}
-					<span class="shrink-0 text-tiny text-muted-foreground/70">
+					<span class="shrink-0 whitespace-nowrap text-tiny text-muted-foreground/70">
 						{message.children.length} step{message.children.length === 1 ? '' : 's'}
 					</span>
 				{/if}
@@ -147,7 +159,7 @@
 						</span>
 						<ol class="m-0 flex list-none flex-col gap-1.5 p-0" aria-label="Subagent transcript">
 							{#each message.children as child (child.key)}
-								<Self message={child} nested />
+								<Self message={child} nested="subagent" />
 							{/each}
 						</ol>
 					</div>
@@ -183,7 +195,7 @@
 		data-role={message.role}
 	>
 		<span class="px-1 text-tiny font-medium text-muted-foreground">
-			{nested && message.role === 'user' ? 'Task' : roleLabel(message.role)}
+			{nested === 'subagent' && message.role === 'user' ? 'Task' : roleLabel(message.role)}
 		</span>
 		<div
 			class={nested

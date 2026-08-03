@@ -388,6 +388,80 @@ describe('agent chat panel', () => {
 		destroy();
 	});
 
+	it("calls a delegated prompt a Task and the reader's own history theirs", async () => {
+		// Both are nested rows carrying `role: 'user'`, and they mean opposite things: one is the task
+		// the parent handed down, the other really was the person typing.
+		const { container, destroy } = mountPanel();
+		type(container, 'Audit the sites');
+		submit(container);
+		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
+		await settle();
+
+		replica.arrive('chat_turn', {
+			norbital_id: 'child-turn',
+			chat_id: 'c1',
+			parent_turn_id: 'parent-turn',
+			subagent_id: 'subagent:call-9',
+			status: 'running',
+			started_at: '2026-08-03T00:00:00.000Z'
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'old',
+			chat_id: 'c1',
+			turn_id: 'parent-turn',
+			seq: 1,
+			parts: [{ role: 'user', content: 'The original question' }]
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'ck',
+			chat_id: 'c1',
+			turn_id: 'parent-turn',
+			seq: 2,
+			kind: 'summary',
+			parts: [{ role: 'system', content: 'They asked about sites.' }]
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'p1',
+			chat_id: 'c1',
+			turn_id: 'parent-turn',
+			seq: 3,
+			parts: [
+				{
+					role: 'assistant',
+					content: '',
+					toolCalls: [{ id: 'call-9', name: 'spawn_subagent', input: { task: 'Audit sites' } }]
+				}
+			]
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'c1m',
+			chat_id: 'c1',
+			turn_id: 'child-turn',
+			seq: 4,
+			parts: [{ role: 'user', content: 'Audit sites' }]
+		});
+		await settle();
+
+		const delegated = container.querySelector('[aria-label="Subagent transcript"] li span');
+		expect(delegated?.textContent?.trim()).toBe('Task');
+
+		// The raw conversation is the checkpoint's second tab, so it has to be asked for.
+		const rawTab = [...container.querySelectorAll('[role="tab"]')].find(
+			(tab) => tab.textContent?.trim() === 'Full conversation'
+		);
+		expect(rawTab).toBeDefined();
+		rawTab?.dispatchEvent(new Event('click', { bubbles: true }));
+		flushSync();
+
+		const history = container.querySelector(
+			'[aria-label="Conversation before compaction"] li span'
+		);
+		// The checkpoint's raw tab holds the person's own message; calling it a Task would be a lie
+		// about who said it.
+		expect(history?.textContent?.trim()).toBe('You');
+		destroy();
+	});
+
 	it('opens on the host default and sends only a model the person changed', async () => {
 		catalog = {
 			defaultModel: 'deepseek/deepseek-v4-flash-0731',
