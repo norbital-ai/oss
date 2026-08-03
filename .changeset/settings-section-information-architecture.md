@@ -14,7 +14,7 @@ organization-scoped settings into one tabbed surface needs the tab named for the
 land on the payment form; the shell already forwards `location.search` into the host frame.
 
 **Migration for hosts:** a host that registered separate `placement: 'settings'` plugins for
-billing, organization profile and messaging credentials should register one `core-organization`
+billing, organization profile and channel credentials should register one `core-organization`
 plugin that reads `?tab=` and selects among them. A host that keeps a standalone billing plugin
 under any other key loses the banner's "Add payment method" action, which degrades to no action
 rather than to a broken link.
