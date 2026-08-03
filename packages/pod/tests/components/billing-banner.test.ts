@@ -12,7 +12,7 @@ describe('billing banner', () => {
 				hasPaymentMethod: false
 			},
 			isAdmin: true,
-			billingHref: '/__host/core-billing',
+			billingHref: '/__host/core-organization?tab=billing',
 			navigate: (href: string) => navigated.push(href)
 		});
 		await settle();
@@ -21,7 +21,7 @@ describe('billing banner', () => {
 			button.textContent?.includes('Add payment method')
 		);
 		action?.click();
-		expect(navigated).toEqual(['/__host/core-billing']);
+		expect(navigated).toEqual(['/__host/core-organization?tab=billing']);
 		destroy();
 	});
 

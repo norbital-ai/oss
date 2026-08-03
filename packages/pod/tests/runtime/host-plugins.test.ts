@@ -59,7 +59,7 @@ describe('visibleHostPlugins', () => {
 			visibleHostPlugins(
 				[
 					plugin({
-						key: 'core-transports',
+						key: 'core-organization',
 						placement: 'settings',
 						adminOnly: true
 					})
@@ -68,7 +68,7 @@ describe('visibleHostPlugins', () => {
 			)
 		).toEqual([
 			{
-				key: 'core-transports',
+				key: 'core-organization',
 				label: 'Workspace Studio',
 				icon: null,
 				entry: '/studio',
