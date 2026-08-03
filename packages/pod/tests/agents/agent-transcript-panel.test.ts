@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { toPanelMessages, toPanelUsage, withPendingEcho } from '$lib/runtime/agent/transcript.js';
+import {
+	toPanelMessages,
+	toPanelUsage,
+	toSessionTotals,
+	withPendingEcho
+} from '$lib/runtime/agent/transcript.js';
 import { parseCompactDirective } from '$lib/server/agent/agent-loop.server.js';
 
 describe('compact directive', () => {
@@ -31,6 +36,25 @@ describe('conversation usage', () => {
 		expect(usage.contextLength).toBe(1_000_000);
 		expect(usage.totalTokens).toBe(1_550);
 		expect(usage.costUsd).toBeCloseTo(0.005, 10);
+	});
+
+	it('reads the durable session counter, and says nothing before a turn has settled', () => {
+		expect(toSessionTotals(undefined)).toBeNull();
+		// Zero settled turns is "not measured yet", not "spent nothing".
+		expect(toSessionTotals({ usage_cost_usd: 0, usage_turns_counted: 0 })).toBeNull();
+		expect(
+			toSessionTotals({
+				usage_cost_usd: 0.00001526,
+				usage_total_tokens: 99,
+				usage_turns_counted: 3,
+				usage_turns_unreported: 1
+			})
+		).toEqual({
+			costUsd: 0.00001526,
+			totalTokens: 99,
+			turnsCounted: 3,
+			turnsUnreported: 1
+		});
 	});
 
 	it('leaves cost null when the host reported none, rather than calling it zero', () => {

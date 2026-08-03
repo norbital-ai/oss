@@ -7,7 +7,7 @@
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 	import { getInitializedWorkspaceClient } from '$lib/runtime/client.js';
-	import { toPanelMessages, toPanelUsage, withPendingEcho } from './transcript.js';
+	import { toPanelMessages, toPanelUsage, toSessionTotals, withPendingEcho } from './transcript.js';
 	import AgentModelPicker from './agent-model-picker.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import type { AgentModelCatalog } from './models.js';
@@ -114,8 +114,32 @@
 			? Math.min(100, Math.round((usage.contextTokens / usage.contextLength) * 100))
 			: null
 	);
+	/**
+	 * Cumulative figures come from the session counter, never from the messages on screen.
+	 *
+	 * Occupancy above is genuinely a property of the current window, so summing the transcript is
+	 * right for it. Spend is not: the counter is what survives someone deleting a message.
+	 */
+	const totals = $derived(
+		toSessionTotals(
+			(sessionQuery?.current ?? []).find((row) => row.norbital_id === chatId) as
+				Record<string, unknown> | undefined
+		)
+	);
 	const tokenLabel = $derived(
-		usage.totalTokens > 0 ? `${usage.totalTokens.toLocaleString()} tokens` : null
+		totals && totals.totalTokens > 0 ? `${totals.totalTokens.toLocaleString()} tokens` : null
+	);
+	// A turn whose host reported no cost makes the total a floor. Saying so costs one character and
+	// stops an unmeasured conversation reading as a cheap one.
+	const costLabel = $derived(
+		totals && (totals.costUsd > 0 || totals.turnsUnreported < totals.turnsCounted)
+			? `${totals.turnsUnreported > 0 ? '≥' : ''}$${totals.costUsd.toFixed(4)}`
+			: null
+	);
+	const costHint = $derived(
+		totals && totals.turnsUnreported > 0
+			? `${totals.turnsUnreported} of ${totals.turnsCounted} turns reported no cost`
+			: 'Reported by the provider'
 	);
 
 	/**
@@ -358,8 +382,8 @@
 					{#if tokenLabel}
 						<span class="truncate">{tokenLabel}</span>
 					{/if}
-					{#if usage.costUsd !== null}
-						<span title="Reported by the provider">${usage.costUsd.toFixed(4)}</span>
+					{#if costLabel}
+						<span title={costHint}>{costLabel}</span>
 					{/if}
 				</div>
 				<Inline justify="end" align="center" gap="xs" class="min-w-0">

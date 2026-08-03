@@ -374,6 +374,39 @@ export function toPanelUsage(
 	return { contextTokens, contextLength, totalTokens, costUsd };
 }
 
+/**
+ * The conversation's durable totals, as the session row carries them.
+ *
+ * Read rather than summed. The loop accumulates these onto `chat_session` as each turn settles, so
+ * they survive the deletion of the messages that produced them — which is the whole point of storing
+ * them at all.
+ */
+export type SessionTotals = {
+	readonly costUsd: number;
+	readonly totalTokens: number;
+	readonly turnsCounted: number;
+	/** Turns whose host reported no cost. Non-zero means the total is a floor, not a figure. */
+	readonly turnsUnreported: number;
+};
+
+export function toSessionTotals(
+	record: Readonly<Record<string, unknown>> | undefined
+): SessionTotals | null {
+	if (!record) return null;
+	const count = (key: string): number => {
+		const value = record[key];
+		return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+	};
+	const totals = {
+		costUsd: count('usage_cost_usd'),
+		totalTokens: count('usage_total_tokens'),
+		turnsCounted: count('usage_turns_counted'),
+		turnsUnreported: count('usage_turns_unreported')
+	};
+	// A session that has settled nothing has nothing to say, which is not the same as zero spend.
+	return totals.turnsCounted === 0 ? null : totals;
+}
+
 function containsPrompt(messages: readonly PanelMessage[], pending: string): boolean {
 	return messages.some(
 		(message) =>

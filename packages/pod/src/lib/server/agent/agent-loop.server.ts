@@ -566,6 +566,89 @@ async function createTurn(input: {
 	return turn.norbital_id;
 }
 
+/** What the provider said one message cost. `null` cost means unreported, never free. */
+function messageSpend(usage: unknown): { tokens: number; cost: number | null } {
+	if (!recordSchema.safeParse(usage).success) return { tokens: 0, cost: null };
+	const record = usage as Record<string, unknown>;
+	for (const key of ['cost', 'total_cost', 'totalCost']) {
+		const value = record[key];
+		if (typeof value === 'number' && Number.isFinite(value)) {
+			return { tokens: usageTokens(usage), cost: value };
+		}
+	}
+	return { tokens: usageTokens(usage), cost: null };
+}
+
+/**
+ * Add one finished turn to its conversation's running totals, at most once.
+ *
+ * Read from the turn's own messages while they are still there, then stored on the session as a
+ * counter. Deleting a message afterwards removes the record of a request but not the fact that it
+ * was paid for, so the total has to be accumulated rather than derived — a sum over surviving rows
+ * would quietly fall every time someone tidied a transcript.
+ *
+ * One statement, so the claim and the increment cannot come apart: the `UPDATE ... WHERE
+ * usage_settled_at IS NULL` is the idempotency gate, and a second attempt at the same turn updates
+ * no row and therefore adds nothing. Compaction is invisible to this by construction — a checkpoint
+ * changes which messages the model is sent, not which ones were paid for, and the summariser's own
+ * usage is persisted onto the checkpoint row so it is counted like any other call.
+ */
+async function settleTurnUsage(turnId: string): Promise<void> {
+	const ctx = getWorkspace({ provision: true });
+	const rows = await ctx.tenantDb.query<{ usage: unknown }>({
+		text: `SELECT usage FROM chat_message WHERE turn_id = $1::uuid AND usage IS NOT NULL`,
+		values: [turnId]
+	});
+	let tokens = 0;
+	let cost = 0;
+	let reported = false;
+	let unreported = false;
+	for (const row of rows.rows) {
+		const spend = messageSpend(row.usage);
+		tokens += spend.tokens;
+		if (spend.cost === null) unreported = true;
+		else {
+			cost += spend.cost;
+			reported = true;
+		}
+	}
+	// A turn that produced no accounting at all still counts as unreported: the request happened.
+	if (!reported) unreported = true;
+	const settled = await ctx.tenantDb.query<{ chat_id: string }>({
+		text: `UPDATE chat_turn
+		          SET usage_settled_at = now()
+		        WHERE norbital_id = $1::uuid
+		          AND usage_settled_at IS NULL
+		    RETURNING chat_id`,
+		values: [turnId]
+	});
+	const chatId = settled.rows[0]?.chat_id;
+	if (typeof chatId !== 'string') return;
+	const totals = await ctx.tenantDb.query<{
+		usage_cost_usd: number;
+		usage_total_tokens: number;
+		usage_turns_counted: number;
+		usage_turns_unreported: number;
+	}>({
+		text: `UPDATE chat_session
+		          SET usage_cost_usd = usage_cost_usd + $2,
+		              usage_total_tokens = usage_total_tokens + $3,
+		              usage_turns_counted = usage_turns_counted + 1,
+		              usage_turns_unreported = usage_turns_unreported + $4
+		        WHERE norbital_id = $1::uuid
+		    RETURNING usage_cost_usd, usage_total_tokens, usage_turns_counted, usage_turns_unreported`,
+		values: [chatId, cost, tokens, unreported ? 1 : 0]
+	});
+	const row = totals.rows[0];
+	if (!row) return;
+	// The increment above is authoritative and atomic; this republishes the same numbers through the
+	// ordinary write path so the sync outbox carries them to the reader, who otherwise would never
+	// see a counter that only ever moved by raw SQL.
+	await updateRecord(ctx, 'chat_session', chatId, { ...row }, { isElevated: true }).catch(
+		() => undefined
+	);
+}
+
 async function finishTurn(
 	turnId: string,
 	status: 'succeeded' | 'failed' | 'aborted',
@@ -584,6 +667,9 @@ async function finishTurn(
 		},
 		{ isElevated: true }
 	);
+	// Every terminal status settles, not only success: a failed turn still spent whatever it spent
+	// before it failed, and a total that ignored that would understate the conversation.
+	await settleTurnUsage(turnId).catch(() => undefined);
 }
 
 type ProviderTurnResult = {
@@ -747,8 +833,11 @@ async function compactWindow(input: {
 	});
 	const summary = result.text.trim();
 	if (!summary) throw new Error('The summarizer returned nothing to checkpoint');
+	// The summariser's own usage rides on the checkpoint row, so compacting is counted like any other
+	// call rather than being spend that never appears in the total.
 	await input.writer.persist({ role: 'system', content: summary }, input.turnId, {
-		kind: 'summary'
+		kind: 'summary',
+		...(result.usage ? { usage: objectValue(result.usage) } : {})
 	});
 	// The turn continues against the recap alone; everything it replaced is still in the transcript.
 	input.messages.splice(0, input.messages.length, {
@@ -811,7 +900,15 @@ async function runAgentLoop(input: {
 		if (calls.length > 0) {
 			const callMessage: AiMessage = { role: 'assistant', content: '', toolCalls: calls };
 			input.messages.push(callMessage);
-			await input.writer.persist(callMessage, input.turnId);
+			// An iteration that chose a tool instead of prose produces no text message, so its usage had
+			// nowhere to be stored and was simply lost — the tokens were spent and nothing recorded it.
+			// It belongs on the call message. Only when there was no text, or the accounting for one
+			// provider round trip would be attached twice.
+			await input.writer.persist(
+				callMessage,
+				input.turnId,
+				!result.text && result.usage ? { usage: objectValue(result.usage) } : undefined
+			);
 		}
 		if (calls.length === 0) {
 			if (result.stopReason === 'refusal') throw new Error('AI provider refused the run');

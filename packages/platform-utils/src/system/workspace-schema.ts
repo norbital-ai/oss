@@ -2,6 +2,7 @@ import { defineRelations, sql } from 'drizzle-orm';
 import {
 	boolean,
 	customType,
+	doublePrecision,
 	index,
 	integer,
 	pgTable,
@@ -435,7 +436,29 @@ const _chat_session = systemTable(
 		external_thread_id: text(),
 		agent_profile_id: uuid(),
 		channel_config_id: uuid(),
-		assigned_channel_id: uuid()
+		assigned_channel_id: uuid(),
+		/**
+		 * What this conversation has spent, accumulated as each turn settles.
+		 *
+		 * A counter rather than a sum over `chat_message.usage`, because a derived total falls when a
+		 * message is deleted and what was spent does not. Deleting a message removes the record of a
+		 * request, never the fact that it was paid for.
+		 *
+		 * `doublePrecision` because this is a figure a person reads, not a ledger anyone settles
+		 * against: the values are ~1e-5 USD and float error at this magnitude is far below the cent.
+		 */
+		usage_cost_usd: doublePrecision().notNull().default(0),
+		usage_total_tokens: integer().notNull().default(0),
+		/** How many turns are behind the totals, and how many could not report — see below. */
+		usage_turns_counted: integer().notNull().default(0),
+		/**
+		 * Turns whose host reported no cost.
+		 *
+		 * Kept separately so a total is never silently passed off as complete. A turn that reported
+		 * nothing must not count as zero, or a conversation on a host that publishes no cost reads as
+		 * free rather than as unmeasured.
+		 */
+		usage_turns_unreported: integer().notNull().default(0)
 	},
 	{ description: 'Agent conversations', record_label: 'title', system: true }
 );
@@ -462,7 +485,15 @@ const _chat_turn = systemTable(
 		started_at: timestamp({ withTimezone: true }).defaultNow().notNull(),
 		/** Refreshed while a turn runs, so an abandoned turn can be told from a slow one. */
 		heartbeat_at: timestamp({ withTimezone: true }).defaultNow().notNull(),
-		ended_at: timestamp({ withTimezone: true })
+		ended_at: timestamp({ withTimezone: true }),
+		/**
+		 * When this turn's usage was added to its session's totals.
+		 *
+		 * The idempotency key for that accumulation: the increment claims the turn by moving this from
+		 * null in the same statement, so a retried or resumed run finds it already claimed and adds
+		 * nothing. Without it a resumed run would bill its session twice for one turn.
+		 */
+		usage_settled_at: timestamp({ withTimezone: true })
 	},
 	{ description: 'Agent turns', record_label: 'model', system: true }
 );
