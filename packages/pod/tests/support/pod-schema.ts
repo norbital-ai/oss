@@ -1,5 +1,9 @@
 import type { Client, Pool } from 'pg';
-import { SCHEMA_FUNCTIONS_SQL, SCHEMA_POST_DDL_SQL } from '$lib/vite/schema-functions-sql.js';
+import { NON_TEMPORAL_SYSTEM_COLLECTIONS } from '@norbital-ai/platform-utils/system/workspace-schema';
+import { SCHEMA_FUNCTIONS_SQL, schemaPostDdlSql } from '$lib/vite/schema-functions-sql.js';
+
+/** What a workspace with no tenant opt-out passes: the system collections that declare no history. */
+export const POD_SCHEMA_POST_DDL_SQL = schemaPostDdlSql(NON_TEMPORAL_SYSTEM_COLLECTIONS);
 
 type Queryable = Pick<Client | Pool, 'query'>;
 
@@ -87,7 +91,7 @@ export async function applyPodSchema(client: Queryable): Promise<void> {
 	await client.query(SCHEMA_FUNCTIONS_SQL);
 	await client.query(ORDERS_TABLE_SQL);
 	await client.query(APPROVAL_TABLES_SQL);
-	await client.query(SCHEMA_POST_DDL_SQL);
+	await client.query(POD_SCHEMA_POST_DDL_SQL);
 }
 
 /**

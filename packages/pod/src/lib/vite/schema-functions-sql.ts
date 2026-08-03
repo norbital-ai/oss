@@ -1,5 +1,7 @@
 import dedent from 'dedent';
 import { SYSTEM_COLLECTION_NAMES } from '@norbital-ai/platform-utils/system/collections';
+import { NON_TEMPORAL_SYSTEM_COLLECTIONS } from '@norbital-ai/platform-utils/system/workspace-schema';
+import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 
 /**
  * Tables the ops guard exempts, as SQL literals.
@@ -18,11 +20,48 @@ const INTERNAL_TABLES = [
 	'sync_outbox'
 ] as const;
 
-const guardExemptTables = (extra: readonly string[] = []): string =>
-	[...new Set([...SYSTEM_COLLECTION_NAMES, ...INTERNAL_TABLES, ...extra])]
+const sqlLiteralList = (names: Iterable<string>): string =>
+	[...new Set(names)]
 		.sort()
-		.map((name) => `'${name}'`)
+		.map((name) => `'${name.replaceAll("'", "''")}'`)
 		.join(', ');
+
+/**
+ * Tables the ops guard exempts: every system collection, plus the internal tables.
+ *
+ * This is a "who may write this table" question. System collection rows are written by paths other
+ * than collection_ops, which do not set the GUC the guard checks, so all of them are exempt.
+ */
+const opsGuardExemptTables = (): string =>
+	sqlLiteralList([...SYSTEM_COLLECTION_NAMES, ...INTERNAL_TABLES]);
+
+/**
+ * Tables the temporal-history refresh skips: the internal tables, plus whichever collections have
+ * opted out of history.
+ *
+ * A different question from the ops guard — "does this table have a history relation" — and so
+ * deliberately a different list. Sharing one was how ~17 system collections that do have history
+ * tables ended up excluded from the drift repair that keeps those relations in step.
+ */
+const historyExemptTables = (nonTemporalCollections: Iterable<string>): string =>
+	sqlLiteralList([...INTERNAL_TABLES, ...nonTemporalCollections]);
+
+/**
+ * Every collection that has opted out of temporal history, read from the two places the flag is
+ * declared: `SystemTableMeta.history` for system collections, and `ModelMetadata.history` for
+ * tenant ones, which reaches here as `extensions.history` on the workspace manifest.
+ *
+ * The workspace manifest carries only tenant collections, which is why the system half is read
+ * directly rather than looked for in it. Both halves are the same flag the migration generator
+ * resolves, so the generated lineage and the runtime DDL cannot disagree about a table.
+ */
+export function nonTemporalCollections(manifest: NorbitalManifest): Set<string> {
+	const names = new Set<string>(NON_TEMPORAL_SYSTEM_COLLECTIONS);
+	for (const [name, collection] of Object.entries(manifest.collections)) {
+		if (collection.extensions?.history === false) names.add(name);
+	}
+	return names;
+}
 
 export const SCHEMA_FUNCTIONS_SQL = dedent`
     CREATE SCHEMA IF NOT EXISTS norbital_auth;
@@ -309,8 +348,14 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
     $norbital_create_history_table$;
 `;
 
-/** Idempotent tenant internals applied after manifest DDL (tables + triggers). */
-export const SCHEMA_POST_DDL_SQL = dedent`
+/**
+ * Idempotent tenant internals applied after manifest DDL (tables + triggers).
+ *
+ * Takes the non-temporal collections rather than deciding for itself, because the migration
+ * generator has to make the same call and a second list is how the two came to disagree. The
+ * caller reads them off the parsed manifest, where every collection carries its own `history` flag.
+ */
+export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): string => dedent`
     CREATE TABLE IF NOT EXISTS _norbital_internal_schema (
       version INT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -604,7 +649,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
           AND c.relkind = 'r'
           AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-            ${guardExemptTables()}
+            ${opsGuardExemptTables()}
           )
           AND EXISTS (
             SELECT 1
@@ -641,7 +686,7 @@ export const SCHEMA_POST_DDL_SQL = dedent`
           AND c.relkind = 'r'
           AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-            ${guardExemptTables()}
+            ${historyExemptTables(nonTemporalCollections)}
           )
           AND EXISTS (
             SELECT 1

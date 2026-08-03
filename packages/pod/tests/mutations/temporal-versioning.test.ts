@@ -1,10 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
-import { applyPodSchema } from '../support/pod-schema.js';
+import { applyPodSchema, POD_SCHEMA_POST_DDL_SQL } from '../support/pod-schema.js';
 import { loadRecordHistorySnapshots } from '$lib/server/collection/record_history.server.js';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
-import { SCHEMA_POST_DDL_SQL } from '$lib/vite/schema-functions-sql.js';
 
 requireDocker();
 
@@ -290,7 +289,7 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 				.then()
 		);
 
-		await pool.query(SCHEMA_POST_DDL_SQL);
+		await pool.query(POD_SCHEMA_POST_DDL_SQL);
 
 		const history = await pool.query<{ status: string }>(
 			`SELECT status
@@ -315,13 +314,13 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 			await pool.query(
 				`ALTER TABLE orders ADD COLUMN reference text NOT NULL DEFAULT 'unassigned'`
 			);
-			await expect(pool.query(SCHEMA_POST_DDL_SQL)).rejects.toThrow(
+			await expect(pool.query(POD_SCHEMA_POST_DDL_SQL)).rejects.toThrow(
 				/temporal history schema mismatch for orders/
 			);
 			await pool.query(
 				`ALTER TABLE orders_history ADD COLUMN reference text NOT NULL DEFAULT 'unassigned'`
 			);
-			await pool.query(SCHEMA_POST_DDL_SQL);
+			await pool.query(POD_SCHEMA_POST_DDL_SQL);
 
 			const history = await pool.query<{ status: string; reference: string }>(
 				`SELECT status, reference
@@ -354,7 +353,7 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 			await pool.query(
 				`SELECT _norbital_create_history_table('array_records'::regclass, 'array_records_history')`
 			);
-			await pool.query(SCHEMA_POST_DDL_SQL);
+			await pool.query(POD_SCHEMA_POST_DDL_SQL);
 
 			const dimensions = await pool.query<{
 				table_name: string;

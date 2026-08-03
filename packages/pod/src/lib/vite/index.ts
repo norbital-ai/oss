@@ -214,7 +214,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		const [
 			{ parseSeedManifest, seedManifestJson },
 			{ parseNorbitalManifest },
-			{ SCHEMA_FUNCTIONS_SQL, SCHEMA_POST_DDL_SQL },
+			{ SCHEMA_FUNCTIONS_SQL, nonTemporalCollections, schemaPostDdlSql },
 			{ workspaceExclusionsDdl }
 		] = await Promise.all([
 			import('@norbital-ai/platform-utils/seed/manifest'),
@@ -273,9 +273,10 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		// EXCLUDE constraints ride along in schema-post-ddl.sql rather than in an artifact of
 		// their own: every consumer (applier, checkpoint required-paths, bundled build, DDL
 		// validator, pod_migrate, studio preview) already reads that one file.
+		const manifest = parseNorbitalManifest(serverModule.workspaceManifest);
 		await writeFile(
 			path.join(artifactRoot, 'schema-post-ddl.sql'),
-			`${SCHEMA_POST_DDL_SQL}\n\n${workspaceExclusionsDdl(parseNorbitalManifest(serverModule.workspaceManifest))}`
+			`${schemaPostDdlSql(nonTemporalCollections(manifest))}\n\n${workspaceExclusionsDdl(manifest)}`
 		);
 	}
 

@@ -22,6 +22,15 @@ export interface SystemTableMeta {
 	readonly record_label?: string | null;
 	readonly icon?: string | null;
 	readonly semanticSearch?: boolean;
+	/**
+	 * Whether this collection keeps a typed `<table>_history` temporal relation. Defaults to true.
+	 *
+	 * Opt out only for a high-volume, append-only table whose rows are already ordered by their own
+	 * sequence: the history row roughly doubles the write cost of every insert to buy a revision
+	 * trail nothing reads. Turning it off on a collection that already has one drops that relation —
+	 * and the rows in it — in the next generated migration.
+	 */
+	readonly history?: boolean;
 	readonly system: true;
 }
 
@@ -246,7 +255,9 @@ const _audit_event = systemTable(
 		details: jsonbColumn(JsonObjectSchema).default({}),
 		actor_id: uuid().references(() => _user.norbital_id)
 	},
-	{ description: 'Audit events', record_label: 'event_type', system: true }
+	// An audit trail is append-only and is itself the revision record; versioning it would store a
+	// second copy of every row for a history nothing reads.
+	{ description: 'Audit events', record_label: 'event_type', history: false, system: true }
 );
 
 const _integration_outbox = systemTable(
@@ -460,7 +471,10 @@ const _chat_session = systemTable(
 		 */
 		usage_turns_unreported: integer().notNull().default(0)
 	},
-	{ description: 'Agent conversations', record_label: 'title', system: true }
+	// Transcripts are high-volume and already ordered by their own sequence; a history table per
+	// message would roughly double the write cost of every agent run for a revision trail nothing
+	// reads. Same reasoning for `chat_turn` and `chat_message` below.
+	{ description: 'Agent conversations', record_label: 'title', history: false, system: true }
 );
 
 /**
@@ -495,7 +509,7 @@ const _chat_turn = systemTable(
 		 */
 		usage_settled_at: timestamp({ withTimezone: true })
 	},
-	{ description: 'Agent turns', record_label: 'model', system: true }
+	{ description: 'Agent turns', record_label: 'model', history: false, system: true }
 );
 
 /**
@@ -535,7 +549,7 @@ const _chat_message = systemTable(
 		source_message_id: text(),
 		source_deleted_at: timestamp({ withTimezone: true })
 	},
-	{ description: 'Agent messages', record_label: 'role', system: true }
+	{ description: 'Agent messages', record_label: 'role', history: false, system: true }
 );
 
 /**
@@ -726,6 +740,20 @@ export const systemTables = {
 	channel_conversation: { table: channel_conversation },
 	channel_inbound_message: { table: channel_inbound_message }
 } satisfies Record<SystemCollectionName, { table: PgTable }>;
+
+/**
+ * System collections that keep no `<table>_history` relation.
+ *
+ * Derived from each collection's own `history` flag rather than restated. A second literal list is
+ * how the migration generator and the runtime DDL came to disagree about `chat_*`: the generator
+ * stopped mirroring column changes into history relations the lineage still declared, and nothing
+ * dropped them. Both halves now read this.
+ */
+export const NON_TEMPORAL_SYSTEM_COLLECTIONS: ReadonlySet<SystemCollectionName> = new Set(
+	Object.entries(systemTables)
+		.filter(([, entry]) => getSystemTableMeta(entry.table)?.history === false)
+		.map(([name]) => name as SystemCollectionName)
+);
 
 export const platformRelations = defineRelations(platformTables, (r) => ({
 	approval_request: {

@@ -54,6 +54,13 @@ export type TableMeta = {
 	readonly icon?: string | null;
 	readonly semanticSearch?: boolean;
 	readonly system?: boolean;
+	/**
+	 * Whether this collection keeps a typed `<table>_history` temporal relation. Defaults to true.
+	 *
+	 * The single source both the migration generator and the runtime post-DDL read, so neither can
+	 * decide a collection is temporal while the other decides it is not.
+	 */
+	readonly history?: boolean;
 	readonly indexes?: readonly TableIndex[];
 	/**
 	 * Postgres EXCLUDE constraints. Drizzle has no entity for them, so these are pure

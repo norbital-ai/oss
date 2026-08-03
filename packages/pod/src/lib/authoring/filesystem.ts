@@ -31,6 +31,18 @@ export type ModelMetadata = {
 	readonly description?: string;
 	readonly recordLabel?: string | readonly string[];
 	readonly icon?: string;
+	/**
+	 * Whether this collection keeps a typed `<collection>_history` temporal relation, so every
+	 * revision of every row stays queryable. Defaults to true.
+	 *
+	 * Opt out only for a high-volume, append-only collection whose rows are already ordered by their
+	 * own sequence — a transcript, an event log — where the history row roughly doubles the write
+	 * cost of every insert to buy a revision trail nothing reads.
+	 *
+	 * Turning this off on a collection that already has a history relation drops that relation, and
+	 * the revisions in it, in the next generated migration. Turning it back on starts a fresh one.
+	 */
+	readonly history?: boolean;
 	readonly indexes?: readonly TableIndex[];
 	/** Postgres EXCLUDE constraints, emitted out-of-band (drizzle cannot express them). */
 	readonly exclusions?: readonly TableExclusion[];
@@ -144,6 +156,7 @@ function modelTableMeta(metadata: ModelMetadata | undefined): TableMeta | undefi
 		description: metadata.description,
 		record_label: labelFields?.map((field) => `scope.record.${field}`).join(" + ' · ' + "),
 		icon: metadata.icon,
+		history: metadata.history,
 		indexes: metadata.indexes,
 		exclusions: metadata.exclusions
 	};

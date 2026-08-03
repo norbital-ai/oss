@@ -69,7 +69,7 @@ function systemCollectionEntry(name: SystemCollectionName): ManifestCollectionEn
 		description: meta?.description ?? null,
 		record_label: meta?.record_label ?? null,
 		icon: meta?.icon ?? null,
-		extensions: { indexes: [] },
+		extensions: { indexes: [], history: meta?.history },
 		enabled_semantic_search: meta?.semanticSearch ?? null,
 		hooks: {},
 		pipelines: {},

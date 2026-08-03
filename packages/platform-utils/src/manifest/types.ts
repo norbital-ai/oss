@@ -31,7 +31,9 @@ export const ManifestCollectionEntrySchema = z
 		extensions: z
 			.object({
 				indexes: z.array(z.unknown()),
-				exclusions: z.array(ManifestExclusionSchema).optional()
+				exclusions: z.array(ManifestExclusionSchema).optional(),
+				/** Absent means the default: the collection keeps a `<name>_history` relation. */
+				history: z.boolean().optional()
 			})
 			.strict(),
 		enabled_semantic_search: z.boolean().nullable().optional(),

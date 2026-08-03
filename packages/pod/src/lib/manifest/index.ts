@@ -70,7 +70,11 @@ function buildCollectionEntries(
 			fields: Object.entries(getTableColumnDefs(handle.table)).map(([name, column]) =>
 				portableCollectionField(name, column)
 			),
-			extensions: { indexes: meta?.indexes ?? [], exclusions: meta?.exclusions ?? [] },
+			extensions: {
+				indexes: meta?.indexes ?? [],
+				exclusions: meta?.exclusions ?? [],
+				history: meta?.history
+			},
 			enabled_semantic_search: meta?.semanticSearch === true ? true : null,
 			hooks: collectHooks(declaredHooks),
 			pipelines: collectPipelines(pipelines?.[collectionName]),
