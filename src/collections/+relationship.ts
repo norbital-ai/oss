@@ -12,7 +12,7 @@ import { cascade } from '@norbital-ai/pod/authoring';
  *   - `component_entries.origin`       → reverses_entry_id / evidence_file
  *   - `leave_ledger.source_id`         → a leave request, or an encashment
  * Referential integrity for those is checked in `+hooks.ts` (validation gate A3), not by the
- * database. See docs/payroll/12-validation.md A3.
+ * database. See docs/architecture/provenance-and-audit.md.
  */
 export default ((r) => ({
 	jurisdictions: {

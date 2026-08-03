@@ -867,7 +867,7 @@ function measureComponent(options: {
 			const sources = new Map<string, LineSource>();
 			for (const segment of matched) {
 				const multiple = Math.max(segment.multiple, floor);
-				if (options.overtimeCalculationMethod === 'INFOTECH_ANNUALISED_DATED') {
+				if (options.overtimeCalculationMethod === 'ANNUALISED_CONTRACT_RATE') {
 					const unitRate =
 						segment.award === 'DAY_WAGE_MULTIPLE'
 							? cents(options.dayWage * multiple)
@@ -886,7 +886,7 @@ function measureComponent(options: {
 				});
 			}
 			const amount =
-				options.overtimeCalculationMethod === 'INFOTECH_ANNUALISED_DATED'
+				options.overtimeCalculationMethod === 'ANNUALISED_CONTRACT_RATE'
 					? cents(datedAmount)
 					: cents(weighted * options.hourlyRate + dayWageAmount);
 			if (amount === 0) return null;
@@ -914,7 +914,7 @@ function measureComponent(options: {
 			const rate =
 				definition.valued_at === 'ORDINARY_DAY_WAGE' ? options.dayWage : options.hourlyRate;
 			const amount =
-				options.overtimeCalculationMethod === 'INFOTECH_ANNUALISED_DATED'
+				options.overtimeCalculationMethod === 'ANNUALISED_CONTRACT_RATE'
 					? cents(
 							matched.reduce((total, row) => {
 								if (row.valuedAt === 'ORDINARY_DAY_WAGE')

@@ -16,7 +16,7 @@ export default defineModel(
 		pay_cutoff_day: integer().notNull(),
 		pay_day: integer().notNull(),
 		leave_year_start_month: integer().notNull(),
-		overtime_calculation_method: enums(['STATUTORY_AGGREGATE', 'INFOTECH_ANNUALISED_DATED'])
+		overtime_calculation_method: enums(['STATUTORY_AGGREGATE', 'ANNUALISED_CONTRACT_RATE'])
 			.notNull()
 			.default('STATUTORY_AGGREGATE'),
 		/**

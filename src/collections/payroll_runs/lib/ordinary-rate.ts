@@ -28,12 +28,12 @@ export type RateTerms = {
 	readonly working_days_per_week: number;
 };
 
-export type OvertimeCalculationMethod = 'STATUTORY_AGGREGATE' | 'INFOTECH_ANNUALISED_DATED';
+export type OvertimeCalculationMethod = 'STATUTORY_AGGREGATE' | 'ANNUALISED_CONTRACT_RATE';
 
 export function readOvertimeCalculationMethod(value: string | null): OvertimeCalculationMethod {
 	switch (value) {
 		case 'STATUTORY_AGGREGATE':
-		case 'INFOTECH_ANNUALISED_DATED':
+		case 'ANNUALISED_CONTRACT_RATE':
 			return value;
 		default:
 			throw new Error('companies.overtime_calculation_method must name a supported method.');
@@ -96,7 +96,7 @@ export function ordinaryHourlyRate(terms: RateTerms, jurisdiction: Jurisdiction)
 }
 
 /**
- * Contract rate used by Infotech: annual salary divided by contracted annual hours. The employee
+ * Contract rate from annual salary divided by contracted annual hours. The employee
  * master expresses annual hours as weekly hours × 52, so no company-wide day divisor is involved.
  */
 export function annualisedContractHourlyRate(terms: RateTerms): number {
@@ -115,7 +115,7 @@ export function overtimeHourlyRate(
 	switch (method) {
 		case 'STATUTORY_AGGREGATE':
 			return statutory;
-		case 'INFOTECH_ANNUALISED_DATED':
+		case 'ANNUALISED_CONTRACT_RATE':
 			return Math.max(annualisedContractHourlyRate(terms), statutory);
 		default:
 			return method satisfies never;

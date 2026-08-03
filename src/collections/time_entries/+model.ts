@@ -27,7 +27,7 @@ export default defineModel(
 		 */
 		overtime_authorized: boolean(),
 		/**
-		 * The approved Infotech multiplier buckets for this attendance day. These are hours, not
+		 * The approved legacy multiplier buckets for this attendance day. These are hours, not
 		 * amounts: payroll still values them from the employment's effective salary terms. All five
 		 * are null where the population supplies no bucket breakdown; zero is an explicit source
 		 * value and is distinct from missing data.

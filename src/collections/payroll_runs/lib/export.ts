@@ -7,9 +7,9 @@
 import ExcelJSBrowser from 'exceljs/dist/exceljs.bare.min.js';
 import type ExcelJS from 'exceljs';
 import {
-	INFOTECH_COLUMNS,
-	INFOTECH_SECTIONS,
-	infotechRow,
+	VENDOR_WORKBOOK_COLUMNS,
+	VENDOR_WORKBOOK_SECTIONS,
+	vendorWorkbookRow,
 	outputGroups,
 	workbookRows,
 	type ReportPayslip
@@ -72,15 +72,15 @@ export async function payrollReportXlsx(sheets: readonly WorkbookSheet[]): Promi
 	workbook.subject = 'Payroll calculation report';
 
 	for (const sheet of sheets) {
-		const usesInfotechLayout = sheet.payslips.every((payslip) => payslip.currency === 'MYR');
+		const usesVendorWorkbookLayout = sheet.payslips.every((payslip) => payslip.currency === 'MYR');
 		// Squared off across the sheet: a scheme this population runs but did not charge one person
 		// must read as an explicit zero on that person's row, not as an unwritten cell.
-		const genericRows = usesInfotechLayout ? [] : workbookRows(sheet.payslips);
-		const rows = usesInfotechLayout
-			? sheet.payslips.map((payslip) => infotechRow(payslip))
+		const genericRows = usesVendorWorkbookLayout ? [] : workbookRows(sheet.payslips);
+		const rows = usesVendorWorkbookLayout
+			? sheet.payslips.map((payslip) => vendorWorkbookRow(payslip))
 			: genericRows;
-		const groups = usesInfotechLayout ? INFOTECH_SECTIONS : outputGroups(genericRows);
-		const identityColumnCount = usesInfotechLayout ? 8 : IDENTITY_COLUMNS.length;
+		const groups = usesVendorWorkbookLayout ? VENDOR_WORKBOOK_SECTIONS : outputGroups(genericRows);
+		const identityColumnCount = usesVendorWorkbookLayout ? 8 : IDENTITY_COLUMNS.length;
 		const worksheet = workbook.addWorksheet(sheet.period, {
 			// The identity block and the two masthead rows stay put when the reader scrolls into the
 			// statutory columns: a number no one can put a name to is worthless.
@@ -90,8 +90,8 @@ export async function payrollReportXlsx(sheets: readonly WorkbookSheet[]): Promi
 		// A collapsed column group summarises into the column on its right — which is what makes
 		// collapsing Earnings leave Gross showing, and collapsing the post-gross block leave Net.
 		worksheet.properties.outlineProperties = { summaryBelow: false, summaryRight: true };
-		worksheet.columns = usesInfotechLayout
-			? INFOTECH_COLUMNS.map((outputId) => ({
+		worksheet.columns = usesVendorWorkbookLayout
+			? VENDOR_WORKBOOK_COLUMNS.map((outputId) => ({
 					header: outputId,
 					key: outputId,
 					width: Math.min(28, Math.max(13, outputId.length + 3))
@@ -109,9 +109,9 @@ export async function payrollReportXlsx(sheets: readonly WorkbookSheet[]): Promi
 
 		// Column styling first: exceljs pushes a column style onto the cells that exist, so the
 		// masthead rows are styled after this, and the data rows inherit it as they are added.
-		let column = usesInfotechLayout ? 1 : IDENTITY_COLUMNS.length + 1;
+		let column = usesVendorWorkbookLayout ? 1 : IDENTITY_COLUMNS.length + 1;
 		const bands: { readonly section: string; readonly from: number; readonly to: number }[] =
-			usesInfotechLayout
+			usesVendorWorkbookLayout
 				? []
 				: [{ section: IDENTITY_SECTION_NAME, from: 1, to: IDENTITY_COLUMNS.length }];
 		for (const [index, group] of groups.entries()) {
@@ -162,7 +162,7 @@ export async function payrollReportXlsx(sheets: readonly WorkbookSheet[]): Promi
 
 		for (const [index, payslip] of sheet.payslips.entries())
 			worksheet.addRow(
-				usesInfotechLayout
+				usesVendorWorkbookLayout
 					? rows[index]
 					: {
 							employee_number: payslip.employeeNumber,

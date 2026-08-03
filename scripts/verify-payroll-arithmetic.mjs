@@ -580,7 +580,7 @@ const periodicTax = contribute({
 	dependents: 0
 });
 check(
-	'OPSPH003 periodic tax excludes rice and current mandatory relief without YTD projection',
+	'periodic tax excludes rice and current mandatory relief without YTD projection',
 	periodicTax.find((charge) => charge.contribution.row.code === 'PERIOD_TAX').employee,
 	1667.55
 );
@@ -664,9 +664,9 @@ check('one remains in December', payPeriodsRemaining('2026-12', 1), 1);
 // Every figure below is the customer's own salary listing, so these are not invented cases: they
 // are the rows the workbook already contains, and matching them is the whole test.
 // ────────────────────────────────────────────────────────────────────────────────────────────────
-const NIHON = { pay_cutoff_day: 21, pay_day: 28 };
-const nihonWindow = (period) => resolveWindow(period, NIHON);
-const NIHON_POLICY = readSettlementPolicy({
+const COMPANY_A = { pay_cutoff_day: 21, pay_day: 28 };
+const companyAWindow = (period) => resolveWindow(period, COMPANY_A);
+const COMPANY_A_POLICY = readSettlementPolicy({
 	settlement_policy: {
 		late_joiner_arrears: { defer_to_component_id: '00000000-0000-4000-8000-000000000001' },
 		final_period: 'SETTLE_IN_FINAL_PERIOD',
@@ -676,7 +676,7 @@ const NIHON_POLICY = readSettlementPolicy({
 		overtime_windows: null
 	}
 });
-const OPSPH_POLICY = readSettlementPolicy({
+const COMPANY_B_POLICY = readSettlementPolicy({
 	settlement_policy: {
 		late_joiner_arrears: null,
 		final_period: 'FOLLOW_ATTENDANCE_WINDOW',
@@ -691,10 +691,10 @@ const OPSPH_POLICY = readSettlementPolicy({
 		overtime_windows: null
 	}
 });
-const settle_ = (period, hire, exit, policy = NIHON_POLICY) =>
-	resolveEmploymentSettlement({ dates: { hire, exit }, window: nihonWindow(period), policy });
+const settle_ = (period, hire, exit, policy = COMPANY_A_POLICY) =>
+	resolveEmploymentSettlement({ dates: { hire, exit }, window: companyAWindow(period), policy });
 
-// NHPMY0048 has twenty-one January UL dates, but only the thirteen through 20 January belong to the
+// Twenty-one January UL dates, but only the thirteen through 20 January belong to the
 // January payroll. The eight dates from 21–30 January settle in February under the ordinary cutoff.
 const january0048UnpaidDates = [
 	'2026-01-04',
@@ -719,13 +719,17 @@ const january0048UnpaidDates = [
 	'2026-01-29',
 	'2026-01-30'
 ];
-const january0048Window = nihonWindow('2026-01').attendance;
+const january0048Window = companyAWindow('2026-01').attendance;
 const january0048SettledDates = january0048UnpaidDates.filter(
 	(date) => date >= january0048Window.start && date <= january0048Window.end
 );
-check('NHPMY0048 January NPL stops at the 20 January cutoff', january0048SettledDates.length, 13);
 check(
-	'NHPMY0048 January NPL reproduces the workbook',
+	'21 January unpaid-leave dates stop at the 20 January cutoff',
+	january0048SettledDates.length,
+	13
+);
+check(
+	'13-day January NPL through cutoff reproduces expected amount',
 	roundMoney(
 		roundMoney(1768 / 31, 'NEAREST_CENT') * january0048SettledDates.length,
 		'NEAREST_CENT'
@@ -735,9 +739,9 @@ check(
 
 // ── Rule 1: a joining period the run cannot see is deferred, not part-paid ──────────────────────
 //
-// NHPMY0397 joined 23 Feb 2026. The February salary listing has no row for them at all, and the
-// March one pays basic 4,000 with `back_pay_basic` 857.14 beside it — 4,000 x 6/28, the six days
-// 23-28 February. NHPMY0400 is the same shape: joined 22 April, absent from the April listing,
+// A late joiner joined 23 Feb 2026. The February salary listing has no row for them at all, and the
+// March one pays basic 4,000 with back-pay basic 857.14 beside it — 4,000 x 6/28, the six days
+// 23-28 February. A second case joined 22 April, absent from the April listing,
 // and May pays 2,300 with `back_pay_basic` 690 — 2,300 x 9/30.
 const feb0397 = settle_('2026-02', '2026-02-23', null);
 check('a joiner after the window closes produces no February payslip', feb0397.runs, false);
@@ -802,14 +806,14 @@ check('with the window extended to cover them', bothRules.attendance, {
 	end: '2026-04-29'
 });
 const apr0400 = settle_('2026-04', '2026-04-22', null);
-check('NHPMY0400’s April is deferred too', apr0400.runs, false);
+check('late joiner after window close defers April period', apr0400.runs, false);
 check('covering 22-30 April', apr0400.deferral?.days, { start: '2026-04-22', end: '2026-04-30' });
 check(
 	'which is the workbook’s 690 exactly',
 	roundMoney(2300 * (inclusiveDays('2026-04-22', '2026-04-30') / 30), 'NEAREST_CENT'),
 	690
 );
-// The boundary is the window, not the number 21. NHPMY0399 joined on 6 April and the company
+// The boundary is the window, not the number 21. A joiner on 6 April is paid in April because
 // summary pays them 900 x 25/30 for April, because 6 April is inside the March-21-to-April-20
 // window the April run reads.
 check(
@@ -831,7 +835,7 @@ check(
 
 // ── Rule 2: a leaver in the tail settles now, because there is no later run ─────────────────────
 //
-// NHPMY0082's last day was 27 April 2026. Their April payslip deducts 48.05 of unpaid leave —
+// A leaver's last day was 27 April 2026. Their April payslip deducts 48.05 of unpaid leave —
 // half a day at 2,883/30 — for a half-day taken on 21 April. Under the plain window that day sits
 // in the MAY run, which they are not in, so the deduction would simply never be taken.
 const apr0082 = settle_('2026-04', '2020-03-09', '2026-04-27');
@@ -862,7 +866,7 @@ check(
 	'2026-03-31'
 );
 check(
-	'OPSPH final-period salary covers the full month before attendance deductions',
+	'final-period FULL_PERIOD wages cover the full month before attendance deductions',
 	settle_('2026-02', '2022-03-05', '2026-02-27', {
 		...PLAIN_CALENDAR,
 		fullFinalPeriodWages: true
@@ -877,7 +881,7 @@ check(
 
 // ── Rule 3: a leave of absence is deducted in the month it falls in ─────────────────────────────
 //
-// NHPMY0340 was on unpaid leave from 1 December 2025 to 30 January 2026, with the rostered rest
+// An employee was on unpaid leave from 1 December 2025 to 30 January 2026, with the rostered rest
 // days showing as gaps. Their January payslip deducts 1,371 — twenty-five days at 1,700/31 — and
 // their February payslip deducts NOTHING, though the 21 Jan - 20 Feb window contains eight of
 // those January days. The absence settled in January, all of it.
@@ -1001,7 +1005,7 @@ const ledger0340 = N0340.map((date, index) => ({
 	source_id: null,
 	norbital_approval_id: null
 }));
-const february = nihonWindow('2026-02');
+const february = companyAWindow('2026-02');
 check(
 	'the plain window drags eight January days into February',
 	unpaidLeaveInWindow({
@@ -1026,8 +1030,8 @@ check(
 	'and January takes all twenty-five of its own days',
 	unpaidLeaveInWindow({
 		ledger: ledger0340,
-		window: nihonWindow('2026-01').attendance,
-		month: nihonWindow('2026-01').salary,
+		window: companyAWindow('2026-01').attendance,
+		month: companyAWindow('2026-01').salary,
 		extendedDates: spell0340,
 		configuration: { leaveTypes }
 	})[0]?.days,
@@ -1188,25 +1192,25 @@ check(
 	),
 	9.25
 );
-const nihonFiveDayTerms = {
+const fiveDayWeekTerms = {
 	...terms,
 	base_salary: { value: 2044, currency: 'MYR' },
 	ordinary_hours_per_week: 42.5,
 	working_days_per_week: 5
 };
 check(
-	'NHPMY0194 annualises RM2,044 over 2,210 employee-master hours',
-	annualisedContractHourlyRate(nihonFiveDayTerms),
+	'five-day week annualises monthly salary over contracted annual hours',
+	annualisedContractHourlyRate(fiveDayWeekTerms),
 	11.1
 );
 check(
-	'Nihon selects the annualised employee-contract rate for OT',
-	overtimeHourlyRate(nihonFiveDayTerms, myJurisdiction, 'INFOTECH_ANNUALISED_DATED'),
+	'annualised contract rate is selected for OT when configured',
+	overtimeHourlyRate(fiveDayWeekTerms, myJurisdiction, 'ANNUALISED_CONTRACT_RATE'),
 	11.1
 );
 check(
 	'the statutory option remains available for companies that select it',
-	overtimeHourlyRate(nihonFiveDayTerms, myJurisdiction, 'STATUTORY_AGGREGATE'),
+	overtimeHourlyRate(fiveDayWeekTerms, myJurisdiction, 'STATUTORY_AGGREGATE'),
 	9.25
 );
 check(
@@ -1219,12 +1223,12 @@ check(
 			working_days_per_week: 7
 		},
 		myJurisdiction,
-		'INFOTECH_ANNUALISED_DATED'
+		'ANNUALISED_CONTRACT_RATE'
 	),
 	12.5
 );
 check(
-	'NHPMY0367 annualisation matches the six-day statutory rate',
+	'six-day contract annualisation matches expected hourly rate',
 	annualisedContractHourlyRate({
 		...terms,
 		base_salary: { value: 2088, currency: 'MYR' },
@@ -1234,12 +1238,12 @@ check(
 	10.71
 );
 check(
-	'NHPMY0194 Infotech OT rounds the 1.5x unit before each dated amount',
+	'annualised dated OT rounds the 1.5x unit before each dated amount',
 	[1, 1, 1, 1].reduce((total, hours) => total + cents(hours * cents(11.1 * 1.5)), 0),
 	66.6
 );
 check(
-	'NHPMY0367 Infotech OT preserves the unit-rate rounding cent',
+	'annualised dated OT preserves the unit-rate rounding cent',
 	[2, 3, 3, 3, 3, 3, 3].reduce((total, hours) => total + cents(hours * cents(10.71 * 1.5)), 0),
 	321.4
 );
@@ -1693,7 +1697,7 @@ check(
  *
  * Verified against the source workbook: for 2026-01 every employee's `no_pay_leave` divides by
  * `round(basic / 31, cent)` into a clean half-day count, and by `basic / 26` into nothing.
- * NHPMY0053: basic 3,451, npl 55.66 → 3451/31 = 111.32, 55.66 / 111.32 = exactly 0.5 days.
+ * Example: basic 3,451, npl 55.66 → 3451/31 = 111.32, 55.66 / 111.32 = exactly 0.5 days.
  * At the EA s.60I divisor of 26 the same half day would withhold 66.37 — 19% too much.
  */
 const { absenceDayRate } = await server.ssrLoadModule(lib('ordinary-rate'));
@@ -1743,7 +1747,7 @@ check(
 	roundMoney(3451 / 22, 'NEAREST_CENT')
 );
 check(
-	'OPSPH monthly NPL uses the Infotech-evidenced 21.75-day cadence override',
+	'monthly NPL uses the configured 21.75-day fixed-days cadence override',
 	absenceDayRate({
 		terms: {
 			base_salary: { value: 25000, currency: 'PHP' },
@@ -1752,7 +1756,7 @@ check(
 			working_days_per_week: 5
 		},
 		jurisdiction: {
-			proration: OPSPH_POLICY.absenceProration[0].basis,
+			proration: COMPANY_B_POLICY.absenceProration[0].basis,
 			ordinary_rate_divisor: 21.75,
 			ordinary_rate_basis: 'DAYS_PER_MONTH'
 		},
