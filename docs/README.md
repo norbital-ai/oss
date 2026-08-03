@@ -24,5 +24,7 @@ integration deliberately when alerts are required.
 
 - [Workspace README](../README.md) — operating model, collections, relations, and verification.
 - `src/collections/job_assignments/+hooks.ts` — the server-side compliance gate.
+- `src/policies/` — three read-only roles that differ only in which application they open, and why
+  that is the right narrowing here.
 - `src/automation/` — daily review exports.
 - `src/lib/ifc-viewer/` — the embedded IFC viewer and converter worker.
