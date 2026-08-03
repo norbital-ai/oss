@@ -95,7 +95,7 @@
 	},
 	"scripts": {
 		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {}",
-		"prepack": "pnpm build",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/ui",
 		"lint": "svelte-check --tsconfig tsconfig.json"
 	},
 	"peerDependencies": {

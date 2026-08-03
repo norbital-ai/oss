@@ -72,7 +72,7 @@
 	},
 	"scripts": {
 		"build": "node ../../scripts/build-package.mjs svelte-package -i src/lib -o {} --tsconfig tsconfig.json",
-		"prepack": "pnpm build",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/pod",
 		"lint": "svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
 		"test": "vitest run",
 		"test:ci": "vitest run --exclude 'tests/standalone/**' --exclude 'tests/**/*e2e*.test.ts'",

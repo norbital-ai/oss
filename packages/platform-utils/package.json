@@ -162,7 +162,7 @@
 	},
 	"scripts": {
 		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
-		"prepack": "pnpm build",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/platform-utils",
 		"lint": "tsc -p tsconfig.json --noEmit",
 		"test": "node --test tests/*.test.ts"
 	},
