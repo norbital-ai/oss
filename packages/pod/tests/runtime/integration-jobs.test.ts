@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
-import { workspaceJobs } from '../../src/lib/bin/invocation/jobs.js';
-import { httpIntegrationDelivery } from '../../src/lib/host/integration-http.js';
+import { workspaceJobs } from '../../src/host/jobs.js';
+import { httpIntegrationDelivery } from '../../src/host/integration-http.js';
 
 const OUTBOX_ROW = {
 	norbital_id: '11111111-1111-4111-8111-111111111111',

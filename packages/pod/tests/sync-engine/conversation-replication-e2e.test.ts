@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
-import type { SyncFetch } from '$lib/client/sync/types.js';
+import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
+import type { SyncFetch } from '$lib/ui/sync/types.js';
 import { requireDocker } from '../support/pg-harness.js';
 import { createClientDb } from '../support/pglite-node.js';
 import { testAiBinding } from '../support/ai-binding.js';

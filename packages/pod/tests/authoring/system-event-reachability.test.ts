@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertSystemEventsAreReachable } from '../../src/lib/authoring/workspace/define-workspace.js';
+import { assertSystemEventsAreReachable } from '../../src/authoring/workspace/define-workspace.js';
 
 /**
  * The two halves of a system-event integration are matched by exact string at dispatch, so a typo on

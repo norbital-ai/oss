@@ -50,8 +50,19 @@
 
 	const DEFAULT_CAP: Cap = {
 		period: 'CALENDAR_YEAR',
-		matrix: '',
-		reimbursement_percentage: 100,
+		matrix: {
+			merge: 'MAX_WITH_STATUTORY_FLOOR',
+			layers: [
+				{
+					level: 'ORGANISATION',
+					eligibility: [],
+					authority: 'Company policy',
+					award: { kind: 'FIXED', amount: 0 },
+					reimbursement_percentage: 100,
+					effective_range: { start: '2026-01-01', end: null }
+				}
+			]
+		},
 		on_exceed: 'BLOCK'
 	};
 
@@ -210,33 +221,23 @@
 					/>
 				</label>
 				<label class="grid gap-1.5 text-sm font-medium">
-					Cap matrix
-					<Input
-						value={cap.matrix}
+					Layered entitlement matrix (JSON)
+					<textarea
+						class="min-h-48 rounded-md border bg-background p-3 font-mono text-xs"
+						value={JSON.stringify(cap.matrix, null, 2)}
 						{disabled}
-						placeholder="Name of the cap band table"
-						oninput={(event) =>
-							emit({ ...current, cap: { ...cap, matrix: event.currentTarget.value } })}
-					/>
-				</label>
-				<label class="grid gap-1.5 text-sm font-medium">
-					Reimbursement (%)
-					<Input
-						type="number"
-						min="0"
-						max="100"
-						step="1"
-						value={cap.reimbursement_percentage}
-						{disabled}
-						oninput={(event) =>
-							emit({
-								...current,
-								cap: {
-									...cap,
-									reimbursement_percentage: numberFrom(event.currentTarget.value, 100)
-								}
-							})}
-					/>
+						onchange={(event) => {
+							try {
+								const matrix = JSON.parse(event.currentTarget.value);
+								const next = componentDefinitionSchema.safeParse({
+									...current,
+									cap: { ...cap, matrix }
+								});
+								if (next.success) emit(next.data);
+							} catch {
+								/* invalid JSON remains uncommitted */
+							}
+						}}></textarea>
 				</label>
 				<label class="grid gap-1.5 text-sm font-medium">
 					On exceed

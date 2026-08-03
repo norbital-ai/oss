@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compilePodFilesystem, discoverPodFilesystem } from '../../src/lib/vite/compiler/index.js';
+import { compilePodFilesystem, discoverPodFilesystem } from '../../src/vite/compiler/index.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const temporaryRoots: string[] = [];

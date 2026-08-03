@@ -8,6 +8,7 @@
 	 * approval locks, request-change reasons, and audit history belong to the platform.
 	 */
 	import { client } from '$pod/client';
+	import { downloadCollectionExport } from '@norbital-ai/pod/client';
 	import type { Row } from './$types.js';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
@@ -15,8 +16,10 @@
 	import { toast } from 'svelte-sonner';
 	import { formatNumeric } from '../../lib/ui/display-formatters.js';
 
-	let { record, refresh }: { record: Row; refresh(): Promise<void> } = $props();
-	let pendingAction = $state<'recalculate' | 'pay' | null>(null);
+	let { record, refresh, close }: { record: Row; refresh(): Promise<void>; close(): void } =
+		$props();
+	let pendingAction = $state<'recalculate' | 'pay' | 'delete' | 'export' | null>(null);
+	let lockArmed = $state(false);
 
 	const companyQuery = $derived(
 		client.db.companies.findFirst({ where: { norbital_id: { eq: record.company_id } } })
@@ -65,9 +68,42 @@
 			pendingAction = null;
 		}
 	}
+
+	async function downloadReport(): Promise<void> {
+		pendingAction = 'export';
+		try {
+			const manifest = await downloadCollectionExport(
+				{ collection_name: 'payroll_runs', record_ids: [record.norbital_id] },
+				{ includeAction: (action) => action.metadata?.kind === 'payroll-report-xlsx' }
+			);
+			if (manifest.length === 0) throw new Error('Build this run before exporting its report.');
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : 'Payroll report export failed.');
+		} finally {
+			pendingAction = null;
+		}
+	}
+
+	async function deleteDraft(): Promise<void> {
+		const remove = client.db.payroll_runs.delete;
+		if (!remove) {
+			toast.error('Payroll runs cannot be deleted in this workspace.');
+			return;
+		}
+		pendingAction = 'delete';
+		try {
+			await remove(record.norbital_id);
+			toast.success(`Draft payroll ${record.period} deleted.`);
+			close();
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : 'Payroll run deletion failed.');
+		} finally {
+			pendingAction = null;
+		}
+	}
 </script>
 
-<Scroll name="Payroll run detail">
+<Scroll name="Payroll run detail" class="max-h-[80vh] pr-1">
 	<Stack gap="lg">
 		<Stack as="section" gap="sm" aria-label="Payroll run summary">
 			<Cluster align="start" justify="between" gap="sm">
@@ -86,13 +122,45 @@
 							variant="outline"
 							size="sm"
 							disabled={pendingAction !== null}
+							onclick={downloadReport}
+						>
+							{pendingAction === 'export' ? 'Exporting…' : 'Export salary listing'}
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={pendingAction !== null}
 							onclick={() => updateDraft('recalculate')}
 						>
 							{pendingAction === 'recalculate' ? 'Recalculating…' : 'Recalculate draft'}
 						</Button>
-						<Button size="sm" disabled={pendingAction !== null} onclick={() => updateDraft('pay')}>
-							{pendingAction === 'pay' ? 'Marking paid…' : 'Mark paid'}
+						<Button
+							size="sm"
+							disabled={pendingAction !== null}
+							onclick={() => {
+								if (!lockArmed) {
+									lockArmed = true;
+									return;
+								}
+								void updateDraft('pay');
+							}}
+						>
+							{pendingAction === 'pay'
+								? 'Locking…'
+								: lockArmed
+									? 'Confirm lock & pay'
+									: 'Lock payroll'}
 						</Button>
+						{#if client.db.payroll_runs.delete}
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={pendingAction !== null}
+								onclick={deleteDraft}
+							>
+								{pendingAction === 'delete' ? 'Deleting…' : 'Delete draft'}
+							</Button>
+						{/if}
 					{/if}
 				</Inline>
 			</Cluster>
@@ -108,11 +176,23 @@
 					<dd class="mt-1 font-medium tabular-nums">{record.pay_date}</dd>
 				</div>
 				<div>
-					<dt class="text-xs text-muted-foreground">Configuration hash</dt>
+					<dt class="text-xs text-muted-foreground">Run-level configuration snapshot</dt>
+					<dd class="mt-1 text-sm font-medium">
+						{record.configuration_snapshot?.kind === 'CAPTURED'
+							? 'Captured with this run'
+							: 'Legacy hash only'}
+					</dd>
 					<dd class="mt-1 truncate font-mono text-xs">{record.configuration_hash}</dd>
 				</div>
 			</Grid>
 		</Stack>
+
+		{#if lockArmed && record.lifecycle === 'DRAFT'}
+			<p class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+				Locking marks this payroll paid and makes its snapshot and payslips immutable. Select
+				“Confirm lock & pay” to continue.
+			</p>
+		{/if}
 
 		<Stack as="section" gap="sm" aria-labelledby="run-payslips-heading">
 			<h3 id="run-payslips-heading" class="text-sm font-semibold">Payslips</h3>
@@ -121,7 +201,7 @@
 					{client}
 					collection="payslips"
 					title="Payslips"
-					description="Open a payslip for its line items and the source records payroll consumed."
+					description="Open a payslip for its direct component and statutory line breakdown."
 					features={{ create: false }}
 					query={{
 						where: { payroll_run_id: { eq: record.norbital_id } },

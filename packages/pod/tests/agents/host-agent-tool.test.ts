@@ -4,11 +4,11 @@ import { decodeWireValue, encodeWireValue } from '@norbital-ai/platform-utils/ru
 import type { HostAgentToolBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { requiredRuntimeFacilities } from '@norbital-ai/platform-utils/runtime/binding';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
-import { facilityProxy } from '../../src/lib/runtime/serve.js';
-import { assertHostAgentTools, hostAgentTools } from '../../src/lib/host/agent-tools.js';
+import { facilityProxy } from '../../src/serve/hosted.js';
+import { assertHostAgentTools, hostAgentTools } from '../../src/host/agent-tools.js';
 
 /**
- * The host half of the stdio binding call, standing in for Core: decode the arguments, invoke the
+ * The host half of a hosted binding call, standing in for Core: decode the arguments, invoke the
  * real binding, encode and structured-clone the result. The clone is the point — it is what the
  * isolate boundary does to a return value, and it is what a callback would not survive.
  *
@@ -56,7 +56,7 @@ describe('host agent tools across the isolate boundary', () => {
 	 * `list()` whose *result* is data and a `run()` that names one tool, and that is enough: the tool
 	 * set becomes something discovered at runtime rather than declared in the binding's type.
 	 */
-	it('discovers and invokes a host tool through the real serve.ts proxy', async () => {
+	it('discovers and invokes a host tool through the real hosted.ts proxy', async () => {
 		const call = hostDispatcher({ agentTools: hostAgentTools([sandboxEcho]) });
 		const binding = facilityProxy<HostAgentToolBinding>('agentTools', call);
 

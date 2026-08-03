@@ -8,7 +8,7 @@ import {
 	resolveHostPluginSurface,
 	workspaceAuthorizesAgentSurface,
 	workspaceProvidesAgentSurface
-} from '$lib/runtime/workspace-navigation.js';
+} from '$lib/ui/shell/workspace-navigation.js';
 import SidebarHarness from '../support/sidebar-harness.svelte';
 import { render } from '../support/component.js';
 

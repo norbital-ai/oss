@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toNotificationRow, unreadBadge } from '$lib/runtime/notifications.js';
+import { toNotificationRow, unreadBadge } from '$lib/ui/shell/notifications.js';
 
 describe('notification bell', () => {
 	it('reads a replica record without asserting its shape', () => {

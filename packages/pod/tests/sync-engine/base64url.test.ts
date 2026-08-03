@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeBase64Url, encodeBase64Url } from '$lib/client/sync/base64url.js';
+import { decodeBase64Url, encodeBase64Url } from '$lib/ui/sync/base64url.js';
 
 describe('Base64URL UTF-8 codec', () => {
 	it('round-trips non-Latin cursor values', () => {

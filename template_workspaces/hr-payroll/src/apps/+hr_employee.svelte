@@ -272,7 +272,7 @@
 			{client}
 			collection="leave_requests"
 			title="My leave"
-			description="Submit leave and track the ledger movements it creates."
+			description="Submit leave and track the approved request that directly updates payroll and balance."
 			disabled={!employmentId}
 			query={{
 				where: { employment_id: employmentId ? { eq: employmentId } : undefined },

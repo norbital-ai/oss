@@ -4,18 +4,18 @@ import type {
 	HostMessagingBinding,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
-import { facilityProxy } from '../../src/lib/runtime/serve.js';
-import { consoleMessaging, messagingProviders } from '../../src/lib/host/facilities.js';
-import { localFileStorage } from '../../src/lib/host/file-storage.js';
-import { googleMaps } from '../../src/lib/host/maps.js';
-import { assertNotificationChannelSupport } from '../../src/lib/server/notifications/channels.js';
+import { facilityProxy } from '../../src/serve/hosted.js';
+import { consoleMessaging, messagingProviders } from '../../src/host/facilities.js';
+import { localFileStorage } from '../../src/host/file-storage.js';
+import { googleMaps } from '../../src/host/maps.js';
+import { assertNotificationChannelSupport } from '../../src/server/notification-outbox.server.js';
 
 /**
  * A facility binding may only declare methods.
  *
  * A data field on a binding is a Core-only defect that no standalone test can see: `pod start` hands
  * the tenant the real object, so reading the field works, and the type checks out on both sides.
- * Inside a hosted isolate the same binding is the proxy in `runtime/serve.ts`, whose `get` trap
+ * Inside a hosted isolate the same binding is the proxy in `serve/hosted.ts`, whose `get` trap
  * answers *every* property with a call forwarder — so the field is a function there, and a value
  * that is not a plain structure does not survive the boundary's structured clone at all.
  *
@@ -48,7 +48,7 @@ const noFacilityCarriesADataField: [FacilityDataFields] extends [never]
 	: FacilityDataFields = true;
 
 /**
- * The host half of the stdio binding call, standing in for Core: decode the arguments, invoke the
+ * The host half of a hosted binding call, standing in for Core: decode the arguments, invoke the
  * real binding, encode the result. `structuredClone` is the point — it is what the isolate boundary
  * does to a return value, and it is what a function (or a record of them) does not survive.
  */
@@ -98,7 +98,7 @@ describe('facility bindings across the isolate boundary', () => {
 	 * binding still answers with channel names, and channel validation still accepts and refuses the
 	 * right things. With `channels` as a field this threw `TypeError: function is not iterable`.
 	 */
-	it('validates notification channels when messaging is reached through the serve.ts proxy', async () => {
+	it('validates notification channels when messaging is reached through the hosted.ts proxy', async () => {
 		const call = hostDispatcher({
 			messaging: messagingProviders({
 				channels: [
@@ -146,10 +146,10 @@ describe('facility bindings across the isolate boundary', () => {
 });
 
 /**
- * Two places assemble `RuntimeFacilityBindings`: `serve.ts` for a hosted guest, and the standalone
+ * Two places assemble `RuntimeFacilityBindings`: `serve/hosted.ts` for the hosted deployment, and the standalone
  * runner. They must offer the same facilities, and nothing made them.
  *
- * `agentTools` shipped present in the standalone assembly and absent from the guest one, so host tools
+ * `agentTools` shipped present in the standalone assembly and absent from the hosted one, so host tools
  * worked under `pod start` and 503'd under Core — invisible to every test here, because every test
  * here goes through standalone. The type is the guard: a facility added to `RuntimeFacilityBindings`
  * and not to both assemblies should not compile.

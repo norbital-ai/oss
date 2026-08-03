@@ -22,6 +22,7 @@ import { z } from 'zod';
 import type { Hooks } from './$types.js';
 import { buildPayrollRun as runEngine, preparePayrollRun } from './lib/engine.js';
 import type { PayrollApi } from './lib/api.js';
+import { configurationSnapshot } from './lib/configuration.js';
 
 /**
  * What a person actually chooses when creating a run: a company and a period. Everything else on the
@@ -41,6 +42,7 @@ const DERIVED_COLUMNS = [
 	'company_id',
 	'period',
 	'configuration_hash',
+	'configuration_snapshot',
 	'pay_date',
 	'attendance_from',
 	'attendance_to'
@@ -80,6 +82,17 @@ export default {
 	create: {
 		input: createPayrollRunInput,
 		before: async ({ input, api }) => {
+			const existing = await api.db.query.payroll_runs.findFirst({
+				where: { company_id: { eq: input.company_id }, period: { eq: input.period } }
+			});
+			if (existing) {
+				const lifecycle = existing.lifecycle;
+				if (lifecycle == null) refuse(`Payroll ${input.period} already exists.`);
+				refuse(
+					`Payroll ${input.period} already exists (${lifecycle.toLowerCase()}). ` +
+						'Open that run, or delete it first if it is still a draft.'
+				);
+			}
 			const { window, configuration } = await preparePayrollRun({
 				api,
 				companyId: input.company_id,
@@ -103,6 +116,11 @@ export default {
 				...input,
 				lifecycle: 'DRAFT' as const,
 				configuration_hash: configuration.hash,
+				configuration_snapshot: {
+					kind: 'CAPTURED' as const,
+					configuration_hash: configuration.hash,
+					configuration: configurationSnapshot(configuration, input.period)
+				},
 				pay_date: window.payDate,
 				attendance_from: window.attendance.start,
 				attendance_to: window.attendance.end
@@ -119,14 +137,33 @@ export default {
 	},
 
 	update: {
-		before: async ({ input, existing }) => {
+		before: async ({ input, existing, api }) => {
 			for (const column of DERIVED_COLUMNS)
 				if (input[column] != null && String(input[column]) !== String(existing[column]))
 					refuse(
 						`Payroll run ${column} is derived from the period and the configuration, and cannot be edited.`
 					);
 			const next = input.lifecycle ?? existing.lifecycle;
-			if (next === existing.lifecycle) return input;
+			if (next === existing.lifecycle) {
+				if (next !== 'DRAFT') return input;
+				const { window, configuration } = await preparePayrollRun({
+					api,
+					companyId: existing.company_id,
+					period: existing.period
+				});
+				return {
+					...input,
+					configuration_hash: configuration.hash,
+					configuration_snapshot: {
+						kind: 'CAPTURED' as const,
+						configuration_hash: configuration.hash,
+						configuration: configurationSnapshot(configuration, existing.period)
+					},
+					pay_date: window.payDate,
+					attendance_from: window.attendance.start,
+					attendance_to: window.attendance.end
+				};
+			}
 			if (existing.lifecycle === 'PAID')
 				refuse('A paid payroll run is immutable. Correct it with a later adjustment entry.');
 			return input;

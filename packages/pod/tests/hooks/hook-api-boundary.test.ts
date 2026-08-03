@@ -20,7 +20,7 @@ import {
  */
 
 const hookApiSource = fileURLToPath(
-	new URL('../../src/lib/server/collection/hook-api.server.ts', import.meta.url)
+	new URL('../../src/server/collection/hook-api.server.ts', import.meta.url)
 );
 
 /** A stand-in carrying the legitimate fields plus capabilities that must not survive narrowing. */

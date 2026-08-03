@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cookieSession, hashToken, mintToken, subjectHmac } from '../../src/lib/host/session.js';
+import { cookieSession, hashToken, mintToken, subjectHmac } from '../../src/host/session.js';
 
 const SECRET = 'a'.repeat(32);
 

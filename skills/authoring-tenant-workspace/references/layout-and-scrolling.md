@@ -220,19 +220,19 @@ Our primitives are the [every-layout](https://every-layout.dev) / [bedrock](http
 set with our own names. If you know those, this is the mapping — and if you are reaching for
 something not in this table, you are almost certainly about to write a layout by hand.
 
-| Ours              | Elsewhere                  | The one thing it does                                     |
-| ----------------- | -------------------------- | --------------------------------------------------------- |
-| `Stack`           | Stack                      | Sibling rhythm down the block axis                        |
-| `Inline`          | Inline / Cluster           | Sibling rhythm along the inline axis                      |
-| `Cluster`         | Cluster                    | Inline rhythm that wraps                                  |
-| `Center`          | Center                     | A measure: `max-inline-size` + auto margins               |
-| `Cover`           | Cover                      | Chrome, body, chrome — body takes the remaining height    |
-| `Bound`           | PadBox / Frame             | A named height contract                                   |
-| `Frame`           | Frame                      | Aspect-ratio media                                        |
-| `Grid`            | Grid                       | `auto-fit` tracks with a minimum, no breakpoints          |
-| `Columns`/`Column`| Columns                    | Explicit column spans                                     |
-| `Split`           | Sidebar / Switcher         | Two panes that collapse on a container query              |
-| `Scroll`          | Reel                       | A named scrollport                                        |
+| Ours               | Elsewhere          | The one thing it does                                  |
+| ------------------ | ------------------ | ------------------------------------------------------ |
+| `Stack`            | Stack              | Sibling rhythm down the block axis                     |
+| `Inline`           | Inline / Cluster   | Sibling rhythm along the inline axis                   |
+| `Cluster`          | Cluster            | Inline rhythm that wraps                               |
+| `Center`           | Center             | A measure: `max-inline-size` + auto margins            |
+| `Cover`            | Cover              | Chrome, body, chrome — body takes the remaining height |
+| `Bound`            | PadBox / Frame     | A named height contract                                |
+| `Frame`            | Frame              | Aspect-ratio media                                     |
+| `Grid`             | Grid               | `auto-fit` tracks with a minimum, no breakpoints       |
+| `Columns`/`Column` | Columns            | Explicit column spans                                  |
+| `Split`            | Sidebar / Switcher | Two panes that collapse on a container query           |
+| `Scroll`           | Reel               | A named scrollport                                     |
 
 Each does exactly one thing. Two primitives composed always beat one primitive plus classes — that
 is the whole reason the set is this small.
@@ -308,7 +308,7 @@ outermost element of a document is fine — that is a floor, not a guess.
 
 ## Responsive without breakpoints
 
-Every layout here responds to its *container*, never to the browser window, and does it without a
+Every layout here responds to its _container_, never to the browser window, and does it without a
 media query: `Grid minimum=` uses `auto-fit`, `Cluster` wraps, `Split collapse=` switches on a
 container query. An app renders inside `[container-name:pod-app]` with a sidebar and shell chrome
 taking width, so a viewport breakpoint is measuring the wrong box. If you find yourself writing
@@ -316,7 +316,7 @@ taking width, so a viewport breakpoint is measuring the wrong box. If you find y
 
 ## Never build a Tailwind class at runtime
 
-Tailwind emits CSS by scanning source *text*. A class assembled from a variable names a rule that
+Tailwind emits CSS by scanning source _text_. A class assembled from a variable names a rule that
 was never generated, so the element simply has no such style — nothing throws, nothing logs, and the
 layout silently falls back to the browser default.
 
@@ -345,13 +345,13 @@ its middle row is `minmax(0,1fr)`, which is a definite track.
 ```svelte
 <!-- WRONG: sits at the top of the viewport -->
 <Stack class="min-h-svh">
-  {@render header()}
-  <Stack as="main" class="flex-1 justify-center">{@render children()}</Stack>
+	{@render header()}
+	<Stack as="main" class="flex-1 justify-center">{@render children()}</Stack>
 </Stack>
 
 <!-- RIGHT -->
 <Cover top={header} class="min-h-svh">
-  <Stack as="main" class="h-full justify-center">{@render children()}</Stack>
+	<Stack as="main" class="h-full justify-center">{@render children()}</Stack>
 </Cover>
 ```
 
@@ -379,14 +379,14 @@ Alignment, distribution, growth and fill are **props**, not classes:
 <Bound size="full">…</Bound>
 ```
 
-| Intent                        | Prop                                      |
-| ----------------------------- | ----------------------------------------- |
-| Cross-axis placement          | `align="start\|center\|end\|stretch"`     |
-| Main-axis distribution        | `justify="start\|center\|end\|between"`   |
-| Take the remaining space      | `grow`                                    |
-| Fill the parent's height      | `fill` (`Bound size="full"`)              |
-| Space between siblings        | `gap`                                     |
-| Page padding                  | `inset`                                   |
+| Intent                   | Prop                                    |
+| ------------------------ | --------------------------------------- |
+| Cross-axis placement     | `align="start\|center\|end\|stretch"`   |
+| Main-axis distribution   | `justify="start\|center\|end\|between"` |
+| Take the remaining space | `grow`                                  |
+| Fill the parent's height | `fill` (`Bound size="full"`)            |
+| Space between siblings   | `gap`                                   |
+| Page padding             | `inset`                                 |
 
 `UI10` fails on `items-*`, `justify-*`, `self-*`, `place-*`, `flex-1`, `grow`, `shrink-0` and
 `h-full` applied to a primitive that has the equivalent prop.

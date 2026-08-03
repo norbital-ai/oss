@@ -49,14 +49,14 @@ chooses where PostgreSQL lives, not which database engine Pod uses.
 `pod.host.ts` makes the target explicit. It is not tenant source and the filesystem compiler does
 not bundle it.
 
-|                         | Core                    | Self-hosted                     |
-| ----------------------- | ----------------------- | ------------------------------- |
-| `pod.host.ts` mode      | `core`                  | `self-hosted`                   |
-| Runtime transport       | framed process I/O      | in-process calls                |
-| HTTP and static assets  | Core                    | `pod start`                     |
-| Facilities and identity | Core runtime bindings   | `pod.host.ts` providers         |
-| Local development       | `pod dev` emulates Core | uses the declared providers     |
-| Production `pod start`  | refused                 | allowed after the facility gate |
+|                         | Core                                                     | Self-hosted                                      |
+| ----------------------- | -------------------------------------------------------- | ------------------------------------------------ |
+| `pod.host.ts` mode      | `core`                                                   | `self-hosted`                                    |
+| Runtime transport       | HTTP over the host proxy; facilities call back over HTTP | HTTP on a loopback socket; facilities in process |
+| HTTP and static assets  | Core                                                     | `pod start`                                      |
+| Facilities and identity | Core runtime bindings                                    | `pod.host.ts` providers                          |
+| Local development       | `pod dev` emulates Core                                  | uses the declared providers                      |
+| Production `pod start`  | refused                                                  | allowed after the facility gate                  |
 
 A Core workspace needs only a marker:
 
@@ -295,7 +295,7 @@ The `notification` collection replicates like any other. The permission guard sc
 `recipient_user_id`, so a browser holds only its own; `notification_outbox` is excluded from the
 replica DDL entirely, since a browser can act on none of it.
 
-The workspace shell renders the bell (`runtime/notifications-menu.svelte`), supplied to
+The workspace shell renders the bell (`ui/shell/notifications-menu.svelte`), supplied to
 `WorkspaceShell` as a snippet — the shell component has no data layer, and what is unread is a
 question only the runtime holding the replica can answer. It is live through the sync engine and
 nothing else: the read is the ordinary cached `findMany`, and a diff applied to the replica re-fires

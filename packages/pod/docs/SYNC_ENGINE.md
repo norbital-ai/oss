@@ -77,9 +77,9 @@ Every server answer is folded into the local replica. The second visit to anythi
 
 Engine code lives in two halves:
 
-- **client** — `packages/pod/src/lib/client/sync/` + the read seam in
-  `packages/pod/src/lib/runtime/client.ts` and `packages/pod/src/lib/client/remote-query.svelte.ts`
-- **server** — `packages/pod/src/lib/server/collection/sync/`
+- **client** — `packages/pod/src/ui/sync/` + the read seam in
+  `packages/pod/src/ui/state/client.ts` and `packages/pod/src/ui/state/remote-query.svelte.ts`
+- **server** — `packages/pod/src/server/collection/sync/`
 
 A compatible host provides the server transport. The sync engine itself is a Pod concern and does
 not depend on any particular host application.
@@ -591,12 +591,12 @@ Honest list of what this design does not yet do.
 
 ## Code map
 
-| Layer                    | Location                                       | Files                                                                                                                                                                             |
-| ------------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Client sync state**    | `packages/pod/src/lib/client/sync/`            | `pod-sync-client.ts` (connect, apply diffs, catch-up, mutate), `client-sync.ts` (local query executor), `subscription-registry.ts` (live query registry), `types.ts` (wire types) |
-| **Client storage**       | `packages/pod/src/lib/client/sync/`            | `pglite-worker.ts` (SharedWorker PGlite), `pglite-worker-bridge.ts` (postMessage bridge), `browser-bootstrap.ts` (browser-side bootstrap)                                         |
-| **Client entry**         | `packages/pod/src/lib/runtime/`                | `client.ts` (browser API proxy), `packages/pod/src/lib/client/remote-query.svelte.ts` (remote query transport)                                                                    |
-| **Server wire protocol** | `packages/pod/src/lib/server/collection/sync/` | `sync-endpoints.server.ts` (schema, shape, stream, mutate dispatch), `sync-outbox.server.ts` (change feed append), `outbox-tailer.server.ts` (cursor management)                  |
-| **Server authority**     | `packages/pod/src/lib/server/collection/sync/` | `mutation-rejection.server.ts` (rejection detection), `db-notifications.server.ts` (PostgreSQL NOTIFY/LISTEN)                                                                     |
+| Layer                    | Location                                   | Files                                                                                                                                                                             |
+| ------------------------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Client sync state**    | `packages/pod/src/ui/sync/`                | `pod-sync-client.ts` (connect, apply diffs, catch-up, mutate), `client-sync.ts` (local query executor), `subscription-registry.ts` (live query registry), `types.ts` (wire types) |
+| **Client storage**       | `packages/pod/src/ui/sync/`                | `pglite-worker.ts` (SharedWorker PGlite), `pglite-worker-bridge.ts` (postMessage bridge), `browser-bootstrap.ts` (browser-side bootstrap)                                         |
+| **Client entry**         | `packages/pod/src/ui/state/`               | `client.ts` (browser API proxy), `packages/pod/src/ui/state/remote-query.svelte.ts` (remote query transport)                                                                      |
+| **Server wire protocol** | `packages/pod/src/server/collection/sync/` | `sync-endpoints.server.ts` (schema, shape, stream, mutate dispatch), `sync-outbox.server.ts` (change feed append), `outbox-tailer.server.ts` (cursor management)                  |
+| **Server authority**     | `packages/pod/src/server/collection/sync/` | `mutation-rejection.server.ts` (rejection detection), `db-notifications.server.ts` (PostgreSQL NOTIFY/LISTEN)                                                                     |
 
 Tests: `packages/pod/tests/sync/` — `pod-sync-p0.test.ts`, `pod-sync-client.test.ts`, `sync-e2e-comprehensive.test.ts`, `sync-e2e.test.ts`, `sync-http-e2e.test.ts`, `client-sync.test.ts`, `mutation-rejection.test.ts`.

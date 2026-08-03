@@ -5,13 +5,13 @@ import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/type
 import {
 	assertStandaloneFacilities,
 	manifestChannelTransports
-} from '../../src/lib/bin/invocation/standalone.js';
-import { loadHostConfig } from '../../src/lib/bin/invocation/host-config.js';
-import { satisfiedFacilities, type RuntimeFacilityName } from '../../src/lib/host/types.js';
-import { intervalQueue } from '../../src/lib/host/interval-queue.js';
-import { postgresDb } from '../../src/lib/host/db.js';
-import { devIdentity } from '../../src/lib/host/identity.js';
-import type { SelfHostedPodHostConfig } from '../../src/lib/host/types.js';
+} from '../../src/serve/standalone.js';
+import { loadHostConfig } from '../../src/host/config.js';
+import { satisfiedFacilities, type RuntimeFacilityName } from '../../src/host/types.js';
+import { intervalQueue } from '../../src/host/interval-queue.js';
+import { postgresDb } from '../../src/host/db.js';
+import { devIdentity } from '../../src/host/identity.js';
+import type { SelfHostedPodHostConfig } from '../../src/host/types.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const temporaryRoots: string[] = [];

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { telegramBot, telegramInboundMessage } from '../../src/lib/host/telegram.js';
-import type { ChannelInboundMessage, ChannelInboundResult } from '../../src/lib/host/types.js';
+import { telegramBot, telegramInboundMessage } from '../../src/host/telegram.js';
+import type { ChannelInboundMessage, ChannelInboundResult } from '../../src/host/types.js';
 
 const TOKEN = '1234:test-token';
 

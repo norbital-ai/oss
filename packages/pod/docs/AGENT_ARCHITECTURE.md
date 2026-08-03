@@ -31,7 +31,7 @@ returns plain data to Pod; Pod records the call and result as part of its own tr
 ## One loop, three entry points
 
 All agent work converges on `runAgent` in
-`src/lib/server/agent/agent-loop.server.ts`:
+`src/server/agent/agent-loop.server.ts`:
 
 - an agent automation supplies a declared task, collections, access mode and tool allowlists;
 - `remotes/agentChatStart` returns the run/session identity before inference and starts a live
@@ -81,7 +81,7 @@ channel run holding `sandbox_bash` or `sandbox_write` would therefore not be ref
 it would succeed as the organization's builder, with shell and git access to the workspace's source
 tree, from a Telegram or WhatsApp group that anyone in the group can post to. `channelAgentSpec`
 consequently names `hostTools: []` while keeping write access and the entire workspace tool surface,
-and the hold is on the identity gap rather than on channel agents: when the binding frame can carry
+and the hold is on the identity gap rather than on channel agents: when a binding call can carry
 an acting principal, a channel run should get the host tools its own principal is entitled to.
 
 Interactive chat keeps its host tools, on a narrower version of the same problem. Those calls also
@@ -168,7 +168,7 @@ There are two kinds of skill, and they share one flat namespace.
 
 **System injected** are the skills Pod ships. They are authored at the repository root under
 `skills/<name>/`, compiled by `scripts/generate-skills.mjs` into
-`packages/pod/src/lib/skills/skills.generated.ts` as `HOST_SKILLS`, and merged in at runtime. No
+`packages/pod/src/skills/skills.generated.ts` as `HOST_SKILLS`, and merged in at runtime. No
 `SKILL.md` exists anywhere under `packages/pod/`; `@norbital-ai/pod/skills` is an export subpath that
 re-exports the generated data, not a directory of markdown.
 
@@ -323,20 +323,21 @@ about a host principal; the host authorizes using the tenant identity already bo
 This is the gap the two sections above keep referring to, written out once so it does not have to be
 rediscovered from the symptoms.
 
-A guest reaches a host facility by sending one frame, and its shape is the whole problem. In
-`packages/platform-utils/src/runtime/wire.ts` the guest-to-host binding header is
-`{ t: 'binding', id, facility, method, args }` — a facility name, a method name, arguments, and a
-correlation id. There is nowhere in it to say who is asking. The omission is one-directional rather
-than a property of the transport: the host-to-guest `host-command` header in the same file carries an
+A guest reaches a host facility through the facility proxy in
+`packages/pod/src/serve/hosted.ts`: a call crosses as a JSON `{ facility, method, args }` request to
+the host's `/_internal/runtime/binding` route, the arguments escaped by `encodeWireValue` in
+`packages/platform-utils/src/runtime/wire.ts` — a facility name, a method name, arguments, and
+nothing else. There is nowhere in it to say who is asking. The omission is one-directional rather
+than a property of the transport: the host's private command plane (`/_host/command`) carries an
 `identity` of `userId`, `organizationId` and `organizationName`, so identity crosses this wire
 perfectly well in the direction the host is the one asserting it.
 
-Every layer above the frame has the same shape, because none of them could have more than the frame
+Every layer above the call has the same shape, because none of them could have more than the call
 does. `HostAgentToolBinding.run(name, input)` in
 `packages/platform-utils/src/runtime/binding.ts` takes a tool name and the model's raw input, and the
 comment immediately above it already says what is absent and why: a tenant isolate's claim about who
 is asking is not something the host can verify, so a host tool authorizes against what the host
-already knows. `HostAgentTool.run(input)` in `packages/pod/src/lib/host/agent-tools.ts` receives only
+already knows. `HostAgentTool.run(input)` in `packages/pod/src/host/agent-tools.ts` receives only
 the validated input, and its type comment says the same. The guest end matches — the agent loop
 dispatches `binding.run(call.name, call.input)` and has no third argument to pass even if it wanted
 one.
@@ -349,8 +350,8 @@ and one channel multiplexes many conversations whose message ids are independent
 correlation ids. Whatever the host guessed from concurrency would be a guess, and a guess is exactly
 the thing an authorization decision must not be.
 
-Until that frame carries the acting principal, three things are not implementable rather than merely
-unbuilt. Interactive runs cannot have per-user sandboxes, because the host cannot tell which user's
+Until a binding call carries the acting principal, three things are not implementable rather than
+merely unbuilt. Interactive runs cannot have per-user sandboxes, because the host cannot tell which user's
 sandbox to open. Channel runs cannot have per-channel sandboxes, for the same reason and with the
 same consequence — which is why `channelAgentSpec` offers no host tools at all. And personal skills
 cannot exist under a host that runs one runtime per organization, because the filesystem discovery

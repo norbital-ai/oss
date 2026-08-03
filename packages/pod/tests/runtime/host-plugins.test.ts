@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { assertHostPlugins } from '../../src/lib/host/types.js';
-import { visibleHostPlugins } from '../../src/lib/server/run/host_plugins.js';
-import { buildSystemNavigation } from '../../src/lib/runtime/workspace-navigation.js';
+import { assertHostPlugins } from '../../src/host/types.js';
+import { visibleHostPlugins } from '../../src/server/host-plugins.js';
+import { buildSystemNavigation } from '../../src/ui/shell/workspace-navigation.js';
 import type { HostAppPlugin } from '@norbital-ai/platform-utils/runtime/binding';
 
 function plugin(overrides: Partial<HostAppPlugin> = {}): HostAppPlugin {

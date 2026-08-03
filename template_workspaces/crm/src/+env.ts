@@ -11,7 +11,7 @@ export default defineEnv({
 	private: {
 		EXTERNAL_SYSTEM_TOKEN: {
 			description:
-				'Bearer token for the external system of record mirrored by the external_synced_table collection.'
+				'Bearer token for the external system of record reached by the external_synced_table integration.'
 		}
 	}
 });

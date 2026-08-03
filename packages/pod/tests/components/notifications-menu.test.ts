@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import NotificationsMenu from '$lib/runtime/notifications-menu.svelte';
+import NotificationsMenu from '$lib/ui/shell/notifications-menu.svelte';
 import SidebarHarness from '../support/sidebar-harness.svelte';
 import { FakeReplica } from '../support/fake-replica.svelte.js';
 import { render, settle } from '../support/component.js';

@@ -1,12 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-	loadHostConfig,
-	resolveDatabaseUrl,
-	type HostConfigInput
-} from '../../src/lib/bin/invocation/host-config.js';
-import { isIdentityDescriptor } from '../../src/lib/host/types.js';
+import { loadHostConfig, resolveDatabaseUrl, type HostConfigInput } from '../../src/host/config.js';
+import { isIdentityDescriptor } from '../../src/host/types.js';
 
 const temporaryRoots: string[] = [];
 

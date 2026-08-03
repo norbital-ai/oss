@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { cookieSession } from '../../src/lib/host/session.js';
-import { emailOtpIdentity } from '../../src/lib/host/email-otp.js';
-import { emailOtp, isIdentityDescriptor } from '../../src/lib/host/types.js';
+import { cookieSession } from '../../src/host/session.js';
+import { emailOtpIdentity } from '../../src/host/email-otp.js';
+import { emailOtp, isIdentityDescriptor } from '../../src/host/types.js';
 
 const SECRET = 'a'.repeat(32);
 

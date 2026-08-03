@@ -22,7 +22,7 @@
  * request time, not at pay time (decision L9).
  */
 
-import type { AccrualBand, Configuration, LeaveType } from './configuration.js';
+import type { Configuration, LeaveType } from './configuration.js';
 import {
 	completedMonths,
 	dateKey,
@@ -32,6 +32,7 @@ import {
 	type IsoDate
 } from './dates.js';
 import { roundHalfDay } from './rounding.js';
+import { coversDate } from './effective.js';
 
 /**
  * A ledger row as the database hands it back.
@@ -78,35 +79,29 @@ export function leaveYearOf(date: IsoDate, startMonth: number): number {
  * the customer configuring correctly.
  */
 export function resolveEntitlement(options: {
-	readonly leaveCode: string;
+	readonly leaveType: LeaveType;
 	readonly serviceMonths: number;
-	readonly companyId: string;
-	readonly jurisdictionId: string;
-	readonly bands: readonly AccrualBand[];
+	readonly employmentId: string;
+	readonly asOf: IsoDate;
 }): number {
-	const forOwner = (level: 'STATUTORY' | 'COMPANY'): number | null => {
-		const owned = options.bands.filter((band) => {
-			if (band.leave_code !== options.leaveCode || band.owner == null) return false;
-			return band.owner.level === 'STATUTORY'
-				? level === 'STATUTORY' && band.owner.jurisdiction_id === options.jurisdictionId
-				: level === 'COMPANY' && band.owner.company_id === options.companyId;
-		});
-		// A FLAT band applies to everyone; a service band applies from its floor upward, so the
-		// highest floor at or below the person's service is the one that governs.
+	const entitlement = options.leaveType.entitlement;
+	if (entitlement == null) return 0;
+	const forLevel = (level: 'STATUTORY' | 'ORGANISATION' | 'EMPLOYEE'): number | null => {
 		let best: { floor: number; days: number } | null = null;
-		for (const band of owned) {
-			if (band.key == null)
-				throw new Error(`An accrual band for ${options.leaveCode} has no key and cannot be read.`);
-			const floor = band.key.by === 'FLAT' ? 0 : band.key.band_from;
+		for (const layer of entitlement.layers) {
+			if (layer.level !== level) continue;
+			if (layer.level === 'EMPLOYEE' && layer.employment_id !== options.employmentId) continue;
+			if (!coversDate(layer.effective_range, options.asOf)) continue;
+			const floor = layer.key.by === 'FLAT' ? 0 : layer.key.band_from;
 			if (floor > options.serviceMonths) continue;
-			if (best == null || floor > best.floor) best = { floor, days: Number(band.days) };
+			if (best == null || floor > best.floor) best = { floor, days: Number(layer.days) };
 		}
 		return best?.days ?? null;
 	};
-	const statutory = forOwner('STATUTORY');
-	const company = forOwner('COMPANY');
-	if (statutory == null && company == null) return 0;
-	return Math.max(statutory ?? 0, company ?? statutory ?? 0);
+	const statutory = forLevel('STATUTORY') ?? 0;
+	const organisation = forLevel('ORGANISATION') ?? statutory;
+	const employee = forLevel('EMPLOYEE') ?? organisation;
+	return Math.max(statutory, organisation, employee);
 }
 
 /**

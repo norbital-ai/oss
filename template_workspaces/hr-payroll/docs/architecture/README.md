@@ -1,112 +1,93 @@
-# Payroll architecture
+# HR and payroll architecture
 
-## Purpose
+Payroll is a deterministic settlement engine over approved, effective-dated facts. The database
+keeps business inputs separate from settled output, but does not add projection or linkage layers.
 
-Payroll is a deterministic settlement engine over approved, effective-dated records. It does not
-copy a source payslip. It reads the contract, events and governing rules for one company and period,
-calculates a draft, persists a source-linked result, and freezes that result when paid.
-
-```mermaid
-flowchart LR
-  subgraph Inputs["Approved inputs"]
-    EMP["Employee and employment"]
-    TERMS["Effective employment terms"]
-    TIME["Roster, shifts and time entries"]
-    LEAVE["Leave requests and adjustments"]
-    MONEY["Claims, allowances and loan instalments"]
-  end
-
-  subgraph Rules["Effective rules"]
-    COMPANY["Company calendar and settlement policy"]
-    JUR["Jurisdiction rules and statutory tables"]
-    CATALOGUE["Pay components and treatment grid"]
-  end
-
-  RUN["Payroll run\nPICK → VALIDATE → GATHER → MEASURE\n→ ACCUMULATE → CONTRIBUTE → SETTLE → PERSIST"]
-
-  subgraph Results["Persisted result"]
-    PS["Payslip"]
-    LINES["Payslip lines"]
-    CONTRIB["Contribution base and shares"]
-    SOURCES["Consumed event links"]
-  end
-
-  Inputs --> RUN
-  Rules --> RUN
-  RUN --> PS
-  PS --> LINES
-  PS --> CONTRIB
-  LINES --> SOURCES
-```
-
-## The pillars
-
-| Pillar     | Records                                                                  | Responsibility                                                                        |
-| ---------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| Identity   | `employees`, `employments`                                               | Person, company, hire/exit and bank/statutory identity                                |
-| Contract   | `employment_terms`, `employment_statutory_facts`                         | Salary, hours, working pattern, OT coverage and scheme standing over effective ranges |
-| Calendar   | `shift_definitions`, `roster_entries`, `company_holidays`                | Scheduled work, rest/off days, holidays and substitute holidays                       |
-| Events     | `time_entries`, `leave_requests`, `leave_ledger`, `component_entries`    | What happened and what money or leave movement was authorised                         |
-| Agreements | `repayment_agreements` and generated instalment `component_entries`      | Exact dated recovery schedule and consumption of each instalment                      |
-| Catalogue  | `component_types`, `pay_components`                                      | What a line means and how it is measured                                              |
-| Law        | `jurisdictions`, contribution/rate/treatment tables, OT rules and limits | Effective statutory calculation and minimum treatment                                 |
-| Settlement | `payroll_runs`, `payslips`, lines, contributions and sources             | Calculated result, audit trail and paid-period immutability                           |
-
-## Input planes
-
-Every amount enters the engine through one of four planes:
-
-1. `SCHEDULE`: contractual salary measured from effective terms and employment dates.
-2. `ENTRY`: an approved money event such as an allowance, reimbursement, correction or loan
-   instalment.
-3. `FORMULA`: a derived value over terms, approved leave movements, earlier measured components and
-   period facts.
-4. `OVERTIME` / `OVERTIME_EXCESS`: dated time entries priced by schedule, day type and statutory
-   rules.
-
-The planes meet at `payslip_lines`. Contribution logic consumes typed lines rather than customer
-component names; therefore a customer cannot decide that “overtime is EPF wages” by renaming a
-component.
-
-## Effective dating
-
-Terms and statutory configuration are not overwritten in place. A change closes the earlier
-effective range and creates a successor row. Payroll selects configuration once for the run and
-stores a `configuration_hash`; the hash detects a rebuild against different rules.
-
-Effective dating solves two different questions:
-
-- which facts governed a historical day; and
-- which facts govern a future recalculation.
-
-It does not, by itself, freeze a paid result. Paid-run locking does that; see
-[Adjustments, ledgers and locking](adjustments-ledgers-and-locking.md).
-
-## Approval boundary
-
-Approval belongs to Pod. A pending record carries `norbital_approval_id` and is locked; payroll reads
-only rows whose approval id is null. An open clock is also rejected because elapsed time is not yet
-known. Payroll lifecycle (`DRAFT` or `PAID`) is separate from approval state.
-
-## Result identities
-
-The final records obey these identities:
+## Current architecture (before this migration)
 
 ```text
-gross = earnings − absence lines
-net = gross − employee statutory shares − deduction lines + non-wage payments
-employer cost = employer statutory shares + employer-cost lines
+component_types ----< pay_components ----< component_entries
+       |                    |                       |
+       |                    v                       v
+       +-------------> payslip_lines <---- payslip_line_sources
+                              ^
+                              |
+payroll_runs ----< payslips --+---- payslip_contributions
+
+leave_requests ----> leave_ledger
+leave_types --------> accrual_bands
 ```
 
-Each contribution persists its wage base as well as employee and employer amounts. This is essential:
-an amount can match by coincidence even when the base is wrong.
+The type catalogue duplicated policy above `pay_components`; output then split a payslip across
+lines, source links and statutory contribution rows. Leave likewise duplicated approved requests
+into a ledger. Those layers made a settled number harder to query without adding new business facts.
 
-## What is deliberately not stored
+## Target architecture
 
-- No mutable YTD accumulator: YTD is summed from earlier `PAID` results.
-- No accrued-leave cache: contractual accrual is derived at the requested date.
-- No payment ledger duplicated from payslips: payment files are projections from paid results.
-- No seeded overtime or incentive-overtime result: both are calculated from dated inputs.
-- No “consumed” boolean: consumption is the existence of a persisted relationship.
+```text
+APPROVED INPUTS                         SETTLED OUTPUT
 
-The detailed mechanisms are in the linked architecture chapters from the documentation index.
+employment_terms --+                 +-> payroll_runs [one policy snapshot]
+time_entries -------+                 |        |
+leave_requests -----+--> calculator -+        v
+component_entries --+                          payslips
+       |                                        |
+       v                                        v
+pay_components <-------------------------- payslip_lines
+ [policy + calculation +                    [the only junction]
+  entitlement union]                        |- pay_component_id
+                                             |- component_entry_id (when entry-backed)
+                                             `- statutory_contribution_id (when statutory)
+
+leave_types
+ [accrual + payroll effect + entitlement layers]
+       |
+       `-- statutory floor
+           + organisation enhancement
+           + employee enhancement
+```
+
+The payroll-output core is five collections:
+
+1. `pay_components` — one reusable definition with a strict settlement/statutory policy and a
+   polymorphic calculation definition.
+2. `component_entries` — approved monetary events such as claims, allowances, adjustments and loan
+   instalments.
+3. `payroll_runs` — one company-period calculation and one captured policy snapshot.
+4. `payslips` — one employment's totals in a run.
+5. `payslip_lines` — the direct payslip-to-component junction and complete breakdown.
+
+`payslip_lines.component` is a closed union. Ordinary lines must name a pay component; entry-backed
+lines must also name exactly one component entry; statutory lines must name a statutory scheme.
+Generated relational columns and composite foreign keys enforce those links physically. A
+single-use entry has one line globally. A recurring entry may have one line per payslip.
+
+## Leave and layered entitlement
+
+Leave is not itself money. `leave_requests` is the approved event stream, `leave_types` owns the
+entitlement/accrual policy, and a mapped `pay_component` owns only the monetary effect (for example,
+unpaid-leave deduction or encashment).
+
+The entitlement matrix is embedded in `leave_types` as a strict layer union:
+
+```text
+effective entitlement = max(statutory floor, organisation layer, employee layer)
+```
+
+The same layering principle applies to claim and allowance caps in their pay-component definition:
+statutory policy cannot be weakened, while organisation and employee layers may enhance it. This is
+policy data, not a reason to add one collection per benefit kind.
+
+## Run snapshot and locking
+
+Configuration is captured once on `payroll_runs`, never once per payslip. Every payslip in a run was
+calculated from the same picked company and statutory policy. Repeating the snapshot per payslip
+would duplicate identical JSON and permit impossible disagreement inside one run.
+
+```text
+DRAFT run --recalculate--> DRAFT run --lock & pay--> PAID run
+                                                   [immutable]
+```
+
+YTD is summed from earlier paid statutory payslip lines. Leave balance is derived from approved
+leave events. Neither requires a mutable ledger/cache collection.

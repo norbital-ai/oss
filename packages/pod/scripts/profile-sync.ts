@@ -18,9 +18,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { PGlite } from '@electric-sql/pglite';
-import { PodSyncClient, type PgliteLike } from '../src/lib/client/sync/pod-sync-client.js';
-import { SubscriptionRegistry } from '../src/lib/client/sync/subscription-registry.js';
-import type { ShapeResponse, SyncFetch } from '../src/lib/client/sync/types.js';
+import { PodSyncClient, type PgliteLike } from '../src/ui/sync/pod-sync-client.js';
+import { SubscriptionRegistry } from '../src/ui/sync/subscription-registry.js';
+import type { ShapeResponse, SyncFetch } from '../src/ui/sync/types.js';
 
 // ── the workload ───────────────────────────────────────────────────────────────
 //

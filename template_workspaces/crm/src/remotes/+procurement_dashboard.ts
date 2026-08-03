@@ -1,7 +1,8 @@
 import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
 
-const COMMITTED_STATUSES = ['submitted', 'confirmed', 'received'] as const;
+const COMMITTED_STATUSES = ['submitted', 'confirmed'] as const;
+const TOP_SUPPLIER_LIMIT = 5;
 
 export default defineQueryHandler({
 	schema: z.object({}),
@@ -12,106 +13,55 @@ export default defineQueryHandler({
 				doc_no: true,
 				status: true,
 				currency: true,
+				supplier_id: true,
+				supplier_name: true,
 				gross: true
 			},
+			orderBy: { doc_no: 'asc' },
 			limit: 5000
 		});
 
 		const statusCounts: Record<string, number> = {};
 		const committedByCurrency = new Map<string, number>();
+		const committedBySupplier = new Map<string, { supplierName: string; gross: number }>();
 
 		for (const order of purchaseOrders) {
 			const status = order.status ?? 'draft';
 			statusCounts[status] = (statusCounts[status] ?? 0) + 1;
 
-			if (
-				order.currency != null &&
-				COMMITTED_STATUSES.some((committed) => committed === order.status)
-			) {
-				const gross = order.gross != null ? Number(order.gross) : 0;
-				const current = committedByCurrency.get(order.currency) ?? 0;
-				committedByCurrency.set(order.currency, current + gross);
+			if (order.currency == null || !COMMITTED_STATUSES.some((s) => s === order.status)) {
+				continue;
 			}
-		}
-
-		const payableOrders = purchaseOrders.filter(
-			(order) => order.status != null && order.status !== 'draft' && order.status !== 'cancelled'
-		);
-		const purchaseOrderIds = payableOrders.map((order) => order.norbital_id);
-
-		const payments =
-			purchaseOrderIds.length === 0
-				? []
-				: await api.db.query.payment_records.findMany({
-						where: {
-							purchase_order_id: { in: purchaseOrderIds },
-							direction: { eq: 'outgoing' }
-						},
-						columns: { purchase_order_id: true, amount: true },
-						limit: 5000
-					});
-
-		const paidByOrder = new Map<string, number>();
-		for (const payment of payments) {
-			if (payment.purchase_order_id == null) continue;
-			const current = paidByOrder.get(payment.purchase_order_id) ?? 0;
-			paidByOrder.set(payment.purchase_order_id, current + (payment.amount?.value ?? 0));
-		}
-
-		const payables = payableOrders.map((order) => {
 			const gross = order.gross != null ? Number(order.gross) : 0;
-			const paid = paidByOrder.get(order.norbital_id) ?? 0;
-			const outstanding = gross - paid;
-			return {
-				id: order.norbital_id,
-				doc_no: order.doc_no,
-				currency: order.currency,
-				gross,
-				paid,
-				outstanding,
-				status: gross === 0 ? 'empty' : paid >= gross ? 'paid' : paid > 0 ? 'partial' : 'unpaid'
+
+			const currencyTotal = committedByCurrency.get(order.currency) ?? 0;
+			committedByCurrency.set(order.currency, currencyTotal + gross);
+
+			const current = committedBySupplier.get(order.supplier_id) ?? {
+				supplierName: order.supplier_name,
+				gross: 0
 			};
-		});
+			committedBySupplier.set(order.supplier_id, {
+				supplierName: current.supplierName,
+				gross: current.gross + gross
+			});
+		}
 
-		const stockLevels = await api.db.query.stock_levels.findMany({
-			columns: { product_id: true, qty_on_hand: true },
-			limit: 5000
-		});
-
-		const lowStockRows = stockLevels.filter((row) => Number(row.qty_on_hand ?? 0) <= 0);
-		const lowStockProductIds = lowStockRows.map((row) => row.product_id);
-
-		const products =
-			lowStockProductIds.length === 0
-				? []
-				: await api.db.query.products.findMany({
-						where: { norbital_id: { in: lowStockProductIds } },
-						columns: { norbital_id: true, code: true, name: true },
-						limit: lowStockProductIds.length
-					});
-
-		const productById = new Map(products.map((product) => [product.norbital_id, product]));
-
-		const lowStock = lowStockRows.flatMap((row) => {
-			const product = productById.get(row.product_id);
-			if (!product) return [];
-			return [
-				{
-					product_id: row.product_id,
-					product_code: product.code,
-					product_name: product.name,
-					qty_on_hand: Number(row.qty_on_hand ?? 0)
-				}
-			];
-		});
+		const topSuppliers = [...committedBySupplier.entries()]
+			.map(([supplierId, row]) => ({
+				supplier_id: supplierId,
+				supplier_name: row.supplierName,
+				gross: row.gross
+			}))
+			.sort((left, right) => right.gross - left.gross)
+			.slice(0, TOP_SUPPLIER_LIMIT);
 
 		return {
 			status_counts: statusCounts,
 			committed_by_currency: [...committedByCurrency.entries()]
 				.map(([currency, total]) => ({ currency, total }))
 				.sort((left, right) => left.currency.localeCompare(right.currency)),
-			payables,
-			low_stock: lowStock.sort((left, right) => left.product_code.localeCompare(right.product_code))
+			top_suppliers: topSuppliers
 		};
 	}
 });

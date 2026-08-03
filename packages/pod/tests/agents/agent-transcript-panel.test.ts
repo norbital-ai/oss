@@ -4,7 +4,7 @@ import {
 	toPanelUsage,
 	toSessionTotals,
 	withPendingEcho
-} from '$lib/runtime/agent/transcript.js';
+} from '$lib/ui/agent/transcript.js';
 import { parseCompactDirective } from '$lib/server/agent/agent-loop.server.js';
 
 describe('compact directive', () => {

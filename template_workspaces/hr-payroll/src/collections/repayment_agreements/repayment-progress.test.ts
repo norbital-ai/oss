@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { repaymentProgress } from './lib/repayment-progress.ts';
 
-test('an instalment is paid when it has a payslip source link', () => {
+test('an instalment is paid when it has a direct payslip line', () => {
 	assert.deepEqual(
 		repaymentProgress(300, 3, [
-			{ amount: '100', repayment_sequence: 0, entry_payslip_sources: [{}] },
-			{ amount: '100', repayment_sequence: 1, entry_payslip_sources: [] },
-			{ amount: '100', repayment_sequence: 2, entry_payslip_sources: null }
+			{ amount: '100', repayment_sequence: 0, entry_payslip_lines: [{}] },
+			{ amount: '100', repayment_sequence: 1, entry_payslip_lines: [] },
+			{ amount: '100', repayment_sequence: 2, entry_payslip_lines: null }
 		]),
 		{
 			paidAmount: 100,
@@ -22,9 +22,9 @@ test('an instalment is paid when it has a payslip source link', () => {
 
 test('duplicate links and duplicate rows cannot double-count a schedule sequence', () => {
 	const progress = repaymentProgress(200, 2, [
-		{ amount: '100', repayment_sequence: 0, entry_payslip_sources: [{}, {}] },
-		{ amount: '100', repayment_sequence: 0, entry_payslip_sources: [{}] },
-		{ amount: '100', repayment_sequence: 1, entry_payslip_sources: [{}] }
+		{ amount: '100', repayment_sequence: 0, entry_payslip_lines: [{}, {}] },
+		{ amount: '100', repayment_sequence: 0, entry_payslip_lines: [{}] },
+		{ amount: '100', repayment_sequence: 1, entry_payslip_lines: [{}] }
 	]);
 	assert.equal(progress?.paidAmount, 200);
 	assert.equal(progress?.paidInstalments, 2);
@@ -33,7 +33,7 @@ test('duplicate links and duplicate rows cannot double-count a schedule sequence
 
 test('a fully-valued but incomplete schedule is not marked settled', () => {
 	const progress = repaymentProgress(200, 2, [
-		{ amount: '200', repayment_sequence: 0, entry_payslip_sources: [{}] }
+		{ amount: '200', repayment_sequence: 0, entry_payslip_lines: [{}] }
 	]);
 	assert.equal(progress?.outstandingAmount, 0);
 	assert.equal(progress?.settled, false);

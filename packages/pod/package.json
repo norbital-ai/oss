@@ -36,19 +36,19 @@
 			"default": "./build/authoring/internals.js"
 		},
 		"./client": {
-			"types": "./build/client/public.d.ts",
-			"svelte": "./build/client/public.js",
-			"default": "./build/client/public.js"
+			"types": "./build/ui/public.d.ts",
+			"svelte": "./build/ui/public.js",
+			"default": "./build/ui/public.js"
 		},
 		"./client/platform": {
-			"types": "./build/runtime/mount-client.d.ts",
-			"svelte": "./build/runtime/mount-client.js",
-			"default": "./build/runtime/mount-client.js"
+			"types": "./build/ui/shell/mount-client.d.ts",
+			"svelte": "./build/ui/shell/mount-client.js",
+			"default": "./build/ui/shell/mount-client.js"
 		},
 		"./client/runtime": {
-			"types": "./build/runtime/client.d.ts",
-			"svelte": "./build/runtime/client.js",
-			"default": "./build/runtime/client.js"
+			"types": "./build/ui/state/client.d.ts",
+			"svelte": "./build/ui/state/client.js",
+			"default": "./build/ui/state/client.js"
 		},
 		"./vite": {
 			"types": "./build/vite/index.d.ts",
@@ -63,19 +63,19 @@
 			"default": "./build/skills/index.js"
 		},
 		"./client/agent": {
-			"types": "./build/runtime/agent/agent-chat-panel.svelte.d.ts",
-			"svelte": "./build/runtime/agent/agent-chat-panel.svelte",
-			"default": "./build/runtime/agent/agent-chat-panel.svelte"
+			"types": "./build/ui/agent/agent-chat-panel.svelte.d.ts",
+			"svelte": "./build/ui/agent/agent-chat-panel.svelte",
+			"default": "./build/ui/agent/agent-chat-panel.svelte"
 		}
 	},
 	"imports": {
 		"#lib/*": {
-			"types": "./src/lib/*",
+			"types": "./src/*",
 			"default": "./build/*"
 		}
 	},
 	"scripts": {
-		"build": "node ../../scripts/build-package.mjs svelte-package -i src/lib -o {} --tsconfig tsconfig.json",
+		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {} --tsconfig tsconfig.json",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/pod",
 		"lint": "svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
 		"test": "vitest run",

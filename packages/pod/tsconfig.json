@@ -4,9 +4,9 @@
 		"allowImportingTsExtensions": true,
 		"noEmit": true,
 		"paths": {
-			"$lib/*": ["./src/lib/*"]
+			"$lib/*": ["./src/*"]
 		}
 	},
-	"include": ["src/lib/**/*.ts", "src/lib/**/*.svelte"],
-	"exclude": ["src/lib/**/__tests__/**", "**/*.test-d.ts", "build/**"]
+	"include": ["src/**/*.ts", "src/**/*.svelte"],
+	"exclude": ["src/**/__tests__/**", "**/*.test-d.ts", "build/**"]
 }

@@ -172,7 +172,7 @@ async function seedTenant(
 }
 
 describe('seeding two tenants in one process', () => {
-	it('links each tenant\'s team_members to that tenant\'s own user row', async () => {
+	it("links each tenant's team_members to that tenant's own user row", async () => {
 		const crm = fakeTenant();
 		const fieldOps = fakeTenant();
 
@@ -183,7 +183,7 @@ describe('seeding two tenants in one process', () => {
 		assert.deepEqual(
 			fieldOps.memberships,
 			[{ userId: FIELD_OPS_ZUYAO, teamId: TEAM }],
-			'the second tenant must not be linked to the first tenant\'s user id'
+			"the second tenant must not be linked to the first tenant's user id"
 		);
 	});
 

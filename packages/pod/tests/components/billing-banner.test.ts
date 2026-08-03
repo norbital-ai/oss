@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import BillingBanner from '$lib/runtime/billing-banner.svelte';
+import BillingBanner from '$lib/ui/shell/billing-banner.svelte';
 import { render, settle } from '../support/component.js';
 
 describe('billing banner', () => {

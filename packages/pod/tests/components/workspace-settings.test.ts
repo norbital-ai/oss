@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import WorkspaceSettingsSurface from '$lib/runtime/workspace-settings-surface.svelte';
-import type { WorkspaceInvitation, WorkspaceSettingsApi } from '$lib/runtime/workspace-settings.js';
+import WorkspaceSettingsSurface from '$lib/ui/shell/workspace-settings-surface.svelte';
+import type {
+	WorkspaceInvitation,
+	WorkspaceSettingsApi
+} from '$lib/ui/shell/workspace-settings.js';
 import { FakeReplica } from '../support/fake-replica.svelte.js';
 import { render, settle } from '../support/component.js';
 

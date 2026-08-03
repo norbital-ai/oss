@@ -16,6 +16,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Pool, type PoolClient } from 'pg';
+import { decodeWireValue, encodeWireValue } from '@norbital-ai/platform-utils/runtime/wire';
 import type {
 	HostAiBinding,
 	HostFileStorageBinding,
@@ -49,6 +50,40 @@ export type Identity = {
 	}[];
 };
 
+/**
+ * One binding call as it left the guest, exactly as the host received it.
+ *
+ * Recorded rather than summarized: the assertion that matters most about this wire is a *negative*
+ * one — the guest must not name its organization, its database or its tenant, because the host
+ * resolves all three from the secret it minted. That can only be checked against the real body.
+ */
+export type RecordedBindingCall = {
+	readonly facility: string;
+	readonly method: string;
+	readonly rawBody: string;
+};
+
+/**
+ * A guest runtime served the way a real host serves one: the built bundle's own
+ * `startPodHttpServer`, listening on a port, with a stand-in host answering its binding calls and its
+ * boot configuration request.
+ *
+ * Nothing here forges identity. A caller sends the host token and the identity headers itself, so a
+ * test can leave either out and see what the guest does about it.
+ */
+export type GuestRuntimeServer = {
+	readonly url: string;
+	readonly hostToken: string;
+	/** The bearer secret the stand-in host expects; a guest that used another would be refused. */
+	readonly bindingSecret: string;
+	/** Headers a host would send with tenant traffic. */
+	headers(identity: Identity): Record<string, string>;
+	readonly bindingCalls: readonly RecordedBindingCall[];
+	/** How many times the guest asked the host for its deployment configuration. */
+	configurationRequests(): number;
+	close(): Promise<void>;
+};
+
 export type PodRuntimeHarness = {
 	readonly schemaSql: string;
 	readonly orgId: string;
@@ -66,7 +101,14 @@ export type PodRuntimeHarness = {
 	hostCommand(command: unknown): Promise<unknown>;
 	/** Serve the runtime over a real HTTP socket (forging `identity` on every request). */
 	serveHttp(identity: Identity): Promise<{ url: string; close: () => Promise<void> }>;
+	/** Serve the runtime as a hosted guest, behind a stand-in host. */
+	serveGuest(options?: GuestRuntimeOptions): Promise<GuestRuntimeServer>;
 	stop(): Promise<void>;
+};
+
+export type GuestRuntimeOptions = {
+	/** Host surfaces the stand-in host advertises at boot. */
+	readonly hostPlugins?: readonly unknown[];
 };
 
 type HandleTenantRequest = (
@@ -79,6 +121,17 @@ type HandleHostCommand = (
 	bindings: RuntimeFacilityBindings,
 	identity: { userId: string; organizationId: string; organizationName: string }
 ) => Promise<unknown>;
+
+type StartGuestRuntime = () => Promise<{ port: number; close(): Promise<void> }>;
+
+/**
+ * Credentials the stand-in host mints for a guest.
+ *
+ * The token is over 32 bytes because `trustedHeaderIdentity` refuses a shorter one — a guest handed a
+ * guessable token would refuse to boot, which is the behaviour, not an inconvenience to work around.
+ */
+const GUEST_HOST_TOKEN = 'guest-host-token-0123456789abcdef0123456789abcdef';
+const GUEST_BINDING_SECRET = 'guest-binding-secret-0123456789abcdef';
 
 type TestHostDbBinding = {
 	query(
@@ -348,11 +401,12 @@ export async function bootPodRuntime(
 	// down on the way out rather than leaving it — and its data volume — behind.
 	let handleTenantRequest: HandleTenantRequest;
 	let handleHostCommand: HandleHostCommand;
+	let startGuestRuntime: StartGuestRuntime;
 	let pool: Pool;
 	let binding: ReturnType<typeof createPgBinding>;
 	let schemaSql: string;
 	try {
-		({ handleTenantRequest, handleHostCommand, pool, binding, schemaSql } =
+		({ handleTenantRequest, handleHostCommand, startGuestRuntime, pool, binding, schemaSql } =
 			await withTemplateBuildLock(templateRoot, async () => {
 				execFileSync('node', [POD_BIN, 'build'], { cwd: templateRoot, env, stdio: 'ignore' });
 				execFileSync('node', [POD_BIN, 'migrate'], { cwd: templateRoot, env, stdio: 'ignore' });
@@ -368,8 +422,13 @@ export async function bootPodRuntime(
 				const runtimeModule = (await import(pathToFileURL(runtimePath).href)) as {
 					handlePodRequest?: HandleTenantRequest;
 					handlePodHostCommand?: HandleHostCommand;
+					startPodHttpServer?: StartGuestRuntime;
 				};
-				if (!runtimeModule.handlePodRequest || !runtimeModule.handlePodHostCommand) {
+				if (
+					!runtimeModule.handlePodRequest ||
+					!runtimeModule.handlePodHostCommand ||
+					!runtimeModule.startPodHttpServer
+				) {
 					throw new Error('built pod runtime is missing its request/host-command entry points');
 				}
 				const loadedPool = new Pool({ connectionString: pg.connectionString, max: 12 });
@@ -377,6 +436,7 @@ export async function bootPodRuntime(
 				return {
 					handleTenantRequest: runtimeModule.handlePodRequest,
 					handleHostCommand: runtimeModule.handlePodHostCommand,
+					startGuestRuntime: runtimeModule.startPodHttpServer,
 					pool: loadedPool,
 					binding: loadedBinding,
 					schemaSql: await loadSchemaSql(templateRoot)
@@ -419,6 +479,49 @@ export async function bootPodRuntime(
 				{ userId: ADMIN_ID, organizationId: ORG_ID, organizationName: ORG_NAME }
 			);
 		},
+		async serveGuest(options = {}) {
+			const bindings: Record<string, unknown> = { db: binding, ...facilities };
+			const calls: RecordedBindingCall[] = [];
+			let configurations = 0;
+			const host = createServer((req, res) => {
+				void standInHost(req, res, bindings, calls, {
+					hostPlugins: options.hostPlugins ?? [],
+					onConfiguration: () => (configurations += 1)
+				}).catch((cause: unknown) => {
+					if (!res.headersSent) res.statusCode = 500;
+					res.end(String(cause));
+				});
+			});
+			await new Promise<void>((resolve) => host.listen(0, '127.0.0.1', resolve));
+			const hostPort = (host.address() as AddressInfo).port;
+			const port = await unusedPort();
+			// The guest reads its environment at boot, the way the sandbox that starts it supplies one.
+			process.env.POD_RUNTIME_PORT = String(port);
+			process.env.POD_HOST_TOKEN = GUEST_HOST_TOKEN;
+			process.env.NORBITAL_CORE_URL = `http://127.0.0.1:${hostPort}`;
+			process.env.NORBITAL_BINDING_SECRET = GUEST_BINDING_SECRET;
+			const guest = await startGuestRuntime();
+			return {
+				url: `http://127.0.0.1:${guest.port}`,
+				hostToken: GUEST_HOST_TOKEN,
+				bindingSecret: GUEST_BINDING_SECRET,
+				headers(identity) {
+					return {
+						'x-norbital-host-token': GUEST_HOST_TOKEN,
+						'x-norbital-user-id': identity.userId,
+						'x-norbital-org-id': ORG_ID,
+						'x-norbital-org-name': ORG_NAME,
+						'x-norbital-base-scope-json': baseScope(identity)
+					};
+				},
+				bindingCalls: calls,
+				configurationRequests: () => configurations,
+				async close() {
+					await guest.close();
+					await new Promise<void>((resolve) => host.close(() => resolve()));
+				}
+			};
+		},
 		async serveHttp(identity) {
 			const server = createServer((req, res) => {
 				void handleNodeRequest(req, res, identity, handleTenantRequest, {
@@ -443,6 +546,86 @@ export async function bootPodRuntime(
 				await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
 		}
 	};
+}
+
+/**
+ * A port nothing is listening on, taken by briefly listening on it.
+ *
+ * The guest binds the port its environment names, because that is what a host's proxy routes to, so a
+ * test has to choose one that is free rather than asking for an ephemeral one.
+ */
+async function unusedPort(): Promise<number> {
+	const probe = createServer();
+	await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+	const port = (probe.address() as AddressInfo).port;
+	await new Promise<void>((resolve) => probe.close(() => resolve()));
+	return port;
+}
+
+async function readAll(request: IncomingMessage): Promise<string> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of request) chunks.push(chunk as Buffer);
+	return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * The host half of the runtime wire: boot configuration, and one facility dispatcher.
+ *
+ * `structuredClone` around the result is the point of dispatching through here rather than handing
+ * the guest the binding objects — it is what a value crossing this boundary really goes through, and
+ * it is what a function (or a record of them) does not survive.
+ */
+async function standInHost(
+	request: IncomingMessage,
+	response: ServerResponse,
+	bindings: Record<string, unknown>,
+	calls: RecordedBindingCall[],
+	options: { hostPlugins: readonly unknown[]; onConfiguration: () => void }
+): Promise<void> {
+	const answer = (status: number, body: unknown) => {
+		response.statusCode = status;
+		response.setHeader('content-type', 'application/json');
+		response.end(JSON.stringify(body));
+	};
+	// The secret is the whole of a guest's authorization here, exactly as it is in the real host.
+	if (request.headers.authorization !== `Bearer ${GUEST_BINDING_SECRET}`) {
+		response.statusCode = 401;
+		response.end('Unauthorized');
+		return;
+	}
+	const pathname = new URL(request.url ?? '/', 'http://host.local').pathname;
+	if (pathname === '/_internal/runtime/config' && request.method === 'GET') {
+		options.onConfiguration();
+		answer(200, { hostPlugins: options.hostPlugins });
+		return;
+	}
+	if (pathname !== '/_internal/runtime/binding' || request.method !== 'POST') {
+		response.statusCode = 404;
+		response.end('Not Found');
+		return;
+	}
+	const rawBody = await readAll(request);
+	const parsed = JSON.parse(rawBody) as {
+		facility?: unknown;
+		method?: unknown;
+		args?: unknown;
+	};
+	const facility = typeof parsed.facility === 'string' ? parsed.facility : '';
+	const method = typeof parsed.method === 'string' ? parsed.method : '';
+	calls.push({ facility, method, rawBody });
+	try {
+		const target = bindings[facility] as Record<string, unknown> | undefined;
+		if (!target) throw new Error(`No ${facility} binding`);
+		const member = target[method];
+		if (typeof member !== 'function') {
+			throw new Error(`${facility}.${method} is not callable across the runtime boundary`);
+		}
+		const args = (Array.isArray(parsed.args) ? parsed.args : []).map(decodeWireValue);
+		const value: unknown = await (member as (...a: unknown[]) => unknown).apply(target, args);
+		answer(200, { ok: true, value: structuredClone(encodeWireValue(value)) });
+	} catch (caught) {
+		answer(200, { ok: false, error: caught instanceof Error ? caught.message : String(caught) });
+	}
 }
 
 /** Convert a Node request → web Request (forging auth), run the runtime, stream the Response back. */

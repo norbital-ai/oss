@@ -5,7 +5,7 @@ import { entryOriginSchema } from '../../custom-types/entry_origin/+definition.j
 type BeforeApi = Parameters<NonNullable<NonNullable<Hooks['create']>['before']>>[0]['api'];
 
 /**
- * Amounts are magnitudes. Direction comes from the component type's nature and from the treatment,
+ * Amounts are magnitudes. Direction comes from the pay component's policy and from the treatment,
  * and a correction is an entry whose `origin.kind` is `REVERSAL` — never a negative number.
  */
 function assertMagnitude(value: unknown): void {
@@ -23,7 +23,7 @@ function assertMagnitude(value: unknown): void {
 
 function instalmentOrigin(value: unknown) {
 	const parsed = entryOriginSchema.safeParse(value);
-	return parsed.success && parsed.data.kind === 'INSTALMENT' ? parsed.data : null;
+	return parsed.success && parsed.data.kind === 'LOAN_INSTALMENT' ? parsed.data : null;
 }
 
 async function assertInstalmentMatchesAgreement(

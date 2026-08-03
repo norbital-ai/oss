@@ -11,7 +11,7 @@ import { z } from 'zod/mini';
  *
  * `PROGRESSIVE` is `constant + (base − band_from) × rate / 100`, where `constant` is the
  * CUMULATIVE tax at the band's lower bound; it is the ONLY value in the whole schema — besides
- * `leave_ledger.days` — that is allowed to be negative.
+ * a leave event's signed `movement_days` — that is allowed to be negative.
  */
 export const rateAwardSchema = z.discriminatedUnion('kind', [
 	z.strictObject({

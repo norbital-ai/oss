@@ -8,13 +8,13 @@ let replica = new FakeReplica();
 // The panel reads its transcript through `getInitializedWorkspaceClient().db`. Mocking the module
 // rather than the client keeps PGlite, the sync worker and the browser bootstrap out of a component
 // test — none of them are the seam this file is about.
-vi.mock('$lib/runtime/client.js', () => ({
+vi.mock('$lib/ui/state/client.js', () => ({
 	getInitializedWorkspaceClient: () => replica
 }));
 
 const { setWorkspaceRemoteTransport } =
 	await import('$lib/authoring/workspace/remote-transport.js');
-const AgentChatPanel = (await import('$lib/runtime/agent/agent-chat-panel.svelte')).default;
+const AgentChatPanel = (await import('$lib/ui/agent/agent-chat-panel.svelte')).default;
 
 type ChatResult = { runId: string; chatId: string };
 

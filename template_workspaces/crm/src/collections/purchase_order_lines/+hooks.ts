@@ -17,7 +17,10 @@ function validateLineFields(input: Record<string, unknown>): void {
 	}
 
 	const unitCost = Number(input.unit_cost);
-	if (Number.isNaN(unitCost) || unitCost < 0) {
+	if (input.unit_cost == null || Number.isNaN(unitCost)) {
+		throw new Error('Unit cost is required.');
+	}
+	if (unitCost < 0) {
 		throw new Error('Unit cost cannot be negative.');
 	}
 
@@ -25,22 +28,6 @@ function validateLineFields(input: Record<string, unknown>): void {
 	if (taxRate < 0 || taxRate > 100) {
 		throw new Error('Tax rate must be between 0 and 100.');
 	}
-}
-
-async function resolveUnitCost(
-	api: Parameters<NonNullable<NonNullable<Hooks['create']>['before']>>[0]['api'],
-	productId: string,
-	suppliedCost: unknown
-): Promise<number> {
-	if (suppliedCost != null) return Number(suppliedCost);
-
-	const stockLevel = await api.db.query.stock_levels.findFirst({
-		where: { product_id: { eq: productId } },
-		columns: { unit_cost: true }
-	});
-	if (stockLevel?.unit_cost != null) return Number(stockLevel.unit_cost);
-
-	throw new Error('Unit cost is required when no stock cost is on file for this product.');
 }
 
 function computeLineAmounts(order: WorkspaceRow<'purchase_orders'>, line: Record<string, unknown>) {
@@ -114,14 +101,12 @@ export default {
 			});
 			if (!product) throw new Error('Referenced product does not exist.');
 
-			const unitCost = await resolveUnitCost(api, input.product_id, input.unit_cost);
 			const resolved = {
 				...input,
 				product_code: input.product_code ?? product.code,
 				product_name: input.product_name ?? product.name,
-				product_spec: input.product_spec ?? product.description,
 				product_unit: input.product_unit ?? product.unit ?? '',
-				unit_cost: unitCost,
+				unit_cost: input.unit_cost,
 				tax_rate: input.tax_rate ?? 0
 			};
 			validateLineFields(resolved);
@@ -154,9 +139,6 @@ export default {
 			}
 
 			const resolved = { ...existing, ...input };
-			if (input.unit_cost == null && resolved.unit_cost == null) {
-				resolved.unit_cost = await resolveUnitCost(api, resolved.product_id, null);
-			}
 			validateLineFields(resolved);
 
 			const amounts = computeLineAmounts(order, resolved);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reconcileDeclaredPolicies } from '../../src/lib/server/bootstrap/policy_reconcile.server.js';
+import { reconcileDeclaredPolicies } from '../../src/server/bootstrap/policy_reconcile.server.js';
 
 /**
  * A policy condition is stored as jsonb. A callback does not survive that, and the grant then lands

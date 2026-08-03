@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { reconcileDeclaredPolicies } from '../../src/lib/server/bootstrap/policy_reconcile.server.js';
+import { reconcileDeclaredPolicies } from '../../src/server/bootstrap/policy_reconcile.server.js';
 
 /**
  * An approval names its approvers by `team.name`; the stored grant holds `team.norbital_id`.
@@ -91,7 +91,9 @@ describe('an approval names its approvers by team name', () => {
 	});
 
 	it('refuses a name no team holds, naming the policy, the grant and the team', async () => {
-		const client = clientWith([{ id: 'team-uuid-1', name: 'Field Operations Controllers Renamed' }]);
+		const client = clientWith([
+			{ id: 'team-uuid-1', name: 'Field Operations Controllers Renamed' }
+		]);
 		await expect(reconcileDeclaredPolicies(client, manifestWith(oneStep))).rejects.toThrow(
 			/policy "field_agent", create on "quotes" → team "Field Operations Controllers"/
 		);
@@ -114,7 +116,12 @@ describe('an approval names its approvers by team name', () => {
 		const result = await reconcileDeclaredPolicies(client, manifestWith(oneStep));
 
 		expect(result.unresolvedApproverTeams).toEqual([
-			{ policy: 'field_agent', collection: 'quotes', action: 'create', team: 'Field Operations Controllers' }
+			{
+				policy: 'field_agent',
+				collection: 'quotes',
+				action: 'create',
+				team: 'Field Operations Controllers'
+			}
 		]);
 		expect(warn.mock.calls[0]?.[0]).toMatch(/team "Field Operations Controllers"/);
 		warn.mockRestore();

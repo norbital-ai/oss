@@ -1,5 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
-import type { PgliteLike } from '$lib/client/sync/pod-sync-client.js';
+import type { PgliteLike } from '$lib/ui/sync/pod-sync-client.js';
 
 /**
  * A fresh in-memory PGlite acting as one client device's local database. PGlite is the same

@@ -1,12 +1,12 @@
 /**
  * Step 7 — SETTLE.
  *
- * Four numbers, derived entirely from `component_types.nature` and the statutory charges. Nothing
+ * Four numbers, derived entirely from `pay_components.nature` and the statutory lines. Nothing
  * here reads a component code.
  *
  * ```
  * gross            = Σ EARNING − Σ ABSENCE
- * statutory (ee)   = Σ payslip_contributions.employee_amount
+ * statutory (ee)   = Σ payslip_lines(STATUTORY_EMPLOYEE).amount
  * other deductions = Σ DEDUCTION lines
  * payments         = Σ NON_WAGE_PAYMENT lines settled through payroll
  *
@@ -28,7 +28,7 @@
  *
  * The plan makes reducibility a `definition.reducible` flag on the pay component. The schema
  * carries that flag only on the `SCHEDULE` arm, so it cannot be read for a deduction; the order is
- * therefore taken from the component type, which is what the plan's own table states anyway —
+ * therefore taken from the pay component policy —
  * `OTHER_DEDUCTION` first, `LOAN_REPAYMENT` next, `STATUTORY_ORDER` never, because a court order
  * cannot be shrunk by policy, and statutory contributions never, because they are not a company's
  * to reduce.
@@ -61,7 +61,7 @@ export function settle(options: {
 
 	const sumOf = (lines: readonly MeasuredLine[], nature: string): number =>
 		lines.reduce(
-			(total, line) => total + (line.componentType.nature === nature ? line.amount : 0),
+			(total, line) => total + (line.payComponent.nature === nature ? line.amount : 0),
 			0
 		);
 	const isCompanyDirect = (line: MeasuredLine): boolean =>
@@ -72,15 +72,13 @@ export function settle(options: {
 	const payments = options.lines.reduce(
 		(total, line) =>
 			total +
-			(line.componentType.nature === 'NON_WAGE_PAYMENT' && !isCompanyDirect(line)
-				? line.amount
-				: 0),
+			(line.payComponent.nature === 'NON_WAGE_PAYMENT' && !isCompanyDirect(line) ? line.amount : 0),
 		0
 	);
 	const employerLines = options.lines.reduce(
 		(total, line) =>
 			total +
-			(line.componentType.nature === 'EMPLOYER_COST' || isCompanyDirect(line) ? line.amount : 0),
+			(line.payComponent.nature === 'EMPLOYER_COST' || isCompanyDirect(line) ? line.amount : 0),
 		0
 	);
 
@@ -95,12 +93,12 @@ export function settle(options: {
 			.map((line, index) => ({ line, index }))
 			.filter(
 				({ line }) =>
-					line.componentType.nature === 'DEDUCTION' &&
-					!PROTECTED_DEDUCTION_TYPES.has(line.componentType.code)
+					line.payComponent.nature === 'DEDUCTION' &&
+					!PROTECTED_DEDUCTION_TYPES.has(line.payComponent.code)
 			)
 			.toSorted(
 				(left, right) =>
-					Number(right.line.componentType.sequence) - Number(left.line.componentType.sequence)
+					Number(right.line.payComponent.sequence) - Number(left.line.payComponent.sequence)
 			);
 		const reduced = [...lines];
 		let outstanding = -net;

@@ -62,7 +62,7 @@ describe('published package identity', () => {
 	it('reads a pack report after package lifecycle output', () => {
 		const output = [
 			'$ pnpm build',
-			'src/lib -> build',
+			'src -> build',
 			JSON.stringify([{ filename: '/tmp/norbital-ai-pod-0.0.1.tgz' }], null, 2)
 		].join('\n');
 		assert.equal(packedArchiveFilename(output), '/tmp/norbital-ai-pod-0.0.1.tgz');

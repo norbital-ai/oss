@@ -2,7 +2,7 @@
 	/**
 	 * One money event, and whether payroll has already consumed it.
 	 *
-	 * The consumption question is answered from the entry's nested source links, not inferred from a
+	 * The consumption question is answered from its directly related payslip lines, not inferred from a
 	 * candidate payroll run. The generated relation key exposes the provenance arm without copying
 	 * mutable state, so the whole path to the run is one bounded relational query.
 	 */
@@ -19,18 +19,13 @@
 					where: { norbital_id: { eq: record.norbital_id } },
 					columns: { norbital_id: true, pay_period: true },
 					with: {
-						entry_payslip_sources: {
+						entry_payslip_lines: {
 							columns: { norbital_id: true },
 							with: {
-								payslip_line_source_line: {
+								payslip_line_payslip: {
 									columns: { norbital_id: true },
 									with: {
-										payslip_line_payslip: {
-											columns: { norbital_id: true },
-											with: {
-												payslip_payroll_run: { columns: { period: true } }
-											}
-										}
+										payslip_payroll_run: { columns: { period: true } }
 									}
 								}
 							}
@@ -40,11 +35,9 @@
 			: null
 	);
 	type ConsumptionRow = {
-		readonly entry_payslip_sources?: readonly {
-			readonly payslip_line_source_line?: {
-				readonly payslip_line_payslip?: {
-					readonly payslip_payroll_run?: { readonly period?: string | null } | null;
-				} | null;
+		readonly entry_payslip_lines?: readonly {
+			readonly payslip_line_payslip?: {
+				readonly payslip_payroll_run?: { readonly period?: string | null } | null;
 			} | null;
 		}[];
 	};
@@ -58,10 +51,9 @@
 		if (!record.pay_period) return 'Settled outside payroll';
 		if (consumptionQuery?.loading) return 'Loading…';
 		const consumption = consumptionQuery?.current as ConsumptionRow | null | undefined;
-		const source = consumption?.entry_payslip_sources?.[0];
+		const source = consumption?.entry_payslip_lines?.[0];
 		if (!source) return '—';
-		const period =
-			source.payslip_line_source_line?.payslip_line_payslip?.payslip_payroll_run?.period;
+		const period = source.payslip_line_payslip?.payslip_payroll_run?.period;
 		return `Paid in ${period ?? 'a payroll run'}`;
 	});
 </script>

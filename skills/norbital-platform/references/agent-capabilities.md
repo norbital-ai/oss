@@ -8,14 +8,14 @@ made it by looking.
 
 Tools Pod provides:
 
-| Tool | Does |
-| --- | --- |
+| Tool                 | Does                                                                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `describe_workspace` | Returns the workspace manifest: collections, fields, enum values, relationships, policies with their approval flows, apps, automations, channels, and the names of hooks, pipelines and remote handlers |
-| `list_skills` | Names and descriptions of every skill available here, host-provided and workspace-provided |
-| `read_skill` | The body of a skill, or one of its reference files |
-| `read_collection` | Reads records, filtered by the requestor's own permissions |
-| `write_collection` | Creates, updates and deletes records, when granted |
-| `spawn_subagent` | Delegates a focused sub-task. Top-level turn only; a subagent cannot spawn another |
+| `list_skills`        | Names and descriptions of every skill available here, host-provided and workspace-provided                                                                                                              |
+| `read_skill`         | The body of a skill, or one of its reference files                                                                                                                                                      |
+| `read_collection`    | Reads records, filtered by the requestor's own permissions                                                                                                                                              |
+| `write_collection`   | Creates, updates and deletes records, when granted                                                                                                                                                      |
+| `spawn_subagent`     | Delegates a focused sub-task. Top-level turn only; a subagent cannot spawn another                                                                                                                      |
 
 A workspace can add its own tools in `src/tools/+<name>.tool.ts`, and its own skills in
 `src/skills/<name>/SKILL.md`. A host can offer tools too — those are named with a `sandbox_` prefix
@@ -36,7 +36,7 @@ a feature is missing from the platform, and should never be reported as one.
 
 ## The manifest does not contain everything
 
-`describe_workspace` returns what the workspace *declares*. It does not return:
+`describe_workspace` returns what the workspace _declares_. It does not return:
 
 - The bodies of hooks, pipelines, remote handlers or automations. For these the manifest reports
   only that they exist, by name. Reading their behaviour means reading source.

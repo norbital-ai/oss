@@ -18,12 +18,13 @@ export default defineModel(
 		encash_on_exit: boolean().notNull(),
 		requires_certificate_after_days: integer(),
 		accrual: custom('leave_accrual').notNull(),
+		entitlement: custom('leave_entitlement').notNull(),
 		payroll_effect: custom('leave_payroll_effect').notNull(),
 		effective_range: dateRange().notNull()
 	},
 	{
 		description:
-			"A company's kind of leave: who may take it, how it accrues and carries, whether it is encashed on exit, and what it does to pay. It carries no statutory flag of any kind.",
+			"A company's kind of leave, including its statutory, organisation and employee entitlement matrix, accrual, carry, eligibility and payroll effect.",
 		recordLabel: ['code', 'name'],
 		icon: 'lucide:calendar-days',
 		// Plan 02 §7: company =, code =, effective range &&.

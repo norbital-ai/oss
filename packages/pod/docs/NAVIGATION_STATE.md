@@ -34,7 +34,7 @@ The host proxies tenant requests into the checkpoint isolate; the Pod runtime sh
 ```
 
 **Applications** is the uppercase muted section label in the sidebar. The implementation lives in
-[`pod-shell.svelte`](../src/lib/runtime/pod-shell.svelte); the shell renders tenant applications
+[`pod-shell.svelte`](../src/ui/shell/pod-shell.svelte); the shell renders tenant applications
 directly and has no host-provided application registry.
 
 Opening a record does **not** navigate to a new document route. The app stays on
@@ -62,7 +62,7 @@ type NavStackItem = {
 ```
 
 The stack is serialized in `?stack=`. `SYSTEM_NAV_NODE_IDS` in
-[`client/types.ts`](../src/lib/client/types.ts) defines host system node IDs; tenant apps register
+[`ui/state/types.ts`](../src/ui/state/types.ts) defines host system node IDs; tenant apps register
 their own `routeKey` values through `DetailSurfaceService`.
 
 ---
@@ -82,14 +82,14 @@ PodApp → /_pod/bootstrap → PodShell
 
 The Pod shell reads the URL stack, hydrates scope server-side when needed, and renders the resolved
 collection surface through
-[`detail-surface-stack.svelte`](../src/lib/runtime/detail-surface-stack.svelte).
+[`detail-surface-stack.svelte`](../src/ui/collection/detail-surface-stack.svelte).
 
 ---
 
 ## Route context (lightweight)
 
 `getRouteContext(url)` in
-[`route_context.ts`](../src/lib/client/utils/route_context.ts) only identifies where the URL belongs:
+[`route_context.ts`](../src/ui/collection/utils/route_context.ts) only identifies where the URL belongs:
 
 - `organization`
 - optional `appName`
@@ -147,17 +147,17 @@ existing row for display/edit; call sites do not register or override record com
 
 ## Important files
 
-| File                                                                                        | Role                                    |
-| ------------------------------------------------------------------------------------------- | --------------------------------------- |
-| [`client/types.ts`](../src/lib/client/types.ts)                                             | `NavState`, `NavStackItem`, scope types |
-| [`client/stack-frame.ts`](../src/lib/client/stack-frame.ts)                                 | Stack-frame hydration input             |
-| [`detail_surface.service.ts`](../src/lib/client/subservices/detail_surface.service.ts)      | Stack URL mutation and registration     |
-| [`page_surface_state.svelte.ts`](../src/lib/client/page_surface_state.svelte.ts)            | `PageSurfaceState` class                |
-| [`pod-shell.svelte`](../src/lib/runtime/pod-shell.svelte)                                   | Sidebar, main surface, and detail sheet |
-| [`route_context.ts`](../src/lib/client/utils/route_context.ts)                              | Lightweight route context               |
-| [`scope_hydration.server.ts`](../src/lib/server/collection/scope/scope_hydration.server.ts) | `hydrateStackItems()`                   |
-| [`collection-table.svelte`](../../ui/src/collection-table/collection-table.svelte)          | Table and detail registration           |
-| [`template_workspaces/*/src/apps`](../../../template_workspaces)                            | Tenant application entry components     |
+| File                                                                               | Role                                       |
+| ---------------------------------------------------------------------------------- | ------------------------------------------ |
+| [`ui/state/types.ts`](../src/ui/state/types.ts)                                    | `NavState`, `NavStackItem`, scope types    |
+| [`utils/context_stack.ts`](../src/ui/collection/utils/context_stack.ts)            | `?stack=` parsing and hydration item shape |
+| [`detail_surface.service.ts`](../src/ui/subservices/detail_surface.service.ts)     | Stack URL mutation and registration        |
+| [`page_surface_state.svelte.ts`](../src/ui/state/page_surface_state.svelte.ts)     | `PageSurfaceState` class                   |
+| [`pod-shell.svelte`](../src/ui/shell/pod-shell.svelte)                             | Sidebar, main surface, and detail sheet    |
+| [`route_context.ts`](../src/ui/collection/utils/route_context.ts)                  | Lightweight route context                  |
+| [`scope_hydration.server.ts`](../src/server/collection/scope_hydration.server.ts)  | `hydrateStackItems()`                      |
+| [`collection-table.svelte`](../../ui/src/collection-table/collection-table.svelte) | Table and detail registration              |
+| [`template_workspaces/*/src/apps`](../../../template_workspaces)                   | Tenant application entry components        |
 
 ---
 

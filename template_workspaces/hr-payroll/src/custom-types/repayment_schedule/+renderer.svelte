@@ -81,22 +81,17 @@
 						where: { repayment_agreement_id: { eq: nextAgreementId } },
 						columns: { norbital_id: true, repayment_sequence: true },
 						with: {
-							entry_payslip_sources: {
-								columns: { norbital_created_at: true },
+							entry_payslip_lines: {
+								columns: { norbital_id: true, sequence: true, norbital_created_at: true },
 								with: {
-									payslip_line_source_line: {
-										columns: { norbital_id: true, sequence: true },
+									payslip_line_payslip: {
+										columns: { norbital_id: true },
 										with: {
-											payslip_line_payslip: {
-												columns: { norbital_id: true },
-												with: {
-													payslip_payroll_run: {
-														columns: {
-															norbital_id: true,
-															period: true,
-															pay_date: true
-														}
-													}
+											payslip_payroll_run: {
+												columns: {
+													norbital_id: true,
+													period: true,
+													pay_date: true
 												}
 											}
 										}

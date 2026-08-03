@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { switchOrganization } from '$lib/runtime/organization-switch.js';
+import { switchOrganization } from '$lib/ui/shell/organization-switch.js';
 import { readFileSync } from 'node:fs';
 
 const podShellSource = readFileSync(
-	new URL('../../src/lib/runtime/pod-shell.svelte', import.meta.url),
+	new URL('../../src/ui/shell/pod-shell.svelte', import.meta.url),
 	'utf8'
 );
 const workspaceShellSource = readFileSync(

@@ -9,15 +9,15 @@ running balance matter.
 | Subject                        | Authoritative transaction                             | Separate ledger?         | Reason                                                                                                                               |
 | ------------------------------ | ----------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Leave taken                    | Approved `leave_request`                              | No duplicate `TAKEN` row | The request already contains type, dates, quantity and approval. Counting both would double-consume leave.                           |
-| Leave correction or encashment | `leave_ledger` adjustment/encashment                  | Yes                      | It changes balance without being a leave request and must remain a signed, dated movement.                                           |
+| Leave correction or encashment | `leave_requests.event` adjustment/encashment arm      | No second table          | It remains a signed, dated event, structurally distinct from a time-off request in the same authoritative stream.                    |
 | Claim or allowance             | Approved `component_entry`                            | No                       | The entry is already the money transaction and carries service date, pay period, evidence and origin.                                |
 | Loan                           | `repayment_agreement` plus scheduled recovery entries | Yes, as a schedule       | Principal, due date and every instalment must reconcile before payroll; each instalment can then be linked and frozen independently. |
 | Payroll/YTD                    | Paid payslips and contributions                       | No mutable accumulator   | Earlier paid results are the immutable accounting history. YTD is their sum.                                                         |
 | Payment file                   | Projection from a paid run                            | No                       | A file is an output transport, not another source of payroll truth.                                                                  |
 
-The seed currently retains historical leave `TAKEN` rows for compatibility, but the engine ignores
-them. Approved leave requests alone create taken movements; only non-request adjustments and
-encashments are read from `leave_ledger`.
+Approved `TIME_OFF` requests create taken movements directly. Adjustments and encashments use their
+own strict `leave_requests.event` arms. The migration keeps an unmatched historical `TAKEN` row as
+`LEGACY_TAKEN`; a projection already matched to its request is not counted twice.
 
 ## Settled and projected balances
 
@@ -59,7 +59,7 @@ Corrections are classified by cause before they are entered:
 | Late claim/allowance is explicitly assigned to a later pay period                              | Seed the event, not the result | Keep service date and explicit `pay_period` distinct                                                     |
 | A paid amount was wrong                                                                        | Correct prospectively          | Add an approved future-period adjustment or reversal; never rewrite a paid run                           |
 
-Amounts are positive magnitudes. Earning or deduction direction comes from component type. A
+Amounts are positive magnitudes. Earning or deduction direction comes from the pay component policy. A
 reversal uses `origin = REVERSAL` and links to its original entry rather than storing a negative
 amount.
 
@@ -81,7 +81,7 @@ flowchart LR
 | Draft run            | Results may be wholly replaced by recalculation                                      | Keeps drafts responsive without mixing old and new lines                                                 |
 | Paid run             | Recalculation and deletion are blocked; output children cannot be deleted            | Preserves the exact result used for payment, YTD and audit                                               |
 | Loan instalment      | A recovery entry linked to a payslip is immutable                                    | Prevents a loan balance from changing behind a paid deduction                                            |
-| Leave ledger         | Movements are insert-only                                                            | A balance correction remains visible instead of rewriting history                                        |
+| Leave event stream   | Corrections use new adjustment events                                                | A balance correction remains visible instead of rewriting history                                        |
 | General event source | The payslip line records consumption                                                 | Establishes provenance, but does **not yet** universally freeze every linked claim, leave or time record |
 
 The final row is a documented gap, not an implied guarantee. Universal consumed-source immutability

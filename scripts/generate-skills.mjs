@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDir, '..');
 const skillsRoot = path.join(repositoryRoot, 'skills');
-const outputFile = path.join(repositoryRoot, 'packages/pod/src/lib/skills/skills.generated.ts');
+const outputFile = path.join(repositoryRoot, 'packages/pod/src/skills/skills.generated.ts');
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const FRONTMATTER_KEYS = new Set(['name', 'description', 'license', 'compatibility', 'metadata']);

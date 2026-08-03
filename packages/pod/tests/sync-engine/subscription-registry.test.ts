@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { SubscriptionRegistry } from '$lib/client/sync/subscription-registry.js';
-import type { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
-import type { CollectionSyncState, ShapeRequest, ShapeResponse } from '$lib/client/sync/types.js';
+import { SubscriptionRegistry } from '$lib/ui/sync/subscription-registry.js';
+import type { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
+import type { CollectionSyncState, ShapeRequest, ShapeResponse } from '$lib/ui/sync/types.js';
 
 /** A page with no `nextCursor` is the last one — that is the whole exhaustion signal. */
 function lastPage(rows: Record<string, unknown>[] = []): ShapeResponse {

@@ -6,7 +6,7 @@ import {
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
 import { createClientDb } from '../support/pglite-node.js';
-import { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
+import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
 import {
 	absorbServerRows,
 	disableClientSync,
@@ -14,8 +14,8 @@ import {
 	localCount,
 	localFindMany,
 	setLocalSchema
-} from '$lib/client/sync/client-sync.js';
-import type { SyncFetch } from '$lib/client/sync/types.js';
+} from '$lib/ui/sync/client-sync.js';
+import type { SyncFetch } from '$lib/ui/sync/types.js';
 
 requireDocker();
 

@@ -31,9 +31,9 @@ const admin: Identity = {
 	role: 'admin'
 };
 
-/** A live SSE reader: frames accumulate in the background so the test can await one at a time. */
-function frameReader(response: Response) {
-	const frames: string[] = [];
+/** A live SSE reader: events accumulate in the background so the test can await one at a time. */
+function sseReader(response: Response) {
+	const events: string[] = [];
 	const reader = response.body!.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
@@ -47,7 +47,7 @@ function frameReader(response: Response) {
 				buffer += decoder.decode(value, { stream: true });
 				let split = buffer.indexOf('\n\n');
 				while (split !== -1) {
-					frames.push(buffer.slice(0, split));
+					events.push(buffer.slice(0, split));
 					buffer = buffer.slice(split + 2);
 					split = buffer.indexOf('\n\n');
 				}
@@ -58,15 +58,15 @@ function frameReader(response: Response) {
 	})();
 
 	return {
-		frames,
-		async waitFor(predicate: (frames: string[]) => boolean, budgetMs: number): Promise<void> {
+		events,
+		async waitFor(predicate: (events: string[]) => boolean, budgetMs: number): Promise<void> {
 			const deadline = Date.now() + budgetMs;
 			while (Date.now() < deadline) {
 				if (failed) throw failed;
-				if (predicate(frames)) return;
+				if (predicate(events)) return;
 				await new Promise((resolve) => setTimeout(resolve, 50));
 			}
-			throw new Error(`timed out waiting on the stream; frames so far: ${JSON.stringify(frames)}`);
+			throw new Error(`timed out waiting on the stream; events so far: ${JSON.stringify(events)}`);
 		},
 		async close(): Promise<void> {
 			await reader.cancel().catch(() => undefined);
@@ -98,13 +98,13 @@ describe('change feed resets a cursor below the compaction boundary', () => {
 			admin
 		);
 		expect(response.status).toBe(200);
-		const stream = frameReader(response);
+		const stream = sseReader(response);
 
 		try {
 			// Let it catch up first. A heartbeat means the loop reached its idle wait, so the cursor
 			// now sits at the head of the feed and everything after this is the case under test.
-			await stream.waitFor((frames) => frames.includes(': heartbeat'), 30_000);
-			const delivered = stream.frames.filter((frame) => frame.startsWith('data: ')).length;
+			await stream.waitFor((events) => events.includes(': heartbeat'), 30_000);
+			const delivered = stream.events.filter((event) => event.startsWith('data: ')).length;
 
 			// Retention overtakes the live stream. The boundary is what a prune leaves behind, and the
 			// only part of pruning a stream can observe, so moving it is the whole of the condition.
@@ -119,16 +119,16 @@ describe('change feed resets a cursor below the compaction boundary', () => {
 			await serverInsert(harness, collection);
 
 			await stream.waitFor(
-				(frames) => frames.some((frame) => frame.startsWith('event: reset')),
+				(events) => events.some((event) => event.startsWith('event: reset')),
 				30_000
 			);
-			expect(stream.frames.find((frame) => frame.startsWith('event: reset'))).toContain(
+			expect(stream.events.find((event) => event.startsWith('event: reset'))).toContain(
 				'cursor_too_old'
 			);
 			// And nothing was served from the truncated feed. A diff after the boundary moved would be
 			// the exact bug: a client applying post-prune changes onto a replica missing the pruned
 			// ones, with no sign anything is absent.
-			expect(stream.frames.filter((frame) => frame.startsWith('data: ')).length).toBe(delivered);
+			expect(stream.events.filter((event) => event.startsWith('data: ')).length).toBe(delivered);
 		} finally {
 			await stream.close();
 			abort.abort();

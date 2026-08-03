@@ -116,7 +116,7 @@ The templates are executable documentation as well as starter projects:
 
 | Template                                                              | Focus                                                                         |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| [Field Operations](../../../template_workspaces/field-operations/)             | Contractor dispatch, qualifications, variations, and photo evidence.          |
+| [Field Operations](../../../template_workspaces/field-operations/)    | Contractor dispatch, qualifications, variations, and photo evidence.          |
 | [Construction Operations](../../../template_workspaces/construction/) | Projects, permits, quality, BIM references, claims, and workforce compliance. |
 | [CRM](../../../template_workspaces/crm/)                              | Accounts, quoting, fulfilment, payments, and sales operations.                |
 | [HR & Payroll](../../../template_workspaces/hr-payroll/)              | Multi-country payroll, attendance, leave, and statutory reporting.            |

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
-import { workspaceJobs } from '$lib/bin/invocation/jobs.js';
+import { workspaceJobs } from '$lib/host/jobs.js';
 import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,

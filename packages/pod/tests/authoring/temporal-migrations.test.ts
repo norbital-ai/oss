@@ -6,7 +6,7 @@ import {
 	liveHistoryRelations,
 	mirrorTemporalHistoryDdl,
 	orphanedHistoryDrops
-} from '../../src/lib/vite/migrations.js';
+} from '../../src/vite/migrations.js';
 
 const BREAK = '--> statement-breakpoint';
 const NONE = new Set<string>();

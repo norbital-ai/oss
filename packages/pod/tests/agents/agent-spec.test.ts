@@ -25,14 +25,14 @@ vi.mock('$lib/server/bootstrap/tenant_workspace.server.js', () => ({
 	getTenantWorkspace: () => workspace
 }));
 
-vi.mock('$lib/server/run/facilities.js', () => ({
+vi.mock('$lib/server/facilities.js', () => ({
 	getRuntimeFacilities: () => ({
 		agentTools: { list: () => Promise.resolve(HOST_TOOLS) }
 	})
 }));
 
 const { channelAgentSpec, interactiveAgentSpec } =
-	await import('../../src/lib/server/agent/agent-spec.server.js');
+	await import('../../src/server/agent/agent-spec.server.js');
 
 describe('the tools each entry point names', () => {
 	it('names every host tool the deployment offers for an interactive run', async () => {

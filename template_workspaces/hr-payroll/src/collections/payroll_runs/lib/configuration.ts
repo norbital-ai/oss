@@ -20,15 +20,13 @@ import { coversDate, effectiveOn, live, overlapsRange } from './effective.js';
 
 export type Company = WorkspaceRow<'companies'>;
 export type Jurisdiction = WorkspaceRow<'jurisdictions'>;
-export type ComponentType = WorkspaceRow<'component_types'>;
 export type PayComponent = WorkspaceRow<'pay_components'>;
 export type OvertimeRule = WorkspaceRow<'overtime_rules'>;
 export type OvertimeLimit = WorkspaceRow<'overtime_limits'>;
 export type ShiftDefinition = WorkspaceRow<'shift_definitions'>;
 export type LeaveType = WorkspaceRow<'leave_types'>;
-export type AccrualBand = WorkspaceRow<'accrual_bands'>;
 export type ContributionRate = WorkspaceRow<'contribution_rates'>;
-export type Treatment = WorkspaceRow<'contribution_treatments'>;
+export type Treatment = NonNullable<PayComponent['policy']>['statutory_treatments'][number];
 export type StatutoryContribution = WorkspaceRow<'statutory_contributions'>;
 
 /** One statutory scheme with the bands that were effective when the run was picked. */
@@ -42,31 +40,28 @@ export type Configuration = {
 	readonly jurisdiction: Jurisdiction;
 	/** In `sequence` order — a relief is produced before the scheme that consumes it. */
 	readonly contributions: readonly ContributionConfig[];
-	/** `${component_type_id}:${statutory_contribution_id}` → the one effective cell. */
+	/** `${pay_component_id}:${statutory_contribution_id}` → the one effective cell. */
 	readonly treatments: ReadonlyMap<string, Treatment>;
 	/** In `sequence` order — the order MEASURE walks. */
-	readonly componentTypes: readonly ComponentType[];
-	readonly componentTypeById: ReadonlyMap<string, ComponentType>;
 	readonly payComponents: readonly PayComponent[];
 	readonly overtimeRules: readonly OvertimeRule[];
 	readonly overtimeLimits: readonly OvertimeLimit[];
 	readonly shiftById: ReadonlyMap<string, ShiftDefinition>;
 	readonly holidays: ReadonlyMap<IsoDate, WorkspaceRow<'company_holidays'>>;
 	readonly leaveTypes: readonly LeaveType[];
-	readonly accrualBands: readonly AccrualBand[];
 	readonly hash: string;
 };
 
-function treatmentKey(componentTypeId: string, contributionId: string): string {
-	return `${componentTypeId}:${contributionId}`;
+function treatmentKey(payComponentId: string, contributionId: string): string {
+	return `${payComponentId}:${contributionId}`;
 }
 
 export function lookupTreatment(
 	configuration: Pick<Configuration, 'treatments'>,
-	componentTypeId: string,
+	payComponentId: string,
 	contributionId: string
 ): Treatment | undefined {
-	return configuration.treatments.get(treatmentKey(componentTypeId, contributionId));
+	return configuration.treatments.get(treatmentKey(payComponentId, contributionId));
 }
 
 /**
@@ -127,20 +122,17 @@ export async function pickConfiguration(options: {
 
 	const [
 		contributionRows,
-		componentTypeRows,
 		payComponentRows,
 		overtimeRuleRows,
 		overtimeLimitRows,
 		shiftRows,
 		holidayRows,
-		leaveTypeRows,
-		accrualBandRows
+		leaveTypeRows
 	] = await Promise.all([
 		query.statutory_contributions.findMany({
 			where: { jurisdiction_id: { eq: jurisdiction.norbital_id }, ...approved },
 			limit: PAGE_LIMIT
 		}),
-		query.component_types.findMany({ where: approved, limit: PAGE_LIMIT }),
 		query.pay_components.findMany({
 			where: { company_id: { eq: company.norbital_id }, ...approved },
 			limit: PAGE_LIMIT
@@ -164,43 +156,31 @@ export async function pickConfiguration(options: {
 		query.leave_types.findMany({
 			where: { company_id: { eq: company.norbital_id }, ...approved },
 			limit: PAGE_LIMIT
-		}),
-		query.accrual_bands.findMany({ where: approved, limit: PAGE_LIMIT })
+		})
 	]);
-	// All nine page to the same ceiling, so all nine are checked: a configuration read that came
+	// Every collection pages to the same ceiling and is checked: a configuration read that came
 	// back truncated would drop law — a missing holiday, a missing band — and still produce a
 	// payslip, which is the one outcome worse than producing none.
 	assertComplete(contributionRows, 'statutory contributions');
-	assertComplete(componentTypeRows, 'component types');
 	assertComplete(payComponentRows, 'pay components');
 	assertComplete(overtimeRuleRows, 'overtime rules');
 	assertComplete(overtimeLimitRows, 'overtime limits');
 	assertComplete(shiftRows, 'shift definitions');
 	assertComplete(holidayRows, 'company holidays');
 	assertComplete(leaveTypeRows, 'leave types');
-	assertComplete(accrualBandRows, 'accrual bands');
 
 	const contributions = live(contributionRows)
 		.filter((row) => coversDate(row.effective_range, asOf))
 		.toSorted((left, right) => Number(left.sequence) - Number(right.sequence));
 
 	const contributionIds = contributions.map((row) => row.norbital_id);
-	const [rateRows, treatmentRows] = await Promise.all([
-		contributionIds.length
-			? query.contribution_rates.findMany({
-					where: { statutory_contribution_id: { in: contributionIds }, ...approved },
-					limit: PAGE_LIMIT
-				})
-			: Promise.resolve<ContributionRate[]>([]),
-		contributionIds.length
-			? query.contribution_treatments.findMany({
-					where: { statutory_contribution_id: { in: contributionIds }, ...approved },
-					limit: PAGE_LIMIT
-				})
-			: Promise.resolve<Treatment[]>([])
-	]);
+	const rateRows = contributionIds.length
+		? await query.contribution_rates.findMany({
+				where: { statutory_contribution_id: { in: contributionIds }, ...approved },
+				limit: PAGE_LIMIT
+			})
+		: [];
 	assertComplete(rateRows, 'contribution rates');
-	assertComplete(treatmentRows, 'contribution treatments');
 
 	const ratesByContribution = new Map<string, ContributionRate[]>();
 	for (const rate of live(rateRows)) {
@@ -210,20 +190,26 @@ export async function pickConfiguration(options: {
 		else ratesByContribution.set(rate.statutory_contribution_id, [rate]);
 	}
 
-	// The exclusion constraint on (type, contribution, effective range) guarantees at most one row
-	// per cell per date, so the last write into this map is also the only one.
+	const payComponents = live(payComponentRows)
+		.filter((row) => coversDate(row.effective_range, asOf))
+		.toSorted((left, right) => Number(left.sequence) - Number(right.sequence));
 	const treatments = new Map<string, Treatment>();
-	for (const treatment of live(treatmentRows)) {
-		if (!coversDate(treatment.effective_range, asOf)) continue;
-		treatments.set(
-			treatmentKey(treatment.component_type_id, treatment.statutory_contribution_id),
-			treatment
-		);
+	for (const component of payComponents) {
+		for (const treatment of component.policy?.statutory_treatments ?? []) {
+			if (
+				!contributionIds.includes(treatment.statutory_contribution_id) ||
+				!coversDate(treatment.effective_range, asOf)
+			)
+				continue;
+			const key = treatmentKey(component.norbital_id, treatment.statutory_contribution_id);
+			if (treatments.has(key))
+				throw new Error(
+					`Pay component ${component.code} has overlapping statutory treatments for ${treatment.statutory_contribution_id}.`
+				);
+			treatments.set(key, treatment);
+		}
 	}
 
-	const componentTypes = live(componentTypeRows).toSorted(
-		(left, right) => Number(left.sequence) - Number(right.sequence)
-	);
 	const shifts = live(shiftRows).filter((row) =>
 		overlapsRange(row.effective_range, windowStart, windowEnd)
 	);
@@ -236,17 +222,14 @@ export async function pickConfiguration(options: {
 			rates: (ratesByContribution.get(row.norbital_id) ?? []).toSorted(bandOrder)
 		})),
 		treatments,
-		componentTypes,
-		componentTypeById: new Map(componentTypes.map((row) => [row.norbital_id, row])),
-		payComponents: live(payComponentRows).filter((row) => coversDate(row.effective_range, asOf)),
+		payComponents,
 		overtimeRules: live(overtimeRuleRows).filter((row) => coversDate(row.effective_range, asOf)),
 		overtimeLimits: live(overtimeLimitRows).filter((row) => coversDate(row.effective_range, asOf)),
 		shiftById: new Map(shifts.map((row) => [row.norbital_id, row])),
 		holidays: new Map(
 			live(holidayRows).map((row) => [String(row.date).slice(0, 10), row] as const)
 		),
-		leaveTypes: live(leaveTypeRows).filter((row) => coversDate(row.effective_range, asOf)),
-		accrualBands: live(accrualBandRows).filter((row) => coversDate(row.effective_range, asOf))
+		leaveTypes: live(leaveTypeRows).filter((row) => coversDate(row.effective_range, asOf))
 	} satisfies Omit<Configuration, 'hash'>;
 
 	return { ...configuration, hash: hashConfiguration(configuration, options.period) };
@@ -257,8 +240,11 @@ export async function pickConfiguration(options: {
  * population, never a timestamp — so two builds of the same month against unchanged law hash alike
  * and a changed hash always means changed law.
  */
-function hashConfiguration(configuration: Omit<Configuration, 'hash'>, period: string): string {
-	return sha256Json({
+export function configurationSnapshot(
+	configuration: Omit<Configuration, 'hash'>,
+	period: string
+): Record<string, unknown> {
+	return {
 		period,
 		company: configuration.company.norbital_id,
 		jurisdiction: configuration.jurisdiction.norbital_id,
@@ -288,13 +274,8 @@ function hashConfiguration(configuration: Omit<Configuration, 'hash'>, period: s
 		treatments: [...configuration.treatments]
 			.map(([key, treatment]) => [key, treatment.treatment])
 			.toSorted((left, right) => String(left[0]).localeCompare(String(right[0]))),
-		component_types: configuration.componentTypes.map((row) => [
-			row.code,
-			row.nature,
-			row.sequence
-		]),
 		pay_components: configuration.payComponents
-			.map((row) => [row.code, row.component_type_id, row.definition, row.eligibility])
+			.map((row) => [row.code, row.policy, row.sequence, row.definition, row.eligibility])
 			.toSorted((left, right) => String(left[0]).localeCompare(String(right[0]))),
 		overtime_rules: configuration.overtimeRules
 			.map((row) => [row.day_type, row.band, row.award])
@@ -306,10 +287,11 @@ function hashConfiguration(configuration: Omit<Configuration, 'hash'>, period: s
 			.map((row) => [String(row.date).slice(0, 10), row.substitutes_date, row.scope])
 			.toSorted((left, right) => String(left[0]).localeCompare(String(right[0]))),
 		leave_types: configuration.leaveTypes
-			.map((row) => [row.code, row.accrual, row.payroll_effect])
-			.toSorted((left, right) => String(left[0]).localeCompare(String(right[0]))),
-		accrual_bands: configuration.accrualBands
-			.map((row) => [row.leave_code, row.days, row.key, row.owner])
-			.toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
-	});
+			.map((row) => [row.code, row.accrual, row.entitlement, row.payroll_effect])
+			.toSorted((left, right) => String(left[0]).localeCompare(String(right[0])))
+	};
+}
+
+function hashConfiguration(configuration: Omit<Configuration, 'hash'>, period: string): string {
+	return sha256Json(configurationSnapshot(configuration, period));
 }

@@ -11,8 +11,8 @@ without re-applying the caller's policy, an export becomes a way to read past it
 drives the public runtime route end to end against a compiled template rather than calling the
 pipeline function directly.
 
-| File                   | Owns                                                                                                                                                       |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File                   | Owns                                                                                                                                                                    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pipeline-e2e.test.ts` | An authenticated, record-scoped export through the public runtime of a compiled Field Operations workspace: authorization, scope, invocation, and output serialization. |
 
 ## The rule for adding to this pillar

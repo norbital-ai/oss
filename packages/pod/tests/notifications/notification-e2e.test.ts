@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
-import { workspaceJobs } from '$lib/bin/invocation/jobs.js';
-import { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
-import type { SyncFetch } from '$lib/client/sync/types.js';
+import { workspaceJobs } from '$lib/host/jobs.js';
+import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
+import type { SyncFetch } from '$lib/ui/sync/types.js';
 import { requireDocker } from '../support/pg-harness.js';
 import { createClientDb } from '../support/pglite-node.js';
 import {

@@ -1,11 +1,31 @@
-import { defineCustomType } from '@norbital-ai/pod/authoring';
+import { dateRangeZodSchema, defineCustomType } from '@norbital-ai/pod/authoring';
 import { z } from 'zod/mini';
+import { eligibilityRulesSchema } from '../eligibility_rules/+definition.js';
 
-/** Cap applied to a claimable ENTRY component (medical, dental, …). */
+const capAwardSchema = z.discriminatedUnion('kind', [
+	z.strictObject({ kind: z.literal('FIXED'), amount: z.number().check(z.minimum(0)) }),
+	z.strictObject({ kind: z.literal('FORMULA'), expr: z.string().check(z.minLength(1)) })
+]);
+const capLayer = {
+	eligibility: eligibilityRulesSchema,
+	authority: z.string().check(z.minLength(1)),
+	award: capAwardSchema,
+	reimbursement_percentage: z.number().check(z.minimum(0), z.maximum(100)),
+	effective_range: dateRangeZodSchema
+} as const;
+const capLayerSchema = z.discriminatedUnion('level', [
+	z.strictObject({ level: z.literal('STATUTORY'), ...capLayer }),
+	z.strictObject({ level: z.literal('ORGANISATION'), ...capLayer }),
+	z.strictObject({ level: z.literal('EMPLOYEE'), employment_id: z.uuid(), ...capLayer })
+]);
+
+/** Layered cap applied to a claimable or allowance ENTRY component. */
 export const componentCapSchema = z.strictObject({
 	period: z.enum(['CALENDAR_YEAR', 'LEAVE_YEAR', 'MONTH', 'LIFETIME', 'PER_EVENT']),
-	matrix: z.string().check(z.minLength(1)),
-	reimbursement_percentage: z.number().check(z.minimum(0), z.maximum(100)),
+	matrix: z.strictObject({
+		merge: z.literal('MAX_WITH_STATUTORY_FLOOR'),
+		layers: z.array(capLayerSchema).check(z.minLength(1))
+	}),
 	on_exceed: z.enum(['BLOCK', 'ALLOW'])
 });
 
@@ -19,11 +39,11 @@ export type ComponentCap = z.infer<typeof componentCapSchema>;
  * - `OVERTIME`  — the engine derives it from time entries + the jurisdiction's overtime rules.
  * - `OVERTIME_EXCESS` — overtime corresponding to work beyond the daily total-work boundary or
  *   calendar-month ordinary-OT limit. The hours are reclassified rather than dropped: same money,
- *   a different component type, and therefore a different contribution treatment.
+ *   a different pay component, and therefore a different contribution treatment.
  * - `SCHEDULE`  — the contracted amount from `employment_terms` (basic salary).
  *
  * There is deliberately NO statutory information here: chargeability is reachable only via
- * `pay_components.component_type_id` → `contribution_treatments`.
+ * `pay_components.policy.statutory_treatments`.
  */
 export const componentDefinitionSchema = z.discriminatedUnion('source', [
 	z.strictObject({

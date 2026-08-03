@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertNotificationChannelSupport } from '../../src/lib/server/notifications/channels.js';
+import { assertNotificationChannelSupport } from '../../src/server/notification-outbox.server.js';
 
 describe('host notification channels', () => {
 	it('accepts only channels advertised by the active host', () => {

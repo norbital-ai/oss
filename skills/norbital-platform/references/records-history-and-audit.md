@@ -5,18 +5,18 @@
 Every collection row carries columns Pod owns. They are read-only to workspace code, and they appear
 in the manifest marked as such.
 
-| Column | Meaning |
-| --- | --- |
-| `norbital_id` | The row's UUID primary key |
-| `norbital_created_at` | When the row was created |
-| `norbital_updated_at` | When it last changed |
-| `norbital_row_version` | Optimistic-concurrency counter |
-| `norbital_sys_period` | The temporal validity range backing record history |
-| `norbital_approval_id` | Non-null while an open approval holds this row |
+| Column                 | Meaning                                            |
+| ---------------------- | -------------------------------------------------- |
+| `norbital_id`          | The row's UUID primary key                         |
+| `norbital_created_at`  | When the row was created                           |
+| `norbital_updated_at`  | When it last changed                               |
+| `norbital_row_version` | Optimistic-concurrency counter                     |
+| `norbital_sys_period`  | The temporal validity range backing record history |
+| `norbital_approval_id` | Non-null while an open approval holds this row     |
 
 `norbital_approval_id` is the one that most often confuses a reader. Seeing it on a collection does
 not mean that collection has an approval flow — every collection has the column. It means the
-platform *can* gate writes to that collection if a policy says so. A row with a non-null value is
+platform _can_ gate writes to that collection if a policy says so. A row with a non-null value is
 currently held by an open approval request.
 
 ## Temporal history
@@ -34,7 +34,7 @@ History is enabled per collection. The manifest reports whether a given collecti
 ## Audit
 
 Mutations are recorded, so who changed what and when is answerable from stored data. This is
-separate from temporal history: history tells you what the row *was*, audit tells you *who acted*.
+separate from temporal history: history tells you what the row _was_, audit tells you _who acted_.
 
 ## Sync and the client replica
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { pod } from '../../src/lib/vite/index.js';
+import { pod } from '../../src/vite/index.js';
 
 const originalBuildTarget = process.env.NORBITAL_POD_BUILD_TARGET;
 const originalIsolatedBuild = process.env.NORBITAL_POD_ISOLATED_BUILD;

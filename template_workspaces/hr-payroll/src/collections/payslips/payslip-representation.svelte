@@ -1,18 +1,10 @@
 <script lang="ts">
-	/**
-	 * One person's settlement for one run, and — the point of this surface — the source records the
-	 * calculation actually read.
-	 *
-	 * Provenance is reached the way it is stored: the payslip's lines, then the link rows each line
-	 * wrote. Nothing here recomputes a figure; it only says which entry, which clocked day and which
-	 * leave request the stored number came from.
-	 */
+	/** One person's settlement. Every row below is the physical payslip-to-component junction. */
 	import { client } from '$pod/client';
 	import type { Row } from './$types.js';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Grid, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { formatNumeric } from '../../lib/ui/display-formatters.js';
-	import { consumedReferenceText, dayKey } from '../../lib/ui/payslip-sources.js';
 
 	let { record }: { record: Row } = $props();
 
@@ -22,6 +14,21 @@
 			readonly employment_employee?: { readonly name?: string | null } | null;
 		} | null;
 	};
+	type NestedLine = {
+		readonly payslip_line_pay_component?: {
+			readonly code?: string | null;
+			readonly name?: string | null;
+		} | null;
+		readonly entry_payslip_lines?: {
+			readonly description?: string | null;
+			readonly event_date?: string | null;
+		} | null;
+		readonly payslip_line_statutory_contribution?: {
+			readonly code?: string | null;
+			readonly name?: string | null;
+		} | null;
+	};
+
 	const summaryQuery = $derived(
 		client.db.payslips.findFirst({
 			where: { norbital_id: { eq: record.norbital_id } },
@@ -36,116 +43,29 @@
 	);
 	const summary = $derived(summaryQuery.current as PayslipSummary | null | undefined);
 	const employment = $derived(summary?.payslip_employment ?? null);
-	const employeeName = $derived(employment?.employment_employee?.name ?? null);
 
-	const linesQuery = $derived(
-		client.db.payslip_lines.findMany({
-			where: { payslip_id: { eq: record.norbital_id } },
-			columns: { norbital_id: true },
-			with: {
-				payslip_line_source_line: {
-					columns: { norbital_id: true },
-					with: {
-						entry_payslip_sources: {
-							columns: { description: true, event_date: true }
-						},
-						time_entry_payslip_sources: { columns: { work_date: true } },
-						leave_request_payslip_sources: {
-							columns: { from_date: true, to_date: true }
-						}
-					}
-				}
-			},
-			orderBy: { sequence: 'asc' },
-			limit: 500
-		})
-	);
-	type NestedSource = {
-		readonly entry_payslip_sources?: {
-			readonly description?: string | null;
-			readonly event_date?: unknown;
-		} | null;
-		readonly time_entry_payslip_sources?: { readonly work_date?: unknown } | null;
-		readonly leave_request_payslip_sources?: {
-			readonly from_date?: unknown;
-			readonly to_date?: unknown;
-		} | null;
-	};
-	type NestedLine = {
-		readonly payslip_line_source_line?: readonly NestedSource[] | null;
-		readonly payslip_line_pay_component?: {
-			readonly code?: string | null;
-			readonly name?: string | null;
-		} | null;
-		readonly payslip_line_component_type?: { readonly name?: string | null } | null;
-	};
-	const sources = $derived(
-		(linesQuery.current as readonly NestedLine[] | null | undefined)?.flatMap(
-			(line) => line.payslip_line_source_line ?? []
-		) ?? []
-	);
-
-	/** A component entry reads as the provenance its author wrote, else the day it happened. */
-	const componentReferences = $derived(
-		sources
-			.flatMap((source) => (source.entry_payslip_sources ? [source.entry_payslip_sources] : []))
-			.map((entry) => entry.description || dayKey(entry.event_date))
-			.toSorted()
-	);
-	const timeEntryReferences = $derived(
-		sources
-			.flatMap((source) =>
-				source.time_entry_payslip_sources ? [source.time_entry_payslip_sources] : []
-			)
-			.map((entry) => dayKey(entry.work_date))
-			.toSorted()
-	);
-	const leaveRequestReferences = $derived(
-		sources
-			.flatMap((source) =>
-				source.leave_request_payslip_sources ? [source.leave_request_payslip_sources] : []
-			)
-			.map((request) => `${dayKey(request.from_date)} → ${dayKey(request.to_date)}`)
-			.toSorted()
-	);
-
-	const componentText = $derived(
-		consumedReferenceText({
-			loading: linesQuery.loading,
-			error: linesQuery.error?.message,
-			references: componentReferences
-		})
-	);
-	const leaveRequestText = $derived(
-		consumedReferenceText({
-			loading: linesQuery.loading,
-			error: linesQuery.error?.message,
-			references: leaveRequestReferences
-		})
-	);
-	const timeEntryText = $derived(
-		consumedReferenceText({
-			loading: linesQuery.loading,
-			error: linesQuery.error?.message,
-			references: timeEntryReferences
-		})
-	);
-
-	function payComponentLabel(row: unknown, fallback: unknown): unknown {
-		const component = (row as NestedLine).payslip_line_pay_component;
-		return component?.code && component.name ? `${component.code} · ${component.name}` : fallback;
+	function componentLabel(row: unknown, fallback: unknown): unknown {
+		const line = row as NestedLine;
+		const component = line.payslip_line_pay_component;
+		if (component?.code)
+			return component.name ? `${component.code} · ${component.name}` : component.code;
+		const statutory = line.payslip_line_statutory_contribution;
+		if (statutory?.code)
+			return statutory.name ? `${statutory.code} · ${statutory.name}` : statutory.code;
+		return fallback ?? 'Derived line';
 	}
 
-	function componentTypeLabel(row: unknown, fallback: unknown): unknown {
-		return (row as NestedLine).payslip_line_component_type?.name ?? fallback;
+	function entryLabel(row: unknown, fallback: unknown): unknown {
+		const entry = (row as NestedLine).entry_payslip_lines;
+		return entry?.description ?? entry?.event_date ?? fallback ?? '—';
 	}
 </script>
 
-<Scroll name="Payslip detail">
+<Scroll name="Payslip detail" class="max-h-[80vh] pr-1">
 	<Stack gap="lg">
 		<Stack as="section" gap="sm" aria-labelledby="payslip-summary-heading">
 			<h2 id="payslip-summary-heading" class="text-xl font-semibold">
-				{employeeName ?? 'Employee'}
+				{employment?.employment_employee?.name ?? 'Employee'}
 			</h2>
 			<p class="text-sm text-muted-foreground">
 				{employment?.employee_number ?? 'Employment'} · {record.currency}
@@ -157,9 +77,7 @@
 				</div>
 				<div>
 					<dt class="text-xs text-muted-foreground">Deductions</dt>
-					<dd class="mt-1 font-semibold tabular-nums">
-						{formatNumeric(record.total_deductions)}
-					</dd>
+					<dd class="mt-1 font-semibold tabular-nums">{formatNumeric(record.total_deductions)}</dd>
 				</div>
 				<div>
 					<dt class="text-xs text-muted-foreground">Net</dt>
@@ -176,56 +94,29 @@
 			as="section"
 			gap="sm"
 			class="border-t border-border pt-4"
-			aria-labelledby="payslip-evidence-heading"
-		>
-			<h3 id="payslip-evidence-heading" class="text-sm font-semibold">Consumed records</h3>
-			<p class="text-xs text-muted-foreground">
-				The source records this payslip's lines read, written by the run that produced them.
-			</p>
-			<Grid as="dl" gap="sm" minimum="compact">
-				<div>
-					<dt class="text-xs text-muted-foreground">Pay components</dt>
-					<dd class="mt-1 text-sm">
-						<span aria-live="polite" class="break-words">{componentText}</span>
-					</dd>
-				</div>
-				<div>
-					<dt class="text-xs text-muted-foreground">Leave requests</dt>
-					<dd class="mt-1 text-sm">
-						<span aria-live="polite" class="break-words">{leaveRequestText}</span>
-					</dd>
-				</div>
-				<div>
-					<dt class="text-xs text-muted-foreground">Time entries</dt>
-					<dd class="mt-1 text-sm">
-						<span aria-live="polite" class="break-words">{timeEntryText}</span>
-					</dd>
-				</div>
-			</Grid>
-		</Stack>
-
-		<Stack
-			as="section"
-			gap="sm"
-			class="border-t border-border pt-4"
 			aria-labelledby="payslip-lines-heading"
 		>
-			<h3 id="payslip-lines-heading" class="text-sm font-semibold">Line items</h3>
+			<h3 id="payslip-lines-heading" class="text-sm font-semibold">Component breakdown</h3>
+			<p class="text-xs text-muted-foreground">
+				Each row is the direct, queryable link from this payslip to its pay component, input entry,
+				or statutory scheme.
+			</p>
 			<Bound size="standard">
 				<CollectionTable
 					{client}
 					collection="payslip_lines"
-					title="Line items"
-					description="Every plane of input arrives here converted to money, in component-type sequence."
+					title="Component breakdown"
+					description="The settled lines that make up this payslip."
 					features={{ create: false }}
 					query={{
 						where: { payslip_id: { eq: record.norbital_id } },
 						orderBy: { sequence: 'asc' },
 						with: {
 							payslip_line_pay_component: { columns: { code: true, name: true } },
-							payslip_line_component_type: { columns: { name: true } }
+							entry_payslip_lines: { columns: { description: true, event_date: true } },
+							payslip_line_statutory_contribution: { columns: { code: true, name: true } }
 						},
-						limit: 100
+						limit: 200
 					}}
 				>
 					{#snippet columns({ Column })}
@@ -234,14 +125,15 @@
 							name="pay_component_id"
 							label="Component"
 							card="title"
-							render={({ row, value }) => payComponentLabel(row, value)}
+							render={({ row, value }) => componentLabel(row, value)}
 						/>
+						<Column name="component" label="Line kind" card="subtitle" />
 						<Column
-							name="component_type_id"
-							label="Type"
-							card="subtitle"
-							render={({ row, value }) => componentTypeLabel(row, value)}
+							name="component_entry_id"
+							label="Input entry"
+							render={({ row, value }) => entryLabel(row, value)}
 						/>
+						<Column name="bucket" card="badge" />
 						<Column name="quantity" render={({ value }) => formatNumeric(value)} />
 						<Column name="rate" render={({ value }) => formatNumeric(value)} />
 						<Column name="amount" card="badge" render={({ value }) => formatNumeric(value)} />

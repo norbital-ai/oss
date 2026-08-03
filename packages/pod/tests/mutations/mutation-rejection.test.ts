@@ -4,13 +4,13 @@ import {
 	isUnexpectedMutationError,
 	mutationRejection
 } from '$lib/server/collection/sync/mutation-rejection.server.js';
-import { mutationRejectionMessage } from '$lib/client/sync/mutation-rejection.js';
-import type { MutationResult } from '$lib/client/sync/types.js';
+import { mutationRejectionMessage } from '$lib/ui/sync/mutation-rejection.js';
+import type { MutationResult } from '$lib/ui/sync/types.js';
 
 /** The whole trip: what a server throw becomes on the wire, and what the user then reads. */
 function userCopyFor(err: unknown): { reason: string; message: string } {
 	const rejection = mutationRejection(err);
-	// The wire frame the client actually receives (sync-endpoints adds clientId/status).
+	// The wire payload the client actually receives (sync-endpoints adds clientId/status).
 	const wire = JSON.parse(
 		JSON.stringify({ clientId: 'c1', status: 'rejected', ...rejection })
 	) as MutationResult;

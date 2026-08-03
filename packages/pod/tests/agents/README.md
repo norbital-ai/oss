@@ -13,4 +13,4 @@ receiving or storing transcripts.
 | `host-agent-tool.test.ts`        | Only declared host tools are exposed to the Pod loop, with validated inputs and outputs.               |
 
 Process-level transport coverage for a self-hosted tool remains in
-`../standalone/host-agent-tool-e2e.test.ts`; it proves the stdio boundary rather than agent behavior.
+`../standalone/host-agent-tool-e2e.test.ts`; it proves the host-tool binding boundary rather than agent behavior.

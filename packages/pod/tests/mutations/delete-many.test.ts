@@ -70,7 +70,7 @@ vi.mock('$lib/server/collection/hook-api-context.server.js', async () => {
 	};
 });
 
-vi.mock('$lib/server/audit/audit_event.server.js', () => ({
+vi.mock('$lib/server/audit_event.server.js', () => ({
 	buildAuditEventPayload: () => ({}),
 	sendAuditEvent: async () => undefined,
 	sendAuditEvents: async (events: { params: { entityId: string } }[]) => {

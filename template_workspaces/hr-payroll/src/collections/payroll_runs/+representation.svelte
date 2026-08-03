@@ -23,8 +23,8 @@
 		(_value, index) => `2026-${String(index + 1).padStart(2, '0')}`
 	);
 
-	// Live rows only: a company or a run held by an open approval request is not yet a fact of the
-	// workspace, and a period held by a withdrawn request must be offered again.
+	// Companies must be live. Runs are intentionally not filtered by approval state: a provisional
+	// row still occupies the physical company/period key and must not be offered a second time.
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true } },
 		orderBy: { name: 'asc' },
@@ -35,7 +35,6 @@
 		limit: 500
 	});
 	const runsQuery = client.db.payroll_runs.findMany({
-		where: { norbital_approval_id: { isNull: true } },
 		orderBy: { period: 'desc' },
 		limit: 1000
 	});
@@ -108,7 +107,7 @@
 </script>
 
 {#if record}
-	<PayrollRunRepresentation {record} {refresh} />
+	<PayrollRunRepresentation {record} {refresh} {close} />
 {:else}
 	<CollectionForm
 		{client}
@@ -184,8 +183,8 @@
 					</Grid>
 				{/if}
 				<p class="text-sm text-muted-foreground">
-					Creating the run builds it: the period's payslips, lines, contributions and the record of
-					what each line consumed are written before this closes.
+					Creating the run builds it: the payslips and their complete component lines are written
+					before this closes.
 				</p>
 			</Stack>
 		{/snippet}

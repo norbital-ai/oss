@@ -59,7 +59,7 @@ export type EmploymentBundle = {
 	readonly age: number | null;
 	/** The days of the pay period this employment covers, or `null` when it covers none. */
 	readonly employedDays: { readonly start: IsoDate; readonly end: IsoDate } | null;
-	/** The span recurring salary and standing allowances cover under the company's final-pay rule. */
+	/** The span recurring salary and recurring allowances cover under the company's final-pay rule. */
 	readonly wageDays: { readonly start: IsoDate; readonly end: IsoDate } | null;
 	/**
 	 * The attendance days **this employment** is measured over. Identical to the run's window for
@@ -159,7 +159,6 @@ export async function gatherRun(options: {
 		factRows,
 		entryRows,
 		requestRows,
-		ledgerRows,
 		timeRows,
 		rosterRows,
 		agreementRows
@@ -172,10 +171,6 @@ export async function gatherRun(options: {
 		query.employment_statutory_facts.findMany({ where: inEmployments, limit: PAGE_LIMIT }),
 		query.component_entries.findMany({ where: inEmployments, limit: PAGE_LIMIT }),
 		query.leave_requests.findMany({ where: inEmployments, limit: PAGE_LIMIT }),
-		query.leave_ledger.findMany({
-			where: { employment_id: { in: employmentIds } },
-			limit: PAGE_LIMIT
-		}),
 		query.time_entries.findMany({
 			where: {
 				employment_id: { in: employmentIds },
@@ -203,7 +198,6 @@ export async function gatherRun(options: {
 	assertComplete(factRows, 'statutory facts');
 	assertComplete(entryRows, 'component entries');
 	assertComplete(requestRows, 'leave requests');
-	assertComplete(ledgerRows, 'leave ledger rows');
 	assertComplete(timeRows, 'time entries');
 	assertComplete(rosterRows, 'roster entries');
 	assertComplete(agreementRows, 'repayment agreements');
@@ -212,26 +206,42 @@ export async function gatherRun(options: {
 	const termsByEmployment = groupBy(live(termRows), (row) => row.employment_id);
 	const factsByEmployment = groupBy(live(factRows), (row) => row.employment_id);
 	const entriesByEmployment = groupBy(live(entryRows), (row) => row.employment_id);
-	/**
-	 * An approved leave request already is the complete TAKEN movement: person, type, date, days
-	 * and source id. Derive that movement directly so payroll never depends on a second seeded copy
-	 * that can drift. The ledger remains for movements that are not requests — ADJUSTMENT and
-	 * ENCASHMENT. Historical TAKEN projection rows are ignored, preventing double counting.
-	 */
-	const movementRows = ledgerRows.filter((row) => row.kind !== 'TAKEN');
-	const takenRows: (LedgerRow & { readonly employment_id: string })[] = live(requestRows).map(
-		(request) => ({
-			norbital_id: request.norbital_id,
-			employment_id: request.employment_id,
-			leave_type_id: request.leave_type_id,
-			entry_date: request.from_date,
-			kind: 'TAKEN',
-			days: -Math.abs(Number(request.days)),
-			source_id: request.norbital_id,
-			norbital_approval_id: null
-		})
+	/** Every approved leave row is already an event; normal requests become TAKEN movements while
+	 * the adjustment/encashment arms carry their exact signed movement. */
+	const leaveMovements: (LedgerRow & { readonly employment_id: string })[] = live(requestRows).map(
+		(request) => {
+			const event = request.event;
+			if (event == null)
+				throw new Error(`Leave request ${request.norbital_id} has no event payload.`);
+			if (event.kind === 'TIME_OFF')
+				return {
+					norbital_id: request.norbital_id,
+					employment_id: request.employment_id,
+					leave_type_id: request.leave_type_id,
+					entry_date: event.from_date,
+					kind: 'TAKEN',
+					days: -Math.abs(Number(event.days)),
+					source_id: request.norbital_id,
+					norbital_approval_id: null
+				};
+			return {
+				norbital_id: request.norbital_id,
+				employment_id: request.employment_id,
+				leave_type_id: request.leave_type_id,
+				entry_date: event.effective_on,
+				kind:
+					event.kind === 'BALANCE_ADJUSTMENT'
+						? 'ADJUSTMENT'
+						: event.kind === 'ENCASHMENT'
+							? 'ENCASHMENT'
+							: 'TAKEN',
+				days: Number(event.movement_days),
+				source_id: event.source_id,
+				norbital_approval_id: null
+			};
+		}
 	);
-	const ledgerByEmployment = groupBy([...movementRows, ...takenRows], (row) => row.employment_id);
+	const ledgerByEmployment = groupBy(leaveMovements, (row) => row.employment_id);
 	const timeByEmployment = groupBy(live(timeRows), (row) => row.employment_id);
 	const rosterByEmployment = groupBy(live(rosterRows), (row) => row.employment_id);
 	const agreementsByEmployment = groupBy(live(agreementRows), (row) => row.employment_id);
@@ -365,24 +375,35 @@ async function gatherYearToDate(options: {
 	const contributionCodeById = new Map(
 		options.configuration.contributions.map((entry) => [entry.row.norbital_id, entry.row.code])
 	);
-	const charges = await query.payslip_contributions.findMany({
+	const charges = await query.payslip_lines.findMany({
 		where: { payslip_id: { in: priorPayslips.map((row) => row.norbital_id) } },
 		limit: PAGE_LIMIT
 	});
-	assertComplete(charges, 'prior statutory charges');
+	assertComplete(charges, 'prior payslip lines');
 	const employeeByPayslip = new Map(
 		priorPayslips.map((row) => [row.norbital_id, employmentToEmployee.get(row.employment_id)])
 	);
+	const countedBases = new Set<string>();
 	for (const charge of charges) {
+		if (charge.statutory_contribution_id == null) continue;
+		const component = charge.component;
+		if (component == null) continue;
+		if (component.kind !== 'STATUTORY_EMPLOYEE' && component.kind !== 'STATUTORY_EMPLOYER')
+			continue;
 		const employeeId = employeeByPayslip.get(charge.payslip_id);
 		const code = contributionCodeById.get(charge.statutory_contribution_id);
 		if (employeeId == null || code == null) continue;
 		const key = `${employeeId}:${code}`;
 		const running = totals.get(key) ?? { employee: 0, employer: 0, base: 0 };
+		const baseKey = `${charge.payslip_id}:${code}`;
+		const base = countedBases.has(baseKey) ? 0 : Number(component.base_amount);
+		countedBases.add(baseKey);
 		totals.set(key, {
-			employee: running.employee + Number(charge.employee_amount),
-			employer: running.employer + Number(charge.employer_amount),
-			base: running.base + Number(charge.base_amount)
+			employee:
+				running.employee + (component.kind === 'STATUTORY_EMPLOYEE' ? Number(charge.amount) : 0),
+			employer:
+				running.employer + (component.kind === 'STATUTORY_EMPLOYER' ? Number(charge.amount) : 0),
+			base: running.base + base
 		});
 	}
 	return totals;

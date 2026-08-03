@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createClientDb } from '../support/pglite-node.js';
-import { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
+import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
 import {
 	enableClientSync,
 	disableClientSync,
@@ -10,8 +10,8 @@ import {
 	setLocalSchema,
 	type LocalCollectionSchema,
 	type LocalPage
-} from '$lib/client/sync/client-sync.js';
-import type { SyncFetch } from '$lib/client/sync/types.js';
+} from '$lib/ui/sync/client-sync.js';
+import type { SyncFetch } from '$lib/ui/sync/types.js';
 
 const SCHEMA = `CREATE TABLE customers (
 	norbital_id text PRIMARY KEY,

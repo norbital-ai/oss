@@ -44,8 +44,7 @@ export const referenceGrants = (...actions: Action[]): readonly Grant[] => [
 	...grantsOn('shift_definitions', actions),
 	...grantsOn('roster_entries', actions),
 	...grantsOn('pay_components', actions),
-	...grantsOn('leave_types', actions),
-	...grantsOn('accrual_bands', actions)
+	...grantsOn('leave_types', actions)
 ];
 
 /**
@@ -56,10 +55,8 @@ export const referenceGrants = (...actions: Action[]): readonly Grant[] => [
  */
 export const statutoryGrants = (...actions: Action[]): readonly Grant[] => [
 	...grantsOn('jurisdictions', actions),
-	...grantsOn('component_types', actions),
 	...grantsOn('statutory_contributions', actions),
 	...grantsOn('contribution_rates', actions),
-	...grantsOn('contribution_treatments', actions),
 	...grantsOn('overtime_rules', actions),
 	...grantsOn('overtime_limits', actions)
 ];
@@ -77,17 +74,14 @@ export const peopleGrants = (...actions: Action[]): readonly Grant[] => [
 	...grantsOn('employment_terms', actions),
 	...grantsOn('employment_statutory_facts', actions),
 	...grantsOn('component_entries', actions),
-	...grantsOn('repayment_agreements', actions),
-	...grantsOn('leave_ledger', actions)
+	...grantsOn('repayment_agreements', actions)
 ];
 
 /** Payroll output. Read-only as a group; `payroll_runs` gets its writes stated separately. */
 export const payrollGrants = (...actions: Action[]): readonly Grant[] => [
 	...grantsOn('payroll_runs', actions),
 	...grantsOn('payslips', actions),
-	...grantsOn('payslip_lines', actions),
-	...grantsOn('payslip_contributions', actions),
-	...grantsOn('payslip_line_sources', actions)
+	...grantsOn('payslip_lines', actions)
 ];
 
 /** What an employee may read to understand their own numbers: company-wide facts, not personal rows. */

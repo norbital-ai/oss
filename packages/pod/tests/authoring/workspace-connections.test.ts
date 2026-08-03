@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { NorbitalManifestSchema } from '@norbital-ai/platform-utils/manifest/types';
-import { defineModel, text } from '../../src/lib/authoring/index.js';
+import { defineModel, text } from '../../src/authoring/index.js';
 import {
 	defineModels,
 	defineRuntimeCollection,
 	defineRuntimeRegistry
-} from '../../src/lib/authoring/filesystem.js';
-import { defineRuntimeWorkspace } from '../../src/lib/authoring/workspace/define-workspace.js';
+} from '../../src/authoring/filesystem.js';
+import { defineRuntimeWorkspace } from '../../src/authoring/workspace/define-workspace.js';
 import {
 	defineConnection,
 	type HttpConnection
-} from '../../src/lib/authoring/integrations/integrations.js';
-import { buildNorbitalManifest } from '../../src/lib/manifest/index.js';
+} from '../../src/authoring/integrations/integrations.js';
+import { buildNorbitalManifest } from '../../src/manifest/index.js';
 
 const connection = () =>
 	defineConnection({

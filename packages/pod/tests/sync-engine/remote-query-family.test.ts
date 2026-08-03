@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { remoteQueryFamily } from '$lib/runtime/client.js';
+import { remoteQueryFamily } from '$lib/ui/state/client.js';
 
 /**
  * A query only shows a loader when it has nothing to show, so what a *new* key inherits is what

@@ -109,7 +109,7 @@ Names come from paths. There is no registry file to maintain:
 - `src/policies/+sales_rep.policy.ts` defines policy `sales_rep`;
 - `src/channels/+sales_desk.channel.ts` defines channel `sales_desk`;
 - `src/remotes/+dashboard_summary.ts` defines remote `dashboard_summary`;
-- `src/lib/tools/+find_supplier.tool.ts` defines agent tool `find_supplier`.
+- `src/tools/+find_supplier.tool.ts` defines agent tool `find_supplier`.
 
 Other root `+*.ts` roles are rejected. In particular, facilities and notifications are not tenant
 registry files: the active host supplies them through `pod.host.ts`.

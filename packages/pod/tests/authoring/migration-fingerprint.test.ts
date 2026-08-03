@@ -6,7 +6,7 @@ import {
 	migrationFingerprint,
 	readMigrationFingerprint,
 	writeMigrationFingerprint
-} from '../../src/lib/vite/migration-fingerprint.js';
+} from '../../src/vite/migration-fingerprint.js';
 
 const temporaryDirectories: string[] = [];
 

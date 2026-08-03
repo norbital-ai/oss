@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assertChannelTransportsAreSupported } from '../../src/lib/authoring/channels/channels.js';
-import { consoleMessaging, messagingProviders } from '../../src/lib/host/facilities.js';
+import { assertChannelTransportsAreSupported } from '../../src/authoring/channels/channels.js';
+import { consoleMessaging, messagingProviders } from '../../src/host/facilities.js';
 
 /**
  * A channel names a wire only the host can hold open, and the two halves are matched by exact string

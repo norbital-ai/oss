@@ -73,33 +73,43 @@ Server roles use the same database method names with promises.
 ```ts
 import { defineAutomation } from '@norbital-ai/pod/authoring';
 
-export default defineAutomation(
-	{ on: { collection: 'sites', event: 'create' } },
-	async ({ event, db }) => ({ id: event.id, count: await db.sites.count({}) })
-);
+export default defineAutomation({ schedule: '0 6 * * *' }, async (api) => {
+	const sites = await api.db.query.sites.findMany({ limit: 250 });
+	return { count: sites.length };
+});
 ```
 
 Automations run after commit, are durable and idempotent, and never repeat their filename as an ID. Use a
-schedule or collection event trigger. Do not put external delivery in transactional hooks.
+schedule or collection event trigger:
+
+```ts
+export default defineAutomation(
+	{ trigger: { collection: 'sites', event: 'create' } },
+	async (api, { scope }) => ({ count: await api.db.sites.count({}) })
+);
+```
+
+Do not put external delivery in transactional hooks.
 
 ## Remotes
 
 `src/remotes/+compute_forecast.ts`:
 
 ```ts
-import { defineRemote } from '@norbital-ai/pod/authoring';
+import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
 import type { Api } from './$types.js';
 
-export default defineRemote({
-	input: z.object({ site_id: z.string() }),
+export default defineQueryHandler({
+	schema: z.object({ site_id: z.string() }),
 	handler: async ({ site_id }, api: Api) =>
 		api.db.site_visits.count({ where: { site_id: { eq: site_id } } })
 });
 ```
 
 Remotes are imperative request/response calls; reactive reads belong to `client.db`. The filename becomes the
-generated `client.invoke` property.
+generated `client.invoke` property. Use `defineQueryHandler` for reactive, read-only server computation and
+`defineCommandHandler` for imperative work that may mutate data.
 
 ## Optional seed
 

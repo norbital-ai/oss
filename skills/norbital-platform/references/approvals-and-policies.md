@@ -88,24 +88,24 @@ There is no separate "submit for approval" action. A gated write creates the req
 
 `approval_request.status` is one of `ONGOING`, `APPROVED`, `REJECTED`, `REQUEST_FOR_CHANGE`.
 
-| Outcome | What happens |
-| --- | --- |
-| Approved | The stamp clears and the locks release. The data was already live. |
-| Rejected, or withdrawn by the requestor | The row is rolled back out of temporal history. |
-| Request for change | Locks stay on. Only the original requestor may revise, and the revision re-evaluates policy from scratch. |
+| Outcome                                 | What happens                                                                                              |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Approved                                | The stamp clears and the locks release. The data was already live.                                        |
+| Rejected, or withdrawn by the requestor | The row is rolled back out of temporal history.                                                           |
+| Request for change                      | Locks stay on. Only the original requestor may revise, and the revision re-evaluates policy from scratch. |
 
 A user may act on a step only if they belong to one of that step's approver teams. Attempting
 otherwise is refused with a message naming the teams that can.
 
 ## Where the state lives
 
-| Table / column | Holds |
-| --- | --- |
-| `approval_request` | Status, the step tree, which records it locks, when it closed |
-| `requestor` | Links a request to the user who raised it |
-| `policy.grants[].approval_config` | The compiled flow, with team ids resolved |
-| `norbital_approval_id` on every collection row | The stamp identifying the open request holding it |
-| `_approval_lock` | The materialised locks the database triggers enforce |
+| Table / column                                 | Holds                                                         |
+| ---------------------------------------------- | ------------------------------------------------------------- |
+| `approval_request`                             | Status, the step tree, which records it locks, when it closed |
+| `requestor`                                    | Links a request to the user who raised it                     |
+| `policy.grants[].approval_config`              | The compiled flow, with team ids resolved                     |
+| `norbital_approval_id` on every collection row | The stamp identifying the open request holding it             |
+| `_approval_lock`                               | The materialised locks the database triggers enforce          |
 
 The first four are system collections. Whether a given agent may read them depends on its
 configuration, but they exist and this is where the answers are.

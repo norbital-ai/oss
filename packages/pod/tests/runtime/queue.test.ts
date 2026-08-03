@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
-import { workspaceJobs } from '../../src/lib/bin/invocation/jobs.js';
-import { intervalQueue } from '../../src/lib/host/interval-queue.js';
+import { workspaceJobs } from '../../src/host/jobs.js';
+import { intervalQueue } from '../../src/host/interval-queue.js';
 
 /** A `messaging` binding that only has to deliver on the `email` channel. */
 function messagingBinding(binding: Pick<HostMessagingBinding, 'send'>): HostMessagingBinding {

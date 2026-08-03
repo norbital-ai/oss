@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createClientDb } from '../support/pglite-node.js';
-import { PodSyncClient } from '$lib/client/sync/pod-sync-client.js';
-import type { SyncFetch, MutateResponse, ShapeResponse, SyncDiff } from '$lib/client/sync/types.js';
+import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
+import type { SyncFetch, MutateResponse, ShapeResponse, SyncDiff } from '$lib/ui/sync/types.js';
 
 const SCHEMA = `CREATE TABLE orders (
 	norbital_id text PRIMARY KEY,

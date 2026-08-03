@@ -4,12 +4,12 @@ import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/type
 import {
 	declaredWebhookBindings,
 	webhookInboundDeliverer
-} from '../../src/lib/bin/invocation/webhook-inbound.js';
+} from '../../src/host/webhook-inbound.js';
 import {
 	verifyWebhookSignature,
 	webhookSignatureTimestamp,
 	webhookTimestampIsFresh
-} from '../../src/lib/host/webhooks.js';
+} from '../../src/host/webhooks.js';
 
 const SECRET = 'whsec-9d41c0';
 

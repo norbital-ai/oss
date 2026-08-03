@@ -38,13 +38,6 @@
 	const companyLabelsById = $derived(
 		new Map((companiesQuery.current ?? []).map((company) => [company.norbital_id, company.name]))
 	);
-	const componentTypesQuery = client.db.component_types.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		limit: 200
-	});
-	const componentTypeLabelsById = $derived(
-		new Map((componentTypesQuery.current ?? []).map((type) => [type.norbital_id, type.name]))
-	);
 	const contributionsQuery = client.db.statutory_contributions.findMany({
 		where: { norbital_approval_id: { isNull: true } },
 		limit: 500
@@ -119,20 +112,8 @@
 	</CollectionTable>
 {/snippet}
 
-{#snippet componentTypes()}
-	<CollectionTable {client} collection="component_types" query={{ orderBy: { sequence: 'asc' } }}>
-		{#snippet columns({ Column })}
-			<Column name="sequence" label="Seq" />
-			<Column name="code" card="title" />
-			<Column name="name" card="subtitle" />
-			<Column name="nature" card="badge" />
-			<Column name="description" />
-		{/snippet}
-	</CollectionTable>
-{/snippet}
-
 {#snippet payComponents()}
-	<CollectionTable {client} collection="pay_components" query={{ orderBy: { code: 'asc' } }}>
+	<CollectionTable {client} collection="pay_components" query={{ orderBy: { sequence: 'asc' } }}>
 		{#snippet columns({ Column })}
 			<Column name="code" card="title" />
 			<Column name="name" card="subtitle" />
@@ -141,16 +122,14 @@
 				label="Company"
 				render={({ value }) => companyLabelsById.get(String(value)) ?? value}
 			/>
-			<Column
-				name="component_type_id"
-				label="Component type"
-				render={({ value }) => componentTypeLabelsById.get(String(value)) ?? value}
-			/>
+			<Column name="nature" card="badge" />
+			<Column name="policy" label="Settlement and statutory policy" />
 			<Column
 				name="definition"
 				label="Definition"
 				render={({ value }) => formatComponentDefinition(value)}
 			/>
+			<Column name="sequence" label="Order" />
 			<Column name="effective_range" label="Effective" />
 		{/snippet}
 	</CollectionTable>
@@ -204,32 +183,6 @@
 	</CollectionTable>
 {/snippet}
 
-{#snippet treatments()}
-	<CollectionTable
-		{client}
-		collection="contribution_treatments"
-		query={{ orderBy: { norbital_created_at: 'desc' } }}
-	>
-		{#snippet columns({ Column })}
-			<Column
-				name="component_type_id"
-				label="Component type"
-				card="title"
-				render={({ value }) => componentTypeLabelsById.get(String(value)) ?? value}
-			/>
-			<Column
-				name="statutory_contribution_id"
-				label="Contribution"
-				card="subtitle"
-				render={({ value }) => contributionLabelsById.get(String(value)) ?? value}
-			/>
-			<Column name="authority" />
-			<Column name="treatment" label="Treatment" />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-	</CollectionTable>
-{/snippet}
-
 {#snippet overtime()}
 	<CollectionTable
 		{client}
@@ -273,19 +226,6 @@
 			<Column name="period" card="badge" />
 			<Column name="max_hours" label="Max hours" render={({ value }) => formatNumeric(value)} />
 			<Column name="on_exceed" label="On exceed" />
-			<Column name="authority" />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-	</CollectionTable>
-{/snippet}
-
-{#snippet bands()}
-	<CollectionTable {client} collection="accrual_bands" query={{ orderBy: { leave_code: 'asc' } }}>
-		{#snippet columns({ Column })}
-			<Column name="leave_code" label="Leave code" card="title" />
-			<Column name="days" render={({ value }) => formatNumeric(value)} />
-			<Column name="key" label="Band key" card="subtitle" />
-			<Column name="owner" label="Owner" />
 			<Column name="authority" />
 			<Column name="effective_range" label="Effective" />
 		{/snippet}
@@ -341,12 +281,6 @@
 			},
 			{ name: 'companies', label: 'Companies', icon: 'lucide:building-2', content: companies },
 			{
-				name: 'component-types',
-				label: 'Component types',
-				icon: 'lucide:shapes',
-				content: componentTypes
-			},
-			{
 				name: 'pay-components',
 				label: 'Pay catalogue',
 				icon: 'lucide:list-tree',
@@ -359,10 +293,8 @@
 				content: contributions
 			},
 			{ name: 'rates', label: 'Rates', icon: 'lucide:percent', content: rates },
-			{ name: 'treatments', label: 'Treatments', icon: 'lucide:shield-check', content: treatments },
 			{ name: 'overtime', label: 'Overtime rules', icon: 'lucide:timer', content: overtime },
 			{ name: 'limits', label: 'Overtime limits', icon: 'lucide:gauge', content: limits },
-			{ name: 'accrual-bands', label: 'Accrual bands', icon: 'lucide:layers', content: bands },
 			{
 				name: 'statutory-facts',
 				label: 'Statutory facts',

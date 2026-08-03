@@ -36,13 +36,13 @@ There is no separate catalogue file. A template declares itself by carrying
 two files. `pnpm templates:check` discovers every workspace on disk and recomputes the collection,
 app, and automation counts from source.
 
-| Template       | Source directory                   | Published ref                       |
-| -------------- | ---------------------------------- | ----------------------------------- |
+| Template         | Source directory                       | Published ref                           |
+| ---------------- | -------------------------------------- | --------------------------------------- |
 | Field Operations | `template_workspaces/field-operations` | `refs/heads/templates/field-operations` |
-| Construction   | `template_workspaces/construction` | `refs/heads/templates/construction` |
-| CRM            | `template_workspaces/crm`          | `refs/heads/templates/crm`          |
-| HR and payroll | `template_workspaces/hr-payroll`   | `refs/heads/templates/hr-payroll`   |
-| Reclamation    | `template_workspaces/reclamation`  | `refs/heads/templates/reclamation`  |
+| Construction     | `template_workspaces/construction`     | `refs/heads/templates/construction`     |
+| CRM              | `template_workspaces/crm`              | `refs/heads/templates/crm`              |
+| HR and payroll   | `template_workspaces/hr-payroll`       | `refs/heads/templates/hr-payroll`       |
+| Reclamation      | `template_workspaces/reclamation`      | `refs/heads/templates/reclamation`      |
 
 The projection is deterministic for a source commit and retains per-template ancestry. A consumer
 resolves the active set with one `git ls-remote --heads <url> 'refs/heads/templates/*'` round trip

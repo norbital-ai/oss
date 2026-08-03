@@ -24,23 +24,23 @@ mode: an agent invents an admin console that does not exist, and the user goes l
 
 ## Where each kind of change lives
 
-| Change | Lives in |
-| --- | --- |
-| Add a field, change an enum's allowed values, add an index | `src/collections/<name>/+model.ts` |
-| Business logic around a write | `src/collections/<name>/+hooks.ts` |
-| Import and export shaping | `src/collections/<name>/+pipelines.ts` |
-| Who may read or write what; what needs approval | `src/policies/+<name>.policy.ts` |
-| Screens | `src/apps/` |
-| Scheduled or event-triggered work | `src/automation/+<name>.ts` |
-| Extra tools for the workspace agent | `src/tools/+<name>.tool.ts` |
-| Extra skills for the workspace agent | `src/skills/<name>/SKILL.md` |
-| The workspace agent's own profile | `src/+agent.ts` |
+| Change                                                     | Lives in                               |
+| ---------------------------------------------------------- | -------------------------------------- |
+| Add a field, change an enum's allowed values, add an index | `src/collections/<name>/+model.ts`     |
+| Business logic around a write                              | `src/collections/<name>/+hooks.ts`     |
+| Import and export shaping                                  | `src/collections/<name>/+pipelines.ts` |
+| Who may read or write what; what needs approval            | `src/policies/+<name>.policy.ts`       |
+| Screens                                                    | `src/apps/`                            |
+| Scheduled or event-triggered work                          | `src/automation/+<name>.ts`            |
+| Extra tools for the workspace agent                        | `src/tools/+<name>.tool.ts`            |
+| Extra skills for the workspace agent                       | `src/skills/<name>/SKILL.md`           |
+| The workspace agent's own profile                          | `src/+agent.ts`                        |
 
 Compiled output lands in `.norbital/` and is never hand-edited.
 
 Runtime data — users, teams, team membership, records — lives in the database and is edited in the
-app. The line between the two matters: *which teams exist* is data, but *which team approves step
-two of the payroll flow* is source.
+app. The line between the two matters: _which teams exist_ is data, but _which team approves step
+two of the payroll flow_ is source.
 
 ## Reference routing
 

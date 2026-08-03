@@ -189,11 +189,12 @@ export type TransportSendResult = { readonly sent: boolean; readonly reason?: st
 
 /**
  * Every member of every binding here is a *method*, and a facility binding may never carry a data
- * field. Bindings reach a tenant runtime through the stdio proxy in `runtime/serve.ts`, which traps
- * every property get and returns a call forwarder — so a data field arrives inside the isolate as a
- * function, and a record of functions does not survive the structured clone at all. The type checks
- * out on both sides and the standalone runner, which holds the real object, works; only a hosted
- * isolate sees the difference. That is why `listChannels()` and `listTransports()` are calls.
+ * field. Bindings reach a tenant runtime through the facility proxy in `serve/hosted.ts`, which
+ * traps every property get and returns a call forwarder — so a data field arrives inside the
+ * isolate as a function, and a record of functions does not survive the structured clone at all.
+ * The type checks out on both sides and the standalone runner, which holds the real object, works;
+ * only a hosted isolate sees the difference. That is why `listChannels()` and `listTransports()`
+ * are calls.
  */
 export type HostMessagingBinding = {
 	/** External channels this host can deliver. `system` is reserved to Pod. */
