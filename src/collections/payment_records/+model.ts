@@ -2,7 +2,9 @@ import { custom, date, defineModel, enums, text, uuid } from '@norbital-ai/pod/a
 
 export default defineModel(
 	{
-		quote_id: uuid().notNull(),
+		direction: enums(['incoming', 'outgoing']),
+		quote_id: uuid(),
+		purchase_order_id: uuid(),
 		amount: custom('money', { allowedCurrencies: ['CNY', 'USD', 'EUR', 'GBP', 'SGD'] }),
 		payment_date: date().notNull(),
 		method: enums([
@@ -20,9 +22,14 @@ export default defineModel(
 	},
 	{
 		description:
-			'Payments received against a confirmed or fulfilled quote/order. Used to derive paid status.',
-		recordLabel: ['quote_id', 'amount'],
+			'Money moved against a trade document. An incoming payment settles a sales document; an outgoing one settles a purchase order. Exactly one of the two document references is set, which is what lets receivable and payable status be derived from a single ledger.',
+		recordLabel: ['payment_date', 'amount'],
 		icon: 'lucide:banknote',
-		indexes: [{ columns: ['quote_id'] }, { columns: ['payment_date'] }]
+		indexes: [
+			{ columns: ['quote_id'] },
+			{ columns: ['purchase_order_id'] },
+			{ columns: ['payment_date'] },
+			{ columns: ['direction'] }
+		]
 	}
 );

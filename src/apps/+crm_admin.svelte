@@ -22,7 +22,7 @@
 	<title>CRM Operations</title>
 	<meta
 		name="description"
-		content="Order fulfilment, payment tracking, revenue summary, and team activities"
+		content="Order fulfilment, invoicing, payment tracking, revenue summary, and team activities"
 	/>
 	<meta name="pod:icon" content="lucide:settings-2" />
 </svelte:head>
@@ -46,6 +46,27 @@
 			<Column name="currency" />
 			<Column name="confirmed_at" label="Confirmed" />
 			<Column name="fulfilled_at" label="Fulfilled" />
+		{/snippet}
+	</CollectionTable>
+{/snippet}
+
+{#snippet invoices()}
+	<CollectionTable
+		{client}
+		collection="invoices"
+		title="Invoices"
+		description="Billing documents raised against confirmed and fulfilled orders. Open one to edit its lines and move it through issue and settlement."
+		query={{ orderBy: { issue_date: 'desc' } }}
+	>
+		{#snippet columns({ Column })}
+			<Column name="doc_no" label="Doc #" minWidth={140} card="badge" />
+			<Column name="status" card="badge" />
+			<Column name="account_id" label="Account" minWidth={200} card="title" />
+			<Column name="quote_id" label="Order" minWidth={180} />
+			<Column name="currency" />
+			<Column name="issue_date" label="Issued" />
+			<Column name="due_date" label="Due" />
+			<Column name="gross" label="Gross amount" />
 		{/snippet}
 	</CollectionTable>
 {/snippet}
@@ -102,6 +123,26 @@
 			<Column name="quantity" />
 			<Column name="unit_price" label="Unit price" />
 			<Column name="discount_pct" label="Discount %" />
+			<Column name="line_total" label="Total" />
+		{/snippet}
+	</CollectionTable>
+{/snippet}
+
+{#snippet invoiceLines()}
+	<CollectionTable
+		{client}
+		collection="invoice_lines"
+		title="Invoice lines"
+		description="Line items across all invoices. Each one bills a quantity against a single sales document line."
+		query={{ orderBy: { invoice_id: 'desc' } }}
+	>
+		{#snippet columns({ Column })}
+			<Column name="invoice_id" label="Invoice" minWidth={200} card="title" />
+			<Column name="product_code" label="Code" minWidth={100} />
+			<Column name="product_name" label="Product" minWidth={200} />
+			<Column name="quote_line_id" label="Sales line" minWidth={180} />
+			<Column name="quantity" />
+			<Column name="unit_price" label="Unit price" />
 			<Column name="line_total" label="Total" />
 		{/snippet}
 	</CollectionTable>
@@ -166,7 +207,7 @@
 	<PageHeader
 		eyebrow="CRM Operations"
 		title="Order management"
-		description="Review confirmed orders, track payments, monitor revenue, and manage team activities."
+		description="Review confirmed orders, raise and issue invoices, track payments, monitor revenue, and manage team activities."
 	/>
 {/snippet}
 
@@ -175,6 +216,7 @@
 		animate={false}
 		config={[
 			{ name: 'orders', label: 'Orders', icon: 'lucide:receipt', content: orders },
+			{ name: 'invoices', label: 'Invoices', icon: 'lucide:file-text', content: invoices },
 			{ name: 'revenue', label: 'Revenue', icon: 'lucide:bar-chart-3', content: revenueSummary },
 			{ name: 'payments', label: 'Payments', icon: 'lucide:banknote', content: payments },
 			{
@@ -182,6 +224,12 @@
 				label: 'Quote lines',
 				icon: 'lucide:list-checks',
 				content: quoteLines
+			},
+			{
+				name: 'invoice-lines',
+				label: 'Invoice lines',
+				icon: 'lucide:list-ordered',
+				content: invoiceLines
 			},
 			{
 				name: 'activities',

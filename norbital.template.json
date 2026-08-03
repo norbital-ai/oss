@@ -3,11 +3,11 @@
 	"key": "crm",
 	"name": "CRM",
 	"industry": "Sales",
-	"description": "Customer relationship management, quoting, fulfilment, and payments.",
+	"description": "Quote-to-cash for B2B distribution: accounts, quoting, fulfilment, invoicing, purchasing, stock, and payments.",
 	"visibility": "public",
 	"counts": {
-		"collections": 9,
-		"apps": 2,
+		"collections": 19,
+		"apps": 3,
 		"automations": 2
 	}
 }

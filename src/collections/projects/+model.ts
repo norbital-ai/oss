@@ -12,9 +12,9 @@ export default defineModel(
 	},
 	{
 		description:
-			'R&D projects. Quotes can be linked to projects for material tracking and budget reconciliation.',
+			'Customer or internal projects. Quotes and activities can reference one, which is how a stream of related deals stays attributable to the engagement that produced it.',
 		recordLabel: 'name',
-		icon: 'lucide:flask-conical',
+		icon: 'lucide:folder-kanban',
 		indexes: [{ columns: ['account_id'] }, { columns: ['owner_id'] }, { columns: ['status'] }]
 	}
 );

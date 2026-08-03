@@ -30,6 +30,7 @@ export default defineQueryHandler({
 
 		const paidByQuote = new Map<string, number>();
 		for (const p of payments) {
+			if (p.quote_id == null) continue;
 			const curr = paidByQuote.get(p.quote_id) ?? 0;
 			paidByQuote.set(p.quote_id, curr + (p.amount?.value ?? 0));
 		}
