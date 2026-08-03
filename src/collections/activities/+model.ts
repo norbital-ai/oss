@@ -2,7 +2,7 @@ import { date, defineModel, enums, text, timestamp, uuid } from '@norbital-ai/po
 
 export default defineModel(
 	{
-		regarding_type: enums(['accounts', 'quotes', 'projects']).notNull(),
+		regarding_type: enums(['accounts', 'quotes']).notNull(),
 		regarding_id: uuid().notNull(),
 		type: enums(['call', 'meeting', 'email', 'task', 'note']),
 		subject: text().notNull(),
@@ -13,7 +13,7 @@ export default defineModel(
 	},
 	{
 		description:
-			'Sales activities — calls, meetings, emails, tasks, and notes — linked to an account, deal, or project.',
+			'Sales activities — calls, meetings, emails, tasks, and notes — linked to an account or deal.',
 		recordLabel: 'subject',
 		icon: 'lucide:calendar-check',
 		indexes: [

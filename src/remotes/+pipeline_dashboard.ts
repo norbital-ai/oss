@@ -15,9 +15,7 @@ export default defineQueryHandler({
 				title: true,
 				status: true,
 				currency: true,
-				net: true,
 				gross: true,
-				owner_id: true,
 				valid_until: true
 			},
 			orderBy: { doc_no: 'desc' },
@@ -25,26 +23,16 @@ export default defineQueryHandler({
 		});
 
 		if (quotes.length === 0) {
-			return { cards: [], stage_counts: {}, total_pipeline_value: 0 };
+			return { cards: [] };
 		}
 
-		const accountIds = [...new Set(quotes.map((q) => q.account_id))];
+		const accountIds = [...new Set(quotes.map((quote) => quote.account_id))];
 		const accounts = await api.db.query.accounts.findMany({
 			where: { norbital_id: { in: accountIds } },
 			columns: { norbital_id: true, name: true },
 			limit: accountIds.length
 		});
-		const accountById = new Map(accounts.map((a) => [a.norbital_id, a.name]));
-
-		const stageCounts: Record<string, number> = {};
-		let pipelineTotal = 0;
-		for (const quote of quotes) {
-			const stage = quote.status ?? 'draft';
-			stageCounts[stage] = (stageCounts[stage] ?? 0) + 1;
-			if (quote.status !== 'lost' && quote.gross != null) {
-				pipelineTotal += Number(quote.gross);
-			}
-		}
+		const accountById = new Map(accounts.map((account) => [account.norbital_id, account.name]));
 
 		return {
 			cards: quotes.map((quote) => ({
@@ -56,9 +44,7 @@ export default defineQueryHandler({
 				gross: quote.gross,
 				currency: quote.currency,
 				valid_until: quote.valid_until
-			})),
-			stage_counts: stageCounts,
-			total_pipeline_value: pipelineTotal
+			}))
 		};
 	}
 });

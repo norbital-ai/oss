@@ -1,4 +1,4 @@
-import { deriveFloorPrice, documentTotals, isBelowFloor, lineAmounts } from '../../lib/pricing.js';
+import { documentTotals, lineAmounts } from '../../lib/pricing.js';
 import type { Hooks, WorkspaceRow } from './$types.js';
 
 type AfterApi = Parameters<NonNullable<NonNullable<Hooks['create']>['after']>>[0]['api'];
@@ -32,38 +32,6 @@ function validateLineFields(input: {
 	if (taxRate < 0 || taxRate > 100) {
 		throw new Error('Tax rate must be between 0 and 100.');
 	}
-}
-
-/**
- * Whether this line sells below the cost-plus-markup floor.
- *
- * The floor itself is deliberately not persisted. Sales reps hold read on `quote_lines` and Pod
- * policies are collection-scoped, so a `floor_price` column on this table would hand the sales floor
- * the buy cost: the floor is cost times markup, and dividing one out recovers the other. The boolean
- * is the part anyone acts on, and it carries no cost basis.
- */
-async function resolveBelowFloor(
-	api: Parameters<NonNullable<NonNullable<Hooks['create']>['before']>>[0]['api'],
-	productId: string,
-	unitPrice: number,
-	taxRate: number,
-	taxInclusive: boolean
-): Promise<boolean> {
-	const stockLevel = await api.db.query.stock_levels.findFirst({
-		where: { product_id: { eq: productId } },
-		columns: { unit_cost: true }
-	});
-	const pricingSettings = await api.db.query.pricing_settings.findFirst({
-		where: { scope: { eq: 'default' } },
-		columns: { markup_pct: true }
-	});
-
-	return isBelowFloor({
-		unit_price: unitPrice,
-		floor_price: deriveFloorPrice(stockLevel?.unit_cost, pricingSettings?.markup_pct),
-		tax_rate: taxRate,
-		tax_inclusive: taxInclusive
-	});
 }
 
 function computeLineAmounts(
@@ -139,40 +107,24 @@ export default {
 			});
 			if (!product) throw new Error('Referenced product does not exist.');
 
-			const customerPrice = await api.db.query.customer_prices.findFirst({
-				where: {
-					account_id: { eq: quote.account_id },
-					product_id: { eq: input.product_id },
-					active: { eq: true }
-				}
-			});
-
 			const resolved = {
 				...input,
 				product_code: input.product_code ?? product.code,
 				product_name: input.product_name ?? product.name,
 				product_unit: input.product_unit ?? product.unit ?? '',
-				unit_price: input.unit_price ?? customerPrice?.unit_price ?? product.unit_price ?? 0,
+				unit_price: input.unit_price ?? product.unit_price ?? 0,
 				discount_pct: input.discount_pct ?? 0,
 				tax_rate: input.tax_rate ?? 0
 			};
 			validateLineFields(resolved);
 
 			const amounts = computeLineAmounts(quote, resolved);
-			const belowFloor = await resolveBelowFloor(
-				api,
-				input.product_id,
-				Number(resolved.unit_price),
-				Number(resolved.tax_rate),
-				quote.tax_inclusive
-			);
 
 			return {
 				...resolved,
 				net: amounts.net,
 				tax: amounts.tax,
-				line_total: amounts.gross,
-				below_floor: belowFloor
+				line_total: amounts.gross
 			};
 		},
 		after: afterRollup
@@ -195,20 +147,12 @@ export default {
 			validateLineFields(resolved);
 
 			const amounts = computeLineAmounts(quote, resolved);
-			const belowFloor = await resolveBelowFloor(
-				api,
-				resolved.product_id,
-				Number(resolved.unit_price),
-				Number(resolved.tax_rate),
-				quote.tax_inclusive
-			);
 
 			return {
 				...input,
 				net: amounts.net,
 				tax: amounts.tax,
-				line_total: amounts.gross,
-				below_floor: belowFloor
+				line_total: amounts.gross
 			} satisfies UpdateInput;
 		},
 		after: afterRollup

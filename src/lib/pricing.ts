@@ -1,7 +1,7 @@
 import { currencyFractionDigits, fromMinorUnits, toMinorUnits } from '@norbital-ai/std/finance';
 
 /**
- * Trade-document arithmetic, shared by every collection that prices a line.
+ * Quote arithmetic, shared by the quote line hooks and the quote rollup.
  *
  * Two rules matter more than the formulas and are the reason this is one module rather than a helper
  * per collection. First, rounding happens at named points only: a line is rounded once, and a
@@ -87,54 +87,4 @@ export function documentTotals(lines: readonly LineAmounts[], currency: string):
 		tax: fromMinorUnits(tax, currency),
 		gross: fromMinorUnits(gross, currency)
 	};
-}
-
-/** The scale unit costs and floor prices are held at — finer than a document, which prices in cents. */
-export const UNIT_COST_DIGITS = 4;
-
-/**
- * The lowest price a seller may quote: cost plus the configured markup.
- *
- * Returns `null` rather than a number whenever the answer would leak the cost it was derived from —
- * no cost on file, no markup configured, a non-positive result, or a floor that has collapsed onto
- * the cost itself. A floor is shown to sellers who are not allowed to see cost, so "no floor" is a
- * safer answer than a floor that happens to equal cost.
- */
-export function deriveFloorPrice(
-	unitCost: number | null | undefined,
-	markupPct: number | null | undefined
-): number | null {
-	if (unitCost == null || markupPct == null) return null;
-	if (!Number.isFinite(unitCost) || !Number.isFinite(markupPct)) return null;
-	if (unitCost <= 0 || markupPct <= 0) return null;
-
-	const floor = roundHalfUp(unitCost * (1 + markupPct / 100), UNIT_COST_DIGITS);
-	if (floor <= 0) return null;
-	if (floor <= roundHalfUp(unitCost, UNIT_COST_DIGITS)) return null;
-	return floor;
-}
-
-export interface FloorComparison {
-	readonly unit_price: number;
-	readonly floor_price: number | null;
-	readonly tax_rate?: number | null;
-	readonly tax_inclusive: boolean;
-}
-
-/**
- * Whether a line is priced under its floor.
- *
- * The comparison is per unit and strictly less-than, and it never divides a line net by quantity —
- * that reintroduces the rounding the line already absorbed and makes a compliant line look
- * non-compliant at awkward quantities. A tax-inclusive line carries tax in its unit price, so the
- * floor is uplifted to match rather than the price being stripped down.
- */
-export function isBelowFloor(comparison: FloorComparison): boolean {
-	const { floor_price: floor } = comparison;
-	if (floor == null) return false;
-	const rate = (comparison.tax_rate ?? 0) / 100;
-	const threshold = comparison.tax_inclusive
-		? roundHalfUp(floor * (1 + rate), UNIT_COST_DIGITS)
-		: floor;
-	return comparison.unit_price < threshold;
 }
