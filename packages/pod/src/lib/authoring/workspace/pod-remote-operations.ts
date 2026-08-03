@@ -34,11 +34,27 @@ export type PodRemoteOperations = {
 	readonly agentChatStart: (input: {
 		readonly message: string;
 		readonly runId?: string;
+		readonly model?: string;
 	}) => Promise<{
 		readonly runId: string;
 		readonly chatId: string;
 		readonly accepted: true;
 	}>;
+	/**
+	 * What the host will run, and which model it picks when a turn names none.
+	 *
+	 * `null` from a host that offers no choice — which is not the same as an empty catalog, and is why
+	 * a picker is absent rather than empty on such a host.
+	 */
+	readonly agentModels: () => Promise<{
+		readonly defaultModel: string;
+		readonly options: readonly {
+			readonly id: string;
+			readonly label: string;
+			readonly canonicalSlug: string;
+			readonly contextLength?: number;
+		}[];
+	} | null>;
 	readonly renderStaticMap: (input: {
 		readonly markers: readonly {
 			readonly latitude: number;

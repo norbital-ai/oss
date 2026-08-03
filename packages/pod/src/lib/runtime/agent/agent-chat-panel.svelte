@@ -7,9 +7,20 @@
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 	import { getInitializedWorkspaceClient } from '$lib/runtime/client.js';
-	import { toPanelMessage, withPendingEcho } from './transcript.js';
+	import { toPanelMessages, toPanelUsage, toSessionTotals, withPendingEcho } from './transcript.js';
+	import AgentModelPicker from './agent-model-picker.svelte';
+	import AgentTranscriptItem from './agent-transcript-item.svelte';
+	import type { AgentModelCatalog } from './models.js';
+	import {
+		AGENT_COMPOSER_CONTROL_TEXT_CLASS,
+		AGENT_COMPOSER_EDITOR_CLASS,
+		AGENT_COMPOSER_SHELL_CLASS
+	} from './composer-chrome.js';
 
 	let draft = $state('');
+	let catalog = $state<AgentModelCatalog | null>(null);
+	/** Empty until the host answers; the picker is not rendered before then. */
+	let selectedModel = $state('');
 	let runId = $state<string | undefined>(undefined);
 	let chatId = $state<string | undefined>(undefined);
 	let pending = $state(false);
@@ -82,10 +93,85 @@
 			return undefined;
 		}
 	});
-	const stored = $derived((transcript?.current ?? []).flatMap(toPanelMessage));
+	const stored = $derived(toPanelMessages(transcript?.current ?? [], turns?.current ?? []));
 	const messages = $derived(withPendingEcho(stored, echo));
 	const turnRows = $derived(turns?.current ?? []);
 	const canSend = $derived(draft.trim().length > 0 && !pending);
+
+	/**
+	 * The window the running model actually has, straight from the catalog that named it.
+	 *
+	 * A host that publishes no `contextLength` leaves this null and the percentage is simply not shown
+	 * — an absolute token count is still true, where a percentage against a guessed window is not.
+	 */
+	const contextLength = $derived(
+		catalog?.options.find((option) => option.id === (selectedModel || catalog?.defaultModel))
+			?.contextLength ?? null
+	);
+	const usage = $derived(toPanelUsage(transcript?.current ?? [], contextLength));
+	const contextPercent = $derived(
+		usage.contextTokens !== null && usage.contextLength
+			? Math.min(100, Math.round((usage.contextTokens / usage.contextLength) * 100))
+			: null
+	);
+	/**
+	 * Cumulative figures come from the session counter, never from the messages on screen.
+	 *
+	 * Occupancy above is genuinely a property of the current window, so summing the transcript is
+	 * right for it. Spend is not: the counter is what survives someone deleting a message.
+	 */
+	const totals = $derived(
+		toSessionTotals(
+			(sessionQuery?.current ?? []).find((row) => row.norbital_id === chatId) as
+				Record<string, unknown> | undefined
+		)
+	);
+	const tokenLabel = $derived(
+		totals && totals.totalTokens > 0 ? `${totals.totalTokens.toLocaleString()} tokens` : null
+	);
+	// A turn whose host reported no cost makes the total a floor. Saying so costs one character and
+	// stops an unmeasured conversation reading as a cheap one.
+	const costLabel = $derived(
+		totals && (totals.costUsd > 0 || totals.turnsUnreported < totals.turnsCounted)
+			? `${totals.turnsUnreported > 0 ? '≥' : ''}$${totals.costUsd.toFixed(4)}`
+			: null
+	);
+	const costHint = $derived(
+		totals && totals.turnsUnreported > 0
+			? `${totals.turnsUnreported} of ${totals.turnsCounted} turns reported no cost`
+			: 'Reported by the provider'
+	);
+
+	/**
+	 * The catalog and the selected model both come from the host, once.
+	 *
+	 * `selectedModel` starts as the host's own default rather than the first catalog entry, so the
+	 * picker opens showing the model that would run if nobody touched it. A host with no `models()`
+	 * leaves the catalog null and the picker unrendered — an absent control is honest about there
+	 * being no choice, where an empty one looks broken.
+	 */
+	$effect(() => {
+		const transport = getWorkspaceRemoteTransport();
+		// Called through a resolved promise so a transport without the endpoint rejects rather than
+		// throwing out of the effect. No catalog is a supported answer; a broken panel is not.
+		void Promise.resolve()
+			.then(() => transport.agentModels())
+			.then((result) => {
+				catalog = result;
+				if (!selectedModel) selectedModel = result?.defaultModel ?? '';
+			})
+			.catch(() => {
+				catalog = null;
+			});
+	});
+	// A tool call is the agent doing something. Once one is on screen it carries its own progress, and
+	// a second "Working…" placeholder beside it says less than the call already does.
+	const agentHasSpoken = $derived(
+		messages.some(
+			(message) =>
+				message.kind === 'tool' || message.kind === 'checkpoint' || message.role === 'assistant'
+		)
+	);
 
 	// `agentChatStart` returns before inference. The replicated root turn is therefore the durable
 	// completion signal; subagent rows may finish while their parent is still working.
@@ -103,7 +189,7 @@
 				typeof root.error === 'string' && root.error.trim()
 					? root.error
 					: 'The agent could not finish this response. Try sending it again.';
-		} else if (terminalMessage?.role === 'system') {
+		} else if (terminalMessage?.kind === 'text' && terminalMessage.role === 'system') {
 			// The terminal transcript row is inserted before the turn-status update. Either can arrive
 			// first through live sync, so a failed run must release the composer as soon as its durable
 			// error message is visible instead of depending on a second replica event.
@@ -131,7 +217,12 @@
 		try {
 			const result = await getWorkspaceRemoteTransport().agentChatStart({
 				message,
-				...(runId ? { runId } : {})
+				...(runId ? { runId } : {}),
+				// Only when the host offered a choice. Sending back its own default would turn a display
+				// value into a caller assertion, and the host would stop being free to change it.
+				...(catalog && selectedModel && selectedModel !== catalog.defaultModel
+					? { model: selectedModel }
+					: {})
 			});
 			runId = result.runId;
 			chatId = result.chatId;
@@ -166,12 +257,6 @@
 			event.preventDefault();
 			void send();
 		}
-	}
-
-	function roleLabel(role: string): string {
-		if (role === 'user') return 'You';
-		if (role === 'assistant') return 'Agent';
-		return 'System';
 	}
 </script>
 
@@ -216,40 +301,15 @@
 	{:else}
 		<ol
 			bind:this={transcriptElement}
-			class="flex min-h-0 flex-1 list-none flex-col gap-5 overflow-y-auto px-4 py-5 sm:px-5"
+			class="flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-4 py-5 sm:px-5"
 			aria-live="polite"
 			aria-label="Agent conversation"
 		>
 			{#each messages as message (message.key)}
-				<li
-					class="message flex flex-col gap-1.5"
-					class:items-end={message.role === 'user'}
-					data-role={message.role}
-				>
-					<span class="px-1 text-tiny font-medium text-muted-foreground">
-						{roleLabel(message.role)}
-					</span>
-					<div
-						class={`text-sm leading-6 sm:max-w-[88%] ${
-							message.role === 'user'
-								? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-foreground'
-								: message.role === 'assistant'
-									? 'w-full text-foreground'
-									: 'w-full rounded-lg bg-destructive/10 px-3.5 py-2.5 text-destructive'
-						}`}
-					>
-						<p class="content m-0 whitespace-pre-wrap break-words">{message.content}</p>
-						{#if message.status === 'streaming'}
-							<span class="mt-1.5 inline-flex items-center gap-1.5 text-tiny text-muted-foreground">
-								<span class="size-1.5 animate-pulse rounded-full bg-current"></span>
-								Streaming
-							</span>
-						{/if}
-					</div>
-				</li>
+				<AgentTranscriptItem {message} />
 			{/each}
-			{#if pending && messages.every((message) => message.role !== 'assistant')}
-				<li class="flex flex-col gap-1.5" aria-label="Agent is working">
+			{#if pending && !agentHasSpoken}
+				<li class="my-1.5 flex flex-col gap-1.5" aria-label="Agent is working">
 					<span class="px-1 text-tiny font-medium text-muted-foreground">Agent</span>
 					<div
 						class="inline-flex w-fit items-center gap-2 rounded-xl bg-muted px-3.5 py-2.5 text-sm"
@@ -274,37 +334,84 @@
 		{/if}
 
 		<form
-			class="flex min-w-0 flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-card shadow-deep"
+			class={AGENT_COMPOSER_SHELL_CLASS}
 			onsubmit={(event) => {
 				event.preventDefault();
 				void send();
 			}}
 		>
-			<label class="sr-only" for="agent-chat-input">Message the agent</label>
-			<Textarea
-				id="agent-chat-input"
-				bind:value={draft}
-				onkeydown={onKeydown}
-				placeholder="Ask about records, documents, or this workspace…"
-				rows={1}
-				class="max-h-40 min-h-14 resize-none border-0 bg-transparent px-4 pt-3.5 pb-2 shadow-none focus-visible:ring-0"
-				disabled={pending}
-			/>
-			<Inline justify="end" align="center" gap="sm" class="px-2.5 pb-2.5">
-				<Button
-					type="submit"
-					disabled={!canSend}
-					size="icon"
-					class="size-8 shrink-0 rounded-full"
-					data-testid="agent-send"
-					aria-label={pending ? 'Agent is working' : 'Send message'}
+			<div class="px-3 pt-3 pb-1 sm:px-4 sm:pt-4" data-agent-composer>
+				<label class="sr-only" for="agent-chat-input">Message the agent</label>
+				<Textarea
+					id="agent-chat-input"
+					bind:value={draft}
+					onkeydown={onKeydown}
+					placeholder="What would you like to know?"
+					rows={1}
+					class={AGENT_COMPOSER_EDITOR_CLASS}
+					disabled={pending}
+				/>
+			</div>
+
+			<!-- stupidity:allow UI6 -- Composer action bar keeps its wrapping left controls pinned beside the send cluster; Cluster would push send below the fold on narrow widths. -->
+			<div
+				class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1 gap-y-1 px-2.5 pt-1 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
+			>
+				<!-- Core's left cell held Plan mode, auto-send-after-step and attach. Each needs a backend
+				     this package does not have — a plan-mode loop, turn stepping, a session file store —
+				     so it carries the run's accounting instead: every figure below is the provider's own,
+				     and anything the provider did not report is absent rather than estimated. -->
+				<div
+					class={`flex min-w-0 items-center gap-2 text-muted-foreground ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
+					data-testid="agent-usage"
 				>
-					<Icon
-						icon={pending ? 'lucide:loader-circle' : 'lucide:arrow-up'}
-						class={pending ? 'size-4 animate-spin' : 'size-4'}
-					/>
-				</Button>
-			</Inline>
+					{#if contextPercent !== null}
+						<span class="inline-flex items-center gap-1.5" title="Context window used">
+							<span
+								class="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted"
+								aria-hidden="true"
+							>
+								<span
+									class="block h-full rounded-full bg-foreground/40"
+									style={`width: ${contextPercent}%`}
+								></span>
+							</span>
+							{contextPercent}%
+						</span>
+					{/if}
+					{#if tokenLabel}
+						<span class="truncate">{tokenLabel}</span>
+					{/if}
+					{#if costLabel}
+						<span title={costHint}>{costLabel}</span>
+					{/if}
+				</div>
+				<Inline justify="end" align="center" gap="xs" class="min-w-0">
+					{#if catalog && selectedModel}
+						<div class="min-w-0" title="Model and variant for this turn">
+							<AgentModelPicker
+								bind:value={selectedModel}
+								options={catalog.options}
+								compact={true}
+								disabled={pending}
+							/>
+						</div>
+					{/if}
+					<Button
+						type="submit"
+						disabled={!canSend}
+						size="icon"
+						class="size-8 shrink-0 rounded-full"
+						data-testid="agent-send"
+						aria-label={pending ? 'Agent is working' : 'Send message'}
+					>
+						<Icon
+							icon={pending ? 'lucide:loader-circle' : 'lucide:arrow-up'}
+							class={pending ? 'size-4 animate-spin' : 'size-4'}
+						/>
+					</Button>
+				</Inline>
+			</div>
 		</form>
 	</div>
 </section>

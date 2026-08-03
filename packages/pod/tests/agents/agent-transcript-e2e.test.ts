@@ -159,5 +159,48 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 			[result.runId]
 		);
 		expect(run.rows[0]?.status).toBe('success');
+
+		// The conversation's spend is accumulated onto the session as the turn settles. This binding
+		// reports tokens but no cost, which is the case that must not read as free.
+		const chatId = session.rows[0]!.norbital_id;
+		const totals = async () =>
+			(
+				await harness.pool.query<{
+					usage_total_tokens: number;
+					usage_cost_usd: number;
+					usage_turns_counted: number;
+					usage_turns_unreported: number;
+				}>(
+					`SELECT usage_total_tokens, usage_cost_usd, usage_turns_counted, usage_turns_unreported
+					   FROM chat_session WHERE norbital_id = $1::uuid`,
+					[chatId]
+				)
+			).rows[0];
+		const settled = await totals();
+		// 10 tokens on the tool-call turn plus 7 on the answer, both on the one root turn.
+		expect(settled?.usage_total_tokens).toBe(17);
+		expect(settled?.usage_turns_counted).toBe(1);
+		expect(settled?.usage_cost_usd).toBe(0);
+		expect(settled?.usage_turns_unreported).toBe(1);
+
+		// Deleting the messages that produced it must not move the total — that is the whole reason it
+		// is a counter and not a sum.
+		await harness.pool.query(`DELETE FROM chat_message WHERE chat_id = $1::uuid`, [chatId]);
+		const afterDeletion = await totals();
+		expect(afterDeletion?.usage_total_tokens).toBe(17);
+		expect(afterDeletion?.usage_turns_counted).toBe(1);
+
+		// And settling the same turn again adds nothing: the claim on `usage_settled_at` already
+		// happened, so a retried or resumed run cannot bill the conversation twice.
+		const turnId = await harness.pool.query<{ norbital_id: string }>(
+			`SELECT norbital_id FROM chat_turn WHERE chat_id = $1::uuid AND subagent_id IS NULL`,
+			[chatId]
+		);
+		const reclaim = await harness.pool.query(
+			`UPDATE chat_turn SET usage_settled_at = now()
+			  WHERE norbital_id = $1::uuid AND usage_settled_at IS NULL RETURNING norbital_id`,
+			[turnId.rows[0]!.norbital_id]
+		);
+		expect(reclaim.rows).toHaveLength(0);
 	});
 });

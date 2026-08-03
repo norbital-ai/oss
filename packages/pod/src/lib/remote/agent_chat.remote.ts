@@ -2,10 +2,25 @@ import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
-import { runAgent } from '$lib/server/agent/agent-loop.server.js';
+import { parseCompactDirective, runAgent } from '$lib/server/agent/agent-loop.server.js';
+import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
+import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/runtime/http.js';
 import { z } from 'zod';
+
+/**
+ * The shape of a model identifier, which is all this package can judge on its own.
+ *
+ * Whether a well-formed id is one this host will actually run is a question only the host can
+ * answer, and `resolveModel` below asks it rather than guessing from a list kept here.
+ */
+const ModelIdSchema = z
+	.string()
+	.trim()
+	.min(1)
+	.max(200)
+	.regex(/^[a-zA-Z0-9~][a-zA-Z0-9._~:/-]*$/, 'Invalid model identifier.');
 
 export const AgentChatInputSchema = z.object({
 	message: z.string().min(1),
@@ -16,8 +31,12 @@ export const AgentChatInputSchema = z.object({
 	 * `runAgent` already refuses a run belonging to another requestor, so continuation inherits that
 	 * check instead of repeating it here.
 	 */
-	runId: z.uuid().optional()
+	runId: z.uuid().optional(),
+	/** Run this turn on a specific model. Omitted leaves the choice to the host. */
+	model: ModelIdSchema.optional()
 });
+
+export const AgentModelsInputSchema = z.object({});
 
 export type AgentChatResult = {
 	readonly runId: string;
@@ -43,14 +62,46 @@ function workspaceAgentTools(): readonly string[] {
 	return Object.keys(getTenantWorkspace().registered.agentTools);
 }
 
-function interactiveSpec(message: string): AgentAutomationSpec {
+function interactiveSpec(message: string, model?: string): AgentAutomationSpec {
 	const authored = getTenantWorkspace().registered.agent;
-	if (authored) return { ...authored, task: message };
+	const chosen = model === undefined ? {} : { model };
+	// An explicit choice overrides the authored profile's model, and only for this turn — the profile
+	// is a workspace-level default, not a lock on which model a person may talk to.
+	if (authored) return { ...authored, task: message, ...chosen };
 	return {
 		kind: 'agent',
 		task: message,
-		tools: workspaceAgentTools() as AgentAutomationSpec['tools']
+		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],
+		...chosen
 	};
+}
+
+/**
+ * What the host will run, or nothing.
+ *
+ * Optional on the binding rather than required: a host may hold one set of credentials and offer no
+ * choice at all, and returning an empty catalog would misreport that as "no models".
+ */
+async function hostModelCatalog(): Promise<AiModelCatalog | null> {
+	const ai = requireRuntimeFacility('ai');
+	return ai.models ? await ai.models() : null;
+}
+
+/**
+ * Accept a caller's model only if the host offers it.
+ *
+ * The shape check on the wire keeps out malformed input; this keeps out a well-formed id the host
+ * never advertised. Model choice is spend, so the ceiling has to come from the side holding the
+ * credentials rather than from whatever the client had rendered when it sent.
+ */
+async function resolveModel(model: string | undefined): Promise<string | undefined> {
+	if (model === undefined) return undefined;
+	const catalog = await hostModelCatalog();
+	if (!catalog) throw error(400, 'This workspace does not offer a choice of model');
+	if (!catalog.options.some((option) => option.id === model)) {
+		throw error(400, `Model ${model} is not available in this workspace`);
+	}
+	return model;
 }
 
 function conversationTitle(message: string): string {
@@ -173,14 +224,33 @@ export const agentChat = authenticated.command(
 export const agentChatStart = authenticated.command(
 	AgentChatInputSchema,
 	async (input): Promise<AgentChatStartResult> => {
+		// Before the conversation exists: a rejected model must fail the request outright rather than
+		// leave a started run whose first visible event is an error.
+		const model = await resolveModel(input.model);
 		const conversation = await prepareConversation(input.message, input.runId);
+		// A directive still becomes a stored user message and a turn — the reader typed it, and the
+		// transcript should show what they asked for beside what it did.
+		const compact = parseCompactDirective(input.message);
 		void runAgent({
 			automationName: null,
 			runId: conversation.runId,
 			sessionId: conversation.chatId,
-			spec: interactiveSpec(input.message),
-			input: input.message
+			spec: interactiveSpec(input.message, model),
+			input: input.message,
+			...(compact ? { compact } : {})
 		}).catch(() => undefined);
 		return { ...conversation, accepted: true };
 	}
+);
+
+/**
+ * The models this workspace can be talked to on, and the one it uses by default.
+ *
+ * Read straight from the host on every call rather than cached here. The catalog is the host's, and
+ * a copy in this package would be a second answer to "what is about to run" — exactly the mismatch a
+ * picker exists to prevent.
+ */
+export const agentModels = authenticated.query(
+	AgentModelsInputSchema,
+	async (): Promise<AiModelCatalog | null> => hostModelCatalog()
 );
