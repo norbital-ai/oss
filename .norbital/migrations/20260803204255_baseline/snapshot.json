@@ -1,9 +1,9 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "a6044879-63b6-443e-a3b3-5b72d3c5a83e",
+  "id": "41581226-347f-47b3-9df8-7fe6d6fb355f",
   "prevIds": [
-    "49fe00ab-fbd5-429f-9157-4eb6764c6eaa"
+    "00000000-0000-0000-0000-000000000000"
   ],
   "ddl": [
     {
@@ -159,6 +159,18 @@
     {
       "isRlsEnabled": false,
       "name": "host_event_outbox",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "integration_cursor",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "integration_inbound_event",
       "entityType": "tables",
       "schema": "public"
     },
@@ -4793,6 +4805,58 @@
       "table": "chat_session"
     },
     {
+      "type": "double precision",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "usage_cost_usd",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_session"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "usage_total_tokens",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_session"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "usage_turns_counted",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_session"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "usage_turns_unreported",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_session"
+    },
+    {
       "type": "uuid",
       "typeSchema": null,
       "notNull": true,
@@ -4996,6 +5060,19 @@
       "generated": null,
       "identity": null,
       "name": "ended_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_turn"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "usage_settled_at",
       "entityType": "columns",
       "schema": "public",
       "table": "chat_turn"
@@ -5363,6 +5440,357 @@
       "entityType": "columns",
       "schema": "public",
       "table": "host_event_outbox"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "tstzrange",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "integration_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "binding_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "binding_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "cursor",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_pulled_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_error",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "tstzrange",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "tstzrange(CURRENT_TIMESTAMP, NULL, '[)')",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_sys_period",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": "1",
+      "generated": null,
+      "identity": null,
+      "name": "norbital_row_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "norbital_approval_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "integration_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "binding_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "binding_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "event_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "receipt_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'received'",
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "imported",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "error",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "completed_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "integration_inbound_event"
     },
     {
       "type": "uuid",
@@ -10098,6 +10526,294 @@
       "with": "",
       "method": "gin",
       "concurrently": false,
+      "name": "integration_cursor_integration_name_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "binding_name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_cursor_binding_name_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "binding_key",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_cursor_binding_key_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "cursor",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_cursor_cursor_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "last_error",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_cursor_last_error_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_cursor"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "integration_name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_inbound_event_integration_name_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "binding_name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_inbound_event_binding_name_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "binding_key",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_inbound_event_binding_key_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "event_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_inbound_event_event_id_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "receipt_key",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_inbound_event_receipt_key_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_inbound_event_status_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "error",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
+      "name": "integration_inbound_event_error_search_trgm_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "integration_inbound_event"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "integration_name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": {
+            "name": "gin_trgm_ops",
+            "default": false
+          }
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "gin",
+      "concurrently": false,
       "name": "integration_outbox_integration_name_search_trgm_idx",
       "entityType": "indexes",
       "schema": "public",
@@ -11687,6 +12403,26 @@
         "norbital_id"
       ],
       "nameExplicit": false,
+      "name": "integration_cursor_pkey",
+      "schema": "public",
+      "table": "integration_cursor",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "norbital_id"
+      ],
+      "nameExplicit": false,
+      "name": "integration_inbound_event_pkey",
+      "schema": "public",
+      "table": "integration_inbound_event",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "norbital_id"
+      ],
+      "nameExplicit": false,
       "name": "integration_outbox_pkey",
       "schema": "public",
       "table": "integration_outbox",
@@ -11792,6 +12528,28 @@
       "name": "channel_inbound_message_receipt_key_key",
       "schema": "public",
       "table": "channel_inbound_message",
+      "entityType": "uniques"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "binding_key"
+      ],
+      "nullsNotDistinct": false,
+      "name": "integration_cursor_binding_key_key",
+      "schema": "public",
+      "table": "integration_cursor",
+      "entityType": "uniques"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "receipt_key"
+      ],
+      "nullsNotDistinct": false,
+      "name": "integration_inbound_event_receipt_key_key",
+      "schema": "public",
+      "table": "integration_inbound_event",
       "entityType": "uniques"
     },
     {
