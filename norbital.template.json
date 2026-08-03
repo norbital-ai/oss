@@ -1,0 +1,13 @@
+{
+	"schemaVersion": 1,
+	"key": "field-operations",
+	"name": "Field Operations",
+	"industry": "Construction",
+	"description": "Generic construction field operations: site jobs, contractor dispatch, qualification gating, variations, and photo evidence integrity.",
+	"visibility": "public",
+	"counts": {
+		"collections": 9,
+		"apps": 2,
+		"automations": 0
+	}
+}
