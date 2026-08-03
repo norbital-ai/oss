@@ -83,6 +83,13 @@ export type {
 export { httpIntegrationDelivery, processEnvSecrets } from './integration-http.js';
 
 /**
+ * The same facility, logged instead of sent — what `pod dev` supplies so that a workspace declaring an
+ * integration still boots on a machine that holds no endpoint credentials. It is a development
+ * stand-in, not a fallback: a deployed host names `httpIntegrationDelivery()` or its own function.
+ */
+export { consoleIntegrationDelivery } from './facilities.js';
+
+/**
  * The inbound half of an integration, on a socket this host owns.
  *
  * `httpWebhookListener` mounts one endpoint per declared `webhook` binding; `verifyWebhookSignature`

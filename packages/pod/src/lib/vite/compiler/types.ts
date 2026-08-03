@@ -1,3 +1,5 @@
+import type { SkillFile } from '$lib/skills/types.js';
+
 export interface SourcePosition {
 	readonly line: number;
 	readonly column: number;
@@ -66,6 +68,26 @@ export interface DiscoveredWorkspaceRole {
 	readonly source: string;
 }
 
+/**
+ * A skill authored under `src/skills/<name>/`, carried whole rather than by reference.
+ *
+ * Every other discovered role is a path the generated workspace imports. A skill is markdown, so
+ * there is nothing to import — the text has to travel in the structure and be inlined at codegen,
+ * which is also why `files` is the full content of the directory and not a listing of it.
+ */
+export interface DiscoveredSkill {
+	readonly name: string;
+	/** `src/skills/<name>/SKILL.md` — the file a diagnostic points at. */
+	readonly source: string;
+	readonly description: string;
+	readonly license?: string;
+	readonly compatibility?: string;
+	readonly metadata?: Readonly<Record<string, string>>;
+	/** `SKILL.md` with its frontmatter removed. */
+	readonly body: string;
+	readonly files: readonly SkillFile[];
+}
+
 export interface PodStructure {
 	readonly version: 1;
 	readonly relationships: string | null;
@@ -79,6 +101,7 @@ export interface PodStructure {
 	readonly agentTools: readonly DiscoveredWorkspaceRole[];
 	readonly policies: readonly DiscoveredWorkspaceRole[];
 	readonly channels: readonly DiscoveredWorkspaceRole[];
+	readonly skills: readonly DiscoveredSkill[];
 	readonly seed: string | null;
 	/** `src/+env.ts`, if declared — the public and private names this workspace asks its host for. */
 	readonly env: string | null;

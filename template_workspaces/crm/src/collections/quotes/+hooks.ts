@@ -1,3 +1,4 @@
+import { docNoSeriesPattern, nextDocNo } from '../../lib/numbering.js';
 import type { Hooks } from './$types.js';
 
 type QuoteStatus = 'draft' | 'sent' | 'won' | 'confirmed' | 'fulfilled' | 'cancelled' | 'lost';
@@ -12,19 +13,43 @@ const VALID_TRANSITIONS: Record<QuoteStatus, readonly QuoteStatus[]> = {
 	lost: ['won']
 };
 
-const TERMINAL_STATES: readonly QuoteStatus[] = ['fulfilled', 'cancelled', 'lost'];
+const WON_CONFIRMED_EDITABLE = [
+	'warehouse_id',
+	'logistics_owner_id',
+	'shipping_terms',
+	'payment_terms_days',
+	'description'
+] as const;
 
-function nextDocNo(existingNumbers: string[], prefix: string, year: number): string {
-	const yearStr = year.toString();
-	const pattern = `${prefix}-${yearStr}-`;
-	let maxSeq = 0;
-	for (const num of existingNumbers) {
-		if (!num.startsWith(pattern)) continue;
-		const seqPart = num.slice(pattern.length);
-		const seq = parseInt(seqPart, 10);
-		if (!Number.isNaN(seq) && seq > maxSeq) maxSeq = seq;
+const FULFILLED_EDITABLE = ['logistics_owner_id'] as const;
+
+async function assertActiveWarehouse(
+	api: Parameters<NonNullable<NonNullable<Hooks['create']>['before']>>[0]['api'],
+	warehouseId: string
+): Promise<void> {
+	const warehouse = await api.db.query.warehouses.findFirst({
+		where: { norbital_id: { eq: warehouseId } }
+	});
+	if (!warehouse) throw new Error('Referenced warehouse does not exist.');
+	if (!warehouse.active) throw new Error('Referenced warehouse is not active.');
+}
+
+function assertOnlyFieldsChanged(
+	input: Record<string, unknown>,
+	existing: Record<string, unknown>,
+	allowed: readonly string[],
+	status: QuoteStatus
+): void {
+	for (const key of Object.keys(input)) {
+		if (key === 'status') continue;
+		if (input[key] === undefined) continue;
+		if (allowed.includes(key)) continue;
+		if (input[key] !== existing[key]) {
+			throw new Error(
+				`A ${status} document is immutable. Revise by reopening to draft status first.`
+			);
+		}
 	}
-	return `${pattern}${String(maxSeq + 1).padStart(4, '0')}`;
 }
 
 export default {
@@ -47,18 +72,21 @@ export default {
 				});
 				if (!project) throw new Error('Referenced project does not exist.');
 			}
+			if (input.warehouse_id != null) {
+				await assertActiveWarehouse(api, input.warehouse_id);
+			}
 
 			if (!input.doc_no) {
 				const year = new Date().getFullYear();
 				const existing = await api.db.query.quotes.findMany({
-					where: { doc_no: { like: `QT-${year}-%` } },
+					where: { doc_no: { like: docNoSeriesPattern('QT', year) } },
 					columns: { doc_no: true },
 					limit: 5000
 				});
 				return {
 					...input,
 					doc_no: nextDocNo(
-						existing.map((r) => r.doc_no),
+						existing.map((row) => row.doc_no),
 						'QT',
 						year
 					),
@@ -76,16 +104,36 @@ export default {
 	},
 	update: {
 		before: async ({ input, existing, api }) => {
+			if (input.warehouse_id != null) {
+				await assertActiveWarehouse(api, input.warehouse_id);
+			}
+
 			const newStatus = (input.status ?? existing.status) as QuoteStatus;
 			const oldStatus = existing.status as QuoteStatus;
 
 			if (oldStatus === newStatus) {
-				if (oldStatus !== 'draft') {
-					throw new Error(
-						`A ${oldStatus} document is immutable. Revise by reopening to draft status first.`
+				if (oldStatus === 'draft') return input;
+				if (oldStatus === 'won' || oldStatus === 'confirmed') {
+					assertOnlyFieldsChanged(
+						input as Record<string, unknown>,
+						existing as Record<string, unknown>,
+						WON_CONFIRMED_EDITABLE,
+						oldStatus
 					);
+					return input;
 				}
-				return input;
+				if (oldStatus === 'fulfilled') {
+					assertOnlyFieldsChanged(
+						input as Record<string, unknown>,
+						existing as Record<string, unknown>,
+						FULFILLED_EDITABLE,
+						oldStatus
+					);
+					return input;
+				}
+				throw new Error(
+					`A ${oldStatus} document is immutable. Revise by reopening to draft status first.`
+				);
 			}
 
 			const allowed = VALID_TRANSITIONS[oldStatus];
@@ -110,7 +158,11 @@ export default {
 				updates.revision_number = currentRev + 1;
 				updates.revision_of = originalId;
 			}
-			if (TERMINAL_STATES.includes(newStatus) && newStatus === 'cancelled') {
+			if (newStatus === 'cancelled') {
+				const cancelReason = input.cancel_reason ?? existing.cancel_reason;
+				if (!cancelReason || String(cancelReason).trim() === '') {
+					throw new Error('A cancellation reason is required.');
+				}
 				const payments = await api.db.query.payment_records.findMany({
 					where: { quote_id: { eq: existing.norbital_id } },
 					limit: 1
@@ -120,6 +172,7 @@ export default {
 						'A document with recorded payments cannot be cancelled. Void the payments first.'
 					);
 				}
+				if (existing.cancelled_at == null) updates.cancelled_at = timestamp;
 			}
 
 			return updates;

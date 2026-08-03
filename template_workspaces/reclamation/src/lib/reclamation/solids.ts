@@ -440,7 +440,7 @@ function triangulatePolygon(polygon: readonly Point2[]): readonly (readonly numb
 	 *
 	 * A traced coastline arrives with runs of nearly collinear points. Clipping
 	 * an ear off such a run yields a triangle with real length and no height —
-	 * one measured at 169,000:1 on the Tuas outline — which shades as a bright
+	 * one measured at 169,000:1 on a real survey outline — which shades as a bright
 	 * needle and reads as a spike radiating out of the surface. They contribute
 	 * nothing to the area either, so the honest move is not to create them.
 	 */

@@ -33,7 +33,7 @@ import path from 'node:path';
 import { repositoryRoot } from './lib/templates.mjs';
 
 const PACKAGES = ['pod', 'ui'];
-const TEMPLATES = ['bca', 'construction', 'crm', 'hr-payroll', 'reclamation'];
+const TEMPLATES = ['field-operations', 'construction', 'crm', 'hr-payroll', 'reclamation'];
 
 const version = process.argv[2];
 if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {

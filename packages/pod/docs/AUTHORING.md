@@ -63,6 +63,7 @@ declaration to drift from the thing it declares.
 | `src/policies/+field_agent.policy.ts`                        | policy `field_agent`                       |
 | `src/channels/+sales_desk.channel.ts`                        | channel `sales_desk`                       |
 | `src/**/+find_supplier.tool.ts`                              | agent tool `find_supplier`                 |
+| `src/skills/<name>/SKILL.md`                                 | skill `<name>`                             |
 | `src/custom-types/money/+definition.ts` + `+renderer.svelte` | custom type `money`                        |
 | `src/collections/work_orders/+integrations.ts`               | its inbound and outbound bindings          |
 | `src/+env.ts`                                                | the names this workspace needs from a host |
@@ -70,6 +71,32 @@ declaration to drift from the thing it declares.
 Adding a file adds the thing. Deleting it removes the thing. Renaming it renames the thing. A role
 file whose name Pod does not recognise is a compile error rather than a file that silently does
 nothing.
+
+**Skills extend what the agent knows.** A skill is a directory under `src/skills/<name>/` holding a
+`SKILL.md` with YAML frontmatter. The format follows the
+[Agent Skills specification](https://agentskills.io/specification): required `name` and
+`description`, optional `license`, `compatibility`, and a flat `metadata` map, plus reference files
+under the directory that the agent loads on demand through `read_skill`. Markdown is not importable,
+so the compiler inlines workspace skills into the generated bundle at compile time. Host skills
+shipped inside `@norbital-ai/pod` share the same namespace; a workspace skill whose name collides
+with a host skill is refused rather than merged. A third place exists that a workspace does not
+author: `.agents/skills/<name>/` on the filesystem a run executes on, committed nowhere. That one is
+personal only where the filesystem is — under a self-hosted `pod dev` or `pod start`, whose process
+serves one principal — and a host that runs a shared runtime per organization has nothing per-person
+to point it at, so it finds none. It loses a name collision to both of the others, so authoring a
+workspace skill is also how a tenant settles an answer for everyone in it.
+
+Frontmatter is validated against the same rules the host-side generator applies:
+
+- **`name`** must match `^[a-z0-9]+(?:-[a-z0-9]+)*$`, be at most 64 characters, and equal the
+  directory name (`src/skills/<name>/`).
+- **`description`** is required, non-empty, and at most 1024 characters.
+- **`compatibility`**, when present, is at most 500 characters.
+
+Diagnostic codes: `SKILL_NAME_INVALID` (bad name or name/directory mismatch),
+`SKILL_FRONTMATTER_INVALID` (missing or malformed frontmatter, unsupported keys, empty description,
+or length overrun), `SKILL_DUPLICATE` (two workspace skills share a name), `SKILL_NAME_RESERVED`
+(name is already shipped by Pod).
 
 **Policies are declarations; membership is not.** A permission set is a property of the workspace, so
 it lives in source and shows up in a diff. Who holds it changes at runtime, so `team`, `team_members`,
@@ -86,12 +113,12 @@ applied directly, and the teams that may approve it are named by `team.name`:
 	where: ownVariation,
 	approval: {
 		id: '019f6f10-0001-7000-8000-000000000003',
-		name: 'BCA variation approval',
+		name: 'Field operations variation approval',
 		steps: [
 			{
 				id: '019f6f10-0001-7000-8000-000000000103',
-				name: 'BCA controller review',
-				approvers: ['BCA Controllers'],
+				name: 'Field operations controller review',
+				approvers: ['Field Operations Controllers'],
 				description: 'Controller verifies scope change and photo evidence.'
 			}
 		]
@@ -204,7 +231,7 @@ Pod's, and hand-rolling it means it is not covered by the guarantees above.
 
 ```
 Is it data shape or behaviour of this workspace?
-  → declare it: a collection, hook, policy, automation, remote, app, tool, or custom type.
+  → declare it: a collection, hook, policy, automation, remote, app, tool, skill, or custom type.
 
 Does it need a credential, an outbound socket, a mailer, a model, or a clock?
   → the host supplies it. Declare the need; never the secret.
@@ -385,15 +412,19 @@ pod dev           # build, migrate, and serve with a loopback development identi
 pod invite you@example.com   # mint a founding invitation (self-hosted)
 ```
 
-`pod dev` supplies `db`, `fileStorage`, `queue`, and a console-only `messaging`, and nothing else. A
-workspace with an agent automation refuses to start under it, because `ai` is a _static_ requirement —
-which is the intended answer, not an inconvenience: the alternative is a development run that fails at
-the first inference call, far from the cause.
+`pod dev` supplies `db`, `fileStorage`, `queue`, a console-only `messaging`, and a console-only
+`integrationDelivery`, and nothing else. A workspace with an agent automation refuses to start under
+it, because `ai` is a _static_ requirement — which is the intended answer, not an inconvenience: the
+alternative is a development run that fails at the first inference call, far from the cause.
 
-`messaging` is there because `pod dev` holds no sockets and a channel needs one. It stands in for every
-transport the workspace's channels declare and logs what would have been sent, so a channel-carrying
-workspace runs locally without Telegram credentials. A deployed host has to supply the transport for
-real — the startup check below is against the host's list, and `pod dev`'s is generous by design.
+The two console facilities are there for the same reason: `pod dev` holds no sockets and no endpoint
+credentials, and both a declared channel and a declared outbound integration are static startup
+requirements, so without a stand-in a workspace that merely _declares_ one cannot be run locally at
+all. `consoleMessaging()` covers every transport the workspace's channels declare;
+`consoleIntegrationDelivery()` is its counterpart for outbound integrations and logs what would have
+been sent rather than throwing, so a local run leaves a readable log instead of an outbox that
+retried ten times and dead-lettered. A deployed host has to supply both for real — the startup check
+below is against the host's list, and `pod dev`'s is generous by design.
 
 `maps` and notification channels are not static requirements and never gate startup. Nothing in the
 manifest implies them: a stored geolocation carries its own geometry and address, and a notification

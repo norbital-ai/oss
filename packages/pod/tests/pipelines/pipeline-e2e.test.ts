@@ -38,7 +38,7 @@ describe('Pod pipelines — compiled runtime contract', () => {
 	let harness: PodRuntimeHarness;
 
 	beforeAll(async () => {
-		harness = await bootPodRuntime('bca');
+		harness = await bootPodRuntime('field-operations');
 	}, 180_000);
 
 	afterAll(async () => {
@@ -46,8 +46,8 @@ describe('Pod pipelines — compiled runtime contract', () => {
 	});
 
 	it('authorizes, scopes, invokes, and serializes an authored export pipeline', async () => {
-		const selectedId = await insertSite(harness, 'BCA Alpha');
-		await insertSite(harness, 'BCA Unselected');
+		const selectedId = await insertSite(harness, 'Alpha Site');
+		await insertSite(harness, 'Unselected Site');
 
 		const response = await harness.request(
 			{
@@ -66,21 +66,21 @@ describe('Pod pipelines — compiled runtime contract', () => {
 
 		expect(manifests).toHaveLength(1);
 		expect(manifests[0]).toMatchObject({
-			label: 'BCA interoperability bundle · BCA Alpha',
-			metadata: { site_id: selectedId, schema: 'norbital.bca.interoperability.v1' }
+			label: 'Field operations interoperability bundle · Alpha Site',
+			metadata: { site_id: selectedId, schema: 'norbital.field_operations.interoperability.v1' }
 		});
 		expect(manifests[0]!.attachments.map((attachment) => attachment.name)).toEqual([
-			'bca_BCA_Alpha.json',
-			'bca_BCA_Alpha_jobs.csv',
-			'bca_BCA_Alpha_job_assignments.csv',
-			'bca_BCA_Alpha_variations.csv',
-			'bca_BCA_Alpha_photo_evidence.csv'
+			'field_ops_Alpha_Site.json',
+			'field_ops_Alpha_Site_jobs.csv',
+			'field_ops_Alpha_Site_job_assignments.csv',
+			'field_ops_Alpha_Site_variations.csv',
+			'field_ops_Alpha_Site_photo_evidence.csv'
 		]);
 		expect(manifests[0]!.attachments[0]).toMatchObject({
 			contentType: 'JSON',
 			content: {
-				schema: 'norbital.bca.interoperability.v1',
-				site: { norbital_id: selectedId, name: 'BCA Alpha' }
+				schema: 'norbital.field_operations.interoperability.v1',
+				site: { norbital_id: selectedId, name: 'Alpha Site' }
 			}
 		});
 	});

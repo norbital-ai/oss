@@ -58,6 +58,10 @@
 			"types": "./build/host/index.d.ts",
 			"default": "./build/host/index.js"
 		},
+		"./skills": {
+			"types": "./build/skills/index.d.ts",
+			"default": "./build/skills/index.js"
+		},
 		"./client/agent": {
 			"types": "./build/runtime/agent/agent-chat-panel.svelte.d.ts",
 			"svelte": "./build/runtime/agent/agent-chat-panel.svelte",

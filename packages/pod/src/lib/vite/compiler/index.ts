@@ -5,11 +5,15 @@ import { sourceDiagnostic } from './diagnostics.js';
 import { safeParse } from '@norbital-ai/std/json';
 import { nearestName } from '@norbital-ai/std/string';
 import { extractAppMetadata } from './app-metadata.js';
+import { parseSkillDocument } from './skill-frontmatter.js';
+import { HOST_SKILLS } from '$lib/skills/skills.generated.js';
+import { isValidSkillName } from '$lib/skills/types.js';
 import type {
 	DiagnosticSnapshot,
 	DiscoveredAppNode,
 	DiscoveredCollection,
 	DiscoveredCustomType,
+	DiscoveredSkill,
 	DiscoveredWorkspaceRole,
 	PodFilesystemCompilation,
 	PodFilesystemCompilerOptions,
@@ -25,6 +29,7 @@ export type {
 	DiscoveredCollection,
 	DiscoveredCustomType,
 	DiscoveredGroup,
+	DiscoveredSkill,
 	DiscoveredWorkspaceRole,
 	PodFilesystemCompilation,
 	PodFilesystemCompilerOptions,
@@ -44,9 +49,18 @@ const PRIVATE_VIRTUAL_IMPORT_PATTERN =
 	/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["']virtual:pod\/[^"']+["']/g;
 const BUILTIN_AGENT_TOOL_NAMES = new Set([
 	'describe_workspace',
+	'list_skills',
+	'read_skill',
 	'read_collection',
-	'write_collection'
+	'write_collection',
+	'spawn_subagent'
 ]);
+/**
+ * Derived from the shipped skills rather than listed, so the reserved set cannot fall behind what
+ * `skills/` actually contains — a stale list would let a workspace compile a skill the runtime then
+ * silently discards in favour of the host copy.
+ */
+const HOST_SKILL_NAMES: ReadonlySet<string> = new Set(HOST_SKILLS.map((skill) => skill.name));
 const LAYOUT_PRIMITIVES = new Set([
 	'Stack',
 	'Inline',
@@ -781,8 +795,9 @@ async function discoverWorkspaceRoles(
 /**
  * Directories under `src/` whose `+<name>.ts` files mean something.
  *
- * `lib` is free-form helper code and `collections`/`apps` nest, so they are listed to be skipped
- * rather than scanned.
+ * `lib` is free-form helper code, `skills` is documentation whose attachments may well be example
+ * `+model.ts` snippets, and `collections`/`apps` nest, so they are listed to be skipped rather than
+ * scanned.
  */
 const KNOWN_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set([
 	'apps',
@@ -792,7 +807,8 @@ const KNOWN_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set([
 	'custom-types',
 	'lib',
 	'policies',
-	'remotes'
+	'remotes',
+	'skills'
 ]);
 
 /**
@@ -986,6 +1002,95 @@ async function discoverChannels(
 	return channels.sort((left, right) => compareText(left.id, right.id));
 }
 
+/**
+ * The directory each file belongs to, once nested skills are possible.
+ *
+ * `src/skills/a/b/SKILL.md` makes `b` a skill in its own right, so `b`'s contents must not also be
+ * loaded as reference material for `a`: an agent reading `a` would otherwise see a second skill's
+ * instructions presented as part of the first.
+ */
+function nearestSkillRoot(file: string, roots: readonly string[]): string | undefined {
+	return roots
+		.filter((root) => file.startsWith(`${root}${path.sep}`))
+		.sort((left, right) => right.length - left.length)[0];
+}
+
+/**
+ * Skills authored under `src/skills/`, discovered by their `SKILL.md` at any depth.
+ *
+ * Depth is unrestricted for the same reason agent tools are: a `SKILL.md` the compiler skipped
+ * because it sat one directory too deep would be a skill its author believes they shipped and the
+ * agent never sees. Every one found either registers under the name of the directory holding it or
+ * says why it could not.
+ */
+async function discoverSkills(
+	root: string,
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): Promise<DiscoveredSkill[]> {
+	const skillsRoot = path.join(root, 'src', 'skills');
+	if (!inventory.hasDirectory(skillsRoot)) return [];
+	const manifests = inventory
+		.filesBelow(skillsRoot)
+		.filter((file) => path.basename(file) === 'SKILL.md');
+	const roots = manifests.map((file) => path.dirname(file));
+	const skills: DiscoveredSkill[] = [];
+	const seen = new Map<string, string>();
+	for (const manifest of manifests) {
+		const directory = path.dirname(manifest);
+		const name = path.basename(directory);
+		const source = relativePath(root, manifest);
+		if (!isValidSkillName(name)) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'SKILL_NAME_INVALID',
+					`Skill directory ${name} must be lowercase hyphenated and at most 64 characters`
+				)
+			);
+			continue;
+		}
+		if (HOST_SKILL_NAMES.has(name)) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'SKILL_NAME_RESERVED',
+					`Skill ${name} is shipped by Pod, and the host skill wins the name, so this one would never be read`
+				)
+			);
+			continue;
+		}
+		const previous = seen.get(name);
+		if (previous) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'SKILL_DUPLICATE',
+					`Skill ${name} is already declared by ${previous}`
+				)
+			);
+			continue;
+		}
+		const parsed = parseSkillDocument(await inventory.source(manifest), name);
+		if (!parsed.ok) {
+			diagnostics.push(topologyDiagnostic(source, parsed.code, parsed.message));
+			continue;
+		}
+		const files = await Promise.all(
+			inventory
+				.filesBelow(directory)
+				.filter((file) => file !== manifest && nearestSkillRoot(file, roots) === directory)
+				.map(async (file) => ({
+					path: posixPath(path.relative(directory, file)),
+					text: await inventory.source(file)
+				}))
+		);
+		seen.set(name, source);
+		skills.push({ ...parsed.document, source, files });
+	}
+	return skills.sort((left, right) => compareText(left.name, right.name));
+}
+
 /** Flat `src/+<name>.ts` declarations the compiler reads. Anything else there is a mistake. */
 const WORKSPACE_ROOT_DECLARATIONS: ReadonlySet<string> = new Set([
 	'+agent.ts',
@@ -1093,7 +1198,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		diagnostics,
 		inventory
 	);
-	const [apps, automations, remotes, agentTools, policies, channels, rootDeclarations] =
+	const [apps, automations, remotes, agentTools, policies, channels, skills, rootDeclarations] =
 		await Promise.all([
 			discoverApps(absoluteRoot, diagnostics, inventory),
 			discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics, inventory),
@@ -1101,6 +1206,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 			discoverAgentTools(absoluteRoot, diagnostics, inventory),
 			discoverPolicies(absoluteRoot, diagnostics, inventory),
 			discoverChannels(absoluteRoot, diagnostics, inventory),
+			discoverSkills(absoluteRoot, diagnostics, inventory),
 			discoverSeed(absoluteRoot, diagnostics, inventory),
 			validateAuthoredSource(absoluteRoot, diagnostics, inventory)
 		]);
@@ -1123,6 +1229,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		agentTools,
 		policies,
 		channels,
+		skills,
 		agent: rootDeclarations.agent,
 		seed: rootDeclarations.seed,
 		env: rootDeclarations.env,
@@ -1248,6 +1355,32 @@ function renderCustomTypeValueMap(customTypes: readonly DiscoveredCustomType[]):
 	return `import type { CustomTypeFactoryOptions, CustomTypeOutput } from '@norbital-ai/pod/authoring';\n${imports.join('\n')}\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface CustomTypeValueMap {\n${valueEntries.join('\n')}\n\t}\n\tinterface CustomTypeOptionsMap {\n${optionsEntries.join('\n')}\n\t}\n}\n\nexport {};\n`;
 }
 
+/**
+ * A skill written out as a literal, because there is no module to import one from.
+ *
+ * `JSON.stringify` on every string is load-bearing rather than tidy: the values are markdown, which
+ * routinely contains backticks, `${`, and backslashes, so any other quoting would let a skill's own
+ * prose terminate the string it is being emitted into and break the generated module.
+ */
+function renderSkill(skill: DiscoveredSkill): string {
+	const fields = [
+		`\t\t\tname: ${JSON.stringify(skill.name)}`,
+		`\t\t\tdescription: ${JSON.stringify(skill.description)}`
+	];
+	if (skill.license) fields.push(`\t\t\tlicense: ${JSON.stringify(skill.license)}`);
+	if (skill.compatibility) {
+		fields.push(`\t\t\tcompatibility: ${JSON.stringify(skill.compatibility)}`);
+	}
+	if (skill.metadata) fields.push(`\t\t\tmetadata: ${JSON.stringify(skill.metadata)}`);
+	fields.push(`\t\t\tbody: ${JSON.stringify(skill.body)}`);
+	const files = skill.files.map(
+		(file) => `\t\t\t\t{ path: ${JSON.stringify(file.path)}, text: ${JSON.stringify(file.text)} }`
+	);
+	fields.push(files.length ? `\t\t\tfiles: [\n${files.join(',\n')}\n\t\t\t]` : '\t\t\tfiles: []');
+	fields.push(`\t\t\torigin: 'workspace'`);
+	return `\t\t{\n${fields.join(',\n')}\n\t\t}`;
+}
+
 function renderWorkspace(
 	structure: PodStructure,
 	metadata: { readonly name: string; readonly description: string | null }
@@ -1326,8 +1459,9 @@ function renderWorkspace(
 	const channels = structure.channels
 		.map((channel, index) => `\t\t${JSON.stringify(channel.id)}: channel${index}`)
 		.join(',\n');
+	const skills = structure.skills.map((skill) => renderSkill(skill)).join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.skills.length ? `,\n\tskills: [\n${skills}\n\t]` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(
@@ -1556,6 +1690,7 @@ export async function compilePodFilesystem(
 			policies: [],
 			channels: [],
 			agentTools: [],
+			skills: [],
 			seed: null,
 			env: null,
 			diagnostics: [diagnostic]

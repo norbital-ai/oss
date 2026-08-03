@@ -15,6 +15,22 @@ const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js
 const CHANNEL = 'sales_desk';
 const CONVERSATION = 'tg-chat-90210';
 
+/**
+ * A value only the host process holds, returned by its one host tool.
+ *
+ * Here it is a string that must never reach a channel transcript. The host registers `sandbox_probe`
+ * and the runtime can dispatch it, so this is reachable from the process serving the channel; its
+ * absence from every answer is what proves the withholding is real rather than declared.
+ */
+const RECEIPT = 'channel-host-receipt-4b7e';
+/** Distinctive enough to locate inside the composed system prompt, and to prove which layer it is. */
+const AUTHORED_MARKER = 'CHANNEL_AUTHORED_PROMPT';
+
+/** The tool names the model reported being offered, out of the answer it wrote them into. */
+function offered(text: string): readonly string[] {
+	return (/offered=(\S+)/.exec(text)?.[1] ?? '').split('|');
+}
+
 async function freePort(): Promise<number> {
 	const server = createServer();
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -101,24 +117,64 @@ async function startSink(): Promise<Sink> {
 }
 
 /**
- * A host that holds one conversational wire and one model.
+ * A workspace tool, so "every workspace tool" is a claim with something in it.
+ *
+ * Never called: the channel agent is asked to prove the tool was *offered*, and running it would
+ * only re-test `defineAgentTool`.
+ */
+const WORKSPACE_TOOL_SOURCE = `import { defineAgentTool } from '@norbital-ai/pod/authoring';
+import { z } from 'zod';
+
+export default defineAgentTool({
+	description: 'List quotes the requestor may see.',
+	input: z.object({ limit: z.number().int().min(1).max(50).optional() }),
+	run: async (api, input) => api.db.query.quotes.findMany({ limit: input.limit ?? 5 })
+});
+`;
+
+/**
+ * An authored profile that is narrower than the channel it cannot narrow.
+ *
+ * `access: 'read'`, one collection and no tools at all: if any of it applied to a channel run, the
+ * offered list below would collapse and the reads would fail. Its prompt, which is the half a channel
+ * *does* take, carries a marker so its position in the composed prompt can be checked.
+ */
+const AGENT_SOURCE = `import type { AgentAutomationSpec } from '@norbital-ai/pod/authoring';
+
+export default {
+	kind: 'agent',
+	task: 'Assist with this sales workspace.',
+	systemPrompt: '${AUTHORED_MARKER} — the workspace speaking to its own agent.',
+	collections: ['quotes'],
+	access: 'read',
+	tools: [],
+	hostTools: []
+} satisfies AgentAutomationSpec;
+`;
+
+/**
+ * A host that holds one conversational wire, one model and one sandbox-shaped tool.
  *
  * The transport is fake in the sense that it speaks HTTP to a test sink instead of Telegram, but it
  * is a real `MessagingTransport` reached through the real facility binding. The `ai` binding is
  * scripted rather than stubbed to nothing: it calls two collections, one the `sales_rep` policy
  * grants and one it does not, and reports what came back — which is how the run proves the declared
- * policy is in force rather than merely declared.
+ * policy is in force rather than merely declared. It also reports the tool list it was offered and
+ * where each layer of the system prompt landed, because both are decisions made before any tool call
+ * and are otherwise invisible from outside the process.
  */
 const HOST_SOURCE = `import { createServer } from 'node:http';
 import {
 	definePodHost,
 	devIdentity,
 	env,
+	httpIntegrationDelivery,
 	intervalQueue,
 	localFileStorage,
 	messagingProviders,
 	postgresDb
 } from '@norbital-ai/pod/host';
+import { z } from 'zod';
 
 const verdict = (results, id) => {
 	const row = results.find((message) => message.toolCallId === id);
@@ -128,6 +184,43 @@ const verdict = (results, id) => {
 	} catch {
 		return 'unreadable';
 	}
+};
+
+const probeReceipt = (results, id) => {
+	const row = results.find((message) => message.toolCallId === id);
+	if (!row) return 'missing';
+	try {
+		const value = JSON.parse(row.content);
+		return value.error ? \`denied(\${value.error})\` : String(value.receipt);
+	} catch {
+		return 'unreadable';
+	}
+};
+
+/**
+ * The messages this turn produced — everything after the last user message.
+ *
+ * A channel conversation replays its history, so filtering the whole window for tool results would
+ * find the *previous* turn's results and answer for a call this turn never made. Every tool call id
+ * below is a constant, so it would match, and a turn that had lost a permission would still report
+ * the read it made while it had one.
+ */
+const thisTurn = (messages) => {
+	let start = -1;
+	for (const [index, message] of messages.entries()) {
+		if (message.role === 'user') start = index;
+	}
+	return messages.slice(start + 1);
+};
+
+/** Where each authored layer starts in the one system message the loop composes. */
+const layers = (messages) => {
+	const system = messages.find((message) => message.role === 'system')?.content ?? '';
+	return (
+		\`baseline_at=\${system.indexOf('You are a Norbital agent')}\` +
+		\` authored_at=\${system.indexOf('${AUTHORED_MARKER}')}\` +
+		\` standing_at=\${system.indexOf('Answer questions about quotes and accounts')}\`
+	);
 };
 
 export default definePodHost({
@@ -141,17 +234,30 @@ export default definePodHost({
 	}),
 	fileStorage: localFileStorage({ directory: '.norbital/storage' }),
 	queue: intervalQueue({ intervalMs: 1000 }),
+	// The \`crm\` workspace declares an outbound integration, so a host that boots it has to be able to
+	// deliver one. Nothing here enqueues a delivery; this is the wiring a real self-hosted crm has, and
+	// leaving it out is what makes the workspace refuse to start.
+	integrationDelivery: httpIntegrationDelivery(),
+	agentTools: [
+		{
+			name: 'sandbox_probe',
+			description: 'Return a value only the host process holds.',
+			input: z.object({}),
+			run: async () => ({ receipt: env('POD_TEST_HOST_RECEIPT') })
+		}
+	],
 	ai: {
 		chat: async (input) => {
 			const messages = input.messages ?? [];
-			const results = messages.filter((message) => message.role === 'tool');
+			const results = thisTurn(messages).filter((message) => message.role === 'tool');
 			if (results.length === 0) {
 				return {
 					text: '',
 					stopReason: 'tool_use',
 					toolCalls: [
 						{ id: 'call_accounts', name: 'read_collection', input: { collection: 'accounts', limit: 1 } },
-						{ id: 'call_payments', name: 'read_collection', input: { collection: 'payment_records', limit: 1 } }
+						{ id: 'call_payments', name: 'read_collection', input: { collection: 'payment_records', limit: 1 } },
+						{ id: 'call_probe', name: 'sandbox_probe', input: {} }
 					]
 				};
 			}
@@ -161,6 +267,9 @@ export default definePodHost({
 					\`answering=\${lastUser?.content ?? ''}\` +
 					\` accounts=\${verdict(results, 'call_accounts')}\` +
 					\` payments=\${verdict(results, 'call_payments')}\` +
+					\` probe=\${probeReceipt(results, 'call_probe')}\` +
+					\` offered=\${(input.tools ?? []).map((tool) => tool.name).join('|')}\` +
+					\` \${layers(messages)}\` +
 					\` prompt_messages=\${messages.length}\`,
 				stopReason: 'end'
 			};
@@ -222,6 +331,9 @@ async function writeWorkspace(root: string): Promise<void> {
 		recursive: true,
 		filter: (source) => !source.includes(`${path.sep}.norbital${path.sep}build`)
 	});
+	await mkdir(path.join(root, 'src', 'tools'), { recursive: true });
+	await writeFile(path.join(root, 'src', 'tools', '+list_quotes.tool.ts'), WORKSPACE_TOOL_SOURCE);
+	await writeFile(path.join(root, 'src', '+agent.ts'), AGENT_SOURCE);
 	await writeFile(path.join(root, 'pod.host.ts'), HOST_SOURCE);
 }
 
@@ -294,7 +406,8 @@ describe('Pod standalone channel delivery — E2E', () => {
 			POD_ADMIN_EMAIL: 'admin@channel.test',
 			POD_TEMPLATE_KEY: 'crm',
 			POD_TEST_SINK_URL: sink.url,
-			POD_TEST_INBOUND_PORT: String(inboundPort)
+			POD_TEST_INBOUND_PORT: String(inboundPort),
+			POD_TEST_HOST_RECEIPT: RECEIPT
 		};
 		execFileSync('node', [POD_BIN, 'build'], { cwd: root, env: environment, stdio: 'ignore' });
 		execFileSync('node', [POD_BIN, 'migrate'], { cwd: root, env: environment, stdio: 'ignore' });
@@ -348,6 +461,57 @@ describe('Pod standalone channel delivery — E2E', () => {
 		expect(sink.sent[0]?.text).toContain('payments=denied');
 	});
 
+	/**
+	 * The whole workspace tool surface, in the order the loop builds it, and `write_collection` among
+	 * it.
+	 *
+	 * Pinned exactly rather than by `toContain` because the claim is two-sided: nothing the workspace
+	 * offers was curated away — the built-ins, the write tool that only an `access: 'write'` spec
+	 * adds, the workspace's own tool — and nothing the host offers was added. The authored profile in
+	 * this workspace says `access: 'read'` and `tools: []`, so every entry after the built-ins is also
+	 * proof that a channel run does not take its permissions from that file.
+	 */
+	it('offers a channel run every workspace tool with write access', () => {
+		expect(offered(sink.sent[0]?.text ?? '')).toEqual([
+			'describe_workspace',
+			'read_collection',
+			'list_skills',
+			'read_skill',
+			'spawn_subagent',
+			'write_collection',
+			'list_quotes'
+		]);
+	});
+
+	/**
+	 * Baseline, then the authored profile, then the channel's declared task.
+	 *
+	 * Order is the assertion: a model resolves a conflict in favour of what it read last, so the
+	 * platform's own instructions have to come first and the narrowest instruction — this channel's —
+	 * has to come last.
+	 */
+	it('composes the authored src/+agent.ts prompt into a channel run', () => {
+		const positions = sink.sent[0]?.text ?? '';
+		const at = (name: string) => Number(new RegExp(`${name}_at=(-?\\d+)`).exec(positions)?.[1]);
+		expect(at('baseline')).toBe(0);
+		expect(at('authored')).toBeGreaterThan(at('baseline'));
+		expect(at('standing')).toBeGreaterThan(at('authored'));
+	});
+
+	/**
+	 * And the host tool this host does register is offered to nobody on this path.
+	 *
+	 * The model asks for it anyway, which is what makes this more than a list assertion: the call is
+	 * refused at dispatch, so the receipt the host closure would have returned is absent from the
+	 * answer entirely. A host tool acts as a principal no channel declaration chooses, so a group
+	 * conversation must not be able to reach one.
+	 */
+	it('withholds host tools from a channel run and refuses one called anyway', () => {
+		expect(offered(sink.sent[0]?.text ?? '')).not.toContain('sandbox_probe');
+		expect(sink.sent[0]?.text).toContain('probe=denied(');
+		expect(sink.sent[0]?.text).not.toContain(RECEIPT);
+	});
+
 	it('stores the transcript and the inbound receipt', async () => {
 		const conversations = await queryTenant<{
 			norbital_id: string;
@@ -379,10 +543,11 @@ describe('Pod standalone channel delivery — E2E', () => {
 			`SELECT role, seq, source_message_id FROM chat_message WHERE chat_id = $1::uuid ORDER BY seq`,
 			[conversations[0]?.chat_id]
 		);
-		// user → assistant tool call → two tool results → assistant answer.
+		// user → assistant tool call → three tool results → assistant answer.
 		expect(messages.map((message) => message.role)).toEqual([
 			'user',
 			'assistant',
+			'tool',
 			'tool',
 			'tool',
 			'assistant'
@@ -431,5 +596,39 @@ describe('Pod standalone channel delivery — E2E', () => {
 		});
 		expect(outcome.error).toContain('Unknown channel "not_a_channel"');
 		expect(outcome.error).toContain(CHANNEL);
+	});
+
+	/**
+	 * A channel whose principal carries no policy can do nothing with the data.
+	 *
+	 * Last, because it takes the principal's team away and nothing after it would mean anything. That
+	 * team is the only thing between an inbound message and this workspace — the run is offered write
+	 * access and every tool — so its absence has to be a refusal rather than a fallback. This is the
+	 * shape a channel left out of reconciliation, or renamed in source and not migrated, would have.
+	 */
+	it('refuses a channel principal that holds no policy', async () => {
+		await queryTenant(
+			`DELETE FROM team_members
+			  WHERE user_id = (SELECT norbital_id FROM "user" WHERE lower(email) = lower($1))`,
+			[`channel.${CHANNEL}@channels.invalid`]
+		);
+		// Checked rather than assumed: a delete that matched nothing would leave the principal fully
+		// permissioned and this test would pass for the opposite reason.
+		const remaining = await queryTenant(
+			`SELECT tm.team_id
+			   FROM team_members tm
+			   JOIN "user" u ON u.norbital_id = tm.user_id
+			  WHERE lower(u.email) = lower($1)`,
+			[`channel.${CHANNEL}@channels.invalid`]
+		);
+		expect(remaining).toHaveLength(0);
+		const outcome = await deliver({ messageId: 'tg-msg-4', text: 'Anything for us now?' });
+		expect(outcome.status).toBe('answered');
+		const answer = sink.sent.at(-1)?.text ?? '';
+		expect(answer).toContain('accounts=denied');
+		expect(answer).toContain('payments=denied');
+		// And the host tool stays out of reach for the reason it always was, which is not this
+		// principal's missing policy: it was never offered.
+		expect(answer).toContain('probe=denied(');
 	});
 });

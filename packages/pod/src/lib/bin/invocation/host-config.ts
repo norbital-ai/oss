@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { postgresDb } from '../../host/db.js';
-import { consoleMessaging } from '../../host/facilities.js';
+import { consoleIntegrationDelivery, consoleMessaging } from '../../host/facilities.js';
 import { localFileStorage } from '../../host/file-storage.js';
 import { devIdentity } from '../../host/identity.js';
 import { intervalQueue } from '../../host/interval-queue.js';
@@ -99,7 +99,12 @@ function coreDevelopmentHostConfig(input: HostConfigInput, source: string): Reso
 			}),
 			// `pod dev` is a single short-lived process, so a timer is the honest fit. A deployed
 			// workspace configures a durable queue in its own `pod.host.ts`.
-			queue: intervalQueue()
+			queue: intervalQueue(),
+			// Core holds the credentials an outbound integration needs; a development run holds none, so
+			// it stands in and logs, exactly as it does for the transports a channel declares. Without it
+			// a workspace that declares an integration — the `crm` template does — could not be run
+			// locally at all, because the facility gate refuses it before the first request.
+			integrationDelivery: consoleIntegrationDelivery()
 		}
 	};
 }

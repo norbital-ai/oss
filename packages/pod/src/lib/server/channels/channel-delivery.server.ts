@@ -7,6 +7,7 @@ import { resolveRequestorBaseScope } from '$lib/server/bootstrap/resolve_workspa
 import { channelPrincipalEmail } from '$lib/server/bootstrap/channel_reconcile.server.js';
 import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
 import { runAgent } from '$lib/server/agent/agent-loop.server.js';
+import { channelAgentSpec } from '$lib/server/agent/agent-spec.server.js';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 
 type ManifestChannel = NonNullable<NorbitalManifest['channels']>[string];
@@ -244,14 +245,11 @@ export async function deliverChannelMessage(
 						? { author_display_name: command.sender.displayName }
 						: {})
 				},
-				spec: {
-					kind: 'agent',
-					// The declared `task` is the agent's standing instruction for this channel, so it is
-					// the system prompt; the message is the input. A channel that declares none still
-					// answers — it simply answers with no standing instruction.
-					task: standingInstruction,
-					systemPrompt: standingInstruction
-				}
+				// The declared `task` is the agent's standing instruction for this channel, so it reaches
+				// the model as the last layer of the system prompt; the message is the input. What the
+				// spec may reach is not narrowed here — `channelAgentSpec` explains why the channel
+				// principal's policy is the whole boundary.
+				spec: await channelAgentSpec({ standingInstruction })
 			});
 
 			const text = result.text.trim();

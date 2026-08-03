@@ -6,8 +6,6 @@ export default defineModel(
 		name: text().notNull(),
 		description: text(),
 		grade: text(),
-		mfi: text(),
-		density: text(),
 		supplier: text(),
 		unit: text(),
 		unit_price: numeric(),
@@ -16,7 +14,7 @@ export default defineModel(
 	},
 	{
 		description:
-			'Products and services in the catalogue. Quote lines snapshot from these at creation. Includes resin-grade technical specs.',
+			'Products and services in the catalogue. Quote and purchase lines snapshot from these at creation, so a later catalogue edit never rewrites a historical document. Grade classifies the item and description carries whatever technical detail the trade needs.',
 		recordLabel: 'name',
 		icon: 'lucide:package',
 		indexes: [{ columns: ['code'], unique: true }, { columns: ['grade'] }]

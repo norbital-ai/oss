@@ -22,6 +22,7 @@ import type { ChannelDefinition } from '../channels/channels.js';
 import type { HandlerDefinition } from '../automations/handlers.js';
 import type { InvokeMap } from './invoke-api-types.js';
 import type { WorkspaceClient } from '$lib/client/workspace-client.js';
+import type { Skill } from '$lib/skills/types.js';
 import type { CollectionType } from '@norbital-ai/platform-utils/collection';
 import type { BeforeApi } from './hook-api.js';
 import type { WorkspaceEnvDeclaration } from '../env.js';
@@ -73,6 +74,8 @@ export type DefineWorkspaceInput<
 	/** `src/+agent.ts` — the permissions and prompt for the Pod-owned interactive agent. */
 	readonly agent?: AgentAutomationSpec;
 	readonly agentTools?: Readonly<Record<string, AgentToolDefinition>>;
+	/** `src/skills` compiled to data — markdown the agent loads on demand, not code it calls. */
+	readonly skills?: readonly Skill[];
 	/** Policy definitions declared in `src/policies`, keyed by filename. */
 	readonly policies?: Readonly<Record<string, PolicyDeclaration>>;
 	/** Channel declarations from `src/channels`, keyed by filename. */
@@ -95,6 +98,7 @@ export type RegisteredWorkspaceState = {
 	readonly automations: Record<string, unknown>;
 	readonly agent: AgentAutomationSpec | null;
 	readonly agentTools: Record<string, AgentToolDefinition>;
+	readonly skills: readonly Skill[];
 	readonly policies: Record<string, PolicyDeclaration>;
 	readonly channels: Record<string, ChannelDefinition>;
 	readonly apps: Record<string, WorkspaceAppDef>;
@@ -566,6 +570,7 @@ export function defineWorkspace<
 		automations,
 		agent: input.agent ?? null,
 		agentTools: { ...(input.agentTools ?? {}) },
+		skills: [...(input.skills ?? [])],
 		policies: { ...(input.policies ?? {}) },
 		channels: { ...(input.channels ?? {}) },
 		apps: { ...(input.apps ?? {}) },

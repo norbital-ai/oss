@@ -14,6 +14,9 @@ import {
 } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
+import { composeSystemPrompt } from '$lib/server/agent/system-prompt.js';
+import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
+import { listSkillSummaries, readSkillContent } from '$lib/skills/registry.server.js';
 import type {
 	AiChatResult,
 	AiMessage,
@@ -27,6 +30,11 @@ const readInput = z.object({
 	collection: z.string(),
 	where: recordSchema.optional(),
 	limit: z.number().int().min(1).max(250).optional()
+});
+const readSkillInput = z.object({
+	name: z.string(),
+	/** Omitted reads `SKILL.md`; a path reads one of the files that skill listed. */
+	file: z.string().optional()
 });
 const writeInput = z.discriminatedUnion('action', [
 	z.object({ collection: z.string(), action: z.literal('create'), record: recordSchema }),
@@ -227,6 +235,22 @@ async function resolveTools(
 			name: 'read_collection',
 			description: 'Read policy-visible records from an allowed collection.',
 			inputSchema: z.toJSONSchema(readInput)
+		},
+		{
+			name: 'list_skills',
+			description:
+				'List the skills available here, with their descriptions and the files each one carries. Skills document how the Norbital platform behaves and how this workspace expects to be worked with.',
+			inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+		},
+		{
+			// The description names the failure it exists to prevent. A model that has never seen this
+			// platform does not know that it has never seen this platform, so "documentation is
+			// available" reads as optional and goes uncalled; "your training data does not contain
+			// this" is the part that makes the call happen instead of a guess.
+			name: 'read_skill',
+			description:
+				'Read a skill, or one of its reference files. Your training data does not contain this platform, so call this before answering any question about how Norbital itself behaves — approvals, permissions, record history, schema changes, or your own capabilities.',
+			inputSchema: z.toJSONSchema(readSkillInput)
 		}
 	];
 	if (options.canSpawnSubagent) {
@@ -325,6 +349,13 @@ async function executeTool(
 			manifest: getTenantManifest(),
 			relevantCollections: [...collections]
 		};
+	}
+	if (call.name === 'list_skills') {
+		return { skills: await listSkillSummaries() };
+	}
+	if (call.name === 'read_skill') {
+		const input = readSkillInput.parse(call.input);
+		return { ...(await readSkillContent(input.name, input.file)) };
 	}
 	if (call.name === 'read_collection') {
 		const input = readInput.parse(call.input);
@@ -698,9 +729,7 @@ async function streamProviderTurn(input: {
 	if (!ai.startStream || !ai.readStream || !ai.cancelStream) {
 		const result = await ai.chat({
 			messages: [
-				...(input.spec.systemPrompt
-					? [{ role: 'system' as const, content: input.spec.systemPrompt }]
-					: []),
+				{ role: 'system' as const, content: composeSystemPrompt(input.spec.systemPrompt) },
 				...input.messages
 			],
 			tools: input.tools,
@@ -723,9 +752,7 @@ async function streamProviderTurn(input: {
 	}
 	const streamId = await ai.startStream({
 		messages: [
-			...(input.spec.systemPrompt
-				? [{ role: 'system' as const, content: input.spec.systemPrompt }]
-				: []),
+			{ role: 'system' as const, content: composeSystemPrompt(input.spec.systemPrompt) },
 			...input.messages
 		],
 		tools: input.tools,
@@ -1159,6 +1186,9 @@ export async function startInteractiveAgent(input: {
 		automationName: null,
 		runId: input.runId,
 		input: input.message,
-		spec: { kind: 'agent', task: input.message }
+		// The same profile the remote entry point builds, rather than a bare spec. Two doors onto one
+		// conversation surface that disagreed about tools would make an agent's reach depend on which
+		// door the client happened to use.
+		spec: await interactiveAgentSpec(input.message)
 	});
 }

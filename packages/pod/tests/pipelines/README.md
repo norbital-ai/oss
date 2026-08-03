@@ -13,7 +13,7 @@ pipeline function directly.
 
 | File                   | Owns                                                                                                                                                       |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipeline-e2e.test.ts` | An authenticated, record-scoped export through the public runtime of a compiled BCA workspace: authorization, scope, invocation, and output serialization. |
+| `pipeline-e2e.test.ts` | An authenticated, record-scoped export through the public runtime of a compiled Field Operations workspace: authorization, scope, invocation, and output serialization. |
 
 ## The rule for adding to this pillar
 

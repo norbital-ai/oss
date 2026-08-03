@@ -12,3 +12,7 @@ workspaces.
   `pnpm templates:lock` when you deliberately move a template's dependencies.
 - Run `pnpm lint`, `pnpm test`, and `pnpm build` after changes.
 - Add a changeset for publishable package changes.
+- `skills/` holds the canonical Agent Skills Pod ships (`norbital-platform`,
+  `authoring-tenant-workspace`, and any future host skills). `.agents/skills/` symlinks them for
+  local agent discovery in Cursor and similar tools. Run `pnpm skills:generate` after editing anything
+  under `skills/`; `pnpm skills:check` verifies the generated bundle has not drifted.

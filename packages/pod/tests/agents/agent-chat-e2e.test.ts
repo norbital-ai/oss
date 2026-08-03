@@ -75,8 +75,15 @@ describe('Pod agent chat — runtime E2E', () => {
 		expect(continued.runId).toBe(opened.runId);
 		expect(continued.chatId).toBe(opened.chatId);
 
-		expect(seen[0]).toEqual(['user:Hello there.']);
-		expect(seen[1]).toEqual(['user:Hello there.', 'assistant:reply 1', 'user:And again.']);
+		// The baseline prompt leads every request and is identical across turns; asserting the opening
+		// words rather than the whole text keeps this from breaking each time the prompt is reworded.
+		expect(seen[0][0]).toMatch(/^system:You are a Norbital agent/);
+		expect(seen[1][0]).toBe(seen[0][0]);
+
+		const turns = (index: number) =>
+			seen[index].filter((message) => !message.startsWith('system:'));
+		expect(turns(0)).toEqual(['user:Hello there.']);
+		expect(turns(1)).toEqual(['user:Hello there.', 'assistant:reply 1', 'user:And again.']);
 
 		const rows = await harness.pool.query<{ role: string; seq: number }>(
 			`SELECT role, seq FROM chat_message WHERE chat_id = $1::uuid ORDER BY seq`,

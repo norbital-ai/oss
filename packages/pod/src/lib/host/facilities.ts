@@ -5,6 +5,8 @@ import type {
 	TransportMessage,
 	TransportSendResult
 } from '@norbital-ai/platform-utils/runtime/binding';
+import type { ManifestIntegrationDestination } from '@norbital-ai/platform-utils/manifest/types';
+import type { HostIntegrationDelivery } from './types.js';
 
 export type NotificationProvider = {
 	readonly channel: string;
@@ -124,6 +126,49 @@ export function consoleMessaging(input: {
 			}
 		}))
 	});
+}
+
+/** Where a delivery was headed, for a log line. Never a resolved credential — only names. */
+function describeDestination(destination: ManifestIntegrationDestination | undefined): string {
+	if (!destination) return 'no declared destination';
+	switch (destination.type) {
+		case 'api':
+			return `${destination.method} ${destination.url}`;
+		case 'webhook':
+			return typeof destination.url === 'string'
+				? `POST ${destination.url}`
+				: `POST secret:${destination.url.name}`;
+		case 'system-event':
+			return `system event ${destination.event}`;
+		default: {
+			const unhandled: never = destination;
+			return String(unhandled);
+		}
+	}
+}
+
+/**
+ * Outbound integration deliveries written to the host log instead of sent.
+ *
+ * The `integrationDelivery` counterpart of `consoleMessaging`, and it exists for the same reason: a
+ * development run holds none of the endpoint credentials a real delivery needs, and without a stand-in
+ * a workspace that merely *declares* an integration cannot start locally at all — the facility gate
+ * refuses it before the first request. Logging keeps the declaration honest while the credential stays
+ * absent.
+ *
+ * Returning rather than throwing marks the outbox row delivered, which is deliberate: a thrown failure
+ * would retry with capped backoff and dead-letter the row after ten attempts, so a local run would
+ * accumulate a broken outbox to explain instead of a readable log of what it would have sent.
+ */
+export function consoleIntegrationDelivery(): HostIntegrationDelivery {
+	return (message) => {
+		console.log(
+			`[pod:integration] ${message.integrationName}.${message.bindingName} ` +
+				`${message.collectionName}/${message.recordId} ${message.action} → ` +
+				`${describeDestination(message.destination)}\n${JSON.stringify(message.payload ?? null)}`
+		);
+		return Promise.resolve();
+	};
 }
 
 /*

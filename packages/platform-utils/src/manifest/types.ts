@@ -392,6 +392,18 @@ export const ManifestChannelSchema = z
 	})
 	.strict();
 
+/**
+ * One skill, reduced to what it is for. `description` is not nullable here because a skill with
+ * nothing said about it is unloadable by design: the description is the whole basis on which an
+ * agent decides to read the body.
+ */
+export const ManifestSkillSchema = z
+	.object({
+		name: nonEmpty,
+		description: nonEmpty
+	})
+	.strict();
+
 export const NorbitalManifestSchema = z
 	.object({
 		version: z.literal(1),
@@ -410,6 +422,14 @@ export const NorbitalManifestSchema = z
 		 * host can only see the collision if the manifest says which names are taken.
 		 */
 		agentTools: z.record(z.string(), ManifestHandlerEntrySchema).optional(),
+		/**
+		 * Workspace-authored skills, by name — the catalogue only, never the markdown.
+		 *
+		 * The manifest is read by hosts and shipped to clients, and a skill body runs to kilobytes of
+		 * prose that only the agent loop inside the tenant ever needs. What travels is what a reader
+		 * outside the tenant can act on: which skills exist and what each claims to cover.
+		 */
+		skills: z.record(z.string(), ManifestSkillSchema).optional(),
 		/** Pod-owned interactive agent permissions, authored by the workspace in `src/+agent.ts`. */
 		agent: ManifestAutomationAgentSpecSchema.optional(),
 		automations: z.record(z.string(), ManifestAutomationSchema),
@@ -491,6 +511,7 @@ export type ManifestCollectionEntry = DeepReadonly<z.infer<typeof ManifestCollec
 export type ManifestRelationship = DeepReadonly<z.infer<typeof ManifestRelationshipSchema>>;
 export type ManifestApp = DeepReadonly<z.infer<typeof ManifestAppSchema>>;
 export type ManifestHandlerEntry = DeepReadonly<z.infer<typeof ManifestHandlerEntrySchema>>;
+export type ManifestSkill = DeepReadonly<z.infer<typeof ManifestSkillSchema>>;
 export type ManifestAutomationAgentSpec = DeepReadonly<
 	z.infer<typeof ManifestAutomationAgentSpecSchema>
 >;

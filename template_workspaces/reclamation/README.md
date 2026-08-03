@@ -42,6 +42,7 @@ reclamation/
 ├── src/remotes/+rebuild_reconstruction.ts
 ├── src/apps/+reclamation_projects.svelte
 ├── src/apps/+reclamation_cost_matrix.svelte
+├── src/policies/+reclamation_estimator.policy.ts
 ├── src/lib/reclamation/                  # the engine — pure, isomorphic, no framework
 └── src/lib/site-viewer/                  # the 3D viewer and its tessellation worker
 ```
@@ -81,25 +82,35 @@ Everything the model knows comes from these, and nothing else. The engine never 
 dimension: no shoreline length, no platform level, no slope multiplier appears anywhere in the
 TypeScript.
 
-| Document           | Supplies                                                          | Accepted formats                    |
-| ------------------ | ----------------------------------------------------------------- | ----------------------------------- |
-| **Floor plan**     | Works outline, seaward perimeter, existing land, structures, cuts | `.dxf`, plan `.json`                |
-| **Bathymetry**     | The existing bed under the works                                  | `.xyz`, `.csv`, `.dxf` points       |
-| **Cross sections** | Levels, slopes, crest and armour dimensions                       | authored `.dwg`, `.dxf`, or `.json` |
+| Document           | Supplies                                                          | Accepted formats              |
+| ------------------ | ----------------------------------------------------------------- | ----------------------------- |
+| **Floor plan**     | Works outline, seaward perimeter, existing land, structures, cuts | `.dxf`, plan `.json`          |
+| **Bathymetry**     | The existing bed under the works                                  | `.xyz`, `.csv`, `.dxf` points |
+| **Cross sections** | Levels, slopes, crest and armour dimensions                       | authored `.dxf` or `.json`    |
 
-Native DWG entities are decoded with LibreDWG. Vector tender PDFs are currently inspected only to
-confirm that they contain vector drawing operators; they are then rejected with a calibration
-error because plotted-sheet coordinates cannot safely be treated as metres. PDF section-path
-recognition and dimension-based scale calibration are not implemented yet. The demonstration JIWE
-DWG is a traced, re-authored drawing from the tender PDF, not a machine conversion. CSV profile
-reconstructions are rejected.
+Native DWG is not read, and a DWG upload is refused by name: decoding it needs LibreDWG, an
+Emscripten build whose heap reaches ~66 MiB on first use and — like every Emscripten heap — never
+shrinks, which does not fit inside the ~139 MiB a tenant runtime has in total. One decode used to
+kill the runtime mid-request, so the refusal names the fix instead: export the sheet to DXF, which
+every CAD application writes and the reconstruction reads directly. The dependency is gone from
+`package.json` entirely; nothing needs to be installed to read a drawing.
+
+Vector tender PDFs are currently inspected only to confirm that they contain vector drawing
+operators; they are then rejected with a calibration error. What is missing is not the calibration —
+that machinery exists and runs on every DXF sheet — but a reader that recovers the drawn paths and
+their layers out of a page of PDF content operators. The demonstration section sheet is a traced,
+re-authored drawing from the tender PDF, not a machine conversion. A CSV table of profile points is
+also refused: it is a transcription of a drawing rather than the drawing, and the calibration
+evidence a sheet carries is exactly what transcribing throws away.
 
 ## Calibration: what your drawings must carry
 
 The engine places the works in space from a small set of references. Without one
 of them the shape cannot be deduced — only guessed at — so **the stitch refuses
-rather than producing a solid that looks right and measures wrong**. Every
-shortfall is reported in one message, so a single pass fixes them all.
+rather than producing a solid that looks right and measures wrong**. References 2
+to 5 are collected and reported in one message, so a single pass fixes them all.
+A plan carrying no closed outline at all fails on its own, earlier: there is then
+no site for anything downstream to be measured inside.
 
 ### Required — the stitch fails without these
 
@@ -171,10 +182,31 @@ A section is treated as a _perimeter_ section only when it reaches the toe. If n
 toe at all, every section is taken as perimeter — the only reading available — and that is recorded
 as an assumption rather than guessed at silently.
 
+### A section sheet is a sheet, not a table
+
+A tender drawing does not arrive as station and elevation. Several sections sit on one page, each
+plotted at its own scale, each placed wherever it fitted, and nothing in the file says what a level
+is. The datum survives only in the text a draughtsman put on the line — `FINAL PLATFORM LEVEL +5.5m
+CD` sitting on the line it names — and in the figured dimensions.
+
+`src/lib/reclamation/sheet.ts` works backwards from those conventions, section by section: group the
+geometry, attach each section's own title, level callouts, dimensions and slope notes, then fit
+`level = a·y + b` to the callouts by consensus rather than by averaging, because a sheet is full of
+notes that mention a level without being one. The horizontal scale comes from a figured dimension
+where one is drawn and otherwise from the vertical scale, which is right whenever the plot is
+isotropic — and the run says so when it is not. Station zero goes on the toe, and the result is
+checked against every `1V:nH` callout on the sheet before it is handed on.
+
+Nothing in that reader knows a station, a level, or a section name in advance. A drawing already
+authored in engineering coordinates simply calibrates to the identity, and a sheet that carries no
+calibration at all is reported as such rather than guessed at. Each section that was placed this way
+records its own assumption naming the plotting scale, how many of its callouts agreed, and to what
+residual — because a callout attached to the wrong line moves that whole section on the datum.
+
 ## How the stitch works
 
 ```
-floor_plan.dxf   bathymetry.xyz   cross_section.dwg
+floor_plan.dxf   bathymetry.xyz   cross_section.dxf
       │                │                  │
       └────────────────┴──────────────────┘
                        ▼
@@ -263,7 +295,7 @@ it is not a factor applied to the platform area.
 Cells that straddle a zone limit are re-integrated on a 4×4 sub-grid. The armour band is only a few
 cells wide, so a boundary quantised to whole cells would move the armour volume by several percent
 depending on how the grid happened to fall across it. With refinement, the same site rotated 37°
-and translated 48 km prices its armour within 1.3%, and its fill within 0.01%.
+and translated 48 km prices its armour within 0.20%, and its fill within 0.00%.
 
 Sand key and dredged rock stay analytic prisms — the section dimensions them, the plan does not
 draw them — and each says so in its own `basis` string.
@@ -418,8 +450,8 @@ pnpm --dir template_workspaces/reclamation verify
 pnpm --dir template_workspaces/reclamation build
 ```
 
-`verify` runs `scripts/verify-engine.ts` — 21 checks, no test framework and no dependency, straight
-on `node`. Three groups:
+`verify` runs `scripts/verify-engine.ts` — 31 checks, no test framework and no dependency, straight
+on `node`. Four groups:
 
 **Against calculus.** Shapes whose answer can be worked out by hand, so a plausible-looking wrong
 number cannot pass: a square pad against the closed-form volume of its four ramps and corners
@@ -438,7 +470,14 @@ _refused_, naming every shortfall in one message.
 and a complete one must price cleanly. Design levers must move volume in the physically right
 direction and by the right amount.
 
-All 21 pass. See [docs/RECONSTRUCTION.md](./docs/RECONSTRUCTION.md#what-generality-means-here).
+**Against a real sheet.** The CAD path is checked on drawings shaped like the ones that arrive:
+sections found by their titles rather than by a layer convention, two sections on one page each
+recovering its own plotting scale, a note that merely mentions a level not being mistaken for one,
+and plotted geometry coming back on the station and level the draughtsman drew. Block definitions
+are held to the same line — an arrow head defined in `BLOCKS` is not drawing geometry, is not
+reported as a lost entity, and must not cluster into a phantom section.
+
+All 31 pass. See [docs/RECONSTRUCTION.md](./docs/RECONSTRUCTION.md#what-generality-means-here).
 
 ## Stack
 

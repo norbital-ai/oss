@@ -1,34 +1,40 @@
 # HR & Payroll documentation
 
-## Goal
+These documents describe the current implementation. Historical plans and superseded variance
+explanations are intentionally not retained here: a reader should not have to decide which version
+is true.
 
-Calculate multi-country payroll from governed employment facts, time, leave, component definitions, and
-statutory rules. The template separates what happened from what must be derived, so a payroll result can
-be traced and reconciled instead of copied from a legacy system.
+## Architecture
 
-## Who it serves
+| Document                                                                            | Purpose                                                                       |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [Overview](architecture/README.md)                                                  | System boundaries, model pillars and the end-to-end map                       |
+| [Payroll lifecycle](architecture/payroll-lifecycle.md)                              | Eight calculation phases, run states, cutoffs and YTD ordering                |
+| [Time, overtime and cutoffs](architecture/time-overtime-and-cutoffs.md)             | Clocks, shifts, day types, half-hour flooring, 12-hour and 104-hour controls  |
+| [Calculation and statutory treatment](architecture/calculation-and-statutory.md)    | Rates, proration, contribution bases, statutory calculations and YTD          |
+| [Adjustments, ledgers and locking](architecture/adjustments-ledgers-and-locking.md) | Corrections, leave and loan ledgers, approval locks and paid-run immutability |
+| [Provenance and audit](architecture/provenance-and-audit.md)                        | Source relationships, configuration hashes, current guarantees and known gaps |
 
-| User                         | Outcome                                                                                    |
-| ---------------------------- | ------------------------------------------------------------------------------------------ |
-| HR and people operations     | Maintains employment, terms, leave, shifts, rosters, and payroll inputs.                   |
-| Payroll and finance          | Runs validated settlements and reconciles compact payslip outputs.                         |
-| Product and compliance teams | Configure jurisdictions, contribution rules, component treatments, and statutory minimums. |
+## Data and reconciliation
 
-## Non-negotiable boundaries
+| Document                                          | Purpose                                                                  |
+| ------------------------------------------------- | ------------------------------------------------------------------------ |
+| [Data preparation](data/README.md)                | What cleaned source data means and what belongs in seed                  |
+| [Source-to-seed contract](data/source-to-seed.md) | Field classes, allowed transformations, omissions and corrections        |
+| [Reconciliation method](data/reconciliation.md)   | How an independent source workbook is compared with a generated workbook |
 
-- Enter or import observed source facts; do not seed derived overtime, gross pay, contributions, net pay,
-  leave balances, or payroll outputs.
-- Pay-component tax and contribution treatment belongs to component type and jurisdictional treatment,
-  not to a free-form flag on an individual component.
-- `UNSET` treatment cells block activation so a new kind of pay cannot silently enter a jurisdiction.
-- The platform owns approval identity and history. Payroll reads the approved/settled predicate instead of
-  recreating local approval-state columns.
-- Reconciliation reports unexplained differences; it never fabricates input to force zero variance.
+Dated variance evidence against real source workbooks is maintained in the private Core
+reconciliation suite, not in this public template.
 
-## Start points
+## Authority order
 
-- [Workspace README](../README.md) — the engine, eight-step run, approval model, and verification.
-- [Payroll architecture](./PAYROLL_ARCHITECTURE.md) — the canonical design and chapter index.
-- [Malaysia calculation](./CALCULATION_MALAYSIA.md) — the country-specific arithmetic reference.
-- `src/collections/payroll_runs/lib/` — settlement implementation.
-- `scripts/verify-payroll-arithmetic.mjs` — arithmetic invariants independent of the database.
+When two statements disagree, use this order:
+
+1. statutory source and effective jurisdiction configuration;
+2. current executable template code;
+3. cleaned source input and its provenance;
+4. generated payroll workbook;
+5. explanatory documentation.
+
+Documentation is updated when code or reconciliation evidence changes. Generated workbooks are
+never promoted into source input merely because they are convenient.

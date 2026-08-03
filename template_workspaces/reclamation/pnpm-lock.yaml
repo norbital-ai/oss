@@ -11,9 +11,6 @@ importers:
       '@iconify/svelte':
         specifier: ^5.2.2
         version: 5.2.2(svelte@5.56.8)
-      '@mlightcad/libredwg-web':
-        specifier: 0.7.9
-        version: 0.7.9
       '@norbital-ai/platform-utils':
         specifier: 0.0.1
         version: 0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0)
@@ -344,10 +341,6 @@ packages:
 
   '@marijn/find-cluster-break@1.0.3':
     resolution: {integrity: sha512-FY+MKLBoTsLNJF/eLWaOsXGdz6uh3Iu1axjPf6TUq92IYumcTcXWHoS747JARLkcdlJ/Waiaxc5wQfFO8jC6NA==}
-
-  '@mlightcad/libredwg-web@0.7.9':
-    resolution: {integrity: sha512-tqjx0eCiR0CNI3TyO3LVYzl4ptuzSFm7asGn/C1YiJaEk7Vneto+lRrVUco85qw+PZDihaFLwWqdYIEse1swbA==}
-    engines: {node: '>=20'}
 
   '@napi-rs/canvas-android-arm64@0.1.100':
     resolution: {integrity: sha512-hjhCKhntPv9+t4ckHymdx0phYNcVW+GKQR6Lzw2zE+pOVjOplSmtx9nNNknTjbEDLcuLZqA1y8ufKg1XfgftzQ==}
@@ -2204,8 +2197,6 @@ snapshots:
   '@marcbachmann/cel-js@8.0.0': {}
 
   '@marijn/find-cluster-break@1.0.3': {}
-
-  '@mlightcad/libredwg-web@0.7.9': {}
 
   '@napi-rs/canvas-android-arm64@0.1.100':
     optional: true

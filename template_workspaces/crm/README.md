@@ -1,332 +1,325 @@
-# EPG CRM — How It Works
+# CRM — How It Works
 
-> Built for the EPG (Engineering Plastics Group) sales team. EPG is a plastics resin trading
-> subsidiary of Omni-Plus Systems, operating out of China, with per-project R&D capabilities.
+A quote-to-cash workspace for B2B distribution and trading: qualify accounts, quote from a catalogue,
+confirm and fulfil orders, invoice, buy replenishment stock, and record money moving in both
+directions.
 
 ## Orientation and boundaries
 
-This is an executable Pod template, not a production-operations manual. It demonstrates a sales and
-operations split, server-enforced quote/payment rules, and the places where a reseller will need explicit
-extensions. Start with the workflow below, then use the [collections](#collections),
+This is an executable Pod template, not a production-operations manual. It demonstrates a sales /
+operations / procurement split, server-enforced document lifecycles, and money arithmetic that holds
+up to reconciliation. Start with the workflow below, then use the [collections](#collections),
 [apps](#apps), [remotes](#remotes), and [verification](#verification) sections when changing it.
 
-The workspace owns CRM records, tenant users, policies, and sales workflow. The host authenticates the
-requestor and supplies external facilities; accounting, inventory, exchange rates, customer documents,
-supplier purchasing, and external messaging are intentionally outside this template’s current scope.
+The workspace owns commercial records, tenant users, policies, and document workflow. The host
+authenticates the requestor and supplies external facilities. Ledger accounting, exchange-rate
+sourcing, customer-facing document rendering, and carrier tracking stay outside this template.
 
-For the template’s goal, users, and extension boundaries, see the [CRM documentation hub](./docs/README.md).
-
-## What this system does
-
-A deal-to-cash pipeline for resin trading: qualify accounts, build quotes with line items that
-snapshot from the product catalogue, track the full quote → order → fulfilment lifecycle, record
-incoming payments, and log every customer interaction. Two apps split sales execution from
-operations management.
+For the template's goal, users, and extension boundaries, see the
+[CRM documentation hub](./docs/README.md).
 
 ---
 
 ## How it works — the full user flow
 
-### Creating a quote
+### Quoting
 
-1. Rep opens the **Sales CRM** app, navigates to the **Pipeline** tab (kanban board).
-2. Creates a new quote: selects an account, optional contact, title, currency (CNY/USD/EUR/GBP/JPY/SGD/HKD),
-   tax-inclusive flag, validity date. The system auto-generates a sequential doc number
-   (`QT-2026-0001`, `QT-2026-0002`, etc.).
-3. Adds line items from the **Products** catalogue. Each line snapshots the product code, name,
-   unit, and unit price at creation time — later catalogue price changes do not retroactively
-   alter historical quotes.
-4. Line totals auto-calculate: `net = quantity × unit_price × (1 − discount%)`, then
-   `total = net + tax`.
-5. The quote starts in `draft` status. Lines can be added, removed, or edited freely.
+1. A rep creates a quote against an account: title, currency, tax-inclusive flag, validity date, and
+   whether the trade is `domestic` or `export`. The server assigns a sequential document number
+   (`QT-2026-0001`).
+2. Lines are added from the product catalogue. Each line snapshots the product code, name, unit, and
+   price at creation, so later catalogue edits never rewrite a historical deal.
+3. If an active `customer_prices` row exists for that account and product, the line takes the
+   customer price instead of the catalogue price.
+4. Each line computes `net`, `tax`, and `line_total` from the parent document's tax mode, and the
+   parent's `net` / `tax` / `gross` are rolled up from the rounded line amounts.
+5. The quote starts in `draft`, where lines are freely editable.
 
-### Sending to the customer
+### Floor price and margin protection
 
-1. Rep opens the draft quote, changes status to `sent`.
-2. The quote is sent to the customer for review.
+`pricing_settings` holds a markup percentage per scope. Quote-line creation derives the floor from the
+product's recorded cost and the applicable markup, then stores `below_floor` when the quoted unit
+price falls under it.
 
-### Revising after sending
+The flag is advisory, not blocking: a rep can quote below floor deliberately, and the record carries
+the evidence.
 
-1. To revise a sent quote (new quantity, lower price, alternate grade), reopen to `draft`.
-2. The system increments `revision_number` and sets `revision_of` to point to the original
-   quote, forming a linked revision chain.
-3. Make changes while the quote is back in draft, then re-send.
+The floor itself is deliberately **not** stored on the line. Sales holds read on `quote_lines` and Pod
+policies are collection-scoped rather than column-scoped, so a `floor_price` column here would hand
+the sales floor the buy cost — the floor is cost times markup, and dividing one out recovers the
+other. Only the boolean is persisted, which is the part anyone acts on and carries no cost basis.
+Cost lives in `stock_levels` and `purchase_order_lines`, which sales has no grant for.
 
-### Winning the deal
+### Sending, revising, winning
 
-1. Customer accepts. Rep moves the quote to `won`.
-2. The state machine validates: `draft → won` and `sent → won` are both valid transitions.
-3. `won` is a soft state — the deal is agreed but not yet confirmed in operations.
+- `draft → sent` delivers the quote to the customer.
+- `sent → draft` reopens it for revision. The server increments `revision_number` and sets
+  `revision_of`, forming a traceable V1 → V2 → V3 chain instead of duplicate deals.
+- `draft → won` and `sent → won` record customer acceptance. `won` is a soft state: agreed
+  commercially, not yet committed operationally.
 
-### Operations confirmation
+### Operations confirmation and fulfilment
 
-1. Back-office opens the **CRM Operations** app, navigates to the **Orders** tab (filtered to
-   `won`, `confirmed`, `fulfilled` quotes).
-2. After entering the order into the Omni-Plus ERP, operations moves the quote to `confirmed`.
-   The system records a `confirmed_at` timestamp.
-3. After warehouse shipment, operations moves to `fulfilled`. The system records a
-   `fulfilled_at` timestamp.
+1. Operations moves a won quote to `confirmed`, which stamps `confirmed_at`. From this point the
+   document also carries the fulfilment facts: shipping warehouse, logistics owner, payment terms,
+   and shipping terms.
+2. `confirmed → fulfilled` stamps `fulfilled_at`.
+3. Confirmed and fulfilled documents lock their commercial fields — lines, prices, currency, and tax
+   mode can no longer change. The operational fields stay editable so a shipment can be re-routed
+   without reopening the deal.
 
-> **Known limitation:** Fulfilment is binary — an order is either fulfilled or it isn't. Resin
-> trading frequently involves partial shipments (20 tons across 4 containers over several weeks).
-> There is no partial-fulfilment tracking, no shipment entity, no container or BL number.
+`cancelled` and `lost` are terminal, except that a lost deal may be reopened to `won`. Cancellation
+is refused when payments already exist against the document, and requires a `cancel_reason`.
 
-### Cancelling and losing
+### Invoicing
 
-- `cancelled` and `lost` are terminal states. Neither can be transitioned out of, with one
-  exception: `lost → won` is allowed (reopening a lost deal).
-- A quote with recorded payments **cannot be cancelled**. The system queries `payment_records`
-  before allowing the transition.
+An invoice is raised against a confirmed or fulfilled quote and inherits its account, currency, and
+tax mode. Invoice lines reference the originating quote line, and the server guards against
+over-billing: the cumulative invoiced quantity for a quote line can never exceed the quantity sold.
+This is what makes partial and staged billing safe across multiple invoices.
 
-### Recording a payment
+Invoices follow `draft → issued → settled`, with `cancelled` available before settlement. Issuing
+requires at least one line.
 
-1. Finance opens the **CRM Operations** app, navigates to the **Payments** tab, creates a new
-   payment record.
-2. Selects the order (quote), enters amount with currency, payment date, method, and optional
-   reference number.
-3. The system validates:
-   - The order exists and is in `won`, `confirmed`, or `fulfilled` status (not `draft`/`sent`/`cancelled`/`lost`)
-   - The payment currency matches the order currency — a USD payment on a CNY order is rejected
-   - The amount is positive
+### Purchasing
 
-### Logging activities
+1. Procurement raises a purchase order against an active supplier. Supplier code, name, currency,
+   and payment terms are snapshotted onto the document, and the server assigns a `PO-YYYY-NNNN`
+   number.
+2. Lines snapshot the product and default their unit cost from the product's recorded stock cost.
+   Amounts use the purchase order's own tax mode and currency, not the sales side's.
+3. Lifecycle is `draft → submitted → confirmed → received`, with `cancelled` blocked once payments
+   exist. Submitting requires at least one line.
 
-1. From any account or quote detail view, create an activity record.
-2. Activities are polymorphic: `regarding_type` (enum: `accounts`, `quotes`, `projects`) paired with a
-   `regarding_id` UUID. This means the same activity table serves calls, meetings, emails, tasks,
-   and notes across accounts, deals, and projects.
-3. Task activities auto-set `due_date` to today if left blank.
+### Stock
 
-### Viewing the pipeline
+`stock_levels` holds one row per product: quantity on hand, unit cost, and the timestamps at which
+each was last established. `stock_lots` breaks that quantity down by warehouse and lot, with a
+`sellable` flag.
 
-1. Rep opens the **Sales CRM → Pipeline** tab. A kanban board shows active quotes grouped into
-   5 lanes (terminal states `cancelled` and `lost` are hidden from the board):
+Lot changes are authoritative: creating, updating, or deleting a lot recomputes the product's
+on-hand quantity as the sum of its sellable lots and restamps `qty_as_of`. Unit cost is maintained
+separately, since cost and quantity move for different reasons.
 
-   | Lane      | Color   | Meaning                                              |
-   | --------- | ------- | ---------------------------------------------------- |
-   | Draft     | gray    | Being prepared, editable. Send or reopen here.       |
-   | Sent      | blue    | Delivered to customer. Reopen to draft for revision. |
-   | Won       | amber   | Customer accepted, awaiting ops confirmation         |
-   | Confirmed | green   | Entered into ERP, awaiting fulfilment                |
-   | Fulfilled | emerald | Shipped, complete                                    |
+### Payments
 
-2. A user-name dropdown above the kanban filters by owner. Selecting a rep re-executes the
-   `pipeline_dashboard` remote with the filtered `owner_id`.
-3. Each card shows: doc number, title, account name, currency, and gross amount.
-4. The `pipeline_dashboard` remote enriches the kanban with account names (fetched separately so
-   the kanban query doesn't need a join).
+`payment_records` is a single ledger for both directions. Exactly one of `quote_id` or
+`purchase_order_id` is set, and `direction` (`incoming` / `outgoing`) is derived from which one it
+is. The server validates that the parent document is in a state that can accept money, that the
+payment currency matches the document currency, and that a settled payment is never moved to a
+different document.
 
-> **Known limitations:**
->
-> - Pipeline value sums raw currency amounts without exchange-rate conversion. A CNY 100,000
->   quote and a USD 100,000 quote both count as 100,000 in the total.
-> - The `valid_until` field exists on every quote but nothing highlights quotes approaching or
->   past their expiry date. (The daily `quote_expiry_watch` automation reports expired quotes
->   but does not take automated action.)
+Receivable and payable status therefore both derive from one table rather than two parallel ledgers
+that can disagree.
 
-### Checking revenue
+### Activities
 
-The **CRM Operations → Revenue** tab shows real-time payment status across all orders:
+Activities are polymorphic: `regarding_type` (`accounts`, `quotes`, `projects`) paired with
+`regarding_id`. One table serves calls, meetings, emails, tasks, and notes across every entity.
+Task activities default `due_date` to today when left blank.
 
-- **Summary cards:** Total invoiced, total paid, outstanding balance.
-- **Order table:** Per-order invoice amount, paid amount, and status badge
-  (`paid` / `partial` / `unpaid` / `empty`).
-- Powered by the `revenue_summary` remote at `src/remotes/+revenue_summary.ts`.
+### Pipeline and revenue views
+
+- **Pipeline** is a kanban over the five active quote lanes; `cancelled` and `lost` are hidden.
+  An owner dropdown, populated from `client.db.user`, re-runs the `pipeline_dashboard` remote.
+- **Revenue** shows invoiced, paid, and outstanding totals plus per-order payment status, powered by
+  the `revenue_summary` remote.
+
+> **Known limitation:** pipeline and revenue totals sum raw currency amounts without conversion. A
+> CNY 100,000 quote and a USD 100,000 quote each count as 100,000. Exchange-rate sourcing is out of
+> scope, so either quote in one currency per view or add a rate collection and convert in the remote.
+
+### External system interoperability
+
+`external_synced_table` is a generic sync registry rather than a per-collection integration. Each row
+records which tenant collection and record it maps to, the external system's own code and id, sync
+direction, sync state, a payload hash for change detection, and the last error.
+
+Around it:
+
+- `+pipelines.ts` imports inbound records and exports the registry as CSV.
+- `+integrations.ts` defines the connection, an hourly cursor-paged pull of changed records, and an
+  outbound publish binding that fires on create and update for pending, non-inbound rows.
+- The bearer token is declared in `src/+env.ts` as `EXTERNAL_SYSTEM_TOKEN` and read from the
+  environment — never committed.
+
+Because the registry is decoupled from the domain collections, pointing this at a different ERP means
+changing the connection and field mapping, not the schema.
 
 ### Exporting
 
-The **Export** pipeline on quotes produces two artefacts per selected quote:
-
-- `quote_<docno>.json` — structured JSON under the `norbital.crm.interoperability.v1` schema
-- `quote_<docno>_lines.csv` — flat CSV of line items
-
-Suitable for ERP import or audit, but **not** what a customer receives. Customer-facing documents
-(quotations, proforma invoices, commercial invoices) are not generated.
-
-### Managing products
-
-The **Products** catalogue holds resin grades, compounds, and R&D project materials. Each product
-has: code (unique), name, description, unit, unit price, and active flag. Quote lines snapshot
-from this catalogue at creation time.
-
-> **Known limitations:**
->
-> - `unit_price` is a single number with no effective dating. Changing a price overwrites history.
-> - No customer-specific pricing. The same grade quotes the same catalogue price to every account.
->   In resin trading, pricing is relationship-based — large buyers get tiered rates.
-> - No technical specifications (MFI, density, tensile strength, grade classification). When a
->   customer asks "do you have a PP with MFI between 10-15?", there is no data to answer this.
-> - For R&D project resins that have no permanent catalogue entry, create a one-off product and
->   mark it inactive after the project. There is no `projects` collection, no project budget
->   tracking, and no way to link quotes to R&D initiatives.
-
-### Managing contacts
-
-Each contact belongs to an account (`account_id` foreign key, validated on create). Fields: first
-name, last name, email, phone, WeChat ID, title, department, active.
+The quotes export pipeline produces `quote_<docno>.json` under the
+`norbital.crm.interoperability.v1` schema plus `quote_<docno>_lines.csv`. These are integration and
+audit artefacts, not customer-facing documents.
 
 ---
 
-## What works well
+## Money arithmetic
 
-- **State machine prevents impossible transitions.** You cannot jump from `draft` to `fulfilled`
-  or cancel a deal with outstanding payments.
-- **Line item snapshotting.** Quote lines freeze product data at creation. Catalogue price changes
-  never retroactively alter historical deals.
-- **Auto document numbering.** Sequential `QT-YYYY-NNNN` with zero-padding. No duplicates, no gaps,
-  no manual numbering errors.
-- **Currency validation on payments.** A USD payment on a CNY order is rejected at entry, not
-  discovered at month-end reconciliation.
-- **Polymorphic activities.** One table for all interaction types, linkable to any entity. No
-  separate tables for calls, meetings, emails, tasks, and notes.
-- **Multi-currency.** CNY, USD, EUR, GBP, JPY, SGD, HKD covers EPG's trading currencies.
-- **Export pipeline.** JSON + CSV with schema versioning, ready for ERP handoff.
-- **Server-side data integrity.** Hooks enforce business rules at the database level, not the UI.
+All money passes through `src/lib/pricing.ts`, which is the only place rounding is decided:
 
----
+- `roundHalfUp` rounds half away from zero via exponent shifting, so `1.005` at two decimal places
+  gives `1.01` rather than the `1.00` that naive float multiplication produces.
+- `lineAmounts` computes `net`, `tax`, and `gross` for a line, handling tax-exclusive and
+  tax-inclusive modes.
+- `documentTotals` sums already-rounded line amounts in minor units, so a document total always
+  equals the sum of the lines a reader can see on it.
+- `deriveFloorPrice` and `isBelowFloor` handle the cost-plus-markup floor across both tax modes.
 
-## What is missing or broken
-
-### Critical — blocks daily work
-
-| Issue                                                  | Impact                                                                                                                                             |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sent quotes are immutable — cannot reopen for revision | Rep must create a new quote from scratch for every customer change. Revision during negotiation is the single most common action in resin trading. |
-| No revision history or version links                   | No way to trace quote V1 → V2 → V3 negotiation chain                                                                                               |
-
-### Fixed (was broken — now functional)
-
-| Issue                                        | What changed                                                                                                 |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Sent quotes were immutable                   | `sent → draft` transition added. Reopening increments `revision_number` and links `revision_of`.             |
-| `revenue_summary` remote was unused          | Wired into `crm_admin` as a Revenue tab with summary cards and per-order payment-status table.               |
-| Pipeline kanban ignored `owner_id` filter    | User-name dropdown queries `client.db.user`. Remote re-fires via `$derived.by` when filter changes.          |
-| No customer-specific pricing                 | New `customer_prices` collection. `quote_lines` hooks check for active account price before catalogue price. |
-| Payment methods missing China channels       | Added `wechat_pay`, `alipay`, `letter_of_credit` to `payment_records` method enum.                           |
-| `regarding_type` on activities was free text | Changed to enum: `['accounts', 'quotes', 'projects']`.                                                       |
-| No `projects` collection for R&D work        | New `projects` collection with status lifecycle. Quotes link via `project_id`.                               |
-| No quote expiry alerts                       | New `+quote_expiry_watch` automation (daily 6 AM read-only report of expired sent quotes).                   |
-| No WeChat ID on contacts                     | Added `wechat_id` + `department` fields to contacts model.                                                   |
-| No product technical specs                   | Added `grade`, `mfi`, `density`, `supplier` to products. Price change auto-records `price_updated_at`.       |
-| `cancelled` and `lost` as full kanban lanes  | Collapsed to 5 active lanes (Draft, Sent, Won, Confirmed, Fulfilled). Terminal states hidden from kanban.    |
-| No owner filter UI                           | Pipeline tab now shows a user-name `<select>` dropdown populated from `client.db.user`.                      |
-
-### Still outstanding
-
-| Issue                              | Impact                                                                                                                                                               |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No partial fulfilment              | Binary fulfilled/not-fulfilled. Cannot track multi-shipment orders.                                                                                                  |
-| No effective-dated prices          | Changing a product price overwrites the single value. `price_updated_at` tracks when but history is not queryable.                                                   |
-| No exchange rate handling          | Pipeline totals add CNY + USD + EUR as raw numbers with no conversion.                                                                                               |
-| Two-app split adds friction        | Small firm: same person creates quotes and records payments. App switching is overhead.                                                                              |
-| No document generation             | Customers receive JSON/CSV exports, not formatted PDF quotes or invoices.                                                                                            |
-| `owner_id` columns render as UUIDs | CollectionTable shows raw UUIDs for owner columns since Pod relationships don't support platform tables. Workaround: pipeline filter uses `client.db.user` dropdown. |
-
-### Missing entirely — not in scope yet
-
-- Purchase/supplier side (no buy price → no margin calculation)
-- Inventory/stock awareness
-- Sales targets and commissions
-- Customer-facing document generation (PDF quotes, proforma invoices, commercial invoices)
-- Email/WeChat integration
-- Exchange rate sourcing
+`src/lib/numbering.ts` owns document numbering: `nextDocNo` derives the next sequence for a prefix
+and year, giving `QT-YYYY-NNNN`, `PO-YYYY-NNNN`, and `INV-YYYY-NNNN` from one implementation.
 
 ---
 
-## System model: users, ownership, and access control
+## What the platform provides — do not rebuild it
 
-The Pod platform provides a built-in `user` table. There is **no separate "sales person" or "rep" collection** — the system user model is the single source of identity and access control.
+The Pod platform supplies a `user` table, policies, audit trail, temporal history, notifications,
+attachments, import/export pipelines, integrations, automations, live query, and the command palette.
+This template authors domain models and rules on top of them.
 
-Every quote, activity, and project stores an `owner_id` that holds a user's `norbital_id`. The pipeline filter queries `client.db.user` directly to populate a user-name dropdown instead of requiring raw UUID input.
-
-### User table (platform-provided, not authored)
-
-| Column       | Purpose                                                                                                                                                  |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`       | Display name                                                                                                                                             |
-| `email`      | Login identity (unique, not null)                                                                                                                        |
-| `phone`      | Contact number                                                                                                                                           |
-| `avatar_url` | Profile image                                                                                                                                            |
-| `status`     | `active` / `inactive` / `suspended` — drives access control                                                                                              |
-| `role`       | `owner` / `admin` / `member` — drives permission policies                                                                                                |
-| `kind`       | `human` / `bot` / `system`                                                                                                                               |
-| `metadata`   | **Extension point** — arbitrary JSONB for Telegram handles, employee IDs, department codes, WeChat IDs, regional assignments, and future channel routing |
-
-### What NOT to build
-
-- Do not create a `users`, `reps`, `sales_people`, or `profiles` collection. The platform `user` table already exists and is the canonical identity store.
-- Do not replicate fields like `email`, `name`, or `phone` on tenant collections. Contacts are customer-facing entities — distinct from platform users who operate the system.
-- Do not hand-roll access control. The platform policy engine handles role-based and record-level permissions.
-
-### Linking additional data to a user
-
-The `user.metadata` jsonb column is the designated extension point. Examples:
+Every quote, activity, and project stores an `owner_id` holding a user's `norbital_id`. The
+`user.metadata` jsonb column is the designated extension point for operational attributes:
 
 ```json
 {
-	"telegram": "@rep_zhang",
-	"wechat": "zhang_epg",
-	"employee_id": "EPG-042",
-	"region": "east_china",
-	"channel_preference": ["wechat", "email"]
+	"telegram": "@rep_handle",
+	"employee_id": "SL-042",
+	"region": "east",
+	"channel_preference": ["email"]
 }
 ```
 
-This keeps identity in one place while allowing channel-specific routing and operational metadata to be attached without schema changes.
+Do not create a `users`, `reps`, `sales_people`, or `profiles` collection, do not duplicate `email` /
+`name` / `phone` onto tenant collections, and do not hand-roll access control. Contacts are
+customer-facing entities and are deliberately distinct from platform users who operate the system.
 
 ---
 
 ## Collections
 
-| Collection        | Purpose                                                                                                                                                                               |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `accounts`        | Customer companies. Multi-currency preference (CNY, USD, EUR, GBP, JPY, SGD, HKD).                                                                                                    |
-| `contacts`        | People at accounts — decision-makers, buyers, day-to-day contacts.                                                                                                                    |
-| `products`        | Resin grades, compounds, R&D project materials catalogue.                                                                                                                             |
-| `customer_prices` | Active account-and-product price overrides. Quote-line creation prefers this price to the catalogue price.                                                                            |
-| `projects`        | Customer R&D or commercial projects. Quotes can carry a project reference and activities may be recorded against one.                                                                 |
-| `quotes`          | Sales document — the full pipeline. Moves draft → sent → won (quote), then confirmed → fulfilled (order). Cancelled and lost are terminal, with `lost → won` as the only reopen path. |
-| `quote_lines`     | Line items on quotes. Snapshots product data at creation so price changes do not retroactively alter historical deals. Can only be modified on draft quotes.                          |
-| `payment_records` | Payments received against won/confirmed/fulfilled orders. Validates currency matches the order.                                                                                       |
-| `activities`      | Polymorphic interaction log — calls, meetings, emails, tasks, notes — linked to accounts or quotes via `regarding_type` + `regarding_id`.                                             |
+### Sales
+
+| Collection         | Purpose                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `accounts`         | Customer companies, with a currency preference.                                                                                      |
+| `contacts`         | People at accounts — decision-makers, buyers, day-to-day contacts.                                                                   |
+| `products`         | Sellable catalogue, including specification fields and unit pricing.                                                                 |
+| `customer_prices`  | Account-and-product price overrides. Quote-line creation prefers an active override to the catalogue price.                          |
+| `pricing_settings` | Markup percentage per scope, used to derive quote-line floor prices.                                                                 |
+| `projects`         | Customer or internal projects. Quotes and activities can reference one.                                                              |
+| `quotes`           | Sales document and the pipeline itself: draft → sent → won, then confirmed → fulfilled. Carries fulfilment and terms once confirmed. |
+| `quote_lines`      | Line items. Snapshot product data, compute net/tax/total, and flag below-floor pricing. Editable only while the parent is draft.     |
+| `invoices`         | Billing document raised against a confirmed or fulfilled quote. draft → issued → settled.                                            |
+| `invoice_lines`    | Invoice lines tied to a quote line, guarded against cumulative over-billing.                                                         |
+| `activities`       | Polymorphic interaction log linked via `regarding_type` + `regarding_id`.                                                            |
+
+### Procurement and stock
+
+| Collection             | Purpose                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `suppliers`            | Vendors, with currency and payment terms that seed their purchase orders.                                   |
+| `purchase_orders`      | Buy-side document: draft → submitted → confirmed → received. Snapshots supplier identity and terms.         |
+| `purchase_order_lines` | Purchase lines. Default unit cost from recorded stock cost and compute amounts in the order's own tax mode. |
+| `warehouses`           | Physical locations that hold stock and ship orders.                                                         |
+| `stock_levels`         | One row per product: on-hand quantity, unit cost, and when each was last established.                       |
+| `stock_lots`           | Quantity by product, warehouse, and lot, with a sellable flag. Lot changes recompute the product's on-hand. |
+
+### Shared
+
+| Collection              | Purpose                                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------------------- |
+| `payment_records`       | One ledger for incoming and outgoing money, attached to exactly one sales or purchase document. |
+| `external_synced_table` | Generic external-system sync registry: mapping, direction, state, payload hash, and last error. |
 
 ## Apps
 
-| App         | Purpose                                                                                  |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| `crm_sales` | Sales workspace — five active pipeline lanes, accounts, contacts, catalogue, and quotes. |
-| `crm_admin` | Operations workspace — order fulfilment, payment tracking, quote lines, team activities. |
+| App               | Purpose                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| `crm_sales`       | Sales workspace — pipeline lanes, accounts, contacts, catalogue, and projects.                                 |
+| `crm_admin`       | Operations and finance workspace — order fulfilment, invoices, payments, revenue, quote lines, and activities. |
+| `crm_procurement` | Buy-side workspace — purchase orders and lines, suppliers, warehouses, stock levels, and stock lots.           |
+
+## Policies
+
+Two roles ship with the workspace rather than being seeded, so a fresh database has them and a change
+to either shows up in a diff.
+
+| Policy                | App               | What it owns                                                                                                           |
+| --------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `sales_rep`           | `crm_sales`       | Its own quotes and activities; reads accounts, contacts, catalogue, customer prices, and invoices raised on its deals. |
+| `procurement_officer` | `crm_procurement` | Suppliers, purchase orders and lines, warehouses, stock, and outgoing payments.                                        |
+
+The sales / procurement split is drawn by omission, not by masking. Pod policies are
+collection-scoped rather than column-scoped, so the way to keep buy cost off the sales surface is to
+grant no read on suppliers, purchase orders, purchase order lines, stock levels, pricing settings, or
+outgoing payments at all. The boundary runs both ways: procurement gets no invoice grant, because an
+invoice is a receivable carrying the sell price of every deal, and handing it over would give the buy
+side the customer pricing the split exists to protect.
+
+`crm_admin` is granted by neither. It is the whole-business view, and these two roles exist precisely
+to divide that view.
 
 ## Remotes
 
-| Remote               | Purpose                                                                                                              | Wired to UI?                                                          |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `pipeline_dashboard` | Stage-by-stage counts, total pipeline value, enriched kanban cards with account names. Accepts `owner_id` parameter. | Yes — `+crm_sales.svelte` re-runs it when the selected owner changes. |
-| `revenue_summary`    | Per-order invoiced/paid/outstanding summary, filterable by currency.                                                 | Yes — `+crm_admin.svelte` powers the Revenue tab.                     |
+| Remote                  | Purpose                                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `pipeline_dashboard`    | Stage-by-stage counts, total pipeline value, and kanban cards enriched with account names. Accepts `owner_id`. |
+| `revenue_summary`       | Per-order invoiced, paid, and outstanding totals, filterable by currency.                                      |
+| `procurement_dashboard` | Purchase-order counts by status, committed spend per currency, and payable status per order.                   |
 
-## State machine
+## Automations
+
+| Automation           | Purpose                                                   |
+| -------------------- | --------------------------------------------------------- |
+| `quote_expiry_watch` | Daily read-only report of sent quotes past `valid_until`. |
+| `user_onboarding`    | Reacts to new tenant users.                               |
+
+## The sales desk channel
+
+`src/channels/+sales_desk.channel.ts` puts the workspace on Telegram as a customer-facing sales desk.
+The agent answers there under the `sales_rep` policy, so an inbound question reaches quote and account
+data through exactly the grants a rep already has — a channel is another caller of the permission
+model, never a way around it.
+
+That is also why `sales_rep` holds read on invoices even though `crm_sales` surfaces no invoice table.
+"Has my order been billed, and when is it due" reaches the agent long before it reaches a screen.
+
+## State machines
+
+Sales document:
 
 ```
 draft ──→ sent ──→ won ──→ confirmed ──→ fulfilled
-  ▲         │         │         │
-  │         │         │         ▼
-  │         │         │      cancelled (terminal)
-  │         │         │
-  │         │         ▼
-  ├─────────┘       lost ◄── (reopen: lost → won)
-  │
-  ├── cancelled (terminal)
-  │
-  └── lost (terminal)
+  ▲         │        │
+  └─────────┘        └──→ cancelled (terminal, blocked when payments exist)
+                     │
+                     └──→ lost (terminal, except lost → won)
 ```
 
-- `draft`: Editable. Lines can be added, removed, modified. **Reachable from `sent`** for revision — reopening increments `revision_number` and sets `revision_of`.
-- `sent`: Delivered to customer. Reopen to draft to revise.
-- `won`: Customer accepted. `confirmed_at` / `fulfilled_at` not yet set.
-- `confirmed`: ERP entry done. `confirmed_at` timestamp set automatically.
-- `fulfilled`: Shipped. `fulfilled_at` timestamp set automatically. Terminal — no further transitions.
-- `cancelled`: Terminal. Blocked if payments exist.
-- `lost`: Terminal, except `lost → won` (reopen).
+Purchase order: `draft → submitted → confirmed → received`, with `cancelled` reachable before
+receipt and blocked once payments exist.
+
+Invoice: `draft → issued → settled`, with `cancelled` reachable before settlement.
+
+---
+
+## Not in scope
+
+Deliberate omissions, each of which should be added as explicit collections, remotes, integrations,
+and policies rather than as untracked process workarounds:
+
+- Partial fulfilment and shipment tracking — fulfilment is a single document-level state, with no
+  shipment entity, container, or bill-of-lading number.
+- Effective-dated catalogue prices — a price change overwrites the current value; history is not
+  queryable.
+- Exchange-rate sourcing and multi-currency roll-up.
+- Customer-facing document rendering (PDF quotations, proforma and commercial invoices).
+- Ledger accounting, sales targets, and commissions.
+- Messaging-channel delivery to customers.
+
+Platform-level constraint worth knowing: `owner_id` columns render as raw UUIDs in `CollectionTable`,
+because Pod relationships do not target platform tables. The pipeline filter works around this by
+populating a dropdown from `client.db.user`.
 
 ## Verification
 

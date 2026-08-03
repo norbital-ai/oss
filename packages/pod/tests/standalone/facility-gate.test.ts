@@ -153,11 +153,13 @@ describe('pod dev facility gate', () => {
 	it('supplies only what it actually implements', async () => {
 		// `pod dev` emulates Core but holds none of Core's credentials. Enumerating the set here means
 		// a facility silently appearing (or disappearing) from the development host is a test failure.
-		// `messaging` is in the set but holds no credentials either: it writes to the console, which is
-		// what lets a workspace with channels boot under `pod dev` at all.
+		// `messaging` and `integrationDelivery` are in the set but hold no credentials either: both write
+		// to the console, which is what lets a workspace with channels or an integration boot under
+		// `pod dev` at all.
 		expect([...(await developmentFacilities())].sort()).toEqual([
 			'db',
 			'fileStorage',
+			'integrationDelivery',
 			'messaging',
 			'queue'
 		]);
@@ -204,6 +206,20 @@ describe('pod dev facility gate', () => {
 			channelTransports: ['telegram']
 		});
 		expect(await config.messaging?.listTransports()).toEqual(['telegram']);
+	});
+
+	/**
+	 * A declared integration must not be the thing that makes a workspace unrunnable locally. The
+	 * shipped `crm` template declares one, and `pod dev` is the only way a Core target runs at all, so
+	 * the development host stands in for delivery and logs — the same bargain it makes for a channel
+	 * transport it cannot carry.
+	 */
+	it('starts a workspace that declares an integration, with no delivery credentials', async () => {
+		const available = await developmentFacilities();
+		const integrating = manifest({
+			integrations: { external_system: { name: 'external_system', definition: {} } }
+		});
+		expect(() => assertStandaloneFacilities(integrating, available)).not.toThrow();
 	});
 
 	it('starts a workspace that only stores geolocation, with no maps provider', async () => {

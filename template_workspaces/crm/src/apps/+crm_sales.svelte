@@ -129,7 +129,7 @@
 		{client}
 		collection="products"
 		title="Products"
-		description="Catalogue of resin grades, compounds, and R&D materials."
+		description="Sellable catalogue. Quote lines snapshot from here at creation."
 		query={{ orderBy: { name: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
@@ -148,8 +148,8 @@
 	<CollectionTable
 		{client}
 		collection="projects"
-		title="R&D Projects"
-		description="Track project-specific resin development and material trials."
+		title="Projects"
+		description="Customer or internal projects that quotes and activities can reference."
 		query={{ orderBy: { name: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
@@ -167,7 +167,7 @@
 	<PageHeader
 		eyebrow="CRM"
 		title="Sales workspace"
-		description="Manage your sales pipeline, accounts, contacts, catalogue, and R&D projects."
+		description="Manage your sales pipeline, accounts, contacts, catalogue, and projects."
 	/>
 {/snippet}
 

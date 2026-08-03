@@ -427,25 +427,40 @@ async function authorizeSeedWrites(client: PgClient): Promise<void> {
 	await client.query(`SELECT set_config('norbital.via_ops', 'on', false)`);
 }
 
-const seedUserIdByEmailCache = new Map<string, string>();
-
+/**
+ * The id a relationship row should point at, which for `user` is not the id in the payload.
+ *
+ * `insertSeedRows` upserts users on `email` and deliberately does not overwrite `norbital_id`, so
+ * a person the tenant already has — the founder, written by provisioning before any seed runs —
+ * keeps the id they were provisioned with and the payload's id is not theirs. The email is the
+ * only stable handle, so the id is read back from the database it was just written to.
+ *
+ * `seenByEmail` memoises that read, and it belongs to one run against one tenant. It used to be a
+ * module-level `Map` — one process seeds every tenant in a `--template all` reset, so the first
+ * tenant to write an address cached its id for all of them. Two templates seed
+ * `zuyao.liu@norbital.ai` under different ids, so whichever ran second inserted a `team_members`
+ * row pointing at a `user` row that exists only in another tenant's database, and the foreign key
+ * took the whole reset down. Compare `seedTableMetadataCache` above, which is keyed per client and
+ * was never able to do this.
+ */
 async function seedSourceId(input: {
 	readonly client: PgClient;
 	readonly collection: string;
 	readonly row: Record<string, unknown>;
+	readonly seenByEmail: Map<string, string>;
 }): Promise<string | null> {
 	if (input.collection !== 'user' || typeof input.row.email !== 'string') {
 		return typeof input.row.norbital_id === 'string' ? input.row.norbital_id : null;
 	}
 	const email = input.row.email.toLowerCase();
-	const cached = seedUserIdByEmailCache.get(email);
+	const cached = input.seenByEmail.get(email);
 	if (cached) return cached;
 	const result = await input.client.query<{ norbital_id: string }>(
 		`SELECT norbital_id FROM ${qualifiedTableName('user')} WHERE email = $1 LIMIT 1`,
 		[email]
 	);
 	const id = result.rows[0]?.norbital_id;
-	if (id) seedUserIdByEmailCache.set(email, id);
+	if (id) input.seenByEmail.set(email, id);
 	return id ?? null;
 }
 
@@ -453,6 +468,7 @@ async function insertSeedRelationships(input: {
 	readonly client: PgClient;
 	readonly collection: string;
 	readonly rows: readonly Record<string, unknown>[];
+	readonly seenByEmail: Map<string, string>;
 }): Promise<number> {
 	let inserted = 0;
 	const sourceColumn = `${singularCollectionName(input.collection)}_id`;
@@ -462,7 +478,8 @@ async function insertSeedRelationships(input: {
 		const sourceId = await seedSourceId({
 			client: input.client,
 			collection: input.collection,
-			row
+			row,
+			seenByEmail: input.seenByEmail
 		});
 		if (!sourceId) continue;
 		// stupidity:allow A6 -- relation metadata and inserts share the ordered database client
@@ -579,6 +596,8 @@ export async function seedTemplateDataFromPlan(input: {
 		}
 
 		const summaries: SeedProvenanceSummary[] = [];
+		// One tenant's user ids, for this run only. See `seedSourceId`.
+		const seenByEmail = new Map<string, string>();
 		// stupidity:allow A6 -- seed mutations are an ordered plan with cross-step references
 		for (const mutation of input.plan.mutations) {
 			const inserted = await insertSeedRows({
@@ -589,7 +608,8 @@ export async function seedTemplateDataFromPlan(input: {
 			const links = await insertSeedRelationships({
 				client,
 				collection: mutation.collection_name,
-				rows: mutation.payloads
+				rows: mutation.payloads,
+				seenByEmail
 			});
 			summaries.push({
 				collectionName: mutation.collection_name,

@@ -39,7 +39,16 @@ const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
  * They are not in the manifest — they are Pod's, not the workspace's — so the collision check has to
  * carry them itself or `read_collection` becomes a host tool nobody can reach past.
  */
-const BUILT_IN_TOOL_NAMES = ['describe_workspace', 'read_collection', 'write_collection'] as const;
+const BUILT_IN_TOOL_NAMES = [
+	'describe_workspace',
+	'list_skills',
+	'read_skill',
+	'read_collection',
+	'write_collection',
+	// Added conditionally by the loop rather than unconditionally, which is exactly why it belongs
+	// here: a host tool of this name would dispatch on root turns and vanish inside subagents.
+	'spawn_subagent'
+] as const;
 
 /**
  * Assemble the `agentTools` facility from the tools this host actually has.

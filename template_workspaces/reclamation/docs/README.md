@@ -34,7 +34,8 @@ Nothing here georeferences. All three documents are read as metres in one shared
 - `src/collections/reclamation_projects/+hooks.ts` — the reconstruction hook.
 - `src/collections/reclamation_projects/lib/run-stitch.ts` — the server driver that reads the
   document assets and records a revision.
-- `src/lib/reclamation/` — the engine: parse, extract, sample, integrate, price.
+- `src/lib/reclamation/` — the engine: parse, read a plotted section sheet, extract, sample,
+  integrate, price.
 - `src/lib/site-viewer/` — the 3D panel and its tessellation worker.
 
 ## Security and data boundary

@@ -38,7 +38,7 @@ app, and automation counts from source.
 
 | Template       | Source directory                   | Published ref                       |
 | -------------- | ---------------------------------- | ----------------------------------- |
-| BCA            | `template_workspaces/bca`          | `refs/heads/templates/bca`          |
+| Field Operations | `template_workspaces/field-operations` | `refs/heads/templates/field-operations` |
 | Construction   | `template_workspaces/construction` | `refs/heads/templates/construction` |
 | CRM            | `template_workspaces/crm`          | `refs/heads/templates/crm`          |
 | HR and payroll | `template_workspaces/hr-payroll`   | `refs/heads/templates/hr-payroll`   |

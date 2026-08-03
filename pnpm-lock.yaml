@@ -427,64 +427,6 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
-  template_workspaces/bca:
-    dependencies:
-      '@iconify/svelte':
-        specifier: ^5.2.2
-        version: 5.2.2(svelte@5.56.8)
-      '@norbital-ai/platform-utils':
-        specifier: 0.0.1
-        version: link:../../packages/platform-utils
-      '@norbital-ai/pod':
-        specifier: 0.0.3
-        version: link:../../packages/pod
-      '@norbital-ai/std':
-        specifier: 0.0.1
-        version: link:../../packages/std
-      '@norbital-ai/ui':
-        specifier: 0.0.3
-        version: link:../../packages/ui
-      exifr:
-        specifier: 7.1.3
-        version: 7.1.3
-      jpeg-js:
-        specifier: 0.4.4
-        version: 0.4.4
-      mode-watcher:
-        specifier: ^1.1.0
-        version: 1.1.0(svelte@5.56.8)
-      pngjs:
-        specifier: 7.0.0
-        version: 7.0.0
-      runed:
-        specifier: ^0.37.1
-        version: 0.37.1(@sveltejs/kit@2.70.1(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.56.8)(vite@8.1.5(@types/node@26.1.2)(jiti@2.7.0)))(svelte@5.56.8)(typescript@6.0.3)(vite@8.1.5(@types/node@26.1.2)(jiti@2.7.0)))(svelte@5.56.8)(zod@4.4.3)
-      svelte:
-        specifier: ^5.56.7
-        version: 5.56.8
-      vite:
-        specifier: ^8.1.5
-        version: 8.1.5(@types/node@26.1.2)(jiti@2.7.0)
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@types/pngjs':
-        specifier: 6.0.5
-        version: 6.0.5
-      prettier:
-        specifier: ^3.9.5
-        version: 3.9.6
-      prettier-plugin-svelte:
-        specifier: ^4.1.1
-        version: 4.1.1(prettier@3.9.6)(svelte@5.56.8)
-      svelte-check:
-        specifier: ^4.7.3
-        version: 4.7.4(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3)
-      typescript:
-        specifier: 6.0.3
-        version: 6.0.3
-
   template_workspaces/construction:
     dependencies:
       '@iconify/svelte':
@@ -577,6 +519,64 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
+  template_workspaces/field-operations:
+    dependencies:
+      '@iconify/svelte':
+        specifier: ^5.2.2
+        version: 5.2.2(svelte@5.56.8)
+      '@norbital-ai/platform-utils':
+        specifier: 0.0.1
+        version: link:../../packages/platform-utils
+      '@norbital-ai/pod':
+        specifier: 0.0.3
+        version: link:../../packages/pod
+      '@norbital-ai/std':
+        specifier: 0.0.1
+        version: link:../../packages/std
+      '@norbital-ai/ui':
+        specifier: 0.0.3
+        version: link:../../packages/ui
+      exifr:
+        specifier: 7.1.3
+        version: 7.1.3
+      jpeg-js:
+        specifier: 0.4.4
+        version: 0.4.4
+      mode-watcher:
+        specifier: ^1.1.0
+        version: 1.1.0(svelte@5.56.8)
+      pngjs:
+        specifier: 7.0.0
+        version: 7.0.0
+      runed:
+        specifier: ^0.37.1
+        version: 0.37.1(@sveltejs/kit@2.70.1(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.56.8)(vite@8.1.5(@types/node@26.1.2)(jiti@2.7.0)))(svelte@5.56.8)(typescript@6.0.3)(vite@8.1.5(@types/node@26.1.2)(jiti@2.7.0)))(svelte@5.56.8)(zod@4.4.3)
+      svelte:
+        specifier: ^5.56.7
+        version: 5.56.8
+      vite:
+        specifier: ^8.1.5
+        version: 8.1.5(@types/node@26.1.2)(jiti@2.7.0)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/pngjs':
+        specifier: 6.0.5
+        version: 6.0.5
+      prettier:
+        specifier: ^3.9.5
+        version: 3.9.6
+      prettier-plugin-svelte:
+        specifier: ^4.1.1
+        version: 4.1.1(prettier@3.9.6)(svelte@5.56.8)
+      svelte-check:
+        specifier: ^4.7.3
+        version: 4.7.4(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
   template_workspaces/hr-payroll:
     dependencies:
       '@iconify/svelte':
@@ -634,9 +634,6 @@ importers:
       '@iconify/svelte':
         specifier: ^5.2.2
         version: 5.2.2(svelte@5.56.8)
-      '@mlightcad/libredwg-web':
-        specifier: 0.7.9
-        version: 0.7.9
       '@norbital-ai/platform-utils':
         specifier: 0.0.1
         version: link:../../packages/platform-utils
@@ -1047,10 +1044,6 @@ packages:
 
   '@marijn/find-cluster-break@1.0.3':
     resolution: {integrity: sha512-FY+MKLBoTsLNJF/eLWaOsXGdz6uh3Iu1axjPf6TUq92IYumcTcXWHoS747JARLkcdlJ/Waiaxc5wQfFO8jC6NA==}
-
-  '@mlightcad/libredwg-web@0.7.9':
-    resolution: {integrity: sha512-tqjx0eCiR0CNI3TyO3LVYzl4ptuzSFm7asGn/C1YiJaEk7Vneto+lRrVUco85qw+PZDihaFLwWqdYIEse1swbA==}
-    engines: {node: '>=20'}
 
   '@napi-rs/canvas-android-arm64@0.1.100':
     resolution: {integrity: sha512-hjhCKhntPv9+t4ckHymdx0phYNcVW+GKQR6Lzw2zE+pOVjOplSmtx9nNNknTjbEDLcuLZqA1y8ufKg1XfgftzQ==}
@@ -3971,8 +3964,6 @@ snapshots:
   '@marcbachmann/cel-js@8.0.0': {}
 
   '@marijn/find-cluster-break@1.0.3': {}
-
-  '@mlightcad/libredwg-web@0.7.9': {}
 
   '@napi-rs/canvas-android-arm64@0.1.100':
     optional: true

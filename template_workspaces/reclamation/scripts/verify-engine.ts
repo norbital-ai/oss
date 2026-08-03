@@ -9,6 +9,7 @@ import { buildSurfaces, integrateSite } from '../src/lib/reclamation/solids.js';
 import { applySimulation, baseSimulation } from '../src/lib/reclamation/simulation.js';
 import { buildEstimate, DEFAULT_LEVERS, unpricedMessage } from '../src/lib/reclamation/cost.js';
 import { extractSections, Ledger, type RawDocument } from '../src/lib/reclamation/extract.js';
+import { parseDxf } from '../src/lib/reclamation/dxf.js';
 
 type P = [number, number];
 const enc = new TextEncoder();
@@ -905,6 +906,124 @@ const fillOf = (r: ReturnType<typeof stitch>) => r.metrics.placedVolumeM3;
 			crest.length > 0 &&
 			Math.abs(Math.min(...crest.map((point) => point.stationM)) - 67.5) < 1e-6,
 		'toe at station 0.0 / -17.00 m CD, crest at station 67.5 — the drawn values'
+	);
+}
+
+/* ------- O. only the ENTITIES section is the drawing ------- */
+{
+	/**
+	 * Every DXF a real CAD application writes carries a `BLOCKS` section: the
+	 * *definitions* of arrow heads, symbols and title blocks, drawn only where a
+	 * matching `INSERT` places them. Reading that geometry as drawing geometry put
+	 * a phantom entity at the origin of every such file, and two of them clustered
+	 * into a section that does not exist.
+	 *
+	 * It stayed invisible for as long as the only DXFs reaching the reader were
+	 * authored by hand — those carry no `BLOCKS` at all — while native DWG went
+	 * around the reader entirely through the decoder that used to precede it. The
+	 * moment the seed shipped an ezdxf-authored sheet, both cover stories expired
+	 * at once.
+	 *
+	 * The block below is deliberately shaped like the real thing: a `BLOCKS`
+	 * section whose arrow head sits at the origin, far from the drawing, on a
+	 * layer nothing else uses.
+	 */
+	const withBlocks = [
+		'0',
+		'SECTION',
+		'2',
+		'HEADER',
+		'9',
+		'$INSUNITS',
+		'70',
+		'6',
+		'0',
+		'ENDSEC',
+		'0',
+		'SECTION',
+		'2',
+		'BLOCKS',
+		'0',
+		'BLOCK',
+		'2',
+		'_ClosedFilled',
+		'0',
+		'LWPOLYLINE',
+		'8',
+		'ARROWS',
+		'70',
+		'1',
+		'10',
+		'-1',
+		'20',
+		'-0.2',
+		'10',
+		'0',
+		'20',
+		'0',
+		'10',
+		'-1',
+		'20',
+		'0.2',
+		'0',
+		'SOLID',
+		'8',
+		'ARROWS',
+		'0',
+		'ENDBLK',
+		'0',
+		'ENDSEC',
+		'0',
+		'SECTION',
+		'2',
+		'ENTITIES',
+		'0',
+		'LINE',
+		'8',
+		'SECTION_1-1__toe',
+		'10',
+		'0',
+		'20',
+		'-15',
+		'11',
+		'61.5',
+		'21',
+		'5.5',
+		'0',
+		'SPLINE',
+		'8',
+		'SECTION_1-1__toe',
+		'0',
+		'ENDSEC',
+		'0',
+		'EOF'
+	].join('\n');
+
+	const parsed = parseDxf(withBlocks);
+	check(
+		'O. block definitions are not read as drawing geometry',
+		parsed.entities.length === 1 &&
+			parsed.entities[0].type === 'LINE' &&
+			parsed.entities[0].layer === 'SECTION_1-1__toe',
+		`decoded ${parsed.entities.length} entity from ENTITIES, ignoring the arrow head in BLOCKS`
+	);
+	check(
+		'O. undecoded BLOCKS records are not reported as lost drawing entities',
+		parsed.skipped.SPLINE === 1 && parsed.skipped.SOLID === undefined,
+		`skipped ${JSON.stringify(parsed.skipped)} — the SPLINE in ENTITIES, not the SOLID in BLOCKS`
+	);
+	check(
+		'O. a header outside ENTITIES is still read',
+		parsed.insUnits === 6,
+		'$INSUNITS 6 survives, so the section gate did not swallow the header'
+	);
+	// The bug's actual signature: two loose block entities near the origin became
+	// their own "section". One real section in, one real section out.
+	const extracted = extractSections(doc('cross_section', 'sheet.dxf', withBlocks), new Ledger());
+	check(
+		'O. no phantom section is clustered out of block geometry',
+		Object.keys(extracted.profiles).join(',') === '1-1',
+		`decoded ${Object.keys(extracted.profiles).join(' and ') || 'nothing'}`
 	);
 }
 

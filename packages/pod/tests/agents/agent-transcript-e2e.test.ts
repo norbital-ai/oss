@@ -29,10 +29,15 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 	const ai = testAiBinding(async (input) => {
 		calls += 1;
 		if (calls === 1) {
+			// `construction` authors no `src/+agent.ts`, so this is the fallback profile: the skill tools
+			// are unconditional, and `write_collection` is present because that profile grants write.
 			expect(input.tools?.map((tool) => tool.name)).toEqual([
 				'describe_workspace',
 				'read_collection',
-				'spawn_subagent'
+				'list_skills',
+				'read_skill',
+				'spawn_subagent',
+				'write_collection'
 			]);
 			return {
 				text: '',

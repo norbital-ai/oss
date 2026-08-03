@@ -1,7 +1,6 @@
 const INITIALISMS: Readonly<Record<string, string>> = {
 	ai: 'AI',
 	api: 'API',
-	bca: 'BCA',
 	bim: 'BIM',
 	hr: 'HR',
 	ui: 'UI'

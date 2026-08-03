@@ -1,10 +1,9 @@
 import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
-import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
 import { parseCompactDirective, runAgent } from '$lib/server/agent/agent-loop.server.js';
+import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
 import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
-import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/runtime/http.js';
 import { z } from 'zod';
@@ -49,32 +48,6 @@ export type AgentChatStartResult = {
 	readonly chatId: string;
 	readonly accepted: true;
 };
-
-/**
- * The workspace's own agent tools, all of them.
- *
- * Deliberately not caller-supplied. `executeTool` will only run a tool the spec names, so letting a
- * request choose would let it widen its own reach; an authored tool is a surface the workspace already
- * decided to expose. Workspaces without an authored agent profile draw from this same registry — the
- * fallback adds no *workspace* tool the workspace did not register.
- */
-function workspaceAgentTools(): readonly string[] {
-	return Object.keys(getTenantWorkspace().registered.agentTools);
-}
-
-function interactiveSpec(message: string, model?: string): AgentAutomationSpec {
-	const authored = getTenantWorkspace().registered.agent;
-	const chosen = model === undefined ? {} : { model };
-	// An explicit choice overrides the authored profile's model, and only for this turn — the profile
-	// is a workspace-level default, not a lock on which model a person may talk to.
-	if (authored) return { ...authored, task: message, ...chosen };
-	return {
-		kind: 'agent',
-		task: message,
-		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],
-		...chosen
-	};
-}
 
 /**
  * What the host will run, or nothing.
@@ -181,20 +154,18 @@ const authenticated = Guard.init().use(requireAuthMiddleware());
  * transcript, so a conversation replicates to its owner through ordinary sync rather than needing a
  * streaming channel of its own.
  *
- * The fallback profile is the intent, not a hole in it: an agent someone is talking to should reach
- * what that person reaches. Leaving `collections` unset widens `allowedCollections` to every tenant
- * collection precisely so the ceiling comes from policy instead of the spec — `read_collection` runs
- * `findMany` unelevated, so a requestor sees the rows they could already see and nothing more.
- * `write_collection` is not offered, and no host tool is.
+ * What the conversation may reach when the workspace authored no profile is decided by
+ * `interactiveAgentSpec`, including the part that is not conservative — read its doc comment before
+ * changing anything here.
  *
- * `src/+agent.ts` is for the case policy cannot cover: a channel with no authenticated requestor to
- * scope against, such as a public WhatsApp or Telegram surface. There the profile has to supply the
- * boundary by hand. A workspace whose agent only answers its own signed-in users does not need one.
+ * `src/+agent.ts` narrows that. It is also the answer for the case policy cannot cover: a channel
+ * with no authenticated requestor to scope against, such as a public WhatsApp or Telegram surface,
+ * where the profile has to supply the boundary by hand.
  */
 export const agentChat = authenticated.command(
 	AgentChatInputSchema,
 	async (input): Promise<AgentChatResult> => {
-		const spec = interactiveSpec('Assist with questions about this workspace.');
+		const spec = await interactiveAgentSpec('Assist with questions about this workspace.');
 		const result = await runAgent({
 			automationName: null,
 			spec,
@@ -231,11 +202,14 @@ export const agentChatStart = authenticated.command(
 		// A directive still becomes a stored user message and a turn — the reader typed it, and the
 		// transcript should show what they asked for beside what it did.
 		const compact = parseCompactDirective(input.message);
+		// Resolved before the run is launched, not inside it: `allHostTools` reads a request-scoped
+		// facility, and the detached promise below outlives the request that would supply it.
+		const spec = await interactiveAgentSpec(input.message, model);
 		void runAgent({
 			automationName: null,
 			runId: conversation.runId,
 			sessionId: conversation.chatId,
-			spec: interactiveSpec(input.message, model),
+			spec,
 			input: input.message,
 			...(compact ? { compact } : {})
 		}).catch(() => undefined);

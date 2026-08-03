@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Author Tenant Workspaces'
+  short_description: 'Author and validate Pod tenant workspaces'
+  default_prompt: 'Use $authoring-tenant-workspace to implement this tenant workspace change.'

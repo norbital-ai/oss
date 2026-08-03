@@ -71,7 +71,7 @@ export type OutputSection = {
 	readonly outputIds: readonly string[];
 };
 
-export const INFOTECH_SECTIONS: readonly OutputSection[] = [
+export const VENDOR_WORKBOOK_SECTIONS: readonly OutputSection[] = [
 	{
 		name: 'Identity',
 		unit: 'MONEY',
@@ -118,7 +118,7 @@ export const INFOTECH_SECTIONS: readonly OutputSection[] = [
 		unit: 'MONEY',
 		outputIds: [
 			'fw_levy',
-			'check_infotech',
+			'check_vendor_workbook',
 			'epf_employee',
 			'socso_employee',
 			'eis_employee',
@@ -159,7 +159,9 @@ export const INFOTECH_SECTIONS: readonly OutputSection[] = [
 	}
 ];
 
-export const INFOTECH_COLUMNS = INFOTECH_SECTIONS.flatMap((section) => section.outputIds);
+export const VENDOR_WORKBOOK_COLUMNS = VENDOR_WORKBOOK_SECTIONS.flatMap(
+	(section) => section.outputIds
+);
 
 /**
  * The sections and their order.
@@ -279,10 +281,10 @@ function componentAmount(payslip: ReportPayslip, codes: readonly string[]): numb
 }
 
 /**
- * The settled Nihon/Infotech workbook row. Its keys and order are the source workbook contract,
+ * The settled vendor workbook row. Its keys and order are the source workbook contract,
  * while every value is read from persisted payroll, identity, terms and attendance records.
  */
-export function infotechRow(payslip: ReportPayslip): Record<string, string | number | null> {
+export function vendorWorkbookRow(payslip: ReportPayslip): Record<string, string | number | null> {
 	const generic = workbookRow(payslip);
 	const incentiveOvertime = generic.incentiveOTPay ?? 0;
 	const medicalClaim = componentAmount(payslip, ['MEDICAL_CLAIM']);
@@ -327,7 +329,7 @@ export function infotechRow(payslip: ReportPayslip): Record<string, string | num
 		cp38_amount: componentAmount(payslip, ['CP38']),
 		net_salary: payslip.net,
 		fw_levy: componentAmount(payslip, ['FOREIGN_WORKER_LEVY']),
-		check_infotech: null,
+		check_vendor_workbook: null,
 		epf_employee: epf(payslip, 'employee'),
 		socso_employee: contribution(payslip, 'SOCSO', 'employee'),
 		eis_employee: contribution(payslip, 'EIS', 'employee'),
@@ -341,7 +343,7 @@ export function infotechRow(payslip: ReportPayslip): Record<string, string | num
 			contribution(payslip, 'SOCSO', 'employee') + contribution(payslip, 'SOCSO', 'employer'),
 		total_eis: contribution(payslip, 'EIS', 'employee') + contribution(payslip, 'EIS', 'employer'),
 		total_epf: epf(payslip, 'employee') + epf(payslip, 'employer'),
-		// Infotech labels the post-EPF remuneration here, not the PCB scheme's gross input.
+		// The vendor workbook labels the post-EPF remuneration here, not the PCB scheme's gross input.
 		// The contribution calculation still receives the full taxable base and applies the EPF
 		// relief itself; this subtraction is presentation parity only.
 		remuneration_for_tax: contribution(payslip, 'PCB', 'base') - epf(payslip, 'employee'),

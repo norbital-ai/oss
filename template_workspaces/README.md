@@ -3,22 +3,23 @@
 Shipped starter workspaces live in this directory. Each is a standalone filesystem-first Pod
 project that can be synchronized, checked, built, migrated, and seeded with the public Pod CLI.
 
-| Template                            | Directory       | Purpose                                                                  |
-| ----------------------------------- | --------------- | ------------------------------------------------------------------------ |
-| [**hr-payroll**](./hr-payroll/)     | `hr-payroll/`   | Multi-country HR and payroll with effective-dated facts and payroll runs |
-| [**construction**](./construction/) | `construction/` | Project-centered construction ops with BIM and workforce compliance      |
-| [**bca**](./bca/)                   | `bca/`          | Site operations: contractor visits, variation approvals, photo integrity |
-| [**crm**](./crm/)                   | `crm/`          | Customer relationship management with pipelines and activity tracking    |
-| [**reclamation**](./reclamation/)   | `reclamation/`  | Survey documents stitched into a 3D site solid and priced from a matrix  |
+| Template                                    | Directory           | Purpose                                                                  |
+| ------------------------------------------- | ------------------- | ------------------------------------------------------------------------ |
+| [**hr-payroll**](./hr-payroll/)             | `hr-payroll/`       | Multi-country HR and payroll with effective-dated facts and payroll runs |
+| [**construction**](./construction/)         | `construction/`     | Project-centered construction ops with BIM and workforce compliance      |
+| [**field-operations**](./field-operations/) | `field-operations/` | Site operations: contractor visits, variation approvals, photo integrity |
+| [**crm**](./crm/)                           | `crm/`              | Quote-to-cash for B2B distribution, with purchasing and stock behind it  |
+| [**reclamation**](./reclamation/)           | `reclamation/`      | Survey documents stitched into a 3D site solid and priced from a matrix  |
 
 ## Choosing a template
 
-- **BCA Field Operations** is the focused choice for day-of-work dispatch, qualification checks,
+- **Field Operations** is the focused choice for day-of-work dispatch, qualification checks,
   site evidence, and variation requests.
 - **Construction Operations** covers wider project delivery: workforce permits, quality, RFIs,
   BIM references, payment claims, and scheduled operational watches.
-- **CRM** covers customer accounts, quoting, customer-specific pricing, order fulfilment, payments,
-  and sales activities.
+- **CRM** runs a B2B deal end to end: accounts, catalogue-backed quoting, customer-specific pricing,
+  operational confirmation and fulfilment, invoicing, and payments — together with the purchasing,
+  supplier, and stock position that make those commitments deliverable.
 - **HR & Payroll** is the specialised multi-country payroll workspace, including attendance, leave,
   statutory contribution configuration, and reconciliation guidance.
 - **Reclamation** is the marine-works workspace: a floor plan, a bathymetric survey, and a section

@@ -28,7 +28,9 @@
 		"templates:lock": "node scripts/lock-templates.mjs",
 		"templates:lock:check": "node scripts/lock-templates.mjs --check",
 		"templates:lock:verify": "node scripts/lock-templates.mjs --check --verify-install",
-		"templates:project": "node scripts/project-templates.mjs --update-local --output .tmp/template-revisions.json"
+		"templates:project": "node scripts/project-templates.mjs --update-local --output .tmp/template-revisions.json",
+		"skills:generate": "node scripts/generate-skills.mjs",
+		"skills:check": "node scripts/generate-skills.mjs --check"
 	},
 	"devDependencies": {
 		"@changesets/cli": "2.31.1",

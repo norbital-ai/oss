@@ -35,8 +35,8 @@ export const settlementPolicySchema = z.strictObject({
 	final_period: z.enum(['SETTLE_IN_FINAL_PERIOD', 'FOLLOW_ATTENDANCE_WINDOW']),
 	/**
 	 * Whether recurring wages cover only the employment days in a final period or the full
-	 * payroll period. OPSPH's source keeps full monthly salary and allowances, then applies the
-	 * period's attendance deductions separately; prorating first would deduct the leaver twice.
+	 * payroll period. One reference configuration keeps full monthly salary and allowances, then
+	 * applies the period's attendance deductions separately; prorating first would deduct the leaver twice.
 	 */
 	final_period_wages: z.enum(['PRORATE_TO_EXIT', 'FULL_PERIOD']),
 	/**
@@ -68,8 +68,8 @@ export const settlementPolicySchema = z.strictObject({
 	),
 	/**
 	 * A payroll cadence may value an unpaid day on a different divisor from the jurisdiction's
-	 * default proration rule. OPSPH is the concrete case: monthly staff use the NWPC 261-day
-	 * factor (21.75 days/month), while semi-monthly staff use the working days in their period.
+	 * default proration rule. One example company uses the NWPC 261-day factor (21.75 days/month),
+	 * while semi-monthly staff use the working days in their period.
 	 */
 	absence_proration: z.nullable(
 		z.array(
@@ -88,8 +88,8 @@ export const settlementPolicySchema = z.strictObject({
 	),
 	/**
 	 * A cadence may use a narrower attendance slice for overtime and night shift while unpaid
-	 * leave continues to follow the company's ordinary cutoff. OPSPH semi-monthly payroll is
-	 * the concrete case: OT/NS is 1st–15th, NPL remains 21st–20th.
+	 * leave continues to follow the company's ordinary cutoff. One example semi-monthly payroll uses
+	 * OT/NS from the 1st–15th while NPL remains on the 21st–20th window.
 	 */
 	overtime_windows: z.nullable(
 		z.array(

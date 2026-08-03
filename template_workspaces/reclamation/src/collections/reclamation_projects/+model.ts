@@ -27,17 +27,18 @@ export default defineModel(
 		bathymetry_document: file({
 			mimeTypes: ['text/plain', 'text/csv', 'image/vnd.dxf', 'application/dxf', 'application/json']
 		}),
-		/** Section sheet profiles: levels, slopes, crest and armour dimensions. */
+		/**
+		 * Section sheet profiles: levels, slopes, crest and armour dimensions.
+		 *
+		 * DXF and JSON only. Native DWG is deliberately absent: the reconstruction
+		 * cannot decode it inside the tenant runtime's memory envelope, and offering
+		 * a file type that is certain to fail at Build time is worse than not
+		 * offering it. PDF is likewise absent — `normalizeDrawing` recognises a
+		 * vector sheet but refuses to treat plotted sheet coordinates as
+		 * engineering geometry.
+		 */
 		cross_section_document: file({
-			mimeTypes: [
-				'image/vnd.dwg',
-				'application/acad',
-				'application/x-autocad',
-				'image/vnd.dxf',
-				'application/dxf',
-				'application/pdf',
-				'application/json'
-			]
+			mimeTypes: ['image/vnd.dxf', 'application/dxf', 'application/json']
 		}),
 
 		/** How geometry is carried between two section cuts. */

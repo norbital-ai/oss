@@ -604,9 +604,31 @@ export default {
 } satisfies AgentAutomationSpec;
 ```
 
-If the file is absent, interactive chat is read-only and receives no host tools. The Pod shell owns
-both its floating tenant-workspace entry point and full `/agent` surface. Assistant and subagent text
-is written as `streaming` tenant rows and arrives through the ordinary replica sync connection.
+If the file is absent, interactive chat still runs — under a fallback profile with `access: 'write'`,
+every workspace agent tool, and every host tool the deployment offers. Tools are not the boundary
+here and are not meant to be read as one: the agent acts as the signed-in user with that user's
+permissions, so policy, hooks and approval gates decide what actually happens. An authored
+`src/+agent.ts` wins outright rather than being widened. Host tools are the exception to all of it,
+because they carry no requestor and act as a principal the host chooses; a channel run is offered
+none of them for that reason. The trade is written out in
+[Agent architecture](./docs/AGENT_ARCHITECTURE.md#host-tools).
+
+The Pod shell owns both its floating tenant-workspace entry point and full `/agent` surface.
+Assistant and subagent text is written as `streaming` tenant rows and arrives through the ordinary
+replica sync connection.
+
+Every agent also reads skills, which are how it learns anything its training data does not contain.
+A skill is a directory holding a `SKILL.md` with `name` and `description` frontmatter, in the
+[Agent Skills format](https://agentskills.io/specification), plus reference files it loads only when
+it needs them. There are two kinds. The ones Pod ships are compiled into the package and present in
+every run — `norbital-platform` for how the platform behaves, `authoring-tenant-workspace` for how to
+author one. The rest are found by reading a filesystem: a workspace skill under `src/skills/<name>/`,
+committed and shared by the tenant, and a personal skill under `.agents/skills/<name>/` on the
+filesystem the run executes on, committed nowhere. Personal skills are a self-hosted feature — under
+`pod dev` and `pod start` that filesystem is one principal's own, while a host that runs one runtime
+per organization has no per-person directory to point discovery at, so it finds none. `list_skills`
+and `read_skill` are granted to every agent unconditionally and no spec can withhold them. Names
+share one namespace, and precedence runs host, then workspace, then personal.
 
 ## Authoring channels
 
@@ -936,7 +958,10 @@ export default definePodHost({ mode: 'core' });
 ```
 
 Core supplies every runtime binding. `pod dev` may run this target locally by emulating Core with
-PostgreSQL, local file storage, an interval queue, and the bootstrapped development identity.
+PostgreSQL, local file storage, an interval queue, and the bootstrapped development identity. The two
+facilities it cannot hold a credential for — messaging and integration delivery — are stood in for and
+written to the console, so a workspace that declares a channel or an integration still starts locally
+instead of being refused for a secret no development machine has.
 
 `pod start` deliberately refuses `mode: 'core'`. A production Core artifact must be deployed to
 Core; it must not silently turn into a different host.

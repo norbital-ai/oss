@@ -41,12 +41,12 @@ function manifestWith(approval: unknown, action = 'create') {
 const oneStep = {
 	id: 'config-1',
 	name: 'Variation approval',
-	steps: [{ id: 'step-1', name: 'Controller review', approvers: ['BCA Controllers'] }]
+	steps: [{ id: 'step-1', name: 'Controller review', approvers: ['Field Operations Controllers'] }]
 };
 
 describe('an approval names its approvers by team name', () => {
 	it('stores the id of the team holding that name', async () => {
-		const client = clientWith([{ id: 'team-uuid-1', name: 'BCA Controllers' }]);
+		const client = clientWith([{ id: 'team-uuid-1', name: 'Field Operations Controllers' }]);
 		const result = await reconcileDeclaredPolicies(client, manifestWith(oneStep));
 
 		expect(result.unresolvedApproverTeams).toEqual([]);
@@ -91,20 +91,20 @@ describe('an approval names its approvers by team name', () => {
 	});
 
 	it('refuses a name no team holds, naming the policy, the grant and the team', async () => {
-		const client = clientWith([{ id: 'team-uuid-1', name: 'BCA Controllers Renamed' }]);
+		const client = clientWith([{ id: 'team-uuid-1', name: 'Field Operations Controllers Renamed' }]);
 		await expect(reconcileDeclaredPolicies(client, manifestWith(oneStep))).rejects.toThrow(
-			/policy "field_agent", create on "quotes" → team "BCA Controllers"/
+			/policy "field_agent", create on "quotes" → team "Field Operations Controllers"/
 		);
 		expect(client.stored).toEqual([]);
 	});
 
 	it('refuses a name two teams share rather than picking one by row order', async () => {
 		const client = clientWith([
-			{ id: 'team-uuid-1', name: 'BCA Controllers' },
-			{ id: 'team-uuid-2', name: 'BCA Controllers' }
+			{ id: 'team-uuid-1', name: 'Field Operations Controllers' },
+			{ id: 'team-uuid-2', name: 'Field Operations Controllers' }
 		]);
 		await expect(reconcileDeclaredPolicies(client, manifestWith(oneStep))).rejects.toThrow(
-			/not unique.*team "BCA Controllers"/s
+			/not unique.*team "Field Operations Controllers"/s
 		);
 	});
 
@@ -114,9 +114,9 @@ describe('an approval names its approvers by team name', () => {
 		const result = await reconcileDeclaredPolicies(client, manifestWith(oneStep));
 
 		expect(result.unresolvedApproverTeams).toEqual([
-			{ policy: 'field_agent', collection: 'quotes', action: 'create', team: 'BCA Controllers' }
+			{ policy: 'field_agent', collection: 'quotes', action: 'create', team: 'Field Operations Controllers' }
 		]);
-		expect(warn.mock.calls[0]?.[0]).toMatch(/team "BCA Controllers"/);
+		expect(warn.mock.calls[0]?.[0]).toMatch(/team "Field Operations Controllers"/);
 		warn.mockRestore();
 
 		// The gate is still there. Losing it would turn a reviewed write into a direct one, which is
@@ -127,7 +127,7 @@ describe('an approval names its approvers by team name', () => {
 	});
 
 	it('refuses to gate a read instead of silently dropping the gate', async () => {
-		const client = clientWith([{ id: 'team-uuid-1', name: 'BCA Controllers' }]);
+		const client = clientWith([{ id: 'team-uuid-1', name: 'Field Operations Controllers' }]);
 		await expect(reconcileDeclaredPolicies(client, manifestWith(oneStep, 'read'))).rejects.toThrow(
 			/gates a read on "quotes"/
 		);

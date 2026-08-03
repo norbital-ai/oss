@@ -132,6 +132,7 @@ const HOST_SOURCE = `import {
 	definePodHost,
 	devIdentity,
 	env,
+	httpIntegrationDelivery,
 	intervalQueue,
 	localFileStorage,
 	messagingProviders,
@@ -164,6 +165,10 @@ export default definePodHost({
 	}),
 	fileStorage: localFileStorage({ directory: '.norbital/storage' }),
 	queue: intervalQueue({ intervalMs: 500 }),
+	// The \`crm\` workspace declares an outbound integration, so a host that boots it has to be able to
+	// deliver one. Nothing here enqueues a delivery; this is the wiring a real self-hosted crm has, and
+	// leaving it out is what makes the workspace refuse to start.
+	integrationDelivery: httpIntegrationDelivery(),
 	agentTools: [
 		{
 			name: deployToolName,
@@ -361,7 +366,7 @@ describe('Pod standalone host agent tools — E2E', () => {
 		// `sandbox_secret` never appears in the tool list at all — it is not merely refused on call.
 		const answer = transcript[4]?.parts?.[0]?.content ?? '';
 		expect(answer).toContain(
-			'offered=describe_workspace|read_collection|spawn_subagent|sandbox_deploy'
+			'offered=describe_workspace|read_collection|list_skills|read_skill|spawn_subagent|sandbox_deploy'
 		);
 		expect(answer).not.toContain('sandbox_secret|');
 		expect(answer).toContain(`deploy=ok(${RECEIPT}:staging)`);

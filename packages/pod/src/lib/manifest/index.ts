@@ -18,8 +18,10 @@ import type {
 	ManifestPipelineEntry,
 	ManifestPolicyApproval,
 	ManifestRelationship,
+	ManifestSkill,
 	NorbitalManifest
 } from '@norbital-ai/platform-utils/manifest/types';
+import type { Skill } from '$lib/skills/types.js';
 
 export type {
 	ManifestApp,
@@ -246,6 +248,22 @@ function buildAgentToolEntries(
 }
 
 /**
+ * The workspace's skill catalogue, without the skills themselves.
+ *
+ * Bodies and attachments stay in the bundle. They are the reason a skill is worth having and also
+ * the reason it cannot travel here: a handful of them would outweigh the rest of the manifest, which
+ * every client of this workspace downloads whether or not it will ever talk to the agent.
+ */
+function buildSkillEntries(skills: readonly Skill[] | undefined): NorbitalManifest['skills'] {
+	if (!skills || skills.length === 0) return undefined;
+	const out: Record<string, ManifestSkill> = {};
+	for (const skill of skills) {
+		out[skill.name] = { name: skill.name, description: skill.description };
+	}
+	return out;
+}
+
+/**
  * Policy definitions, flattened into the manifest so the runtime can reconcile `policy` rows from it.
  *
  * The authoring shape uses `where`/`approval`; the stored grant uses `conditions`/`approval_config`.
@@ -337,6 +355,7 @@ export function buildNorbitalManifest(workspace: {
 		apps: buildAppEntries(workspace.registered?.apps),
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
 		agentTools: buildAgentToolEntries(workspace.registered?.agentTools),
+		skills: buildSkillEntries(workspace.registered?.skills),
 		agent: buildAgentEntry(workspace.registered?.agent),
 		automations: buildAutomationEntries(workspace.registered?.automations),
 		policies: buildPolicyEntries(workspace.registered?.policies),
