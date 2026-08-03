@@ -44,7 +44,22 @@ export type PanelToolCall = {
 	readonly children: readonly PanelMessage[];
 };
 
-export type PanelMessage = PanelText | PanelToolCall;
+/**
+ * A point where the conversation was replaced, for the model, by a summary of itself.
+ *
+ * Rendered rather than hidden because the alternative is history that vanishes with no mark. `before`
+ * is the whole prefix, not the slice since the previous checkpoint: nothing was deleted, so showing
+ * all of it costs nothing, and a summary of a summary with no path back to the original is the
+ * failure this exists to prevent.
+ */
+export type PanelCheckpoint = {
+	readonly kind: 'checkpoint';
+	readonly key: string;
+	readonly summary: string;
+	readonly before: readonly PanelMessage[];
+};
+
+export type PanelMessage = PanelText | PanelToolCall | PanelCheckpoint;
 
 /**
  * Tool payloads are held behind a disclosure and capped.
@@ -120,7 +135,23 @@ export function toPanelMessages(
 		const turnId = record.turn_id;
 		return typeof turnId !== 'string' || !subagentTurnIds.has(turnId);
 	});
-	return roots.flatMap((record) => toPanelRow(record, context, 0));
+
+	// A checkpoint absorbs everything before it. Later checkpoints therefore contain earlier ones,
+	// which is what makes repeated compaction readable rather than a chain of recaps of recaps.
+	let output: PanelMessage[] = [];
+	for (const record of roots) {
+		if (record.kind === 'summary') {
+			const stored = storedMessage(record);
+			const id = record.norbital_id;
+			const content = stored?.message.content;
+			if (typeof id === 'string' && typeof content === 'string') {
+				output = [{ kind: 'checkpoint', key: id, summary: content, before: output }];
+				continue;
+			}
+		}
+		output.push(...toPanelRow(record, context, 0));
+	}
+	return output;
 }
 
 type ProjectionContext = {
@@ -280,13 +311,88 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * moment the real row arrives rather than being cleared on a timer or by the response returning.
  * Sending the same text twice suppresses the echo one message early, which is invisible.
  */
+/**
+ * What this conversation has cost so far, as the provider reported it.
+ *
+ * Every number here is read from `chat_message.usage`, which the loop writes verbatim from the
+ * provider's own accounting. Nothing is derived: no token estimate, and above all no cost computed
+ * from a price list, because a figure a reader takes for a bill has to be the bill.
+ */
+export type PanelUsage = {
+	/** Tokens in the most recent request — how full the window actually was. */
+	readonly contextTokens: number | null;
+	/** The window those tokens sat in, when the host published one for the model. */
+	readonly contextLength: number | null;
+	readonly totalTokens: number;
+	/** Only when the host passed a cost through. `null` means unreported, never zero. */
+	readonly costUsd: number | null;
+};
+
+function readNumber(
+	source: Readonly<Record<string, unknown>>,
+	keys: readonly string[]
+): number | null {
+	for (const key of keys) {
+		const value = source[key];
+		if (typeof value === 'number' && Number.isFinite(value)) return value;
+	}
+	return null;
+}
+
+export function toPanelUsage(
+	records: readonly Readonly<Record<string, unknown>>[],
+	contextLength: number | null = null
+): PanelUsage {
+	let contextTokens: number | null = null;
+	let totalTokens = 0;
+	let costUsd: number | null = null;
+	for (const record of records) {
+		const usage = record.usage;
+		if (!isRecord(usage)) continue;
+		// The newest request's input is the live window occupancy; earlier ones describe windows that
+		// have already been replaced.
+		const input = readNumber(usage, [
+			'inputTokens',
+			'input_tokens',
+			'promptTokens',
+			'prompt_tokens'
+		]);
+		if (input !== null) contextTokens = input;
+		const total =
+			readNumber(usage, ['totalTokens', 'total_tokens', 'total']) ??
+			(input ?? 0) +
+				(readNumber(usage, [
+					'outputTokens',
+					'output_tokens',
+					'completionTokens',
+					'completion_tokens'
+				]) ?? 0);
+		totalTokens += total;
+		const cost = readNumber(usage, ['cost', 'total_cost', 'totalCost']);
+		if (cost !== null) costUsd = (costUsd ?? 0) + cost;
+	}
+	return { contextTokens, contextLength, totalTokens, costUsd };
+}
+
+function containsPrompt(messages: readonly PanelMessage[], pending: string): boolean {
+	return messages.some(
+		(message) =>
+			(message.kind === 'text' && message.role === 'user' && message.content === pending) ||
+			(message.kind === 'checkpoint' && containsPrompt(message.before, pending))
+	);
+}
+
 export function withPendingEcho(
 	messages: readonly PanelMessage[],
 	pending: string | null
 ): readonly PanelMessage[] {
 	if (pending === null) return messages;
+	// Only the visible tail is searched. A prompt that landed before a checkpoint is inside its
+	// `before`, and an echo alongside it would be a duplicate of a message the reader can already see.
 	const landed = messages.some(
-		(message) => message.kind === 'text' && message.role === 'user' && message.content === pending
+		(message) =>
+			(message.kind === 'text' && message.role === 'user' && message.content === pending) ||
+			(message.kind === 'checkpoint' && containsPrompt(message.before, pending))
 	);
 	if (landed) return messages;
 	return [...messages, { kind: 'text', key: 'pending', role: 'user', content: pending }];

@@ -11,6 +11,8 @@ export type AgentModelOption = {
 	readonly id: string;
 	readonly label: string;
 	readonly canonicalSlug: string;
+	/** The model's context window in tokens, when the host publishes one. The denominator, nothing more. */
+	readonly contextLength?: number;
 };
 
 export type AgentModelCatalog = {

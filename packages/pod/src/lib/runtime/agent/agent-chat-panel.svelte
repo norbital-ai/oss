@@ -7,7 +7,7 @@
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 	import { getInitializedWorkspaceClient } from '$lib/runtime/client.js';
-	import { toPanelMessages, withPendingEcho } from './transcript.js';
+	import { toPanelMessages, toPanelUsage, withPendingEcho } from './transcript.js';
 	import AgentModelPicker from './agent-model-picker.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import type { AgentModelCatalog } from './models.js';
@@ -99,6 +99,26 @@
 	const canSend = $derived(draft.trim().length > 0 && !pending);
 
 	/**
+	 * The window the running model actually has, straight from the catalog that named it.
+	 *
+	 * A host that publishes no `contextLength` leaves this null and the percentage is simply not shown
+	 * — an absolute token count is still true, where a percentage against a guessed window is not.
+	 */
+	const contextLength = $derived(
+		catalog?.options.find((option) => option.id === (selectedModel || catalog?.defaultModel))
+			?.contextLength ?? null
+	);
+	const usage = $derived(toPanelUsage(transcript?.current ?? [], contextLength));
+	const contextPercent = $derived(
+		usage.contextTokens !== null && usage.contextLength
+			? Math.min(100, Math.round((usage.contextTokens / usage.contextLength) * 100))
+			: null
+	);
+	const tokenLabel = $derived(
+		usage.totalTokens > 0 ? `${usage.totalTokens.toLocaleString()} tokens` : null
+	);
+
+	/**
 	 * The catalog and the selected model both come from the host, once.
 	 *
 	 * `selectedModel` starts as the host's own default rather than the first catalog entry, so the
@@ -123,7 +143,10 @@
 	// A tool call is the agent doing something. Once one is on screen it carries its own progress, and
 	// a second "Working…" placeholder beside it says less than the call already does.
 	const agentHasSpoken = $derived(
-		messages.some((message) => message.kind === 'tool' || message.role === 'assistant')
+		messages.some(
+			(message) =>
+				message.kind === 'tool' || message.kind === 'checkpoint' || message.role === 'assistant'
+		)
 	);
 
 	// `agentChatStart` returns before inference. The replicated root turn is therefore the durable
@@ -312,8 +335,33 @@
 			>
 				<!-- Core's left cell held Plan mode, auto-send-after-step and attach. Each needs a backend
 				     this package does not have — a plan-mode loop, turn stepping, a session file store —
-				     so the cell stays empty rather than being filled with controls that do nothing. -->
-				<div class={`min-w-0 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}></div>
+				     so it carries the run's accounting instead: every figure below is the provider's own,
+				     and anything the provider did not report is absent rather than estimated. -->
+				<div
+					class={`flex min-w-0 items-center gap-2 text-muted-foreground ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
+					data-testid="agent-usage"
+				>
+					{#if contextPercent !== null}
+						<span class="inline-flex items-center gap-1.5" title="Context window used">
+							<span
+								class="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted"
+								aria-hidden="true"
+							>
+								<span
+									class="block h-full rounded-full bg-foreground/40"
+									style={`width: ${contextPercent}%`}
+								></span>
+							</span>
+							{contextPercent}%
+						</span>
+					{/if}
+					{#if tokenLabel}
+						<span class="truncate">{tokenLabel}</span>
+					{/if}
+					{#if usage.costUsd !== null}
+						<span title="Reported by the provider">${usage.costUsd.toFixed(4)}</span>
+					{/if}
+				</div>
 				<Inline justify="end" align="center" gap="xs" class="min-w-0">
 					{#if catalog && selectedModel}
 						<div class="min-w-0" title="Model and variant for this turn">

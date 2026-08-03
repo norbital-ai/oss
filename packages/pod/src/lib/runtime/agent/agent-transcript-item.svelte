@@ -14,6 +14,9 @@
 
 	let { message, nested = false }: { message: PanelMessage; nested?: boolean } = $props();
 
+	/** The recap is what the model carries, so it opens first; the raw conversation is one click away. */
+	let checkpointTab = $state<'summary' | 'raw'>('summary');
+
 	function roleLabel(role: string): string {
 		if (role === 'user') return 'You';
 		if (role === 'assistant') return 'Agent';
@@ -21,7 +24,77 @@
 	}
 </script>
 
-{#if message.kind === 'tool'}
+{#if message.kind === 'checkpoint'}
+	<li class="message my-1.5" data-role="checkpoint">
+		<!-- Core rendered this as a bare `<details>` reading "Context automatically compacted". The two
+		     tabs are the addition: the summary alone tells a reader that history went somewhere without
+		     telling them where, and nothing was actually deleted to hide. -->
+		<details class="group/compaction w-full text-xs" role="note">
+			<!-- stupidity:allow UI6 -- details disclosure summary is a clickable control row. -->
+			<summary
+				class="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+			>
+				<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0" />
+				<span>Context compacted</span>
+				<span class="text-tiny text-muted-foreground/70">
+					{message.before.length} message{message.before.length === 1 ? '' : 's'} kept below
+				</span>
+				<Icon
+					icon="lucide:chevron-right"
+					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/compaction:rotate-90"
+				/>
+			</summary>
+			<div class="mt-1 ml-3.5 flex flex-col gap-2 border-l border-border/60 py-1 pl-3">
+				<div class="flex items-center gap-1" role="tablist" aria-label="Compacted context">
+					<button
+						type="button"
+						role="tab"
+						aria-selected={checkpointTab === 'summary'}
+						onclick={() => (checkpointTab = 'summary')}
+						class={`rounded-md px-2 py-0.5 text-tiny font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring ${
+							checkpointTab === 'summary'
+								? 'bg-primary/10 text-primary'
+								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
+						}`}
+					>
+						What the agent kept
+					</button>
+					<button
+						type="button"
+						role="tab"
+						aria-selected={checkpointTab === 'raw'}
+						onclick={() => (checkpointTab = 'raw')}
+						class={`rounded-md px-2 py-0.5 text-tiny font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring ${
+							checkpointTab === 'raw'
+								? 'bg-primary/10 text-primary'
+								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
+						}`}
+					>
+						Full conversation
+					</button>
+				</div>
+				<div role="tabpanel" class="min-w-0">
+					{#if checkpointTab === 'summary'}
+						<p
+							class="m-0 max-h-72 overflow-auto text-micro leading-relaxed break-words whitespace-pre-wrap text-foreground/90"
+						>
+							{message.summary}
+						</p>
+					{:else}
+						<ol
+							class="m-0 flex max-h-72 list-none flex-col gap-1.5 overflow-auto p-0"
+							aria-label="Conversation before compaction"
+						>
+							{#each message.before as earlier (earlier.key)}
+								<Self message={earlier} nested />
+							{/each}
+						</ol>
+					{/if}
+				</div>
+			</div>
+		</details>
+	</li>
+{:else if message.kind === 'tool'}
 	<li class="message" data-role="tool" data-tool={message.name}>
 		<!-- One row per call, collapsed: the name and its identifying argument are the whole story most
 		     of the time, and the payload is tenant data that belongs behind a deliberate click rather

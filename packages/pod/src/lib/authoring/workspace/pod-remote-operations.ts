@@ -52,6 +52,7 @@ export type PodRemoteOperations = {
 			readonly id: string;
 			readonly label: string;
 			readonly canonicalSlug: string;
+			readonly contextLength?: number;
 		}[];
 	} | null>;
 	readonly renderStaticMap: (input: {

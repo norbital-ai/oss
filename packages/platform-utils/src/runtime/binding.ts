@@ -126,6 +126,14 @@ export type AiModelOption = {
 	readonly label: string;
 	/** Groups the variants of one model (`:free`, `:thinking`) under a single family. */
 	readonly canonicalSlug: string;
+	/**
+	 * The model's context window, in tokens.
+	 *
+	 * Model metadata rather than usage: it belongs beside the name because it is a property of the
+	 * model, and a reader cannot turn a token count into "how full is the window" without it. Optional
+	 * because a host may not know it — a guest that guessed would be inventing the denominator.
+	 */
+	readonly contextLength?: number;
 };
 
 /**

@@ -63,7 +63,47 @@ type AgentRunOptions = {
 	readonly historyLimit?: number;
 	/** Extra `chat_message` columns for the input message only — where it came from, and from whom. */
 	readonly inputMetadata?: Record<string, unknown>;
+	/**
+	 * Compact the window before this turn reasons, whatever its size.
+	 *
+	 * Set by `/compact`. `instructions` steers what the summary keeps; it is the caller's words, not a
+	 * prompt fragment this package composes.
+	 */
+	readonly compact?: { readonly instructions?: string };
 };
+
+/**
+ * A directive typed into the composer rather than a message for the model.
+ *
+ * Matched on the whole message, not a prefix: `/compacting the schema` is a sentence, and treating
+ * anything merely starting with the word as a command would swallow it. Bare `/compact` is what Core
+ * matched; the trailing instructions are new, and must be separated by whitespace to count.
+ */
+const COMPACT_DIRECTIVE = /^\/compact(?:\s+([\s\S]+))?$/;
+
+export function parseCompactDirective(message: string): { readonly instructions?: string } | null {
+	const match = COMPACT_DIRECTIVE.exec(message.trim());
+	if (!match) return null;
+	const instructions = match[1]?.trim();
+	return instructions ? { instructions } : {};
+}
+
+/**
+ * When the window is large enough to be worth replacing with a summary.
+ *
+ * A character estimate, deliberately: this decides whether to spend a summarisation call, and being
+ * wrong costs one call. It is never shown to anyone — a number a reader sees comes from the
+ * provider's own accounting on `chat_message.usage`, never from this.
+ */
+function estimateTokens(messages: readonly AiMessage[]): number {
+	return Math.ceil(JSON.stringify(messages).length / 4);
+}
+
+/** Leaves room for the turn's own reasoning inside the window the summary has to fit. */
+const COMPACTION_TRIGGER_TOKENS = 120_000;
+
+/** Below this there is nothing a summary would usefully replace. */
+const COMPACTION_FLOOR_MESSAGES = 4;
 
 type TranscriptWriter = {
 	readonly sessionId: string;
@@ -368,11 +408,28 @@ async function loadMessages(
 	scope: { readonly runId: string } | { readonly sessionId: string; readonly limit?: number }
 ): Promise<{ messages: AiMessage[]; sequence: number }> {
 	const ctx = getWorkspace({ provision: true });
+	// A compaction checkpoint is a durable, explicit floor for the window. Resolving it from a stored
+	// column means two runs over the same transcript build the same window, where the recency limit
+	// below moves under the conversation as it grows and drops history with no record of having done
+	// it. Subagent rows are excluded here exactly as they are from every other window query.
+	const anchor =
+		'sessionId' in scope
+			? await ctx.tenantDb.query<{ seq: number | null }>({
+					text: `SELECT MAX(m.seq) AS seq
+					         FROM chat_message m
+					    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
+					        WHERE m.chat_id = $1::uuid
+					          AND m.kind = 'summary'
+					          AND (m.turn_id IS NULL OR t.subagent_id IS NULL)`,
+					values: [scope.sessionId]
+				})
+			: null;
+	const anchorSeq = anchor?.rows[0]?.seq ?? null;
 	// A window is only meaningful for a session — a run's transcript is bounded by the run itself.
 	const query =
 		'runId' in scope
 			? {
-					text: `SELECT m.seq, m.parts
+					text: `SELECT m.seq, m.parts, m.kind
 					         FROM chat_message m
 					         JOIN chat_session s ON s.norbital_id = m.chat_id
 					    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
@@ -381,22 +438,49 @@ async function loadMessages(
 					        ORDER BY m.seq`,
 					values: [scope.runId]
 				}
-			: {
-					text: `SELECT seq, parts FROM (
-					         SELECT m.seq, m.parts FROM chat_message m
-					          LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
-					          WHERE m.chat_id = $1::uuid
-					            AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
-					          ORDER BY seq DESC
-					          LIMIT $2
-					       ) recent ORDER BY seq`,
-					values: [scope.sessionId, scope.limit ?? 40]
-				};
-	const result = await ctx.tenantDb.query<{ seq: number; parts: AiMessage[] | null }>(query);
+			: anchorSeq !== null
+				? {
+						// From the checkpoint forward, unbounded: the summary stands in for everything below
+						// it, and re-limiting on top would drop turns the checkpoint promised were kept.
+						text: `SELECT m.seq, m.parts, m.kind FROM chat_message m
+						    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
+						        WHERE m.chat_id = $1::uuid
+						          AND m.seq >= $2
+						          AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
+						        ORDER BY m.seq`,
+						values: [scope.sessionId, anchorSeq]
+					}
+				: {
+						text: `SELECT seq, parts, kind FROM (
+						         SELECT m.seq, m.parts, m.kind FROM chat_message m
+						          LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
+						          WHERE m.chat_id = $1::uuid
+						            AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
+						          ORDER BY seq DESC
+						          LIMIT $2
+						       ) recent ORDER BY seq`,
+						values: [scope.sessionId, scope.limit ?? 40]
+					};
+	const result = await ctx.tenantDb.query<{
+		seq: number;
+		parts: AiMessage[] | null;
+		kind: string | null;
+	}>(query);
 	const messages: AiMessage[] = [];
 	for (const row of result.rows) {
 		const message = row.parts?.[0];
-		if (message) messages.push(message);
+		if (!message) continue;
+		// A checkpoint re-enters the window as the user's own recap rather than as the system message it
+		// is stored as. It has to read as conversation the model may rely on, and a window opening on a
+		// `system` role beside the spec's own system prompt is two different things claiming one voice.
+		messages.push(
+			row.kind === 'summary'
+				? {
+						role: 'user',
+						content: `<conversation-summary>\n${message.content}\n</conversation-summary>`
+					}
+				: message
+		);
 	}
 	// The next sequence number comes from the whole transcript, never from the window: numbering from
 	// the window would reuse sequence numbers and reorder the stored conversation.
@@ -407,9 +491,11 @@ async function loadMessages(
 					text: `SELECT COALESCE(MAX(seq), 0) AS seq FROM chat_message WHERE chat_id = $1::uuid`,
 					values: [scope.sessionId]
 				});
-	if ('sessionId' in scope) {
-		// Start the window at a user message. A window that opens on a `tool` result carries a result
-		// whose call was cut away, and a provider rejects the whole request rather than ignoring it.
+	if ('sessionId' in scope && anchorSeq === null) {
+		// Only without a checkpoint. A window that opens on a `tool` result carries a result whose call
+		// was cut away, and a provider rejects the whole request rather than ignoring it — so the
+		// recency window is aligned to a user message. A checkpoint already opens on one by
+		// construction, and re-aligning would skip past the summary itself.
 		const start = messages.findIndex((message) => message.role === 'user');
 		messages.splice(0, start === -1 ? messages.length : start);
 	}
@@ -627,6 +713,51 @@ async function streamProviderTurn(input: {
 	}
 }
 
+/**
+ * Replace a window with a summary of itself, and record that it happened.
+ *
+ * Nothing is deleted. The checkpoint is an ordinary `chat_message` with `kind = 'summary'`, and the
+ * window builder starts from it — so the conversation below stays readable in full while the model
+ * carries the recap. That is the whole trust property: history that leaves the model's view leaves a
+ * durable mark in the transcript rather than falling silently out of a recency limit.
+ */
+async function compactWindow(input: {
+	readonly messages: AiMessage[];
+	readonly writer: TranscriptWriter;
+	readonly turnId: string;
+	readonly spec: AgentAutomationSpec;
+	readonly instructions?: string;
+}): Promise<string> {
+	const ai = requireRuntimeFacility('ai');
+	const steer = input.instructions
+		? `\n\nThe person asked you to focus on: ${input.instructions}`
+		: '';
+	const result = await ai.chat({
+		messages: [
+			{
+				role: 'user',
+				content:
+					'Summarize this agent conversation for faithful continuation. Preserve decisions, ' +
+					'constraints, identifiers, tool outcomes, unresolved work, and the intent behind the ' +
+					`request.${steer}\n\n${JSON.stringify(input.messages)}`
+			}
+		],
+		...(input.spec.model ? { model: input.spec.model } : {}),
+		...(input.spec.profile ? { profile: input.spec.profile } : {})
+	});
+	const summary = result.text.trim();
+	if (!summary) throw new Error('The summarizer returned nothing to checkpoint');
+	await input.writer.persist({ role: 'system', content: summary }, input.turnId, {
+		kind: 'summary'
+	});
+	// The turn continues against the recap alone; everything it replaced is still in the transcript.
+	input.messages.splice(0, input.messages.length, {
+		role: 'user',
+		content: `<conversation-summary>\n${summary}\n</conversation-summary>`
+	});
+	return summary;
+}
+
 type LoopResult = { readonly text: string; readonly consumedTokens: number };
 
 async function runAgentLoop(input: {
@@ -642,7 +773,25 @@ async function runAgentLoop(input: {
 	const maxIterations = input.iterationLimit ?? input.spec.maxIterations ?? 8;
 	let consumedTokens = 0;
 	let finalText = '';
+	// Once per turn, and never for a subagent: a child's window is its task and one loop, and a
+	// checkpoint written into the shared session from inside a child would anchor its parent too.
+	let compacted = input.depth !== 0;
 	for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+		if (
+			!compacted &&
+			input.messages.length >= COMPACTION_FLOOR_MESSAGES &&
+			estimateTokens(input.messages) >= COMPACTION_TRIGGER_TOKENS
+		) {
+			compacted = true;
+			// A failed summarisation must not fail the turn: the window it would have replaced is still
+			// valid, and losing a conversation to a summariser outage is worse than a large prompt.
+			await compactWindow({
+				messages: input.messages,
+				writer: input.writer,
+				turnId: input.turnId,
+				spec: input.spec
+			}).catch(() => undefined);
+		}
 		const result = await streamProviderTurn({
 			messages: input.messages,
 			tools: resolved.specs,
@@ -827,6 +976,42 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 		}
 	}
 	if (messages.length === 0) throw new Error('Agent run requires an input message');
+
+	// `/compact` is a directive about the conversation, not a prompt for the model. It finishes here
+	// rather than running a turn — asking the agent to answer the word "/compact" would produce a
+	// reply about nothing, on top of a window that had just been replaced under it.
+	if (options.compact) {
+		// The prompt itself is already stored above; drop it from what gets summarized so the recap is
+		// of the conversation rather than of the request to summarize it.
+		const window = messages.slice(0, -1);
+		const notice =
+			window.length < COMPACTION_FLOOR_MESSAGES
+				? 'There is not enough conversation to compact yet.'
+				: await compactWindow({
+						messages: window,
+						writer,
+						turnId,
+						spec: options.spec,
+						...(options.compact.instructions ? { instructions: options.compact.instructions } : {})
+					}).then(() => 'Context compacted. The conversation above is kept and still readable.');
+		if (window.length < COMPACTION_FLOOR_MESSAGES) {
+			await writer.persist({ role: 'system', content: notice }, turnId);
+		}
+		await finishTurn(turnId, 'succeeded');
+		await updateRecord(
+			ctx,
+			'automation_run',
+			runId,
+			{
+				status: 'success',
+				output: { text: notice },
+				error: null,
+				completed_at: new Date().toISOString()
+			},
+			{ isElevated: true }
+		);
+		return { runId, status: 'success', text: notice, sessionId, inputMessageId };
+	}
 
 	try {
 		const result = await runAgentLoop({

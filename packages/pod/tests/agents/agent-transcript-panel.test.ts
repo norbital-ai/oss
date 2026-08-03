@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { toPanelMessages, withPendingEcho } from '$lib/runtime/agent/transcript.js';
+import { toPanelMessages, toPanelUsage, withPendingEcho } from '$lib/runtime/agent/transcript.js';
+import { parseCompactDirective } from '$lib/server/agent/agent-loop.server.js';
+
+describe('compact directive', () => {
+	it('matches the whole message, so a sentence starting with the word is still a sentence', () => {
+		expect(parseCompactDirective('/compact')).toEqual({});
+		expect(parseCompactDirective('  /compact  ')).toEqual({});
+		expect(parseCompactDirective('/compact keep the site identifiers')).toEqual({
+			instructions: 'keep the site identifiers'
+		});
+		// Not directives — the first is a word, the rest are prose the reader meant for the agent.
+		expect(parseCompactDirective('/compacting the schema')).toBeNull();
+		expect(parseCompactDirective('can you /compact this')).toBeNull();
+		expect(parseCompactDirective('compact the report')).toBeNull();
+	});
+});
+
+describe('conversation usage', () => {
+	it('reports what the provider reported and nothing it did not', () => {
+		const usage = toPanelUsage(
+			[
+				{ usage: { input_tokens: 500, output_tokens: 100, cost: 0.002 } },
+				{ usage: { input_tokens: 900, output_tokens: 50, cost: 0.003 } },
+				{ parts: [{ role: 'user', content: 'no usage on this row' }] }
+			],
+			1_000_000
+		);
+		// The newest request's input is the live window occupancy, not the sum of every request.
+		expect(usage.contextTokens).toBe(900);
+		expect(usage.contextLength).toBe(1_000_000);
+		expect(usage.totalTokens).toBe(1_550);
+		expect(usage.costUsd).toBeCloseTo(0.005, 10);
+	});
+
+	it('leaves cost null when the host reported none, rather than calling it zero', () => {
+		const usage = toPanelUsage([{ usage: { total_tokens: 40 } }]);
+		expect(usage.costUsd).toBeNull();
+		expect(usage.contextLength).toBeNull();
+		expect(usage.totalTokens).toBe(40);
+	});
+});
 
 describe('agent panel transcript', () => {
 	it('projects a stored message without a second model of it', () => {
@@ -219,6 +259,53 @@ describe('agent panel transcript', () => {
 		if (nestedCall?.kind !== 'tool') throw new Error('expected the nested call');
 		expect(nestedCall.name).toBe('read_collection');
 		expect(nestedCall.state).toBe('complete');
+	});
+
+	it('folds everything before a checkpoint into it, keeping a path back to the original', () => {
+		const rows = toPanelMessages([
+			{ norbital_id: 'a', parts: [{ role: 'user', content: 'First question' }] },
+			{ norbital_id: 'b', parts: [{ role: 'assistant', content: 'First answer' }] },
+			{ norbital_id: 'c', kind: 'summary', parts: [{ role: 'system', content: 'They asked X.' }] },
+			{ norbital_id: 'd', parts: [{ role: 'user', content: 'Second question' }] }
+		]);
+
+		// The checkpoint is the head of the visible transcript; the prefix lives inside it.
+		expect(rows.map((row) => row.kind)).toEqual(['checkpoint', 'text']);
+		const checkpoint = rows[0];
+		if (checkpoint?.kind !== 'checkpoint') throw new Error('expected a checkpoint');
+		expect(checkpoint.summary).toBe('They asked X.');
+		expect(checkpoint.before.map((row) => row.key)).toEqual(['a', 'b']);
+	});
+
+	it('nests an earlier checkpoint inside a later one instead of chaining recaps', () => {
+		const rows = toPanelMessages([
+			{ norbital_id: 'a', parts: [{ role: 'user', content: 'Oldest' }] },
+			{ norbital_id: 'c1', kind: 'summary', parts: [{ role: 'system', content: 'First recap' }] },
+			{ norbital_id: 'b', parts: [{ role: 'user', content: 'Middle' }] },
+			{ norbital_id: 'c2', kind: 'summary', parts: [{ role: 'system', content: 'Second recap' }] }
+		]);
+
+		expect(rows).toHaveLength(1);
+		const newest = rows[0];
+		if (newest?.kind !== 'checkpoint') throw new Error('expected the newest checkpoint');
+		expect(newest.summary).toBe('Second recap');
+		// Its prefix holds the older checkpoint, which in turn still holds the original message — so the
+		// oldest turn is reachable rather than lost behind a summary of a summary.
+		const older = newest.before[0];
+		if (older?.kind !== 'checkpoint')
+			throw new Error('expected the older checkpoint nested inside');
+		expect(older.summary).toBe('First recap');
+		expect(older.before.map((row) => row.key)).toEqual(['a']);
+	});
+
+	it('does not echo a prompt that landed before a checkpoint swallowed it', () => {
+		const stored = toPanelMessages([
+			{ norbital_id: 'a', parts: [{ role: 'user', content: 'What is on site?' }] },
+			{ norbital_id: 'c', kind: 'summary', parts: [{ role: 'system', content: 'Recap.' }] }
+		]);
+		// The prompt is inside the checkpoint rather than at the top level; echoing it would show the
+		// reader their own message twice.
+		expect(withPendingEcho(stored, 'What is on site?')).toEqual(stored);
 	});
 
 	it('drops a row it cannot render', () => {

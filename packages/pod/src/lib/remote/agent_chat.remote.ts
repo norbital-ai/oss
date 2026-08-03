@@ -2,7 +2,7 @@ import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
-import { runAgent } from '$lib/server/agent/agent-loop.server.js';
+import { parseCompactDirective, runAgent } from '$lib/server/agent/agent-loop.server.js';
 import { requireRuntimeFacility } from '$lib/server/run/facilities.js';
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
@@ -228,12 +228,16 @@ export const agentChatStart = authenticated.command(
 		// leave a started run whose first visible event is an error.
 		const model = await resolveModel(input.model);
 		const conversation = await prepareConversation(input.message, input.runId);
+		// A directive still becomes a stored user message and a turn — the reader typed it, and the
+		// transcript should show what they asked for beside what it did.
+		const compact = parseCompactDirective(input.message);
 		void runAgent({
 			automationName: null,
 			runId: conversation.runId,
 			sessionId: conversation.chatId,
 			spec: interactiveSpec(input.message, model),
-			input: input.message
+			input: input.message,
+			...(compact ? { compact } : {})
 		}).catch(() => undefined);
 		return { ...conversation, accepted: true };
 	}
