@@ -33,18 +33,24 @@ function deferred(): {
 }
 
 let inFlight = deferred();
-let sent: string[] = [];
+let sent: { message: string; model?: string }[] = [];
+let catalog: {
+	defaultModel: string;
+	options: { id: string; label: string; canonicalSlug: string }[];
+} | null = null;
 
 beforeEach(() => {
 	// A device that has synced nothing yet, per test — the query cache lives on the replica too.
 	replica = new FakeReplica();
 	inFlight = deferred();
 	sent = [];
+	catalog = null;
 	setWorkspaceRemoteTransport({
-		agentChatStart: (input: { message: string }) => {
-			sent.push(input.message);
+		agentChatStart: (input: { message: string; model?: string }) => {
+			sent.push(input);
 			return inFlight.promise;
-		}
+		},
+		agentModels: () => Promise.resolve(catalog)
 	} as never);
 });
 
@@ -82,7 +88,7 @@ describe('agent chat panel', () => {
 		// Nothing has been awaited: the round trip runs the whole agent loop, and a prompt that
 		// vanishes for those seconds reads as a dropped message.
 		expect(transcript(container)).toEqual([{ role: 'user', content: 'What is on site?' }]);
-		expect(sent).toEqual(['What is on site?']);
+		expect(sent).toEqual([{ message: 'What is on site?' }]);
 		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
 			'Agent is working'
 		);
@@ -271,6 +277,94 @@ describe('agent chat panel', () => {
 			'What is on site?',
 			'Belongs to this one.'
 		]);
+		destroy();
+	});
+
+	it('renders every tool call in a turn as its own row, with its result', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Compare the two collections');
+		submit(container);
+		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
+		await settle();
+
+		// One assistant row carrying two calls to the same tool. The regression rendered this as a
+		// single bubble reading "Using read_collection, read_collection…".
+		replica.arrive('chat_message', {
+			norbital_id: 'm1',
+			chat_id: 'c1',
+			seq: 1,
+			parts: [
+				{
+					role: 'assistant',
+					content: '',
+					toolCalls: [
+						{ id: 'a', name: 'read_collection', input: { collection: 'accounts' } },
+						{ id: 'b', name: 'read_collection', input: { collection: 'payments' } }
+					]
+				}
+			]
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'm2',
+			chat_id: 'c1',
+			seq: 2,
+			parts: [{ role: 'tool', content: '{"rows":[{"name":"Depot"}]}', toolCallId: 'a' }]
+		});
+		await settle();
+
+		const rows = [...container.querySelectorAll('[data-role="tool"]')];
+		expect(rows).toHaveLength(2);
+		expect(rows.map((row) => row.getAttribute('data-tool'))).toEqual([
+			'read_collection',
+			'read_collection'
+		]);
+		// The two rows are distinguishable by the argument that made them different.
+		const summaries = rows.map((row) => row.querySelector('summary')?.textContent ?? '');
+		expect(summaries[0]).toContain('accounts');
+		expect(summaries[1]).toContain('payments');
+		// The answered call carries its result; the unanswered one is still waiting.
+		expect(rows[0]?.textContent).toContain('Depot');
+		expect(rows[1]?.textContent).toContain('Waiting for the result');
+		// Collapsed by default: tool output is tenant data, not conversation.
+		expect(rows[0]?.querySelector('details')?.open).toBe(false);
+		destroy();
+	});
+
+	it('opens on the host default and sends only a model the person changed', async () => {
+		catalog = {
+			defaultModel: 'deepseek/deepseek-v4-flash-0731',
+			options: [
+				{
+					id: 'deepseek/deepseek-v4-flash-0731',
+					label: 'DeepSeek V4 Flash 0731',
+					canonicalSlug: 'deepseek/deepseek-v4-flash-20260731'
+				},
+				{
+					id: 'anthropic/claude-sonnet-5',
+					label: 'Claude Sonnet 5',
+					canonicalSlug: 'anthropic/claude-sonnet-5-20260630'
+				}
+			]
+		};
+		const { container, destroy } = mountPanel();
+		await settle();
+
+		expect(container.querySelector('[aria-label="Model"]')?.textContent).toContain(
+			'DeepSeek V4 Flash 0731'
+		);
+
+		type(container, 'Summarize the site log');
+		submit(container);
+		// Untouched, so the host stays free to change what its default resolves to.
+		expect(sent).toEqual([{ message: 'Summarize the site log' }]);
+		destroy();
+	});
+
+	it('shows no picker at all on a host that offers no choice', async () => {
+		const { container, destroy } = mountPanel();
+		await settle();
+		// Absent rather than empty: an empty combobox reads as a broken control.
+		expect(container.querySelector('[aria-label="Model"]')).toBeNull();
 		destroy();
 	});
 

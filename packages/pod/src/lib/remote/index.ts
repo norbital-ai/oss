@@ -23,7 +23,9 @@ export {
 export {
 	agentChat,
 	agentChatStart,
+	agentModels,
 	AgentChatInputSchema,
+	AgentModelsInputSchema,
 	type AgentChatResult,
 	type AgentChatStartResult
 } from './agent_chat.remote.js';

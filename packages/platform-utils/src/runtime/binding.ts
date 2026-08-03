@@ -120,9 +120,31 @@ export type AiChatStreamBatch = {
 	readonly done: boolean;
 };
 
+/** One model a host will accept in `AiChatInput.model`. */
+export type AiModelOption = {
+	readonly id: string;
+	readonly label: string;
+	/** Groups the variants of one model (`:free`, `:thinking`) under a single family. */
+	readonly canonicalSlug: string;
+};
+
+/**
+ * What this host will run, and which model it picks when a run names none.
+ *
+ * `defaultModel` exists so a picker can show the model that is actually about to run. The host holds
+ * the credentials and the default; a guest that duplicated either would be a second source of truth
+ * free to disagree with the one doing the inference.
+ */
+export type AiModelCatalog = {
+	readonly defaultModel: string;
+	readonly options: readonly AiModelOption[];
+};
+
 /** Model inference is the host's only AI responsibility; Pod owns the agent loop and tools. */
 export type HostAiBinding = {
 	chat(input: AiChatInput): Promise<AiChatResult>;
+	/** Offer a choice of model. A host without one runs its default and no picker is shown. */
+	models?(): Promise<AiModelCatalog>;
 	/** Start one provider turn. The opaque id names transient host memory, never a transcript. */
 	startStream?(input: AiChatInput): Promise<string>;
 	/** Pull the next available event batch; text deltas remain live across the isolate boundary. */

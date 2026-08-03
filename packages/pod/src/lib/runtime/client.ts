@@ -1,5 +1,6 @@
 import { setWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 import type { WorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
+import type { PodRemoteOperations } from '$lib/authoring/workspace/pod-remote-operations.js';
 import {
 	ReactiveRemoteQuery,
 	RemoteQueryResourceManager,
@@ -393,6 +394,8 @@ const transport: WorkspaceRemoteTransport = {
 		post<{ runId: string; chatId: string | null; text: string }>('remotes/agentChat', input),
 	agentChatStart: (input) =>
 		post<{ runId: string; chatId: string; accepted: true }>('remotes/agentChatStart', input),
+	agentModels: () =>
+		post<Awaited<ReturnType<PodRemoteOperations['agentModels']>>>('remotes/agentModels', {}),
 	autocompleteGeolocation: (input) =>
 		post<TGeolocation[]>('remotes/autocompleteGeolocation', input),
 	renderStaticMap: (input) => post('remotes/renderStaticMap', input),

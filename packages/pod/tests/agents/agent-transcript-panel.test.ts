@@ -1,64 +1,192 @@
 import { describe, expect, it } from 'vitest';
-import { toPanelMessage, withPendingEcho } from '$lib/runtime/agent/transcript.js';
+import { toPanelMessages, withPendingEcho } from '$lib/runtime/agent/transcript.js';
 
 describe('agent panel transcript', () => {
 	it('projects a stored message without a second model of it', () => {
 		expect(
-			toPanelMessage({
-				norbital_id: 'm1',
-				parts: [{ role: 'assistant', content: 'The workspace is ready.' }]
-			})
-		).toEqual([{ key: 'm1', role: 'assistant', content: 'The workspace is ready.' }]);
+			toPanelMessages([
+				{ norbital_id: 'm1', parts: [{ role: 'assistant', content: 'The workspace is ready.' }] }
+			])
+		).toEqual([{ kind: 'text', key: 'm1', role: 'assistant', content: 'The workspace is ready.' }]);
 	});
 
-	it('names the tool call an empty assistant turn actually made', () => {
-		// Content is empty by construction when the model chose a tool. A raw render leaves a blank
-		// bubble where the conversation visibly did something.
-		expect(
-			toPanelMessage({
+	it('gives every call in a turn its own row instead of one joined name', () => {
+		// The regression this replaces read "Using read_collection, read_collection…" — one bubble in
+		// which neither call could be told from the other.
+		const rows = toPanelMessages([
+			{
 				norbital_id: 'm2',
 				parts: [
 					{
 						role: 'assistant',
 						content: '',
-						toolCalls: [{ id: 't1', name: 'describe_workspace', input: {} }]
+						toolCalls: [
+							{ id: 't1', name: 'read_collection', input: { collection: 'accounts', limit: 5 } },
+							{ id: 't2', name: 'read_collection', input: { collection: 'payments', limit: 5 } }
+						]
 					}
 				]
-			})
-		).toEqual([{ key: 'm2', role: 'assistant', content: 'Using describe_workspace…' }]);
+			}
+		]);
+		expect(rows).toHaveLength(2);
+		expect(rows.map((row) => row.key)).toEqual(['m2:0', 'm2:1']);
+		expect(rows.map((row) => (row.kind === 'tool' ? row.detail : null))).toEqual([
+			'accounts',
+			'payments'
+		]);
+		// The empty assistant row that carried them adds nothing beside the calls it made.
+		expect(rows.every((row) => row.kind === 'tool')).toBe(true);
+	});
+
+	it('labels a built-in call and humanizes one it does not know', () => {
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'm3',
+				parts: [
+					{
+						role: 'assistant',
+						content: '',
+						toolCalls: [
+							{ id: 't1', name: 'describe_workspace', input: {} },
+							{ id: 't2', name: 'sandbox_deploy', input: {} }
+						]
+					}
+				]
+			}
+		]);
+		expect(rows.map((row) => (row.kind === 'tool' ? row.label : null))).toEqual([
+			'Describe workspace',
+			'Sandbox deploy'
+		]);
+		// No arguments to show, and no result yet, so the call reads as still running.
+		expect(rows.map((row) => (row.kind === 'tool' ? row.input : null))).toEqual([null, null]);
+		expect(rows.map((row) => (row.kind === 'tool' ? row.state : null))).toEqual([
+			'running',
+			'running'
+		]);
+	});
+
+	it('shows a tool result on the call it answers rather than dropping it', () => {
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'm4',
+				parts: [
+					{
+						role: 'assistant',
+						content: '',
+						toolCalls: [{ id: 'call-1', name: 'read_collection', input: { collection: 'sites' } }]
+					}
+				]
+			},
+			{
+				norbital_id: 'm5',
+				parts: [{ role: 'tool', content: '{"rows":[{"name":"Depot"}]}', toolCallId: 'call-1' }]
+			}
+		]);
+		// The result row is folded into the call, so it never renders as an unattributed blob.
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			kind: 'tool',
+			name: 'read_collection',
+			state: 'complete',
+			error: null
+		});
+		expect(rows[0]?.kind === 'tool' && rows[0].output).toContain('Depot');
+	});
+
+	it('surfaces a tool the loop swallowed into the model context as failed', () => {
+		// A thrown tool becomes `{ error }` and the run still succeeds, so the panel is the only place
+		// the failure is visible at all.
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'm6',
+				parts: [
+					{
+						role: 'assistant',
+						content: '',
+						toolCalls: [{ id: 'call-2', name: 'read_collection', input: { collection: 'secrets' } }]
+					}
+				]
+			},
+			{
+				norbital_id: 'm7',
+				parts: [
+					{
+						role: 'tool',
+						content: '{"error":"Agent cannot read collection secrets"}',
+						toolCallId: 'call-2'
+					}
+				]
+			}
+		]);
+		expect(rows[0]).toMatchObject({
+			kind: 'tool',
+			state: 'failed',
+			error: 'Agent cannot read collection secrets',
+			output: null
+		});
+	});
+
+	it('caps a payload so one read cannot bury the conversation', () => {
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'm8',
+				parts: [
+					{
+						role: 'assistant',
+						content: '',
+						toolCalls: [{ id: 'call-3', name: 'read_collection', input: { collection: 'rows' } }]
+					}
+				]
+			},
+			{
+				norbital_id: 'm9',
+				parts: [
+					{
+						role: 'tool',
+						content: JSON.stringify({ rows: 'x'.repeat(9_000) }),
+						toolCallId: 'call-3'
+					}
+				]
+			}
+		]);
+		const output = rows[0]?.kind === 'tool' ? rows[0].output : null;
+		expect(output?.length).toBe(2_001);
+		expect(output?.endsWith('…')).toBe(true);
 	});
 
 	it('drops a row it cannot render', () => {
-		expect(toPanelMessage({ norbital_id: 'm3', parts: null })).toEqual([]);
-		expect(toPanelMessage({ norbital_id: 'm4', parts: [] })).toEqual([]);
-		expect(toPanelMessage({ parts: [{ role: 'user', content: 'orphan' }] })).toEqual([]);
+		expect(toPanelMessages([{ norbital_id: 'm10', parts: null }])).toEqual([]);
+		expect(toPanelMessages([{ norbital_id: 'm11', parts: [] }])).toEqual([]);
+		expect(toPanelMessages([{ parts: [{ role: 'user', content: 'orphan' }] }])).toEqual([]);
 	});
 
-	it('keeps streaming state for assistant paint and hides machine-only tool results', () => {
+	it('keeps streaming state for assistant paint', () => {
 		expect(
-			toPanelMessage({
-				norbital_id: 'm5',
-				status: 'streaming',
-				parts: [{ role: 'assistant', content: 'Partial' }]
-			})
-		).toEqual([{ key: 'm5', role: 'assistant', content: 'Partial', status: 'streaming' }]);
-		expect(
-			toPanelMessage({
-				norbital_id: 'm6',
-				parts: [{ role: 'tool', content: '{"rows":[]}', toolCallId: 'call-1' }]
-			})
-		).toEqual([]);
+			toPanelMessages([
+				{
+					norbital_id: 'm12',
+					status: 'streaming',
+					parts: [{ role: 'assistant', content: 'Partial' }]
+				}
+			])
+		).toEqual([
+			{ kind: 'text', key: 'm12', role: 'assistant', content: 'Partial', status: 'streaming' }
+		]);
 	});
 
 	it('echoes a prompt until its stored row arrives, then stops', () => {
-		const stored = [{ key: 'm1', role: 'assistant', content: 'Hello.' }];
+		const stored = [{ kind: 'text', key: 'm1', role: 'assistant', content: 'Hello.' }] as const;
 		expect(withPendingEcho(stored, 'What is on site?')).toEqual([
 			...stored,
-			{ key: 'pending', role: 'user', content: 'What is on site?' }
+			{ kind: 'text', key: 'pending', role: 'user', content: 'What is on site?' }
 		]);
 
 		// The moment the loop's own row replicates, the echo is gone — no timer, and never both.
-		const landed = [...stored, { key: 'm2', role: 'user', content: 'What is on site?' }];
+		const landed = [
+			...stored,
+			{ kind: 'text', key: 'm2', role: 'user', content: 'What is on site?' }
+		] as const;
 		expect(withPendingEcho(landed, 'What is on site?')).toEqual(landed);
 		expect(withPendingEcho(landed, null)).toEqual(landed);
 	});
