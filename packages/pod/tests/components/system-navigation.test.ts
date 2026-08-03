@@ -4,6 +4,7 @@ import {
 	buildSystemNavigation,
 	hostPluginSurfaceHref,
 	isHostPluginEntry,
+	resolveBillingSettingsHref,
 	resolveHostPluginSurface,
 	workspaceAuthorizesAgentSurface,
 	workspaceProvidesAgentSurface
@@ -100,7 +101,11 @@ describe('the system section of the sidebar', () => {
 		destroy();
 	});
 
-	it('groups each host-owned setting as a distinct child beside the tenant workspace', () => {
+	it('groups each host-owned setting as a distinct child beside the pod’s own', () => {
+		// One host-owned settings child, not three. The three org-scoped forms Core used to list
+		// separately are tabs of a single surface now, so this asserts the general shape — a
+		// `placement: settings` plugin becomes a child of Settings, badged, alongside Pod's own — on
+		// two children rather than four. A host declaring several still gets several.
 		const { container, destroy } = mountSidebar({
 			plugins: [
 				{
@@ -112,46 +117,24 @@ describe('the system section of the sidebar', () => {
 					adminOnly: true
 				},
 				{
-					key: 'core-transports',
-					label: 'Transport credentials',
+					key: 'core-organization',
+					label: 'Organization',
 					icon: null,
-					entry: '/_host/app/core-transports',
-					placement: 'settings',
-					adminOnly: true
-				},
-				{
-					key: 'core-profile',
-					label: 'Profile',
-					icon: null,
-					entry: '/_host/app/core-profile',
-					placement: 'settings',
-					adminOnly: true
-				},
-				{
-					key: 'core-billing',
-					label: 'Billing',
-					icon: null,
-					entry: '/_host/app/core-billing',
+					entry: '/_host/app/core-organization',
 					placement: 'settings',
 					adminOnly: true
 				}
 			],
 			isAdmin: true,
-			currentPath: '/__host/core-profile'
+			currentPath: '/__host/core-organization'
 		});
 
 		expect(links(container)).toEqual([
-			{ label: 'Tenant workspace', href: '/settings', current: false },
-			{
-				label: 'Transport credentials',
-				href: '/__host/core-transports',
-				current: false
-			},
-			{ label: 'Profile', href: '/__host/core-profile', current: true },
-			{ label: 'Billing', href: '/__host/core-billing', current: false },
+			{ label: 'People', href: '/settings', current: false },
+			{ label: 'Organization', href: '/__host/core-organization', current: true },
 			{ label: 'Workspace Studio', href: '/__host/workspace-studio', current: false }
 		]);
-		expect(container.querySelectorAll('[data-navigation-badge="Core"]')).toHaveLength(3);
+		expect(container.querySelectorAll('[data-navigation-badge="Core"]')).toHaveLength(1);
 		// The badge trails the label it annotates, so the label is the element that gives up room when
 		// the row runs short. Asserting the order keeps that honest without pinning utility classes.
 		for (const badge of container.querySelectorAll('[data-navigation-badge="Core"]')) {
@@ -175,10 +158,19 @@ describe('the system section of the sidebar', () => {
 			currentPath: '/settings'
 		});
 
-		expect(links(container)).toEqual([
-			{ label: 'Tenant workspace', href: '/settings', current: true }
-		]);
+		expect(links(container)).toEqual([{ label: 'People', href: '/settings', current: true }]);
 		destroy();
+	});
+
+	it('points the trial banner at the billing tab, and nowhere when the host has none', () => {
+		// The tab is the whole value of the deep link: the shell forwards this query string into the
+		// host frame, so dropping it lands an admin who clicked "Add payment method" on the host
+		// surface's default tab instead of the one holding the payment form.
+		expect(resolveBillingSettingsHref([{ key: 'core-organization' }])).toBe(
+			'/__host/core-organization?tab=billing'
+		);
+		expect(resolveBillingSettingsHref([{ key: 'workspace-studio' }])).toBeNull();
+		expect(resolveBillingSettingsHref([])).toBeNull();
 	});
 
 	it('marks the entry the current path is inside, and only that one', () => {

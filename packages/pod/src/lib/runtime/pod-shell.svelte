@@ -42,7 +42,7 @@
 		appAccessAllowed,
 		buildApplicationNavigation,
 		buildSystemNavigation,
-		hostPluginSurfaceHref,
+		resolveBillingSettingsHref,
 		resolveHostPluginSurface,
 		resolveApplicationLandingAppId,
 		resolveWorkspaceOrganizationOptions,
@@ -200,11 +200,7 @@
 	const agentSurfaceAllowed = $derived(workspaceAuthorizesAgentSurface(currentPath));
 	const agentAvailable = workspaceProvidesAgentSurface();
 	const activeHostPlugin = $derived(resolveHostPluginSurface(currentPath, data.hostPlugins ?? []));
-	const billingSettingsHref = $derived(
-		data.hostPlugins?.some((plugin) => plugin.key === 'core-billing')
-			? hostPluginSurfaceHref('core-billing')
-			: null
-	);
+	const billingSettingsHref = $derived(resolveBillingSettingsHref(data.hostPlugins ?? []));
 
 	function closeDetailSheet(): void {
 		if (detailSheetOpen) platformState.navigation.pop(page.url);

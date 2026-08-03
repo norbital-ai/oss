@@ -36,6 +36,26 @@ export function hostPluginSurfaceHref(pluginKey: string): string {
 }
 
 /**
+ * The host surface that owns subscriptions, and the tab within it that shows them.
+ *
+ * Pod's trial banner deep-links here, so it has to name a surface Pod does not implement. The pair
+ * is stated once rather than at the call site because the query string is load-bearing: the shell
+ * forwards `location.search` into the host frame, and that is the only thing that tells a tabbed
+ * host surface which tab to open. A banner linking at the surface without the tab lands an admin on
+ * whichever tab the host defaults to, which is the one they were not asking for.
+ */
+export const BILLING_HOST_PLUGIN_KEY = 'core-organization';
+export const BILLING_HOST_PLUGIN_TAB = 'billing';
+
+/** `null` when the host declares no billing surface, so the banner can omit the action entirely. */
+export function resolveBillingSettingsHref(
+	plugins: readonly { readonly key: string }[]
+): string | null {
+	if (!plugins.some((plugin) => plugin.key === BILLING_HOST_PLUGIN_KEY)) return null;
+	return `${hostPluginSurfaceHref(BILLING_HOST_PLUGIN_KEY)}?tab=${BILLING_HOST_PLUGIN_TAB}`;
+}
+
+/**
  * Host-plugin entries cross out of Pod's in-memory router.
  *
  * A host route can happen to share this origin, but it is still served by a different application
@@ -117,8 +137,11 @@ export function buildSystemNavigation(input: {
 			? [
 					{
 						key: 'pod-settings',
-						label: 'Tenant workspace',
-						icon: 'lucide:database',
+						// Named for what an admin manages here — members, invitations, teams, the audit
+						// trail — not for the tenant database those rows happen to live in. The storage was
+						// never the thing anyone came to this entry looking for.
+						label: 'People',
+						icon: 'lucide:users',
 						href: WORKSPACE_SETTINGS_PATH,
 						active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)
 					} satisfies WorkspaceNavigationItem
