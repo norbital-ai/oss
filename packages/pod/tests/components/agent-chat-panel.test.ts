@@ -330,6 +330,64 @@ describe('agent chat panel', () => {
 		destroy();
 	});
 
+	it('renders a subagent inside its call, recursively and without a composer', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Audit the sites');
+		submit(container);
+		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
+		await settle();
+
+		replica.arrive('chat_turn', {
+			norbital_id: 'child-turn',
+			chat_id: 'c1',
+			parent_turn_id: 'parent-turn',
+			subagent_id: 'subagent:call-9',
+			status: 'running',
+			started_at: '2026-08-03T00:00:00.000Z'
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'p1',
+			chat_id: 'c1',
+			turn_id: 'parent-turn',
+			seq: 1,
+			parts: [
+				{
+					role: 'assistant',
+					content: '',
+					toolCalls: [{ id: 'call-9', name: 'spawn_subagent', input: { task: 'Audit sites' } }]
+				}
+			]
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'c2',
+			chat_id: 'c1',
+			turn_id: 'child-turn',
+			seq: 2,
+			parts: [
+				{
+					role: 'assistant',
+					content: '',
+					toolCalls: [{ id: 'call-10', name: 'read_collection', input: { collection: 'sites' } }]
+				}
+			]
+		});
+		await settle();
+
+		const toolRows = [...container.querySelectorAll('[data-role="tool"]')];
+		// Two rows, but not siblings: the child's read is *inside* the spawn call, not beside it.
+		expect(toolRows.map((row) => row.getAttribute('data-tool'))).toEqual([
+			'spawn_subagent',
+			'read_collection'
+		]);
+		const spawnRow = container.querySelector('[data-tool="spawn_subagent"]');
+		expect(spawnRow?.querySelector('[data-tool="read_collection"]')).not.toBeNull();
+		expect(spawnRow?.querySelector('[aria-label="Subagent transcript"]')).not.toBeNull();
+		// A subagent is given a task, not talked to — exactly one composer, at the top level.
+		expect(container.querySelectorAll('textarea')).toHaveLength(1);
+		expect(spawnRow?.querySelector('textarea')).toBeNull();
+		destroy();
+	});
+
 	it('opens on the host default and sends only a model the person changed', async () => {
 		catalog = {
 			defaultModel: 'deepseek/deepseek-v4-flash-0731',

@@ -89,7 +89,8 @@ describe('agent panel transcript', () => {
 			kind: 'tool',
 			name: 'read_collection',
 			state: 'complete',
-			error: null
+			error: null,
+			children: []
 		});
 		expect(rows[0]?.kind === 'tool' && rows[0].output).toContain('Depot');
 	});
@@ -153,6 +154,71 @@ describe('agent panel transcript', () => {
 		const output = rows[0]?.kind === 'tool' ? rows[0].output : null;
 		expect(output?.length).toBe(2_001);
 		expect(output?.endsWith('…')).toBe(true);
+	});
+
+	it("nests a subagent's transcript under the call that spawned it", () => {
+		// The child writes into the parent's session with a turn of its own. Without the nesting its
+		// rows interleave by `seq` and its task prompt reads as something the person typed.
+		const rows = toPanelMessages(
+			[
+				{
+					norbital_id: 'p1',
+					turn_id: 'parent-turn',
+					parts: [
+						{
+							role: 'assistant',
+							content: '',
+							toolCalls: [{ id: 'call-9', name: 'spawn_subagent', input: { task: 'Audit sites' } }]
+						}
+					]
+				},
+				{
+					norbital_id: 'c1',
+					turn_id: 'child-turn',
+					parts: [{ role: 'user', content: 'Audit sites' }]
+				},
+				{
+					norbital_id: 'c2',
+					turn_id: 'child-turn',
+					parts: [
+						{
+							role: 'assistant',
+							content: '',
+							toolCalls: [
+								{ id: 'call-10', name: 'read_collection', input: { collection: 'sites' } }
+							]
+						}
+					]
+				},
+				{
+					norbital_id: 'c3',
+					turn_id: 'child-turn',
+					parts: [{ role: 'tool', content: '{"rows":[]}', toolCallId: 'call-10' }]
+				},
+				{
+					norbital_id: 'p2',
+					turn_id: 'parent-turn',
+					parts: [{ role: 'assistant', content: 'Done.' }]
+				}
+			],
+			[
+				{ norbital_id: 'parent-turn', subagent_id: null },
+				{ norbital_id: 'child-turn', subagent_id: 'subagent:call-9' }
+			]
+		);
+
+		// Top level is the spawn call and the parent's own answer — the child's three rows are not here.
+		expect(rows.map((row) => row.key)).toEqual(['p1:0', 'p2']);
+		const spawn = rows[0];
+		if (spawn?.kind !== 'tool') throw new Error('expected the spawn call');
+		expect(spawn.label).toBe('Delegate task');
+		expect(spawn.detail).toBe('Audit sites');
+		// The same projection, recursively: the child's own tool call kept its result.
+		expect(spawn.children.map((child) => child.kind)).toEqual(['text', 'tool']);
+		const nestedCall = spawn.children[1];
+		if (nestedCall?.kind !== 'tool') throw new Error('expected the nested call');
+		expect(nestedCall.name).toBe('read_collection');
+		expect(nestedCall.state).toBe('complete');
 	});
 
 	it('drops a row it cannot render', () => {

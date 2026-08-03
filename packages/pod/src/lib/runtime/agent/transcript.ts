@@ -34,6 +34,14 @@ export type PanelToolCall = {
 	readonly output: string | null;
 	readonly error: string | null;
 	readonly state: 'running' | 'complete' | 'failed';
+	/**
+	 * The delegated agent's own transcript, projected the same way this one was.
+	 *
+	 * Empty for every tool but `spawn_subagent`. A subagent writes into its parent's session with a
+	 * turn of its own, so without this its messages interleave into the parent by `seq` and its task
+	 * prompt reads as something the person typed.
+	 */
+	readonly children: readonly PanelMessage[];
 };
 
 export type PanelMessage = PanelText | PanelToolCall;
@@ -73,7 +81,8 @@ const DETAIL_KEYS = ['collection', 'task', 'action', 'path', 'filePath', 'query'
  * rows joined by `toolCallId`, and a call cannot show what it returned without reading past itself.
  */
 export function toPanelMessages(
-	records: readonly Readonly<Record<string, unknown>>[]
+	records: readonly Readonly<Record<string, unknown>>[],
+	turns: readonly Readonly<Record<string, unknown>>[] = []
 ): readonly PanelMessage[] {
 	const results = new Map<string, unknown>();
 	for (const record of records) {
@@ -82,8 +91,52 @@ export function toPanelMessages(
 		const callId = stored.message.toolCallId;
 		if (typeof callId === 'string') results.set(callId, parsedContent(stored.message.content));
 	}
-	return records.flatMap((record) => toPanelRow(record, results));
+
+	// `runSubagent` tags the child's turn `subagent:<spawn call id>`, so the call that started a
+	// delegated agent names the turn that carries its transcript. That is the whole join.
+	const turnByCallId = new Map<string, string>();
+	const subagentTurnIds = new Set<string>();
+	for (const turn of turns) {
+		const turnId = turn.norbital_id;
+		const subagentId = turn.subagent_id;
+		if (typeof turnId !== 'string' || typeof subagentId !== 'string') continue;
+		subagentTurnIds.add(turnId);
+		if (subagentId.startsWith('subagent:')) {
+			turnByCallId.set(subagentId.slice('subagent:'.length), turnId);
+		}
+	}
+	const byTurn = new Map<string, Readonly<Record<string, unknown>>[]>();
+	for (const record of records) {
+		const turnId = record.turn_id;
+		if (typeof turnId !== 'string' || !subagentTurnIds.has(turnId)) continue;
+		const bucket = byTurn.get(turnId) ?? [];
+		bucket.push(record);
+		byTurn.set(turnId, bucket);
+	}
+
+	const context: ProjectionContext = { results, turnByCallId, byTurn };
+	// A subagent's rows belong to its call, not to the conversation they share a session with.
+	const roots = records.filter((record) => {
+		const turnId = record.turn_id;
+		return typeof turnId !== 'string' || !subagentTurnIds.has(turnId);
+	});
+	return roots.flatMap((record) => toPanelRow(record, context, 0));
 }
+
+type ProjectionContext = {
+	readonly results: ReadonlyMap<string, unknown>;
+	readonly turnByCallId: ReadonlyMap<string, string>;
+	readonly byTurn: ReadonlyMap<string, readonly Readonly<Record<string, unknown>>[]>;
+};
+
+/**
+ * How far a delegated transcript may nest before the panel stops descending.
+ *
+ * The loop already refuses a subagent that spawns another, so two is the real ceiling. The guard is
+ * against a cycle in the data — a turn that somehow names itself would otherwise recurse forever in
+ * the reader's browser rather than failing where it was written.
+ */
+const MAX_SUBAGENT_DEPTH = 3;
 
 /**
  * Read one replica row, or nothing.
@@ -93,7 +146,8 @@ export function toPanelMessages(
  */
 function toPanelRow(
 	record: Readonly<Record<string, unknown>>,
-	results: ReadonlyMap<string, unknown>
+	context: ProjectionContext,
+	depth: number
 ): PanelMessage[] {
 	const id = record.norbital_id;
 	const stored = storedMessage(record);
@@ -105,7 +159,7 @@ function toPanelRow(
 	const raw = stored.message.toolCalls;
 	const calls: readonly unknown[] = Array.isArray(raw) ? raw : [];
 	const rows: PanelMessage[] = calls.map((call, index) =>
-		toToolCall(call, `${id}:${index}`, results)
+		toToolCall(call, `${id}:${index}`, context, depth)
 	);
 
 	const body = stored.message.content;
@@ -128,15 +182,21 @@ function toPanelRow(
 function toToolCall(
 	call: unknown,
 	key: string,
-	results: ReadonlyMap<string, unknown>
+	context: ProjectionContext,
+	depth: number
 ): PanelToolCall {
 	const record = isRecord(call) ? call : {};
 	const name = typeof record.name === 'string' ? record.name : 'tool';
 	const metadata = TOOL_METADATA[name] ?? { label: humanize(name), icon: 'lucide:wrench' };
 	const input = isRecord(record.input) ? record.input : undefined;
 	const id = typeof record.id === 'string' ? record.id : null;
-	const answered = id !== null && results.has(id);
-	const output = answered ? results.get(id) : undefined;
+	const answered = id !== null && context.results.has(id);
+	const output = answered ? context.results.get(id) : undefined;
+	const childTurn = id === null ? undefined : context.turnByCallId.get(id);
+	const children =
+		childTurn !== undefined && depth < MAX_SUBAGENT_DEPTH
+			? (context.byTurn.get(childTurn) ?? []).flatMap((row) => toPanelRow(row, context, depth + 1))
+			: [];
 	// The loop turns a thrown tool into `{ error }` and feeds it back to the model rather than failing
 	// the turn, so a failed call is visible only here — the run around it still reports success.
 	const error = isRecord(output) && typeof output.error === 'string' ? output.error : null;
@@ -150,7 +210,8 @@ function toToolCall(
 		input: input && Object.keys(input).length > 0 ? formatPayload(input) : null,
 		output: answered && error === null ? formatPayload(output) : null,
 		error: error === null ? null : clamp(error),
-		state: answered ? (error === null ? 'complete' : 'failed') : 'running'
+		state: answered ? (error === null ? 'complete' : 'failed') : 'running',
+		children
 	};
 }
 

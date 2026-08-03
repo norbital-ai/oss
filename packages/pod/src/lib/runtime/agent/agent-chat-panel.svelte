@@ -9,6 +9,7 @@
 	import { getInitializedWorkspaceClient } from '$lib/runtime/client.js';
 	import { toPanelMessages, withPendingEcho } from './transcript.js';
 	import AgentModelPicker from './agent-model-picker.svelte';
+	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import type { AgentModelCatalog } from './models.js';
 	import {
 		AGENT_COMPOSER_CONTROL_TEXT_CLASS,
@@ -92,7 +93,7 @@
 			return undefined;
 		}
 	});
-	const stored = $derived(toPanelMessages(transcript?.current ?? []));
+	const stored = $derived(toPanelMessages(transcript?.current ?? [], turns?.current ?? []));
 	const messages = $derived(withPendingEcho(stored, echo));
 	const turnRows = $derived(turns?.current ?? []);
 	const canSend = $derived(draft.trim().length > 0 && !pending);
@@ -210,12 +211,6 @@
 			void send();
 		}
 	}
-
-	function roleLabel(role: string): string {
-		if (role === 'user') return 'You';
-		if (role === 'assistant') return 'Agent';
-		return 'System';
-	}
 </script>
 
 <section class="flex h-full min-h-0 flex-col bg-background" aria-label="Workspace agent">
@@ -264,104 +259,7 @@
 			aria-label="Agent conversation"
 		>
 			{#each messages as message (message.key)}
-				{#if message.kind === 'tool'}
-					<li class="message" data-role="tool" data-tool={message.name}>
-						<!-- One row per call, collapsed: the name and its identifying argument are the whole
-						     story most of the time, and the payload is tenant data that belongs behind a
-						     deliberate click rather than in the flow of the conversation. -->
-						<details class="group/tool w-full">
-							<!-- stupidity:allow UI6 -- details disclosure summary is a clickable control row. -->
-							<summary
-								class="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
-							>
-								<Icon
-									icon={message.icon}
-									class={`size-3.5 shrink-0 ${
-										message.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
-									}`}
-								/>
-								<span class="shrink-0 font-medium text-foreground/80">{message.label}</span>
-								{#if message.detail}
-									<span class="min-w-0 truncate font-mono text-tiny">{message.detail}</span>
-								{/if}
-								{#if message.state === 'running'}
-									<Icon icon="lucide:loader-circle" class="size-3 shrink-0 animate-spin" />
-								{:else if message.state === 'failed'}
-									<Icon icon="lucide:circle-alert" class="size-3 shrink-0 text-destructive" />
-								{/if}
-								<Icon
-									icon="lucide:chevron-right"
-									class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/tool:rotate-90"
-								/>
-							</summary>
-							<div class="mt-1 ml-3.5 flex flex-col gap-2 border-l border-border/60 py-1 pl-3">
-								{#if message.input}
-									<div class="flex min-w-0 flex-col gap-1">
-										<span
-											class="text-tiny font-medium tracking-wide text-muted-foreground uppercase"
-										>
-											Input
-										</span>
-										<pre
-											class="m-0 max-h-56 overflow-auto rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90">{message.input}</pre>
-									</div>
-								{/if}
-								{#if message.error}
-									<div class="flex min-w-0 flex-col gap-1">
-										<span class="text-tiny font-medium tracking-wide text-destructive uppercase">
-											Error
-										</span>
-										<pre
-											class="m-0 max-h-56 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive">{message.error}</pre>
-									</div>
-								{:else if message.output}
-									<div class="flex min-w-0 flex-col gap-1">
-										<span
-											class="text-tiny font-medium tracking-wide text-muted-foreground uppercase"
-										>
-											Result
-										</span>
-										<pre
-											class="m-0 max-h-56 overflow-auto rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90">{message.output}</pre>
-									</div>
-								{:else if message.state === 'running'}
-									<p class="m-0 text-micro text-muted-foreground">Waiting for the result…</p>
-								{/if}
-							</div>
-						</details>
-					</li>
-				{:else}
-					<!-- The list gap is tuned for consecutive tool rows; the margin restores the wider
-					     rhythm between spoken messages without re-spacing the trace. -->
-					<li
-						class="message my-1.5 flex flex-col gap-1.5"
-						class:items-end={message.role === 'user'}
-						data-role={message.role}
-					>
-						<span class="px-1 text-tiny font-medium text-muted-foreground">
-							{roleLabel(message.role)}
-						</span>
-						<div
-							class={`text-sm leading-6 sm:max-w-[88%] ${
-								message.role === 'user'
-									? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-foreground'
-									: message.role === 'assistant'
-										? 'w-full text-foreground'
-										: 'w-full rounded-lg bg-destructive/10 px-3.5 py-2.5 text-destructive'
-							}`}
-						>
-							<p class="content m-0 whitespace-pre-wrap break-words">{message.content}</p>
-							{#if message.status === 'streaming'}
-								<span
-									class="mt-1.5 inline-flex items-center gap-1.5 text-tiny text-muted-foreground"
-								>
-									<span class="size-1.5 animate-pulse rounded-full bg-current"></span>
-									Streaming
-								</span>
-							{/if}
-						</div>
-					</li>
-				{/if}
+				<AgentTranscriptItem {message} />
 			{/each}
 			{#if pending && !agentHasSpoken}
 				<li class="my-1.5 flex flex-col gap-1.5" aria-label="Agent is working">
