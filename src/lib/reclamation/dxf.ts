@@ -7,8 +7,9 @@
  * 3D solids are ignored — an ignored entity is reported rather than guessed at,
  * so nothing silently disappears from the model.
  *
- * Native DWG is decoded by the server-side LibreDWG normaliser and then mapped
- * into this same entity model before extraction.
+ * Native DWG is not decoded at all. `normalize-drawing.server.ts` refuses one
+ * before extraction and names DXF as the export to supply instead, so this
+ * entity model is the only shape a drawing ever reaches the engine in.
  */
 
 export type DxfEntityType = 'LWPOLYLINE' | 'POLYLINE' | 'LINE' | 'POINT' | 'TEXT' | 'MTEXT';
@@ -117,13 +118,24 @@ export function parseDxf(text: string): DxfDocument {
 			return;
 		}
 		if (draft.type === 'POLYLINE') {
-			polyline = draft;
+			if (section === 'ENTITIES') polyline = draft;
+			draft = null;
+			return;
+		}
+		// Only the ENTITIES section is the drawing. `BLOCKS` holds *definitions* —
+		// arrow heads, symbols, title blocks — whose geometry is drawn only where a
+		// matching `INSERT` places it, and every DXF a real CAD application writes
+		// has one. Reading it as drawing geometry put a 1 m arrow head at the origin
+		// of every such file, which then clustered into a section that does not
+		// exist. This was invisible for as long as the only DXFs reaching the reader
+		// were authored by hand and carried no BLOCKS section at all.
+		if (section !== 'ENTITIES') {
 			draft = null;
 			return;
 		}
 		const entity = draftToEntity(draft);
 		if (entity) entities.push(entity);
-		else if (section === 'ENTITIES') {
+		else {
 			// Only real drawing entities count as skipped; table and header records
 			// are structure, not lost geometry.
 			skipped[draft.type] = (skipped[draft.type] ?? 0) + 1;

@@ -10,6 +10,7 @@ this is the detail an engineer needs before trusting a volume.
 | ------------------------------------------- | -------------------------------------------------------- |
 | Slope, run, area, sampling primitives       | `src/lib/reclamation/math.ts`                            |
 | DXF group-code reader                       | `src/lib/reclamation/dxf.ts`                             |
+| Section sheet reading and calibration       | `src/lib/reclamation/sheet.ts`                           |
 | XYZ / CSV / JSON decoders and gridding      | `src/lib/reclamation/parse.ts`                           |
 | Section layer vocabulary                    | `src/lib/reclamation/profile-layers.ts`                  |
 | Document interpretation, layer mapping      | `src/lib/reclamation/extract.ts`                         |
@@ -17,11 +18,16 @@ this is the detail an engineer needs before trusting a volume.
 | Volume integration and tessellation         | `src/lib/reclamation/solids.ts`                          |
 | Pipeline and the standing assumption ledger | `src/lib/reclamation/stitch.ts`                          |
 | Levers, rates, money                        | `src/lib/reclamation/cost.ts`                            |
-| Server driver (read assets, record a run)   | `src/collections/reclamation_projects/lib/run-stitch.ts` |
+| Format triage, DWG and PDF refusal          | `src/lib/reclamation/normalize-drawing.server.ts`        |
+| Stitch driver shared by hook and remote     | `src/lib/reclamation/stitch-driver.ts`                   |
+| Reading the assets and recording a run      | `src/collections/reclamation_projects/lib/run-stitch.ts` |
 | The hook itself                             | `src/collections/reclamation_projects/+hooks.ts`         |
 
 The engine has no framework, DOM, or Node dependency. `stitch()` is bytes in, JSON out, which is
 why the same modules run in the server hook and in the browser tessellation worker.
+`normalize-drawing.server.ts` is the one deliberate exception, and it sits outside `stitch()`: it
+runs before extraction, decides whether a document can be read at all, and is the only module that
+reaches for a PDF decoder.
 
 ## Frame and conventions
 
@@ -116,9 +122,11 @@ Section cuts are named by proximity: the cut line takes the label of the nearest
 }
 ```
 
-`works_outline` is required. Without `seaward_edges` the whole outline is treated as
-water-facing, which is recorded as an assumption. Without `shoreline_length_m` the seaward edges
-are measured.
+`works_outline` is required and its absence throws. `seaward_edges` is a calibration requirement:
+the reader provisionally takes the whole outline as water-facing so that the rest of the plan can
+still be inspected, but the run is refused with the other shortfalls rather than priced on that
+guess. For a wholly offshore site, state the entire outline there and the same reading becomes a
+declared fact. Without `shoreline_length_m` the seaward edges are measured.
 
 ### Bathymetry
 
@@ -141,25 +149,32 @@ not in the same frame.
 
 ### Cross sections
 
-CSV is the primary form:
+**DXF** is the primary form, and it is read as a plotted sheet rather than as a table of
+coordinates. Several sections may share one page, each at its own scale and placed wherever it
+fitted; `sheet.ts` groups the geometry into sections, attaches each section's own title, level
+callouts, figured dimensions and slope notes, and calibrates that section from them before any of it
+becomes station and elevation. The steps are:
 
-```csv
-profile,station_m,z_cd_m,layer
-1-1,-22,-17.5,sand_key
-1-1,0,-15.0,toe
-1-1,52.545,2.515,hwm
-1-1,61.5,5.5,crest_seaward
-1-1,63.0,5.5,armor_crest
-1-1,83.0,5.5,crest_landward
-1-1,144.0,-15.0,bund_landward_toe
-1-1,420,5.5,platform
-```
+1. group geometry into sections and attach each section's text;
+2. fit `level = a·y + b` to the level callouts by consensus, not by averaging — a sheet is full of
+   notes that mention a level without being one;
+3. take the horizontal scale from a figured dimension where one is drawn, and otherwise from the
+   vertical scale, which is correct whenever the plot is isotropic, with a warning when it is not;
+4. put station zero on the toe; and
+5. check the fitted geometry against every `1V:nH` callout on the sheet.
 
-The `profile` column is optional; without it every row belongs to one section. Column names
-`station_m`/`station`, `z_cd_m`/`z_m`/`z`, and `layer`/`material` are all accepted.
+A section placed this way records a `sheet-calibration-<id>` assumption naming its plotting scale,
+how many of its callouts agreed and to what residual. A drawing already authored in engineering
+coordinates calibrates to the identity and reads back unchanged, so the two paths are one path.
+Drafting furniture — level leaders, dimension lines, grids, borders and title blocks — is kept for
+calibration but never read as profile.
 
-JSON is `{ "profiles": { "1-1": [[station, z, "layer"], …] } }`. A DXF section sheet works when
-each section is on its own layer and drawn in station/elevation space.
+**JSON** is the digitised path: `{ "profiles": { "1-1": [[station, z, "layer"], …] } }`, with
+station and elevation already in metres on the project datum.
+
+**CSV is refused.** A profile table is a transcription of a drawing, and the callouts, dimensions
+and title text a sheet carries — the evidence the calibration rests on — are exactly what
+transcribing discards. The error names the authored DXF as the thing to supply instead.
 
 Extra section sheets attach as `project_documents` with role `additional_sections`. Their profiles
 join the set, with ids kept unique. Every additional perimeter section replaces a stretch of
@@ -190,17 +205,22 @@ and how it was read.
 
 ## The calibration gate
 
-Five references decide whether the shape can be deduced at all. Missing any of them raises a
+Four references decide whether the shape can be deduced at all. Missing any of them raises a
 `CalibrationRequirement`, and `stitch()` throws before integration with every shortfall listed in
 one message. Nothing is assumed in their place.
 
 | Id                | Document      | Satisfied by                                                           |
 | ----------------- | ------------- | ---------------------------------------------------------------------- |
-| `works-outline`   | Floor plan    | A closed polyline on a works layer, or `works_outline`                 |
 | `seaward-edges`   | Floor plan    | A polyline on `TOE`/`QUAY`, or `seaward_edges`                         |
 | `toe-marker`      | Cross section | A point on layer `toe`/`quay_crest`, or `profileLayers.toe`            |
 | `platform-marker` | Cross section | A point on `platform`, `profileLayers.platform`, or `levelsM.platform` |
 | `survey-coverage` | Bathymetry    | Soundings over at least 60% of the works outline                       |
+
+The works outline is a fifth requirement in substance but not in mechanism: it fails immediately
+rather than being collected, because the gate that reports the other four runs over a site that a
+missing outline has not yet established. A DXF with no works layer falls back to the platform
+polygon and records `outline-from-platform`; a plan with neither, and a plan JSON without
+`works_outline`, throws.
 
 Everything else degrades with a recorded assumption instead of failing, because an engineer needs
 to see the shape before deciding whether the uncertainty matters. The line between the two is
@@ -211,11 +231,19 @@ exactly this: does the missing item change _where the works are_, or only _what 
 A section layer drawn below the finished surface is not merely excluded from the top surface — it
 is read as a material band with its own invert polyline:
 
-```csv
-1-1,-22,-17.5,sand_key      ← station is negative: seaward of the toe
-1-1,-8,-17.5,sand_key
-1-1,0,-15.0,toe
+```json
+{
+	"profiles": {
+		"1-1": [
+			[-22, -17.5, "sand_key"],
+			[-8, -17.5, "sand_key"],
+			[0, -15.0, "toe"]
+		]
+	}
+}
 ```
+
+The first two stations are negative: that band reaches seaward of the toe.
 
 `SUBGRADE_SUBSTRATE` maps the layer name onto a priced substrate (`sand_key`, `dredged_rock`,
 `geofabric`), overridable with `profileLayers.subgrade`. At each cell the band is dug from
@@ -236,18 +264,18 @@ used instead, and its `basis` says so. The two are never added together.
 
 ## Derivation rules
 
-| Quantity             | Rule                                                                                                             |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Toe / platform level | Elevation of the `toe` and highest `platform` point.                                                             |
-| Seaward face slope   | The profile segment leaving the toe. Not the chord across the face.                                              |
-| Inner face slope     | `crest_landward` → `bund_landward_toe`.                                                                          |
-| Crest width          | Station of `crest_landward` − station of `crest_seaward`.                                                        |
-| Armour crest         | Station of `armor_crest` − station of `crest_seaward`.                                                           |
-| Sand key             | Extent and depth of the `sand_key` points below the toe.                                                         |
-| Structure face slope | The bed-contact segment of a `*_face` layer on a non-perimeter section.                                          |
-| Structure crest      | Highest `*crest*` point on a non-perimeter section.                                                              |
-| Face typology        | `caisson` when the section names a caisson/quay/wall layer, or when armour thickness is zero.                    |
-| Armour thickness     | Override → an `ARMOUR … 1.5 m` annotation → the Detail-A crest width → 1.00 m. Always recorded as an assumption. |
+| Quantity             | Rule                                                                                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Toe / platform level | Elevation of the `toe` and highest `platform` point.                                                                                                                                                   |
+| Seaward face slope   | The profile segment leaving the toe. Not the chord across the face.                                                                                                                                    |
+| Inner face slope     | `crest_landward` → `bund_landward_toe`.                                                                                                                                                                |
+| Crest width          | Station of `crest_landward` − station of `crest_seaward`.                                                                                                                                              |
+| Armour crest         | Station of `armor_crest` − station of `crest_seaward`.                                                                                                                                                 |
+| Sand key             | Extent and depth of the `sand_key` points below the toe.                                                                                                                                               |
+| Structure face slope | The bed-contact segment of a `*_face` layer on a non-perimeter section.                                                                                                                                |
+| Structure crest      | Highest `*crest*` point on a non-perimeter section.                                                                                                                                                    |
+| Face typology        | `caisson` when the section names a caisson/quay/wall layer, or when armour thickness is zero.                                                                                                          |
+| Armour thickness     | Override → an `ARMOUR … 1.5 m` annotation → `t = 2B/3` from the armour crest width. Never defaulted: with none of those the armour and geofabric lines are zero and an error-severity warning says so. |
 
 Layer lookup is exact, never substring: `crest_seaward` must not answer a request for `sea`.
 
@@ -257,14 +285,16 @@ The engine holds no site dimension, no orientation, and no slope multiplier. Eve
 comes out of a document, and where a document is silent it records an assumption instead of
 inventing a number. That claim is checked rather than asserted:
 
-| Check                                           | Result                                                                 |
-| ----------------------------------------------- | ---------------------------------------------------------------------- |
-| Circular island, sections labelled only `grade` | Solid built; `no-toe-label` assumption raised                          |
-| Rotation 37° + 48 km translation                | Fill within **0.01%**, armour within **1.3%** of the untransformed run |
-| Foreign section vocabulary                      | Usable through `profileLayers`; classification reported back           |
-| Comb of finger piers, three sections            | Blended around the perimeter, `morph` active                           |
-| 40 arbitrary star polygons                      | 40 solids built, none crashed                                          |
-| Integration cell 5.0 m → 1.5 m                  | Volume moves **0.00%**                                                 |
+| Check                                | Result                                                                  |
+| ------------------------------------ | ----------------------------------------------------------------------- |
+| Rotation 37° + 48 km translation     | Fill within **0.00%**, armour within **0.20%** of the untransformed run |
+| Foreign section vocabulary           | Usable through `profileLayers`; classification reported back            |
+| The same drawings left unmapped      | Refused, rather than read with the wrong layers                         |
+| Comb of finger piers, three sections | Blended around the perimeter, `morph` active                            |
+| 40 arbitrary star polygons           | 40 solids built, none refused without a reason, none crashed            |
+| Uncalibrated drawings                | Refused, naming the toe, platform and seaward-edge shortfalls at once   |
+| Integration cell 4 m → 2 m → 1 m     | Converges on the closed-form answer: 0.001% → 0.000%                    |
+| Two sections plotted on one sheet    | Each recovers its own scale, 1:500 and 1:1000, from that one page       |
 
 The rotation case is the important one. If any axis, chainage direction, or site dimension were
 baked in, a rotated copy of the same site would price differently.
@@ -333,40 +363,44 @@ condition worth checking.
 
 ### Conditional assumptions
 
-| Id                                    | Raised when                                            |
-| ------------------------------------- | ------------------------------------------------------ |
-| `armor-thickness-assumed`             | No thickness stated on the section or in overrides     |
-| `caisson-no-armor`                    | Vertical face, so no armour blanket                    |
-| `no-dredged-rock`                     | No foundation-rock thickness stated                    |
-| `no-hwm`                              | No `hwm` point on the section                          |
-| `sea-level-zero`                      | No `sea` point on the section                          |
-| `material-change-at-zero`             | No `interim` point on the section                      |
-| `sand-key-trench`                     | Sand key read from the section, batter taken as 1V:2H  |
-| `slope-from-annotation`               | Face slope came from a text callout                    |
-| `structure-face-from-section`         | Structure batter derived from a `*_face` layer         |
-| `structure-crest-from-sections`       | Structure crest applied to every plan footprint        |
-| `levels-from-first-perimeter-section` | Several perimeter sections; the first governs levels   |
-| `lagoon-carries-no-fill`              | Containment ponds on the plan                          |
-| `bathymetry-hole-fill`                | Cells interpolated in the survey                       |
-| `outline-from-platform`               | No works-layer outline; platform polygon used instead  |
-| `whole-outline-is-seaward`            | No toe/quay layer; the section wraps the whole outline |
-| `revetment-band-split`                | Two bands share the revetment layer                    |
-| `section-dxf-layer-per-profile`       | Sections supplied as a DXF                             |
-| `unlabelled-section-cuts`             | Cut lines carry no `SEC x-x` label                     |
+| Id                                    | Raised when                                                     |
+| ------------------------------------- | --------------------------------------------------------------- |
+| `sheet-calibration-<section>`         | A section was placed on the datum from its own level callouts   |
+| `no-toe-label`                        | No section names a toe, so every section is read as perimeter   |
+| `armor-thickness-from-crest-width`    | Thickness derived as `t = 2B/3` from the drawn armour crest     |
+| `caisson-no-armor`                    | Vertical face, so no armour blanket                             |
+| `no-dredged-rock`                     | No foundation-rock thickness stated                             |
+| `no-hwm`                              | No `hwm` point on the section                                   |
+| `sea-level-zero`                      | No `sea` point on the section                                   |
+| `material-change-at-zero`             | No `interim` point on the section                               |
+| `sand-key-trench`                     | Sand key read from the section, batter taken as 1V:2H           |
+| `sub-grade-bands-dug-to-invert`       | Below-grade bands are dug against the surveyed bed              |
+| `slope-from-annotation`               | Face slope came from a text callout                             |
+| `structure-face-from-section`         | Structure batter derived from a `*_face` layer                  |
+| `structure-crest-from-sections`       | Structure crest applied to every plan footprint                 |
+| `levels-from-first-perimeter-section` | Several perimeter sections; the first governs levels            |
+| `lagoon-carries-no-fill`              | Containment ponds on the plan                                   |
+| `bathymetry-pooled`                   | More than one survey supplied; soundings pooled before gridding |
+| `bathymetry-hole-fill`                | Cells interpolated in the survey                                |
+| `outline-from-platform`               | No works-layer outline; platform polygon used instead           |
+| `revetment-band-split`                | Two bands share the revetment layer                             |
+| `unlabelled-section-cuts`             | Cut lines carry no `SEC x-x` label                              |
 
 ### Warnings
 
-| Code                       | Meaning                                                |
-| -------------------------- | ------------------------------------------------------ |
-| `frame-coverage`           | The survey does not cover the works outline            |
-| `design-below-bed`         | Part of the footprint is a cut, not a fill             |
-| `seaward-edge-off-outline` | A seaward-edge vertex is more than 1 m off the outline |
-| `bathymetry-downsampled`   | Survey coarsened to stay under the cell ceiling        |
-| `plan-level-conflict`      | Plan annotation disagrees with the section sheet       |
-| `plan-units`               | `$INSUNITS` is not metres                              |
-| `unmapped-plan-layers`     | Plan layers carrying geometry that the model ignored   |
-| `plan-entities-skipped`    | Undecoded DXF entity types                             |
-| `override-slope`           | An unparseable slope override was ignored              |
+| Code                       | Meaning                                                                   |
+| -------------------------- | ------------------------------------------------------------------------- |
+| `frame-coverage`           | The survey does not cover the works outline                               |
+| `design-below-bed`         | Part of the footprint is a cut, not a fill                                |
+| `seaward-edge-off-outline` | A seaward-edge vertex is more than 1 m off the outline                    |
+| `bathymetry-downsampled`   | Survey coarsened to stay under the cell ceiling                           |
+| `plan-level-conflict`      | Plan annotation disagrees with the section sheet                          |
+| `plan-units`               | `$INSUNITS` is not metres                                                 |
+| `unmapped-plan-layers`     | Plan layers carrying geometry that the model ignored                      |
+| `plan-entities-skipped`    | Undecoded DXF entity types                                                |
+| `override-slope`           | An unparseable slope override was ignored                                 |
+| `armor-thickness-unknown`  | Error severity: nothing on the sheet dimensions the armour, so it is zero |
+| `sheet-<section>`          | A calibration note from the sheet reader about that one section           |
 
 ## When the stitch fails
 

@@ -111,8 +111,6 @@ export type RawDocument = {
 	readonly mimeType: string | null;
 	readonly bytes: Uint8Array;
 	readonly sha256: string;
-	/** Native CAD decoded before the deterministic stitch runs. */
-	readonly decodedCad?: DxfDocument;
 };
 
 /**
@@ -309,17 +307,19 @@ export function extractSections(document: RawDocument, ledger: Ledger): SectionE
 	if (format === 'csv') {
 		throw new Error(
 			`Cross-section document "${document.fileName ?? 'upload'}" is a CSV profile table. ` +
-				'CSV reconstructions are no longer accepted; supply the authored DWG, DXF, or vector PDF drawing.'
+				'CSV reconstructions are no longer accepted; supply the authored DXF drawing.'
 		);
 	}
-	if ((format === 'dwg' || format === 'pdf') && !document.decodedCad) {
+	// `normalizeDrawing` refuses both of these with a reason naming what to supply
+	// instead, so reaching here means the caller skipped it.
+	if (format === 'dwg' || format === 'pdf') {
 		throw new Error(
-			`Cross-section document "${document.fileName ?? 'upload'}" is ${format.toUpperCase()}, but its vector geometry was not normalised before stitching.`
+			`Cross-section document "${document.fileName ?? 'upload'}" is ${format.toUpperCase()}, which the reconstruction does not read. Export it to DXF first.`
 		);
 	}
 	if (format === 'unsupported') {
 		throw new Error(
-			`Cross-section document "${document.fileName ?? 'upload'}" is not an authored DWG, DXF, vector PDF, or structured JSON drawing.`
+			`Cross-section document "${document.fileName ?? 'upload'}" is not an authored DXF or structured JSON drawing.`
 		);
 	}
 	const text = decodeText(document.bytes);
@@ -338,8 +338,8 @@ export function extractSections(document: RawDocument, ledger: Ledger): SectionE
 		};
 	}
 
-	if (format === 'dxf' || format === 'dwg' || format === 'pdf') {
-		const parsed = document.decodedCad ?? parseDxf(text);
+	if (format === 'dxf') {
+		const parsed = parseDxf(text);
 		const { profiles, annotations, calibrations } = profilesFromDxf(parsed, ledger);
 		if (Object.keys(profiles).length === 0) {
 			throw new Error('Cross-section DXF contained no polyline geometry.');

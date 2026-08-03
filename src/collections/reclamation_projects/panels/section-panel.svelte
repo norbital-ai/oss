@@ -12,6 +12,17 @@
 	let { model, report }: { model: StitchedModel; report: StitchReport | null } = $props();
 	const source = $derived(report?.documents.find((document) => document.kind === 'cross_section'));
 	const drawingNative = $derived(source?.format === 'dxf' || source?.format === 'dwg');
+	/**
+	 * `dwg` stays in this test for revisions stitched before DWG was refused.
+	 *
+	 * No new revision can carry it — the model's MIME allowlist will not accept a
+	 * DWG and `normalizeDrawing` refuses one before extraction — but a revision is
+	 * never overwritten, so an older `report_json` still names that format. Its
+	 * geometry did come from authored CAD entities, and dropping the test would
+	 * relabel it "Legacy profile data" and tell the reader to replace a drawing
+	 * that was read correctly.
+	 */
+	const archivedDwg = $derived(source?.format === 'dwg');
 
 	const names = $derived(Object.keys(model.profiles).sort());
 	let selected = $state<string | null>(null);
@@ -116,6 +127,12 @@
 				<p class="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
 					Source is {source?.fileName ?? 'a non-CAD profile document'}. Replace it with the authored
 					cross-section drawing before treating this reconstruction as verified.
+				</p>
+			{:else if archivedDwg}
+				<p class="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
+					This revision was stitched from a native DWG, which the reconstruction no longer reads.
+					The geometry below stands, but rebuilding the project needs the same sheet exported to
+					DXF.
 				</p>
 			{/if}
 

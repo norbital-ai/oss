@@ -14,7 +14,6 @@
 	},
 	"dependencies": {
 		"@iconify/svelte": "^5.2.2",
-		"@mlightcad/libredwg-web": "0.7.9",
 		"@norbital-ai/platform-utils": "0.0.1",
 		"@norbital-ai/pod": "0.0.3",
 		"@norbital-ai/std": "0.0.1",

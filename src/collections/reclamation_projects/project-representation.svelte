@@ -160,7 +160,7 @@
 			kind: 'cross_section',
 			label: 'Cross sections',
 			field: 'cross_section_document',
-			hint: 'Authored DWG/DXF, or the vector tender PDF retained for calibrated normalisation.'
+			hint: 'Authored DXF section sheet, or a digitised section JSON. A DWG must be exported to DXF first — every CAD application writes it.'
 		}
 	] as const;
 

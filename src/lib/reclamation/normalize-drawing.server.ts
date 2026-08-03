@@ -1,114 +1,4 @@
-import { Dwg_File_Type, LibreDwg, type DwgEntity } from '@mlightcad/libredwg-web';
-import type { DxfDocument, DxfEntity, DxfEntityType } from './dxf.js';
 import { detectFormat, type RawDocument } from './extract.js';
-
-let libreDwg: ReturnType<typeof LibreDwg.create> | null = null;
-
-function decoder() {
-	libreDwg ??= LibreDwg.create();
-	return libreDwg;
-}
-
-type PointLike = { readonly x?: number; readonly y?: number; readonly z?: number };
-type EntityLike = DwgEntity & Record<string, unknown>;
-
-function point(value: unknown): readonly [number, number, number] | null {
-	if (typeof value !== 'object' || value === null) return null;
-	const candidate = value as PointLike;
-	const x = Number(candidate.x);
-	const y = Number(candidate.y);
-	const z = Number(candidate.z ?? 0);
-	return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x, y, z] : null;
-}
-
-function points(value: unknown): readonly (readonly [number, number, number])[] {
-	if (!Array.isArray(value)) return [];
-	return value.flatMap((entry) => {
-		const parsed = point(entry);
-		return parsed ? [parsed] : [];
-	});
-}
-
-function decodedEntity(entity: EntityLike): DxfEntity | null {
-	const layer = String(entity.layer || '0');
-	const flag = Number(entity.flag ?? 0);
-	const common = (
-		type: DxfEntityType,
-		vertices: DxfEntity['vertices'],
-		closed = false
-	): DxfEntity => ({
-		type,
-		layer,
-		vertices,
-		closed
-	});
-
-	switch (entity.type) {
-		case 'LINE': {
-			const start = point(entity.startPoint);
-			const end = point(entity.endPoint);
-			return start && end ? common('LINE', [start, end]) : null;
-		}
-		case 'LWPOLYLINE':
-			return common('LWPOLYLINE', points(entity.vertices), (flag & 1) === 1);
-		case 'POLYLINE2D':
-		case 'POLYLINE3D':
-			return common('POLYLINE', points(entity.vertices), (flag & 1) === 1);
-		case 'POINT': {
-			const position = point(entity.position);
-			return position ? common('POINT', [position]) : null;
-		}
-		case 'TEXT': {
-			const position = point(entity.startPoint);
-			return {
-				...common('TEXT', position ? [position] : []),
-				text: String(entity.text ?? '')
-			};
-		}
-		case 'MTEXT': {
-			const position = point(entity.insertionPoint);
-			return {
-				...common('MTEXT', position ? [position] : []),
-				text: String(entity.text ?? '')
-			};
-		}
-		default:
-			return null;
-	}
-}
-
-/** Decode a native DWG to the same entity model used by the DXF reader. */
-async function normalizeDwg(document: RawDocument): Promise<RawDocument> {
-	const runtime = await decoder();
-	const data = runtime.dwg_read_data(document.bytes.slice().buffer, Dwg_File_Type.DWG);
-	if (data === undefined) {
-		throw new Error(`LibreDWG could not decode "${document.fileName ?? 'drawing.dwg'}".`);
-	}
-	try {
-		const database = runtime.convert(data);
-		const entities: DxfEntity[] = [];
-		const layers = new Set<string>();
-		const skipped: Record<string, number> = {};
-		for (const source of database.entities as EntityLike[]) {
-			const entity = decodedEntity(source);
-			if (entity) {
-				entities.push(entity);
-				layers.add(entity.layer);
-			} else {
-				skipped[source.type] = (skipped[source.type] ?? 0) + 1;
-			}
-		}
-		const decodedCad: DxfDocument = {
-			entities,
-			layers: [...layers].sort(),
-			skipped,
-			insUnits: null
-		};
-		return { ...document, decodedCad };
-	} finally {
-		runtime.dwg_free(data);
-	}
-}
 
 /**
  * Confirm whether a tender PDF actually carries vector drawing operators.
@@ -160,10 +50,40 @@ async function inspectPdf(document: RawDocument): Promise<never> {
 	);
 }
 
-/** Native drawing normalisation happens before the synchronous geometry engine. */
+/**
+ * Refuse native DWG, in the same terms the floor-plan reader already uses.
+ *
+ * The engine runs inside a pooled tenant runtime with roughly 139 MiB of memory
+ * available to it in total. Decoding DWG needs LibreDWG, an Emscripten build
+ * whose heap reaches ~66 MiB on first use and — like every Emscripten heap —
+ * never shrinks, so one decode claimed that memory for the rest of that
+ * runtime's life and left too little for the reconstruction itself. The result
+ * was not a bad model but a dead process: the guest kernel killed the runtime
+ * mid-request and the caller saw a generic error with nothing to act on.
+ *
+ * DXF is not a workaround here, it is the format the rest of this template
+ * already runs on — `extractPlan` has always required it for floor plans, in
+ * these words — and every CAD application writes it. The refusal is explicit and
+ * names the fix, so it reaches the user as a `failure_reason` on a failed
+ * revision instead of as a runtime that stopped answering.
+ */
+function refuseDwg(document: RawDocument): never {
+	throw new Error(
+		`Cross-section document "${document.fileName ?? 'upload.dwg'}" is a native DWG, which this workspace does not read. ` +
+			'DWG has to be exported to DXF first — every CAD application can write it, and the reconstruction reads DXF directly.'
+	);
+}
+
+/**
+ * Native drawing normalisation happens before the synchronous geometry engine.
+ *
+ * What remains is format triage: DXF, XYZ, CSV and JSON are already readable by
+ * the extractor and pass straight through, while DWG and PDF are refused with a
+ * reason naming what to supply instead.
+ */
 export async function normalizeDrawing(document: RawDocument): Promise<RawDocument> {
 	const format = detectFormat(document);
-	if (format === 'dwg') return normalizeDwg(document);
+	if (format === 'dwg') refuseDwg(document);
 	if (format === 'pdf') return inspectPdf(document);
 	return document;
 }
