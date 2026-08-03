@@ -1,22 +1,19 @@
 /**
  * Step 8 — PERSIST.
  *
- * Four collections, written in dependency order: the payslip, its lines, its statutory charges, and
- * what each line consumed.
- *
- * Provenance is rows, not a column. A line is many-to-one with its sources — an overtime line is
- * computed from every time entry in the attendance window, an unpaid-leave deduction from every
- * leave request that caused it — so `payslip_line_sources` carries one row per source rather than
- * `payslip_lines` carrying one nullable id that could only ever name the first of them.
+ * Two collections, written in dependency order: the payslip and its complete component breakdown.
+ * A payslip line is the only junction. Its strict component union points directly to the configured
+ * component, the entered component event, or the statutory scheme that produced the line.
  *
  * A rebuild is safe: the run's existing payslips are deleted first and the cascade takes their
- * lines, charges and sources with them. Nothing is merged, so a rebuild cannot leave half of a
+ * lines with them. Nothing is merged, so a rebuild cannot leave half of a
  * previous answer behind.
  */
 
 import { assertComplete, PAGE_LIMIT, type PayrollApi } from './api.js';
 import type { ContributionCharge } from './contribute.js';
-import type { LineSource, MeasuredLine } from './measure.js';
+import type { MeasuredLine } from './measure.js';
+import type { PayslipLineComponent } from '../../../custom-types/payslip_line_component/+definition.js';
 import type { Settlement } from './settle.js';
 
 export type PendingPayslip = {
@@ -78,61 +75,65 @@ export async function persistPayslips(options: {
 	if (payslipIdByEmployment.size !== options.pending.length)
 		throw new Error('Not every calculated employment produced a payslip.');
 
-	// Lines are written in one batch and matched back by (payslip, sequence), which is unique by
-	// construction — the measurement numbers them from one within each payslip.
-	const lineInputs: { payslipId: string; line: MeasuredLine }[] = [];
+	type LineInput = {
+		readonly payslip_id: string;
+		readonly component: PayslipLineComponent;
+		readonly bucket: 'EARNING' | 'ABSENCE' | 'DEDUCTION' | 'NON_WAGE_PAYMENT' | 'EMPLOYER_COST';
+		readonly amount: number;
+		readonly quantity: number | null;
+		readonly rate: number | null;
+		readonly sequence: number;
+	};
+	const lineInputs: LineInput[] = [];
 	for (const payslip of options.pending) {
 		const payslipId = payslipIdByEmployment.get(payslip.employmentId);
 		if (payslipId == null)
 			throw new Error('A calculated employment has no payslip to hang lines on.');
-		for (const line of payslip.settlement.lines) lineInputs.push({ payslipId, line });
-	}
-
-	if (lineInputs.length > 0) {
-		const lineRows = await options.api.db.mutate(
-			'payslip_lines',
-			lineInputs.map(({ payslipId, line }) => ({
+		let sequence = 1;
+		for (const line of payslip.settlement.lines) {
+			const policy = line.payComponent.policy;
+			if (policy == null || policy.kind === 'INFORMATION') continue;
+			lineInputs.push({
 				payslip_id: payslipId,
-				pay_component_id: line.payComponent.norbital_id,
-				component_type_id: line.componentType.norbital_id,
+				component: line.component,
+				bucket: policy.kind,
 				amount: line.amount,
 				quantity: line.quantity,
 				rate: line.rate,
-				sequence: line.sequence
-			}))
-		);
-		const lineIdByKey = new Map(
-			lineRows.map((row) => [
-				`${String(row.payslip_id)}:${String(row.sequence)}`,
-				identifier(row, 'a payslip line')
-			])
-		);
-		const sourceInputs: { payslip_line_id: string; source: LineSource }[] = [];
-		for (const { payslipId, line } of lineInputs) {
-			const lineId = lineIdByKey.get(`${payslipId}:${line.sequence}`);
-			if (lineId == null)
-				throw new Error(
-					`Payslip line ${line.payComponent.code} was written without an identifier.`
-				);
-			for (const source of line.sources) sourceInputs.push({ payslip_line_id: lineId, source });
+				sequence: sequence++
+			});
 		}
-		if (sourceInputs.length > 0) await options.api.db.mutate('payslip_line_sources', sourceInputs);
+		for (const charge of payslip.charges) {
+			const shared = {
+				statutory_contribution_id: charge.contribution.row.norbital_id,
+				base_amount: charge.base,
+				band_reference: charge.bandReference,
+				special_amounts: charge.special
+			};
+			lineInputs.push({
+				payslip_id: payslipId,
+				component: { kind: 'STATUTORY_EMPLOYEE', ...shared },
+				bucket: 'DEDUCTION',
+				amount: charge.employee,
+				quantity: null,
+				rate: null,
+				sequence: sequence++
+			});
+			lineInputs.push({
+				payslip_id: payslipId,
+				component: { kind: 'STATUTORY_EMPLOYER', ...shared },
+				bucket: 'EMPLOYER_COST',
+				amount: charge.employer,
+				quantity: null,
+				rate: null,
+				sequence: sequence++
+			});
+		}
 	}
 
-	const chargeInputs = options.pending.flatMap((payslip) => {
-		const payslipId = payslipIdByEmployment.get(payslip.employmentId);
-		if (payslipId == null) return [];
-		return payslip.charges.map((charge) => ({
-			payslip_id: payslipId,
-			statutory_contribution_id: charge.contribution.row.norbital_id,
-			base_amount: charge.base,
-			employee_amount: charge.employee,
-			employer_amount: charge.employer,
-			band_reference: charge.bandReference,
-			special_amounts: charge.special
-		}));
-	});
-	if (chargeInputs.length > 0) await options.api.db.mutate('payslip_contributions', chargeInputs);
+	if (lineInputs.length > 0) {
+		await options.api.db.mutate('payslip_lines', lineInputs);
+	}
 
 	return { payslipCount: options.pending.length, lineCount: lineInputs.length };
 }

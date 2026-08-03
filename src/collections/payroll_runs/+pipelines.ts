@@ -47,10 +47,6 @@ export default {
 				});
 			}
 
-			const componentNameByType = new Map<string, string>();
-			for (const type of await api.db.query.component_types.findMany({ limit: 1000 }))
-				componentNameByType.set(type.code, type.name);
-
 			for (const run of exports) {
 				if (run.payslips.length === 0) continue;
 				actions.push({
@@ -61,8 +57,7 @@ export default {
 						content: payslipPdf({
 							period: run.period,
 							payDate: run.payDate,
-							payslip,
-							componentNameByType
+							payslip
 						})
 					})),
 					metadata: { kind: 'payslip-pdfs', period: run.period }

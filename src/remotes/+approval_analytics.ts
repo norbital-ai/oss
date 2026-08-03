@@ -146,25 +146,30 @@ export default defineQueryHandler({
 				api.db.leave_requests.count({
 					where: {
 						norbital_approval_id: { isNotNull: true },
+						kind: { eq: 'TIME_OFF' },
 						from_date: { gte: ytdStartKey, lt: ytdEndKey }
 					}
 				}),
 				api.db.leave_requests.count({
 					where: {
 						norbital_approval_id: { isNull: true },
+						kind: { eq: 'TIME_OFF' },
 						from_date: { gte: ytdStartKey, lt: ytdEndKey }
 					}
 				}),
-				api.db.leave_requests.count(),
+				api.db.leave_requests.count({ where: { kind: { eq: 'TIME_OFF' } } }),
 				api.db.query.leave_requests.findMany({
-					where: { from_date: { gte: ytdStartKey, lt: ytdEndKey } },
+					where: { kind: { eq: 'TIME_OFF' }, from_date: { gte: ytdStartKey, lt: ytdEndKey } },
 					columns: { norbital_id: true },
 					limit: 5000
 				}),
 				approvalQuery,
 				...historyYears.map((year) =>
 					api.db.leave_requests.count({
-						where: { from_date: { gte: `${year}-01-01`, lt: `${year + 1}-01-01` } }
+						where: {
+							kind: { eq: 'TIME_OFF' },
+							from_date: { gte: `${year}-01-01`, lt: `${year + 1}-01-01` }
+						}
 					})
 				)
 			]);

@@ -44,13 +44,6 @@
 	const companyLabelsById = $derived(
 		new Map((companiesQuery.current ?? []).map((company) => [company.norbital_id, company.name]))
 	);
-	const componentTypesQuery = client.db.component_types.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		limit: 200
-	});
-	const componentTypeLabelsById = $derived(
-		new Map((componentTypesQuery.current ?? []).map((type) => [type.norbital_id, type.name]))
-	);
 	const analyticsQuery = client.invoke.approval_analytics({ subject: 'CLAIM' });
 	const analytics = $derived(
 		analyticsQuery.current ?? {
@@ -99,7 +92,7 @@
 				<h2 class="text-lg font-semibold">Reimbursement claims</h2>
 				<p class="text-sm text-muted-foreground">
 					{analytics.total.toLocaleString()} claim entries in the ledger. Every other pay component —
-					standing allowances, one-offs, arrears, reversals, loan instalments — arrives through the same
+					recurring allowances, one-offs, arrears, reversals, loan instalments — arrives through the same
 					entry stream and is listed under Entries.
 				</p>
 			</div>
@@ -139,6 +132,7 @@
 			<Column name="quantity" label="Quantity" />
 			<Column name="event_date" label="Event date" />
 			<Column name="pay_period" label="Pay period" />
+			<Column name="usage_mode" label="Payslip usage" card="badge" />
 			<Column name="description" label="Description" />
 			<Column
 				name="origin"
@@ -165,11 +159,10 @@
 				label="Company"
 				render={({ value }) => companyLabelsById.get(String(value)) ?? value}
 			/>
-			<Column
-				name="component_type_id"
-				label="Component type"
-				render={({ value }) => componentTypeLabelsById.get(String(value)) ?? value}
-			/>
+			<Column name="nature" card="badge" />
+			<Column name="policy" label="Settlement and statutory policy" />
+			<Column name="definition" label="Calculation" />
+			<Column name="sequence" label="Order" />
 			<Column name="effective_range" label="Effective" />
 		{/snippet}
 	</CollectionTable>

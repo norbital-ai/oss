@@ -14,7 +14,7 @@
  * - **numeric literals need a decimal point** when mixed with doubles: `26` is an int, `26.0` a
  *   double, and `x / 26` where `x` is a double is a type error.
  *
- * Each formula is evaluated as its own one-expression computation, in `component_types.sequence`
+ * Each formula is evaluated as its own one-expression computation, in `pay_components.sequence`
  * order. That is deliberate: `component('HOURLY_RATE')` is an opaque op call, so Reckon's
  * AST-derived topological sort cannot see through it, and evaluating the whole catalogue as one
  * graph would silently read a component before it was measured. Sequence order is the contract the

@@ -27,7 +27,7 @@ configuration. The formula is not copied into company pay components.
 | `OVERTIME`        | Dated statutory award after schedule/day classification                     | Time entry, shift, roster, holiday, OT rule           |
 | `OVERTIME_EXCESS` | Statutory value reclassified beyond daily/monthly control                   | Same time entry and rule as the original OT           |
 
-Amounts are stored as magnitudes. Earning/deduction direction comes from the component type and
+Amounts are stored as magnitudes. Earning/deduction direction comes from the pay component policy and
 contribution treatment. A correction never sneaks direction in through a negative amount.
 
 ### Claimable components
@@ -45,9 +45,9 @@ object from an allowance:
 some are soft ones a manager may deliberately exceed. A system that can only refuse pushes the soft
 case out into a spreadsheet, where it stops being visible to payroll at all.
 
-The definition carries no statutory information. Whether a component is EPF wages is reachable only
-through `pay_components.component_type_id` → `contribution_treatments`, so renaming a component
-cannot change what it is chargeable to.
+The pay-component definition carries no statutory information. Whether a component is EPF wages is
+owned by the strict policy union on its `component_type`; renaming a component cannot change its
+settlement direction or what it is chargeable to.
 
 ### Leave entitlement
 
@@ -56,9 +56,9 @@ statutory figure is a floor, not a default: a company that mis-configures matern
 still owes 98. Compliance does not depend on the customer configuring correctly, which is the only
 arrangement that survives contact with a real tenant.
 
-## Contribution treatment grid
+## Component-owned contribution treatment grid
 
-Every component type has one effective treatment for every statutory contribution:
+Every pay component policy carries one effective treatment for every statutory contribution:
 
 | Treatment | Effect on contribution base                                    |
 | --------- | -------------------------------------------------------------- |
@@ -68,7 +68,7 @@ Every component type has one effective treatment for every statutory contributio
 | `SPECIAL` | Apply a named contribution-specific rule                       |
 | `UNSET`   | Configuration is incomplete; activation/calculation is blocked |
 
-This cross-product makes omissions visible. Adding a new component type cannot silently bypass EPF,
+This cross-product makes omissions visible. Adding a new pay component cannot silently bypass EPF,
 SOCSO, EIS, tax or another scheme.
 
 ## Malaysian treatment summary
@@ -109,7 +109,7 @@ YTD is not a mutable ledger table. It is the sum of earlier paid results in the 
 
 ```text
 YTD contribution base/share
-  = SUM(payslip_contributions)
+  = SUM(payslip_lines WHERE component.kind starts with 'STATUTORY_')
     over earlier PAID runs for the employee and statutory scheme
 ```
 

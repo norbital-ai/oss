@@ -76,7 +76,6 @@ export default {
 		{ collection: 'employment_statutory_facts', action: 'read', where: ownEmploymentChild },
 		{ collection: 'roster_entries', action: 'read', where: ownEmploymentChild },
 		{ collection: 'repayment_agreements', action: 'read', where: ownEmploymentChild },
-		{ collection: 'leave_ledger', action: 'read', where: ownEmploymentChild },
 		{ collection: 'payslips', action: 'read', where: ownEmploymentChild },
 		{ collection: 'component_entries', action: 'read', where: ownEmploymentChild },
 		{ collection: 'time_entries', action: 'read', where: ownEmploymentChild },

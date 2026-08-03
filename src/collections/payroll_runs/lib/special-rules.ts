@@ -4,7 +4,7 @@
  * A statutory scheme is more than a band table. EPF brackets its wage before applying a percentage;
  * PCB annualises, relieves, scales, spreads and rounds twice; SOCSO does none of it. Those
  * behaviours are named rules on the contribution row, so a jurisdiction is still rows rather than
- * code, and `contribution_treatments.SPECIAL { rule }` can name one of them.
+ * code, and a pay component policy's `SPECIAL { rule }` treatment can name one of them.
  *
  * A token is `NAME` or `NAME:arg[:arg]`. **The set is closed**: an unrecognised token is an error,
  * not a no-op, because a silently ignored rule is an under-contribution nobody notices. Validation

@@ -9,7 +9,11 @@ import { z } from 'zod/mini';
  * `reverses_entry_id` are validated in `+hooks.ts`, not by a constraint.
  */
 export const entryOriginSchema = z.discriminatedUnion('kind', [
-	z.strictObject({ kind: z.literal('STANDING'), effective_range: dateRangeZodSchema }),
+	z.strictObject({
+		kind: z.literal('RECURRING'),
+		cadence: z.literal('PAY_PERIOD'),
+		effective_range: dateRangeZodSchema
+	}),
 	z.strictObject({ kind: z.literal('ONE_OFF'), note: z.string() }),
 	z.strictObject({
 		kind: z.literal('CLAIM'),
@@ -17,7 +21,7 @@ export const entryOriginSchema = z.discriminatedUnion('kind', [
 		incurred_on: z.iso.date()
 	}),
 	z.strictObject({
-		kind: z.literal('INSTALMENT'),
+		kind: z.literal('LOAN_INSTALMENT'),
 		agreement_id: z.uuid(),
 		sequence: z.int().check(z.positive()),
 		of: z.int().check(z.positive())

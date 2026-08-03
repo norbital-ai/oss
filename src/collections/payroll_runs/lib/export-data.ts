@@ -102,45 +102,51 @@ export async function loadRunExports(
 		.map((run) => requiredDateKey(run.attendance_to, 'payroll_runs.attendance_to'))
 		.toSorted()
 		.at(-1)!;
-	const [lines, charges, employments, componentTypes, payComponents, terms, timeEntries, rosters] =
-		await Promise.all([
-			api.db.query.payslip_lines.findMany({
-				where: { payslip_id: { in: payslipIds } },
-				limit: PAGE_LIMIT
-			}),
-			api.db.query.payslip_contributions.findMany({
-				where: { payslip_id: { in: payslipIds } },
-				limit: PAGE_LIMIT
-			}),
-			api.db.query.employments.findMany({
-				where: { norbital_id: { in: employmentIds } },
-				limit: PAGE_LIMIT
-			}),
-			api.db.query.component_types.findMany({ limit: PAGE_LIMIT }),
-			api.db.query.pay_components.findMany({ limit: PAGE_LIMIT }),
-			api.db.query.employment_terms.findMany({
-				where: { employment_id: { in: employmentIds } },
-				limit: PAGE_LIMIT
-			}),
-			api.db.query.time_entries.findMany({
-				where: {
-					employment_id: { in: employmentIds },
-					work_date: { gte: attendanceFrom, lte: attendanceTo }
-				},
-				limit: PAGE_LIMIT
-			}),
-			api.db.query.roster_entries.findMany({
-				where: {
-					employment_id: { in: employmentIds },
-					work_date: { gte: attendanceFrom, lte: attendanceTo }
-				},
-				limit: PAGE_LIMIT
-			})
-		]);
+	const [lines, employments, payComponents, terms, timeEntries, rosters] = await Promise.all([
+		api.db.query.payslip_lines.findMany({
+			where: { payslip_id: { in: payslipIds } },
+			limit: PAGE_LIMIT
+		}),
+		api.db.query.employments.findMany({
+			where: { norbital_id: { in: employmentIds } },
+			limit: PAGE_LIMIT
+		}),
+		api.db.query.pay_components.findMany({ limit: PAGE_LIMIT }),
+		api.db.query.employment_terms.findMany({
+			where: { employment_id: { in: employmentIds } },
+			limit: PAGE_LIMIT
+		}),
+		api.db.query.time_entries.findMany({
+			where: {
+				employment_id: { in: employmentIds },
+				work_date: { gte: attendanceFrom, lte: attendanceTo }
+			},
+			limit: PAGE_LIMIT
+		}),
+		api.db.query.roster_entries.findMany({
+			where: {
+				employment_id: { in: employmentIds },
+				work_date: { gte: attendanceFrom, lte: attendanceTo }
+			},
+			limit: PAGE_LIMIT
+		})
+	]);
 	assertComplete(lines, 'payslip lines');
 	assertComplete(terms, 'employment terms');
 	assertComplete(timeEntries, 'time entries');
 	assertComplete(rosters, 'roster entries');
+	const componentEntryIds = [
+		...new Set(
+			lines.flatMap((line) => (line.component_entry_id == null ? [] : [line.component_entry_id]))
+		)
+	];
+	const componentEntries = componentEntryIds.length
+		? await api.db.query.component_entries.findMany({
+				where: { norbital_id: { in: componentEntryIds } },
+				limit: PAGE_LIMIT
+			})
+		: [];
+	assertComplete(componentEntries, 'component entries');
 
 	const employeeIds = [...new Set(employments.map((row) => row.employee_id))];
 	const shiftIds = [...new Set(rosters.map((row) => row.shift_definition_id))];
@@ -159,7 +165,13 @@ export async function loadRunExports(
 	assertComplete(employees, 'employees');
 	assertComplete(shifts, 'shift definitions');
 
-	const contributionIds = [...new Set(charges.map((row) => row.statutory_contribution_id))];
+	const contributionIds = [
+		...new Set(
+			lines.flatMap((line) =>
+				line.statutory_contribution_id == null ? [] : [line.statutory_contribution_id]
+			)
+		)
+	];
 	const contributions = contributionIds.length
 		? await api.db.query.statutory_contributions.findMany({
 				where: { norbital_id: { in: contributionIds } },
@@ -167,8 +179,8 @@ export async function loadRunExports(
 			})
 		: [];
 
-	const typeById = new Map(componentTypes.map((row) => [row.norbital_id, row]));
 	const componentById = new Map(payComponents.map((row) => [row.norbital_id, row]));
+	const entryById = new Map(componentEntries.map((row) => [row.norbital_id, row]));
 	const employmentById = new Map(employments.map((row) => [row.norbital_id, row]));
 	const employeeById = new Map(employees.map((row) => [row.norbital_id, row]));
 	const termsByEmployment = groupBy(terms, (row) => row.employment_id);
@@ -177,7 +189,6 @@ export async function loadRunExports(
 	const shiftById = new Map(shifts.map((row) => [row.norbital_id, row]));
 	const contributionCodeById = new Map(contributions.map((row) => [row.norbital_id, row.code]));
 	const linesByPayslip = groupBy(lines, (row) => row.payslip_id);
-	const chargesByPayslip = groupBy(charges, (row) => row.payslip_id);
 	const payslipsByRun = groupBy(payslips, (row) => row.payroll_run_id);
 
 	return runs.map((run) => {
@@ -215,29 +226,58 @@ export async function loadRunExports(
 						account_number: account.bank_account_number
 					}
 				});
-			const reportLines: ReportLine[] = (linesByPayslip.get(payslip.norbital_id) ?? [])
+			const settledLines = linesByPayslip.get(payslip.norbital_id) ?? [];
+			const reportLines: ReportLine[] = settledLines
 				.toSorted((left, right) => Number(left.sequence) - Number(right.sequence))
-				.map((line) => {
-					const type = typeById.get(line.component_type_id);
-					const definition = componentById.get(line.pay_component_id)?.definition ?? null;
+				.flatMap((line) => {
+					if (line.pay_component_id == null) return [];
+					const payComponent = componentById.get(line.pay_component_id);
+					const definition = payComponent?.definition ?? null;
 					const overtimeDayType =
 						definition != null &&
 						(definition.source === 'OVERTIME' || definition.source === 'OVERTIME_EXCESS')
 							? definition.rule.day_type
 							: null;
-					return {
-						payComponentCode: componentById.get(line.pay_component_id)?.code ?? 'UNKNOWN',
-						componentTypeCode: type?.code ?? 'UNKNOWN',
-						nature: type?.nature ?? 'INFORMATION',
-						amount: Number(line.amount),
-						quantity: line.quantity == null ? null : Number(line.quantity),
-						isCompanyDirect:
-							definition?.source === 'ENTRY' && definition.settlement === 'COMPANY_DIRECT',
-						isClaim: definition?.source === 'ENTRY' && definition.cap != null,
-						overtimeDayType,
-						isOvertimeExcess: definition?.source === 'OVERTIME_EXCESS'
-					};
+					return [
+						{
+							payComponentCode: payComponent?.code ?? 'UNKNOWN',
+							payComponentName: payComponent?.name ?? payComponent?.code ?? 'Unknown component',
+							nature: payComponent?.nature ?? 'INFORMATION',
+							calculationSource: definition?.source ?? 'DERIVED',
+							amount: Number(line.amount),
+							quantity: line.quantity == null ? null : Number(line.quantity),
+							isCompanyDirect:
+								definition?.source === 'ENTRY' && definition.settlement === 'COMPANY_DIRECT',
+							isClaim: definition?.source === 'ENTRY' && definition.cap != null,
+							isLoanInstalment:
+								line.component_entry_id != null &&
+								entryById.get(line.component_entry_id)?.origin?.kind === 'LOAN_INSTALMENT',
+							overtimeDayType,
+							isOvertimeExcess: definition?.source === 'OVERTIME_EXCESS'
+						}
+					];
 				});
+			const contributionTotals = new Map<
+				string,
+				{ base: number; employee: number; employer: number }
+			>();
+			for (const line of settledLines) {
+				if (line.statutory_contribution_id == null) continue;
+				const code = contributionCodeById.get(line.statutory_contribution_id);
+				if (code == null) continue;
+				const component = line.component;
+				if (component == null) continue;
+				if (component.kind !== 'STATUTORY_EMPLOYEE' && component.kind !== 'STATUTORY_EMPLOYER')
+					continue;
+				const current = contributionTotals.get(code) ?? { base: 0, employee: 0, employer: 0 };
+				contributionTotals.set(code, {
+					base: Math.max(current.base, Number(component.base_amount)),
+					employee:
+						current.employee + (component.kind === 'STATUTORY_EMPLOYEE' ? Number(line.amount) : 0),
+					employer:
+						current.employer + (component.kind === 'STATUTORY_EMPLOYER' ? Number(line.amount) : 0)
+				});
+			}
 			return {
 				employmentId: payslip.employment_id,
 				employeeNumber,
@@ -278,22 +318,7 @@ export async function loadRunExports(
 				net: Number(payslip.net),
 				employerCost: Number(payslip.employer_cost),
 				lines: reportLines,
-				contributions: new Map(
-					(chargesByPayslip.get(payslip.norbital_id) ?? []).flatMap((charge) => {
-						const code = contributionCodeById.get(charge.statutory_contribution_id);
-						if (code == null) return [];
-						return [
-							[
-								code,
-								{
-									base: Number(charge.base_amount),
-									employee: Number(charge.employee_amount),
-									employer: Number(charge.employer_amount)
-								}
-							] as const
-						];
-					})
-				)
+				contributions: contributionTotals
 			};
 		});
 		return {

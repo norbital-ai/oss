@@ -1,7 +1,7 @@
 /**
  * Component entries — the only door money enters payroll through.
  *
- * An entry's `amount` is always a **magnitude**. Direction comes from the component type's nature
+ * An entry's `amount` is always a **magnitude**. Direction comes from the pay component's policy
  * and from the treatment grid, and taking money back is an entry whose `origin.kind` is `REVERSAL`,
  * never a negative number. That is what keeps "is this figure a credit or a debit?" answerable from
  * the type alone.
@@ -103,10 +103,10 @@ export function entryEventDate(
 }
 
 /** A standing entry's own effective range, which prorates it independently of the employment. */
-export function standingRange(
+export function recurringRange(
 	entry: ComponentEntry
 ): { readonly start: IsoDate; readonly end: IsoDate | null } | null {
-	if (entry.origin?.kind !== 'STANDING') return null;
+	if (entry.origin?.kind !== 'RECURRING') return null;
 	const range = entry.origin.effective_range;
 	return {
 		start: String(range.start).slice(0, 10),
@@ -121,5 +121,5 @@ export function standingRange(
  * amounts for a moment in time, and dividing them by the days of a month would be meaningless.
  */
 export function prorates(entry: ComponentEntry): boolean {
-	return entry.origin?.kind === 'STANDING';
+	return entry.origin?.kind === 'RECURRING';
 }

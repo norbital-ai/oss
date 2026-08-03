@@ -39,39 +39,30 @@ export function validateConfiguration(configuration: Configuration): RunIssue[] 
 			configuration.jurisdiction.norbital_id
 		);
 
-	// ── the grid: every type the catalogue uses must have a decided cell for every scheme ───────
-	const usedTypeIds = new Set(
-		configuration.payComponents.map((component) => component.component_type_id)
-	);
-	for (const typeId of usedTypeIds) {
-		const type = configuration.componentTypeById.get(typeId);
-		if (!type) {
-			blocker(
-				'COMPONENT_TYPE_MISSING',
-				'A pay component points at a component type that does not exist.',
-				'pay_components'
-			);
-			continue;
-		}
-		if (type.nature === 'INFORMATION') continue;
+	// Every monetary component owns a decided cell for every effective statutory scheme.
+	for (const component of configuration.payComponents) {
+		if (component.nature === 'INFORMATION') continue;
 		for (const contribution of configuration.contributions) {
-			const cell = configuration.treatments.get(`${typeId}:${contribution.row.norbital_id}`);
+			const cell = configuration.treatments.get(
+				`${component.norbital_id}:${contribution.row.norbital_id}`
+			);
 			if (cell?.treatment == null) {
 				blocker(
 					'TREATMENT_MISSING',
-					`No ${contribution.row.code} treatment exists for ${type.code}. The grid is generated ` +
-						'for every pair, so an absent cell is a seeding fault, not a decision.',
-					'contribution_treatments'
+					`No ${contribution.row.code} treatment exists for ${component.code}. Each component ` +
+						'must state the decision in its policy.',
+					'pay_components',
+					component.norbital_id
 				);
 				continue;
 			}
 			if (cell.treatment.kind === 'UNSET')
 				blocker(
 					'TREATMENT_UNSET',
-					`${type.code} × ${contribution.row.code} is undecided. Payroll cannot guess whether ` +
+					`${component.code} × ${contribution.row.code} is undecided. Payroll cannot guess whether ` +
 						'this kind of pay is chargeable.',
-					'contribution_treatments',
-					cell.norbital_id
+					'pay_components',
+					component.norbital_id
 				);
 			if (
 				cell.treatment.kind === 'SPECIAL' &&
@@ -79,10 +70,10 @@ export function validateConfiguration(configuration: Configuration): RunIssue[] 
 			)
 				blocker(
 					'SPECIAL_RULE_UNKNOWN',
-					`${type.code} × ${contribution.row.code} names special rule "${cell.treatment.rule}", ` +
+					`${component.code} × ${contribution.row.code} names special rule "${cell.treatment.rule}", ` +
 						`which ${contribution.row.code} does not declare.`,
-					'contribution_treatments',
-					cell.norbital_id
+					'pay_components',
+					component.norbital_id
 				);
 		}
 	}

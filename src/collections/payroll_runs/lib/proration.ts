@@ -4,9 +4,9 @@
  * An amount is prorated when the employment — or a standing entry's own effective range — covers
  * only part of the pay period. The divisor comes from `jurisdictions.proration` and nothing else:
  * there is no `prorates` flag on a pay component, no proration arithmetic inside a formula, and no
- * branch on a component type's name.
+ * branch on a pay component's name.
  *
- * What prorates is a component's **cadence**, not its kind: basic salary and a standing allowance
+ * What prorates is a component's **cadence**, not its kind: basic salary and a recurring allowance
  * do, a one-off claim, a bonus and a loan instalment do not. Keying on cadence is what removes the
  * type-name branch the plan itself worries about (decision E7 / E22).
  *

@@ -39,10 +39,45 @@ const HEADER_ROW = 1;
 const SECTION_BAND_ROW = 2;
 const NUMERIC_FORMAT = '#,##0.00';
 const THIN_BORDER = { style: 'thin', color: { argb: 'FFB8B5A8' } } as const;
+const INFOTECH_NAVY = 'FF17365D';
+const INFOTECH_LIGHT_BLUE = 'FFD9EAF7';
+
+const HUMAN_HEADERS: Readonly<Record<string, string>> = {
+	eid: 'Employee ID',
+	ic_no: 'Identification No.',
+	basic_salary: 'Basic Salary',
+	gross_salary: 'Gross Salary',
+	net_salary: 'Net Salary',
+	incentive_ot: 'OT Incentive',
+	loan_recovery: 'Loan Recovery',
+	epf_employee: 'EPF (Employee)',
+	epf_employer: 'EPF (Employer)',
+	socso_employee: 'SOCSO (Employee)',
+	socso_employer: 'SOCSO (Employer)',
+	eis_employee: 'EIS (Employee)',
+	eis_employer: 'EIS (Employer)',
+	tax_employee: 'PCB / Tax',
+	att_normal_hours: 'Normal Hours',
+	att_actual_hours: 'Actual Hours',
+	att_shift_codes: 'Shift Codes'
+};
+
+function humanHeader(outputId: string): string {
+	return (
+		HUMAN_HEADERS[outputId] ??
+		outputId
+			.split('_')
+			.map((word) =>
+				word.length <= 3 ? word.toUpperCase() : `${word[0]!.toUpperCase()}${word.slice(1)}`
+			)
+			.join(' ')
+	);
+}
 
 export type WorkbookSheet = {
 	/** The worksheet name — one sheet per period. */
 	readonly period: string;
+	readonly payDate?: string;
 	readonly payslips: readonly ReportPayslip[];
 };
 
@@ -81,11 +116,85 @@ export async function payrollReportXlsx(sheets: readonly WorkbookSheet[]): Promi
 			: genericRows;
 		const groups = usesVendorWorkbookLayout ? VENDOR_WORKBOOK_SECTIONS : outputGroups(genericRows);
 		const identityColumnCount = usesVendorWorkbookLayout ? 8 : IDENTITY_COLUMNS.length;
+		if (usesVendorWorkbookLayout) {
+			const cleanName = `${sheet.period} Salary Listing`.slice(0, 31);
+			const clean = workbook.addWorksheet(cleanName, {
+				views: [{ state: 'frozen', xSplit: identityColumnCount, ySplit: 5 }],
+				pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+			});
+			clean.properties.defaultRowHeight = 20;
+			clean.columns = VENDOR_WORKBOOK_COLUMNS.map((outputId) => ({
+				key: outputId,
+				width: Math.min(24, Math.max(12, humanHeader(outputId).length + 2))
+			}));
+			clean.mergeCells(1, 1, 1, VENDOR_WORKBOOK_COLUMNS.length);
+			clean.getCell(1, 1).value = 'SALARY LISTING';
+			clean.getCell(1, 1).font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
+			clean.getCell(1, 1).fill = fill(INFOTECH_NAVY);
+			clean.getCell(1, 1).alignment = { horizontal: 'center', vertical: 'middle' };
+			clean.getRow(1).height = 28;
+			clean.mergeCells(2, 1, 2, VENDOR_WORKBOOK_COLUMNS.length);
+			clean.getCell(2, 1).value =
+				`Salary month: ${sheet.period}${sheet.payDate ? `   ·   Pay date: ${sheet.payDate}` : ''}`;
+			clean.getCell(2, 1).font = { bold: true, color: { argb: INFOTECH_NAVY } };
+			clean.getCell(2, 1).alignment = { horizontal: 'center' };
+
+			let cleanColumn = 1;
+			for (const group of VENDOR_WORKBOOK_SECTIONS) {
+				const from = cleanColumn;
+				const to = from + group.outputIds.length - 1;
+				clean.getCell(4, from).value = group.name;
+				if (from < to) clean.mergeCells(4, from, 4, to);
+				for (let position = from; position <= to; position += 1) {
+					const cell = clean.getCell(4, position);
+					cell.fill = fill(INFOTECH_LIGHT_BLUE);
+					cell.font = { bold: true, color: { argb: INFOTECH_NAVY } };
+					cell.alignment = { horizontal: 'center', vertical: 'middle' };
+					cell.border = { top: THIN_BORDER, bottom: THIN_BORDER, right: THIN_BORDER };
+				}
+				cleanColumn = to + 1;
+			}
+			for (const [index, outputId] of VENDOR_WORKBOOK_COLUMNS.entries()) {
+				const cell = clean.getCell(5, index + 1);
+				cell.value = humanHeader(outputId);
+				cell.fill = fill(INFOTECH_NAVY);
+				cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+				cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+				cell.border = { top: THIN_BORDER, bottom: THIN_BORDER, right: THIN_BORDER };
+			}
+			clean.getRow(5).height = 34;
+			for (const row of rows) clean.addRow(row);
+			const firstDataRow = 6;
+			const lastDataRow = firstDataRow + rows.length - 1;
+			if (rows.length > 0) {
+				const total = clean.addRow({ eid: 'TOTAL' });
+				total.font = { bold: true, color: { argb: INFOTECH_NAVY } };
+				total.fill = fill(INFOTECH_LIGHT_BLUE);
+				for (let position = identityColumnCount + 1; position <= clean.columnCount; position += 1) {
+					const outputId = VENDOR_WORKBOOK_COLUMNS[position - 1]!;
+					if (outputId === 'remark' || outputId === 'att_shift_codes') continue;
+					total.getCell(position).value = {
+						formula: `SUM(${clean.getColumn(position).letter}${firstDataRow}:${clean.getColumn(position).letter}${lastDataRow})`
+					};
+				}
+			}
+			for (let rowNumber = firstDataRow; rowNumber <= clean.rowCount; rowNumber += 1) {
+				const dataRow = clean.getRow(rowNumber);
+				for (let position = 1; position <= clean.columnCount; position += 1) {
+					const cell = dataRow.getCell(position);
+					cell.border = { bottom: THIN_BORDER, right: THIN_BORDER };
+					if (position > identityColumnCount && typeof cell.value !== 'string')
+						cell.numFmt = NUMERIC_FORMAT;
+				}
+			}
+			clean.autoFilter = { from: { row: 5, column: 1 }, to: { row: 5, column: clean.columnCount } };
+		}
 		const worksheet = workbook.addWorksheet(sheet.period, {
 			// The identity block and the two masthead rows stay put when the reader scrolls into the
 			// statutory columns: a number no one can put a name to is worthless.
 			views: [{ state: 'frozen', xSplit: identityColumnCount, ySplit: SECTION_BAND_ROW }]
 		});
+		if (usesVendorWorkbookLayout) worksheet.state = 'veryHidden';
 		worksheet.properties.defaultRowHeight = 20;
 		// A collapsed column group summarises into the column on its right — which is what makes
 		// collapsing Earnings leave Gross showing, and collapsing the post-gross block leave Net.
@@ -283,7 +392,6 @@ export function payslipPdf(options: {
 	readonly period: string;
 	readonly payDate: string;
 	readonly payslip: ReportPayslip;
-	readonly componentNameByType: ReadonlyMap<string, string>;
 }): string {
 	const { payslip } = options;
 	return textPdf([
@@ -294,9 +402,7 @@ export function payslipPdf(options: {
 		'',
 		'Line | Amount | Currency',
 		...payslip.lines.map(
-			(line) =>
-				`${options.componentNameByType.get(line.componentTypeCode) ?? line.componentTypeCode} | ` +
-				`${line.amount.toFixed(2)} | ${payslip.currency}`
+			(line) => `${line.payComponentName} | ` + `${line.amount.toFixed(2)} | ${payslip.currency}`
 		),
 		'',
 		'Statutory | Employee | Employer',

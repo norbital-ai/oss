@@ -2,7 +2,7 @@ import { defineCustomType } from '@norbital-ai/pod/authoring';
 import { z } from 'zod/mini';
 
 /**
- * How one component type is charged against one statutory contribution.
+ * How one pay component is charged against one statutory contribution.
  * `UNSET` is the generated default — every (component_type, contribution) pair exists
  * as a row, so chargeability is never inferred from a missing row.
  * `SPECIAL.rule` must name a rule listed on `statutory_contributions.special_rules`.

@@ -1,18 +1,34 @@
-import { custom, dateRange, defineModel, text, uuid } from '@norbital-ai/pod/authoring';
+import {
+	custom,
+	dateRange,
+	defineModel,
+	integer,
+	sql,
+	text,
+	uuid
+} from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
 		company_id: uuid().notNull(),
 		code: text().notNull(),
 		name: text().notNull(),
-		component_type_id: uuid().notNull(),
+		/**
+		 * The component's complete economic type. The discriminated union fixes its settlement direction
+		 * and owns every effective-dated statutory decision; there is no component-types lookup table.
+		 */
+		policy: custom('pay_component_policy').notNull(),
+		/** Read-only projection used for grouping and reporting. */
+		nature: text().generatedAlwaysAs(sql`policy ->> 'kind'`),
+		/** Formula/dependency and deduction-reduction order. */
+		sequence: integer().notNull(),
 		eligibility: custom('eligibility_rules').notNull(),
 		definition: custom('component_definition').notNull(),
 		effective_range: dateRange().notNull()
 	},
 	{
 		description:
-			"The customer's pay catalogue: what a line is called, who is eligible for it and how its amount is obtained. It carries no statutory flag — chargeability is reachable only through component_type_id.",
+			"The customer's complete pay catalogue: name, strict settlement/statutory policy, eligibility and polymorphic calculation definition in one row.",
 		recordLabel: ['code', 'name'],
 		icon: 'lucide:receipt',
 		// Plan 02 §7: one overtime rule may be mapped by at most one component per company, so a

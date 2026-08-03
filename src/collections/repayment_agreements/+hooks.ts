@@ -16,7 +16,7 @@ function checked<T>(rows: T[], what: string): T[] {
 
 function instalmentOrigin(value: unknown) {
 	const parsed = entryOriginSchema.safeParse(value);
-	return parsed.success && parsed.data.kind === 'INSTALMENT' ? parsed.data : null;
+	return parsed.success && parsed.data.kind === 'LOAN_INSTALMENT' ? parsed.data : null;
 }
 
 async function agreementEntries(
@@ -26,12 +26,12 @@ async function agreementEntries(
 	return checked(
 		await api.db.query.component_entries.findMany({
 			where: { repayment_agreement_id: { eq: agreement.norbital_id } },
-			with: { entry_payslip_sources: { columns: { norbital_id: true } } },
+			with: { entry_payslip_lines: { columns: { norbital_id: true } } },
 			limit: LIMIT
 		}),
 		'Component entries'
 	) as (WorkspaceRow<'component_entries'> & {
-		readonly entry_payslip_sources?: readonly unknown[] | null;
+		readonly entry_payslip_lines?: readonly unknown[] | null;
 	})[];
 }
 
@@ -39,7 +39,7 @@ async function agreementEntries(
 function linkedEntryIds(entries: Awaited<ReturnType<typeof agreementEntries>>): Set<string> {
 	return new Set(
 		entries
-			.filter((entry) => Boolean(entry.entry_payslip_sources?.length))
+			.filter((entry) => Boolean(entry.entry_payslip_lines?.length))
 			.map((entry) => entry.norbital_id)
 	);
 }
@@ -108,7 +108,7 @@ async function synchronizeInstalments(
 			pay_period: instalment.due_date.slice(0, 7),
 			description: `${agreement.reference} · repayment ${sequence}/${count}`,
 			origin: {
-				kind: 'INSTALMENT' as const,
+				kind: 'LOAN_INSTALMENT' as const,
 				agreement_id: agreement.norbital_id,
 				sequence,
 				of: count

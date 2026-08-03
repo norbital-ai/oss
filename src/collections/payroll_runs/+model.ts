@@ -1,4 +1,4 @@
-import { date, defineModel, enums, text, uuid } from '@norbital-ai/pod/authoring';
+import { custom, date, defineModel, enums, text, uuid } from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
@@ -6,6 +6,7 @@ export default defineModel(
 		period: text().notNull(),
 		lifecycle: enums(['DRAFT', 'PAID']).notNull(),
 		configuration_hash: text().notNull(),
+		configuration_snapshot: custom('payroll_configuration_snapshot').notNull(),
 		pay_date: date().notNull(),
 		attendance_from: date().notNull(),
 		attendance_to: date().notNull()

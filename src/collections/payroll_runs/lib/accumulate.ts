@@ -3,14 +3,14 @@
  *
  * Every measured line passes through the treatment grid and becomes part of a contribution base.
  * Nothing in this step knows the word "EPF" and nothing knows the word "overtime": a line carries a
- * component type, a type and a contribution meet in exactly one grid cell, and the cell says what
+ * pay component: a component and a contribution meet in exactly one policy cell, and the cell says what
  * to do.
  *
  * ```
  * payslip_line  OT_1_5  288.45
- *       │  pay_components.component_type_id
+ *       │  pay_components.policy
  *       ▼
- * component_type  OVERTIME  (nature EARNING)
+ * component_type  OVERTIME  (policy EARNING / ADD)
  *       ▼
  * OVERTIME × EPF    EXCLUDE  ──►  EPF base    unchanged
  * OVERTIME × SOCSO  INCLUDE  ──►  SOCSO base  += 288.45
@@ -48,16 +48,16 @@ export function accumulateBases(options: {
 		const special: Record<string, number> = {};
 		for (const line of options.lines) {
 			// Information is not money, so the grid does not apply to it and it carries no cell.
-			if (line.componentType.nature === 'INFORMATION') continue;
+			if (line.payComponent.nature === 'INFORMATION') continue;
 			const treatment = lookupTreatment(
 				options.configuration,
-				line.componentType.norbital_id,
+				line.payComponent.norbital_id,
 				contribution.row.norbital_id
 			)?.treatment;
 			if (treatment == null)
 				throw new Error(
-					`No ${contribution.row.code} treatment exists for ${line.componentType.code}. ` +
-						'The grid is generated for every pair, so an absent cell is a seeding fault.'
+					`No ${contribution.row.code} treatment exists for ${line.payComponent.code}. ` +
+						'The component policy must decide every effective statutory scheme.'
 				);
 			switch (treatment.kind) {
 				case 'INCLUDE':
@@ -71,7 +71,7 @@ export function accumulateBases(options: {
 				case 'SPECIAL': {
 					if (!contribution.row.special_rules.includes(treatment.rule))
 						throw new Error(
-							`${line.componentType.code} × ${contribution.row.code} routes to special rule ` +
+							`${line.payComponent.code} × ${contribution.row.code} routes to special rule ` +
 								`"${treatment.rule}", which ${contribution.row.code} does not declare.`
 						);
 					special[treatment.rule] = (special[treatment.rule] ?? 0) + line.amount;
@@ -79,7 +79,7 @@ export function accumulateBases(options: {
 				}
 				case 'UNSET':
 					throw new Error(
-						`${line.componentType.code} × ${contribution.row.code} is undecided. ` +
+						`${line.payComponent.code} × ${contribution.row.code} is undecided. ` +
 							`${options.employeeNumber} cannot be paid until the grid cell is set.`
 					);
 			}

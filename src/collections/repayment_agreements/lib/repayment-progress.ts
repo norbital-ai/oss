@@ -1,7 +1,7 @@
 export type RepaymentInstalmentLink = {
 	readonly amount: unknown;
 	readonly repayment_sequence: number | null;
-	readonly entry_payslip_sources?: readonly unknown[] | null;
+	readonly entry_payslip_lines?: readonly unknown[] | null;
 };
 
 export type RepaymentProgress = {
@@ -15,7 +15,7 @@ export type RepaymentProgress = {
 /**
  * Derive repayment progress from the agreement's nested instalment relation.
  *
- * An instalment is paid when payroll persisted at least one source link to it. Duplicate source
+ * An instalment is paid when payroll persisted at least one direct payslip line to it. Duplicate line
  * rows cannot double-count an instalment: sequence is the schedule identity and is counted once.
  */
 export function repaymentProgress(
@@ -28,7 +28,7 @@ export function repaymentProgress(
 
 	const paidBySequence = new Map<number, number>();
 	for (const instalment of instalments) {
-		if (!instalment.entry_payslip_sources?.length) continue;
+		if (!instalment.entry_payslip_lines?.length) continue;
 		if (!Number.isInteger(instalment.repayment_sequence)) continue;
 		const amount = Number(instalment.amount);
 		if (!Number.isFinite(amount) || amount < 0) continue;

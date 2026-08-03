@@ -10,19 +10,17 @@ test('indexes complete payroll consumption provenance by schedule sequence', () 
 	const references = repaymentConsumptionBySequence([
 		{
 			repayment_sequence: 2,
-			entry_payslip_sources: [
+			entry_payslip_lines: [
 				{
 					norbital_created_at: '2026-07-31T08:15:00.000Z',
-					payslip_line_source_line: {
-						norbital_id: 'line-2',
-						sequence: 7,
-						payslip_line_payslip: {
-							norbital_id: 'payslip-2',
-							payslip_payroll_run: {
-								norbital_id: 'run-2',
-								period: '2026-07',
-								pay_date: '2026-07-31'
-							}
+					norbital_id: 'line-2',
+					sequence: 7,
+					payslip_line_payslip: {
+						norbital_id: 'payslip-2',
+						payslip_payroll_run: {
+							norbital_id: 'run-2',
+							period: '2026-07',
+							pay_date: '2026-07-31'
 						}
 					}
 				}
@@ -45,14 +43,12 @@ test('does not mark a schedule row consumed from an incomplete source link', () 
 	const references = repaymentConsumptionBySequence([
 		{
 			repayment_sequence: 0,
-			entry_payslip_sources: [
+			entry_payslip_lines: [
 				{
 					norbital_created_at: '2026-07-31T08:15:00.000Z',
-					payslip_line_source_line: {
-						norbital_id: 'line-draft',
-						sequence: 1,
-						payslip_line_payslip: null
-					}
+					norbital_id: 'line-draft',
+					sequence: 1,
+					payslip_line_payslip: null
 				}
 			]
 		}

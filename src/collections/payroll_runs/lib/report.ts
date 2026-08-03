@@ -7,15 +7,15 @@
  * model. A pay component knows its code, its type and how it is measured; it does not know what a
  * spreadsheet calls it.
  *
- * Everything below is derived from what was persisted — `payslip_lines` grouped by component type,
- * `payslip_contributions` walked scheme by scheme, and the payslip's own four totals. No output id
+ * Everything below is derived from what was persisted — ordinary and statutory `payslip_lines`,
+ * plus the payslip's own four totals. No output id
  * is stored anywhere.
  *
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  * NO JURISDICTION IS NAMED IN THIS FILE.
  *
  * A statutory column is produced by the contribution that charged it, not by a list of the schemes
- * one country happens to run. This module walks whatever `payslip_contributions` a run actually
+ * one country happens to run. This module walks whatever statutory payslip lines a run actually
  * produced and asks `vocabulary.ts` what the workbook calls each one; a Philippine run therefore
  * exports `sssEmployee` and `withholdingTax` for the same reason a Malaysian one exports
  * `epfEmployee` and `pcb` — because that is what was charged. Adding a jurisdiction is an addition
@@ -27,14 +27,16 @@ import { statutoryNaming, statutoryOutputIds, type StatutoryRole } from './vocab
 
 export type ReportLine = {
 	readonly payComponentCode: string;
-	readonly componentTypeCode: string;
+	readonly payComponentName: string;
 	readonly nature: string;
+	readonly calculationSource: string;
 	readonly amount: number;
 	readonly quantity: number | null;
 	/** An audited company expense whose cash never passes through the employee. */
 	readonly isCompanyDirect: boolean;
 	/** A capped employee reimbursement, excluding unrelated non-wage payments such as tax refunds. */
 	readonly isClaim: boolean;
+	readonly isLoanInstalment: boolean;
 	/** `OVERTIME` / `OVERTIME_EXCESS` lines carry the day type of the rule they pay. */
 	readonly overtimeDayType: 'ORDINARY' | 'REST_DAY' | 'PUBLIC_HOLIDAY' | null;
 	readonly isOvertimeExcess: boolean;
@@ -230,23 +232,6 @@ export const OUTPUT_SECTIONS: readonly OutputSection[] = SECTION_LAYOUT.map((sec
 /** Where output ids the vocabulary does not rank are collected, so a new id is never dropped. */
 const OTHER_SECTION_NAME = 'Other';
 
-/**
- * Component types that are neither the contractual base nor overtime, and are therefore reported as
- * benefits. Unpaid absence is not among them: it sits in Info Lines, because gross has already
- * netted it and rendering it inside Earnings would read as a double subtraction (decision L31).
- */
-const BENEFIT_TYPES = new Set([
-	'FIXED_ALLOWANCE',
-	'VARIABLE_ALLOWANCE',
-	'COMMISSION',
-	'BONUS',
-	'BENEFIT_IN_KIND',
-	'LEAVE_ENCASHMENT',
-	'TERMINATION_PAY'
-]);
-
-const ADHOC_DEDUCTION_TYPES = new Set(['OTHER_DEDUCTION', 'SALARY_SACRIFICE', 'STATUTORY_ORDER']);
-
 function sumLines(payslip: ReportPayslip, predicate: (line: ReportLine) => boolean): number {
 	return payslip.lines.reduce((total, line) => total + (predicate(line) ? line.amount : 0), 0);
 }
@@ -291,7 +276,8 @@ export function vendorWorkbookRow(payslip: ReportPayslip): Record<string, string
 	const regularAllowance = sumLines(
 		payslip,
 		(line) =>
-			BENEFIT_TYPES.has(line.componentTypeCode) &&
+			line.nature === 'EARNING' &&
+			!['SCHEDULE', 'OVERTIME', 'OVERTIME_EXCESS'].includes(line.calculationSource) &&
 			!line.isOvertimeExcess &&
 			!['BPAYBS', 'ALPAY', 'PHILE'].includes(line.payComponentCode)
 	);
@@ -364,7 +350,7 @@ export function vendorWorkbookRow(payslip: ReportPayslip): Record<string, string
 /**
  * The statutory columns, derived from the schemes the run actually charged.
  *
- * Nothing here knows a country. Every `payslip_contributions` row carries the scheme that produced
+ * Nothing here knows a country. Every statutory payslip line carries the scheme that produced
  * it, and the scheme's code is what the workbook vocabulary is keyed by — so a run charges SSS and
  * the sheet grows an `sssEmployee` column, for the same reason and by the same code path that a
  * Malaysian run grows an `epfEmployee` one.
@@ -412,23 +398,26 @@ function statutoryOutputs(payslip: ReportPayslip): Record<string, number> {
 export function workbookRow(payslip: ReportPayslip): Record<string, number> {
 	const overtimePay = sumLines(
 		payslip,
-		(line) => line.componentTypeCode === 'OVERTIME' && !line.isOvertimeExcess
+		(line) => line.calculationSource === 'OVERTIME' && !line.isOvertimeExcess
 	);
 	const incentiveOTPay = sumLines(payslip, (line) => line.isOvertimeExcess);
 	const multipliedHours = (dayType: ReportLine['overtimeDayType']): number =>
 		sumHours(payslip, (line) => !line.isOvertimeExcess && line.overtimeDayType === dayType);
 	return {
-		proratedSalary: sumLines(payslip, (line) => line.componentTypeCode === 'BASIC_SALARY'),
+		proratedSalary: sumLines(payslip, (line) => line.calculationSource === 'SCHEDULE'),
 		overtimePay,
 		incentiveOTPay,
 		// Overtime corresponding to work past the total-work-hours boundary is reclassified to a
-		// benefit component type, so it would
+		// benefit pay component, so it would
 		// otherwise be reported twice: once here and once as `incentiveOTPay`. The customer's
 		// workbook keeps its allowance column and its incentive-overtime column disjoint, and so
 		// does this one.
 		taxableBenefits: sumLines(
 			payslip,
-			(line) => BENEFIT_TYPES.has(line.componentTypeCode) && !line.isOvertimeExcess
+			(line) =>
+				line.nature === 'EARNING' &&
+				!['SCHEDULE', 'OVERTIME'].includes(line.calculationSource) &&
+				!line.isOvertimeExcess
 		),
 		// The rebuilt type list has no exempt-earning kind: a payment that is not wages is a
 		// REIMBURSEMENT and is reported under Reimbursements. The column is kept so the workbook
@@ -444,14 +433,17 @@ export function workbookRow(payslip: ReportPayslip): Record<string, number> {
 		ot30Hours: multipliedHours('PUBLIC_HOLIDAY'),
 		totalOTHours: sumHours(payslip, (line) => line.overtimeDayType != null),
 		totalUnpaidLeaveDeduction: sumLines(payslip, (line) => line.nature === 'ABSENCE'),
-		loanRecovery: sumLines(payslip, (line) => line.componentTypeCode === 'LOAN_REPAYMENT'),
-		adhocDeductions: sumLines(payslip, (line) => ADHOC_DEDUCTION_TYPES.has(line.componentTypeCode)),
+		loanRecovery: sumLines(payslip, (line) => line.isLoanInstalment),
+		adhocDeductions: sumLines(
+			payslip,
+			(line) => line.nature === 'DEDUCTION' && !line.isLoanInstalment
+		),
 		grossEarnings: payslip.gross,
 		totalDeductions: payslip.totalDeductions,
 		employerCost: payslip.employerCost,
 		netPay: payslip.net,
 		// The statutory block, and with it the per-scheme totals and the wages each scheme was
-		// charged on. Every one of these is already persisted on `payslip_contributions`; nothing
+		// charged on. Every one of these is already persisted on statutory payslip lines; nothing
 		// here is a new calculation, and nothing here is a jurisdiction's name.
 		...statutoryOutputs(payslip)
 	};

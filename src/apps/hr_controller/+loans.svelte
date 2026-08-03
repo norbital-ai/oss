@@ -11,7 +11,7 @@
 
 	/**
 	 * There is no mutable `state` or `outstanding` column. The table asks for each agreement and its
-	 * direct relations in one nested query; an instalment is paid once a persisted payslip source link
+	 * direct relations in one nested query; an instalment is paid once a persisted payslip line
 	 * points back to it.
 	 */
 	type NestedAgreement = {
@@ -86,7 +86,7 @@
 						where: { norbital_approval_id: { isNull: true } },
 						columns: { amount: true, repayment_sequence: true },
 						with: {
-							entry_payslip_sources: { columns: { norbital_id: true } }
+							entry_payslip_lines: { columns: { norbital_id: true } }
 						}
 					}
 				}

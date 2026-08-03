@@ -9,11 +9,7 @@
 	import { daysBetweenKeys, payDateFor, periodWindow, todayKey } from '../../lib/ui/calendar.js';
 
 	const today = todayKey();
-	// Live rows only. A run held by an approval request carries a non-null `norbital_approval_id`
-	// and must not be counted as an existing cycle — that is what makes a withdrawal or rejection
-	// roll the provisional run back out of this board.
 	const payrollRunsQuery = client.db.payroll_runs.findMany({
-		where: { norbital_approval_id: { isNull: true } },
 		orderBy: { period: 'desc' },
 		limit: 500
 	});
@@ -200,7 +196,7 @@
 		{client}
 		collection="payroll_runs"
 		title="Payroll runs"
-		description="Review payslips, reconcile totals, export bank files and PDFs, and pay."
+		description="Review payslips against their shared run-level policy snapshot, reconcile totals, export, and pay."
 		query={{ orderBy: { period: 'desc' } }}
 		exportPipelines={[
 			{
@@ -241,8 +237,7 @@
 			{
 				id: 'payroll-report-xlsx',
 				label: 'Payroll workbook',
-				description:
-					'Download a real Excel workbook with a payslip matrix and itemized calculation rows.',
+				description: 'Download the clean Infotech-style salary listing and complete breakdown.',
 				requiresSelection: true,
 				run: async ({ selectedRows }) => {
 					const manifest = await downloadCollectionExport(
@@ -270,6 +265,7 @@
 			<Column name="period" label="Period" />
 			<Column name="lifecycle" label="Lifecycle" />
 			<Column name="pay_date" label="Pay date" />
+			<Column name="configuration_snapshot" label="Policy snapshot" />
 		{/snippet}
 		{#snippet ListCard(run)}
 			<Inline align="start" justify="between" gap="sm">

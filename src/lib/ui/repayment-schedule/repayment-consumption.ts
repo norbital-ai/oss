@@ -24,19 +24,17 @@ export interface RepaymentScheduleMatrixRow {
 
 export interface RepaymentConsumptionSourceRow {
 	readonly repayment_sequence?: number | null;
-	readonly entry_payslip_sources?:
+	readonly entry_payslip_lines?:
 		| readonly {
 				readonly norbital_created_at?: string | null;
-				readonly payslip_line_source_line?: {
+				readonly norbital_id?: string | null;
+				readonly sequence?: number | null;
+				readonly payslip_line_payslip?: {
 					readonly norbital_id?: string | null;
-					readonly sequence?: number | null;
-					readonly payslip_line_payslip?: {
+					readonly payslip_payroll_run?: {
 						readonly norbital_id?: string | null;
-						readonly payslip_payroll_run?: {
-							readonly norbital_id?: string | null;
-							readonly period?: string | null;
-							readonly pay_date?: string | null;
-						} | null;
+						readonly period?: string | null;
+						readonly pay_date?: string | null;
 					} | null;
 				} | null;
 		  }[]
@@ -60,8 +58,8 @@ export function repaymentConsumptionBySequence(
 	for (const row of rows) {
 		const sequence = row.repayment_sequence;
 		if (typeof sequence !== 'number' || references.has(sequence)) continue;
-		for (const source of row.entry_payslip_sources ?? []) {
-			const line = source.payslip_line_source_line;
+		for (const source of row.entry_payslip_lines ?? []) {
+			const line = source;
 			const payslip = line?.payslip_line_payslip;
 			const run = payslip?.payslip_payroll_run;
 			const payslipLineId = nonEmpty(line?.norbital_id);

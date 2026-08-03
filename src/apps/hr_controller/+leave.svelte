@@ -81,10 +81,7 @@
 
 <svelte:head>
 	<title>Leave</title>
-	<meta
-		name="description"
-		content="Review leave requests, the leave ledger, and the leave types that entitle them"
-	/>
+	<meta name="description" content="Review leave events and the leave types that entitle them" />
 	<meta name="pod:icon" content="lucide:calendar-check-2" />
 </svelte:head>
 
@@ -94,8 +91,8 @@
 			<div>
 				<h2 class="text-lg font-semibold">Leave activity</h2>
 				<p class="text-sm text-muted-foreground">
-					{analytics.total.toLocaleString()} requests. Balances are derived from the ledger at read time
-					— there is no stored balance and no accrual job.
+					{analytics.total.toLocaleString()} time-off requests. Balances are derived directly from approved
+					leave events at read time — there is no duplicate ledger, stored balance, or accrual job.
 				</p>
 			</div>
 			<ApprovalSummaryTable
@@ -133,35 +130,9 @@
 			/>
 			<Column name="from_date" label="From" />
 			<Column name="to_date" label="To" />
+			<Column name="kind" label="Event" card="badge" />
 			<Column name="days" label="Days" render={({ value }) => formatNumeric(value)} />
 			<Column name="certificate_file" label="Certificate" />
-		{/snippet}
-	</CollectionTable>
-{/snippet}
-
-{#snippet ledger()}
-	<CollectionTable
-		{client}
-		collection="leave_ledger"
-		query={{ orderBy: { entry_date: 'desc' } }}
-		searchPlaceholder="Search ledger movements…"
-	>
-		{#snippet columns({ Column })}
-			<Column name="entry_date" label="Date" card="title" />
-			<Column
-				name="employment_id"
-				label="Employment"
-				card="subtitle"
-				render={({ value }) => employmentLabelsById.get(String(value)) ?? value}
-			/>
-			<Column
-				name="leave_type_id"
-				label="Leave type"
-				render={({ value }) => leaveTypeLabelsById.get(String(value)) ?? value}
-			/>
-			<Column name="kind" label="Kind" card="badge" />
-			<Column name="days" label="Days" render={({ value }) => formatNumeric(value)} />
-			<Column name="note" label="Note" />
 		{/snippet}
 	</CollectionTable>
 {/snippet}
@@ -182,6 +153,7 @@
 				render={({ value }) => companyLabelsById.get(String(value)) ?? value}
 			/>
 			<Column name="accrual" label="Accrual" render={({ value }) => formatLeaveAccrual(value)} />
+			<Column name="entitlement" label="Entitlement matrix" />
 			<Column
 				name="payroll_effect"
 				label="Payroll effect"
@@ -197,7 +169,7 @@
 	<PageHeader
 		eyebrow="HR Controller"
 		title="Leave"
-		description="Decide requests against the leave type, its accrual bands, and the ledger effective on the leave dates."
+		description="Decide time-off requests against the leave type's layered entitlement matrix. The approved request is the payroll and balance event."
 	/>
 {/snippet}
 
@@ -212,7 +184,6 @@
 				content: overview
 			},
 			{ name: 'requests', label: 'Requests', icon: 'lucide:calendar-check-2', content: requests },
-			{ name: 'ledger', label: 'Ledger', icon: 'lucide:list-ordered', content: ledger },
 			{ name: 'types', label: 'Leave types', icon: 'lucide:palmtree', content: types }
 		] satisfies TabConfig[]}
 	/>

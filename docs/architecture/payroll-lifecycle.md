@@ -27,7 +27,7 @@ correction is a new approved event in a later draft.
 | ACCUMULATE | Applies every line's statutory treatment to each contribution base                                                          | Refuses missing or undecided treatment cells                        |
 | CONTRIBUTE | Applies effective rate bands and statutory special rules                                                                    | Refuses an uncovered band or missing selector fact                  |
 | SETTLE     | Calculates gross, deductions, net, employer cost and deduction shortfall                                                    | Does not allow a negative net; carries an unpaid recovery forward   |
-| PERSIST    | Replaces draft results with payslips, lines, contribution rows and source links                                             | Writes in dependency order; a partial prior result is cleared first |
+| PERSIST    | Replaces draft results with payslips and their complete direct component/statutory lines                                    | Writes in dependency order; a partial prior result is cleared first |
 
 ## Periods and cutoffs
 

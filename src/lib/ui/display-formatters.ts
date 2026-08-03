@@ -55,13 +55,13 @@ export function formatEntryOrigin(value: unknown): string {
 	if (!parsed.success) return 'Invalid origin';
 	const origin = parsed.data;
 	switch (origin.kind) {
-		case 'STANDING':
-			return `Standing · ${formatEffectiveRange(origin.effective_range)}`;
+		case 'RECURRING':
+			return `Recurring each pay period · ${formatEffectiveRange(origin.effective_range)}`;
 		case 'ONE_OFF':
 			return origin.note ? `One-off · ${origin.note}` : 'One-off';
 		case 'CLAIM':
 			return `Claim · incurred ${origin.incurred_on}${origin.evidence_file ? ' · evidence attached' : ''}`;
-		case 'INSTALMENT':
+		case 'LOAN_INSTALMENT':
 			return `Instalment ${origin.sequence} of ${origin.of}`;
 		case 'REVERSAL':
 			return `Reversal · ${origin.reason}`;

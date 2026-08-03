@@ -8,10 +8,18 @@
 	type OriginKind = Value['kind'];
 
 	const KIND_OPTIONS: { value: OriginKind; label: string; description: string }[] = [
-		{ value: 'STANDING', label: 'Standing', description: 'Recurs while the range is open' },
+		{
+			value: 'RECURRING',
+			label: 'Recurring',
+			description: 'Applies to every pay period while the range is open'
+		},
 		{ value: 'ONE_OFF', label: 'One-off', description: 'A single ad-hoc entry' },
 		{ value: 'CLAIM', label: 'Claim', description: 'Reimbursement against evidence' },
-		{ value: 'INSTALMENT', label: 'Instalment', description: 'One leg of a repayment agreement' },
+		{
+			value: 'LOAN_INSTALMENT',
+			label: 'Loan instalment',
+			description: 'One single-use leg of a repayment agreement'
+		},
 		{ value: 'REVERSAL', label: 'Reversal', description: 'Reverses an earlier entry' },
 		{ value: 'ARREARS', label: 'Arrears', description: 'Back-pay for earlier periods' }
 	];
@@ -23,13 +31,13 @@
 	const summary = $derived.by(() => {
 		if (current === null) return '—';
 		switch (current.kind) {
-			case 'STANDING':
-				return `Standing ${dateOf(current.effective_range.start)} → ${dateOf(current.effective_range.end)}`;
+			case 'RECURRING':
+				return `Recurring each pay period · ${dateOf(current.effective_range.start)} → ${dateOf(current.effective_range.end)}`;
 			case 'ONE_OFF':
 				return current.note.length === 0 ? 'One-off' : `One-off · ${current.note}`;
 			case 'CLAIM':
 				return `Claim incurred ${current.incurred_on}`;
-			case 'INSTALMENT':
+			case 'LOAN_INSTALMENT':
 				return `Instalment ${current.sequence} of ${current.of}`;
 			case 'REVERSAL':
 				return `Reversal · ${current.reason}`;
@@ -57,9 +65,10 @@
 	function defaultFor(kind: OriginKind): Value {
 		const today = todayDate();
 		switch (kind) {
-			case 'STANDING':
+			case 'RECURRING':
 				return {
-					kind: 'STANDING',
+					kind: 'RECURRING',
+					cadence: 'PAY_PERIOD',
 					effective_range: {
 						start: `${today}T00:00:00.000Z`,
 						end: `${Number(today.slice(0, 4)) + 1}${today.slice(4)}T00:00:00.000Z`
@@ -69,8 +78,8 @@
 				return { kind: 'ONE_OFF', note: '' };
 			case 'CLAIM':
 				return { kind: 'CLAIM', evidence_file: null, incurred_on: today };
-			case 'INSTALMENT':
-				return { kind: 'INSTALMENT', agreement_id: '', sequence: 1, of: 1 };
+			case 'LOAN_INSTALMENT':
+				return { kind: 'LOAN_INSTALMENT', agreement_id: '', sequence: 1, of: 1 };
 			case 'REVERSAL':
 				return { kind: 'REVERSAL', reverses_entry_id: '', reason: '' };
 			case 'ARREARS':
@@ -116,7 +125,7 @@
 			/>
 		</label>
 
-		{#if current?.kind === 'STANDING'}
+		{#if current?.kind === 'RECURRING'}
 			{@const range = current.effective_range}
 			<label class="grid gap-1.5 text-sm font-medium">
 				Effective from
@@ -126,7 +135,8 @@
 					{disabled}
 					oninput={(event) =>
 						emit({
-							kind: 'STANDING',
+							kind: 'RECURRING',
+							cadence: 'PAY_PERIOD',
 							effective_range: {
 								...range,
 								start: instantOf(event.currentTarget.value, range.start)
@@ -142,7 +152,8 @@
 					{disabled}
 					oninput={(event) =>
 						emit({
-							kind: 'STANDING',
+							kind: 'RECURRING',
+							cadence: 'PAY_PERIOD',
 							effective_range: { ...range, end: instantOf(event.currentTarget.value, range.end) }
 						})}
 				/>
@@ -181,7 +192,7 @@
 						})}
 				/>
 			</label>
-		{:else if current?.kind === 'INSTALMENT'}
+		{:else if current?.kind === 'LOAN_INSTALMENT'}
 			<label class="grid gap-1.5 text-sm font-medium">
 				Agreement id
 				<Input

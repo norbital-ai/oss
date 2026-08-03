@@ -2,12 +2,12 @@
  * Step 4 — MEASURE.
  *
  * Every plane of input — a contract, an entry, a clock, a formula — arrives here and leaves as
- * money. Components are measured in `component_types.sequence` order, so the hourly rate exists
+ * money. Components are measured in `pay_components.sequence` order, so the hourly rate exists
  * before overtime needs it and every earning exists before the grid sums them.
  *
  * Two rules hold throughout:
  *
- * - **an amount is a magnitude.** Direction is the component type's `nature` and the treatment's
+ * - **an amount is a magnitude.** Direction is the pay component's `nature` and the treatment's
  *   decision; no line here carries a minus sign, including unpaid absence, whose type is `ABSENCE`
  *   and whose grid row is `REDUCE`.
  * - **an ineligible component produces nothing at all.** Not a zero line — nothing. A manager has
@@ -18,7 +18,8 @@
  * column must never find an hourly rate inside it (plan 03 §2).
  */
 
-import type { ComponentType, Configuration, PayComponent } from './configuration.js';
+import type { Configuration, PayComponent } from './configuration.js';
+import type { PayslipLineComponent } from '../../../custom-types/payslip_line_component/+definition.js';
 import {
 	addDays,
 	dateKey,
@@ -32,18 +33,20 @@ import {
 	type IsoDate
 } from './dates.js';
 import { clipRange, coversDate } from './effective.js';
-import { isEligible } from './eligibility.js';
+import { isEligible, type EligibilitySubject } from './eligibility.js';
 import {
+	entryEventDate,
 	entryPayPeriod,
 	entrySign,
 	prorates,
-	standingRange,
+	recurringRange,
 	type ComponentEntry
 } from './entries.js';
 import { evaluateFormula, type FormulaContext } from './formula.js';
 import type { EmploymentBundle } from './gather.js';
 import {
 	leaveBalance,
+	leaveYearOf,
 	resolveEntitlement,
 	unpaidLeaveDates,
 	unpaidLeaveInWindow,
@@ -76,22 +79,15 @@ import { cents } from './rounding.js';
 import { normalDailyHours, resolveSchedule, type ScheduledDay } from './schedule.js';
 import { settle } from './settle.js';
 
-/** What a payslip line consumed, in the shape `payslip_line_sources.source` stores. */
-export type LineSource =
-	| { readonly kind: 'COMPONENT_ENTRY'; readonly entry_id: string }
-	| { readonly kind: 'TIME_ENTRY'; readonly time_entry_id: string }
-	| { readonly kind: 'LEAVE_REQUEST'; readonly leave_request_id: string };
-
 export type MeasuredLine = {
 	readonly payComponent: PayComponent;
-	readonly componentType: ComponentType;
+	readonly component: PayslipLineComponent;
 	/** Always a magnitude. */
 	readonly amount: number;
 	/** Hours, days or units where the line has a natural quantity; `null` otherwise. */
 	readonly quantity: number | null;
 	readonly rate: number | null;
 	readonly sequence: number;
-	readonly sources: readonly LineSource[];
 };
 
 export type MeasuredEmployment = {
@@ -410,9 +406,15 @@ export function measureEmployment(options: {
 		entry.origin?.kind === 'ARREARS' &&
 		entry.origin.covers_periods.length === 1 &&
 		entry.origin.covers_periods[0] === bundle.arrearsFor.period;
-	const periodEntries = bundle.entries.filter(
-		(entry) => entryPayPeriod(entry, cutoffDay) === options.period && !ownedArrears(entry)
-	);
+	const periodEntries = bundle.entries.filter((entry) => {
+		if (ownedArrears(entry)) return false;
+		const recurring = recurringRange(entry);
+		if (recurring == null) return entryPayPeriod(entry, cutoffDay) === options.period;
+		return (
+			recurring.start <= options.salary.end &&
+			(recurring.end == null || recurring.end >= options.salary.start)
+		);
+	});
 	const entriesByComponent = new Map<string, ComponentEntry[]>();
 	for (const entry of periodEntries) {
 		const bucket = entriesByComponent.get(entry.pay_component_id);
@@ -478,11 +480,10 @@ export function measureEmployment(options: {
 				leaveType: type,
 				entitlementAtMonths: (serviceMonths) =>
 					resolveEntitlement({
-						leaveCode: type.code,
+						leaveType: type,
 						serviceMonths,
-						companyId: configuration.company.norbital_id,
-						jurisdictionId: configuration.jurisdiction.norbital_id,
-						bands: configuration.accrualBands
+						employmentId: bundle.employment.norbital_id,
+						asOf: options.salary.end
 					}),
 				hireDate,
 				exitDate,
@@ -565,7 +566,7 @@ export function measureEmployment(options: {
 	//
 	// The arrears is **this same function**, run against the deferred period's own windows. That is
 	// what makes the figure "what that month would have paid" rather than a second, parallel
-	// calculation of it — a prorated wage, its standing allowances and the entries that settled
+	// calculation of it — a prorated wage, its recurring allowances and the entries that settled
 	// there, all under the terms and the law in force then. Nothing carries across from the earlier
 	// run, because there may not have been one.
 	//
@@ -585,48 +586,44 @@ export function measureEmployment(options: {
 				);
 	const arrears = explicitArrearsEntry == null ? calculatedArrears : null;
 
-	// ── walk the catalogue in type sequence ────────────────────────────────────────────────────
+	// ── walk the catalogue in component sequence ───────────────────────────────────────────────
 	const lines: MeasuredLine[] = [];
 	if (arrears != null) {
 		const component = configuration.payComponents.find(
 			(row) => row.norbital_id === arrears.payComponentId
 		);
-		const componentType =
-			component == null
-				? undefined
-				: configuration.componentTypeById.get(component.component_type_id);
-		if (component == null || componentType == null)
+		if (component == null)
 			throw new Error(
 				`${bundle.employment.employee_number} is owed ${arrears.period}, but the component it is ` +
 					'paid back on is not in this company’s catalogue.'
 			);
 		lines.push({
 			payComponent: component,
-			componentType,
+			component: { kind: 'DERIVED', pay_component_id: component.norbital_id },
 			amount: arrears.amount,
 			quantity: null,
 			rate: null,
-			sequence: lines.length + 1,
-			sources: []
+			sequence: lines.length + 1
 		});
 		componentAmounts.set(component.code, arrears.amount);
 		componentsByCode[component.code] = arrears.amount;
 	}
-	for (const componentType of configuration.componentTypes) {
-		const components = configuration.payComponents.filter(
-			(component) => component.component_type_id === componentType.norbital_id
-		);
-		for (const component of components) {
-			if (!isEligible(component.eligibility, subject)) continue;
+	for (const component of configuration.payComponents) {
+		if (!isEligible(component.eligibility, subject)) continue;
+		const componentEntries = entriesByComponent.get(component.norbital_id) ?? [];
+		const entryGroups =
+			component.definition?.source === 'ENTRY'
+				? componentEntries.map((entry) => [entry] as const)
+				: [componentEntries];
+		for (const entries of entryGroups) {
 			const measured = measureComponent({
 				component,
-				componentType,
 				bundle,
 				configuration,
 				salary: options.salary,
 				employed: wageDays,
 				contracted: employed,
-				entries: entriesByComponent.get(component.norbital_id) ?? [],
+				entries,
 				entryById,
 				unpaid: unpaidByComponent.get(component.norbital_id) ?? null,
 				segments,
@@ -635,7 +632,8 @@ export function measureEmployment(options: {
 				dayWage,
 				overtimeCalculationMethod,
 				workingDaysIn,
-				context
+				context,
+				subject
 			});
 			if (measured == null) continue;
 			// `+`, not `=`: a back-pay component can carry both this run's derived arrears and an
@@ -644,15 +642,14 @@ export function measureEmployment(options: {
 			componentAmounts.set(component.code, running);
 			componentsByCode[component.code] = running;
 			// Information is measured so formulas can read it, and stops there: it is not money.
-			if (componentType.nature === 'INFORMATION') continue;
+			if (component.nature === 'INFORMATION') continue;
 			lines.push({
 				payComponent: component,
-				componentType,
+				component: measured.component,
 				amount: measured.amount,
 				quantity: measured.quantity,
 				rate: measured.rate,
-				sequence: lines.length + 1,
-				sources: measured.sources
+				sequence: lines.length + 1
 			});
 		}
 	}
@@ -724,12 +721,85 @@ type Measurement = {
 	readonly amount: number;
 	readonly quantity: number | null;
 	readonly rate: number | null;
-	readonly sources: LineSource[];
+	readonly component: PayslipLineComponent;
 };
+
+type EntryDefinition = Extract<NonNullable<PayComponent['definition']>, { source: 'ENTRY' }>;
+type EntryCap = NonNullable<EntryDefinition['cap']>;
+
+function resolveEntryCap(options: {
+	readonly cap: EntryCap;
+	readonly component: PayComponent;
+	readonly entry: ComponentEntry;
+	readonly bundle: EmploymentBundle;
+	readonly subject: EligibilitySubject;
+	readonly entryById: ReadonlyMap<string, ComponentEntry>;
+	readonly context: FormulaContext;
+	readonly leaveYearStartMonth: number;
+}): { amount: number; percentage: number; exceededBy: number } | null {
+	const eventDate = entryEventDate(options.entry, options.entryById);
+	const applicable = options.cap.matrix.layers.flatMap((layer) => {
+		if (layer.level === 'EMPLOYEE' && layer.employment_id !== options.bundle.employment.norbital_id)
+			return [];
+		if (
+			!coversDate(layer.effective_range, eventDate) ||
+			!isEligible(layer.eligibility, options.subject)
+		)
+			return [];
+		const amount =
+			layer.award.kind === 'FIXED'
+				? layer.award.amount
+				: evaluateFormula({
+						code: `${options.component.code}_${layer.level}_ENTITLEMENT`,
+						expr: layer.award.expr,
+						context: options.context
+					});
+		return [{ level: layer.level, amount, percentage: layer.reimbursement_percentage }];
+	});
+	if (applicable.length === 0) return null;
+	const amount = Math.max(...applicable.map((layer) => layer.amount));
+	const percentage = Math.max(...applicable.map((layer) => layer.percentage));
+	const samePeriod = (candidate: ComponentEntry): boolean => {
+		const candidateDate = entryEventDate(candidate, options.entryById);
+		switch (options.cap.period) {
+			case 'PER_EVENT':
+				return false;
+			case 'LIFETIME':
+				return true;
+			case 'MONTH':
+				return candidateDate.slice(0, 7) === eventDate.slice(0, 7);
+			case 'CALENDAR_YEAR':
+				return candidateDate.slice(0, 4) === eventDate.slice(0, 4);
+			case 'LEAVE_YEAR':
+				return (
+					leaveYearOf(candidateDate, options.leaveYearStartMonth) ===
+					leaveYearOf(eventDate, options.leaveYearStartMonth)
+				);
+		}
+	};
+	const previouslyUsed = options.bundle.entries.reduce((total, candidate) => {
+		if (
+			candidate.pay_component_id !== options.component.norbital_id ||
+			candidate.norbital_id === options.entry.norbital_id
+		)
+			return total;
+		const candidateDate = entryEventDate(candidate, options.entryById);
+		if (
+			!samePeriod(candidate) ||
+			candidateDate > eventDate ||
+			(candidateDate === eventDate && candidate.norbital_id > options.entry.norbital_id)
+		)
+			return total;
+		return (
+			total +
+			(entrySign(candidate, options.entryById) * Number(candidate.amount) * percentage) / 100
+		);
+	}, 0);
+	return { amount, percentage, exceededBy: Math.max(0, previouslyUsed) };
+}
 
 function measureComponent(options: {
 	readonly component: PayComponent;
-	readonly componentType: ComponentType;
 	readonly bundle: EmploymentBundle;
 	readonly configuration: Configuration;
 	readonly salary: { readonly start: IsoDate; readonly end: IsoDate };
@@ -745,6 +815,7 @@ function measureComponent(options: {
 	readonly overtimeCalculationMethod: OvertimeCalculationMethod;
 	readonly workingDaysIn: (window: { start: IsoDate; end: IsoDate }) => number;
 	readonly context: () => FormulaContext;
+	readonly subject: EligibilitySubject;
 }): Measurement | null {
 	const definition = options.component.definition;
 	if (definition == null)
@@ -783,27 +854,45 @@ function measureComponent(options: {
 					Number(asRateTerms(termsAt(options.bundle, options.contracted.end)).base_salary.value) *
 					fraction;
 			}
-			return { amount: cents(amount), quantity: null, rate: null, sources: [] };
+			return {
+				amount: cents(amount),
+				quantity: null,
+				rate: null,
+				component: { kind: 'SCHEDULE', pay_component_id: options.component.norbital_id }
+			};
 		}
 
 		case 'ENTRY': {
 			if (options.entries.length === 0) return null;
-			const percentage = definition.cap?.reimbursement_percentage ?? 100;
 			let amount = 0;
 			let quantity = 0;
-			const sources: LineSource[] = [];
+			let lineComponent: PayslipLineComponent | null = null;
 			for (const entry of options.entries) {
+				const cap =
+					definition.cap == null
+						? null
+						: resolveEntryCap({
+								cap: definition.cap,
+								component: options.component,
+								entry,
+								bundle: options.bundle,
+								subject: options.subject,
+								entryById: options.entryById,
+								context: options.context(),
+								leaveYearStartMonth: Number(options.configuration.company.leave_year_start_month)
+							});
+				const percentage = cap?.percentage ?? 100;
 				const sign = entrySign(entry, options.entryById);
-				const standing = standingRange(entry);
+				const recurring = recurringRange(entry);
 				const fraction = prorates(entry)
 					? prorationFraction({
 							jurisdiction: options.configuration.jurisdiction,
 							period: options.salary,
 							covered:
-								standing == null
+								recurring == null
 									? options.employed
 									: (intersectDays(
-											{ start: standing.start, end: standing.end ?? options.salary.end },
+											{ start: recurring.start, end: recurring.end ?? options.salary.end },
 											options.employed
 										) ?? null),
 							workingDaysIn: options.workingDaysIn
@@ -812,16 +901,33 @@ function measureComponent(options: {
 				if (fraction <= 0) continue;
 				// The reimbursable share is an economic fact per claim, so it is rounded per entry and
 				// then summed — not applied to a total that never existed.
-				amount += sign * cents((Number(entry.amount) * fraction * percentage) / 100);
+				const reimbursable = cents((Number(entry.amount) * fraction * percentage) / 100);
+				if (
+					cap != null &&
+					cap.exceededBy + reimbursable > cap.amount &&
+					definition.cap?.on_exceed === 'BLOCK'
+				)
+					throw new Error(
+						`${options.component.name} entitlement exceeded for ${options.bundle.employment.employee_number}: ` +
+							`${cents(cap.exceededBy + reimbursable).toFixed(2)} requested against ${cents(cap.amount).toFixed(2)} allowed.`
+					);
+				amount += sign * reimbursable;
 				quantity += sign * Number(entry.quantity ?? 0);
-				sources.push({ kind: 'COMPONENT_ENTRY', entry_id: entry.norbital_id });
+				lineComponent = {
+					kind:
+						entry.origin?.kind === 'RECURRING'
+							? 'COMPONENT_ENTRY_RECURRING'
+							: 'COMPONENT_ENTRY_ONCE',
+					pay_component_id: options.component.norbital_id,
+					component_entry_id: entry.norbital_id
+				};
 			}
-			if (sources.length === 0) return null;
+			if (lineComponent == null) return null;
 			return {
 				amount: cents(amount),
 				quantity: quantity === 0 ? null : quantity,
 				rate: null,
-				sources
+				component: lineComponent
 			};
 		}
 
@@ -831,20 +937,13 @@ function measureComponent(options: {
 				expr: definition.expr,
 				context: options.context()
 			});
-			// An unpaid-absence formula reads its days from the ledger, so its provenance is the leave
-			// requests that moved them.
-			const sources: LineSource[] =
-				options.unpaid?.leaveRequestIds.map((id) => ({
-					kind: 'LEAVE_REQUEST' as const,
-					leave_request_id: id
-				})) ?? [];
 			const quantity = options.unpaid?.days ?? null;
-			if (amount === 0 && sources.length === 0 && definition.unit !== 'RATE') return null;
+			if (amount === 0 && quantity == null && definition.unit !== 'RATE') return null;
 			return {
 				amount: cents(Math.abs(amount)),
 				quantity,
 				rate: definition.unit === 'RATE' ? cents(Math.abs(amount)) : null,
-				sources
+				component: { kind: 'FORMULA', pay_component_id: options.component.norbital_id }
 			};
 		}
 
@@ -864,7 +963,6 @@ function measureComponent(options: {
 			let weighted = 0;
 			let dayWageAmount = 0;
 			let datedAmount = 0;
-			const sources = new Map<string, LineSource>();
 			for (const segment of matched) {
 				const multiple = Math.max(segment.multiple, floor);
 				if (options.overtimeCalculationMethod === 'ANNUALISED_CONTRACT_RATE') {
@@ -880,17 +978,18 @@ function measureComponent(options: {
 					weighted += segment.hours * multiple;
 				}
 				hours += segment.hours;
-				sources.set(segment.timeEntryId, {
-					kind: 'TIME_ENTRY',
-					time_entry_id: segment.timeEntryId
-				});
 			}
 			const amount =
 				options.overtimeCalculationMethod === 'ANNUALISED_CONTRACT_RATE'
 					? cents(datedAmount)
 					: cents(weighted * options.hourlyRate + dayWageAmount);
 			if (amount === 0) return null;
-			return { amount, quantity: hours, rate: options.hourlyRate, sources: [...sources.values()] };
+			return {
+				amount,
+				quantity: hours,
+				rate: options.hourlyRate,
+				component: { kind: 'OVERTIME', pay_component_id: options.component.norbital_id }
+			};
 		}
 
 		case 'OVERTIME_EXCESS': {
@@ -929,14 +1028,7 @@ function measureComponent(options: {
 				amount,
 				quantity: hours,
 				rate,
-				sources: [
-					...new Map(
-						matched.map((row) => [
-							row.timeEntryId,
-							{ kind: 'TIME_ENTRY' as const, time_entry_id: row.timeEntryId }
-						])
-					).values()
-				]
+				component: { kind: 'OVERTIME_EXCESS', pay_component_id: options.component.norbital_id }
 			};
 		}
 	}
