@@ -6,7 +6,6 @@
 	import { Cluster, Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { watch } from 'runed';
 	import {
 		formatEntryOrigin,
 		formatNumeric,
@@ -33,7 +32,7 @@
 	);
 	// A relation column holds a uuid and would render as one. These catalogues are small and load
 	// once per page, so the label is resolved from memory rather than by mounting a lookup per row.
-	// A miss falls back to the raw id — a label the page has not loaded must not read as no data.
+	// A miss renders as an em dash — never the underlying uuid.
 	const leaveTypesQuery = client.db.leave_types.findMany({
 		where: { norbital_approval_id: { isNull: true } },
 		limit: 200
@@ -55,34 +54,13 @@
 			])
 		)
 	);
-	const payrollRunsQuery = client.db.payroll_runs.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		orderBy: { period: 'desc' },
-		limit: 500
-	});
-	const payrollRunLabelsById = $derived(
-		new Map((payrollRunsQuery.current ?? []).map((run) => [run.norbital_id, run.period]))
-	);
-	// svelte-ignore state_referenced_locally -- this initial handle is replaced by the identity watch below.
-	let employmentsQuery = $state(
+	const employmentsQuery = $derived(
 		employeeId
 			? client.db.employments.findMany({
 					where: { employee_id: { eq: employeeId }, norbital_approval_id: { isNull: true } },
 					limit: 10
 				})
 			: null
-	);
-	watch(
-		() => employeeId,
-		(id) => {
-			employmentsQuery = id
-				? client.db.employments.findMany({
-						where: { employee_id: { eq: id }, norbital_approval_id: { isNull: true } },
-						limit: 10
-					})
-				: null;
-		},
-		{ lazy: true }
 	);
 	const activeEmployments = $derived(
 		(employmentsQuery?.current ?? []).filter(
@@ -127,6 +105,18 @@
 	const daysToPayday = $derived(
 		nextPayDate ? Math.max(0, daysBetweenKeys(today, nextPayDate)) : null
 	);
+
+	type NestedPayslip = {
+		readonly payslip_payroll_run?: { readonly period?: string | null } | null;
+	};
+
+	function nestedPayslip(row: unknown): NestedPayslip {
+		return row as NestedPayslip;
+	}
+
+	function payrollRunPeriod(row: unknown): string {
+		return nestedPayslip(row).payslip_payroll_run?.period ?? '—';
+	}
 </script>
 
 <svelte:head>
@@ -285,7 +275,8 @@
 					name="leave_type_id"
 					label="Leave type"
 					card="title"
-					render={({ value }) => leaveTypeLabelsById.get(String(value)) ?? value}
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (leaveTypeLabelsById.get(String(value)) ?? '—')}
 				/>
 				<Column name="from_date" label="From" />
 				<Column name="to_date" label="To" />
@@ -315,7 +306,10 @@
 					name="pay_component_id"
 					label="Component"
 					card="title"
-					render={({ value }) => payComponentLabelsById.get(String(value)) ?? value}
+					render={({ value }) =>
+						value == null || value === ''
+							? '—'
+							: (payComponentLabelsById.get(String(value)) ?? '—')}
 				/>
 				<Column name="amount" label="Amount" render={({ value }) => formatNumeric(value)} />
 				<Column name="event_date" label="Date" />
@@ -373,15 +367,12 @@
 			disabled={!employmentId}
 			query={{
 				where: { employment_id: employmentId ? { eq: employmentId } : undefined },
-				orderBy: { norbital_created_at: 'desc' }
+				orderBy: { norbital_created_at: 'desc' },
+				with: { payslip_payroll_run: { columns: { period: true } } }
 			}}
 		>
 			{#snippet columns({ Column })}
-				<Column
-					name="payroll_run_id"
-					label="Pay run"
-					render={({ value }) => payrollRunLabelsById.get(String(value)) ?? value}
-				/>
+				<Column name="payroll_run_id" label="Pay run" render={({ row }) => payrollRunPeriod(row)} />
 				<Column name="gross" label="Gross" render={({ value }) => formatNumeric(value)} />
 				<Column
 					name="total_deductions"
@@ -392,9 +383,7 @@
 				<Column name="currency" />
 			{/snippet}
 			{#snippet ListCard(payslip)}
-				<p class="truncate font-medium">
-					{payrollRunLabelsById.get(payslip.payroll_run_id) ?? payslip.payroll_run_id}
-				</p>
+				<p class="truncate font-medium">{payrollRunPeriod(payslip)}</p>
 				<p class="mt-1 text-sm text-muted-foreground">
 					{payslip.currency}
 					{formatNumeric(payslip.net)}

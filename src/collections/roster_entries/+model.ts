@@ -6,6 +6,12 @@ export default defineModel(
 		work_date: date().notNull(),
 		shift_definition_id: uuid().notNull(),
 		/**
+		 * The month this entry was drafted in. Entries belonging to a published roster are frozen,
+		 * which is what makes publication mean anything. Optional: entries imported or seeded
+		 * directly, without going through a drafted month, carry none.
+		 */
+		roster_id: uuid(),
+		/**
 		 * The roster code shown to the operator in the source schedule. On a non-working day this
 		 * is the REST/OFF code (for example AMRES), while shift_definition_id still points to the
 		 * employee's underlying working shift so worked hours can be measured correctly.

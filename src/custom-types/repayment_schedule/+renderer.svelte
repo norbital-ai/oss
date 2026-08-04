@@ -2,7 +2,6 @@
 	import { client } from '$pod/client';
 	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 	import { MatrixRenderer, type MatrixColumn } from '@norbital-ai/ui/data-renderer/matrix';
-	import { watch } from 'runed';
 	import { repaymentScheduleSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
 	import ConsumedByCell from '../../lib/ui/repayment-schedule/consumed-by-cell.svelte';
@@ -16,8 +15,6 @@
 	type RepaymentScheduleRendererProps = RendererProps & {
 		readonly row?: Record<string, unknown>;
 	};
-	type ConsumptionQuery = ReturnType<typeof client.db.component_entries.findMany>;
-
 	const columns = [
 		{
 			key: 'due_date',
@@ -71,40 +68,34 @@
 	const agreementId = $derived(
 		typeof props.row?.norbital_id === 'string' ? props.row.norbital_id : null
 	);
-	let consumptionQuery = $state<ConsumptionQuery | null>(null);
-
-	watch(
-		() => agreementId,
-		(nextAgreementId) => {
-			consumptionQuery = nextAgreementId
-				? client.db.component_entries.findMany({
-						where: { repayment_agreement_id: { eq: nextAgreementId } },
-						columns: { norbital_id: true, repayment_sequence: true },
-						with: {
-							entry_payslip_lines: {
-								columns: { norbital_id: true, sequence: true, norbital_created_at: true },
-								with: {
-									payslip_line_payslip: {
-										columns: { norbital_id: true },
-										with: {
-											payslip_payroll_run: {
-												columns: {
-													norbital_id: true,
-													period: true,
-													pay_date: true
-												}
+	const consumptionQuery = $derived(
+		agreementId
+			? client.db.component_entries.findMany({
+					where: { repayment_agreement_id: { eq: agreementId } },
+					columns: { norbital_id: true, repayment_sequence: true },
+					with: {
+						entry_payslip_lines: {
+							columns: { norbital_id: true, sequence: true, norbital_created_at: true },
+							with: {
+								payslip_line_payslip: {
+									columns: { norbital_id: true },
+									with: {
+										payslip_payroll_run: {
+											columns: {
+												norbital_id: true,
+												period: true,
+												pay_date: true
 											}
 										}
 									}
 								}
 							}
-						},
-						orderBy: { repayment_sequence: 'asc' },
-						limit: 600
-					})
-				: null;
-		},
-		{ lazy: false }
+						}
+					},
+					orderBy: { repayment_sequence: 'asc' },
+					limit: 600
+				})
+			: null
 	);
 
 	const consumptionBySequence = $derived(
@@ -177,7 +168,7 @@
 		canRemoveRow={(row) =>
 			schedule.length > 1 && row.consumed_by.status !== 'consumed' && !consumptionPending}
 		isRowDisabled={(row) => row.consumed_by.status === 'consumed'}
-		class="h-full max-h-none"
+		bounded={false}
 		onChange={(nextRows) =>
 			emit(nextRows.map(({ due_date, amount }) => ({ due_date, amount })) as Value)}
 	/>

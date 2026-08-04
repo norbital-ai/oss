@@ -9,9 +9,9 @@
 		current === null
 			? '—'
 			: current.kind === 'CAPTURED'
-				? `Captured · ${current.configuration_hash.slice(0, 12)}`
-				: `Legacy hash only · ${current.configuration_hash.slice(0, 12)}`
+				? 'Captured at run time'
+				: 'Legacy snapshot'
 	);
 </script>
 
-<span class="block truncate font-mono text-xs" title={summary}>{summary}</span>
+<span class="block truncate text-sm" title={summary}>{summary}</span>

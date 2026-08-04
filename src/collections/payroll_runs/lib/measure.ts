@@ -76,7 +76,12 @@ import {
 } from './ordinary-rate.js';
 import { prorationFraction } from './proration.js';
 import { cents } from './rounding.js';
-import { normalDailyHours, resolveSchedule, type ScheduledDay } from './schedule.js';
+import {
+	normalDailyHours,
+	resolveSchedule,
+	type ScheduleTerms,
+	type ScheduledDay
+} from './schedule.js';
 import { settle } from './settle.js';
 
 export type MeasuredLine = {
@@ -130,6 +135,29 @@ function overtimeExcessWorkLimit(components: readonly PayComponent[]): number | 
 		);
 	}
 	return limits.values().next().value ?? null;
+}
+
+/**
+ * The week shape governing one set of terms, or `null` for terms that name no pattern.
+ *
+ * A named pattern that has gone missing is a fault rather than a reason to guess: falling back to
+ * the legacy inference would quietly reprice rest days as off days.
+ */
+function weekShapeOf(
+	configuration: Configuration,
+	workPatternId: string | null
+): ScheduleTerms['week'] {
+	if (workPatternId == null) return null;
+	const pattern = configuration.workPatternById.get(workPatternId);
+	if (pattern == null)
+		throw new Error(
+			'Employment terms name a work pattern that is not effective for this company in this ' +
+				'period, so the week they describe cannot be resolved.'
+		);
+	const variant = pattern.variant;
+	if (variant == null) throw new Error(`Work pattern ${pattern.code} has no variant.`);
+	if (variant.type === 'ROSTERED') return 'ROSTERED';
+	return { rest_days: variant.rest_days, off_days: variant.off_days };
 }
 
 function monthlyOvertimeLimit(configuration: Configuration): number | null {
@@ -236,7 +264,8 @@ export function measureEmployment(options: {
 		return {
 			ordinary_hours_per_week: Number(row.ordinary_hours_per_week),
 			working_days_per_week: Number(row.working_days_per_week),
-			rest_day: row.rest_day
+			rest_day: row.rest_day,
+			week: weekShapeOf(configuration, row.work_pattern_id)
 		};
 	};
 	const schedule = resolveSchedule({

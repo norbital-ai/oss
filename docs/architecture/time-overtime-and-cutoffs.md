@@ -15,9 +15,18 @@ flowchart LR
   A --> O
 ```
 
-For a rostered shift worker, the dated roster is authoritative. `WORK` is ordinary, `REST` is the
-statutory rest day and `OFF` is an off day. When no roster exists, working days per week and the
-configured rest weekday provide a fixed-week fallback.
+For a rostered **shift worker**, the dated roster / attendance assignment is authoritative and may
+place `REST` or `OFF` on any weekday. `WORK` is ordinary, `REST` is the statutory rest day and
+`OFF` is an additional non-working day.
+
+For a **fixed five-day (office / normal) worker** with no conflicting dated roster override:
+
+- Saturday is `OFF`;
+- Sunday is `REST` (statutory rest day);
+- Monday–Friday are ordinary workdays unless a holiday or approved leave applies.
+
+When no roster exists, working days per week and the configured rest weekday provide that fixed-week
+fallback. Do not treat Saturday as the statutory rest day for a five-day contract.
 
 `REST` does not mean that work is impossible. Malaysian law requires a weekly rest day; for shift
 work, a continuous period of at least 30 hours can constitute that day. The employer prepares the
@@ -123,6 +132,17 @@ The 104-hour counter:
   daily boundary.
 
 Only the portion above 104 hours is moved to `OVERTIME_EXCESS`.
+
+## Unpaid leave and the settlement window
+
+NPL uses the same attendance settlement window as OT (21st–20th for Nihon). Calendar-month UL in
+the source salary listing can therefore differ from the engine without either side being “broken”:
+
+- Norbital: UL dates inside the run’s settlement window.
+- Some Infotech April rows: UL dated in calendar April, including 21–30 April that belong to May
+  settlement.
+
+Named April examples are in the current variance report. Product rule: keep the 21st–20th window.
 
 ## Payment window versus compliance month
 

@@ -10,7 +10,7 @@ export default defineModel(
 	{
 		description:
 			'Where one employment stands with one statutory scheme — registered with a reference number, or not registered with a reason. An absent row means registered with nothing captured.',
-		recordLabel: 'statutory_contribution_id',
+		recordLabel: ['status', 'effective_range'],
 		icon: 'lucide:badge-check',
 		// Plan 02 §7: employment =, contribution =, effective range &&.
 		exclusions: [

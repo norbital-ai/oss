@@ -2,7 +2,6 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
-	import { watch } from 'runed';
 	import { specialAmountsSchema, type SpecialAmounts } from './+definition.js';
 	import type { RendererProps } from './$types.js';
 
@@ -31,30 +30,18 @@
 
 	let props: RendererProps = $props();
 	const disabled = $derived(props.mode === 'edit' ? props.disabled : true);
-	// svelte-ignore state_referenced_locally -- external changes are synchronized by the watch below.
-	const initial = specialAmountsSchema.safeParse(props.value);
-	let rows = $state<AmountRow[]>(initial.success ? toRows(initial.data) : []);
-	let lastEmitted = $state<string | null>(null);
-
-	watch(
-		() => props.value,
-		(next) => {
-			if (JSON.stringify(next ?? {}) === lastEmitted) return;
-			const parsed = specialAmountsSchema.safeParse(next);
-			rows = parsed.success ? toRows(parsed.data) : [];
-		},
-		{ lazy: true }
-	);
+	const parsedIncoming = $derived(specialAmountsSchema.safeParse(props.value));
+	const incomingRows = $derived(parsedIncoming.success ? toRows(parsedIncoming.data) : []);
+	let edits = $state<AmountRow[] | null>(null);
+	const rows = $derived(edits ?? incomingRows);
 
 	const summary = $derived(
 		rows.length === 0 ? '—' : rows.map((row) => `${row.rule}: ${row.amount}`).join(', ')
 	);
 
 	function commit(nextRows: AmountRow[]): void {
-		rows = nextRows;
-		const record = toRecord(nextRows);
-		lastEmitted = JSON.stringify(record);
-		if (props.mode === 'edit') props.onValueChange(record);
+		edits = nextRows;
+		if (props.mode === 'edit') props.onValueChange(toRecord(nextRows));
 	}
 
 	function numberFrom(raw: string, fallback: number): number {

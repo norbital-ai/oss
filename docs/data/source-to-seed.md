@@ -24,19 +24,18 @@ Cleaning must not calculate OT, infer a missing shift, convert leave, change a c
 transaction date or silently fill an employee master field. If source files conflict, both facts are
 retained and the conflict is reported.
 
-## Explicitly inferred entries
+## Explicitly authorised entries when trackers disagree
 
-An amount may appear on a source payslip but be absent from its specialist tracker. It is not seeded
-by default. If the business explicitly authorises matching it, create an entry with:
+An amount may appear on a source payslip but disagree with its specialist tracker. Prefer the
+tracker when it matches the paid listing. When HR confirms a different paid amount with supporting
+evidence, seed the **paid** amount and document the reason — do not invent a tracker receipt date
+and do not leave the payslip amount as an unexplained gap.
 
-- the exact payslip amount;
-- a date inside the applicable settlement window;
-- a description beginning `INFERRED` and naming the source payslip cell; and
-- no claim that the invented date came from the tracker.
-
-Example: employee `ACME0042` has a January medical reimbursement of RM93.50 on the payslip and in
-the allowance report, but neither medical tracker contains the event. Without explicit authorisation
-the item remains an input gap and a variance — it must not be reverse-seeded from the payslip alone.
+Example: employee `NHPMY0053` has January medical RM93.50 on the salary listing (`JAN 2026!X5`).
+The medical tracker also lists RM158 for January 2026 and RM215 for December 2025. The supporting
+medical claim form shows the original claim RM158 struck through and replaced with RM93.50 because
+the **2025 annual medical balance** remaining was RM93.50. Seed RM93.50 with that provenance; do
+not invent a missing receipt date beyond the settlement window.
 
 ## Cutoff representation
 

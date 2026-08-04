@@ -30,8 +30,7 @@
 	);
 	// A payslip's employment column holds a uuid. The run belongs to one company, so that company's
 	// employments are the only ones the table below can show; the employee number is resolved from
-	// that one set rather than by mounting a lookup per row, and a miss falls back to the raw id so
-	// an unloaded label never reads as missing data.
+	// that one set rather than by mounting a lookup per row, and a miss renders as an em dash.
 	const employmentsQuery = $derived(
 		client.db.employments.findMany({
 			where: { company_id: { eq: record.company_id }, norbital_approval_id: { isNull: true } },
@@ -179,10 +178,9 @@
 					<dt class="text-xs text-muted-foreground">Run-level configuration snapshot</dt>
 					<dd class="mt-1 text-sm font-medium">
 						{record.configuration_snapshot?.kind === 'CAPTURED'
-							? 'Captured with this run'
-							: 'Legacy hash only'}
+							? 'Captured at run time'
+							: 'Legacy snapshot'}
 					</dd>
-					<dd class="mt-1 truncate font-mono text-xs">{record.configuration_hash}</dd>
 				</div>
 			</Grid>
 		</Stack>
@@ -214,7 +212,10 @@
 							name="employment_id"
 							label="Employee"
 							card="title"
-							render={({ value }) => employmentLabelsById.get(String(value)) ?? value}
+							render={({ value }) =>
+								value == null || value === ''
+									? '—'
+									: (employmentLabelsById.get(String(value)) ?? '—')}
 						/>
 						<Column name="currency" card="badge" />
 						<Column name="gross" render={({ value }) => formatNumeric(value)} />

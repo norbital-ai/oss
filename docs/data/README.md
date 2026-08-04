@@ -54,14 +54,15 @@ produced by a fresh run and compared against the independent source workbook.
 
 The seed audit must list every source record that cannot be seeded. Common categories:
 
-| Missing source                                                               | Payroll impact                                                                  |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Employee master for a population with attendance only                        | Attendance cannot form complete employments or money inputs                     |
-| Payslips withheld for blind testing                                          | Output can run but cannot yet be reconciled                                     |
-| Payslip amount visible in a listing but absent from the specialist tracker   | Remains an input gap until confirmed or explicitly authorised as inferred       |
-| Loan agreement whose principal does not equal the stated instalment schedule | Period recoveries may pay, but the agreement cannot be represented consistently |
-| Shift catalogue, roster definitions or independent medical register          | Identity, schedule and claim provenance remain incomplete                       |
-| Loan disbursement dates                                                      | Valid schedules exist, but origination-date audit is incomplete                 |
+| Missing source                                                               | Payroll impact                                                                                      |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Employee master for a population with attendance only                        | Attendance cannot form complete employments or money inputs                                         |
+| Payslips withheld for blind testing                                          | Output can run but cannot yet be reconciled                                                         |
+| Payslip amount that disagrees with the specialist tracker                    | Remains an input gap until HR confirms the paid amount; then seed the paid value with that evidence |
+| Incomplete June joiner master while attendance exists                        | Keep cleaned attendance; key master/terms in UI for testing — do not invent                         |
+| Loan agreement whose principal does not equal the stated instalment schedule | Period recoveries may pay, but the agreement cannot be represented consistently                     |
+| Shift catalogue, roster definitions or independent medical register          | Identity, schedule and claim provenance remain incomplete                                           |
+| Loan disbursement dates                                                      | Valid schedules exist, but origination-date audit is incomplete                                     |
 
 See [Source-to-seed contract](source-to-seed.md) for the field rules and
 [Reconciliation method](reconciliation.md) for the independent-output test. Dated variance evidence
