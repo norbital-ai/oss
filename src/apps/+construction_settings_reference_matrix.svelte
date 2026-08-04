@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { client } from '$pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Cover } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
-	import { client } from '$pod/client';
 </script>
 
 <svelte:head>
@@ -21,7 +21,11 @@
 
 <Cover as="main" top={pageHeading}>
 	<Bound size="full" inset>
-		<CollectionTable {client} collection="bim_reference_matrix">
+		<CollectionTable
+			{client}
+			collection="bim_reference_matrix"
+			view="construction_reference_matrix"
+		>
 			{#snippet columns({ Column })}
 				<Column name="reference_name" />
 				<Column name="reference_code" />
