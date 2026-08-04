@@ -12,9 +12,16 @@
 -->
 <script lang="ts">
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
-	import { STATUS_PRESENTATION, monthDays, type DayFacts, type DayStatus } from './roster-month.js';
+	import {
+		STATUS_PRESENTATION,
+		describeDay,
+		monthDays,
+		statusGlyph,
+		type DayFacts,
+		type DayStatus
+	} from './roster-month.js';
 
 	type Person = { readonly id: string; readonly number: string; readonly name: string };
 
@@ -47,61 +54,6 @@
 		return day === 0 || day === 6;
 	}
 
-	/** The glyph a cell carries: the shift code when there is one, else what kind of day it is. */
-	function glyphOf(day: DayFacts | undefined): string {
-		if (day == null) return '';
-		switch (day.status) {
-			case 'HOLIDAY':
-				return 'PH';
-			case 'ON_LEAVE':
-				return day.halfDayLeave ? '½' : 'L';
-			case 'REST':
-				return 'R';
-			case 'OFF':
-				return 'O';
-			case 'UNROSTERED':
-				return '·';
-			case 'ABSENT':
-				return '!';
-			case 'OPEN':
-				return '⧗';
-			case 'ATTENDED':
-			case 'PLANNED':
-				return day.shiftCode ?? 'W';
-			default: {
-				const unhandled: never = day.status;
-				throw new Error(`Unhandled day status: ${String(unhandled)}`);
-			}
-		}
-	}
-
-	// Literal variants rather than assembled class strings, so Tailwind can see every one of them.
-	const TONE_CLASS: Record<DayStatus, string> = {
-		UNROSTERED: 'bg-muted/30 text-muted-foreground',
-		PLANNED: 'bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-200',
-		ATTENDED: 'bg-success/15 text-success-foreground',
-		OPEN: 'bg-warning/25 text-warning-foreground',
-		ABSENT: 'bg-destructive/20 text-destructive font-semibold',
-		ON_LEAVE: 'bg-accent text-accent-foreground',
-		HOLIDAY: 'bg-brand/20 text-brand-foreground',
-		REST: 'bg-muted text-muted-foreground',
-		OFF: 'bg-muted/60 text-muted-foreground'
-	};
-
-	function describe(day: DayFacts | undefined, person: Person, date: string): string {
-		if (day == null) return `${person.number} · ${date}`;
-		const parts = [
-			`${person.number} · ${date}`,
-			STATUS_PRESENTATION[day.status].label,
-			day.shiftCode == null ? null : `Shift ${day.shiftCode}`,
-			day.assignmentCode == null ? null : `Roster code ${day.assignmentCode}`,
-			day.holidayName,
-			day.leaveCode == null ? null : `${day.leaveCode}${day.halfDayLeave ? ' (half day)' : ''}`,
-			day.withinCutoff ? 'Inside the current cut-off' : null
-		];
-		return parts.filter((part) => part != null && part !== '').join(' — ');
-	}
-
 	/** The first day inside the cut-off, so the boundary can be drawn as an edge rather than a fill. */
 	const cutoffStartsAt = $derived(
 		cutoff == null ? null : days.find((date) => date >= cutoff.start && date <= cutoff.end)
@@ -114,13 +66,10 @@
 	</p>
 {:else}
 	<Stack gap="sm">
-		<!--
-			stupidity:allow UI3 -- a person-by-day board is a derived cross-tab of four collections, not
-			one collection's rows, so CollectionTable cannot express it.
-			stupidity:allow UI16 -- the horizontal scrollport is the table's own; a Scroll wrapper here
-			would nest inside the tab panel's scrollport.
-		-->
-		<div class="overflow-x-auto rounded-lg border">
+		<!-- An x-only reel: thirty-one days do not fit, and Scroll's per-axis containment keeps the
+		     tab panel's vertical scroll from being trapped here. -->
+		<Scroll axis="x" name="Month roster board" class="rounded-lg border">
+			<!-- stupidity:allow UI3 -- a person-by-day board is a derived cross-tab of four collections, not one collection's rows. -->
 			<table class="border-separate border-spacing-0 text-left text-xs">
 				<thead>
 					<tr>
@@ -171,16 +120,16 @@
 									-->
 									<button
 										type="button"
-										title={describe(day, person, date)}
+										title={describeDay(day, `${person.number} · ${date}`)}
 										class={cn(
 											'flex h-7 w-full items-center justify-center rounded-sm text-micro tabular-nums focus-visible:ring-2 focus-visible:ring-ring',
-											day == null ? 'bg-muted/20' : TONE_CLASS[day.status],
+											day == null ? 'bg-muted/20' : STATUS_PRESENTATION[day.status].className,
 											onSelectDay != null && 'hover:ring-1 hover:ring-ring'
 										)}
 										disabled={onSelectDay == null}
 										onclick={() => onSelectDay?.(person.id, date)}
 									>
-										<span class="truncate px-0.5">{glyphOf(day)}</span>
+										<span class="truncate px-0.5">{day == null ? '' : statusGlyph(day)}</span>
 									</button>
 								</td>
 							{/each}
@@ -188,13 +137,12 @@
 					{/each}
 				</tbody>
 			</table>
-		</div>
+		</Scroll>
 
-		<Inline gap="md" class="flex-wrap text-micro text-muted-foreground">
+		<Cluster gap="md" class="text-micro text-muted-foreground">
 			{#each Object.entries(STATUS_PRESENTATION) as [status, presentation] (status)}
 				<Inline gap="xs">
-					<span class={cn('inline-block size-3 rounded-sm', TONE_CLASS[status as DayStatus])}
-					></span>
+					<span class={cn('inline-block size-3 rounded-sm', presentation.className)}></span>
 					<span>{presentation.label}</span>
 				</Inline>
 			{/each}
@@ -204,6 +152,6 @@
 					<span>Cut-off {cutoff.start} to {cutoff.end}</span>
 				</Inline>
 			{/if}
-		</Inline>
+		</Cluster>
 	</Stack>
 {/if}
