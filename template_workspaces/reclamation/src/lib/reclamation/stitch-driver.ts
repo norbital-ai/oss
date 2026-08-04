@@ -1,21 +1,23 @@
 /**
  * One stitch driver, shared by everything that can trigger a reconstruction.
  *
- * The project hooks, the document hooks, and the rebuild command all need the
- * same four capabilities. They differ only in how the runtime lets them write:
- * an `after` hook is elevated and writes through `db.mutate`, while a remote
- * command handler gets the ordinary API and writes through
- * `db.site_reconstructions.create` — which exists only because that collection
- * declares a `create` behaviour. That single difference is the argument;
- * nothing else is repeated.
+ * The reconstruction automations and the rebuild command all need the same four
+ * capabilities, and both run after commit with the ordinary API, so both write
+ * through `db.site_reconstructions.create` — which exists only because that
+ * collection declares a `create` behaviour. Nothing here is repeated per caller:
+ * a trigger supplies a project id, and `reconstructProject` does the rest.
  */
 
+import { runStitchForProject } from '../../collections/reclamation_projects/lib/run-stitch.js';
 import type { ReconstructionWrite } from '../../collections/reclamation_projects/lib/run-stitch.js';
 import type {
 	ExtraDocument,
 	PreviousRun,
 	StitchDriver
 } from '../../collections/reclamation_projects/lib/run-stitch.js';
+// Type-only, and therefore erased: this module keeps its structural `StitchApi` so the driver stays
+// testable on its own, and names the generated API only where a caller hands over the real one.
+import type { Api } from '../../../.norbital/generated/types.js';
 
 /** The subset of the server API a stitch needs, in either hook or remote form. */
 export type StitchApi = {
@@ -76,3 +78,56 @@ export const PROJECT_STITCH_COLUMNS = {
 	render_cell_m: true,
 	stitch_overrides: true
 } as const;
+
+/** What one reconstruction attempt did, including the two cases that never reach the engine. */
+export type ReconstructionOutcome =
+	'stitched' | 'skipped' | 'failed' | 'missing_project' | 'unrelated_document';
+
+/**
+ * Reconstruct one project from its committed state.
+ *
+ * Every trigger — a saved project, an attached reconstruction document, the rebuild command —
+ * funnels through here, and none of them pass the row they were handed: the project is re-read by
+ * id so the stitch always describes what is actually stored, not what one event happened to carry.
+ *
+ * Idempotent by construction. `runStitchForProject` fingerprints the documents and settings and
+ * compares that against the fingerprint recorded on the newest ready run, so a redelivered event,
+ * a double save, or two triggers firing for one edit all return `skipped` instead of appending an
+ * identical revision. `force` is the deliberate exception, and only the rebuild command uses it.
+ */
+export async function reconstructProject(
+	api: Api,
+	projectId: string | null | undefined,
+	options: { readonly force?: boolean } = {}
+): Promise<ReconstructionOutcome> {
+	if (typeof projectId !== 'string' || projectId === '') return 'missing_project';
+	const project = await api.db.query.reclamation_projects.findFirst({
+		where: { norbital_id: { eq: projectId } },
+		columns: PROJECT_STITCH_COLUMNS
+	});
+	if (!project) return 'missing_project';
+	return runStitchForProject(
+		project,
+		stitchDriver(api, (payload) =>
+			api.db.site_reconstructions.create(
+				payload as Parameters<typeof api.db.site_reconstructions.create>[0]
+			)
+		),
+		options
+	);
+}
+
+/**
+ * Reconstruct after a `project_documents` row changes.
+ *
+ * Only the reconstruction category feeds the engine. Filing a tender letter or a correspondence
+ * PDF against the project must not touch the model, and that test lives here rather than in three
+ * near-identical automation files.
+ */
+export async function reconstructForDocument(
+	api: Api,
+	document: { readonly category?: string | null; readonly project_id?: string | null }
+): Promise<ReconstructionOutcome> {
+	if (document.category !== 'reconstruction') return 'unrelated_document';
+	return reconstructProject(api, document.project_id);
+}

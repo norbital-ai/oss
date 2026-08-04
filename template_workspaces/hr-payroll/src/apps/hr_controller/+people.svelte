@@ -103,10 +103,11 @@
 					]
 				: []
 		);
+		// The window ends on the *payroll* month. Reading getUTCMonth() instead puts a viewer east of
+		// Greenwich in last month for the first eight hours of every first-of-month.
+		const [currentYear, currentMonth] = todayKey().split('-').map(Number) as [number, number];
 		return Array.from({ length: 12 }, (_value, offset) => {
-			const date = new Date(
-				Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 11 + offset, 1)
-			);
+			const date = new Date(Date.UTC(currentYear, currentMonth - 1 - 11 + offset, 1));
 			const month = date.toISOString().slice(0, 7);
 			const monthStart = `${month}-01`;
 			const monthEnd = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0))

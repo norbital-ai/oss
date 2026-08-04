@@ -1,19 +1,18 @@
-import { PROJECT_STITCH_COLUMNS, stitchDriver } from '../../lib/reclamation/stitch-driver.js';
-import { parseOverrides, runStitchForProject } from './lib/run-stitch.js';
+import { parseOverrides } from './lib/run-stitch.js';
 import { refuse } from '@norbital-ai/pod/authoring';
 import type { Hooks } from './$types.js';
 
 /**
- * The 3D reconstruction runs here.
+ * Validate what has to be right before the project row lands.
  *
- * `before` validates only what has to be right before the row lands: an override
- * blob has to be JSON, and the tuning cells have to be sane. The stitch itself
- * runs in `after`, because it reads file assets, walks a survey grid, and writes
- * a `site_reconstructions` revision — work that belongs after the project row is
- * durable, not inside the write that creates it.
+ * An override blob has to be JSON, and the tuning cells have to be sane — both are same-transaction
+ * checks on the record being written, which is the whole of what a hook is for.
  *
- * The project row is never mutated by these hooks, so a stitch cannot re-enter
- * them. Status is read from the newest reconstruction revision instead.
+ * The reconstruction is *not* here. It reads three file assets, walks a survey grid, and appends a
+ * revision to `site_reconstructions` — durable work against another collection, which by definition
+ * belongs to an automation that runs after commit. `src/automation/+reconstruct_created_project.ts`
+ * and `+reconstruct_updated_project.ts` own it, and a stitch failure now records a failed revision
+ * instead of rolling back the project the engineer just saved.
  */
 
 function validateTuning(input: {
@@ -42,27 +41,12 @@ export default {
 		before: async ({ input }) => {
 			validateTuning(input);
 			return input;
-		},
-		after: async ({ record, api }) => {
-			await runStitchForProject(
-				record,
-				stitchDriver(api, (payload) => api.db.mutate('site_reconstructions', [payload]))
-			);
 		}
 	},
 	update: {
 		before: async ({ input }) => {
 			validateTuning(input);
 			return input;
-		},
-		after: async ({ record, api }) => {
-			// The driver compares the current documents and settings against the
-			// fingerprint on the newest run, so an unrelated edit — a rename, a
-			// status change — does not re-integrate the site.
-			await runStitchForProject(
-				record,
-				stitchDriver(api, (payload) => api.db.mutate('site_reconstructions', [payload]))
-			);
 		}
 	}
 } satisfies Hooks;

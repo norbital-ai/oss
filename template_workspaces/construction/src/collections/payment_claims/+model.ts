@@ -1,11 +1,11 @@
 import {
 	custom,
+	date,
 	dateRange,
 	defineModel,
 	enums,
 	file,
 	text,
-	timestamp,
 	uuid
 } from '@norbital-ai/pod/authoring';
 
@@ -19,8 +19,8 @@ export default defineModel(
 		claimed_amount: custom('money'),
 		certified_amount: custom('money'),
 		claim_period: dateRange(),
-		submitted_date: timestamp(),
-		paid_date: timestamp(),
+		submitted_date: date(),
+		paid_date: date(),
 		description: text(),
 		supporting_documents: file().array()
 	},

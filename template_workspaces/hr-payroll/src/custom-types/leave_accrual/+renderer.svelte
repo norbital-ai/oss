@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { numberFrom } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
@@ -45,6 +46,13 @@
 		}
 	}
 
+	/*
+	 * Every variant renderer needs this same three-line guard, but it closes over this file's
+	 * `current`, `emit` and `defaultFor`. Sharing it would mean a generic taking three callbacks —
+	 * `controller-surfaces.md` §2 calls that a wrapper thinner than the thing it wraps. The pure
+	 * coercions these renderers used to duplicate did move, to lib/ui/renderer-input.ts.
+	 */
+	// stupidity:allow D1 -- closes over this file's current/emit/defaultFor; see the note above.
 	function selectKind(kind: AccrualKind | null): void {
 		if (kind === null) {
 			emit(null);
@@ -52,11 +60,6 @@
 		}
 		if (current !== null && current.kind === kind) return;
 		emit(defaultFor(kind));
-	}
-
-	function numberFrom(raw: string, fallback: number): number {
-		const next = Number(raw);
-		return Number.isFinite(next) ? next : fallback;
 	}
 </script>
 

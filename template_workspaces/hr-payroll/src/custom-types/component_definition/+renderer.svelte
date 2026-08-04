@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { nullableNumberFrom, numberFrom } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
@@ -128,17 +129,6 @@
 		if (current !== null && current.source === source) return;
 		emit(defaultFor(source));
 	}
-
-	function numberFrom(raw: string, fallback: number): number {
-		const next = Number(raw);
-		return Number.isFinite(next) ? next : fallback;
-	}
-
-	function nullableNumberFrom(raw: string): number | null {
-		if (raw.trim().length === 0) return null;
-		const next = Number(raw);
-		return Number.isFinite(next) ? next : null;
-	}
 </script>
 
 {#if props.mode === 'display'}
@@ -228,14 +218,16 @@
 						{disabled}
 						onchange={(event) => {
 							try {
+								// stupidity:allow R6b -- componentDefinitionSchema.safeParse below is the validation.
 								const matrix = JSON.parse(event.currentTarget.value);
 								const next = componentDefinitionSchema.safeParse({
 									...current,
 									cap: { ...cap, matrix }
 								});
 								if (next.success) emit(next.data);
+								// stupidity:allow S1 -- half-typed JSON is the normal state of this field, not a fault.
 							} catch {
-								/* invalid JSON remains uncommitted */
+								/* Invalid JSON is left uncommitted; the field keeps the operator's text. */
 							}
 						}}></textarea>
 				</label>

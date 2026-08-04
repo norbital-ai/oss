@@ -1,4 +1,4 @@
-import { custom, defineModel, enums, text, timestamp } from '@norbital-ai/pod/authoring';
+import { custom, date, defineModel, enums, text } from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
@@ -9,11 +9,11 @@ export default defineModel(
 		phone: text(),
 		email: text(),
 		emergency_contact: custom('emergency_contact'),
-		date_of_birth: timestamp(),
+		date_of_birth: date(),
 		nationality: text(),
-		work_permit_expiry: timestamp(),
-		medical_check_date: timestamp(),
-		safety_induction_date: timestamp()
+		work_permit_expiry: date(),
+		medical_check_date: date(),
+		safety_induction_date: date()
 	},
 	{
 		description: 'Worker roster used for job assignment and compliance checks.',

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Cover } from '@norbital-ai/ui/layout';
+	import { Bound, Cover } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 </script>
 
@@ -20,13 +20,15 @@
 {/snippet}
 
 <Cover as="main" top={pageHeading}>
-	<CollectionTable {client} collection="projects" query={{ limit: 50 }}>
-		{#snippet columns({ Column })}
-			<Column name="project_name" />
-			<Column name="project_number" />
-			<Column name="client" />
-			<Column name="status" />
-			<Column name="schedule_range" />
-		{/snippet}
-	</CollectionTable>
+	<Bound size="full" inset>
+		<CollectionTable {client} collection="projects" query={{ limit: 50 }}>
+			{#snippet columns({ Column })}
+				<Column name="project_name" />
+				<Column name="project_number" />
+				<Column name="client" />
+				<Column name="status" />
+				<Column name="schedule_range" />
+			{/snippet}
+		</CollectionTable>
+	</Bound>
 </Cover>

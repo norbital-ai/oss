@@ -14,6 +14,7 @@
 		Stack
 	} from '@norbital-ai/ui/layout';
 	import { formatDateRangeLocal } from '@norbital-ai/std/date';
+	import { PROJECT_TIME_ZONE, calendarDateInTimeZone } from '../../lib/calendar.js';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import IfcDisplay from '../../lib/ifc-viewer/ifc_display.svelte';
 
@@ -22,14 +23,10 @@
 		currency: string;
 	}
 
-	function todayKey(): string {
-		return new Date().toISOString().slice(0, 10);
-	}
-
 	let { record }: { record: Row } = $props();
 
 	const projectId = $derived(record.norbital_id);
-	const today = todayKey();
+	const today = calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE);
 
 	const sitesQuery = $derived(
 		client.db.site_locations.findMany({
@@ -190,6 +187,10 @@
 			{loadError.message}
 		</p>
 	{/if}
+
+	{#if loading}
+		<p class="sr-only" aria-live="polite">Loading project operating context.</p>
+	{/if}
 {/snippet}
 
 {#snippet coordinationModel()}
@@ -246,298 +247,280 @@
 {/snippet}
 
 {#snippet coordination()}
-	<Scroll name="Project model and coordination">
-		<Stack gap="lg">
-			<Split ratio="wide" collapse="stack" start={coordinationModel} end={deliveryPulse} />
+	<Stack gap="lg">
+		<Split ratio="wide" collapse="stack" start={coordinationModel} end={deliveryPulse} />
 
-			<Grid minimum="panel">
-				<CollectionTable
-					{client}
-					collection="rfis"
-					query={{ where: { project_id: { eq: projectId } }, limit: 25 }}
-					title="RFIs"
-					description="Design questions tied to this project."
-				>
-					{#snippet columns({ Column })}
-						<Column name="rfi_number" label="RFI" />
-						<Column name="title" minWidth={180} />
-						<Column name="priority" />
-						<Column name="status" />
-						<Column name="due_date" label="Due" />
-					{/snippet}
-					{#snippet ListCard(rfi)}
-						<Inline align="start" justify="between" gap="sm">
-							<p class="truncate font-medium">{rfi.title}</p>
-							<span class="shrink-0 text-xs text-muted-foreground">{rfi.status}</span>
-						</Inline>
-						<p class="mt-1 truncate text-sm text-muted-foreground">
-							{rfi.rfi_number} · {rfi.priority}
-						</p>
-					{/snippet}
-				</CollectionTable>
-				<CollectionTable
-					{client}
-					collection="defects"
-					query={{ where: { project_id: { eq: projectId } }, limit: 25 }}
-					title="Defects"
-					description="Quality issues across project work fronts."
-				>
-					{#snippet columns({ Column })}
-						<Column name="defect_number" label="Defect" />
-						<Column name="title" minWidth={180} />
-						<Column name="severity" />
-						<Column name="status" />
-						<Column name="due_date" label="Due" />
-					{/snippet}
-					{#snippet ListCard(defect)}
-						<Inline align="start" justify="between" gap="sm">
-							<p class="truncate font-medium">{defect.title}</p>
-							<span class="shrink-0 text-xs text-muted-foreground">{defect.status}</span>
-						</Inline>
-						<p class="mt-1 truncate text-sm text-muted-foreground">
-							{defect.defect_number} · {defect.severity}
-						</p>
-					{/snippet}
-				</CollectionTable>
-			</Grid>
-		</Stack>
-	</Scroll>
-{/snippet}
-
-{#snippet manpower()}
-	<Scroll name="Project manpower allocation">
-		<Stack gap="lg">
-			<Stack gap="xs">
-				<h3 class="text-heading">Manpower allocation</h3>
-				<p class="max-w-[70ch] text-sm text-muted-foreground">
-					Each lane is a project work front. Cards show the worker, work package, role, and planned
-					daily hours.
-				</p>
-			</Stack>
-			{#if sitesQuery.loading || Boolean(assignmentsQuery?.loading)}
-				<Columns count={3}>
-					{#each [1, 2, 3] as lane (lane)}
-						<div class="h-64 animate-pulse rounded-md bg-muted/60"></div>
-					{/each}
-				</Columns>
-			{:else if (sitesQuery.current?.length ?? 0) === 0}
-				<div
-					class="rounded-md border border-dashed px-6 py-12 text-center text-sm text-muted-foreground"
-				>
-					Add a site location before allocating manpower.
-				</div>
-			{:else}
-				<Bound size="standard" clip>
-					<Scroll axis="x" name="Manpower allocation" class="pb-2">
-						<Inline align="start" gap="md">
-							{#each sitesQuery.current ?? [] as site (site.norbital_id)}
-								{@const siteAssignments = assignments.filter(
-									(assignment) => assignment.site_location_id === site.norbital_id
-								)}
-								<section class="w-72 shrink-0 rounded-md bg-muted/50 p-3">
-									<Inline
-										as="header"
-										align="start"
-										justify="between"
-										gap="sm"
-										class="border-b pb-3"
-									>
-										<div class="min-w-0">
-											<h4 class="truncate text-sm font-medium">{site.location_name}</h4>
-											<p class="mt-0.5 truncate text-xs text-muted-foreground">
-												{site.location_code ?? site.location_type ?? 'Work front'}
-											</p>
-										</div>
-										<span class="rounded-full bg-background px-2 py-0.5 text-xs tabular-nums">
-											{siteAssignments.length}
-										</span>
-									</Inline>
-									<Stack gap="sm" class="mt-3">
-										{#each siteAssignments as assignment (assignment.norbital_id)}
-											<article class="rounded-md border bg-card p-3 shadow-xs">
-												<p class="text-sm font-medium">
-													{assignment.worker_id
-														? (workerById.get(assignment.worker_id)?.worker_name ?? '—')
-														: '—'}
-												</p>
-												<p class="mt-1 text-xs text-muted-foreground">
-													{assignment.job_id
-														? (jobById.get(assignment.job_id)?.job_title ?? '—')
-														: '—'}
-												</p>
-												<Inline justify="between" gap="sm" class="mt-3 text-xs">
-													<span
-														>{assignment.role ??
-															(assignment.worker_id
-																? workerById.get(assignment.worker_id)?.trade
-																: null) ??
-															'Site role'}</span
-													>
-													<span class="text-muted-foreground tabular-nums"
-														>{assignment.hours_per_day ?? 0} h/day</span
-													>
-												</Inline>
-											</article>
-										{/each}
-										{#if siteAssignments.length === 0}
-											<p class="py-6 text-center text-xs text-muted-foreground">No allocations</p>
-										{/if}
-									</Stack>
-								</section>
-							{/each}
-						</Inline>
-					</Scroll>
-				</Bound>
-			{/if}
-		</Stack>
-	</Scroll>
-{/snippet}
-
-{#snippet controls()}
-	<Scroll name="Project commercial controls">
-		<Stack gap="lg">
-			<Grid minimum="compact">
-				<div class="border-b pb-3">
-					<p class="text-xs text-muted-foreground">Contract value</p>
-					<p class="mt-1 text-heading">{formatMoney(record.contract_value)}</p>
-				</div>
-				<div class="border-b pb-3">
-					<p class="text-xs text-muted-foreground">Claimed</p>
-					<p class="mt-1 text-heading">
-						{sumMoney(claims.map((claim) => claim.claimed_amount))}
-					</p>
-				</div>
-				<div class="border-b pb-3">
-					<p class="text-xs text-muted-foreground">Certified</p>
-					<p class="mt-1 text-heading">
-						{sumMoney(claims.map((claim) => claim.certified_amount))}
-					</p>
-				</div>
-				<div class="border-b pb-3">
-					<p class="text-xs text-muted-foreground">Documents</p>
-					<p class="mt-1 text-heading tabular-nums">{documents.length}</p>
-				</div>
-			</Grid>
-
-			<Grid minimum="panel">
-				<Stack as="section" gap="sm">
-					<div class="border-b pb-2">
-						<h3 class="text-sm font-semibold">Payment claims</h3>
-						<p class="text-xs text-muted-foreground">Commercial progression for this project.</p>
-					</div>
-					<div class="divide-y rounded-md border bg-card">
-						{#each claims as claim (claim.norbital_id)}
-							<Inline align="start" justify="between" gap="md" class="p-3">
-								<div class="min-w-0">
-									<p class="truncate text-sm font-medium">{claim.claim_number}</p>
-									<p class="text-xs text-muted-foreground capitalize">
-										{claim.claim_type ?? 'Progress claim'} · {claim.status ?? 'No status'}
-									</p>
-								</div>
-								<p class="text-sm font-medium tabular-nums">{formatMoney(claim.claimed_amount)}</p>
-							</Inline>
-						{:else}
-							<p class="p-4 text-sm text-muted-foreground">No payment claims.</p>
-						{/each}
-					</div>
-				</Stack>
-
-				<Stack as="section" gap="sm">
-					<div class="border-b pb-2">
-						<h3 class="text-sm font-semibold">Project documents</h3>
-						<p class="text-xs text-muted-foreground">Models, handover packs, and asset records.</p>
-					</div>
-					<div class="divide-y rounded-md border bg-card">
-						{#each documents as document (document.norbital_id)}
-							<Inline align="start" justify="between" gap="md" class="p-3">
-								<div class="min-w-0">
-									<p class="truncate text-sm font-medium">{document.title}</p>
-									<p class="text-xs text-muted-foreground">
-										{document.document_number ?? 'No document number'} · {document.version ??
-											'No version'}
-									</p>
-								</div>
-								{#if document.document_url}
-									<a
-										class="shrink-0 text-xs font-medium text-brand hover:underline"
-										href={document.document_url}
-										target="_blank"
-										rel="noreferrer"
-									>
-										Open
-									</a>
-								{/if}
-							</Inline>
-						{:else}
-							<p class="p-4 text-sm text-muted-foreground">No project documents.</p>
-						{/each}
-					</div>
-				</Stack>
-			</Grid>
-
+		<Grid minimum="panel">
 			<CollectionTable
 				{client}
-				collection="permits_to_work"
-				query={{
-					where: {
-						project_id: { eq: projectId },
-						validity_range: { contains_date: today }
-					},
-					limit: 50
-				}}
-				title="Permits to work"
-				description="Current work authority and expiry coverage."
+				collection="rfis"
+				query={{ where: { project_id: { eq: projectId } }, limit: 25 }}
+				title="RFIs"
+				description="Design questions tied to this project."
 			>
 				{#snippet columns({ Column })}
-					<Column name="permit_number" label="Permit" />
-					<Column name="permit_type" label="Type" />
+					<Column name="rfi_number" label="RFI" />
+					<Column name="title" minWidth={180} />
+					<Column name="priority" />
 					<Column name="status" />
-					<Column name="validity_range" label="Valid" />
-					<Column name="approved_by" label="Approved by" />
+					<Column name="due_date" label="Due" />
 				{/snippet}
-				{#snippet ListCard(permit)}
+				{#snippet ListCard(rfi)}
 					<Inline align="start" justify="between" gap="sm">
-						<p class="truncate font-medium">{permit.permit_number}</p>
-						<span class="shrink-0 text-xs text-muted-foreground">{permit.status}</span>
+						<p class="truncate font-medium">{rfi.title}</p>
+						<span class="shrink-0 text-xs text-muted-foreground">{rfi.status}</span>
 					</Inline>
 					<p class="mt-1 truncate text-sm text-muted-foreground">
-						{permit.permit_type} · expires {formatDate(permit.validity_range?.end)}
+						{rfi.rfi_number} · {rfi.priority}
 					</p>
 				{/snippet}
 			</CollectionTable>
-		</Stack>
-	</Scroll>
+			<CollectionTable
+				{client}
+				collection="defects"
+				query={{ where: { project_id: { eq: projectId } }, limit: 25 }}
+				title="Defects"
+				description="Quality issues across project work fronts."
+			>
+				{#snippet columns({ Column })}
+					<Column name="defect_number" label="Defect" />
+					<Column name="title" minWidth={180} />
+					<Column name="severity" />
+					<Column name="status" />
+					<Column name="due_date" label="Due" />
+				{/snippet}
+				{#snippet ListCard(defect)}
+					<Inline align="start" justify="between" gap="sm">
+						<p class="truncate font-medium">{defect.title}</p>
+						<span class="shrink-0 text-xs text-muted-foreground">{defect.status}</span>
+					</Inline>
+					<p class="mt-1 truncate text-sm text-muted-foreground">
+						{defect.defect_number} · {defect.severity}
+					</p>
+				{/snippet}
+			</CollectionTable>
+		</Grid>
+	</Stack>
 {/snippet}
 
-<main class="h-full min-h-0">
-	<Cover gap="md" top={projectSummary}>
-		<Tabs
-			lazyLoad={false}
-			animate={false}
-			config={[
-				{
-					name: 'coordination',
-					label: 'Model & coordination',
-					icon: 'lucide:box',
-					content: coordination
-				},
-				{
-					name: 'manpower',
-					label: 'Manpower allocation',
-					icon: 'lucide:users',
-					content: manpower
-				},
-				{
-					name: 'controls',
-					label: 'Commercial & controls',
-					icon: 'lucide:clipboard-check',
-					content: controls
-				}
-			] satisfies TabConfig[]}
-		/>
-	</Cover>
+{#snippet manpower()}
+	<Stack gap="lg">
+		<Stack gap="xs">
+			<h3 class="text-heading">Manpower allocation</h3>
+			<p class="max-w-[70ch] text-sm text-muted-foreground">
+				Each lane is a project work front. Cards show the worker, work package, role, and planned
+				daily hours.
+			</p>
+		</Stack>
+		{#if sitesQuery.loading || Boolean(assignmentsQuery?.loading)}
+			<Columns count={3}>
+				{#each [1, 2, 3] as lane (lane)}
+					<div class="h-64 animate-pulse rounded-md bg-muted/60"></div>
+				{/each}
+			</Columns>
+		{:else if (sitesQuery.current?.length ?? 0) === 0}
+			<div
+				class="rounded-md border border-dashed px-6 py-12 text-center text-sm text-muted-foreground"
+			>
+				Add a site location before allocating manpower.
+			</div>
+		{:else}
+			<Bound size="standard" clip>
+				<Scroll axis="x" name="Manpower allocation" class="pb-2">
+					<Inline align="start" gap="md">
+						{#each sitesQuery.current ?? [] as site (site.norbital_id)}
+							{@const siteAssignments = assignments.filter(
+								(assignment) => assignment.site_location_id === site.norbital_id
+							)}
+							<section class="w-72 shrink-0 rounded-md bg-muted/50 p-3">
+								<Inline as="header" align="start" justify="between" gap="sm" class="border-b pb-3">
+									<div class="min-w-0">
+										<h4 class="truncate text-sm font-medium">{site.location_name}</h4>
+										<p class="mt-0.5 truncate text-xs text-muted-foreground">
+											{site.location_code ?? site.location_type ?? 'Work front'}
+										</p>
+									</div>
+									<span class="rounded-full bg-background px-2 py-0.5 text-xs tabular-nums">
+										{siteAssignments.length}
+									</span>
+								</Inline>
+								<Stack gap="sm" class="mt-3">
+									{#each siteAssignments as assignment (assignment.norbital_id)}
+										<article class="rounded-md border bg-card p-3 shadow-xs">
+											<p class="text-sm font-medium">
+												{assignment.worker_id
+													? (workerById.get(assignment.worker_id)?.worker_name ?? '—')
+													: '—'}
+											</p>
+											<p class="mt-1 text-xs text-muted-foreground">
+												{assignment.job_id
+													? (jobById.get(assignment.job_id)?.job_title ?? '—')
+													: '—'}
+											</p>
+											<Inline justify="between" gap="sm" class="mt-3 text-xs">
+												<span
+													>{assignment.role ??
+														(assignment.worker_id
+															? workerById.get(assignment.worker_id)?.trade
+															: null) ??
+														'Site role'}</span
+												>
+												<span class="text-muted-foreground tabular-nums"
+													>{assignment.hours_per_day ?? 0} h/day</span
+												>
+											</Inline>
+										</article>
+									{/each}
+									{#if siteAssignments.length === 0}
+										<p class="py-6 text-center text-xs text-muted-foreground">No allocations</p>
+									{/if}
+								</Stack>
+							</section>
+						{/each}
+					</Inline>
+				</Scroll>
+			</Bound>
+		{/if}
+	</Stack>
+{/snippet}
 
-	{#if loading}
-		<p class="sr-only" aria-live="polite">Loading project operating context.</p>
-	{/if}
-</main>
+{#snippet controls()}
+	<Stack gap="lg">
+		<Grid minimum="compact">
+			<div class="border-b pb-3">
+				<p class="text-xs text-muted-foreground">Contract value</p>
+				<p class="mt-1 text-heading">{formatMoney(record.contract_value)}</p>
+			</div>
+			<div class="border-b pb-3">
+				<p class="text-xs text-muted-foreground">Claimed</p>
+				<p class="mt-1 text-heading">
+					{sumMoney(claims.map((claim) => claim.claimed_amount))}
+				</p>
+			</div>
+			<div class="border-b pb-3">
+				<p class="text-xs text-muted-foreground">Certified</p>
+				<p class="mt-1 text-heading">
+					{sumMoney(claims.map((claim) => claim.certified_amount))}
+				</p>
+			</div>
+			<div class="border-b pb-3">
+				<p class="text-xs text-muted-foreground">Documents</p>
+				<p class="mt-1 text-heading tabular-nums">{documents.length}</p>
+			</div>
+		</Grid>
+
+		<Grid minimum="panel">
+			<Stack as="section" gap="sm">
+				<div class="border-b pb-2">
+					<h3 class="text-sm font-semibold">Payment claims</h3>
+					<p class="text-xs text-muted-foreground">Commercial progression for this project.</p>
+				</div>
+				<div class="divide-y rounded-md border bg-card">
+					{#each claims as claim (claim.norbital_id)}
+						<Inline align="start" justify="between" gap="md" class="p-3">
+							<div class="min-w-0">
+								<p class="truncate text-sm font-medium">{claim.claim_number}</p>
+								<p class="text-xs text-muted-foreground capitalize">
+									{claim.claim_type ?? 'Progress claim'} · {claim.status ?? 'No status'}
+								</p>
+							</div>
+							<p class="text-sm font-medium tabular-nums">{formatMoney(claim.claimed_amount)}</p>
+						</Inline>
+					{:else}
+						<p class="p-4 text-sm text-muted-foreground">No payment claims.</p>
+					{/each}
+				</div>
+			</Stack>
+
+			<Stack as="section" gap="sm">
+				<div class="border-b pb-2">
+					<h3 class="text-sm font-semibold">Project documents</h3>
+					<p class="text-xs text-muted-foreground">Models, handover packs, and asset records.</p>
+				</div>
+				<div class="divide-y rounded-md border bg-card">
+					{#each documents as document (document.norbital_id)}
+						<Inline align="start" justify="between" gap="md" class="p-3">
+							<div class="min-w-0">
+								<p class="truncate text-sm font-medium">{document.title}</p>
+								<p class="text-xs text-muted-foreground">
+									{document.document_number ?? 'No document number'} · {document.version ??
+										'No version'}
+								</p>
+							</div>
+							{#if document.document_url}
+								<a
+									class="shrink-0 text-xs font-medium text-brand hover:underline"
+									href={document.document_url}
+									target="_blank"
+									rel="noreferrer"
+								>
+									Open
+								</a>
+							{/if}
+						</Inline>
+					{:else}
+						<p class="p-4 text-sm text-muted-foreground">No project documents.</p>
+					{/each}
+				</div>
+			</Stack>
+		</Grid>
+
+		<CollectionTable
+			{client}
+			collection="permits_to_work"
+			query={{
+				where: {
+					project_id: { eq: projectId },
+					validity_range: { contains_date: today }
+				},
+				limit: 50
+			}}
+			title="Permits to work"
+			description="Current work authority and expiry coverage."
+		>
+			{#snippet columns({ Column })}
+				<Column name="permit_number" label="Permit" />
+				<Column name="permit_type" label="Type" />
+				<Column name="status" />
+				<Column name="validity_range" label="Valid" />
+				<Column name="approved_by" label="Approved by" />
+			{/snippet}
+			{#snippet ListCard(permit)}
+				<Inline align="start" justify="between" gap="sm">
+					<p class="truncate font-medium">{permit.permit_number}</p>
+					<span class="shrink-0 text-xs text-muted-foreground">{permit.status}</span>
+				</Inline>
+				<p class="mt-1 truncate text-sm text-muted-foreground">
+					{permit.permit_type} · expires {formatDate(permit.validity_range?.end)}
+				</p>
+			{/snippet}
+		</CollectionTable>
+	</Stack>
+{/snippet}
+
+<Cover as="main" gap="md" top={projectSummary}>
+	<Tabs
+		lazyLoad={false}
+		animate={false}
+		config={[
+			{
+				name: 'coordination',
+				label: 'Model & coordination',
+				icon: 'lucide:box',
+				content: coordination
+			},
+			{
+				name: 'manpower',
+				label: 'Manpower allocation',
+				icon: 'lucide:users',
+				content: manpower
+			},
+			{
+				name: 'controls',
+				label: 'Commercial & controls',
+				icon: 'lucide:clipboard-check',
+				content: controls
+			}
+		] satisfies TabConfig[]}
+	/>
+</Cover>

@@ -5,6 +5,8 @@
  * inspected structurally rather than narrowed by the compiler.
  */
 
+import { entryOriginSchema } from '../custom-types/entry_origin/+definition.js';
+
 /** Read a field off a JSONB variant value, or `undefined` when absent. */
 export function variantField(value: unknown, key: string): unknown {
 	if (value == null || typeof value !== 'object') return undefined;
@@ -23,4 +25,16 @@ export function variantNumber(value: unknown, key: string): number | null {
 	if (raw == null) return null;
 	const parsed = Number(raw);
 	return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * The `LOAN_INSTALMENT` variant of a `component_entries.origin` value, or `null` for anything else.
+ *
+ * Both the entry hook and the agreement hook ask this same question — one to validate an incoming
+ * instalment against its agreement, the other to find the entries an agreement owns — so they ask
+ * it once, here, rather than each keeping a copy of the parse.
+ */
+export function instalmentOrigin(value: unknown) {
+	const parsed = entryOriginSchema.safeParse(value);
+	return parsed.success && parsed.data.kind === 'LOAN_INSTALMENT' ? parsed.data : null;
 }

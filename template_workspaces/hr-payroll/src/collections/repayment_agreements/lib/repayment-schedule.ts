@@ -127,10 +127,20 @@ export function repaymentScheduleIssues(input: {
 	return [...new Set(issues)];
 }
 
+/**
+ * Throw the collected issues, and narrow on the way through.
+ *
+ * The validation is `repaymentScheduleIssues`, which is cross-field — instalments must total the
+ * principal to the cent, dates must strictly increase, the last one must not pass the repay-by date
+ * — and reports every failure at once so the form can attach them all. A schema would check the
+ * shape and still leave those three to hand-written code, so the predicate follows the validator
+ * rather than replacing it.
+ */
 export function assertRepaymentSchedule(input: {
 	readonly principal: unknown;
 	readonly repayBy: unknown;
 	readonly schedule: unknown;
+	// stupidity:allow R5b -- repaymentScheduleIssues above is the validator; this only narrows.
 }): asserts input is {
 	readonly principal: number;
 	readonly repayBy: string | Date;

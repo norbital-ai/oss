@@ -1,4 +1,5 @@
 import { isCalendarDate, isClockTime, isUtcIsoInstant } from '@norbital-ai/std/date';
+import { formatNamedList } from '../../lib/period.js';
 import { z } from 'zod';
 import type { Pipelines } from './$types.js';
 
@@ -22,16 +23,8 @@ const importSchema = z.object({
 });
 
 const QUERY_LIMIT = 20_000;
-const NAMED_LIMIT = 20;
 
 type ImportRow = z.infer<typeof rowSchema>;
-
-function formatNamedList(items: readonly string[], limit = NAMED_LIMIT): string {
-	const shown = items.slice(0, limit);
-	const lines = shown.map((item) => `• ${item}`);
-	const remainder = items.length > limit ? `\n…and ${items.length - limit} more.` : '';
-	return `${lines.join('\n')}${remainder}`;
-}
 
 function addDays(date: string, days: number): string {
 	const parsed = Date.parse(`${date}T00:00:00.000Z`);
@@ -259,6 +252,12 @@ export default {
 			 * than a cast so that an edit which moves that check cannot quietly write a row with no
 			 * employment behind it.
 			 */
+			/*
+			 * The twin in the other pipeline reads a map this handler built from its own scoped query,
+			 * so there is nothing to share but the three-line shape. Extracting it would take the map
+			 * as a parameter and leave a wrapper of the same length behind.
+			 */
+			// stupidity:allow D1 -- closes over this handler's own lookup map; see the note above.
 			const employmentIdFor = (employeeNumber: string): string => {
 				const id = employmentIdByNumber.get(employeeNumber);
 				if (id == null) throw new Error(`No employment resolved for ${employeeNumber}.`);

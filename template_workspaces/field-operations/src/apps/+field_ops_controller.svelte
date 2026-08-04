@@ -15,7 +15,6 @@
 	import Icon from '@iconify/svelte';
 	import { calendarDateInTimeZone, shiftCalendarDate } from '../lib/calendar.js';
 	import { contractorSatisfiesCertificationRequirements } from '../lib/certification-eligibility.js';
-	import JobForm from '../collections/jobs/job-form.svelte';
 
 	type ContractorCertification = WorkspaceRow<'contractor_certifications'>;
 	interface AssignmentForm {
@@ -28,7 +27,6 @@
 	const today = calendarDateInTimeZone(new Date(), 'Asia/Singapore');
 
 	let dispatchDay = $state(today);
-	let createJobOpen = $state(false);
 	let assignContractorOpen = $state(false);
 	const dashboardQuery = $derived(
 		client.invoke.field_ops_dashboard({ scheduled_for: dispatchDay })
@@ -62,12 +60,12 @@
 		orderBy: { company_name: 'asc' },
 		limit: 250
 	});
-	const assignSitesQuery = client.db.sites.findMany({
+	const sitesQuery = client.db.sites.findMany({
 		orderBy: { name: 'asc' },
 		limit: 250
 	});
-	const assignSiteById = $derived(
-		new Map((assignSitesQuery.current ?? []).map((site) => [site.norbital_id, site.name]))
+	const siteNameById = $derived(
+		new Map((sitesQuery.current ?? []).map((site) => [site.norbital_id, site.name]))
 	);
 	let assignment = $state<AssignmentForm>({
 		jobId: null,
@@ -123,7 +121,7 @@
 	const assignJobOptions = $derived(
 		(assignJobsQuery.current ?? []).map((job) => ({
 			value: job.norbital_id,
-			label: `${job.title} · ${assignSiteById.get(job.site_id) ?? '—'}`
+			label: `${job.title} · ${siteNameById.get(job.site_id) ?? '—'}`
 		}))
 	);
 	const assignContractorOptions = $derived(
@@ -263,10 +261,6 @@
 						<Icon icon="lucide:user-round-check" class="mr-1.5 size-4 shrink-0" />
 						Assign contractor
 					</Button>
-					<Button onclick={() => (createJobOpen = true)}>
-						<Icon icon="lucide:plus" class="mr-1.5 size-4 shrink-0" />
-						Create job
-					</Button>
 				</Cluster>
 			{/snippet}
 		</Split>
@@ -307,6 +301,32 @@
 				</Bound>
 			{/snippet}
 		</Split>
+
+		<CollectionTable
+			{client}
+			collection="jobs"
+			title={`Jobs scheduled on ${dispatchDay}`}
+			description="Every job on this dispatch date, including work that still needs a contractor. Scheduling a new job opens the job form."
+			query={{
+				where: { scheduled_for: { eq: dispatchDay } },
+				orderBy: { title: 'asc' }
+			}}
+			searchPlaceholder="Search jobs on this date…"
+		>
+			{#snippet columns({ Column })}
+				<Column name="title" minWidth={240} card="title" />
+				<Column
+					name="site_id"
+					label="Site"
+					minWidth={200}
+					card="subtitle"
+					render={({ row }) => siteNameById.get(row.site_id) ?? '—'}
+				/>
+				<Column name="status" card="badge" />
+				<Column name="nature" label="Job nature" minWidth={180} />
+				<Column name="description" minWidth={240} />
+			{/snippet}
+		</CollectionTable>
 	</Stack>
 {/snippet}
 
@@ -409,26 +429,6 @@
 		] satisfies TabConfig[]}
 	/>
 </Cover>
-
-<Sheet.Root bind:open={createJobOpen}>
-	<Sheet.Content flush class="sm:max-w-xl">
-		<Sheet.Header class="border-b border-border px-5 py-4">
-			<Sheet.Title>Create job</Sheet.Title>
-			<Sheet.Description>
-				Schedule a described scope of work at a site. Add certification requirements after the job
-				exists.
-			</Sheet.Description>
-		</Sheet.Header>
-		<JobForm
-			class="p-5"
-			defaultValues={{ scheduled_for: dispatchDay }}
-			onAfterSubmit={async () => {
-				await refreshDispatch();
-				createJobOpen = false;
-			}}
-		/>
-	</Sheet.Content>
-</Sheet.Root>
 
 <Sheet.Root bind:open={assignContractorOpen}>
 	<Sheet.Content flush class="sm:max-w-lg">

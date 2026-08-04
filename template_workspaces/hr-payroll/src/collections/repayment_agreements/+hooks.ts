@@ -1,5 +1,5 @@
 import type { Hooks, WorkspaceRow } from './$types.js';
-import { entryOriginSchema } from '../../custom-types/entry_origin/+definition.js';
+import { instalmentOrigin } from '../../lib/variant.js';
 import { assertRepaymentSchedule } from './lib/repayment-schedule.js';
 
 const LIMIT = 5000;
@@ -12,11 +12,6 @@ function checked<T>(rows: T[], what: string): T[] {
 			`${what} reached the ${LIMIT}-row safety limit; the operation was not applied.`
 		);
 	return rows;
-}
-
-function instalmentOrigin(value: unknown) {
-	const parsed = entryOriginSchema.safeParse(value);
-	return parsed.success && parsed.data.kind === 'LOAN_INSTALMENT' ? parsed.data : null;
 }
 
 async function agreementEntries(

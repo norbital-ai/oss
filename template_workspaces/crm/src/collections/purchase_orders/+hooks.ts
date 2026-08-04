@@ -1,3 +1,4 @@
+import { deskToday, shiftCalendarDate } from '../../lib/calendar.js';
 import { docNoSeriesPattern, nextDocNo } from '../../lib/numbering.js';
 import type { Hooks } from './$types.js';
 
@@ -9,16 +10,6 @@ const VALID_TRANSITIONS: Record<PurchaseOrderStatus, readonly PurchaseOrderStatu
 	confirmed: [],
 	cancelled: []
 };
-
-function todayDateString(): string {
-	return new Date().toISOString().slice(0, 10);
-}
-
-function addDaysToDate(dateStr: string, days: number): string {
-	const date = new Date(`${dateStr}T00:00:00`);
-	date.setDate(date.getDate() + days);
-	return date.toISOString().slice(0, 10);
-}
 
 export default {
 	create: {
@@ -42,7 +33,7 @@ export default {
 				net: input.net ?? 0,
 				tax: input.tax ?? 0,
 				gross: input.gross ?? 0,
-				expected_date: input.expected_date ?? addDaysToDate(todayDateString(), 14)
+				expected_date: input.expected_date ?? shiftCalendarDate(deskToday(), 14)
 			};
 
 			if (!input.doc_no) {

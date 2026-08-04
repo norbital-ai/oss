@@ -1,7 +1,8 @@
 import { defineAutomation } from '@norbital-ai/pod/authoring';
+import { deskToday } from '../lib/calendar.js';
 
 export default defineAutomation({ schedule: '0 6 * * *' }, async (api) => {
-	const today = new Date().toISOString().split('T')[0];
+	const today = deskToday();
 
 	const expiredQuotes = await api.db.query.quotes.findMany({
 		where: {

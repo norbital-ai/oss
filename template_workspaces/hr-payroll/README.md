@@ -45,14 +45,12 @@ the repository template-lock workflow.
 
 ## Verification
 
-The template includes focused arithmetic and export checks. Two run against the source and can be
-invoked directly; the third reads the emitted server chunk and therefore only means anything after a
-build, which is why `pnpm build` runs it rather than leaving it to be remembered:
+The template includes focused arithmetic and export checks. All of them run against the source, so
+`pnpm test` is the whole story and `pnpm build` only builds:
 
 ```bash
-node scripts/verify-payroll-arithmetic.mjs
-pnpm test    # overtime controls, plus the repayment-agreement unit tests
-pnpm build   # vite build, then verify-built-xlsx.mjs against what it emitted
+pnpm test    # overtime controls, the payroll XLSX, and the repayment-agreement unit tests
+node scripts/verify-payroll-arithmetic.mjs   # the long-form arithmetic acceptance run, on demand
 ```
 
 The confidential source reconciliation is opt-in in Core; see

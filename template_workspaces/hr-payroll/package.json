@@ -7,10 +7,10 @@
 	"scripts": {
 		"sync": "pod sync",
 		"sync:watch": "pod sync --watch",
-		"build": "vite build && node scripts/verify-built-xlsx.mjs",
+		"build": "vite build",
 		"format": "prettier --write .",
 		"lint": "prettier --check . && svelte-check --tsconfig ./tsconfig.json",
-		"test": "node scripts/verify-overtime-controls.mjs && node --experimental-strip-types --test src/collections/repayment_agreements/*.test.ts src/collections/rosters/lib/*.test.ts"
+		"test": "node scripts/verify-overtime-controls.mjs && node scripts/verify-payroll-xlsx.mjs && node --experimental-strip-types --test src/collections/repayment_agreements/*.test.ts src/collections/rosters/lib/*.test.ts"
 	},
 	"dependencies": {
 		"@iconify/svelte": "^5.2.2",

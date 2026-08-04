@@ -22,6 +22,11 @@ type Request =
 			readonly simulation: GeometrySimulation;
 	  };
 
+// The workspace tsconfig compiles every file with lib DOM, so `self` is typed
+// `Window & typeof globalThis` here even under the `webworker` reference above. This module only
+// ever runs as a dedicated worker, and the two global types share no members, so no narrowing,
+// declaration merge, or single assertion connects them.
+// stupidity:allow R3b -- the worker global cannot be typed from a DOM-lib program any other way.
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
 scope.onmessage = (event: MessageEvent<Request>) => {

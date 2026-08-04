@@ -78,12 +78,39 @@ src/
 │       └── +<app>.svelte
 ├── automation/+<automation>.ts
 ├── remotes/+<remote>.ts
+├── policies/+<name>.policy.ts     # optional
+├── channels/+<name>.channel.ts    # optional
+├── lib/**                         # optional, free-form helper code — no role, no `+` prefix
+├── +agent.ts                      # optional
+├── +env.ts                        # optional
 └── +seed.ts                       # optional
 ```
 
-Directory and filename own all identities. Every role default-exports one declaration. Unknown, duplicate,
-misplaced, or legacy role files are compiler errors. Collection server roles import adjacent
-`./$types.js` only when they need generated types.
+Directory and filename own all identities. Every role default-exports one declaration. Collection server
+roles import adjacent `./$types.js` only when they need generated types.
+
+**What the compiler actually enforces.** Every topology check keys on a leading `+`, so the rules below
+bind role files and nothing else:
+
+| Rule                                                                                  | Applies to                            |
+| ------------------------------------------------------------------------------------- | ------------------------------------- |
+| An unknown, duplicate, misplaced, or legacy role file is a compiler error             | `+`-prefixed basenames only           |
+| A `+`-prefixed file nested _below_ a collection directory is a compiler error         | e.g. `collections/x/panels/+y.svelte` |
+| `src/policies` and `src/channels` hold only `+<lower_snake_case>.{policy,channel}.ts` | those directories                     |
+
+Everything without a `+` is ordinary source the compiler does not claim. `src/lib/**`,
+`collections/<c>/lib/**`, `collections/<c>/panels/`, co-located `*.test.ts`, and adjacent components such
+as `project-representation.svelte` are all legal — `lib` is listed as free-form helper code precisely so
+a workspace can keep engine and helper code somewhere.
+
+Two consequences worth stating, because the compiler will not state them for you:
+
+- A non-`+` component beside a role is **not** a way to opt out of a role's contract. A create/edit
+  surface still belongs behind `+representation.svelte`; moving it into `job-form.svelte` and rendering
+  it from a call site is the rejected call-site create API with a different filename, and nothing will
+  fail the build.
+- Compiler-legal is not skill-legal. The layout, spacing, data-access and date rules in the references
+  apply to every authored file, `+`-prefixed or not.
 
 `pod sync` owns `.norbital/generated/{models,registry,apps,workspace,client}.ts`, `types`, `diagnosis`,
 `dist`, and `tsconfig.json`. `.norbital/migrations` is generated but committed; other `.norbital` output is

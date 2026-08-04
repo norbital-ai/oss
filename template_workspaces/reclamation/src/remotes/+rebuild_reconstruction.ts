@@ -1,18 +1,17 @@
 import { defineCommandHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
-import { PROJECT_STITCH_COLUMNS, stitchDriver } from '../lib/reclamation/stitch-driver.js';
-import { runStitchForProject } from '../collections/reclamation_projects/lib/run-stitch.js';
+import { reconstructProject } from '../lib/reclamation/stitch-driver.js';
 
 /**
  * Re-run the reconstruction for one project on demand.
  *
- * The project hooks already stitch on every write, so this exists for the cases
- * a write does not cover: documents loaded by a seed or an import, which go
- * straight to the database and never call a hook, and a re-run against a newer
- * engine version without touching the record.
+ * The reconstruction automations already stitch on every project and document
+ * write, so this exists for the cases a write does not cover: documents loaded
+ * by a seed or an import, which go straight to the database and trigger nothing,
+ * and a re-run against a newer engine version without touching the record.
  *
  * Idempotent: unchanged inputs return `skipped`, so pressing twice does not
- * append an identical revision.
+ * append an identical revision. `force` is the explicit opt-out.
  */
 export default defineCommandHandler({
 	schema: z.object({
@@ -21,21 +20,8 @@ export default defineCommandHandler({
 		force: z.boolean().optional()
 	}),
 	handler: async ({ project_id, force }, api) => {
-		const project = await api.db.query.reclamation_projects.findFirst({
-			where: { norbital_id: { eq: project_id } },
-			columns: PROJECT_STITCH_COLUMNS
-		});
-		if (!project) throw new Error('That project does not exist.');
-
-		const outcome = await runStitchForProject(
-			project,
-			stitchDriver(api, (payload) =>
-				api.db.site_reconstructions.create(
-					payload as Parameters<typeof api.db.site_reconstructions.create>[0]
-				)
-			),
-			{ force: force === true }
-		);
+		const outcome = await reconstructProject(api, project_id, { force: force === true });
+		if (outcome === 'missing_project') throw new Error('That project does not exist.');
 		// The command commits outside the client's local mutation path. Return the row that this
 		// invocation just made authoritative so the mounted model can render it immediately while
 		// the ordinary sync stream catches up in the background.

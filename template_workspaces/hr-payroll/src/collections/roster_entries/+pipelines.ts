@@ -1,4 +1,5 @@
 import { isCalendarDate } from '@norbital-ai/std/date';
+import { formatNamedList, monthBounds } from '../../lib/period.js';
 import { z } from 'zod';
 import type { Pipelines } from './$types.js';
 
@@ -18,24 +19,9 @@ const importSchema = z.object({
 });
 
 const QUERY_LIMIT = 20_000;
-const NAMED_LIMIT = 20;
 
 type ImportRow = z.infer<typeof rowSchema>;
 type Designation = 'WORK' | 'REST' | 'OFF';
-
-function formatNamedList(items: readonly string[], limit = NAMED_LIMIT): string {
-	const shown = items.slice(0, limit);
-	const lines = shown.map((item) => `• ${item}`);
-	const remainder = items.length > limit ? `\n…and ${items.length - limit} more.` : '';
-	return `${lines.join('\n')}${remainder}`;
-}
-
-function monthBounds(month: string): { readonly start: string; readonly end: string } {
-	const [year, index] = month.split('-').map(Number) as [number, number];
-	const start = `${month}-01`;
-	const lastDay = new Date(Date.UTC(year, index, 0)).getUTCDate();
-	return { start, end: `${month}-${String(lastDay).padStart(2, '0')}` };
-}
 
 function dateInMonth(workDate: string, month: string): boolean {
 	const bounds = monthBounds(month);
@@ -191,6 +177,12 @@ export default {
 			 * They are assertions rather than casts so that an edit which moves those checks cannot
 			 * quietly write a row pointing at no employment or no shift.
 			 */
+			/*
+			 * The twin in the other pipeline reads a map this handler built from its own scoped query,
+			 * so there is nothing to share but the three-line shape. Extracting it would take the map
+			 * as a parameter and leave a wrapper of the same length behind.
+			 */
+			// stupidity:allow D1 -- closes over this handler's own lookup map; see the note above.
 			const employmentIdFor = (employeeNumber: string): string => {
 				const id = employmentIdByNumber.get(employeeNumber);
 				if (id == null) throw new Error(`No employment resolved for ${employeeNumber}.`);

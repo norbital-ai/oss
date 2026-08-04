@@ -4,6 +4,7 @@
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { SiteLayer, SiteViewerStats } from '../../../lib/site-viewer/site_viewer.types.js';
 	import { SURFACE_NOTE } from '../../../lib/site-viewer/surface-notes.js';
+	import { formatNumber } from '../../../lib/format.js';
 	import type { ReconstructionMetrics, StitchReport } from '../../../lib/reclamation/types.js';
 
 	/**
@@ -39,11 +40,6 @@
 	);
 	const notices = $derived((report?.warnings ?? []).filter((entry) => entry.severity === 'info'));
 	const assumptions = $derived(report?.assumptions ?? []);
-
-	function number(value: number | null | undefined, digits = 0): string {
-		if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-		return value.toLocaleString(undefined, { maximumFractionDigits: digits });
-	}
 </script>
 
 <Stack gap="lg" class="pb-4">
@@ -78,7 +74,7 @@
 								</span>
 							{/if}
 							<span class="shrink-0 text-xs tabular-nums text-muted-foreground">
-								{number(layer.triangles / 1000, 1)}k tri
+								{formatNumber(layer.triangles / 1000, 1)}k tri
 							</span>
 						</button>
 					</li>
@@ -89,8 +85,8 @@
 
 	{#if stats}
 		<p class="text-xs text-muted-foreground tabular-nums">
-			{number(stats.triangleCount)} triangles at {number(stats.renderCellM, 1)} m · volumes integrated
-			server-side at {number(metrics.integrationCellM, 1)} m
+			{formatNumber(stats.triangleCount)} triangles at {formatNumber(stats.renderCellM, 1)} m · volumes
+			integrated server-side at {formatNumber(metrics.integrationCellM, 1)} m
 		</p>
 	{/if}
 
@@ -100,34 +96,34 @@
 			<Column>
 				<dt class="text-xs text-muted-foreground">Platform area</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
-					{number(metrics.platformAreaM2 / 10_000, 1)} ha
+					{formatNumber(metrics.platformAreaM2 / 10_000, 1)} ha
 				</dd>
 			</Column>
 			<Column>
 				<dt class="text-xs text-muted-foreground">Works footprint</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
-					{number(metrics.worksFootprintM2 / 10_000, 1)} ha
+					{formatNumber(metrics.worksFootprintM2 / 10_000, 1)} ha
 				</dd>
 			</Column>
 			<Column>
 				<dt class="text-xs text-muted-foreground">Seaward perimeter</dt>
-				<dd class="mt-0.5 font-medium tabular-nums">{number(metrics.shorelineLengthM)} m</dd>
+				<dd class="mt-0.5 font-medium tabular-nums">{formatNumber(metrics.shorelineLengthM)} m</dd>
 			</Column>
 			<Column>
 				<dt class="text-xs text-muted-foreground">Mean / max fill depth</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
-					{number(metrics.meanFillDepthM, 2)} / {number(metrics.maxFillDepthM, 2)} m
+					{formatNumber(metrics.meanFillDepthM, 2)} / {formatNumber(metrics.maxFillDepthM, 2)} m
 				</dd>
 			</Column>
 			<Column>
 				<dt class="text-xs text-muted-foreground">Existing bund displaced</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
-					{number(metrics.structureDisplacementM3)} m³
+					{formatNumber(metrics.structureDisplacementM3)} m³
 				</dd>
 			</Column>
 			<Column>
 				<dt class="text-xs text-muted-foreground">Below the surveyed bed</dt>
-				<dd class="mt-0.5 font-medium tabular-nums">{number(metrics.excavationM3)} m³</dd>
+				<dd class="mt-0.5 font-medium tabular-nums">{formatNumber(metrics.excavationM3)} m³</dd>
 			</Column>
 		</Columns>
 	</Stack>

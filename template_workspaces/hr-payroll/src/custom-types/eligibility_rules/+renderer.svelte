@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { nullableNumberFrom, numberFrom, splitList } from '../../lib/ui/renderer-input.js';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
@@ -90,24 +91,6 @@
 			? list.filter((entry) => entry !== option)
 			: [...list, option];
 		return next.length === 0 ? null : next;
-	}
-
-	function splitList(raw: string): string[] {
-		return raw
-			.split(',')
-			.map((entry) => entry.trim())
-			.filter((entry) => entry.length > 0);
-	}
-
-	function numberFrom(raw: string, fallback: number): number {
-		const next = Number(raw);
-		return Number.isFinite(next) ? next : fallback;
-	}
-
-	function nullableNumberFrom(raw: string): number | null {
-		if (raw.trim().length === 0) return null;
-		const next = Number(raw);
-		return Number.isFinite(next) ? next : null;
 	}
 </script>
 

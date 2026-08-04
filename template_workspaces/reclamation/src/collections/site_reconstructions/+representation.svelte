@@ -2,51 +2,43 @@
 	import { Bound, Grid, Inline, Scroll, Split, Stack } from '@norbital-ai/ui/layout';
 	import SiteDisplay from '../../lib/site-viewer/site_display.svelte';
 	import { formatQuantity, substrateDefinition } from '../../lib/reclamation/cost.js';
-	import type {
-		ReconstructionMetrics,
-		StitchReport,
-		StitchedModel,
-		SubstrateQuantity
-	} from '../../lib/reclamation/types.js';
+	import {
+		parseReconstructionMetrics,
+		parseStitchReport,
+		parseStitchedModel,
+		parseSubstrateQuantities
+	} from '../../lib/reclamation/reconstruction-json.js';
+	import { formatNumber } from '../../lib/format.js';
 	import type { RepresentationProps } from './$types.js';
 
 	/**
 	 * One stitch revision, read-only.
 	 *
-	 * Reconstructions are written by the project hook and are never edited: an
-	 * estimate points at a revision, so changing one after the fact would rewrite
-	 * history under a price.
+	 * Reconstructions are written by the reconstruction automations and are never
+	 * edited: an estimate points at a revision, so changing one after the fact
+	 * would rewrite history under a price.
+	 *
+	 * Every stored blob is validated rather than asserted. This surface is the one
+	 * that shows failed revisions, and a failed run records a report holding only
+	 * the input fingerprint — asserted as a `StitchReport`, that rendered
+	 * `warnings.length` of an array that was never there.
 	 */
 	let { record }: RepresentationProps = $props();
 
-	function parse<T>(json: string | null | undefined): T | null {
-		if (!json) return null;
-		try {
-			return JSON.parse(json) as T;
-		} catch {
-			return null;
-		}
-	}
-
-	const model = $derived(parse<StitchedModel>(record?.model_json));
-	const report = $derived(parse<StitchReport>(record?.report_json));
-	const metrics = $derived(parse<ReconstructionMetrics>(record?.metrics_json));
-	const quantities = $derived(parse<SubstrateQuantity[]>(record?.quantities_json) ?? []);
-
-	function number(value: number | null | undefined, digits = 0): string {
-		if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-		return value.toLocaleString(undefined, { maximumFractionDigits: digits });
-	}
+	const model = $derived(parseStitchedModel(record?.model_json));
+	const report = $derived(parseStitchReport(record?.report_json));
+	const metrics = $derived(parseReconstructionMetrics(record?.metrics_json));
+	const quantities = $derived(parseSubstrateQuantities(record?.quantities_json) ?? []);
 </script>
 
 {#snippet detail()}
 	<Scroll name="Reconstruction detail" class="pr-1">
 		<Stack gap="lg" class="pb-4">
 			<Stack as="header" gap="xs" class="border-b pb-4">
-				<h2 class="text-heading">Revision {number(record?.revision)}</h2>
+				<h2 class="text-heading">Revision {formatNumber(record?.revision)}</h2>
 				<p class="text-sm text-muted-foreground">
 					{record?.status === 'ready' ? 'Stitched' : 'Failed'} · engine {record?.engine_version ??
-						'—'} · {number(record?.integration_cell_m, 1)} m integration cell
+						'—'} · {formatNumber(record?.integration_cell_m, 1)} m integration cell
 				</p>
 			</Stack>
 
@@ -62,32 +54,32 @@
 				<div>
 					<p class="text-xs text-muted-foreground">Platform area</p>
 					<p class="mt-0.5 font-medium tabular-nums">
-						{number((metrics?.platformAreaM2 ?? 0) / 10_000, 1)} ha
+						{formatNumber((metrics?.platformAreaM2 ?? 0) / 10_000, 1)} ha
 					</p>
 				</div>
 				<div>
 					<p class="text-xs text-muted-foreground">Works footprint</p>
 					<p class="mt-0.5 font-medium tabular-nums">
-						{number((metrics?.worksFootprintM2 ?? 0) / 10_000, 1)} ha
+						{formatNumber((metrics?.worksFootprintM2 ?? 0) / 10_000, 1)} ha
 					</p>
 				</div>
 				<div>
 					<p class="text-xs text-muted-foreground">Seaward perimeter</p>
-					<p class="mt-0.5 font-medium tabular-nums">{number(metrics?.shorelineLengthM)} m</p>
+					<p class="mt-0.5 font-medium tabular-nums">{formatNumber(metrics?.shorelineLengthM)} m</p>
 				</div>
 				<div>
 					<p class="text-xs text-muted-foreground">Mean / max fill depth</p>
 					<p class="mt-0.5 font-medium tabular-nums">
-						{number(metrics?.meanFillDepthM, 2)} / {number(metrics?.maxFillDepthM, 2)} m
+						{formatNumber(metrics?.meanFillDepthM, 2)} / {formatNumber(metrics?.maxFillDepthM, 2)} m
 					</p>
 				</div>
 				<div>
 					<p class="text-xs text-muted-foreground">Placed volume</p>
-					<p class="mt-0.5 font-medium tabular-nums">{number(metrics?.placedVolumeM3)} m³</p>
+					<p class="mt-0.5 font-medium tabular-nums">{formatNumber(metrics?.placedVolumeM3)} m³</p>
 				</div>
 				<div>
 					<p class="text-xs text-muted-foreground">Excavated</p>
-					<p class="mt-0.5 font-medium tabular-nums">{number(metrics?.excavationM3)} m³</p>
+					<p class="mt-0.5 font-medium tabular-nums">{formatNumber(metrics?.excavationM3)} m³</p>
 				</div>
 			</Grid>
 

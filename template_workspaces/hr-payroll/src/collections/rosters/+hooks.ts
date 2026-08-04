@@ -1,4 +1,5 @@
 import { workPatternVariantSchema } from '../../custom-types/work_pattern_variant/+definition.js';
+import { monthBounds } from '../../lib/period.js';
 import {
 	validateRosterSchedule,
 	type Designation,
@@ -15,13 +16,6 @@ const ENTRY_LIMIT = 20_000;
 function addDays(date: string, days: number): string {
 	const parsed = Date.parse(`${date}T00:00:00.000Z`);
 	return new Date(parsed + days * 86_400_000).toISOString().slice(0, 10);
-}
-
-function monthBounds(month: string): { readonly start: string; readonly end: string } {
-	const [year, index] = month.split('-').map(Number) as [number, number];
-	const start = `${month}-01`;
-	const lastDay = new Date(Date.UTC(year, index, 0)).getUTCDate();
-	return { start, end: `${month}-${String(lastDay).padStart(2, '0')}` };
 }
 
 function dateKey(value: string | Date): string {
