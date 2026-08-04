@@ -4,8 +4,23 @@
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-
 	const dashboard = client.invoke.procurement_dashboard({});
+
+	const usersQuery = client.db.user.findMany({
+		columns: { norbital_id: true, name: true },
+		orderBy: { name: 'asc' }
+	});
+	const userLabelsById = $derived(
+		new Map((usersQuery.current ?? []).map((user) => [user.norbital_id, user.name]))
+	);
+	const purchaseOrdersQuery = client.db.purchase_orders.findMany({
+		columns: { norbital_id: true, doc_no: true },
+		orderBy: { doc_no: 'desc' },
+		limit: 5000
+	});
+	const purchaseOrderLabelsById = $derived(
+		new Map((purchaseOrdersQuery.current ?? []).map((order) => [order.norbital_id, order.doc_no]))
+	);
 </script>
 
 <svelte:head>
@@ -69,7 +84,12 @@
 			<Column name="expected_date" label="Expected" />
 			<Column name="gross" label="Gross amount" />
 			<Column name="confirmed_at" label="Confirmed" />
-			<Column name="owner_id" label="Owner" />
+			<Column
+				name="owner_id"
+				label="Owner"
+				render={({ value }) =>
+					value == null || value === '' ? '—' : (userLabelsById.get(String(value)) ?? '—')}
+			/>
 		{/snippet}
 	</CollectionTable>
 {/snippet}
@@ -83,7 +103,14 @@
 		query={{ orderBy: { purchase_order_id: 'desc' } }}
 	>
 		{#snippet columns({ Column })}
-			<Column name="purchase_order_id" label="Purchase order" minWidth={200} card="title" />
+			<Column
+				name="purchase_order_id"
+				label="Purchase order"
+				minWidth={200}
+				card="title"
+				render={({ value }) =>
+					value == null || value === '' ? '—' : (purchaseOrderLabelsById.get(String(value)) ?? '—')}
+			/>
 			<Column name="product_code" label="Code" minWidth={100} />
 			<Column name="product_name" label="Product" minWidth={200} />
 			<Column name="quantity" />
@@ -99,7 +126,7 @@
 		collection="suppliers"
 		title="Suppliers"
 		description="Vendors the business buys from. Currency and payment terms flow into new purchase orders."
-		query={{ orderBy: { name: 'asc' } }}
+		query={{ where: { active: { eq: true } }, orderBy: { name: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
 			<Column name="code" minWidth={120} card="badge" />
