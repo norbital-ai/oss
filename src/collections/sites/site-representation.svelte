@@ -1,20 +1,15 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import type { Row } from './$types.js';
-	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid, Stack } from '@norbital-ai/ui/layout';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import * as Sheet from '@norbital-ai/ui/sheet';
-	import Icon from '@iconify/svelte';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { calendarDateInTimeZone } from '../../lib/calendar.js';
-	import JobForm from '../jobs/job-form.svelte';
 
 	let { record }: { record: Row } = $props();
 	const recordId = $derived(record.norbital_id);
 	const today = calendarDateInTimeZone(new Date(), 'Asia/Singapore');
-	let createJobOpen = $state(false);
 	const siteJobsQuery = $derived(
 		client.db.jobs.findMany({
 			where: { site_id: { eq: recordId } },
@@ -64,35 +59,26 @@
 {/snippet}
 
 {#snippet upcomingJobs()}
-	<Stack gap="sm">
-		<div class="flex justify-end">
-			<Button size="sm" onclick={() => (createJobOpen = true)}>
-				<Icon icon="lucide:plus" class="mr-1.5 size-4" />
-				Create job
-			</Button>
-		</div>
-		<CollectionTable
-			{client}
-			collection="jobs"
-			view={`field_ops_site:${recordId}:upcoming`}
-			title="Upcoming scheduled jobs"
-			description="Future-dated jobs and past-due jobs that are still pending assignment or dispatch."
-			features={{ create: false }}
-			query={{
-				where: { norbital_id: { in: upcomingJobIds } },
-				orderBy: { scheduled_for: 'asc' }
-			}}
-			searchPlaceholder="Search upcoming jobs…"
-		>
-			{#snippet columns({ Column })}
-				<Column name="title" minWidth={240} card="title" />
-				<Column name="scheduled_for" label="Scheduled" card="badge" />
-				<Column name="status" />
-				<Column name="nature" label="Job nature" minWidth={180} />
-				<Column name="description" card="subtitle" minWidth={200} />
-			{/snippet}
-		</CollectionTable>
-	</Stack>
+	<CollectionTable
+		{client}
+		collection="jobs"
+		view={`field_ops_site:${recordId}:upcoming`}
+		title="Upcoming scheduled jobs"
+		description="Future-dated jobs and past-due jobs that are still pending assignment or dispatch. New jobs open the job form — pick this site on the form."
+		query={{
+			where: { norbital_id: { in: upcomingJobIds } },
+			orderBy: { scheduled_for: 'asc' }
+		}}
+		searchPlaceholder="Search upcoming jobs…"
+	>
+		{#snippet columns({ Column })}
+			<Column name="title" minWidth={240} card="title" />
+			<Column name="scheduled_for" label="Scheduled" card="badge" />
+			<Column name="status" />
+			<Column name="nature" label="Job nature" minWidth={180} />
+			<Column name="description" card="subtitle" minWidth={200} />
+		{/snippet}
+	</CollectionTable>
 {/snippet}
 
 {#snippet activityHistory()}
@@ -152,20 +138,3 @@
 		}
 	] satisfies TabConfig[]}
 />
-
-<Sheet.Root bind:open={createJobOpen}>
-	<Sheet.Content flush class="sm:max-w-xl">
-		<Sheet.Header class="border-b border-border px-5 py-4">
-			<Sheet.Title>Create job</Sheet.Title>
-			<Sheet.Description>Schedule a job at {record.name}.</Sheet.Description>
-		</Sheet.Header>
-		<JobForm
-			class="p-5"
-			defaultValues={{ site_id: recordId, scheduled_for: today }}
-			onAfterSubmit={async () => {
-				await siteJobsQuery.refresh();
-				createJobOpen = false;
-			}}
-		/>
-	</Sheet.Content>
-</Sheet.Root>

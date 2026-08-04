@@ -33,29 +33,29 @@
 		certificationSaving = true;
 		certificationError = null;
 		try {
-			const create = client.db.contractor_certifications.create;
+			const createMany = client.db.contractor_certifications.createMany;
 			const remove = client.db.contractor_certifications.delete;
-			if (!create || !remove) throw new Error('Certification editing is unavailable.');
+			if (!createMany || !remove) throw new Error('Certification editing is unavailable.');
 			const currentLinks = certificationsQuery.current ?? [];
 			const nextSet = new Set(nextIds);
 			const currentIds = new Set(currentLinks.map((link) => link.certification_type_id));
+			const addedIds = nextIds.filter(
+				(certificationTypeId) => !currentIds.has(certificationTypeId)
+			);
 
 			await Promise.all(
 				currentLinks
 					.filter((link) => !nextSet.has(link.certification_type_id))
 					.map((link) => remove(link.norbital_id))
 			);
-			await Promise.all(
-				nextIds
-					.filter((certificationTypeId) => !currentIds.has(certificationTypeId))
-					.map((certificationTypeId) =>
-						create({
-							contractor_profile_id: recordId,
-							certification_type_id: certificationTypeId
-						})
-					)
-			);
-			await certificationsQuery.refresh();
+			if (addedIds.length > 0) {
+				await createMany(
+					addedIds.map((certificationTypeId) => ({
+						contractor_profile_id: recordId,
+						certification_type_id: certificationTypeId
+					}))
+				);
+			}
 			certificationDraft = null;
 		} catch (cause) {
 			certificationDraft = null;
