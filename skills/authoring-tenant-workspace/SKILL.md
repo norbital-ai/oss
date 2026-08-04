@@ -35,19 +35,25 @@ Studio → Template updates using the explicit Template/Tenant choices.
 
 ## Reference routing
 
-| Task                                      | Reference                                                             |
-| ----------------------------------------- | --------------------------------------------------------------------- |
-| Collections, relationships, hooks, values | [collections-and-modeling.md](references/collections-and-modeling.md) |
-| Dates, clock times, timestamps, filters   | [dates-and-time.md](references/dates-and-time.md)                     |
-| Queries and batching                      | [data-access.md](references/data-access.md)                           |
-| Apps, client, automation, remotes, seed   | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |
-| Why the layout system is shaped this way  | [interface-ideology.md](references/interface-ideology.md)             |
-| Composition, scrolling, scroll traps      | [layout-and-scrolling.md](references/layout-and-scrolling.md)         |
-| Padding, gaps, the app inset              | [padding-and-spacing.md](references/padding-and-spacing.md)           |
-| Generated files and build lifecycle       | [generated-and-build.md](references/generated-and-build.md)           |
+| Task                                        | Reference                                                             |
+| ------------------------------------------- | --------------------------------------------------------------------- |
+| Collections, relationships, hooks, values   | [collections-and-modeling.md](references/collections-and-modeling.md) |
+| Dates, clock times, timestamps, filters     | [dates-and-time.md](references/dates-and-time.md)                     |
+| Queries: `$derived`, no N+1, batching       | [data-access.md](references/data-access.md)                           |
+| Apps, client, automation, remotes, seed     | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |
+| Why the layout system is shaped this way    | [interface-ideology.md](references/interface-ideology.md)             |
+| Composition, scrolling, scroll traps        | [layout-and-scrolling.md](references/layout-and-scrolling.md)         |
+| Controller UI: inline, `$derived`, no UUIDs | [controller-surfaces.md](references/controller-surfaces.md)           |
+| Padding, gaps, the app inset                | [padding-and-spacing.md](references/padding-and-spacing.md)           |
+| Generated files and build lifecycle         | [generated-and-build.md](references/generated-and-build.md)           |
 
 Read only the relevant reference. Use `TENANT_WORKSPACE.md` for runtime internals,
 `ACCESS_CONTROL.md` for policy behavior, and the code-quality skill after edits.
+
+**Template authoring defaults:** inline duplicated UI to keep the file count small; DRY only for
+substantially big components; describe UI with `$derived` (queries are already reactive — no
+`$effect` / `watch`); paint useful human information only; prefer nested/`with` queries over N+1
+or gratuitous parallel fetches; never show system UUIDs, including on relationships.
 
 ## Authored filesystem
 

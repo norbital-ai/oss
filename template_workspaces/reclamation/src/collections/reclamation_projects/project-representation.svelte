@@ -3,7 +3,6 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { Bound, Cluster, Inline, Scroll, Split, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { watch } from 'runed';
 	import SiteDisplay from '../../lib/site-viewer/site_display.svelte';
 	import type { SiteLayer, SiteViewerStats } from '../../lib/site-viewer/site_viewer.types.js';
 	import type { CostLevers, RateRow } from '../../lib/reclamation/cost.js';
@@ -45,29 +44,23 @@
 
 	const projectId = $derived(record.norbital_id);
 	const currency = $derived(record.currency?.trim() || 'SGD');
+	const today = new Date().toISOString().slice(0, 10);
 
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let runsQuery = $state(
+	const runsQuery = $derived(
 		client.db.site_reconstructions.findMany({
 			where: { project_id: { eq: projectId } },
 			orderBy: { revision: 'desc' },
 			limit: 10
 		})
 	);
-	const ratesQuery = client.db.cost_rates.findMany({ limit: 100 });
+	const ratesQuery = $derived(
+		client.db.cost_rates.findMany({
+			where: { validity_range: { contains_date: today } },
+			limit: 100
+		})
+	);
 	type ReconstructionRow = NonNullable<(typeof runsQuery)['current']>[number];
 	let commandReconstruction = $state<ReconstructionRow | null>(null);
-	watch(
-		() => projectId,
-		(nextId) => {
-			runsQuery = client.db.site_reconstructions.findMany({
-				where: { project_id: { eq: nextId } },
-				orderBy: { revision: 'desc' },
-				limit: 10
-			});
-		},
-		{ lazy: true }
-	);
 
 	const runs = $derived.by(() => {
 		const replicated = runsQuery.current ?? [];

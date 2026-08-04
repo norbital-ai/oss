@@ -44,7 +44,7 @@
 	const summary = $derived(summaryQuery.current as PayslipSummary | null | undefined);
 	const employment = $derived(summary?.payslip_employment ?? null);
 
-	function componentLabel(row: unknown, fallback: unknown): unknown {
+	function componentLabel(row: unknown): string {
 		const line = row as NestedLine;
 		const component = line.payslip_line_pay_component;
 		if (component?.code)
@@ -52,12 +52,12 @@
 		const statutory = line.payslip_line_statutory_contribution;
 		if (statutory?.code)
 			return statutory.name ? `${statutory.code} · ${statutory.name}` : statutory.code;
-		return fallback ?? 'Derived line';
+		return 'Derived line';
 	}
 
-	function entryLabel(row: unknown, fallback: unknown): unknown {
+	function entryLabel(row: unknown): string {
 		const entry = (row as NestedLine).entry_payslip_lines;
-		return entry?.description ?? entry?.event_date ?? fallback ?? '—';
+		return entry?.description ?? entry?.event_date ?? '—';
 	}
 </script>
 
@@ -125,13 +125,13 @@
 							name="pay_component_id"
 							label="Component"
 							card="title"
-							render={({ row, value }) => componentLabel(row, value)}
+							render={({ row }) => componentLabel(row)}
 						/>
 						<Column name="component" label="Line kind" card="subtitle" />
 						<Column
 							name="component_entry_id"
 							label="Input entry"
-							render={({ row, value }) => entryLabel(row, value)}
+							render={({ row }) => entryLabel(row)}
 						/>
 						<Column name="bucket" card="badge" />
 						<Column name="quantity" render={({ value }) => formatNumeric(value)} />

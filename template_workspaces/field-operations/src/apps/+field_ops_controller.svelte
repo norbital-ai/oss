@@ -5,13 +5,14 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { DataRenderer } from '@norbital-ai/ui/data-renderer';
+	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import { Bound, Cluster, Cover, Inline, Split, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import * as Sheet from '@norbital-ai/ui/sheet';
 	import { StaticMap, type StaticMapMarker } from '@norbital-ai/ui/static-map';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
+	import { renderComponent } from '@norbital-ai/ui/utils';
 	import Icon from '@iconify/svelte';
-	import { watch } from 'runed';
 	import { calendarDateInTimeZone, shiftCalendarDate } from '../lib/calendar.js';
 	import { contractorSatisfiesCertificationRequirements } from '../lib/certification-eligibility.js';
 	import JobForm from '../collections/jobs/job-form.svelte';
@@ -29,14 +30,8 @@
 	let dispatchDay = $state(today);
 	let createJobOpen = $state(false);
 	let assignContractorOpen = $state(false);
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let dashboardQuery = $state(client.invoke.field_ops_dashboard({ scheduled_for: dispatchDay }));
-	watch(
-		() => dispatchDay,
-		(day) => {
-			dashboardQuery = client.invoke.field_ops_dashboard({ scheduled_for: day });
-		},
-		{ lazy: true }
+	const dashboardQuery = $derived(
+		client.invoke.field_ops_dashboard({ scheduled_for: dispatchDay })
 	);
 	const assignmentCardById = $derived(
 		new Map((dashboardQuery.current?.assignment_cards ?? []).map((card) => [card.id, card]))
@@ -56,24 +51,12 @@
 	];
 
 	// Assign-contractor sheet — filters unassigned jobs for the day to certified contractors.
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let assignJobsQuery = $state(
+	const assignJobsQuery = $derived(
 		client.db.jobs.findMany({
 			where: { scheduled_for: { eq: dispatchDay }, status: { eq: 'unassigned' } },
 			orderBy: { title: 'asc' },
 			limit: 250
 		})
-	);
-	watch(
-		() => dispatchDay,
-		(nextDate) => {
-			assignJobsQuery = client.db.jobs.findMany({
-				where: { scheduled_for: { eq: nextDate }, status: { eq: 'unassigned' } },
-				orderBy: { title: 'asc' },
-				limit: 250
-			});
-		},
-		{ lazy: true }
 	);
 	const assignContractorsQuery = client.db.contractor_profiles.findMany({
 		orderBy: { company_name: 'asc' },
@@ -95,45 +78,24 @@
 	const assignSelectedJob = $derived(
 		(assignJobsQuery.current ?? []).find((job) => job.norbital_id === assignment.jobId)
 	);
-	type AssignRequirementsQuery = ReturnType<
-		typeof client.db.job_certification_requirements.findMany
-	>;
-	let assignRequirementsQuery = $state<AssignRequirementsQuery | null>(null);
-	let loadedAssignRequirementsJobId: string | undefined;
-	watch(
-		() => assignSelectedJob?.norbital_id,
-		(selectedJobId) => {
-			if (loadedAssignRequirementsJobId === selectedJobId) return;
-			loadedAssignRequirementsJobId = selectedJobId;
-			assignRequirementsQuery = selectedJobId
-				? client.db.job_certification_requirements.findMany({
-						where: { job_id: { eq: selectedJobId } },
-						limit: 250
-					})
-				: null;
-		}
+	const assignRequirementsQuery = $derived(
+		assignSelectedJob?.norbital_id
+			? client.db.job_certification_requirements.findMany({
+					where: { job_id: { eq: assignSelectedJob.norbital_id } },
+					limit: 250
+				})
+			: null
 	);
 	const assignContractorIds = $derived(
 		(assignContractorsQuery.current ?? []).map((contractor) => contractor.norbital_id)
 	);
-	const assignContractorIdsKey = $derived(assignContractorIds.join(','));
-	type AssignContractorCertificationQuery = ReturnType<
-		typeof client.db.contractor_certifications.findMany
-	>;
-	let assignContractorCertificationQuery = $state<AssignContractorCertificationQuery | null>(null);
-	let loadedAssignContractorIdsKey: string | undefined;
-	watch(
-		() => assignContractorIdsKey,
-		(idsKey) => {
-			if (loadedAssignContractorIdsKey === idsKey) return;
-			loadedAssignContractorIdsKey = idsKey;
-			assignContractorCertificationQuery = assignContractorIds.length
-				? client.db.contractor_certifications.findMany({
-						where: { contractor_profile_id: { in: assignContractorIds } },
-						limit: 500
-					})
-				: null;
-		}
+	const assignContractorCertificationQuery = $derived(
+		assignContractorIds.length
+			? client.db.contractor_certifications.findMany({
+					where: { contractor_profile_id: { in: assignContractorIds } },
+					limit: 500
+				})
+			: null
 	);
 	const assignContractorCertifications = $derived(
 		assignContractorCertificationQuery?.current ?? []
@@ -161,7 +123,7 @@
 	const assignJobOptions = $derived(
 		(assignJobsQuery.current ?? []).map((job) => ({
 			value: job.norbital_id,
-			label: `${job.title} · ${assignSiteById.get(job.site_id) ?? 'Unknown site'}`
+			label: `${job.title} · ${assignSiteById.get(job.site_id) ?? '—'}`
 		}))
 	);
 	const assignContractorOptions = $derived(
@@ -376,7 +338,26 @@
 	>
 		{#snippet columns({ Column })}
 			<Column name="company_name" minWidth={240} card="title" />
-			<Column name="user_id" label="Portal user" minWidth={240} card="subtitle" />
+			<Column
+				name="user_id"
+				label="Portal user"
+				minWidth={240}
+				card="subtitle"
+				render={({ value }) =>
+					renderComponent(RelationshipRenderer, {
+						target: 'user',
+						value: typeof value === 'string' ? value : null,
+						options: {
+							label: (record) => {
+								const v = record.name;
+								return v != null && v !== '' ? String(v) : '—';
+							},
+							orderBy: { name: 'asc' },
+							limit: 500
+						},
+						displayOnly: true
+					})}
+			/>
 		{/snippet}
 	</CollectionTable>
 {/snippet}

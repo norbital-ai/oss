@@ -10,7 +10,7 @@ export default defineModel(
 	{
 		description:
 			'One band of one statutory contribution: the selector that picks it (wage, wage and age, headcount or risk class) and the award it pays. A floor is the first band, a ceiling the terminal one.',
-		recordLabel: ['statutory_contribution_id', 'selector'],
+		recordLabel: ['selector', 'effective_range'],
 		icon: 'lucide:percent',
 		// Plan 02 §7 — two-dimensional: contribution =, selector band &&, effective range &&.
 		// Successive bands coexist because their selectors do not overlap; only a pair overlapping

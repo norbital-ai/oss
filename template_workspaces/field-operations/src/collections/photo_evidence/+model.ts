@@ -23,7 +23,7 @@ export default defineModel(
 	{
 		description:
 			'One explicitly selected photo and its deterministic integrity result, linked to exactly one job assignment or variation request. Conversation history and unselected media are not retained.',
-		recordLabel: 'source_key',
+		recordLabel: 'source',
 		icon: 'lucide:scan-search',
 		indexes: [
 			{ columns: ['source_key'], unique: true },

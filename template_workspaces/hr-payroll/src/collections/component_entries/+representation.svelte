@@ -9,6 +9,7 @@
 	import { client } from '$pod/client';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
+	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import type { RepresentationProps } from './$types.js';
 
 	let { record, close }: RepresentationProps = $props();
@@ -76,8 +77,42 @@
 >
 	{#snippet children({ Field })}
 		<Grid gap="md" minimum="compact">
-			<Field name="employment_id" />
-			<Field name="pay_component_id" label="Pay component" />
+			<Field
+				name="employment_id"
+				label="Employment"
+				renderer={RelationshipRenderer}
+				rendererProps={{
+					target: 'employments',
+					options: {
+						label: (record) =>
+							record.employee_number != null && record.employee_number !== ''
+								? String(record.employee_number)
+								: '—',
+						orderBy: { employee_number: 'asc' },
+						limit: 1000
+					}
+				}}
+			/>
+			<Field
+				name="pay_component_id"
+				label="Pay component"
+				renderer={RelationshipRenderer}
+				rendererProps={{
+					target: 'pay_components',
+					options: {
+						label: (record) => {
+							const code = record.code;
+							const name = record.name;
+							if (code && name) return `${code} · ${name}`;
+							if (code) return String(code);
+							if (name) return String(name);
+							return '—';
+						},
+						orderBy: { code: 'asc' },
+						limit: 500
+					}
+				}}
+			/>
 			<Field name="amount" />
 			<Field name="quantity" />
 			<Field name="event_date" />

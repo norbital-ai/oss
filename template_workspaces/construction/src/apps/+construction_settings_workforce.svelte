@@ -1,9 +1,25 @@
 <script lang="ts">
+	import { client } from '$pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Cover } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { client } from '$pod/client';
+
+	const projectsQuery = client.db.projects.findMany({
+		columns: { norbital_id: true, project_name: true, project_number: true },
+		orderBy: { project_name: 'asc' },
+		limit: 500
+	});
+	const projectLabelsById = $derived(
+		new Map(
+			(projectsQuery.current ?? []).map((project) => [
+				project.norbital_id,
+				project.project_number
+					? `${project.project_number} · ${project.project_name}`
+					: project.project_name
+			])
+		)
+	);
 </script>
 
 <svelte:head>
@@ -39,10 +55,17 @@
 {/snippet}
 
 {#snippet jobRequirements()}
-	<CollectionTable {client} collection="jobs">
+	<CollectionTable {client} collection="jobs" view="construction_workforce:jobs">
 		{#snippet columns({ Column })}
 			<Column name="job_title" />
 			<Column name="job_number" />
+			<Column
+				name="project_id"
+				label="Project"
+				minWidth={200}
+				render={({ value }) =>
+					value == null || value === '' ? '—' : (projectLabelsById.get(String(value)) ?? '—')}
+			/>
 			<Column name="job_type" />
 			<Column name="status" />
 			<Column name="priority" />

@@ -128,7 +128,7 @@ export default {
 				);
 				throw new Error(
 					`Contractor is missing required certifications: ${missingIds
-						.map((certificationId) => missingNames.get(certificationId) ?? certificationId)
+						.map((certificationId) => missingNames.get(certificationId) ?? '—')
 						.join(', ')}.`
 				);
 			}

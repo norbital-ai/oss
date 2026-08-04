@@ -12,14 +12,7 @@
  */
 
 import type { Configuration, ShiftDefinition } from './configuration.js';
-import {
-	WEEKDAY_CODES,
-	dateKey,
-	requiredDateKey,
-	weekdayCode,
-	weekdayIndex,
-	type IsoDate
-} from './dates.js';
+import { WEEKDAY_CODES, dateKey, requiredDateKey, weekdayCode, type IsoDate } from './dates.js';
 import { coversDate } from './effective.js';
 
 export type DayType = 'ORDINARY' | 'REST_DAY' | 'PUBLIC_HOLIDAY' | 'OFF_DAY';
@@ -50,9 +43,29 @@ export interface WeeklyHoursTerms {
 	readonly working_days_per_week: number;
 }
 
+/**
+ * The shape of a week as a work pattern names it.
+ *
+ * `week_starts_on` is deliberately absent: deciding what one day *is* only needs to know which set
+ * that weekday belongs to. Where the week begins matters when counting rest days per week — that is
+ * the roster publication check's job, not this one's.
+ */
+export type WeekShape = {
+	readonly rest_days: readonly string[];
+	readonly off_days: readonly string[];
+};
+
 export interface ScheduleTerms extends WeeklyHoursTerms {
 	/** Widened: a generated enum column is nullable. An unknown rest day is a data fault. */
 	readonly rest_day: string | null;
+	/**
+	 * What the employment's work pattern says about its week.
+	 *
+	 * A `WeekShape` comes from a STANDARD pattern and is authoritative — it names the rest and off
+	 * days outright. `'ROSTERED'` means the roster decides every day. `null` means terms written
+	 * before patterns existed, which fall back to `rest_day` and `working_days_per_week`.
+	 */
+	readonly week?: WeekShape | 'ROSTERED' | null;
 }
 
 type RosterEntry = {
@@ -71,31 +84,60 @@ export function normalDailyHours(terms: WeeklyHoursTerms): number {
 	return Number(terms.ordinary_hours_per_week) / days;
 }
 
+/** A week read in the conventional order, used only by the legacy inference below. */
+const LEGACY_WEEK_ORDER = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'] as const;
+
+/** What a day is when a STANDARD work pattern has named the week outright. */
+function patternDayType(date: IsoDate, week: WeekShape): Exclude<DayType, 'PUBLIC_HOLIDAY'> {
+	const code = weekdayCode(date);
+	if (week.rest_days.includes(code)) return 'REST_DAY';
+	if (week.off_days.includes(code)) return 'OFF_DAY';
+	return 'ORDINARY';
+}
+
 /**
- * Which weekdays a fixed-week employee works, when no roster says otherwise.
+ * Which weekdays a fixed-week employee works, for terms that name no work pattern.
  *
- * The rest day is named on the terms. The remaining working days are counted backwards from the
- * day before the rest day, so a six-day week with Sunday rest works Monday to Saturday and a
- * five-day week with Sunday rest works Monday to Friday, leaving Saturday an off day rather than a
- * second rest day — an off day is worked at the ordinary rate, a rest day at the rest-day rate, and
- * the difference is real money.
+ * The rest day is named on the terms; the working days are then taken in week order, skipping it,
+ * until `working_days_per_week` is satisfied. Everything left over is an off day — worked at the
+ * ordinary rate, where a rest day is worked at the rest-day rate, and the difference is real money.
+ *
+ * A five-day week resting Sunday therefore works Monday to Friday and leaves Saturday off. This is
+ * an inference, and it can only ever be a guess about *which* non-rest days are the off ones: it
+ * happens to be right for a week that runs Monday to Friday and wrong for one that runs Tuesday to
+ * Saturday, and it cannot tell the two apart. Naming a work pattern removes the guess.
  */
-function fixedWeekDayType(date: IsoDate, terms: ScheduleTerms): Exclude<DayType, 'PUBLIC_HOLIDAY'> {
+function legacyWeekDayType(
+	date: IsoDate,
+	terms: ScheduleTerms
+): Exclude<DayType, 'PUBLIC_HOLIDAY'> {
 	if (terms.rest_day == null)
 		throw new Error(
-			'Employment terms name no rest day, so a week with no roster cannot be resolved. ' +
-				'Every employment states its rest day; without it a rest day is indistinguishable from ' +
-				'an ordinary one and rest-day work would be paid at the ordinary rate.'
+			'Employment terms name neither a work pattern nor a rest day, so a week with no roster ' +
+				'cannot be resolved. Without one a rest day is indistinguishable from an ordinary day ' +
+				'and rest-day work would be paid at the ordinary rate.'
 		);
-	if (weekdayCode(date) === terms.rest_day) return 'REST_DAY';
-	const restIndex = WEEKDAY_CODES.indexOf(terms.rest_day as (typeof WEEKDAY_CODES)[number]);
-	if (restIndex < 0) throw new Error(`Unknown rest day "${terms.rest_day}".`);
+	if (!WEEKDAY_CODES.includes(terms.rest_day as (typeof WEEKDAY_CODES)[number]))
+		throw new Error(`Unknown rest day "${terms.rest_day}".`);
+	const code = weekdayCode(date);
+	if (code === terms.rest_day) return 'REST_DAY';
 	const workingDays = Math.min(6, Math.max(0, Math.round(Number(terms.working_days_per_week))));
-	const offDays = 6 - workingDays;
-	for (let offset = offDays + 1; offset <= 6; offset += 1) {
-		if ((restIndex - offset + 7) % 7 === weekdayIndex(date)) return 'ORDINARY';
-	}
-	return 'OFF_DAY';
+	const working = LEGACY_WEEK_ORDER.filter((day) => day !== terms.rest_day).slice(0, workingDays);
+	return working.includes(code as (typeof LEGACY_WEEK_ORDER)[number]) ? 'ORDINARY' : 'OFF_DAY';
+}
+
+/**
+ * What a day is when no roster entry covers it.
+ *
+ * A rostered employment answers this with `OFF_DAY` rather than by inference. The roster is the
+ * authority for those people, so a day it does not mention is a day it did not schedule — and an
+ * off day is the kind that is neither worked nor a rest-day entitlement. Guessing a rest day here
+ * would hand out the rest-day multiple on a day nobody rostered as rest.
+ */
+function derivedDayType(date: IsoDate, terms: ScheduleTerms): Exclude<DayType, 'PUBLIC_HOLIDAY'> {
+	if (terms.week === 'ROSTERED') return 'OFF_DAY';
+	if (terms.week != null) return patternDayType(date, terms.week);
+	return legacyWeekDayType(date, terms);
 }
 
 /**
@@ -146,7 +188,7 @@ export function resolveSchedule(options: {
 				: roster.designation === 'REST'
 					? 'REST_DAY'
 					: 'OFF_DAY'
-			: fixedWeekDayType(date, terms);
+			: derivedDayType(date, terms);
 		// A holiday on the statutory rest day is substituted under s.60D(1): the original day
 		// remains REST_DAY and the following working day becomes PUBLIC_HOLIDAY.
 		const dayType: DayType = holiday && baseDayType !== 'REST_DAY' ? 'PUBLIC_HOLIDAY' : baseDayType;

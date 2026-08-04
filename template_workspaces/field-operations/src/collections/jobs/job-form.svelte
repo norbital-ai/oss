@@ -5,7 +5,7 @@
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { MatrixRenderer, type MatrixColumn } from '@norbital-ai/ui/data-renderer/matrix';
 	import { Column, Grid, Stack } from '@norbital-ai/ui/layout';
-	import { watch } from 'runed';
+	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 
 	interface CertificationRequirementRow {
 		id: string;
@@ -27,7 +27,7 @@
 				}
 			} satisfies CollectionField,
 			relationOptions: {
-				label: (certification) => String(certification.name ?? certification.norbital_id),
+				label: (certification) => String(certification.name ?? '—'),
 				where: { active: { eq: true } },
 				orderBy: { name: 'asc' },
 				limit: 250
@@ -54,10 +54,7 @@
 		...defaultValues,
 		...(record ?? {})
 	});
-	// svelte-ignore state_referenced_locally -- the record identity watch replaces this initial handle.
-	let requirementsQuery = $state<ReturnType<
-		typeof client.db.job_certification_requirements.findMany
-	> | null>(
+	const requirementsQuery = $derived(
 		recordId
 			? client.db.job_certification_requirements.findMany({
 					where: { job_id: { eq: recordId } },
@@ -66,7 +63,10 @@
 				})
 			: null
 	);
-	let certificationRows = $state<CertificationRequirementRow[]>([]);
+	let certificationDraft = $state<{
+		recordId: string;
+		rows: CertificationRequirementRow[];
+	} | null>(null);
 	let certificationSaving = $state(false);
 	let certificationError = $state<string | null>(null);
 	const persistedCertificationRows = $derived(
@@ -76,40 +76,18 @@
 			certification_type_id: requirement.certification_type_id
 		}))
 	);
-	const persistedCertificationKey = $derived(
-		persistedCertificationRows
-			.map((requirement) => `${requirement.norbital_id}:${requirement.certification_type_id}`)
-			.join(',')
-	);
-
-	watch(
-		() => recordId,
-		(nextRecordId) => {
-			requirementsQuery = nextRecordId
-				? client.db.job_certification_requirements.findMany({
-						where: { job_id: { eq: nextRecordId } },
-						orderBy: { certification_type_id: 'asc' },
-						limit: 250
-					})
-				: null;
-			certificationRows = [];
-			certificationError = null;
-		},
-		{ lazy: true }
-	);
-	watch(
-		() => persistedCertificationKey,
-		() => {
-			if (!certificationSaving) certificationRows = persistedCertificationRows;
-		}
+	const certificationRows = $derived(
+		certificationDraft != null && certificationDraft.recordId === recordId
+			? certificationDraft.rows
+			: persistedCertificationRows
 	);
 
 	async function updateCertificationRequirements(
 		nextRows: CertificationRequirementRow[]
 	): Promise<void> {
-		certificationRows = nextRows;
 		if (!recordId || !requirementsQuery) return;
 
+		certificationDraft = { recordId, rows: nextRows };
 		const validRows = nextRows.filter((row) => row.certification_type_id.length > 0);
 		const nextIds = validRows.map((row) => row.certification_type_id);
 		if (new Set(nextIds).size !== nextIds.length) {
@@ -146,13 +124,9 @@
 				)
 			);
 			await requirementsQuery.refresh();
-			certificationRows = (requirementsQuery.current ?? []).map((requirement) => ({
-				id: requirement.norbital_id,
-				norbital_id: requirement.norbital_id,
-				certification_type_id: requirement.certification_type_id
-			}));
+			certificationDraft = null;
 		} catch (cause) {
-			certificationRows = persistedCertificationRows;
+			certificationDraft = null;
 			certificationError = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			certificationSaving = false;
@@ -171,7 +145,22 @@
 >
 	{#snippet children({ Field })}
 		<Grid minimum="panel">
-			<Field name="site_id" label="Site" />
+			<Field
+				name="site_id"
+				label="Site"
+				renderer={RelationshipRenderer}
+				rendererProps={{
+					target: 'sites',
+					options: {
+						label: (record) => {
+							const v = record.name;
+							return v != null && v !== '' ? String(v) : '—';
+						},
+						orderBy: { name: 'asc' },
+						limit: 500
+					}
+				}}
+			/>
 			<Field name="title" label="Job title" />
 			<Field name="nature" label="Job nature" />
 			<Field name="scheduled_for" label="Scheduled date" />

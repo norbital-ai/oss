@@ -5,6 +5,7 @@
 	import type { CollectionFormValidation } from '@norbital-ai/ui/collection-form';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Column, Grid, Stack } from '@norbital-ai/ui/layout';
+	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import type { RepresentationProps } from './$types.js';
 	import {
 		distributeRepaymentSchedule,
@@ -39,10 +40,44 @@
 	onAfterSubmit={record ? undefined : close}
 >
 	{#snippet children({ Field, form })}
-		<Stack gap="md" fill>
+		<Stack gap="md">
 			<Grid gap="md" minimum="compact" class="shrink-0">
-				<Field name="employment_id" label="Employment" />
-				<Field name="pay_component_id" label="Payroll deduction type" />
+				<Field
+					name="employment_id"
+					label="Employment"
+					renderer={RelationshipRenderer}
+					rendererProps={{
+						target: 'employments',
+						options: {
+							label: (record) =>
+								record.employee_number != null && record.employee_number !== ''
+									? String(record.employee_number)
+									: '—',
+							orderBy: { employee_number: 'asc' },
+							limit: 1000
+						}
+					}}
+				/>
+				<Field
+					name="pay_component_id"
+					label="Payroll deduction type"
+					renderer={RelationshipRenderer}
+					rendererProps={{
+						target: 'pay_components',
+						options: {
+							label: (record) => {
+								const code = record.code;
+								const name = record.name;
+								if (code && name) return `${code} · ${name}`;
+								if (code) return String(code);
+								if (name) return String(name);
+								return '—';
+							},
+							orderBy: { code: 'asc' },
+							limit: 500
+						}
+					}}
+				/>
 				<Field name="reference" />
 				<Field name="principal" />
 				<Field name="disbursed_on" label="Disbursed on" />
@@ -96,7 +131,7 @@
 				</Stack>
 			{/if}
 
-			<Field name="schedule" label="Recovery instalments" class="min-h-64 flex-1" />
+			<Field name="schedule" label="Recovery instalments" />
 		</Stack>
 	{/snippet}
 </CollectionForm>

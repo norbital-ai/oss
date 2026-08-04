@@ -3,23 +3,57 @@
 	import { Display, type ChartDisplaySpec } from '@norbital-ai/ui/chart';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { formatDataValue } from '@norbital-ai/ui/data-renderer';
-	import { Columns, Cover, Split, Stack } from '@norbital-ai/ui/layout';
+	import { Combobox } from '@norbital-ai/ui/combobox';
+	import { Columns, Cover, Inline, Split, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { todayKey } from '../../lib/ui/calendar.js';
+	import { formatStatutoryFactStatus } from '../../lib/ui/display-formatters.js';
 
+	let companyId = $state<string | null>(null);
 	const today = todayKey();
-	const employmentsQuery = client.db.employments.findMany({
-		where: { norbital_approval_id: { isNull: true } },
+	const activeRange = { effective_range: { contains_date: today } } as const;
+
+	const companiesQuery = client.db.companies.findMany({
+		where: { norbital_approval_id: { isNull: true }, ...activeRange },
+		orderBy: { name: 'asc' },
 		limit: 500
 	});
-	// A relation column holds a uuid. The employments already loaded for the headcount double as the
-	// employee-number lookup; people and companies are loaded once beside them. The label is
-	// resolved from memory rather than by mounting a lookup per row, and a miss falls back to the
-	// raw id so an unloaded label never reads as missing data.
+	const companies = $derived(companiesQuery.current ?? []);
+	const companyOptions = $derived(
+		companies.map((c) => ({
+			value: c.norbital_id,
+			label: c.name,
+			search_term: `${c.name} ${c.registration_number ?? ''}`
+		}))
+	);
+	const selectedCompanyId = $derived(
+		companyId != null && companies.some((c) => c.norbital_id === companyId)
+			? companyId
+			: (companies[0]?.norbital_id ?? null)
+	);
+
+	const employmentsQuery = $derived(
+		selectedCompanyId == null
+			? null
+			: client.db.employments.findMany({
+					where: {
+						norbital_approval_id: { isNull: true },
+						company_id: { eq: selectedCompanyId }
+					},
+					limit: 1000
+				})
+	);
+
+	const employmentIds = $derived(
+		(employmentsQuery?.current ?? []).map((employment) => employment.norbital_id)
+	);
+	const employeeIds = $derived([
+		...new Set((employmentsQuery?.current ?? []).map((employment) => employment.employee_id))
+	]);
 	const employmentLabelsById = $derived(
 		new Map(
-			(employmentsQuery.current ?? []).map((employment) => [
+			(employmentsQuery?.current ?? []).map((employment) => [
 				employment.norbital_id,
 				employment.employee_number
 			])
@@ -32,17 +66,22 @@
 	const employeeLabelsById = $derived(
 		new Map((employeesQuery.current ?? []).map((employee) => [employee.norbital_id, employee.name]))
 	);
-	const companiesQuery = client.db.companies.findMany({
+	const contributionsQuery = client.db.statutory_contributions.findMany({
 		where: { norbital_approval_id: { isNull: true } },
 		limit: 500
 	});
-	const companyLabelsById = $derived(
-		new Map((companiesQuery.current ?? []).map((company) => [company.norbital_id, company.name]))
+	const contributionLabelsById = $derived(
+		new Map(
+			(contributionsQuery.current ?? []).map((contribution) => [
+				contribution.norbital_id,
+				`${contribution.code} · ${contribution.name}`
+			])
+		)
 	);
 	/** Headcount is derived from effective employments — the schema stores no headcount column. */
 	const currentEmployees = $derived(
 		new Set(
-			(employmentsQuery.current ?? [])
+			(employmentsQuery?.current ?? [])
 				.filter(
 					(employment) =>
 						employment.effective_range != null &&
@@ -54,7 +93,7 @@
 		).size
 	);
 	const workforceTrend = $derived.by(() => {
-		const ranges = (employmentsQuery.current ?? []).flatMap((employment) =>
+		const ranges = (employmentsQuery?.current ?? []).flatMap((employment) =>
 			employment.effective_range
 				? [
 						{
@@ -98,7 +137,7 @@
 	);
 	const workforceChart = $derived({
 		kind: 'line',
-		loading: employmentsQuery.loading,
+		loading: employmentsQuery?.loading ?? false,
 		title: 'Turnover and hiring',
 		description: 'Monthly leavers and joiners against average headcount.',
 		data: workforceTrend,
@@ -111,7 +150,46 @@
 		valueFormat: { style: 'percent', maximumFractionDigits: 1 },
 		curve: 'linear'
 	} satisfies ChartDisplaySpec);
+
+	type NestedEmployment = {
+		readonly employment_employee?: { readonly name?: string | null } | null;
+	};
+
+	function nestedEmployment(row: unknown): NestedEmployment {
+		return row as NestedEmployment;
+	}
+
+	function personLabel(row: unknown): string {
+		return nestedEmployment(row).employment_employee?.name ?? '—';
+	}
 </script>
+
+{#snippet companyScopeActions()}
+	<label class="grid gap-1.5 text-sm">
+		<span class="font-medium text-muted-foreground">Legal entity</span>
+		<Inline gap="sm">
+			<Combobox
+				ariaLabel="Legal entity"
+				options={companyOptions}
+				value={selectedCompanyId}
+				onValueChange={(value) => {
+					if (typeof value === 'string') {
+						companyId = value;
+						return;
+					}
+					companyId = companies[0]?.norbital_id ?? null;
+				}}
+				emptyPlaceholder="Select legal entity…"
+				searchPlaceholder="Search companies…"
+				clientConfig={{
+					isLoading: companiesQuery.loading,
+					error: companiesQuery.error?.message ?? null
+				}}
+				class="min-w-[16rem]"
+			/>
+		</Inline>
+	</label>
+{/snippet}
 
 {#snippet workforceSummary()}
 	<Stack as="section" gap="md" aria-labelledby="workforce-summary-heading">
@@ -121,29 +199,37 @@
 				Current status is derived from effective employments, not a duplicated employee flag.
 			</p>
 		</div>
-		<!-- stupidity:allow UI10 -- 1px hairline gutters via bg-border are not on the gap scale -->
-		<Columns count={2} gap="none" class="gap-px rounded-lg border bg-border">
-			<Stack gap="none" class="bg-card p-4">
-				<p class="text-xs font-medium text-muted-foreground">Current</p>
-				<p class="text-2xl font-semibold tabular-nums">{currentEmployees}</p>
-			</Stack>
-			<Stack gap="none" class="bg-card p-4">
-				<p class="text-xs font-medium text-muted-foreground">12-month average turnover</p>
-				<p class="text-2xl font-semibold tabular-nums">
-					{averageTurnover.toLocaleString(undefined, {
-						style: 'percent',
-						maximumFractionDigits: 1
-					})}
-				</p>
-			</Stack>
-		</Columns>
+		{#if selectedCompanyId == null}
+			<p class="text-sm text-muted-foreground">Select a legal entity to load workforce metrics.</p>
+		{:else}
+			<!-- stupidity:allow UI10 -- 1px hairline gutters via bg-border are not on the gap scale -->
+			<Columns count={2} gap="none" class="gap-px rounded-lg border bg-border">
+				<Stack gap="none" class="bg-card p-4">
+					<p class="text-xs font-medium text-muted-foreground">Current</p>
+					<p class="text-2xl font-semibold tabular-nums">{currentEmployees}</p>
+				</Stack>
+				<Stack gap="none" class="bg-card p-4">
+					<p class="text-xs font-medium text-muted-foreground">12-month average turnover</p>
+					<p class="text-2xl font-semibold tabular-nums">
+						{averageTurnover.toLocaleString(undefined, {
+							style: 'percent',
+							maximumFractionDigits: 1
+						})}
+					</p>
+				</Stack>
+			</Columns>
+		{/if}
 	</Stack>
 {/snippet}
 
 {#snippet workforceTrendPanel()}
-	<div class="min-w-0 rounded-lg border bg-card p-4 shadow-card">
-		<Display spec={workforceChart} class="min-h-[18rem]" />
-	</div>
+	{#if selectedCompanyId == null}
+		<p class="text-sm text-muted-foreground">Select a legal entity to load the trend chart.</p>
+	{:else}
+		<div class="min-w-0 rounded-lg border bg-card p-4 shadow-card">
+			<Display spec={workforceChart} class="min-h-[18rem]" />
+		</div>
+	{/if}
 {/snippet}
 
 {#snippet overview()}
@@ -158,86 +244,155 @@
 {/snippet}
 
 {#snippet directory()}
-	<CollectionTable
-		{client}
-		collection="employees"
-		title="People directory"
-		description="Facts true of the human being. Everything job-shaped lives on employments."
-		query={{ orderBy: { name: 'asc' } }}
-		searchPlaceholder="Search people…"
-	>
-		{#snippet columns({ Column })}
-			<Column name="name" />
-			<Column name="email" />
-			<Column name="phone" />
-			<Column name="nationality" />
-			<Column name="date_of_birth" label="Date of birth" />
-			<Column name="dependents_count" label="Dependents" />
-		{/snippet}
-		{#snippet ListCard(person)}
-			<p class="truncate font-medium">{person.name}</p>
-			<p class="mt-1 truncate text-sm text-muted-foreground">{person.email}</p>
-			<p class="mt-1 truncate text-sm">
-				{person.phone
-					? formatDataValue({ name: 'phone', kind: 'phone', nullable: true }, person.phone)
-					: (person.nationality ?? '')}
-			</p>
-		{/snippet}
-	</CollectionTable>
+	{#if selectedCompanyId == null}
+		<p class="text-sm text-muted-foreground">Select a legal entity to browse its people.</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="employees"
+			view={`hr_controller:people:directory:${selectedCompanyId}`}
+			title="People directory"
+			description="Facts true of the human being. Everything job-shaped lives on employments."
+			query={{
+				where: { norbital_id: { in: employeeIds } },
+				orderBy: { name: 'asc' }
+			}}
+			searchPlaceholder="Search people…"
+		>
+			{#snippet columns({ Column })}
+				<Column name="name" />
+				<Column name="email" />
+				<Column name="phone" />
+				<Column name="nationality" />
+				<Column name="date_of_birth" label="Date of birth" />
+				<Column name="dependents_count" label="Dependents" />
+			{/snippet}
+			{#snippet ListCard(person)}
+				<p class="truncate font-medium">{person.name}</p>
+				<p class="mt-1 truncate text-sm text-muted-foreground">{person.email}</p>
+				<p class="mt-1 truncate text-sm">
+					{person.phone
+						? formatDataValue({ name: 'phone', kind: 'phone', nullable: true }, person.phone)
+						: (person.nationality ?? '')}
+				</p>
+			{/snippet}
+		</CollectionTable>
+	{/if}
 {/snippet}
 
 {#snippet engagements()}
-	<CollectionTable
-		{client}
-		collection="employments"
-		title="Employments"
-		description="One person working for one company. hire_date drives service months and every leave accrual."
-		query={{ orderBy: { employee_number: 'asc' } }}
-		searchPlaceholder="Search employments…"
-	>
-		{#snippet columns({ Column })}
-			<Column name="employee_number" card="title" />
-			<Column
-				name="employee_id"
-				label="Person"
-				card="subtitle"
-				render={({ value }) => employeeLabelsById.get(String(value)) ?? value}
-			/>
-			<Column
-				name="company_id"
-				label="Company"
-				render={({ value }) => companyLabelsById.get(String(value)) ?? value}
-			/>
-			<Column name="hire_date" label="Hired" />
-			<Column name="exit_date" label="Exited" />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-	</CollectionTable>
+	{#if selectedCompanyId == null}
+		<p class="text-sm text-muted-foreground">Select a legal entity to manage its employments.</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="employments"
+			view={`hr_controller:people:employments:${selectedCompanyId}`}
+			title="Employments"
+			description="One person working for one company. hire_date drives service months and every leave accrual."
+			query={{
+				where: { company_id: { eq: selectedCompanyId }, ...activeRange },
+				orderBy: { employee_number: 'asc' },
+				with: { employment_employee: { columns: { name: true } } }
+			}}
+			searchPlaceholder="Search employments…"
+		>
+			{#snippet columns({ Column })}
+				<Column name="employee_number" card="title" />
+				<Column
+					name="employee_id"
+					label="Person"
+					card="subtitle"
+					render={({ row }) => personLabel(row)}
+				/>
+				<Column name="hire_date" label="Hired" />
+				<Column name="exit_date" label="Exited" />
+				<Column name="effective_range" label="Effective" />
+			{/snippet}
+		</CollectionTable>
+	{/if}
 {/snippet}
 
 {#snippet terms()}
-	<CollectionTable
-		{client}
-		collection="employment_terms"
-		title="Contractual terms"
-		description="Effective-dated pay and classification. End-date and insert a successor; never update in place."
-		query={{ orderBy: { norbital_created_at: 'desc' } }}
-	>
-		{#snippet columns({ Column })}
-			<Column
-				name="employment_id"
-				label="Employment"
-				card="title"
-				render={({ value }) => employmentLabelsById.get(String(value)) ?? value}
-			/>
-			<Column name="base_salary" label="Base salary" />
-			<Column name="pay_frequency" label="Frequency" card="badge" />
-			<Column name="work_classification" label="Classification" />
-			<Column name="employment_type" label="Type" />
-			<Column name="rest_day" label="Rest day" />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-	</CollectionTable>
+	{#if selectedCompanyId == null}
+		<p class="text-sm text-muted-foreground">
+			Select a legal entity to manage its contractual terms.
+		</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="employment_terms"
+			view={`hr_controller:people:terms:${selectedCompanyId}`}
+			title="Contractual terms"
+			description="Effective-dated pay and classification. End-date and insert a successor; never update in place."
+			query={{
+				where: { employment_id: { in: employmentIds }, ...activeRange },
+				orderBy: { norbital_created_at: 'desc' }
+			}}
+		>
+			{#snippet columns({ Column })}
+				<Column
+					name="employment_id"
+					label="Employment"
+					card="title"
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
+				/>
+				<Column name="base_salary" label="Base salary" />
+				<Column name="pay_frequency" label="Frequency" card="badge" />
+				<Column name="work_classification" label="Classification" />
+				<Column name="employment_type" label="Type" />
+				<Column name="rest_day" label="Rest day" />
+				<Column name="effective_range" label="Effective" />
+			{/snippet}
+		</CollectionTable>
+	{/if}
+{/snippet}
+
+{#snippet statutoryFacts()}
+	{#if selectedCompanyId == null}
+		<p class="text-sm text-muted-foreground">
+			Select a legal entity to manage statutory registrations for its employments.
+		</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="employment_statutory_facts"
+			view={`hr_controller:people:statutory-facts:${selectedCompanyId}`}
+			title="Statutory registrations"
+			description="Per-employment registration status against regime contributions — scoped to the selected legal entity."
+			query={{
+				where: { employment_id: { in: employmentIds }, ...activeRange },
+				orderBy: { norbital_created_at: 'desc' }
+			}}
+			searchPlaceholder="Search statutory facts…"
+		>
+			{#snippet columns({ Column })}
+				<Column
+					name="employment_id"
+					label="Employment"
+					card="title"
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
+				/>
+				<Column
+					name="statutory_contribution_id"
+					label="Contribution"
+					card="subtitle"
+					render={({ value }) =>
+						value == null || value === ''
+							? '—'
+							: (contributionLabelsById.get(String(value)) ?? '—')}
+				/>
+				<Column
+					name="status"
+					label="Registration"
+					render={({ value }) => formatStatutoryFactStatus(value)}
+				/>
+				<Column name="effective_range" label="Effective" />
+			{/snippet}
+		</CollectionTable>
+	{/if}
 {/snippet}
 
 <svelte:head>
@@ -253,7 +408,8 @@
 	<PageHeader
 		eyebrow="HR Controller"
 		title="People"
-		description="Keep personal details separate from legal engagements, contractual terms, and dated changes."
+		description="Keep personal details separate from legal engagements, contractual terms, and dated changes — scoped to one legal entity."
+		actions={companyScopeActions}
 	/>
 {/snippet}
 
@@ -269,7 +425,13 @@
 			},
 			{ name: 'directory', label: 'Directory', icon: 'lucide:users', content: directory },
 			{ name: 'employments', label: 'Employments', icon: 'lucide:briefcase', content: engagements },
-			{ name: 'terms', label: 'Terms', icon: 'lucide:file-signature', content: terms }
+			{ name: 'terms', label: 'Terms', icon: 'lucide:file-signature', content: terms },
+			{
+				name: 'statutory-facts',
+				label: 'Statutory facts',
+				icon: 'lucide:id-card',
+				content: statutoryFacts
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

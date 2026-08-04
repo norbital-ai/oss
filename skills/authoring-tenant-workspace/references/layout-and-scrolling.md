@@ -57,6 +57,7 @@ Priority 2-5 activate.
 | `CollectionForm`                 | Yes         | Vertical: field area `Scroll`, footer pinned                 |
 | `Tabs.Root` / `TabsContent`      | Yes         | `grid min-h-0`, content `overflow-y-auto overscroll-contain` |
 | `MatrixRenderer` (bounded=true)  | Yes         | Default; set `bounded={false}` to yield scroll to parent     |
+| `CollectionGrid` (bounded=true)  | Yes         | Default; `bounded={false}` scrolls on the inline axis only   |
 | `Sheet.Content`                  | Yes         | `flex h-full overflow-hidden` + scrollable body              |
 | `Scroll` (explicit Bound+Scroll) | Yes         | For custom content that needs local scrolling                |
 | Charts / static tables / cards   | No          | Content flows to parent scrollport                           |
@@ -69,7 +70,37 @@ or `<Bound><Scroll>` — and do not add `inset` there either.
 ## The scroll contract
 
 **Never nest two scrollports on the same axis.** The inner one traps scroll — the user gets
-"stuck" in a small region, unable to scroll the parent.
+"stuck" in a small region, unable to scroll the parent. The stupidity scanner rule **UI16** flags
+the common cases automatically.
+
+### Scroll-trap checklist (UI16)
+
+| Anti-pattern                                                                                  | Fix                                                                                          |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `<Scroll>` wrapping `CollectionForm`, `*Form`, `CollectionTable`, `Tabs`, or another `Scroll` | Remove the outer `Scroll`; the child already owns vertical scroll                            |
+| `MatrixRenderer` inside a form/sheet **without** `bounded={false}`                            | Always set `bounded={false}` so the form/`Scroll` owns vertical scroll                       |
+| `MatrixRenderer` with default `bounded` (prop omitted)                                        | Illegal — write `bounded={false}` or an intentional `bounded={true}` inside a `Bound` height |
+| `Field class="min-h-64 flex-1"` / `Stack fill` around a matrix inside `CollectionForm`        | Drop the nested height fight; let content flow and the form scroll                           |
+
+```svelte
+<!-- WRONG: nested scrollports — wheel events die on the matrix -->
+<CollectionForm>
+	<MatrixRenderer {rows} {columns} createRow={…} />
+</CollectionForm>
+
+<!-- RIGHT -->
+<CollectionForm>
+	<MatrixRenderer {rows} {columns} createRow={…} bounded={false} />
+</CollectionForm>
+
+<!-- WRONG: Scroll around a form that already scrolls -->
+<Scroll name="Create job">
+	<JobForm … />
+</Scroll>
+
+<!-- RIGHT -->
+<JobForm class="p-5" … />
+```
 
 **Explicit scroll regions** use `<Bound size="...">` to establish a height contract, with
 `<Scroll name="...">` as the single scroll owner inside:

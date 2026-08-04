@@ -3,11 +3,10 @@
 	import type { Row } from './$types.js';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
-	import { Column, Grid, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Column, Grid, Stack } from '@norbital-ai/ui/layout';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import * as Sheet from '@norbital-ai/ui/sheet';
 	import Icon from '@iconify/svelte';
-	import { watch } from 'runed';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { calendarDateInTimeZone } from '../../lib/calendar.js';
 	import JobForm from '../jobs/job-form.svelte';
@@ -16,8 +15,7 @@
 	const recordId = $derived(record.norbital_id);
 	const today = calendarDateInTimeZone(new Date(), 'Asia/Singapore');
 	let createJobOpen = $state(false);
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let siteJobsQuery = $state(
+	const siteJobsQuery = $derived(
 		client.db.jobs.findMany({
 			where: { site_id: { eq: recordId } },
 			limit: 500
@@ -41,16 +39,6 @@
 			.map((job) => job.norbital_id)
 	);
 	const jobById = $derived(new Map(siteJobs.map((job) => [job.norbital_id, job] as const)));
-	watch(
-		() => recordId,
-		(nextRecordId) => {
-			siteJobsQuery = client.db.jobs.findMany({
-				where: { site_id: { eq: nextRecordId } },
-				limit: 500
-			});
-		},
-		{ lazy: true }
-	);
 </script>
 
 {#snippet generalInformation()}
@@ -85,32 +73,23 @@
 		</div>
 		<CollectionTable
 			{client}
-			collection="job_assignments"
+			collection="jobs"
 			view={`field_ops_site:${recordId}:upcoming`}
 			title="Upcoming scheduled jobs"
 			description="Future-dated jobs and past-due jobs that are still pending assignment or dispatch."
 			features={{ create: false }}
 			query={{
-				where: { job_id: { in: upcomingJobIds } },
-				orderBy: { dispatched_at: 'asc' }
+				where: { norbital_id: { in: upcomingJobIds } },
+				orderBy: { scheduled_for: 'asc' }
 			}}
 			searchPlaceholder="Search upcoming jobs…"
 		>
 			{#snippet columns({ Column })}
-				<Column
-					name="job_id"
-					label="Job · site · date"
-					minWidth={360}
-					card="title"
-					render={({ row }) => {
-						const job = jobById.get(row.job_id);
-						return job ? `${job.title} · ${record.name} · ${job.scheduled_for}` : 'Job';
-					}}
-				/>
-				<Column name="dispatched_at" label="Dispatched" />
-				<Column name="status" card="badge" />
-				<Column name="location" label="Reported location" minWidth={220} />
-				<Column name="summary" card="subtitle" minWidth={200} />
+				<Column name="title" minWidth={240} card="title" />
+				<Column name="scheduled_for" label="Scheduled" card="badge" />
+				<Column name="status" />
+				<Column name="nature" label="Job nature" minWidth={180} />
+				<Column name="description" card="subtitle" minWidth={200} />
 			{/snippet}
 		</CollectionTable>
 	</Stack>
@@ -180,14 +159,13 @@
 			<Sheet.Title>Create job</Sheet.Title>
 			<Sheet.Description>Schedule a job at {record.name}.</Sheet.Description>
 		</Sheet.Header>
-		<Scroll name="Create job" class="p-5">
-			<JobForm
-				defaultValues={{ site_id: recordId, scheduled_for: today }}
-				onAfterSubmit={async () => {
-					await siteJobsQuery.refresh();
-					createJobOpen = false;
-				}}
-			/>
-		</Scroll>
+		<JobForm
+			class="p-5"
+			defaultValues={{ site_id: recordId, scheduled_for: today }}
+			onAfterSubmit={async () => {
+				await siteJobsQuery.refresh();
+				createJobOpen = false;
+			}}
+		/>
 	</Sheet.Content>
 </Sheet.Root>

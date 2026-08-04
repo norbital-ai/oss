@@ -1,10 +1,76 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
+	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { SUBSTRATES } from '../lib/reclamation/cost.js';
+	import { SUBSTRATES, substrateDefinition } from '../lib/reclamation/cost.js';
+	import type { SubstrateId } from '../lib/reclamation/types.js';
+
+	type ReclamationProjectScopeRow = {
+		readonly norbital_id: string;
+		readonly project_name: string;
+		readonly project_code?: string | null;
+		readonly status?: string | null;
+	};
+
+	const today = new Date().toISOString().slice(0, 10);
+	const activeRates = { validity_range: { contains_date: today } } as const;
+
+	const IN_FLIGHT_STATUSES = ['planning', 'design', 'tender', 'construction'] as const;
+
+	function resolveScopedId(
+		selected: string | null,
+		rows: readonly ReclamationProjectScopeRow[]
+	): string | null {
+		if (selected != null && rows.some((row) => row.norbital_id === selected)) return selected;
+		const active = rows.find((row) =>
+			IN_FLIGHT_STATUSES.includes((row.status ?? '') as (typeof IN_FLIGHT_STATUSES)[number])
+		);
+		return active?.norbital_id ?? rows[0]?.norbital_id ?? null;
+	}
+
+	function projectLabel(record: ReclamationProjectScopeRow): string {
+		const code = record.project_code;
+		const name = record.project_name;
+		if (code && name) return `${code} · ${name}`;
+		return name || '—';
+	}
+
+	let projectId = $state<string | null>(null);
+	const projectsQuery = client.db.reclamation_projects.findMany({
+		orderBy: { project_code: 'asc' },
+		limit: 200
+	});
+	const projects = $derived((projectsQuery.current ?? []) as readonly ReclamationProjectScopeRow[]);
+	const projectOptions = $derived(
+		projects.map((project) => ({
+			value: project.norbital_id,
+			label: projectLabel(project),
+			search_term: `${project.project_code ?? ''} ${project.project_name ?? ''}`
+		}))
+	);
+	const selectedProjectId = $derived(resolveScopedId(projectId, projects));
+
+	const reconstructionsQuery = $derived(
+		selectedProjectId == null
+			? null
+			: client.db.site_reconstructions.findMany({
+					where: { project_id: { eq: selectedProjectId } },
+					columns: { norbital_id: true, revision: true },
+					orderBy: { revision: 'desc' },
+					limit: 200
+				})
+	);
+	const reconstructionLabelsById = $derived(
+		new Map(
+			(reconstructionsQuery?.current ?? []).map((run) => [
+				run.norbital_id,
+				`Revision ${run.revision}`
+			])
+		)
+	);
 </script>
 
 <svelte:head>
@@ -13,16 +79,48 @@
 	<meta name="pod:icon" content="lucide:table-2" />
 </svelte:head>
 
+{#snippet projectScopeActions()}
+	<label class="grid gap-1.5 text-sm">
+		<span class="font-medium text-muted-foreground">Project</span>
+		<Inline gap="sm">
+			<Combobox
+				ariaLabel="Project"
+				options={projectOptions}
+				value={selectedProjectId}
+				onValueChange={(value) => {
+					if (typeof value === 'string') {
+						projectId = value;
+						return;
+					}
+					projectId = resolveScopedId(null, projects);
+				}}
+				emptyPlaceholder="Select project…"
+				searchPlaceholder="Search projects…"
+				clientConfig={{
+					isLoading: projectsQuery.loading,
+					error: projectsQuery.error?.message ?? null
+				}}
+				class="min-w-[16rem]"
+			/>
+		</Inline>
+	</label>
+{/snippet}
+
 {#snippet rates()}
 	<CollectionTable
 		{client}
 		collection="cost_rates"
 		title="Unit cost matrix"
 		description="One rate per substrate, shared by every project. Rates never change a volume."
+		query={{ where: activeRates }}
 	>
 		{#snippet columns({ Column })}
 			<Column name="label" minWidth={200} />
-			<Column name="substrate" />
+			<Column
+				name="substrate"
+				render={({ value }) =>
+					value != null && value !== '' ? substrateDefinition(value as SubstrateId).label : '—'}
+			/>
 			<Column name="unit" />
 			<Column name="rate" />
 			<Column name="rate_basis" label="Basis" />
@@ -35,35 +133,55 @@
 				<span class="shrink-0 text-xs text-muted-foreground">{rate.unit}</span>
 			</Inline>
 			<p class="mt-1 truncate text-sm text-muted-foreground">
-				{rate.substrate} · {rate.rate_basis ?? 'basis not stated'}
+				{rate.substrate != null && rate.substrate !== ''
+					? substrateDefinition(rate.substrate as SubstrateId).label
+					: '—'} · {rate.rate_basis ?? 'basis not stated'}
 			</p>
 		{/snippet}
 	</CollectionTable>
 {/snippet}
 
 {#snippet estimates()}
-	<CollectionTable
-		{client}
-		collection="cost_estimates"
-		title="Estimates"
-		description="Each estimate prices one reconstruction revision. Totals recompute on every save."
-	>
-		{#snippet columns({ Column })}
-			<Column name="estimate_name" minWidth={200} />
-			<Column name="status" />
-			<Column name="currency" />
-			<Column name="subtotal" />
-			<Column name="contingency" />
-			<Column name="total" />
-			<Column name="priced_at" label="Priced" />
-		{/snippet}
-		{#snippet ListCard(estimate)}
-			<Inline align="start" justify="between" gap="sm">
-				<p class="truncate font-medium">{estimate.estimate_name}</p>
-				<span class="shrink-0 text-xs text-muted-foreground">{estimate.status ?? 'draft'}</span>
-			</Inline>
-		{/snippet}
-	</CollectionTable>
+	{#if selectedProjectId == null}
+		<p class="text-sm text-muted-foreground">Select a project to browse its estimates.</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="cost_estimates"
+			title="Estimates"
+			description="Each estimate prices one reconstruction revision. Totals recompute on every save."
+			view={`reclamation_cost_matrix:estimates:${selectedProjectId}`}
+			query={{
+				where: { project_id: { eq: selectedProjectId } },
+				orderBy: { priced_at: 'desc' }
+			}}
+		>
+			{#snippet columns({ Column })}
+				<Column name="estimate_name" minWidth={200} />
+				<Column
+					name="reconstruction_id"
+					label="Reconstruction"
+					minWidth={160}
+					render={({ value }) =>
+						value == null || value === ''
+							? '—'
+							: (reconstructionLabelsById.get(String(value)) ?? '—')}
+				/>
+				<Column name="status" />
+				<Column name="currency" />
+				<Column name="subtotal" />
+				<Column name="contingency" />
+				<Column name="total" />
+				<Column name="priced_at" label="Priced" />
+			{/snippet}
+			{#snippet ListCard(estimate)}
+				<Inline align="start" justify="between" gap="sm">
+					<p class="truncate font-medium">{estimate.estimate_name}</p>
+					<span class="shrink-0 text-xs text-muted-foreground">{estimate.status ?? 'draft'}</span>
+				</Inline>
+			{/snippet}
+		</CollectionTable>
+	{/if}
 {/snippet}
 
 {#snippet catalogue()}
@@ -94,6 +212,7 @@
 		eyebrow="Reclamation settings"
 		title="Cost Matrix"
 		description="Unit rates per substrate, the estimates built from them, and what each substrate measures."
+		actions={projectScopeActions}
 	/>
 {/snippet}
 

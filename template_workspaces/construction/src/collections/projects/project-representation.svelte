@@ -15,7 +15,6 @@
 	} from '@norbital-ai/ui/layout';
 	import { formatDateRangeLocal } from '@norbital-ai/std/date';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { watch } from 'runed';
 	import IfcDisplay from '../../lib/ifc-viewer/ifc_display.svelte';
 
 	interface MoneyValue {
@@ -23,11 +22,16 @@
 		currency: string;
 	}
 
+	function todayKey(): string {
+		return new Date().toISOString().slice(0, 10);
+	}
+
 	let { record }: { record: Row } = $props();
 
 	const projectId = $derived(record.norbital_id);
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let sitesQuery = $state(
+	const today = todayKey();
+
+	const sitesQuery = $derived(
 		client.db.site_locations.findMany({
 			where: { project_id: { eq: projectId } },
 			orderBy: { location_name: 'asc' },
@@ -35,62 +39,36 @@
 		})
 	);
 	const siteIds = $derived((sitesQuery.current ?? []).map((site) => site.norbital_id));
-	const siteIdsKey = $derived(siteIds.join(','));
-	function loadAssignments(siteLocationIds: string[]) {
-		return client.db.job_assignments.findMany({
-			where: { site_location_id: { in: siteLocationIds } },
-			orderBy: { norbital_updated_at: 'desc' },
-			limit: 500
-		});
-	}
-	type AssignmentsQuery = ReturnType<typeof loadAssignments>;
-	let assignmentsQuery = $state<AssignmentsQuery | null>(null);
-	let loadedSiteIdsKey: string | undefined;
-	watch(
-		() => siteIdsKey,
-		(idsKey) => {
-			if (loadedSiteIdsKey === idsKey) return;
-			loadedSiteIdsKey = idsKey;
-			assignmentsQuery = siteIds.length ? loadAssignments(siteIds) : null;
-		}
+
+	const assignmentsQuery = $derived(
+		siteIds.length === 0
+			? null
+			: client.db.job_assignments.findMany({
+					where: { site_location_id: { in: siteIds } },
+					orderBy: { norbital_updated_at: 'desc' },
+					limit: 500
+				})
 	);
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let claimsQuery = $state(
+
+	const claimsQuery = $derived(
 		client.db.payment_claims.findMany({
 			where: { project_id: { eq: projectId } },
 			orderBy: { norbital_updated_at: 'desc' },
 			limit: 100
 		})
 	);
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let documentsQuery = $state(
+
+	const documentsQuery = $derived(
 		client.db.asset_documents.findMany({
-			where: { project_id: { eq: projectId } },
+			where: {
+				project_id: { eq: projectId },
+				status: { in: ['draft', 'in_review', 'issued'] }
+			},
 			orderBy: { norbital_updated_at: 'desc' },
 			limit: 100
 		})
 	);
-	watch(
-		() => projectId,
-		(nextProjectId) => {
-			sitesQuery = client.db.site_locations.findMany({
-				where: { project_id: { eq: nextProjectId } },
-				orderBy: { location_name: 'asc' },
-				limit: 100
-			});
-			claimsQuery = client.db.payment_claims.findMany({
-				where: { project_id: { eq: nextProjectId } },
-				orderBy: { norbital_updated_at: 'desc' },
-				limit: 100
-			});
-			documentsQuery = client.db.asset_documents.findMany({
-				where: { project_id: { eq: nextProjectId } },
-				orderBy: { norbital_updated_at: 'desc' },
-				limit: 100
-			});
-		},
-		{ lazy: true }
-	);
+
 	const assignments = $derived(assignmentsQuery?.current ?? []);
 	const workerIds = $derived([
 		...new Set(
@@ -100,34 +78,18 @@
 	const jobIds = $derived([
 		...new Set(assignments.flatMap((assignment) => (assignment.job_id ? [assignment.job_id] : [])))
 	]);
-	const workerIdsKey = $derived(workerIds.join(','));
-	const jobIdsKey = $derived(jobIds.join(','));
-	type WorkersQuery = ReturnType<typeof client.db.workers.findMany>;
-	type JobsQuery = ReturnType<typeof client.db.jobs.findMany>;
-	let workersQuery = $state<WorkersQuery | null>(null);
-	let jobsQuery = $state<JobsQuery | null>(null);
-	let loadedWorkerIdsKey: string | undefined;
-	let loadedJobIdsKey: string | undefined;
-	watch(
-		() => workerIdsKey,
-		(idsKey) => {
-			if (loadedWorkerIdsKey === idsKey) return;
-			loadedWorkerIdsKey = idsKey;
-			workersQuery = workerIds.length
-				? client.db.workers.findMany({ where: { norbital_id: { in: workerIds } }, limit: 500 })
-				: null;
-		}
+
+	const workersQuery = $derived(
+		workerIds.length === 0
+			? null
+			: client.db.workers.findMany({ where: { norbital_id: { in: workerIds } }, limit: 500 })
 	);
-	watch(
-		() => jobIdsKey,
-		(idsKey) => {
-			if (loadedJobIdsKey === idsKey) return;
-			loadedJobIdsKey = idsKey;
-			jobsQuery = jobIds.length
-				? client.db.jobs.findMany({ where: { norbital_id: { in: jobIds } }, limit: 500 })
-				: null;
-		}
+	const jobsQuery = $derived(
+		jobIds.length === 0
+			? null
+			: client.db.jobs.findMany({ where: { norbital_id: { in: jobIds } }, limit: 500 })
 	);
+
 	const workerById = $derived(
 		new Map((workersQuery?.current ?? []).map((worker) => [worker.norbital_id, worker]))
 	);
@@ -395,15 +357,13 @@
 											<article class="rounded-md border bg-card p-3 shadow-xs">
 												<p class="text-sm font-medium">
 													{assignment.worker_id
-														? (workerById.get(assignment.worker_id)?.worker_name ??
-															'Worker not assigned')
-														: 'Worker not assigned'}
+														? (workerById.get(assignment.worker_id)?.worker_name ?? '—')
+														: '—'}
 												</p>
 												<p class="mt-1 text-xs text-muted-foreground">
 													{assignment.job_id
-														? (jobById.get(assignment.job_id)?.job_title ??
-															'Work package not assigned')
-														: 'Work package not assigned'}
+														? (jobById.get(assignment.job_id)?.job_title ?? '—')
+														: '—'}
 												</p>
 												<Inline justify="between" gap="sm" class="mt-3 text-xs">
 													<span
@@ -518,7 +478,13 @@
 			<CollectionTable
 				{client}
 				collection="permits_to_work"
-				query={{ where: { project_id: { eq: projectId } }, limit: 50 }}
+				query={{
+					where: {
+						project_id: { eq: projectId },
+						validity_range: { contains_date: today }
+					},
+					limit: 50
+				}}
 				title="Permits to work"
 				description="Current work authority and expiry coverage."
 			>

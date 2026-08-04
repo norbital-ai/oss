@@ -59,7 +59,7 @@
 						render={({ row }) => {
 							const job = jobById.get(row.job_id);
 							return job
-								? `${job.title} · ${siteById.get(job.site_id) ?? 'Unknown site'} · ${job.scheduled_for}`
+								? `${job.title} · ${siteById.get(job.site_id) ?? '—'} · ${job.scheduled_for}`
 								: 'Job';
 						}}
 					/>

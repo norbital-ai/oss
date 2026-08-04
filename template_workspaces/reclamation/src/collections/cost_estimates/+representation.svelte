@@ -2,6 +2,7 @@
 	import { client } from '$pod/client';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import { formatMoney, formatQuantity } from '../../lib/reclamation/cost.js';
 	import type { CostLine } from '../../lib/reclamation/cost.js';
 	import type { RepresentationProps } from './$types.js';
@@ -32,11 +33,52 @@
 		defaultValues={record ?? undefined}
 		onAfterSubmit={record ? undefined : close}
 	>
-		{#snippet children({ Field })}
+		{#snippet children({ Field, form })}
+			{@const values = form.values()}
 			<Grid minimum="compact">
 				<Field name="estimate_name" />
-				<Field name="project_id" />
-				<Field name="reconstruction_id" />
+				<Field
+					name="project_id"
+					label="Project"
+					renderer={RelationshipRenderer}
+					rendererProps={{
+						target: 'reclamation_projects',
+						options: {
+							label: (record) => {
+								const code = record.project_code;
+								const name = record.project_name;
+								if (code && name) return `${code} · ${name}`;
+								const v = record.project_name;
+								return v != null && v !== '' ? String(v) : '—';
+							},
+							orderBy: { project_code: 'asc' },
+							limit: 200
+						}
+					}}
+				/>
+				{#key values.project_id}
+					<Field
+						name="reconstruction_id"
+						label="Reconstruction"
+						renderer={RelationshipRenderer}
+						rendererProps={{
+							target: 'site_reconstructions',
+							disabled: !values.project_id,
+							placeholder: values.project_id ? 'Select reconstruction…' : 'Choose a project first',
+							options: {
+								where: values.project_id
+									? { project_id: { eq: values.project_id } }
+									: { norbital_id: { eq: '' } },
+								label: (record) => {
+									const revision = record.revision;
+									return revision != null && revision !== '' ? `Revision ${revision}` : '—';
+								},
+								orderBy: { revision: 'desc' },
+								limit: 200
+							}
+						}}
+					/>
+				{/key}
 				<Field name="status" />
 				<Field name="currency" />
 				<Field name="sand_loss_pct" />

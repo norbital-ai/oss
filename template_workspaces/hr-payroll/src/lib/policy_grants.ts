@@ -36,12 +36,15 @@ export function grantsOn<const C extends Grant['collection']>(
  * Configuration a company reads and writes.
  *
  * `roster_entries` sits here rather than with people because a roster is scheduling configuration
- * that HR edits in bulk, even though an employee reads only their own rows out of it.
+ * that HR edits in bulk, even though an employee reads only their own rows out of it. `rosters` and
+ * `work_patterns` join it for the same reason: they shape the schedule rather than describe a person.
  */
 export const referenceGrants = (...actions: Action[]): readonly Grant[] => [
 	...grantsOn('companies', actions),
 	...grantsOn('company_holidays', actions),
 	...grantsOn('shift_definitions', actions),
+	...grantsOn('work_patterns', actions),
+	...grantsOn('rosters', actions),
 	...grantsOn('roster_entries', actions),
 	...grantsOn('pay_components', actions),
 	...grantsOn('leave_types', actions)
@@ -89,6 +92,10 @@ export const employeeReferenceGrants = (...actions: Action[]): readonly Grant[] 
 	...grantsOn('companies', actions),
 	...grantsOn('company_holidays', actions),
 	...grantsOn('shift_definitions', actions),
+	// An employee cannot read their own calendar without the pattern that names their rest and off
+	// days, nor tell a draft month from a settled one without the roster's published stamp.
+	...grantsOn('work_patterns', actions),
+	...grantsOn('rosters', actions),
 	...grantsOn('pay_components', actions),
 	...grantsOn('leave_types', actions)
 ];

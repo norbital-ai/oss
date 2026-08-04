@@ -9,10 +9,75 @@ for architecture and invariants.
 
 ## Contents
 
+- [Describe queries declaratively](#describe-queries-declaratively)
+- [Prefer nested and inline queries](#prefer-nested-and-inline-queries)
 - [Batch genuine bulk work](#batch-genuine-bulk-work)
 - [Eliminate query-per-record loops](#eliminate-query-per-record-loops)
 - [Treat 5,000 rows as a ceiling](#treat-5000-rows-as-a-ceiling)
 - [Keep temporal filters canonical](#keep-temporal-filters-canonical)
+
+## Describe queries declaratively
+
+`findMany` / `findFirst` / `count` return **live query handles**. The handle’s `.current` updates
+when the replica changes. When _your_ filter inputs change (selected entity, date range, ids),
+build the next handle with `$derived` — never `$effect` or `watch`. Templates are declarative:
+`$state` for operator input; `$derived` for everything downstream.
+
+```svelte
+<!-- RIGHT -->
+const selectedCompanyId = $derived(
+	companyId != null && companies.some((c) => c.norbital_id === companyId)
+		? companyId
+		: (companies[0]?.norbital_id ?? null)
+);
+const rosterQuery = $derived(
+	selectedCompanyId == null
+		? null
+		: client.db.roster_entries.findMany({
+				where: { company_id: { eq: selectedCompanyId } },
+				limit: 1000
+			})
+);
+const rows = $derived(rosterQuery?.current ?? []);
+
+<!-- WRONG: imperative side effect recreates the query -->
+$effect(() => {
+	rosterQuery = client.db.roster_entries.findMany({
+		where: { company_id: { eq: companyId } }
+	});
+});
+```
+
+For controller scoping and display rules see
+[controller-surfaces.md](controller-surfaces.md#authoring-principles).
+
+## Prefer nested and inline queries
+
+Do **not** create N+1 patterns (one query per row, or one query per relation column cell). Prefer:
+
+1. **Nested `with`** on the primary query so related human fields arrive with each row.
+2. **One** scoped label query for the page, then Map lookup in `render` — not a fan-out of parallel
+   `findMany` calls for every relation that might appear.
+
+```svelte
+<!-- RIGHT: labels travel with the row -->
+<CollectionTable
+	query={{
+		where: { employment_id: { in: employmentIds } },
+		with: { agreement_employment: { columns: { employee_number: true } } }
+	}}
+/>
+
+<!-- WRONG: N queries (or N parallel handles) for N rows -->
+{#each rows as row}
+	{@const emp = client.db.employments.findFirst({
+		where: { norbital_id: { eq: row.employment_id } }
+	})}
+{/each}
+```
+
+Only open an extra live query when the page truly needs an independent catalogue (for example the
+entity selector’s company list). Otherwise keep data on the primary query.
 
 ## Keep temporal filters canonical
 

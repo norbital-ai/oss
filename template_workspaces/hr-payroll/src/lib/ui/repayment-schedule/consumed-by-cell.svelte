@@ -36,12 +36,11 @@
 {:else}
 	{@const reference = consumption.reference}
 	{@const label = `Payslip item ${reference.payslipLineSequence} · ${formatPayrollCycleDate(reference.cycleDate)}`}
-	{@const title = `Payslip ${reference.payslipId} · payroll ${reference.payrollRunId} · cycle ${reference.payrollPeriod}`}
 	{#if target && navigation && href}
 		<a
 			{href}
 			class="inline-flex min-h-8 items-center text-sm font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-			{title}
+			title={label}
 			onclick={(event) => {
 				event.preventDefault();
 				navigation.open(target);
@@ -50,6 +49,6 @@
 			{label}
 		</a>
 	{:else}
-		<span class="text-sm font-medium" {title}>{label}</span>
+		<span class="text-sm font-medium" title={label}>{label}</span>
 	{/if}
 {/if}
