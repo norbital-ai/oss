@@ -5,6 +5,7 @@
 	import { repaymentScheduleSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
 	import ConsumedByCell from '../../lib/ui/repayment-schedule/consumed-by-cell.svelte';
+	import { todayKey } from '../../lib/ui/calendar.js';
 	import {
 		repaymentConsumptionBySequence,
 		type RepaymentConsumptionCell,
@@ -141,7 +142,7 @@
 	}
 
 	function nextDate(): string {
-		const last = schedule.at(-1)?.due_date ?? new Date().toISOString().slice(0, 10);
+		const last = schedule.at(-1)?.due_date ?? todayKey();
 		const parsedDate = new Date(`${last}T00:00:00.000Z`);
 		parsedDate.setUTCMonth(parsedDate.getUTCMonth() + 1);
 		return parsedDate.toISOString().slice(0, 10);

@@ -1,6 +1,6 @@
 import { refuse } from '@norbital-ai/pod/authoring';
 import type { Hooks } from './$types.js';
-import { entryOriginSchema } from '../../custom-types/entry_origin/+definition.js';
+import { instalmentOrigin } from '../../lib/variant.js';
 
 type BeforeApi = Parameters<NonNullable<NonNullable<Hooks['create']>['before']>>[0]['api'];
 
@@ -19,11 +19,6 @@ function assertMagnitude(value: unknown): void {
 			'Amount is a magnitude and can never be negative. To take money back, record an entry whose origin is { kind: "REVERSAL", reverses_entry_id, reason }.'
 		);
 	}
-}
-
-function instalmentOrigin(value: unknown) {
-	const parsed = entryOriginSchema.safeParse(value);
-	return parsed.success && parsed.data.kind === 'LOAN_INSTALMENT' ? parsed.data : null;
 }
 
 async function assertInstalmentMatchesAgreement(

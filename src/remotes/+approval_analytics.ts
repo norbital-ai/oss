@@ -1,5 +1,6 @@
 import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
+import { todayKey } from '../lib/ui/calendar.js';
 
 /**
  * Year-to-date approval counters and a five-year application trend for the three subjects the HR
@@ -103,7 +104,18 @@ export default defineQueryHandler({
 		const historyYears = Array.from({ length: 5 }, (_value, index) => currentYear - 5 + index);
 		const collectionName = COLLECTION_FOR_SUBJECT[subject];
 
+		/*
+		 * Only closed approvals for this subject's collection, opened this year, can contribute to the
+		 * average — `approvalDurationHours` discards everything else. Pushing those three conditions
+		 * into the query is what keeps this from reading the whole approval table across every
+		 * collection and every prior year to compute one number.
+		 */
 		const approvalQuery = api.db.query.approval_request.findMany({
+			where: {
+				collection_name: { eq: collectionName },
+				status: { eq: 'APPROVED' },
+				norbital_created_at: { gte: ytdStart }
+			},
 			orderBy: { norbital_created_at: 'desc' },
 			limit: 5000
 		});
@@ -129,7 +141,7 @@ export default defineQueryHandler({
 			const duration = approvalDurationHours(approvalRows, collectionName, ytdStart);
 			return {
 				subject,
-				as_of_date: now.toISOString().slice(0, 10),
+				as_of_date: todayKey(),
 				total,
 				summary: {
 					ytd_pending: pending,
@@ -179,7 +191,7 @@ export default defineQueryHandler({
 			const fittedValues = linearTrend(trendValues);
 			return {
 				subject,
-				as_of_date: now.toISOString().slice(0, 10),
+				as_of_date: todayKey(),
 				total,
 				summary: {
 					ytd_pending: pending,
@@ -238,7 +250,7 @@ export default defineQueryHandler({
 
 		return {
 			subject,
-			as_of_date: now.toISOString().slice(0, 10),
+			as_of_date: todayKey(),
 			total,
 			summary: {
 				ytd_pending: pending,

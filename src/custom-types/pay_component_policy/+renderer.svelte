@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Stack } from '@norbital-ai/ui/layout';
 	import { payComponentPolicySchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
 
@@ -33,7 +34,7 @@
 {#if props.mode === 'display'}
 	<span class="block truncate" title={summary}>{summary}</span>
 {:else}
-	<div class="grid gap-1.5 rounded-md border border-border bg-muted/20 p-3">
+	<Stack gap="xs" class="rounded-md border border-border bg-muted/20 p-3">
 		<label class="text-sm font-medium" for="component-policy-json">Pay component policy</label>
 		<textarea
 			id="component-policy-json"
@@ -45,5 +46,5 @@
 			The union fixes settlement direction; each statutory decision remains effective-dated.
 		</p>
 		{#if error}<p class="text-xs text-destructive">{error}</p>{/if}
-	</div>
+	</Stack>
 {/if}

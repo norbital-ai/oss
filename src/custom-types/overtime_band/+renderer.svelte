@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { nullableNumberFrom, numberFrom } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
@@ -51,17 +52,6 @@
 		}
 		if (current !== null && current.measure === measure) return;
 		emit(defaultFor(measure));
-	}
-
-	function numberFrom(raw: string, fallback: number): number {
-		const next = Number(raw);
-		return Number.isFinite(next) ? next : fallback;
-	}
-
-	function nullableNumberFrom(raw: string): number | null {
-		if (raw.trim().length === 0) return null;
-		const next = Number(raw);
-		return Number.isFinite(next) ? next : null;
 	}
 </script>
 

@@ -1,4 +1,11 @@
 <script lang="ts">
+	import {
+		PAYROLL_TIME_ZONE,
+		calendarDateInTimeZone,
+		startOfDayInstant,
+		todayKey
+	} from '../../lib/ui/calendar.js';
+	import { numberFrom, splitList } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
@@ -50,28 +57,34 @@
 		if (props.mode === 'edit') props.onValueChange(next);
 	}
 
+	/**
+	 * An `effective_range` bound is an instant; the picker beside it offers a calendar day. Both
+	 * directions resolve through the payroll timezone, so the day an operator picks is the day the
+	 * range starts locally. Slicing the instant, or appending `Z` to the picked day, would place the
+	 * boundary eight hours into the adjacent local day — which is what
+	 * `dates-and-time.md` forbids.
+	 */
 	function dateOf(instant: string): string {
-		return instant.slice(0, 10);
+		return calendarDateInTimeZone(new Date(instant), PAYROLL_TIME_ZONE);
 	}
 
 	function instantOf(date: string, fallback: string): string {
-		return date.trim().length === 0 ? fallback : `${date}T00:00:00.000Z`;
-	}
-
-	function todayDate(): string {
-		return new Date().toISOString().slice(0, 10);
+		return date.trim().length === 0 ? fallback : startOfDayInstant(date, PAYROLL_TIME_ZONE);
 	}
 
 	function defaultFor(kind: OriginKind): Value {
-		const today = todayDate();
+		const today = todayKey();
 		switch (kind) {
 			case 'RECURRING':
 				return {
 					kind: 'RECURRING',
 					cadence: 'PAY_PERIOD',
 					effective_range: {
-						start: `${today}T00:00:00.000Z`,
-						end: `${Number(today.slice(0, 4)) + 1}${today.slice(4)}T00:00:00.000Z`
+						start: startOfDayInstant(today, PAYROLL_TIME_ZONE),
+						end: startOfDayInstant(
+							`${Number(today.slice(0, 4)) + 1}${today.slice(4)}`,
+							PAYROLL_TIME_ZONE
+						)
 					}
 				};
 			case 'ONE_OFF':
@@ -87,6 +100,13 @@
 		}
 	}
 
+	/*
+	 * Every variant renderer needs this same three-line guard, but it closes over this file's
+	 * `current`, `emit` and `defaultFor`. Sharing it would mean a generic taking three callbacks —
+	 * `controller-surfaces.md` §2 calls that a wrapper thinner than the thing it wraps. The pure
+	 * coercions these renderers used to duplicate did move, to lib/ui/renderer-input.ts.
+	 */
+	// stupidity:allow D1 -- closes over this file's current/emit/defaultFor; see the note above.
 	function selectKind(kind: OriginKind | null): void {
 		if (kind === null) {
 			emit(null);
@@ -94,18 +114,6 @@
 		}
 		if (current !== null && current.kind === kind) return;
 		emit(defaultFor(kind));
-	}
-
-	function numberFrom(raw: string, fallback: number): number {
-		const next = Number(raw);
-		return Number.isFinite(next) ? next : fallback;
-	}
-
-	function splitPeriods(raw: string): string[] {
-		return raw
-			.split(',')
-			.map((entry) => entry.trim())
-			.filter((entry) => entry.length > 0);
 	}
 </script>
 
@@ -251,7 +259,7 @@
 					{disabled}
 					placeholder="2026-01, 2026-02"
 					oninput={(event) =>
-						emit({ ...current, covers_periods: splitPeriods(event.currentTarget.value) })}
+						emit({ ...current, covers_periods: splitList(event.currentTarget.value) })}
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">

@@ -12,7 +12,7 @@
 	import type { Row } from './$types.js';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Bound, Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cluster, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { toast } from 'svelte-sonner';
 	import { formatNumeric } from '../../lib/ui/display-formatters.js';
 
@@ -102,137 +102,135 @@
 	}
 </script>
 
-<Scroll name="Payroll run detail" class="max-h-[80vh] pr-1">
-	<Stack gap="lg">
-		<Stack as="section" gap="sm" aria-label="Payroll run summary">
-			<Cluster align="start" justify="between" gap="sm">
-				<Stack gap="none" class="min-w-0">
-					<h2 class="truncate text-lg font-semibold">{company?.name ?? 'Company'}</h2>
-					<p class="text-sm text-muted-foreground">
-						Period {record.period} · {payslipCountQuery.current ?? 0} payslips
-					</p>
-				</Stack>
-				<Inline gap="xs" justify="end" shrink={false}>
-					<span class="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
-						{record.lifecycle}
-					</span>
-					{#if record.lifecycle === 'DRAFT' && client.db.payroll_runs.update}
+<Stack gap="lg">
+	<Stack as="section" gap="sm" aria-label="Payroll run summary">
+		<Cluster align="start" justify="between" gap="sm">
+			<Stack gap="none" class="min-w-0">
+				<h2 class="truncate text-lg font-semibold">{company?.name ?? 'Company'}</h2>
+				<p class="text-sm text-muted-foreground">
+					Period {record.period} · {payslipCountQuery.current ?? 0} payslips
+				</p>
+			</Stack>
+			<Inline gap="xs" justify="end" shrink={false}>
+				<span class="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
+					{record.lifecycle}
+				</span>
+				{#if record.lifecycle === 'DRAFT' && client.db.payroll_runs.update}
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={pendingAction !== null}
+						onclick={downloadReport}
+					>
+						{pendingAction === 'export' ? 'Exporting…' : 'Export salary listing'}
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={pendingAction !== null}
+						onclick={() => updateDraft('recalculate')}
+					>
+						{pendingAction === 'recalculate' ? 'Recalculating…' : 'Recalculate draft'}
+					</Button>
+					<Button
+						size="sm"
+						disabled={pendingAction !== null}
+						onclick={() => {
+							if (!lockArmed) {
+								lockArmed = true;
+								return;
+							}
+							void updateDraft('pay');
+						}}
+					>
+						{pendingAction === 'pay'
+							? 'Locking…'
+							: lockArmed
+								? 'Confirm lock & pay'
+								: 'Lock payroll'}
+					</Button>
+					{#if client.db.payroll_runs.delete}
 						<Button
 							variant="outline"
 							size="sm"
 							disabled={pendingAction !== null}
-							onclick={downloadReport}
+							onclick={deleteDraft}
 						>
-							{pendingAction === 'export' ? 'Exporting…' : 'Export salary listing'}
+							{pendingAction === 'delete' ? 'Deleting…' : 'Delete draft'}
 						</Button>
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={pendingAction !== null}
-							onclick={() => updateDraft('recalculate')}
-						>
-							{pendingAction === 'recalculate' ? 'Recalculating…' : 'Recalculate draft'}
-						</Button>
-						<Button
-							size="sm"
-							disabled={pendingAction !== null}
-							onclick={() => {
-								if (!lockArmed) {
-									lockArmed = true;
-									return;
-								}
-								void updateDraft('pay');
-							}}
-						>
-							{pendingAction === 'pay'
-								? 'Locking…'
-								: lockArmed
-									? 'Confirm lock & pay'
-									: 'Lock payroll'}
-						</Button>
-						{#if client.db.payroll_runs.delete}
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={pendingAction !== null}
-								onclick={deleteDraft}
-							>
-								{pendingAction === 'delete' ? 'Deleting…' : 'Delete draft'}
-							</Button>
-						{/if}
 					{/if}
-				</Inline>
-			</Cluster>
-			<Grid as="dl" gap="sm" minimum="compact">
-				<div>
-					<dt class="text-xs text-muted-foreground">Attendance window</dt>
-					<dd class="mt-1 font-medium tabular-nums">
-						{record.attendance_from} → {record.attendance_to}
-					</dd>
-				</div>
-				<div>
-					<dt class="text-xs text-muted-foreground">Pay date</dt>
-					<dd class="mt-1 font-medium tabular-nums">{record.pay_date}</dd>
-				</div>
-				<div>
-					<dt class="text-xs text-muted-foreground">Run-level configuration snapshot</dt>
-					<dd class="mt-1 text-sm font-medium">
-						{record.configuration_snapshot?.kind === 'CAPTURED'
-							? 'Captured at run time'
-							: 'Legacy snapshot'}
-					</dd>
-				</div>
-			</Grid>
-		</Stack>
-
-		{#if lockArmed && record.lifecycle === 'DRAFT'}
-			<p class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-				Locking marks this payroll paid and makes its snapshot and payslips immutable. Select
-				“Confirm lock & pay” to continue.
-			</p>
-		{/if}
-
-		<Stack as="section" gap="sm" aria-labelledby="run-payslips-heading">
-			<h3 id="run-payslips-heading" class="text-sm font-semibold">Payslips</h3>
-			<Bound size="tall">
-				<CollectionTable
-					{client}
-					collection="payslips"
-					title="Payslips"
-					description="Open a payslip for its direct component and statutory line breakdown."
-					features={{ create: false }}
-					query={{
-						where: { payroll_run_id: { eq: record.norbital_id } },
-						orderBy: { norbital_created_at: 'asc' },
-						limit: 100
-					}}
-				>
-					{#snippet columns({ Column })}
-						<Column
-							name="employment_id"
-							label="Employee"
-							card="title"
-							render={({ value }) =>
-								value == null || value === ''
-									? '—'
-									: (employmentLabelsById.get(String(value)) ?? '—')}
-						/>
-						<Column name="currency" card="badge" />
-						<Column name="gross" render={({ value }) => formatNumeric(value)} />
-						<Column
-							name="total_deductions"
-							label="Deductions"
-							render={({ value }) => formatNumeric(value)}
-						/>
-						<Column name="net" card="subtitle" render={({ value }) => formatNumeric(value)} />
-						<Column
-							name="employer_cost"
-							label="Employer cost"
-							render={({ value }) => formatNumeric(value)}
-						/>
-					{/snippet}
-				</CollectionTable>
-			</Bound>
-		</Stack>
+				{/if}
+			</Inline>
+		</Cluster>
+		<Grid as="dl" gap="sm" minimum="compact">
+			<div>
+				<dt class="text-xs text-muted-foreground">Attendance window</dt>
+				<dd class="mt-1 font-medium tabular-nums">
+					{record.attendance_from} → {record.attendance_to}
+				</dd>
+			</div>
+			<div>
+				<dt class="text-xs text-muted-foreground">Pay date</dt>
+				<dd class="mt-1 font-medium tabular-nums">{record.pay_date}</dd>
+			</div>
+			<div>
+				<dt class="text-xs text-muted-foreground">Run-level configuration snapshot</dt>
+				<dd class="mt-1 text-sm font-medium">
+					{record.configuration_snapshot?.kind === 'CAPTURED'
+						? 'Captured at run time'
+						: 'Legacy snapshot'}
+				</dd>
+			</div>
+		</Grid>
 	</Stack>
-</Scroll>
+
+	{#if lockArmed && record.lifecycle === 'DRAFT'}
+		<p class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+			Locking marks this payroll paid and makes its snapshot and payslips immutable. Select “Confirm
+			lock & pay” to continue.
+		</p>
+	{/if}
+
+	<Stack as="section" gap="sm" aria-labelledby="run-payslips-heading">
+		<h3 id="run-payslips-heading" class="text-sm font-semibold">Payslips</h3>
+		<Bound size="tall">
+			<CollectionTable
+				{client}
+				collection="payslips"
+				title="Payslips"
+				description="Open a payslip for its direct component and statutory line breakdown."
+				features={{ create: false }}
+				query={{
+					where: { payroll_run_id: { eq: record.norbital_id } },
+					orderBy: { norbital_created_at: 'asc' },
+					limit: 100
+				}}
+			>
+				{#snippet columns({ Column })}
+					<Column
+						name="employment_id"
+						label="Employee"
+						card="title"
+						render={({ value }) =>
+							value == null || value === ''
+								? '—'
+								: (employmentLabelsById.get(String(value)) ?? '—')}
+					/>
+					<Column name="currency" card="badge" />
+					<Column name="gross" render={({ value }) => formatNumeric(value)} />
+					<Column
+						name="total_deductions"
+						label="Deductions"
+						render={({ value }) => formatNumeric(value)}
+					/>
+					<Column name="net" card="subtitle" render={({ value }) => formatNumeric(value)} />
+					<Column
+						name="employer_cost"
+						label="Employer cost"
+						render={({ value }) => formatNumeric(value)}
+					/>
+				{/snippet}
+			</CollectionTable>
+		</Bound>
+	</Stack>
+</Stack>
