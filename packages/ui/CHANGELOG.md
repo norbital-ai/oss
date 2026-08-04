@@ -1,5 +1,12 @@
 # @norbital-ai/ui
 
+## 4.0.0
+
+### Patch Changes
+
+- Updated dependencies [ce88fce]
+  - @norbital-ai/platform-utils@0.4.0
+
 ## 3.0.0
 
 ### Patch Changes
