@@ -4,50 +4,32 @@
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
-	import { watch } from 'runed';
 
 	let { record }: { record: Row } = $props();
 
 	const recordId = $derived(record.norbital_id);
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let certificationsQuery = $state(
+	const certificationsQuery = $derived(
 		client.db.contractor_certifications.findMany({
 			where: { contractor_profile_id: { eq: recordId } },
 			orderBy: { certification_type_id: 'asc' },
 			limit: 250
 		})
 	);
-	let selectedCertificationIds = $state<string[]>([]);
+	let certificationDraft = $state<{ recordId: string; ids: string[] } | null>(null);
 	let certificationSaving = $state(false);
 	let certificationError = $state<string | null>(null);
 	const persistedCertificationIds = $derived(
 		(certificationsQuery.current ?? []).map((link) => link.certification_type_id)
 	);
-	const persistedCertificationKey = $derived(persistedCertificationIds.join(','));
-
-	watch(
-		() => recordId,
-		(nextRecordId) => {
-			certificationsQuery = client.db.contractor_certifications.findMany({
-				where: { contractor_profile_id: { eq: nextRecordId } },
-				orderBy: { certification_type_id: 'asc' },
-				limit: 250
-			});
-			selectedCertificationIds = [];
-			certificationError = null;
-		},
-		{ lazy: true }
-	);
-	watch(
-		() => persistedCertificationKey,
-		() => {
-			if (!certificationSaving) selectedCertificationIds = persistedCertificationIds;
-		}
+	const selectedCertificationIds = $derived(
+		certificationDraft != null && certificationDraft.recordId === recordId
+			? certificationDraft.ids
+			: persistedCertificationIds
 	);
 
 	async function updateCertifications(value: string | string[] | null): Promise<void> {
 		const nextIds = [...new Set(Array.isArray(value) ? value : value ? [value] : [])];
-		selectedCertificationIds = nextIds;
+		certificationDraft = { recordId, ids: nextIds };
 		certificationSaving = true;
 		certificationError = null;
 		try {
@@ -74,8 +56,9 @@
 					)
 			);
 			await certificationsQuery.refresh();
+			certificationDraft = null;
 		} catch (cause) {
-			selectedCertificationIds = persistedCertificationIds;
+			certificationDraft = null;
 			certificationError = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			certificationSaving = false;
@@ -94,7 +77,22 @@
 			</Stack>
 			<Stack gap="md">
 				<Field name="company_name" />
-				<Field name="user_id" label="Portal user" />
+				<Field
+					name="user_id"
+					label="Portal user"
+					renderer={RelationshipRenderer}
+					rendererProps={{
+						target: 'user',
+						options: {
+							label: (record) => {
+								const v = record.name;
+								return v != null && v !== '' ? String(v) : '—';
+							},
+							orderBy: { name: 'asc' },
+							limit: 500
+						}
+					}}
+				/>
 				<Stack as="fieldset" gap="xs">
 					<legend class="text-sm font-medium">Certifications held</legend>
 					<RelationshipRenderer
@@ -102,7 +100,7 @@
 						value={selectedCertificationIds}
 						multiple
 						options={{
-							label: (certification) => String(certification.name ?? certification.norbital_id),
+							label: (certification) => String(certification.name ?? '—'),
 							where: { active: { eq: true } },
 							orderBy: { name: 'asc' },
 							limit: 250

@@ -15,7 +15,6 @@
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { formatFileSize } from '@norbital-ai/ui/utils';
 	import Icon from '@iconify/svelte';
-	import { watch } from 'runed';
 	import { z } from 'zod';
 	import { formatSingaporeInstant } from '../../lib/instant-format.js';
 	import JobsRepresentation from '../jobs/+representation.svelte';
@@ -29,49 +28,25 @@
 		storage_key: z.string()
 	});
 
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let jobQuery = $state(
+	const jobQuery = $derived(
 		client.db.jobs.findMany({
 			where: { norbital_id: { eq: record.job_id } },
 			limit: 1
 		})
 	);
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let variationsQuery = $state(
+	const variationsQuery = $derived(
 		client.db.variation_requests.findMany({
 			where: { job_assignment_id: { eq: record.norbital_id } },
 			orderBy: { requested_at: 'desc' },
 			limit: 50
 		})
 	);
-	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial handle.
-	let directEvidenceQuery = $state(
+	const directEvidenceQuery = $derived(
 		client.db.photo_evidence.findMany({
 			where: { job_assignment_id: { eq: record.norbital_id } },
 			orderBy: { norbital_created_at: 'desc' },
 			limit: 250
 		})
-	);
-	const recordQueryKey = $derived(`${record.norbital_id}:${record.job_id}`);
-	watch(
-		() => recordQueryKey,
-		() => {
-			jobQuery = client.db.jobs.findMany({
-				where: { norbital_id: { eq: record.job_id } },
-				limit: 1
-			});
-			variationsQuery = client.db.variation_requests.findMany({
-				where: { job_assignment_id: { eq: record.norbital_id } },
-				orderBy: { requested_at: 'desc' },
-				limit: 50
-			});
-			directEvidenceQuery = client.db.photo_evidence.findMany({
-				where: { job_assignment_id: { eq: record.norbital_id } },
-				orderBy: { norbital_created_at: 'desc' },
-				limit: 250
-			});
-		},
-		{ lazy: true }
 	);
 
 	const scopedEvidence = $derived(
@@ -82,22 +57,13 @@
 	const evidenceAssetIds = $derived([
 		...new Set(scopedEvidence.map((evidence) => evidence.document_asset_id))
 	]);
-	const evidenceAssetIdsKey = $derived(evidenceAssetIds.join(','));
-	type EvidenceAssetsQuery = ReturnType<typeof client.db.document_asset.findMany>;
-	let evidenceAssetsQuery = $state<EvidenceAssetsQuery | null>(null);
-	let loadedEvidenceAssetIdsKey: string | undefined;
-	watch(
-		() => evidenceAssetIdsKey,
-		(idsKey) => {
-			if (loadedEvidenceAssetIdsKey === idsKey) return;
-			loadedEvidenceAssetIdsKey = idsKey;
-			evidenceAssetsQuery = evidenceAssetIds.length
-				? client.db.document_asset.findMany({
-						where: { norbital_id: { in: evidenceAssetIds } },
-						limit: evidenceAssetIds.length
-					})
-				: null;
-		}
+	const evidenceAssetsQuery = $derived(
+		evidenceAssetIds.length
+			? client.db.document_asset.findMany({
+					where: { norbital_id: { in: evidenceAssetIds } },
+					limit: evidenceAssetIds.length
+				})
+			: null
 	);
 	const evidenceByAssetId = $derived(
 		new Map(scopedEvidence.map((evidence) => [evidence.document_asset_id, evidence]))
