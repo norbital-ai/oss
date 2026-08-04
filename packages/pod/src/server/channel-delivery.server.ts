@@ -246,10 +246,15 @@ export async function deliverChannelMessage(
 						: {})
 				},
 				// The declared `task` is the agent's standing instruction for this channel, so it reaches
-				// the model as the last layer of the system prompt; the message is the input. What the
-				// spec may reach is not narrowed here — `channelAgentSpec` explains why the channel
-				// principal's policy is the whole boundary.
-				spec: await channelAgentSpec({ standingInstruction })
+				// the model as the last layer of the system prompt; the message is the input. Collection
+				// reach is the channel principal's policy; host tools are only those the channel named.
+				spec: await channelAgentSpec({
+					standingInstruction,
+					...(channel.hostTools && channel.hostTools.length > 0
+						? { hostTools: channel.hostTools }
+						: {}),
+					...(channel.hostSandbox ? { hostSandbox: channel.hostSandbox } : {})
+				})
 			});
 
 			const text = result.text.trim();

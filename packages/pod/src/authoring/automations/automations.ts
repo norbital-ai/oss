@@ -76,6 +76,15 @@ export type AgentAutomationSpec = {
 	 * names a tool its host does not supply, and refuses a host tool that shadows a workspace one.
 	 */
 	readonly hostTools?: readonly string[];
+	/**
+	 * How host sandbox tools may touch the tenant worktree for this run.
+	 *
+	 * Interactive defaults to read-write (omitted). Channel runs that name `hostTools` default to
+	 * read-only unless the channel declaration sets `hostSandbox.workspace: 'read-write'`.
+	 */
+	readonly hostSandbox?: {
+		readonly workspace: 'read-only' | 'read-write';
+	};
 	readonly profile?: string;
 	readonly maxIterations?: number;
 	readonly maxTokens?: number;

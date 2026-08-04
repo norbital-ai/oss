@@ -1,5 +1,15 @@
 # @norbital-ai/config
 
+## 0.0.4
+
+### Patch Changes
+
+- Release the five packages as one set, so no template pins a mix.
+
+  `config`, `std` and `ui` carry no source change here. They are versioned anyway because a template
+  pins every first-party dependency exactly and exempts each pinned version from the release-age delay
+  by name — a partial bump would leave a template straddling two release sets.
+
 ## 0.0.3
 
 ### Patch Changes

@@ -24,6 +24,7 @@
 	let runId = $state<string | undefined>(undefined);
 	let chatId = $state<string | undefined>(undefined);
 	let pending = $state(false);
+	let planMode = $state(false);
 	let echo = $state<string | null>(null);
 	let failure = $state<string | null>(null);
 	let transcriptElement = $state<HTMLOListElement | null>(null);
@@ -218,6 +219,7 @@
 			const result = await getWorkspaceRemoteTransport().agentChatStart({
 				message,
 				...(runId ? { runId } : {}),
+				...(planMode ? { planMode: true } : {}),
 				// Only when the host offered a choice. Sending back its own default would turn a display
 				// value into a caller assertion, and the host would stop being free to change it.
 				...(catalog && selectedModel && selectedModel !== catalog.defaultModel
@@ -357,14 +359,30 @@
 			<div
 				class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1 gap-y-1 px-2.5 pt-1 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
 			>
-				<!-- Core's left cell held Plan mode, auto-send-after-step and attach. Each needs a backend
-				     this package does not have — a plan-mode loop, turn stepping, a session file store —
-				     so it carries the run's accounting instead: every figure below is the provider's own,
-				     and anything the provider did not report is absent rather than estimated. -->
+				<!-- Plan mode is restored. Auto-send-after-step and attach remain deferred — turn stepping
+				     and a session file store are not in this package yet. Usage figures below are the
+				     provider's own; anything the provider did not report is absent rather than estimated. -->
 				<div
 					class={`flex min-w-0 items-center gap-2 text-muted-foreground ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
 					data-testid="agent-usage"
 				>
+					<button
+						type="button"
+						aria-pressed={planMode}
+						disabled={pending}
+						onclick={() => (planMode = !planMode)}
+						class={`rounded-md px-1.5 py-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} ${
+							planMode
+								? 'bg-primary/10 text-primary'
+								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
+						}`}
+						title={planMode
+							? 'Plan mode on — research only, no changes'
+							: 'Plan mode — research and return a plan without making changes'}
+						data-testid="agent-plan-mode"
+					>
+						Plan
+					</button>
 					{#if contextPercent !== null}
 						<span class="inline-flex items-center gap-1.5" title="Context window used">
 							<span

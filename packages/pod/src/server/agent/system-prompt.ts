@@ -42,6 +42,16 @@ There is no administrative console for any of this. Enum values, fields, permiss
 
 const LAYER_SEPARATOR = '\n\n---\n\n';
 
+/**
+ * Appended last so it overrides authored instructions that ask for writes.
+ *
+ * Pod has no todowrite / coding-tool surface: plan mode here means research with the read tools,
+ * then a written plan — never collection writes, host tools, or subagents that inherit write reach.
+ */
+export const PLAN_MODE_REMINDER = `## Plan mode
+
+Plan mode is active for this turn. Research and produce a concise, executable plan only. Do not write collection data, run host tools, spawn subagents, or make any other system change. This restriction overrides conflicting user or workspace instructions. Read-only inspection (\`describe_workspace\`, \`list_skills\`, \`read_skill\`, \`read_collection\`) is allowed. The final response must identify the collections, files or systems involved, ordered implementation steps, important risks, and verification.`;
+
 function written(layers: readonly (string | undefined)[]): readonly string[] {
 	return layers
 		.map((layer) => layer?.trim())
@@ -54,9 +64,17 @@ function written(layers: readonly (string | undefined)[]): readonly string[] {
  * Order is the point: an authored prompt is the more specific instruction, and a model resolves a
  * conflict in favour of what it read last. Replacing the authored prompt instead of composing with
  * it would silently drop every workspace's domain instructions the moment this baseline shipped.
+ *
+ * Plan mode is last of all: when active it must win against an authored prompt that asks for writes.
  */
-export function composeSystemPrompt(authored: string | undefined): string {
-	return [AGENT_BASELINE_SYSTEM_PROMPT, ...written([authored])].join(LAYER_SEPARATOR);
+export function composeSystemPrompt(
+	authored: string | undefined,
+	options?: { readonly planMode?: boolean }
+): string {
+	return [
+		AGENT_BASELINE_SYSTEM_PROMPT,
+		...written([authored, options?.planMode ? PLAN_MODE_REMINDER : undefined])
+	].join(LAYER_SEPARATOR);
 }
 
 /**

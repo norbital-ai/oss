@@ -323,13 +323,19 @@ function buildChannelEntries(
 			policy?: string;
 			description?: string | null;
 			task?: string;
+			hostTools?: readonly string[];
+			hostSandbox?: { readonly workspace: 'read-only' | 'read-write' };
 		};
 		out[key] = {
 			key,
 			transport: channel.transport ?? '',
 			policy: String(channel.policy ?? ''),
 			...(channel.description == null ? {} : { description: channel.description }),
-			...(channel.task == null ? {} : { task: channel.task })
+			...(channel.task == null ? {} : { task: channel.task }),
+			...(channel.hostTools && channel.hostTools.length > 0
+				? { hostTools: [...channel.hostTools] }
+				: {}),
+			...(channel.hostSandbox ? { hostSandbox: { ...channel.hostSandbox } } : {})
 		};
 	}
 	return out as NorbitalManifest['channels'];

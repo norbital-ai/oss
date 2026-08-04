@@ -49,7 +49,7 @@
 		)
 	);
 	const monthEntries = $derived(
-		(rosterQuery.current ?? []).filter((entry) => entry.work_date.slice(0, 7) === currentMonth)
+		(rosterQuery.current ?? []).filter((entry) => monthKey(entry.work_date) === currentMonth)
 	);
 	const rosteredPeople = $derived(new Set(monthEntries.map((entry) => entry.employment_id)).size);
 	const shiftUsage = $derived.by(() => {

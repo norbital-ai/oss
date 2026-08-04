@@ -72,6 +72,13 @@ type AgentRunOptions = {
 	/** Extra `chat_message` columns for the input message only — where it came from, and from whom. */
 	readonly inputMetadata?: Record<string, unknown>;
 	/**
+	 * Research-only turn: read tools stay, writes / host tools / subagents are withheld.
+	 *
+	 * Stored on the user `chat_message.plan_mode` column and injected into the system prompt so the
+	 * model sees the same restriction the tool list already enforces.
+	 */
+	readonly planMode?: boolean;
+	/**
 	 * Compact the window before this turn reasons, whatever its size.
 	 *
 	 * Set by `/compact`. `instructions` steers what the summary keeps; it is the caller's words, not a
@@ -222,7 +229,7 @@ async function hostToolSpecs(
 
 async function resolveTools(
 	spec: AgentAutomationSpec,
-	options: { readonly canSpawnSubagent: boolean }
+	options: { readonly canSpawnSubagent: boolean; readonly planMode: boolean }
 ): Promise<ResolvedTools> {
 	const collections = allowedCollections(spec);
 	const tools: AiToolSpec[] = [
@@ -253,7 +260,7 @@ async function resolveTools(
 			inputSchema: z.toJSONSchema(readSkillInput)
 		}
 	];
-	if (options.canSpawnSubagent) {
+	if (options.canSpawnSubagent && !options.planMode) {
 		tools.push({
 			name: 'spawn_subagent',
 			description:
@@ -268,7 +275,9 @@ async function resolveTools(
 			}
 		});
 	}
-	if ((spec.access ?? 'read') === 'write') {
+	// Plan mode withholds every mutator and every host/workspace tool so the model cannot ask for a
+	// change that would only be refused at execution time.
+	if (!options.planMode && (spec.access ?? 'read') === 'write') {
 		tools.push({
 			name: 'write_collection',
 			description: 'Create, update, or delete records through Pod collection operations.',
@@ -288,14 +297,16 @@ async function resolveTools(
 			}
 		});
 	}
-	const registered = getTenantWorkspace().registered.agentTools;
-	for (const name of spec.tools ?? []) {
-		const definition = registered[name];
-		if (!definition) throw new Error(`Agent references unknown tenant tool: ${name}`);
-		tools.push({ name, description: definition.description, inputSchema: jsonSchema(definition) });
+	if (!options.planMode) {
+		const registered = getTenantWorkspace().registered.agentTools;
+		for (const name of spec.tools ?? []) {
+			const definition = registered[name];
+			if (!definition) throw new Error(`Agent references unknown tenant tool: ${name}`);
+			tools.push({ name, description: definition.description, inputSchema: jsonSchema(definition) });
+		}
 	}
 	const taken = new Set(tools.map((tool) => tool.name));
-	const hostSpecs = await hostToolSpecs(spec, taken);
+	const hostSpecs = options.planMode ? [] : await hostToolSpecs(spec, taken);
 	tools.push(...hostSpecs);
 	void collections;
 	return { specs: tools, hostTools: new Set(hostSpecs.map((tool) => tool.name)) };
@@ -337,11 +348,22 @@ function agentToolApi(spec: AgentAutomationSpec): BeforeApi {
 	return { ...api, db } as unknown as BeforeApi;
 }
 
+const PLAN_MODE_READ_TOOLS = new Set([
+	'describe_workspace',
+	'list_skills',
+	'read_skill',
+	'read_collection'
+]);
+
 async function executeTool(
 	spec: AgentAutomationSpec,
 	resolved: ResolvedTools,
-	call: AiToolCall
+	call: AiToolCall,
+	planMode: boolean
 ): Promise<Record<string, unknown>> {
+	if (planMode && !PLAN_MODE_READ_TOOLS.has(call.name)) {
+		throw new Error('Permission denied: this turn is in plan mode.');
+	}
 	const ctx = getWorkspace({ provision: true });
 	const collections = allowedCollections(spec);
 	if (call.name === 'describe_workspace') {
@@ -388,7 +410,13 @@ async function executeTool(
 	// nothing, so the two branches can never both claim one call.
 	if (resolved.hostTools.has(call.name)) {
 		const binding = requireRuntimeFacility('agentTools');
-		return objectValue(await binding.run(call.name, call.input));
+		return objectValue(
+			await binding.run(call.name, call.input, {
+				...(spec.hostSandbox?.workspace
+					? { sandboxWorkspace: spec.hostSandbox.workspace }
+					: {})
+			})
+		);
 	}
 	const definition = getTenantWorkspace().registered.agentTools[call.name];
 	if (!definition || !(spec.tools ?? []).includes(call.name)) {
@@ -723,15 +751,14 @@ async function streamProviderTurn(input: {
 	readonly spec: AgentAutomationSpec;
 	readonly writer: TranscriptWriter;
 	readonly turnId: string;
+	readonly planMode: boolean;
 }): Promise<ProviderTurnResult> {
 	const ctx = getWorkspace({ provision: true });
 	const ai = requireRuntimeFacility('ai');
+	const system = composeSystemPrompt(input.spec.systemPrompt, { planMode: input.planMode });
 	if (!ai.startStream || !ai.readStream || !ai.cancelStream) {
 		const result = await ai.chat({
-			messages: [
-				{ role: 'system' as const, content: composeSystemPrompt(input.spec.systemPrompt) },
-				...input.messages
-			],
+			messages: [{ role: 'system' as const, content: system }, ...input.messages],
 			tools: input.tools,
 			...(input.spec.model ? { model: input.spec.model } : {}),
 			...(input.spec.profile ? { profile: input.spec.profile } : {})
@@ -751,10 +778,7 @@ async function streamProviderTurn(input: {
 		};
 	}
 	const streamId = await ai.startStream({
-		messages: [
-			{ role: 'system' as const, content: composeSystemPrompt(input.spec.systemPrompt) },
-			...input.messages
-		],
+		messages: [{ role: 'system' as const, content: system }, ...input.messages],
 		tools: input.tools,
 		...(input.spec.model ? { model: input.spec.model } : {}),
 		...(input.spec.profile ? { profile: input.spec.profile } : {})
@@ -882,10 +906,14 @@ async function runAgentLoop(input: {
 	readonly writer: TranscriptWriter;
 	readonly turnId: string;
 	readonly depth: number;
+	readonly planMode: boolean;
 	readonly iterationLimit?: number;
 }): Promise<LoopResult> {
 	const ctx = getWorkspace({ provision: true });
-	const resolved = await resolveTools(input.spec, { canSpawnSubagent: input.depth === 0 });
+	const resolved = await resolveTools(input.spec, {
+		canSpawnSubagent: input.depth === 0 && !input.planMode,
+		planMode: input.planMode
+	});
 	const maxIterations = input.iterationLimit ?? input.spec.maxIterations ?? 8;
 	let consumedTokens = 0;
 	let finalText = '';
@@ -913,7 +941,8 @@ async function runAgentLoop(input: {
 			tools: resolved.specs,
 			spec: input.spec,
 			writer: input.writer,
-			turnId: input.turnId
+			turnId: input.turnId,
+			planMode: input.planMode
 		});
 		consumedTokens += usageTokens(result.usage);
 		if (input.spec.maxTokens && consumedTokens > input.spec.maxTokens) {
@@ -945,6 +974,7 @@ async function runAgentLoop(input: {
 			let output: Record<string, unknown>;
 			try {
 				if (call.name === 'spawn_subagent') {
+					if (input.planMode) throw new Error('Permission denied: this turn is in plan mode.');
 					if (input.depth !== 0) throw new Error('Subagents cannot spawn another subagent');
 					const task = z.object({ task: z.string().min(1) }).parse(call.input).task;
 					const child = await runSubagent({
@@ -953,11 +983,12 @@ async function runAgentLoop(input: {
 						writer: input.writer,
 						parentTurnId: input.turnId,
 						subagentId: `subagent:${call.id}`,
-						depth: input.depth + 1
+						depth: input.depth + 1,
+						planMode: input.planMode
 					});
 					output = { text: child.text, turnId: child.turnId };
 				} else {
-					output = await executeTool(input.spec, resolved, call);
+					output = await executeTool(input.spec, resolved, call, input.planMode);
 				}
 			} catch (cause) {
 				output = { error: cause instanceof Error ? cause.message : String(cause) };
@@ -988,6 +1019,7 @@ async function runSubagent(input: {
 	readonly parentTurnId: string;
 	readonly subagentId: string;
 	readonly depth: number;
+	readonly planMode: boolean;
 }): Promise<{ readonly text: string; readonly turnId: string }> {
 	const ctx = getWorkspace({ provision: true });
 	const turnId = await createTurn(input);
@@ -1009,6 +1041,7 @@ async function runSubagent(input: {
 			writer: input.writer,
 			turnId,
 			depth: input.depth,
+			planMode: input.planMode,
 			iterationLimit: Math.min(input.spec.maxIterations ?? 8, 4)
 		});
 		await finishTurn(turnId, 'succeeded');
@@ -1082,12 +1115,16 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 	const turnId = await createTurn({ writer, spec: options.spec });
 	const initial = options.input ?? (messages.length === 0 ? options.spec.task : undefined);
 	let inputMessageId: string | null = null;
+	const planMode = options.planMode === true;
 	if (initial) {
 		messages.push({ role: 'user', content: initial });
 		inputMessageId = await writer.persist(
 			{ role: 'user', content: initial },
 			turnId,
-			options.inputMetadata
+			{
+				...(options.inputMetadata ?? {}),
+				...(planMode ? { plan_mode: true } : {})
+			}
 		);
 		if (inputMessageId) {
 			await updateRecord(
@@ -1143,7 +1180,8 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			messages,
 			writer,
 			turnId,
-			depth: 0
+			depth: 0,
+			planMode
 		});
 		await finishTurn(turnId, 'succeeded');
 		await updateRecord(

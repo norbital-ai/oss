@@ -9,6 +9,7 @@
 	 * There is deliberately no composer inside: a subagent is given a task, it is not talked to.
 	 */
 	import Icon from '@iconify/svelte';
+	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
 
@@ -208,7 +209,11 @@
 								: 'w-full rounded-lg bg-destructive/10 px-3.5 py-2.5 text-destructive'
 					}`}
 		>
-			<p class="content m-0 break-words whitespace-pre-wrap">{message.content}</p>
+			{#if message.role === 'assistant'}
+				<ReadonlyMarkdown scale="reading" content={message.content} class="content" />
+			{:else}
+				<p class="content m-0 break-words whitespace-pre-wrap">{message.content}</p>
+			{/if}
 			{#if message.status === 'streaming'}
 				<span class="mt-1.5 inline-flex items-center gap-1.5 text-tiny text-muted-foreground">
 					<span class="size-1.5 animate-pulse rounded-full bg-current"></span>

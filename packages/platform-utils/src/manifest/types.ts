@@ -388,7 +388,19 @@ export const ManifestChannelSchema = z
 		transport: nonEmpty,
 		policy: nonEmpty,
 		description: z.string().nullable().optional(),
-		task: z.string().optional()
+		task: z.string().optional(),
+		/** Host tool names this channel opts into; omitted / empty means none. */
+		hostTools: z.array(nonEmpty).optional(),
+		/**
+		 * How host sandbox tools may touch the tenant worktree for this channel.
+		 * Default when omitted and hostTools is non-empty: read-only (enforced at run time).
+		 */
+		hostSandbox: z
+			.object({
+				workspace: z.enum(['read-only', 'read-write'])
+			})
+			.strict()
+			.optional()
 	})
 	.strict();
 

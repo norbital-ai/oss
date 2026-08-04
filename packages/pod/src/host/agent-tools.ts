@@ -1,5 +1,6 @@
 import type {
 	HostAgentToolBinding,
+	HostAgentToolRunContext,
 	HostAgentToolSpec
 } from '@norbital-ai/platform-utils/runtime/binding';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
@@ -17,17 +18,21 @@ import { z } from 'zod';
  * `run` receives input already validated against `input`, and returns a value that has to survive
  * structured clone on its way back into the isolate — plain data, no functions, no class instances.
  *
- * It receives no caller. The tenant runtime cannot prove who is asking (an isolate's claim about its
- * own requestor is unverifiable from out here), so a host tool authorizes against what the host
- * already knows — which tenant this process serves — never against something that arrived over the
- * binding wire.
+ * It receives no caller identity. The tenant runtime cannot prove who is asking (an isolate's claim
+ * about its own requestor is unverifiable from out here), so a host tool authorizes against what the
+ * host already knows — which tenant this process serves — never against something that arrived over
+ * the binding wire. Optional `context` carries only authored sandbox *policy* (read-only vs
+ * read-write worktree), not an identity claim.
  */
 export type HostAgentTool<TInput extends z.ZodType = z.ZodType> = {
 	/** How the model names it. Shares one namespace with the workspace's own agent tools. */
 	readonly name: string;
 	readonly description: string;
 	readonly input: TInput;
-	run(input: z.infer<TInput>): unknown | Promise<unknown>;
+	run(
+		input: z.infer<TInput>,
+		context?: HostAgentToolRunContext
+	): unknown | Promise<unknown>;
 };
 
 /** Tool names a provider will accept; also what the agent loop's built-ins are named. */
@@ -77,10 +82,10 @@ export function hostAgentTools(tools: readonly HostAgentTool[]): HostAgentToolBi
 		list() {
 			return Promise.resolve(specs);
 		},
-		async run(name, input) {
+		async run(name, input, context) {
 			const tool = byName.get(name);
 			if (!tool) throw new Error(`This host supplies no agent tool named ${name}`);
-			return tool.run(tool.input.parse(input));
+			return tool.run(tool.input.parse(input), context);
 		}
 	};
 }
@@ -137,6 +142,12 @@ export function assertHostAgentTools(
 		for (const named of automation.spec?.hostTools ?? []) {
 			if (seen.has(named)) continue;
 			missing.set(named, [...(missing.get(named) ?? []), name]);
+		}
+	}
+	for (const [name, channel] of Object.entries(manifest.channels ?? {})) {
+		for (const named of channel.hostTools ?? []) {
+			if (seen.has(named)) continue;
+			missing.set(named, [...(missing.get(named) ?? []), `channel:${name}`]);
 		}
 	}
 	if (missing.size === 0) return;

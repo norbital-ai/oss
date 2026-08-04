@@ -32,7 +32,12 @@ export const AgentChatInputSchema = z.object({
 	 */
 	runId: z.uuid().optional(),
 	/** Run this turn on a specific model. Omitted leaves the choice to the host. */
-	model: ModelIdSchema.optional()
+	model: ModelIdSchema.optional(),
+	/**
+	 * Research-only turn. When true the loop withholds write tools and records `plan_mode` on the
+	 * user message. Omitted / false is a normal turn.
+	 */
+	planMode: z.boolean().optional()
 });
 
 export const AgentModelsInputSchema = z.object({});
@@ -170,7 +175,8 @@ export const agentChat = authenticated.command(
 			automationName: null,
 			spec,
 			input: input.message,
-			...(input.runId ? { runId: input.runId } : {})
+			...(input.runId ? { runId: input.runId } : {}),
+			...(input.planMode ? { planMode: true } : {})
 		});
 
 		const ctx = getWorkspace({ provision: true });
@@ -211,6 +217,7 @@ export const agentChatStart = authenticated.command(
 			sessionId: conversation.chatId,
 			spec,
 			input: input.message,
+			...(input.planMode ? { planMode: true } : {}),
 			...(compact ? { compact } : {})
 		}).catch(() => undefined);
 		return { ...conversation, accepted: true };

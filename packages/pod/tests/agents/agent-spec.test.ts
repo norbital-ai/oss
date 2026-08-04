@@ -43,17 +43,40 @@ describe('the tools each entry point names', () => {
 	});
 
 	/**
-	 * The same host, the same workspace, and no host tools at all.
+	 * The same host, the same workspace, and no host tools unless the channel named them.
 	 *
-	 * A host tool authorizes on the principal it acts as, which no channel declaration chooses and no
-	 * channel policy reaches, so offering `sandbox_bash` to a group conversation would hand it the
-	 * workspace's own source tree under whichever principal the host resolved. The workspace half is
-	 * untouched, because that half genuinely is bounded by the channel principal's policy.
+	 * A host tool authorizes on the principal it acts as, which no channel policy reaches, so the
+	 * default is none. A channel that opts into a narrow analysis surface passes those names through.
 	 */
-	it('names no host tool for a channel run, keeping the whole workspace surface', async () => {
+	it('names no host tool for a channel run by default, keeping the whole workspace surface', async () => {
 		const spec = await channelAgentSpec({ standingInstruction: 'Answer sales questions.' });
 		expect(spec.access).toBe('write');
 		expect(spec.tools).toEqual(['list_quotes', 'create_quote']);
 		expect(spec.hostTools).toEqual([]);
+	});
+
+	it('names only the host tools the channel declaration opted into', async () => {
+		const spec = await channelAgentSpec({
+			standingInstruction: 'Answer field questions.',
+			hostTools: ['sandbox_bash', 'sandbox_read']
+		});
+		expect(spec.hostTools).toEqual(['sandbox_bash', 'sandbox_read']);
+	});
+
+	it('defaults hostSandbox to read-only when a channel names host tools', async () => {
+		const spec = await channelAgentSpec({
+			standingInstruction: 'Answer field questions.',
+			hostTools: ['sandbox_bash']
+		});
+		expect(spec.hostSandbox).toEqual({ workspace: 'read-only' });
+	});
+
+	it('keeps an explicit hostSandbox from the channel declaration', async () => {
+		const spec = await channelAgentSpec({
+			standingInstruction: 'Deploy from chat.',
+			hostTools: ['sandbox_bash'],
+			hostSandbox: { workspace: 'read-write' }
+		});
+		expect(spec.hostSandbox).toEqual({ workspace: 'read-write' });
 	});
 });

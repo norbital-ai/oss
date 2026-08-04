@@ -33,7 +33,7 @@ function deferred(): {
 }
 
 let inFlight = deferred();
-let sent: { message: string; model?: string }[] = [];
+let sent: { message: string; model?: string; planMode?: boolean }[] = [];
 let catalog: {
 	defaultModel: string;
 	options: { id: string; label: string; canonicalSlug: string }[];
@@ -46,7 +46,7 @@ beforeEach(() => {
 	sent = [];
 	catalog = null;
 	setWorkspaceRemoteTransport({
-		agentChatStart: (input: { message: string; model?: string }) => {
+		agentChatStart: (input: { message: string; model?: string; planMode?: boolean }) => {
 			sent.push(input);
 			return inFlight.promise;
 		},
@@ -497,6 +497,44 @@ describe('agent chat panel', () => {
 		await settle();
 		// Absent rather than empty: an empty combobox reads as a broken control.
 		expect(container.querySelector('[aria-label="Model"]')).toBeNull();
+		destroy();
+	});
+
+	it('forwards plan mode only when the Plan toggle is pressed', async () => {
+		const { container, destroy } = mountPanel();
+		await settle();
+
+		const plan = container.querySelector('[data-testid="agent-plan-mode"]');
+		expect(plan).not.toBeNull();
+		expect(plan?.getAttribute('aria-pressed')).toBe('false');
+
+		type(container, 'How should payroll runs be structured?');
+		submit(container);
+		expect(sent).toEqual([{ message: 'How should payroll runs be structured?' }]);
+		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
+		await settle();
+		replica.arrive('chat_turn', {
+			norbital_id: 't1',
+			chat_id: 'c1',
+			parent_turn_id: null,
+			subagent_id: null,
+			status: 'succeeded',
+			started_at: '2026-08-01T00:00:00.000Z'
+		});
+		await settle();
+
+		plan?.dispatchEvent(new Event('click', { bubbles: true }));
+		flushSync();
+		expect(plan?.getAttribute('aria-pressed')).toBe('true');
+
+		inFlight = deferred();
+		type(container, 'Draft a rollout plan');
+		submit(container);
+		expect(sent.at(-1)).toEqual({
+			message: 'Draft a rollout plan',
+			planMode: true,
+			runId: 'r1'
+		});
 		destroy();
 	});
 

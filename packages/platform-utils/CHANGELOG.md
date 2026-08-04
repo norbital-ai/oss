@@ -1,5 +1,18 @@
 # @norbital-ai/platform-utils
 
+## 0.3.0
+
+### Minor Changes
+
+- Allow channel declarations to opt into host tools via `hostTools`, with configurable sandbox workspace mode via `hostSandbox.workspace`.
+
+  Channel agents still default to no host tools (so WhatsApp/Telegram cannot quietly inherit builder sandbox write). A channel that needs analysis can name tools explicitly; startup refuses names the host does not supply. When `hostTools` is non-empty and `hostSandbox` is omitted, the worktree mounts read-only and scratch (`/workspace/src/.tmp`) stays writable; set `hostSandbox.workspace: 'read-write'` for authoring-style repo mutation.
+
+### Patch Changes
+
+- Updated dependencies
+  - @norbital-ai/std@0.0.4
+
 ## 0.2.0
 
 ### Minor Changes

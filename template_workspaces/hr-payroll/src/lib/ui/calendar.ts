@@ -7,14 +7,24 @@
  * a company's `pay_day` on a calendar so an operator can see which cycles are still open.
  */
 
+import { formatDateISO } from '@norbital-ai/std/date';
+
 /** UTC calendar day of "now", the reference every board on these pages is drawn against. */
 export function todayKey(): string {
 	return new Date().toISOString().slice(0, 10);
 }
 
-/** `YYYY-MM` of a UTC calendar day. */
-export function monthKey(date: string): string {
-	return date.slice(0, 7);
+/**
+ * `YYYY-MM-DD` from a Pod `date()` column value. Local PGlite reads yield `Date`; wire payloads
+ * yield calendar or ISO strings — both are accepted.
+ */
+export function calendarDayKey(value: string | Date): string {
+	return formatDateISO(value);
+}
+
+/** `YYYY-MM` of a UTC calendar day (string key or live `date()` column value). */
+export function monthKey(date: string | Date): string {
+	return calendarDayKey(date).slice(0, 7);
 }
 
 /** `YYYY-MM` offset by whole months. */
@@ -50,8 +60,15 @@ export function daysBetweenKeys(from: string, to: string): number {
 
 /** The Monday of the ISO week containing `date`, as `YYYY-MM-DD`. */
 export function startOfIsoWeekDate(date: unknown): string | null {
-	if (typeof date !== 'string' || date.length < 10) return null;
-	const parsed = new Date(`${date.slice(0, 10)}T00:00:00.000Z`);
+	if (typeof date !== 'string' && !(date instanceof Date)) return null;
+	let day: string;
+	try {
+		day = calendarDayKey(date);
+	} catch {
+		return null;
+	}
+	if (day.length < 10) return null;
+	const parsed = new Date(`${day.slice(0, 10)}T00:00:00.000Z`);
 	if (Number.isNaN(parsed.getTime())) return null;
 	const weekday = (parsed.getUTCDay() + 6) % 7;
 	parsed.setUTCDate(parsed.getUTCDate() - weekday);

@@ -243,11 +243,32 @@ export type HostAgentToolSpec = AiToolSpec;
  * already knows — which tenant this container belongs to — and never against an assertion that
  * arrived over this wire.
  */
+/**
+ * How a host-tool call may touch the tenant worktree.
+ *
+ * `read-only` mounts `/workspace/src` read-only and leaves `/workspace/src/.tmp` writable for
+ * ephemeral analysis. `read-write` is the authoring default (interactive Studio / agent).
+ */
+export type HostSandboxWorkspaceMode = 'read-only' | 'read-write';
+
+/**
+ * Per-call context the guest may attach to a host tool run.
+ *
+ * Deliberately small and non-identity: the guest still cannot assert who is asking. This only carries
+ * sandbox *policy* the workspace authored in source (e.g. a channel's `hostSandbox.workspace`).
+ */
+export type HostAgentToolRunContext = {
+	readonly sandboxWorkspace?: HostSandboxWorkspaceMode;
+};
+
 export type HostAgentToolBinding = {
 	/** The tools this host exposes. A method, not a field — see the note on `RuntimeFacilityBindings`. */
 	list(): Promise<readonly HostAgentToolSpec[]>;
-	/** Run one host tool by name. The host validates `input`; the guest never sees the implementation. */
-	run(name: string, input: unknown): Promise<unknown>;
+	/**
+	 * Run one host tool by name. The host validates `input`; the guest never sees the implementation.
+	 * Optional `context` carries authored sandbox policy (workspace read-only vs read-write).
+	 */
+	run(name: string, input: unknown, context?: HostAgentToolRunContext): Promise<unknown>;
 };
 
 export type StaticMapMarker = {

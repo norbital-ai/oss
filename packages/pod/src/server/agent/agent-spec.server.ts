@@ -86,39 +86,46 @@ export async function interactiveAgentSpec(
  * grants can do nothing. Adding a tool-shaped second boundary here would be redundant where it
  * agreed with the policy and misleading where it did not.
  *
- * Host tools are the exception, and they are withheld for as long as they have to be. A host tool
- * carries no requestor — a binding call has nowhere to put one — so it authorizes on the
- * principal it *acts as*, and nothing in a channel declaration chooses that principal. The channel's
- * policy, which bounds everything above, does not reach it at all. A hosted deployment resolves that
- * principal once per organization and to a builder, so a channel run offered `sandbox_bash` or
- * `sandbox_write` would not be refused: it would succeed, as the organization's builder, with shell
- * and git access to the workspace's own source tree. A Telegram or WhatsApp group is a semi-public
- * surface, and that is the failure being prevented — being a participant in a group conversation
- * must not be a way to edit the workspace.
- *
- * This is a hold on the identity gap rather than a judgement that a channel agent should be narrow.
- * Once a host-tool binding can carry the acting principal, a channel run should be offered the host
- * tools its own principal is entitled to, on exactly the footing everything else here already has.
+ * Host tools default to none. A host tool authorizes on the principal it *acts as*, which no channel
+ * policy reaches — a hosted deployment resolves that to the organization's builder — so offering the
+ * full sandbox write / branch / deploy surface to a WhatsApp group would make group membership a path
+ * into the workspace tree. Channels that need a narrow analysis surface opt in by naming tools on the
+ * channel declaration (`hostTools`); startup refuses a name the host does not supply.
  *
  * An authored `src/+agent.ts` is supplementary here rather than authoritative, which is the one place
  * this deliberately differs from interactive chat. Its prompt and its model and budget choices are
  * carried, because those are the workspace speaking about how its agent should work; its
  * `collections`, `access`, `tools` and `hostTools` are not, because permission for this run belongs
- * to the channel's policy and a file that could widen or narrow it from the side would make the
- * policy advisory.
+ * to the channel's policy (and the channel's own hostTools allowlist), and a file that could widen
+ * or narrow that from the side would make those declarations advisory.
  */
 export async function channelAgentSpec(input: {
 	/** The declared `task` — what this channel's agent is for, in the workspace's own words. */
 	readonly standingInstruction: string;
+	/**
+	 * Host tools the channel declaration opted into. Omitted / empty keeps the default: none.
+	 * Only names the host actually supplies are useful; `assertHostAgentTools` refuses unknown ones.
+	 */
+	readonly hostTools?: readonly string[];
+	/**
+	 * How those host tools may touch the worktree. When hostTools is non-empty and this is omitted,
+	 * the run defaults to read-only (RO worktree + writable scratch).
+	 */
+	readonly hostSandbox?: AgentAutomationSpec['hostSandbox'];
 }): Promise<AgentAutomationSpec> {
 	const authored = getTenantWorkspace().registered.agent;
 	const systemPrompt = layerAuthoredPrompts(authored?.systemPrompt, input.standingInstruction);
+	const hostTools = [...(input.hostTools ?? [])];
+	const hostSandbox =
+		input.hostSandbox ??
+		(hostTools.length > 0 ? ({ workspace: 'read-only' } as const) : undefined);
 	return {
 		kind: 'agent',
 		task: input.standingInstruction,
 		access: 'write',
 		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],
-		hostTools: [],
+		hostTools,
+		...(hostSandbox ? { hostSandbox } : {}),
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		...(authored?.model === undefined ? {} : { model: authored.model }),
 		...(authored?.profile === undefined ? {} : { profile: authored.profile }),

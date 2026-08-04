@@ -35,6 +35,7 @@ export type PodRemoteOperations = {
 		readonly message: string;
 		readonly runId?: string;
 		readonly model?: string;
+		readonly planMode?: boolean;
 	}) => Promise<{
 		readonly runId: string;
 		readonly chatId: string;

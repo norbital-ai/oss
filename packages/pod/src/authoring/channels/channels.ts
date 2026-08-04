@@ -1,5 +1,14 @@
 import type { DefaultPolicyName } from '../schema/types.js';
 
+/** How host sandbox tools may touch the tenant worktree for one channel. */
+export type ChannelHostSandbox = {
+	/**
+	 * `read-only` — worktree mounted RO; only `/workspace/src/.tmp` (scratch) is writable.
+	 * `read-write` — full authoring sandbox (repo edits allowed).
+	 */
+	readonly workspace: 'read-only' | 'read-write';
+};
+
 /**
  * A conversational entry point into the workspace agent, declared in
  * `src/channels/+<name>.channel.ts`.
@@ -36,6 +45,24 @@ export type ChannelDefinition = {
 	readonly description?: string | null;
 	/** Overrides the agent's default instruction for this channel. */
 	readonly task?: string;
+	/**
+	 * Host tools this channel's agent may call — empty / omitted means none.
+	 *
+	 * Channel runs default to no host tools: a host tool authorizes as the host's builder principal,
+	 * which the channel's policy cannot reach, so a WhatsApp or Telegram group must not inherit
+	 * sandbox write / branch / deploy reach by accident. Naming tools here is an explicit opt-in for
+	 * that channel (e.g. analysis-only `sandbox_bash` + read tools), checked at startup against what
+	 * the host actually supplies.
+	 */
+	readonly hostTools?: readonly string[];
+	/**
+	 * How those host tools may touch the tenant worktree.
+	 *
+	 * When `hostTools` is non-empty and this is omitted, the run defaults to `workspace: 'read-only'`
+	 * (RO worktree + writable scratch). Set `workspace: 'read-write'` only when the channel is meant
+	 * to author the repo.
+	 */
+	readonly hostSandbox?: ChannelHostSandbox;
 };
 
 /** Identity function that exists for its inference; a channel file gets checked on write. */

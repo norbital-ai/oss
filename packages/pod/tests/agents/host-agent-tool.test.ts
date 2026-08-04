@@ -172,6 +172,25 @@ describe('assertHostAgentTools', () => {
 		expect(requiredRuntimeFacilities(declared)).not.toContain('queue');
 	});
 
+	it('validates host tools a channel declaration opted into', () => {
+		const declared = manifest({
+			channels: {
+				field_ops_whatsapp: {
+					key: 'field_ops_whatsapp',
+					transport: 'whatsapp',
+					policy: 'field_ops_controller',
+					hostTools: ['sandbox_bash']
+				}
+			}
+		});
+		expect(() => assertHostAgentTools([sandboxEcho], declared)).toThrow(
+			/channel:field_ops_whatsapp.*names host tool "sandbox_bash"/s
+		);
+		expect(() =>
+			assertHostAgentTools([{ ...sandboxEcho, name: 'sandbox_bash' }], declared)
+		).not.toThrow();
+	});
+
 	/** And the facility gate sees it, so a host with no tools at all refuses the workspace outright. */
 	it('makes agentTools a facility the manifest can require', () => {
 		expect(
