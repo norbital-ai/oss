@@ -338,94 +338,69 @@
 {/snippet}
 
 <!-- stupidity:allow UI10 -- the responsive matrix clips the inactive wide/narrow renderer at its surface boundary -->
+<!-- stupidity:allow UI5 -- surface overflow-hidden clips the inactive wide/narrow variant at an audited boundary -->
 <Stack
 	gap="none"
 	grow={bounded}
 	class={cn(
-		'matrix-renderer min-h-0 overflow-hidden bg-card',
-		bounded ? 'max-h-[min(70dvh,36rem)]' : 'max-h-none',
+		'matrix-renderer min-h-0 min-w-0 bg-card [container-type:inline-size]',
+		bounded ? 'max-h-[min(70dvh,36rem)] overflow-hidden' : 'max-h-none',
 		className
 	)}
 	data-data-matrix-surface
 >
-	<Bound size="full" clip class="matrix-renderer-wide">
-		<CollectionGrid
-			class="min-h-0 flex-1"
-			table={tableApi}
-			{disabled}
-			isLoading={false}
-			error=""
-			hidePaginationWhenSinglePage={true}
-			enableSorting={true}
-			enableColumnReordering={false}
-			enableRowExpansion={false}
-			enableRowReordering={false}
-			enableSelection={false}
-			borderless={true}
-			stickyRowActions={true}
-			rowActions={gridRowActions}
-			{emptyPlaceholder}
-		/>
-	</Bound>
-	<Scroll
-		axis="y"
-		name="Matrix rows"
-		grow
-		class={cn('matrix-renderer-narrow min-h-0', bounded ? 'overscroll-y-contain' : undefined)}
-		style={bounded ? undefined : 'overflow: visible'}
-	>
-		{#if displayRows.length === 0}
-			{@render emptyPlaceholder()}
+	<div class="matrix-renderer-wide flex min-h-0 min-w-0 flex-1 flex-col">
+		{#if bounded}
+			<Bound size="full" clip>
+				<CollectionGrid
+					class="min-h-0 flex-1"
+					table={tableApi}
+					{disabled}
+					isLoading={false}
+					error=""
+					hidePaginationWhenSinglePage={true}
+					enableSorting={true}
+					enableColumnReordering={false}
+					enableRowExpansion={false}
+					enableRowReordering={false}
+					enableSelection={false}
+					borderless={true}
+					stickyRowActions={true}
+					bounded={true}
+					rowActions={gridRowActions}
+					{emptyPlaceholder}
+				/>
+			</Bound>
 		{:else}
-			<div class="divide-y divide-border">
-				{#each displayRows as tableRow (tableRow.__matrixRowId)}
-					{@const source = resolveSource(tableRow)}
-					<!-- stupidity:allow UI5 -- per-row clip for the swipe-action overlay is an audited row boundary -->
-					<section class="matrix-renderer-narrow-row group relative overflow-hidden">
-						{#if source && showRowActionsColumn}
-							{@const rowDisabled = isRowDisabled?.(source.row, source.index) === true}
-							<div
-								class="absolute inset-y-0 right-0 flex w-16 items-stretch bg-destructive text-destructive-foreground"
-							>
-								{#each extraRowActions ?? [] as action, actionIndex (actionIndex)}
-									{@render action({
-										row: source.row,
-										index: source.index,
-										hovered: true,
-										disabled,
-										rowDisabled
-									})}
-								{/each}
-								{#if rowRemovable(source.row, source.index)}
-									<button
-										type="button"
-										class="flex w-full items-center justify-center outline-none hover:bg-destructive/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-										aria-label="Remove row"
-										onclick={() => removeRow(tableRow.__matrixRowId)}
-									>
-										<Icon icon="lucide:trash-2" class="size-4" />
-									</button>
-								{/if}
-							</div>
-						{/if}
-						<Stack
-							gap="sm"
-							class="matrix-renderer-narrow-row-content relative z-10 bg-card px-3 py-3"
-						>
-							{#each columns as column (column.key)}
-								<Stack gap="xs">
-									<p class="text-tiny font-medium uppercase tracking-wide text-muted-foreground">
-										{column.label}
-									</p>
-									{@render matrixCellEditor(tableRow, column, false)}
-								</Stack>
-							{/each}
-						</Stack>
-					</section>
-				{/each}
-			</div>
+			<CollectionGrid
+				class="min-h-0"
+				table={tableApi}
+				{disabled}
+				isLoading={false}
+				error=""
+				hidePaginationWhenSinglePage={true}
+				enableSorting={true}
+				enableColumnReordering={false}
+				enableRowExpansion={false}
+				enableRowReordering={false}
+				enableSelection={false}
+				borderless={true}
+				stickyRowActions={true}
+				bounded={false}
+				rowActions={gridRowActions}
+				{emptyPlaceholder}
+			/>
 		{/if}
-	</Scroll>
+	</div>
+	<div class="matrix-renderer-narrow flex min-h-0 min-w-0 flex-1 flex-col">
+		{#if bounded}
+			<Scroll axis="y" name="Matrix rows" grow class="overscroll-y-contain">
+				{@render narrowRows()}
+			</Scroll>
+		{:else}
+			{@render narrowRows()}
+		{/if}
+	</div>
 	{#if allowAddRows && createRow}
 		<div class="shrink-0 border-t border-border px-2 py-1">
 			<button
@@ -440,6 +415,60 @@
 		</div>
 	{/if}
 </Stack>
+
+{#snippet narrowRows()}
+	{#if displayRows.length === 0}
+		{@render emptyPlaceholder()}
+	{:else}
+		<div class="divide-y divide-border">
+			{#each displayRows as tableRow (tableRow.__matrixRowId)}
+				{@const source = resolveSource(tableRow)}
+				<!-- stupidity:allow UI5 -- per-row clip for the swipe-action overlay is an audited row boundary -->
+				<section class="matrix-renderer-narrow-row group relative overflow-hidden">
+					{#if source && showRowActionsColumn}
+						{@const rowDisabled = isRowDisabled?.(source.row, source.index) === true}
+						<div
+							class="absolute inset-y-0 right-0 flex w-16 items-stretch bg-destructive text-destructive-foreground"
+						>
+							{#each extraRowActions ?? [] as action, actionIndex (actionIndex)}
+								{@render action({
+									row: source.row,
+									index: source.index,
+									hovered: true,
+									disabled,
+									rowDisabled
+								})}
+							{/each}
+							{#if rowRemovable(source.row, source.index)}
+								<button
+									type="button"
+									class="flex w-full items-center justify-center outline-none hover:bg-destructive/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+									aria-label="Remove row"
+									onclick={() => removeRow(tableRow.__matrixRowId)}
+								>
+									<Icon icon="lucide:trash-2" class="size-4" />
+								</button>
+							{/if}
+						</div>
+					{/if}
+					<Stack
+						gap="sm"
+						class="matrix-renderer-narrow-row-content relative z-10 bg-card px-3 py-3"
+					>
+						{#each columns as column (column.key)}
+							<Stack gap="xs">
+								<p class="text-tiny font-medium uppercase tracking-wide text-muted-foreground">
+									{column.label}
+								</p>
+								{@render matrixCellEditor(tableRow, column, false)}
+							</Stack>
+						{/each}
+					</Stack>
+				</section>
+			{/each}
+		</div>
+	{/if}
+{/snippet}
 
 <style>
 	.matrix-renderer {
@@ -465,13 +494,15 @@
 		}
 	}
 
-	@media (max-width: 47.999rem) {
+	/* Matrix keeps the grid through sheet widths (~520px). Stacked cards only kick in for
+	   phone-narrow containers — unlike CollectionTable's 48rem list swap. */
+	@container (max-width: 23.999rem) {
 		.matrix-renderer-wide {
 			display: none;
 		}
 
 		.matrix-renderer-narrow {
-			display: block;
+			display: flex;
 		}
 	}
 </style>

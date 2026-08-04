@@ -44,9 +44,10 @@
 		...restProps
 	}: ScrollProps = $props();
 	const axisClasses: Record<ScrollAxis, string> = {
-		x: 'overflow-x-auto overflow-y-clip',
-		y: 'overflow-x-clip overflow-y-auto',
-		both: 'overflow-auto'
+		// Per-axis contain: an x-only reel must not trap vertical parent scroll.
+		x: 'overflow-x-auto overflow-y-clip overscroll-x-contain',
+		y: 'overflow-x-clip overflow-y-auto overscroll-y-contain',
+		both: 'overflow-auto overscroll-contain'
 	};
 	const layoutClasses: Record<ScrollLayout, string | undefined> = {
 		block: undefined,
@@ -77,7 +78,7 @@
 	tabindex="0"
 	class={cn(
 		className,
-		'h-full max-h-full min-h-0 min-w-0 overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+		'h-full max-h-full min-h-0 min-w-0 [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
 		axisClasses[axis],
 		layoutClasses[layout],
 		layout !== 'block' && GAP_CLASSES[gap],

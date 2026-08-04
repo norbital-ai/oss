@@ -198,7 +198,8 @@
 		}))
 	);
 	const agentSurfaceAllowed = $derived(workspaceAuthorizesAgentSurface(currentPath));
-	const agentAvailable = workspaceProvidesAgentSurface();
+	/** Every tenant workspace gets the interactive agent surface; authored `+agent.ts` only customizes it. */
+	const agentAvailable = $derived(workspaceProvidesAgentSurface());
 	const activeHostPlugin = $derived(resolveHostPluginSurface(currentPath, data.hostPlugins ?? []));
 	const billingSettingsHref = $derived(resolveBillingSettingsHref(data.hostPlugins ?? []));
 
@@ -279,12 +280,6 @@
 	{onSignOut}
 >
 	<Bound size="full" clip grow>
-		<BillingBanner
-			billing={data.billing}
-			isAdmin={data.user.role === 'admin'}
-			billingHref={billingSettingsHref}
-			{navigate}
-		/>
 		{#if currentPath === '/'}
 			<Scroll name="Workspace overview" inset>
 				<Center measure="wide">
@@ -408,6 +403,18 @@
 		{/if}
 	</Bound>
 </WorkspaceShell>
+
+<!--
+	Billing toast and agent FAB sit outside WorkspaceShell / Bound so `position: fixed`
+	is viewport-relative. Bound sets `container-type: inline-size`, which would otherwise
+	make fixed descendants anchor to the content pane and flush against the sidebar.
+-->
+<BillingBanner
+	billing={data.billing}
+	isAdmin={data.user.role === 'admin'}
+	billingHref={billingSettingsHref}
+	{navigate}
+/>
 
 {#if agentAvailable && !agentSurfaceAllowed && !agentSheetOpen}
 	<Button

@@ -67,14 +67,14 @@
 </script>
 
 {#if notice && !dismissed}
-	<!-- stupidity:allow UI15 -- this fixed toast anchor follows the mobile shell safe area, not content sizing -->
+	<!-- stupidity:allow UI15 -- viewport-fixed toast; keep offsets explicit so mobile safe-area and desktop chrome clear -->
 	<Inline
 		justify="end"
-		class="pointer-events-none fixed inset-x-3 top-[calc(3.25rem+env(safe-area-inset-top)+0.75rem)] z-50 sm:inset-x-auto sm:right-4 sm:w-[min(34rem,calc(100vw-2rem))] md:top-4"
+		class="pointer-events-none fixed inset-x-4 top-[calc(3.25rem+env(safe-area-inset-top)+1rem)] z-50 sm:inset-x-auto sm:top-6 sm:right-6 sm:w-[min(34rem,calc(100vw-3rem))]"
 	>
 		<Cluster
 			gap="sm"
-			class="pointer-events-auto rounded-lg border border-border bg-popover p-2 text-sm text-foreground shadow-md"
+			class="pointer-events-auto rounded-lg border border-border bg-popover p-2.5 text-sm text-foreground shadow-md"
 			role="status"
 			aria-live="polite"
 		>

@@ -86,6 +86,11 @@
 
 		/** Record id currently open in the detail stack; drives the row active indicator. */
 		activeRecordId?: string | null;
+		/**
+		 * When false, size to row content and scroll on the inline axis only so a parent
+		 * can own vertical scrolling (avoids nested scroll traps in forms/sheets).
+		 */
+		bounded?: boolean;
 	}
 
 	let {
@@ -120,7 +125,8 @@
 		onRowActivate,
 		getRowHasChildren,
 		getRowLeadingAccent,
-		activeRecordId = null
+		activeRecordId = null,
+		bounded = true
 	}: Props = $props();
 
 	// ----------------------------------------------------------------------------------
@@ -235,10 +241,12 @@
 	function handleHeaderWheel(event: WheelEvent) {
 		if (!bodyScrollElement) return;
 		if (event.deltaX === 0 && event.deltaY === 0) return;
+		// Unbounded grids yield vertical wheel to the parent scrollport.
+		if (!bounded && event.deltaX === 0) return;
 
 		event.preventDefault();
 		bodyScrollElement.scrollLeft += event.deltaX;
-		bodyScrollElement.scrollTop += event.deltaY;
+		if (bounded) bodyScrollElement.scrollTop += event.deltaY;
 	}
 
 	function syncHeaderScrollPosition() {
@@ -423,6 +431,7 @@
 	as="div"
 	gap={leftActions || rightActions ? 'sm' : 'none'}
 	class={className}
+	style={bounded ? undefined : 'height: auto; max-height: none;'}
 	role="grid"
 	aria-rowcount={tableApi.totalRows}
 	aria-colcount={layouts.length}
@@ -434,13 +443,15 @@
 		as="div"
 		gap="none"
 		class={cn('relative rounded-md bg-card', !borderless && 'border')}
+		style={bounded ? undefined : 'height: auto; max-height: none;'}
 		top={renderTableHeader}
 	>
 		<Scroll
-			axis="both"
+			axis={bounded ? 'both' : 'x'}
 			name="Collection table rows"
 			bind:ref={bodyScrollElement}
 			class="relative"
+			style={bounded ? undefined : 'height: auto; max-height: none;'}
 			data-collection-grid-scroll-owner
 			onscroll={syncScrollState}
 		>
