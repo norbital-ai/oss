@@ -188,21 +188,73 @@ export function buildRosterMonth(options: {
 	return facts;
 }
 
-/** How each status reads on a cell, and how loudly. */
+/**
+ * How each status reads, and how loudly.
+ *
+ * The board and the per-person calendar share this so the same day cannot look like two different
+ * things depending on which tab you opened. Classes are literal variants, never assembled, so
+ * Tailwind can see every one of them.
+ */
 export const STATUS_PRESENTATION: Record<
 	DayStatus,
-	{ readonly label: string; readonly tone: 'neutral' | 'positive' | 'warning' | 'danger' | 'muted' }
+	{ readonly label: string; readonly className: string }
 > = {
-	UNROSTERED: { label: 'Unrostered', tone: 'warning' },
-	PLANNED: { label: 'Planned', tone: 'neutral' },
-	ATTENDED: { label: 'Attended', tone: 'positive' },
-	OPEN: { label: 'Open punch', tone: 'warning' },
-	ABSENT: { label: 'No attendance', tone: 'danger' },
-	ON_LEAVE: { label: 'Leave', tone: 'muted' },
-	HOLIDAY: { label: 'Public holiday', tone: 'muted' },
-	REST: { label: 'Rest day', tone: 'muted' },
-	OFF: { label: 'Off day', tone: 'muted' }
+	UNROSTERED: { label: 'Unrostered', className: 'bg-muted/30 text-muted-foreground' },
+	PLANNED: {
+		label: 'Planned',
+		className: 'bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-200'
+	},
+	ATTENDED: { label: 'Attended', className: 'bg-success/15 text-success-foreground' },
+	OPEN: { label: 'Open punch', className: 'bg-warning/25 text-warning-foreground' },
+	ABSENT: { label: 'No attendance', className: 'bg-destructive/20 font-semibold text-destructive' },
+	ON_LEAVE: { label: 'Leave', className: 'bg-accent text-accent-foreground' },
+	HOLIDAY: { label: 'Public holiday', className: 'bg-brand/20 text-brand-foreground' },
+	REST: { label: 'Rest day', className: 'bg-muted text-muted-foreground' },
+	OFF: { label: 'Off day', className: 'bg-muted/60 text-muted-foreground' }
 };
+
+/** The glyph a cell carries: the shift code when there is one, else what kind of day it is. */
+export function statusGlyph(day: DayFacts): string {
+	switch (day.status) {
+		case 'HOLIDAY':
+			return 'PH';
+		case 'ON_LEAVE':
+			return day.halfDayLeave ? '½' : 'L';
+		case 'REST':
+			return 'R';
+		case 'OFF':
+			return 'O';
+		case 'UNROSTERED':
+			return '·';
+		case 'ABSENT':
+			return '!';
+		case 'OPEN':
+			return '⧗';
+		case 'ATTENDED':
+		case 'PLANNED':
+			return day.shiftCode ?? 'W';
+		default: {
+			const unhandled: never = day.status;
+			throw new Error(`Unhandled day status: ${String(unhandled)}`);
+		}
+	}
+}
+
+/** One line describing everything known about a day, for a cell's hover text. */
+export function describeDay(day: DayFacts | undefined, heading: string): string {
+	if (day == null) return heading;
+	return [
+		heading,
+		STATUS_PRESENTATION[day.status].label,
+		day.shiftCode == null ? null : `Shift ${day.shiftCode}`,
+		day.assignmentCode == null ? null : `Roster code ${day.assignmentCode}`,
+		day.holidayName,
+		day.leaveCode == null ? null : `${day.leaveCode}${day.halfDayLeave ? ' (half day)' : ''}`,
+		day.withinCutoff ? 'Inside the current cut-off' : null
+	]
+		.filter((part) => part != null && part !== '')
+		.join(' — ');
+}
 
 /** A tally of the month by status, for the board's summary strip. */
 export function summarizeRosterMonth(facts: ReadonlyMap<string, DayFacts>): Map<DayStatus, number> {
