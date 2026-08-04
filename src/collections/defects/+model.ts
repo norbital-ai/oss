@@ -1,4 +1,4 @@
-import { defineModel, enums, file, text, timestamp, uuid } from '@norbital-ai/pod/authoring';
+import { date, defineModel, enums, file, text, uuid } from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
@@ -13,9 +13,9 @@ export default defineModel(
 		severity: enums(['low', 'medium', 'high', 'critical']),
 		status: enums(['open', 'in_review', 'ready_for_closeout', 'closed']),
 		description: text(),
-		reported_date: timestamp(),
-		due_date: timestamp(),
-		closed_date: timestamp(),
+		reported_date: date(),
+		due_date: date(),
+		closed_date: date(),
 		photos: file({ mimeTypes: ['image/jpeg', 'image/png'] }).array(),
 		resolution_notes: text()
 	},

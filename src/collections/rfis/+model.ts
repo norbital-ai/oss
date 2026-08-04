@@ -1,4 +1,4 @@
-import { defineModel, enums, file, text, timestamp, uuid } from '@norbital-ai/pod/authoring';
+import { date, defineModel, enums, file, text, uuid } from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
@@ -12,9 +12,9 @@ export default defineModel(
 		answer: text(),
 		status: enums(['open', 'answered', 'closed']),
 		priority: enums(['low', 'medium', 'high', 'critical']),
-		submitted_date: timestamp(),
-		due_date: timestamp(),
-		resolved_date: timestamp(),
+		submitted_date: date(),
+		due_date: date(),
+		resolved_date: date(),
 		attachments: file().array(),
 		related_defect_id: uuid()
 	},

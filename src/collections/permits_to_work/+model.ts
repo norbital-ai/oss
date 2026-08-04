@@ -1,10 +1,10 @@
 import {
 	custom,
+	date,
 	dateRange,
 	defineModel,
 	enums,
 	text,
-	timestamp,
 	uuid
 } from '@norbital-ai/pod/authoring';
 
@@ -33,7 +33,7 @@ export default defineModel(
 			'suspended',
 			'closed'
 		]),
-		requested_date: timestamp(),
+		requested_date: date(),
 		validity_range: dateRange(),
 		approved_by: text(),
 		hazards_identified: text().array(),
