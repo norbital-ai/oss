@@ -5,7 +5,11 @@ import {
 	type CostLevers,
 	type RateRow
 } from '../../lib/reclamation/cost.js';
-import type { ReconstructionMetrics, SubstrateQuantity } from '../../lib/reclamation/types.js';
+import {
+	parseReconstructionMetrics,
+	parseSubstrateQuantities
+} from '../../lib/reclamation/reconstruction-json.js';
+import { calendarDateInTimeZone, PROJECT_TIME_ZONE } from '../../lib/calendar.js';
 import type { Hooks } from './$types.js';
 
 /**
@@ -55,15 +59,6 @@ function leversFrom(input: EstimateInput): CostLevers {
 	};
 }
 
-function parse<T>(json: unknown, fallback: T): T {
-	if (typeof json !== 'string' || json === '') return fallback;
-	try {
-		return JSON.parse(json) as T;
-	} catch {
-		return fallback;
-	}
-}
-
 async function price(estimate: EstimateInput, api: HookApi): Promise<Record<string, unknown>> {
 	const reconstruction = estimate.reconstruction_id
 		? await api.db.query.site_reconstructions.findFirst({
@@ -88,6 +83,17 @@ async function price(estimate: EstimateInput, api: HookApi): Promise<Record<stri
 		throw new Error('That reconstruction did not produce a solid, so it cannot be priced.');
 	}
 
+	// Validated, not asserted. An estimate built on an unreadable take-off is worse than no
+	// estimate: an empty metrics object prices the whole platform at a mean fill depth of
+	// `undefined`, and the total that comes out of that looks exactly like a real one.
+	const quantities = parseSubstrateQuantities(reconstruction.quantities_json);
+	const metrics = parseReconstructionMetrics(reconstruction.metrics_json);
+	if (!quantities || !metrics) {
+		throw new Error(
+			'That reconstruction stored a take-off this engine cannot read. Rebuild the model before pricing it.'
+		);
+	}
+
 	const project = estimate.project_id
 		? await api.db.query.reclamation_projects.findFirst({
 				where: { norbital_id: { eq: estimate.project_id } },
@@ -96,7 +102,10 @@ async function price(estimate: EstimateInput, api: HookApi): Promise<Record<stri
 		: null;
 	const currency = estimate.currency?.trim() || project?.currency?.trim() || 'SGD';
 
-	const asOf = new Date().toISOString().slice(0, 10);
+	// The project's calendar day, not the UTC one. `contains_date` is evaluated against whatever
+	// day this string names, so a UTC day would price a Singapore evening against yesterday's rate
+	// matrix while the cost panel beside it showed today's.
+	const asOf = calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE);
 	const rates = (
 		await api.db.query.cost_rates.findMany({
 			where: { validity_range: { contains_date: asOf } },
@@ -117,8 +126,8 @@ async function price(estimate: EstimateInput, api: HookApi): Promise<Record<stri
 	});
 
 	const result = buildEstimate({
-		quantities: parse<SubstrateQuantity[]>(reconstruction.quantities_json, []),
-		metrics: parse<ReconstructionMetrics>(reconstruction.metrics_json, {} as ReconstructionMetrics),
+		quantities,
+		metrics,
 		rates,
 		levers: leversFrom(estimate),
 		currency

@@ -6,12 +6,14 @@
 	import SiteDisplay from '../../lib/site-viewer/site_display.svelte';
 	import type { SiteLayer, SiteViewerStats } from '../../lib/site-viewer/site_viewer.types.js';
 	import type { CostLevers, RateRow } from '../../lib/reclamation/cost.js';
-	import type {
-		ReconstructionMetrics,
-		StitchReport,
-		StitchedModel,
-		SubstrateQuantity
-	} from '../../lib/reclamation/types.js';
+	import type { ReconstructionMetrics } from '../../lib/reclamation/types.js';
+	import {
+		parseReconstructionMetrics,
+		parseStitchReport,
+		parseStitchedModel,
+		parseSubstrateQuantities
+	} from '../../lib/reclamation/reconstruction-json.js';
+	import { calendarDateInTimeZone, PROJECT_TIME_ZONE } from '../../lib/calendar.js';
 	import CostPanel from './panels/cost-panel.svelte';
 	import DocumentsPanel from './panels/documents-panel.svelte';
 	import ModelPanel from './panels/model-panel.svelte';
@@ -44,7 +46,9 @@
 
 	const projectId = $derived(record.norbital_id);
 	const currency = $derived(record.currency?.trim() || 'SGD');
-	const today = new Date().toISOString().slice(0, 10);
+	// The site's calendar day. The server hook prices against the same one, so the rates shown here
+	// and the rates the estimate is built from cannot be a day apart.
+	const today = calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE);
 
 	const runsQuery = $derived(
 		client.db.site_reconstructions.findMany({
@@ -75,24 +79,13 @@
 	const latestRun = $derived(runs[0]);
 	const latestReady = $derived(runs.find((run) => run.status === 'ready'));
 
-	function parse<T>(json: string | null | undefined): T | null {
-		if (!json) return null;
-		try {
-			return JSON.parse(json) as T;
-		} catch {
-			return null;
-		}
-	}
-
-	const model = $derived(parse<StitchedModel>(latestReady?.model_json));
-	const report = $derived(parse<StitchReport>(latestReady?.report_json));
-	const quantities = $derived(parse<SubstrateQuantity[]>(latestReady?.quantities_json) ?? []);
-
-	// One shape, parsed once. The reconstruction stores the whole metric record,
-	// so nothing here re-assembles it field by field.
-	const metrics = $derived(
-		parse<ReconstructionMetrics>(latestReady?.metrics_json) ?? EMPTY_METRICS
-	);
+	// One shape, validated once. The reconstruction stores the whole metric record, so nothing here
+	// re-assembles it field by field — and a blob that does not match the engine reading it comes
+	// back as `null` and renders as "nothing built yet" rather than as a half-populated model.
+	const model = $derived(parseStitchedModel(latestReady?.model_json));
+	const report = $derived(parseStitchReport(latestReady?.report_json));
+	const quantities = $derived(parseSubstrateQuantities(latestReady?.quantities_json) ?? []);
+	const metrics = $derived(parseReconstructionMetrics(latestReady?.metrics_json) ?? EMPTY_METRICS);
 
 	const rates = $derived(
 		(ratesQuery.current ?? []).flatMap((row): RateRow[] => {
@@ -261,7 +254,7 @@
 		{:else if !latestRun}
 			<!--
 				Attached but never stitched. A seed or an import writes straight to the
-				database and runs no hook, so a project can arrive complete and unbuilt.
+				database and triggers nothing, so a project can arrive complete and unbuilt.
 				Saying "attach all three" here, next to three slots that all read
 				`attached`, sends people looking for a missing document.
 			-->
@@ -407,7 +400,7 @@
 				class="px-8 text-center text-sm text-muted-foreground"
 			>
 				No solid to show yet. Attach the floor plan, the bathymetric survey, and the section sheet;
-				the reconstruction hook builds the model on save.
+				the reconstruction runs on save and the model appears when it lands.
 			</Inline>
 		{/if}
 	</Bound>

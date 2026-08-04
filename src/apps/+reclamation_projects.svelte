@@ -15,6 +15,7 @@
 
 	const IN_FLIGHT_STATUSES = ['planning', 'design', 'tender', 'construction'] as const;
 
+	// stupidity:allow D1 -- an entity-scope selector is inlined per app on purpose; controller-surfaces.md §1.
 	function resolveScopedId(
 		selected: string | null,
 		rows: readonly ReclamationProjectScopeRow[]
@@ -26,6 +27,7 @@
 		return active?.norbital_id ?? rows[0]?.norbital_id ?? null;
 	}
 
+	// stupidity:allow D1 -- a human label belongs at the surface that paints it; controller-surfaces.md §1.
 	function projectLabel(record: ReclamationProjectScopeRow): string {
 		const code = record.project_code;
 		const name = record.project_name;

@@ -6,6 +6,7 @@
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { SUBSTRATES, substrateDefinition } from '../lib/reclamation/cost.js';
+	import { calendarDateInTimeZone, PROJECT_TIME_ZONE } from '../lib/calendar.js';
 	import type { SubstrateId } from '../lib/reclamation/types.js';
 
 	type ReclamationProjectScopeRow = {
@@ -15,11 +16,14 @@
 		readonly status?: string | null;
 	};
 
-	const today = new Date().toISOString().slice(0, 10);
+	// The site's calendar day, so "the rates in force today" means the same day here, in the project
+	// cost panel, and in the server hook that prices an estimate against `contains_date`.
+	const today = calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE);
 	const activeRates = { validity_range: { contains_date: today } } as const;
 
 	const IN_FLIGHT_STATUSES = ['planning', 'design', 'tender', 'construction'] as const;
 
+	// stupidity:allow D1 -- an entity-scope selector is inlined per app on purpose; controller-surfaces.md §1.
 	function resolveScopedId(
 		selected: string | null,
 		rows: readonly ReclamationProjectScopeRow[]
@@ -31,6 +35,7 @@
 		return active?.norbital_id ?? rows[0]?.norbital_id ?? null;
 	}
 
+	// stupidity:allow D1 -- a human label belongs at the surface that paints it; controller-surfaces.md §1.
 	function projectLabel(record: ReclamationProjectScopeRow): string {
 		const code = record.project_code;
 		const name = record.project_name;
