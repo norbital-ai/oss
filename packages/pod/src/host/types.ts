@@ -348,6 +348,56 @@ export function assertHostPlugins(plugins: readonly HostAppPlugin[]): void {
 	}
 }
 
+/**
+ * Read a host plugin set out of whatever the host actually sent, refusing anything malformed.
+ *
+ * The value arrives from outside this process — the `configure` frame the host pushes down the
+ * runtime channel — so it is untyped until this has run. A malformed entry has to fail here, naming
+ * what was wrong about it; the alternative is a `TypeError` from somewhere in the shell for every
+ * session of the workspace, blamed on the workspace.
+ */
+export function parseHostPlugins(value: unknown): readonly HostAppPlugin[] {
+	if (!Array.isArray(value)) {
+		throw new Error('Host runtime configuration did not carry a hostPlugins array');
+	}
+	const plugins = value.map((entry, index) => {
+		const plugin =
+			typeof entry === 'object' && entry != null && !Array.isArray(entry)
+				? (entry as Record<string, unknown>)
+				: null;
+		const key = plugin?.key;
+		const label = plugin?.label;
+		const target = plugin?.entry;
+		const placement: HostAppPlugin['placement'] | null =
+			plugin?.placement === 'sidebar'
+				? 'sidebar'
+				: plugin?.placement === 'settings'
+					? 'settings'
+					: null;
+		if (
+			typeof key !== 'string' ||
+			typeof label !== 'string' ||
+			typeof target !== 'string' ||
+			placement == null
+		) {
+			throw new Error(
+				`Host plugin at index ${index} is missing a string key, label and entry, or a placement of sidebar or settings`
+			);
+		}
+		const icon = plugin?.icon;
+		return {
+			key,
+			label,
+			entry: target,
+			placement,
+			icon: typeof icon === 'string' ? icon : null,
+			...(plugin?.adminOnly === true ? { adminOnly: true } : {})
+		};
+	});
+	assertHostPlugins(plugins);
+	return plugins;
+}
+
 /** Core owns all runtime bindings; this file only declares the deployment target. */
 export type CorePodHostConfig = {
 	readonly mode: 'core';

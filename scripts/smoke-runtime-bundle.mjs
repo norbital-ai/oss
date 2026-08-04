@@ -9,6 +9,7 @@ import {
 	statSync,
 	writeFileSync
 } from 'node:fs';
+import { createServer as createNetServer } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { prepareDepset } from './lib/depset.mjs';
@@ -76,16 +77,50 @@ function materializeTrackedTemplate(template, destination) {
 }
 
 /**
- * Boot the bundle and wait for its ready frame. The runtime speaks the framed wire protocol,
- * so a bundle that boots but never frames is a failure, not a timeout to be tolerated.
+ * A port nothing is listening on. The guest binds the port its environment names, because that is
+ * what a host's proxy routes to, so the caller has to pick a free one rather than ask for ephemeral.
  */
-function waitForRuntimeReady(entry, bundle, timeoutMilliseconds) {
+function freePort() {
+	return new Promise((resolve, reject) => {
+		const probe = createNetServer();
+		probe.on('error', reject);
+		probe.listen(0, '127.0.0.1', () => {
+			const { port } = probe.address();
+			probe.close(() => resolve(port));
+		});
+	});
+}
+
+/** One length-prefixed frame, the way the host writes them into the guest's stdin. */
+function encodeFrame(header) {
+	const headerBytes = Buffer.from(JSON.stringify(header), 'utf8');
+	const frame = Buffer.alloc(8 + headerBytes.length);
+	frame.writeUInt32BE(4 + headerBytes.length, 0);
+	frame.writeUInt32BE(headerBytes.length, 4);
+	headerBytes.copy(frame, 8);
+	return frame;
+}
+
+/**
+ * Boot the bundle the way a host boots it and wait for its ready frame.
+ *
+ * The guest never dials out: the host opens the channel on the guest's own stdio, pushes the
+ * deployment configuration the guest waits for before binding, and reads back the `ready` frame. A
+ * bundle that boots but never frames is a failure, not a timeout to be tolerated.
+ */
+function waitForRuntimeReady(entry, bundle, port, timeoutMilliseconds) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(process.execPath, [entry], {
 			cwd: bundle,
 			stdio: ['pipe', 'pipe', 'pipe'],
-			env: { ...process.env, NODE_ENV: 'production' }
+			env: {
+				...process.env,
+				NODE_ENV: 'production',
+				POD_HOST_TOKEN: 'runtime-smoke-host-token-0123456789abcdef',
+				POD_RUNTIME_PORT: String(port)
+			}
 		});
+		child.stdin.write(encodeFrame({ t: 'configure', hostPlugins: [] }));
 		const readyFrame = Buffer.from('{"t":"ready"}');
 		let stdout = Buffer.alloc(0);
 		let stderr = '';
@@ -200,7 +235,7 @@ try {
 		.digest('hex');
 
 	console.log('Booting serve.mjs from the clean bundle.');
-	await waitForRuntimeReady(path.join(bundle, 'serve.mjs'), bundle, 20_000);
+	await waitForRuntimeReady(path.join(bundle, 'serve.mjs'), bundle, await freePort(), 20_000);
 } finally {
 	rmSync(temporaryDirectory, { recursive: true, force: true });
 }

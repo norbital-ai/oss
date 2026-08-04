@@ -10,10 +10,12 @@
  * identity a request acts under is whatever the host asserts in its `x-norbital-*` headers, which is
  * trustworthy for exactly the same reason.
  *
- * Nothing in here holds a credential. A facility the workspace needs — the tenant database, object
- * storage, a model, a map — is a call back to the host through the client below, authorized by a
- * per-sandbox secret the host resolves a tenant from. So the hosted runtime can name a facility
- * and a method, and cannot name a tenant, a database or a bucket.
+ * Nothing in here holds a credential, and nothing in here dials out. A facility the workspace needs —
+ * the tenant database, object storage, a model, a map — is a call down the channel the host opened on
+ * this process's own stdio (`serve/stdio.ts`), and the host resolves the tenant from the session it
+ * started. So the hosted runtime can name a facility and a method, and cannot name a tenant, a
+ * database or a bucket. There is no second transport: a sealed sandbox has no route to the host, so a
+ * guest that dials out is a guest that cannot run.
  *
  * Static assets are deliberately absent. The host holds the same build output on disk and serves
  * `dist/` itself, so a page load never has to wake a runtime and this process only ever sees
@@ -23,18 +25,11 @@
  * `handlePodRequest` — lives in the shared `serve/server.ts` core; this file is the adapter that
  * names the pieces and answers the host's `/_host/*` control plane.
  */
-import {
-	Agent as HttpAgent,
-	request as httpRequest,
-	type IncomingMessage,
-	type ServerResponse
-} from 'node:http';
-import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
+import { type IncomingMessage, type ServerResponse } from 'node:http';
 import { decodeWireValue, encodeWireValue } from '@norbital-ai/platform-utils/runtime/wire';
 import type {
 	HostAgentToolBinding,
 	HostAiBinding,
-	HostAppPlugin,
 	HostDbBinding,
 	HostFileStorageBinding,
 	HostMapsBinding,
@@ -45,9 +40,9 @@ import { safeParse } from '@norbital-ai/std/json';
 import { setDatabaseNotifications } from '$lib/server/collection/sync/db-notifications.server.js';
 import { setHostPlugins } from '$lib/server/host-plugins.js';
 import { trustedHeaderIdentity } from '$lib/host/identity.js';
-import { assertHostPlugins } from '../host/types.js';
 import { handlePodHostCommand, type PodHostIdentity } from '../server/entry.js';
 import { createPodHttpServer, type PodHttpServer } from './server.js';
+import { claimStdoutForFrames, createStdioRuntimeClient } from './stdio.js';
 
 /**
  * The authority workspace code sees, and the address the socket binds.
@@ -65,187 +60,19 @@ const HEALTH_PATH = '/_host/health';
 const COMMAND_PATH = '/_host/command';
 const NOTIFY_PATH = '/_host/notify';
 
-type HostedEnvironment = {
-	readonly port: number;
-	readonly hostToken: string;
-	readonly coreUrl: string;
-	readonly bindingSecret: string;
-};
+/**
+ * What the host injected.
+ *
+ * Two values, and neither is a credential for reaching the host: the channel the host opened *is*
+ * the capability, so there is no address to configure and no shared secret crosses the guest
+ * boundary. `POD_HOST_TOKEN` faces the other way — it gates traffic arriving from the host's proxy.
+ */
+type HostedEnvironment = { readonly port: number; readonly hostToken: string };
 
 type HostedRuntime = {
 	readonly bindings: RuntimeFacilityBindings;
 	readonly notify: (channel: string, payload: string) => void;
 };
-
-/**
- * The hosted runtime's channel to its host.
- *
- * A tenant runtime holds no credential and knows no address other than this one: it cannot name its
- * organization, its database, or its object store. Everything that needs one of those is a call to
- * the host over this client, authorized by a secret that was minted for this sandbox alone. The host
- * resolves which tenant the secret belongs to, which is why a request from here carries a facility, a
- * method and arguments and nothing that identifies a tenant — a hosted runtime that named its own organization
- * would be asserting the one thing it must not be able to assert.
- *
- * Arguments and results are escaped by `encodeWireValue`, because file bytes and `timestamptz`
- * values do not survive a plain JSON round trip.
- */
-const BINDING_PATH = '/_internal/runtime/binding';
-const CONFIGURATION_PATH = '/_internal/runtime/config';
-
-export type CoreRuntimeClient = {
-	/** Deployment configuration, read once before the runtime serves anything. */
-	configuration(): Promise<readonly HostAppPlugin[]>;
-	/** Invoke one host facility method. Returns the still-escaped result. */
-	call(facility: string, method: string, args: readonly unknown[]): Promise<unknown>;
-};
-
-type HostReply = {
-	readonly status: number;
-	readonly body: string;
-};
-
-/**
- * One agent per scheme, with no timeout of any kind.
- *
- * A facility call is not a page load and has no deadline that belongs on this side. `ai.readStream`
- * waits for the next event of a model response, so the host answers it when there is something to
- * say and not before; a client-side inactivity timeout would abort exactly the calls that were
- * behaving correctly, and the symptom would be an agent turn that dies partway through a sentence.
- * Connections are kept alive because a single request can make dozens of these calls.
- */
-const httpAgent = new HttpAgent({ keepAlive: true });
-const httpsAgent = new HttpsAgent({ keepAlive: true });
-
-function send(url: string, method: string, headers: Record<string, string>, body?: string) {
-	const target = new URL(url);
-	const secure = target.protocol === 'https:';
-	const perform = secure ? httpsRequest : httpRequest;
-	return new Promise<HostReply>((resolve, reject) => {
-		const request = perform(
-			target,
-			{ method, headers, agent: secure ? httpsAgent : httpAgent },
-			(response) => {
-				const chunks: Buffer[] = [];
-				response.on('data', (chunk: Buffer) => chunks.push(chunk));
-				response.on('error', reject);
-				response.on('end', () =>
-					resolve({
-						status: response.statusCode ?? 0,
-						body: Buffer.concat(chunks).toString('utf8')
-					})
-				);
-			}
-		);
-		request.on('error', reject);
-		if (body == null) request.end();
-		else request.end(body);
-	});
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-	return typeof value === 'object' && value != null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: null;
-}
-
-/** First line of a host error body, so a failure names its cause without pasting a page of HTML. */
-function summarize(body: string): string {
-	const trimmed = body.trim().split('\n')[0] ?? '';
-	return trimmed.length > 200 ? `${trimmed.slice(0, 200)}…` : trimmed;
-}
-
-/**
- * Validate the plugin set the host supplies at boot.
- *
- * A malformed entry has to fail here, naming what was wrong. The alternative is a `TypeError` from
- * somewhere in the shell for every session of the workspace, blamed on the workspace.
- */
-function parseHostPlugins(value: unknown): readonly HostAppPlugin[] {
-	if (!Array.isArray(value)) {
-		throw new Error('Host runtime configuration did not carry a hostPlugins array');
-	}
-	const plugins = value.map((entry, index) => {
-		const plugin = record(entry);
-		const key = plugin?.key;
-		const label = plugin?.label;
-		const target = plugin?.entry;
-		const placement: HostAppPlugin['placement'] | null =
-			plugin?.placement === 'sidebar'
-				? 'sidebar'
-				: plugin?.placement === 'settings'
-					? 'settings'
-					: null;
-		if (
-			typeof key !== 'string' ||
-			typeof label !== 'string' ||
-			typeof target !== 'string' ||
-			placement == null
-		) {
-			throw new Error(
-				`Host plugin at index ${index} is missing a string key, label and entry, or a placement of sidebar or settings`
-			);
-		}
-		const icon = plugin?.icon;
-		return {
-			key,
-			label,
-			entry: target,
-			placement,
-			icon: typeof icon === 'string' ? icon : null,
-			...(plugin?.adminOnly === true ? { adminOnly: true } : {})
-		};
-	});
-	assertHostPlugins(plugins);
-	return plugins;
-}
-
-export function createCoreRuntimeClient(options: {
-	readonly baseUrl: string;
-	readonly secret: string;
-}): CoreRuntimeClient {
-	const base = options.baseUrl.replace(/\/+$/, '');
-	const authorization = `Bearer ${options.secret}`;
-	return {
-		async configuration() {
-			const reply = await send(`${base}${CONFIGURATION_PATH}`, 'GET', { authorization });
-			if (reply.status !== 200) {
-				throw new Error(
-					`Host refused the runtime configuration request (HTTP ${reply.status}): ${summarize(reply.body)}`
-				);
-			}
-			const parsed = record(safeParse(reply.body));
-			if (!parsed) throw new Error('Host runtime configuration was not a JSON object');
-			return parseHostPlugins(parsed.hostPlugins);
-		},
-		async call(facility, method, args) {
-			const reply = await send(
-				`${base}${BINDING_PATH}`,
-				'POST',
-				{ authorization, 'content-type': 'application/json' },
-				JSON.stringify({ facility, method, args: args.map(encodeWireValue) })
-			);
-			// A non-200 never carries a facility result, so it is a transport failure however plausible
-			// its body looks. Reporting it as one keeps a revoked secret or a restarting host from
-			// arriving in workspace code as `undefined`.
-			if (reply.status !== 200) {
-				throw new Error(
-					`Host binding call ${facility}.${method} failed (HTTP ${reply.status}): ${summarize(reply.body)}`
-				);
-			}
-			const parsed = record(safeParse(reply.body));
-			if (!parsed) {
-				throw new Error(`Host binding call ${facility}.${method} answered with malformed JSON`);
-			}
-			if (parsed.ok === true) return parsed.value;
-			throw new Error(
-				typeof parsed.error === 'string' && parsed.error
-					? parsed.error
-					: `Host binding call ${facility}.${method} was refused without a reason`
-			);
-		}
-	};
-}
 
 /**
  * Project one host facility into the hosted runtime.
@@ -271,21 +98,17 @@ export function facilityProxy<T>(
 /**
  * Read the hosted runtime's environment, refusing to boot on anything missing.
  *
- * The host injects these when it creates the sandbox. A hosted runtime that started without its token would
- * serve nothing, and one that started without its host address or secret would answer every request
- * with a facility failure — both are better as a process that never came up, named in the host's logs
- * beside the sandbox it belongs to.
+ * The host injects these when it creates the sandbox. A hosted runtime that started without its token
+ * would serve nothing — better as a process that never came up, named in the host's logs beside the
+ * sandbox it belongs to. Exported so a test can assert that without setting process-wide state.
  */
-function hostedEnvironment(): HostedEnvironment {
-	const value = (name: string): string => process.env[name]?.trim() ?? '';
-	const required = ['POD_HOST_TOKEN', 'NORBITAL_CORE_URL', 'NORBITAL_BINDING_SECRET'] as const;
-	const missing = required.filter((name) => !value(name));
-	if (missing.length > 0) {
-		throw new Error(`Missing required tenant runtime environment: ${missing.join(', ')}`);
-	}
-	const coreUrl = value('NORBITAL_CORE_URL');
-	if (!/^https?:\/\/[^/]+/.test(coreUrl)) {
-		throw new Error(`NORBITAL_CORE_URL must be an http or https origin; received "${coreUrl}"`);
+export function hostedEnvironment(
+	env: Readonly<Record<string, string | undefined>> = process.env
+): HostedEnvironment {
+	const value = (name: string): string => env[name]?.trim() ?? '';
+	const hostToken = value('POD_HOST_TOKEN');
+	if (!hostToken) {
+		throw new Error('Missing required tenant runtime environment: POD_HOST_TOKEN');
 	}
 	const configuredPort = value('POD_RUNTIME_PORT');
 	const port = configuredPort ? Number(configuredPort) : DEFAULT_RUNTIME_PORT;
@@ -294,12 +117,7 @@ function hostedEnvironment(): HostedEnvironment {
 			`POD_RUNTIME_PORT must be an integer from 1 to 65535; received "${configuredPort}"`
 		);
 	}
-	return {
-		port,
-		hostToken: value('POD_HOST_TOKEN'),
-		coreUrl,
-		bindingSecret: value('NORBITAL_BINDING_SECRET')
-	};
+	return { port, hostToken };
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -417,17 +235,30 @@ async function handleHostRoute(
 }
 
 /**
- * Serve the workspace bundle. Called by the generated `serve.mjs` at the bundle root; never on
- * import, so the build can import this bundle to read its manifest without starting a server.
+ * Serve the workspace bundle over the channel the host opened. Called by the generated `serve.mjs` at
+ * the bundle root; never on import, so the build can import this bundle to read its manifest without
+ * starting a server.
  *
- * Resolves once the port is bound, which is also the moment `/_host/health` starts to answer.
+ * Resolves once the port is bound, which is also the moment `/_host/health` starts to answer and the
+ * moment the `ready` frame goes out — the host waits on that rather than on the process existing.
+ *
+ * stdout is claimed for frames before anything else happens. A channel that breaks ends the process,
+ * because there is nothing to resynchronise on and a runtime that cannot reach its facilities can
+ * only answer failures; exiting hands the host a session to evict and the next request a cold boot.
  */
 export async function startPodHttpServer(): Promise<PodHttpServer> {
 	const environment = hostedEnvironment();
-	const core = createCoreRuntimeClient({
-		baseUrl: environment.coreUrl,
-		secret: environment.bindingSecret
+	const writeFrame = claimStdoutForFrames({ stdout: process.stdout, stderr: process.stderr });
+	const core = createStdioRuntimeClient({
+		input: process.stdin,
+		writeFrame,
+		onFatal: (error) => {
+			process.stderr.write(`[tenant-runtime] host channel failed: ${error.message}\n`);
+			process.exit(1);
+		},
+		onClosed: () => process.exit(0)
 	});
+
 	// Deployment configuration comes before the socket, so the first request cannot arrive at a
 	// workspace whose host surfaces are half-installed. Anything a browser must not be able to assert
 	// travels this way rather than in a request header: a sidebar entry is the motivating case, since a
@@ -463,7 +294,7 @@ export async function startPodHttpServer(): Promise<PodHttpServer> {
 		}
 	};
 
-	return createPodHttpServer({
+	const server = await createPodHttpServer({
 		origin: GUEST_ORIGIN,
 		bind: { host: BIND_ADDRESS, port: environment.port },
 		label: '[tenant-runtime]',
@@ -473,4 +304,6 @@ export async function startPodHttpServer(): Promise<PodHttpServer> {
 		hostRoutes: (pathname, request, response) =>
 			handleHostRoute(runtime, pathname, request, response)
 	});
+	core.readyForTraffic();
+	return server;
 }

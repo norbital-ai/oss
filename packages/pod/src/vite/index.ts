@@ -11,6 +11,7 @@ import {
 	POD_CLIENT_PLATFORM_MANIFEST,
 	type PodClientPlatformManifest
 } from './platform-contract.js';
+import { STDIO_FRAME_GUARD_SOURCE } from '../serve/stdio.js';
 import type {
 	PodFilesystemCompilation,
 	PodFilesystemCompilerOptions,
@@ -232,13 +233,18 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			path.join(clientDistRoot, 'index.html'),
 			`<!doctype html><html><head><meta charset="utf-8"><script>(function(){var stored=localStorage.getItem('mode-watcher-mode');var prefersDark=window.matchMedia('(prefers-color-scheme: dark)').matches;if(stored==='dark'||(stored==='system'&&prefersDark)||(!stored&&prefersDark)){document.documentElement.classList.add('dark');document.documentElement.style.colorScheme='dark';}})();</script><meta name="viewport" content="width=device-width,initial-scale=1">${stylesheets.map((file) => `<link rel="stylesheet" href="${file}">`).join('')}</head><body><script type="module" src="/${clientEntryFile}"></script></body></html>\n`
 		);
-		// The runtime entry point. Two lines so the server bundle stays importable at build
-		// time (below) without binding a socket. The boot is awaited at the top level, so a
-		// runtime that cannot reach its host exits non-zero with the reason rather than
+		// The runtime entry point. The boot is a separate statement so the server bundle stays
+		// importable at build time (below) without binding a socket, and it is awaited at the top
+		// level, so a runtime that cannot reach its host exits non-zero with the reason rather than
 		// listening on a port that answers nothing.
+		//
+		// The bundle is imported dynamically rather than declared, because the stdout guard ahead of
+		// it has to run first: stdout carries RPC frames only, and a workspace module is free to log
+		// as it evaluates. A static import would evaluate the workspace before any statement here
+		// could protect the stream.
 		await writeFile(
 			path.join(artifactRoot, SERVE_ENTRY_FILENAME),
-			`import { startPodHttpServer } from './output/server/index.js';\nawait startPodHttpServer();\n`
+			`${STDIO_FRAME_GUARD_SOURCE}const { startPodHttpServer } = await import('./output/server/index.js');\nawait startPodHttpServer();\n`
 		);
 		await writeFile(path.join(clientDistRoot, 'package.json'), '{"type":"module"}\n');
 		await mkdir(path.join(artifactRoot, 'output/server'), { recursive: true });

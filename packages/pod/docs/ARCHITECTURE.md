@@ -49,14 +49,14 @@ chooses where PostgreSQL lives, not which database engine Pod uses.
 `pod.host.ts` makes the target explicit. It is not tenant source and the filesystem compiler does
 not bundle it.
 
-|                         | Core                                                     | Self-hosted                                      |
-| ----------------------- | -------------------------------------------------------- | ------------------------------------------------ |
-| `pod.host.ts` mode      | `core`                                                   | `self-hosted`                                    |
-| Runtime transport       | HTTP over the host proxy; facilities call back over HTTP | HTTP on a loopback socket; facilities in process |
-| HTTP and static assets  | Core                                                     | `pod start`                                      |
-| Facilities and identity | Core runtime bindings                                    | `pod.host.ts` providers                          |
-| Local development       | `pod dev` emulates Core                                  | uses the declared providers                      |
-| Production `pod start`  | refused                                                  | allowed after the facility gate                  |
+|                         | Core                                                       | Self-hosted                                      |
+| ----------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
+| `pod.host.ts` mode      | `core`                                                     | `self-hosted`                                    |
+| Runtime transport       | HTTP over the host proxy; facilities over host-owned stdio | HTTP on a loopback socket; facilities in process |
+| HTTP and static assets  | Core                                                       | `pod start`                                      |
+| Facilities and identity | Core runtime bindings                                      | `pod.host.ts` providers                          |
+| Local development       | `pod dev` emulates Core                                    | uses the declared providers                      |
+| Production `pod start`  | refused                                                    | allowed after the facility gate                  |
 
 A Core workspace needs only a marker:
 

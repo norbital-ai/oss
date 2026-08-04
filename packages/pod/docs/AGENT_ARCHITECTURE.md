@@ -324,8 +324,9 @@ This is the gap the two sections above keep referring to, written out once so it
 rediscovered from the symptoms.
 
 A guest reaches a host facility through the facility proxy in
-`packages/pod/src/serve/hosted.ts`: a call crosses as a JSON `{ facility, method, args }` request to
-the host's `/_internal/runtime/binding` route, the arguments escaped by `encodeWireValue` in
+`packages/pod/src/serve/hosted.ts`: a call crosses as a `binding` frame carrying
+`{ facility, method, args }` down the stdio channel the host opened
+(`packages/pod/src/serve/stdio.ts`), the arguments escaped by `encodeWireValue` in
 `packages/platform-utils/src/runtime/wire.ts` — a facility name, a method name, arguments, and
 nothing else. There is nowhere in it to say who is asking. The omission is one-directional rather
 than a property of the transport: the host's private command plane (`/_host/command`) carries an
