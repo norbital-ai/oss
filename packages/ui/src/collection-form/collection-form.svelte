@@ -5,6 +5,7 @@
 	import type {
 		CollectionCreateInput,
 		CollectionField,
+		CollectionFieldName,
 		CollectionRecordHistoryEntry,
 		CollectionRegistry,
 		CollectionRow,
@@ -26,6 +27,7 @@
 	} from './collection-form-field.svelte';
 	import CollectionFormSkeleton from './collection-form-skeleton.svelte';
 	import type {
+		CollectionFormFieldComponent,
 		CollectionFormName,
 		CollectionFormProps,
 		CollectionFormValidation,
@@ -344,7 +346,10 @@
 				</Stack>
 			{:else if children}
 				{@render children({
-					Field: CollectionFormField,
+					// Runtime Field is TFieldName-only; composition exposes a per-usage renderer generic.
+					Field: CollectionFormField as CollectionFormFieldComponent<
+						CollectionFieldName<TCollections[TName]>
+					>,
 					form: {
 						values: () => Object.fromEntries(Object.entries(form.getData())),
 						setValues: (values) => {

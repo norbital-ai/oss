@@ -3,15 +3,19 @@ import type {
 	CollectionCreateInput,
 	CollectionField,
 	CollectionFieldName,
-	CollectionQuery,
-	CollectionRecord,
 	CollectionRelationOptions,
 	CollectionRegistry,
 	CollectionRow,
 	CollectionUpdateInput
 } from '@norbital-ai/platform-utils/collection';
 import type { StandardSchemaV1 } from '@norbital-ai/std/schema';
-import type { Component, Snippet } from 'svelte';
+import type {
+	Component,
+	ComponentConstructorOptions,
+	ComponentInternals,
+	Snippet,
+	SvelteComponent
+} from 'svelte';
 
 export type CollectionFormName<TCollections extends CollectionRegistry> = Extract<
 	keyof TCollections,
@@ -37,20 +41,24 @@ export interface CollectionFormValidation {
 		| Promise<readonly CollectionFormValidationIssue[] | void>;
 }
 
-export interface CollectionFormFieldProps<TFieldName extends string = string> {
-	name: TFieldName;
-	label?: string;
-	class?: string;
-	renderer?: Component<CollectionFormRendererProps>;
-	rendererProps?: CollectionFormRendererOptions;
-}
+/** Props CollectionFormField always injects; callers supply the rest via `rendererProps`. */
+export type CollectionFormInjectedRendererKey = 'value' | 'field' | 'row' | 'onValueChange';
+
+/** Re-map so interface prop bags satisfy Svelte's `Component` props bound without writing `any`. */
+type CollectionFormSvelteProps<T> = {
+	[K in keyof T]: T[K];
+};
+
+export type CollectionFormCallerRendererProps<TRendererProps> = Omit<
+	TRendererProps,
+	CollectionFormInjectedRendererKey
+>;
 
 export interface CollectionFormRendererOptions {
 	readonly?: boolean;
 	disabled?: boolean;
 	placeholder?: string;
 	relationOptions?: CollectionRelationOptions;
-	[key: string]: unknown;
 }
 
 export interface CollectionFormRendererProps extends CollectionFormRendererOptions {
@@ -59,6 +67,38 @@ export interface CollectionFormRendererProps extends CollectionFormRendererOptio
 	/** Current form record, including unsaved sibling-field values. */
 	row: Record<string, unknown>;
 	onValueChange: (value: unknown) => void;
+}
+
+export interface CollectionFormFieldProps<
+	TFieldName extends string = string,
+	TRendererProps = CollectionFormRendererProps
+> {
+	name: TFieldName;
+	label?: string;
+	class?: string;
+	renderer?: Component<CollectionFormSvelteProps<TRendererProps>>;
+	rendererProps?: CollectionFormCallerRendererProps<TRendererProps>;
+}
+
+/**
+ * `Field` as handed to form composition snippets. Isomorphic (construct + call) so svelte-check
+ * accepts it as a component; the generic lets each usage instantiate `TRendererProps` from
+ * `renderer={...}` so `rendererProps` stays typed.
+ */
+export interface CollectionFormFieldComponent<TFieldName extends string = string> {
+	new <TRendererProps = CollectionFormRendererProps>(
+		options: ComponentConstructorOptions<CollectionFormFieldProps<TFieldName, TRendererProps>>
+	): SvelteComponent<CollectionFormFieldProps<TFieldName, TRendererProps>>;
+	<TRendererProps = CollectionFormRendererProps>(
+		this: void,
+		internals: ComponentInternals,
+		props: CollectionFormFieldProps<TFieldName, TRendererProps>
+	): {
+		$on?(type: string, callback: (e: unknown) => void): () => void;
+		$set?(props: Partial<CollectionFormFieldProps<TFieldName, TRendererProps>>): void;
+	};
+	element?: typeof HTMLElement;
+	z_$$bindings?: string;
 }
 
 export interface CollectionFormController {
@@ -76,7 +116,7 @@ export interface CollectionFormComposition<
 	TCollections extends CollectionRegistry,
 	TName extends CollectionFormName<TCollections>
 > {
-	Field: Component<CollectionFormFieldProps<CollectionFieldName<TCollections[TName]>>>;
+	Field: CollectionFormFieldComponent<CollectionFieldName<TCollections[TName]>>;
 	form: CollectionFormController;
 }
 

@@ -40,14 +40,21 @@
 		label,
 		class: className,
 		renderer: Renderer,
-		rendererProps = {}
+		rendererProps
 	}: CollectionFormFieldProps<TFieldName> = $props();
 
 	const context = getCollectionFormFieldContext();
 	const field = $derived(context.field(name));
 	const value = $derived(context.value(name));
-	const readonly = $derived(rendererProps.readonly ?? false);
-	const disabled = $derived(rendererProps.disabled ?? context.disabled());
+	const resolvedRendererProps = $derived(rendererProps ?? {});
+	const readonly = $derived.by(() => {
+		const flag = Reflect.get(resolvedRendererProps, 'readonly');
+		return typeof flag === 'boolean' ? flag : false;
+	});
+	const disabled = $derived.by(() => {
+		const flag = Reflect.get(resolvedRendererProps, 'disabled');
+		return typeof flag === 'boolean' ? flag : context.disabled();
+	});
 	const fieldId = $derived(`${context.collectionName()}-${name}`);
 	const dirty = $derived(context.dirty(name));
 	const errors = $derived(context.errors(name));
@@ -91,7 +98,7 @@
 		<div class="min-h-0 min-w-0 flex-1">
 			{#if Renderer}
 				<Renderer
-					{...rendererProps}
+					{...resolvedRendererProps}
 					{field}
 					{value}
 					row={context.row()}
@@ -101,7 +108,7 @@
 				/>
 			{:else}
 				<DataRenderer
-					{...rendererProps}
+					{...resolvedRendererProps}
 					id={fieldId}
 					{field}
 					{value}
