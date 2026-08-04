@@ -27,7 +27,7 @@ import {
 import { handlePodRequest } from '../server/entry.js';
 
 /** The host's private control plane, gated by the shared token rather than by identity. */
-export const HOST_ROUTE_PREFIX = '/_host/';
+const HOST_ROUTE_PREFIX = '/_host/';
 
 /**
  * Headers the runtime reads from its trusted host and never from the client.
@@ -191,7 +191,7 @@ function writeStaticAsset(
 	response.end(request.method === 'HEAD' ? undefined : asset.body);
 }
 
-export type PodHttpServerOptions = {
+type PodHttpServerOptions = {
 	/** The authority the runtime sees on every request. Never read back from the socket. */
 	readonly origin: string;
 	/** The socket address. */

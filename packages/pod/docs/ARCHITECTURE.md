@@ -52,7 +52,7 @@ not bundle it.
 |                         | Core                                                       | Self-hosted                                      |
 | ----------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
 | `pod.host.ts` mode      | `core`                                                     | `self-hosted`                                    |
-| Runtime transport       | HTTP over the host proxy; facilities over host-owned stdio | HTTP on a loopback socket; facilities in process |
+| Runtime transport       | Host proxies browser HTTP into the guest; facilities over host-owned stdio | HTTP on a loopback socket; facilities in process |
 | HTTP and static assets  | Core                                                       | `pod start`                                      |
 | Facilities and identity | Core runtime bindings                                      | `pod.host.ts` providers                          |
 | Local development       | `pod dev` emulates Core                                    | uses the declared providers                      |

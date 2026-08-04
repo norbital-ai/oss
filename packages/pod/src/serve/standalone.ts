@@ -77,7 +77,7 @@ const REQUIRED_ENVIRONMENT = [
 ] as const;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
-export interface StandaloneEnvironment {
+interface StandaloneEnvironment {
 	readonly databaseUrl: string;
 	readonly host: string;
 	readonly port: number;
@@ -453,7 +453,7 @@ async function resolveStandaloneHost(
 	});
 }
 
-export type StandaloneStartOptions = {
+type StandaloneStartOptions = {
 	/** Core targets may be locally emulated only through `pod dev`. */
 	readonly development?: boolean;
 };

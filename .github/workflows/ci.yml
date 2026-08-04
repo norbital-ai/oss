@@ -49,3 +49,12 @@ jobs:
         run: pnpm templates:lock:verify
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # The bundle format is the only cross-version contract between a template and a host, and this
+      # is the only thing that proves it: a real build against a materialized depset, booted, and
+      # answering with its `ready` frame. It existed unwired for long enough that a host-transport
+      # change shipped without it ever running. A gate nobody runs is not a gate.
+      - name: Verify the runtime bundle boots
+        run: node scripts/smoke-runtime-bundle.mjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}

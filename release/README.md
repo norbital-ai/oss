@@ -113,16 +113,17 @@ host-materialized depset would not be reusable.
 
 ## Budgets
 
-Three numbers, measured separately, never compared:
+Two live SLOs, measured against a real tenant deploy:
 
-| Budget             | Where                                                                                                                                                                    |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `compileMs`        | `benchmark-builder.mjs` — `vite build` against a materialized depset on a fixed CI runner. Evidence: [`builder-benchmark.schema.json`](./builder-benchmark.schema.json). |
-| `deployCacheHitMs` | live SLO, measured against a real tenant deploy                                                                                                                          |
-| `deployColdMs`     | live SLO, measured against a real tenant deploy                                                                                                                          |
+| Budget             | Where                                           |
+| ------------------ | ----------------------------------------------- |
+| `deployCacheHitMs` | live SLO, measured against a real tenant deploy |
+| `deployColdMs`     | live SLO, measured against a real tenant deploy |
 
-Conflating the first with the last is what let an acceptance run report 5807 ms against a 5 s gate
-that had never measured the same thing.
+A build-time `compileMs` budget used to sit alongside these, produced by a benchmark that no workflow
+ever ran. Both it and its schema are gone. The reason it existed is still worth keeping in mind:
+conflating a `vite build` number with a deploy SLO is what let an acceptance run report 5807 ms
+against a 5 s gate that had never measured the same thing.
 
 `smoke-runtime-bundle.mjs` proves the bundle contract: a build against a materialized depset
 produces a bundle that boots and emits its ready frame. The bundle format is the only cross-version

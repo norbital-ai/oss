@@ -46,6 +46,12 @@ jobs:
       - name: Validate template package policies
         run: node --test scripts/tests/templates.test.mjs
 
+      # This workflow already reruns when the projection validator changes, but nothing ever ran it,
+      # so a projection that omitted a tracked file or carried an untracked one would publish
+      # unnoticed. Check before pushing refs, not after.
+      - name: Validate template projections
+        run: node scripts/validate-template-projections.mjs
+
       - name: Project and publish root template refs
         run: |
           node scripts/project-templates.mjs \

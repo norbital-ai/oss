@@ -75,7 +75,7 @@ type StreamWrite = (chunk: Uint8Array | string, ...rest: unknown[]) => boolean;
  */
 type ClaimableStream = { write(chunk: Uint8Array | string, ...rest: unknown[]): boolean };
 
-export type FrameStreams = {
+type FrameStreams = {
 	readonly stdout: ClaimableStream;
 	readonly stderr: ClaimableStream;
 	/**
@@ -140,7 +140,7 @@ export type StdioRuntimeChannel = {
 	readonly inFlight: number;
 };
 
-export type StdioRuntimeChannelOptions = {
+type StdioRuntimeChannelOptions = {
 	/** Frames from the host. `process.stdin` in a sandbox; a pipe in a test. */
 	readonly input: Readable;
 	/** Frames to the host — the writer {@link claimStdoutForFrames} returned. */
