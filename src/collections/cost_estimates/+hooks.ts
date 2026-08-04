@@ -96,8 +96,10 @@ async function price(estimate: EstimateInput, api: HookApi): Promise<Record<stri
 		: null;
 	const currency = estimate.currency?.trim() || project?.currency?.trim() || 'SGD';
 
+	const asOf = new Date().toISOString().slice(0, 10);
 	const rates = (
 		await api.db.query.cost_rates.findMany({
+			where: { validity_range: { contains_date: asOf } },
 			columns: { substrate: true, unit: true, rate: true },
 			limit: 100
 		})
