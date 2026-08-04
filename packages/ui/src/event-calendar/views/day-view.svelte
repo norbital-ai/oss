@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { Scroll } from '#lib/layout';
-	import { pixelDrag } from '#lib/utils/pixel-drag.js';
+	import { pixelDrag } from '#lib/utils/pixel-drag';
 	import { assignLanes, dateToPixels, isMultiDayEvent, isSameDay } from '../utils.js';
 	import type { CalendarEvent, CalendarView, CreateSlot, EventRenderContext } from '../types.js';
 	import type { Snippet } from 'svelte';

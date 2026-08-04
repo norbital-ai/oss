@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { Scroll, Stack } from '#lib/layout';
-	import { pixelDrag } from '#lib/utils/pixel-drag.js';
+	import { pixelDrag } from '#lib/utils/pixel-drag';
 	import {
 		assignLanes,
 		dateToPixels,
