@@ -1,5 +1,14 @@
 # @norbital-ai/pod
 
+## 2.0.0
+
+### Patch Changes
+
+- Updated dependencies [7320705]
+  - @norbital-ai/ui@2.0.0
+  - @norbital-ai/std@2.0.0
+  - @norbital-ai/platform-utils@2.0.0
+
 ## 1.0.2
 
 ### Patch Changes
