@@ -14,8 +14,17 @@ import {
 } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import { getColumns } from 'drizzle-orm';
-import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js';
-import { andRelationsFilters } from '$lib/authoring/workspace/relations-filter.js';
+import {
+	andRelationsFilters,
+	toRelationsFilter,
+	toRelationsWith
+} from '$lib/authoring/workspace/relations-filter.js';
+import {
+	dateRangeFilter,
+	isDateRangeOperator,
+	isKnownFieldOperator,
+	rejectUnknownFieldOperator
+} from './collection_operators.server.js';
 import { typeGuard } from '@norbital-ai/std/schema';
 import { isTemporalOperand, temporalKindForFieldKind } from '@norbital-ai/std/date';
 import { z } from 'zod';
@@ -78,30 +87,138 @@ function validateColumns(ctx: ProvisionedContext, collection: string, columns: u
 	for (const column of Object.keys(columns)) validateColumnName(ctx, collection, column);
 }
 
-function validateWhere(ctx: ProvisionedContext, collection: string, where: unknown): void {
-	if (!typeGuard(recordSchema, where)) return;
+/**
+ * One column's condition after compilation. `lifted` conditions carry an operator Drizzle has no
+ * idea about (Pod's `dateRange()` operators), so they leave the column key entirely and become a
+ * table-level filter; everything else stays exactly as it arrived.
+ */
+type CompiledCondition =
+	| { readonly lifted: false; readonly condition: unknown }
+	| { readonly lifted: true; readonly filter: AnyRelationsFilter };
+
+/**
+ * Compile one column's condition, validating every operator key on the way.
+ *
+ * Pod's `dateRange()` operators (`contains_date`, `overlaps`) have no Drizzle equivalent — they
+ * compile to RAW SQL, which is a *table-level* filter key. Because the column is fixed for the
+ * whole condition, a field-level `AND`/`OR`/`NOT` around them is exactly the table-level
+ * `AND`/`OR`/`NOT` of the lifted parts, so nesting composes without a special case.
+ */
+function compileCondition(
+	ctx: ProvisionedContext,
+	collection: string,
+	field: string,
+	condition: unknown
+): CompiledCondition {
+	if (!typeGuard(recordSchema, condition)) return { lifted: false, condition };
+
+	const residual: Record<string, unknown> = {};
+	const lifted: AnyRelationsFilter[] = [];
+
+	for (const [operator, operand] of Object.entries(condition)) {
+		if (operator === 'AND' || operator === 'OR') {
+			const group = compileConditionGroup(ctx, collection, field, operator, operand);
+			if (group.lifted) lifted.push(group.filter);
+			else residual[operator] = group.condition;
+			continue;
+		}
+		if (operator === 'NOT') {
+			const inner = compileCondition(ctx, collection, field, operand);
+			if (inner.lifted) lifted.push(toRelationsFilter({ NOT: inner.filter }));
+			else residual[operator] = inner.condition;
+			continue;
+		}
+		if (isDateRangeOperator(operator)) {
+			lifted.push(dateRangeFilter(field, operator, operand));
+			continue;
+		}
+		if (!isKnownFieldOperator(operator)) {
+			rejectUnknownFieldOperator(collection, field, operator);
+		}
+		residual[operator] = operand;
+	}
+
+	if (lifted.length === 0) return { lifted: false, condition };
+	const parts = Object.keys(residual).length
+		? [toRelationsFilter({ [field]: residual }), ...lifted]
+		: lifted;
+	return {
+		lifted: true,
+		filter: parts.length === 1 ? parts[0] : andRelationsFilters(...parts)
+	};
+}
+
+/** A field-level `AND`/`OR` array; lifted to the table level only if a member had to be. */
+function compileConditionGroup(
+	ctx: ProvisionedContext,
+	collection: string,
+	field: string,
+	operator: 'AND' | 'OR',
+	operand: unknown
+): CompiledCondition {
+	if (!Array.isArray(operand)) return { lifted: false, condition: operand };
+	const members = operand.map((entry) => compileCondition(ctx, collection, field, entry));
+	if (!members.some((member) => member.lifted)) return { lifted: false, condition: operand };
+	const filters = members.map((member) =>
+		member.lifted ? member.filter : toRelationsFilter({ [field]: member.condition })
+	);
+	return { lifted: true, filter: toRelationsFilter({ [operator]: filters }) };
+}
+
+/**
+ * Validate a raw `where` object and compile the operators Drizzle does not have.
+ *
+ * Validation and compilation are one traversal on purpose: a `where` that passes the checks is by
+ * construction the `where` that is handed to Drizzle, so there is no shape the validator accepts
+ * and the compiler never sees.
+ */
+function compileWhere(
+	ctx: ProvisionedContext,
+	collection: string,
+	where: unknown
+): AnyRelationsFilter | undefined {
+	if (!typeGuard(recordSchema, where)) return where as AnyRelationsFilter | undefined;
+
+	const residual: Record<string, unknown> = {};
+	const lifted: AnyRelationsFilter[] = [];
+
 	for (const [key, value] of Object.entries(where)) {
 		if ((key === 'AND' || key === 'OR') && Array.isArray(value)) {
-			for (const filter of value) validateWhere(ctx, collection, filter);
+			residual[key] = value.map((filter) => compileWhere(ctx, collection, filter));
 			continue;
 		}
 		if (key === 'NOT' && typeGuard(recordSchema, value)) {
-			validateWhere(ctx, collection, value);
+			residual[key] = compileWhere(ctx, collection, value);
 			continue;
 		}
-		if (key === 'RAW') continue;
+		if (key === 'RAW') {
+			residual[key] = value;
+			continue;
+		}
 		const relatedCollection = relatedCollectionFor(ctx, collection, key);
 		if (relatedCollection) {
-			if (typeof value === 'boolean') continue;
+			if (typeof value === 'boolean') {
+				residual[key] = value;
+				continue;
+			}
 			if (typeGuard(recordSchema, value)) {
-				validateWhere(ctx, relatedCollection, value);
+				residual[key] = compileWhere(ctx, relatedCollection, value);
 				continue;
 			}
 			throw error(400, `Relation filter '${key}' must be a boolean or filter object.`);
 		}
 		validateColumnName(ctx, collection, key);
 		validateTemporalCondition(ctx, collection, key, value);
+		const compiled = compileCondition(ctx, collection, key, value);
+		if (compiled.lifted) lifted.push(compiled.filter);
+		else residual[key] = compiled.condition;
 	}
+
+	if (lifted.length === 0) return toRelationsFilter(residual);
+	if (Object.keys(residual).length === 0) {
+		return lifted.length === 1 ? lifted[0] : andRelationsFilters(...lifted);
+	}
+	return andRelationsFilters(toRelationsFilter(residual), ...lifted);
 }
 
 function validateTemporalCondition(
@@ -143,8 +260,10 @@ function relatedCollectionFor(
 	return relationship.from === collection ? relationship.to : relationship.from;
 }
 
-function validateWith(ctx: ProvisionedContext, collection: string, withClause: unknown): void {
-	if (!typeGuard(recordSchema, withClause)) return;
+/** Nested `with` selections carry their own `where`, so they need the same compilation. */
+function compileWith(ctx: ProvisionedContext, collection: string, withClause: unknown): unknown {
+	if (!typeGuard(recordSchema, withClause)) return withClause;
+	const compiled: Record<string, unknown> = {};
 	for (const [relation, selection] of Object.entries(withClause)) {
 		const relatedCollection = relatedCollectionFor(ctx, collection, relation);
 		if (!relatedCollection) {
@@ -157,23 +276,46 @@ function validateWith(ctx: ProvisionedContext, collection: string, withClause: u
 				`Collection '${collection}' has no relation '${relation}'. Valid relations: ${validRelations.join(', ') || '(none)'}`
 			);
 		}
-		if (!typeGuard(recordSchema, selection)) continue;
+		if (!typeGuard(recordSchema, selection)) {
+			compiled[relation] = selection;
+			continue;
+		}
 		validateColumns(ctx, relatedCollection, selection.columns);
-		validateWhere(ctx, relatedCollection, selection.where);
 		validateColumns(ctx, relatedCollection, selection.orderBy);
-		validateWith(ctx, relatedCollection, selection.with);
+		compiled[relation] = {
+			...selection,
+			...(selection.where === undefined
+				? {}
+				: { where: compileWhere(ctx, relatedCollection, selection.where) }),
+			...(selection.with === undefined
+				? {}
+				: { with: compileWith(ctx, relatedCollection, selection.with) })
+		};
 	}
+	return compiled;
 }
 
-function validateQuery(
+type CompiledQuery = {
+	readonly where: AnyRelationsFilter | undefined;
+	readonly with: AnyDBQueryConfig['with'];
+};
+
+/** Validate a query and hand back the `where`/`with` that must be sent to Drizzle in its place. */
+function compileQuery(
 	ctx: ProvisionedContext,
 	collection: string,
 	query: QueryValidationInput
-): void {
+): CompiledQuery {
 	validateColumns(ctx, collection, query.columns);
-	validateWhere(ctx, collection, query.where);
 	validateColumns(ctx, collection, query.orderBy);
-	validateWith(ctx, collection, query.with);
+	return {
+		where: compileWhere(ctx, collection, query.where),
+		with: toRelationsWith(
+			query.with === undefined
+				? undefined
+				: (compileWith(ctx, collection, query.with) as Record<string, unknown>)
+		)
+	};
 }
 
 async function asDynamicSelectRows(
@@ -526,11 +668,11 @@ export async function directFindMany(
 	collection: string,
 	query: CollectionQuery
 ): Promise<Record<string, unknown>[]> {
-	validateQuery(ctx, collection, query);
+	const compiled = compileQuery(ctx, collection, query);
 	return getCollectionQuery(ctx, collection).findMany({
 		columns: query.columns,
-		with: query.with,
-		where: query.where,
+		with: compiled.with,
+		where: compiled.where,
 		extras: query.extras,
 		orderBy: query.orderBy,
 		limit: query.limit,
@@ -544,11 +686,11 @@ export async function directRelationalFindFirst(
 	collection: string,
 	query: CollectionFindFirstQuery = {}
 ): Promise<Record<string, unknown> | undefined> {
-	validateQuery(ctx, collection, query);
+	const compiled = compileQuery(ctx, collection, query);
 	return getCollectionQuery(ctx, collection).findFirst({
 		columns: query.columns,
-		with: query.with,
-		where: query.where,
+		with: compiled.with,
+		where: compiled.where,
 		extras: query.extras,
 		orderBy: query.orderBy,
 		offset: query.offset,
@@ -577,13 +719,13 @@ export async function directCount(
 	collection: string,
 	query: CollectionQuery
 ): Promise<number> {
-	validateQuery(ctx, collection, query);
+	const compiled = compileQuery(ctx, collection, query);
 	const rows = await getCollectionQuery(ctx, collection).findMany({
 		columns: {},
 		extras: {
 			__norbital_count: sql<number>`count(*) over()`.as('__norbital_count')
 		},
-		where: query.where,
+		where: compiled.where,
 		limit: 1
 	});
 	const count = rows[0]?.__norbital_count;
@@ -595,10 +737,9 @@ export async function directFindGrouped(
 	collection: string,
 	query: CollectionGroupedQuery
 ): Promise<Record<string, Record<string, unknown>[]>> {
-	validateQuery(ctx, collection, query);
+	const compiled = compileQuery(ctx, collection, query);
 	validateColumnName(ctx, collection, query.group.by);
 	const finder = getCollectionQuery(ctx, collection);
-	const groupedQuery = query;
 
 	const laneKeys = query.group.lanes?.length
 		? [...new Set(query.group.lanes)]
@@ -607,7 +748,7 @@ export async function directFindGrouped(
 					(
 						await finder.findMany({
 							columns: { [query.group.by]: true },
-							where: groupedQuery.where,
+							where: compiled.where,
 							limit: query.limit
 						})
 					)
@@ -619,12 +760,12 @@ export async function directFindGrouped(
 	const groupedEntries = await Promise.all(
 		laneKeys.map(async (laneKey) => {
 			const laneWhere = mergeWhere(
-				groupedQuery.where,
+				compiled.where,
 				toRelationsFilter({ [query.group.by]: laneKey })
 			);
 			const rows = await finder.findMany({
 				columns: query.columns,
-				with: query.with,
+				with: compiled.with,
 				where: laneWhere,
 				extras: query.extras,
 				orderBy: query.orderBy,

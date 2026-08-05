@@ -5,7 +5,17 @@ import { z } from 'zod';
 
 const recordSchema = z.record(z.string(), z.unknown());
 
-/** Plain column-operator where objects used by server-side collection ops. */
+/**
+ * Plain column-operator where objects used by server-side collection ops.
+ *
+ * The cast cannot be narrowed usefully: column names are dynamic strings, so any type able to
+ * accept them also accepts an arbitrary operator key, and spelling the operator vocabulary out
+ * here would be a second copy of the list that `collection/collection_operators.server.ts` owns.
+ * The contract is therefore positional — only hand this filters Pod built itself, or the output of
+ * `collection_direct.ts`'s `compileQuery`, which is the single place a caller-supplied `where` is
+ * checked. Passing wire input straight through is what let an unknown operator reach Drizzle and
+ * be called as a function.
+ */
 export function toRelationsFilter(where: Record<string, unknown>): AnyRelationsFilter {
 	// Safe: RQB where clauses are plain column-operator maps at runtime; Drizzle types them per-schema.
 	return where as AnyRelationsFilter;
