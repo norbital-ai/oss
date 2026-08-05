@@ -7,11 +7,17 @@
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
-	import { daysBetweenKeys, payDateFor, periodWindow, todayKey } from '../../lib/ui/calendar.js';
+	import {
+		daysBetweenKeys,
+		payDateFor,
+		periodWindow,
+		todayKey,
+		todayInstant
+	} from '../../lib/ui/calendar.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
-	const activeRange = { effective_range: { contains_date: today } } as const;
+	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },

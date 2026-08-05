@@ -4,7 +4,7 @@
 	import { Cover } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { todayKey } from '../../lib/ui/calendar.js';
+	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
 	import {
 		formatNumeric,
 		formatOvertimeAward,
@@ -14,7 +14,7 @@
 		formatRateSelector
 	} from '../../lib/ui/display-formatters.js';
 
-	const activeRange = { effective_range: { contains_date: todayKey() } } as const;
+	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	// Relation columns hold uuids; resolve labels from one loaded set. Miss → em dash, never the uuid.
 	const jurisdictionsQuery = client.db.jurisdictions.findMany({

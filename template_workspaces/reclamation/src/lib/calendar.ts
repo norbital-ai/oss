@@ -21,3 +21,28 @@ export function calendarDateInTimeZone(value: Date, timeZone: string): string {
 		parts.find((part) => part.type === type)?.value ?? '';
 	return `${valueFor('year')}-${valueFor('month')}-${valueFor('day')}`;
 }
+
+/** Midnight of `calendarDate` in `timeZone`, as the UTC instant that moment actually is. */
+export function startOfDayInstant(calendarDate: string, timeZone: string): string {
+	const naive = Date.parse(`${calendarDate}T00:00:00Z`);
+	if (Number.isNaN(naive)) throw new Error(`Not a calendar date: ${calendarDate}`);
+	// Resolve twice: the offset at the guessed instant can differ from the offset at the real one
+	// across a daylight-saving boundary.
+	let instant = naive;
+	for (let pass = 0; pass < 2; pass += 1) {
+		const shown = Date.parse(`${calendarDateInTimeZone(new Date(instant), timeZone)}T00:00:00Z`);
+		instant += naive - shown;
+	}
+	return new Date(instant).toISOString();
+}
+
+/**
+ * "Now", as the instant a `contains_date` filter wants. A calendar day is not an instant, and the
+ * server refuses one rather than guessing which timezone turns it into a moment.
+ */
+export function todayInstant(): string {
+	return startOfDayInstant(
+		calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE),
+		PROJECT_TIME_ZONE
+	);
+}

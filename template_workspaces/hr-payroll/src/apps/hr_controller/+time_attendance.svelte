@@ -6,13 +6,13 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { startOfIsoWeekDate, todayKey } from '../../lib/ui/calendar.js';
+	import { startOfIsoWeekDate, todayKey, todayInstant } from '../../lib/ui/calendar.js';
 	import { runWorkbookImport } from '../../lib/ui/workbook-import.js';
 	import { timeEntryImportPayload } from '../../collections/time_entries/lib/import-workbook.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
-	const activeRange = { effective_range: { contains_date: today } } as const;
+	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },

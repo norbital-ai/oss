@@ -14,7 +14,7 @@
 		Stack
 	} from '@norbital-ai/ui/layout';
 	import { formatDateRangeLocal } from '@norbital-ai/std/date';
-	import { PROJECT_TIME_ZONE, calendarDateInTimeZone } from '../../lib/calendar.js';
+	import { PROJECT_TIME_ZONE, calendarDateInTimeZone, todayInstant } from '../../lib/calendar.js';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import IfcDisplay from '../../lib/ifc-viewer/ifc_display.svelte';
 
@@ -471,7 +471,7 @@
 			query={{
 				where: {
 					project_id: { eq: projectId },
-					validity_range: { contains_date: today }
+					validity_range: { contains_date: todayInstant() }
 				},
 				limit: 50
 			}}

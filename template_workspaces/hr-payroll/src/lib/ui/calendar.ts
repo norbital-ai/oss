@@ -152,3 +152,14 @@ export function periodWindow(count: number, ahead: number): string[] {
 		shiftMonthKey(current, ahead - count + 1 + index)
 	);
 }
+
+/**
+ * "Now", as the instant a `contains_date` filter wants.
+ *
+ * `todayKey()` is a calendar day, and a calendar day is not an instant — the server refuses one
+ * rather than guessing which timezone turns it into a moment. This resolves it through the payroll
+ * timezone, which is the perspective every effective-dated list on these screens is read from.
+ */
+export function todayInstant(): string {
+	return startOfDayInstant(todayKey(), PAYROLL_TIME_ZONE);
+}
