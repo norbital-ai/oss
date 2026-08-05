@@ -6,8 +6,10 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
 	import {
+		formatCalendarDate,
 		formatLeaveAccrual,
 		formatLeavePayrollEffect,
 		formatNumeric
@@ -17,6 +19,17 @@
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
+
+	/**
+	 * Leave types are effective-dated, so the catalogue opens on the entitlements in force *today*
+	 * and widens to superseded versions only when the operator asks. The legal-entity selector below
+	 * keeps `activeRange` whatever this is set to: it is the page's scope picker, not a listing, and
+	 * it has to default to an entity that still exists.
+	 */
+	let effectiveWindow = $state<'current' | 'history'>('current');
+	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
+		effectiveWindow === 'history' ? {} : activeRange
+	);
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
@@ -113,9 +126,9 @@
 </svelte:head>
 
 {#snippet companyScopeActions()}
-	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Legal entity</span>
-		<Inline gap="sm">
+	<Inline gap="md" align="end">
+		<label class="grid gap-1.5 text-sm">
+			<span class="font-medium text-muted-foreground">Legal entity</span>
 			<Combobox
 				ariaLabel="Legal entity"
 				options={companyOptions}
@@ -135,8 +148,26 @@
 				}}
 				class="min-w-[16rem]"
 			/>
-		</Inline>
-	</label>
+		</label>
+		<Stack gap="xs">
+			<span class="text-sm font-medium text-muted-foreground">Leave types</span>
+			<ToggleGroup
+				type="single"
+				size="sm"
+				value={effectiveWindow}
+				onValueChange={(value) => {
+					effectiveWindow = value === 'history' ? 'history' : 'current';
+				}}
+			>
+				<ToggleGroupItem value="current" aria-label="Show only leave types in force today">
+					In force today
+				</ToggleGroupItem>
+				<ToggleGroupItem value="history" aria-label="Show every version, including superseded ones">
+					All history
+				</ToggleGroupItem>
+			</ToggleGroup>
+		</Stack>
+	</Inline>
 {/snippet}
 
 {#snippet overview()}
@@ -197,8 +228,8 @@
 					card="subtitle"
 					render={({ row }) => employmentLabel(row)}
 				/>
-				<Column name="from_date" label="From" />
-				<Column name="to_date" label="To" />
+				<Column name="from_date" label="From" render={({ value }) => formatCalendarDate(value)} />
+				<Column name="to_date" label="To" render={({ value }) => formatCalendarDate(value)} />
 				<Column name="kind" label="Event" card="badge" />
 				<Column name="days" label="Days" render={({ value }) => formatNumeric(value)} />
 				<Column
@@ -222,7 +253,7 @@
 			query={{
 				where: {
 					company_id: { eq: selectedCompanyId },
-					...activeRange
+					...effectiveRange
 				},
 				orderBy: { code: 'asc' }
 			}}

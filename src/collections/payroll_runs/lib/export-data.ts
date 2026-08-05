@@ -149,7 +149,10 @@ export async function loadRunExports(
 	assertComplete(componentEntries, 'component entries');
 
 	const employeeIds = [...new Set(employments.map((row) => row.employee_id))];
-	const shiftIds = [...new Set(rosters.map((row) => row.shift_definition_id))];
+	// Only working days name a shift; rest and off days schedule none.
+	const shiftIds = [
+		...new Set(rosters.map((row) => row.shift_definition_id).filter((id) => id != null))
+	];
 	const [employees, shifts] = await Promise.all([
 		api.db.query.employees.findMany({
 			where: { norbital_id: { in: employeeIds } },
@@ -295,7 +298,7 @@ export async function loadRunExports(
 						: requiredDateKey(employment.exit_date, 'employments.exit_date'),
 				attendance: {
 					normalHours: runRosters.reduce((total, roster) => {
-						if (roster.designation !== 'WORK') return total;
+						if (roster.designation !== 'WORK' || roster.shift_definition_id == null) return total;
 						const shift = shiftById.get(roster.shift_definition_id);
 						return total + (shift == null ? 0 : shiftHours(shift));
 					}, 0),
@@ -307,6 +310,7 @@ export async function loadRunExports(
 						...new Set(
 							runRosters.flatMap((row) => {
 								if (row.assignment_code != null) return [row.assignment_code];
+								if (row.shift_definition_id == null) return [];
 								const shift = shiftById.get(row.shift_definition_id);
 								return shift == null ? [] : [shift.code];
 							})

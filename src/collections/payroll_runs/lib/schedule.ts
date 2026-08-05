@@ -32,6 +32,11 @@ export type ScheduledDay = {
 	/**
 	 * The shift start used to clamp an early clock-in. On a rest or off day the employee's ordinary
 	 * shift start is carried over, so arriving before their normal starting time is still unpaid.
+	 *
+	 * That carry-over is what makes a worked rest day measurable without pinning a shift to it. It
+	 * is taken from the first ORDINARY rostered day of the whole window — the loop below settles
+	 * `clampStart` across every date before any `ScheduledDay` is built, so it does not matter
+	 * whether the rest day falls before or after the working day it borrows from.
 	 */
 	readonly clampStart: string | null;
 	/** Contracted hours for a working day of this employment. */
@@ -68,9 +73,15 @@ export interface ScheduleTerms extends WeeklyHoursTerms {
 	readonly week?: WeekShape | 'ROSTERED' | null;
 }
 
+/**
+ * `shift_definition_id` is null on a REST or OFF entry: those arms schedule no shift.
+ *
+ * Rows written before the roster took that shape may still carry one, and they resolve exactly as
+ * they always did — the read below is null-tolerant rather than null-assuming.
+ */
 type RosterEntry = {
 	readonly work_date: string | Date;
-	readonly shift_definition_id: string;
+	readonly shift_definition_id: string | null;
 	readonly designation: string | null;
 };
 

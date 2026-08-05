@@ -7,6 +7,13 @@
  * Merged into one cell they answer the question an operator actually has: is this day settled, and
  * if not, what is wrong with it.
  *
+ * A public holiday is NOT one of those answers. It is a property of the calendar rather than of one
+ * person's roster — `roster_entries` has no holiday arm for the same reason — so it is carried here
+ * as an overlay on the date and drawn as a column of the board, leaving each cell free to keep
+ * saying what that person's day is. A holiday that replaced the cell would hide whether the person
+ * was rostered to work it and whether they turned up, which is precisely what an operator needs to
+ * know about a holiday.
+ *
  * Display only. Nothing here prices anything — the payroll engine resolves day types itself from the
  * same rows, and `docs/architecture/time-overtime-and-cutoffs.md` is the authority on how.
  */
@@ -17,24 +24,18 @@ export type Designation = 'WORK' | 'REST' | 'OFF';
 
 /** Why a planned working day has no attendance behind it, in the order an operator cares about. */
 export type DayStatus =
-	| 'UNROSTERED'
-	| 'PLANNED'
-	| 'ATTENDED'
-	| 'OPEN'
-	| 'ABSENT'
-	| 'ON_LEAVE'
-	| 'HOLIDAY'
-	| 'REST'
-	| 'OFF';
+	'UNROSTERED' | 'PLANNED' | 'ATTENDED' | 'OPEN' | 'ABSENT' | 'ON_LEAVE' | 'REST' | 'OFF';
 
 export type DayFacts = {
 	readonly employmentId: string;
 	readonly date: string;
 	/** `null` when no roster entry covers the day at all. */
 	readonly designation: Designation | null;
+	/** The shift the day is worked on. Null on a rest or off day, which schedules none. */
 	readonly shiftCode: string | null;
 	/** The source roster token, e.g. `AMRES` or `OFF/S`, when the roster carried one. */
 	readonly assignmentCode: string | null;
+	/** Overlaid from `company_holidays`, never stored on the entry. */
 	readonly holidayName: string | null;
 	readonly leaveCode: string | null;
 	readonly halfDayLeave: boolean;
@@ -49,7 +50,7 @@ export type RosterEntryLike = {
 	readonly employment_id: string;
 	readonly work_date: string | Date;
 	readonly designation: string | null;
-	readonly shift_definition_id: string;
+	readonly shift_definition_id: string | null;
 	readonly assignment_code: string | null;
 };
 
@@ -84,6 +85,16 @@ export function monthDays(month: string): string[] {
 	);
 }
 
+/**
+ * The company calendar as a date lookup.
+ *
+ * The board draws its holiday column from this and `buildRosterMonth` overlays the same map onto
+ * every person-day, so a holiday cannot be marked in the header and missing from the cells below it.
+ */
+export function holidayNamesByDate(holidays: readonly HolidayLike[]): Map<string, string> {
+	return new Map(holidays.map((holiday) => [calendarDayKey(holiday.date), holiday.name]));
+}
+
 function designationOf(value: string | null): Designation | null {
 	return value === 'WORK' || value === 'REST' || value === 'OFF' ? value : null;
 }
@@ -91,12 +102,14 @@ function designationOf(value: string | null): Designation | null {
 /**
  * Decide what one cell says, most specific reason first.
  *
- * A public holiday outranks the roster because a holiday is a holiday whatever the roster planned.
  * Approved leave outranks an absence for the obvious reason: the person is not missing, they are on
  * leave, and calling that an absence is how a payroll ends up docking somebody who filed properly.
+ *
+ * A public holiday is not in this ladder at all — it is an overlay, not a status — but it does stop
+ * a day being called an absence: nobody is expected to appear on a gazetted holiday, so a rostered
+ * working day with no punches on one has not gone wrong.
  */
 function statusOf(facts: Omit<DayFacts, 'status'>): DayStatus {
-	if (facts.holidayName != null) return 'HOLIDAY';
 	if (facts.leaveCode != null) return 'ON_LEAVE';
 	if (facts.designation === 'REST') return 'REST';
 	if (facts.designation === 'OFF') return 'OFF';
@@ -105,7 +118,7 @@ function statusOf(facts: Omit<DayFacts, 'status'>): DayStatus {
 	if (facts.clockedIn) return 'ATTENDED';
 	// A planned working day still in the future has simply not happened yet; one already inside the
 	// window the next run will settle, with nothing clocked, is an absence somebody must explain.
-	return facts.withinCutoff ? 'ABSENT' : 'PLANNED';
+	return facts.withinCutoff && facts.holidayName == null ? 'ABSENT' : 'PLANNED';
 }
 
 /**
@@ -129,9 +142,7 @@ export function buildRosterMonth(options: {
 	const first = days[0]!;
 	const last = days[days.length - 1]!;
 
-	const holidayByDate = new Map(
-		options.holidays.map((holiday) => [calendarDayKey(holiday.date), holiday.name])
-	);
+	const holidayByDate = holidayNamesByDate(options.holidays);
 
 	const rosterByKey = new Map<string, RosterEntryLike>();
 	for (const entry of options.rosterEntries) {
@@ -208,16 +219,33 @@ export const STATUS_PRESENTATION: Record<
 	OPEN: { label: 'Open punch', className: 'bg-warning/25 text-warning-foreground' },
 	ABSENT: { label: 'No attendance', className: 'bg-destructive/20 font-semibold text-destructive' },
 	ON_LEAVE: { label: 'Leave', className: 'bg-accent text-accent-foreground' },
-	HOLIDAY: { label: 'Public holiday', className: 'bg-brand/20 text-brand-foreground' },
 	REST: { label: 'Rest day', className: 'bg-muted text-muted-foreground' },
 	OFF: { label: 'Off day', className: 'bg-muted/60 text-muted-foreground' }
 };
 
+/**
+ * The holiday overlay, which sits on the date rather than on the person.
+ *
+ * It is a separate constant from `STATUS_PRESENTATION` because it is a separate axis: a cell can be
+ * `ATTENDED` and on a public holiday at once, and a board that had to choose between saying those
+ * two things would always be hiding one of them.
+ */
+export const HOLIDAY_PRESENTATION = {
+	mark: 'PH',
+	label: 'Public holiday',
+	/** Body cells: translucent, so the status chip sitting inside the cell stays legible through it. */
+	className: 'bg-brand/20',
+	/**
+	 * The day header, which is `position: sticky` and therefore must be OPAQUE. A translucent sticky
+	 * cell is not a lighter shade of the header — it is a window, and the rows scrolling underneath
+	 * are visible straight through it.
+	 */
+	headerClassName: 'bg-brand-100 text-brand-700 dark:bg-brand-900 dark:text-brand-100'
+} as const;
+
 /** The glyph a cell carries: the shift code when there is one, else what kind of day it is. */
 export function statusGlyph(day: DayFacts): string {
 	switch (day.status) {
-		case 'HOLIDAY':
-			return 'PH';
 		case 'ON_LEAVE':
 			return day.halfDayLeave ? '½' : 'L';
 		case 'REST':
@@ -248,7 +276,7 @@ export function describeDay(day: DayFacts | undefined, heading: string): string 
 		STATUS_PRESENTATION[day.status].label,
 		day.shiftCode == null ? null : `Shift ${day.shiftCode}`,
 		day.assignmentCode == null ? null : `Roster code ${day.assignmentCode}`,
-		day.holidayName,
+		day.holidayName == null ? null : `${HOLIDAY_PRESENTATION.label}: ${day.holidayName}`,
 		day.leaveCode == null ? null : `${day.leaveCode}${day.halfDayLeave ? ' (half day)' : ''}`,
 		day.withinCutoff ? 'Inside the current cut-off' : null
 	]
@@ -263,4 +291,54 @@ export function summarizeRosterMonth(facts: ReadonlyMap<string, DayFacts>): Map<
 		counts.set(day.status, (counts.get(day.status) ?? 0) + 1);
 	}
 	return counts;
+}
+
+/**
+ * How far the month has got: not drafted, being drafted, or published.
+ *
+ * This is the difference between an empty month and a broken one, and the board has to draw it
+ * because the two look identical in the tally. A month nobody has opened yet has every person-day
+ * unrostered — three hundred people times thirty-one days is nine thousand of them — and reporting
+ * that as an exception in alarm red says a catastrophe has happened where in fact nothing has
+ * happened at all. An unrostered day only becomes a fault once the month has been published, which
+ * is the point at which the roster claims to be complete.
+ */
+export type MonthDrafting = 'NOT_DRAFTED' | 'DRAFT' | 'PUBLISHED';
+
+export type MonthProgress = {
+	readonly drafting: MonthDrafting;
+	/** People times days: the size of the month, and the denominator of everything below. */
+	readonly personDays: number;
+	readonly rostered: number;
+	readonly unrostered: number;
+	/**
+	 * The things somebody has to act on now. Attendance faults always count; an unrostered day
+	 * counts only in a published month, where it is a hole rather than unfinished work.
+	 */
+	readonly exceptions: readonly { readonly status: DayStatus; readonly count: number }[];
+};
+
+/** Statuses that mean a person-day needs somebody, once the month is far enough along to say so. */
+const ATTENDANCE_EXCEPTIONS: readonly DayStatus[] = ['ABSENT', 'OPEN'];
+
+export function monthProgress(
+	facts: ReadonlyMap<string, DayFacts>,
+	drafting: MonthDrafting
+): MonthProgress {
+	const counts = summarizeRosterMonth(facts);
+	const personDays = facts.size;
+	const unrostered = counts.get('UNROSTERED') ?? 0;
+	const statuses: DayStatus[] =
+		drafting === 'PUBLISHED'
+			? [...ATTENDANCE_EXCEPTIONS, 'UNROSTERED']
+			: [...ATTENDANCE_EXCEPTIONS];
+	return {
+		drafting,
+		personDays,
+		rostered: personDays - unrostered,
+		unrostered,
+		exceptions: statuses
+			.map((status) => ({ status, count: counts.get(status) ?? 0 }))
+			.filter((entry) => entry.count > 0)
+	};
 }

@@ -6,14 +6,15 @@ is true.
 
 ## Architecture
 
-| Document                                                                            | Purpose                                                                       |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| [Overview](architecture/README.md)                                                  | System boundaries, model pillars and the end-to-end map                       |
-| [Payroll lifecycle](architecture/payroll-lifecycle.md)                              | Eight calculation phases, run states, cutoffs and YTD ordering                |
-| [Time, overtime and cutoffs](architecture/time-overtime-and-cutoffs.md)             | Clocks, shifts, day types, half-hour flooring, 12-hour and 104-hour controls  |
-| [Calculation and statutory treatment](architecture/calculation-and-statutory.md)    | Rates, proration, contribution bases, statutory calculations and YTD          |
-| [Adjustments, ledgers and locking](architecture/adjustments-ledgers-and-locking.md) | Corrections, leave and loan ledgers, approval locks and paid-run immutability |
-| [Provenance and audit](architecture/provenance-and-audit.md)                        | Source relationships, configuration hashes, current guarantees and known gaps |
+| Document                                                                            | Purpose                                                                         |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [Overview](architecture/README.md)                                                  | System boundaries, model pillars and the end-to-end map                         |
+| [Payroll lifecycle](architecture/payroll-lifecycle.md)                              | Eight calculation phases, run states, cutoffs and YTD ordering                  |
+| [Time, overtime and cutoffs](architecture/time-overtime-and-cutoffs.md)             | Clocks, shifts, day types, half-hour flooring, 12-hour and 104-hour controls    |
+| [Calculation and statutory treatment](architecture/calculation-and-statutory.md)    | Rates, proration, contribution bases, statutory calculations and YTD            |
+| [Adjustments, ledgers and locking](architecture/adjustments-ledgers-and-locking.md) | Corrections, leave and loan ledgers, approval locks and paid-run immutability   |
+| [Provenance and audit](architecture/provenance-and-audit.md)                        | Source relationships, configuration hashes, current guarantees and known gaps   |
+| [Statutory overtime coverage](architecture/statutory-overtime-coverage.md)          | Which MY overtime rates, caps and coverage tests are encoded, and which are not |
 
 ## Data and reconciliation
 

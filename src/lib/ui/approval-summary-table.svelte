@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { formatCalendarDate } from './display-formatters.js';
+
 	type Summary = {
 		ytd_pending: number;
 		ytd_approved: number;
@@ -29,7 +31,7 @@
 	<div class="border-b px-4 py-3">
 		<h3 id={headingId} class="text-sm font-semibold">{title}</h3>
 		<p class="mt-0.5 text-xs text-muted-foreground">
-			Year to date · through {new Date(`${asOfDate}T00:00:00.000Z`).toLocaleDateString()}
+			Year to date · through {formatCalendarDate(asOfDate)}
 		</p>
 	</div>
 	<!-- stupidity:allow UI3 -- this is a derived three-row analytical summary, not collection data. -->

@@ -5,6 +5,7 @@
 		startOfDayInstant,
 		todayKey
 	} from '../../lib/ui/calendar.js';
+	import { formatCalendarDate } from '../../lib/ui/display-formatters.js';
 	import { numberFrom, splitList } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
@@ -39,11 +40,11 @@
 		if (current === null) return '—';
 		switch (current.kind) {
 			case 'RECURRING':
-				return `Recurring each pay period · ${dateOf(current.effective_range.start)} → ${dateOf(current.effective_range.end)}`;
+				return `Recurring each pay period · ${formatCalendarDate(dateOf(current.effective_range.start))} → ${formatCalendarDate(dateOf(current.effective_range.end))}`;
 			case 'ONE_OFF':
 				return current.note.length === 0 ? 'One-off' : `One-off · ${current.note}`;
 			case 'CLAIM':
-				return `Claim incurred ${current.incurred_on}`;
+				return `Claim incurred ${formatCalendarDate(current.incurred_on)}`;
 			case 'LOAN_INSTALMENT':
 				return `Instalment ${current.sequence} of ${current.of}`;
 			case 'REVERSAL':

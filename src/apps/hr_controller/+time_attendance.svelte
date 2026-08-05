@@ -7,6 +7,7 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { startOfIsoWeekDate, todayKey, todayInstant } from '../../lib/ui/calendar.js';
+	import { formatCalendarDate, formatInstant } from '../../lib/ui/display-formatters.js';
 	import { runWorkbookImport } from '../../lib/ui/workbook-import.js';
 	import { timeEntryImportPayload } from '../../collections/time_entries/lib/import-workbook.js';
 
@@ -194,7 +195,12 @@
 			]}
 		>
 			{#snippet columns({ Column })}
-				<Column name="work_date" label="Work date" card="title" />
+				<Column
+					name="work_date"
+					label="Work date"
+					card="title"
+					render={({ value }) => formatCalendarDate(value)}
+				/>
 				<Column
 					name="employment_id"
 					label="Employment"
@@ -202,12 +208,12 @@
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="clock_in" label="Clock in" />
-				<Column name="clock_out" label="Clock out" />
+				<Column name="clock_in" label="Clock in" render={({ value }) => formatInstant(value)} />
+				<Column name="clock_out" label="Clock out" render={({ value }) => formatInstant(value)} />
 				<Column name="break_minutes" label="Break (min)" />
 				<Column name="overtime_authorized" label="OT authorised" />
-				<Column name="overtime_in" label="OT in" />
-				<Column name="overtime_out" label="OT out" />
+				<Column name="overtime_in" label="OT in" render={({ value }) => formatInstant(value)} />
+				<Column name="overtime_out" label="OT out" render={({ value }) => formatInstant(value)} />
 				<Column name="state" label="State" card="badge" />
 			{/snippet}
 		</CollectionTable>

@@ -5,13 +5,23 @@
 	import { formatDataValue } from '@norbital-ai/ui/data-renderer';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Columns, Cover, Inline, Split, Stack } from '@norbital-ai/ui/layout';
+	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
+	import { formatCalendarDate } from '../../lib/ui/display-formatters.js';
 	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
+
+	/**
+	 * The profile list is membership in an effective-dated employment, so it opens on the people
+	 * employed here *today* and widens to past staff only when the operator asks. The legal-entity
+	 * selector below keeps `activeRange` whatever this is set to: it is the page's scope picker, not
+	 * a listing, and it has to default to an entity that still exists.
+	 */
+	let effectiveWindow = $state<'current' | 'history'>('current');
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
@@ -44,11 +54,15 @@
 				})
 	);
 
-	const employeeIds = $derived([
-		...new Set((employmentsQuery?.current ?? []).map((employment) => employment.employee_id))
-	]);
-	/** Headcount is derived from effective employments — the schema stores no headcount column. */
-	const currentEmployees = $derived(
+	/**
+	 * People whose employment with this entity is in force today. Headcount is derived from
+	 * effective employments — the schema stores no headcount column — and the same set is what the
+	 * profile list opens on, so a leaver is not presented as current staff.
+	 *
+	 * The window is applied here rather than on `employmentsQuery` because the trend chart below
+	 * needs twelve months of ranges, including ones that have since ended.
+	 */
+	const currentEmployeeIds = $derived(
 		new Set(
 			(employmentsQuery?.current ?? [])
 				.filter(
@@ -59,7 +73,13 @@
 							employment.effective_range.end.slice(0, 10) >= today)
 				)
 				.map((employment) => employment.employee_id)
-		).size
+		)
+	);
+	const currentEmployees = $derived(currentEmployeeIds.size);
+	const employeeIds = $derived(
+		effectiveWindow === 'history'
+			? [...new Set((employmentsQuery?.current ?? []).map((employment) => employment.employee_id))]
+			: [...currentEmployeeIds]
 	);
 	const workforceTrend = $derived.by(() => {
 		const ranges = (employmentsQuery?.current ?? []).flatMap((employment) =>
@@ -123,9 +143,9 @@
 </script>
 
 {#snippet companyScopeActions()}
-	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Legal entity</span>
-		<Inline gap="sm">
+	<Inline gap="md" align="end">
+		<label class="grid gap-1.5 text-sm">
+			<span class="font-medium text-muted-foreground">Legal entity</span>
 			<Combobox
 				ariaLabel="Legal entity"
 				options={companyOptions}
@@ -145,8 +165,26 @@
 				}}
 				class="min-w-[16rem]"
 			/>
-		</Inline>
-	</label>
+		</label>
+		<Stack gap="xs">
+			<span class="text-sm font-medium text-muted-foreground">Profiles</span>
+			<ToggleGroup
+				type="single"
+				size="sm"
+				value={effectiveWindow}
+				onValueChange={(value) => {
+					effectiveWindow = value === 'history' ? 'history' : 'current';
+				}}
+			>
+				<ToggleGroupItem value="current" aria-label="Show only people employed here today">
+					Employed today
+				</ToggleGroupItem>
+				<ToggleGroupItem value="history" aria-label="Show everyone ever employed here">
+					All history
+				</ToggleGroupItem>
+			</ToggleGroup>
+		</Stack>
+	</Inline>
 {/snippet}
 
 {#snippet workforceSummary()}
@@ -210,7 +248,9 @@
 			collection="employees"
 			view={`hr_controller:people:profiles:${selectedCompanyId}`}
 			title="Employee profile"
-			description="Open a person for their employments, contractual terms and statutory registrations — everything job-shaped hangs off the engagement, not off the human being."
+			description={effectiveWindow === 'history'
+				? 'Everyone ever employed by this entity, leavers included. Open a person for their employments, contractual terms and statutory registrations — everything job-shaped hangs off the engagement, not off the human being.'
+				: 'People whose employment with this entity is in force today; switch Profiles to All history in the header for past staff. Open a person for their employments, contractual terms and statutory registrations — everything job-shaped hangs off the engagement, not off the human being.'}
 			query={{
 				where: { norbital_id: { in: employeeIds } },
 				orderBy: { name: 'asc' }
@@ -222,7 +262,11 @@
 				<Column name="email" />
 				<Column name="phone" />
 				<Column name="nationality" />
-				<Column name="date_of_birth" label="Date of birth" />
+				<Column
+					name="date_of_birth"
+					label="Date of birth"
+					render={({ value }) => formatCalendarDate(value)}
+				/>
 				<Column name="dependents_count" label="Dependents" />
 			{/snippet}
 			{#snippet ListCard(person)}

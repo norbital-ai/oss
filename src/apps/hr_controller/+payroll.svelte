@@ -7,6 +7,7 @@
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
+	import { formatCalendarDate } from '../../lib/ui/display-formatters.js';
 	import {
 		daysBetweenKeys,
 		payDateFor,
@@ -76,7 +77,9 @@
 					period,
 					payDate: payDateFor(period, selectedCompany.pay_day),
 					runState: run?.lifecycle ?? null,
-					attendance: run ? `${run.attendance_from} → ${run.attendance_to}` : null
+					attendance: run
+						? `${formatCalendarDate(run.attendance_from)} → ${formatCalendarDate(run.attendance_to)}`
+						: null
 				};
 			})
 			.filter((row) => row.runState !== 'PAID')
@@ -219,7 +222,7 @@
 											</span>
 										</td>
 										<td class="px-3 py-2.5 font-medium">
-											{new Date(`${row.payDate}T00:00:00.000Z`).toLocaleDateString()}
+											{formatCalendarDate(row.payDate)}
 										</td>
 										<td class="px-3 py-2.5 tabular-nums">{row.period}</td>
 										<td class="px-3 py-2.5 text-muted-foreground">{row.attendance ?? '—'}</td>
@@ -317,7 +320,11 @@
 			{#snippet columns({ Column })}
 				<Column name="period" label="Period" card="title" />
 				<Column name="lifecycle" label="Lifecycle" card="badge" />
-				<Column name="pay_date" label="Pay date" />
+				<Column
+					name="pay_date"
+					label="Pay date"
+					render={({ value }) => formatCalendarDate(value)}
+				/>
 				<Column name="configuration_snapshot" label="Policy snapshot" />
 			{/snippet}
 			{#snippet ListCard(run)}
@@ -325,7 +332,9 @@
 					<p class="truncate font-medium">{run.period}</p>
 					<span class="shrink-0 text-xs text-muted-foreground">{run.lifecycle}</span>
 				</Inline>
-				<p class="mt-1 truncate text-sm text-muted-foreground">Pays {run.pay_date}</p>
+				<p class="mt-1 truncate text-sm text-muted-foreground">
+					Pays {formatCalendarDate(run.pay_date)}
+				</p>
 			{/snippet}
 		</CollectionTable>
 	{/if}

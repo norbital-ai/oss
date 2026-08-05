@@ -4,10 +4,13 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cluster, Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import {
+		formatCalendarDate,
 		formatEntryOrigin,
+		formatInstant,
 		formatNumeric,
 		formatRepaymentSchedule
 	} from '../lib/ui/display-formatters.js';
@@ -16,11 +19,23 @@
 		monthKey,
 		payDateFor,
 		shiftMonthKey,
+		todayInstant,
 		todayKey
 	} from '../lib/ui/calendar.js';
 
 	const user = getPlatformStateContext()().user;
 	const today = todayKey();
+
+	/**
+	 * A repayment agreement is effective-dated, so My loans opens on the ones still being repaid
+	 * *today* and widens to settled loans only when the reader asks. `contains_date` compares against
+	 * a `dateRange()` bound, which is an instant: `todayInstant()` resolves the payroll timezone,
+	 * while `todayKey()` is a calendar day the query layer rejects.
+	 */
+	let effectiveWindow = $state<'current' | 'history'>('current');
+	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
+		effectiveWindow === 'history' ? {} : { effective_range: { contains_date: todayInstant() } }
+	);
 	const employeeQuery = client.db.employees.findFirst({ where: { email: { eq: user.email } } });
 	const employeeId = $derived(employeeQuery.current?.norbital_id);
 	const companiesQuery = client.db.companies.findMany({
@@ -200,7 +215,7 @@
 								{daysToPayday === 0 ? 'Today' : `${daysToPayday} days`}
 							</p>
 							<p class="text-xs text-muted-foreground">
-								{new Date(`${nextPayDate}T00:00:00.000Z`).toLocaleDateString()}
+								{formatCalendarDate(nextPayDate)}
 							</p>
 						</Stack>
 					{/if}
@@ -242,13 +257,17 @@
 			}}
 		>
 			{#snippet columns({ Column })}
-				<Column name="work_date" label="Work date" />
-				<Column name="clock_in" label="Clock in" />
-				<Column name="clock_out" label="Clock out" />
+				<Column
+					name="work_date"
+					label="Work date"
+					render={({ value }) => formatCalendarDate(value)}
+				/>
+				<Column name="clock_in" label="Clock in" render={({ value }) => formatInstant(value)} />
+				<Column name="clock_out" label="Clock out" render={({ value }) => formatInstant(value)} />
 				<Column name="state" label="State" />
 			{/snippet}
 			{#snippet ListCard(entry)}
-				<p class="font-medium">{entry.work_date}</p>
+				<p class="font-medium">{formatCalendarDate(entry.work_date)}</p>
 				<p class="mt-1 text-sm text-muted-foreground">{entry.state}</p>
 			{/snippet}
 		</CollectionTable>
@@ -278,8 +297,8 @@
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (leaveTypeLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="from_date" label="From" />
-				<Column name="to_date" label="To" />
+				<Column name="from_date" label="From" render={({ value }) => formatCalendarDate(value)} />
+				<Column name="to_date" label="To" render={({ value }) => formatCalendarDate(value)} />
 				<Column name="days" label="Days" render={({ value }) => formatNumeric(value)} />
 			{/snippet}
 		</CollectionTable>
@@ -312,7 +331,7 @@
 							: (payComponentLabelsById.get(String(value)) ?? '—')}
 				/>
 				<Column name="amount" label="Amount" render={({ value }) => formatNumeric(value)} />
-				<Column name="event_date" label="Date" />
+				<Column name="event_date" label="Date" render={({ value }) => formatCalendarDate(value)} />
 				<Column
 					name="origin"
 					label="Origin"
@@ -327,15 +346,38 @@
 {#snippet loans()}
 	<Stack gap="md">
 		{@render contextGate()}
+		<Inline gap="sm" align="center">
+			<span class="text-sm font-medium text-muted-foreground">Agreements</span>
+			<ToggleGroup
+				type="single"
+				size="sm"
+				value={effectiveWindow}
+				onValueChange={(value) => {
+					effectiveWindow = value === 'history' ? 'history' : 'current';
+				}}
+			>
+				<ToggleGroupItem value="current" aria-label="Show only loans still being repaid">
+					Running today
+				</ToggleGroupItem>
+				<ToggleGroupItem value="history" aria-label="Show every loan, settled ones included">
+					All history
+				</ToggleGroupItem>
+			</ToggleGroup>
+		</Inline>
 		<CollectionTable
 			{client}
 			collection="repayment_agreements"
 			features={{ create: false }}
 			title="My loans"
-			description="Review the agreed principal and the instalments it is being repaid by."
+			description={effectiveWindow === 'history'
+				? 'Every loan on record, settled ones included: the agreed principal and the instalments it was repaid by.'
+				: 'Loans still being repaid today: the agreed principal and the instalments it is being repaid by. Switch to All history for settled ones.'}
 			disabled={!employmentId}
 			query={{
-				where: { employment_id: employmentId ? { eq: employmentId } : undefined },
+				where: {
+					employment_id: employmentId ? { eq: employmentId } : undefined,
+					...effectiveRange
+				},
 				orderBy: { disbursed_on: 'desc' }
 			}}
 			searchPlaceholder="Search loans…"
@@ -349,7 +391,11 @@
 					card="subtitle"
 					render={({ value }) => formatRepaymentSchedule(value)}
 				/>
-				<Column name="disbursed_on" label="Disbursed" />
+				<Column
+					name="disbursed_on"
+					label="Disbursed"
+					render={({ value }) => formatCalendarDate(value)}
+				/>
 			{/snippet}
 		</CollectionTable>
 	</Stack>

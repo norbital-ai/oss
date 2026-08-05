@@ -1,6 +1,41 @@
 import type { HookApi, Hooks } from './$types.js';
 
 /**
+ * The two arms of the union, enforced on the row as it will be stored.
+ *
+ * A working day without a shift has no hours, so nothing about it can be measured — the publication
+ * check already refuses one, and catching it at the write means a month is not drafted for a fortnight
+ * before anybody is told. A rest or off day WITH a shift is the older conflation this collection was
+ * built on: it recorded a shift the person was not working, which is why a non-working day used to
+ * look scheduled to every reader of the row. Neither is a shape the roster is allowed to be in.
+ */
+function assertDesignationArm(
+	designation: string | null | undefined,
+	shiftDefinitionId: string | null,
+	workDate: string
+): void {
+	if (designation === 'WORK') {
+		if (shiftDefinitionId != null) return;
+		throw new Error(
+			`${workDate} is rostered as a working day but names no shift, so its hours cannot be ` +
+				'measured. Name the shift it is worked on, or mark the day REST or OFF.'
+		);
+	}
+	if (shiftDefinitionId == null) return;
+	throw new Error(
+		`${workDate} is rostered as a ${designation ?? 'non-working'} day, which schedules no shift, ` +
+			'so it cannot name one. Clear the shift, or mark the day WORK if it is worked. Hours ' +
+			'actually worked on a rest or off day are measured from the punches, not from a shift ' +
+			'nobody was scheduled on.'
+	);
+}
+
+function dateKey(value: string | Date | null | undefined): string {
+	if (value == null) return 'This entry';
+	return typeof value === 'string' ? value.slice(0, 10) : value.toISOString().slice(0, 10);
+}
+
+/**
  * A published month is the roster the payroll engine reads, so its entries stop being editable.
  *
  * Without this, publication would be decoration: the statutory checks would pass at the moment of
@@ -27,6 +62,11 @@ export default {
 	create: {
 		before: async ({ input, api }) => {
 			await assertRosterOpen(api, input.roster_id);
+			assertDesignationArm(
+				input.designation,
+				input.shift_definition_id ?? null,
+				dateKey(input.work_date)
+			);
 			return input;
 		}
 	},
@@ -36,6 +76,15 @@ export default {
 			if (input.roster_id != null && input.roster_id !== existing.roster_id) {
 				await assertRosterOpen(api, input.roster_id);
 			}
+			// The patch is judged as the row it produces, not on its own: changing only the
+			// designation of a day that still names a shift is exactly how the two arms drift apart.
+			assertDesignationArm(
+				input.designation ?? existing.designation,
+				(input.shift_definition_id === undefined
+					? existing.shift_definition_id
+					: input.shift_definition_id) ?? null,
+				dateKey(input.work_date ?? existing.work_date)
+			);
 			return input;
 		}
 	},

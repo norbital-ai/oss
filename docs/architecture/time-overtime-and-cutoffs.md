@@ -69,6 +69,12 @@ raw OT = clock-out − scheduled shift end − configured OT break
 Early clock-in does not earn time because clock-in is clamped to shift start. On a rest, off or
 holiday day, clocked work is measured from the actual punches less the applicable unpaid break.
 
+A rest or off day schedules no shift — `roster_entries.shift_definition_id` is null on those arms —
+so the clamp cannot come from the day itself. It is the employee's **ordinary** shift start, taken
+from the rostered working days of the same window, so arriving before their normal starting time
+stays unpaid on a rest day exactly as it does on a working one. The unpaid break on such a day is
+the one the time entry records, because a day with no scheduled shift has no scheduled break.
+
 Every dated quantity is floored down to a half-hour:
 
 ```text

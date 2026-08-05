@@ -7,8 +7,13 @@ const rowSchema = z.object({
 	employee_number: z.string().trim().min(1),
 	work_date: z.string().trim().min(1),
 	day_type: z.enum(['WORK', 'REST', 'OFF', 'PUBLIC_HOLIDAY']),
-	/** Required on every row: even REST/OFF days keep the employee's underlying working shift attached. */
-	shift_code: z.string().trim().min(1),
+	/**
+	 * Required on a WORK row, which is the only kind of day that has a shift. A non-working row may
+	 * still carry one — the workbook already in operators' hands repeats the employee's ordinary
+	 * shift on every line — and it is read but not stored, because a rest or off day schedules
+	 * nothing. See `designationFor` below for why nothing is lost by dropping it.
+	 */
+	shift_code: z.string().trim().min(1).optional(),
 	assignment_code: z.string().trim().min(1).optional(),
 	note: z.string().optional()
 });
@@ -124,7 +129,31 @@ export default {
 				);
 			}
 
-			const shiftCodes = [...new Set(rows.map((row) => row.shift_code))];
+			/*
+			 * A working day is the only kind that has a shift, so only working rows are resolved.
+			 * A code left on a REST or OFF row is not looked up at all: it names a shift the day does
+			 * not schedule, and refusing the file over a stale one would be pedantry about a value
+			 * that is about to be discarded.
+			 */
+			const missingShiftCode = rows
+				.filter((row) => row.day_type === 'WORK' && row.shift_code == null)
+				.map((row) => `${row.employee_number} on ${row.work_date}`);
+			if (missingShiftCode.length > 0) {
+				throw new Error(
+					'These rows are working days but name no shift, so their hours cannot be measured:\n' +
+						`${formatNamedList(missingShiftCode)}\n` +
+						'Give each one a shift_code, or mark the day REST or OFF.'
+				);
+			}
+
+			const shiftCodes = [
+				...new Set(
+					rows
+						.filter((row) => row.day_type === 'WORK')
+						.map((row) => row.shift_code)
+						.filter((code) => code != null)
+				)
+			];
 			const shifts = await api.db.query.shift_definitions.findMany({
 				where: {
 					company_id: { eq: roster.company_id },
@@ -188,9 +217,11 @@ export default {
 				if (id == null) throw new Error(`No employment resolved for ${employeeNumber}.`);
 				return id;
 			};
-			const shiftIdFor = (shiftCode: string): string => {
-				const id = shiftIdByCode.get(shiftCode);
-				if (id == null) throw new Error(`No shift resolved for ${shiftCode}.`);
+			/** Null on every non-working row: `designationFor` decides the arm, this fills only its shift. */
+			const shiftIdFor = (row: ImportRow): string | null => {
+				if (row.day_type !== 'WORK') return null;
+				const id = row.shift_code == null ? null : shiftIdByCode.get(row.shift_code);
+				if (id == null) throw new Error(`No shift resolved for ${row.shift_code ?? '(none)'}.`);
 				return id;
 			};
 
@@ -225,7 +256,7 @@ export default {
 			return rows.map((row) => ({
 				employment_id: employmentIdFor(row.employee_number),
 				work_date: row.work_date,
-				shift_definition_id: shiftIdFor(row.shift_code),
+				shift_definition_id: shiftIdFor(row),
 				roster_id: rosterId,
 				assignment_code: row.assignment_code ?? null,
 				designation: designationFor(row)
@@ -242,6 +273,11 @@ export default {
  * a roster mentions it. Recording it as OFF states the roster's own fact — that no shift was
  * scheduled — while leaving the holiday itself to the calendar. The handler has already refused any
  * PUBLIC_HOLIDAY row whose date the calendar does not know, so the two cannot disagree.
+ *
+ * Every arm but WORK stores no shift, which is why a `shift_code` on such a row is read and dropped:
+ * the value it carries is the employee's ORDINARY shift, and the payroll engine already carries that
+ * over from the rostered working days of the same window when it has to clamp an early punch on a
+ * worked rest day. Storing it here would only restate it, on a day nobody was scheduled to work.
  */
 function designationFor(row: ImportRow): Designation {
 	switch (row.day_type) {
