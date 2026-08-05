@@ -4,9 +4,14 @@
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
-	import { Button } from '@norbital-ai/ui/button';
+	import { Button, buttonVariants } from '@norbital-ai/ui/button';
 	import { Badge } from '@norbital-ai/ui/badge';
+	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
+	import { Indicator } from '@norbital-ai/ui/indicator';
+	import { Input } from '@norbital-ai/ui/input';
+	import * as Popover from '@norbital-ai/ui/popover';
 	import { Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { cn } from '@norbital-ai/ui/utils';
 	import { toast } from 'svelte-sonner';
 	import { formatHolidayScope } from '../../lib/ui/display-formatters.js';
 	import { runWorkbookImport } from '../../lib/ui/workbook-import.js';
@@ -19,18 +24,22 @@
 		todayInstant
 	} from '../../lib/ui/calendar.js';
 	import RosterMonthBoard from '../../lib/ui/roster/roster-month-board.svelte';
-	import RosterPersonCalendar from '../../lib/ui/roster/roster-person-calendar.svelte';
 	import {
 		STATUS_PRESENTATION,
 		buildRosterMonth,
+		monthDays,
 		summarizeRosterMonth,
 		type DayStatus
 	} from '../../lib/ui/roster/roster-month.js';
 
 	let companyId = $state<string | null>(null);
 	let month = $state<string>(monthKey(todayKey()));
-	let personId = $state<string | null>(null);
 	let publishing = $state(false);
+	let importing = $state(false);
+	/** Board query state, kept in the shape `CollectionTable` uses: free-text search plus filters. */
+	let personSearch = $state('');
+	let statusFilter = $state<DayStatus | null>(null);
+	let shiftFilter = $state<string | null>(null);
 
 	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
@@ -114,18 +123,6 @@
 			number: employment.employee_number,
 			name: employeeNameById.get(employment.employee_id) ?? '—'
 		}))
-	);
-	const personOptions = $derived(
-		people.map((person) => ({
-			value: person.id,
-			label: `${person.number} · ${person.name}`,
-			search_term: `${person.number} ${person.name}`
-		}))
-	);
-	const selectedPersonId = $derived(
-		personId != null && people.some((person) => person.id === personId)
-			? personId
-			: (people[0]?.id ?? null)
 	);
 
 	const shiftsQuery = $derived(
@@ -244,6 +241,49 @@
 		)
 	);
 
+	/**
+	 * The board's own query controls, in `CollectionTable`'s idiom rather than a bespoke filter bar:
+	 * free-text search over the row header, plus conditions that all have to match.
+	 *
+	 * A condition selects *rows*, not cells — a board with the absent days blanked out would hide the
+	 * very context that makes an absence readable, so a filter keeps every day of the people it
+	 * matches and drops the people it does not.
+	 */
+	const DAY_STATUSES = Object.keys(STATUS_PRESENTATION) as DayStatus[];
+	const statusOptions = DAY_STATUSES.map((status) => ({
+		value: status,
+		label: STATUS_PRESENTATION[status].label,
+		search_term: STATUS_PRESENTATION[status].label
+	}));
+	const shiftOptions = $derived(
+		(shiftsQuery?.current ?? []).map((shift) => ({
+			value: shift.code,
+			label: `${shift.code} · ${shift.name}`,
+			search_term: `${shift.code} ${shift.name}`
+		}))
+	);
+	const activeFilterCount = $derived(
+		(statusFilter == null ? 0 : 1) + (shiftFilter == null ? 0 : 1)
+	);
+	const searchActive = $derived(personSearch.trim() !== '');
+	const days = $derived(monthDays(month));
+	const boardPeople = $derived(
+		people.filter((person) => {
+			const term = personSearch.trim().toLowerCase();
+			if (term !== '' && !`${person.number} ${person.name}`.toLowerCase().includes(term)) {
+				return false;
+			}
+			if (statusFilter == null && shiftFilter == null) return true;
+			return days.some((date) => {
+				const day = facts.get(`${person.id}:${date}`);
+				if (day == null) return false;
+				if (statusFilter != null && day.status !== statusFilter) return false;
+				if (shiftFilter != null && day.shiftCode !== shiftFilter) return false;
+				return true;
+			});
+		})
+	);
+
 	const rostersQuery = $derived(
 		selectedCompanyId == null
 			? null
@@ -268,6 +308,23 @@
 				? `No roster is drafted for ${month}. Create the draft month first, then import into it.`
 				: `Roster ${month} is published, so its entries are fixed. Re-open the month to import into it.`
 	);
+
+	async function importRoster(): Promise<void> {
+		const rosterId = draftRoster?.norbital_id;
+		if (rosterId == null) return;
+		importing = true;
+		try {
+			// `runWorkbookImport` reports its own refusals: the pipeline answers with the rows the
+			// company's records contradict, and that list is the whole message worth showing.
+			await runWorkbookImport({
+				collectionName: 'roster_entries',
+				recordLabel: 'roster rows',
+				buildPayload: (grids) => rosterImportPayload(grids, rosterId)
+			});
+		} finally {
+			importing = false;
+		}
+	}
 
 	async function publish(rosterId: string): Promise<void> {
 		const update = client.db.rosters.update;
@@ -309,54 +366,158 @@
 	<title>Scheduling</title>
 	<meta
 		name="description"
-		content="Plan the monthly roster on a calendar, publish it against the statutory rules, and manage work patterns, shifts and holidays"
+		content="Plan the monthly roster on a calendar, publish it against the statutory rules, and manage the shifts a day is worked on and the patterns a week is shaped by"
 	/>
 	<meta name="pod:icon" content="lucide:calendar-clock" />
 </svelte:head>
 
 {#snippet companyScopeActions()}
-	<Cluster gap="md">
-		<label class="grid gap-1.5 text-sm">
-			<span class="font-medium text-muted-foreground">Legal entity</span>
-			<Combobox
-				ariaLabel="Legal entity"
-				options={companyOptions}
-				value={selectedCompanyId}
-				onValueChange={(value) => {
-					companyId = typeof value === 'string' ? value : (companies[0]?.norbital_id ?? null);
-				}}
-				emptyPlaceholder="Select legal entity…"
-				searchPlaceholder="Search companies…"
-				clientConfig={{
-					isLoading: companiesQuery.loading,
-					error: companiesQuery.error?.message ?? null
-				}}
-				class="min-w-[16rem]"
-			/>
-		</label>
-		<label class="grid gap-1.5 text-sm">
-			<span class="font-medium text-muted-foreground">Month</span>
-			<Inline gap="xs">
-				<Button
-					variant="outline"
-					size="icon"
-					aria-label="Previous month"
-					onclick={() => (month = shiftMonthKey(month, -1))}
+	<label class="grid gap-1.5 text-sm">
+		<span class="font-medium text-muted-foreground">Legal entity</span>
+		<Combobox
+			ariaLabel="Legal entity"
+			options={companyOptions}
+			value={selectedCompanyId}
+			onValueChange={(value) => {
+				companyId = typeof value === 'string' ? value : (companies[0]?.norbital_id ?? null);
+			}}
+			emptyPlaceholder="Select legal entity…"
+			searchPlaceholder="Search companies…"
+			clientConfig={{
+				isLoading: companiesQuery.loading,
+				error: companiesQuery.error?.message ?? null
+			}}
+			class="min-w-[16rem]"
+		/>
+	</label>
+{/snippet}
+
+{#snippet boardToolbar()}
+	<Inline gap="xs" justify="between" class="min-w-0">
+		<Inline gap="xs" shrink={false}>
+			<Button
+				variant="outline"
+				size="icon"
+				aria-label="Previous month"
+				onclick={() => (month = shiftMonthKey(month, -1))}
+			>
+				‹
+			</Button>
+			<span class="min-w-[6rem] text-center text-sm font-medium tabular-nums">{month}</span>
+			<Button
+				variant="outline"
+				size="icon"
+				aria-label="Next month"
+				onclick={() => (month = shiftMonthKey(month, 1))}
+			>
+				›
+			</Button>
+		</Inline>
+		<Inline gap="xs" shrink={false}>
+			<Popover.Root>
+				<Popover.Trigger
+					class={cn(
+						buttonVariants({ variant: 'ghost', size: 'icon' }),
+						searchActive && 'bg-accent'
+					)}
+					aria-label="Search people"
+					aria-pressed={searchActive}
 				>
-					‹
-				</Button>
-				<span class="min-w-[6rem] text-center text-sm font-medium tabular-nums">{month}</span>
-				<Button
-					variant="outline"
-					size="icon"
-					aria-label="Next month"
-					onclick={() => (month = shiftMonthKey(month, 1))}
-				>
-					›
-				</Button>
-			</Inline>
-		</label>
-	</Cluster>
+					<IconWrapper name="lucide:search" class="size-4" />
+				</Popover.Trigger>
+				<Popover.Content align="end" class="w-[min(24rem,calc(100vw-1rem))] p-2">
+					<Inline gap="sm">
+						<Input
+							type="search"
+							class="h-9"
+							placeholder="Search people…"
+							bind:value={personSearch}
+						/>
+						{#if searchActive}
+							<Button type="button" variant="ghost" size="sm" onclick={() => (personSearch = '')}>
+								Clear
+							</Button>
+						{/if}
+					</Inline>
+				</Popover.Content>
+			</Popover.Root>
+			<Popover.Root>
+				<Indicator visible={activeFilterCount > 0} variant="info" size="sm">
+					<Popover.Trigger
+						class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+						aria-label={activeFilterCount > 0 ? 'Filters active' : 'Filter the board'}
+						aria-pressed={activeFilterCount > 0}
+					>
+						<IconWrapper name="lucide:list-filter" class="size-4" />
+					</Popover.Trigger>
+				</Indicator>
+				<Popover.Content align="end" class="w-[min(22rem,calc(100vw-1rem))] p-0">
+					<Inline justify="between" gap="sm" class="border-b px-3 py-2">
+						<Stack gap="none">
+							<p class="text-xs font-medium">Filters</p>
+							<p class="text-micro text-muted-foreground">
+								All conditions must match, and they keep whole people.
+							</p>
+						</Stack>
+						{#if activeFilterCount > 0}
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								onclick={() => {
+									statusFilter = null;
+									shiftFilter = null;
+								}}
+							>
+								Clear all
+							</Button>
+						{/if}
+					</Inline>
+					<Stack gap="sm" class="p-3">
+						<label class="grid gap-1.5 text-sm">
+							<span class="font-medium text-muted-foreground">Has a day that is</span>
+							<Combobox
+								ariaLabel="Day status"
+								options={statusOptions}
+								value={statusFilter}
+								allowClear
+								searchable={false}
+								emptyPlaceholder="Any status"
+								onValueChange={(value) => {
+									statusFilter = DAY_STATUSES.find((status) => status === value) ?? null;
+								}}
+							/>
+						</label>
+						<label class="grid gap-1.5 text-sm">
+							<span class="font-medium text-muted-foreground">Rostered on shift</span>
+							<Combobox
+								ariaLabel="Shift"
+								options={shiftOptions}
+								value={shiftFilter}
+								allowClear
+								emptyPlaceholder="Any shift"
+								searchPlaceholder="Search shifts…"
+								onValueChange={(value) => {
+									shiftFilter = typeof value === 'string' ? value : null;
+								}}
+							/>
+						</label>
+					</Stack>
+				</Popover.Content>
+			</Popover.Root>
+			<Button
+				size="sm"
+				variant="outline"
+				disabled={importing || rosterImportBlocker != null}
+				title={rosterImportBlocker ??
+					`Import planned assignments into the ${month} draft from the roster template — one row per person per day, on its "Roster" sheet.`}
+				onclick={() => void importRoster()}
+			>
+				<IconWrapper name="lucide:upload" class="size-4" />
+				Import
+			</Button>
+		</Inline>
+	</Inline>
 {/snippet}
 
 {#snippet monthStatus()}
@@ -394,6 +555,9 @@
 				</Badge>
 			{/each}
 		</Cluster>
+		{#if rosterImportBlocker != null}
+			<p class="text-sm text-muted-foreground">{rosterImportBlocker}</p>
+		{/if}
 		<p class="text-sm text-muted-foreground">
 			Publishing checks the month against the work pattern: at least one rest day in every week,
 			plus any consecutive-day, daily-hours and between-shift limits the pattern promises. A
@@ -407,39 +571,52 @@
 		<p class="text-sm text-muted-foreground">Select a legal entity to load its roster.</p>
 	{:else}
 		<Stack gap="md">
+			{@render boardToolbar()}
 			{@render monthStatus()}
 			{#if loading}
 				<p class="text-sm text-muted-foreground">Loading {month}…</p>
+			{:else if people.length > 0 && boardPeople.length === 0}
+				<p class="text-sm text-muted-foreground">No people match the current search or filters.</p>
 			{:else}
-				<RosterMonthBoard {month} {people} {facts} {today} {cutoff} />
+				<RosterMonthBoard {month} people={boardPeople} {facts} {today} {cutoff} />
 			{/if}
 		</Stack>
 	{/if}
 {/snippet}
 
-{#snippet personCalendar()}
+{#snippet shifts()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to load a calendar.</p>
-	{:else if people.length === 0}
-		<p class="text-sm text-muted-foreground">No active employments for this legal entity.</p>
+		<p class="text-sm text-muted-foreground">Select a legal entity to manage its shifts.</p>
 	{:else}
 		<Stack gap="md">
-			<label class="grid max-w-md gap-1.5 text-sm">
-				<span class="font-medium text-muted-foreground">Person</span>
-				<Combobox
-					ariaLabel="Person"
-					options={personOptions}
-					value={selectedPersonId}
-					onValueChange={(value) => {
-						personId = typeof value === 'string' ? value : (people[0]?.id ?? null);
-					}}
-					emptyPlaceholder="Select a person…"
-					searchPlaceholder="Search people…"
-				/>
-			</label>
-			{#if selectedPersonId != null}
-				<RosterPersonCalendar {month} employmentId={selectedPersonId} {facts} {today} {cutoff} />
-			{/if}
+			<p class="text-sm text-muted-foreground">
+				A shift definition is one working <em>day</em>: when it starts, when it ends, the unpaid
+				break inside it and whether it runs past midnight. It says nothing about which days of the
+				week are worked — that is a work pattern, which arranges shifts into a week and names one of
+				these as the day it uses.
+			</p>
+			<CollectionTable
+				{client}
+				collection="shift_definitions"
+				view={`hr_controller:scheduling:shifts:${selectedCompanyId}`}
+				query={{
+					where: { company_id: { eq: selectedCompanyId }, ...activeRange },
+					orderBy: { code: 'asc' }
+				}}
+				searchPlaceholder="Search shifts…"
+			>
+				{#snippet columns({ Column })}
+					<Column name="code" card="title" />
+					<Column name="name" card="subtitle" />
+					<Column name="start_time" label="Start" />
+					<Column name="end_time" label="End" />
+					<Column name="break_minutes" label="Break (min)" />
+					<Column name="pays_overtime" label="OT eligible" />
+					<Column name="overtime_break_minutes" label="OT break (min)" />
+					<Column name="crosses_midnight" label="Crosses midnight" />
+					<Column name="effective_range" label="Effective" />
+				{/snippet}
+			</CollectionTable>
 		</Stack>
 	{/if}
 {/snippet}
@@ -450,10 +627,10 @@
 	{:else}
 		<Stack gap="md">
 			<p class="text-sm text-muted-foreground">
-				A work pattern names which weekdays are working, rest and off, and which weekday the week
-				starts on — so a week running Tuesday to Monday, or one that swaps its rest and off days, is
-				stated rather than inferred. A rostered pattern derives nothing and takes every day from the
-				published roster.
+				A work pattern is one <em>week</em>: which weekdays are working, rest and off, which weekday
+				the week starts on, and the scheduling limits a published roster must respect. It carries a
+				default shift for its ordinary days rather than restating one — a rostered pattern derives
+				nothing at all and takes every day from the published roster.
 			</p>
 			<CollectionTable
 				{client}
@@ -481,91 +658,6 @@
 				{/snippet}
 			</CollectionTable>
 		</Stack>
-	{/if}
-{/snippet}
-
-{#snippet shifts()}
-	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to manage its shifts.</p>
-	{:else}
-		<CollectionTable
-			{client}
-			collection="shift_definitions"
-			view={`hr_controller:scheduling:shifts:${selectedCompanyId}`}
-			query={{
-				where: { company_id: { eq: selectedCompanyId }, ...activeRange },
-				orderBy: { code: 'asc' }
-			}}
-			searchPlaceholder="Search shifts…"
-		>
-			{#snippet columns({ Column })}
-				<Column name="code" card="title" />
-				<Column name="name" card="subtitle" />
-				<Column name="start_time" label="Start" />
-				<Column name="end_time" label="End" />
-				<Column name="break_minutes" label="Break (min)" />
-				<Column name="pays_overtime" label="OT eligible" />
-				<Column name="overtime_break_minutes" label="OT break (min)" />
-				<Column name="crosses_midnight" label="Crosses midnight" />
-				<Column name="effective_range" label="Effective" />
-			{/snippet}
-		</CollectionTable>
-	{/if}
-{/snippet}
-
-{#snippet rosterRows()}
-	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to manage its roster rows.</p>
-	{:else}
-		<CollectionTable
-			{client}
-			collection="roster_entries"
-			view={`hr_controller:scheduling:roster:${selectedCompanyId}`}
-			query={{
-				where: { employment_id: { in: employmentIds } },
-				orderBy: { work_date: 'desc' }
-			}}
-			searchPlaceholder="Search roster entries…"
-			importPipelines={[
-				{
-					id: 'roster-workbook',
-					label: 'Roster workbook',
-					description: `Import planned assignments into the ${month} draft from the roster template — one row per person per day, on its "Roster" sheet.`,
-					icon: 'lucide:calendar-plus',
-					getDisabledReason: () => rosterImportBlocker,
-					run: async () => {
-						const rosterId = draftRoster?.norbital_id;
-						if (rosterId == null) return;
-						await runWorkbookImport({
-							collectionName: 'roster_entries',
-							recordLabel: 'roster rows',
-							buildPayload: (grids) => rosterImportPayload(grids, rosterId)
-						});
-					}
-				}
-			]}
-		>
-			{#snippet columns({ Column })}
-				<Column name="work_date" label="Work date" card="title" />
-				<Column
-					name="employment_id"
-					label="Employment"
-					card="subtitle"
-					render={({ value }) =>
-						value == null || value === ''
-							? '—'
-							: (people.find((person) => person.id === String(value))?.number ?? '—')}
-				/>
-				<Column
-					name="shift_definition_id"
-					label="Underlying shift"
-					render={({ value }) =>
-						value == null || value === '' ? '—' : (shiftLabelsById.get(String(value)) ?? '—')}
-				/>
-				<Column name="assignment_code" label="Roster code" />
-				<Column name="designation" label="Day type" card="badge" />
-			{/snippet}
-		</CollectionTable>
 	{/if}
 {/snippet}
 
@@ -606,15 +698,8 @@
 		animate={false}
 		config={[
 			{ name: 'board', label: 'Month board', icon: 'lucide:calendar-range', content: board },
-			{
-				name: 'calendar',
-				label: 'Calendar',
-				icon: 'lucide:calendar-days',
-				content: personCalendar
-			},
-			{ name: 'patterns', label: 'Work patterns', icon: 'lucide:calendar-cog', content: patterns },
 			{ name: 'shifts', label: 'Shift definitions', icon: 'lucide:clock-4', content: shifts },
-			{ name: 'rows', label: 'Roster rows', icon: 'lucide:table-2', content: rosterRows },
+			{ name: 'patterns', label: 'Work patterns', icon: 'lucide:calendar-cog', content: patterns },
 			{ name: 'holidays', label: 'Holidays', icon: 'lucide:party-popper', content: holidays }
 		] satisfies TabConfig[]}
 	/>
