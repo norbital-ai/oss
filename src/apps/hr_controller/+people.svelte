@@ -7,12 +7,12 @@
 	import { Columns, Cover, Inline, Split, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { todayKey } from '../../lib/ui/calendar.js';
+	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
 	import { formatStatutoryFactStatus } from '../../lib/ui/display-formatters.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
-	const activeRange = { effective_range: { contains_date: today } } as const;
+	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },

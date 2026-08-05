@@ -5,7 +5,7 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Bound, Cover, Inline } from '@norbital-ai/ui/layout';
 	import { formatNumeric, formatRepaymentSchedule } from '../../lib/ui/display-formatters.js';
-	import { todayKey } from '../../lib/ui/calendar.js';
+	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
 	import {
 		repaymentProgress,
 		type RepaymentInstalmentLink
@@ -13,7 +13,7 @@
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
-	const activeRange = { effective_range: { contains_date: today } } as const;
+	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },

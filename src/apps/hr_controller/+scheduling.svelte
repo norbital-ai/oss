@@ -11,7 +11,13 @@
 	import { formatHolidayScope } from '../../lib/ui/display-formatters.js';
 	import { runWorkbookImport } from '../../lib/ui/workbook-import.js';
 	import { rosterImportPayload } from '../../collections/roster_entries/lib/import-workbook.js';
-	import { calendarDayKey, monthKey, shiftMonthKey, todayKey } from '../../lib/ui/calendar.js';
+	import {
+		calendarDayKey,
+		monthKey,
+		shiftMonthKey,
+		todayKey,
+		todayInstant
+	} from '../../lib/ui/calendar.js';
 	import RosterMonthBoard from '../../lib/ui/roster/roster-month-board.svelte';
 	import RosterPersonCalendar from '../../lib/ui/roster/roster-person-calendar.svelte';
 	import {
@@ -27,7 +33,7 @@
 	let publishing = $state(false);
 
 	const today = todayKey();
-	const activeRange = { effective_range: { contains_date: today } } as const;
+	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 	const approved = { norbital_approval_id: { isNull: true } } as const;
 
 	const companiesQuery = client.db.companies.findMany({

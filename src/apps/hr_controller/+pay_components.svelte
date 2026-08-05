@@ -8,11 +8,11 @@
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
 	import { formatEntryOrigin, formatNumeric } from '../../lib/ui/display-formatters.js';
-	import { todayKey } from '../../lib/ui/calendar.js';
+	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
-	const activeRange = { effective_range: { contains_date: today } } as const;
+	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },

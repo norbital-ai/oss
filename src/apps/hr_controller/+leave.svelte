@@ -12,11 +12,11 @@
 		formatLeavePayrollEffect,
 		formatNumeric
 	} from '../../lib/ui/display-formatters.js';
-	import { todayKey } from '../../lib/ui/calendar.js';
+	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
-	const activeRange = { effective_range: { contains_date: today } } as const;
+	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
