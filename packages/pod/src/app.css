@@ -1,4 +1,4 @@
 @import '@norbital-ai/ui/base.css';
 /* Tenant Vite builds import this packaged file, so scan only packaged UI artifacts. */
-@source './{client,runtime}/**/*.{js,ts,svelte}';
+@source './ui/**/*.{js,ts,svelte}';
 @source '../../ui/build/**/*.{js,svelte}';
