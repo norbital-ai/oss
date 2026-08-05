@@ -191,9 +191,9 @@ export function buildRosterMonth(options: {
 /**
  * How each status reads, and how loudly.
  *
- * The board and the per-person calendar share this so the same day cannot look like two different
- * things depending on which tab you opened. Classes are literal variants, never assembled, so
- * Tailwind can see every one of them.
+ * The board's cells, its legend and the scheduling app's filter all read this one table, so a day
+ * cannot be described one way in a cell and another way in the control that selects it. Classes are
+ * literal variants, never assembled, so Tailwind can see every one of them.
  */
 export const STATUS_PRESENTATION: Record<
 	DayStatus,

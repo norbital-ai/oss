@@ -15,7 +15,8 @@ The documentation is deliberately split by responsibility:
 ## Surfaces
 
 Nine applications: `hr_employee` for self-service, and eight pages grouped under `hr_controller` —
-people, scheduling, time and attendance, leave, loans, pay components, payroll, and settings. A
+people, scheduling, time and attendance, leave, loans, pay components, payroll, and the statutory
+profile (whose file remains `+settings.svelte`, because a file name owns an app's identity). A
 policy names the group rather than each page, so adding a controller page does not mean revisiting
 every role declaration.
 

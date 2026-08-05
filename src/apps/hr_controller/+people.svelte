@@ -8,7 +8,6 @@
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
-	import { formatStatutoryFactStatus } from '../../lib/ui/display-formatters.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
@@ -45,39 +44,9 @@
 				})
 	);
 
-	const employmentIds = $derived(
-		(employmentsQuery?.current ?? []).map((employment) => employment.norbital_id)
-	);
 	const employeeIds = $derived([
 		...new Set((employmentsQuery?.current ?? []).map((employment) => employment.employee_id))
 	]);
-	const employmentLabelsById = $derived(
-		new Map(
-			(employmentsQuery?.current ?? []).map((employment) => [
-				employment.norbital_id,
-				employment.employee_number
-			])
-		)
-	);
-	const employeesQuery = client.db.employees.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		limit: 1000
-	});
-	const employeeLabelsById = $derived(
-		new Map((employeesQuery.current ?? []).map((employee) => [employee.norbital_id, employee.name]))
-	);
-	const contributionsQuery = client.db.statutory_contributions.findMany({
-		where: { norbital_approval_id: { isNull: true } },
-		limit: 500
-	});
-	const contributionLabelsById = $derived(
-		new Map(
-			(contributionsQuery.current ?? []).map((contribution) => [
-				contribution.norbital_id,
-				`${contribution.code} · ${contribution.name}`
-			])
-		)
-	);
 	/** Headcount is derived from effective employments — the schema stores no headcount column. */
 	const currentEmployees = $derived(
 		new Set(
@@ -151,18 +120,6 @@
 		valueFormat: { style: 'percent', maximumFractionDigits: 1 },
 		curve: 'linear'
 	} satisfies ChartDisplaySpec);
-
-	type NestedEmployment = {
-		readonly employment_employee?: { readonly name?: string | null } | null;
-	};
-
-	function nestedEmployment(row: unknown): NestedEmployment {
-		return row as NestedEmployment;
-	}
-
-	function personLabel(row: unknown): string {
-		return nestedEmployment(row).employment_employee?.name ?? '—';
-	}
 </script>
 
 {#snippet companyScopeActions()}
@@ -244,16 +201,16 @@
 	/>
 {/snippet}
 
-{#snippet directory()}
+{#snippet profiles()}
 	{#if selectedCompanyId == null}
 		<p class="text-sm text-muted-foreground">Select a legal entity to browse its people.</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="employees"
-			view={`hr_controller:people:directory:${selectedCompanyId}`}
-			title="People directory"
-			description="Facts true of the human being. Everything job-shaped lives on employments."
+			view={`hr_controller:people:profiles:${selectedCompanyId}`}
+			title="Employee profile"
+			description="Open a person for their employments, contractual terms and statutory registrations — everything job-shaped hangs off the engagement, not off the human being."
 			query={{
 				where: { norbital_id: { in: employeeIds } },
 				orderBy: { name: 'asc' }
@@ -281,126 +238,11 @@
 	{/if}
 {/snippet}
 
-{#snippet engagements()}
-	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to manage its employments.</p>
-	{:else}
-		<CollectionTable
-			{client}
-			collection="employments"
-			view={`hr_controller:people:employments:${selectedCompanyId}`}
-			title="Employments"
-			description="One person working for one company. hire_date drives service months and every leave accrual."
-			query={{
-				where: { company_id: { eq: selectedCompanyId }, ...activeRange },
-				orderBy: { employee_number: 'asc' },
-				with: { employment_employee: { columns: { name: true } } }
-			}}
-			searchPlaceholder="Search employments…"
-		>
-			{#snippet columns({ Column })}
-				<Column name="employee_number" card="title" />
-				<Column
-					name="employee_id"
-					label="Person"
-					card="subtitle"
-					render={({ row }) => personLabel(row)}
-				/>
-				<Column name="hire_date" label="Hired" />
-				<Column name="exit_date" label="Exited" />
-				<Column name="effective_range" label="Effective" />
-			{/snippet}
-		</CollectionTable>
-	{/if}
-{/snippet}
-
-{#snippet terms()}
-	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">
-			Select a legal entity to manage its contractual terms.
-		</p>
-	{:else}
-		<CollectionTable
-			{client}
-			collection="employment_terms"
-			view={`hr_controller:people:terms:${selectedCompanyId}`}
-			title="Contractual terms"
-			description="Effective-dated pay and classification. End-date and insert a successor; never update in place."
-			query={{
-				where: { employment_id: { in: employmentIds }, ...activeRange },
-				orderBy: { norbital_created_at: 'desc' }
-			}}
-		>
-			{#snippet columns({ Column })}
-				<Column
-					name="employment_id"
-					label="Employment"
-					card="title"
-					render={({ value }) =>
-						value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
-				/>
-				<Column name="base_salary" label="Base salary" />
-				<Column name="pay_frequency" label="Frequency" card="badge" />
-				<Column name="work_classification" label="Classification" />
-				<Column name="employment_type" label="Type" />
-				<Column name="rest_day" label="Rest day" />
-				<Column name="effective_range" label="Effective" />
-			{/snippet}
-		</CollectionTable>
-	{/if}
-{/snippet}
-
-{#snippet statutoryFacts()}
-	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">
-			Select a legal entity to manage statutory registrations for its employments.
-		</p>
-	{:else}
-		<CollectionTable
-			{client}
-			collection="employment_statutory_facts"
-			view={`hr_controller:people:statutory-facts:${selectedCompanyId}`}
-			title="Statutory registrations"
-			description="Per-employment registration status against regime contributions — scoped to the selected legal entity."
-			query={{
-				where: { employment_id: { in: employmentIds }, ...activeRange },
-				orderBy: { norbital_created_at: 'desc' }
-			}}
-			searchPlaceholder="Search statutory facts…"
-		>
-			{#snippet columns({ Column })}
-				<Column
-					name="employment_id"
-					label="Employment"
-					card="title"
-					render={({ value }) =>
-						value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
-				/>
-				<Column
-					name="statutory_contribution_id"
-					label="Contribution"
-					card="subtitle"
-					render={({ value }) =>
-						value == null || value === ''
-							? '—'
-							: (contributionLabelsById.get(String(value)) ?? '—')}
-				/>
-				<Column
-					name="status"
-					label="Registration"
-					render={({ value }) => formatStatutoryFactStatus(value)}
-				/>
-				<Column name="effective_range" label="Effective" />
-			{/snippet}
-		</CollectionTable>
-	{/if}
-{/snippet}
-
 <svelte:head>
 	<title>People</title>
 	<meta
 		name="description"
-		content="Manage the employee directory, employment history, contractual terms, and workforce health"
+		content="Workforce health, and one profile per person carrying their employments, contractual terms and statutory registrations"
 	/>
 	<meta name="pod:icon" content="lucide:users" />
 </svelte:head>
@@ -409,7 +251,7 @@
 	<PageHeader
 		eyebrow="HR Controller"
 		title="People"
-		description="Keep personal details separate from legal engagements, contractual terms, and dated changes — scoped to one legal entity."
+		description="Facts about the human being stay on the person; engagements, dated terms and statutory registrations hang off the employment and are read from that person's profile — scoped to one legal entity."
 		actions={companyScopeActions}
 	/>
 {/snippet}
@@ -424,15 +266,7 @@
 				icon: 'lucide:chart-no-axes-combined',
 				content: overview
 			},
-			{ name: 'directory', label: 'Directory', icon: 'lucide:users', content: directory },
-			{ name: 'employments', label: 'Employments', icon: 'lucide:briefcase', content: engagements },
-			{ name: 'terms', label: 'Terms', icon: 'lucide:file-signature', content: terms },
-			{
-				name: 'statutory-facts',
-				label: 'Statutory facts',
-				icon: 'lucide:id-card',
-				content: statutoryFacts
-			}
+			{ name: 'profiles', label: 'Employee profile', icon: 'lucide:users', content: profiles }
 		] satisfies TabConfig[]}
 	/>
 </Cover>

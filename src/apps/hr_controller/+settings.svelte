@@ -44,18 +44,20 @@
 </script>
 
 <svelte:head>
-	<title>HR Settings</title>
+	<title>Statutory profile</title>
 	<meta
 		name="description"
-		content="Manage jurisdictions, companies, statutory contributions and rates, and overtime rules"
+		content="The regime every payroll is calculated against: jurisdictions and the schemes inside them, the companies bound to each, contribution rates, and overtime rules and limits"
 	/>
-	<meta name="pod:icon" content="lucide:settings-2" />
+	<meta name="pod:icon" content="lucide:scale" />
 </svelte:head>
 
 {#snippet jurisdictions()}
 	<CollectionTable
 		{client}
 		collection="jurisdictions"
+		title="Jurisdictions"
+		description="Open a jurisdiction to configure the statutory schemes it levies — they belong to the regime, not to a catalogue of their own."
 		query={{ where: { ...activeRange }, orderBy: { code: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
@@ -95,30 +97,6 @@
 			<Column name="leave_year_start_month" label="Leave year starts" />
 			<Column name="overtime_calculation_method" label="OT calculation" />
 			<Column name="risk_class" label="Risk class" />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-	</CollectionTable>
-{/snippet}
-
-{#snippet contributions()}
-	<CollectionTable
-		{client}
-		collection="statutory_contributions"
-		query={{ where: { ...activeRange }, orderBy: { sequence: 'asc' } }}
-	>
-		{#snippet columns({ Column })}
-			<Column name="code" card="title" />
-			<Column name="name" card="subtitle" />
-			<Column
-				name="jurisdiction_id"
-				label="Jurisdiction"
-				render={({ value }) =>
-					value == null || value === '' ? '—' : (jurisdictionLabelsById.get(String(value)) ?? '—')}
-			/>
-			<Column name="authority" />
-			<Column name="payer" card="badge" />
-			<Column name="keyed_by" label="Keyed by" />
-			<Column name="rounding" />
 			<Column name="effective_range" label="Effective" />
 		{/snippet}
 	</CollectionTable>
@@ -204,8 +182,8 @@
 {#snippet pageHeading()}
 	<PageHeader
 		eyebrow="HR Controller"
-		title="Settings"
-		description="Jurisdictions, companies, statutory contributions and rates, and overtime policy. Pay catalogue lives under Pay components; statutory facts under People. Every rule is effective-dated — end-date and insert a successor, never update in place."
+		title="Statutory profile"
+		description="The regime payroll is calculated against: jurisdictions, the companies bound to one, and the contribution and overtime rules a jurisdiction sets. Each statutory scheme is configured inside its own jurisdiction; the pay catalogue lives under Pay components and per-person registrations under People. Every rule is effective-dated — end-date and insert a successor, never update in place."
 	/>
 {/snippet}
 
@@ -220,12 +198,6 @@
 				content: jurisdictions
 			},
 			{ name: 'companies', label: 'Companies', icon: 'lucide:building-2', content: companies },
-			{
-				name: 'contributions',
-				label: 'Contributions',
-				icon: 'lucide:landmark',
-				content: contributions
-			},
 			{ name: 'rates', label: 'Rates', icon: 'lucide:percent', content: rates },
 			{ name: 'overtime', label: 'Overtime rules', icon: 'lucide:timer', content: overtime },
 			{ name: 'limits', label: 'Overtime limits', icon: 'lucide:gauge', content: limits }
