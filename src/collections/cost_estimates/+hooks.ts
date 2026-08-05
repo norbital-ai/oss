@@ -9,7 +9,11 @@ import {
 	parseReconstructionMetrics,
 	parseSubstrateQuantities
 } from '../../lib/reclamation/reconstruction-json.js';
-import { calendarDateInTimeZone, PROJECT_TIME_ZONE } from '../../lib/calendar.js';
+import {
+	calendarDateInTimeZone,
+	PROJECT_TIME_ZONE,
+	startOfDayInstant
+} from '../../lib/calendar.js';
 import type { Hooks } from './$types.js';
 
 /**
@@ -105,7 +109,10 @@ async function price(estimate: EstimateInput, api: HookApi): Promise<Record<stri
 	// The project's calendar day, not the UTC one. `contains_date` is evaluated against whatever
 	// day this string names, so a UTC day would price a Singapore evening against yesterday's rate
 	// matrix while the cost panel beside it showed today's.
-	const asOf = calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE);
+	const asOf = startOfDayInstant(
+		calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE),
+		PROJECT_TIME_ZONE
+	);
 	const rates = (
 		await api.db.query.cost_rates.findMany({
 			where: { validity_range: { contains_date: asOf } },

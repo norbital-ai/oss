@@ -6,7 +6,7 @@
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { SUBSTRATES, substrateDefinition } from '../lib/reclamation/cost.js';
-	import { calendarDateInTimeZone, PROJECT_TIME_ZONE } from '../lib/calendar.js';
+	import { calendarDateInTimeZone, PROJECT_TIME_ZONE, todayInstant } from '../lib/calendar.js';
 	import type { SubstrateId } from '../lib/reclamation/types.js';
 
 	type ReclamationProjectScopeRow = {
@@ -19,7 +19,7 @@
 	// The site's calendar day, so "the rates in force today" means the same day here, in the project
 	// cost panel, and in the server hook that prices an estimate against `contains_date`.
 	const today = calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE);
-	const activeRates = { validity_range: { contains_date: today } } as const;
+	const activeRates = { validity_range: { contains_date: todayInstant() } } as const;
 
 	const IN_FLIGHT_STATUSES = ['planning', 'design', 'tender', 'construction'] as const;
 

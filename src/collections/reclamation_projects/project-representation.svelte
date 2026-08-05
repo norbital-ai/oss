@@ -13,7 +13,7 @@
 		parseStitchedModel,
 		parseSubstrateQuantities
 	} from '../../lib/reclamation/reconstruction-json.js';
-	import { calendarDateInTimeZone, PROJECT_TIME_ZONE } from '../../lib/calendar.js';
+	import { calendarDateInTimeZone, PROJECT_TIME_ZONE, todayInstant } from '../../lib/calendar.js';
 	import CostPanel from './panels/cost-panel.svelte';
 	import DocumentsPanel from './panels/documents-panel.svelte';
 	import ModelPanel from './panels/model-panel.svelte';
@@ -59,7 +59,7 @@
 	);
 	const ratesQuery = $derived(
 		client.db.cost_rates.findMany({
-			where: { validity_range: { contains_date: today } },
+			where: { validity_range: { contains_date: todayInstant() } },
 			limit: 100
 		})
 	);
