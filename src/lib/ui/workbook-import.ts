@@ -20,9 +20,9 @@ import ExcelJSBrowser from 'exceljs/dist/exceljs.bare.min.js';
 import { importCollectionRecords } from '@norbital-ai/pod/client';
 import { toast } from 'svelte-sonner';
 import {
-	normalizeCellValue,
+	csvGrid,
+	workbookGrids,
 	WorkbookImportError,
-	type SheetCell,
 	type WorkbookGrids
 } from '../workbook-rows.js';
 
@@ -57,44 +57,6 @@ export async function pickWorkbookFile(): Promise<File | null> {
 	});
 }
 
-/** A CSV row, honouring RFC 4180 quoting so a quoted comma or newline stays inside its cell. */
-function parseCsv(text: string): readonly (readonly SheetCell[])[] {
-	const rows: SheetCell[][] = [];
-	let row: SheetCell[] = [];
-	let cell = '';
-	let quoted = false;
-	const source = text.replace(/^﻿/, '');
-
-	const endCell = (): void => {
-		row.push(cell === '' ? null : cell);
-		cell = '';
-	};
-	const endRow = (): void => {
-		endCell();
-		rows.push(row);
-		row = [];
-	};
-
-	for (let index = 0; index < source.length; index += 1) {
-		const character = source[index]!;
-		if (quoted) {
-			if (character !== '"') cell += character;
-			else if (source[index + 1] === '"') {
-				cell += '"';
-				index += 1;
-			} else quoted = false;
-			continue;
-		}
-		if (character === '"') quoted = true;
-		else if (character === ',') endCell();
-		else if (character === '\r') continue;
-		else if (character === '\n') endRow();
-		else cell += character;
-	}
-	if (cell !== '' || row.length > 0) endRow();
-	return rows;
-}
-
 /**
  * Every sheet in the chosen file, as grids of plain values.
  *
@@ -103,12 +65,9 @@ function parseCsv(text: string): readonly (readonly SheetCell[])[] {
  * file's — `requireSheet` accepts a single-sheet file under any name.
  */
 export async function readWorkbookGrids(file: File): Promise<WorkbookGrids> {
-	const grids = new Map<string, readonly (readonly SheetCell[])[]>();
 	if (file.name.toLowerCase().endsWith('.csv')) {
-		grids.set(file.name, parseCsv(await file.text()));
-		return grids;
+		return new Map([[file.name, csvGrid(await file.text())]]);
 	}
-
 	const workbook = new ExcelJSBrowser.Workbook();
 	try {
 		await workbook.xlsx.load(await file.arrayBuffer());
@@ -118,25 +77,7 @@ export async function readWorkbookGrids(file: File): Promise<WorkbookGrids> {
 			cause instanceof Error ? cause.message : String(cause)
 		]);
 	}
-
-	// A worksheet is addressed by row and column number, and both skip: an empty row is simply not
-	// there. Every gap is filled so that a grid index is the spreadsheet's own row number minus one,
-	// which is what lets a refusal name the row the operator is looking at.
-	workbook.eachSheet((worksheet) => {
-		const rows: SheetCell[][] = [];
-		worksheet.eachRow({ includeEmpty: true }, (worksheetRow, rowNumber) => {
-			const cells: SheetCell[] = [];
-			worksheetRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
-				cells[columnNumber - 1] = normalizeCellValue(cell.value);
-			});
-			rows[rowNumber - 1] = Array.from({ length: cells.length }, (_, index) => cells[index] ?? null);
-		});
-		grids.set(
-			worksheet.name,
-			Array.from({ length: rows.length }, (_, index) => rows[index] ?? [])
-		);
-	});
-	return grids;
+	return workbookGrids(workbook);
 }
 
 /**

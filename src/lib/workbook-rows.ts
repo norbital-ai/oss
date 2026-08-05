@@ -78,6 +78,103 @@ export function normalizeCellValue(value: unknown): SheetCell {
 	return null;
 }
 
+/**
+ * The shape of a loaded spreadsheet this file reads.
+ *
+ * Structural rather than the library's own type, so the same conversion runs against whichever
+ * ExcelJS distribution is at hand — the browser bundle the app ships, or the ordinary package a
+ * verification script opens a file with. What the operator's browser does to a workbook is then
+ * exactly what a test can do to one.
+ */
+export interface WorkbookCellLike {
+	readonly value: unknown;
+}
+export interface WorkbookRowLike {
+	eachCell(
+		options: { includeEmpty: boolean },
+		callback: (cell: WorkbookCellLike, columnNumber: number) => void
+	): void;
+}
+export interface WorksheetLike {
+	readonly name: string;
+	eachRow(
+		options: { includeEmpty: boolean },
+		callback: (row: WorkbookRowLike, rowNumber: number) => void
+	): void;
+}
+export interface WorkbookLike {
+	eachSheet(callback: (worksheet: WorksheetLike, sheetId: number) => void): void;
+}
+
+/**
+ * Every sheet of a loaded workbook, as grids of plain values.
+ *
+ * A worksheet is addressed by row and column number, and both skip — an empty row is simply not
+ * there. Every gap is filled, so a grid index is the spreadsheet's own row number minus one, which
+ * is what lets a refusal name the row the operator is looking at.
+ */
+export function workbookGrids(workbook: WorkbookLike): WorkbookGrids {
+	const grids = new Map<string, SheetGrid>();
+	workbook.eachSheet((worksheet) => {
+		const rows: SheetCell[][] = [];
+		worksheet.eachRow({ includeEmpty: true }, (worksheetRow, rowNumber) => {
+			const cells: SheetCell[] = [];
+			worksheetRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+				cells[columnNumber - 1] = normalizeCellValue(cell.value);
+			});
+			rows[rowNumber - 1] = Array.from({ length: cells.length }, (_, index) => cells[index] ?? null);
+		});
+		grids.set(
+			worksheet.name,
+			Array.from({ length: rows.length }, (_, index) => rows[index] ?? [])
+		);
+	});
+	return grids;
+}
+
+/**
+ * A CSV as one grid, honouring RFC 4180 quoting so a quoted comma or newline stays in its cell.
+ *
+ * A CSV carries no sheet name, so the caller supplies one — `requireSheet` accepts a single-sheet
+ * file under any name rather than insisting a format that cannot name a sheet names it correctly.
+ */
+export function csvGrid(text: string): SheetGrid {
+	const rows: SheetCell[][] = [];
+	let row: SheetCell[] = [];
+	let cell = '';
+	let quoted = false;
+	const source = text.replace(/^﻿/, '');
+
+	const endCell = (): void => {
+		row.push(cell === '' ? null : cell);
+		cell = '';
+	};
+	const endRow = (): void => {
+		endCell();
+		rows.push(row);
+		row = [];
+	};
+
+	for (let index = 0; index < source.length; index += 1) {
+		const character = source[index]!;
+		if (quoted) {
+			if (character !== '"') cell += character;
+			else if (source[index + 1] === '"') {
+				cell += '"';
+				index += 1;
+			} else quoted = false;
+			continue;
+		}
+		if (character === '"') quoted = true;
+		else if (character === ',') endCell();
+		else if (character === '\r') continue;
+		else if (character === '\n') endRow();
+		else cell += character;
+	}
+	if (cell !== '' || row.length > 0) endRow();
+	return rows;
+}
+
 /** A header as it is compared: case, surrounding space and separator style do not distinguish two. */
 function headerKey(value: SheetCell): string {
 	return String(value ?? '')

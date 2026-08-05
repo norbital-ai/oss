@@ -7,6 +7,8 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { startOfIsoWeekDate, todayKey } from '../../lib/ui/calendar.js';
+	import { runWorkbookImport } from '../../lib/ui/workbook-import.js';
+	import { timeEntryImportPayload } from '../../collections/time_entries/lib/import-workbook.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
@@ -174,6 +176,21 @@
 				orderBy: { work_date: 'desc' }
 			}}
 			searchPlaceholder="Search time entries…"
+			importPipelines={[
+				{
+					id: 'time-entry-workbook',
+					label: 'Time entry workbook',
+					description: 'Import clock punches from the time-entries template — one row per person per day on its "Time entries" sheet, read as local wall time in the zone its "Settings" sheet names.',
+					icon: 'lucide:clock-arrow-up',
+					run: async () => {
+						await runWorkbookImport({
+							collectionName: 'time_entries',
+							recordLabel: 'time entries',
+							buildPayload: timeEntryImportPayload
+						});
+					}
+				}
+			]}
 		>
 			{#snippet columns({ Column })}
 				<Column name="work_date" label="Work date" card="title" />

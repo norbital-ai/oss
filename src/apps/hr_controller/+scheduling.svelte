@@ -9,6 +9,8 @@
 	import { Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { toast } from 'svelte-sonner';
 	import { formatHolidayScope } from '../../lib/ui/display-formatters.js';
+	import { runWorkbookImport } from '../../lib/ui/workbook-import.js';
+	import { rosterImportPayload } from '../../collections/roster_entries/lib/import-workbook.js';
 	import { calendarDayKey, monthKey, shiftMonthKey, todayKey } from '../../lib/ui/calendar.js';
 	import RosterMonthBoard from '../../lib/ui/roster/roster-month-board.svelte';
 	import RosterPersonCalendar from '../../lib/ui/roster/roster-person-calendar.svelte';
@@ -245,6 +247,21 @@
 				})
 	);
 	const rosters = $derived(rostersQuery?.current ?? []);
+	/**
+	 * The month's draft roster, which an import lands in.
+	 *
+	 * A published month is frozen and the pipeline refuses one outright, so the import is offered
+	 * only against a draft. The operator is told which state the month is in before they choose a
+	 * file, rather than after the file has been read and sent.
+	 */
+	const draftRoster = $derived(rosters.find((roster) => roster.published_at == null) ?? null);
+	const rosterImportBlocker = $derived(
+		draftRoster != null
+			? null
+			: rosters.length === 0
+				? `No roster is drafted for ${month}. Create the draft month first, then import into it.`
+				: `Roster ${month} is published, so its entries are fixed. Re-open the month to import into it.`
+	);
 
 	async function publish(rosterId: string): Promise<void> {
 		const update = client.db.rosters.update;
@@ -503,6 +520,24 @@
 				orderBy: { work_date: 'desc' }
 			}}
 			searchPlaceholder="Search roster entries…"
+			importPipelines={[
+				{
+					id: 'roster-workbook',
+					label: 'Roster workbook',
+					description: `Import planned assignments into the ${month} draft from the roster template — one row per person per day, on its "Roster" sheet.`,
+					icon: 'lucide:calendar-plus',
+					getDisabledReason: () => rosterImportBlocker,
+					run: async () => {
+						const rosterId = draftRoster?.norbital_id;
+						if (rosterId == null) return;
+						await runWorkbookImport({
+							collectionName: 'roster_entries',
+							recordLabel: 'roster rows',
+							buildPayload: (grids) => rosterImportPayload(grids, rosterId)
+						});
+					}
+				}
+			]}
 		>
 			{#snippet columns({ Column })}
 				<Column name="work_date" label="Work date" card="title" />
