@@ -180,7 +180,8 @@
 				{
 					id: 'time-entry-workbook',
 					label: 'Time entry workbook',
-					description: 'Import clock punches from the time-entries template — one row per person per day on its "Time entries" sheet, read as local wall time in the zone its "Settings" sheet names.',
+					description:
+						'Import clock punches from the time-entries template — one row per person per day on its "Time entries" sheet, read as local wall time in the zone its "Settings" sheet names.',
 					icon: 'lucide:clock-arrow-up',
 					run: async () => {
 						await runWorkbookImport({

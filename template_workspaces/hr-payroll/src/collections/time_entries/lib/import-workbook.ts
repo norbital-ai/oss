@@ -47,7 +47,12 @@ export interface TimeEntryImportPayload {
  */
 export function timeEntryImportTimezone(grids: WorkbookGrids): string {
 	const settings = findSheet(grids, SETTINGS_SHEET_NAME);
-	const row = settings?.find((cells) => String(cells[0] ?? '').trim().toLowerCase() === 'timezone');
+	const row = settings?.find(
+		(cells) =>
+			String(cells[0] ?? '')
+				.trim()
+				.toLowerCase() === 'timezone'
+	);
 	const timezone = String(row?.[1] ?? '').trim();
 	if (timezone === '') {
 		throw new WorkbookImportError(
@@ -76,21 +81,17 @@ export function timeEntryImportPayload(grids: WorkbookGrids): TimeEntryImportPay
 	// derives from what it was given — an unwritten `overtime_authorized` is a third state, and an
 	// unwritten `state` is derived from whether both clocks arrived. `JSON.stringify` drops an
 	// undefined property on the way out, so absence travels as absence.
-	const rows = readRows(
-		table,
-		identifyTimeEntryRow,
-		(reader): TimeEntryImportRow => ({
-			employee_number: reader.requiredText('employee_number') ?? '',
-			work_date: reader.calendarDate('work_date') ?? '',
-			clock_in: reader.clockTime('clock_in'),
-			clock_out: reader.clockTime('clock_out'),
-			break_minutes: reader.wholeNumber('break_minutes'),
-			overtime_in: reader.clockTime('overtime_in'),
-			overtime_out: reader.clockTime('overtime_out'),
-			overtime_authorized: reader.triStateBoolean('overtime_authorized'),
-			state: reader.choice('state', STATES, false),
-			reason: reader.text('reason')
-		})
-	);
+	const rows = readRows(table, identifyTimeEntryRow, (reader): TimeEntryImportRow => ({
+		employee_number: reader.requiredText('employee_number') ?? '',
+		work_date: reader.calendarDate('work_date') ?? '',
+		clock_in: reader.clockTime('clock_in'),
+		clock_out: reader.clockTime('clock_out'),
+		break_minutes: reader.wholeNumber('break_minutes'),
+		overtime_in: reader.clockTime('overtime_in'),
+		overtime_out: reader.clockTime('overtime_out'),
+		overtime_authorized: reader.triStateBoolean('overtime_authorized'),
+		state: reader.choice('state', STATES, false),
+		reason: reader.text('reason')
+	}));
 	return { timezone, rows };
 }

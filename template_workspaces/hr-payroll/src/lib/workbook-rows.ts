@@ -122,7 +122,10 @@ export function workbookGrids(workbook: WorkbookLike): WorkbookGrids {
 			worksheetRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
 				cells[columnNumber - 1] = normalizeCellValue(cell.value);
 			});
-			rows[rowNumber - 1] = Array.from({ length: cells.length }, (_, index) => cells[index] ?? null);
+			rows[rowNumber - 1] = Array.from(
+				{ length: cells.length },
+				(_, index) => cells[index] ?? null
+			);
 		});
 		grids.set(
 			worksheet.name,
@@ -310,9 +313,9 @@ export class RowReader {
 	}
 
 	reject(column: string, expected: string): undefined {
-		const shown = this.raw(column);
+		const shown = this.text(column);
 		this.#problems.push(
-			`${this.identity}: ${column} ${shown == null ? 'is empty' : `is "${String(shown)}"`}, expected ${expected}.`
+			`${this.identity}: ${column} ${shown == null ? 'is empty' : `is "${shown}"`}, expected ${expected}.`
 		);
 		return undefined;
 	}

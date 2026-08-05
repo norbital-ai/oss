@@ -51,17 +51,13 @@ function identifyRosterRow(reader: RowReader): string {
  */
 export function rosterImportPayload(grids: WorkbookGrids, rosterId: string): RosterImportPayload {
 	const table = readSheetTable(grids, ROSTER_SHEET_NAME, REQUIRED_COLUMNS);
-	const rows = readRows(
-		table,
-		identifyRosterRow,
-		(reader): RosterImportRow => ({
-			employee_number: reader.requiredText('employee_number') ?? '',
-			work_date: reader.calendarDate('work_date') ?? '',
-			day_type: reader.choice('day_type', DAY_TYPES, true) ?? 'WORK',
-			shift_code: reader.requiredText('shift_code') ?? '',
-			assignment_code: reader.text('assignment_code'),
-			note: reader.text('note')
-		})
-	);
+	const rows = readRows(table, identifyRosterRow, (reader): RosterImportRow => ({
+		employee_number: reader.requiredText('employee_number') ?? '',
+		work_date: reader.calendarDate('work_date') ?? '',
+		day_type: reader.choice('day_type', DAY_TYPES, true) ?? 'WORK',
+		shift_code: reader.requiredText('shift_code') ?? '',
+		assignment_code: reader.text('assignment_code'),
+		note: reader.text('note')
+	}));
 	return { roster_id: rosterId, rows };
 }
