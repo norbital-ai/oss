@@ -13,11 +13,11 @@ allowBuilds:
 # scripts/tests/templates.test.mjs enforces it. Forgetting surfaces as
 # ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION inside a tenant sandbox build.
 minimumReleaseAgeExclude:
-  - '@norbital-ai/config@1.0.0'
-  - '@norbital-ai/platform-utils@1.0.0'
-  - '@norbital-ai/pod@1.0.0'
-  - '@norbital-ai/std@1.0.0'
-  - '@norbital-ai/ui@1.0.0'
+  - '@norbital-ai/config@1.0.2'
+  - '@norbital-ai/platform-utils@1.0.2'
+  - '@norbital-ai/pod@1.0.2'
+  - '@norbital-ai/std@1.0.2'
+  - '@norbital-ai/ui@1.0.2'
 
 # Host tools execute from this depset, while tenant builds execute in a Linux/musl microVM.
 # Include both host-native and guest-native optional packages on macOS, Windows, and Linux hosts.
