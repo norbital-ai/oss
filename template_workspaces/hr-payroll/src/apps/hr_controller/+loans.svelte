@@ -3,8 +3,13 @@
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
-	import { Bound, Cover, Inline } from '@norbital-ai/ui/layout';
-	import { formatNumeric, formatRepaymentSchedule } from '../../lib/ui/display-formatters.js';
+	import { Bound, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
+	import {
+		formatCalendarDate,
+		formatNumeric,
+		formatRepaymentSchedule
+	} from '../../lib/ui/display-formatters.js';
 	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
 	import {
 		repaymentProgress,
@@ -14,6 +19,17 @@
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
+
+	/**
+	 * A repayment agreement is effective-dated, so the ledger opens on the agreements still running
+	 * *today* and widens to settled and future ones only when the operator asks. The legal-entity
+	 * selector below keeps `activeRange` whatever this is set to: it is the page's scope picker, not
+	 * a listing, and it has to default to an entity that still exists.
+	 */
+	let effectiveWindow = $state<'current' | 'history'>('current');
+	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
+		effectiveWindow === 'history' ? {} : activeRange
+	);
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
@@ -105,9 +121,9 @@
 </svelte:head>
 
 {#snippet companyScopeActions()}
-	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Legal entity</span>
-		<Inline gap="sm">
+	<Inline gap="md" align="end">
+		<label class="grid gap-1.5 text-sm">
+			<span class="font-medium text-muted-foreground">Legal entity</span>
 			<Combobox
 				ariaLabel="Legal entity"
 				options={companyOptions}
@@ -127,8 +143,26 @@
 				}}
 				class="min-w-[16rem]"
 			/>
-		</Inline>
-	</label>
+		</label>
+		<Stack gap="xs">
+			<span class="text-sm font-medium text-muted-foreground">Agreements</span>
+			<ToggleGroup
+				type="single"
+				size="sm"
+				value={effectiveWindow}
+				onValueChange={(value) => {
+					effectiveWindow = value === 'history' ? 'history' : 'current';
+				}}
+			>
+				<ToggleGroupItem value="current" aria-label="Show only agreements running today">
+					Running today
+				</ToggleGroupItem>
+				<ToggleGroupItem value="history" aria-label="Show every agreement, settled ones included">
+					All history
+				</ToggleGroupItem>
+			</ToggleGroup>
+		</Stack>
+	</Inline>
 {/snippet}
 
 {#snippet pageHeading()}
@@ -156,7 +190,7 @@
 				query={{
 					where: {
 						employment_id: { in: employmentIds },
-						...activeRange
+						...effectiveRange
 					},
 					orderBy: { disbursed_on: 'desc' },
 					with: {
@@ -196,14 +230,24 @@
 						label="Schedule"
 						render={({ value }) => formatRepaymentSchedule(value)}
 					/>
-					<Column name="disbursed_on" label="Disbursed" />
-					<Column name="repay_by" label="Repay by" />
+					<Column
+						name="disbursed_on"
+						label="Disbursed"
+						render={({ value }) => formatCalendarDate(value)}
+					/>
+					<Column
+						name="repay_by"
+						label="Repay by"
+						render={({ value }) => formatCalendarDate(value)}
+					/>
 					<Column name="effective_range" label="Effective" />
 				{/snippet}
 				{#snippet ListCard(agreement)}
 					<Inline align="start" justify="between" gap="sm">
 						<p class="truncate font-medium">{agreement.reference}</p>
-						<span class="shrink-0 text-xs text-muted-foreground">{agreement.disbursed_on}</span>
+						<span class="shrink-0 text-xs text-muted-foreground">
+							{formatCalendarDate(agreement.disbursed_on)}
+						</span>
 					</Inline>
 					<p class="mt-1 truncate text-sm text-muted-foreground">
 						{formatRepaymentSchedule(agreement.schedule)}

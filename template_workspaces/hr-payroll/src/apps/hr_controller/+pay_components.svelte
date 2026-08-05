@@ -6,13 +6,29 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
-	import { formatEntryOrigin, formatNumeric } from '../../lib/ui/display-formatters.js';
+	import {
+		formatCalendarDate,
+		formatEntryOrigin,
+		formatNumeric
+	} from '../../lib/ui/display-formatters.js';
 	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
+
+	/**
+	 * The catalogue is effective-dated, so it opens on the components in force *today* and widens to
+	 * superseded versions only when the operator asks. The legal-entity selector below keeps
+	 * `activeRange` whatever this is set to: it is the page's scope picker, not a listing, and it has
+	 * to default to an entity that still exists.
+	 */
+	let effectiveWindow = $state<'current' | 'history'>('current');
+	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
+		effectiveWindow === 'history' ? {} : activeRange
+	);
 
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
@@ -57,14 +73,16 @@
 			])
 		)
 	);
+	// Deliberately unfiltered by effective range: this is the label map for the entries table's
+	// component column, and an entry booked last year against a since-superseded component must
+	// still resolve to its name rather than an em dash.
 	const payComponentsQuery = $derived(
 		selectedCompanyId == null
 			? null
 			: client.db.pay_components.findMany({
 					where: {
 						norbital_approval_id: { isNull: true },
-						company_id: { eq: selectedCompanyId },
-						...activeRange
+						company_id: { eq: selectedCompanyId }
 					},
 					limit: 500
 				})
@@ -119,9 +137,9 @@
 </svelte:head>
 
 {#snippet companyScopeActions()}
-	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Legal entity</span>
-		<Inline gap="sm">
+	<Inline gap="md" align="end">
+		<label class="grid gap-1.5 text-sm">
+			<span class="font-medium text-muted-foreground">Legal entity</span>
 			<Combobox
 				ariaLabel="Legal entity"
 				options={companyOptions}
@@ -141,8 +159,26 @@
 				}}
 				class="min-w-[16rem]"
 			/>
-		</Inline>
-	</label>
+		</label>
+		<Stack gap="xs">
+			<span class="text-sm font-medium text-muted-foreground">Catalogue</span>
+			<ToggleGroup
+				type="single"
+				size="sm"
+				value={effectiveWindow}
+				onValueChange={(value) => {
+					effectiveWindow = value === 'history' ? 'history' : 'current';
+				}}
+			>
+				<ToggleGroupItem value="current" aria-label="Show only components in force today">
+					In force today
+				</ToggleGroupItem>
+				<ToggleGroupItem value="history" aria-label="Show every version, including superseded ones">
+					All history
+				</ToggleGroupItem>
+			</ToggleGroup>
+		</Stack>
+	</Inline>
 {/snippet}
 
 {#snippet overview()}
@@ -207,7 +243,11 @@
 				/>
 				<Column name="amount" label="Amount" render={({ value }) => formatNumeric(value)} />
 				<Column name="quantity" label="Quantity" />
-				<Column name="event_date" label="Event date" />
+				<Column
+					name="event_date"
+					label="Event date"
+					render={({ value }) => formatCalendarDate(value)}
+				/>
 				<Column name="pay_period" label="Pay period" />
 				<Column name="usage_mode" label="Payslip usage" card="badge" />
 				<Column name="description" label="Description" />
@@ -235,7 +275,7 @@
 			query={{
 				where: {
 					company_id: { eq: selectedCompanyId },
-					...activeRange
+					...effectiveRange
 				},
 				orderBy: { code: 'asc' }
 			}}

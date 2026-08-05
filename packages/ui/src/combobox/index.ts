@@ -137,8 +137,33 @@ export interface TComboboxBaseProps<
 	minWidth?: number;
 	maxWidth?: number;
 	/**
+	 * When true, the dropdown is clamped to whichever viewport edge it collides with
+	 * instead of spilling past it: the preferred `side` is flipped and the alignment is
+	 * shifted along the anchor until the dropdown fits.
+	 *
+	 * Handled natively by the underlying floating primitive (`flip` + `shift`), so the
+	 * position is re-evaluated on scroll and resize rather than only when the dropdown opens.
+	 *
+	 * Set to `false` to pin the dropdown to `align` exactly and allow it to overflow.
+	 *
+	 * @default true
+	 */
+	avoidCollisions?: boolean;
+	/**
+	 * Virtual padding, in pixels, inset from the viewport edges when detecting collisions.
+	 * Larger values keep the dropdown further away from the edge it clamps against.
+	 * Has no effect when `avoidCollisions` is `false`.
+	 *
+	 * @default 8
+	 */
+	collisionPadding?: number;
+	/**
 	 * When true, if the popover is displaced horizontally due to viewport collisions,
 	 * the combobox will snap alignment to 'start' (left) or 'end' (right) automatically.
+	 *
+	 * @deprecated Redundant. Viewport clamping is handled natively by `avoidCollisions`
+	 * (on by default), which re-evaluates continuously instead of guessing the dropdown
+	 * width once at open time. Remove this prop; it will be dropped in a future major.
 	 */
 	snapToEnds?: boolean;
 

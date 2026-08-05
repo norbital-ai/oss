@@ -21,7 +21,15 @@ export interface RosterImportRow {
 	readonly employee_number: string;
 	readonly work_date: string;
 	readonly day_type: (typeof DAY_TYPES)[number];
-	readonly shift_code: string;
+	/**
+	 * Required on a `WORK` row and optional on every other kind.
+	 *
+	 * A rest, off or public-holiday day schedules no shift, so it has no shift code to give. The
+	 * workbook already in operators' hands repeats the employee's ordinary shift on every line, and
+	 * that still reads: the cell is accepted on a non-working row and the pipeline discards it. Only
+	 * a WORK row with the cell empty is refused, because a working day with no shift has no hours.
+	 */
+	readonly shift_code?: string;
 	readonly assignment_code?: string;
 	readonly note?: string;
 }
@@ -51,13 +59,18 @@ function identifyRosterRow(reader: RowReader): string {
  */
 export function rosterImportPayload(grids: WorkbookGrids, rosterId: string): RosterImportPayload {
 	const table = readSheetTable(grids, ROSTER_SHEET_NAME, REQUIRED_COLUMNS);
-	const rows = readRows(table, identifyRosterRow, (reader): RosterImportRow => ({
-		employee_number: reader.requiredText('employee_number') ?? '',
-		work_date: reader.calendarDate('work_date') ?? '',
-		day_type: reader.choice('day_type', DAY_TYPES, true) ?? 'WORK',
-		shift_code: reader.requiredText('shift_code') ?? '',
-		assignment_code: reader.text('assignment_code'),
-		note: reader.text('note')
-	}));
+	const rows = readRows(table, identifyRosterRow, (reader): RosterImportRow => {
+		const dayType = reader.choice('day_type', DAY_TYPES, true) ?? 'WORK';
+		return {
+			employee_number: reader.requiredText('employee_number') ?? '',
+			work_date: reader.calendarDate('work_date') ?? '',
+			day_type: dayType,
+			// A working day must name the shift that gives it its hours; no other kind of day has one.
+			shift_code:
+				dayType === 'WORK' ? reader.requiredText('shift_code') : reader.text('shift_code'),
+			assignment_code: reader.text('assignment_code'),
+			note: reader.text('note')
+		};
+	});
 	return { roster_id: rosterId, rows };
 }

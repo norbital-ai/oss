@@ -62,6 +62,8 @@
 		align,
 		minWidth = 240,
 		maxWidth,
+		avoidCollisions = true,
+		collisionPadding = 8,
 		snapToEnds = false,
 		header,
 		footer,
@@ -446,6 +448,8 @@
 		{minWidth}
 		{maxWidth}
 		{align}
+		{avoidCollisions}
+		{collisionPadding}
 		{snapToEnds}
 		{renderSelectionContent}
 		onOpenChange={handleOpenChange}

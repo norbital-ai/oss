@@ -193,14 +193,18 @@ try {
 	const rosterPayload = rosterImportPayload(await rosterGrids(ROSTER_ROWS), ROSTER_ID);
 	assert.equal(rosterPayload.roster_id, ROSTER_ID);
 	assert.equal(rosterPayload.rows.length, 7, 'the "Read me first" sheet is not a source of rows');
-	assert.deepEqual(rosterPayload.rows[2], {
-		employee_number: 'NHPMY0002',
-		work_date: '2026-05-03',
-		day_type: 'REST',
-		shift_code: '7.5AM',
-		assignment_code: 'AMRES',
-		note: undefined
-	});
+	assert.deepEqual(
+		rosterPayload.rows[2],
+		{
+			employee_number: 'NHPMY0002',
+			work_date: '2026-05-03',
+			day_type: 'REST',
+			shift_code: '7.5AM',
+			assignment_code: 'AMRES',
+			note: undefined
+		},
+		'the shipped workbook repeats the ordinary shift on a REST row, and the reader still accepts it'
+	);
 	assert.equal(rosterPayload.rows[0].note, 'Labour Day');
 	assert.equal(
 		rosterPayload.rows[0].assignment_code,
@@ -210,17 +214,28 @@ try {
 
 	const written = await rosterPipeline.import.handler({ input: rosterPayload }, rosterApi());
 	assert.equal(written.length, 7);
-	assert.deepEqual(written[0], {
-		employment_id: 'employment:2',
-		work_date: '2026-05-01',
-		shift_definition_id: 'shift:75',
-		roster_id: ROSTER_ID,
-		assignment_code: null,
-		designation: 'OFF'
-	});
+	assert.deepEqual(
+		written[0],
+		{
+			employment_id: 'employment:2',
+			work_date: '2026-05-01',
+			shift_definition_id: null,
+			roster_id: ROSTER_ID,
+			assignment_code: null,
+			designation: 'OFF'
+		},
+		'a public holiday is stored as an off day that schedules nothing — the holiday itself is the ' +
+			"calendar's, and an off day has no shift"
+	);
 	assert.deepEqual(
 		written.map((row) => row.designation),
 		['OFF', 'OFF', 'REST', 'WORK', 'WORK', 'WORK', 'WORK']
+	);
+	assert.deepEqual(
+		written.map((row) => row.shift_definition_id),
+		[null, null, null, 'shift:75', 'shift:75', 'shift:am', 'shift:pm'],
+		'only a WORK row carries a shift; the code the workbook repeats on a REST or OFF row is read ' +
+			'and dropped, because a non-working day schedules none'
 	);
 	assert.deepEqual(
 		written.at(-1),
@@ -233,6 +248,55 @@ try {
 			designation: 'WORK'
 		},
 		'every row resolves to the employment and shift its codes name'
+	);
+
+	/*
+	 * The shape the REISSUED template will have: a non-working row may leave `shift_code` blank,
+	 * because the day schedules no shift to name. The column still has to exist — a file missing it
+	 * is refused below — so the same sheet serves both the workbook already in operators' hands and
+	 * the one that replaces it.
+	 */
+	const blankShiftOnRestRows = await rosterPipeline.import.handler(
+		{
+			input: rosterImportPayload(
+				await rosterGrids(
+					ROSTER_ROWS.map((row) =>
+						row[2] === 'WORK' ? row : [...row.slice(0, 3), '', ...row.slice(4)]
+					)
+				),
+				ROSTER_ID
+			)
+		},
+		rosterApi()
+	);
+	assert.deepEqual(
+		blankShiftOnRestRows.map((row) => row.shift_definition_id),
+		[null, null, null, 'shift:75', 'shift:75', 'shift:am', 'shift:pm'],
+		'a blank shift_code on a non-working row lands exactly as a repeated one does'
+	);
+
+	const workDayWithoutShift = await refusal(async () =>
+		rosterPipeline.import.handler(
+			{
+				// Straight at the pipeline: the browser reader refuses this row before it is ever sent,
+				// and the server refuses it again, because a working day with no shift has no hours.
+				input: {
+					roster_id: ROSTER_ID,
+					rows: [
+						{ employee_number: 'NHPMY0002', work_date: '2026-05-04', day_type: 'WORK' },
+						{ employee_number: 'NHPMY0002', work_date: '2026-05-05', day_type: 'REST' }
+					]
+				}
+			},
+			rosterApi()
+		)
+	);
+	assert.match(workDayWithoutShift, /working days but name no shift/);
+	assert.match(workDayWithoutShift, /• NHPMY0002 on 2026-05-04/);
+	assert.doesNotMatch(
+		workDayWithoutShift,
+		/2026-05-05/,
+		'a REST row without a shift is the normal case, not a complaint'
 	);
 
 	// ── One bad row refuses the whole file, and says which row ─────────────────────────────────────

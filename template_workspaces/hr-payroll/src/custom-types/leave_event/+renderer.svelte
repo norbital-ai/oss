@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Stack } from '@norbital-ai/ui/layout';
+	import { formatCalendarDate } from '../../lib/ui/display-formatters.js';
 	import { leaveEventSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
 
@@ -13,8 +14,8 @@
 	const summary = $derived.by(() => {
 		if (current === null) return '—';
 		if (current.kind === 'TIME_OFF')
-			return `${current.from_date} → ${current.to_date} · ${current.days}d`;
-		return `${current.kind.replaceAll('_', ' ').toLowerCase()} · ${current.effective_on} · ${current.movement_days}d`;
+			return `${formatCalendarDate(current.from_date)} → ${formatCalendarDate(current.to_date)} · ${current.days}d`;
+		return `${current.kind.replaceAll('_', ' ').toLowerCase()} · ${formatCalendarDate(current.effective_on)} · ${current.movement_days}d`;
 	});
 
 	function update(raw: string): void {

@@ -13,7 +13,11 @@
 	import { Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { toast } from 'svelte-sonner';
-	import { formatHolidayScope } from '../../lib/ui/display-formatters.js';
+	import {
+		formatCalendarDate,
+		formatDurationHours,
+		formatHolidayScope
+	} from '../../lib/ui/display-formatters.js';
 	import { runWorkbookImport } from '../../lib/ui/workbook-import.js';
 	import { rosterImportPayload } from '../../collections/roster_entries/lib/import-workbook.js';
 	import {
@@ -27,9 +31,11 @@
 	import {
 		STATUS_PRESENTATION,
 		buildRosterMonth,
+		holidayNamesByDate,
 		monthDays,
-		summarizeRosterMonth,
-		type DayStatus
+		monthProgress,
+		type DayStatus,
+		type MonthDrafting
 	} from '../../lib/ui/roster/roster-month.js';
 
 	let companyId = $state<string | null>(null);
@@ -219,6 +225,10 @@
 		)
 	);
 
+	/** Overlaid onto the board from the company calendar; never a mark stored on a roster entry. */
+	const companyHolidays = $derived(holidaysQuery?.current ?? []);
+	const holidayNames = $derived(holidayNamesByDate(companyHolidays));
+
 	const facts = $derived(
 		buildRosterMonth({
 			month,
@@ -226,19 +236,11 @@
 			rosterEntries: rosterEntriesQuery?.current ?? [],
 			timeEntries: timeEntriesQuery?.current ?? [],
 			leaveRequests: leaveQuery?.current ?? [],
-			holidays: holidaysQuery?.current ?? [],
+			holidays: companyHolidays,
 			shiftCodeById,
 			leaveCodeById,
 			cutoff
 		})
-	);
-	const summary = $derived(summarizeRosterMonth(facts));
-	/** Only the statuses that need somebody to act are worth a headline figure. */
-	const EXCEPTION_STATUSES: DayStatus[] = ['ABSENT', 'OPEN', 'UNROSTERED'];
-	const exceptions = $derived(
-		EXCEPTION_STATUSES.map((status) => ({ status, count: summary.get(status) ?? 0 })).filter(
-			(entry) => entry.count > 0
-		)
 	);
 
 	/**
@@ -301,6 +303,18 @@
 	 * file, rather than after the file has been read and sent.
 	 */
 	const draftRoster = $derived(rosters.find((roster) => roster.published_at == null) ?? null);
+	/**
+	 * How far the month has got, which is the difference between an empty board and a broken one.
+	 *
+	 * A month nobody has drafted has every person-day unrostered — three hundred people times
+	 * thirty-one days — and that tally is what the month is *supposed* to look like before anyone has
+	 * touched it. `monthProgress` therefore counts an unrostered day as an exception only once the
+	 * month is published and claims to be complete.
+	 */
+	const drafting = $derived<MonthDrafting>(
+		rosters.length === 0 ? 'NOT_DRAFTED' : draftRoster != null ? 'DRAFT' : 'PUBLISHED'
+	);
+	const progress = $derived(monthProgress(facts, drafting));
 	const rosterImportBlocker = $derived(
 		draftRoster != null
 			? null
@@ -523,8 +537,11 @@
 {#snippet monthStatus()}
 	<Stack gap="sm">
 		<Cluster gap="sm">
-			{#if rosters.length === 0}
-				<Badge variant="outline">No roster drafted for {month}</Badge>
+			{#if progress.drafting === 'NOT_DRAFTED'}
+				<Badge variant="outline">Not drafted for {month}</Badge>
+				<Badge variant="outline">
+					{progress.personDays.toLocaleString()} person-days to plan
+				</Badge>
 			{:else}
 				{#each rosters as roster (roster.norbital_id)}
 					<Inline gap="xs">
@@ -547,15 +564,28 @@
 						{/if}
 					</Inline>
 				{/each}
+				{#if progress.drafting === 'DRAFT'}
+					<!-- Progress, not a fault: a month is drafted a day at a time and is incomplete for most
+					     of the time it is being written. -->
+					<Badge variant="outline">
+						{progress.rostered.toLocaleString()} of {progress.personDays.toLocaleString()} person-days
+						drafted
+					</Badge>
+				{/if}
 			{/if}
-			{#each exceptions as exception (exception.status)}
+			{#each progress.exceptions as exception (exception.status)}
 				<Badge variant="destructive">
-					{exception.count}
+					{exception.count.toLocaleString()}
 					{STATUS_PRESENTATION[exception.status].label.toLowerCase()}
 				</Badge>
 			{/each}
 		</Cluster>
-		{#if rosterImportBlocker != null}
+		{#if progress.drafting === 'NOT_DRAFTED'}
+			<p class="text-sm text-muted-foreground">
+				Nothing has been planned for {month} yet, so every day on the board is blank. That is where a
+				month starts, not a fault to fix: create the draft month, then assign or import its days.
+			</p>
+		{:else if rosterImportBlocker != null}
 			<p class="text-sm text-muted-foreground">{rosterImportBlocker}</p>
 		{/if}
 		<p class="text-sm text-muted-foreground">
@@ -566,21 +596,32 @@
 	</Stack>
 {/snippet}
 
+{#snippet boardChrome()}
+	<Stack gap="md">
+		{@render boardToolbar()}
+		{@render monthStatus()}
+	</Stack>
+{/snippet}
+
+<!--
+	The chrome is the `Cover`'s top row and the board is its body, which is what gives the board a
+	definite height to fill: `Cover`'s middle track is `minmax(0,1fr)`. The board owns the scroll from
+	there, so the tab panel around it never has to — the same division `CollectionTable` makes between
+	its toolbar and its rows.
+-->
 {#snippet board()}
 	{#if selectedCompanyId == null}
 		<p class="text-sm text-muted-foreground">Select a legal entity to load its roster.</p>
 	{:else}
-		<Stack gap="md">
-			{@render boardToolbar()}
-			{@render monthStatus()}
+		<Cover gap="md" top={boardChrome}>
 			{#if loading}
 				<p class="text-sm text-muted-foreground">Loading {month}…</p>
 			{:else if people.length > 0 && boardPeople.length === 0}
 				<p class="text-sm text-muted-foreground">No people match the current search or filters.</p>
 			{:else}
-				<RosterMonthBoard {month} people={boardPeople} {facts} {today} {cutoff} />
+				<RosterMonthBoard {month} people={boardPeople} {facts} {today} {holidayNames} {cutoff} />
 			{/if}
-		</Stack>
+		</Cover>
 	{/if}
 {/snippet}
 
@@ -610,9 +651,17 @@
 					<Column name="name" card="subtitle" />
 					<Column name="start_time" label="Start" />
 					<Column name="end_time" label="End" />
-					<Column name="break_minutes" label="Break (min)" />
+					<Column
+						name="break_minutes"
+						label="Break"
+						render={({ value }) => formatDurationHours(value)}
+					/>
 					<Column name="pays_overtime" label="OT eligible" />
-					<Column name="overtime_break_minutes" label="OT break (min)" />
+					<Column
+						name="overtime_break_minutes"
+						label="OT break"
+						render={({ value }) => formatDurationHours(value)}
+					/>
 					<Column name="crosses_midnight" label="Crosses midnight" />
 					<Column name="effective_range" label="Effective" />
 				{/snippet}
@@ -676,7 +725,12 @@
 			searchPlaceholder="Search holidays…"
 		>
 			{#snippet columns({ Column })}
-				<Column name="date" label="Date" card="title" />
+				<Column
+					name="date"
+					label="Date"
+					card="title"
+					render={({ value }) => formatCalendarDate(value)}
+				/>
 				<Column name="name" card="subtitle" />
 				<Column name="scope" label="Scope" render={({ value }) => formatHolidayScope(value)} />
 			{/snippet}

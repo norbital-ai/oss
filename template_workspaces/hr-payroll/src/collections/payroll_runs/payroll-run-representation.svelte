@@ -14,7 +14,7 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Cluster, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { toast } from 'svelte-sonner';
-	import { formatNumeric } from '../../lib/ui/display-formatters.js';
+	import { formatCalendarDate, formatNumeric } from '../../lib/ui/display-formatters.js';
 
 	let { record, refresh, close }: { record: Row; refresh(): Promise<void>; close(): void } =
 		$props();
@@ -166,12 +166,12 @@
 			<div>
 				<dt class="text-xs text-muted-foreground">Attendance window</dt>
 				<dd class="mt-1 font-medium tabular-nums">
-					{record.attendance_from} → {record.attendance_to}
+					{formatCalendarDate(record.attendance_from)} → {formatCalendarDate(record.attendance_to)}
 				</dd>
 			</div>
 			<div>
 				<dt class="text-xs text-muted-foreground">Pay date</dt>
-				<dd class="mt-1 font-medium tabular-nums">{record.pay_date}</dd>
+				<dd class="mt-1 font-medium tabular-nums">{formatCalendarDate(record.pay_date)}</dd>
 			</div>
 			<div>
 				<dt class="text-xs text-muted-foreground">Run-level configuration snapshot</dt>

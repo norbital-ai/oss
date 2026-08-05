@@ -1,24 +1,30 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Cover } from '@norbital-ai/ui/layout';
+	import { Cover, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
-	import {
-		formatNumeric,
-		formatOvertimeAward,
-		formatOvertimeBand,
-		formatProrationBasis,
-		formatRateAward,
-		formatRateSelector
-	} from '../../lib/ui/display-formatters.js';
+	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
+	import { todayInstant } from '../../lib/ui/calendar.js';
+	import { formatNumeric, formatProrationBasis } from '../../lib/ui/display-formatters.js';
 
-	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
+	/**
+	 * Both catalogues here are effective-dated, so both open on the regime in force *today* and widen
+	 * only when the operator asks for history. `contains_date` compares against a `dateRange()`
+	 * bound, which is an instant: `todayInstant()` resolves the payroll timezone, while a bare
+	 * calendar day is rejected by the query layer.
+	 */
+	let effectiveWindow = $state<'current' | 'history'>('current');
+	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
+		effectiveWindow === 'history' ? {} : { effective_range: { contains_date: todayInstant() } }
+	);
 
-	// Relation columns hold uuids; resolve labels from one loaded set. Miss → em dash, never the uuid.
+	/**
+	 * Relation column labels, not a listing — deliberately unfiltered by the effective window so a
+	 * superseded jurisdiction still resolves to its name instead of an em dash when history is shown.
+	 */
 	const jurisdictionsQuery = client.db.jurisdictions.findMany({
-		where: { norbital_approval_id: { isNull: true }, ...activeRange },
+		where: { norbital_approval_id: { isNull: true } },
 		limit: 200
 	});
 	const jurisdictionLabelsById = $derived(
@@ -29,36 +35,47 @@
 			])
 		)
 	);
-	const contributionsQuery = client.db.statutory_contributions.findMany({
-		where: { norbital_approval_id: { isNull: true }, ...activeRange },
-		limit: 500
-	});
-	const contributionLabelsById = $derived(
-		new Map(
-			(contributionsQuery.current ?? []).map((contribution) => [
-				contribution.norbital_id,
-				`${contribution.code} · ${contribution.name}`
-			])
-		)
-	);
 </script>
 
 <svelte:head>
 	<title>Statutory profile</title>
 	<meta
 		name="description"
-		content="The regime every payroll is calculated against: jurisdictions and the schemes inside them, the companies bound to each, contribution rates, and overtime rules and limits"
+		content="The regime every payroll is calculated against: jurisdictions with the schemes, rates, overtime rules and limits configured inside them, and the companies bound to each"
 	/>
 	<meta name="pod:icon" content="lucide:scale" />
 </svelte:head>
+
+{#snippet effectiveWindowActions()}
+	<Stack gap="xs">
+		<span class="text-sm font-medium text-muted-foreground">Effective</span>
+		<ToggleGroup
+			type="single"
+			size="sm"
+			value={effectiveWindow}
+			onValueChange={(value) => {
+				effectiveWindow = value === 'history' ? 'history' : 'current';
+			}}
+		>
+			<ToggleGroupItem value="current" aria-label="Show only what is in force today">
+				In force today
+			</ToggleGroupItem>
+			<ToggleGroupItem value="history" aria-label="Show every version, including superseded ones">
+				All history
+			</ToggleGroupItem>
+		</ToggleGroup>
+	</Stack>
+{/snippet}
 
 {#snippet jurisdictions()}
 	<CollectionTable
 		{client}
 		collection="jurisdictions"
+		view="hr_controller:settings:jurisdictions"
 		title="Jurisdictions"
-		description="Open a jurisdiction to configure the statutory schemes it levies — they belong to the regime, not to a catalogue of their own."
-		query={{ where: { ...activeRange }, orderBy: { code: 'asc' } }}
+		description="Open a jurisdiction to configure everything it sets: the statutory schemes it levies (and the rate bands inside each), what overtime is worth, and the ceiling on overtime hours. None of those is a catalogue of its own."
+		query={{ where: { ...effectiveRange }, orderBy: { code: 'asc' } }}
+		searchPlaceholder="Search jurisdictions…"
 	>
 		{#snippet columns({ Column })}
 			<Column name="code" card="title" />
@@ -81,7 +98,11 @@
 	<CollectionTable
 		{client}
 		collection="companies"
-		query={{ where: { ...activeRange }, orderBy: { name: 'asc' } }}
+		view="hr_controller:settings:companies"
+		title="Companies"
+		description="The legal entities payroll runs for, each bound to the jurisdiction whose regime prices it."
+		query={{ where: { ...effectiveRange }, orderBy: { name: 'asc' } }}
+		searchPlaceholder="Search companies…"
 	>
 		{#snippet columns({ Column })}
 			<Column name="name" card="title" />
@@ -102,88 +123,12 @@
 	</CollectionTable>
 {/snippet}
 
-{#snippet rates()}
-	<CollectionTable
-		{client}
-		collection="contribution_rates"
-		query={{ where: { ...activeRange }, orderBy: { norbital_created_at: 'desc' } }}
-	>
-		{#snippet columns({ Column })}
-			<Column
-				name="statutory_contribution_id"
-				label="Contribution"
-				card="title"
-				render={({ value }) =>
-					value == null || value === '' ? '—' : (contributionLabelsById.get(String(value)) ?? '—')}
-			/>
-			<Column
-				name="selector"
-				label="Selector"
-				card="subtitle"
-				render={({ value }) => formatRateSelector(value)}
-			/>
-			<Column name="award" label="Award" render={({ value }) => formatRateAward(value)} />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-	</CollectionTable>
-{/snippet}
-
-{#snippet overtime()}
-	<CollectionTable
-		{client}
-		collection="overtime_rules"
-		query={{ where: { ...activeRange }, orderBy: { norbital_created_at: 'desc' } }}
-	>
-		{#snippet columns({ Column })}
-			<Column
-				name="jurisdiction_id"
-				label="Jurisdiction"
-				card="title"
-				render={({ value }) =>
-					value == null || value === '' ? '—' : (jurisdictionLabelsById.get(String(value)) ?? '—')}
-			/>
-			<Column name="day_type" label="Day type" card="badge" />
-			<Column
-				name="band"
-				label="Band"
-				card="subtitle"
-				render={({ value }) => formatOvertimeBand(value)}
-			/>
-			<Column name="award" label="Award" render={({ value }) => formatOvertimeAward(value)} />
-			<Column name="authority" />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-	</CollectionTable>
-{/snippet}
-
-{#snippet limits()}
-	<CollectionTable
-		{client}
-		collection="overtime_limits"
-		query={{ where: { ...activeRange }, orderBy: { norbital_created_at: 'desc' } }}
-	>
-		{#snippet columns({ Column })}
-			<Column
-				name="jurisdiction_id"
-				label="Jurisdiction"
-				card="title"
-				render={({ value }) =>
-					value == null || value === '' ? '—' : (jurisdictionLabelsById.get(String(value)) ?? '—')}
-			/>
-			<Column name="period" card="badge" />
-			<Column name="max_hours" label="Max hours" render={({ value }) => formatNumeric(value)} />
-			<Column name="on_exceed" label="On exceed" />
-			<Column name="authority" />
-			<Column name="effective_range" label="Effective" />
-		{/snippet}
-	</CollectionTable>
-{/snippet}
-
 {#snippet pageHeading()}
 	<PageHeader
 		eyebrow="HR Controller"
 		title="Statutory profile"
-		description="The regime payroll is calculated against: jurisdictions, the companies bound to one, and the contribution and overtime rules a jurisdiction sets. Each statutory scheme is configured inside its own jurisdiction; the pay catalogue lives under Pay components and per-person registrations under People. Every rule is effective-dated — end-date and insert a successor, never update in place."
+		description="The regime payroll is calculated against, and the companies bound to one. Contribution rates, overtime rules and overtime limits are not catalogues — they are configured inside the jurisdiction that levies them, and rate bands inside the scheme they belong to. The pay catalogue lives under Pay components and per-person registrations under People. Every rule is effective-dated — end-date and insert a successor, never update in place."
+		actions={effectiveWindowActions}
 	/>
 {/snippet}
 
@@ -197,10 +142,7 @@
 				icon: 'lucide:globe',
 				content: jurisdictions
 			},
-			{ name: 'companies', label: 'Companies', icon: 'lucide:building-2', content: companies },
-			{ name: 'rates', label: 'Rates', icon: 'lucide:percent', content: rates },
-			{ name: 'overtime', label: 'Overtime rules', icon: 'lucide:timer', content: overtime },
-			{ name: 'limits', label: 'Overtime limits', icon: 'lucide:gauge', content: limits }
+			{ name: 'companies', label: 'Companies', icon: 'lucide:building-2', content: companies }
 		] satisfies TabConfig[]}
 	/>
 </Cover>

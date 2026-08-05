@@ -4,6 +4,7 @@
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
+	import DurationHoursRenderer from './duration-hours-renderer.svelte';
 
 	let { record, close }: RepresentationProps = $props();
 </script>
@@ -35,10 +36,14 @@
 			<Field name="name" />
 			<Field name="start_time" label="Start time" />
 			<Field name="end_time" label="End time" />
-			<Field name="break_minutes" label="Break (min)" />
+			<Field name="break_minutes" label="Break (hours)" renderer={DurationHoursRenderer} />
 			<Field name="crosses_midnight" label="Crosses midnight" />
 			<Field name="pays_overtime" label="Overtime eligible" />
-			<Field name="overtime_break_minutes" label="Overtime break (min)" />
+			<Field
+				name="overtime_break_minutes"
+				label="Overtime break (hours)"
+				renderer={DurationHoursRenderer}
+			/>
 			<Column span="all"><Field name="effective_range" label="Effective period" /></Column>
 		</Grid>
 	{/snippet}

@@ -15,6 +15,7 @@
 	import { Grid, Stack } from '@norbital-ai/ui/layout';
 	import PayrollRunRepresentation from './payroll-run-representation.svelte';
 	import { resolveWindow } from './lib/period.js';
+	import { formatCalendarDate } from '../../lib/ui/display-formatters.js';
 
 	let { record, close, refresh }: RepresentationProps = $props();
 
@@ -85,7 +86,7 @@
 				return [
 					{
 						value: candidate,
-						label: `${candidate} · Pay ${window.payDate}`,
+						label: `${candidate} · Pay ${formatCalendarDate(window.payDate)}`,
 						search_term: `${candidate} ${window.attendance.start} ${window.attendance.end}`
 					}
 				];
@@ -167,18 +168,24 @@
 						<div>
 							<dt class="text-xs text-muted-foreground">Salary month</dt>
 							<dd class="mt-1 font-medium tabular-nums">
-								{selectedWindow.salary.start} → {selectedWindow.salary.end}
+								{formatCalendarDate(selectedWindow.salary.start)} → {formatCalendarDate(
+									selectedWindow.salary.end
+								)}
 							</dd>
 						</div>
 						<div>
 							<dt class="text-xs text-muted-foreground">Attendance window</dt>
 							<dd class="mt-1 font-medium tabular-nums">
-								{selectedWindow.attendance.start} → {selectedWindow.attendance.end}
+								{formatCalendarDate(selectedWindow.attendance.start)} → {formatCalendarDate(
+									selectedWindow.attendance.end
+								)}
 							</dd>
 						</div>
 						<div>
 							<dt class="text-xs text-muted-foreground">Pay date</dt>
-							<dd class="mt-1 font-medium tabular-nums">{selectedWindow.payDate}</dd>
+							<dd class="mt-1 font-medium tabular-nums">
+								{formatCalendarDate(selectedWindow.payDate)}
+							</dd>
 						</div>
 					</Grid>
 				{/if}

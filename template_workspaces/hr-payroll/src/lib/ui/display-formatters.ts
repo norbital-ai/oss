@@ -1,10 +1,12 @@
 /**
- * Read-only formatters for the JSONB variants the app pages surface in table cells.
+ * Read-only formatters for the values the app pages surface in table cells — the JSONB variants,
+ * and every date this workspace prints.
  *
  * Every formatter parses defensively: a table cell must never throw on a row whose variant was
  * written by an older definition. There is no writing here — presentation only.
  */
 import { humanize } from '@norbital-ai/std/string';
+import { PAYROLL_TIME_ZONE, calendarDateInTimeZone, calendarDayKey } from './calendar.js';
 import { componentDefinitionSchema } from '../../custom-types/component_definition/+definition.js';
 import { entryOriginSchema } from '../../custom-types/entry_origin/+definition.js';
 import { holidayScopeSchema } from '../../custom-types/holiday_scope/+definition.js';
@@ -30,24 +32,136 @@ export function formatNumeric(value: unknown): string {
 	return Number.isFinite(parsed) ? DECIMAL.format(parsed) : String(value);
 }
 
+const HOURS = new Intl.NumberFormat(undefined, {
+	minimumFractionDigits: 0,
+	maximumFractionDigits: 2
+});
+
+/**
+ * An integer-minutes column presented as hours.
+ *
+ * The column stays minutes — minutes are the exact unit the overtime and export arithmetic measures
+ * in, and every half-hour a rota actually uses is a whole number of them. Only the label the
+ * operator reads changes, so no stored value is reinterpreted.
+ *
+ * Deliberately *not* rounded to the half hour: the half-hour step belongs to the input, which is
+ * where the operator's intent is expressed. A row that already holds 45 minutes must read `0.75 h`
+ * and not be quietly reported as `0.5 h` — display that disagrees with storage is how a payroll
+ * dispute starts.
+ */
+export function formatDurationHours(value: unknown): string {
+	if (value == null || value === '') return '—';
+	const minutes = Number(value);
+	if (!Number.isFinite(minutes)) return '—';
+	return `${HOURS.format(minutes / 60)} h`;
+}
+
+const MONTH_NAMES = [
+	'Jan',
+	'Feb',
+	'Mar',
+	'Apr',
+	'May',
+	'Jun',
+	'Jul',
+	'Aug',
+	'Sep',
+	'Oct',
+	'Nov',
+	'Dec'
+] as const;
+
+/**
+ * A `YYYY-MM-DD` calendar day from a `date()` column value, or `null` when there is not one.
+ *
+ * Local PGlite reads of a `date()` column yield a `Date` at UTC midnight; wire payloads yield the
+ * calendar string, sometimes with the `T00:00:00.000Z` suffix still attached. Strings are read as
+ * characters and never routed through `Date` — turning a calendar day into an instant and back is
+ * exactly how `dates-and-time.md` says a birthday moves.
+ */
+function calendarDayFrom(value: unknown): string | null {
+	if (value instanceof Date) {
+		return Number.isNaN(value.getTime()) ? null : calendarDayKey(value);
+	}
+	if (typeof value !== 'string') return null;
+	return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : null;
+}
+
+/**
+ * The one date format this workspace prints: **`05 Aug 2026`** — day, month, year.
+ *
+ * Every on-screen date goes through here so the workspace never shows two shapes for the same
+ * value. The month is a *name*, not a number, because this template serves Malaysian, Philippine
+ * and Indonesian payroll in one interface: `05/08/2026` reads as 5 August to one operator and
+ * 8 May to the next, and a misread pay date or work date is a real payroll error. The day is
+ * zero-padded so the column stays a fixed width down a table.
+ *
+ * The month name is fixed, not locale-derived: `Intl` with the viewer's locale would put the month
+ * first for a viewer in the United States, which is the ambiguity this format exists to remove.
+ *
+ * Takes a **calendar day**. Resolve an instant to a day first — see `formatInstant` for values that
+ * are genuinely moments in time.
+ */
+export function formatCalendarDate(value: unknown): string {
+	const day = calendarDayFrom(value);
+	if (day === null) return '—';
+	const month = MONTH_NAMES[Number(day.slice(5, 7)) - 1];
+	if (month === undefined) return '—';
+	return `${day.slice(8, 10)} ${month} ${day.slice(0, 4)}`;
+}
+
+/**
+ * A `timestamp()` instant as `05 Aug 2026, 14:30` **in the viewer's timezone**.
+ *
+ * An instant is a moment, so unlike a calendar day it is meant to move with the viewer — a clock-in
+ * recorded at 09:00 in Kuala Lumpur is a different wall-clock reading in Manila, and both are true.
+ * The date part matches `formatCalendarDate`, and the clock is 24-hour so `05 Aug 2026, 01:30`
+ * cannot be mistaken for the afternoon.
+ */
+export function formatInstant(value: unknown): string {
+	const at = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null;
+	if (at === null || Number.isNaN(at.getTime())) return '—';
+	const parts = new Intl.DateTimeFormat('en-GB', {
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		hourCycle: 'h23'
+	}).formatToParts(at);
+	const field = (type: Intl.DateTimeFormatPartTypes) =>
+		parts.find((part) => part.type === type)?.value ?? '';
+	const month = MONTH_NAMES[Number(field('month')) - 1];
+	if (month === undefined) return '—';
+	return `${field('day')} ${month} ${field('year')}, ${field('hour')}:${field('minute')}`;
+}
+
 /** `YYYY-MM` → a readable month, used for `payroll_runs.period` and `component_entries.pay_period`. */
 export function formatPayPeriod(value: unknown): string {
 	if (typeof value !== 'string' || !/^\d{4}-\d{2}$/.test(value)) return '—';
-	return new Intl.DateTimeFormat(undefined, {
-		month: 'short',
-		year: 'numeric',
-		timeZone: 'UTC'
-	}).format(new Date(`${value}-01T00:00:00.000Z`));
+	const month = MONTH_NAMES[Number(value.slice(5, 7)) - 1];
+	return month === undefined ? '—' : `${month} ${value.slice(0, 4)}`;
 }
 
-/** A `dateRange()` value `{ start, end }` of UTC ISO instants. */
+/**
+ * A `dateRange()` value `{ start, end }` of UTC ISO instants, as the two calendar days an operator
+ * picked.
+ *
+ * The bound is an *instant*, so it is resolved through the payroll timezone rather than sliced.
+ * `'2026-03-01'` picked in Kuala Lumpur is stored as `2026-02-28T16:00:00.000Z`; taking the first
+ * ten characters of that would report the range as starting the day before it does, and effective
+ * dating is what decides which rate row prices a run. This is the same resolution the
+ * `entry_origin` renderer already performs.
+ */
 export function formatEffectiveRange(value: unknown): string {
 	if (value == null || typeof value !== 'object') return '—';
-	const start = Reflect.get(value, 'start');
-	const end = Reflect.get(value, 'end');
-	const bound = (instant: unknown, fallback: string) =>
-		typeof instant === 'string' && instant !== '' ? instant.slice(0, 10) : fallback;
-	return `${bound(start, '…')} → ${bound(end, '∞')}`;
+	const bound = (instant: unknown, fallback: string) => {
+		if (typeof instant !== 'string' || instant === '') return fallback;
+		const at = new Date(instant);
+		if (Number.isNaN(at.getTime())) return fallback;
+		return formatCalendarDate(calendarDateInTimeZone(at, PAYROLL_TIME_ZONE));
+	};
+	return `${bound(Reflect.get(value, 'start'), '…')} → ${bound(Reflect.get(value, 'end'), '∞')}`;
 }
 
 export function formatEntryOrigin(value: unknown): string {
@@ -60,7 +174,9 @@ export function formatEntryOrigin(value: unknown): string {
 		case 'ONE_OFF':
 			return origin.note ? `One-off · ${origin.note}` : 'One-off';
 		case 'CLAIM':
-			return `Claim · incurred ${origin.incurred_on}${origin.evidence_file ? ' · evidence attached' : ''}`;
+			return `Claim · incurred ${formatCalendarDate(origin.incurred_on)}${
+				origin.evidence_file ? ' · evidence attached' : ''
+			}`;
 		case 'LOAN_INSTALMENT':
 			return `Instalment ${origin.sequence} of ${origin.of}`;
 		case 'REVERSAL':

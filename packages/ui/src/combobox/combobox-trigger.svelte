@@ -43,6 +43,8 @@
 		minWidth?: number;
 		maxWidth?: number;
 		align?: 'start' | 'center' | 'end';
+		avoidCollisions: boolean;
+		collisionPadding: number;
 		snapToEnds: boolean;
 		renderSelectionContent: Snippet;
 		onOpenChange: (open: boolean) => Promise<void> | void;
@@ -115,6 +117,8 @@
 		minWidth,
 		maxWidth,
 		align,
+		avoidCollisions,
+		collisionPadding,
 		snapToEnds,
 		renderSelectionContent,
 		onOpenChange,
@@ -214,6 +218,20 @@
 			compactTextClass
 		)
 	);
+	/**
+	 * The chevron glyph stays visible at rest — it is the only affordance that says
+	 * "this opens a dropdown", and keyboard and touch users have no hover state to
+	 * reveal it with. Only its chrome (background + outline) fades in, on hover *and*
+	 * focus-within, matching the clear button above. The transparent resting border
+	 * reserves the space so revealing the chrome does not shift the glyph.
+	 */
+	const chevronChromeClasses = cn(
+		'flex size-5 flex-none items-center justify-center rounded-md',
+		'border border-transparent bg-transparent text-muted-foreground opacity-60',
+		'transition-[background-color,border-color,opacity]',
+		'group-hover:border-input group-hover:bg-background group-hover:opacity-100',
+		'group-focus-within:border-input group-focus-within:bg-background group-focus-within:opacity-100'
+	);
 </script>
 
 <Popover.Root {open} onOpenChange={handleOpenChange}>
@@ -249,11 +267,9 @@
 					<Spinner class="h-3 w-3 shrink-0 opacity-60" />
 				{/if}
 				{#if !hideChevron}
-					<Icon
-						icon="lucide:chevrons-up-down"
-						class="h-3 w-3 shrink-0 opacity-60"
-						aria-hidden="true"
-					/>
+					<span class={chevronChromeClasses} aria-hidden="true">
+						<Icon icon="lucide:chevrons-up-down" class="h-3 w-3 shrink-0" />
+					</span>
 				{/if}
 			</div>
 		{/if}
@@ -270,6 +286,8 @@
 		{minWidth}
 		{maxWidth}
 		align={snapToEnds ? computedAlign : align}
+		{avoidCollisions}
+		{collisionPadding}
 		sideOffset={2}
 		{trapFocus}
 		role={readonly ? 'dialog' : 'listbox'}

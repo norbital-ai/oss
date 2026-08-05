@@ -98,7 +98,12 @@ async function assertPublishable(
 			employment_id: entry.employment_id,
 			work_date: workDate,
 			designation: designationOf(entry.designation, workDate),
-			shift: shiftById.get(entry.shift_definition_id) ?? null
+			// A rest or off day names no shift; a working day that names none is a violation the
+			// validator reports as WORK_DAY_WITHOUT_SHIFT rather than something to guess around here.
+			shift:
+				entry.shift_definition_id == null
+					? null
+					: (shiftById.get(entry.shift_definition_id) ?? null)
 		};
 	});
 

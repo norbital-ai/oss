@@ -4,7 +4,7 @@
 	import type { Row } from './$types.js';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Grid, Stack } from '@norbital-ai/ui/layout';
-	import { formatNumeric } from '../../lib/ui/display-formatters.js';
+	import { formatCalendarDate, formatNumeric } from '../../lib/ui/display-formatters.js';
 
 	let { record }: { record: Row } = $props();
 
@@ -57,7 +57,8 @@
 
 	function entryLabel(row: unknown): string {
 		const entry = (row as NestedLine).entry_payslip_lines;
-		return entry?.description ?? entry?.event_date ?? '—';
+		if (entry?.description) return entry.description;
+		return entry?.event_date == null ? '—' : formatCalendarDate(entry.event_date);
 	}
 </script>
 
