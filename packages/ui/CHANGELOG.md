@@ -1,5 +1,12 @@
 # @norbital-ai/ui
 
+## 1.0.2
+
+### Patch Changes
+
+- @norbital-ai/std@1.0.2
+- @norbital-ai/platform-utils@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes
