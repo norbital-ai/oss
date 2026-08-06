@@ -1,9 +1,12 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { Dialog as DialogPrimitive, Portal, type WithoutChildrenOrChild } from 'bits-ui';
 	import type { Snippet } from 'svelte';
 	import Overlay from './dialog-overlay.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		ref = $bindable(null),
@@ -32,7 +35,7 @@
 			class="absolute top-4 right-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:outline-none focus:ring-inset disabled:pointer-events-none"
 		>
 			<Icon icon="lucide:x" class="size-4" />
-			<span class="sr-only">Close</span>
+			<span class="sr-only">{t('common.close')}</span>
 		</DialogPrimitive.Close>
 	</DialogPrimitive.Content>
 </Portal>

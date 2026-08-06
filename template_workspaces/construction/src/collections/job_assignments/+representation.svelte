@@ -1,11 +1,15 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 
 	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -21,7 +25,7 @@
 			<Field name="status" />
 			<Field
 				name="job_id"
-				label="Job"
+				label={t('component.job')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'jobs',
@@ -37,7 +41,7 @@
 			/>
 			<Field
 				name="worker_id"
-				label="Worker"
+				label={t('component.worker')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'workers',
@@ -56,7 +60,7 @@
 			/>
 			<Field
 				name="site_location_id"
-				label="Site location"
+				label={t('component.site_location')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'site_locations',

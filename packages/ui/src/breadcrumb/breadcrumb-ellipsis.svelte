@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { WithElementRef, WithoutChildren } from 'bits-ui';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -9,6 +10,8 @@
 		class: className,
 		...restProps
 	}: WithoutChildren<WithElementRef<HTMLAttributes<HTMLSpanElement>>> = $props();
+
+	const { t } = useI18n<UiKeys>();
 </script>
 
 <span
@@ -19,5 +22,5 @@
 	{...restProps}
 >
 	<Icon icon="lucide:ellipsis" class="size-4" />
-	<span class="sr-only">More</span>
+	<span class="sr-only">{t('common.more')}</span>
 </span>

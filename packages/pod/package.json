@@ -58,6 +58,10 @@
 			"types": "./build/host/index.d.ts",
 			"default": "./build/host/index.js"
 		},
+		"./i18n": {
+			"types": "./build/i18n/index.d.ts",
+			"default": "./build/i18n/index.js"
+		},
 		"./skills": {
 			"types": "./build/skills/index.d.ts",
 			"default": "./build/skills/index.js"

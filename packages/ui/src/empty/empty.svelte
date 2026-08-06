@@ -1,12 +1,15 @@
 <!-- Empty.svelte -->
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import Icon from '@iconify/svelte';
 	import { Stack } from '#lib/layout';
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
-		title = 'No items found',
-		description = 'Get started by creating your first item.',
+		title,
+		description,
 		icon = 'lucide:inbox',
 		iconClass = 'w-12 h-12',
 		iconWellClass = '',
@@ -17,6 +20,9 @@
 		align = 'center' as 'center' | 'left',
 		hideIcon = false
 	} = $props();
+
+	const titleEffective = $derived(title ?? t('common.noItemsFound'));
+	const descriptionEffective = $derived(description ?? t('common.emptyGetStarted'));
 </script>
 
 <!-- stupidity:allow UI15 -- the empty-state minimum prevents a short result set from collapsing the surface -->
@@ -35,8 +41,8 @@
 	{/if}
 
 	<Stack gap="sm">
-		<h3 class={cn('text-section', titleClass)}>{title}</h3>
-		<p class={cn('text-sm text-muted-foreground', descriptionClass)}>{description}</p>
+		<h3 class={cn('text-section', titleClass)}>{titleEffective}</h3>
+		<p class={cn('text-sm text-muted-foreground', descriptionClass)}>{descriptionEffective}</p>
 	</Stack>
 
 	{#if children}

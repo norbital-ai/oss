@@ -7,12 +7,15 @@
 	 * mutable state, so the whole path to the run is one bounded relational query.
 	 */
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import type { RepresentationProps } from './$types.js';
 
 	let { record, close }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const consumptionQuery = $derived(
 		record
@@ -49,20 +52,20 @@
 	 */
 	const consumedByPayslip = $derived.by((): string => {
 		if (!record) return '—';
-		if (!record.pay_period) return 'Settled outside payroll';
-		if (consumptionQuery?.loading) return 'Loading…';
+		if (!record.pay_period) return t('component.settled_outside_payroll');
+		if (consumptionQuery?.loading) return t('component.loading');
 		const consumption = consumptionQuery?.current as ConsumptionRow | null | undefined;
 		const source = consumption?.entry_payslip_lines?.[0];
 		if (!source) return '—';
 		const period = source.payslip_line_payslip?.payslip_payroll_run?.period;
-		return `Paid in ${period ?? 'a payroll run'}`;
+		return t('component.paid_in', { period: period ?? t('component.a_payroll_run') });
 	});
 </script>
 
 <Grid gap="md" minimum="compact">
 	<Column span="all">
 		<div class="rounded-md border border-border bg-muted/20 p-3">
-			<span class="text-xs text-muted-foreground">Payroll consumption</span>
+			<span class="text-xs text-muted-foreground">{t('component.payroll_consumption')}</span>
 			<span aria-live="polite" class="mt-1 block text-sm">{consumedByPayslip}</span>
 		</div>
 	</Column>
@@ -79,7 +82,7 @@
 		<Grid gap="md" minimum="compact">
 			<Field
 				name="employment_id"
-				label="Employment"
+				label={t('component.employment')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'employments',
@@ -95,7 +98,7 @@
 			/>
 			<Field
 				name="pay_component_id"
-				label="Pay component"
+				label={t('component.pay_component')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'pay_components',
@@ -116,7 +119,7 @@
 			<Field name="amount" />
 			<Field name="quantity" />
 			<Field name="event_date" />
-			<Field name="pay_period" label="Pay period" />
+			<Field name="pay_period" label={t('component.pay_period')} />
 			<Column span="all"><Field name="description" /></Column>
 			<Column span="all"><Field name="origin" /></Column>
 		</Grid>

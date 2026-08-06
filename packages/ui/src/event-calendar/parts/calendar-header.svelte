@@ -1,10 +1,14 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { buttonVariants } from '#lib/button';
 	import { Inline } from '#lib/layout';
 	import { navigateView } from '../utils.js';
 	import type { CalendarView } from '../types.js';
+
+	const { t } = useI18n<UiKeys>();
+	const intlLocale = $derived(useI18n().intlLocale);
 
 	let {
 		view = 'week',
@@ -25,9 +29,9 @@
 	} = $props();
 
 	const viewLabels: Record<CalendarView, string> = {
-		day: 'Day',
-		week: 'Week',
-		month: 'Month'
+		day: t('misc.day'),
+		week: t('misc.week'),
+		month: t('misc.month')
 	};
 
 	function goToday() {
@@ -51,9 +55,9 @@
 					date.getMonth() === today.getMonth() &&
 					date.getDate() === today.getDate()
 				) {
-					return 'Today';
+					return t('misc.today');
 				}
-				return date.toLocaleDateString('en-US', {
+				return date.toLocaleDateString(intlLocale, {
 					weekday: 'long',
 					month: 'long',
 					day: 'numeric',
@@ -64,11 +68,11 @@
 				start.setDate(start.getDate() - start.getDay() + (start.getDay() === 0 ? -6 : 1));
 				const end = new Date(start);
 				end.setDate(end.getDate() + 6);
-				const startStr = start.toLocaleDateString('en-US', {
+				const startStr = start.toLocaleDateString(intlLocale, {
 					month: 'short',
 					day: 'numeric'
 				});
-				const endStr = end.toLocaleDateString('en-US', {
+				const endStr = end.toLocaleDateString(intlLocale, {
 					month: 'short',
 					day: 'numeric',
 					year: end.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
@@ -76,7 +80,7 @@
 				return `${startStr} – ${endStr}`;
 			}
 			case 'month': {
-				const str = date.toLocaleDateString('en-US', {
+				const str = date.toLocaleDateString(intlLocale, {
 					month: 'long',
 					year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
 				});
@@ -97,7 +101,7 @@
 			<button
 				class={buttonVariants({ variant: 'ghost', size: 'icon' })}
 				onclick={goPrev}
-				aria-label="Previous"
+				aria-label={t('common.previous')}
 			>
 				<Icon icon="lucide:chevron-left" class="size-4" />
 			</button>
@@ -105,12 +109,12 @@
 				class={cn(buttonVariants({ variant: 'ghost' }), 'h-7 px-2.5 text-xs font-medium')}
 				onclick={goToday}
 			>
-				Today
+				{t('misc.today')}
 			</button>
 			<button
 				class={buttonVariants({ variant: 'ghost', size: 'icon' })}
 				onclick={goNext}
-				aria-label="Next"
+				aria-label={t('common.next')}
 			>
 				<Icon icon="lucide:chevron-right" class="size-4" />
 			</button>

@@ -8,10 +8,23 @@ import {
 	acceptInvitePage,
 	type IdentityPageBranding
 } from './identity-pages.js';
+import type { Locale } from '@norbital-ai/std/i18n';
+import { serverI18n, type ServerI18n } from '$lib/i18n/index.js';
+
+/**
+ * The locale a request should be answered in: `?lang=` wins, then `Accept-Language`.
+ */
+export function identityRequestI18n(request: Request): ServerI18n {
+	const lang = new URL(request.url).searchParams.get('lang');
+	const acceptLanguage = request.headers.get('accept-language');
+	return serverI18n(lang ? [lang, acceptLanguage ?? ''] : acceptLanguage);
+}
 
 export type EmailOtpDeliver = (input: {
 	readonly email: string;
 	readonly code: string;
+	/** The locale the recipient should be written to, resolved from the triggering request. */
+	readonly locale: Locale;
 }) => Promise<void>;
 
 export type EmailOtpIdentityOptions = {
@@ -123,16 +136,18 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 	}
 	const ttl = (options.ttlSeconds ?? 600) * 1000;
 	const maxRequests = options.maxRequestsPerWindow ?? 5;
-	const brandedLoginPage = (error?: string): Response =>
+	const brandedLoginPage = (i18n: ServerI18n, error?: string): Response =>
 		loginPage({
+			i18n,
 			organizationName: options.organizationName,
 			...(error ? { error } : {}),
 			branding: options.branding
 		});
-	const brandedCodeEntryPage = (email: string, error?: string): Response =>
-		codeEntryPage({ email, ...(error ? { error } : {}), branding: options.branding });
-	const brandedInvitePage = (token: string | null, error?: string): Response =>
+	const brandedCodeEntryPage = (i18n: ServerI18n, email: string, error?: string): Response =>
+		codeEntryPage({ i18n, email, ...(error ? { error } : {}), branding: options.branding });
+	const brandedInvitePage = (i18n: ServerI18n, token: string | null, error?: string): Response =>
 		acceptInvitePage({
+			i18n,
 			organizationName: options.organizationName,
 			token,
 			...(error ? { error } : {}),
@@ -189,20 +204,20 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 	 * Delivery failure is logged, not surfaced: telling the caller that sending failed for this
 	 * address but succeeded for another turns the form into an existence oracle.
 	 */
-	async function issueCode(email: string): Promise<Response> {
+	async function issueCode(i18n: ServerI18n, email: string): Promise<Response> {
 		const code = options.generateCode?.() ?? String(randomInt(0, 1_000_000)).padStart(6, '0');
 		if (!/^\d{6}$/.test(code)) {
 			throw new Error('emailOtpIdentity generateCode must return exactly six digits');
 		}
 		const expiry = Date.now() + ttl;
 		const mac = challenge(options.secret, email, code, expiry);
-		await options.deliver({ email, code }).catch((cause: unknown) => {
+		await options.deliver({ email, code, locale: i18n.locale }).catch((cause: unknown) => {
 			console.error('[pod:identity] code delivery failed', cause);
 		});
 		// Built by adding a cookie to the page's own response, not by re-wrapping its body: rebuilding
 		// the headers dropped `no-store`, `x-frame-options: DENY`, and `referrer-policy` from the one
 		// page that carries the credential form.
-		const page = brandedCodeEntryPage(email);
+		const page = brandedCodeEntryPage(i18n, email);
 		const headers = new Headers(page.headers);
 		headers.append(
 			'set-cookie',
@@ -229,6 +244,7 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 		async handleRoute(request) {
 			const url = new URL(request.url);
 			const path = url.pathname.replace(/\/+$/, '') || '/';
+			const i18n = identityRequestI18n(request);
 
 			// POST only: a cross-site `<img src="/logout">` would otherwise log the user out on sight.
 			if (path === '/logout') {
@@ -238,7 +254,7 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 			}
 
 			if (path === '/login' && request.method === 'GET') {
-				return brandedLoginPage();
+				return brandedLoginPage(i18n);
 			}
 
 			if (path === '/login' && request.method === 'POST') {
@@ -247,10 +263,10 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 				// The response is identical whether or not the address exists. Anything else turns this
 				// form into an oracle for which people belong to this workspace.
 				if (!isPlausibleEmail(email)) {
-					return brandedLoginPage('Enter a valid email address.');
+					return brandedLoginPage(i18n, i18n.t('pod.identity.invalidEmail'));
 				}
-				if (withinRateLimit(email)) return issueCode(email);
-				return brandedCodeEntryPage(email, 'Too many requests. Try again shortly.');
+				if (withinRateLimit(email)) return issueCode(i18n, email);
+				return brandedCodeEntryPage(i18n, email, i18n.t('pod.identity.tooManyRequests'));
 			}
 
 			if (path === '/login/code' && request.method === 'POST') {
@@ -258,21 +274,21 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 				const code = String(form.get('code') ?? '').trim();
 				const pending = readChallenge(request);
 				if (!pending || pending.expiry <= Date.now()) {
-					return brandedLoginPage('That code expired. Request a new one.');
+					return brandedLoginPage(i18n, i18n.t('pod.identity.codeExpired'));
 				}
 				if (consumed.has(pending.mac)) {
-					return brandedLoginPage('That code was already used. Request a new one.');
+					return brandedLoginPage(i18n, i18n.t('pod.identity.codeAlreadyUsed'));
 				}
 				// Bounded before the comparison, and keyed by the challenge rather than the address: the
 				// client supplies the cookie, so a per-address counter alone would let a fresh challenge
 				// reset the budget for the same guessing run.
 				if (!withinLimit(verifications, pending.mac, MAX_VERIFICATIONS)) {
 					consumed.set(pending.mac, pending.expiry);
-					return brandedLoginPage('Too many incorrect codes. Request a new one.');
+					return brandedLoginPage(i18n, i18n.t('pod.identity.tooManyIncorrectCodes'));
 				}
 				const expected = challenge(options.secret, pending.email, code, pending.expiry);
 				if (!constantTimeEquals(expected, pending.mac)) {
-					return brandedCodeEntryPage(pending.email, 'That code is not correct.');
+					return brandedCodeEntryPage(i18n, pending.email, i18n.t('pod.identity.codeIncorrect'));
 				}
 				// Single-use is enforced here, not by clearing the cookie: the digest stays valid until
 				// expiry, so a client that simply keeps its own cookie could otherwise mint unlimited
@@ -303,7 +319,7 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 			}
 
 			if (path === '/accept-invite' && request.method === 'GET') {
-				return brandedInvitePage(url.searchParams.get('token'));
+				return brandedInvitePage(i18n, url.searchParams.get('token'));
 			}
 
 			if (path === '/accept-invite' && request.method === 'POST') {
@@ -317,19 +333,20 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 				// and the error is deliberately identical for a bad token and a mismatched address so the
 				// form does not reveal which invitations exist.
 				if (!invited || invited !== claimed) {
-					return brandedInvitePage(token, 'That invitation link and email address do not match.');
+					return brandedInvitePage(i18n, token, i18n.t('pod.identity.inviteMismatch'));
 				}
 				if (!withinRateLimit(claimed)) {
-					return brandedInvitePage(token, 'Too many requests. Try again shortly.');
+					return brandedInvitePage(i18n, token, i18n.t('pod.identity.tooManyRequests'));
 				}
 				// From here the flow is an ordinary sign-in. The invitation itself is claimed during
 				// subject resolution on the first authenticated request, which is what keeps the
 				// single-use guarantee in the database rather than in this handler.
-				return issueCode(claimed);
+				return issueCode(i18n, claimed);
 			}
 
 			if (path === '/check-email') {
 				return checkEmailPage({
+					i18n,
 					organizationName: options.organizationName,
 					branding: options.branding
 				});

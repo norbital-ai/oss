@@ -11,7 +11,6 @@ const rowSchema = z.object({
 	break_minutes: z.number().int().nonnegative().optional(),
 	overtime_in: z.string().trim().optional(),
 	overtime_out: z.string().trim().optional(),
-	overtime_authorized: z.boolean().optional(),
 	state: z.enum(['OPEN', 'CLOSED']).optional(),
 	/** Informational provenance only — leave is recorded on leave_requests, not here. */
 	reason: z.string().optional()
@@ -327,10 +326,10 @@ function toCreatePayload(row: ImportRow, timeZone: string, employmentId: string)
 		clock_out: toInstant(clockOut),
 		break_minutes: row.break_minutes ?? 0,
 		state,
-		overtime_authorized: row.overtime_authorized ?? null,
 		overtime_in: toInstant(overtimeIn),
 		overtime_out: toInstant(overtimeOut)
-		// approved_ot_* buckets are not populated here: day type at calculation time decides the rate,
-		// and the buckets are a legacy source-supplied input when a population tracks them explicitly.
+		// No overtime hours are imported. A time entry records punches; the payroll run derives the
+		// overtime from them, the statutory day type and the effective employment terms, so a source
+		// file cannot assert a duration that disagrees with the clock it came from.
 	};
 }

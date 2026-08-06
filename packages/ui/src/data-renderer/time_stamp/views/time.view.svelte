@@ -2,15 +2,18 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import DateView from './date.view.svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
 	import { fromLocalDateTimeParts, toLocalDateTimeParts } from '../timestamp.utils.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		value,
 		multiple = false,
 		disabled = false,
-		placeholder = 'Select date and time',
+		placeholder = t('dataRenderer.selectDateTime'),
 		class: className,
 		onValueChange
 	}: {
@@ -92,7 +95,7 @@
 				<Input
 					type="time"
 					value={parts?.time ?? ''}
-					aria-label="Time"
+					aria-label={t('dataRenderer.time')}
 					class="border-0 pl-8 shadow-none focus-visible:ring-0"
 					{disabled}
 					oninput={(event) => updateTime(index, event.currentTarget.value)}
@@ -103,7 +106,7 @@
 					type="button"
 					variant="outline"
 					size="icon"
-					aria-label="Remove date and time"
+					aria-label={t('dataRenderer.removeDateTime')}
 					{disabled}
 					onclick={() => removeAt(index)}
 				>
@@ -137,7 +140,7 @@
 				<Input
 					type="time"
 					value=""
-					aria-label="Time"
+					aria-label={t('dataRenderer.time')}
 					class="border-0 pl-8 shadow-none focus-visible:ring-0"
 					disabled
 				/>
@@ -154,7 +157,7 @@
 			onclick={addValue}
 		>
 			<Icon icon="radix-icons:plus" class="size-4" />
-			Add date and time
+			{t('dataRenderer.addDateTime')}
 		</Button>
 	{/if}
 </Stack>

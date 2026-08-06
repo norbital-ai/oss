@@ -1,8 +1,11 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import PayslipRepresentation from './payslip-representation.svelte';
 
 	let { record }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 {#if record}

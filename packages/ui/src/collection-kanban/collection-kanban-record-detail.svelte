@@ -10,6 +10,7 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { resolveRecordLabel } from '@norbital-ai/platform-utils/manifest/context';
 	import { humanize } from '@norbital-ai/std/string';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Grid } from '#lib/layout';
 	import { CollectionForm } from '../collection-form/index.js';
 	import { DataRenderer } from '../data-renderer/index.js';
@@ -54,6 +55,7 @@
 		refresh(): Promise<void>;
 	} = $props();
 	const surfaceRuntime = getCollectionSurfaceRuntime();
+	const { t } = useI18n<UiKeys>();
 	const collectionSurface = $derived(
 		resolveCollectionSurface(surfaceRuntime?.surfaces, String(collection))
 	);
@@ -78,15 +80,15 @@
 	{:else}
 		<CollectionRecordDetailEmpty
 			icon="lucide:panel-top-dashed"
-			title="No custom record view"
-			description="This collection has no dedicated UI representation. Use Raw to inspect its fields."
+			title={t('table.noCustomView')}
+			description={t('table.noCustomViewDesc')}
 		/>
 	{/if}
 {/snippet}
 
 {#snippet approvalDetails()}
 	{#if approvalLoading}
-		<p class="text-sm text-muted-foreground">Loading approval payload…</p>
+		<p class="text-sm text-muted-foreground">{t('kanban.approvalLoading')}</p>
 	{:else if approvalRequest}
 		<Grid as="dl" minimum="card" gap="md">
 			{#each Object.entries(approvalRequest) as [key, value] (key)}
@@ -101,8 +103,8 @@
 	{:else}
 		<CollectionRecordDetailEmpty
 			icon="lucide:shield-check"
-			title="No approval request"
-			description="This record has no approval workflow activity yet."
+			title={t('table.noApprovalRequest')}
+			description={t('table.noApprovalRequestDesc')}
 		/>
 	{/if}
 {/snippet}
@@ -130,7 +132,7 @@
 			? (resolveRecordLabel(definition.recordLabel ?? null, activeRecord) ??
 				String(Reflect.get(activeRecord, recordIdField) ?? humanize(String(collection))))
 			: humanize(String(collection))}
-		description={`${humanize(String(collection))} record details`}
+		description={t('table.recordDetails', { name: humanize(String(collection)) })}
 		loading={recordId !== activeRecordId || activeRecordLoading}
 		error={activeRecordError}
 		found={Boolean(activeRecord)}

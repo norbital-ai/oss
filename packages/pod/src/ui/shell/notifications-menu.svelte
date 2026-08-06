@@ -10,6 +10,10 @@
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { toNotificationRow, unreadBadge, type NotificationRow } from './notifications.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	/**
 	 * The workspace's notification bell.
@@ -95,14 +99,20 @@
 		{#snippet child({ props })}
 			<Sidebar.MenuButton
 				{...props}
-				aria-label={unread.length > 0 ? `Notifications, ${unread.length} unread` : 'Notifications'}
+				aria-label={
+					unread.length > 0
+						? t('pod.shell.notificationsUnread', { count: unread.length })
+						: t('pod.shell.notifications')
+				}
 				class={cn(
 					'relative rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',
 					expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'
 				)}
 			>
 				<Icon icon="lucide:bell" class="size-4 shrink-0" />
-				{#if expanded}<span class="min-w-0 flex-1 truncate text-left">Notifications</span>{/if}
+				{#if expanded}
+					<span class="min-w-0 flex-1 truncate text-left">{t('pod.shell.notifications')}</span>
+				{/if}
 				{#if unread.length > 0}
 					<span
 						data-testid="notification-unread-badge"
@@ -118,20 +128,20 @@
 		{/snippet}
 	</Popover.Trigger>
 	<Popover.Content side={expanded ? 'top' : 'right'} align="start" sideOffset={8} class="w-80 p-0">
-		<Inline justify="between" gap="sm" class="border-b px-3 py-2">
-			<p class="text-xs font-medium">Notifications</p>
-			{#if unread.length > 0}
-				<Button
-					type="button"
-					variant="ghost"
-					class="h-6 px-2 text-tiny"
-					disabled={busy}
-					onclick={() => void markRead(unread.map((row) => row.norbital_id))}
-				>
-					Mark all read
-				</Button>
-			{/if}
-		</Inline>
+	<Inline justify="between" gap="sm" class="border-b px-3 py-2">
+		<p class="text-xs font-medium">{t('pod.shell.notifications')}</p>
+		{#if unread.length > 0}
+			<Button
+				type="button"
+				variant="ghost"
+				class="h-6 px-2 text-tiny"
+				disabled={busy}
+				onclick={() => void markRead(unread.map((row) => row.norbital_id))}
+			>
+				{t('pod.shell.markAllRead')}
+			</Button>
+		{/if}
+	</Inline>
 
 		{#if failure}
 			<p class="border-b px-3 py-2 text-tiny text-destructive" role="alert">{failure}</p>
@@ -142,7 +152,7 @@
 				<Stack align="center" gap="xs" class="px-3 py-8 text-center">
 					<Icon icon="lucide:bell-off" class="size-6 text-muted-foreground" />
 					<span class="text-tiny text-muted-foreground">
-						{query?.loading ? 'Loading…' : 'Nothing here yet'}
+						{query?.loading ? t('pod.shell.loading') : t('pod.shell.nothingHereYet')}
 					</span>
 				</Stack>
 			{:else}
@@ -169,7 +179,7 @@
 									<span>{whenReceived(row)}</span>
 									{#if row.cta_url}
 										<Inline as="span" gap="xs" class="ml-auto text-primary">
-											{row.cta_label ?? 'Open'}
+											{row.cta_label ?? t('pod.shell.open')}
 											<Icon icon="lucide:arrow-right" class="size-3" />
 										</Inline>
 									{/if}

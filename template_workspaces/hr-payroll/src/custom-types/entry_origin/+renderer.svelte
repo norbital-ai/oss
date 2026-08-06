@@ -7,13 +7,29 @@
 	} from '../../lib/ui/calendar.js';
 	import { formatCalendarDate } from '../../lib/ui/display-formatters.js';
 	import { numberFrom, splitList } from '../../lib/ui/renderer-input.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
+	import { client } from '$pod/client';
 	import { Combobox } from '@norbital-ai/ui/combobox';
+	import { DataRenderer, type CollectionField } from '@norbital-ai/ui/data-renderer';
 	import { Input } from '@norbital-ai/ui/input';
-	import { Grid } from '@norbital-ai/ui/layout';
+	import { Grid, Stack } from '@norbital-ai/ui/layout';
 	import { entryOriginSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
 
+	const { t } = useI18n<TenantI18nKeys>();
+
 	type OriginKind = Value['kind'];
+	type EntryOriginRendererProps = RendererProps & {
+		/** The component entry being edited — what scopes the agreements and entries offered below. */
+		readonly row?: Record<string, unknown>;
+	};
+
+	const EVIDENCE_FIELD = {
+		name: 'evidence_file',
+		kind: 'file',
+		nullable: true
+	} satisfies CollectionField;
 
 	const KIND_OPTIONS: { value: OriginKind; label: string; description: string }[] = [
 		{
@@ -32,8 +48,57 @@
 		{ value: 'ARREARS', label: 'Arrears', description: 'Back-pay for earlier periods' }
 	];
 
-	let props: RendererProps = $props();
+	let props: EntryOriginRendererProps = $props();
 	const disabled = $derived(props.mode === 'edit' ? props.disabled : true);
+
+	/*
+	 * `agreement_id` and `reverses_entry_id` are foreign keys no constraint can declare — a variant
+	 * is one JSONB value — so both option sets are built here, scoped to the employment this entry
+	 * belongs to. Asking an operator to paste a uuid was the alternative.
+	 */
+	const employmentId = $derived(
+		typeof props.row?.employment_id === 'string' ? props.row.employment_id : null
+	);
+	const agreementsQuery = $derived(
+		employmentId == null
+			? null
+			: client.db.repayment_agreements.findMany({
+					where: { employment_id: { eq: employmentId } },
+					orderBy: { reference: 'asc' },
+					limit: 200
+				})
+	);
+	const agreementOptions = $derived(
+		(agreementsQuery?.current ?? []).map((agreement) => ({
+			value: agreement.norbital_id,
+			label:
+				agreement.reference != null && agreement.reference !== ''
+					? String(agreement.reference)
+					: '—',
+			search_term: String(agreement.reference ?? '')
+		}))
+	);
+	const entriesQuery = $derived(
+		employmentId == null
+			? null
+			: client.db.component_entries.findMany({
+					where: { employment_id: { eq: employmentId } },
+					orderBy: { event_date: 'desc' },
+					limit: 500
+				})
+	);
+	const entryOptions = $derived(
+		(entriesQuery?.current ?? [])
+			.filter((entry) => entry.norbital_id !== props.row?.norbital_id)
+			.map((entry) => ({
+				value: entry.norbital_id,
+				label:
+					[formatCalendarDate(entry.event_date), entry.description]
+						.filter((part) => part != null && part !== '' && part !== '—')
+						.join(' · ') || '—',
+				search_term: String(entry.description ?? '')
+			}))
+	);
 	const parsed = $derived(entryOriginSchema.safeParse(props.value));
 	const current = $derived(parsed.success ? parsed.data : null);
 	const summary = $derived.by(() => {
@@ -173,7 +238,7 @@
 				<Input
 					value={current.note}
 					{disabled}
-					placeholder="Why this entry exists"
+					placeholder={t('component.why_this_entry_exists')}
 					oninput={(event) => emit({ kind: 'ONE_OFF', note: event.currentTarget.value })}
 				/>
 			</label>
@@ -187,28 +252,36 @@
 					oninput={(event) => emit({ ...current, incurred_on: event.currentTarget.value })}
 				/>
 			</label>
-			<label class="grid gap-1.5 text-sm font-medium">
-				Evidence file id (blank = none)
-				<Input
-					value={current.evidence_file ?? ''}
+			<Stack gap="xs" class="text-sm font-medium">
+				<span>{t('component.evidence')}</span>
+				<DataRenderer
+					field={EVIDENCE_FIELD}
+					value={current.evidence_file}
+					mode="edit"
 					{disabled}
-					placeholder="UUID of the uploaded document"
-					oninput={(event) =>
+					onValueChange={(next) =>
 						emit({
 							...current,
-							evidence_file:
-								event.currentTarget.value.trim().length === 0 ? null : event.currentTarget.value
+							evidence_file: typeof next === 'string' && next !== '' ? next : null
 						})}
 				/>
-			</label>
+			</Stack>
 		{:else if current?.kind === 'LOAN_INSTALMENT'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Agreement id
-				<Input
-					value={current.agreement_id}
-					{disabled}
-					placeholder="UUID of the repayment agreement"
-					oninput={(event) => emit({ ...current, agreement_id: event.currentTarget.value })}
+				Repayment agreement
+				<Combobox
+					ariaLabel="Repayment agreement"
+					options={agreementOptions}
+					value={current.agreement_id === '' ? null : current.agreement_id}
+					disabled={disabled || employmentId == null}
+					searchPlaceholder="Search agreements…"
+					emptyPlaceholder="Choose the agreement this leg repays"
+					clientConfig={{
+						isLoading: agreementsQuery?.loading ?? false,
+						error: agreementsQuery?.error?.message ?? null
+					}}
+					onValueChange={(value) =>
+						emit({ ...current, agreement_id: typeof value === 'string' ? value : '' })}
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
@@ -236,12 +309,20 @@
 			</label>
 		{:else if current?.kind === 'REVERSAL'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Reverses entry id
-				<Input
-					value={current.reverses_entry_id}
-					{disabled}
-					placeholder="UUID of the reversed entry"
-					oninput={(event) => emit({ ...current, reverses_entry_id: event.currentTarget.value })}
+				Reverses
+				<Combobox
+					ariaLabel="Reversed entry"
+					options={entryOptions}
+					value={current.reverses_entry_id === '' ? null : current.reverses_entry_id}
+					disabled={disabled || employmentId == null}
+					searchPlaceholder="Search this person’s entries…"
+					emptyPlaceholder="Choose the entry being reversed"
+					clientConfig={{
+						isLoading: entriesQuery?.loading ?? false,
+						error: entriesQuery?.error?.message ?? null
+					}}
+					onValueChange={(value) =>
+						emit({ ...current, reverses_entry_id: typeof value === 'string' ? value : '' })}
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
@@ -258,7 +339,7 @@
 				<Input
 					value={current.covers_periods.join(', ')}
 					{disabled}
-					placeholder="2026-01, 2026-02"
+					placeholder={t('component.pay_periods')}
 					oninput={(event) =>
 						emit({ ...current, covers_periods: splitList(event.currentTarget.value) })}
 				/>

@@ -6,7 +6,12 @@
  * server-rendered HTML with no imports from the workspace bundle, because they have to render before
  * a session exists. The code page carries only a tiny progressive-enhancement script for its six
  * accessible OTP cells; authentication and validation remain ordinary server form posts.
+ *
+ * Every user-facing string is translated through the pod catalog. The caller resolves the locale
+ * per request (`?lang=` first, then `Accept-Language`) and hands in the runtime; the pages are pure
+ * render functions and never touch the request themselves.
  */
+import type { ServerI18n } from '$lib/i18n/index.js';
 
 function escapeHtml(value: string): string {
 	return value
@@ -47,13 +52,18 @@ function slateField(): string {
 	}).join('')}</div>`;
 }
 
-function shell(title: string, inner: string, branding: IdentityPageBranding = {}): string {
+function shell(
+	i18n: ServerI18n,
+	title: string,
+	inner: string,
+	branding: IdentityPageBranding = {}
+): string {
 	const productName = branding.productName?.trim() || 'Norbital';
 	const brandMark = branding.logoUrl
 		? `<img src="${escapeHtml(branding.logoUrl)}" alt="" aria-hidden="true" />`
 		: escapeHtml(productName.slice(0, 1).toUpperCase());
 	return `<!doctype html>
-<html lang="en">
+<html lang="${i18n.intlLocale}">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -112,28 +122,31 @@ function shell(title: string, inner: string, branding: IdentityPageBranding = {}
   @media (prefers-reduced-motion: reduce) { .slate-cell { animation: none; } .slate-cell:nth-child(11n) { background: color-mix(in oklch, var(--brand) 9%, transparent); } }
 </style>
 </head>
-<body><div class="small-grid" aria-hidden="true"></div><div class="large-grid" aria-hidden="true"></div><div class="top-glow" aria-hidden="true"></div>${slateField()}<div class="page"><header class="brand"><a class="brand-name" href="/"><span class="brand-mark">${brandMark}</span><span>${escapeHtml(productName)}</span></a><span class="secure">Secure access</span></header><div class="center"><main>${inner}</main></div></div></body>
+<body><div class="small-grid" aria-hidden="true"></div><div class="large-grid" aria-hidden="true"></div><div class="top-glow" aria-hidden="true"></div>${slateField()}<div class="page"><header class="brand"><a class="brand-name" href="/"><span class="brand-mark">${brandMark}</span><span>${escapeHtml(productName)}</span></a><span class="secure">${escapeHtml(i18n.t('pod.identity.secureAccess'))}</span></header><div class="center"><main>${inner}</main></div></div></body>
 </html>`;
 }
 
 export function loginPage(input: {
+	readonly i18n: ServerI18n;
 	readonly organizationName: string;
 	readonly error?: string;
 	readonly branding?: IdentityPageBranding;
 }): Response {
+	const { i18n, organizationName } = input;
 	return html(
 		shell(
-			`Sign in — ${input.organizationName}`,
+			i18n,
+			i18n.t('pod.identity.titleSignIn', { organization: organizationName }),
 			`
-<h1>Sign in</h1>
-<p class="sub">${escapeHtml(input.organizationName)}</p>
+<h1>${escapeHtml(i18n.t('pod.identity.headingSignIn'))}</h1>
+<p class="sub">${escapeHtml(organizationName)}</p>
 ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
 <form method="post" action="/login">
-  <label for="email">Email address</label>
+  <label for="email">${escapeHtml(i18n.t('pod.identity.emailLabel'))}</label>
   <input id="email" name="email" type="email" autocomplete="email" required autofocus />
-  <button type="submit">Send sign-in code</button>
+  <button type="submit">${escapeHtml(i18n.t('pod.identity.sendCode'))}</button>
 </form>
-	<p class="muted">We'll email you a six-digit code. No password required.</p>`,
+	<p class="muted">${escapeHtml(i18n.t('pod.identity.noPasswordHint'))}</p>`,
 			input.branding
 		),
 		input.error ? 400 : 200
@@ -141,26 +154,40 @@ ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
 }
 
 export function codeEntryPage(input: {
+	readonly i18n: ServerI18n;
 	readonly email: string;
 	readonly error?: string;
 	readonly branding?: IdentityPageBranding;
 }): Response {
+	const { i18n, email } = input;
+	const codeHeading = i18n.t('pod.identity.headingEnterCode');
 	return html(
 		shell(
-			'Enter your code',
+			i18n,
+			codeHeading,
 			`
-<h1>Enter your code</h1>
-<p class="sub">Sent to ${escapeHtml(input.email)}</p>
+<h1>${escapeHtml(codeHeading)}</h1>
+<p class="sub">${escapeHtml(i18n.t('pod.identity.sentTo', { email }))}</p>
 ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
 <form method="post" action="/login/code">
-  <label for="code-1">Six-digit code</label>
+  <label for="code-1">${escapeHtml(i18n.t('pod.identity.codeLabel'))}</label>
   <input class="pin-hidden" id="code" name="code" pattern="[0-9]{6}" required tabindex="-1" aria-hidden="true" />
   <div class="pin" data-pin-group>
-    ${Array.from({ length: 6 }, (_, index) => `<input id="code-${index + 1}" data-pin inputmode="numeric" autocomplete="${index === 0 ? 'one-time-code' : 'off'}" pattern="[0-9]" maxlength="1" aria-label="Digit ${index + 1} of 6" ${index === 0 ? 'autofocus' : ''} />`).join('')}
+    ${Array.from(
+			{ length: 6 },
+			(_, index) =>
+				`<input id="code-${index + 1}" data-pin inputmode="numeric" autocomplete="${
+					index === 0 ? 'one-time-code' : 'off'
+				}" pattern="[0-9]" maxlength="1" aria-label="${escapeHtml(i18n.t('pod.identity.digitAria', { index: index + 1 }))}" ${
+					index === 0 ? 'autofocus' : ''
+				} />`
+		).join('')}
   </div>
-  <button type="submit">Verify and continue</button>
+  <button type="submit">${escapeHtml(i18n.t('pod.identity.verifyAndContinue'))}</button>
 </form>
-<p class="muted">The code expires in ten minutes. <a href="/login">Change email</a>.</p>
+<p class="muted">${i18n.t('pod.identity.codeExpiresMuted', {
+				link: `<a href="/login">${escapeHtml(i18n.t('pod.identity.changeEmail'))}</a>`
+			})}</p>
 <script>
 (() => {
   const group = document.querySelector('[data-pin-group]');
@@ -190,39 +217,46 @@ ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
  * appear in a redirect URL even if someone wanted it to. This page exists to say so.
  */
 export function checkEmailPage(input: {
+	readonly i18n: ServerI18n;
 	readonly organizationName: string;
 	readonly branding?: IdentityPageBranding;
 }): Response {
+	const { i18n, organizationName } = input;
+	const heading = i18n.t('pod.identity.headingCheckEmail');
 	return html(
 		shell(
-			'Check your email',
+			i18n,
+			heading,
 			`
-<h1>Check your email</h1>
-<p class="sub">${escapeHtml(input.organizationName)}</p>
-<p>We've sent an invitation link to the address you signed up with. Open it to finish setting up your
-workspace.</p>
-<p class="muted">The link is single-use and expires in three days. Already have access?
-	<a href="/login">Sign in</a>.</p>`,
+<h1>${escapeHtml(heading)}</h1>
+<p class="sub">${escapeHtml(organizationName)}</p>
+<p>${escapeHtml(i18n.t('pod.identity.checkEmailBody'))}</p>
+<p class="muted">${i18n.t('pod.identity.linkSingleUse', {
+				link: `<a href="/login">${escapeHtml(i18n.t('pod.identity.signIn'))}</a>`
+			})}</p>`,
 			input.branding
 		)
 	);
 }
 
 export function acceptInvitePage(input: {
+	readonly i18n: ServerI18n;
 	readonly organizationName: string;
 	readonly token: string | null;
 	readonly error?: string;
 	readonly branding?: IdentityPageBranding;
 }): Response {
+	const { i18n, organizationName } = input;
 	if (!input.token) {
 		return html(
 			shell(
-				'Invitation link required',
+				i18n,
+				i18n.t('pod.identity.titleInviteRequired'),
 				`
-<h1>That link is incomplete</h1>
-<p class="sub">${escapeHtml(input.organizationName)}</p>
-<p>Open the invitation link from your email — it carries a token this page needs.</p>
-	<p class="muted"><a href="/login">Sign in instead</a></p>`,
+<h1>${escapeHtml(i18n.t('pod.identity.headingLinkIncomplete'))}</h1>
+<p class="sub">${escapeHtml(organizationName)}</p>
+<p>${escapeHtml(i18n.t('pod.identity.linkIncompleteBody'))}</p>
+	<p class="muted"><a href="/login">${escapeHtml(i18n.t('pod.identity.signInInstead'))}</a></p>`,
 				input.branding
 			),
 			400
@@ -230,18 +264,19 @@ export function acceptInvitePage(input: {
 	}
 	return html(
 		shell(
-			`Accept invitation — ${input.organizationName}`,
+			i18n,
+			i18n.t('pod.identity.titleAcceptInvitation', { organization: organizationName }),
 			`
-<h1>Accept your invitation</h1>
-<p class="sub">${escapeHtml(input.organizationName)}</p>
+<h1>${escapeHtml(i18n.t('pod.identity.headingAcceptInvitation'))}</h1>
+<p class="sub">${escapeHtml(organizationName)}</p>
 ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
 <form method="post" action="/accept-invite">
   <input type="hidden" name="token" value="${escapeHtml(input.token)}" />
-  <label for="email">Confirm your email address</label>
+  <label for="email">${escapeHtml(i18n.t('pod.identity.confirmEmailLabel'))}</label>
   <input id="email" name="email" type="email" autocomplete="email" required autofocus />
-  <button type="submit">Accept and sign in</button>
+  <button type="submit">${escapeHtml(i18n.t('pod.identity.acceptAndSignIn'))}</button>
 </form>
-	<p class="muted">We'll email a code to confirm it's you before creating your account.</p>`,
+	<p class="muted">${escapeHtml(i18n.t('pod.identity.confirmCodeMuted'))}</p>`,
 			input.branding
 		),
 		input.error ? 400 : 200

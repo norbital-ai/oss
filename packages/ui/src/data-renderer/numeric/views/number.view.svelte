@@ -1,10 +1,13 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '../../data-renderer.types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
@@ -12,11 +15,12 @@
 		id,
 		mode = 'display',
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
-		locale = 'en-US',
+		locale,
 		class: className
 	}: DataRendererProps = $props();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 
 	const values = $derived(
 		Array.isArray(value) ? value.filter((item): item is number => typeof item === 'number') : []
@@ -24,7 +28,7 @@
 	const scalarValue = $derived(typeof value === 'number' ? String(value) : '');
 	const step = $derived(field.kind === 'integer' ? 1 : 'any');
 	const formatted = $derived.by(() => {
-		const formatter = new Intl.NumberFormat(locale);
+		const formatter = new Intl.NumberFormat(localeEffective);
 		if (field.array) return values.map((item) => formatter.format(item)).join(', ');
 		return typeof value === 'number' ? formatter.format(value) : placeholder;
 	});
@@ -55,7 +59,7 @@
 			<Inline gap="sm">
 				<Input
 					id={id ? `${id}-${index}` : undefined}
-					aria-label={`Value ${index + 1}`}
+					aria-label={t('dataRenderer.valueIndex', { index: index + 1 })}
 					type="number"
 					{step}
 					value={String(item)}
@@ -69,7 +73,7 @@
 					variant="outline"
 					size="icon"
 					class="shrink-0"
-					aria-label="Remove value"
+					aria-label={t('dataRenderer.removeValue')}
 					{disabled}
 					onclick={() => onValueChange?.(values.filter((_, itemIndex) => itemIndex !== index))}
 				>
@@ -86,7 +90,7 @@
 			onclick={() => onValueChange?.([...values, 0])}
 		>
 			<Icon icon="lucide:plus" class="size-4" />
-			Add value
+			{t('dataRenderer.addValue')}
 		</Button>
 	</Stack>
 {:else}

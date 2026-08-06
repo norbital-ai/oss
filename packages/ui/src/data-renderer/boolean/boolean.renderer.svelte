@@ -3,23 +3,26 @@
 	import { Button } from '#lib/button';
 	import { Checkbox } from '#lib/checkbox';
 	import { Combobox } from '#lib/combobox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '../data-renderer.types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
 		value,
 		id,
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
 		class: className
 	}: DataRendererProps = $props();
 
 	const options = [
-		{ value: 'true', label: 'Yes' },
-		{ value: 'false', label: 'No' }
+		{ value: 'true', label: t('dataRenderer.true') },
+		{ value: 'false', label: t('dataRenderer.false') }
 	];
 	const values = $derived(
 		Array.isArray(value) ? value.filter((item): item is boolean => typeof item === 'boolean') : []
@@ -43,19 +46,19 @@
 				<Inline gap="sm" grow class="min-w-0">
 					<Checkbox
 						id={id ? `${id}-${index}` : undefined}
-						aria-label={`Boolean value ${index + 1}`}
+						aria-label={t('dataRenderer.booleanValue', { index: index + 1 })}
 						{checked}
 						{disabled}
 						onCheckedChange={(next) => updateArrayItem(index, next)}
 					/>
-					<span class="text-sm">{checked ? 'Yes' : 'No'}</span>
+					<span class="text-sm">{checked ? t('dataRenderer.true') : t('dataRenderer.false')}</span>
 				</Inline>
 				<Button
 					type="button"
 					variant="outline"
 					size="icon"
 					class="shrink-0"
-					aria-label="Remove boolean value"
+					aria-label={t('dataRenderer.removeBooleanValue')}
 					{disabled}
 					onclick={() => removeArrayItem(index)}
 				>
@@ -72,7 +75,7 @@
 			onclick={() => onValueChange?.([...values, false])}
 		>
 			<Icon icon="lucide:plus" class="size-4" />
-			Add value
+			{t('dataRenderer.addValue')}
 		</Button>
 	</Stack>
 {:else if field.nullable}
@@ -95,6 +98,6 @@
 			{disabled}
 			onCheckedChange={(checked) => onValueChange?.(checked)}
 		/>
-		<span class="text-sm">{value === true ? 'Yes' : 'No'}</span>
+		<span class="text-sm">{value === true ? t('dataRenderer.true') : t('dataRenderer.false')}</span>
 	</div>
 {/if}

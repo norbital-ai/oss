@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts" generics="T extends TimeValue = Time">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { TimeField, type WithoutChildrenOrChild } from 'bits-ui';
 
@@ -17,7 +18,7 @@
 		disabled = false,
 		readonly = false,
 		granularity = 'minute',
-		locale = 'en-US',
+		locale,
 		hourCycle,
 		minValue,
 		maxValue,
@@ -42,6 +43,8 @@
 		segmentClass?: string;
 	} = $props();
 
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+
 	// Handle validation errors
 	function handleInvalid(reason: 'min' | 'max' | 'custom', msg?: string | string[]) {
 		if (onInvalid) {
@@ -57,7 +60,7 @@
 	{disabled}
 	{readonly}
 	{granularity}
-	{locale}
+	locale={localeEffective}
 	{hourCycle}
 	{minValue}
 	{maxValue}

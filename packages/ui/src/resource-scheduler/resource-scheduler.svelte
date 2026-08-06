@@ -4,6 +4,7 @@
 >
 	import Icon from '@iconify/svelte';
 	import { Checkbox } from '#lib/checkbox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { Cover, Inline, Scroll } from '#lib/layout';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
@@ -38,6 +39,8 @@
 				end: string;
 		  };
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		resources,
 		items,
@@ -48,7 +51,7 @@
 		rowHeight: configuredRowHeight,
 		resourceWidth = 220,
 		dayWidth: configuredDayWidth,
-		resourceLabel = 'Resources',
+		resourceLabel = t('misc.resources'),
 		maxVisibleCellItems = 3,
 		disabled = false,
 		readonly = false,
@@ -332,7 +335,7 @@
 >
 	<Scroll
 		axis="both"
-		name="Resource schedule"
+		name={t('misc.resourceSchedule')}
 		class="relative"
 		bind:ref={bodyElement}
 		onscroll={syncHeaderScroll}
@@ -402,13 +405,13 @@
 											type="button"
 											class="flex w-full items-center justify-between rounded-sm text-left text-micro font-medium focus-visible:ring-2 focus-visible:ring-ring"
 											disabled={disabled || !onCellActivate}
-											aria-label={`${cell.items.length} assignments on ${day.label} for ${resource.label}`}
+											aria-label={t('misc.cellAssignments', { count: cell.items.length, day: day.label, resource: resource.label })}
 											onclick={() => onCellActivate?.(cell)}
 										>
 											{#if cellContent}
 												{@render cellContent(resource, cell)}
 											{:else}
-												<span>{cell.items.length} assigned</span>
+												<span>{t('misc.assigned', { count: cell.items.length })}</span>
 												{#if locked}
 													<Icon icon="lucide:lock-keyhole" class="size-3 text-muted-foreground" />
 												{/if}
@@ -469,7 +472,7 @@
 										class="absolute inset-y-0 border-r hover:bg-muted/30 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring"
 										style={`left:${index * dayWidth}px;width:${dayWidth}px`}
 										data-day-index={index}
-										aria-label={`Create on ${day.label} for ${resource.label}`}
+										aria-label={t('misc.createOn', { day: day.label, resource: resource.label })}
 										disabled={disabled || readonly || !onCreate}
 										onclick={(event) => {
 											if (event.detail === 0) commitCreate(resource.id, day.start, day.end);
@@ -514,7 +517,7 @@
 												class="absolute inset-y-0 left-0 flex w-2 cursor-ew-resize items-center justify-center opacity-0 group-hover:opacity-100"
 												role="separator"
 												aria-orientation="vertical"
-												aria-label="Resize start"
+												aria-label={t('misc.resizeStart')}
 												onpointerdown={(event) => {
 													event.stopPropagation();
 													beginItemDrag(event, item, 'resize-start');
@@ -527,7 +530,7 @@
 												class="absolute inset-y-0 right-0 flex w-2 cursor-ew-resize items-center justify-center opacity-0 group-hover:opacity-100"
 												role="separator"
 												aria-orientation="vertical"
-												aria-label="Resize end"
+												aria-label={t('misc.resizeEnd')}
 												onpointerdown={(event) => {
 													event.stopPropagation();
 													beginItemDrag(event, item, 'resize-end');

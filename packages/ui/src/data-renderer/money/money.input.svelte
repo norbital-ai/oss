@@ -3,6 +3,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button, buttonVariants } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import * as InputGroup from '#lib/input-group';
 	import { Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
@@ -18,6 +19,8 @@
 		amount: string;
 		currency: string;
 	}
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		value,
@@ -84,8 +87,8 @@
 		completedValues.length
 			? completedValues.map((entry) => formatMoney(entry)).join(', ')
 			: multiple
-				? 'No amounts selected'
-				: 'Select amount'
+				? t('dataRenderer.noAmountsSelected')
+				: t('dataRenderer.selectAmount')
 	);
 
 	function formatMoney(entry: MoneyValue): string {
@@ -153,8 +156,8 @@
 	{#if multiple && drafts.length === 0}
 		<Stack gap="sm" align="center" class="rounded-md border border-dashed p-5 text-center">
 			<Icon icon="lucide:banknote" class="size-8 text-muted-foreground" />
-			<p class="text-sm font-medium">No amounts configured</p>
-			<p class="text-xs text-muted-foreground">Add a monetary value to get started.</p>
+			<p class="text-sm font-medium">{t('dataRenderer.noAmountsConfigured')}</p>
+			<p class="text-xs text-muted-foreground">{t('dataRenderer.addMonetaryValue')}</p>
 		</Stack>
 	{/if}
 
@@ -191,7 +194,7 @@
 				<Button
 					variant="ghost"
 					size="icon"
-					aria-label="Remove amount"
+					aria-label={t('dataRenderer.removeAmount')}
 					{disabled}
 					onclick={() => removeValue(index)}
 				>
@@ -209,7 +212,7 @@
 			onclick={addValue}
 		>
 			<Icon icon="lucide:plus" class="size-4" />
-			Add amount
+			{t('dataRenderer.addAmount')}
 		</Button>
 	{/if}
 {/snippet}

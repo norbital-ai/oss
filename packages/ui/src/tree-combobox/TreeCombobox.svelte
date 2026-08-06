@@ -2,20 +2,23 @@
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
 	import * as Popover from '#lib/popover';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { BaseTreeItem } from '#lib/tree-select';
 	import { TreeSelect } from '#lib/tree-select';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		rootItems = [] as readonly BaseTreeItem<TMetadata>[],
 		value = '' as string | undefined,
-		placeholder = 'Select...',
+		placeholder = t('misc.selectEllipsis'),
 		readonly = false,
 		disabled = false,
 		disabledIds = [] as string[],
 		onValueChange,
-		searchPlaceholder = 'Search...',
+		searchPlaceholder = t('misc.searchEllipsis'),
 		ariaLabel,
 		align = 'start' as 'start' | 'center' | 'end',
 		contentClass = '',
@@ -108,7 +111,7 @@
 							e.preventDefault();
 							handleClear(e);
 						}}
-						aria-label="Clear selection">clear</button
+						aria-label={t('dataRenderer.clearSelection')}>{t('misc.clearButton')}</button
 					>
 				{:else}
 					<Icon

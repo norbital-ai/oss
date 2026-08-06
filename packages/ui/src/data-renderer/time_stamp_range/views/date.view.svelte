@@ -20,6 +20,7 @@
 	import { formatUtcInstantLocal, parseUtcInstant } from '@norbital-ai/std/date';
 	import { type DateRange } from 'bits-ui';
 	import type { Snippet } from 'svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { RangeCalendar } from '#lib/range-calendar';
@@ -31,6 +32,8 @@
 	// ==================================================================================
 	// TYPES & INTERFACES
 	// ==================================================================================
+
+	const { t } = useI18n<UiKeys>();
 
 	type StringDateRange = { start?: string; end?: string };
 	type ValueType<T extends boolean> = T extends true ? StringDateRange[] : StringDateRange;
@@ -73,7 +76,7 @@
 		multi,
 		onValueChange,
 		align = 'start',
-		emptyPlaceholder = 'Pick date range(s)',
+		emptyPlaceholder = t('dataRenderer.pickDateRanges'),
 		allowClear = true,
 		allowTime = false,
 		class: className,
@@ -252,7 +255,7 @@
 		if (range.end) {
 			return `... - ${formatUtcInstantLocal(range.end, { dateStyle: 'medium', timeStyle: allowTime ? 'short' : undefined })}`;
 		}
-		return 'Select dates';
+		return t('dataRenderer.selectDates');
 	}
 
 	function getRangeStatus(range: StringDateRange): 'complete' | 'partial' | 'empty' {
@@ -303,7 +306,7 @@
 						removeRange(index);
 					}}
 					class="p-1 text-muted-foreground transition-colors hover:text-destructive"
-					aria-label="Remove this range"
+					aria-label={t('dataRenderer.removeRange')}
 				>
 					<Icon icon="lucide:x" class="h-3 w-3" />
 				</button>
@@ -327,14 +330,14 @@
 	{:else if multi}
 		<Inline gap="sm" grow>
 			<span class="shrink-0 rounded-full bg-brand-100 px-2 py-0.5 text-xs text-brand-700">
-				{ranges.length} range{ranges.length !== 1 ? 's' : ''}
+				{ranges.length} {t(ranges.length === 1 ? 'dataRenderer.rangeSingular' : 'dataRenderer.rangePlural')}
 			</span>
 			<span class="truncate text-xs">
 				{#if ranges.length <= maxTriggerRanges}
 					{ranges.map(formatRange).join(' • ')}
 				{:else}
 					{ranges.slice(0, maxTriggerRanges).map(formatRange).join(' • ')}
-					• +{ranges.length - maxTriggerRanges} more
+					• {t('misc.moreItems', { count: ranges.length - maxTriggerRanges })}
 				{/if}
 			</span>
 		</Inline>
@@ -347,18 +350,18 @@
 	{#if multi}
 		<Stack gap="md" class="min-w-[280px] border-l border-border bg-muted p-4">
 			<Inline justify="between" gap="sm">
-				<h4 class="text-sm font-semibold text-foreground">Selected Ranges ({ranges.length})</h4>
+				<h4 class="text-sm font-semibold text-foreground">{t('dataRenderer.selectedRangesHeading', { count: ranges.length })}</h4>
 				{#if hasSelection && !cantMutate}
 					<button
 						type="button"
 						onclick={clearAllRanges}
 						class="text-xs font-medium text-destructive hover:text-destructive-foreground"
 					>
-						Clear all
+						{t('dataRenderer.clearAll')}
 					</button>
 				{/if}
 			</Inline>
-			<Scroll axis="y" name="Selected ranges" class="max-h-[300px]">
+			<Scroll axis="y" name={t('dataRenderer.selectedRangesScroll')} class="max-h-[300px]">
 				<Stack gap="sm">
 					{#each ranges as range, index}
 						{@render RangeBadge(range, index, index === activeRangeIndex)}
@@ -366,7 +369,7 @@
 					{#if ranges.length === 0}
 						<Stack gap="sm" align="center" class="py-8 text-center text-muted-foreground">
 							<Icon icon="lucide:calendar" class="size-8" />
-							<p class="text-sm">No ranges selected</p>
+							<p class="text-sm">{t('dataRenderer.noRanges')}</p>
 						</Stack>
 					{/if}
 				</Stack>
@@ -378,7 +381,7 @@
 				class="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-brand-300 hover:text-brand disabled:cursor-not-allowed disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
 			>
 				<Icon icon="lucide:plus" class="h-4 w-4" />
-				Add new range
+				{t('dataRenderer.addRange')}
 			</button>
 		</Stack>
 	{/if}
@@ -409,7 +412,7 @@
 					e.stopPropagation();
 					clearAllRanges();
 				}}
-				aria-label="Clear selection"
+				aria-label={t('dataRenderer.clearSelection')}
 			>
 				<Icon icon="lucide:x" class="h-3 w-3" />
 			</button>

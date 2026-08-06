@@ -8,6 +8,7 @@
 	import { Button, buttonVariants } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import { DataRenderer } from '../data-renderer/index.js';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { toast } from 'svelte-sonner';
@@ -69,6 +70,8 @@
 		refresh(): Promise<void>;
 	} = $props();
 
+	const { t } = useI18n<UiKeys>();
+
 	let pendingOperation = $state<string | null>(null);
 	let expandedSections = $state<string[]>(['export']);
 	let selectedFieldName = $state<string | null>(null);
@@ -89,12 +92,16 @@
 		eligibleFields.map((field) => ({
 			value: field.name,
 			label: field.label ?? humanize(field.name),
-			description: field.relation ? `Links to ${humanize(field.relation.target)}` : undefined
+			description: field.relation
+				? t('table.linksTo', { target: humanize(field.relation.target) })
+				: undefined
 		}))
 	);
 	const selectedField = $derived(eligibleFields.find((field) => field.name === selectedFieldName));
 	const selectionLabel = $derived(
-		`${selectedRows.length} selected ${selectedRows.length === 1 ? 'record' : 'records'}`
+		selectedRows.length === 1
+			? t('table.selectedRecord', { count: selectedRows.length })
+			: t('table.selectedRecords', { count: selectedRows.length })
 	);
 	const canSubmitUpdate = $derived(
 		Boolean(
@@ -128,7 +135,7 @@
 			await pipeline.run(context);
 			if (kind === 'import') await refresh();
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : `${pipeline.label} failed`);
+			toast.error(error instanceof Error ? error.message : t('table.pipelineFailed', { label: pipeline.label }));
 		} finally {
 			pendingOperation = null;
 		}
@@ -154,11 +161,11 @@
 			if (kind === 'update') {
 				if (!updateSelected || !selectedField || !canSubmitUpdate) return;
 				await updateSelected(selectedField.name, bulkValue, selectedRows);
-				toast.success(`Updated ${selectionLabel}`);
+				toast.success(t('table.bulkUpdated', { label: selectionLabel }));
 			} else {
 				if (!deleteSelected) return;
 				await deleteSelected(selectedRows);
-				toast.success(`Deleted ${selectionLabel}`);
+				toast.success(t('table.bulkDeleted', { label: selectionLabel }));
 			}
 			if (kind === 'update') confirmUpdateOpen = false;
 			else confirmDeleteOpen = false;
@@ -169,7 +176,7 @@
 				bulkValueTouched = false;
 			}
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : `Bulk ${kind} failed`);
+			toast.error(error instanceof Error ? error.message : t('table.bulkFailed', { kind }));
 		} finally {
 			pendingOperation = null;
 		}
@@ -190,10 +197,8 @@
 {#snippet actionsMenu()}
 	<Inline align="start" justify="between" gap="md" class="border-b px-4 py-3">
 		<div class="min-w-0">
-			<p class="text-sm font-semibold">Collection actions</p>
-			<p class="mt-0.5 text-xs text-muted-foreground">
-				Run configured pipelines or change selected records.
-			</p>
+			<p class="text-sm font-semibold">{t('table.collectionActions')}</p>
+			<p class="mt-0.5 text-xs text-muted-foreground">{t('table.collectionActionsDescription')}</p>
 		</div>
 	</Inline>
 	<Accordion.Root type="multiple" bind:value={expandedSections} class="p-2">
@@ -202,7 +207,7 @@
 				<Accordion.Trigger class="px-2 hover:no-underline">
 					<Inline gap="md">
 						<Icon icon="lucide:upload" class="size-4 shrink-0" />
-						<span>Import</span>
+						<span>{t('table.import')}</span>
 						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
 							{importPipelines.length}
 						</span>
@@ -216,7 +221,7 @@
 				<Accordion.Trigger class="px-2 hover:no-underline">
 					<Inline gap="md">
 						<Icon icon="lucide:download" class="size-4 shrink-0" />
-						<span>Export</span>
+						<span>{t('table.export')}</span>
 						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
 							{exportPipelines.length}
 						</span>
@@ -230,7 +235,7 @@
 				<Accordion.Trigger class="px-2 hover:no-underline">
 					<Inline gap="md">
 						<Icon icon="lucide:plug-zap" class="size-4 shrink-0" />
-						<span>Integrations</span>
+						<span>{t('table.integrations')}</span>
 						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
 							{integrations.length}
 						</span>
@@ -246,31 +251,31 @@
 				<Accordion.Trigger class="px-2 hover:no-underline">
 					<Inline gap="md">
 						<Icon icon="lucide:list-restart" class="size-4 shrink-0" />
-						<span>Bulk update</span>
+						<span>{t('table.bulkUpdate')}</span>
 						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
 							{selectedRows.length}
 						</span>
 					</Inline>
 				</Accordion.Trigger>
-				<Accordion.Content class="px-1">
-					<Stack gap="md" class="rounded-md border bg-muted/30 p-3">
+			<Accordion.Content class="px-1">
+				<Stack gap="md" class="rounded-md border bg-muted/30 p-3">
+					<Stack gap="xs">
+						<p class="text-xs font-medium">{t('table.bulkStep1')}</p>
+						<Combobox
+							options={fieldOptions}
+							value={selectedFieldName}
+							searchable={fieldOptions.length > 8}
+							emptyPlaceholder={t('table.selectFieldPlaceholder')}
+							ariaLabel={t('table.chooseFieldToUpdate')}
+							disabled={disabled || selectedRows.length === 0}
+							onValueChange={chooseField}
+						/>
+					</Stack>
+					{#if selectedField}
 						<Stack gap="xs">
-							<p class="text-xs font-medium">1. Choose a field</p>
-							<Combobox
-								options={fieldOptions}
-								value={selectedFieldName}
-								searchable={fieldOptions.length > 8}
-								emptyPlaceholder="Select a primitive or linked field"
-								ariaLabel="Choose a field to update"
-								disabled={disabled || selectedRows.length === 0}
-								onValueChange={chooseField}
-							/>
-						</Stack>
-						{#if selectedField}
-							<Stack gap="xs">
-								<label class="text-xs font-medium" for="collection-bulk-update-value">
-									2. Set the new value
-								</label>
+							<label class="text-xs font-medium" for="collection-bulk-update-value">
+								{t('table.bulkStep2')}
+							</label>
 								<DataRenderer
 									id="collection-bulk-update-value"
 									field={selectedField}
@@ -284,17 +289,17 @@
 								/>
 							</Stack>
 						{/if}
-						<Inline justify="between" gap="md" class="border-t pt-3">
-							<p class="text-xs text-muted-foreground">{selectionLabel}</p>
-							<Button
-								type="button"
-								size="sm"
-								disabled={disabled || pendingOperation != null || !canSubmitUpdate}
-								onclick={() => void reviewBulkOperation('update')}
-							>
-								3. Review update
-							</Button>
-						</Inline>
+					<Inline justify="between" gap="md" class="border-t pt-3">
+						<p class="text-xs text-muted-foreground">{selectionLabel}</p>
+						<Button
+							type="button"
+							size="sm"
+							disabled={disabled || pendingOperation != null || !canSubmitUpdate}
+							onclick={() => void reviewBulkOperation('update')}
+						>
+							{t('table.bulkStep3')}
+						</Button>
+					</Inline>
 					</Stack>
 				</Accordion.Content>
 			</Accordion.Item>
@@ -304,7 +309,7 @@
 				<Accordion.Trigger class="px-2 text-destructive hover:no-underline">
 					<Inline gap="md">
 						<Icon icon="lucide:trash-2" class="size-4 shrink-0" />
-						<span>Delete records</span>
+						<span>{t('table.deleteRecords')}</span>
 						<span class="rounded-full bg-destructive/10 px-2 py-0.5 text-xs">
 							{selectedRows.length}
 						</span>
@@ -316,7 +321,9 @@
 						gap="md"
 						class="rounded-md border border-destructive/30 bg-destructive/5 p-3"
 					>
-						<p class="text-xs text-muted-foreground">Delete {selectionLabel}.</p>
+						<p class="text-xs text-muted-foreground">
+							{t('table.deleteSelectedLabel', { label: selectionLabel })}
+						</p>
 						<Button
 							type="button"
 							variant="destructive"
@@ -324,7 +331,7 @@
 							disabled={disabled || pendingOperation != null || selectedRows.length === 0}
 							onclick={() => void reviewBulkOperation('delete')}
 						>
-							Review deletion
+							{t('table.reviewDeletion')}
 						</Button>
 					</Inline>
 				</Accordion.Content>
@@ -336,16 +343,17 @@
 <AlertDialog.Root bind:open={confirmUpdateOpen}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Update {selectionLabel}?</AlertDialog.Title>
+			<AlertDialog.Title>{t('table.confirmUpdateTitle', { label: selectionLabel })}</AlertDialog.Title>
 			<AlertDialog.Description>
-				Every selected record will receive the same value for {selectedField?.label ??
-					selectedFieldName}.
+				{t('table.confirmUpdateDescription', {
+					field: selectedField?.label ?? selectedFieldName ?? ''
+				})}
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<AlertDialog.Footer>
-			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Cancel>{t('common.cancel')}</AlertDialog.Cancel>
 			<AlertDialog.Action onclick={() => void runBulkOperation('update')}>
-				Confirm update
+				{t('table.confirmUpdate')}
 			</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
@@ -354,19 +362,16 @@
 <AlertDialog.Root bind:open={confirmDeleteOpen}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Delete {selectionLabel}?</AlertDialog.Title>
-			<AlertDialog.Description>
-				This permanently removes the selected records. Linked records or collection policy may block
-				the deletion.
-			</AlertDialog.Description>
+			<AlertDialog.Title>{t('table.confirmDeleteTitle', { label: selectionLabel })}</AlertDialog.Title>
+			<AlertDialog.Description>{t('table.confirmDeleteDescription')}</AlertDialog.Description>
 		</AlertDialog.Header>
 		<AlertDialog.Footer>
-			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Cancel>{t('common.cancel')}</AlertDialog.Cancel>
 			<AlertDialog.Action
 				class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 				onclick={() => void runBulkOperation('delete')}
 			>
-				Delete records
+				{t('table.deleteRecords')}
 			</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
@@ -376,8 +381,8 @@
 	<Popover.Root bind:open={actionsOpen}>
 		<Popover.Trigger
 			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-			aria-label="Open collection actions"
-			title="Collection actions"
+			aria-label={t('table.openCollectionActions')}
+			title={t('table.collectionActions')}
 		>
 			<Icon icon="lucide:zap" class="size-4" />
 		</Popover.Trigger>
@@ -390,7 +395,7 @@
 	</Popover.Root>
 	{#if selectionControls}
 		<span class="text-xs tabular-nums text-muted-foreground">
-			{selectedRows.length} selected
+			{t('common.selected', { count: selectedRows.length })}
 		</span>
 		<Button
 			type="button"
@@ -400,7 +405,7 @@
 			disabled={disabled || selectionControls.totalRows === 0}
 			onclick={selectionControls.toggleAll}
 		>
-			{selectionControls.allSelected ? 'Clear all' : 'Select all'}
+			{selectionControls.allSelected ? t('table.clearAll') : t('common.selectAll')}
 		</Button>
 	{/if}
 </Inline>

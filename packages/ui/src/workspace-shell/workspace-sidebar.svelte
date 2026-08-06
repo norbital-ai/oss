@@ -5,6 +5,7 @@
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import * as DropdownMenu from '#lib/dropdown-menu';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import * as Sidebar from '#lib/sidebar';
 	import { Spinner } from '#lib/spinner';
@@ -15,6 +16,8 @@
 		WorkspaceOrganizationOption
 	} from './workspace-shell.types.js';
 	import WorkspaceSidebarNavigationSection from './workspace-sidebar-navigation-section.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		model,
@@ -102,8 +105,8 @@
 			value={model.activeOrganization.id}
 			options={organizationOptions}
 			display={organizationSelection}
-			searchPlaceholder="Search organizations..."
-			emptyPlaceholder="Select organization"
+			searchPlaceholder={t('misc.searchOrganizations')}
+			emptyPlaceholder={t('misc.selectOrganization')}
 			preserveOptionOrder={true}
 			scrollToSelection={true}
 			disabled={switchingOrganizationId !== null || !onOrganizationChange}
@@ -130,7 +133,7 @@
 			<Sidebar.Trigger
 				target="expansion"
 				class="size-8 shrink-0"
-				aria-label={sidebar.isMobile ? 'Close workspace navigation' : 'Collapse sidebar'}
+				aria-label={sidebar.isMobile ? t('misc.closeWorkspaceNavigation') : t('misc.collapseSidebar')}
 			/>
 		{:else}
 			<div class="relative mx-auto size-8">
@@ -142,14 +145,14 @@
 
 <Sidebar.Content class="text-xs">
 	<WorkspaceSidebarNavigationSection
-		label="Platform"
+		label={t('misc.platform')}
 		items={model.system}
 		open={displayExpanded}
 		{onNavigate}
 		{onPrefetch}
 	/>
 	<WorkspaceSidebarNavigationSection
-		label="Applications"
+		label={t('misc.applications')}
 		items={model.applications}
 		open={displayExpanded}
 		{onNavigate}
@@ -164,7 +167,7 @@
 		{/if}
 		{#if displayExpanded}
 			<div class="px-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-				Account
+				{t('misc.account')}
 			</div>
 		{/if}
 		<Sidebar.MenuItem>
@@ -174,7 +177,7 @@
 						<Sidebar.MenuButton
 							{...props}
 							size="lg"
-							aria-label="Open account menu"
+							aria-label={t('misc.openAccountMenu')}
 							class={cn(
 								'overflow-visible rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',
 								displayExpanded
@@ -215,7 +218,7 @@
 						<p class="text-xs font-medium">{model.user.name}</p>
 						<p class="text-tiny text-muted-foreground">{model.user.email}</p>
 						<p class="text-tiny text-muted-foreground capitalize">
-							Role: {model.user.role}
+							{t('misc.roleLabel', { role: model.user.role })}
 						</p>
 					</div>
 					<DropdownMenu.Separator />
@@ -227,7 +230,7 @@
 						onclick={() => void signOut()}
 					>
 						<Icon icon="lucide:log-out" class="size-3.5" />
-						<span>Logout</span>
+						<span>{t('misc.logout')}</span>
 						{#if signOutPending}<Spinner class="ml-auto size-3.5" />{/if}
 					</Button>
 				</DropdownMenu.Content>

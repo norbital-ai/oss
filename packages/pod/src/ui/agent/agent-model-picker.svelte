@@ -11,6 +11,10 @@
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { AgentModelOption } from './models.js';
 	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	interface ModelFamily {
 		id: string;
@@ -40,7 +44,7 @@
 	}
 
 	function variantLabel(modelId: string, defaultModelId: string): string {
-		if (modelId === defaultModelId) return 'Default';
+		if (modelId === defaultModelId) return t('pod.agent.default');
 		const variant = modelId.slice(baseModelId(modelId).length + 1);
 		return variant.replaceAll(/[-_]/g, ' ').replace(/^\w/, (character) => character.toUpperCase());
 	}
@@ -97,13 +101,13 @@
 
 {#snippet fields()}
 	<Stack gap="xs" class="min-w-0">
-		{#if !compact}<span class="text-sm font-medium">Model</span>{/if}
+		{#if !compact}<span class="text-sm font-medium">{t('pod.agent.model')}</span>{/if}
 		<Combobox
 			options={modelOptions}
-			ariaLabel="Model"
+			ariaLabel={t('pod.agent.model')}
 			value={selectedFamily?.defaultOption.id ?? value}
 			onValueChange={selectModel}
-			searchPlaceholder="Search all models…"
+			searchPlaceholder={t('pod.agent.searchAllModels')}
 			itemHeight={36}
 			maxHeight={360}
 			class="min-w-0"
@@ -119,10 +123,10 @@
 		/>
 	</Stack>
 	<Stack gap="xs" class="min-w-0">
-		{#if !compact}<span class="text-sm font-medium">Variant</span>{/if}
+		{#if !compact}<span class="text-sm font-medium">{t('pod.agent.variant')}</span>{/if}
 		<Combobox
 			options={variantOptions}
-			ariaLabel="Model variant"
+			ariaLabel={t('pod.agent.modelVariantAria')}
 			{value}
 			onValueChange={selectModel}
 			searchable={false}

@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { buttonVariants } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import Icon from '@iconify/svelte';
+
+	const { t } = useI18n<UiKeys>();
+	const intlLocale = $derived(useI18n().intlLocale);
 
 	let {
 		date,
@@ -14,7 +18,12 @@
 		class?: string;
 	} = $props();
 
-	const weekDays = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+	const weekDays = $derived.by(() => {
+		const formatter = new Intl.DateTimeFormat(intlLocale, { weekday: 'short' });
+		return Array.from({ length: 7 }, (_, index) =>
+			formatter.format(new Date(2024, 0, 1 + index)).slice(0, 2)
+		);
+	});
 
 	const today = $derived(new Date());
 	const currentMonth = $derived(date.getMonth());
@@ -43,7 +52,7 @@
 	});
 
 	const monthLabel = $derived(
-		firstOfMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+		firstOfMonth.toLocaleDateString(intlLocale, { month: 'long', year: 'numeric' })
 	);
 
 	function goPrevMonth() {
@@ -69,7 +78,7 @@
 		<button
 			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
 			onclick={goPrevMonth}
-			aria-label="Previous month"
+			aria-label={t('misc.previousMonth')}
 		>
 			<Icon icon="lucide:chevron-left" class="size-3.5" />
 		</button>
@@ -77,7 +86,7 @@
 		<button
 			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
 			onclick={goNextMonth}
-			aria-label="Next month"
+			aria-label={t('misc.nextMonth')}
 		>
 			<Icon icon="lucide:chevron-right" class="size-3.5" />
 		</button>
@@ -85,7 +94,7 @@
 		<button
 			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
 			onclick={goNextMonth}
-			aria-label="Next month"
+			aria-label={t('misc.nextMonth')}
 		>
 			<svg
 				xmlns="http://www.w3.org/2000/svg"

@@ -1,17 +1,22 @@
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import DateView from './views/date.view.svelte';
 	import TimeView from './views/time.view.svelte';
 	import { calendarDateToInstant, instantToCalendarDate } from './date.utils.js';
 	import type { DataRendererProps } from '../data-renderer.types.js';
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		field,
 		value,
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
 		class: className
 	}: DataRendererProps = $props();
+
+	const valuePlaceholderText = t('dataRenderer.valuePlaceholder');
 
 	function instantString(item: unknown): string | null {
 		if (item instanceof Date && !Number.isNaN(item.getTime())) return item.toISOString();
@@ -48,7 +53,7 @@
 	<DateView
 		value={Array.isArray(datePickerValue) ? datePickerValue : []}
 		multi={true}
-		placeholder={placeholder === 'Value…' ? 'Select date' : placeholder}
+		placeholder={placeholder === valuePlaceholderText ? t('dataRenderer.selectDate') : placeholder}
 		{disabled}
 		class={className}
 		onValueChange={updateDate}
@@ -57,7 +62,7 @@
 	<DateView
 		value={typeof datePickerValue === 'string' ? datePickerValue : null}
 		multi={false}
-		placeholder={placeholder === 'Value…' ? 'Select date' : placeholder}
+		placeholder={placeholder === valuePlaceholderText ? t('dataRenderer.selectDate') : placeholder}
 		{disabled}
 		class={className}
 		onValueChange={updateDate}

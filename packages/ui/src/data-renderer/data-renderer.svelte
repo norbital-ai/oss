@@ -5,14 +5,17 @@
 		type TGeolocationPickerValue
 	} from './geolocation/geolocation.internal.js';
 	import { StructuredValue } from '#lib/structured-value';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import DataRendererEditor from './data-renderer-editor.svelte';
 	import { getDataRendererRuntimeContext } from './data-renderer-runtime.js';
 	import type { CollectionRecord } from '@norbital-ai/platform-utils/collection';
 	import type { DataRendererProps } from './data-renderer.types.js';
-	import { formatDataValue } from './data-renderer.utils.js';
+	import { formatDataValue, type Translate } from './data-renderer.utils.js';
 	import NumericRenderer from './numeric/numeric.renderer.svelte';
 	import RelationshipRenderer from './relationship/relationship.renderer.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	const BUILTIN_DISPLAY_KINDS = new Set([
 		'boolean',
@@ -43,13 +46,14 @@
 		id,
 		mode = 'display',
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
 		row,
 		onRowChange,
-		locale = 'en-US',
+		locale,
 		class: className
 	}: DataRendererProps = $props();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 	const rendererRuntime = getDataRendererRuntimeContext();
 	const autocompleteGeolocation =
 		rendererRuntime?.autocompleteGeolocation ?? (() => Promise.resolve([]));
@@ -95,7 +99,7 @@
 		{onValueChange}
 		{row}
 		{onRowChange}
-		{locale}
+		locale={localeEffective}
 		class={className}
 	/>
 {:else if field.kind === 'geolocation' && mode === 'display' && field.array}
@@ -115,7 +119,7 @@
 		class={className}
 	/>
 {:else if NUMERIC_KINDS.has(field.kind) && mode === 'display'}
-	<NumericRenderer {field} {value} mode="display" placeholder="—" {locale} class={className} />
+	<NumericRenderer {field} {value} mode="display" placeholder={t('dataRenderer.null')} locale={localeEffective} class={className} />
 {:else if field.kind === 'file' && mode === 'edit'}
 	<DataRendererEditor
 		{field}
@@ -124,7 +128,7 @@
 		{disabled}
 		{placeholder}
 		{onValueChange}
-		{locale}
+		locale={localeEffective}
 		class={className}
 	/>
 {:else if fileTarget}
@@ -154,12 +158,12 @@
 		{disabled}
 		{placeholder}
 		{onValueChange}
-		{locale}
+		locale={localeEffective}
 		class={className}
 	/>
 {:else if usesStructuredDisplay}
 	<StructuredValue {value} class={className} />
 {:else}
-	{@const displayValue = formatDataValue(field, value, locale)}
+	{@const displayValue = formatDataValue(field, value, localeEffective, t as Translate)}
 	<span class={cn('block truncate', className)} title={displayValue}>{displayValue}</span>
 {/if}

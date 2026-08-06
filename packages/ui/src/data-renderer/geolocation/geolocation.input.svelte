@@ -5,6 +5,7 @@
 	import * as Carousel from '#lib/carousel';
 	import type { TComboboxProps, TOption } from '#lib/combobox';
 	import { Combobox } from '#lib/combobox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { StaticMap } from '#lib/static-map';
 	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { resource } from 'runed';
@@ -49,13 +50,15 @@
 					GeolocationPickerComboboxOmit
 				>);
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		value = $bindable(),
 		class: className,
 		style,
 		multiple,
 		readonly = false,
-		searchPlaceholder = 'Search for a location...',
+		searchPlaceholder = t('dataRenderer.searchLocation'),
 		onValueChange,
 		sameWidth = true,
 		autocomplete,
@@ -140,18 +143,18 @@
 	}
 
 	function formatCoordinates(geometry: TGeolocationPickerValue['geometry']): string {
-		if (!geometry) return 'No coordinates';
+		if (!geometry) return t('dataRenderer.noCoordinates');
 		return `${geometry.lat.toFixed(6)}, ${geometry.lon.toFixed(6)}`;
 	}
 
 	function getLocationTypeName(type: string): string {
 		const typeMap: Record<string, string> = {
-			geocode: 'Address',
-			establishment: 'Business',
-			point_of_interest: 'Point of Interest',
-			political: 'Political Area',
-			locality: 'City/Town',
-			country: 'Country'
+			geocode: t('dataRenderer.locationTypeAddress'),
+			establishment: t('dataRenderer.locationTypeBusiness'),
+			point_of_interest: t('dataRenderer.locationTypePointOfInterest'),
+			political: t('dataRenderer.locationTypePolitical'),
+			locality: t('dataRenderer.locationTypeLocality'),
+			country: t('dataRenderer.locationTypeCountry')
 		};
 		return typeMap[type] || type;
 	}
@@ -188,7 +191,7 @@
 			</span>
 			{#if !value.geometry}
 				<span class="shrink-0 text-xs font-normal text-orange-600 transition-all"
-					>No coordinates</span
+					>{t('dataRenderer.noCoordinates')}</span
 				>
 			{/if}
 		</Inline>
@@ -206,14 +209,14 @@
 						class={`h-3 w-3 shrink-0 ${geoValue.geometry ? 'text-success' : 'text-orange-500'}`}
 					/>
 					<span class="truncate text-xs">
-						{geoValue?.formatted_address || 'Unknown location'}
+						{geoValue?.formatted_address || t('dataRenderer.unknownLocation')}
 					</span>
 					{#if !readonly && multiple}
 						<button
 							type="button"
 							class="ml-1 rounded-full hover:bg-secondary focus:ring-2 focus:ring-brand focus:outline-none"
 							onclick={(e) => handleLocationRemove(geoValue, e)}
-							aria-label="Remove {geoValue.formatted_address}"
+							aria-label={t('dataRenderer.removeLocation', { location: geoValue.formatted_address })}
 						>
 							<Icon icon="lucide:x" class="h-3 w-3" />
 						</button>
@@ -224,7 +227,9 @@
 			{#if addresses.length > 2}
 				<Badge variant="info" class="flex items-center gap-1 px-2 py-0.5">
 					<Icon icon="lucide:more-horizontal" class="h-3 w-3" />
-					<span class="text-xs">+{addresses.length - 2} more</span>
+					<span class="text-xs">
+						{t('misc.moreItems', { count: addresses.length - 2 })}
+					</span>
 				</Badge>
 			{/if}
 		</Inline>
@@ -244,7 +249,7 @@
 			<div class="min-w-0 flex-1">
 				<p class="text-xs font-semibold text-foreground">{location.formatted_address}</p>
 				<p class="truncate text-xs text-muted-foreground">
-					{location.geometry ? formatCoordinates(location.geometry) : 'No coordinates available'}
+					{location.geometry ? formatCoordinates(location.geometry) : t('dataRenderer.noCoordinatesAvailable')}
 				</p>
 			</div>
 		</Inline>
@@ -253,13 +258,13 @@
 			<Stack gap="sm" fill class="p-2">
 				<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 					<Icon icon="lucide:map" class="h-4 w-4" />
-					Location map
+					{t('dataRenderer.locationMap')}
 				</Inline>
 				<StaticMap
 					markers={[
 						{ latitude: location.geometry.lat, longitude: location.geometry.lon, label: 'A' }
 					]}
-					ariaLabel={`Map of ${location.formatted_address}`}
+					ariaLabel={t('dataRenderer.mapOf', { location: location.formatted_address })}
 					class="h-[12.5rem]"
 				/>
 			</Stack>
@@ -268,18 +273,18 @@
 		<Stack gap="sm" fill class="p-2">
 			<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 				<Icon icon="lucide:info" class="h-4 w-4" />
-				Location Details
+				{t('dataRenderer.locationDetails')}
 			</Inline>
 			<Stack gap="xs" class="pl-6">
 				<p class="font-mono text-xs text-muted-foreground">
 					{#if location.geometry}
-						Lat: {location.geometry.lat.toFixed(6)}°
+						{t('dataRenderer.latitude')}: {location.geometry.lat.toFixed(6)}°
 						<br />
-						Lon: {location.geometry.lon.toFixed(6)}°
+						{t('dataRenderer.longitude')}: {location.geometry.lon.toFixed(6)}°
 						<br />
 						SRID: {location.srid}
 					{:else}
-						No coordinates available for this location
+						{t('dataRenderer.noCoordinatesForLocation')}
 					{/if}
 				</p>
 
@@ -291,7 +296,7 @@
 							class="rounded-full bg-success/10 px-2 py-1 text-xs text-success-foreground"
 						>
 							<Icon icon="lucide:check" class="h-3 w-3" />
-							Geocoded
+							{t('dataRenderer.geocoded')}
 						</Inline>
 					{:else}
 						<Inline
@@ -300,7 +305,7 @@
 							class="rounded-full bg-orange-100 px-2 py-1 text-xs text-orange-800"
 						>
 							<Icon icon="lucide:alert-triangle" class="h-3 w-3" />
-							No Coordinates
+							{t('dataRenderer.noCoordinatesAvailable')}
 						</Inline>
 					{/if}
 
@@ -320,7 +325,7 @@
 							class="rounded-full bg-purple-100 px-2 py-1 text-xs text-purple-800"
 						>
 							<Icon icon="lucide:satellite" class="h-3 w-3" />
-							GPS Compatible
+							{t('dataRenderer.gpsCompatible')}
 						</Inline>
 					{/if}
 				</Cluster>
@@ -347,7 +352,7 @@
 	{:else}
 		<div class="py-8 text-center text-muted-foreground">
 			<Icon icon="lucide:map-pin-off" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-			<p class="text-sm">No locations selected</p>
+			<p class="text-sm">{t('dataRenderer.noLocations')}</p>
 		</div>
 	{/if}
 {/snippet}
@@ -372,7 +377,7 @@
 		onSearch: handleSearch,
 		isLoading: searchResource.loading
 	}}
-	searchPlaceholder="Type to search for locations..."
+	searchPlaceholder={t('dataRenderer.typeToSearchLocations')}
 	{multiple}
 	{emptyPlaceholder}
 	{...restProps}
@@ -381,6 +386,6 @@
 {#snippet emptyPlaceholder()}
 	<Inline gap="sm" class="text-xs text-muted-foreground">
 		<Icon icon="lucide:map-pin-off" class="h-6 w-6" />
-		<p>No locations selected</p>
+		<p>{t('dataRenderer.noLocations')}</p>
 	</Inline>
 {/snippet}

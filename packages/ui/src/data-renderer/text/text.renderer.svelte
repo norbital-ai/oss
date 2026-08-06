@@ -1,16 +1,19 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
 	import type { DataRendererProps } from '../data-renderer.types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
 		value,
 		id,
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
 		class: className
 	}: DataRendererProps = $props();
@@ -51,7 +54,7 @@
 			<Inline gap="sm">
 				<Input
 					id={id ? `${id}-${index}` : undefined}
-					aria-label={`Value ${index + 1}`}
+					aria-label={t('dataRenderer.valueIndex', { index: index + 1 })}
 					type="text"
 					value={String(item)}
 					{placeholder}
@@ -64,7 +67,7 @@
 					variant="outline"
 					size="icon"
 					class="shrink-0"
-					aria-label="Remove value"
+					aria-label={t('dataRenderer.removeValue')}
 					{disabled}
 					onclick={() => removeArrayItem(index)}
 				>
@@ -81,7 +84,7 @@
 			onclick={addArrayItem}
 		>
 			<Icon icon="lucide:plus" class="size-4" />
-			Add value
+			{t('dataRenderer.addValue')}
 		</Button>
 	</Stack>
 {:else}

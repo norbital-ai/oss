@@ -17,6 +17,7 @@ export {
 	type CollectionSurfaceRuntime
 } from '../collection-runtime/index.js';
 export {
+	CollectionFilterPathError,
 	collectionTableRowMatchesFilters,
 	collectionTableRowMatchesSearch,
 	collectionTableRowMatchesWhere
@@ -41,6 +42,7 @@ export type {
 	CollectionTableIntegrationState,
 	CollectionTableIntegrationStatus,
 	CollectionTableFeatures,
+	CollectionTableInitialFilter,
 	CollectionTableProps,
 	CollectionTablePipeline,
 	CollectionTablePipelineContext,

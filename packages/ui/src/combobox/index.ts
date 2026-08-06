@@ -96,6 +96,11 @@ export interface TComboboxBaseProps<
 	/** When true, clicking an already-selected option clears the value (single-select only). */
 	allowClickToSetNull?: boolean;
 	hideChevron?: boolean;
+	/**
+	 * Hides the trigger chevron at rest; it reveals on hover and focus-within.
+	 * For triggers that read as plain text rather than as a control.
+	 */
+	chevronOnHover?: boolean;
 	disabled?: boolean;
 	invalid?: boolean;
 	readonly?: boolean;

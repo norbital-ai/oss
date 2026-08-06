@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '../workspace-shell/workspace-shell.types.js';
@@ -23,6 +24,8 @@
 		onRowClick: () => void;
 		onDeleteClick: (event: MouseEvent) => void;
 	};
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		entry,
@@ -166,7 +169,7 @@
 
 		{#snippet collaborators()}
 			{#if presencePeers.length > 0}
-				<Inline as="span" gap="xs" shrink={false} aria-label="Active collaborators">
+				<Inline as="span" gap="xs" shrink={false} aria-label={t('misc.activeCollaborators')}>
 					{#each presencePeers.slice(0, 3) as peer, index (`${peer.label}:${index}`)}
 						<span
 							class="size-2 rounded-full ring-1 ring-background"
@@ -188,7 +191,7 @@
 		</span>
 
 		{#if entryBadge}
-			<span class={badgeClass} aria-label="Status {entryBadge.label}">
+			<span class={badgeClass} aria-label={t('misc.statusLabel', { status: entryBadge.label })}>
 				{entryBadge.label}
 			</span>
 		{:else if showFileSize}
@@ -201,7 +204,7 @@
 			type="button"
 			class={deleteClass}
 			disabled={deleteDisabled}
-			aria-label="Remove {displayName}"
+			aria-label={t('misc.removeItem', { name: displayName })}
 			onclick={onDeleteClick}
 		>
 			<Icon icon="lucide:trash-2" class="size-3.5" />

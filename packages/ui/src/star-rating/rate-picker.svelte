@@ -3,12 +3,15 @@
 	// IMPORTS & DEPENDENCIES
 	// ============================================================================
 	import * as Popover from '#lib/popover';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
 	import Button, { buttonVariants } from '../button/button.svelte';
 	import StarRating from './star-rating.svelte';
 	import Star from './star-rating-star.svelte';
 	import { Inline, Stack } from '#lib/layout';
+
+	const { t } = useI18n<UiKeys>();
 
 	// ============================================================================
 	// COMPONENT PROPS
@@ -73,7 +76,7 @@
 	// ============================================================================
 	const triggerText = $derived.by((): string => {
 		if (!hasValidRatings) {
-			return multiple ? 'No ratings selected' : 'Select rating';
+			return multiple ? t('misc.noRatingsSelected') : t('misc.selectRating');
 		}
 
 		if (multiple) {
@@ -186,7 +189,7 @@
 			<Stack gap="sm">
 				<Inline gap="sm">
 					<Icon icon="lucide:star" class="h-5 w-5 text-yellow-500" />
-					<h4 class="font-semibold text-foreground">Rating Details</h4>
+					<h4 class="font-semibold text-foreground">{t('misc.ratingDetails')}</h4>
 				</Inline>
 
 				{#if hasValidRatings}
@@ -194,7 +197,7 @@
 						{#each validRatings as rating, index (index)}
 							<Inline justify="between" gap="sm" class="rounded-md bg-muted/40 p-3">
 								<span class="text-sm font-medium">
-									{multiple ? `Rating #${index + 1}` : 'Current Rating'}
+									{multiple ? t('misc.ratingIndex', { index: index + 1 }) : t('misc.currentRating')}
 								</span>
 								<Inline gap="sm">
 									<StarRating value={rating} readonly class="text-yellow-400">
@@ -212,7 +215,7 @@
 				{:else}
 					<div class="py-4 text-center">
 						<Icon icon="lucide:star" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-						<p class="text-sm text-muted-foreground">No ratings assigned</p>
+						<p class="text-sm text-muted-foreground">{t('misc.noRatingsAssigned')}</p>
 					</div>
 				{/if}
 			</Stack>
@@ -262,7 +265,7 @@
 					variant="ghost"
 					class="invisible absolute top-1/2 right-1 h-6 w-6 -translate-y-1/2 rounded-full p-0 group-hover:visible focus:visible"
 					onclick={handleClear}
-					aria-label="Clear selection"
+					aria-label={t('dataRenderer.clearSelection')}
 					tabindex={-1}
 				>
 					<Icon icon="lucide:x" class="h-4 w-4" />
@@ -276,11 +279,11 @@
 					<!-- Empty state -->
 					<Stack gap="sm" class="p-4 py-8 text-center">
 						<Icon icon="lucide:star" class="mx-auto h-12 w-12 text-muted-foreground" />
-						<h4 class="font-medium text-foreground">No ratings configured</h4>
-						<p class="text-sm text-muted-foreground">Add your first rating to get started</p>
+						<h4 class="font-medium text-foreground">{t('misc.noRatingsConfigured')}</h4>
+						<p class="text-sm text-muted-foreground">{t('misc.addFirstRatingHint')}</p>
 						<Button variant="outline" onclick={addRating} class="border-dashed" {disabled}>
 							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
-							Add first rating
+							{t('misc.addFirstRating')}
 						</Button>
 					</Stack>
 				{:else}
@@ -292,9 +295,9 @@
 								<!-- Visual indicator for entry state -->
 								<div class="flex shrink-0">
 									{#if entryState === 'valid'}
-										<div class="h-2 w-2 rounded-full bg-green-500" title="Complete"></div>
+										<div class="h-2 w-2 rounded-full bg-green-500" title={t('misc.progressComplete')}></div>
 									{:else}
-										<div class="h-2 w-2 rounded-full bg-border" title="Empty"></div>
+										<div class="h-2 w-2 rounded-full bg-border" title={t('misc.progressEmpty')}></div>
 									{/if}
 								</div>
 
@@ -343,7 +346,7 @@
 							{disabled}
 						>
 							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
-							Add rating
+							{t('dataRenderer.addRating')}
 						</Button>
 					</Stack>
 				{/if}

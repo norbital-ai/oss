@@ -4,6 +4,10 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { Inline, Cluster } from '@norbital-ai/ui/layout';
 	import { onDestroy, onMount } from 'svelte';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	let {
 		billing,
@@ -28,8 +32,8 @@
 			['past_due', 'unpaid', 'incomplete', 'incomplete_expired'].includes(resolvedBilling.status)
 		) {
 			return {
-				message: 'Your billing needs attention. Update your payment details to resolve it.',
-				action: 'Manage billing'
+				message: t('pod.shell.billingNeedsAttention'),
+				action: t('pod.shell.manageBilling')
 			};
 		}
 		if (resolvedBilling.hasPaymentMethod) return null;
@@ -40,13 +44,13 @@
 				year: 'numeric'
 			});
 			return {
-				message: `Your free trial ends ${trialEnd}. Add a payment method to keep your workspace active.`,
-				action: 'Add payment method'
+				message: t('pod.shell.trialEndsAddPayment', { date: trialEnd }),
+				action: t('pod.shell.addPaymentMethod')
 			};
 		}
 		return {
-			message: 'No payment method is on file. Add one to avoid an interruption.',
-			action: 'Add payment method'
+			message: t('pod.shell.noPaymentMethod'),
+			action: t('pod.shell.addPaymentMethod')
 		};
 	});
 
@@ -100,7 +104,7 @@
 				variant="ghost"
 				size="icon"
 				class="size-7 shrink-0 text-muted-foreground"
-				aria-label="Dismiss billing notice"
+				aria-label={t('pod.shell.dismissBillingNotice')}
 				onclick={() => {
 					dismissed = true;
 					const now = new Date();

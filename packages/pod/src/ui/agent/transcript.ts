@@ -5,6 +5,8 @@
  * and not a second model of the conversation. Kept out of the component because it is the only part
  * with an answer worth checking, and this package has no browser runner to check it through one.
  */
+import type { PodUiKeys } from '$lib/i18n/index.js';
+
 export type PanelText = {
 	readonly kind: 'text';
 	readonly key: string;
@@ -26,7 +28,13 @@ export type PanelToolCall = {
 	readonly key: string;
 	/** Registered name, kept verbatim — tenant and host tools are not in the label table. */
 	readonly name: string;
-	readonly label: string;
+	/**
+	 * Catalog key for a built-in tool label, or `null` when the tool is not one
+	 * Pod ships — those render the humanized name in `label` instead.
+	 */
+	readonly labelKey: PodUiKeys | null;
+	/** Humanized fallback label, used only when `labelKey` is null. */
+	readonly label: string | null;
 	readonly icon: string;
 	/** The one argument worth reading at a glance, so two calls to one tool differ on sight. */
 	readonly detail: string | null;
@@ -71,14 +79,14 @@ export type PanelMessage = PanelText | PanelToolCall | PanelCheckpoint;
  */
 const PAYLOAD_LIMIT = 2_000;
 
-type ToolMetadata = { readonly label: string; readonly icon: string };
+type ToolMetadata = { readonly labelKey: PodUiKeys | null; readonly icon: string };
 
 /** The tools this package resolves itself. Tenant and host tools are named by their registration. */
 const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
-	describe_workspace: { label: 'Describe workspace', icon: 'lucide:book-open' },
-	read_collection: { label: 'Read collection', icon: 'lucide:table' },
-	write_collection: { label: 'Write collection', icon: 'lucide:database' },
-	spawn_subagent: { label: 'Delegate task', icon: 'lucide:network' }
+	describe_workspace: { labelKey: 'pod.agent.tool.describeWorkspace', icon: 'lucide:book-open' },
+	read_collection: { labelKey: 'pod.agent.tool.readCollection', icon: 'lucide:table' },
+	write_collection: { labelKey: 'pod.agent.tool.writeCollection', icon: 'lucide:database' },
+	spawn_subagent: { labelKey: 'pod.agent.tool.delegateTask', icon: 'lucide:network' }
 };
 
 /**
@@ -218,7 +226,7 @@ function toToolCall(
 ): PanelToolCall {
 	const record = isRecord(call) ? call : {};
 	const name = typeof record.name === 'string' ? record.name : 'tool';
-	const metadata = TOOL_METADATA[name] ?? { label: humanize(name), icon: 'lucide:wrench' };
+	const metadata = TOOL_METADATA[name];
 	const input = isRecord(record.input) ? record.input : undefined;
 	const id = typeof record.id === 'string' ? record.id : null;
 	const answered = id !== null && context.results.has(id);
@@ -235,8 +243,9 @@ function toToolCall(
 		kind: 'tool',
 		key,
 		name,
-		label: metadata.label,
-		icon: metadata.icon,
+		labelKey: metadata?.labelKey ?? null,
+		label: metadata ? null : humanize(name),
+		icon: metadata?.icon ?? 'lucide:wrench',
 		detail: toDetail(input),
 		input: input && Object.keys(input).length > 0 ? formatPayload(input) : null,
 		output: answered && error === null ? formatPayload(output) : null,
@@ -267,7 +276,7 @@ function clamp(text: string, limit: number = PAYLOAD_LIMIT): string {
 	return text.length <= limit ? text : `${text.slice(0, limit)}…`;
 }
 
-/** `read_collection` reads as `Read collection`, matching how the built-ins are labelled. */
+/** How an unknown tool reads: capitalized words, the same shape as the built-in labels. */
 function humanize(name: string): string {
 	const words = name.split(/[_-]+/).filter(Boolean);
 	const first = words[0];

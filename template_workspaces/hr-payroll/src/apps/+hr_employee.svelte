@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { getPlatformStateContext } from '@norbital-ai/pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cluster, Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import {
@@ -16,26 +17,22 @@
 	} from '../lib/ui/display-formatters.js';
 	import {
 		daysBetweenKeys,
+		inForceTodayFilter,
 		monthKey,
 		payDateFor,
 		shiftMonthKey,
-		todayInstant,
 		todayKey
 	} from '../lib/ui/calendar.js';
 
 	const user = getPlatformStateContext()().user;
 	const today = todayKey();
 
+	const { t } = useI18n<TenantI18nKeys>();
+
 	/**
-	 * A repayment agreement is effective-dated, so My loans opens on the ones still being repaid
-	 * *today* and widens to settled loans only when the reader asks. `contains_date` compares against
-	 * a `dateRange()` bound, which is an instant: `todayInstant()` resolves the payroll timezone,
-	 * while `todayKey()` is a calendar day the query layer rejects.
+	 * My loans opens on the agreements still being repaid today, as a filter chip the reader can drop
+	 * to see settled ones.
 	 */
-	let effectiveWindow = $state<'current' | 'history'>('current');
-	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
-		effectiveWindow === 'history' ? {} : { effective_range: { contains_date: todayInstant() } }
-	);
 	const employeeQuery = client.db.employees.findFirst({ where: { email: { eq: user.email } } });
 	const employeeId = $derived(employeeQuery.current?.norbital_id);
 	const companiesQuery = client.db.companies.findMany({
@@ -106,6 +103,26 @@
 		activeEmployments.find((employment) => employment.norbital_id === employmentId)
 	);
 	const needsEmploymentChoice = $derived(activeEmployments.length > 1 && !employmentId);
+	/**
+	 * Every table on this page is scoped by `employmentId`, so a reader with no active employment has
+	 * nothing to scope to and each table is handed `disabled`. That disables the create button along
+	 * with search, filter and refresh — and on its own it renders as a dead page whose greyed
+	 * `New Time Entry` reads as "you are not allowed to do this", which is the one thing it does not
+	 * mean. An employee who *does* hold an employment may create here; the create is gated on their
+	 * direct manager, and a gated create is still a create.
+	 *
+	 * The gate below states the real reason instead. It is held false while either query is still in
+	 * flight so the explanation cannot flash before the rows that would contradict it. A resolved
+	 * employee with no `employments` row and no employee row at all land in the same place, and
+	 * correctly so: neither can be scoped to an employment, and both are fixed by HR, not by the
+	 * reader.
+	 */
+	const employmentContextResolved = $derived(
+		!employeeQuery.loading && !(employmentsQuery?.loading ?? false)
+	);
+	const hasNoActiveEmployment = $derived(
+		employmentContextResolved && activeEmployments.length === 0
+	);
 	const company = $derived(
 		activeEmployment ? companyById.get(activeEmployment.company_id) : undefined
 	);
@@ -144,40 +161,47 @@
 </svelte:head>
 
 {#snippet contextGate()}
-	{#if needsEmploymentChoice}
+	{#if hasNoActiveEmployment}
+		<Stack gap="none" class="rounded-xl border bg-card p-4 shadow-sm">
+			<p class="text-sm font-medium">{t('app.hr_employee.no_active_employment')}</p>
+			<p class="text-sm text-muted-foreground">
+				{t('app.hr_employee.no_active_employment_description')}
+			</p>
+		</Stack>
+	{:else if needsEmploymentChoice}
 		<Stack gap="sm" class="rounded-xl border bg-card p-4 shadow-sm">
 			<Stack gap="none">
-				<p class="text-sm font-medium">Choose the employment you are working in</p>
+				<p class="text-sm font-medium">{t('app.hr_employee.choose_employment')}</p>
 				<p class="text-sm text-muted-foreground">
-					Your requests, time, loans, and payslips will be scoped to this employment.
+					{t('app.hr_employee.choose_employment_description')}
 				</p>
 			</Stack>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Working as
+				{t('app.hr_employee.working_as')}
 				<Combobox
 					options={employmentOptions}
 					bind:value={selectedEmploymentId}
-					searchPlaceholder="Search by company or employee number…"
-					emptyPlaceholder="No matching employment"
+					searchPlaceholder={t('app.hr_employee.search_employment')}
+					emptyPlaceholder={t('app.hr_employee.no_matching_employment')}
 				/>
 			</label>
 		</Stack>
 	{:else if activeEmployments.length > 1 && selectedEmployment}
 		<Cluster class="rounded-xl border bg-card p-4 shadow-sm" gap="md" align="end" justify="between">
 			<Stack gap="none">
-				<p class="text-sm font-medium">Working in</p>
+				<p class="text-sm font-medium">{t('app.hr_employee.working_in')}</p>
 				<p class="text-sm text-muted-foreground">
 					{companyById.get(selectedEmployment.company_id)?.name ?? 'Company'} · Employee
 					{selectedEmployment.employee_number}
 				</p>
 			</Stack>
 			<label class="grid w-full gap-1.5 text-sm font-medium">
-				Switch employment
+				{t('app.hr_employee.switch_employment')}
 				<Combobox
 					options={employmentOptions}
 					bind:value={selectedEmploymentId}
-					searchPlaceholder="Search by company or employee number…"
-					emptyPlaceholder="No matching employment"
+					searchPlaceholder={t('app.hr_employee.search_employment')}
+					emptyPlaceholder={t('app.hr_employee.no_matching_employment')}
 				/>
 			</label>
 		</Cluster>
@@ -197,22 +221,28 @@
 				<Cluster align="start" justify="between" gap="md" class="border-b bg-muted/30 px-5 py-4">
 					<Stack gap="none">
 						<p class="text-tiny font-medium uppercase tracking-wide text-muted-foreground">
-							My profile
+							{t('app.hr_employee.my_profile')}
 						</p>
 						<h2 id="my-profile-heading" class="text-heading">
 							{employeeQuery.current.name}
 						</h2>
 						<p class="text-sm text-muted-foreground">
-							{company?.name ?? 'No active company'}{activeEmployment
-								? ` · Employee ${activeEmployment.employee_number}`
+							{company?.name ?? t('app.hr_employee.no_active_company')}{activeEmployment
+								? t('app.hr_employee.employee_of', {
+										number: activeEmployment.employee_number
+									})
 								: ''}
 						</p>
 					</Stack>
-					{#if nextPayDate}
+					{#if nextPayDate && daysToPayday != null}
 						<Stack gap="none" class="text-right">
-							<p class="text-xs font-medium text-muted-foreground">Next payday</p>
+							<p class="text-xs font-medium text-muted-foreground">
+								{t('app.hr_employee.next_payday')}
+							</p>
 							<p class="text-lg font-semibold tabular-nums">
-								{daysToPayday === 0 ? 'Today' : `${daysToPayday} days`}
+								{daysToPayday === 0
+									? t('app.hr_employee.today')
+									: t('app.hr_employee.days_until', { days: daysToPayday })}
 							</p>
 							<p class="text-xs text-muted-foreground">
 								{formatCalendarDate(nextPayDate)}
@@ -223,17 +253,19 @@
 				<!-- stupidity:allow UI10 -- 1px hairline gutters via bg-border are not on the gap scale -->
 				<Grid class="gap-px bg-border" gap="none" minimum="compact">
 					<div class="bg-card px-5 py-4">
-						<p class="text-xs font-medium text-muted-foreground">Email</p>
+						<p class="text-xs font-medium text-muted-foreground">{t('component.email')}</p>
 						<p class="mt-1 truncate text-sm font-medium">{employeeQuery.current.email}</p>
 					</div>
 					<div class="bg-card px-5 py-4">
-						<p class="text-xs font-medium text-muted-foreground">Phone</p>
-						<p class="mt-1 text-sm font-medium">{employeeQuery.current.phone ?? 'Not provided'}</p>
+						<p class="text-xs font-medium text-muted-foreground">{t('component.phone')}</p>
+						<p class="mt-1 text-sm font-medium">
+							{employeeQuery.current.phone ?? t('app.hr_employee.not_provided')}
+						</p>
 					</div>
 					<div class="bg-card px-5 py-4">
-						<p class="text-xs font-medium text-muted-foreground">Nationality</p>
+						<p class="text-xs font-medium text-muted-foreground">{t('component.nationality')}</p>
 						<p class="mt-1 text-sm font-medium">
-							{employeeQuery.current.nationality ?? 'Not provided'}
+							{employeeQuery.current.nationality ?? t('app.hr_employee.not_provided')}
 						</p>
 					</div>
 				</Grid>
@@ -248,8 +280,8 @@
 		<CollectionTable
 			{client}
 			collection="time_entries"
-			title="My time and schedule"
-			description="Raw clock events keyed by employment and explicit local work date."
+			title={t('app.hr_employee.my_time_title')}
+			description={t('app.hr_employee.my_time_description')}
 			disabled={!employmentId}
 			query={{
 				where: { employment_id: employmentId ? { eq: employmentId } : undefined },
@@ -259,12 +291,20 @@
 			{#snippet columns({ Column })}
 				<Column
 					name="work_date"
-					label="Work date"
+					label={t('component.work_date')}
 					render={({ value }) => formatCalendarDate(value)}
 				/>
-				<Column name="clock_in" label="Clock in" render={({ value }) => formatInstant(value)} />
-				<Column name="clock_out" label="Clock out" render={({ value }) => formatInstant(value)} />
-				<Column name="state" label="State" />
+				<Column
+					name="clock_in"
+					label={t('component.clock_in')}
+					render={({ value }) => formatInstant(value)}
+				/>
+				<Column
+					name="clock_out"
+					label={t('component.clock_out')}
+					render={({ value }) => formatInstant(value)}
+				/>
+				<Column name="state" label={t('component.state')} />
 			{/snippet}
 			{#snippet ListCard(entry)}
 				<p class="font-medium">{formatCalendarDate(entry.work_date)}</p>
@@ -280,26 +320,38 @@
 		<CollectionTable
 			{client}
 			collection="leave_requests"
-			title="My leave"
-			description="Submit leave and track the approved request that directly updates payroll and balance."
+			title={t('app.hr_employee.my_leave_title')}
+			description={t('app.hr_employee.my_leave_description')}
 			disabled={!employmentId}
 			query={{
 				where: { employment_id: employmentId ? { eq: employmentId } : undefined },
 				orderBy: { from_date: 'desc' }
 			}}
-			searchPlaceholder="Search leave type…"
+			searchPlaceholder={t('app.hr_employee.search_leave_type')}
 		>
 			{#snippet columns({ Column })}
 				<Column
 					name="leave_type_id"
-					label="Leave type"
+					label={t('component.leave_type')}
 					card="title"
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (leaveTypeLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="from_date" label="From" render={({ value }) => formatCalendarDate(value)} />
-				<Column name="to_date" label="To" render={({ value }) => formatCalendarDate(value)} />
-				<Column name="days" label="Days" render={({ value }) => formatNumeric(value)} />
+				<Column
+					name="from_date"
+					label={t('component.from')}
+					render={({ value }) => formatCalendarDate(value)}
+				/>
+				<Column
+					name="to_date"
+					label={t('component.to')}
+					render={({ value }) => formatCalendarDate(value)}
+				/>
+				<Column
+					name="days"
+					label={t('component.days')}
+					render={({ value }) => formatNumeric(value)}
+				/>
 			{/snippet}
 		</CollectionTable>
 	</Stack>
@@ -311,30 +363,38 @@
 		<CollectionTable
 			{client}
 			collection="component_entries"
-			title="My pay components"
-			description="Claims, allowances, arrears, and loan instalments, with why each entry exists."
+			title={t('app.hr_employee.my_components_title')}
+			description={t('app.hr_employee.my_components_description')}
 			disabled={!employmentId}
 			query={{
 				where: { employment_id: employmentId ? { eq: employmentId } : undefined },
 				orderBy: { event_date: 'desc' }
 			}}
-			searchPlaceholder="Search pay component…"
+			searchPlaceholder={t('app.hr_employee.search_pay_component')}
 		>
 			{#snippet columns({ Column })}
 				<Column
 					name="pay_component_id"
-					label="Component"
+					label={t('component.component')}
 					card="title"
 					render={({ value }) =>
 						value == null || value === ''
 							? '—'
 							: (payComponentLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="amount" label="Amount" render={({ value }) => formatNumeric(value)} />
-				<Column name="event_date" label="Date" render={({ value }) => formatCalendarDate(value)} />
+				<Column
+					name="amount"
+					label={t('component.amount')}
+					render={({ value }) => formatNumeric(value)}
+				/>
+				<Column
+					name="event_date"
+					label={t('component.date')}
+					render={({ value }) => formatCalendarDate(value)}
+				/>
 				<Column
 					name="origin"
-					label="Origin"
+					label={t('component.origin')}
 					card="subtitle"
 					render={({ value }) => formatEntryOrigin(value)}
 				/>
@@ -346,54 +406,38 @@
 {#snippet loans()}
 	<Stack gap="md">
 		{@render contextGate()}
-		<Inline gap="sm" align="center">
-			<span class="text-sm font-medium text-muted-foreground">Agreements</span>
-			<ToggleGroup
-				type="single"
-				size="sm"
-				value={effectiveWindow}
-				onValueChange={(value) => {
-					effectiveWindow = value === 'history' ? 'history' : 'current';
-				}}
-			>
-				<ToggleGroupItem value="current" aria-label="Show only loans still being repaid">
-					Running today
-				</ToggleGroupItem>
-				<ToggleGroupItem value="history" aria-label="Show every loan, settled ones included">
-					All history
-				</ToggleGroupItem>
-			</ToggleGroup>
-		</Inline>
 		<CollectionTable
 			{client}
 			collection="repayment_agreements"
 			features={{ create: false }}
-			title="My loans"
-			description={effectiveWindow === 'history'
-				? 'Every loan on record, settled ones included: the agreed principal and the instalments it was repaid by.'
-				: 'Loans still being repaid today: the agreed principal and the instalments it is being repaid by. Switch to All history for settled ones.'}
+			title={t('app.hr_employee.my_loans_title')}
+			description={t('app.hr_employee.my_loans_description')}
 			disabled={!employmentId}
+			initialFilters={inForceTodayFilter()}
 			query={{
 				where: {
-					employment_id: employmentId ? { eq: employmentId } : undefined,
-					...effectiveRange
+					employment_id: employmentId ? { eq: employmentId } : undefined
 				},
 				orderBy: { disbursed_on: 'desc' }
 			}}
-			searchPlaceholder="Search loans…"
+			searchPlaceholder={t('app.hr_employee.search_loans')}
 		>
 			{#snippet columns({ Column })}
 				<Column name="reference" card="title" />
-				<Column name="principal" label="Principal" render={({ value }) => formatNumeric(value)} />
+				<Column
+					name="principal"
+					label={t('component.principal')}
+					render={({ value }) => formatNumeric(value)}
+				/>
 				<Column
 					name="schedule"
-					label="Schedule"
+					label={t('component.schedule')}
 					card="subtitle"
 					render={({ value }) => formatRepaymentSchedule(value)}
 				/>
 				<Column
 					name="disbursed_on"
-					label="Disbursed"
+					label={t('component.disbursed')}
 					render={({ value }) => formatCalendarDate(value)}
 				/>
 			{/snippet}
@@ -408,8 +452,8 @@
 			{client}
 			collection="payslips"
 			features={{ create: false }}
-			title="My payslips"
-			description="Review payroll results and a safe explanation of every line."
+			title={t('app.hr_employee.my_payslips_title')}
+			description={t('app.hr_employee.my_payslips_description')}
 			disabled={!employmentId}
 			query={{
 				where: { employment_id: employmentId ? { eq: employmentId } : undefined },
@@ -418,14 +462,26 @@
 			}}
 		>
 			{#snippet columns({ Column })}
-				<Column name="payroll_run_id" label="Pay run" render={({ row }) => payrollRunPeriod(row)} />
-				<Column name="gross" label="Gross" render={({ value }) => formatNumeric(value)} />
 				<Column
-					name="total_deductions"
-					label="Deductions"
+					name="payroll_run_id"
+					label={t('app.hr_employee.pay_run')}
+					render={({ row }) => payrollRunPeriod(row)}
+				/>
+				<Column
+					name="gross"
+					label={t('component.gross')}
 					render={({ value }) => formatNumeric(value)}
 				/>
-				<Column name="net" label="Net" render={({ value }) => formatNumeric(value)} />
+				<Column
+					name="total_deductions"
+					label={t('component.deductions')}
+					render={({ value }) => formatNumeric(value)}
+				/>
+				<Column
+					name="net"
+					label={t('component.net')}
+					render={({ value }) => formatNumeric(value)}
+				/>
 				<Column name="currency" />
 			{/snippet}
 			{#snippet ListCard(payslip)}
@@ -441,9 +497,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="Employee Self-Service"
-		title="My HR"
-		description="Your schedule, leave, pay components, loans, payslips, and employment history in one place."
+		eyebrow={t('app.hr_employee.eyebrow')}
+		title={t('app.hr_employee.header_title')}
+		description={t('app.hr_employee.header_description')}
 	/>
 {/snippet}
 
@@ -451,14 +507,34 @@
 	<Tabs
 		animate={false}
 		config={[
-			{ name: 'home', label: 'Home', icon: 'lucide:user-round', content: home },
-			{ name: 'time', label: 'My time', icon: 'lucide:clock', content: time },
-			{ name: 'leave', label: 'My leave', icon: 'lucide:calendar-check', content: leave },
-			{ name: 'claims', label: 'My claims', icon: 'lucide:receipt', content: claims },
-			{ name: 'loans', label: 'My loans', icon: 'lucide:hand-coins', content: loans },
+			{
+				name: 'home',
+				label: t('app.hr_employee.tab_home'),
+				icon: 'lucide:user-round',
+				content: home
+			},
+			{ name: 'time', label: t('app.hr_employee.tab_time'), icon: 'lucide:clock', content: time },
+			{
+				name: 'leave',
+				label: t('app.hr_employee.tab_leave'),
+				icon: 'lucide:calendar-check',
+				content: leave
+			},
+			{
+				name: 'claims',
+				label: t('app.hr_employee.tab_claims'),
+				icon: 'lucide:receipt',
+				content: claims
+			},
+			{
+				name: 'loans',
+				label: t('app.hr_employee.tab_loans'),
+				icon: 'lucide:hand-coins',
+				content: loans
+			},
 			{
 				name: 'payslips',
-				label: 'My payslips',
+				label: t('app.hr_employee.tab_payslips'),
 				icon: 'lucide:badge-dollar-sign',
 				content: payslips
 			}

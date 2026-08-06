@@ -3,6 +3,8 @@
 		getCollectionTableNavigationContext,
 		type CollectionTableNavigationTarget
 	} from '@norbital-ai/ui/collection-table';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { MatrixCellRendererProps } from '@norbital-ai/ui/data-renderer/matrix';
 	import { formatPayrollCycleDate, repaymentShortfall } from './repayment-consumption.js';
 	import type {
@@ -11,6 +13,9 @@
 	} from './repayment-consumption.js';
 
 	let { value, row }: MatrixCellRendererProps<RepaymentScheduleMatrixRow> = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
+
 	const navigation = getCollectionTableNavigationContext();
 	const consumption = $derived(value as RepaymentConsumptionCell);
 	const target = $derived.by((): CollectionTableNavigationTarget | null => {
@@ -32,33 +37,26 @@
 		switch (consumption.status) {
 			case 'not_due':
 				return {
-					label: `Due in ${consumption.period}`,
-					title: `Not yet due. The ${consumption.period} payroll run deducts this instalment.`,
+					label: t('component.due_in', { period: consumption.period }),
+					title: t('component.not_yet_due', { period: consumption.period }),
 					alarming: false
 				};
 			case 'awaiting_run':
 				return {
-					label: `Awaiting ${consumption.period} payroll`,
-					title:
-						`No payroll run exists for ${consumption.period} yet. This instalment is deducted ` +
-						'when that run is built.',
+					label: t('component.awaiting_run', { period: consumption.period }),
+					title: t('component.awaiting_run_title', { period: consumption.period }),
 					alarming: false
 				};
 			case 'awaiting_rebuild':
 				return {
-					label: `Draft ${consumption.period} payroll`,
-					title:
-						`The ${consumption.period} payroll run is still a draft, so nothing has been ` +
-						'deducted yet. Recalculating that run takes this instalment.',
+					label: t('component.awaiting_rebuild', { period: consumption.period }),
+					title: t('component.awaiting_rebuild_title', { period: consumption.period }),
 					alarming: false
 				};
 			case 'unrecovered':
 				return {
-					label: `Missed · ${consumption.period} paid`,
-					title:
-						`The ${consumption.period} payroll run was paid without this instalment, so the ` +
-						'money was never recovered. A paid run is never rebuilt — reschedule the ' +
-						'outstanding amount into a period that is still open.',
+					label: t('component.missed_paid', { period: consumption.period }),
+					title: t('component.missed_paid_title', { period: consumption.period }),
 					alarming: true
 				};
 			default:
@@ -74,10 +72,12 @@
 </script>
 
 {#if consumption.status === 'loading'}
-	<span class="text-sm text-muted-foreground" aria-live="polite">Checking payroll…</span>
+	<span class="text-sm text-muted-foreground" aria-live="polite"
+		>{t('component.checking_payroll')}</span
+	>
 {:else if consumption.status === 'error'}
 	<span class="text-sm text-destructive" role="alert" title={consumption.message}>
-		Unable to verify payroll
+		{t('component.unable_to_verify')}
 	</span>
 {:else if pending}
 	<span
@@ -91,15 +91,23 @@
 	</span>
 {:else if consumption.status === 'consumed'}
 	{@const reference = consumption.reference}
-	{@const label = `Payslip item ${reference.payslipLineSequence} · ${formatPayrollCycleDate(reference.cycleDate)}`}
+	{@const label = t('component.payslip_item', {
+		sequence: reference.payslipLineSequence,
+		date: formatPayrollCycleDate(reference.cycleDate)
+	})}
 	{@const title =
 		shortfall == null
 			? label
-			: `${label} — payroll could only take ${(reference.recoveredAmount ?? 0).toFixed(2)} of ${Number(row.amount).toFixed(2)}; the remaining ${shortfall.toFixed(2)} was carried forward as arrears.`}
+			: t('component.partial_recovery', {
+					label,
+					recovered: (reference.recoveredAmount ?? 0).toFixed(2),
+					amount: Number(row.amount).toFixed(2),
+					shortfall: shortfall.toFixed(2)
+				})}
 	{#if target && navigation && href}
 		<a
 			{href}
-			class="inline-flex min-h-8 items-center text-sm font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+			class="inline-flex min-h-8 items-center text-sm font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
 			{title}
 			onclick={(event) => {
 				event.preventDefault();
@@ -107,13 +115,13 @@
 			}}
 		>
 			{label}{#if shortfall != null}<span class="ml-1 font-normal text-destructive"
-					>· short {shortfall.toFixed(2)}</span
+					>{t('component.short_amount', { amount: shortfall.toFixed(2) })}</span
 				>{/if}
 		</a>
 	{:else}
 		<span class="text-sm font-medium" {title}
 			>{label}{#if shortfall != null}<span class="ml-1 font-normal text-destructive"
-					>· short {shortfall.toFixed(2)}</span
+					>{t('component.short_amount', { amount: shortfall.toFixed(2) })}</span
 				>{/if}</span
 		>
 	{/if}

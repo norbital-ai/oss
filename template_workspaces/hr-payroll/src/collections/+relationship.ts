@@ -17,7 +17,9 @@ export default ((r) => ({
 		company_jurisdiction: r.many.companies(),
 		contribution_jurisdiction: r.many.statutory_contributions(),
 		overtime_rule_jurisdiction: r.many.overtime_rules(),
-		overtime_limit_jurisdiction: r.many.overtime_limits()
+		overtime_limit_jurisdiction: r.many.overtime_limits(),
+		overtime_coverage_rule_jurisdiction: r.many.overtime_coverage_rules(),
+		rest_break_rule_jurisdiction: r.many.rest_break_rules()
 	},
 
 	statutory_contributions: {
@@ -49,6 +51,20 @@ export default ((r) => ({
 	overtime_limits: {
 		overtime_limit_jurisdiction: r.one.jurisdictions({
 			from: r.overtime_limits.jurisdiction_id,
+			to: r.jurisdictions.norbital_id
+		})
+	},
+
+	overtime_coverage_rules: {
+		overtime_coverage_rule_jurisdiction: r.one.jurisdictions({
+			from: r.overtime_coverage_rules.jurisdiction_id,
+			to: r.jurisdictions.norbital_id
+		})
+	},
+
+	rest_break_rules: {
+		rest_break_rule_jurisdiction: r.one.jurisdictions({
+			from: r.rest_break_rules.jurisdiction_id,
 			to: r.jurisdictions.norbital_id
 		})
 	},

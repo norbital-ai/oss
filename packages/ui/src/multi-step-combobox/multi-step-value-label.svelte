@@ -1,6 +1,9 @@
 <script lang="ts" generics="TValueMap extends Record<string, unknown>">
 	import { isEqual } from 'es-toolkit/predicate';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { AnyStepOption, SelectionDraft, StepsConfig } from './types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		selection,
@@ -36,7 +39,7 @@
 	{#if definition.type === 'custom' && definition.formatSelection}
 		{@render definition.formatSelection(value, { compact: true, ...selection })}
 	{:else if definition.type === 'custom'}
-		<span class={fallbackClass} title={JSON.stringify(value)}>[Custom]</span>
+		<span class={fallbackClass} title={JSON.stringify(value)}>{t('common.customFallback')}</span>
 	{:else if option}
 		{#if typeof option.label === 'string'}
 			<span>{option.label}</span>
@@ -44,6 +47,6 @@
 			{@render option.label(value, { compact: true })}
 		{/if}
 	{:else}
-		<span class={fallbackClass} title={JSON.stringify(value)}>[Unknown]</span>
+		<span class={fallbackClass} title={JSON.stringify(value)}>{t('common.unknownFallback')}</span>
 	{/if}
 {/if}

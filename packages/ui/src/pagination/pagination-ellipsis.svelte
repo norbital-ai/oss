@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import Icon from '@iconify/svelte';
 	import type { WithElementRef, WithoutChildren } from 'bits-ui';
 	import type { HTMLAttributes } from 'svelte/elements';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		ref = $bindable(null),
@@ -18,5 +21,5 @@
 	{...restProps}
 >
 	<Icon icon="lucide:ellipsis" class="size-4" />
-	<span class="sr-only">More pages</span>
+	<span class="sr-only">{t('common.more')}</span>
 </span>

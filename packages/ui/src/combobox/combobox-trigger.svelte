@@ -4,6 +4,7 @@
 >
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import * as Popover from '#lib/popover';
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
@@ -16,6 +17,8 @@
 	} from './combobox-alignment';
 	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from './index.js';
 
+	const { t } = useI18n<UiKeys>();
+
 	interface Props {
 		open: boolean;
 		readonly: boolean;
@@ -24,6 +27,7 @@
 		showClearButton: boolean;
 		isLoading: boolean;
 		hideChevron: boolean;
+		chevronOnHover: boolean;
 		error: string | null;
 		comboboxId: string;
 		selectionDescription: string;
@@ -98,6 +102,7 @@
 		showClearButton,
 		isLoading,
 		hideChevron,
+		chevronOnHover,
 		error,
 		comboboxId,
 		selectionDescription,
@@ -219,18 +224,23 @@
 		)
 	);
 	/**
-	 * The chevron glyph stays visible at rest — it is the only affordance that says
+	 * The chevron glyph stays visible at rest by default — it is the only affordance that says
 	 * "this opens a dropdown", and keyboard and touch users have no hover state to
 	 * reveal it with. Only its chrome (background + outline) fades in, on hover *and*
 	 * focus-within, matching the clear button above. The transparent resting border
-	 * reserves the space so revealing the chrome does not shift the glyph.
+	 * reserves the space so revealing the chrome does not shift the glyph. Triggers that
+	 * read as plain text opt into `chevronOnHover`, which hides the glyph at rest too but
+	 * still reveals it on focus-within so keyboard users keep the affordance.
 	 */
-	const chevronChromeClasses = cn(
-		'flex size-5 flex-none items-center justify-center rounded-md',
-		'border border-transparent bg-transparent text-muted-foreground opacity-60',
-		'transition-[background-color,border-color,opacity]',
-		'group-hover:border-input group-hover:bg-background group-hover:opacity-100',
-		'group-focus-within:border-input group-focus-within:bg-background group-focus-within:opacity-100'
+	const chevronChromeClasses = $derived(
+		cn(
+			'flex size-5 flex-none items-center justify-center rounded-md',
+			'border border-transparent bg-transparent text-muted-foreground',
+			chevronOnHover ? 'opacity-0' : 'opacity-60',
+			'transition-[background-color,border-color,opacity]',
+			'group-hover:border-input group-hover:bg-background group-hover:opacity-100',
+			'group-focus-within:border-input group-focus-within:bg-background group-focus-within:opacity-100'
+		)
 	);
 </script>
 
@@ -241,7 +251,7 @@
 			aria-haspopup="listbox"
 			aria-invalid={invalid}
 			aria-describedby={error ? `${comboboxId}-error` : undefined}
-			aria-label={ariaLabel ?? (readonly ? 'View details' : selectionDescription)}
+			aria-label={ariaLabel ?? (readonly ? t('common.viewDetails') : selectionDescription)}
 			class={triggerBaseClasses}
 			role={readonly ? 'button' : 'combobox'}
 			disabled={disabled || isLoading}
@@ -260,7 +270,7 @@
 						type="button"
 						class={clearBtnClasses}
 						onclick={onClear}
-						aria-label="Clear selection">clear</button
+						aria-label={t('common.clearSelection')}>{t('common.clear')}</button
 					>
 				{/if}
 				{#if isLoading}
@@ -276,7 +286,9 @@
 	</div>
 
 	{#if error}
-		<div id="{comboboxId}-error" class="sr-only" aria-live="polite">Error: {error}</div>
+		<div id="{comboboxId}-error" class="sr-only" aria-live="polite">
+			{t('common.errorLabel', { message: error ?? '' })}
+		</div>
 	{/if}
 
 	<Popover.Content

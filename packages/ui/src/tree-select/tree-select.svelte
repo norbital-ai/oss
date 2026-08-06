@@ -3,6 +3,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Checkbox } from '#lib/checkbox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
 	import { ScrollArea } from '#lib/scroll-area';
@@ -16,6 +17,8 @@
 
 	const INDENTATION_WIDTH = 18;
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		rootItems = [],
 		value = $bindable(),
@@ -23,7 +26,7 @@
 		disabled = false,
 		readonly = false,
 		showSearch = false,
-		searchPlaceholder = 'Search...',
+		searchPlaceholder = t('misc.searchEllipsis'),
 		containerClass = '',
 		multiple = false
 	}: TreeSelectProps<TMetadata> = $props();
@@ -489,7 +492,7 @@
 		tabindex={-1}
 		role="tree"
 		aria-multiselectable={multiple}
-		aria-label="Tree navigation"
+		aria-label={t('misc.treeNavigation')}
 		onmousemove={handleMouseMove}
 	>
 		{@render renderNodeList(treeState.visibleNodes)}
@@ -521,7 +524,7 @@
 							class="w-full text-sm"
 							tabindex={0}
 							bind:ref={inputElement}
-							aria-label="Search tree"
+							aria-label={t('misc.searchTree')}
 							onfocus={handleInputFocus}
 							onblur={handleInputBlur}
 						/>
@@ -555,7 +558,7 @@
 						tabindex={0}
 						bind:ref={inputElement}
 						{disabled}
-						aria-label="Search tree"
+						aria-label={t('misc.searchTree')}
 						onfocus={handleInputFocus}
 						onblur={handleInputBlur}
 					/>
@@ -578,14 +581,14 @@
 				tabindex="-1"
 				role="tree"
 				aria-multiselectable={multiple}
-				aria-label="Tree navigation"
+				aria-label={t('misc.treeNavigation')}
 				onmousemove={handleMouseMove}
 			>
 				{#if treeState.visibleNodes.length > 0}
 					{@render renderNodeList(treeState.visibleNodes)}
 				{:else}
 					<p class="p-2 text-xs text-muted-foreground italic dark:text-muted-foreground">
-						No items to display
+						{t('misc.noItemsToDisplay')}
 					</p>
 				{/if}
 			</div>

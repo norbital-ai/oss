@@ -53,6 +53,7 @@ import { assertHostAgentTools, hostAgentTools } from '../host/agent-tools.js';
 import { createPodHttpServer } from './server.js';
 import { cookieSession, subjectHmac } from '../host/session.js';
 import { emailOtpIdentity } from '../host/email-otp.js';
+import { serverI18n } from '$lib/i18n/index.js';
 import { assertChannelTransportsAreSupported } from '../authoring/channels/channels.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from '../host/config.js';
 import { workspaceJobs } from '../host/jobs.js';
@@ -578,14 +579,15 @@ export async function startStandalone(
 			// The challenge cookie needs this as much as the session one: a `Secure` challenge over a
 			// loopback HTTP bind is dropped by the browser, and sign-in then fails with nothing logged.
 			...(descriptor.secureCookies === false ? { secureCookies: false } : {}),
-			deliver: async ({ email, code }) => {
+			deliver: async ({ email, code, locale }) => {
 				const channels = await messaging.listChannels();
+				const i18n = serverI18n(locale);
 				const result = await messaging.send({
 					organizationId: environment.orgId,
 					channel: channels[0] ?? 'email',
 					recipientUserId: email,
-					subject: `Your ${environment.orgName} sign-in code`,
-					message: `Your sign-in code is ${code}. It expires in ten minutes.`,
+					subject: i18n.t('pod.email.loginSubjectOrg', { workspace: environment.orgName }),
+					message: i18n.t('pod.email.loginBody', { code, minutes: 10 }),
 					cta: null
 				});
 				if (!result.sent) throw new Error(result.reason ?? 'provider refused delivery');

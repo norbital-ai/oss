@@ -12,6 +12,10 @@
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	/**
 	 * Where this row sits, which decides what a `user` message means.
@@ -29,9 +33,14 @@
 	let checkpointTab = $state<'summary' | 'raw'>('summary');
 
 	function roleLabel(role: string): string {
-		if (role === 'user') return 'You';
-		if (role === 'assistant') return 'Agent';
-		return 'System';
+		if (role === 'user') return t('pod.agent.you');
+		if (role === 'assistant') return t('pod.agent.agent');
+		return t('pod.agent.system');
+	}
+
+	/** A built-in tool's label is a catalog key; everything else is the humanized name. */
+	function toolLabel(message: Extract<PanelMessage, { kind: 'tool' }>): string {
+		return message.labelKey ? t(message.labelKey) : (message.label ?? message.name);
 	}
 </script>
 
@@ -46,9 +55,9 @@
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0" />
-				<span class="shrink-0 whitespace-nowrap">Context compacted</span>
+				<span class="shrink-0 whitespace-nowrap">{t('pod.agent.contextCompacted')}</span>
 				<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground/70">
-					{message.before.length} message{message.before.length === 1 ? '' : 's'} kept below
+					{t('pod.agent.messagesKept', { count: message.before.length })}
 				</span>
 				<Icon
 					icon="lucide:chevron-right"
@@ -56,7 +65,7 @@
 				/>
 			</summary>
 			<div class="mt-1 ml-3.5 flex flex-col gap-2 border-l border-border/60 py-1 pl-3">
-				<div class="flex items-center gap-1" role="tablist" aria-label="Compacted context">
+				<div class="flex items-center gap-1" role="tablist" aria-label={t('pod.agent.compactedContextAria')}>
 					<button
 						type="button"
 						role="tab"
@@ -68,7 +77,7 @@
 								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
 						}`}
 					>
-						What the agent kept
+						{t('pod.agent.whatAgentKept')}
 					</button>
 					<button
 						type="button"
@@ -81,7 +90,7 @@
 								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
 						}`}
 					>
-						Full conversation
+						{t('pod.agent.fullConversation')}
 					</button>
 				</div>
 				<div role="tabpanel" class="min-w-0">
@@ -94,7 +103,7 @@
 					{:else}
 						<ol
 							class="m-0 flex max-h-72 list-none flex-col gap-1.5 overflow-auto p-0"
-							aria-label="Conversation before compaction"
+							aria-label={t('pod.agent.conversationBeforeCompaction')}
 						>
 							{#each message.before as earlier (earlier.key)}
 								<Self message={earlier} nested="history" />
@@ -122,14 +131,14 @@
 					}`}
 				/>
 				<span class="shrink-0 font-medium whitespace-nowrap text-foreground/80"
-					>{message.label}</span
+					>{toolLabel(message)}</span
 				>
 				{#if message.detail}
 					<span class="min-w-0 flex-1 truncate font-mono text-tiny">{message.detail}</span>
 				{/if}
 				{#if message.children.length > 0}
 					<span class="shrink-0 whitespace-nowrap text-tiny text-muted-foreground/70">
-						{message.children.length} step{message.children.length === 1 ? '' : 's'}
+						{t('pod.agent.steps', { count: message.children.length })}
 					</span>
 				{/if}
 				{#if message.state === 'running'}
@@ -146,7 +155,7 @@
 				{#if message.input}
 					<div class="flex min-w-0 flex-col gap-1">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							Input
+							{t('pod.agent.input')}
 						</span>
 						<pre
 							class="m-0 max-h-56 overflow-auto rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90">{message.input}</pre>
@@ -156,9 +165,9 @@
 					<!-- The delegated agent's own transcript, rendered by this same component. -->
 					<div class="flex min-w-0 flex-col gap-1">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							Delegated transcript
+							{t('pod.agent.delegatedTranscript')}
 						</span>
-						<ol class="m-0 flex list-none flex-col gap-1.5 p-0" aria-label="Subagent transcript">
+						<ol class="m-0 flex list-none flex-col gap-1.5 p-0" aria-label={t('pod.agent.subagentTranscriptAria')}>
 							{#each message.children as child (child.key)}
 								<Self message={child} nested="subagent" />
 							{/each}
@@ -167,7 +176,7 @@
 				{/if}
 				{#if message.error}
 					<div class="flex min-w-0 flex-col gap-1">
-						<span class="text-tiny font-medium tracking-wide text-destructive uppercase">Error</span
+						<span class="text-tiny font-medium tracking-wide text-destructive uppercase">{t('pod.agent.error')}</span
 						>
 						<pre
 							class="m-0 max-h-56 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive">{message.error}</pre>
@@ -175,13 +184,13 @@
 				{:else if message.output}
 					<div class="flex min-w-0 flex-col gap-1">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							Result
+							{t('pod.agent.result')}
 						</span>
 						<pre
 							class="m-0 max-h-56 overflow-auto rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90">{message.output}</pre>
 					</div>
 				{:else if message.state === 'running'}
-					<p class="m-0 text-micro text-muted-foreground">Waiting for the result…</p>
+					<p class="m-0 text-micro text-muted-foreground">{t('pod.agent.waitingForResult')}</p>
 				{/if}
 			</div>
 		</details>
@@ -196,7 +205,7 @@
 		data-role={message.role}
 	>
 		<span class="px-1 text-tiny font-medium text-muted-foreground">
-			{nested === 'subagent' && message.role === 'user' ? 'Task' : roleLabel(message.role)}
+			{nested === 'subagent' && message.role === 'user' ? t('pod.agent.task') : roleLabel(message.role)}
 		</span>
 		<div
 			class={nested
@@ -217,7 +226,7 @@
 			{#if message.status === 'streaming'}
 				<span class="mt-1.5 inline-flex items-center gap-1.5 text-tiny text-muted-foreground">
 					<span class="size-1.5 animate-pulse rounded-full bg-current"></span>
-					Streaming
+					{t('pod.agent.streaming')}
 				</span>
 			{/if}
 		</div>

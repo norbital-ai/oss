@@ -1,9 +1,13 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import type { RendererProps } from './$types.js';
 	import { Input } from '@norbital-ai/ui/input';
 	import { bankAccountDraftSchema, bankAccountSchema, type BankAccount } from './+definition.js';
 	import { Grid } from '@norbital-ai/ui/layout';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	interface BankOption {
 		readonly name: string;
@@ -77,7 +81,7 @@
 			<Input
 				value={account.bank_name ?? ''}
 				{disabled}
-				placeholder="Bank name"
+				placeholder={t('component.bank_name')}
 				oninput={(event) => update({ bank_name: event.currentTarget.value })}
 			/>
 		{/if}
@@ -88,7 +92,7 @@
 			<Input
 				value={account.bank_code ?? ''}
 				{disabled}
-				placeholder="SWIFT or routing code"
+				placeholder={t('component.swift_routing_code')}
 				oninput={(event) => update({ bank_code: event.currentTarget.value })}
 			/>
 		</label>
@@ -99,7 +103,7 @@
 			value={account.bank_account_name ?? ''}
 			{disabled}
 			autocomplete="name"
-			placeholder="Registered account name"
+			placeholder={t('component.registered_account_name')}
 			oninput={(event) => update({ bank_account_name: event.currentTarget.value })}
 		/>
 	</label>
@@ -110,7 +114,7 @@
 			{disabled}
 			inputmode="numeric"
 			autocomplete="off"
-			placeholder="Bank account number"
+			placeholder={t('component.bank_account_number')}
 			oninput={(event) => update({ bank_account_number: event.currentTarget.value })}
 		/>
 	</label>

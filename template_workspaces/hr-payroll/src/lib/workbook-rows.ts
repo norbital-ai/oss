@@ -65,16 +65,22 @@ export function normalizeCellValue(value: unknown): SheetCell {
 	if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
 	if (typeof value !== 'object') return null;
 
-	const record = value as Record<string, unknown>;
-	if ('error' in record) return null;
-	if ('result' in record) return normalizeCellValue(record.result);
-	if ('richText' in record && Array.isArray(record.richText)) {
-		return record.richText
-			.map((fragment) => String((fragment as { text?: unknown }).text ?? ''))
+	// The wrapper shapes an ExcelJS cell value can take, told apart one property at a time: the
+	// `in` operator narrows `object` to the member it names, so nothing here needs a cast.
+	if ('error' in value) return null;
+	if ('result' in value) return normalizeCellValue(value.result);
+	if ('richText' in value && Array.isArray(value.richText)) {
+		const fragments: readonly unknown[] = value.richText;
+		return fragments
+			.map((fragment) =>
+				typeof fragment === 'object' && fragment !== null && 'text' in fragment
+					? String(fragment.text ?? '')
+					: ''
+			)
 			.join('');
 	}
-	if ('text' in record) return normalizeCellValue(record.text);
-	if ('formula' in record || 'sharedFormula' in record) return null;
+	if ('text' in value) return normalizeCellValue(value.text);
+	if ('formula' in value || 'sharedFormula' in value) return null;
 	return null;
 }
 
@@ -380,38 +386,6 @@ export class RowReader {
 		return value;
 	}
 
-	/**
-	 * TRUE, FALSE, or neither.
-	 *
-	 * Empty is not false. The column it reads records whether overtime was authorised, and "nobody
-	 * said" is a third answer the collection stores as null — flattening it to false would assert a
-	 * refusal that no one made.
-	 */
-	triStateBoolean(column: string): boolean | undefined {
-		const cell = this.raw(column);
-		if (isBlank(cell)) return undefined;
-		if (typeof cell === 'boolean') return cell;
-		if (typeof cell === 'number') {
-			if (cell === 1) return true;
-			if (cell === 0) return false;
-			return this.reject(column, 'TRUE, FALSE or empty');
-		}
-		switch (String(cell).trim().toLowerCase()) {
-			case 'true':
-			case 'yes':
-			case 'y':
-			case '1':
-				return true;
-			case 'false':
-			case 'no':
-			case 'n':
-			case '0':
-				return false;
-			default:
-				return this.reject(column, 'TRUE, FALSE or empty');
-		}
-	}
-
 	choice<TChoice extends string>(
 		column: string,
 		allowed: readonly TChoice[],
@@ -422,6 +396,20 @@ export class RowReader {
 		const match = allowed.find((option) => option.toLowerCase() === text.toLowerCase());
 		return match ?? this.reject(column, allowed.join(', '));
 	}
+}
+
+/**
+ * A row's identity as refusals quote it: the named columns joined with "on", or the row number
+ * alone when none of them carry a value. Every import workbook in this workspace identifies a row
+ * the same way — by the employee and the day — so the composition belongs here, beside the reader
+ * it names, rather than copied into each collection's import.
+ */
+export function identifyRowByColumns(reader: RowReader, columns: readonly string[]): string {
+	const named = columns
+		.map((column) => reader.text(column))
+		.filter((part) => part != null)
+		.join(' on ');
+	return named === '' ? `Row ${reader.rowNumber}` : `Row ${reader.rowNumber} (${named})`;
 }
 
 /**

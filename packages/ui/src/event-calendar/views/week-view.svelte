@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Scroll, Stack } from '#lib/layout';
 	import { pixelDrag } from '#lib/utils/pixel-drag';
 	import {
@@ -56,6 +57,8 @@
 		readonly?: boolean;
 		class?: string;
 	} = $props();
+
+	const { t } = useI18n<UiKeys>();
 
 	const weekStart = $derived(startOfWeek(date));
 	const totalHeight = $derived((endHour - startHour) * hourHeight);
@@ -134,7 +137,7 @@
 <Stack gap="none" grow class={className}>
 	<AllDaySection {events} columnCount={7} {colWidth} onbarclick={onboxclick} {eventContent} />
 
-	<Scroll axis="y" name="Week events" class="bg-background relative">
+	<Scroll axis="y" name={t('misc.weekEvents')} class="bg-background relative">
 		<div style="height: {totalHeight}px; position: relative; min-width: {7 * colWidth}px">
 			{#each Array.from({ length: 7 }) as _, col (col)}
 				{@const colDate = getColumnDate(weekStart, col)}

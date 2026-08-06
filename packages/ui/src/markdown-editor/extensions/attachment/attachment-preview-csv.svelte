@@ -1,6 +1,9 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '../../../i18n/index.js';
 	import type { ParseError } from 'papaparse';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		headers,
@@ -21,7 +24,7 @@
 	{#if errors.length > 0}
 		<div class="border-b bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
 			<Icon icon="lucide:alert-triangle" width="14" height="14" class="mr-1 inline" />
-			{errors.length} parsing warning(s) - some data may not display correctly
+			{t('misc.csvParsingWarnings', { count: errors.length })}
 		</div>
 	{/if}
 
@@ -52,7 +55,7 @@
 
 	{#if totalRows > 50}
 		<div class="border-t px-3 py-2 text-center text-sm text-muted-foreground">
-			Showing first 50 rows of {totalRows} rows
+			{t('misc.csvShowingRows', { count: totalRows })}
 		</div>
 	{/if}
 </div>

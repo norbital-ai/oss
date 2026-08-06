@@ -3,13 +3,12 @@
 Shipped starter workspaces live in this directory. Each is a standalone filesystem-first Pod
 project that can be synchronized, checked, built, migrated, and seeded with the public Pod CLI.
 
-| Template                                    | Directory           | Purpose                                                                  |
-| ------------------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| [**hr-payroll**](./hr-payroll/)             | `hr-payroll/`       | Multi-country HR and payroll with effective-dated facts and payroll runs |
-| [**construction**](./construction/)         | `construction/`     | Project-centered construction ops with BIM and workforce compliance      |
-| [**field-operations**](./field-operations/) | `field-operations/` | Site operations: contractor visits, variation approvals, photo integrity |
-| [**crm**](./crm/)                           | `crm/`              | Quote-to-cash for B2B distribution, with purchasing and stock behind it  |
-| [**reclamation**](./reclamation/)           | `reclamation/`      | Survey documents stitched into a 3D site solid and priced from a matrix  |
+| Template                                    | Directory           | Purpose                                                                        |
+| ------------------------------------------- | ------------------- | ------------------------------------------------------------------------------ |
+| [**hr-payroll**](./hr-payroll/)             | `hr-payroll/`       | Multi-country HR and payroll with effective-dated facts and payroll runs       |
+| [**construction**](./construction/)         | `construction/`     | Project-centered construction ops with BIM and workforce compliance            |
+| [**field-operations**](./field-operations/) | `field-operations/` | Site operations: contractor visits, variation approvals, photo integrity       |
+| [**crm**](./crm/)                           | `crm/`              | B2B quoting and pipeline with purchasing, mirrored masters, and an ERP handoff |
 
 ## Choosing a template
 
@@ -17,15 +16,12 @@ project that can be synchronized, checked, built, migrated, and seeded with the 
   site evidence, and variation requests.
 - **Construction Operations** covers wider project delivery: workforce permits, quality, RFIs,
   BIM references, payment claims, and scheduled operational watches.
-- **CRM** runs a B2B deal end to end: accounts, catalogue-backed quoting, customer-specific pricing,
-  operational confirmation and fulfilment, invoicing, and payments — together with the purchasing,
-  supplier, and stock position that make those commitments deliverable.
+- **CRM** runs a B2B deal end to end: accounts with their credit position, catalogue-backed quoting
+  with payment and shipping terms, revision-safe pipeline, and a confirmed-document handoff to the
+  third-party ERP — together with the purchasing, supplier, and indicative stock position that make
+  those commitments deliverable.
 - **HR & Payroll** is the specialised multi-country payroll workspace, including attendance, leave,
   statutory contribution configuration, and reconciliation guidance.
-- **Reclamation** is the marine-works workspace: a floor plan, a bathymetric survey, and a section
-  sheet are stitched server-side into one 3D site solid, integrated cell by cell for volumes, and
-  priced against a shared unit cost matrix, with every geometric assumption recorded beside the
-  result.
 
 Each template README explains its domain model, workflows, safeguards, source layout, and verification.
 They are designed to be changed as normal Pod workspaces rather than treated as generated product code.

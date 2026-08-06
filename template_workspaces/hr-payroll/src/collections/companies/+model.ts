@@ -25,6 +25,18 @@ export default defineModel(
 		 * is here and not on `jurisdictions`. `null` means the plain calendar governs everything.
 		 */
 		settlement_policy: custom('settlement_policy'),
+		/**
+		 * The occupational risk group the entity is rated in, where its regime prices a contribution
+		 * by risk rather than by wage or age.
+		 *
+		 * It looks like ceremony because only one jurisdiction here uses it, and only one entity
+		 * therefore carries a value. That is the point: Indonesia's JKK is published as a risk ladder
+		 * (`RISK_CLASS` selector, class `IV` at 0.89% and class `I` at 0.24% employer), so
+		 * `selectBand` filters the JKK bands on this column. A null risk class matches no band and
+		 * the run stops naming JKK, which is the intended loud failure — a silent zero employer
+		 * contribution is the alternative. Malaysian and Philippine entities have no risk-keyed
+		 * contribution, so empty is the correct value for them, not a gap.
+		 */
 		risk_class: text(),
 		effective_range: dateRange().notNull()
 	},

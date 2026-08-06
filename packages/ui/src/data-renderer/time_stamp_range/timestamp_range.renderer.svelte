@@ -1,17 +1,22 @@
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { DataRendererProps } from '../data-renderer.types.js';
 	import DateView from './views/date.view.svelte';
 
 	type RangeValue = { start?: string; end?: string };
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		field,
 		value,
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
 		class: className
 	}: DataRendererProps = $props();
+
+	const valuePlaceholderText = t('dataRenderer.valuePlaceholder');
 
 	function parseRange(item: unknown): RangeValue {
 		if (item != null && typeof item === 'object') {
@@ -37,7 +42,7 @@
 		value={Array.isArray(pickerValue) ? pickerValue : []}
 		multi={true}
 		allowTime={field.kind === 'tstzrange'}
-		emptyPlaceholder={placeholder === 'Value…' ? 'Pick date range(s)' : placeholder}
+		emptyPlaceholder={placeholder === valuePlaceholderText ? t('dataRenderer.pickDateRanges') : placeholder}
 		{disabled}
 		class={className}
 		onValueChange={(next) => onValueChange?.(next)}
@@ -47,7 +52,7 @@
 		value={!Array.isArray(pickerValue) ? pickerValue : {}}
 		multi={false}
 		allowTime={field.kind === 'tstzrange'}
-		emptyPlaceholder={placeholder === 'Value…' ? 'Pick date range(s)' : placeholder}
+		emptyPlaceholder={placeholder === valuePlaceholderText ? t('dataRenderer.pickDateRanges') : placeholder}
 		{disabled}
 		class={className}
 		onValueChange={(next) => onValueChange?.(next)}

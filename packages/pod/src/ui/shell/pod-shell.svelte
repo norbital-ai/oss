@@ -53,6 +53,7 @@
 	import WorkspaceSettingsSurface from './workspace-settings-surface.svelte';
 	import { workspaceSettingsApi } from './workspace-settings-api.js';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
+	import { useI18n } from '@norbital-ai/ui/i18n';
 
 	let {
 		apps,
@@ -69,6 +70,10 @@
 	} = $props();
 
 	const manifestContext = $derived(new ManifestContext(data.initialWorkspaceLatest));
+	// Open key type on purpose: the app-title chokepoint resolves `app.<id>.title`,
+	// which lives in the tenant catalog and is not a compile-time pod key.
+	const { t, has } = useI18n();
+	const i18nResolver = { t, has };
 	const platformState = new PageSurfaceState({
 		getManifestContext: () => manifestContext,
 		getUser: () => data.user,
@@ -181,13 +186,15 @@
 		system: buildSystemNavigation({
 			plugins: data.hostPlugins ?? [],
 			isAdmin: data.user.role === 'admin',
-			currentPath
+			currentPath,
+			i18n: i18nResolver
 		}),
 		applications: buildApplicationNavigation({
 			appIds: appNames,
 			apps: manifestContext.getAppsRecord(),
 			accessibleAppNames: data.accessibleAppNames,
-			currentPath
+			currentPath,
+			i18n: i18nResolver
 		})
 	}));
 	const overviewApplications = $derived(
@@ -286,12 +293,12 @@
 					<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
 						<Stack as="header" gap="xs">
 							<h1 class="text-base font-semibold text-foreground">{data.organization.name}</h1>
-							<p class="text-xs text-muted-foreground">Pick an application to get started.</p>
+							<p class="text-xs text-muted-foreground">{t('pod.shell.pickApplication')}</p>
 						</Stack>
 
 						<Stack as="section" gap="sm">
 							<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-								Applications
+								{t('pod.shell.applications')}
 							</h2>
 							{#if overviewApplications.length === 0}
 								<Stack
@@ -301,9 +308,9 @@
 									class="rounded-lg border border-dashed p-8"
 								>
 									<Icon icon="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
-									<span class="text-xs text-muted-foreground">No applications yet</span>
+									<span class="text-xs text-muted-foreground">{t('pod.shell.noApplications')}</span>
 									<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
-										Author an app in the tenant workspace source to make it available here.
+										{t('pod.shell.noApplicationsHint')}
 									</span>
 								</Stack>
 							{:else}
@@ -365,7 +372,7 @@
 			{#key activeHostPlugin.key}
 				<iframe
 					title={navigationModel.system.find((item) => item.key === activeHostPlugin.key)?.label ??
-						'Host workspace surface'}
+						t('pod.shell.hostSurfaceTitle')}
 					src={`${activeHostPlugin.entry}${page.url.search}`}
 					class="h-full min-h-0 w-full border-0 bg-background"
 					data-testid="host-plugin-surface"
@@ -380,7 +387,7 @@
 					>
 						{#await activeApp}
 							<div class="grid h-full min-h-0 place-items-center text-sm text-muted-foreground">
-								Loading application…
+								{t('pod.shell.loadingApplication')}
 							</div>
 						{:then ActiveApp}
 							<ActiveApp />
@@ -394,11 +401,11 @@
 			</Bound>
 		{:else if appName && !accessible}
 			<div class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-destructive">
-				Access denied
+				{t('pod.shell.accessDenied')}
 			</div>
 		{:else}
 			<div class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-muted-foreground">
-				Workspace application not found
+				{t('pod.shell.appNotFound')}
 			</div>
 		{/if}
 	</Bound>
@@ -419,14 +426,14 @@
 {#if agentAvailable && !agentSurfaceAllowed && !agentSheetOpen}
 	<Button
 		type="button"
-		aria-label="Open workspace agent"
+		aria-label={t('pod.shell.openWorkspaceAgent')}
 		aria-haspopup="dialog"
 		class="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 h-11 gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-6"
 		onclick={() => (agentSheetOpen = true)}
 		data-testid="workspace-agent-trigger"
 	>
 		<IconWrapper name="product:agent" class="size-4" />
-		<span>Ask agent</span>
+		<span>{t('pod.shell.askAgent')}</span>
 	</Button>
 {/if}
 
@@ -443,9 +450,9 @@
 		>
 			<div class="flex h-full min-h-0 flex-col">
 				<Sheet.Header class="shrink-0 border-b px-4 py-3.5 pr-12 text-left sm:px-5">
-					<Sheet.Title class="text-sm font-semibold">Workspace agent</Sheet.Title>
+					<Sheet.Title class="text-sm font-semibold">{t('pod.shell.workspaceAgentTitle')}</Sheet.Title>
 					<Sheet.Description class="text-xs leading-5 text-muted-foreground">
-						Answers stream here and stay with this tenant workspace.
+						{t('pod.shell.workspaceAgentDescription')}
 					</Sheet.Description>
 				</Sheet.Header>
 				<div class="min-h-0 flex-1">

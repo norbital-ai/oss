@@ -1,7 +1,10 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import Button, { type ButtonProps } from '../button/button.svelte';
+	import { useI18n, type UiKeys } from '../i18n/index.js';
 	import { onDestroy } from 'svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		data,
@@ -45,7 +48,7 @@
 	{size}
 	{variant}
 	onclick={handleCopy}
-	title={copied ? 'Copied!' : 'Copy'}
+	title={copied ? t('dataRenderer.copied') : t('common.copy')}
 	class="transition-all {className} {size === 'icon' ? 'h-8 w-8' : ''}"
 	{...restProps}
 >

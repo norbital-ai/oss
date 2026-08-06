@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Scroll, Stack } from '#lib/layout';
 	import {
 		assignLanes,
@@ -31,6 +32,8 @@
 		readonly?: boolean;
 		class?: string;
 	} = $props();
+
+	const { t } = useI18n<UiKeys>();
 
 	const today = $derived(new Date());
 	const { days, weekCount } = $derived(getMonthGrid(date));
@@ -67,7 +70,7 @@
 	}
 </script>
 
-<Scroll axis="y" name="Month events" class={cn('bg-background p-2', className)}>
+<Scroll axis="y" name={t('misc.monthEvents')} class={cn('bg-background p-2', className)}>
 	<div
 		class="grid h-full"
 		style="grid-template-columns: repeat(7, 1fr); grid-template-rows: repeat({weekCount}, 1fr)"

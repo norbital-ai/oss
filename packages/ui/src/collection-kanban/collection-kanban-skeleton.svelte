@@ -1,6 +1,9 @@
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cover, Inline, Stack } from '#lib/layout';
 	import { Skeleton } from '#lib/skeleton';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		loading,
@@ -10,7 +13,7 @@
 </script>
 
 {#if loading && empty}
-	<div class="contents" aria-busy="true" aria-label="Loading board">
+	<div class="contents" aria-busy="true" aria-label={t('kanban.loadingBoard')}>
 		{#each Array.from({ length: lanes }) as _, lane (lane)}
 			<Cover as="section" gap="sm" class="rounded-sm bg-muted/40 p-3" aria-hidden="true">
 				{#snippet top()}

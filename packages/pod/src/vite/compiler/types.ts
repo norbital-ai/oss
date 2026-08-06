@@ -88,6 +88,22 @@ export interface DiscoveredSkill {
 	readonly files: readonly SkillFile[];
 }
 
+/**
+ * Tenant translation overrides, authored under `src/i18n/`.
+ *
+ * The tenant supplies its own copy for the supported locales; the platform
+ * catalogs (pod chrome + `@norbital-ai/ui`) are merged underneath at build
+ * time, so these files only need to name what the workspace changes or adds.
+ */
+export interface DiscoveredI18n {
+	/** True when `src/i18n/` exists at all. */
+	readonly present: boolean;
+	/** `src/i18n/messages.en.json`, when present and valid. */
+	readonly en: Readonly<Record<string, string>> | null;
+	/** `src/i18n/messages.zh.json`, when present and valid. */
+	readonly zh: Readonly<Record<string, string>> | null;
+}
+
 export interface PodStructure {
 	readonly version: 1;
 	readonly relationships: string | null;
@@ -102,6 +118,8 @@ export interface PodStructure {
 	readonly policies: readonly DiscoveredWorkspaceRole[];
 	readonly channels: readonly DiscoveredWorkspaceRole[];
 	readonly skills: readonly DiscoveredSkill[];
+	/** Tenant translation overrides under `src/i18n/`, if any. */
+	readonly i18n: DiscoveredI18n;
 	readonly seed: string | null;
 	/** `src/+env.ts`, if declared — the public and private names this workspace asks its host for. */
 	readonly env: string | null;

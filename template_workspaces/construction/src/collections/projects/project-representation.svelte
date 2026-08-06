@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { Row } from './$types.js';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import {
@@ -14,7 +16,7 @@
 		Stack
 	} from '@norbital-ai/ui/layout';
 	import { formatDateRangeLocal } from '@norbital-ai/std/date';
-	import { PROJECT_TIME_ZONE, calendarDateInTimeZone, todayInstant } from '../../lib/calendar.js';
+	import { calendarDateInTimeZone, todayInstant } from '../../lib/calendar.js';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import IfcDisplay from '../../lib/ifc-viewer/ifc_display.svelte';
 
@@ -25,8 +27,10 @@
 
 	let { record }: { record: Row } = $props();
 
+	const { t } = useI18n<TenantI18nKeys>();
+
 	const projectId = $derived(record.norbital_id);
-	const today = calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE);
+	const today = calendarDateInTimeZone(new Date());
 
 	const sitesQuery = $derived(
 		client.db.site_locations.findMany({
@@ -120,14 +124,14 @@
 	);
 
 	function formatDate(value: Date | string | null | undefined): string {
-		if (!value) return 'Not set';
+		if (!value) return t('component.not_set');
 		return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(
 			new Date(value)
 		);
 	}
 
 	function formatMoney(value: MoneyValue | null | undefined): string {
-		if (!value) return 'Not set';
+		if (!value) return t('component.not_set');
 		return new Intl.NumberFormat(undefined, {
 			style: 'currency',
 			currency: value.currency,
@@ -141,7 +145,7 @@
 			if (!value) continue;
 			totals.set(value.currency, (totals.get(value.currency) ?? 0) + value.value);
 		}
-		if (totals.size === 0) return 'No value';
+		if (totals.size === 0) return t('component.no_value');
 		return [...totals.entries()]
 			.map(([currency, value]) => formatMoney({ currency, value }))
 			.join(' · ');
@@ -149,33 +153,36 @@
 </script>
 
 {#snippet projectSummary()}
-	<Stack as="header" gap="md" class="border-b pb-5" aria-label="Project summary">
+	<Stack as="header" gap="md" class="border-b pb-5" aria-label={t('component.project_summary')}>
 		<Cluster align="start" justify="between" gap="sm">
 			<p class="min-w-0 text-sm text-muted-foreground">
-				{record.project_number ?? 'No project number'} · {record.client ?? 'No client'}
+				{record.project_number ?? t('component.no_project_number')} · {record.client ??
+					t('component.no_client')}
 			</p>
 			<span class="rounded-full bg-muted px-3 py-1 text-xs font-medium capitalize">
-				{record.status ?? 'Status not set'}
+				{record.status ?? t('component.status_not_set')}
 			</span>
 		</Cluster>
 		<Grid minimum="compact" class="text-sm">
 			<div>
-				<p class="text-xs text-muted-foreground">Programme</p>
+				<p class="text-xs text-muted-foreground">{t('component.programme')}</p>
 				<p class="mt-1 font-medium">
-					{record.schedule_range ? formatDateRangeLocal(record.schedule_range) : 'Not set'}
+					{record.schedule_range
+						? formatDateRangeLocal(record.schedule_range)
+						: t('component.not_set')}
 				</p>
 			</div>
 			<div>
-				<p class="text-xs text-muted-foreground">Contract value</p>
+				<p class="text-xs text-muted-foreground">{t('component.contract_value')}</p>
 				<p class="mt-1 font-medium">{formatMoney(record.contract_value)}</p>
 			</div>
 			<div>
-				<p class="text-xs text-muted-foreground">Main contractor</p>
-				<p class="mt-1 font-medium">{record.main_contractor ?? 'Not set'}</p>
+				<p class="text-xs text-muted-foreground">{t('component.main_contractor')}</p>
+				<p class="mt-1 font-medium">{record.main_contractor ?? t('component.not_set')}</p>
 			</div>
 			<div>
-				<p class="text-xs text-muted-foreground">Project manager</p>
-				<p class="mt-1 font-medium">{record.project_manager ?? 'Not set'}</p>
+				<p class="text-xs text-muted-foreground">{t('component.project_manager')}</p>
+				<p class="mt-1 font-medium">{record.project_manager ?? t('component.not_set')}</p>
 			</div>
 		</Grid>
 	</Stack>
@@ -189,21 +196,24 @@
 	{/if}
 
 	{#if loading}
-		<p class="sr-only" aria-live="polite">Loading project operating context.</p>
+		<p class="sr-only" aria-live="polite">{t('component.loading_operating_context')}</p>
 	{/if}
 {/snippet}
 
 {#snippet coordinationModel()}
 	<Stack gap="sm">
 		<div>
-			<h3 class="text-heading">Coordination model</h3>
+			<h3 class="text-heading">{t('component.coordination_model')}</h3>
 			<p class="max-w-[70ch] text-sm text-muted-foreground">
-				Review the issued IFC model beside the live coordination register.
+				{t('component.coordination_model_description')}
 			</p>
 		</div>
 		{#if ifcDocument?.document_url}
 			<Bound size="standard" clip class="rounded-md border bg-muted/30">
-				<IfcDisplay src={ifcDocument.document_url} alt={ifcDocument.title ?? 'Current IFC model'} />
+				<IfcDisplay
+					src={ifcDocument.document_url}
+					alt={ifcDocument.title ?? t('component.current_ifc_model')}
+				/>
 			</Bound>
 		{:else if documentsQuery.loading}
 			<div class="h-64 animate-pulse rounded-md bg-muted/60"></div>
@@ -213,7 +223,7 @@
 				justify="center"
 				class="h-64 rounded-md border border-dashed bg-muted/20 px-6 text-center text-sm text-muted-foreground"
 			>
-				Link an IFC document to this project to open the coordination model here.
+				{t('component.link_ifc_document')}
 			</Inline>
 		{/if}
 	</Stack>
@@ -221,25 +231,29 @@
 {#snippet deliveryPulse()}
 	<Stack as="aside" gap="md" class="border-t pt-4">
 		<Stack gap="md">
-			<p class="text-tiny uppercase tracking-wide text-muted-foreground">Delivery pulse</p>
+			<p class="text-tiny uppercase tracking-wide text-muted-foreground">
+				{t('component.delivery_pulse')}
+			</p>
 			<dl class="divide-y text-sm">
 				<Inline as="div" justify="between" class="py-2">
-					<dt>Work fronts</dt>
+					<dt>{t('component.work_fronts')}</dt>
 					<dd class="font-medium tabular-nums">{sitesQuery.current?.length ?? 0}</dd>
 				</Inline>
 				<Inline as="div" justify="between" class="py-2">
-					<dt>Allocated workers</dt>
+					<dt>{t('component.allocated_workers')}</dt>
 					<dd class="font-medium tabular-nums">{assignments.length}</dd>
 				</Inline>
 				<Inline as="div" justify="between" class="py-2">
-					<dt>Project documents</dt>
+					<dt>{t('component.project_documents')}</dt>
 					<dd class="font-medium tabular-nums">{documents.length}</dd>
 				</Inline>
 			</dl>
 		</Stack>
 		{#if record.description}
 			<Stack gap="sm">
-				<p class="text-tiny uppercase tracking-wide text-muted-foreground">Scope</p>
+				<p class="text-tiny uppercase tracking-wide text-muted-foreground">
+					{t('component.scope')}
+				</p>
 				<p class="text-sm leading-normal">{record.description}</p>
 			</Stack>
 		{/if}
@@ -255,15 +269,15 @@
 				{client}
 				collection="rfis"
 				query={{ where: { project_id: { eq: projectId } }, limit: 25 }}
-				title="RFIs"
-				description="Design questions tied to this project."
+				title={t('component.rfis')}
+				description={t('component.rfis_description')}
 			>
 				{#snippet columns({ Column })}
-					<Column name="rfi_number" label="RFI" />
+					<Column name="rfi_number" label={t('component.rfi')} />
 					<Column name="title" minWidth={180} />
 					<Column name="priority" />
 					<Column name="status" />
-					<Column name="due_date" label="Due" />
+					<Column name="due_date" label={t('component.due')} />
 				{/snippet}
 				{#snippet ListCard(rfi)}
 					<Inline align="start" justify="between" gap="sm">
@@ -279,15 +293,15 @@
 				{client}
 				collection="defects"
 				query={{ where: { project_id: { eq: projectId } }, limit: 25 }}
-				title="Defects"
-				description="Quality issues across project work fronts."
+				title={t('component.defects')}
+				description={t('component.defects_description')}
 			>
 				{#snippet columns({ Column })}
-					<Column name="defect_number" label="Defect" />
+					<Column name="defect_number" label={t('component.defect')} />
 					<Column name="title" minWidth={180} />
 					<Column name="severity" />
 					<Column name="status" />
-					<Column name="due_date" label="Due" />
+					<Column name="due_date" label={t('component.due')} />
 				{/snippet}
 				{#snippet ListCard(defect)}
 					<Inline align="start" justify="between" gap="sm">
@@ -306,10 +320,9 @@
 {#snippet manpower()}
 	<Stack gap="lg">
 		<Stack gap="xs">
-			<h3 class="text-heading">Manpower allocation</h3>
+			<h3 class="text-heading">{t('component.manpower_allocation')}</h3>
 			<p class="max-w-[70ch] text-sm text-muted-foreground">
-				Each lane is a project work front. Cards show the worker, work package, role, and planned
-				daily hours.
+				{t('component.manpower_allocation_description')}
 			</p>
 		</Stack>
 		{#if sitesQuery.loading || Boolean(assignmentsQuery?.loading)}
@@ -322,11 +335,11 @@
 			<div
 				class="rounded-md border border-dashed px-6 py-12 text-center text-sm text-muted-foreground"
 			>
-				Add a site location before allocating manpower.
+				{t('component.add_site_location')}
 			</div>
 		{:else}
 			<Bound size="standard" clip>
-				<Scroll axis="x" name="Manpower allocation" class="pb-2">
+				<Scroll axis="x" name={t('component.manpower_allocation')} class="pb-2">
 					<Inline align="start" gap="md">
 						{#each sitesQuery.current ?? [] as site (site.norbital_id)}
 							{@const siteAssignments = assignments.filter(
@@ -337,7 +350,7 @@
 									<div class="min-w-0">
 										<h4 class="truncate text-sm font-medium">{site.location_name}</h4>
 										<p class="mt-0.5 truncate text-xs text-muted-foreground">
-											{site.location_code ?? site.location_type ?? 'Work front'}
+											{site.location_code ?? site.location_type ?? t('component.work_front')}
 										</p>
 									</div>
 									<span class="rounded-full bg-background px-2 py-0.5 text-xs tabular-nums">
@@ -363,16 +376,20 @@
 														(assignment.worker_id
 															? workerById.get(assignment.worker_id)?.trade
 															: null) ??
-														'Site role'}</span
+														t('component.site_role')}</span
 												>
 												<span class="text-muted-foreground tabular-nums"
-													>{assignment.hours_per_day ?? 0} h/day</span
+													>{t('component.hours_per_day', {
+														hours: assignment.hours_per_day ?? 0
+													})}</span
 												>
 											</Inline>
 										</article>
 									{/each}
 									{#if siteAssignments.length === 0}
-										<p class="py-6 text-center text-xs text-muted-foreground">No allocations</p>
+										<p class="py-6 text-center text-xs text-muted-foreground">
+											{t('component.no_allocations')}
+										</p>
 									{/if}
 								</Stack>
 							</section>
@@ -388,23 +405,23 @@
 	<Stack gap="lg">
 		<Grid minimum="compact">
 			<div class="border-b pb-3">
-				<p class="text-xs text-muted-foreground">Contract value</p>
+				<p class="text-xs text-muted-foreground">{t('component.contract_value')}</p>
 				<p class="mt-1 text-heading">{formatMoney(record.contract_value)}</p>
 			</div>
 			<div class="border-b pb-3">
-				<p class="text-xs text-muted-foreground">Claimed</p>
+				<p class="text-xs text-muted-foreground">{t('component.claimed')}</p>
 				<p class="mt-1 text-heading">
 					{sumMoney(claims.map((claim) => claim.claimed_amount))}
 				</p>
 			</div>
 			<div class="border-b pb-3">
-				<p class="text-xs text-muted-foreground">Certified</p>
+				<p class="text-xs text-muted-foreground">{t('component.certified')}</p>
 				<p class="mt-1 text-heading">
 					{sumMoney(claims.map((claim) => claim.certified_amount))}
 				</p>
 			</div>
 			<div class="border-b pb-3">
-				<p class="text-xs text-muted-foreground">Documents</p>
+				<p class="text-xs text-muted-foreground">{t('component.documents')}</p>
 				<p class="mt-1 text-heading tabular-nums">{documents.length}</p>
 			</div>
 		</Grid>
@@ -412,8 +429,10 @@
 		<Grid minimum="panel">
 			<Stack as="section" gap="sm">
 				<div class="border-b pb-2">
-					<h3 class="text-sm font-semibold">Payment claims</h3>
-					<p class="text-xs text-muted-foreground">Commercial progression for this project.</p>
+					<h3 class="text-sm font-semibold">{t('component.payment_claims')}</h3>
+					<p class="text-xs text-muted-foreground">
+						{t('component.payment_claims_description')}
+					</p>
 				</div>
 				<div class="divide-y rounded-md border bg-card">
 					{#each claims as claim (claim.norbital_id)}
@@ -421,21 +440,24 @@
 							<div class="min-w-0">
 								<p class="truncate text-sm font-medium">{claim.claim_number}</p>
 								<p class="text-xs text-muted-foreground capitalize">
-									{claim.claim_type ?? 'Progress claim'} · {claim.status ?? 'No status'}
+									{claim.claim_type ?? t('component.progress_claim')} · {claim.status ??
+										t('component.no_status')}
 								</p>
 							</div>
 							<p class="text-sm font-medium tabular-nums">{formatMoney(claim.claimed_amount)}</p>
 						</Inline>
 					{:else}
-						<p class="p-4 text-sm text-muted-foreground">No payment claims.</p>
+						<p class="p-4 text-sm text-muted-foreground">{t('component.no_payment_claims')}</p>
 					{/each}
 				</div>
 			</Stack>
 
 			<Stack as="section" gap="sm">
 				<div class="border-b pb-2">
-					<h3 class="text-sm font-semibold">Project documents</h3>
-					<p class="text-xs text-muted-foreground">Models, handover packs, and asset records.</p>
+					<h3 class="text-sm font-semibold">{t('component.project_documents')}</h3>
+					<p class="text-xs text-muted-foreground">
+						{t('component.project_documents_description')}
+					</p>
 				</div>
 				<div class="divide-y rounded-md border bg-card">
 					{#each documents as document (document.norbital_id)}
@@ -443,8 +465,8 @@
 							<div class="min-w-0">
 								<p class="truncate text-sm font-medium">{document.title}</p>
 								<p class="text-xs text-muted-foreground">
-									{document.document_number ?? 'No document number'} · {document.version ??
-										'No version'}
+									{document.document_number ?? t('component.no_document_number')} ·
+									{document.version ?? t('component.no_version')}
 								</p>
 							</div>
 							{#if document.document_url}
@@ -454,12 +476,12 @@
 									target="_blank"
 									rel="noreferrer"
 								>
-									Open
+									{t('component.open')}
 								</a>
 							{/if}
 						</Inline>
 					{:else}
-						<p class="p-4 text-sm text-muted-foreground">No project documents.</p>
+						<p class="p-4 text-sm text-muted-foreground">{t('component.no_project_documents')}</p>
 					{/each}
 				</div>
 			</Stack>
@@ -475,15 +497,15 @@
 				},
 				limit: 50
 			}}
-			title="Permits to work"
-			description="Current work authority and expiry coverage."
+			title={t('component.permits_to_work')}
+			description={t('component.permits_to_work_description')}
 		>
 			{#snippet columns({ Column })}
-				<Column name="permit_number" label="Permit" />
-				<Column name="permit_type" label="Type" />
+				<Column name="permit_number" label={t('component.permit')} />
+				<Column name="permit_type" label={t('component.type')} />
 				<Column name="status" />
-				<Column name="validity_range" label="Valid" />
-				<Column name="approved_by" label="Approved by" />
+				<Column name="validity_range" label={t('component.valid')} />
+				<Column name="approved_by" label={t('component.approved_by')} />
 			{/snippet}
 			{#snippet ListCard(permit)}
 				<Inline align="start" justify="between" gap="sm">
@@ -491,7 +513,9 @@
 					<span class="shrink-0 text-xs text-muted-foreground">{permit.status}</span>
 				</Inline>
 				<p class="mt-1 truncate text-sm text-muted-foreground">
-					{permit.permit_type} · expires {formatDate(permit.validity_range?.end)}
+					{permit.permit_type} · {t('component.expires', {
+						date: formatDate(permit.validity_range?.end)
+					})}
 				</p>
 			{/snippet}
 		</CollectionTable>
@@ -505,19 +529,19 @@
 		config={[
 			{
 				name: 'coordination',
-				label: 'Model & coordination',
+				label: t('component.model_and_coordination'),
 				icon: 'lucide:box',
 				content: coordination
 			},
 			{
 				name: 'manpower',
-				label: 'Manpower allocation',
+				label: t('component.manpower_allocation'),
 				icon: 'lucide:users',
 				content: manpower
 			},
 			{
 				name: 'controls',
-				label: 'Commercial & controls',
+				label: t('component.commercial_and_controls'),
 				icon: 'lucide:clipboard-check',
 				content: controls
 			}

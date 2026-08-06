@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Tooltip } from '#lib/tooltip';
 	import { Stack } from '#lib/layout';
 	import type { FileMetadata } from './file-value.types.js';
@@ -16,6 +17,8 @@
 		preventDefault?: boolean;
 	} = $props();
 
+	const { t } = useI18n<UiKeys>();
+
 	const hasMetadata = $derived(Boolean(metadata.summary || metadata.structure_hint));
 </script>
 
@@ -26,7 +29,7 @@
 				type="button"
 				{...props}
 				class={className}
-				aria-label="View summary"
+				aria-label={t('misc.viewSummary')}
 				onclick={(event) => {
 					event.stopPropagation();
 					if (preventDefault) event.preventDefault();

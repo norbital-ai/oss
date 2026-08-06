@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Combobox, type TOption } from '#lib/combobox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
@@ -16,12 +17,14 @@
 		sanitizePhoneInput
 	} from './phone_number.utils.js';
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		value,
 		id,
 		disabled = false,
-		placeholder = 'Phone number',
-		locale = 'en-US',
+		placeholder = t('dataRenderer.phonePlaceholder'),
+		locale,
 		class: className,
 		onValueChange
 	}: {
@@ -33,9 +36,10 @@
 		class?: string;
 		onValueChange?: (value: string | null) => void;
 	} = $props();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 
-	const fallbackCountry = $derived(phoneCountryFromLocale(locale));
-	const countries = $derived(phoneCountryOptions(locale));
+	const fallbackCountry = $derived(phoneCountryFromLocale(localeEffective));
+	const countries = $derived(phoneCountryOptions(localeEffective));
 	const countryOptions = $derived.by((): TOption<CountryCode, Record<string, never>>[] =>
 		countries.map((option) => ({
 			value: option.country,
@@ -47,8 +51,9 @@
 	let draft = $state('');
 	let hasBlurred = $state(false);
 	let lastEmittedValue: string | null | undefined;
+	const phonePlaceholderText = t('dataRenderer.phonePlaceholder');
 	const inputPlaceholder = $derived(
-		placeholder === 'Phone number' ? phoneInputPlaceholder(country) : placeholder
+		placeholder === phonePlaceholderText ? phoneInputPlaceholder(country, phonePlaceholderText) : placeholder
 	);
 	const invalid = $derived(hasBlurred && draft !== '' && !normalizePhoneValue(draft, country));
 	const errorId = $derived(id ? `${id}-error` : undefined);
@@ -104,8 +109,8 @@
 			options={countryOptions}
 			value={country}
 			display={countryDisplay}
-			ariaLabel="Country calling code"
-			searchPlaceholder="Search countries..."
+			ariaLabel={t('dataRenderer.countryCallingCode')}
+			searchPlaceholder={t('dataRenderer.searchCountries')}
 			preserveOptionOrder
 			scrollToSelection
 			sameWidth={false}
@@ -133,6 +138,8 @@
 		/>
 	</div>
 	{#if invalid}
-		<p id={errorId} class="text-xs text-destructive" role="alert">Enter a valid phone number.</p>
+		<p id={errorId} class="text-xs text-destructive" role="alert">
+			{t('dataRenderer.invalidPhone')}
+		</p>
 	{/if}
 </div>

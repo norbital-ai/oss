@@ -3,9 +3,12 @@
 	import type { Snippet } from 'svelte';
 	import { Button } from '#lib/button';
 	import { Checkbox } from '#lib/checkbox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { CollectionTableRowActionContext } from './collection-table.types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	interface ListRow {
 		readonly id: string;
@@ -62,7 +65,7 @@
 
 {#snippet listToolbar()}
 	<Cluster gap="sm" align="center" justify="between">
-		<Scroll axis="x" name="Collection toolbar" grow class="collection-table-list-toolbar min-w-0">
+		<Scroll axis="x" name={t('table.toolbarRegion')} grow class="collection-table-list-toolbar min-w-0">
 			<Inline gap="xs">
 				{@render toolbar()}
 			</Inline>
@@ -83,9 +86,9 @@
 	aria-busy={loading}
 	bottom={listPagination}
 >
-	<Scroll axis="y" name="Collection records" class="rounded-md border bg-card">
+	<Scroll axis="y" name={t('table.recordsRegion')} class="rounded-md border bg-card">
 		{#if loading}
-			<div class="divide-y" aria-label="Loading records">
+			<div class="divide-y" aria-label={t('table.loading')}>
 				{#each Array(8) as _, index (index)}
 					<Stack gap="xs" class="p-4">
 						<div class="h-4 w-2/3 animate-pulse rounded bg-muted"></div>
@@ -97,7 +100,7 @@
 			<Inline justify="center" align="center" class="min-h-48 p-6">
 				<Stack gap="xs">
 					<Icon icon="lucide:alert-circle" class="mx-auto size-5 text-destructive" />
-					<p class="text-sm font-medium text-destructive">Unable to load records</p>
+					<p class="text-sm font-medium text-destructive">{t('table.unableToLoadRecords')}</p>
 					<p class="text-xs text-muted-foreground">{error}</p>
 				</Stack>
 			</Inline>
@@ -108,8 +111,8 @@
 				{:else}
 					<Stack gap="xs" class="text-center">
 						<Icon icon="lucide:inbox" class="mx-auto size-6" />
-						<p class="text-sm font-medium">No results found</p>
-						<p class="text-xs text-muted-foreground">Try adjusting your search or filters</p>
+						<p class="text-sm font-medium">{t('common.noResultsFound')}</p>
+						<p class="text-xs text-muted-foreground">{t('table.emptyStateHint')}</p>
 					</Stack>
 				{/if}
 			</Inline>
@@ -135,7 +138,7 @@
 						{/if}
 						{#if selectable}
 							<label class="flex min-h-11 w-11 shrink-0 cursor-pointer items-center justify-center">
-								<span class="sr-only">Select {recordTitle(row.record)}</span>
+								<span class="sr-only">{t('table.selectRecordLabel', { label: recordTitle(row.record) })}</span>
 								<Checkbox
 									checked={row.selected}
 									{disabled}
@@ -177,19 +180,21 @@
 			variant="outline"
 			size="icon"
 			class="size-11"
-			aria-label="Previous page"
+			aria-label={t('table.previousPage')}
 			disabled={disabled || pageIndex === 0}
 			onclick={onPreviousPage}
 		>
 			<Icon icon="lucide:chevron-left" class="size-4" />
 		</Button>
-		<p class="text-xs tabular-nums text-muted-foreground">Page {pageIndex + 1} of {pageCount}</p>
+		<p class="text-xs tabular-nums text-muted-foreground">
+			{t('table.pageOf', { page: pageIndex + 1, pages: pageCount })}
+		</p>
 		<Button
 			type="button"
 			variant="outline"
 			size="icon"
 			class="size-11"
-			aria-label="Next page"
+			aria-label={t('table.nextPage')}
 			disabled={disabled || !hasNextPage}
 			onclick={onNextPage}
 		>

@@ -1,10 +1,14 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { nullableNumberFrom, numberFrom } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { rateSelectorSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type SelectorKey = Value['by'];
 
@@ -228,7 +232,7 @@
 				<Input
 					value={current.class}
 					{disabled}
-					placeholder="e.g. A"
+					placeholder={t('component.rate_example')}
 					oninput={(event) => emit({ by: 'RISK_CLASS', class: event.currentTarget.value })}
 				/>
 			</label>

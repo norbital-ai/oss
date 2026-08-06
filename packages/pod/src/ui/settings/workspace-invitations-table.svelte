@@ -13,6 +13,10 @@
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { renderSnippet } from '@norbital-ai/ui/utils';
 	import type { WorkspaceInvitation } from '../shell/workspace-settings.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	let {
 		invitations,
@@ -79,14 +83,24 @@
 				name: 'invitation',
 				recordLabel: 'email',
 				system: true,
-				fields: [
-					{ name: 'norbital_id', kind: 'uuid', nullable: false },
-					{ name: 'email', kind: 'text', nullable: false, label: 'Email' },
-					{ name: 'role', kind: 'text', nullable: false, label: 'Role' },
-					{ name: 'status', kind: 'text', nullable: false, label: 'Status' },
-					{ name: 'created_at', kind: 'timestamptz', nullable: false, label: 'Invited' },
-					{ name: 'expires_at', kind: 'timestamptz', nullable: false, label: 'Expires' }
-				]
+			fields: [
+				{ name: 'norbital_id', kind: 'uuid', nullable: false },
+				{ name: 'email', kind: 'text', nullable: false, label: t('pod.settings.email') },
+				{ name: 'role', kind: 'text', nullable: false, label: t('pod.settings.memberRole') },
+				{ name: 'status', kind: 'text', nullable: false, label: t('pod.settings.status') },
+				{
+					name: 'created_at',
+					kind: 'timestamptz',
+					nullable: false,
+					label: t('pod.settings.invited')
+				},
+				{
+					name: 'expires_at',
+					kind: 'timestamptz',
+					nullable: false,
+					label: t('pod.settings.expires')
+				}
+			]
 			}
 		},
 		db: {
@@ -138,7 +152,7 @@
 			variant="ghost"
 			size="sm"
 			disabled={busy}
-			onclick={() => onRevoke(String(row.norbital_id))}>Revoke</Button
+			onclick={() => onRevoke(String(row.norbital_id))}>{t('pod.settings.revoke')}</Button
 		>
 	{/if}
 {/snippet}
@@ -152,14 +166,14 @@
 		<input
 			class="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-xs"
 			type="email"
-			placeholder="person@example.com"
-			aria-label="Invitation email"
+			placeholder={t('pod.settings.invitePlaceholder')}
+			aria-label={t('pod.settings.invitationEmail')}
 			bind:value={email}
 			required
 		/>
 		<select
 			class="h-9 rounded-md border border-input bg-background px-2 text-xs"
-			aria-label="Invitation role"
+			aria-label={t('pod.settings.invitationRole')}
 			value={role}
 			onchange={(event) => {
 				const parsed = UserRoleSchema.safeParse(event.currentTarget.value);
@@ -169,7 +183,7 @@
 			{#each UserRoleSchema.options as option (option)}<option value={option}>{option}</option
 				>{/each}
 		</select>
-		<Button type="submit" disabled={busy}>Invite</Button>
+		<Button type="submit" disabled={busy}>{t('pod.settings.invite')}</Button>
 	</Inline>
 
 	{#if mintedLink}
@@ -177,7 +191,7 @@
 			class="rounded-md border bg-muted/40 px-3 py-2 text-tiny break-all"
 			data-testid="minted-invitation"
 		>
-			Send this link to {mintedLink.email}: {mintedLink.acceptUrl}
+			{t('pod.settings.sendLinkTo', { email: mintedLink.email, url: mintedLink.acceptUrl })}
 		</p>
 	{/if}
 
@@ -186,30 +200,30 @@
 		collection="invitation"
 		view="workspace-settings-invitations"
 		query={{ orderBy: { created_at: 'desc' }, limit: 25 }}
-		title="Invitations"
-		description="Pending and completed invitations from the tenant identity service."
+		title={t('pod.settings.invitations')}
+		description={t('pod.settings.invitationsDescription')}
 		features={{ search: true, filter: false, bulk: false, create: false }}
 		class="h-[min(36rem,calc(100dvh-20rem))] min-h-[24rem]"
 	>
 		{#snippet columns({ Column })}
 			<Column
 				name="email"
-				label="Email"
+				label={t('pod.settings.email')}
 				minWidth={220}
 				card="title"
 				render={({ row }) => renderSnippet(emailCell, { row })}
 			/>
-			<Column name="role" label="Role" width={110} card="subtitle" />
-			<Column name="status" label="Status" width={110} card="badge" />
+			<Column name="role" label={t('pod.settings.memberRole')} width={110} card="subtitle" />
+			<Column name="status" label={t('pod.settings.status')} width={110} card="badge" />
 			<Column
 				name="created_at"
-				label="Invited"
+				label={t('pod.settings.invited')}
 				minWidth={180}
 				render={({ row }) => date(String(row.created_at))}
 			/>
 			<Column
 				name="expires_at"
-				label="Expires"
+				label={t('pod.settings.expires')}
 				minWidth={180}
 				render={({ row }) => date(String(row.expires_at))}
 			/>
@@ -221,8 +235,5 @@
 			/>
 		{/snippet}
 	</CollectionTable>
-	<p class="text-micro text-muted-foreground">
-		Invitation secrets are excluded from live sync; CollectionTable receives only this
-		server-projected safe view.
-	</p>
+	<p class="text-micro text-muted-foreground">{t('pod.settings.invitationsHint')}</p>
 </Stack>

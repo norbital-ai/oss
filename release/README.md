@@ -42,7 +42,6 @@ app, and automation counts from source.
 | Construction     | `template_workspaces/construction`     | `refs/heads/templates/construction`     |
 | CRM              | `template_workspaces/crm`              | `refs/heads/templates/crm`              |
 | HR and payroll   | `template_workspaces/hr-payroll`       | `refs/heads/templates/hr-payroll`       |
-| Reclamation      | `template_workspaces/reclamation`      | `refs/heads/templates/reclamation`      |
 
 The projection is deterministic for a source commit and retains per-template ancestry. A consumer
 resolves the active set with one `git ls-remote --heads <url> 'refs/heads/templates/*'` round trip

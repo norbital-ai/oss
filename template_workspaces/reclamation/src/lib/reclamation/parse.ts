@@ -5,6 +5,7 @@
  * into numbers; `extract.ts` decides what those numbers are.
  */
 
+import { z } from 'zod';
 import type { Point2, SeabedGrid } from './types.js';
 
 export type Xyz = { readonly x: number; readonly y: number; readonly z: number };
@@ -177,10 +178,24 @@ export function coercePolygon(value: unknown): Point2[] | undefined {
 	return points.length >= 2 ? points : undefined;
 }
 
+/**
+ * A decoded JSON value that is a plain key/value object.
+ *
+ * `z.record` accepts an object and refuses arrays, scalars and `null`, which is exactly the shape
+ * every document payload must be, so the schema — not a cast — is what decides a value is one.
+ */
+const jsonRecord = z.record(z.string(), z.unknown());
+
+/** Narrow an already-decoded JSON value to an object, or `undefined` when it is not one. */
+export function recordFrom(value: unknown): Record<string, unknown> | undefined {
+	const result = jsonRecord.safeParse(value);
+	return result.success ? result.data : undefined;
+}
+
 export function parseJson(text: string): Record<string, unknown> {
-	const value: unknown = JSON.parse(text);
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+	const result = jsonRecord.safeParse(JSON.parse(text));
+	if (!result.success) {
 		throw new Error('Expected a JSON object at the document root.');
 	}
-	return value as Record<string, unknown>;
+	return result.data;
 }

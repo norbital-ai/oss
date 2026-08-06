@@ -1,20 +1,25 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '../data-renderer.types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
 		value,
 		id,
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
 		class: className
 	}: DataRendererProps = $props();
+
+	const valuePlaceholderText = t('dataRenderer.valuePlaceholder');
 
 	const time = $derived(typeof value === 'string' ? value : '');
 	const times = $derived(
@@ -53,7 +58,7 @@
 					type="time"
 					step={60}
 					value={entry}
-					aria-label="Time"
+					aria-label={t('dataRenderer.time')}
 					{disabled}
 					class="min-w-0 flex-1"
 					oninput={(event) => updateTime(index, event.currentTarget.value)}
@@ -62,7 +67,7 @@
 					type="button"
 					variant="outline"
 					size="icon"
-					aria-label="Remove time"
+					aria-label={t('dataRenderer.removeTime')}
 					{disabled}
 					onclick={() => removeTime(index)}
 				>
@@ -78,7 +83,7 @@
 			onclick={addTime}
 		>
 			<Icon icon="radix-icons:plus" class="size-4" />
-			Add time
+			{t('dataRenderer.addTime')}
 		</Button>
 	</Stack>
 {:else}
@@ -88,7 +93,7 @@
 		step={60}
 		value={time}
 		{disabled}
-		placeholder={placeholder === 'Value…' ? undefined : placeholder}
+		placeholder={placeholder === valuePlaceholderText ? undefined : placeholder}
 		class={className}
 		oninput={(event) => onValueChange?.(event.currentTarget.value)}
 	/>

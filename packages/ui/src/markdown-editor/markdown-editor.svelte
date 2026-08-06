@@ -8,6 +8,7 @@
 	import StarterKit from '@tiptap/starter-kit';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import * as Command from '#lib/command';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import * as ToggleGroup from '#lib/toggle-group';
 	import { cn } from '#lib/utils';
@@ -25,6 +26,8 @@
 	import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 	import { common, createLowlight } from 'lowlight';
 	import { watch } from 'runed';
+
+	const { t } = useI18n<UiKeys>();
 
 	const lowlight = createLowlight(common);
 
@@ -84,7 +87,8 @@
 	}: Props = $props();
 
 	const placeholder = $derived(
-		placeholderProp ?? (type === 'input' ? 'Type something...' : 'Type "/" for commands...')
+		placeholderProp ??
+			(type === 'input' ? t('misc.markdownInputPlaceholder') : t('misc.markdownPlaceholder'))
 	);
 	const isInput = $derived(type === 'input');
 	const isTextarea = $derived(type === 'textarea');
@@ -133,10 +137,10 @@
 		}));
 		const mediaGroup: CommandGroup | null = fileAttachmentClient
 			? {
-					title: 'Media',
+					title: t('misc.markdownMedia'),
 					items: [
 						{
-							title: 'Insert image…',
+							title: t('misc.markdownInsertImage'),
 							icon: 'lucide:image',
 							command: ({ editor, range }) => {
 								const input = document.createElement('input');
@@ -151,7 +155,7 @@
 							}
 						},
 						{
-							title: 'Attach files…',
+							title: t('misc.markdownAttachFiles'),
 							icon: 'lucide:paperclip',
 							command: ({ editor, range }) => {
 								const input = document.createElement('input');
@@ -174,28 +178,28 @@
 
 		const defaultGroups: CommandGroup[] = [
 			{
-				title: 'Typography',
+				title: t('misc.markdownTypography'),
 				items: [
 					{
-						title: 'Heading 1',
+						title: t('misc.markdownHeading1'),
 						icon: 'lucide:heading-1',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).setNode('heading', { level: 1 }).run()
 					},
 					{
-						title: 'Heading 2',
+						title: t('misc.markdownHeading2'),
 						icon: 'lucide:heading-2',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).setNode('heading', { level: 2 }).run()
 					},
 					{
-						title: 'Heading 3',
+						title: t('misc.markdownHeading3'),
 						icon: 'lucide:heading-3',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run()
 					},
 					{
-						title: 'Text',
+						title: t('misc.markdownText'),
 						icon: 'lucide:text',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).setNode('paragraph').run()
@@ -203,22 +207,22 @@
 				]
 			},
 			{
-				title: 'Lists',
+				title: t('misc.markdownLists'),
 				items: [
 					{
-						title: 'Bulleted list',
+						title: t('misc.markdownBulletedList'),
 						icon: 'lucide:list',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).toggleBulletList().run()
 					},
 					{
-						title: 'Numbered list',
+						title: t('misc.markdownNumberedList'),
 						icon: 'lucide:list-ordered',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).toggleOrderedList().run()
 					},
 					{
-						title: 'Checklist',
+						title: t('misc.markdownChecklist'),
 						icon: 'lucide:check-square',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).toggleTaskList().run()
@@ -227,16 +231,16 @@
 			},
 			...(mediaGroup ? [mediaGroup] : []),
 			{
-				title: 'Advanced Blocks',
+				title: t('misc.markdownAdvancedBlocks'),
 				items: [
 					{
-						title: 'Blockquote',
+						title: t('misc.markdownBlockquote'),
 						icon: 'lucide:quote',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).toggleWrap('blockquote').run()
 					},
 					{
-						title: 'Horizontal Rule',
+						title: t('misc.markdownHorizontalRule'),
 						icon: 'lucide:minus',
 						command: ({ editor, range }) =>
 							editor.chain().focus().deleteRange(range).setNode('horizontalRule').run()
@@ -549,7 +553,7 @@
 				{/if}
 			{/snippet}
 			{#if commandItems.filter((i) => i._type === 'item').length === 0}
-				<Command.Empty>No commands found</Command.Empty>
+				<Command.Empty>{t('misc.commandNoResults')}</Command.Empty>
 			{/if}
 		</Command.List>
 	</Command.Root>

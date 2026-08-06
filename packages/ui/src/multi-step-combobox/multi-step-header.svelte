@@ -2,7 +2,10 @@
 	import Icon from '@iconify/svelte';
 	import { Badge } from '#lib/badge';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		currentStepIndex,
@@ -32,20 +35,23 @@
 			size="icon"
 			class="shrink-0 text-muted-foreground"
 			onclick={onPrevious}
-			aria-label="Go to previous step"
+			aria-label={t('common.previousStep')}
 			disabled={isFirstStep}
 		>
 			<Icon icon="lucide:chevron-left" class="h-4 w-4" />
 		</Button>
 		<Badge variant="outline" class="h-5 px-2 text-micro text-muted-foreground">
-			Step {Math.min(currentStepIndex + 1, stepCount)}/{stepCount}
+			{t('common.stepOf', {
+				current: Math.min(currentStepIndex + 1, stepCount),
+				total: stepCount
+			})}
 		</Badge>
 		<Button
 			variant="ghost"
 			size="icon"
 			class="shrink-0 text-muted-foreground"
 			onclick={onNext}
-			aria-label="Go to next step"
+			aria-label={t('common.nextStep')}
 			disabled={nextDisabled}
 		>
 			<Icon icon="lucide:chevron-right" class="h-4 w-4" />

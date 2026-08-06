@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import type { CollectionFormValidation } from '@norbital-ai/ui/collection-form';
@@ -14,6 +16,7 @@
 	} from './lib/repayment-schedule.js';
 
 	let { record, close }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 	// svelte-ignore state_referenced_locally -- a mounted representation owns one record baseline.
 	let firstDueDate = $state(record?.schedule?.[0]?.due_date ?? '');
 	// svelte-ignore state_referenced_locally -- a mounted representation owns one record baseline.
@@ -36,7 +39,9 @@
 	recordId={record?.norbital_id}
 	defaultValues={record ?? undefined}
 	{validation}
-	submitLabel={record ? 'Save repayment agreement' : 'Create repayment agreement'}
+	submitLabel={record
+		? t('component.save_repayment_agreement')
+		: t('component.create_repayment_agreement')}
 	onAfterSubmit={record ? undefined : close}
 >
 	{#snippet children({ Field, form })}
@@ -44,7 +49,7 @@
 			<Grid gap="md" minimum="compact" class="shrink-0">
 				<Field
 					name="employment_id"
-					label="Employment"
+					label={t('component.employment')}
 					renderer={RelationshipRenderer}
 					rendererProps={{
 						target: 'employments',
@@ -60,7 +65,7 @@
 				/>
 				<Field
 					name="pay_component_id"
-					label="Payroll deduction type"
+					label={t('component.payroll_deduction_type')}
 					renderer={RelationshipRenderer}
 					rendererProps={{
 						target: 'pay_components',
@@ -80,10 +85,13 @@
 				/>
 				<Field name="reference" />
 				<Field name="principal" />
-				<Field name="disbursed_on" label="Disbursed on" />
-				<Field name="repay_by" label="Repay by" />
+				<Field name="disbursed_on" label={t('component.disbursed_on')} />
+				<Field name="repay_by" label={t('component.repay_by')} />
 				<Column span="all"
-					><Field name="effective_range" label="Agreement effective period" /></Column
+					><Field
+						name="effective_range"
+						label={t('component.agreement_effective_period')}
+					/></Column
 				>
 			</Grid>
 
@@ -131,7 +139,7 @@
 				</Stack>
 			{/if}
 
-			<Field name="schedule" label="Recovery instalments" />
+			<Field name="schedule" label={t('component.recovery_instalments')} />
 		</Stack>
 	{/snippet}
 </CollectionForm>

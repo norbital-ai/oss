@@ -1,7 +1,7 @@
 # CRM — How It Works
 
-A B2B trade workspace with two sides, bridged into the company's external system of record (an
-ERP or accounting system that owns the master data): the **sales side** qualifies accounts and
+A B2B trade workspace with two sides, integrated with the company's external system of record (a
+third-party ERP or accounting system that owns the master data): the **sales side** qualifies accounts and
 contacts, quotes from a product catalogue, runs the pipeline to won, and confirms the deal; the
 **purchase side** raises purchase orders against suppliers and confirms the buy. Both sides hand
 their committed documents across the boundary. One entry, no re-keying.
@@ -26,7 +26,7 @@ requestor and supplies external facilities.
   omission of grants, and the cost column lives only on the buy-side document.
 - **The external system owns the master data.** Customers, items, and suppliers mirror _in_; the
   workspace never invents a customer, an item, or a vendor. Confirmed quotes and confirmed
-  purchase orders go _out_ — that is the handoff the whole bridge exists for.
+  purchase orders go _out_ — that is the handoff the whole integration exists for.
 - **The platform owns the plumbing** — users, teams, policies, audit trail, temporal history,
   notifications, attachments, import/export pipelines, integrations, automations, live query, and
   the command palette. This workspace authors domain models and rules on top of them.
@@ -42,7 +42,11 @@ requestor and supplies external facilities.
 2. Lines are added from the product catalogue. Each line snapshots the product code, name, unit,
    and price at creation, so later catalogue edits never rewrite a historical deal.
 3. Each line computes `net`, `tax`, and `line_total` from the parent document's tax mode, and the
-   parent's `net` / `tax` / `gross` are rolled up from the rounded line amounts.
+   parent's `net` / `tax` / `gross` are rolled up from the rounded line amounts. Lines left without
+   a tax rate snapshot the catalogue's `tax_rate` at creation.
+4. Trade terms travel on the header: `payment_terms` plus the shipping block (`shipping_terms`,
+   `place_of_loading`, `place_of_delivery`, `packaging`, `shipping_mark`, `time_of_shipment`,
+   `other_terms`) — free-text facts that print onto the document and cross the boundary with it.
 
 ### Sending, revising, winning
 
@@ -52,6 +56,12 @@ requestor and supplies external facilities.
 - `draft → won` and `sent → won` record customer acceptance.
 - `won → confirmed` is the committed sale — the state the external system books. A confirmed
   document is terminal, which is what makes its figures safe to hand across the boundary.
+  Confirmation re-checks the deal against the masters: the account must still be active, the
+  document must carry at least one line, and every line's product must still be active — stale
+  master data never books into the third-party ERP.
+- Credit is **warn-never-blocks**: an adverse verdict (account on hold, or the document would push
+  used credit past its limit) does not refuse the confirm — it demands an explicit
+  `credit_acknowledged` on the document, which lands in the audit trail with it.
 - `lost` and `cancelled` are terminal, except that a lost deal may be reopened to `won`. Cancelling
   requires a `cancel_reason`.
 
@@ -64,10 +74,37 @@ Only `draft` documents are editable — lines, prices, and terms lock once a doc
    The order's expected date defaults two weeks out.
 2. Lines snapshot the product and carry the unit cost the buy is struck at — required, entered by
    the purchaser, and never derived from the sales catalogue. Amounts use the order's own tax mode
-   and currency.
+   and currency; a line left without a tax rate snapshots the catalogue's `tax_rate`. Inactive
+   products cannot be added to a draft, on either side.
 3. `draft → submitted` requires at least one line; `submitted → confirmed` is the committed buy —
    the state the external system books, and terminal. `cancelled` is available before confirmation
    and requires a `cancel_reason`.
+
+### Receiving and purchase invoices
+
+1. Goods receipts (`GRN-YYYY-NNNN`) record what arrived against a **confirmed** order. A receipt is
+   an event, not a lifecycle document: lines cap cumulative received quantity at the ordered
+   quantity, and remaining-to-receive is derived, never stored.
+2. Purchase invoices (`PI-YYYY-NNNN`) book the supplier's invoice against a confirmed order,
+   snapshotting the supplier and inheriting the order's currency and tax mode. Lines allocate
+   ordered quantities (capped across live invoices) and roll the totals up.
+   `draft → confirmed` is the three-way match checkpoint; `cancelled` requires a reason.
+3. The `purchase_matching` remote returns ordered / received / invoiced per order line for the
+   match review; cancelled invoices do not count toward invoiced.
+
+### Billing, payments, and contracts
+
+- Sales invoices (`SI-YYYY-NNNN`) bill a **confirmed** quote over one or more documents; lines
+  allocate quoted quantities, capped across live invoices, and roll up like every other document.
+  `draft → issued` requires at least one line; `cancelled` requires a reason.
+- Settlements record money in or out against any committed document (quote, purchase order, or
+  purchase invoice), currency-matched by the hook. Paid / partial / unpaid is **derived at render**
+  from the sum of settlements against the document gross — never stored, and em-dash until the
+  document is committed. The `settlement_summary` remote feeds those derivations per table.
+- Contract signings track the confirmed quote's contract: generated → counterparty-stamped →
+  acknowledged, with `voided` for re-signing (one active signing per quote). `binding_hash`
+  fingerprints the quote substance at generation, so an edited quote can never ride under an
+  acknowledged contract; the generated and stamped copies are platform file fields.
 
 ### Pipeline
 
@@ -81,7 +118,7 @@ Activities are polymorphic: `regarding_type` (`accounts`, `quotes`) paired with 
 One table serves calls, meetings, emails, tasks, and notes across every entity. Task activities
 default `due_date` to today when left blank.
 
-## The external-system bridge
+## The external-system integration
 
 An external system of record (typically an ERP or accounting system) owns the master data — and
 **the sync writes straight into our tables**. `accounts`, `products`, and `suppliers` _are_ the
@@ -95,7 +132,10 @@ connection's credential, parse the body against the binding's schema, hand it to
 `import` pipeline, and write the rows the pipeline returns into that collection. The resume point
 is the platform's own cursor (`integration_cursor`), so a missed window resumes where it stopped.
 The import pipeline skips codes already on file — the unique index on `external_code` is the
-backstop against a re-delivered page.
+backstop against a re-delivered page. Mirrors carry more than identity: accounts carry the credit
+position (`credit_limit`, `credit_used`, `credit_hold` — available credit is derived at render,
+never stored), products carry `spec`, `tax_rate`, and an indicative `qty_on_hand`, and suppliers
+carry their contact and payment terms. Buy cost is deliberately not among them.
 
 **Outbound — the confirmed document is handed over.** Each document collection declares a `send`
 binding in its `+integrations.ts` that matches the `draft → confirmed` transition. A mutation that
@@ -153,44 +193,52 @@ system.
 
 ### Sales
 
-| Collection    | Purpose                                                                               |
-| ------------- | ------------------------------------------------------------------------------------- |
-| `accounts`    | Customer companies, mirrored in from the system of record.                            |
-| `contacts`    | People at accounts — decision-makers, buyers, day-to-day contacts.                    |
-| `quotes`      | The sales pipeline: draft → sent → won → confirmed, with lost and cancelled terminal. |
-| `quote_lines` | Line items. Snapshot product data, compute net/tax/total. Editable only while draft.  |
-| `activities`  | Polymorphic interaction log linked via `regarding_type` + `regarding_id`.             |
+| Collection            | Purpose                                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `accounts`            | Customer companies, mirrored in with their credit position.                                                               |
+| `contacts`            | People at accounts — decision-makers, buyers, day-to-day contacts.                                                        |
+| `quotes`              | The sales pipeline: draft → sent → won → confirmed, with lost and cancelled terminal. Carries payment and shipping terms. |
+| `quote_lines`         | Line items. Snapshot product data and tax rate, compute net/tax/total. Editable only while draft.                         |
+| `sales_invoices`      | Billing against confirmed quotes: draft → issued, allocated quantities, capped per quote line.                            |
+| `sales_invoice_lines` | Billed quantities per quote line; snapshot price and tax rate, roll totals up.                                            |
+| `contract_signings`   | Contract lifecycle of a confirmed quote: generated → counterparty-stamped → acknowledged, voided for re-signing.          |
+| `activities`          | Polymorphic interaction log linked via `regarding_type` + `regarding_id`.                                                 |
 
 ### Shared
 
-| Collection | Purpose                                                                              |
-| ---------- | ------------------------------------------------------------------------------------ |
-| `products` | Sellable catalogue, mirrored in from the system of record. Carries sell prices only. |
+| Collection    | Purpose                                                                                                        |
+| ------------- | -------------------------------------------------------------------------------------------------------------- |
+| `products`    | Sellable catalogue, mirrored in. Sell prices only, plus spec, tax rate, indicative on-hand, and main supplier. |
+| `settlements` | Payments in/out against any committed document. Paid status is derived at render, never stored.                |
 
 ### Procurement
 
-| Collection             | Purpose                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------- |
-| `suppliers`            | Vendors the business buys from, mirrored in from the system of record.                |
-| `purchase_orders`      | The buying pipeline: draft → submitted → confirmed, with cancelled terminal.          |
-| `purchase_order_lines` | Line items. Snapshot product data, carry the struck unit cost, compute net/tax/total. |
+| Collection               | Purpose                                                                                             |
+| ------------------------ | --------------------------------------------------------------------------------------------------- |
+| `suppliers`              | Vendors, mirrored in with contact, category, and payment terms.                                     |
+| `purchase_orders`        | The buying pipeline: draft → submitted → confirmed, with cancelled terminal.                        |
+| `purchase_order_lines`   | Line items. Snapshot product data and tax rate, carry the struck unit cost, compute net/tax/total.  |
+| `goods_receipts`         | Received-against-order events (`GRN-…`); immutable, remaining-to-receive derived.                   |
+| `goods_receipt_lines`    | Received quantity per order line, capped at the ordered quantity.                                   |
+| `purchase_invoices`      | Supplier invoices on confirmed orders: draft → confirmed (the three-way match), cancelled terminal. |
+| `purchase_invoice_lines` | Invoiced quantity and cost per order line, capped across live invoices.                             |
 
 ## Apps
 
-| App            | Purpose                                                                       |
-| -------------- | ----------------------------------------------------------------------------- |
-| `crm`          | Sales — pipeline kanban, quotes, quote lines, accounts, contacts, activities. |
-| `crm_purchase` | Procurement — dashboard, purchase orders, PO lines, suppliers.                |
+| App            | Purpose                                                                                                                                   |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `crm`          | Sales — pipeline kanban, quotes, quote lines, accounts, contacts, activities, invoices, invoice lines, contracts, payments.               |
+| `crm_purchase` | Procurement — dashboard, purchase orders, PO lines, suppliers, goods receipts, receipt lines, purchase invoices, invoice lines, payments. |
 
 ## Policies
 
 Two roles ship with the workspace rather than being seeded, so a fresh database has them and a
 change to either shows up in a diff.
 
-| Policy                | App            | What it owns                                                                 |
-| --------------------- | -------------- | ---------------------------------------------------------------------------- |
-| `sales_rep`           | `crm`          | Its own quotes and quote lines; reads accounts, contacts, and the catalogue. |
-| `procurement_officer` | `crm_purchase` | Suppliers, purchase orders and lines, and the catalogue.                     |
+| Policy                | App            | What it owns                                                                                                                                             |
+| --------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sales_rep`           | `crm`          | Its own quotes, sales invoices, and contract signings; quote lines, invoice lines, settlements, activities; reads accounts, contacts, and the catalogue. |
+| `procurement_officer` | `crm_purchase` | Suppliers, purchase orders and lines, goods receipts, purchase invoices and lines, settlements, and the catalogue.                                       |
 
 The sales/procurement split is drawn by omission, not by masking. Pod policies are
 collection-scoped, so buy cost stays off the sales surface because sales has no grant for
@@ -201,10 +249,12 @@ both roles and exposes sell prices only. Quote reads and edits are scoped to the
 
 ## Remotes
 
-| Remote                  | Purpose                                                           |
-| ----------------------- | ----------------------------------------------------------------- |
-| `pipeline_dashboard`    | Pipeline cards enriched with account names. Accepts `owner_id`.   |
-| `procurement_dashboard` | PO counts by status, committed spend per currency, top suppliers. |
+| Remote                  | Purpose                                                                       |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| `pipeline_dashboard`    | Pipeline cards enriched with account names. Accepts `owner_id`.               |
+| `procurement_dashboard` | PO counts by status, committed spend per currency, top suppliers.             |
+| `settlement_summary`    | Paid-to-date per document for one regarding type, for derived payment status. |
+| `purchase_matching`     | Ordered / received / invoiced per order line — the three-way match review.    |
 
 ## Automation
 
@@ -232,35 +282,54 @@ draft ──→ submitted ──→ confirmed (terminal — the state the system
    └── cancelled (before confirmation, requires a cancel_reason)
 ```
 
+Sales invoice / purchase invoice:
+
+```
+draft ──→ issued | confirmed (terminal, requires at least one line)
+   │
+   └── cancelled (requires a cancel_reason)
+```
+
+Contract signing:
+
+```
+unstamped ──→ counterparty_stamped (requires the stamped file) ──→ acknowledged
+     │                  │                        │
+     └──────────────────┴────────────────────────┴──→ voided (requires a void_reason)
+```
+
+Goods receipts carry no status: a receipt is an immutable event.
+
 ## Extending the workspace
 
 Additions should be explicit collections, remotes, integrations, and policies, never untracked
 process workarounds:
 
-- **A second sales document type** (e.g. a sales order or billing document): follow the quote
-  pattern — header + lines, gapless numbering, lifecycle hook, snapshot rule, outbound sync rows
-  once the document is committed.
 - **A cost ledger**: a buy-side collection holding per-product cost (the source the purchase order
   line hook defaults its unit cost from), granted to procurement only — the extension that makes
   unit cost first-class without leaking it to sales.
-- **A payment layer**: a settlement/ledger collection fed by the external system, with derived
-  paid/partial/unpaid status — never hand-maintained per document.
-- **Customer-facing rendering** (quotations as PDFs): the platform's export/print facilities, not
-  a new schema.
+- **Customer-facing rendering** (quotations and contracts as PDFs): the platform's export/print
+  facilities, not a new schema. The contract portal for share links is likewise a host surface;
+  the workspace stores only the token hash and its lifecycle.
 
 ## Not in scope
 
 Deliberate omissions, each of which should be added as explicit collections, remotes,
 integrations, and policies rather than as untracked process workarounds:
 
-- Sales orders and billing documents — the confirmed quote is the handoff; the external system
-  books it.
-- Stock and warehouse management (quantities on hand, lots, receiving against a confirmed
-  purchase order).
-- Payment tracking and receivables — the external system holds the ledger.
-- Customer-facing document rendering (PDF quotations and proformas).
+- **A separate sales-order document.** The confirmed quote _is_ the committed sale; spinning a
+  second document out of it would copy facts the quote already carries — numbers, terms, lines,
+  totals — and keep two lifecycles in lockstep for no new information. The quote's confirmed
+  state, revision lineage, and cancellation reason are the whole lifecycle.
+- ERP push states (pushing, push-failed, remote-voided) — the platform's transactional outbox owns
+  delivery; the template sees confirmed → handed across the boundary.
+- Floor prices, markup configuration, and cost on the sales surface — cost secrecy is drawn by
+  policy omission instead.
+- Commission calculations and customer-specific side models (blanket orders, aging exports) —
+  bespoke concerns that do not generalize into a reference template.
 - Exchange-rate sourcing and multi-currency roll-up — totals stay per currency.
-- Partial fulfilment and shipment tracking.
+- Warehousing beyond the indicative on-hand mirror: lots, bin locations, and stock movements stay
+  in the external system.
 
 Platform-level constraint worth knowing: `owner_id` columns render as raw UUIDs in
 `CollectionTable`, because Pod relationships do not target platform tables. The pipeline filter

@@ -1,7 +1,10 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Combobox } from '#lib/combobox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
+
+	const { t } = useI18n<UiKeys>();
 	import { COUNTRY_CODES, COUNTRY_NAMES } from './country-data';
 
 	const countryCode = COUNTRY_CODES;
@@ -50,7 +53,7 @@
 	{multiple}
 	options={countryOptions}
 	class={className}
-	emptyPlaceholder="Select a country"
+	emptyPlaceholder={t('misc.selectCountry')}
 	sameWidth={true}
 	align="start"
 	{onValueChange}

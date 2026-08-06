@@ -15,10 +15,14 @@
 </script>
 
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
+
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		class: className,
-		title = 'No messages yet',
-		description = 'Start a conversation to see messages here',
+		title = t('misc.noMessagesYet'),
+		description = t('misc.startConversation'),
 		icon,
 		children,
 		ref = $bindable(null),

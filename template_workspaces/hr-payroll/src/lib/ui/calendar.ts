@@ -8,11 +8,15 @@
  */
 
 import { formatDateISO } from '@norbital-ai/std/date';
+import type { CollectionTableInitialFilter } from '@norbital-ai/ui/collection-table';
 
 /** The business timezone every calendar-day default and `contains_date` filter resolves in. */
 export const PAYROLL_TIME_ZONE = 'Asia/Kuala_Lumpur';
 
 /** Calendar date for an instant in an IANA timezone, formatted as YYYY-MM-DD. */
+// Every template workspace is a self-contained publishable unit with its own lockfile and no
+// cross-template import surface, so this helper is deliberately owned per template.
+// stupidity:allow D1 -- construction, crm, field-operations and reclamation carry the same copy.
 export function calendarDateInTimeZone(value: Date, timeZone: string): string {
 	const parts = new Intl.DateTimeFormat('en', {
 		timeZone,
@@ -36,6 +40,40 @@ export function calendarDateInTimeZone(value: Date, timeZone: string): string {
  */
 export function todayKey(): string {
 	return calendarDateInTimeZone(new Date(), PAYROLL_TIME_ZONE);
+}
+
+/**
+ * The condition an effective-dated list opens on: the versions in force today.
+ *
+ * Seeded into `CollectionTable`'s own filter builder rather than baked into `query.where`, so it
+ * reads as a chip beside every other condition and the operator can drop it to see superseded rows.
+ * Clearing it is remembered per view, so it does not come back on the next load.
+ *
+ * The operand is a **calendar day**, not `todayInstant()`. That is not an inconsistency with the
+ * `where` clauses elsewhere on these pages: the filter builder edits `contains_date` with a date
+ * picker and `collectionFilterClause` converts the chosen day to an instant on its way to the wire,
+ * so handing it an instant here would double-convert. A `where` clause has no such step and still
+ * needs `todayInstant()`.
+ */
+export function inForceTodayFilter(): readonly CollectionTableInitialFilter[] {
+	return [{ field: 'effective_range', operator: 'contains_date', value: todayKey() }];
+}
+
+/**
+ * The condition a *person* list opens on: someone with an employment in force today.
+ *
+ * People is a list of `employees`, and effective dating lives on `employments`, so the chip filters
+ * across the relation. A relation condition is existential — it selects a person who has *some*
+ * employment in force — which is why the surrounding `query.where` still scopes the list to the
+ * employees of the selected entity. One consequence worth knowing: somebody who left this entity
+ * but is currently employed by another company in the workspace satisfies the chip, because "has an
+ * employment in force" and "has an employment here" are two conditions and a relation filter cannot
+ * insist that one employment satisfies both.
+ */
+export function employedTodayFilter(): readonly CollectionTableInitialFilter[] {
+	return [
+		{ field: 'employment_employee.effective_range', operator: 'contains_date', value: todayKey() }
+	];
 }
 
 /** How far `timeZone` is ahead of UTC at `at`, in milliseconds. */

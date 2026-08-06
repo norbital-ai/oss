@@ -1,10 +1,13 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import type {
 		CollectionTableIntegrationState,
 		CollectionTableIntegrationStatus
 	} from './collection-table.types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let { integrations }: { integrations: readonly CollectionTableIntegrationStatus[] } = $props();
 
@@ -21,9 +24,9 @@
 
 {#if integrations.length === 0}
 	<Stack gap="sm" align="center" justify="center" class="min-h-32 px-5 py-8 text-center">
-		<p class="text-sm font-medium">No integrations configured</p>
+		<p class="text-sm font-medium">{t('table.noIntegrationsConfigured')}</p>
 		<p class="max-w-xs text-xs text-muted-foreground">
-			This collection is not currently connected to an external integration.
+			{t('table.noIntegrationsDescription')}
 		</p>
 	</Stack>
 {:else}

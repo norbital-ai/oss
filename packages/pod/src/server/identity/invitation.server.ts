@@ -2,6 +2,7 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
 import { hashToken, mintToken } from '$lib/host/session.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
+import { serverI18n } from '$lib/i18n/index.js';
 import { UserRoleSchema } from '@norbital-ai/platform-utils/system/types';
 
 const DEFAULT_TTL_HOURS = 72;
@@ -109,6 +110,8 @@ export async function inviteeEmailForToken(token: string): Promise<string | null
 export async function provisionFoundingInvitation(input: {
 	readonly adminEmail: string;
 	readonly publicUrl: string;
+	/** The recipient-side language signal, when the provisioning caller has one (`?lang=` etc.). */
+	readonly locale?: string | null;
 }): Promise<{ readonly delivered: boolean }> {
 	const ctx = getWorkspace({ provision: true });
 	const email = input.adminEmail.trim().toLowerCase();
@@ -131,13 +134,15 @@ export async function provisionFoundingInvitation(input: {
 	// be entered, so a missing messaging facility must fail provisioning loudly.
 	const messaging = requireRuntimeFacility('messaging');
 	const channels = await messaging.listChannels();
+	const workspaceName = ctx.baseScope.organization.name;
+	const i18n = serverI18n(input.locale ?? null);
 	const result = await messaging.send({
 		organizationId: ctx.baseScope.organization.norbital_id,
 		channel: channels[0] ?? 'email',
 		recipientUserId: email,
-		subject: `Your ${ctx.baseScope.organization.name} workspace is ready`,
-		message: `Open your workspace to finish setting it up: ${acceptUrl}`,
-		cta: { label: 'Accept invitation', url: acceptUrl }
+		subject: i18n.t('pod.email.readySubject', { workspace: workspaceName }),
+		message: i18n.t('pod.email.readyBody', { url: acceptUrl }),
+		cta: { label: i18n.t('pod.email.inviteCta'), url: acceptUrl }
 	});
 	if (!result.sent) {
 		throw new Error(

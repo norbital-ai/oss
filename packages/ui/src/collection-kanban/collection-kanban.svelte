@@ -19,6 +19,7 @@
 	import { watch } from 'runed';
 	import { Cover, Grid, Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { onMount } from 'svelte';
 	import { getCollectionSurfaceRuntime } from '#lib/collection-runtime';
 	import { badgeColorClass } from '../collection-table/collection-card-colors.js';
@@ -77,6 +78,7 @@
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionKanban');
 	setCollectionClientContext(() => workspaceClient);
+	const { t } = useI18n<UiKeys>();
 	const surfaceRuntime = getCollectionSurfaceRuntime();
 	const resolvedView = $derived(
 		view ?? `${surfaceRuntime?.appId() ?? 'unhosted'}:${String(collection)}`
@@ -511,7 +513,7 @@
 				{definition}
 				collections={workspaceClient.collections}
 				align="end"
-				searchPlaceholder="Search records…"
+				searchPlaceholder={t('kanban.searchRecords')}
 				onSearchChange={(search) => (boardQuery.search = search)}
 				onFilterChange={(filters) => (boardQuery.filters = filters)}
 			/>
@@ -532,7 +534,7 @@
 >
 	<Scroll
 		axis="x"
-		name="Kanban lanes"
+		name={t('kanban.lanesRegion')}
 		class={cn('scroll-smooth', activeDrag ? 'snap-none' : 'snap-x snap-mandatory', className)}
 	>
 		<Grid

@@ -9,6 +9,8 @@
 	 * than a second derivation of it.
 	 */
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Combobox } from '@norbital-ai/ui/combobox';
@@ -18,6 +20,7 @@
 	import { formatCalendarDate } from '../../lib/ui/display-formatters.js';
 
 	let { record, close, refresh }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const OFFERED_PERIODS = Array.from(
 		{ length: 12 },
@@ -113,7 +116,7 @@
 	<CollectionForm
 		{client}
 		collection="payroll_runs"
-		submitLabel="Create payroll run"
+		submitLabel={t('component.create_payroll_run')}
 		onSubmit={async () => {
 			const company = selectedCompany;
 			if (!company) throw new Error('Choose a legal entity.');

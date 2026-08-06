@@ -28,6 +28,7 @@
 	import * as Sheet from '#lib/sheet';
 	import { Tooltip } from '#lib/tooltip';
 	import { cn, renderSnippet, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { DataRenderer } from '../data-renderer/index.js';
 	import { formatDataValue } from '../data-renderer/index.js';
 	import { Cluster, Grid, Inline, Stack, Bound } from '#lib/layout';
@@ -108,6 +109,7 @@
 		collection,
 		view,
 		query,
+		initialFilters = [],
 		disabled = false,
 		selectable = false,
 		class: className,
@@ -126,6 +128,7 @@
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionTable');
 	setCollectionClientContext(() => workspaceClient);
+	const { t } = useI18n<UiKeys>();
 	const surfaceRuntime = getCollectionSurfaceRuntime();
 	const collectionSurface = $derived(
 		resolveCollectionSurface(surfaceRuntime?.surfaces, String(collection))
@@ -204,7 +207,9 @@
 	});
 
 	const metadataError = $derived(
-		activeColumns.length === 0 ? `No field metadata is available for ${String(collection)}.` : ''
+		activeColumns.length === 0
+			? t('table.metadataError', { collection: String(collection) })
+			: ''
 	);
 
 	function metadataFor(column: ColumnConfig): CollectionField<Extract<keyof Row, string>> {
@@ -523,10 +528,12 @@
 	const approvalRequest = $derived(queries.approval?.current?.[0]);
 	const approvalStatusMessage = $derived(
 		queries.approval?.loading
-			? 'Loading approval status…'
+			? t('table.approvalLoading')
 			: approvalRequest?.status === 'ONGOING'
-				? 'This record is awaiting approval.'
-				: `Status: ${approvalRequest?.status ?? 'Unknown'}`
+				? t('table.approvalAwaiting')
+				: t('table.approvalStatus', {
+						status: approvalRequest?.status ?? t('common.unknown')
+					})
 	);
 
 	function openRecord(row: GridRow): void {
@@ -555,9 +562,27 @@
 		});
 	}
 
-	function approvalAccent(row: GridRow): { borderClass: string; tooltip: string } | null {
+	/**
+	 * The leading edge of a row says one thing: this record is not settled.
+	 *
+	 * Approval already spoke that way — a leading border with a title and aria-label, so the state
+	 * survives colour blindness and a screen reader — and a write still waiting in the sync outbox
+	 * is the same kind of fact about a row, so it reuses the same affordance rather than inventing a
+	 * second vocabulary for "not final". Only the colour and the sentence differ: warning amber for
+	 * a write that has not reached the server, brand for one that has and is awaiting a human.
+	 *
+	 * Unsynced outranks awaiting-approval, because it is the more consequential of the two: an
+	 * approval is a record the server already holds, an unsynced row is one it does not.
+	 *
+	 * A *rejected* write is never in this state — the mutation is rolled back, so the row either
+	 * reverts or disappears, and the failure is reported where it was made.
+	 */
+	function rowLeadingAccent(row: GridRow): { borderClass: string; tooltip: string } | null {
+		if (Reflect.get(row.record, 'norbital_pending_sync') === true) {
+			return { borderClass: 'border-warning', tooltip: t('table.pendingSync') };
+		}
 		return typeof Reflect.get(row.record, 'norbital_approval_id') === 'string'
-			? { borderClass: 'border-brand', tooltip: 'Pending approval' }
+			? { borderClass: 'border-brand', tooltip: t('table.pendingApproval') }
 			: null;
 	}
 
@@ -601,7 +626,7 @@
 			)
 			.map((field) => formatDataValue(field, Reflect.get(record, field.name)))
 			.find((value) => value && value !== '—');
-		return fallback ?? `${humanize(String(collection))} record`;
+		return fallback ?? t('table.recordDescription', { name: humanize(String(collection)) });
 	}
 
 	function formatRawStructuredValue(value: unknown): string {
@@ -624,43 +649,45 @@
 	function describeFilters(where: unknown): string[] {
 		if (Array.isArray(where)) return where.flatMap(describeFilters);
 		if (typeof where !== 'object' || where == null) return [];
-		return Object.entries(where).flatMap(([fieldName, condition]) => {
-			if (fieldName === 'AND') return describeFilters(condition);
-			if (fieldName === 'OR') {
-				const alternatives = describeFilters(condition);
-				return alternatives.length > 0 ? [`Any of: ${alternatives.join('; ')}`] : [];
+	return Object.entries(where).flatMap(([fieldName, condition]) => {
+		if (fieldName === 'AND') return describeFilters(condition);
+		if (fieldName === 'OR') {
+			const alternatives = describeFilters(condition);
+			return alternatives.length > 0
+				? [t('table.filterAnyOf', { values: alternatives.join('; ') })]
+				: [];
+		}
+		if (fieldName === 'NOT')
+			return describeFilters(condition).map((label) => t('table.filterNot', { label }));
+		const field = definition.fields.find((candidate) => candidate.name === fieldName);
+		const label = field?.label ?? humanize(fieldName);
+		if (typeof condition !== 'object' || condition == null || Array.isArray(condition)) {
+			return [t('table.filterIs', { label, value: formatFilterValue(condition) })];
+		}
+		return Object.entries(condition).map(([operator, operand]) => {
+			switch (operator) {
+				case 'ilike':
+				case 'contains_date':
+					return t('table.filterContains', { label, value: formatFilterValue(operand) });
+				case 'ne':
+					return t('table.filterIsNot', { label, value: formatFilterValue(operand) });
+				case 'gt':
+					return t('table.filterGreaterThan', { label, value: formatFilterValue(operand) });
+				case 'gte':
+					return t('table.filterAtLeast', { label, value: formatFilterValue(operand) });
+				case 'lt':
+					return t('table.filterLessThan', { label, value: formatFilterValue(operand) });
+				case 'lte':
+					return t('table.filterAtMost', { label, value: formatFilterValue(operand) });
+				case 'isNull':
+					return t('table.filterIsEmpty', { label });
+				case 'isNotNull':
+					return t('table.filterIsNotEmpty', { label });
+				default:
+					return t('table.filterIs', { label, value: formatFilterValue(operand) });
 			}
-			if (fieldName === 'NOT') return describeFilters(condition).map((label) => `Not ${label}`);
-			const field = definition.fields.find((candidate) => candidate.name === fieldName);
-			const label = field?.label ?? humanize(fieldName);
-			if (typeof condition !== 'object' || condition == null || Array.isArray(condition)) {
-				return [`${label} is ${formatFilterValue(condition)}`];
-			}
-			return Object.entries(condition).map(([operator, operand]) => {
-				switch (operator) {
-					case 'ilike':
-						return `${label} contains ${formatFilterValue(operand)}`;
-					case 'ne':
-						return `${label} is not ${formatFilterValue(operand)}`;
-					case 'gt':
-						return `${label} is greater than ${formatFilterValue(operand)}`;
-					case 'gte':
-						return `${label} is at least ${formatFilterValue(operand)}`;
-					case 'lt':
-						return `${label} is less than ${formatFilterValue(operand)}`;
-					case 'lte':
-						return `${label} is at most ${formatFilterValue(operand)}`;
-					case 'isNull':
-						return `${label} is empty`;
-					case 'isNotNull':
-						return `${label} is not empty`;
-					case 'contains_date':
-						return `${label} contains ${formatFilterValue(operand)}`;
-					default:
-						return `${label} is ${formatFilterValue(operand)}`;
-				}
-			});
 		});
+	});
 	}
 
 	async function processApproval(
@@ -684,13 +711,13 @@
 			void Promise.all([queries.approval?.refresh(), refreshRows()]).catch((error: unknown) => {
 				toast.error(
 					error instanceof Error
-						? `Action completed, but the table did not refresh: ${error.message}`
-						: 'Action completed, but the table did not refresh'
+						? `${t('table.actionRefreshFailed')}: ${error.message}`
+						: t('table.actionRefreshFailed')
 				);
 			});
 			return true;
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'Approval action failed');
+			toast.error(error instanceof Error ? error.message : t('table.approvalActionFailed'));
 			approvalActionState =
 				action === 'REQUEST_FOR_CHANGE'
 					? { status: 'requesting_changes', reason: comments ?? '', pending: false }
@@ -704,11 +731,11 @@
 	): string {
 		switch (action) {
 			case 'APPROVED':
-				return 'Request approved';
+				return t('table.approvalApproved');
 			case 'REJECTED':
-				return 'Request rejected';
+				return t('table.approvalRejected');
 			case 'REQUEST_FOR_CHANGE':
-				return 'Changes requested';
+				return t('table.approvalChangesRequested');
 			default:
 				return action satisfies never;
 		}
@@ -743,9 +770,9 @@
 		try {
 			await approvals.withdraw(activeApprovalId);
 			await Promise.all([queries.approval?.refresh(), refreshRows()]);
-			toast.success('Approval request withdrawn');
+			toast.success(t('table.approvalWithdrawn'));
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'Unable to withdraw approval request');
+			toast.error(error instanceof Error ? error.message : t('table.approvalWithdrawFailed'));
 		} finally {
 			approvalActionState = { status: 'idle' };
 		}
@@ -768,7 +795,7 @@
 		try {
 			await refresh();
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'Refresh failed');
+			toast.error(error instanceof Error ? error.message : t('table.refreshFailed'));
 		}
 	}
 
@@ -859,7 +886,7 @@
 	{@const isDetailActive = isRecordDetailActive(row.id)}
 	<button
 		type="button"
-		aria-label="Open record detail"
+		aria-label={t('table.detailOpen')}
 		aria-pressed={isDetailActive}
 		tabindex={recordActionTabIndex(hovered, isDetailActive)}
 		class={recordActionClass(hovered, isDetailActive)}
@@ -885,7 +912,7 @@
 					variant="ghost"
 					size="icon"
 					class="size-8"
-					aria-label="About this collection"
+					aria-label={t('table.aboutCollection')}
 				>
 					<Icon icon="lucide:info" class="size-4" />
 				</Button>
@@ -894,7 +921,7 @@
 				{#if description}<p>{description}</p>{/if}
 				{#if query?.where}
 					<Stack gap="xs">
-						<p class="font-medium">Applied by this view</p>
+						<p class="font-medium">{t('table.appliedByView')}</p>
 						<Stack as="ul" gap="xs">
 							{#each prefilterDescriptions as filterDescription}
 								<Inline as="li" align="start" gap="xs" class="text-xs">
@@ -915,7 +942,9 @@
 		searchEnabled={searchEnabled && definition.fields.length > 0}
 		{filterEnabled}
 		initialSearch={tableApi.search.current}
-		searchPlaceholder={searchPlaceholder ?? 'Search text fields…'}
+		{initialFilters}
+		filterPersistenceKey={resolvedView}
+		searchPlaceholder={searchPlaceholder ?? t('table.searchTextFields')}
 		onSearchChange={(search) => {
 			resetToFirstPage();
 			tableApi.setSearch(search);
@@ -954,8 +983,8 @@
 		type="button"
 		variant="ghost"
 		size="icon"
-		aria-label="Refresh collection data"
-		title="Refresh collection data"
+		aria-label={t('table.refreshCollectionData')}
+		title={t('table.refreshCollectionData')}
 		disabled={disabled || tableLoading}
 		onclick={() => void refreshData()}
 	>
@@ -1008,8 +1037,8 @@
 	{:else}
 		<CollectionRecordDetailEmpty
 			icon="lucide:panel-top-dashed"
-			title="No custom record view"
-			description="This collection has no dedicated UI representation. Use Raw to inspect its fields."
+			title={t('table.noCustomView')}
+			description={t('table.noCustomViewDesc')}
 		/>
 	{/if}
 {/snippet}
@@ -1018,7 +1047,7 @@
 	<Stack gap="md">
 		{#if queries.approval?.loading || approvalRequest}
 			<div class="rounded-lg border bg-muted/30 p-4">
-				<p class="text-sm font-medium">Approval request</p>
+				<p class="text-sm font-medium">{t('table.approvalRequest')}</p>
 				<p class="mt-1 text-sm text-muted-foreground">{approvalStatusMessage}</p>
 			</div>
 		{/if}
@@ -1036,25 +1065,25 @@
 		{:else if !queries.approval?.loading}
 			<CollectionRecordDetailEmpty
 				icon="lucide:shield-check"
-				title="No approval request"
-				description="This record has no approval workflow activity yet."
+				title={t('table.noApprovalRequest')}
+				description={t('table.noApprovalRequestDesc')}
 			/>
 		{/if}
 		{#if approvalRequest?.status === 'ONGOING'}
 			<Cluster gap="sm">
 				<Button disabled={approvalActionPending} onclick={() => void processApproval('APPROVED')}>
-					Approve
+					{t('table.approve')}
 				</Button>
 				<Button variant="outline" disabled={approvalActionPending} onclick={openChangeRequest}
-					>Request changes</Button
+					>{t('table.requestChanges')}</Button
 				>
 				<Button
 					variant="outline"
 					disabled={approvalActionPending}
-					onclick={() => void processApproval('REJECTED')}>Reject</Button
+					onclick={() => void processApproval('REJECTED')}>{t('table.reject')}</Button
 				>
 				<Button variant="ghost" disabled={approvalActionPending} onclick={withdrawApproval}
-					>Withdraw request</Button
+					>{t('table.withdrawRequest')}</Button
 				>
 			</Cluster>
 		{/if}
@@ -1088,7 +1117,7 @@
 {#snippet recordSurface({ recordId, actions }: CollectionTableDetailRenderContext)}
 	<CollectionRecordDetailTabs
 		title={activeRecord ? recordTitle(activeRecord) : humanize(String(collection))}
-		description={`${humanize(String(collection))} record details`}
+		description={t('table.recordDetails', { name: humanize(String(collection)) })}
 		loading={recordId !== activeRecordId || activeRecordLoading}
 		error={activeRecordError}
 		found={Boolean(activeRecord)}
@@ -1124,7 +1153,7 @@
 		error={errorMessage}
 		enableSelection={effectiveSelectable}
 		onRowActivate={openRecord}
-		getRowLeadingAccent={approvalAccent}
+		getRowLeadingAccent={rowLeadingAccent}
 		{activeRecordId}
 		rowActions={gridRowActions}
 		leftActions={[tableToolbar]}
@@ -1172,7 +1201,9 @@
 	<Sheet.Content flush class="sm:max-w-xl">
 		<Sheet.Header class="shrink-0 border-b px-5 py-4">
 			<Sheet.Title>{createLabel}</Sheet.Title>
-			<Sheet.Description class="sr-only">{createLabel} form</Sheet.Description>
+			<Sheet.Description class="sr-only">
+				{t('table.createFormDescription', { label: createLabel })}
+			</Sheet.Description>
 		</Sheet.Header>
 		<div class="min-h-0 flex-1 p-5">
 			{#if collectionSurface?.representation}
@@ -1199,35 +1230,33 @@
 	</Sheet.Content>
 </Sheet.Root>
 
-<Dialog.Root open={changeRequestOpen} onOpenChange={(open) => !open && closeChangeRequest()}>
-	<Dialog.Content class="max-w-md">
-		<Dialog.Header>
-			<Dialog.Title>Request changes</Dialog.Title>
-			<Dialog.Description>
-				Explain what must change before this request can be approved.
-			</Dialog.Description>
-		</Dialog.Header>
-		<label class="grid gap-1.5 text-sm font-medium">
-			Change request reason
-			<Textarea
-				value={changeRequestReason}
-				placeholder="Describe the required changes"
-				maxlength={1000}
-				required
-				oninput={(event) => updateChangeRequestReason(event.currentTarget.value)}
-			/>
-		</label>
-		<Dialog.Footer>
-			<Dialog.Close disabled={approvalActionPending}>Cancel</Dialog.Close>
-			<Button
-				disabled={approvalActionPending || changeRequestReason.trim().length === 0}
-				onclick={() => void requestChanges()}
-			>
-				{approvalActionPending ? 'Requesting…' : 'Request changes'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+	<Dialog.Root open={changeRequestOpen} onOpenChange={(open) => !open && closeChangeRequest()}>
+		<Dialog.Content class="max-w-md">
+			<Dialog.Header>
+				<Dialog.Title>{t('table.requestChanges')}</Dialog.Title>
+				<Dialog.Description>{t('table.requestChangesDescription')}</Dialog.Description>
+			</Dialog.Header>
+			<label class="grid gap-1.5 text-sm font-medium">
+				{t('table.changeRequestReason')}
+				<Textarea
+					value={changeRequestReason}
+					placeholder={t('table.describeChangesPlaceholder')}
+					maxlength={1000}
+					required
+					oninput={(event) => updateChangeRequestReason(event.currentTarget.value)}
+				/>
+			</label>
+			<Dialog.Footer>
+				<Dialog.Close disabled={approvalActionPending}>{t('common.cancel')}</Dialog.Close>
+				<Button
+					disabled={approvalActionPending || changeRequestReason.trim().length === 0}
+					onclick={() => void requestChanges()}
+				>
+					{approvalActionPending ? t('table.requesting') : t('table.requestChanges')}
+				</Button>
+			</Dialog.Footer>
+		</Dialog.Content>
+	</Dialog.Root>
 
 <style>
 	/* These classes are forwarded to child-component roots. They must be global:

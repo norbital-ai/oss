@@ -4,11 +4,14 @@
 	// ============================================================================
 	import * as Popover from '#lib/popover';
 	import Progress from './progress.svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import Button, { buttonVariants } from '../button/button.svelte';
 	import { Inline, Stack } from '#lib/layout';
+
+	const { t } = useI18n<UiKeys>();
 
 	// ============================================================================
 	// COMPONENT PROPS
@@ -82,7 +85,7 @@
 	// ============================================================================
 	const triggerText = $derived.by((): string => {
 		if (!hasValidProgress) {
-			return multiple ? 'No progress selected' : 'Select progress';
+			return multiple ? t('misc.noProgressSelected') : t('misc.selectProgress');
 		}
 
 		if (multiple) {
@@ -286,7 +289,7 @@
 			<Stack gap="sm">
 				<Inline gap="sm">
 					<Icon icon="lucide:trending-up" class="h-5 w-5 text-brand" />
-					<h4 class="font-semibold text-foreground">Progress Details</h4>
+					<h4 class="font-semibold text-foreground">{t('misc.progressDetails')}</h4>
 				</Inline>
 
 				{#if hasValidProgress}
@@ -294,7 +297,7 @@
 						{#each validProgress as progress, index (index)}
 							<Inline justify="between" gap="sm" class="rounded-md bg-muted/40 p-3">
 								<span class="text-sm font-medium">
-									{multiple ? `Progress #${index + 1}` : 'Current Progress'}
+									{multiple ? t('misc.progressIndex', { index: index + 1 }) : t('misc.currentProgress')}
 								</span>
 								<Inline gap="sm">
 									<Progress value={progress} class="h-2 w-20" />
@@ -306,7 +309,7 @@
 				{:else}
 					<div class="py-4 text-center">
 						<Icon icon="lucide:trending-up" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-						<p class="text-sm text-muted-foreground">No progress assigned</p>
+						<p class="text-sm text-muted-foreground">{t('misc.noProgressAssigned')}</p>
 					</div>
 				{/if}
 			</Stack>
@@ -356,7 +359,7 @@
 					variant="ghost"
 					class="invisible absolute top-1/2 right-1 h-6 w-6 -translate-y-1/2 rounded-full p-0 group-hover:visible focus:visible"
 					onclick={handleClear}
-					aria-label="Clear selection"
+					aria-label={t('dataRenderer.clearSelection')}
 					tabindex={-1}
 				>
 					<Icon icon="lucide:x" class="h-4 w-4" />
@@ -370,13 +373,13 @@
 					<!-- Empty state -->
 					<Stack gap="sm" class="p-4 py-8 text-center">
 						<Icon icon="lucide:trending-up" class="mx-auto h-12 w-12 text-muted-foreground" />
-						<h4 class="font-medium text-foreground">No progress configured</h4>
+						<h4 class="font-medium text-foreground">{t('misc.noProgressConfigured')}</h4>
 						<p class="text-sm text-muted-foreground">
-							Add your first progress value to get started
+							{t('misc.addFirstProgressHint')}
 						</p>
 						<Button variant="outline" onclick={addProgress} class="border-dashed" {disabled}>
 							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
-							Add first progress
+							{t('misc.addFirstProgress')}
 						</Button>
 					</Stack>
 				{:else}
@@ -388,9 +391,9 @@
 								<!-- Visual indicator for entry state -->
 								<div class="flex shrink-0">
 									{#if entryState === 'valid'}
-										<div class="h-2 w-2 rounded-full bg-success" title="Complete"></div>
+										<div class="h-2 w-2 rounded-full bg-success" title={t('misc.progressComplete')}></div>
 									{:else}
-										<div class="h-2 w-2 rounded-full bg-border" title="Empty"></div>
+										<div class="h-2 w-2 rounded-full bg-border" title={t('misc.progressEmpty')}></div>
 									{/if}
 								</div>
 
@@ -406,7 +409,7 @@
 										onkeydown={(e) => handleKeyDown(e, index)}
 										role="slider"
 										tabindex="0"
-										aria-label="Progress {index + 1}"
+										aria-label={t('misc.progressAria', { index: index + 1 })}
 										aria-valuenow={progress}
 										aria-valuemin="0"
 										aria-valuemax="100"
@@ -447,7 +450,7 @@
 							{disabled}
 						>
 							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
-							Add progress
+							{t('misc.addProgress')}
 						</Button>
 					</Stack>
 				{/if}
@@ -470,7 +473,7 @@
 				onkeydown={(e) => handleKeyDown(e)}
 				role="slider"
 				tabindex="0"
-				aria-label="Progress"
+				aria-label={t('misc.progress')}
 				aria-valuenow={currentSingleValue || 0}
 				aria-valuemin="0"
 				aria-valuemax="100"

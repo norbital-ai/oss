@@ -84,6 +84,8 @@ const {
 } = await server.ssrLoadModule(lib('overtime'));
 const { resolveSchedule } = await server.ssrLoadModule(lib('schedule'));
 const { isStatutoryOvertimePayCovered } = await server.ssrLoadModule(lib('measure'));
+const { classifyWageComparand, deriveStatutoryWages } = await server.ssrLoadModule(lib('coverage'));
+const { resolveRestBreakRules } = await server.ssrLoadModule(lib('rest-breaks'));
 const { annualisedContractHourlyRate, ordinaryHourlyRate, ordinaryDayWage, overtimeHourlyRate } =
 	await server.ssrLoadModule(lib('ordinary-rate'));
 const { entrySign } = await server.ssrLoadModule(lib('entries'));
@@ -112,23 +114,22 @@ check('3.25 h floors to 3.0', floorHalfHour(3.25), 3);
 check('1.9 h floors to 1.5', floorHalfHour(1.9), 1.5);
 check('0.4 h floors away entirely — there is no one-hour minimum', floorHalfHour(0.4), 0);
 check('2.5 h is already a half hour', floorHalfHour(2.5), 2.5);
-const approvedBucketEntry = {
-	norbital_id: 'approved-bucket-entry',
+/*
+ * A rest day worked. This row used to carry `overtime_authorized` and a five-hour approved bucket,
+ * and the bucket was taken as the payable duration. Both columns are gone: the clock is the only
+ * account of the day there is, so the same row now earns what it was actually at work for.
+ */
+const restDayPunches = {
+	norbital_id: 'rest-day-entry',
 	work_date: '2026-01-17',
 	clock_in: '2026-01-17T08:29:00.000+08:00',
 	clock_out: '2026-01-17T13:41:00.000+08:00',
 	break_minutes: 60,
 	state: 'CLOSED',
-	overtime_authorized: true,
-	approved_ot_1x_hours: 0,
-	approved_ot_15x_hours: 5,
-	approved_ot_2x_hours: 0,
-	approved_ot_3x_hours: 0,
-	approved_ot_flat_hours: 0,
 	overtime_in: null,
 	overtime_out: null
 };
-const approvedBucketDay = {
+const restDayScheduled = {
 	date: '2026-01-17',
 	dayType: 'REST_DAY',
 	shift: {
@@ -139,13 +140,16 @@ const approvedBucketDay = {
 	normalHours: 8.5
 };
 check(
-	'an explicit approved bucket is the payable duration, not a guessed flat-break reconstruction',
-	deriveDailyOvertime(approvedBucketEntry, approvedBucketDay)?.hours,
-	5
+	'a rest day is priced from the clock: 08:30–13:41 less an hour, floored to the half hour',
+	deriveDailyOvertime(restDayPunches, restDayScheduled)?.hours,
+	4
 );
 check(
-	'a recorded OT refusal still overrides a populated legacy bucket',
-	deriveDailyOvertime({ ...approvedBucketEntry, overtime_authorized: false }, approvedBucketDay),
+	'a shift that never pays overtime still earns nothing, whatever the clock says',
+	deriveDailyOvertime(restDayPunches, {
+		...restDayScheduled,
+		shift: { ...restDayScheduled.shift, pays_overtime: false }
+	}),
 	null
 );
 const semiMonthlyOvertimePolicy = {
@@ -176,9 +180,15 @@ check(
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 // Entry settlement — a panel-clinic invoice is a company cost, not cash paid to the employee.
 // ────────────────────────────────────────────────────────────────────────────────────────────────
+// A `MeasuredLine` carries the `pay_components` row itself: `code`, `nature` and `sequence` are
+// columns on that row — `nature` is generated from `policy ->> 'kind'` — and there is deliberately
+// no component-types lookup table to hold them separately.
 const claimLine = (settlement, amount) => ({
 	payComponent: {
 		norbital_id: `claim-${settlement}`,
+		code: 'REIMBURSEMENT',
+		nature: 'NON_WAGE_PAYMENT',
+		sequence: 1500,
 		definition: {
 			source: 'ENTRY',
 			unit: 'MONEY',
@@ -187,17 +197,15 @@ const claimLine = (settlement, amount) => ({
 			settlement
 		}
 	},
-	componentType: {
-		norbital_id: 'reimbursement',
-		code: 'REIMBURSEMENT',
-		nature: 'NON_WAGE_PAYMENT',
-		sequence: 1500
+	component: {
+		kind: 'COMPONENT_ENTRY_ONCE',
+		pay_component_id: `claim-${settlement}`,
+		component_entry_id: `entry-${settlement}`
 	},
 	amount,
 	quantity: null,
 	rate: null,
-	sequence: 1,
-	sources: []
+	sequence: 1
 });
 const claimSettlement = settle({
 	lines: [claimLine('PAYROLL', 100), claimLine('COMPANY_DIRECT', 75)],
@@ -1085,12 +1093,16 @@ check(
 			settlement_policy: {
 				late_joiner_arrears: null,
 				final_period: 'FOLLOW_ATTENDANCE_WINDOW',
+				// Required on the stored policy, so a real row always states them; both values below
+				// are what the engine already inferred from their absence.
+				final_period_wages: 'PRORATE_TO_EXIT',
 				extended_unpaid_leave: {
 					minimum_calendar_days: 14,
 					bridged_gap_days: 7,
 					population_contribution_id: null
 				},
-				absence_proration: null
+				absence_proration: null,
+				overtime_windows: null
 			}
 		}),
 		statutoryFacts: [],
@@ -1447,32 +1459,225 @@ check(
 	[dynamicSchedule.get('2026-01-06')?.dayType, dynamicSchedule.get('2026-01-07')?.dayType],
 	['REST_DAY', 'PUBLIC_HOLIDAY']
 );
+// ── statutory overtime coverage, read from the jurisdiction's cited rule ────────────────────────
+// The Malaysian row as seeded in Core: Employment Act 1955 First Schedule paras 1A, 2 and 3.
+const MY_COVERAGE_RULE = {
+	wage_ceiling: { value: 4000, currency: 'MYR' },
+	ceiling_is_inclusive: true,
+	wage_basis: 'STATUTORY_WAGES',
+	category_basis: 'STATUTORY_WORK_CATEGORY',
+	exempt_categories: ['MANUAL_LABOUR', 'MANUAL_LABOUR_SUPERVISOR', 'COMMERCIAL_VEHICLE_OPERATOR'],
+	excluded_categories: ['VESSEL_WORK'],
+	authority: 'Employment Act 1955 First Schedule paras 1A, 2 and 3'
+};
+const coverageArgs = (category, salary, comparand = salary) => ({
+	rule: MY_COVERAGE_RULE,
+	jurisdictionCode: 'MY',
+	wages: {
+		BASE_SALARY: { value: salary, currency: 'MYR' },
+		STATUTORY_WAGES: { value: comparand, currency: 'MYR' }
+	},
+	statutoryWorkCategory: category,
+	workClassification: 'EA_COVERED',
+	employeeNumber: 'E-0001'
+});
+
 check(
-	'a non-manual employee at RM4,000 remains statutorily OT-pay covered',
-	isStatutoryOvertimePayCovered({
-		jurisdictionCode: 'MY',
-		monthlyBaseSalary: 4000,
-		statutoryWorkCategory: 'NON_MANUAL'
-	}),
+	'manual labour above RM4,000 remains statutorily OT-pay covered — First Schedule para 2(1)',
+	isStatutoryOvertimePayCovered(coverageArgs('MANUAL_LABOUR', 5000)),
 	true
 );
 check(
-	'manual labour above RM4,000 remains statutorily OT-pay covered',
-	isStatutoryOvertimePayCovered({
-		jurisdictionCode: 'MY',
-		monthlyBaseSalary: 5000,
-		statutoryWorkCategory: 'MANUAL_LABOUR'
-	}),
+	'a supervisor of manual labour is covered irrespective of wages — para 2(3)',
+	isStatutoryOvertimePayCovered(coverageArgs('MANUAL_LABOUR_SUPERVISOR', 12000)),
 	true
 );
 check(
-	'non-manual work above RM4,000 is outside the statutory OT-pay provisions',
-	isStatutoryOvertimePayCovered({
-		jurisdictionCode: 'MY',
-		monthlyBaseSalary: 5000,
-		statutoryWorkCategory: 'NON_MANUAL'
-	}),
+	'vessel work is outside the ladder at any wage — para 2(4) disapplies Part XII',
+	isStatutoryOvertimePayCovered(coverageArgs('VESSEL_WORK', 1000)),
 	false
+);
+check(
+	'a jurisdiction with no coverage rule covers everyone, rather than nobody',
+	isStatutoryOvertimePayCovered({ ...coverageArgs('NON_MANUAL', 99000), rule: null }),
+	true
+);
+// The First Schedule tests para 3 wages — s.2 wages less commissions, subsistence allowance and
+// overtime payment — which the engine derives from the pay components and their entries. A person
+// on RM3,800 basic plus a RM500 fixed allowance earns RM4,300 of para 3 wages and is outside the
+// ladder, even though their base salary alone would have kept them inside it.
+check(
+	'wages exactly at the ceiling stay covered — para 1A bites only on wages that EXCEED it',
+	isStatutoryOvertimePayCovered(coverageArgs('NON_MANUAL', 4000)),
+	true
+);
+check(
+	'an allowance that takes para 3 wages past the ceiling ends coverage',
+	isStatutoryOvertimePayCovered(coverageArgs('NON_MANUAL', 3800, 4300)),
+	false
+);
+check(
+	'base salary alone never answers a STATUTORY_WAGES rule — the comparand is wider',
+	isStatutoryOvertimePayCovered(coverageArgs('NON_MANUAL', 3000)),
+	true
+);
+
+// ── the para 3 comparand, classified from the pay component model ───────────────────────────────
+// s.2: basic wages AND all other cash payments for work done. Para 3 lessens that by commissions,
+// subsistence allowance and overtime payment. The classification below is the statute read against
+// what a pay component row can say.
+const component = (kind, source) => ({
+	policy: kind == null ? null : { kind },
+	definition: source == null ? null : { source }
+});
+check(
+	'the contracted wage is basic wages',
+	classifyWageComparand(component('EARNING', 'SCHEDULE')),
+	'BASIC_WAGES'
+);
+check(
+	'an earning entry is another cash payment for work done',
+	classifyWageComparand(component('EARNING', 'ENTRY')),
+	'CASH_FOR_WORK'
+);
+check(
+	'a formula earning is another cash payment for work done',
+	classifyWageComparand(component('EARNING', 'FORMULA')),
+	'CASH_FOR_WORK'
+);
+check(
+	'the overtime ladder is overtime payment, which para 3 takes out',
+	classifyWageComparand(component('EARNING', 'OVERTIME')),
+	'OVERTIME_PAY'
+);
+check(
+	'reclassified excess hours are still overtime payment',
+	classifyWageComparand(component('EARNING', 'OVERTIME_EXCESS')),
+	'OVERTIME_PAY'
+);
+check(
+	'a reimbursement is not a cash payment for work done',
+	classifyWageComparand(component('NON_WAGE_PAYMENT', 'ENTRY')),
+	'NOT_WAGES'
+);
+check(
+	'a deduction is not wages',
+	classifyWageComparand(component('DEDUCTION', 'ENTRY')),
+	'NOT_WAGES'
+);
+check(
+	'information is not wages',
+	classifyWageComparand(component('INFORMATION', 'FORMULA')),
+	'NOT_WAGES'
+);
+
+const comparand = deriveStatutoryWages({
+	baseSalary: { value: 3800, currency: 'MYR' },
+	payments: [
+		{ category: 'CASH_FOR_WORK', amount: 500 }, // fixed allowance
+		{ category: 'CASH_FOR_WORK', amount: -50 }, // a reversal on the same component takes back
+		{ category: 'OVERTIME_PAY', amount: 700 }, // para 3 excludes overtime payment
+		{ category: 'NOT_WAGES', amount: 300 }, // a reimbursement
+		{ category: 'BASIC_WAGES', amount: 0 } // basic comes from the terms, not an entry
+	]
+});
+check('the comparand is basic plus cash-for-work, less nothing else', comparand, {
+	value: 4250,
+	currency: 'MYR'
+});
+check(
+	'a ceiling in another currency than the wages still stops the run',
+	(() => {
+		try {
+			isStatutoryOvertimePayCovered({
+				...coverageArgs('NON_MANUAL', 3000),
+				rule: {
+					...MY_COVERAGE_RULE,
+					wage_ceiling: { value: 4000, currency: 'SGD' }
+				}
+			});
+			return 'no error';
+		} catch (error) {
+			return /different currency/.test(error.message) && /E-0001/.test(error.message);
+		}
+	})(),
+	true
+);
+
+// ── rest breaks, read from the jurisdiction's cited rows ────────────────────────────────────────
+// The figures are the seeded rows' — s.60A(1)(a), the s.60A(1) proviso (ii), art.85 and UU 13/2003
+// Pasal 79(2)(a) — never the engine's.
+const breaks = resolveRestBreakRules([
+	{
+		after_consecutive_hours: 5,
+		minimum_minutes: 30,
+		counts_as_worked_time: null,
+		applies_when: 'ALWAYS',
+		authority: 'Employment Act 1955 s.60A(1)(a)'
+	},
+	{
+		after_consecutive_hours: 8,
+		minimum_minutes: 45,
+		counts_as_worked_time: null,
+		applies_when: 'CONTINUOUS_ATTENDANCE',
+		authority: 'Employment Act 1955 s.60A(1) proviso (ii)'
+	}
+]);
+check('the ordinary break resolves with its window and its silence on pay', breaks.get('ALWAYS'), {
+	appliesWhen: 'ALWAYS',
+	afterConsecutiveHours: 5,
+	minimumMinutes: 30,
+	countsAsWorkedTime: null,
+	authority: 'Employment Act 1955 s.60A(1)(a)'
+});
+check(
+	'the continuous-attendance variant coexists with the ordinary one',
+	breaks.get('CONTINUOUS_ATTENDANCE')?.minimumMinutes,
+	45
+);
+check(
+	'a break the statute ties to no window keeps its null trigger',
+	resolveRestBreakRules([
+		{
+			after_consecutive_hours: null,
+			minimum_minutes: 60,
+			counts_as_worked_time: null,
+			applies_when: 'ALWAYS',
+			authority: 'Labor Code of the Philippines art.85'
+		}
+	]).get('ALWAYS')?.afterConsecutiveHours,
+	null
+);
+check(
+	'a break stated as not counted in working hours keeps the statute s own false',
+	resolveRestBreakRules([
+		{
+			after_consecutive_hours: 4,
+			minimum_minutes: 30,
+			counts_as_worked_time: false,
+			applies_when: 'ALWAYS',
+			authority: 'UU 13/2003 Pasal 79(2)(a)'
+		}
+	]).get('ALWAYS')?.countsAsWorkedTime,
+	false
+);
+throws('two rows of the same kind are a seeding fault, not a choice', () =>
+	resolveRestBreakRules([
+		{
+			after_consecutive_hours: 5,
+			minimum_minutes: 30,
+			counts_as_worked_time: null,
+			applies_when: 'ALWAYS',
+			authority: 'one'
+		},
+		{
+			after_consecutive_hours: 8,
+			minimum_minutes: 45,
+			counts_as_worked_time: null,
+			applies_when: 'ALWAYS',
+			authority: 'two'
+		}
+	])
 );
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1709,6 +1914,9 @@ const januaryTerms = {
 };
 const january = { start: '2026-01-01', end: '2026-01-31' };
 const calendarMY = {
+	// `ordinaryRateDivisor` branches on the jurisdiction code for the Philippine 313-day
+	// alternative, so a jurisdiction fixture that omits it is only ever "not PH" by accident.
+	code: 'MY',
 	proration: { by: 'CALENDAR_DAYS' },
 	ordinary_rate_divisor: 26,
 	ordinary_rate_basis: 'DAYS_PER_MONTH'

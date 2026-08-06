@@ -1,16 +1,36 @@
-import { custom, dateRange, defineModel, uuid } from '@norbital-ai/pod/authoring';
+import { custom, dateRange, defineModel, sql, text, uuid } from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
 		statutory_contribution_id: uuid().notNull(),
 		selector: custom('rate_selector').notNull(),
 		award: custom('rate_award').notNull(),
-		effective_range: dateRange().notNull()
+		effective_range: dateRange().notNull(),
+		/**
+		 * The band's own title, composed in SQL.
+		 *
+		 * `recordLabel` compiles to a CEL concatenation and CEL has no `+` overload for anything but
+		 * strings, so naming `selector` and `effective_range` — a variant and a range, both objects —
+		 * resolved to nothing and the record title fell back to joining every scalar column, which
+		 * printed `statutory_contribution_id` as a raw uuid. No coercion turns an object into a
+		 * title; the band has to say what it is. This mirrors `bandReference` in
+		 * `payroll_runs/lib/bands.ts`, which is what a payslip already cites.
+		 */
+		summary: text().generatedAlwaysAs(
+			sql`CASE selector ->> 'by'
+				WHEN 'WAGE' THEN (selector ->> 'from') || ' – ' || COALESCE(selector ->> 'to', '∞')
+				WHEN 'WAGE_AND_AGE' THEN (selector ->> 'from') || ' – ' || COALESCE(selector ->> 'to', '∞') || ' · age ' || (selector ->> 'age_from') || '–' || COALESCE(selector ->> 'age_to', '∞')
+				WHEN 'WAGE_AND_MARITAL' THEN (selector ->> 'from') || ' – ' || COALESCE(selector ->> 'to', '∞') || ' · ' || LOWER(selector ->> 'marital')
+				WHEN 'HEADCOUNT' THEN 'headcount ' || (selector ->> 'from') || ' – ' || COALESCE(selector ->> 'to', '∞')
+				WHEN 'RISK_CLASS' THEN 'risk ' || (selector ->> 'class')
+				ELSE 'band'
+			END || ' · from ' || LEFT(effective_range ->> 'start', 10)`
+		)
 	},
 	{
 		description:
 			'One band of one statutory contribution: the selector that picks it (wage, wage and age, headcount or risk class) and the award it pays. A floor is the first band, a ceiling the terminal one.',
-		recordLabel: ['selector', 'effective_range'],
+		recordLabel: 'summary',
 		icon: 'lucide:percent',
 		// Plan 02 §7 — two-dimensional: contribution =, selector band &&, effective range &&.
 		// Successive bands coexist because their selectors do not overlap; only a pair overlapping

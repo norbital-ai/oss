@@ -18,6 +18,10 @@
 		type WorkspaceInvitation,
 		type WorkspaceSettingsApi
 	} from './workspace-settings.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	let {
 		workspaceApi,
@@ -145,16 +149,16 @@
 		class="p-6 text-sm text-destructive"
 		data-testid="settings-denied"
 	>
-		Workspace settings are for admins
+		{t('pod.settings.adminsOnly')}
 	</Stack>
 {:else}
 	<Bound size="full" clip class="bg-background">
 		<Scroll name="People" class="h-full">
 			<Stack gap="lg" class="mx-auto min-h-full w-full max-w-7xl p-4 sm:p-6">
 				<Stack as="header" gap="xs">
-					<h1 class="text-lg font-semibold">People</h1>
+					<h1 class="text-lg font-semibold">{t('pod.settings.people')}</h1>
 					<p class="max-w-2xl text-xs text-muted-foreground">
-						Who can open this workspace, the teams they belong to, and what they have done in it.
+						{t('pod.settings.peopleDescription')}
 					</p>
 				</Stack>
 
@@ -172,17 +176,22 @@
 					listClass="mx-0 w-full"
 					class="min-h-[32rem]"
 					config={[
-						{ name: 'members', label: 'Members', icon: 'lucide:users', content: membersContent },
+						{
+							name: 'members',
+							label: t('pod.settings.members'),
+							icon: 'lucide:users',
+							content: membersContent
+						},
 						{
 							name: 'invitations',
-							label: 'Invitations',
+							label: t('pod.settings.invitations'),
 							icon: 'lucide:mail-plus',
 							content: invitationsContent
 						},
-						{ name: 'teams', label: 'Teams', icon: 'lucide:network', content: teamsContent },
+						{ name: 'teams', label: t('pod.settings.teams'), icon: 'lucide:network', content: teamsContent },
 						{
 							name: 'audit',
-							label: 'Audit log',
+							label: t('pod.settings.auditLog'),
 							icon: 'lucide:scroll-text',
 							content: auditContent
 						}

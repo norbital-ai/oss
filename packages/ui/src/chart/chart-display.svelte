@@ -7,8 +7,11 @@
 	import ChartContainer from './chart-container.svelte';
 	import ChartSkeleton from './chart-skeleton.svelte';
 	import ChartTooltip from './chart-tooltip.svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import { AreaChart, BarChart, LineChart, PieChart } from 'layerchart';
+
+	const { t } = useI18n<UiKeys>();
 
 	interface Props {
 		spec: ChartDisplaySpec;
@@ -107,7 +110,7 @@
 		<div
 			class="flex h-[250px] items-center justify-center"
 			aria-busy="true"
-			aria-label="Loading chart"
+			aria-label={t('misc.chartLoading')}
 		>
 			<ChartSkeleton donut={isDonutChartSpec(spec)} />
 		</div>
@@ -115,7 +118,7 @@
 		<div
 			class="flex h-[250px] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground"
 		>
-			No data available yet
+			{t('misc.chartNoData')}
 		</div>
 	{:else if isDonutChartSpec(spec)}
 		{@const data = spec.data.map((entry, index) => ({
@@ -175,7 +178,7 @@
 			value: key,
 			color: chartConfig[key]?.color ?? getSeriesColor(index, spec.config[key])
 		}))}
-		<Scroll axis="x" name={`Scrollable chart: ${spec.title ?? 'Data chart'}`} class="max-">
+		<Scroll axis="x" name={t('misc.chartScrollable', { title: spec.title ?? t('misc.dataChart') })} class="max-">
 			<ChartContainer
 				config={chartConfig}
 				class="h-[clamp(14rem,45dvh,18rem)] min-w-full"

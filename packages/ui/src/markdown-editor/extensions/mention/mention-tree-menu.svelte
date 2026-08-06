@@ -4,6 +4,7 @@
 	 * @description Tree-based dropdown menu for selecting metadata items to mention
 	 */
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Scroll } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
@@ -31,6 +32,8 @@
 		/** Callback to receive the key handler function for the mention extension to call */
 		onKeyHandlerReady?: (handler: (key: string) => boolean) => void;
 	} = $props();
+
+	const { t } = useI18n<UiKeys>();
 
 	// =================================================================================
 	// STATE
@@ -233,18 +236,18 @@
 <div
 	class="flex max-h-[min(28rem,70vh)] w-[min(34rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border bg-popover p-1 shadow-deep"
 	role="menu"
-	aria-label="Mention menu"
+	aria-label={t('misc.mentionMenu')}
 	tabindex="-1"
 	onmousemove={handleMouseMove}
 >
 	<div class="flex items-center justify-between px-2.5 py-2">
-		<span class="text-xs font-medium text-muted-foreground">Reference</span>
-		<span class="text-tiny text-muted-foreground/70">↑↓ navigate · Enter add</span>
+		<span class="text-xs font-medium text-muted-foreground">{t('misc.reference')}</span>
+		<span class="text-tiny text-muted-foreground/70">{t('misc.mentionKeyboardHint')}</span>
 	</div>
-	<Scroll axis="y" name="Mention tree" bind:ref={scrollContainerRef}>
+	<Scroll axis="y" name={t('misc.mentionTree')} bind:ref={scrollContainerRef}>
 		<!-- Tree Content with scrolling -->
 		{#if visibleItems.length === 0}
-			<div class="p-4 text-center text-xs text-muted-foreground">No items found</div>
+			<div class="p-4 text-center text-xs text-muted-foreground">{t('misc.noItemsFound')}</div>
 		{:else}
 			{#each visibleItems as { item, depth }, index (item.id)}
 				{@const isConsidered = index === consideredIndex}

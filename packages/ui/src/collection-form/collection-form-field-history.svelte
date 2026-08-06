@@ -4,11 +4,12 @@
 		CollectionRecordHistoryEntry
 	} from '@norbital-ai/platform-utils/collection';
 	import Icon from '@iconify/svelte';
-	import { formatDataValue } from '../data-renderer/index.js';
+	import { formatDataValue, formatStructuredValue } from '../data-renderer/index.js';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Label } from '#lib/label';
-	import { Inline, Scroll, Stack } from '#lib/layout';
-	import { StructuredValue } from '#lib/structured-value';
+	import { Inline, Scroll } from '#lib/layout';
 	import { Tooltip } from '#lib/tooltip';
+	import { formatUtcInstantLocal } from '#lib/utils';
 	import { collectionFieldHistory } from './collection-form-history.js';
 
 	interface Props {
@@ -22,28 +23,44 @@
 		loading: boolean;
 		error: Error | undefined;
 		load: () => void;
+		locale?: string;
 	}
 
-	let { field, fieldId, label, value, dirty, available, history, loading, error, load }: Props =
-		$props();
+	let { field, fieldId, label, value, dirty, available, history, loading, error, load, locale }:
+		Props = $props();
+
+	const { t } = useI18n<UiKeys>();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 
 	const fieldHistory = $derived(collectionFieldHistory(history, field.name));
-	const timestampField: CollectionField = {
-		name: 'history_timestamp',
-		kind: 'timestamptz',
-		nullable: false
-	};
-</script>
 
-{#snippet HistoryValue(entryValue: unknown)}
-	{#if entryValue != null && typeof entryValue === 'object'}
-		<Scroll axis="both" name="History value" class="max-h-32 rounded-md border bg-muted/30 p-2">
-			<StructuredValue value={entryValue} />
-		</Scroll>
-	{:else}
-		<p class="break-words text-sm text-foreground">{formatDataValue(field, entryValue)}</p>
-	{/if}
-{/snippet}
+	/**
+	 * Day-month-year, matching the convention the templates use (`05 Aug 2026, 14:32`).
+	 * `formatUtcInstantLocal` resolves the stored UTC instant in the viewer's timezone; it
+	 * throws on anything that is not a UTC ISO instant, so never feed it a calendar day.
+	 */
+	function formatRevisionInstant(instant: string): string {
+		try {
+			return formatUtcInstantLocal(instant, {
+				locale: localeEffective,
+				day: '2-digit',
+				month: 'short',
+				year: 'numeric',
+				hour: '2-digit',
+				minute: '2-digit'
+			});
+		} catch {
+			return instant;
+		}
+	}
+
+	/** One revision reads as one line, so structured values collapse to a single-line summary. */
+	function revisionText(entryValue: unknown): string {
+		return entryValue != null && typeof entryValue === 'object'
+			? formatStructuredValue(entryValue)
+			: formatDataValue(field, entryValue);
+	}
+</script>
 
 {#if available}
 	<Inline gap="xs" class="min-w-0">
@@ -53,7 +70,7 @@
 			side="bottom"
 			align="start"
 			sideOffset={6}
-			contentClass="w-80 max-w-[min(20rem,calc(100vw-2rem))] border border-border bg-popover p-0 text-popover-foreground shadow-md"
+			contentClass="flex max-h-80 w-72 max-w-[calc(100vw-2rem)] flex-col rounded-md border border-border bg-popover p-0 text-popover-foreground shadow-md"
 			arrowClasses="text-popover"
 			onOpenChange={(open) => {
 				if (open) load();
@@ -63,72 +80,63 @@
 				<button
 					{...props}
 					type="button"
-					aria-label={`${label} field history`}
+					aria-label={t('form.fieldHistoryLabel', { label })}
 					class="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 				>
 					<Icon icon="lucide:history" class="size-3" aria-hidden="true" />
 				</button>
 			{/snippet}
 			{#snippet content()}
-				<div class="border-b px-3 py-2.5 text-left">
-					<p class="text-sm font-semibold text-foreground">{label}</p>
-					<p class="text-xs text-muted-foreground">Local edits and saved history</p>
-				</div>
+				<p class="shrink-0 px-2.5 pt-2 pb-1.5 text-left text-xs font-semibold text-foreground">
+					{t('form.historyTitle', { label })}
+				</p>
 				{#if dirty}
-					<div class="border-b bg-brand/5 px-3 py-2.5 text-left">
-						<Inline gap="xs" class="mb-1 text-xs font-medium text-brand">
-							<span class="size-1.5 rounded-full bg-brand"></span>
-							Unsaved local value
-						</Inline>
-						{@render HistoryValue(value)}
-					</div>
+					<Inline
+						align="baseline"
+						justify="between"
+						gap="sm"
+						class="shrink-0 bg-brand/5 px-2.5 py-1 text-left"
+					>
+						<span class="min-w-0 truncate text-xs text-foreground" title={revisionText(value)}>
+							{revisionText(value)}
+						</span>
+						<span class="shrink-0 text-tiny text-brand">{t('form.unsaved')}</span>
+					</Inline>
 				{/if}
-				<Scroll axis="y" name="Field history" class="max-h-64 px-3 py-3 text-left">
-					<Stack gap="sm">
-						<p class="text-xs font-medium text-muted-foreground">Saved timeline</p>
-						{#if loading}
-							<Inline gap="sm" class="text-xs text-muted-foreground" role="status">
-								<Icon icon="lucide:loader-circle" class="size-3.5 animate-spin" />
-								Loading history…
-							</Inline>
-						{:else if error}
-							<p class="text-xs text-destructive" role="alert">History could not be loaded.</p>
-						{:else if fieldHistory.length === 0}
-							<p class="text-xs text-muted-foreground">No saved history yet.</p>
-						{:else}
-							<ol aria-label={`${label} saved history`}>
-								{#each fieldHistory as entry, index (`${entry.version}:${entry.validFrom}`)}
-									<li class="relative pb-4 last:pb-0">
-										<Inline align="start" gap="sm">
-											<div class="flex w-3 shrink-0 justify-center">
-												<span class="relative z-10 mt-1 size-2 rounded-full bg-muted-foreground"
-												></span>
-												{#if index < fieldHistory.length - 1}
-													<span class="absolute top-3 bottom-0 w-px bg-border"></span>
-												{/if}
-											</div>
-											<div class="min-w-0">
-												<Inline align="baseline" justify="between" gap="sm">
-													<p class="text-xs font-medium text-foreground">
-														{entry.validTo === null
-															? 'Current saved value'
-															: `Version ${entry.version}`}
-													</p>
-													<time
-														class="shrink-0 text-tiny text-muted-foreground"
-														datetime={entry.validFrom}
-													>
-														{formatDataValue(timestampField, entry.validFrom)}
-													</time>
-												</Inline>
-												<div class="mt-1">{@render HistoryValue(entry.value)}</div>
-											</div>
-										</Inline>
-									</li>
-								{/each}
-							</ol>
-						{/if}
-					</Stack>
+				<Scroll axis="y" name={t('form.fieldHistoryRegion')} grow class="px-2.5 pt-0.5 pb-2 text-left">
+					{#if loading}
+						<Inline gap="xs" class="py-1 text-xs text-muted-foreground" role="status">
+							<Icon icon="lucide:loader-circle" class="size-3 animate-spin" />
+							{t('common.loading')}
+						</Inline>
+					{:else if error}
+						<p class="py-1 text-xs text-destructive" role="alert">
+							{t('form.historyLoadFailed')}
+						</p>
+					{:else if fieldHistory.length === 0}
+						<p class="py-1 text-xs text-muted-foreground">{t('form.noSavedChanges')}</p>
+					{:else}
+						<ol aria-label={t('form.savedHistoryLabel', { label })}>
+							{#each fieldHistory as entry, index (`${entry.version}:${entry.validFrom}`)}
+								{@const text = revisionText(entry.value)}
+								<li class="flex items-baseline justify-between gap-2 py-1">
+									<span
+										class="min-w-0 flex-1 truncate text-xs text-foreground"
+										class:font-medium={index === 0}
+										title={text}
+									>
+										{text}
+									</span>
+									<time
+										class="shrink-0 text-tiny tabular-nums text-muted-foreground"
+										datetime={entry.validFrom}
+									>
+										{formatRevisionInstant(entry.validFrom)}
+									</time>
+								</li>
+							{/each}
+						</ol>
+					{/if}
 				</Scroll>
 			{/snippet}
 		</Tooltip>

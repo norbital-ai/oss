@@ -10,12 +10,15 @@
 	import { Tooltip } from '#lib/tooltip';
 	import { cn, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { debounce } from 'es-toolkit/function';
 	import { watch } from 'runed';
 	import { onMount, tick, type Snippet } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import CollectionTableColumnActions from './component/columns/collection-table-column-actions.svelte';
 	import { ColumnAPI, RowAPI, TableAPI } from './collection-table-state.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	// ----------------------------------------------------------------------------------
 	// Types
@@ -409,7 +412,7 @@
 		data-collection-grid-toolbar
 	>
 		{#if leftActions}
-			<Scroll axis="x" name="Collection toolbar" grow class="min-w-0">
+			<Scroll axis="x" name={t('table.toolbarRegion')} grow class="min-w-0">
 				<Inline gap="sm" fill class="min-w-0">
 					{#each leftActions as action}
 						{@render action({ table: tableApi })}
@@ -448,7 +451,7 @@
 	>
 		<Scroll
 			axis={bounded ? 'both' : 'x'}
-			name="Collection table rows"
+			name={t('table.rowsRegion')}
 			bind:ref={bodyScrollElement}
 			class="relative"
 			style={bounded ? undefined : 'height: auto; max-height: none;'}
@@ -478,13 +481,19 @@
 				{#if enableSelection}
 					<span
 						class="whitespace-nowrap"
-						title="{selectedCount.toLocaleString()} of {tableApi.totalRows.toLocaleString()} selected"
+						title={t('common.selectedOfTotal', {
+							selected: selectedCount.toLocaleString(),
+							total: tableApi.totalRows.toLocaleString()
+						})}
 					>
-						{formatNumber(selectedCount)} / {formatNumber(tableApi.totalRows)} selected
+						{t('table.selectedFraction', {
+							selected: formatNumber(selectedCount),
+							total: formatNumber(tableApi.totalRows)
+						})}
 					</span>
 					<Separator orientation="vertical" class="h-4" />
 				{/if}
-				<Tooltip delayDuration={0} text={disabled ? 'Page size is disabled' : undefined}>
+				<Tooltip delayDuration={0} text={disabled ? t('table.pageSizeDisabled') : undefined}>
 					{#snippet trigger({ props })}
 						<Inline gap="xs" {...props}>
 							<Input
@@ -496,7 +505,7 @@
 								oninput={handlePageSizeInput}
 								{disabled}
 							/>
-							<span class="text-xs text-muted-foreground">/ page</span>
+							<span class="text-xs text-muted-foreground">{t('table.perPage')}</span>
 						</Inline>
 					{/snippet}
 				</Tooltip>
@@ -508,21 +517,24 @@
 					variant="outline"
 					size="icon"
 					class="size-8"
-					aria-label="Previous page"
+					aria-label={t('table.previousPage')}
 					disabled={disabled || tableApi.pagination.current.pageIndex === 0}
 					onclick={onPreviousPage}
 				>
 					<Icon icon="lucide:chevron-left" class="size-4" />
 				</Button>
 				<span class="min-w-20 text-center tabular-nums">
-					Page {tableApi.pagination.current.pageIndex + 1} of {pageCountLocal}
+					{t('table.pageOf', {
+						page: tableApi.pagination.current.pageIndex + 1,
+						pages: pageCountLocal
+					})}
 				</span>
 				<Button
 					type="button"
 					variant="outline"
 					size="icon"
 					class="size-8"
-					aria-label="Next page"
+					aria-label={t('table.nextPage')}
 					disabled={disabled || !hasNextPage}
 					onclick={onNextPage}
 				>
@@ -688,15 +700,15 @@
 					<button
 						type="button"
 						aria-label={dir === 'asc'
-							? `Sort ${headerLabel} descending`
+							? t('table.sortLabelDescending', { label: headerLabel })
 							: dir === 'desc'
-								? `Clear sort for ${headerLabel}`
-								: `Sort ${headerLabel} ascending`}
+								? t('table.sortClearLabel', { label: headerLabel })
+								: t('table.sortLabelAscending', { label: headerLabel })}
 						title={dir === 'asc'
-							? 'Sort descending'
+							? t('table.sortDescending')
 							: dir === 'desc'
-								? 'Clear sort'
-								: 'Sort ascending'}
+								? t('table.sortClear')
+								: t('table.sortAscending')}
 						onclick={() => handleSort(inst)}
 						class={cn(
 							'flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-opacity duration-150 hover:bg-muted focus:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
@@ -726,7 +738,7 @@
 			{#if canResize}
 				<button
 					type="button"
-					title="Resize column"
+					title={t('table.resizeColumn')}
 					onmousedown={(e) => resizer.handle(e, inst.id)}
 					ontouchstart={(e) => resizer.handle(e, inst.id)}
 					class={cn(
@@ -822,7 +834,7 @@
 	<Inline justify="center" align="center" class="min-h-48 p-8">
 		<Alert.Root variant="destructive" class="max-w-md">
 			<Icon icon="lucide:alert-circle" class="h-4 w-4" />
-			<Alert.Title>Something went wrong</Alert.Title>
+			<Alert.Title>{t('table.loadError')}</Alert.Title>
 			<Alert.Description class="mt-2">{error}</Alert.Description>
 		</Alert.Root>
 	</Inline>
@@ -835,8 +847,8 @@
 		{:else}
 			<Stack gap="xs" class="text-center text-muted-foreground">
 				<Icon icon="lucide:inbox" class="mx-auto h-6 w-6 text-muted-foreground" />
-				<p class="text-sm font-medium">No results found</p>
-				<p class="text-xs text-muted-foreground">Try adjusting your search or filters</p>
+				<p class="text-sm font-medium">{t('common.noResultsFound')}</p>
+				<p class="text-xs text-muted-foreground">{t('table.emptyStateHint')}</p>
 			</Stack>
 		{/if}
 	</Inline>
@@ -917,7 +929,7 @@
 														'bg-accent group-hover:w-3 hover:bg-input',
 														'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100'
 													)}
-													title="Drag to reorder"
+													title={t('form.dragToReorder')}
 												>
 													<div
 														class="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
@@ -1100,8 +1112,8 @@
 						}}
 						aria-expanded={isExpanded}
 						aria-controls={expandedRegionId(rowObj.id)}
-						aria-label={isExpanded ? 'Collapse row details' : 'Expand row details'}
-						title={isExpanded ? 'Collapse row details' : 'Expand row details'}
+						aria-label={isExpanded ? t('table.collapseRowDetails') : t('table.expandRowDetails')}
+						title={isExpanded ? t('table.collapseRowDetails') : t('table.expandRowDetails')}
 					>
 						<Icon
 							icon={isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'}

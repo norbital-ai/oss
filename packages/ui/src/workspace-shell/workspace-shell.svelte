@@ -1,5 +1,6 @@
 <script lang="ts">
 	import WorkspaceShellFrame from './workspace-shell-frame.svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Snippet } from 'svelte';
 	import { Inline } from '#lib/layout';
 	import { Spinner } from '#lib/spinner';
@@ -8,6 +9,8 @@
 		WorkspaceOrganizationOption
 	} from './workspace-shell.types.js';
 	import WorkspaceSidebar from './workspace-sidebar.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		model,
@@ -63,20 +66,20 @@
 		class="grid min-h-dvh w-full place-items-center bg-background"
 		role="status"
 		aria-live="polite"
-		aria-label={`Switching to ${switchingOrganization.name}`}
+		aria-label={t('misc.switchingTo', { organization: switchingOrganization.name })}
 		data-testid="organization-switch-loader"
 	>
 		<Inline gap="md" class="text-sm font-medium">
 			<Spinner class="size-4" />
-			<span>Switching to {switchingOrganization.name}</span>
+			<span>{t('misc.switchingTo', { organization: switchingOrganization.name })}</span>
 		</Inline>
 	</main>
 {:else}
 	<WorkspaceShellFrame
 		persistenceKey="workspace-shell.sidebar-expanded"
 		{mobileTitle}
-		mobileDescription="Switch organizations, open applications, or manage your account."
-		navigationLabel="Workspace navigation"
+		mobileDescription={t('misc.shellMobileDescription')}
+		navigationLabel={t('misc.workspaceNavigation')}
 		collapsible="icon"
 		sidebarClass="overflow-x-hidden text-xs [view-transition-name:sidebar]"
 		mobileSidebarClass="px-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))]"

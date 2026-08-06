@@ -43,6 +43,7 @@ import {
 	griddedSurveyFromPoints,
 	parseJson,
 	parseXyz,
+	recordFrom,
 	type Xyz
 } from './parse.js';
 import { readSectionSheet, type SectionCalibration } from './sheet.js';
@@ -266,10 +267,10 @@ function profilesFromDxf(
 }
 
 function profilesFromJson(payload: Record<string, unknown>): Record<string, ProfilePoint[]> {
-	const raw = payload.profiles;
 	const profiles: Record<string, ProfilePoint[]> = {};
-	if (typeof raw !== 'object' || raw === null) return profiles;
-	for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+	const raw = recordFrom(payload.profiles);
+	if (!raw) return profiles;
+	for (const [id, value] of Object.entries(raw)) {
 		if (!Array.isArray(value)) continue;
 		const points: ProfilePoint[] = [];
 		for (const entry of value) {
@@ -284,8 +285,8 @@ function profilesFromJson(payload: Record<string, unknown>): Record<string, Prof
 				});
 				continue;
 			}
-			if (typeof entry === 'object' && entry !== null) {
-				const record = entry as Record<string, unknown>;
+			const record = recordFrom(entry);
+			if (record) {
 				const station = Number(record.stationM ?? record.station_m ?? record.station);
 				const z = Number(record.zCdM ?? record.z_cd_m ?? record.z);
 				if (!Number.isFinite(station) || !Number.isFinite(z)) continue;
@@ -795,13 +796,13 @@ function planFromJsonPayload(payload: Record<string, unknown>, ledger: Ledger): 
 	const structuresRaw = Array.isArray(payload.structures) ? payload.structures : [];
 	const structures: PlanStructure[] = [];
 	for (const entry of structuresRaw) {
-		if (typeof entry !== 'object' || entry === null) continue;
-		const record = entry as Record<string, unknown>;
+		const record = recordFrom(entry);
+		if (!record) continue;
 		const partsRaw = Array.isArray(record.parts) ? record.parts : [];
 		const parts: PlanStructurePart[] = [];
 		for (const partEntry of partsRaw) {
-			if (typeof partEntry !== 'object' || partEntry === null) continue;
-			const part = partEntry as Record<string, unknown>;
+			const part = recordFrom(partEntry);
+			if (!part) continue;
 			const polygon = coercePolygon(part.polygon);
 			if (!polygon) continue;
 			parts.push({
@@ -825,11 +826,11 @@ function planFromJsonPayload(payload: Record<string, unknown>, ledger: Ledger): 
 	}
 
 	const cuts: PlanSectionCut[] = [];
-	const cutsRaw = payload.section_cuts ?? payload.sectionCuts;
-	if (typeof cutsRaw === 'object' && cutsRaw !== null) {
-		for (const [id, value] of Object.entries(cutsRaw as Record<string, unknown>)) {
-			if (typeof value !== 'object' || value === null) continue;
-			const record = value as Record<string, unknown>;
+	const cutsRecord = recordFrom(payload.section_cuts ?? payload.sectionCuts);
+	if (cutsRecord) {
+		for (const [id, value] of Object.entries(cutsRecord)) {
+			const record = recordFrom(value);
+			if (!record) continue;
 			const line = coercePolygon(record.line);
 			if (!line || line.length < 2) continue;
 			cuts.push({
@@ -857,8 +858,8 @@ function planFromJsonPayload(payload: Record<string, unknown>, ledger: Ledger): 
 				if (direct && direct.length >= 3) {
 					return [{ label: `Adjacent works ${index + 1}`, polygon: direct }];
 				}
-				if (typeof entry !== 'object' || entry === null) return [];
-				const record = entry as Record<string, unknown>;
+				const record = recordFrom(entry);
+				if (!record) return [];
 				const polygon = coercePolygon(record.polygon);
 				if (!polygon || polygon.length < 3) return [];
 				return [{ label: String(record.label ?? `Adjacent works ${index + 1}`), polygon }];

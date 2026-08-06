@@ -1,9 +1,12 @@
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import type { CalendarEvent, CalendarView, CreateSlot, EventRenderContext } from './types.js';
 	import type { Snippet } from 'svelte';
 	import { watch } from 'runed';
 	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
+
+	const { t } = useI18n<UiKeys>();
 	import CalendarHeader from './parts/calendar-header.svelte';
 	import TimeAxis from './parts/time-axis.svelte';
 	import ColumnHeaders from './parts/column-headers.svelte';
@@ -171,7 +174,7 @@
 					<TimeAxis {startHour} {endHour} {hourHeight} stepMinutes={60} />
 				{/if}
 
-				<Scroll axis="both" name="Calendar grid">
+				<Scroll axis="both" name={t('misc.calendarGrid')}>
 					{#if view === 'day'}
 						<DayView
 							date={currentDate}

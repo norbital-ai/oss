@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import { Star, StarRating } from '#lib/star-rating';
 	import { cn } from '#lib/utils';
@@ -10,12 +11,14 @@
 		max: number;
 	}
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		field,
 		value,
 		mode = 'display',
 		disabled = false,
-		placeholder = 'No rating',
+		placeholder = t('dataRenderer.noRating'),
 		onValueChange,
 		max,
 		class: className
@@ -70,7 +73,7 @@
 						variant="outline"
 						size="icon"
 						class="shrink-0"
-						aria-label="Remove rating"
+						aria-label={t('dataRenderer.removeRating')}
 						{disabled}
 						onclick={() => onValueChange?.(values.filter((_, itemIndex) => itemIndex !== index))}
 					>
@@ -90,7 +93,7 @@
 				onclick={() => onValueChange?.([...values, 0])}
 			>
 				<Icon icon="lucide:plus" class="size-4" />
-				Add rating
+				{t('dataRenderer.addRating')}
 			</Button>
 		{/if}
 	</Stack>
@@ -107,7 +110,7 @@
 				type="button"
 				variant="ghost"
 				size="icon"
-				aria-label="Clear rating"
+				aria-label={t('dataRenderer.clearRating')}
 				{disabled}
 				onclick={() => onValueChange?.(null)}
 			>

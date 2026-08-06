@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Tooltip } from '@norbital-ai/ui/tooltip';
 
@@ -11,7 +13,10 @@
 	 * a drawn level and an assumed one — so they move behind the icon rather than
 	 * being deleted.
 	 */
-	let { text, label = 'What this means' }: { text: string; label?: string } = $props();
+	let { text, label }: { text: string; label?: string } = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
+	const ariaLabel = $derived(label ?? t('component.what_this_means'));
 </script>
 
 <Tooltip {text} side="right" contentClass="max-w-[17rem] text-xs leading-snug">
@@ -19,7 +24,7 @@
 		<button
 			type="button"
 			class="shrink-0 rounded-full text-muted-foreground/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-			aria-label={label}
+			aria-label={ariaLabel}
 			{...props}
 		>
 			<IconWrapper name="lucide:info" class="size-3.5" />

@@ -1,9 +1,12 @@
 <script lang="ts" generics="TRow extends object">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { CollectionTablePipeline } from './collection-table.types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		kind,
@@ -23,7 +26,7 @@
 
 	function disabledReason(pipeline: CollectionTablePipeline<TRow>): string | null {
 		if (pipeline.requiresSelection && selectedRows.length === 0)
-			return `Select one or more rows to run ${pipeline.label}.`;
+			return t('table.pipelineSelectRows', { label: pipeline.label });
 		return pipeline.getDisabledReason?.(selectedRows) ?? null;
 	}
 </script>
@@ -34,9 +37,9 @@
 			icon={kind === 'export' ? 'lucide:download' : 'lucide:upload'}
 			class="size-5 text-muted-foreground"
 		/>
-		<p class="text-sm font-medium">No {kind} pipelines configured</p>
+		<p class="text-sm font-medium">{t('table.noPipelinesConfigured', { kind })}</p>
 		<p class="max-w-xs text-xs text-muted-foreground">
-			This collection does not currently declare a {kind} pipeline.
+			{t('table.noPipelinesDeclared', { kind })}
 		</p>
 	</Stack>
 {:else}
@@ -57,7 +60,7 @@
 						<p class="text-sm font-medium">{pipeline.label}</p>
 						<Stack gap="sm">
 							<p class="text-xs leading-relaxed text-muted-foreground">
-								{pipeline.description ?? `${pipeline.label} ${kind} pipeline.`}
+								{pipeline.description ?? t('table.pipelineDescription', { label: pipeline.label, kind })}
 							</p>
 							{#if reason}
 								<p class="text-xs leading-relaxed text-muted-foreground">{reason}</p>
@@ -68,7 +71,7 @@
 						type="button"
 						size="sm"
 						class="shrink-0"
-						aria-label={`Run ${pipeline.label}`}
+						aria-label={t('table.runPipeline', { label: pipeline.label })}
 						disabled={disabled || pendingOperation !== null || reason != null}
 						onclick={() => onRun(pipeline)}
 					>
@@ -78,7 +81,7 @@
 								: 'lucide:play'}
 							class={cn('size-4', pendingOperation === `${kind}:${pipeline.id}` && 'animate-spin')}
 						/>
-						Run
+						{t('table.run')}
 					</Button>
 				</Inline>
 			</section>

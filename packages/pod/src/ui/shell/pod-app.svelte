@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { Toaster } from '@norbital-ai/ui/sonner';
+	import { provideI18n, useI18n } from '@norbital-ai/ui/i18n';
+	import type { LocaleCatalogs } from '@norbital-ai/std/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
 	import { onMount } from 'svelte';
 	import type {
 		CollectionClient,
@@ -17,16 +20,22 @@
 		apps,
 		collectionSurfaces,
 		customTypeRenderers,
+		i18nMessages,
 		shellData
 	}: {
 		apps: Readonly<Record<string, WorkspaceAppLoader>>;
 		collectionSurfaces: CollectionSurfaceRegistry;
 		customTypeRenderers: CustomTypeRendererMap;
+		i18nMessages: LocaleCatalogs;
 		shellData: Promise<{
 			data: TenantWorkspaceShellData;
 			workspaceApi: CollectionClient<ErasedCollectionRegistry>;
 		}>;
 	} = $props();
+
+	provideI18n(i18nMessages);
+
+	const { t } = useI18n<PodUiKeys>();
 
 	onMount(() => {
 		document.body.dataset.hydrated = 'true';
@@ -65,7 +74,7 @@
 					</Stack>
 				</div>
 			</div>
-			<p class="text-[15px] font-semibold tracking-[-0.01em]">Preparing your workspace…</p>
+			<p class="text-[15px] font-semibold tracking-[-0.01em]">{t('pod.shell.prepareWorkspace')}</p>
 		</Stack>
 	</div>
 {:then initialized}

@@ -256,6 +256,453 @@ describe('PodSyncClient (client sync logic)', () => {
 		}
 	});
 
+	/**
+	 * `isOnline()` was `navigator.onLine && this.online`, and nothing ever assigned `this.online` —
+	 * so the whole verdict was `navigator.onLine`, which reports whether the machine has a network
+	 * interface, not whether our server can be reached. A Wi-Fi handover or a VPN reconnect flips it
+	 * false for a moment, and any write landing in that window was filed as "offline queued" while
+	 * the server was answering every other request perfectly well.
+	 */
+	it('stays online while requests succeed, whatever the browser claims', async () => {
+		let mutateCalls = 0;
+		const { fetch } = mockTransport({
+			mutate: (body) => {
+				mutateCalls += 1;
+				return {
+					results: (body.mutations as { clientId: string; row?: Record<string, unknown> }[]).map(
+						(m) => ({
+							clientId: m.clientId,
+							status: 'confirmed' as const,
+							serverId: (m.row?.norbital_id as string) ?? null,
+							row: { ...m.row, norbital_row_version: 1 }
+						})
+					)
+				};
+			}
+		});
+		const client = await makeClient(fetch);
+		const original = Reflect.get(globalThis, 'navigator');
+		Object.defineProperty(globalThis, 'navigator', {
+			value: { onLine: false },
+			configurable: true,
+			writable: true
+		});
+		try {
+			expect(client.isOnline()).toBe(true);
+			const results = await client.mutate([
+				{
+					clientId: 'c1',
+					collection: 'orders',
+					action: 'create',
+					row: { norbital_id: 'r', status: 'open' }
+				}
+			]);
+			expect(results[0]?.status).toBe('confirmed');
+			expect(mutateCalls).toBe(1);
+			expect((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length).toBe(0);
+		} finally {
+			if (original === undefined) Reflect.deleteProperty(globalThis, 'navigator');
+			else
+				Object.defineProperty(globalThis, 'navigator', {
+					value: original,
+					configurable: true,
+					writable: true
+				});
+			await client.close();
+		}
+	});
+
+	/** A gateway with no healthy upstream is the real offline signal, and recovery has to drain. */
+	it('marks itself offline on a 503 and drains once the server answers again', async () => {
+		let reachable = false;
+		let mutateCalls = 0;
+		const fetch: SyncFetch = async (path, init) => {
+			if (!path.startsWith('sync/mutate')) return new Response('not found', { status: 404 });
+			mutateCalls += 1;
+			if (!reachable) return new Response('no upstream', { status: 503 });
+			const body = JSON.parse(init.body!) as {
+				mutations: { clientId: string; row?: Record<string, unknown> }[];
+			};
+			return jsonResponse({
+				results: body.mutations.map((m) => ({
+					clientId: m.clientId,
+					status: 'confirmed' as const,
+					serverId: (m.row?.norbital_id as string) ?? null,
+					row: { ...m.row, norbital_row_version: 1 }
+				}))
+			});
+		};
+		const client = await makeClient(fetch);
+		try {
+			const queued = await client.mutate([
+				{
+					clientId: 'c1',
+					collection: 'orders',
+					action: 'create',
+					row: { norbital_id: 'q', status: 'queued' }
+				}
+			]);
+			expect(queued[0]?.status).toBe('rejected');
+			expect((queued[0] as { reason: string }).reason).toBe('OFFLINE_QUEUED');
+			expect(client.isOnline()).toBe(false);
+			// The optimistic row is on screen even though the write has not landed.
+			expect(await client.count('orders')).toBe(1);
+			expect((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length).toBe(1);
+
+			reachable = true;
+			const flushed = await client.flushPending();
+			expect(flushed[0]?.status).toBe('confirmed');
+			expect(client.isOnline()).toBe(true);
+			expect((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length).toBe(0);
+			expect(mutateCalls).toBe(2);
+		} finally {
+			await client.close();
+		}
+	});
+
+	/**
+	 * Deleting a record whose create is still queued used to send the delete straight to the server,
+	 * which had never seen the id and answered `404 Record with ID … not found`. It self-resolved
+	 * once the outbox drained, so it was a race — and one the client can remove outright, because
+	 * the create is still in its own hands. Create-then-delete on an unsynced row is a no-op.
+	 */
+	it('cancels a delete against a create that has not been sent, without a round trip', async () => {
+		let mutateCalls = 0;
+		const { fetch } = mockTransport({
+			mutate: () => {
+				mutateCalls += 1;
+				return { results: [] };
+			}
+		});
+		const client = await makeClient(fetch);
+		try {
+			client.setOnline(false);
+			await client.mutate([
+				{
+					clientId: 'create-1',
+					collection: 'orders',
+					action: 'create',
+					row: { norbital_id: 'ghost', status: 'draft' }
+				}
+			]);
+			expect(await client.count('orders')).toBe(1);
+
+			const deleted = await client.mutate([
+				{
+					clientId: 'delete-1',
+					collection: 'orders',
+					action: 'delete',
+					row: { norbital_id: 'ghost' }
+				}
+			]);
+			expect(deleted[0]?.status).toBe('confirmed');
+			expect(await client.count('orders')).toBe(0);
+			// Both halves left the outbox: nothing remains to be sent about a record that never existed.
+			expect((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length).toBe(0);
+
+			// And the drain has nothing to say either — the server is never told about it at all.
+			client.setOnline(true);
+			await client.flushPending();
+			expect(mutateCalls).toBe(0);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('folds an update into the create it is still waiting behind', async () => {
+		let sent: { action: string; row?: Record<string, unknown> }[] = [];
+		const { fetch } = mockTransport({
+			mutate: (body) => {
+				sent = body.mutations as { action: string; row?: Record<string, unknown> }[];
+				return {
+					results: (body.mutations as { clientId: string; row?: Record<string, unknown> }[]).map(
+						(m) => ({
+							clientId: m.clientId,
+							status: 'confirmed' as const,
+							serverId: (m.row?.norbital_id as string) ?? null,
+							row: { ...m.row, norbital_row_version: 1 }
+						})
+					)
+				};
+			}
+		});
+		const client = await makeClient(fetch);
+		try {
+			client.setOnline(false);
+			await client.mutate([
+				{
+					clientId: 'create-1',
+					collection: 'orders',
+					action: 'create',
+					row: { norbital_id: 'k', status: 'draft' }
+				}
+			]);
+			await client.mutate([
+				{
+					clientId: 'update-1',
+					collection: 'orders',
+					action: 'update',
+					row: { norbital_id: 'k', status: 'final' }
+				}
+			]);
+			expect((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length).toBe(1);
+
+			client.setOnline(true);
+			await client.flushPending();
+			// One INSERT carrying the latest values — never an UPDATE racing ahead of its own row.
+			expect(sent).toHaveLength(1);
+			expect(sent[0]?.action).toBe('create');
+			expect(sent[0]?.row?.status).toBe('final');
+			expect((await client.localRow('orders', 'k'))?.status).toBe('final');
+		} finally {
+			await client.close();
+		}
+	});
+
+	/**
+	 * Offline queueing and dependent ordering happening at once. The server is unreachable, so an
+	 * update queues; a second update to the same record must then queue *behind* it rather than
+	 * race it; an unrelated create joins the same queue. When the server comes back, one drain
+	 * sends all three, oldest first, and each reaches the server exactly once.
+	 */
+	it('drains an offline queue with dependent entries in order, exactly once, on reconnect', async () => {
+		let reachable = false;
+		let mutateCalls = 0;
+		const batches: { clientId: string; action: string; row?: Record<string, unknown> }[][] = [];
+		const fetch: SyncFetch = async (path, init) => {
+			if (!path.startsWith('sync/mutate')) return new Response('not found', { status: 404 });
+			mutateCalls += 1;
+			if (!reachable) return new Response('no upstream', { status: 503 });
+			const body = JSON.parse(init.body!) as {
+				mutations: { clientId: string; action: string; row?: Record<string, unknown> }[];
+			};
+			batches.push(body.mutations);
+			return jsonResponse({
+				results: body.mutations.map((m) => ({
+					clientId: m.clientId,
+					status: 'confirmed' as const,
+					serverId: (m.row?.norbital_id as string) ?? null,
+					row: { ...m.row, norbital_row_version: 2 }
+				}))
+			});
+		};
+		const client = await makeClient(fetch);
+		try {
+			await client.upsertRow('orders', {
+				norbital_id: 'a',
+				norbital_row_version: 1,
+				status: 'open'
+			});
+
+			// The first write discovers the outage the honest way — by failing to reach the server.
+			const first = await client.mutate([
+				{
+					clientId: 'update-1',
+					collection: 'orders',
+					action: 'update',
+					row: { norbital_id: 'a', status: 'one' },
+					version: 1
+				}
+			]);
+			expect(first[0]).toMatchObject({ status: 'rejected', reason: 'OFFLINE_QUEUED' });
+			expect(client.isOnline()).toBe(false);
+			expect(mutateCalls).toBe(1);
+
+			// Dependent ordering: this edit's server-side effect depends on the queued one, so it
+			// must not be sent first. It is appended to the outbox without any round trip at all.
+			const second = await client.mutate([
+				{
+					clientId: 'update-2',
+					collection: 'orders',
+					action: 'update',
+					row: { norbital_id: 'a', status: 'two' },
+					version: 1
+				}
+			]);
+			expect(second[0]).toMatchObject({ status: 'rejected', reason: 'OFFLINE_QUEUED' });
+			expect(mutateCalls).toBe(1);
+
+			// An unrelated write queues on the same clock, interleaved behind both.
+			const third = await client.mutate([
+				{
+					clientId: 'create-1',
+					collection: 'orders',
+					action: 'create',
+					row: { norbital_id: 'b', status: 'new' }
+				}
+			]);
+			expect(third[0]).toMatchObject({ status: 'rejected', reason: 'OFFLINE_QUEUED' });
+			expect(mutateCalls).toBe(1);
+			expect(
+				(
+					await client.queryLocal<{ client_id: string }>(
+						`SELECT client_id FROM _pod_pending ORDER BY created_at ASC`
+					)
+				).map((entry) => entry.client_id)
+			).toEqual(['update-1', 'update-2', 'create-1']);
+
+			// Connectivity returns; the drain it triggers sends everything once, in queue order.
+			reachable = true;
+			client.setOnline(true);
+			const flushed = await client.flushPending();
+			expect(flushed.every((result) => result.status === 'confirmed')).toBe(true);
+			expect(batches).toHaveLength(1);
+			expect(batches[0]!.map((mutation) => mutation.clientId)).toEqual([
+				'update-1',
+				'update-2',
+				'create-1'
+			]);
+			// The failed probe plus the one successful drain — every entry reached the server once.
+			expect(mutateCalls).toBe(2);
+			expect((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length).toBe(0);
+			expect((await client.localRow('orders', 'a'))?.status).toBe('two');
+			expect((await client.localRow('orders', 'b'))?.status).toBe('new');
+
+			// And the outbox stays empty: nothing re-sends on a second pass.
+			await client.flushPending();
+			expect(mutateCalls).toBe(2);
+		} finally {
+			await client.close();
+		}
+	});
+
+	/**
+	 * The device's own connectivity events are wired where a window exists. `offline` is trusted
+	 * negatively — a write queues without spending a request on proving the radio is down — and
+	 * `online` is the drain trigger: the outbox moves the moment the device says it can, and the
+	 * attempt itself decides the verdict.
+	 */
+	it('queues on the browser offline event and drains on the online event', async () => {
+		const listeners = new Map<string, Set<() => void>>();
+		const fakeWindow = {
+			addEventListener: (type: string, listener: () => void) => {
+				const set = listeners.get(type) ?? new Set<() => void>();
+				set.add(listener);
+				listeners.set(type, set);
+			},
+			removeEventListener: (type: string, listener: () => void) => {
+				listeners.get(type)?.delete(listener);
+			}
+		};
+		// The replica must open before the fake window exists: PGlite picks its loader by sniffing
+		// `window`, and a client db that believes it is in a browser it cannot find never opens.
+		const db = await createClientDb();
+		let mutateCalls = 0;
+		const { fetch } = mockTransport({
+			mutate: (body) => {
+				mutateCalls += 1;
+				return {
+					results: (body.mutations as { clientId: string; row?: Record<string, unknown> }[]).map(
+						(m) => ({
+							clientId: m.clientId,
+							status: 'confirmed' as const,
+							serverId: (m.row?.norbital_id as string) ?? null,
+							row: { ...m.row, norbital_row_version: 1 }
+						})
+					)
+				};
+			}
+		});
+		const hadWindow = Reflect.has(globalThis, 'window');
+		const original = Reflect.get(globalThis, 'window');
+		Reflect.set(globalThis, 'window', fakeWindow);
+		let client: PodSyncClient | undefined;
+		try {
+			client = new PodSyncClient({ replicaEpoch: 'test-epoch', db, schemaSql: SCHEMA, fetch });
+			await client.bootstrap();
+			expect(listeners.get('offline')?.size).toBe(1);
+			expect(listeners.get('online')?.size).toBe(1);
+
+			for (const listener of listeners.get('offline') ?? []) listener();
+			expect(client.isOnline()).toBe(false);
+
+			const queued = await client.mutate([
+				{
+					clientId: 'c1',
+					collection: 'orders',
+					action: 'create',
+					row: { norbital_id: 'w', status: 'queued' }
+				}
+			]);
+			expect(queued[0]).toMatchObject({ status: 'rejected', reason: 'OFFLINE_QUEUED' });
+			// The radio being down is not a request: nothing was sent to find that out.
+			expect(mutateCalls).toBe(0);
+
+			for (const listener of listeners.get('online') ?? []) listener();
+			// The online event schedules the drain; it is not awaited anywhere, so poll for it.
+			for (let attempt = 0; attempt < 100; attempt++) {
+				if ((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length === 0) break;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length).toBe(0);
+			expect(mutateCalls).toBe(1);
+			expect(client.isOnline()).toBe(true);
+		} finally {
+			if (hadWindow) Reflect.set(globalThis, 'window', original);
+			else Reflect.deleteProperty(globalThis, 'window');
+			await client?.close();
+		}
+	});
+
+	/** The coalescing must not swallow a real delete: an id the outbox knows nothing about is the
+	 *  server's to judge, and it is still entitled to answer 404. */
+	it('sends a delete for a record the outbox has never heard of', async () => {
+		let mutateCalls = 0;
+		const { fetch } = mockTransport({
+			mutate: (body) => {
+				mutateCalls += 1;
+				return {
+					results: (body.mutations as { clientId: string }[]).map((m) => ({
+						clientId: m.clientId,
+						status: 'rejected' as const,
+						reason: 'NOT_FOUND',
+						detail: 'Record with ID stranger not found.'
+					}))
+				};
+			}
+		});
+		const client = await makeClient(fetch);
+		try {
+			const results = await client.mutate([
+				{
+					clientId: 'delete-1',
+					collection: 'orders',
+					action: 'delete',
+					row: { norbital_id: 'stranger' }
+				}
+			]);
+			expect(mutateCalls).toBe(1);
+			expect(results[0]?.status).toBe('rejected');
+			expect((results[0] as { reason: string }).reason).toBe('NOT_FOUND');
+		} finally {
+			await client.close();
+		}
+	});
+
+	/** The outbox is what the pending indicator is derived from, so it has to name its records. */
+	it('reports the records whose writes have not settled yet', async () => {
+		const { fetch } = mockTransport({});
+		const client = await makeClient(fetch);
+		try {
+			client.setOnline(false);
+			await client.mutate([
+				{
+					clientId: 'c1',
+					collection: 'orders',
+					action: 'create',
+					row: { norbital_id: 'unsettled', status: 'draft' }
+				}
+			]);
+			expect([...(await client.pendingRecordIds('orders'))]).toEqual(['unsettled']);
+			expect((await client.pendingRecordIds('customers')).size).toBe(0);
+
+			await client.queryLocal(`DELETE FROM _pod_pending`);
+			expect((await client.pendingRecordIds('orders')).size).toBe(0);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it('applies streamed diffs and evicts on delete/leave', async () => {
 		const { fetch } = mockTransport({});
 		const client = await makeClient(fetch);

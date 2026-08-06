@@ -1,11 +1,14 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 
 	let { record, close }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -13,14 +16,14 @@
 	collection="employment_statutory_facts"
 	recordId={record?.norbital_id}
 	defaultValues={record ?? undefined}
-	submitLabel={record ? 'Save registration' : 'Record registration'}
+	submitLabel={record ? t('component.save_registration') : t('component.record_registration')}
 	onAfterSubmit={record ? undefined : close}
 >
 	{#snippet children({ Field })}
 		<Grid gap="md" minimum="panel">
 			<Field
 				name="employment_id"
-				label="Employment"
+				label={t('component.employment')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'employments',
@@ -36,7 +39,7 @@
 			/>
 			<Field
 				name="statutory_contribution_id"
-				label="Statutory scheme"
+				label={t('component.statutory_scheme')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'statutory_contributions',
@@ -50,8 +53,10 @@
 					}
 				}}
 			/>
-			<Column span="all"><Field name="status" label="Registration" /></Column>
-			<Column span="all"><Field name="effective_range" label="Effective period" /></Column>
+			<Column span="all"><Field name="status" label={t('component.registration')} /></Column>
+			<Column span="all"
+				><Field name="effective_range" label={t('component.effective_period')} /></Column
+			>
 		</Grid>
 	{/snippet}
 </CollectionForm>

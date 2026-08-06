@@ -50,9 +50,23 @@ The template includes focused arithmetic and export checks. All of them run agai
 `pnpm test` is the whole story and `pnpm build` only builds:
 
 ```bash
-pnpm test    # overtime controls, the payroll XLSX, and the repayment-agreement unit tests
-node scripts/verify-payroll-arithmetic.mjs   # the long-form arithmetic acceptance run, on demand
+pnpm test    # everything below, plus the repayment-agreement and roster unit tests
+node scripts/verify-payroll-arithmetic.mjs   # the long-form arithmetic acceptance run
+node scripts/verify-fixture-shapes.mjs       # audits that run's fixtures against the real API shape
 ```
+
+The arithmetic run used to be on-demand and outside `pnpm test`. It is in `pnpm test` now, because
+being outside it is what let a fixture rot unnoticed until the assertion above it stopped meaning
+anything. A check nobody runs is a check that does not exist.
+
+`verify-fixture-shapes.mjs` re-runs the arithmetic script under instrumentation and reports two
+things: fields the engine read that a fixture never supplied, and fixture keys that exist nowhere in
+`src/`. It exists because a fixture once described a response shape the API does not have — `nature`
+on an invented `componentType` — which made a passing assertion prove nothing. Deleted collections
+survive in stale build artefacts (`graphify-out/cache/stat-index.json`, `.norbital/dist/`), so a
+fixture written against one of those looks right and is not; check `src/collections/<name>/+model.ts`
+instead. Read that script's header before trusting a green run: it is honest about what it cannot
+see, and a green run means nothing until the mutation check described there has been done.
 
 The confidential source reconciliation is opt-in in Core; see
 [`docs/data/reconciliation.md`](docs/data/reconciliation.md).

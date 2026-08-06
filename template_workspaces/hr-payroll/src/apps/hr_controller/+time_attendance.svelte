@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Display, type ChartDisplaySpec } from '@norbital-ai/ui/chart';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
@@ -7,9 +9,15 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { startOfIsoWeekDate, todayKey, todayInstant } from '../../lib/ui/calendar.js';
-	import { formatCalendarDate, formatInstant } from '../../lib/ui/display-formatters.js';
+	import {
+		formatCalendarDate,
+		formatDurationHours,
+		formatInstant
+	} from '../../lib/ui/display-formatters.js';
 	import { runWorkbookImport } from '../../lib/ui/workbook-import.js';
 	import { timeEntryImportPayload } from '../../collections/time_entries/lib/import-workbook.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
@@ -89,14 +97,16 @@
 	const attendanceChart = $derived({
 		kind: 'line',
 		loading: recentEntriesQuery?.loading ?? false,
-		title: 'Weekly attendance exception rate',
-		description:
-			'Open or incomplete punches as a share of recorded attendance over the latest eight weeks.',
+		title: t('app.time_attendance.chart_title'),
+		description: t('app.time_attendance.chart_description'),
 		data: attendanceTrend,
 		xKey: 'week',
 		series: ['exceptionRate'],
 		config: {
-			exceptionRate: { label: 'Exception rate', color: 'var(--color-destructive)' }
+			exceptionRate: {
+				label: t('app.time_attendance.chart_exception_rate'),
+				color: 'var(--color-destructive)'
+			}
 		},
 		valueFormat: { style: 'percent', maximumFractionDigits: 1 },
 		curve: 'linear'
@@ -114,10 +124,10 @@
 
 {#snippet companyScopeActions()}
 	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Legal entity</span>
+		<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
 		<Inline gap="sm">
 			<Combobox
-				ariaLabel="Legal entity"
+				ariaLabel={t('component.legal_entity')}
 				options={companyOptions}
 				value={selectedCompanyId}
 				onValueChange={(value) => {
@@ -127,8 +137,8 @@
 					}
 					companyId = companies[0]?.norbital_id ?? null;
 				}}
-				emptyPlaceholder="Select legal entity…"
-				searchPlaceholder="Search companies…"
+				emptyPlaceholder={t('component.select_legal_entity')}
+				searchPlaceholder={t('component.search_companies')}
 				clientConfig={{
 					isLoading: companiesQuery.loading,
 					error: companiesQuery.error?.message ?? null
@@ -143,17 +153,15 @@
 	<Grid gap="xl" minimum="panel">
 		<Stack gap="md">
 			<div>
-				<h2 class="text-lg font-semibold">Attendance readiness</h2>
+				<h2 class="text-lg font-semibold">{t('app.time_attendance.attendance_readiness')}</h2>
 				<p class="text-sm text-muted-foreground">
-					A CLOSED entry with both stamps can be measured into payroll. State only describes the
-					clock. Overtime authorised is the separate day-level decision that lets a clock overrun
-					reach payroll; the platform approval stamp governs edits to the whole attendance row.
+					{t('app.time_attendance.attendance_readiness_description')}
 				</p>
 			</div>
 		</Stack>
 		{#if selectedCompanyId == null}
 			<p class="text-sm text-muted-foreground">
-				Select a legal entity to load its attendance trend.
+				{t('app.time_attendance.empty_overview')}
 			</p>
 		{:else}
 			<Display
@@ -166,7 +174,7 @@
 
 {#snippet entries()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to review its time entries.</p>
+		<p class="text-sm text-muted-foreground">{t('app.time_attendance.empty_entries')}</p>
 	{:else}
 		<CollectionTable
 			{client}
@@ -176,13 +184,12 @@
 				where: { employment_id: { in: employmentIds } },
 				orderBy: { work_date: 'desc' }
 			}}
-			searchPlaceholder="Search time entries…"
+			searchPlaceholder={t('app.time_attendance.search_entries')}
 			importPipelines={[
 				{
 					id: 'time-entry-workbook',
-					label: 'Time entry workbook',
-					description:
-						'Import clock punches from the time-entries template — one row per person per day on its "Time entries" sheet, read as local wall time in the zone its "Settings" sheet names.',
+					label: t('app.time_attendance.import_pipeline'),
+					description: t('app.time_attendance.import_pipeline_description'),
 					icon: 'lucide:clock-arrow-up',
 					run: async () => {
 						await runWorkbookImport({
@@ -197,24 +204,43 @@
 			{#snippet columns({ Column })}
 				<Column
 					name="work_date"
-					label="Work date"
+					label={t('component.work_date')}
 					card="title"
 					render={({ value }) => formatCalendarDate(value)}
 				/>
 				<Column
 					name="employment_id"
-					label="Employment"
+					label={t('component.employment')}
 					card="subtitle"
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="clock_in" label="Clock in" render={({ value }) => formatInstant(value)} />
-				<Column name="clock_out" label="Clock out" render={({ value }) => formatInstant(value)} />
-				<Column name="break_minutes" label="Break (min)" />
-				<Column name="overtime_authorized" label="OT authorised" />
-				<Column name="overtime_in" label="OT in" render={({ value }) => formatInstant(value)} />
-				<Column name="overtime_out" label="OT out" render={({ value }) => formatInstant(value)} />
-				<Column name="state" label="State" card="badge" />
+				<Column
+					name="clock_in"
+					label={t('component.clock_in')}
+					render={({ value }) => formatInstant(value)}
+				/>
+				<Column
+					name="clock_out"
+					label={t('component.clock_out')}
+					render={({ value }) => formatInstant(value)}
+				/>
+				<Column
+					name="break_minutes"
+					label={t('app.time_attendance.break_hours')}
+					render={({ value }) => formatDurationHours(value)}
+				/>
+				<Column
+					name="overtime_in"
+					label={t('app.time_attendance.ot_in')}
+					render={({ value }) => formatInstant(value)}
+				/>
+				<Column
+					name="overtime_out"
+					label={t('app.time_attendance.ot_out')}
+					render={({ value }) => formatInstant(value)}
+				/>
+				<Column name="state" label={t('component.state')} card="badge" />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -222,9 +248,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="HR Controller"
-		title="Time &amp; Attendance"
-		description="Compare actual clocks with the rostered shift before they reach payroll — scoped to one legal entity."
+		eyebrow={t('app.time_attendance.eyebrow')}
+		title={t('app.time_attendance.header_title')}
+		description={t('app.time_attendance.header_description')}
 		actions={companyScopeActions}
 	/>
 {/snippet}
@@ -235,11 +261,16 @@
 		config={[
 			{
 				name: 'overview',
-				label: 'Overview',
+				label: t('component.tab_overview'),
 				icon: 'lucide:chart-no-axes-combined',
 				content: overview
 			},
-			{ name: 'entries', label: 'Entries', icon: 'lucide:clock-3', content: entries }
+			{
+				name: 'entries',
+				label: t('app.time_attendance.tab_entries'),
+				icon: 'lucide:clock-3',
+				content: entries
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

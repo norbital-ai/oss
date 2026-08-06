@@ -6,11 +6,14 @@
 	} from '../../collection-table-state.svelte';
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
 	import { Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { Separator } from '#lib/separator';
 	import { cn } from '#lib/utils';
+
+	const { t } = useI18n<UiKeys>();
 
 	const { inst, table }: { inst: ColumnAPI<T, TCondition>; table: TableAPI<T, TCondition> } =
 		$props();
@@ -27,6 +30,7 @@
 {#if inst.enablePinning || inst.enableHiding}
 	<Popover.Root bind:open={isPopoverOpen}>
 		<Popover.Trigger
+			aria-label={t('table.columnActions')}
 			class={cn(
 				buttonVariants({ variant: 'ghost', size: 'icon' }),
 				'mr-3 transition-opacity',
@@ -42,7 +46,7 @@
 		<Popover.Content align="start" class="flex flex-col gap-2 p-2 py-4">
 			<Stack gap="xs">
 				<div class="px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-					Display
+					{t('table.display')}
 				</div>
 
 				{#if inst.enableHiding}
@@ -51,7 +55,7 @@
 						onclick={() => inst.toggleVisibility()}
 					>
 						<Icon icon={inst.isVisible ? 'lucide:eye-off' : 'lucide:eye'} class="mr-2 h-3 w-3" />
-						{inst.isVisible ? 'Hide column' : 'Show column'}
+						{inst.isVisible ? t('table.hideColumn') : t('table.showColumn')}
 					</button>
 				{/if}
 
@@ -62,14 +66,14 @@
 						onclick={() => inst.id !== COLLECTION_TABLE_SELECTION_COLUMN_ID && inst.togglePin()}
 					>
 						<Icon icon={inst.isPinned ? 'lucide:pin-off' : 'lucide:pin'} class="mr-2 h-3 w-3" />
-						{inst.isPinned ? 'Unpin column' : 'Pin column'}
+						{inst.isPinned ? t('table.unpinColumn') : t('table.pinColumn')}
 					</button>
 				{/if}
 
 				{#if displayOptions.length > 0 && onDisplayChange}
 					<Separator />
 					<div class="px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-						Format
+						{t('table.format')}
 					</div>
 					{#each displayOptions as option (option.value)}
 						<button
@@ -90,7 +94,7 @@
 				<div class="mt-1">
 					<Separator />
 					<div class="px-2 pt-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-						Sizing
+						{t('table.sizing')}
 					</div>
 					<Stack gap="none">
 						<button
@@ -100,7 +104,7 @@
 							}}
 						>
 							<Icon icon="lucide:undo-2" class="mr-2 h-3.5 w-3.5" />
-							Reset width
+							{t('table.resetWidth')}
 						</button>
 						<button
 							class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
@@ -109,14 +113,14 @@
 							}}
 						>
 							<Icon icon="lucide:scan" class="mr-2 h-3.5 w-3.5" />
-							Fit column
+							{t('table.fitColumn')}
 						</button>
 						<button
 							class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
 							onclick={() => table.fitAllColumns()}
 						>
 							<Icon icon="lucide:scan-line" class="mr-2 h-3.5 w-3.5" />
-							Fit all
+							{t('table.fitAll')}
 						</button>
 					</Stack>
 				</div>

@@ -16,6 +16,10 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { composeSystemPrompt } from '$lib/server/agent/system-prompt.js';
 import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
+import {
+	composeMentionContext,
+	type AgentMentionInput
+} from '$lib/server/agent/agent-mentions.server.js';
 import { listSkillSummaries, readSkillContent } from '$lib/skills/registry.server.js';
 import type {
 	AiChatResult,
@@ -85,6 +89,14 @@ type AgentRunOptions = {
 	 * prompt fragment this package composes.
 	 */
 	readonly compact?: { readonly instructions?: string };
+	/**
+	 * Records the requestor referenced with "@" in the composer.
+	 *
+	 * Fetched as the requestor and appended to this turn's window only — the stored transcript keeps
+	 * the clean message the person typed. A reference that no longer resolves degrades to prose: the
+	 * label stays in the text and nothing is injected.
+	 */
+	readonly mentions?: readonly AgentMentionInput[];
 };
 
 /**
@@ -302,7 +314,11 @@ async function resolveTools(
 		for (const name of spec.tools ?? []) {
 			const definition = registered[name];
 			if (!definition) throw new Error(`Agent references unknown tenant tool: ${name}`);
-			tools.push({ name, description: definition.description, inputSchema: jsonSchema(definition) });
+			tools.push({
+				name,
+				description: definition.description,
+				inputSchema: jsonSchema(definition)
+			});
 		}
 	}
 	const taken = new Set(tools.map((tool) => tool.name));
@@ -412,9 +428,7 @@ async function executeTool(
 		const binding = requireRuntimeFacility('agentTools');
 		return objectValue(
 			await binding.run(call.name, call.input, {
-				...(spec.hostSandbox?.workspace
-					? { sandboxWorkspace: spec.hostSandbox.workspace }
-					: {})
+				...(spec.hostSandbox?.workspace ? { sandboxWorkspace: spec.hostSandbox.workspace } : {})
 			})
 		);
 	}
@@ -945,9 +959,6 @@ async function runAgentLoop(input: {
 			planMode: input.planMode
 		});
 		consumedTokens += usageTokens(result.usage);
-		if (input.spec.maxTokens && consumedTokens > input.spec.maxTokens) {
-			throw new Error(`Agent token budget exceeded (${input.spec.maxTokens})`);
-		}
 		if (result.text) {
 			finalText = result.text;
 			input.messages.push({ role: 'assistant', content: result.text });
@@ -964,6 +975,13 @@ async function runAgentLoop(input: {
 				callMessage,
 				input.turnId,
 				!result.text && result.usage ? { usage: objectValue(result.usage) } : undefined
+			);
+		}
+		// Checked after the iteration's own usage is persisted: a turn that dies on the budget must
+		// still show what it spent, or the session total reads lower than the error that stopped it.
+		if (input.spec.maxTokens && consumedTokens > input.spec.maxTokens) {
+			throw new Error(
+				`Agent token budget exceeded (${consumedTokens} of ${input.spec.maxTokens} tokens)`
 			);
 		}
 		if (calls.length === 0) {
@@ -1117,15 +1135,20 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 	let inputMessageId: string | null = null;
 	const planMode = options.planMode === true;
 	if (initial) {
-		messages.push({ role: 'user', content: initial });
-		inputMessageId = await writer.persist(
-			{ role: 'user', content: initial },
-			turnId,
-			{
-				...(options.inputMetadata ?? {}),
-				...(planMode ? { plan_mode: true } : {})
-			}
-		);
+		// The transcript stores what the person typed; the record snapshots ride along in the model
+		// window only. A later turn that still needs a record can read it through `read_collection` —
+		// the replayed history carries the label that says which one.
+		const mentionContext = options.mentions?.length
+			? await composeMentionContext(ctx, options.mentions)
+			: null;
+		messages.push({
+			role: 'user',
+			content: mentionContext ? `${initial}\n\n${mentionContext}` : initial
+		});
+		inputMessageId = await writer.persist({ role: 'user', content: initial }, turnId, {
+			...(options.inputMetadata ?? {}),
+			...(planMode ? { plan_mode: true } : {})
+		});
 		if (inputMessageId) {
 			await updateRecord(
 				ctx,

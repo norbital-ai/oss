@@ -1,4 +1,4 @@
-import { boolean, defineModel, enums, text } from '@norbital-ai/pod/authoring';
+import { boolean, defineModel, enums, numeric, text } from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
@@ -9,6 +9,9 @@ export default defineModel(
 		phone: text(),
 		currency: enums(['CNY', 'USD', 'EUR', 'GBP', 'JPY', 'SGD', 'HKD']),
 		address: text(),
+		credit_limit: numeric(),
+		credit_used: numeric(),
+		credit_hold: boolean(),
 		active: boolean().notNull()
 	},
 	{

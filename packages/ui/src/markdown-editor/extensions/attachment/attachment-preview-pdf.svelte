@@ -1,6 +1,9 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '../../../button/index.js';
+	import { useI18n, type UiKeys } from '../../../i18n/index.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		dataUrl,
@@ -24,16 +27,16 @@
 <!-- stupidity:allow UI5 -- attachment media crop -->
 <div class="h-full overflow-hidden rounded shadow">
 	<div class="flex items-center justify-between bg-muted px-3 py-2">
-		<span class="text-sm font-medium">PDF Preview</span>
+		<span class="text-sm font-medium">{t('misc.pdfPreview')}</span>
 		<Button
 			variant="ghost"
 			size="sm"
 			class="text-brand"
 			onclick={openInNewTab}
-			title="Open in new tab"
+			title={t('dataRenderer.openInNewTab')}
 		>
 			<Icon icon="lucide:external-link" width="14" height="14" class="mr-1" />
-			Open in new tab
+			{t('dataRenderer.openInNewTab')}
 		</Button>
 	</div>
 
@@ -41,7 +44,7 @@
 		<iframe src={dataUrl} title={fileName} class="h-96 w-full border-0" allow="fullscreen"></iframe>
 	{:else}
 		<div class="flex h-64 items-center justify-center">
-			<p>PDF preview not available. Please open in a new tab.</p>
+			<p>{t('misc.pdfPreviewUnavailable')}</p>
 		</div>
 	{/if}
 </div>

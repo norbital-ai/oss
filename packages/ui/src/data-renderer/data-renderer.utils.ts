@@ -1,7 +1,23 @@
 import type { CollectionField } from '@norbital-ai/platform-utils/collection';
+import type { MessageVars } from '@norbital-ai/std/i18n';
 import { formatDateRangeLocal } from '@norbital-ai/std/date';
 import { humanize } from '@norbital-ai/std/string';
 import { formatPhoneDisplay, phoneCountryFromLocale } from './phone_number/phone_number.utils.js';
+
+type Translate = (key: string, vars?: MessageVars) => string;
+export type { Translate };
+
+/** English fallbacks so callers without an i18n handle render stable text. */
+const FALLBACK_TEXT: Record<string, string> = {
+	'dataRenderer.null': '—',
+	'dataRenderer.true': 'Yes',
+	'dataRenderer.false': 'No',
+	'dataRenderer.present': 'Present'
+};
+
+function resolveText(t: Translate | undefined, key: string): string {
+	return t ? t(key) : (FALLBACK_TEXT[key] ?? key);
+}
 
 function dateValue(input: unknown): Date | null {
 	const value = input instanceof Date ? input : new Date(String(input));
@@ -23,13 +39,13 @@ export function formatStructuredValue(value: unknown, pretty = false): string {
 	}
 }
 
-function formatTimestampRange(value: unknown, locale: string): string {
+function formatTimestampRange(value: unknown, locale: string, t?: Translate): string {
 	const lower = objectProperty(value, 'lower') ?? objectProperty(value, 'start');
 	const upper = objectProperty(value, 'upper') ?? objectProperty(value, 'end');
 	let start = lower;
 	let end = upper;
 	if (typeof value === 'string') {
-		if (value === 'empty') return '—';
+		if (value === 'empty') return resolveText(t, 'dataRenderer.null');
 		const match = value.match(/^[[(]\"?([^,\"]*)\"?,\"?([^\]\)\"]*)\"?[\])]$/);
 		if (!match) return value;
 		start = match[1] || null;
@@ -40,7 +56,7 @@ function formatTimestampRange(value: unknown, locale: string): string {
 		kind: 'timestamptz',
 		nullable: true
 	};
-	return `${formatScalar(timestampField, start, locale)} – ${end == null ? 'Present' : formatScalar(timestampField, end, locale)}`;
+	return `${formatScalar(timestampField, start, locale, t)} – ${end == null ? resolveText(t, 'dataRenderer.present') : formatScalar(timestampField, end, locale, t)}`;
 }
 
 function formatDateRange(value: unknown, locale: string): string {
@@ -59,13 +75,22 @@ function formatDateRange(value: unknown, locale: string): string {
 	}
 }
 
-function formatScalar(field: CollectionField, value: unknown, locale: string): string {
-	if (value == null || value === '') return '—';
+function formatScalar(
+	field: CollectionField,
+	value: unknown,
+	locale: string,
+	t?: Translate
+): string {
+	if (value == null || value === '') return resolveText(t, 'dataRenderer.null');
 	if (field.relation || field.kind === 'file') return String(value);
 
 	switch (field.kind) {
 		case 'boolean':
-			return value === true ? 'Yes' : value === false ? 'No' : '—';
+			return value === true
+				? resolveText(t, 'dataRenderer.true')
+				: value === false
+					? resolveText(t, 'dataRenderer.false')
+					: resolveText(t, 'dataRenderer.null');
 		case 'numeric':
 		case 'number':
 		case 'integer': {
@@ -77,7 +102,8 @@ function formatScalar(field: CollectionField, value: unknown, locale: string): s
 		case 'money': {
 			const amount = objectProperty(value, 'value');
 			const currency = objectProperty(value, 'currency');
-			if (typeof amount !== 'number' || typeof currency !== 'string') return '—';
+			if (typeof amount !== 'number' || typeof currency !== 'string')
+				return resolveText(t, 'dataRenderer.null');
 			try {
 				return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(amount);
 			} catch {
@@ -101,10 +127,10 @@ function formatScalar(field: CollectionField, value: unknown, locale: string): s
 			return formatDateRange(value, locale);
 		case 'geolocation': {
 			const address = objectProperty(value, 'formatted_address');
-			return typeof address === 'string' ? address : '—';
+			return typeof address === 'string' ? address : resolveText(t, 'dataRenderer.null');
 		}
 		case 'tstzrange':
-			return formatTimestampRange(value, locale);
+			return formatTimestampRange(value, locale, t);
 		case 'enum':
 			return humanize(String(value));
 		case 'phone':
@@ -119,8 +145,15 @@ function formatScalar(field: CollectionField, value: unknown, locale: string): s
 	}
 }
 
-export function formatDataValue(field: CollectionField, value: unknown, locale = 'en-US'): string {
+export function formatDataValue(
+	field: CollectionField,
+	value: unknown,
+	locale = 'en-US',
+	t?: Translate
+): string {
 	return field.array && Array.isArray(value)
-		? value.map((item) => formatScalar(field, item, locale)).join(', ')
-		: formatScalar(field, value, locale);
+		? value
+				.map((item) => formatScalar(field, item, locale, t))
+				.join(', ')
+		: formatScalar(field, value, locale, t);
 }

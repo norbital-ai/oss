@@ -8,11 +8,16 @@
 	} from '@internationalized/date';
 	import { buttonVariants } from '#lib/button';
 	import { formatDistance } from 'date-fns/formatDistance';
+	import { enUS, zhCN } from 'date-fns/locale';
 	import { Calendar } from '#lib/calendar';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn, parseUtcInstantZoned } from '#lib/utils';
 	import YearView from './year.view.svelte';
+
+	const { t } = useI18n<UiKeys>();
+	const intlLocale = $derived(useI18n().intlLocale);
 
 	// ==================================================================================
 	// TYPES & INTERFACES
@@ -62,7 +67,7 @@
 		readonly = false,
 		borderless = false,
 		onValueChange,
-		placeholder = 'Select date',
+		placeholder = t('dataRenderer.selectDate'),
 		maxTriggerBadges = 2,
 		maxBelowBadges = 5,
 		align = 'start',
@@ -74,7 +79,8 @@
 	// STATE & DERIVED VALUES
 	// ==================================================================================
 
-	const df = new DateFormatter('en-US', { dateStyle: 'medium' });
+	const df = $derived(new DateFormatter(intlLocale, { dateStyle: 'medium' }));
+	const dateFnsLocale = $derived(intlLocale.startsWith('zh') ? zhCN : enUS);
 	let popoverOpen = $state(false);
 	/** A derived flag to determine if mutation actions should be disabled */
 	const cantMutate = $derived(readonly || disabled);
@@ -119,7 +125,7 @@
 		try {
 			const date = parseUtcInstantZoned(dateStr).toDate();
 			const now = new Date();
-			return formatDistance(date, now, { addSuffix: true });
+			return formatDistance(date, now, { addSuffix: true, locale: dateFnsLocale });
 		} catch {
 			return dateStr;
 		}
@@ -143,10 +149,17 @@
 		const now = new Date();
 
 		if (dateStrings.length === 2) {
-			return `${formatDistance(earliest, now, { addSuffix: true })} and ${formatDistance(latest, now, { addSuffix: true })}`;
+			return t('dataRenderer.dateSummaryTwo', {
+				first: formatDistance(earliest, now, { addSuffix: true, locale: dateFnsLocale }),
+				second: formatDistance(latest, now, { addSuffix: true, locale: dateFnsLocale })
+			});
 		}
 
-		return `${dateStrings.length} dates (${formatDistance(earliest, now, { addSuffix: true })} to ${formatDistance(latest, now, { addSuffix: true })})`;
+		return t('dataRenderer.dateSummaryMany', {
+			count: dateStrings.length,
+			first: formatDistance(earliest, now, { addSuffix: true, locale: dateFnsLocale }),
+			second: formatDistance(latest, now, { addSuffix: true, locale: dateFnsLocale })
+		});
 	}
 
 	// ==================================================================================
@@ -202,7 +215,7 @@
 				type="button"
 				onclick={() => removeDate(dateStr)}
 				class="ml-1 text-brand transition-colors hover:text-brand-700"
-				aria-label="Remove {getDisplayDate(dateStr)}"
+				aria-label={t('dataRenderer.removeDate', { date: getDisplayDate(dateStr) })}
 			>
 				<Icon icon="radix-icons:cross-1" class="h-2 w-2" />
 			</button>
@@ -222,7 +235,7 @@
 			<!-- Show relative summary for multiple dates -->
 			<span
 				class="flex-1 truncate text-left text-xs font-normal transition-all hover:font-medium"
-				title="Click to see all dates"
+				title={t('dataRenderer.seeAllDates')}
 			>
 				{getRelativeSummary(selectedDateStrings)}
 			</span>
@@ -236,7 +249,7 @@
 					<span
 						class="inline-flex items-center rounded-full bg-muted px-2 py-1 text-xs font-normal text-muted-foreground transition-all hover:font-medium"
 					>
-						+{selectedDateStrings.length - maxTriggerBadges} more
+						{t('misc.moreItems', { count: selectedDateStrings.length - maxTriggerBadges })}
 					</span>
 				{/if}
 			</Cluster>
@@ -259,19 +272,19 @@
 		<Stack gap="sm" class="min-w-[220px] border-l border-border bg-muted p-3">
 			<Inline justify="between" gap="sm">
 				<h4 class="text-xs font-normal text-foreground transition-all hover:font-medium">
-					Selected Dates ({selectedDateStrings.length})
+					{t('dataRenderer.selectedDatesHeading', { count: selectedDateStrings.length })}
 				</h4>
 				<button
 					type="button"
 					onclick={clearAllDates}
 					disabled={cantMutate}
 					class="text-xs font-normal text-destructive transition-all hover:font-medium hover:text-destructive-foreground disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:text-muted-foreground"
-					aria-label="Clear all selected dates"
+					aria-label={t('dataRenderer.clearAllDates')}
 				>
-					Clear all
+					{t('dataRenderer.clearAll')}
 				</button>
 			</Inline>
-			<Scroll axis="y" name="Selected dates" class="max-h-[280px]">
+			<Scroll axis="y" name={t('dataRenderer.selectedDatesScroll')} class="max-h-[280px]">
 				<Stack gap="sm">
 					{#each selectedDateStrings as dateStr}
 						<Inline
@@ -298,7 +311,9 @@
 								onclick={() => removeDate(dateStr)}
 								disabled={cantMutate}
 								class="shrink-0 text-brand transition-colors hover:text-brand-700 disabled:cursor-not-allowed disabled:text-muted-foreground"
-								aria-label="Remove {formatDateForDisplay(dateStr)}"
+								aria-label={t('dataRenderer.removeDate', {
+									date: formatDateForDisplay(dateStr)
+								})}
 							>
 								<Icon icon="radix-icons:cross-1" class="h-4 w-4" />
 							</button>
@@ -339,7 +354,7 @@
 						e.stopPropagation();
 						clearAllDates();
 					}}
-					aria-label="Clear selection"
+					aria-label={t('dataRenderer.clearSelection')}
 				>
 					<Icon icon="lucide:x" class="h-3 w-3" />
 				</button>
@@ -381,7 +396,7 @@
 				<span
 					class="inline-flex items-center rounded-full bg-muted px-3 py-1 text-xs font-normal text-muted-foreground transition-all hover:font-medium"
 				>
-					+{selectedDateStrings.length - maxBelowBadges} more
+					{t('misc.moreItems', { count: selectedDateStrings.length - maxBelowBadges })}
 				</span>
 			{/if}
 		</Cluster>

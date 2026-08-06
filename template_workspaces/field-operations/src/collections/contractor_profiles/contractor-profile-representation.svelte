@@ -1,11 +1,15 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { Row } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 
 	let { record }: { record: Row } = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const recordId = $derived(record.norbital_id);
 	const certificationsQuery = $derived(
@@ -35,7 +39,7 @@
 		try {
 			const createMany = client.db.contractor_certifications.createMany;
 			const remove = client.db.contractor_certifications.delete;
-			if (!createMany || !remove) throw new Error('Certification editing is unavailable.');
+			if (!createMany || !remove) throw new Error(t('component.certification_editing_unavailable'));
 			const currentLinks = certificationsQuery.current ?? [];
 			const nextSet = new Set(nextIds);
 			const currentIds = new Set(currentLinks.map((link) => link.certification_type_id));
@@ -70,16 +74,18 @@
 	{#snippet children({ Field })}
 		<Stack gap="lg">
 			<Stack gap="none">
-				<h3 id="contractor-profile-heading" class="text-sm font-semibold">Company and access</h3>
+				<h3 id="contractor-profile-heading" class="text-sm font-semibold">
+					{t('component.company_and_access')}
+				</h3>
 				<p class="text-sm text-muted-foreground">
-					The linked portal user receives assignments; certification holdings control eligibility.
+					{t('component.company_and_access_description')}
 				</p>
 			</Stack>
 			<Stack gap="md">
 				<Field name="company_name" />
 				<Field
 					name="user_id"
-					label="Portal user"
+					label={t('component.portal_user')}
 					renderer={RelationshipRenderer}
 					rendererProps={{
 						target: 'user',
@@ -94,7 +100,7 @@
 					}}
 				/>
 				<Stack as="fieldset" gap="xs">
-					<legend class="text-sm font-medium">Certifications held</legend>
+					<legend class="text-sm font-medium">{t('component.certifications_held')}</legend>
 					<RelationshipRenderer
 						target="certification_types"
 						value={selectedCertificationIds}
@@ -105,14 +111,14 @@
 							orderBy: { name: 'asc' },
 							limit: 250
 						}}
-						placeholder="Select certifications…"
+						placeholder={t('component.select_certifications')}
 						disabled={certificationSaving || certificationsQuery.loading}
 						onValueChange={(value) => void updateCertifications(value)}
 					/>
 					<p class="text-xs text-muted-foreground">
 						{certificationSaving
-							? 'Saving certification links…'
-							: 'Used to check dispatch eligibility.'}
+							? t('component.saving_certification_links')
+							: t('component.dispatch_eligibility_note')}
 					</p>
 					{#if certificationError}
 						<p class="text-xs text-destructive" role="alert">{certificationError}</p>

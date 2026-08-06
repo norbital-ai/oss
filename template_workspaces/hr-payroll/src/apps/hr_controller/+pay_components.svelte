@@ -1,35 +1,31 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Display, type ChartDisplaySpec } from '@norbital-ai/ui/chart';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
 	import {
 		formatCalendarDate,
 		formatEntryOrigin,
 		formatNumeric
 	} from '../../lib/ui/display-formatters.js';
-	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
+	import { inForceTodayFilter, todayKey, todayInstant } from '../../lib/ui/calendar.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	let companyId = $state<string | null>(null);
-	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	/**
-	 * The catalogue is effective-dated, so it opens on the components in force *today* and widens to
-	 * superseded versions only when the operator asks. The legal-entity selector below keeps
-	 * `activeRange` whatever this is set to: it is the page's scope picker, not a listing, and it has
-	 * to default to an entity that still exists.
+	 * The catalogue opens on the components in force today, as a filter chip the operator can drop to
+	 * reach superseded versions. The legal-entity selector keeps `activeRange` in its own query: it is
+	 * the page's scope picker, not a listing, and it has to default to an entity that still exists.
 	 */
-	let effectiveWindow = $state<'current' | 'history'>('current');
-	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
-		effectiveWindow === 'history' ? {} : activeRange
-	);
-
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
 		orderBy: { name: 'asc' },
@@ -112,15 +108,14 @@
 	const claimTrendChart = $derived({
 		kind: 'line',
 		loading: analyticsQuery.loading,
-		title: 'Annual claim applications',
-		description:
-			'Application volume across the five completed calendar years, with a least-squares regression line.',
+		title: t('app.pay_components.chart_title'),
+		description: t('app.pay_components.chart_description'),
 		data: analytics.annual_trend,
 		xKey: 'year',
 		series: ['applications', 'regression'],
 		config: {
-			applications: { label: 'Applications', color: 'var(--color-primary)' },
-			regression: { label: 'Regression trend', color: 'var(--color-muted-foreground)' }
+			applications: { label: t('component.chart_applications'), color: 'var(--color-primary)' },
+			regression: { label: t('component.chart_regression'), color: 'var(--color-muted-foreground)' }
 		},
 		valueFormat: { style: 'number', maximumFractionDigits: 1 },
 		curve: 'linear'
@@ -139,9 +134,9 @@
 {#snippet companyScopeActions()}
 	<Inline gap="md" align="end">
 		<label class="grid gap-1.5 text-sm">
-			<span class="font-medium text-muted-foreground">Legal entity</span>
+			<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
 			<Combobox
-				ariaLabel="Legal entity"
+				ariaLabel={t('component.legal_entity')}
 				options={companyOptions}
 				value={selectedCompanyId}
 				onValueChange={(value) => {
@@ -151,8 +146,8 @@
 					}
 					companyId = companies[0]?.norbital_id ?? null;
 				}}
-				emptyPlaceholder="Select legal entity…"
-				searchPlaceholder="Search companies…"
+				emptyPlaceholder={t('component.select_legal_entity')}
+				searchPlaceholder={t('component.search_companies')}
 				clientConfig={{
 					isLoading: companiesQuery.loading,
 					error: companiesQuery.error?.message ?? null
@@ -160,46 +155,28 @@
 				class="min-w-[16rem]"
 			/>
 		</label>
-		<Stack gap="xs">
-			<span class="text-sm font-medium text-muted-foreground">Catalogue</span>
-			<ToggleGroup
-				type="single"
-				size="sm"
-				value={effectiveWindow}
-				onValueChange={(value) => {
-					effectiveWindow = value === 'history' ? 'history' : 'current';
-				}}
-			>
-				<ToggleGroupItem value="current" aria-label="Show only components in force today">
-					In force today
-				</ToggleGroupItem>
-				<ToggleGroupItem value="history" aria-label="Show every version, including superseded ones">
-					All history
-				</ToggleGroupItem>
-			</ToggleGroup>
-		</Stack>
 	</Inline>
 {/snippet}
 
 {#snippet overview()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to load claim activity.</p>
+		<p class="text-sm text-muted-foreground">{t('app.pay_components.empty_overview')}</p>
 	{:else}
 		<Grid gap="xl" minimum="panel">
 			<Stack gap="md">
 				<div>
-					<h2 class="text-lg font-semibold">Reimbursement claims</h2>
+					<h2 class="text-lg font-semibold">{t('app.pay_components.reimbursement_claims')}</h2>
 					<p class="text-sm text-muted-foreground">
-						{analytics.total.toLocaleString()} claim entries in the ledger. Every other pay component
-						— recurring allowances, one-offs, arrears, reversals, loan instalments — arrives through the
-						same entry stream and is listed under Entries.
+						{t('app.pay_components.reimbursement_claims_description', {
+							count: analytics.total.toLocaleString()
+						})}
 					</p>
 				</div>
 				<ApprovalSummaryTable
-					title="Claim decisions"
+					title={t('app.pay_components.claim_decisions')}
 					asOfDate={analytics.as_of_date}
 					summary={analytics.summary}
-					note="Counts use the claim's incurred date from its origin variant. Approval speed is shown only when completed workflow history exists; imported records do not invent a duration."
+					note={t('app.pay_components.claim_decisions_note')}
 				/>
 			</Stack>
 			<div class="min-w-0 rounded-lg border bg-card p-4 shadow-card">
@@ -212,7 +189,7 @@
 {#snippet entries()}
 	{#if selectedCompanyId == null}
 		<p class="text-sm text-muted-foreground">
-			Select a legal entity to review its pay-component entries.
+			{t('app.pay_components.empty_entries')}
 		</p>
 	{:else}
 		<CollectionTable
@@ -223,12 +200,12 @@
 				where: { employment_id: { in: employmentIds } },
 				orderBy: { event_date: 'desc' }
 			}}
-			searchPlaceholder="Search entries…"
+			searchPlaceholder={t('app.pay_components.search_entries')}
 		>
 			{#snippet columns({ Column })}
 				<Column
 					name="pay_component_id"
-					label="Component"
+					label={t('component.component')}
 					card="title"
 					render={({ value }) =>
 						value == null || value === ''
@@ -237,23 +214,27 @@
 				/>
 				<Column
 					name="employment_id"
-					label="Employment"
+					label={t('component.employment')}
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="amount" label="Amount" render={({ value }) => formatNumeric(value)} />
-				<Column name="quantity" label="Quantity" />
+				<Column
+					name="amount"
+					label={t('component.amount')}
+					render={({ value }) => formatNumeric(value)}
+				/>
+				<Column name="quantity" label={t('component.quantity')} />
 				<Column
 					name="event_date"
-					label="Event date"
+					label={t('component.date')}
 					render={({ value }) => formatCalendarDate(value)}
 				/>
-				<Column name="pay_period" label="Pay period" />
-				<Column name="usage_mode" label="Payslip usage" card="badge" />
-				<Column name="description" label="Description" />
+				<Column name="pay_period" label={t('component.pay_period')} />
+				<Column name="usage_mode" label={t('app.pay_components.payslip_usage')} card="badge" />
+				<Column name="description" />
 				<Column
 					name="origin"
-					label="Origin"
+					label={t('component.origin')}
 					card="subtitle"
 					render={({ value }) => formatEntryOrigin(value)}
 				/>
@@ -265,30 +246,30 @@
 {#snippet catalogue()}
 	{#if selectedCompanyId == null}
 		<p class="text-sm text-muted-foreground">
-			Select a legal entity to manage its pay-component catalogue.
+			{t('app.pay_components.empty_catalogue')}
 		</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="pay_components"
 			view={`hr_controller:pay_components:catalogue:${selectedCompanyId}`}
+			initialFilters={inForceTodayFilter()}
 			query={{
 				where: {
-					company_id: { eq: selectedCompanyId },
-					...effectiveRange
+					company_id: { eq: selectedCompanyId }
 				},
 				orderBy: { code: 'asc' }
 			}}
-			searchPlaceholder="Search the catalogue…"
+			searchPlaceholder={t('app.pay_components.search_catalogue')}
 		>
 			{#snippet columns({ Column })}
 				<Column name="code" card="title" />
 				<Column name="name" card="subtitle" />
 				<Column name="nature" card="badge" />
-				<Column name="policy" label="Settlement and statutory policy" />
-				<Column name="definition" label="Calculation" />
-				<Column name="sequence" label="Order" />
-				<Column name="effective_range" label="Effective" />
+				<Column name="policy" label={t('app.pay_components.settlement_policy')} />
+				<Column name="definition" label={t('app.pay_components.calculation')} />
+				<Column name="sequence" label={t('app.pay_components.order')} />
+				<Column name="effective_range" label={t('component.effective')} />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -296,9 +277,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="HR Controller"
-		title="Pay components"
-		description="The company catalogue and the single entry stream money reaches payroll through — scoped to one legal entity. A live entry is one with no open approval; there is no separate requested/approved state."
+		eyebrow={t('app.pay_components.eyebrow')}
+		title={t('app.pay_components.header_title')}
+		description={t('app.pay_components.header_description')}
 		actions={companyScopeActions}
 	/>
 {/snippet}
@@ -309,12 +290,22 @@
 		config={[
 			{
 				name: 'overview',
-				label: 'Overview',
+				label: t('component.tab_overview'),
 				icon: 'lucide:chart-no-axes-combined',
 				content: overview
 			},
-			{ name: 'entries', label: 'Entries', icon: 'lucide:receipt-text', content: entries },
-			{ name: 'catalogue', label: 'Catalogue', icon: 'lucide:list-tree', content: catalogue }
+			{
+				name: 'entries',
+				label: t('app.pay_components.tab_entries'),
+				icon: 'lucide:receipt-text',
+				content: entries
+			},
+			{
+				name: 'catalogue',
+				label: t('app.pay_components.tab_catalogue'),
+				icon: 'lucide:list-tree',
+				content: catalogue
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

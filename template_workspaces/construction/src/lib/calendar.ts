@@ -9,10 +9,10 @@
 /** The business timezone every calendar-day filter and "today" default on this site resolves in. */
 export const PROJECT_TIME_ZONE = 'Asia/Singapore';
 
-/** Calendar date for an instant in an IANA timezone, formatted as YYYY-MM-DD. */
-export function calendarDateInTimeZone(value: Date, timeZone: string): string {
+/** Calendar date for an instant in this workspace's business timezone, as `YYYY-MM-DD`. */
+export function calendarDateInTimeZone(value: Date): string {
 	const parts = new Intl.DateTimeFormat('en', {
-		timeZone,
+		timeZone: PROJECT_TIME_ZONE,
 		year: 'numeric',
 		month: '2-digit',
 		day: '2-digit'
@@ -22,15 +22,15 @@ export function calendarDateInTimeZone(value: Date, timeZone: string): string {
 	return `${valueFor('year')}-${valueFor('month')}-${valueFor('day')}`;
 }
 
-/** Midnight of `calendarDate` in `timeZone`, as the UTC instant that moment actually is. */
-export function startOfDayInstant(calendarDate: string, timeZone: string): string {
+/** Midnight of `calendarDate` in the business timezone, as the UTC instant that moment actually is. */
+export function startOfDayInstant(calendarDate: string): string {
 	const naive = Date.parse(`${calendarDate}T00:00:00Z`);
 	if (Number.isNaN(naive)) throw new Error(`Not a calendar date: ${calendarDate}`);
 	// Resolve twice: the offset at the guessed instant can differ from the offset at the real one
 	// across a daylight-saving boundary.
 	let instant = naive;
 	for (let pass = 0; pass < 2; pass += 1) {
-		const shown = Date.parse(`${calendarDateInTimeZone(new Date(instant), timeZone)}T00:00:00Z`);
+		const shown = Date.parse(`${calendarDateInTimeZone(new Date(instant))}T00:00:00Z`);
 		instant += naive - shown;
 	}
 	return new Date(instant).toISOString();
@@ -41,8 +41,5 @@ export function startOfDayInstant(calendarDate: string, timeZone: string): strin
  * server refuses one rather than guessing which timezone turns it into a moment.
  */
 export function todayInstant(): string {
-	return startOfDayInstant(
-		calendarDateInTimeZone(new Date(), PROJECT_TIME_ZONE),
-		PROJECT_TIME_ZONE
-	);
+	return startOfDayInstant(calendarDateInTimeZone(new Date()));
 }

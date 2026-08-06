@@ -118,8 +118,13 @@ describe('agent panel transcript', () => {
 				]
 			}
 		]);
+		// Built-ins carry a catalog key the panel translates; unknown tools carry a humanized label.
+		expect(rows.map((row) => (row.kind === 'tool' ? row.labelKey : null))).toEqual([
+			'pod.agent.tool.describeWorkspace',
+			null
+		]);
 		expect(rows.map((row) => (row.kind === 'tool' ? row.label : null))).toEqual([
-			'Describe workspace',
+			null,
 			'Sandbox deploy'
 		]);
 		// No arguments to show, and no result yet, so the call reads as still running.
@@ -275,7 +280,8 @@ describe('agent panel transcript', () => {
 		expect(rows.map((row) => row.key)).toEqual(['p1:0', 'p2']);
 		const spawn = rows[0];
 		if (spawn?.kind !== 'tool') throw new Error('expected the spawn call');
-		expect(spawn.label).toBe('Delegate task');
+		expect(spawn.labelKey).toBe('pod.agent.tool.delegateTask');
+		expect(spawn.label).toBeNull();
 		expect(spawn.detail).toBe('Audit sites');
 		// The same projection, recursively: the child's own tool call kept its result.
 		expect(spawn.children.map((child) => child.kind)).toEqual(['text', 'tool']);

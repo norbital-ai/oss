@@ -7,12 +7,16 @@
 	import { debounce } from 'es-toolkit/function';
 	import { onDestroy } from 'svelte';
 	import { Button, buttonVariants } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
 	import CollectionTableFilter from './collection-table-filter.svelte';
 	import type { FilterCollectionDefinition } from './collection-table-filter-fields.js';
+	import type { CollectionTableInitialFilter } from './collection-table.types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		definition,
@@ -21,7 +25,9 @@
 		searchEnabled = true,
 		filterEnabled = true,
 		initialSearch = '',
-		searchPlaceholder = 'Search text fields…',
+		initialFilters = [],
+		filterPersistenceKey,
+		searchPlaceholder = t('table.searchTextFields'),
 		align = 'start',
 		onSearchChange,
 		onFilterChange
@@ -32,6 +38,10 @@
 		searchEnabled?: boolean;
 		filterEnabled?: boolean;
 		initialSearch?: string;
+		/** Conditions the view opens with, seeded as removable rows in the filter builder. */
+		initialFilters?: readonly CollectionTableInitialFilter[];
+		/** View key a cleared seed is remembered against. */
+		filterPersistenceKey?: string;
 		searchPlaceholder?: string;
 		align?: 'start' | 'center' | 'end';
 		onSearchChange: (search: string) => void;
@@ -64,7 +74,7 @@
 	<Popover.Root>
 		<Popover.Trigger
 			class={cn(buttonVariants({ variant: 'ghost', size: 'icon' }), searchActive && 'bg-accent')}
-			aria-label="Search records"
+			aria-label={t('table.searchRecords')}
 			aria-pressed={searchActive}
 			{disabled}
 		>
@@ -91,7 +101,7 @@
 				/>
 				{#if searchInput}
 					<Button type="button" variant="ghost" size="sm" class="h-9 shrink-0" onclick={clearSearch}
-						>Clear</Button
+						>{t('common.clear')}</Button
 					>
 				{/if}
 			</Inline>
@@ -99,5 +109,12 @@
 	</Popover.Root>
 {/if}
 {#if filterEnabled}
-	<CollectionTableFilter {definition} {collections} {disabled} onChange={onFilterChange} />
+	<CollectionTableFilter
+		{definition}
+		{collections}
+		{disabled}
+		{initialFilters}
+		persistenceKey={filterPersistenceKey}
+		onChange={onFilterChange}
+	/>
 {/if}

@@ -1,4 +1,5 @@
 import { flushSync, mount, unmount, type Component } from 'svelte';
+import I18nHarness from './i18n-harness.svelte';
 
 /**
  * Mount a component into the document and hand back its root.
@@ -6,6 +7,10 @@ import { flushSync, mount, unmount, type Component } from 'svelte';
  * Svelte 5 already exports everything a test needs to drive a component, so this is a shim over
  * `mount` and not a testing library: one more dependency here would only re-export `mount`,
  * `flushSync` and a `querySelector`.
+ *
+ * The subject is mounted through `I18nHarness`, which installs the merged pod + ui catalog:
+ * pod chrome components translate with `useI18n<PodUiKeys>()`, and without a provider they would
+ * fall back to the ui catalog alone and render raw `pod.*` keys instead of English.
  */
 export function render<Props extends Record<string, unknown>>(
 	component: Component<Props, Record<string, unknown>, string>,
@@ -13,7 +18,10 @@ export function render<Props extends Record<string, unknown>>(
 ): { readonly container: HTMLElement; destroy(): void } {
 	const container = document.createElement('div');
 	document.body.append(container);
-	const instance = mount(component, { target: container, props });
+	const instance = mount(I18nHarness as never, {
+		target: container,
+		props: { component, props }
+	});
 	flushSync();
 	return {
 		container,

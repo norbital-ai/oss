@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Scroll } from '#lib/layout';
 	import { pixelDrag } from '#lib/utils/pixel-drag';
 	import { assignLanes, dateToPixels, isMultiDayEvent, isSameDay } from '../utils.js';
@@ -48,6 +49,8 @@
 		class?: string;
 	} = $props();
 
+	const { t } = useI18n<UiKeys>();
+
 	const totalHeight = $derived((endHour - startHour) * hourHeight);
 	const timedEvents = $derived(events.filter((e) => !e.allDay && isSameDay(e.start, e.end)));
 	const laneAssignments = $derived(assignLanes(timedEvents));
@@ -90,7 +93,7 @@
 	const overlay = $derived(getOverlayRect());
 </script>
 
-<Scroll axis="y" name="Day events" class={cn('relative bg-background', className)}>
+<Scroll axis="y" name={t('misc.dayEvents')} class={cn('relative bg-background', className)}>
 	<div style="height: {totalHeight}px; position: relative">
 		{#each Array.from({ length: endHour - startHour + 1 }) as _, i (i)}
 			<div

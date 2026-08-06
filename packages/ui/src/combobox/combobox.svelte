@@ -11,11 +11,14 @@
 	import { Inline, Stack } from '#lib/layout';
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { groupBy } from 'es-toolkit/array';
 	import { isEqual } from 'es-toolkit/predicate';
 	import ComboboxTrigger from './combobox-trigger.svelte';
 	import ComboboxSelection from './combobox-selection.svelte';
 	import type { TComboboxCommandItem, TComboboxProps, TOption } from './index.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	/* ═══════════════════════════════════════════════════════════════════ */
 	/* PROPS                                                               */
@@ -33,6 +36,7 @@
 		allowClear = false,
 		allowClickToSetNull = false,
 		hideChevron = false,
+		chevronOnHover = false,
 		disabled = false,
 		invalid = false,
 		readonly = false,
@@ -45,7 +49,7 @@
 		clientConfig,
 		serverConfig,
 		searchable = true,
-		searchPlaceholder = 'Search options...',
+		searchPlaceholder = t('common.searchOptions'),
 
 		itemHeight = 32,
 		groupHeaderHeight = 28,
@@ -105,8 +109,8 @@
 	);
 	const emptyMessage = $derived(
 		type === 'server' && serverConfig && ui.searchQuery.length > 0
-			? `No results found for "${ui.searchQuery}"`
-			: 'No options available'
+			? t('common.noResultsFor', { query: ui.searchQuery })
+			: t('common.noOptions')
 	);
 	const isReadonlySimple = $derived(readonly && !readonlyContent);
 	const canSelectAll = $derived(
@@ -207,7 +211,7 @@
 			} else if (item.type === 'select-all') {
 				return {
 					value: '__select_all__',
-					label: allOptionsSelected ? 'Clear all options' : 'Select all options',
+					label: allOptionsSelected ? t('common.clearAllOptions') : t('common.selectAllOptions'),
 					_type: 'select-all' as const,
 					_selectedCount: selectedOptionCount,
 					_totalCount: options.length,
@@ -224,7 +228,7 @@
 			} else {
 				return {
 					value: '__create__',
-					label: `Create "${ui.searchQuery}"`,
+					label: t('common.createOption', { query: ui.searchQuery }),
 					_type: 'create' as const
 				};
 			}
@@ -249,16 +253,16 @@
 	const selectionDescription = $derived.by(() => {
 		if (multiple && Array.isArray(value)) {
 			const count = value.length;
-			if (count === 0) return 'No items selected';
-			return count === 1 ? '1 item selected' : `${count} items selected`;
+			if (count === 0) return t('common.noItemsSelected');
+			return count === 1 ? t('common.oneItemSelected') : t('common.itemsSelected', { count });
 		}
 		if (value) {
 			const option = sortedOptions.find((o) => isEqual(o.value, value));
 			return option && typeof option.label === 'string'
-				? `Selected: ${option.label}`
-				: 'Item selected';
+				? t('common.selectedLabel', { label: option.label })
+				: t('common.itemSelected');
 		}
-		return 'No selection';
+		return t('common.noSelection');
 	});
 
 	/* ═══════════════════════════════════════════════════════════════════ */
@@ -384,14 +388,14 @@
 {#snippet loadingState()}
 	<Inline justify="center" gap="sm" class={cn('p-3', compactTextClass)}>
 		<Spinner class="h-3 w-3" />
-		Loading options...
+		{t('common.loadingOptions')}
 	</Inline>
 {/snippet}
 
 {#snippet errorState()}
 	<Stack gap="sm" align="center" class={cn('p-3 text-destructive', compactTextClass)} role="alert">
 		<Icon icon="lucide:alert-circle" class="h-4 w-4" />
-		<span>Error: {error}</span>
+		<span>{t('common.errorLabel', { message: error ?? '' })}</span>
 	</Stack>
 {/snippet}
 
@@ -429,6 +433,7 @@
 		{showClearButton}
 		{isLoading}
 		{hideChevron}
+		{chevronOnHover}
 		{error}
 		{comboboxId}
 		{selectionDescription}

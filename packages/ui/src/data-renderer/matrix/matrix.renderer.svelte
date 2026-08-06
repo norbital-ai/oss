@@ -95,22 +95,25 @@
 	} from '../../collection-table/internal/index.js';
 	import { collectionTableColumnCanSort } from '../../collection-table/collection-table.types.js';
 	import { Bound, Scroll, Stack } from '#lib/layout';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, renderSnippet } from '#lib/utils';
 	import { watch } from 'runed';
 	type TableRow = Record<string, unknown> & { __matrixRowId: string };
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		rows = $bindable(),
 		columns,
 		disabled = false,
-		emptyMessage = 'No rows.',
+		emptyMessage = t('dataRenderer.noRows'),
 		class: className,
 		bounded = true,
 		getRowId,
 		isRowDisabled,
 		allowAddRows = true,
 		createRow,
-		addRowLabel = 'Add row',
+		addRowLabel = t('dataRenderer.addRow'),
 		addRowDisabled = false,
 		allowRemoveRows = true,
 		canRemoveRow,
@@ -315,7 +318,7 @@
 		{#if rowRemovable(source.row, source.index)}
 			<button
 				type="button"
-				aria-label="Remove row"
+				aria-label={t('dataRenderer.removeRow')}
 				tabindex={hovered ? 0 : -1}
 				class={cn(
 					'inline-flex size-8 items-center justify-center rounded-sm text-destructive outline-none hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -394,7 +397,7 @@
 	</div>
 	<div class="matrix-renderer-narrow flex min-h-0 min-w-0 flex-1 flex-col">
 		{#if bounded}
-			<Scroll axis="y" name="Matrix rows" grow class="overscroll-y-contain">
+			<Scroll axis="y" name={t('dataRenderer.matrixRows')} grow class="overscroll-y-contain">
 				{@render narrowRows()}
 			</Scroll>
 		{:else}
@@ -443,7 +446,7 @@
 								<button
 									type="button"
 									class="flex w-full items-center justify-center outline-none hover:bg-destructive/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-									aria-label="Remove row"
+									aria-label={t('dataRenderer.removeRow')}
 									onclick={() => removeRow(tableRow.__matrixRowId)}
 								>
 									<Icon icon="lucide:trash-2" class="size-4" />

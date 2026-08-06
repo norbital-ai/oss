@@ -1,6 +1,6 @@
 import { type Plugin, type PluginOption } from 'vite';
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -58,11 +58,30 @@ export type {
 const CLIENT_ENTRY = 'virtual:pod/client-entry';
 const CLIENT_RUNTIME = 'virtual:pod/client-runtime';
 const SERVER_ENTRY = 'virtual:pod/server-entry';
+const I18N_MODULE = 'virtual:pod/i18n';
 const ISOLATED_SERVER_MAX_OLD_SPACE_MIB = 144;
 
 function podBuildFile(relativePath: string): string {
 	const abs = path.resolve(import.meta.dirname, '..', relativePath);
 	return abs.split(path.sep).join('/');
+}
+
+/** Read a tenant message JSON file, returning null when absent or unparsable. */
+async function readMessageFile(
+	file: string
+): Promise<Readonly<Record<string, string>> | null> {
+	try {
+		const raw = await readFile(file, 'utf8');
+		const parsed = JSON.parse(raw) as unknown;
+		if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+		return Object.fromEntries(
+			Object.entries(parsed as Record<string, unknown>).filter(
+				(entry): entry is [string, string] => typeof entry[1] === 'string'
+			)
+		);
+	} catch {
+		return null;
+	}
 }
 
 export interface PodPluginOptions {
@@ -474,6 +493,9 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			if (source === CLIENT_ENTRY || source === SERVER_ENTRY) {
 				return `\0${source}`;
 			}
+			if (source === I18N_MODULE) {
+				return `\0${I18N_MODULE}`;
+			}
 			if (source === CLIENT_RUNTIME) {
 				if (clientPlatform) {
 					const runtimeFile = clientPlatform.manifest.imports['@norbital-ai/pod/client/runtime'];
@@ -489,7 +511,22 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			}
 			if (source === '$pod/client') return generatedClient;
 		},
-		load(id) {
+		async load(id) {
+			if (id === `\0${I18N_MODULE}`) {
+				const [{ podMessages }, { uiMessages }] = await Promise.all([
+					import('../i18n/messages.js'),
+					import('@norbital-ai/ui/i18n/messages')
+				]);
+				const i18nDirectory = path.join(root, 'src', 'i18n');
+				const [tenantEn, tenantZh] = await Promise.all([
+					readMessageFile(path.join(i18nDirectory, 'messages.en.json')),
+					readMessageFile(path.join(i18nDirectory, 'messages.zh.json'))
+				]);
+				return `export const i18nMessages = ${JSON.stringify({
+					en: { ...podMessages.en, ...uiMessages.en, ...(tenantEn ?? {}) },
+					zh: { ...podMessages.zh, ...uiMessages.zh, ...(tenantZh ?? {}) }
+				})};\n`;
+			}
 			if (id === `\0${SERVER_ENTRY}`) {
 				return `import workspace from ${JSON.stringify(generatedWorkspace.split(path.sep).join('/'))};
 	import { handlePodHostCommand, handlePodRequest, registerPodWorkspace, registerPodDatabaseNotifications, registerPodHostPlugins, getTenantManifest } from ${JSON.stringify(podBuildFile('server/entry.js'))};
@@ -501,10 +538,11 @@ export const workspaceManifest = getTenantManifest();
 			}
 			if (id !== `\0${CLIENT_ENTRY}`) return;
 			return `${clientPlatform ? '' : `import ${JSON.stringify(podBuildFile('app.css'))};\n`}import { mountPodWorkspace } from '@norbital-ai/pod/client/platform';
+import { i18nMessages } from ${JSON.stringify(I18N_MODULE)};
 import { appLoaders } from ${JSON.stringify(generatedClient.split(path.sep).join('/'))};
 import { collectionSurfaces } from ${JSON.stringify(path.join(root, '.norbital/generated/collection-surfaces.ts').split(path.sep).join('/'))};
 import { customTypeRenderers } from ${JSON.stringify(path.join(root, '.norbital/generated/custom-type-renderers.ts').split(path.sep).join('/'))};
-mountPodWorkspace({ apps: appLoaders, collectionSurfaces, customTypeRenderers });`;
+mountPodWorkspace({ apps: appLoaders, collectionSurfaces, customTypeRenderers, i18nMessages });`;
 		},
 		async writeBundle(_options, bundle) {
 			if (this.environment.name !== 'client') return;

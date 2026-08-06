@@ -14,6 +14,7 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { Button } from '#lib/button';
 	import { FormState, type FormSchema } from '#lib/form';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Cover, Grid, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
@@ -44,28 +45,28 @@
 		value: unknown
 	): readonly CollectionFormValidationIssue[] {
 		if (!field.nullable && value == null) {
-			return [{ message: 'This field is required.', path: [fieldName] }];
+			return [{ message: t('form.requiredGeneric'), path: [fieldName] }];
 		}
 		if (value == null) return [];
 		if (field.array && !Array.isArray(value)) {
-			return [{ message: 'Enter a list of values.', path: [fieldName] }];
+			return [{ message: t('form.invalidList'), path: [fieldName] }];
 		}
 
 		const issues: CollectionFormValidationIssue[] = [];
 		if (field.values) {
 			const selected = Array.isArray(value) ? value : [value];
 			if (selected.some((entry) => typeof entry !== 'string' || !field.values?.includes(entry))) {
-				issues.push({ message: 'Select a valid option.', path: [fieldName] });
+				issues.push({ message: t('form.invalidOption'), path: [fieldName] });
 			}
 		}
 		if (
 			['integer', 'number', 'numeric'].includes(field.kind) &&
 			(typeof value !== 'number' || !Number.isFinite(value))
 		) {
-			issues.push({ message: 'Enter a valid number.', path: [fieldName] });
+			issues.push({ message: t('form.invalidNumber'), path: [fieldName] });
 		}
 		if (field.kind === 'boolean' && typeof value !== 'boolean') {
-			issues.push({ message: 'Choose a valid boolean value.', path: [fieldName] });
+			issues.push({ message: t('form.invalidBoolean'), path: [fieldName] });
 		}
 		return issues;
 	}
@@ -109,7 +110,7 @@
 			return candidate;
 		}
 		if (result.value == null || typeof result.value !== 'object' || Array.isArray(result.value)) {
-			issues.push({ message: 'Validated form values must be an object.', path: [] });
+			issues.push({ message: t('form.valuesMustBeObject'), path: [] });
 			return candidate;
 		}
 		return Object.fromEntries(Object.entries(result.value));
@@ -149,6 +150,7 @@
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionForm');
 	setCollectionClientContext(() => workspaceClient);
+	const { t } = useI18n<UiKeys>();
 
 	// svelte-ignore state_referenced_locally
 	const initialValues: Record<string, unknown> = { ...defaultValues };
@@ -172,7 +174,7 @@
 		'~standard': {
 			validate: async (data: unknown) => {
 				if (data == null || typeof data !== 'object' || Array.isArray(data)) {
-					return { issues: [{ message: 'Form values must be an object.', path: [] }] };
+					return { issues: [{ message: t('form.formMustBeObject'), path: [] }] };
 				}
 
 				let candidate = Object.fromEntries(Object.entries(data));
@@ -280,7 +282,7 @@
 </script>
 
 {#snippet formFooter()}
-	<Stack as="footer" gap="sm" class="border-t" aria-label="Form actions">
+	<Stack as="footer" gap="sm" class="border-t" aria-label={t('form.actionsLabel')}>
 		{#if form.errorMessage}
 			<p class="text-sm text-destructive" role="alert">{form.errorMessage}</p>
 		{/if}
@@ -288,7 +290,7 @@
 			<p class="text-sm text-destructive" role="alert">{message}</p>
 		{/each}
 		{#if Object.keys(form.errors.fieldErrors).length > 0}
-			<p class="text-sm text-destructive" role="alert">Fix the highlighted fields before saving.</p>
+			<p class="text-sm text-destructive" role="alert">{t('form.fixErrors')}</p>
 		{/if}
 		<Cluster gap="xs" align="center">
 			<Button
@@ -298,17 +300,21 @@
 					form.isSubmitting ||
 					Boolean(recordId && !form.isDirty)}
 			>
-				{form.isSubmitting ? 'Saving…' : (submitLabel ?? (recordId ? 'Save changes' : 'Create'))}
+				{form.isSubmitting
+					? t('form.saving')
+					: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}
 			</Button>
 			<Button
 				type="button"
 				variant="outline"
 				disabled={loading || form.disabled || form.isSubmitting || !form.isDirty}
-				onclick={clear}>Clear</Button
+				onclick={clear}>{t('common.clear')}</Button
 			>
 			{#if form.isDirty}
 				<span class="text-xs text-muted-foreground" role="status">
-					{dirtyFieldCount} unsaved {dirtyFieldCount === 1 ? 'field' : 'fields'}
+					{dirtyFieldCount === 1
+						? t('form.unsavedField', { count: dirtyFieldCount })
+						: t('form.unsavedFields', { count: dirtyFieldCount })}
 				</span>
 			{/if}
 			{#if deleteAction}
@@ -323,7 +329,7 @@
 						deleteAction.disabled}
 					onclick={() => void deleteRecord()}
 				>
-					{deleting ? 'Deleting…' : (deleteAction.label ?? 'Delete')}
+					{deleting ? t('form.deleting') : (deleteAction.label ?? t('common.delete'))}
 				</Button>
 			{/if}
 		</Cluster>
@@ -338,10 +344,10 @@
 	onsubmit={submit}
 	bottom={formFooter}
 >
-	<Scroll name={`${String(collection)} form fields`}>
+	<Scroll name={t('form.fieldsRegion', { name: String(collection) })}>
 		<div class="flex min-h-full min-w-0 flex-col pb-4">
 			{#if loading}
-				<Stack gap="md" aria-label="Loading form">
+				<Stack gap="md" aria-label={t('form.loadingForm')}>
 					<CollectionFormSkeleton rows={skeletonRows} />
 				</Stack>
 			{:else if children}

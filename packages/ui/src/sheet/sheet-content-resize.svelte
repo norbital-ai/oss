@@ -1,5 +1,8 @@
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Side } from './index.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	/**
 	 * Props interface for the Sheet Content Resize component
@@ -216,7 +219,7 @@
 	<button
 		type="button"
 		class="absolute top-0 left-1/2 z-20 flex h-6 w-24 -translate-x-1/2 touch-none cursor-ns-resize items-center justify-center rounded-md border-0 bg-transparent p-0 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:hidden"
-		aria-label="Resize panel height"
+		aria-label={t('misc.resizePanelHeight')}
 		onpointerdown={handleHeightPointerDown}
 		onpointermove={handlePointerMove}
 		onpointerup={finishResize}
@@ -238,7 +241,7 @@
 	class="absolute top-1/2 hidden -translate-y-1/2 touch-none outline-none {widthHandlePositionStyles} z-10 md:block"
 	role="separator"
 	aria-orientation="vertical"
-	aria-label="Resize panel"
+	aria-label={t('misc.resizePanel')}
 	onpointerdown={handleWidthPointerDown}
 	onpointermove={handlePointerMove}
 	onpointerup={finishResize}

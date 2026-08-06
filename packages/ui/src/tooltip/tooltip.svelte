@@ -12,6 +12,8 @@
 		side = 'top',
 		sideOffset = 0,
 		align,
+		avoidCollisions = true,
+		collisionPadding = 8,
 		text,
 		contentClass,
 		arrowClasses,
@@ -31,6 +33,15 @@
 		side?: ContentProps['side'];
 		sideOffset?: ContentProps['sideOffset'];
 		align?: ContentProps['align'];
+		/**
+		 * Let Floating UI flip/shift the content to keep it on screen. Bits UI defaults this to
+		 * `true`, but leaves `collisionPadding` at `0`; we default to an 8px gutter instead.
+		 *
+		 * Collision handling only *moves* the content — it never shrinks it. Rich tooltip bodies
+		 * must still cap their own height, or they overflow the viewport no matter what.
+		 */
+		avoidCollisions?: ContentProps['avoidCollisions'];
+		collisionPadding?: ContentProps['collisionPadding'];
 		/** Simple string body. Prefer `content` for richer markup. */
 		text?: string;
 		contentClass?: string;
@@ -53,7 +64,15 @@
 					{@render trigger({ props })}
 				{/snippet}
 			</TooltipPrimitive.Trigger>
-			<Content {side} {sideOffset} {align} {arrowClasses} class={contentClass}>
+			<Content
+				{side}
+				{sideOffset}
+				{align}
+				{avoidCollisions}
+				{collisionPadding}
+				{arrowClasses}
+				class={contentClass}
+			>
 				{#if content}
 					{@render content()}
 				{:else}

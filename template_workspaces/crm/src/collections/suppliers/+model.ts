@@ -5,6 +5,7 @@ export default defineModel(
 		external_code: text().notNull(),
 		code: text().notNull(),
 		name: text().notNull(),
+		contact: text(),
 		category: text(),
 		currency: enums(['CNY', 'USD', 'EUR', 'GBP', 'JPY', 'SGD', 'HKD']),
 		payment_terms_days: integer(),

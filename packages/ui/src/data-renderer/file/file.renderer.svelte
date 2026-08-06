@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { CollectionRecord, RemoteQuery } from '@norbital-ai/platform-utils/collection';
 	import type { IFileUploadClient } from '#lib/file-upload';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import type { DataRendererRuntime } from '../data-renderer-runtime.js';
@@ -10,6 +11,8 @@
 	import { getCollectionClientContext } from '#lib/collection-runtime';
 
 	const MAX_WORKSPACE_FILE_SIZE = 10 * 1024 * 1024;
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
@@ -89,7 +92,7 @@
 		class={cn('rounded-md border border-destructive/40 p-3 text-sm text-destructive', className)}
 		role="alert"
 	>
-		File editing is unavailable because no workspace upload provider is configured.
+		{t('dataRenderer.fileProviderMissing')}
 	</p>
 {:else if field.array}
 	<FileInput

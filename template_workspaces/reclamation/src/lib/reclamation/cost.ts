@@ -11,6 +11,7 @@
  * is not, so `buildEstimate` reports it and the server hook refuses the write.
  */
 
+import { z } from 'zod';
 import { MANUAL_TAKE_OFF, SUBSTRATES, substrateDefinition } from './substrates.js';
 import type {
 	QuantityUnit,
@@ -213,4 +214,42 @@ export function formatMoney(value: number, currency: string): string {
 		currency,
 		maximumFractionDigits: 0
 	}).format(value);
+}
+
+/**
+ * The priced lines as stored on `cost_estimates.lines_json`, read back through validation the way
+ * `reconstruction-json.ts` reads the stitch engine's blobs: `buildEstimate` writes them, and a cast
+ * would only assert a stored blob still matches the engine that reads it. Absent, malformed or
+ * off-contract JSON reads as no lines, which the panel already renders as "nothing priced yet".
+ */
+const costLine: z.ZodType<CostLine> = z.object({
+	substrate: z.enum([
+		'rock_armor',
+		'geofabric',
+		'dredged_rock',
+		'sand_key',
+		'sand_fill',
+		'dredged_fill',
+		'pvd'
+	]),
+	label: z.string(),
+	unit: z.enum(['m3', 'm2', 'm']),
+	stitchedQuantity: z.number(),
+	pricedQuantity: z.number(),
+	rate: z.number(),
+	amount: z.number(),
+	basis: z.string(),
+	method: z.enum(['integrated', 'analytic']),
+	unpriced: z.boolean()
+});
+
+/** Decode the stored priced lines of one estimate. */
+export function parseCostLines(json: string | null | undefined): CostLine[] {
+	if (typeof json !== 'string' || json.trim() === '') return [];
+	try {
+		const result = z.array(costLine).safeParse(JSON.parse(json));
+		return result.success ? result.data : [];
+	} catch {
+		return [];
+	}
 }

@@ -16,13 +16,17 @@ import type { WorkspaceRow } from '../$types.js';
 import { assertComplete, PAGE_LIMIT, type PayrollReadApi } from './api.js';
 import { bandAgeFloor, bandCeiling } from './bands.js';
 import { monthBounds, monthKey, type IsoDate } from './dates.js';
+import { coverageRuleFor } from './coverage.js';
 import { coversDate, effectiveOn, live, overlapsRange } from './effective.js';
+import { resolveRestBreakRules, type ResolvedRestBreakRule } from './rest-breaks.js';
 
 export type Company = WorkspaceRow<'companies'>;
 export type Jurisdiction = WorkspaceRow<'jurisdictions'>;
 export type PayComponent = WorkspaceRow<'pay_components'>;
 export type OvertimeRule = WorkspaceRow<'overtime_rules'>;
 export type OvertimeLimit = WorkspaceRow<'overtime_limits'>;
+export type OvertimeCoverageRule = WorkspaceRow<'overtime_coverage_rules'>;
+export type RestBreakRuleRow = WorkspaceRow<'rest_break_rules'>;
 export type ShiftDefinition = WorkspaceRow<'shift_definitions'>;
 export type LeaveType = WorkspaceRow<'leave_types'>;
 export type WorkPattern = WorkspaceRow<'work_patterns'>;
@@ -47,6 +51,18 @@ export type Configuration = {
 	readonly payComponents: readonly PayComponent[];
 	readonly overtimeRules: readonly OvertimeRule[];
 	readonly overtimeLimits: readonly OvertimeLimit[];
+	/**
+	 * Who the ladder covers, or null where the jurisdiction restricts coverage in no way.
+	 *
+	 * Null is a real answer and is not the same as "nobody is covered" — see `coverage.ts`.
+	 */
+	readonly overtimeCoverageRule: OvertimeCoverageRule | null;
+	/**
+	 * The statutory rest and meal breaks in force, resolved by when they bite — see
+	 * `rest-breaks.ts`. Picked with the rest of the law so a run can say which break rules
+	 * governed it; nothing prices them yet.
+	 */
+	readonly restBreakRules: ReadonlyMap<string, ResolvedRestBreakRule>;
 	readonly shiftById: ReadonlyMap<string, ShiftDefinition>;
 	readonly holidays: ReadonlyMap<IsoDate, WorkspaceRow<'company_holidays'>>;
 	readonly leaveTypes: readonly LeaveType[];
@@ -128,6 +144,8 @@ export async function pickConfiguration(options: {
 		payComponentRows,
 		overtimeRuleRows,
 		overtimeLimitRows,
+		overtimeCoverageRuleRows,
+		restBreakRuleRows,
 		shiftRows,
 		holidayRows,
 		leaveTypeRows,
@@ -146,6 +164,14 @@ export async function pickConfiguration(options: {
 			limit: PAGE_LIMIT
 		}),
 		query.overtime_limits.findMany({
+			where: { jurisdiction_id: { eq: jurisdiction.norbital_id }, ...approved },
+			limit: PAGE_LIMIT
+		}),
+		query.overtime_coverage_rules.findMany({
+			where: { jurisdiction_id: { eq: jurisdiction.norbital_id }, ...approved },
+			limit: PAGE_LIMIT
+		}),
+		query.rest_break_rules.findMany({
 			where: { jurisdiction_id: { eq: jurisdiction.norbital_id }, ...approved },
 			limit: PAGE_LIMIT
 		}),
@@ -173,6 +199,8 @@ export async function pickConfiguration(options: {
 	assertComplete(payComponentRows, 'pay components');
 	assertComplete(overtimeRuleRows, 'overtime rules');
 	assertComplete(overtimeLimitRows, 'overtime limits');
+	assertComplete(overtimeCoverageRuleRows, 'overtime coverage rules');
+	assertComplete(restBreakRuleRows, 'rest break rules');
 	assertComplete(shiftRows, 'shift definitions');
 	assertComplete(holidayRows, 'company holidays');
 	assertComplete(leaveTypeRows, 'leave types');
@@ -240,6 +268,12 @@ export async function pickConfiguration(options: {
 		payComponents,
 		overtimeRules: live(overtimeRuleRows).filter((row) => coversDate(row.effective_range, asOf)),
 		overtimeLimits: live(overtimeLimitRows).filter((row) => coversDate(row.effective_range, asOf)),
+		overtimeCoverageRule: coverageRuleFor(
+			live(overtimeCoverageRuleRows).filter((row) => coversDate(row.effective_range, asOf))
+		),
+		restBreakRules: resolveRestBreakRules(
+			live(restBreakRuleRows).filter((row) => coversDate(row.effective_range, asOf))
+		),
 		shiftById: new Map(shifts.map((row) => [row.norbital_id, row])),
 		holidays: new Map(
 			live(holidayRows).map((row) => [String(row.date).slice(0, 10), row] as const)
@@ -297,8 +331,34 @@ export function configurationSnapshot(
 			.map((row) => [row.day_type, row.band, row.award])
 			.toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
 		overtime_limits: configuration.overtimeLimits
-			.map((row) => [row.period, row.max_hours, row.on_exceed])
+			.map((row) => [row.period, row.measures, row.max_hours, row.on_exceed])
 			.toSorted((left, right) => String(left[0]).localeCompare(String(right[0]))),
+		// Who the ladder covered is as much a part of the law a payslip was computed under as what an
+		// hour was worth. Without this a PAID run could not say which wage ceiling priced it, and a
+		// First Schedule amendment would rebuild to the same hash as the law it replaced.
+		overtime_coverage: configuration.overtimeCoverageRule
+			? [
+					configuration.overtimeCoverageRule.wage_ceiling,
+					configuration.overtimeCoverageRule.ceiling_is_inclusive,
+					configuration.overtimeCoverageRule.wage_basis,
+					configuration.overtimeCoverageRule.category_basis,
+					[...configuration.overtimeCoverageRule.exempt_categories].toSorted(),
+					[...configuration.overtimeCoverageRule.excluded_categories].toSorted(),
+					configuration.overtimeCoverageRule.authority
+				]
+			: null,
+		// The breaks in force were picked with the rest of the law: a rebuild after an amendment to
+		// s.60A must hash differently from the run that priced under the old text, even though no
+		// figure on a payslip moves until a check starts reading them.
+		rest_break_rules: [...configuration.restBreakRules.values()]
+			.map((rule) => [
+				rule.appliesWhen,
+				rule.afterConsecutiveHours,
+				rule.minimumMinutes,
+				rule.countsAsWorkedTime,
+				rule.authority
+			])
+			.toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
 		holidays: [...configuration.holidays.values()]
 			.map((row) => [String(row.date).slice(0, 10), row.substitutes_date, row.scope])
 			.toSorted((left, right) => String(left[0]).localeCompare(String(right[0]))),

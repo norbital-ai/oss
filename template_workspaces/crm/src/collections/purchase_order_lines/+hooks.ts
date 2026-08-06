@@ -100,6 +100,9 @@ export default {
 				where: { norbital_id: { eq: input.product_id } }
 			});
 			if (!product) throw new Error('Referenced product does not exist.');
+			if (!product.active) {
+				throw new Error('Cannot add a line for an inactive product.');
+			}
 
 			const resolved = {
 				...input,
@@ -107,7 +110,7 @@ export default {
 				product_name: input.product_name ?? product.name,
 				product_unit: input.product_unit ?? product.unit ?? '',
 				unit_cost: input.unit_cost,
-				tax_rate: input.tax_rate ?? 0
+				tax_rate: input.tax_rate ?? product.tax_rate ?? 0
 			};
 			validateLineFields(resolved);
 

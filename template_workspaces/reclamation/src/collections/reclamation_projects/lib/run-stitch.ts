@@ -7,6 +7,7 @@
  */
 
 import type { WorkspaceInsert } from '../../../../.norbital/generated/types.js';
+import { z } from 'zod';
 import type { RawDocument, StitchOverrides } from '../../../lib/reclamation/extract.js';
 import { normalizeDrawing } from '../../../lib/reclamation/normalize-drawing.server.js';
 import { sha256Hex } from '../../../lib/reclamation/hash.js';
@@ -70,21 +71,24 @@ const DOCUMENT_FIELD: Record<DocumentKind, keyof ProjectDocumentFields> = {
 	cross_section: 'cross_section_document'
 };
 
+/** The overrides blob must at least be a JSON object; the engine reads its fields defensively. */
+const overridesJson = z.record(z.string(), z.unknown());
+
 /** Parse the project's override blob, rejecting anything that is not an object. */
 export function parseOverrides(raw: string | null | undefined): StitchOverrides {
 	if (raw == null || raw.trim() === '') return {};
-	let parsed: unknown;
+	let result: ReturnType<typeof overridesJson.safeParse>;
 	try {
-		parsed = JSON.parse(raw);
+		result = overridesJson.safeParse(JSON.parse(raw));
 	} catch (error) {
 		throw new Error(
 			`Stitch overrides must be valid JSON: ${error instanceof Error ? error.message : String(error)}`
 		);
 	}
-	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+	if (!result.success) {
 		throw new Error('Stitch overrides must be a JSON object.');
 	}
-	return parsed as StitchOverrides;
+	return result.data as StitchOverrides;
 }
 
 export function resolveSettings(project: ProjectDocumentFields): StitchSettings {
@@ -136,13 +140,14 @@ export async function inputFingerprint(
 	].join('|');
 }
 
+/** A run's report carries the fingerprint of the inputs it was built from. */
+const reportFingerprint = z.object({ inputFingerprint: z.string() });
+
 function fingerprintOfRun(run: PreviousRun): string | null {
 	if (!run.report_json) return null;
 	try {
-		const report: unknown = JSON.parse(run.report_json);
-		if (typeof report !== 'object' || report === null) return null;
-		const value = (report as { inputFingerprint?: unknown }).inputFingerprint;
-		return typeof value === 'string' ? value : null;
+		const result = reportFingerprint.safeParse(JSON.parse(run.report_json));
+		return result.success ? result.data.inputFingerprint : null;
 	} catch {
 		return null;
 	}
@@ -189,29 +194,35 @@ async function loadExtras(
 	extras: readonly ExtraDocument[],
 	driver: StitchDriver
 ): Promise<{ sections: RawDocument[]; bathymetry: RawDocument[] }> {
+	// The reads are independent — one per attachment — so they run concurrently, exactly like
+	// `loadDocuments` above; only the bucketing by kind happens afterwards, in input order.
+	const loaded = await Promise.all(
+		extras.map(async (entry): Promise<RawDocument | null> => {
+			const assetId = entry.document_file;
+			if (typeof assetId !== 'string' || assetId === '') return null;
+			if (
+				entry.document_role !== 'additional_bathymetry' &&
+				entry.document_role !== 'additional_sections'
+			) {
+				return null;
+			}
+			const kind: DocumentKind =
+				entry.document_role === 'additional_bathymetry' ? 'bathymetry' : 'cross_section';
+			const asset = await driver.readFileAsset(assetId);
+			return {
+				kind,
+				assetId: asset.id,
+				fileName: asset.name,
+				mimeType: asset.mimeType,
+				bytes: asset.bytes,
+				sha256: await sha256Hex(asset.bytes)
+			};
+		})
+	);
 	const sections: RawDocument[] = [];
 	const bathymetry: RawDocument[] = [];
-	for (const entry of extras) {
-		const assetId = entry.document_file;
-		if (typeof assetId !== 'string' || assetId === '') continue;
-		const kind: DocumentKind =
-			entry.document_role === 'additional_bathymetry' ? 'bathymetry' : 'cross_section';
-		if (
-			entry.document_role !== 'additional_bathymetry' &&
-			entry.document_role !== 'additional_sections'
-		) {
-			continue;
-		}
-		const asset = await driver.readFileAsset(assetId);
-		const document: RawDocument = {
-			kind,
-			assetId: asset.id,
-			fileName: asset.name,
-			mimeType: asset.mimeType,
-			bytes: asset.bytes,
-			sha256: await sha256Hex(asset.bytes)
-		};
-		(kind === 'bathymetry' ? bathymetry : sections).push(document);
+	for (const document of loaded) {
+		if (document) (document.kind === 'bathymetry' ? bathymetry : sections).push(document);
 	}
 	return { sections, bathymetry };
 }

@@ -1,9 +1,12 @@
 <script lang="ts" generics="T, TAdditionalProps extends Record<string, unknown> = {}">
 	import Icon from '@iconify/svelte';
 	import { Checkbox } from '#lib/checkbox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { TComboboxCommandItem } from './index.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	interface Props {
 		item: TComboboxCommandItem<T, TAdditionalProps>;
@@ -100,7 +103,10 @@
 			<div class="min-w-0">
 				<div class="truncate font-medium">{item.label}</div>
 				<div class="truncate text-tiny leading-3 text-muted-foreground">
-					{item._selectedCount} of {item._totalCount} selected
+					{t('common.selectedOfTotal', {
+						selected: item._selectedCount,
+						total: item._totalCount
+					})}
 				</div>
 			</div>
 		</Inline>
@@ -122,6 +128,6 @@
 		style="height: {itemHeight}px;"
 	>
 		<Icon icon="lucide:plus" class="mr-2 h-3 w-3" />
-		Create "{searchQuery}"
+		{t('common.createOption', { query: searchQuery })}
 	</div>
 {/if}

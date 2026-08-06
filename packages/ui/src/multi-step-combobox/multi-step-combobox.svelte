@@ -14,6 +14,7 @@
 		type CommandServerConfig,
 		type TInfiniteLoadingConfig
 	} from '#lib/command';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Bound, Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
@@ -29,6 +30,8 @@
 	import MultiStepSelectionSidebar from './multi-step-selection-sidebar.svelte';
 	import MultiStepHeader from './multi-step-header.svelte';
 	import MultiStepValueLabel from './multi-step-value-label.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	type TOutputValue<M extends boolean> = M extends true ? TValueMap[] : TValueMap;
 
@@ -115,10 +118,13 @@
 		overscan = 10,
 		stepSeparator = ' → ',
 		panelHeight = 420,
-		ariaLabelSelections = 'Existing selections',
-		ariaLabelList = 'Options',
+		ariaLabelSelections,
+		ariaLabelList,
 		snapToEnds = false
 	}: TMultiStepComboboxProps<TMultiple> = $props();
+
+	const ariaLabelSelectionsEffective = $derived(ariaLabelSelections ?? t('common.existingSelections'));
+	const ariaLabelListEffective = $derived(ariaLabelList ?? t('common.options'));
 
 	const normalizeValue = (input: TOutputValue<TMultiple> | null): TValueMap[] => {
 		if (!input) return [];
@@ -632,7 +638,7 @@
 					{@render emptyPlaceholder()}
 				{:else}
 					<span class="text-xs font-normal text-muted-foreground"
-						>Build {multiple ? 'items' : 'item'} step by step...</span
+						>{multiple ? t('common.buildItemsStepByStep') : t('common.buildItemStepByStep')}</span
 					>
 				{/if}
 			</div>
@@ -652,9 +658,9 @@
 						e.preventDefault();
 						handleClear(e);
 					}}
-					aria-label="Clear selection"
+					aria-label={t('common.clearSelection')}
 				>
-					clear
+					{t('common.clear')}
 				</button>
 			{:else if !hideChevron}
 				<Icon
@@ -686,7 +692,7 @@
 					{currentSelectionIndex}
 					{multiple}
 					{disabled}
-					ariaLabel={ariaLabelSelections}
+					ariaLabel={ariaLabelSelectionsEffective}
 					{steps}
 					isComplete={isSelectionComplete}
 					onSelect={selectSelection}
@@ -732,12 +738,12 @@
 								<div class="relative w-full p-1">
 									<Input
 										type="text"
-										placeholder="Search..."
+										placeholder={t('common.search')}
 										bind:value={searchValue}
 										class="w-full text-sm"
 										tabindex={0}
 										bind:ref={refs.searchInput}
-										aria-label="Search tree"
+										aria-label={t('common.searchTree')}
 										{disabled}
 										oninput={handleSearchInput}
 									/>
@@ -752,7 +758,7 @@
 									class="relative w-full overflow-auto bg-transparent p-1"
 									style={`max-height: ${Math.min(maxHeight, panelHeight - 140)}px;`}
 									id="{comboboxId}-listbox"
-									aria-label={ariaLabelList}
+									aria-label={ariaLabelListEffective}
 									{itemHeight}
 									{overscan}
 									clientConfig={currentClientConfig}
@@ -806,10 +812,10 @@
 									{#if currentIsLoading && filteredOptions.length === 0}
 										<div class="flex items-center justify-center p-3 text-xs">
 											<Spinner class="mr-2 h-3 w-3" />
-											Loading...
+											{t('common.loading')}
 										</div>
 									{:else if commandItems.length === 0}
-										<div class="p-3 text-center text-xs">No results found.</div>
+										<div class="p-3 text-center text-xs">{t('common.noResultsFound')}</div>
 									{/if}
 								</Command.List>
 							{/if}
@@ -818,9 +824,7 @@
 				</Bound>
 			{:else}
 				<Inline justify="center" gap="none" grow class="p-4 text-xs text-muted-foreground">
-					{multiple
-						? 'Select or create a selection to get started.'
-						: 'Create a selection to get started.'}
+					{multiple ? t('common.selectOrCreateToStart') : t('common.createToStart')}
 				</Inline>
 			{/if}
 		</Inline>

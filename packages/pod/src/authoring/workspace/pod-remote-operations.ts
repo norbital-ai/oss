@@ -36,6 +36,16 @@ export type PodRemoteOperations = {
 		readonly runId?: string;
 		readonly model?: string;
 		readonly planMode?: boolean;
+		/**
+		 * Records the composer's "@" picker resolved. The loop fetches each one as the requestor and
+		 * appends it to the turn's window; a reference that no longer resolves leaves its label in
+		 * the message text and injects nothing.
+		 */
+		readonly mentions?: readonly {
+			readonly collection: string;
+			readonly recordId: string;
+			readonly label: string;
+		}[];
 	}) => Promise<{
 		readonly runId: string;
 		readonly chatId: string;

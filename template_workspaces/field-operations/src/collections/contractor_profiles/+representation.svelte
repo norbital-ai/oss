@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Grid } from '@norbital-ai/ui/layout';
@@ -7,6 +9,8 @@
 	import ContractorProfileRepresentation from './contractor-profile-representation.svelte';
 
 	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 {#if record}
@@ -15,7 +19,7 @@
 	<CollectionForm
 		{client}
 		collection="contractor_profiles"
-		submitLabel="Add contractor"
+		submitLabel={t('component.add_contractor')}
 		onAfterSubmit={close}
 	>
 		{#snippet children({ Field })}
@@ -23,7 +27,7 @@
 				<Field name="company_name" />
 				<Field
 					name="user_id"
-					label="Portal user"
+					label={t('component.portal_user')}
 					renderer={RelationshipRenderer}
 					rendererProps={{
 						target: 'user',

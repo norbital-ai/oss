@@ -44,19 +44,26 @@ A public holiday can replace an ordinary day. If a paid holiday falls on the sta
 the next working day is the substitute unless an explicit `company_holidays.substitutes_date`
 already defines one. This changes schedule classification; it does not invent an OIL transaction.
 
-## Authorisation gates
+## Gates
 
 An overtime amount is produced only when all relevant gates pass:
 
 1. the time entry is approved and `CLOSED`;
 2. the shift permits overtime;
-3. `overtime_authorized` is not explicitly false;
-4. a separately punched OT interval, when supplied, is complete and forward-running; and
-5. payable duration remains after flooring.
+3. a separately punched OT interval, when supplied, is complete and forward-running; and
+4. payable duration remains after flooring.
 
-Approved legacy buckets supply the authorised duration, but labels such as `1.5`, `2.0` and `3.0`
-do not override the legal day type. The schedule decides whether the same hours were ordinary,
-rest-day or public-holiday work.
+**Overtime is a calculated value, never a stored one.** A `time_entries` row records what happened
+on the clock — the punches, the unpaid break, the clock state — and nothing about what those hours
+are worth or who agreed to them. The payroll run derives the duration from the punches, and the
+schedule decides whether the same hours were ordinary, rest-day or public-holiday work.
+
+`time_entries` previously carried `overtime_authorized` and five `approved_ot_*_hours` buckets, and
+both were engine inputs: a recorded refusal suppressed the day entirely, and a bucket total replaced
+the clock as the payable duration. They were dropped in the `drop_time_entry_overtime_approval`
+migration. A per-day authorisation decision, if a population needs one again, belongs on a record
+that says who decided and when — not as an unattributed flag that silently withholds pay for hours
+the clock says were worked.
 
 ## Hours
 
@@ -105,8 +112,9 @@ effective HRP = max(configured-method HRP, statutory HRP)
 ```
 
 Ordinary/off-day work uses the ordinary OT ladder. Rest-day and public-holiday work can contain a
-day-wage award for work within normal hours and an hourly award beyond normal hours. This is why
-simply multiplying all source “1.5” bucket hours can differ from the statutory result.
+day-wage award for work within normal hours and an hourly award beyond normal hours. This is why a
+legacy source's flat “1.5× hours” figure can differ from the statutory result, and why that figure
+is not an input.
 
 ## Incentive OT (`OVERTIME_EXCESS`)
 
@@ -122,8 +130,9 @@ retained OT hours  = payable OT hours − daily excess hours
 ```
 
 The legal ladder prices the whole day first. The value associated with excess hours is moved to the
-matching `OVERTIME_EXCESS` component at the same statutory value; it is not discarded. A warning
-still identifies work beyond 12 hours because reclassification does not make the schedule compliant.
+matching `OVERTIME_EXCESS` component at the same statutory value; it is not discarded. The run then
+**fails** on `DAILY_WORK_LIMIT_EXCEEDED`, naming the employee and the date: reclassification settles
+what the day is worth, and does not make the schedule compliant.
 The 12-hour boundary is the statutory daily maximum outside the Act's exceptional circumstances,
 not a daily OT entitlement or a rule that permits twelve overtime hours.
 
@@ -171,13 +180,37 @@ specific dated hour crossed the threshold; the attendance window determines whic
 
 ## Coverage
 
-For Malaysian OT/rest-day/holiday provisions, monthly salary and
-`statutory_work_category` determine statutory coverage. A contractual entitlement can be more
-favourable. The legacy `work_classification = NON_EA` label is not, by itself, proof that the
-Employment Act does not apply.
+Coverage is **data, not code**. It lives in `overtime_coverage_rules`, one effective-dated row per
+jurisdiction, each carrying the section it comes from. Nothing about it is compiled in, and a
+jurisdiction with no row covers everyone — absence of a coverage restriction is not a restriction
+that excludes everyone. See
+[Statutory overtime coverage](statutory-overtime-coverage.md) for the full model, the sources and
+what is still unencoded.
 
-The Act's general protections cover private-sector employees, but employees earning more than
-RM4,000 a month who are not manual employees are excluded from the statutory claims for overtime,
-rest-day work and paid-holiday work. Manual employees remain in the protected category regardless
-of that threshold. The effective employment fact therefore stores manual/non-manual status instead
-of inferring entitlement from job title text.
+A contractual entitlement can be more favourable: `employment_terms.overtime_eligible` widens
+coverage and never narrows it. The legacy `work_classification = NON_EA` label is not, by itself,
+proof that the Employment Act does not apply.
+
+For Malaysia the row encodes the Employment Act 1955 First Schedule as substituted by the
+Employment (Amendment of First Schedule) Order 2022 [P.U. (A) 262]: a ceiling of RM4,000 a month,
+**inclusive** because paragraph 1A disapplies the ladder to wages that "exceeds" that figure; the
+paragraph 2 categories — manual labour, supervisors of manual labour, and commercial vehicle
+operators — covered irrespective of wages; and vessel work _excluded_ outright, because paragraph
+2(4) disapplies the whole of Part XII, which is where ss.60, 60A and 60D live.
+
+The ceiling is measured on First Schedule paragraph 3 wages — section 2 wages less commissions,
+subsistence allowance and overtime payment — and **not** on base salary. The engine derives that
+figure per employment: the contracted basic wage plus the signed totals of every cash-for-work
+component's entries settling in the run, with the overtime components left out
+(`classifyWageComparand` / `deriveStatutoryWages` in `payroll_runs/lib/coverage.ts`). A person on
+RM3,800 basic plus a RM500 fixed allowance is outside the ladder; the old base-salary comparison
+said inside. Where the model cannot express a distinction the statute draws — commissions and
+subsistence allowance have no component category of their own — the derivation says so rather than
+guessing, and a figure the run cannot produce fails the run naming the employee and the authority
+instead of being approximated from the nearest column.
+
+Meal breaks are data the same way: `rest_break_rules` carries each jurisdiction's cited row — the
+consecutive-hours window the flat `break_minutes` columns cannot express, the minimum length, and
+whether the statute counts the break as working time. The run picks them with the rest of its law
+and records them in its configuration snapshot; nothing enforces them yet, because whether a break
+was taken is a question over punches that payroll does not answer.

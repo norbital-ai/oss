@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
@@ -7,6 +9,8 @@
 	import type { CollectionRelationOptions } from '@norbital-ai/platform-utils/collection';
 
 	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -21,12 +25,12 @@
 		<Grid minimum="compact">
 			<Field name="subject" />
 			<Field name="type" />
-			<Field name="regarding_type" label="Regarding type" />
+			<Field name="regarding_type" label={t('component.regarding_type')} />
 			{#key values.regarding_type}
 				{#if values.regarding_type === 'quotes'}
 					<Field
 						name="regarding_id"
-						label="Quote"
+						label={t('component.quote')}
 						renderer={RelationshipRenderer}
 						rendererProps={{
 							target: 'quotes',
@@ -45,7 +49,7 @@
 				{:else}
 					<Field
 						name="regarding_id"
-						label="Account"
+						label={t('component.account')}
 						renderer={RelationshipRenderer}
 						rendererProps={{
 							target: 'accounts',
@@ -59,11 +63,11 @@
 					/>
 				{/if}
 			{/key}
-			<Field name="due_date" label="Due date" />
-			<Field name="completed_at" label="Completed" />
+			<Field name="due_date" label={t('component.due_date')} />
+			<Field name="completed_at" label={t('component.completed')} />
 			<Field
 				name="owner_id"
-				label="Owner"
+				label={t('component.owner')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'user',

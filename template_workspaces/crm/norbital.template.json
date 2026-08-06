@@ -3,10 +3,10 @@
 	"key": "crm",
 	"name": "CRM",
 	"industry": "Sales",
-	"description": "B2B trade workspace bridging sales quotes and purchase orders into the company's system of record: accounts, quoting, pipeline, and purchasing.",
+	"description": "B2B trade workspace integrating sales quotes and purchase orders with the company's system of record: accounts, quoting, pipeline, and purchasing.",
 	"visibility": "public",
 	"counts": {
-		"collections": 9,
+		"collections": 17,
 		"apps": 2,
 		"automations": 1
 	}

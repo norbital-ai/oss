@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
 	import { Root as Progress } from '#lib/progress';
@@ -11,24 +12,27 @@
 		denominator: number;
 	}
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		field,
 		value,
 		id,
 		mode = 'display',
 		disabled = false,
-		placeholder = 'No progress',
+		placeholder = t('dataRenderer.noProgress'),
 		onValueChange,
-		locale = 'en-US',
+		locale,
 		denominator,
 		class: className
 	}: Props = $props();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 
 	const values = $derived(
 		Array.isArray(value) ? value.filter((item): item is number => typeof item === 'number') : []
 	);
 	const scalarValue = $derived(typeof value === 'number' ? value : null);
-	const formatter = $derived(new Intl.NumberFormat(locale));
+	const formatter = $derived(new Intl.NumberFormat(localeEffective));
 
 	function visualValue(next: number): number {
 		return Math.min(denominator, Math.max(0, next));
@@ -66,7 +70,7 @@
 				{#if mode === 'edit'}
 					<Input
 						id={id ? `${id}-${index}` : undefined}
-						aria-label={`Progress ${index + 1}`}
+						aria-label={t('dataRenderer.progressIndex', { index: index + 1 })}
 						type="number"
 						min={0}
 						max={denominator}
@@ -84,7 +88,7 @@
 						variant="outline"
 						size="icon"
 						class="shrink-0"
-						aria-label="Remove progress value"
+						aria-label={t('dataRenderer.removeProgress')}
 						{disabled}
 						onclick={() => onValueChange?.(values.filter((_, itemIndex) => itemIndex !== index))}
 					>
@@ -104,7 +108,7 @@
 				onclick={() => onValueChange?.([...values, 0])}
 			>
 				<Icon icon="lucide:plus" class="size-4" />
-				Add progress
+				{t('dataRenderer.addProgress')}
 			</Button>
 		{/if}
 	</Stack>

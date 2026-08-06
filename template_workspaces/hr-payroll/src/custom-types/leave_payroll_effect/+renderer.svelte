@@ -1,6 +1,12 @@
 <script lang="ts">
+	/**
+	 * `component_id` is a foreign key the database cannot declare — a variant is one JSONB value —
+	 * so the picker is built here, from a query scoped to the leave type's own company. It used to
+	 * be a text box asking the operator for a uuid, and the display summary printed that uuid on
+	 * every row of the leave-types table.
+	 */
+	import { client } from '$pod/client';
 	import { Combobox } from '@norbital-ai/ui/combobox';
-	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { leavePayrollEffectSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
@@ -16,14 +22,41 @@
 		}
 	];
 
-	let props: RendererProps = $props();
+	type LeavePayrollEffectRendererProps = RendererProps & {
+		/** The leave type being edited, which is what scopes the pay catalogue below. */
+		readonly row?: Record<string, unknown>;
+	};
+
+	let props: LeavePayrollEffectRendererProps = $props();
 	const disabled = $derived(props.mode === 'edit' ? props.disabled : true);
 	const parsed = $derived(leavePayrollEffectSchema.safeParse(props.value));
 	const current = $derived(parsed.success ? parsed.data : null);
-	const summary = $derived.by(() => {
-		if (current === null) return '—';
-		return current.kind === 'PAID' ? 'Paid' : `Unpaid · ${current.component_id}`;
-	});
+	/*
+	 * The component is named in the editor, not here. Resolving it in display mode would mount one
+	 * lookup per table row — the N+1 `controller-surfaces.md` §5 forbids — and the id itself is not
+	 * an answer to any question an operator has.
+	 */
+	const summary = $derived(current === null ? '—' : current.kind === 'PAID' ? 'Paid' : 'Unpaid');
+
+	const companyId = $derived(
+		typeof props.row?.company_id === 'string' ? props.row.company_id : null
+	);
+	const componentsQuery = $derived(
+		companyId == null
+			? null
+			: client.db.pay_components.findMany({
+					where: { company_id: { eq: companyId } },
+					orderBy: { code: 'asc' },
+					limit: 500
+				})
+	);
+	const componentOptions = $derived(
+		(componentsQuery?.current ?? []).map((component) => ({
+			value: component.norbital_id,
+			label: [component.code, component.name].filter((part) => part).join(' · ') || '—',
+			search_term: `${component.code ?? ''} ${component.name ?? ''}`
+		}))
+	);
 
 	function emit(next: Value | null): void {
 		if (props.mode === 'edit') props.onValueChange(next);
@@ -72,12 +105,20 @@
 		</label>
 		{#if current?.kind === 'UNPAID'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Deduction component id
-				<Input
-					value={current.component_id}
-					{disabled}
-					placeholder="UUID of the unpaid-leave pay component"
-					oninput={(event) => emit({ kind: 'UNPAID', component_id: event.currentTarget.value })}
+				Deducted on
+				<Combobox
+					ariaLabel="Deduction component"
+					options={componentOptions}
+					value={current.component_id === '' ? null : current.component_id}
+					disabled={disabled || companyId == null}
+					searchPlaceholder="Search pay components…"
+					emptyPlaceholder="Choose the component that carries the lost wage"
+					clientConfig={{
+						isLoading: componentsQuery?.loading ?? false,
+						error: componentsQuery?.error?.message ?? null
+					}}
+					onValueChange={(value) =>
+						emit({ kind: 'UNPAID', component_id: typeof value === 'string' ? value : '' })}
 				/>
 			</label>
 		{/if}

@@ -15,6 +15,10 @@
 		TeamRow,
 		WorkspaceSettingsApi
 	} from '../shell/workspace-settings.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	let {
 		teams,
@@ -143,7 +147,8 @@
 	}
 
 	function deleteSelected(): void {
-		if (!selectedTeam || !confirm(`Delete ${selectedTeam.name}?`)) return;
+		if (!selectedTeam || !confirm(t('pod.settings.deleteTeamConfirm', { name: selectedTeam.name })))
+			return;
 		void run(async () => {
 			await api.deleteTeam(selectedTeam.norbital_id);
 			selectedTeamId = null;
@@ -162,16 +167,16 @@
 <Stack gap="md" data-testid="settings-teams">
 	<Cluster align="center" justify="between" gap="md">
 		<div>
-			<h2 class="text-sm font-semibold">Organization chart</h2>
+			<h2 class="text-sm font-semibold">{t('pod.settings.orgChart')}</h2>
 			<p class="mt-0.5 text-xs text-muted-foreground">
-				Tenant teams and their reporting hierarchy.
+				{t('pod.settings.orgChartDescription')}
 			</p>
 		</div>
 		<Button
 			variant="outline"
 			size="icon"
-			hint="Create team"
-			aria-label="Create team"
+			hint={t('pod.settings.createTeam')}
+			aria-label={t('pod.settings.createTeam')}
 			onclick={openCreate}
 		>
 			<Icon icon="lucide:plus" class="size-4" />
@@ -180,7 +185,7 @@
 
 	{#if teams.length === 0}
 		<div class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-			No teams yet. Use the action above to create the first one.
+			{t('pod.settings.noTeams')}
 		</div>
 	{:else}
 		<div
@@ -220,8 +225,8 @@
 							<Button
 								variant="ghost"
 								size="icon"
-								hint="Edit team"
-								aria-label={`Edit ${selectedTeam.name}`}
+								hint={t('pod.settings.editTeam')}
+								aria-label={t('pod.settings.editAria', { name: selectedTeam.name })}
 								onclick={() => openEdit(selectedTeam)}
 							>
 								<Icon icon="lucide:pencil" class="size-4" />
@@ -229,8 +234,8 @@
 							<Button
 								variant="ghost"
 								size="icon"
-								hint="Delete team"
-								aria-label={`Delete ${selectedTeam.name}`}
+								hint={t('pod.settings.deleteTeam')}
+								aria-label={t('pod.settings.deleteAria', { name: selectedTeam.name })}
 								class="text-muted-foreground hover:text-destructive"
 								onclick={deleteSelected}
 							>
@@ -241,14 +246,14 @@
 
 					<Stack gap="xs" class="border-t pt-3">
 						<p class="text-micro font-semibold tracking-wide text-muted-foreground uppercase">
-							Policy
+							{t('pod.settings.policy')}
 						</p>
-						<p class="text-xs">{selectedPolicy?.name ?? 'No policy assigned'}</p>
+						<p class="text-xs">{selectedPolicy?.name ?? t('pod.settings.noPolicyAssigned')}</p>
 					</Stack>
 
 					<Stack gap="xs" class="border-t pt-3">
 						<p class="text-micro font-semibold tracking-wide text-muted-foreground uppercase">
-							Members
+							{t('pod.settings.members')}
 						</p>
 						{#each selectedMemberships as membership (membership.norbital_id)}
 							{@const member = membersById.get(membership.user_id)}
@@ -258,8 +263,11 @@
 									<Button
 										variant="ghost"
 										size="icon"
-										hint="Remove member"
-										aria-label={`Remove ${member.email} from ${selectedTeam.name}`}
+										hint={t('pod.settings.removeMember')}
+										aria-label={t('pod.settings.removeMemberAria', {
+											email: member.email,
+											team: selectedTeam.name
+										})}
 										disabled={busy}
 										onclick={() =>
 											void run(async () => {
@@ -271,25 +279,25 @@
 								</Inline>
 							{/if}
 						{:else}
-							<p class="text-xs text-muted-foreground">No members in this team.</p>
+							<p class="text-xs text-muted-foreground">{t('pod.settings.noMembersInTeam')}</p>
 						{/each}
 						<Inline gap="xs" class="pt-1">
 							<select
 								class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
-								aria-label={`Add someone to ${selectedTeam.name}`}
+								aria-label={t('pod.settings.addSomeoneTo', { name: selectedTeam.name })}
 								value={memberToAdd}
 								onchange={(event) => (memberToAdd = event.currentTarget.value)}
 							>
-								<option value="">Add member…</option>
+								<option value="">{t('pod.settings.addMemberPlaceholder')}</option>
 								{#each availableMembers as member (member.norbital_id)}<option
 										value={member.norbital_id}>{member.email}</option
 									>{/each}
 							</select>
 							<Button
 								size="sm"
-								aria-label={`Add member to ${selectedTeam.name}`}
+								aria-label={t('pod.settings.addMemberTo', { name: selectedTeam.name })}
 								disabled={!memberToAdd || busy}
-								onclick={addMember}>Add</Button
+								onclick={addMember}>{t('pod.settings.add')}</Button
 							>
 						</Inline>
 					</Stack>
@@ -302,37 +310,35 @@
 <Dialog.Root bind:open={dialogOpen}>
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
-			<Dialog.Title>{editingTeamId ? 'Edit team' : 'Create team'}</Dialog.Title>
-			<Dialog.Description
-				>Team structure and policy assignment are stored in this tenant database.</Dialog.Description
-			>
+			<Dialog.Title>{editingTeamId ? t('pod.settings.editTeamTitle') : t('pod.settings.createTeam')}</Dialog.Title>
+			<Dialog.Description>{t('pod.settings.teamDialogDescription')}</Dialog.Description>
 		</Dialog.Header>
 		<Stack gap="md">
 			<label class="space-y-1 text-xs font-medium"
-				>Name<Input bind:value={teamName} placeholder="Engineering" /></label
+				>{t('pod.settings.name')}<Input bind:value={teamName} placeholder={t('pod.settings.teamNamePlaceholder')} /></label
 			>
 			<label class="space-y-1 text-xs font-medium"
-				>Description<Input bind:value={teamDescription} placeholder="Engineering team" /></label
+				>{t('pod.settings.description')}<Input bind:value={teamDescription} placeholder={t('pod.settings.teamDescriptionPlaceholder')} /></label
 			>
 			<label class="space-y-1 text-xs font-medium"
-				>Parent team
+				>{t('pod.settings.parentTeam')}
 				<select
 					class="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
 					bind:value={teamParentId}
 				>
-					<option value="">No parent</option>
+					<option value="">{t('pod.settings.noParent')}</option>
 					{#each teams.filter((team) => team.norbital_id !== editingTeamId) as team (team.norbital_id)}<option
 							value={team.norbital_id}>{team.name}</option
 						>{/each}
 				</select>
 			</label>
 			<label class="space-y-1 text-xs font-medium"
-				>Policy
+				>{t('pod.settings.policy')}
 				<select
 					class="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
 					bind:value={teamPolicyId}
 				>
-					<option value="">No policy</option>
+					<option value="">{t('pod.settings.noPolicy')}</option>
 					{#each policies as policy (policy.norbital_id)}<option value={policy.norbital_id}
 							>{policy.name}</option
 						>{/each}
@@ -340,9 +346,9 @@
 			</label>
 		</Stack>
 		<Dialog.Footer>
-			<Dialog.Close>Cancel</Dialog.Close>
+			<Dialog.Close>{t('pod.settings.cancel')}</Dialog.Close>
 			<Button disabled={!teamName.trim() || busy} onclick={saveTeam}
-				>{editingTeamId ? 'Save' : 'Create'}</Button
+				>{editingTeamId ? t('pod.settings.save') : t('pod.settings.create')}</Button
 			>
 		</Dialog.Footer>
 	</Dialog.Content>

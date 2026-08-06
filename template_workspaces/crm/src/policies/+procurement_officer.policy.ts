@@ -30,6 +30,22 @@ export default {
 		{ collection: 'purchase_order_lines', action: 'read' },
 		{ collection: 'purchase_order_lines', action: 'create' },
 		{ collection: 'purchase_order_lines', action: 'update' },
-		{ collection: 'purchase_order_lines', action: 'delete' }
+		{ collection: 'purchase_order_lines', action: 'delete' },
+
+		{ collection: 'goods_receipts', action: 'read' },
+		{ collection: 'goods_receipts', action: 'create' },
+		{ collection: 'goods_receipt_lines', action: 'read' },
+		{ collection: 'goods_receipt_lines', action: 'create' },
+
+		{ collection: 'purchase_invoices', action: 'read' },
+		{ collection: 'purchase_invoices', action: 'create' },
+		{ collection: 'purchase_invoices', action: 'update' },
+		{ collection: 'purchase_invoice_lines', action: 'read' },
+		{ collection: 'purchase_invoice_lines', action: 'create' },
+		{ collection: 'purchase_invoice_lines', action: 'update' },
+		{ collection: 'purchase_invoice_lines', action: 'delete' },
+
+		{ collection: 'settlements', action: 'read' },
+		{ collection: 'settlements', action: 'create' }
 	]
 } satisfies Policy;

@@ -5,7 +5,7 @@ import { emailOtp, isIdentityDescriptor } from '../../src/host/types.js';
 
 const SECRET = 'a'.repeat(32);
 
-type Sent = { email: string; code: string };
+type Sent = { email: string; code: string; locale: 'en' | 'zh' };
 
 function provider(
 	options: {
@@ -175,6 +175,7 @@ describe('emailOtpIdentity', () => {
 		const sent: Sent[] = [];
 		await provider({ sent }).handleRoute?.(form('/login', { email: '  BOB@Example.COM ' }));
 		expect(sent[0]?.email).toBe('bob@example.com');
+		expect(sent[0]?.locale).toBe('en');
 	});
 
 	it('lets an isolated host make its sign-in code deterministic', async () => {
@@ -269,7 +270,9 @@ describe('emailOtpIdentity', () => {
 			form('/accept-invite', { token: 'tok', email: 'bob@example.com' })
 		);
 		expect(response?.status).toBe(200);
-		expect(sent).toEqual([{ email: 'bob@example.com', code: expect.any(String) }]);
+		expect(sent).toEqual([
+			{ email: 'bob@example.com', code: expect.any(String), locale: 'en' }
+		]);
 	});
 
 	it('declines routes it does not own so the workspace still serves them', async () => {

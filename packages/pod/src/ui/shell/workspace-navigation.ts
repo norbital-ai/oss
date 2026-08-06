@@ -5,6 +5,34 @@ import type {
 	WorkspaceOrganizationOption
 } from '@norbital-ai/ui/workspace-shell';
 
+/**
+ * The subset of the i18n api the navigation label resolution needs, with an open
+ * key type: app and group titles live under `app.<id>.title`, which tenant
+ * catalogs define and this catalog cannot type.
+ */
+export type NavigationLabelResolver = {
+	has(key: string): boolean;
+	t(key: string, vars?: { readonly [name: string]: string | number }): string;
+};
+
+/**
+ * The app-title localization chokepoint.
+ *
+ * App and group display labels resolve through the tenant catalog before any
+ * metadata fallback: `app.<id>.title` wins, then the manifest label, then the
+ * humanized id. The same path is used for a group and its apps, so a tenant can
+ * translate its navigation per locale without touching the shell.
+ */
+export function resolveNavigationLabel(
+	i18n: NavigationLabelResolver | undefined,
+	id: string,
+	fallback: string
+): string {
+	if (!i18n) return fallback;
+	const key = `app.${id}.title`;
+	return i18n.has(key) ? i18n.t(key) : fallback;
+}
+
 export function resolveWorkspaceOrganizationOptions(input: {
 	activeOrganization: WorkspaceOrganizationOption;
 	organizations: readonly {
@@ -119,8 +147,11 @@ export function buildSystemNavigation(input: {
 	}[];
 	isAdmin: boolean;
 	currentPath: string;
+	/** Resolves pod chrome labels; falls back to the source English when absent. */
+	i18n?: NavigationLabelResolver;
 }): WorkspaceNavigationItem[] {
-	const visiblePlugins = input.plugins.filter((plugin) => input.isAdmin || !plugin.adminOnly);
+	const { i18n } = input;
+	const visiblePlugins = input.plugins.filter((inputPlugin) => input.isAdmin || !inputPlugin.adminOnly);
 	const pluginItem = (plugin: (typeof visiblePlugins)[number]): WorkspaceNavigationItem => {
 		const href = hostPluginSurfaceHref(plugin.key);
 		return {
@@ -140,7 +171,7 @@ export function buildSystemNavigation(input: {
 						// Named for what an admin manages here — members, invitations, teams, the audit
 						// trail — not for the tenant database those rows happen to live in. The storage was
 						// never the thing anyone came to this entry looking for.
-						label: 'People',
+						label: i18n ? i18n.t('pod.shell.people') : 'People',
 						icon: 'lucide:users',
 						href: WORKSPACE_SETTINGS_PATH,
 						active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)
@@ -153,7 +184,7 @@ export function buildSystemNavigation(input: {
 		? [
 				{
 					key: 'settings',
-					label: 'Settings',
+					label: i18n ? i18n.t('pod.shell.settings') : 'Settings',
 					icon: 'lucide:settings',
 					href: settingsChildren[0].href,
 					active: settingsChildren.some((item) => item.active),
@@ -215,6 +246,8 @@ export function buildApplicationNavigation(input: {
 	apps: Readonly<Record<string, ManifestApp>>;
 	accessibleAppNames: readonly string[] | null;
 	currentPath: string;
+	/** Resolves app/group titles through the tenant catalog (`app.<id>.title`). */
+	i18n?: NavigationLabelResolver;
 }): WorkspaceNavigationItem[] {
 	const leafIds = new Set(
 		input.appIds.filter((appId) => appAccessAllowed(appId, input.accessibleAppNames))
@@ -256,7 +289,11 @@ export function buildApplicationNavigation(input: {
 			input.currentPath.startsWith(`/app/${id}/`);
 		return {
 			key: id,
-			label: app?.label?.trim() || humanize(id.split('/').at(-1) ?? id),
+			label: resolveNavigationLabel(
+				input.i18n,
+				id,
+				app?.label?.trim() || humanize(id.split('/').at(-1) ?? id)
+			),
 			icon: app?.icon ?? 'lucide:layout-grid',
 			href,
 			active,

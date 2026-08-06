@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Grid } from '@norbital-ai/ui/layout';
@@ -7,6 +9,8 @@
 	import type { CollectionRelationOptions } from '@norbital-ai/platform-utils/collection';
 
 	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -20,7 +24,7 @@
 		<Grid minimum="compact">
 			<Field
 				name="purchase_order_id"
-				label="Purchase order"
+				label={t('component.purchase_order')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'purchase_orders',
@@ -34,7 +38,7 @@
 			/>
 			<Field
 				name="product_id"
-				label="Product"
+				label={t('component.product')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'products',
@@ -50,11 +54,13 @@
 					} satisfies CollectionRelationOptions
 				}}
 			/>
-			<Field name="product_code" label="Code" />
-			<Field name="product_name" label="Product name" />
+			<Field name="product_code" label={t('component.code')} />
+			<Field name="product_name" label={t('component.product_name')} />
+			<Field name="product_unit" label={t('component.unit')} />
 			<Field name="quantity" />
-			<Field name="unit_cost" label="Unit cost" />
-			<Field name="line_total" label="Line total" />
+			<Field name="unit_cost" label={t('component.unit_cost')} />
+			<Field name="tax_rate" label={t('component.tax_rate')} />
+			<Field name="line_total" label={t('component.line_total')} />
 		</Grid>
 	{/snippet}
 </CollectionForm>

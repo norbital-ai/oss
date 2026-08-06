@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '#lib/button';
 	import * as Command from '#lib/command';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { humanize } from '@norbital-ai/std';
@@ -13,6 +14,8 @@
 		type ColoredTagsInputProps,
 		type TagColor
 	} from './types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	const AVAILABLE_COLORS: TagColor[] = [
 		'red',
@@ -35,7 +38,7 @@
 		value = [],
 		onValueChange,
 		fixedTag,
-		placeholder = 'Add tags...',
+		placeholder = t('misc.addTags'),
 		class: className,
 		disabled = false,
 		readonly = false,
@@ -241,7 +244,7 @@
 
 {#if isSelectingColor}
 	<Stack gap="sm" class="rounded-md border border-input bg-background p-2">
-		<p class="text-xs font-medium">Select a color for "{String(validatedInput)}"</p>
+		<p class="text-xs font-medium">{t('misc.selectColorFor', { value: String(validatedInput) })}</p>
 
 		<Command.Root
 			shouldFilter={false}
@@ -252,7 +255,7 @@
 			<Command.Input
 				autofocus={true}
 				bind:value={colorSearchValue}
-				placeholder="Search colors…"
+				placeholder={t('misc.searchColors')}
 				{disabled}
 				class="text-xs"
 			>
@@ -295,7 +298,7 @@
 					</Inline>
 				{/snippet}
 				{#if colorItems.length === 0}
-					<Command.Empty class="text-xs">No colors found.</Command.Empty>
+					<Command.Empty class="text-xs">{t('misc.noColorsFound')}</Command.Empty>
 				{/if}
 			</Command.List>
 
@@ -307,7 +310,7 @@
 					{disabled}
 					class="text-xs"
 				>
-					Back
+					{t('common.back')}
 				</Button>
 			</Inline>
 		</Command.Root>
@@ -337,7 +340,7 @@
 		{#if hiddenTagCount > 0}
 			<span
 				class="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
-				title={`${hiddenTagCount} more tag${hiddenTagCount === 1 ? '' : 's'}`}
+				title={t('misc.moreTags', { count: hiddenTagCount })}
 			>
 				+{hiddenTagCount}
 			</span>
@@ -358,7 +361,7 @@
 					'focus:outline-none disabled:cursor-not-allowed',
 					'data-[invalid=true]:text-destructive'
 				)}
-				aria-label="Add new tag"
+				aria-label={t('misc.addTag')}
 				aria-invalid={isInputInvalid}
 			/>
 		{/if}

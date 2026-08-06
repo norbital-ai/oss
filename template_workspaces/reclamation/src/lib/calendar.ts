@@ -10,6 +10,9 @@
 export const PROJECT_TIME_ZONE = 'Asia/Singapore';
 
 /** Calendar date for an instant in an IANA timezone, formatted as YYYY-MM-DD. */
+// Every template workspace is a self-contained publishable unit with its own lockfile and no
+// cross-template import surface, so this helper is deliberately owned per template.
+// stupidity:allow D1 -- construction, crm, field-operations and hr-payroll carry the same copy.
 export function calendarDateInTimeZone(value: Date, timeZone: string): string {
 	const parts = new Intl.DateTimeFormat('en', {
 		timeZone,
@@ -23,6 +26,7 @@ export function calendarDateInTimeZone(value: Date, timeZone: string): string {
 }
 
 /** Midnight of `calendarDate` in `timeZone`, as the UTC instant that moment actually is. */
+// stupidity:allow D1 -- same per-template ownership as `calendarDateInTimeZone` above.
 export function startOfDayInstant(calendarDate: string, timeZone: string): string {
 	const naive = Date.parse(`${calendarDate}T00:00:00Z`);
 	if (Number.isNaN(naive)) throw new Error(`Not a calendar date: ${calendarDate}`);

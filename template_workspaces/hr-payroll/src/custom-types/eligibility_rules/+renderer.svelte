@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { nullableNumberFrom, numberFrom, splitList } from '../../lib/ui/renderer-input.js';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
@@ -10,6 +12,8 @@
 		type EligibilityRules
 	} from './+definition.js';
 	import type { RendererProps } from './$types.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type Rule = EligibilityRule;
 	type RuleField = Rule['field'];
@@ -204,7 +208,7 @@
 						<Input
 							value={rule.in.join(', ')}
 							{disabled}
-							placeholder="Operations, Finance"
+							placeholder={t('component.operations_finance')}
 							oninput={(event) =>
 								replaceAt(index, {
 									field: 'DEPARTMENT',
@@ -218,7 +222,7 @@
 						<Input
 							value={rule.in.join(', ')}
 							{disabled}
-							placeholder="MONTHLY, WEEKLY"
+							placeholder={t('component.monthly_weekly')}
 							oninput={(event) =>
 								replaceAt(index, {
 									field: 'PAYROLL_GROUP',

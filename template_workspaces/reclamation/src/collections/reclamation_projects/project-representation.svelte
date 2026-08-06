@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { Button } from '@norbital-ai/ui/button';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Bound, Cluster, Inline, Scroll, Split, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import SiteDisplay from '../../lib/site-viewer/site_display.svelte';
@@ -28,6 +30,8 @@
 	 * moving between documents and cost never costs a re-tessellation.
 	 */
 	let { record }: { record: Row } = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const EMPTY_METRICS: ReconstructionMetrics = {
 		platformAreaM2: 0,
@@ -129,26 +133,26 @@
 
 	/* --------------------------------------------------------------- documents */
 
-	const documentSlots = [
+	const documentSlots = $derived([
 		{
 			kind: 'floor_plan',
-			label: 'Floor plan',
+			label: t('component.doc_slot_floor_plan'),
 			field: 'floor_plan_document',
-			hint: 'DXF site key plan, or a digitised plan JSON.'
+			hint: t('component.doc_slot_floor_plan_hint')
 		},
 		{
 			kind: 'bathymetry',
-			label: 'Bathymetry',
+			label: t('component.doc_slot_bathymetry'),
 			field: 'bathymetry_document',
-			hint: 'XYZ or CSV soundings in the same frame as the plan.'
+			hint: t('component.doc_slot_bathymetry_hint')
 		},
 		{
 			kind: 'cross_section',
-			label: 'Cross sections',
+			label: t('component.doc_slot_cross_sections'),
 			field: 'cross_section_document',
-			hint: 'Authored DXF section sheet, or a digitised section JSON. A DWG must be exported to DXF first — every CAD application writes it.'
+			hint: t('component.doc_slot_cross_sections_hint')
 		}
-	] as const;
+	] as const);
 
 	const slots = $derived(
 		documentSlots.map((slot) => ({
@@ -180,10 +184,10 @@
 			void runsQuery.refresh();
 			rebuildMessage =
 				result.outcome === 'stitched'
-					? 'Reconstruction rebuilt.'
+					? t('component.rebuilt')
 					: result.outcome === 'skipped'
-						? 'Inputs unchanged since the last run.'
-						: 'The stitch failed — see the newest revision.';
+						? t('component.rebuild_skipped')
+						: t('component.stitch_failed');
 		} catch (error) {
 			rebuildMessage = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -202,7 +206,7 @@
 			// Creation is policy-gated, so the client only exposes it when the
 			// current scope may write estimates.
 			const create = client.db.cost_estimates.create;
-			if (!create) throw new Error('You do not have permission to create an estimate.');
+			if (!create) throw new Error(t('component.no_estimate_permission'));
 			await create({
 				estimate_name: `${record.project_name} — revision ${latestReady.revision}`,
 				project_id: projectId,
@@ -216,7 +220,7 @@
 				pvd_spacing_m: levers.pvdSpacingM,
 				contingency_pct: levers.contingencyPct
 			});
-			savedMessage = 'Saved and re-priced server-side.';
+			savedMessage = t('component.saved_re_priced');
 		} catch (error) {
 			savedMessage = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -225,7 +229,7 @@
 	}
 
 	function formatWhen(value: Date | string | null | undefined): string {
-		if (!value) return 'not yet';
+		if (!value) return t('component.not_yet');
 		return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
 			new Date(value)
 		);
@@ -238,18 +242,18 @@
 			<div class="min-w-0">
 				<h2 class="truncate text-heading">{record.project_name}</h2>
 				<p class="mt-0.5 truncate text-sm text-muted-foreground">
-					{record.project_code ?? 'No project code'} · {record.client ?? 'No client'}
+					{record.project_code ?? t('component.no_project_code')} · {record.client ??
+						t('component.no_client')}
 				</p>
 			</div>
 			<span class="shrink-0 rounded-full bg-muted px-3 py-1 text-xs font-medium capitalize">
-				{record.status ?? 'no status'}
+				{record.status ?? t('component.no_status')}
 			</span>
 		</Cluster>
 
 		{#if !latestRun && !documentsReady}
 			<p class="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-				Attach all three reconstruction inputs to build the model. The stitch runs server-side as
-				soon as the project is saved with a floor plan, a survey, and a section sheet.
+				{t('component.attach_all_inputs')}
 			</p>
 		{:else if !latestRun}
 			<!--
@@ -259,35 +263,47 @@
 				`attached`, sends people looking for a missing document.
 			-->
 			<p class="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-				All three inputs are attached and nothing has been stitched yet — press <strong
-					>Build model</strong
-				>. Saving the project stitches it automatically; rows written by a seed or an import bypass
-				that, so they need one build.
+				{t('component.all_attached_prompt')}<strong>{t('component.build_model')}</strong>{t(
+					'component.all_attached_prompt_tail'
+				)}
 			</p>
 		{:else if latestRun.status === 'failed'}
 			<div class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
 				<p class="font-medium text-destructive">
-					Revision {latestRun.revision} did not produce a solid
+					{t('component.revision_failed', { revision: latestRun.revision })}
 				</p>
 				<p class="mt-1 text-destructive/90">{latestRun.failure_reason}</p>
 			</div>
 		{/if}
 
 		<Inline gap="sm" align="center" class="text-xs text-muted-foreground">
-			<span>Datum {record.datum ?? 'CD'}</span>
+			<span>{t('component.datum', { datum: record.datum ?? 'CD' })}</span>
 			<span aria-hidden="true">·</span>
-			<span>{record.interpolation ?? 'morph'} between sections</span>
+			<span
+				>{t('component.between_sections_line', {
+					interpolation: record.interpolation ?? 'morph'
+				})}</span
+			>
 			{#if latestRun}
 				<span aria-hidden="true">·</span>
-				<span>revision {latestRun.revision}, stitched {formatWhen(latestRun.stitched_at)}</span>
+				<span>
+					{t('component.revision_stitched', {
+						revision: latestRun.revision,
+						when: formatWhen(latestRun.stitched_at)
+					})}
+				</span>
 			{/if}
 			{#if documentsReady}
 				<Button size="sm" variant="outline" disabled={rebuilding} onclick={() => rebuild(false)}>
-					{rebuilding ? 'Rebuilding…' : latestRun ? 'Rebuild' : 'Build model'}
+					{rebuilding
+						? t('component.rebuilding')
+						: latestRun
+							? t('component.rebuild')
+							: t('component.build_model')}
 				</Button>
 				{#if latestRun}
 					<Button size="sm" variant="ghost" disabled={rebuilding} onclick={() => rebuild(true)}>
-						Force revision
+						{t('component.force_revision')}
 					</Button>
 				{/if}
 			{/if}
@@ -299,33 +315,33 @@
 {/snippet}
 
 {#snippet documentsTab()}
-	<Scroll name="Project documents" class="pr-1">
+	<Scroll name={t('component.scroll_project_documents')} class="pr-1">
 		<DocumentsPanel {projectId} {slots} provenance={report?.documents ?? []} />
 	</Scroll>
 {/snippet}
 
 {#snippet modelTab()}
-	<Scroll name="Model layers and checks" class="pr-1">
+	<Scroll name={t('component.scroll_model_layers')} class="pr-1">
 		{#if latestReady}
 			<ModelPanel {layers} {visible} onToggle={toggleLayer} {stats} {metrics} {report} />
 		{:else}
-			<p class="p-3 text-sm text-muted-foreground">No successful reconstruction yet.</p>
+			<p class="p-3 text-sm text-muted-foreground">{t('component.no_reconstruction_yet')}</p>
 		{/if}
 	</Scroll>
 {/snippet}
 
 {#snippet sectionsTab()}
-	<Scroll name="Sections as read" class="pr-1">
+	<Scroll name={t('component.scroll_sections_read')} class="pr-1">
 		{#if model}
 			<SectionPanel {model} {report} />
 		{:else}
-			<p class="p-3 text-sm text-muted-foreground">Build the model to plot its sections.</p>
+			<p class="p-3 text-sm text-muted-foreground">{t('component.build_for_sections')}</p>
 		{/if}
 	</Scroll>
 {/snippet}
 
 {#snippet costTab()}
-	<Scroll name="Cost simulation" class="pr-1">
+	<Scroll name={t('component.scroll_cost_simulation')} class="pr-1">
 		{#if latestReady && quantities.length > 0}
 			<CostPanel
 				{model}
@@ -339,7 +355,7 @@
 			/>
 		{:else}
 			<p class="p-3 text-sm text-muted-foreground">
-				Build the model first — the estimate prices the solid, not the drawings.
+				{t('component.build_for_estimate')}
 			</p>
 		{/if}
 	</Scroll>
@@ -362,18 +378,28 @@
 			config={[
 				{
 					name: 'documents',
-					label: 'Documents',
+					label: t('component.tab_documents'),
 					icon: 'lucide:folder-open',
 					content: documentsTab
 				},
-				{ name: 'model', label: 'Model', icon: 'lucide:box', content: modelTab },
+				{
+					name: 'model',
+					label: t('component.tab_model'),
+					icon: 'lucide:box',
+					content: modelTab
+				},
 				{
 					name: 'sections',
-					label: 'Sections',
+					label: t('component.tab_sections'),
 					icon: 'lucide:chart-spline',
 					content: sectionsTab
 				},
-				{ name: 'cost', label: 'Cost', icon: 'lucide:calculator', content: costTab }
+				{
+					name: 'cost',
+					label: t('component.tab_cost'),
+					icon: 'lucide:calculator',
+					content: costTab
+				}
 			] satisfies TabConfig[]}
 		/>
 	</Stack>
@@ -399,8 +425,7 @@
 				fill
 				class="px-8 text-center text-sm text-muted-foreground"
 			>
-				No solid to show yet. Attach the floor plan, the bathymetric survey, and the section sheet;
-				the reconstruction runs on save and the model appears when it lands.
+				{t('component.no_solid_yet')}
 			</Inline>
 		{/if}
 	</Bound>

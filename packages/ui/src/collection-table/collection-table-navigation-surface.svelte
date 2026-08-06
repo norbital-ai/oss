@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import * as Sheet from '#lib/sheet';
 	import { Bound } from '#lib/layout';
 	import type { Snippet } from 'svelte';
@@ -8,6 +9,8 @@
 		CollectionTableUrlNavigation,
 		setCollectionTableNavigationContext
 	} from './collection-table-navigation.svelte.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		url,
@@ -60,7 +63,7 @@
 			{#if current && registration}
 				{@render registration.renderDetail({ recordId: current.recordId, actions: detailActions })}
 			{:else if current}
-				<p class="p-5 text-sm text-muted-foreground">Record detail is unavailable.</p>
+				<p class="p-5 text-sm text-muted-foreground">{t('table.detailUnavailable')}</p>
 			{/if}
 		</Bound>
 	</Sheet.Content>

@@ -6,6 +6,7 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import { Combobox } from '#lib/combobox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
@@ -36,13 +37,15 @@
 		onValueChange?: (value: string | string[] | null) => void;
 	}
 
+	const { t } = useI18n<UiKeys>();
+
 	let {
 		target,
 		value,
 		multiple = false,
 		options: relationOptions,
 		label = null,
-		placeholder = 'Select record…',
+		placeholder = t('dataRenderer.selectRecord'),
 		disabled = false,
 		readonly = false,
 		displayOnly = false,
@@ -178,7 +181,7 @@
 		multiple={true}
 		value={Array.isArray(value) ? value : []}
 		emptyPlaceholder={placeholder}
-		searchPlaceholder={`Search ${humanize(target)}…`}
+		searchPlaceholder={t('dataRenderer.searchTarget', { target: humanize(target) })}
 		type="server"
 		serverConfig={{ onSearch: (query) => (searchQuery = query), isLoading: loading, error }}
 		header={optionFilters}
@@ -193,7 +196,7 @@
 		{options}
 		value={typeof value === 'string' ? value : null}
 		emptyPlaceholder={placeholder}
-		searchPlaceholder={`Search ${humanize(target)}…`}
+		searchPlaceholder={t('dataRenderer.searchTarget', { target: humanize(target) })}
 		type="server"
 		serverConfig={{ onSearch: (query) => (searchQuery = query), isLoading: loading, error }}
 		header={optionFilters}

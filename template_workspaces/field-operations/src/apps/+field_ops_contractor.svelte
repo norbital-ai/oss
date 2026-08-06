@@ -1,9 +1,13 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { getPlatformStateContext } from '@norbital-ai/pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Cover } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const user = getPlatformStateContext()().user;
 	const contractorQuery = client.db.contractor_profiles.findMany({
@@ -30,42 +34,44 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="Contractor workspace"
-		title={contractor?.company_name ?? 'Contractor jobs'}
-		description="Review dispatched work, site details, and report progress from the field."
+		eyebrow={t('app.field_ops_contractor.eyebrow')}
+		title={contractor?.company_name ?? t('app.field_ops_contractor.header_title')}
+		description={t('app.field_ops_contractor.header_description')}
 	/>
 {/snippet}
 
 <Cover as="main" top={pageHeading}>
 	<Bound size="full" inset>
 		{#if contractorQuery.error}
-			<p class="text-sm text-destructive">Could not load your contractor profile.</p>
+			<p class="text-sm text-destructive">
+				{t('app.field_ops_contractor.profile_load_failed')}
+			</p>
 		{:else if contractorQuery.loading}
 			<div class="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse" aria-label="Loading"></div>
 		{:else}
 			<CollectionTable
 				{client}
 				collection="job_assignments"
-				title="Dispatched jobs"
-				description="Jobs visible under your access policy. Review the site and scope, update progress, and inspect information captured by agents."
+				title={t('app.field_ops_contractor.dispatched_jobs')}
+				description={t('app.field_ops_contractor.dispatched_jobs_description')}
 				query={{ orderBy: { dispatched_at: 'desc' } }}
 			>
 				{#snippet columns({ Column })}
 					<Column
 						name="job_id"
-						label="Job · site · date"
+						label={t('component.job_site_date')}
 						minWidth={360}
 						card="title"
 						render={({ row }) => {
 							const job = jobById.get(row.job_id);
 							return job
 								? `${job.title} · ${siteById.get(job.site_id) ?? '—'} · ${job.scheduled_for}`
-								: 'Job';
+								: t('component.job');
 						}}
 					/>
-					<Column name="dispatched_at" label="Dispatched" />
+					<Column name="dispatched_at" label={t('component.dispatched')} />
 					<Column name="status" card="badge" />
-					<Column name="location" label="Reported location" minWidth={220} />
+					<Column name="location" label={t('component.reported_location')} minWidth={220} />
 					<Column name="summary" card="subtitle" minWidth={200} />
 				{/snippet}
 			</CollectionTable>

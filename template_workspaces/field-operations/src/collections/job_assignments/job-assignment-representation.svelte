@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { Row } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import {
@@ -20,6 +22,8 @@
 	import JobsRepresentation from '../jobs/+representation.svelte';
 
 	let { record, refresh }: { record: Row; refresh(): Promise<void> } = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const documentAssetSchema = z.object({
 		norbital_id: z.string().uuid(),
@@ -93,27 +97,32 @@
 	);
 
 	function evidenceSource(source: unknown): string {
-		if (source == null || typeof source !== 'object') return 'Workspace upload';
+		if (source == null || typeof source !== 'object') return t('component.workspace_upload');
 		const kind = Reflect.get(source, 'kind');
-		if (kind !== 'channel') return 'Workspace upload';
+		if (kind !== 'channel') return t('component.workspace_upload');
 		const provider = Reflect.get(source, 'provider');
-		return typeof provider === 'string' ? `${provider} agent` : 'Channel agent';
+		return typeof provider === 'string'
+			? t('component.provider_agent', { provider })
+			: t('component.channel_agent');
 	}
 
 	function formatMoney(value: unknown): string {
-		if (value == null || typeof value !== 'object') return 'Not recorded';
+		if (value == null || typeof value !== 'object') return t('component.not_recorded');
 		const amount = Reflect.get(value, 'value');
 		const currency = Reflect.get(value, 'currency');
-		if (typeof amount !== 'number' || typeof currency !== 'string') return 'Not recorded';
+		if (typeof amount !== 'number' || typeof currency !== 'string')
+			return t('component.not_recorded');
 		return new Intl.NumberFormat('en-SG', { style: 'currency', currency }).format(amount);
 	}
 </script>
 
 {#snippet jobScopeHeader()}
 	<div>
-		<h3 id="assignment-job-scope-heading" class="text-sm font-semibold">Job scope</h3>
+		<h3 id="assignment-job-scope-heading" class="text-sm font-semibold">
+			{t('component.job_scope')}
+		</h3>
 		<p class="text-sm text-muted-foreground">
-			Site, schedule, work nature, and the description the contractor receives.
+			{t('component.job_scope_description')}
 		</p>
 	</div>
 {/snippet}
@@ -128,8 +137,8 @@
 				aria-label="Loading job"
 			></div>
 		{:else}
-			<Scroll name="Job scope status">
-				<p class="text-sm text-destructive">The assigned job could not be loaded.</p>
+			<Scroll name={t('component.job_scope_status')}>
+				<p class="text-sm text-destructive">{t('component.job_load_failed')}</p>
 			</Scroll>
 		{/if}
 	</Cover>
@@ -146,22 +155,23 @@
 			<Stack gap="md">
 				<div>
 					<h3 id="assignment-activity-heading" class="text-sm font-semibold">
-						Assignment and activity
+						{t('component.assignment_and_activity')}
 					</h3>
 					<p class="text-sm text-muted-foreground">
-						Completion, captured evidence, variations, and charges are retained against the
-						assignment.
+						{t('component.assignment_and_activity_description')}
 					</p>
 				</div>
 				<Grid minimum="panel">
 					<Field name="status" />
-					<Field name="dispatched_at" label="Dispatched at" />
-					<Field name="completed_at" label="Completed at" />
-					<Field name="amount_charged" label="Value charged" />
+					<Field name="dispatched_at" label={t('component.dispatched_at')} />
+					<Field name="completed_at" label={t('component.completed_at')} />
+					<Field name="amount_charged" label={t('component.value_charged')} />
 					<Column span="all">
-						<Field name="summary" label="Completion / visit summary" />
+						<Field name="summary" label={t('component.completion_summary')} />
 					</Column>
-					<Column span="all"><Field name="location" label="Reported location" /></Column>
+					<Column span="all"
+						><Field name="location" label={t('component.reported_location')} /></Column
+					>
 				</Grid>
 			</Stack>
 		{/snippet}
@@ -169,15 +179,17 @@
 {/snippet}
 
 {#snippet variationHistory()}
-	<Scroll name="Variation history">
+	<Scroll name={t('component.variation_history')}>
 		<Stack as="section" aria-labelledby="variation-history-heading" gap="md">
 			<Inline justify="between" gap="sm">
 				<div>
-					<h4 id="variation-history-heading" class="text-sm font-semibold">Variations</h4>
-					<p class="text-xs text-muted-foreground">Scope changes captured by the field agent.</p>
+					<h4 id="variation-history-heading" class="text-sm font-semibold">
+						{t('component.variations')}
+					</h4>
+					<p class="text-xs text-muted-foreground">{t('component.variations_description')}</p>
 				</div>
 				<span class="text-xs tabular-nums text-muted-foreground">
-					{variationsQuery.current?.length ?? 0} recorded
+					{t('component.recorded_count', { count: variationsQuery.current?.length ?? 0 })}
 				</span>
 			</Inline>
 			<Stack gap="sm">
@@ -191,14 +203,16 @@
 							<span class="shrink-0 text-sm font-medium">{formatMoney(variation.amount)}</span>
 						</Inline>
 						<p class="text-xs text-muted-foreground">
-							Requested {formatSingaporeInstant(variation.requested_at)}
+							{t('component.requested_at_instant', {
+								instant: formatSingaporeInstant(variation.requested_at)
+							})}
 						</p>
 					</Stack>
 				{:else}
 					<div
 						class="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground"
 					>
-						No variation requests were recorded for this assignment.
+						{t('component.no_variations')}
 					</div>
 				{/each}
 			</Stack>
@@ -207,17 +221,17 @@
 {/snippet}
 
 {#snippet photoGallery()}
-	<Scroll name="Assignment evidence">
+	<Scroll name={t('component.assignment_evidence')}>
 		<Stack as="section" aria-labelledby="evidence-heading" gap="md">
 			<Inline justify="between" gap="sm">
 				<div>
-					<h4 id="evidence-heading" class="text-sm font-semibold">Evidence</h4>
-					<p class="text-xs text-muted-foreground">Selected photos and their integrity results.</p>
+					<h4 id="evidence-heading" class="text-sm font-semibold">{t('component.evidence')}</h4>
+					<p class="text-xs text-muted-foreground">{t('component.evidence_description')}</p>
 				</div>
 				<span class="text-xs tabular-nums text-muted-foreground">
 					{evidenceLoading
-						? 'Loading evidence…'
-						: `${photoCards.length} captured for this assignment`}
+						? t('component.loading_evidence')
+						: t('component.captured_for_assignment', { count: photoCards.length })}
 				</span>
 			</Inline>
 			{#if directEvidenceQuery.error || evidenceAssetsQuery?.error}
@@ -225,7 +239,7 @@
 					class="rounded-md border border-destructive/40 p-3 text-sm text-destructive"
 					role="alert"
 				>
-					Could not load the photographic evidence.
+					{t('component.evidence_load_failed')}
 				</p>
 			{:else if evidenceLoading && photoCards.length === 0}
 				<Grid minimum="card" gap="md" aria-label="Loading photographic evidence">
@@ -242,7 +256,7 @@
 								target="_blank"
 								rel="noreferrer"
 								class="group block bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-								aria-label={`Open ${photo.name} at full size`}
+								aria-label={t('component.open_photo', { name: photo.name })}
 							>
 								<Frame ratio="landscape">
 									<img
@@ -272,7 +286,9 @@
 									<span
 										class={photo.flags.length > 0 ? 'text-destructive' : 'text-muted-foreground'}
 									>
-										{photo.flags.length > 0 ? photo.flags.join(', ') : 'Integrity checks passed'}
+										{photo.flags.length > 0
+											? photo.flags.join(', ')
+											: t('component.integrity_passed')}
 									</span>
 									{#if photo.fileSize != null}
 										<span class="shrink-0 tabular-nums text-muted-foreground">
@@ -287,7 +303,7 @@
 							<div
 								class="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground"
 							>
-								No photographic evidence has been attached yet.
+								{t('component.no_evidence')}
 							</div>
 						</Column>
 					{/each}
@@ -302,25 +318,25 @@
 	config={[
 		{
 			name: 'scope',
-			label: 'Job scope',
+			label: t('component.job_scope'),
 			icon: 'lucide:briefcase-business',
 			content: jobScope
 		},
 		{
 			name: 'activity',
-			label: 'Status and activity',
+			label: t('component.status_and_activity'),
 			icon: 'lucide:clipboard-check',
 			content: statusAndActivity
 		},
 		{
 			name: 'variations',
-			label: 'Variations',
+			label: t('component.variations'),
 			icon: 'lucide:git-pull-request-arrow',
 			content: variationHistory
 		},
 		{
 			name: 'photos',
-			label: 'Photos',
+			label: t('component.photos'),
 			icon: 'lucide:images',
 			content: photoGallery
 		}

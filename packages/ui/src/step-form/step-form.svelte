@@ -1,12 +1,15 @@
 <script lang="ts" generics="T extends FormSchema">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '#lib/card';
 	import { ProgressPicker } from '#lib/progress';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { FormSchema } from '../form/form_state.svelte';
 	import type { StepFormState } from './step-form-state.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		stepFormState,
@@ -39,7 +42,10 @@
 				{/if}
 				<span> </span>
 				<div class="text-sm text-muted-foreground">
-					Step {stepFormState.currentStep + 1} of {stepFormState.steps.length}
+					{t('misc.stepOf', {
+						current: stepFormState.currentStep + 1,
+						total: stepFormState.steps.length
+					})}
 				</div>
 			</CardTitle>
 			<CardDescription class="flex flex-col">
@@ -61,14 +67,14 @@
 				disabled={stepFormState.currentStep === 0}
 			>
 				<Icon icon="lucide:chevron-left" class="mr-2 h-4 w-4" />
-				Previous
+				{t('common.previous')}
 			</Button>
 			{#if stepFormState.currentStep === stepFormState.steps.length - 1}
 				<Button
 					type="submit"
 					disabled={disableSubmit || hasErrors || stepFormState.submission.isSubmitting}
 				>
-					<span>Submit</span>
+					<span>{t('common.submit')}</span>
 					<Icon icon="lucide:circle-arrow-right" class="ml-2 h-4 w-4" />
 				</Button>
 			{:else}
@@ -78,7 +84,7 @@
 						stepFormState.next();
 					}}
 				>
-					Next
+					{t('common.next')}
 					<Icon icon="lucide:chevron-right" class="ml-2 h-4 w-4" />
 				</Button>
 			{/if}

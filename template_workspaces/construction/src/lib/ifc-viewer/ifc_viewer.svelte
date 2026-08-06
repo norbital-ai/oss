@@ -2,6 +2,8 @@
 	import Icon from '@iconify/svelte';
 	import { getErrorMessage, withTimeout } from '@norbital-ai/std';
 	import { Button } from '@norbital-ai/ui/button';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Bound, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { watch } from 'runed';
@@ -94,6 +96,8 @@
 	interface Props extends IFCViewerProps {}
 
 	let { src, alt, markers = [], markerGroups }: Props = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const trimmedSrc = $derived(src?.trim() ?? '');
 	const markerKey = $derived(markers.join(','));
@@ -538,7 +542,7 @@
 		)}
 		role="button"
 		tabindex={0}
-		aria-label={alt ?? 'IFC model preview'}
+		aria-label={alt ?? t('component.ifc_model_preview')}
 		onclick={handlePick}
 		onkeydown={handleKeydown}
 		{@attach viewerAttach}
@@ -566,7 +570,10 @@
 								</span>
 							{:else}
 								<span class="block truncate text-[11px] text-muted-foreground">
-									Model {item.modelId} • Element #{item.id}
+									{t('component.ifc_element_line', {
+										modelId: item.modelId,
+										elementId: item.id
+									})}
 								</span>
 							{/if}
 						</div>
@@ -581,7 +588,7 @@
 					<Button
 						size="icon"
 						variant="ghost"
-						hint="Clear selected element"
+						hint={t('component.clear_selected_element')}
 						class="shrink-0 self-start"
 						onclick={clearSelection}
 					>
@@ -595,7 +602,7 @@
 								<p
 									class="pb-2 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase"
 								>
-									Selected element properties
+									{t('component.selected_element_properties')}
 								</p>
 								<Scroll
 									axis="both"
@@ -616,14 +623,16 @@
 				<div
 					class="hidden rounded-md border border-border/80 bg-background/90 px-2 py-1 text-[11px] text-muted-foreground shadow-sm sm:block"
 				>
-					Scroll-safe mode
+					{t('component.scroll_safe_mode')}
 				</div>
 			{/if}
 			<Button
 				size="icon"
 				variant={interactionLocked ? 'secondary' : 'ghost'}
 				aria-pressed={!interactionLocked}
-				hint={interactionLocked ? 'Unlock model navigation' : 'Lock model navigation'}
+				hint={interactionLocked
+					? t('component.unlock_model_navigation')
+					: t('component.lock_model_navigation')}
 				onclick={toggleInteractionLock}
 			>
 				<Icon icon={interactionLocked ? 'lucide:lock' : 'lucide:unlock'} />
@@ -637,7 +646,7 @@
 			justify="center"
 			class="pointer-events-auto absolute inset-0 z-10 bg-background/80 p-4"
 		>
-			<p class="text-sm text-muted-foreground">Loading IFC model...</p>
+			<p class="text-sm text-muted-foreground">{t('component.loading_ifc_model')}</p>
 		</Inline>
 	{:else if typeof loadBanner === 'object'}
 		<Inline
@@ -651,17 +660,17 @@
 		</Inline>
 	{:else if !trimmedSrc}
 		<Inline align="center" justify="center" class="absolute inset-0 z-10 p-4">
-			<p class="text-sm text-muted-foreground">No IFC model available.</p>
+			<p class="text-sm text-muted-foreground">{t('component.no_ifc_model')}</p>
 		</Inline>
 	{/if}
 
 	{#if normalizedMarkerGroups.length > 0}
 		<div
 			class="pointer-events-none absolute bottom-2 left-2 z-20 max-w-[min(16rem,85%)] rounded-md border border-border/80 bg-background/90 p-2 shadow-sm"
-			aria-label="Marker legend"
+			aria-label={t('component.marker_legend')}
 		>
 			<p class="mb-1.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-				Highlights
+				{t('component.highlights')}
 			</p>
 			<Stack as="ul" gap="xs">
 				{#each normalizedMarkerGroups as group (group.label + group.color + group.expressIds.join(','))}

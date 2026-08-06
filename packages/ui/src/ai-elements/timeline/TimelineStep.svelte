@@ -2,12 +2,15 @@
 	import Icon from '@iconify/svelte';
 	import { Inline, Stack } from '#lib/layout';
 	import { Shimmer } from '../shimmer';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { getTimelineContext } from './timeline-context.svelte.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	type TimelineStepStatus = 'complete' | 'active' | 'pending' | 'error' | 'aborted';
 
@@ -149,7 +152,7 @@
 							<div
 								{...props}
 								class="min-w-0 flex-1 leading-4 font-medium"
-								aria-label={`${label}. Step details available.`}
+								aria-label={t('misc.stepDetails', { label })}
 							>
 								{label}
 							</div>

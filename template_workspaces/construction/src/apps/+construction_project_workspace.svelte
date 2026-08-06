@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Cover } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
+
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <svelte:head>
@@ -13,9 +17,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="Construction"
-		title="Project workspace"
-		description="Browse the project catalogue. Open a project record to manage RFIs, defects, claims, and manpower."
+		eyebrow={t('app.construction_project_workspace.eyebrow')}
+		title={t('app.construction_project_workspace.header_title')}
+		description={t('app.construction_project_workspace.header_description')}
 	/>
 {/snippet}
 

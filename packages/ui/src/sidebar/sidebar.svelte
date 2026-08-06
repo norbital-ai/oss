@@ -1,9 +1,12 @@
 <script lang="ts">
 	import * as Sheet from '#lib/sheet';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { Attachment } from 'svelte/attachments';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { SIDEBAR_WIDTH_MOBILE } from './constants.js';
+
+	const { t } = useI18n<UiKeys>();
 	import { useSidebar } from './context.svelte.js';
 	import { watch } from 'runed';
 
@@ -13,8 +16,8 @@
 		mobileSide = side,
 		variant = 'sidebar',
 		collapsible = 'offcanvas',
-		mobileTitle = 'Navigation',
-		mobileDescription = 'Browse and choose where to go.',
+		mobileTitle = t('misc.navigation'),
+		mobileDescription = t('misc.browseAndChoose'),
 		closeOnNavigate = true,
 		class: className,
 		mobileClass,

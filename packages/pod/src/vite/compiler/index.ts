@@ -13,6 +13,7 @@ import type {
 	DiscoveredAppNode,
 	DiscoveredCollection,
 	DiscoveredCustomType,
+	DiscoveredI18n,
 	DiscoveredSkill,
 	DiscoveredWorkspaceRole,
 	PodFilesystemCompilation,
@@ -1081,6 +1082,129 @@ const WORKSPACE_ROOT_DECLARATIONS: ReadonlySet<string> = new Set([
 	'+env.ts'
 ]);
 
+/**
+ * Tenant translation overrides: `src/i18n/messages.{en,zh}.json`.
+ *
+ * Both files must agree on their key sets — a Chinese catalog missing an
+ * English key (or carrying a stray one) is an authoring error, not a fallback
+ * decision; the runtime fallback exists for languages, not for this locale
+ * pair. Anything else in `src/i18n/` is rejected like an unknown root role.
+ */
+const I18N_MESSAGE_FILES: ReadonlySet<string> = new Set(['messages.en.json', 'messages.zh.json']);
+
+async function discoverI18n(
+	root: string,
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): Promise<DiscoveredI18n> {
+	const i18nDirectory = path.join(root, 'src', 'i18n');
+	if (!inventory.hasDirectory(i18nDirectory)) {
+		return { present: false, en: null, zh: null };
+	}
+	for (const entry of inventory.entries(i18nDirectory)) {
+		if (entry.isFile() && !I18N_MESSAGE_FILES.has(entry.name)) {
+			const file = posixPath(path.join('src', 'i18n', entry.name));
+			diagnostics.push(
+				topologyDiagnostic(
+					file,
+					'I18N_FILE_UNKNOWN',
+					`Unknown i18n file ${entry.name}. Only messages.en.json and messages.zh.json are allowed.`
+				)
+			);
+		}
+	}
+
+	async function readLocale(
+		fileName: 'messages.en.json' | 'messages.zh.json'
+	): Promise<Readonly<Record<string, string>> | null> {
+		const file = path.join(i18nDirectory, fileName);
+		if (!inventory.hasFile(file)) return null;
+		const source = await inventory.source(file);
+		const parsed = safeParse(source);
+		if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+			diagnostics.push(
+				sourceDiagnostic(
+					source,
+					posixPath(path.join('src', 'i18n', fileName)),
+					0,
+					'I18N_CATALOG_INVALID',
+					`${fileName} must be a JSON object mapping message keys to strings`
+				)
+			);
+			return null;
+		}
+		const messages: Record<string, string> = {};
+		let invalidOffset: number | null = null;
+		for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+			if (typeof value === 'string') {
+				messages[key] = value;
+				continue;
+			}
+			if (invalidOffset === null) {
+				invalidOffset = source.indexOf(key);
+			}
+		}
+		if (invalidOffset !== null) {
+			diagnostics.push(
+				sourceDiagnostic(
+					source,
+					posixPath(path.join('src', 'i18n', fileName)),
+					Math.max(0, invalidOffset),
+					'I18N_CATALOG_INVALID',
+					`${fileName} values must all be strings`
+				)
+			);
+			return null;
+		}
+		return messages;
+	}
+
+	const [en, zh] = await Promise.all([readLocale('messages.en.json'), readLocale('messages.zh.json')]);
+
+	if (en && !zh) {
+		diagnostics.push(
+			topologyDiagnostic(
+				'src/i18n/messages.zh.json',
+				'I18N_CATALOG_MISSING',
+				'src/i18n/messages.en.json exists without a matching messages.zh.json. Both supported locales are required.'
+			)
+		);
+	} else if (zh && !en) {
+		diagnostics.push(
+			topologyDiagnostic(
+				'src/i18n/messages.en.json',
+				'I18N_CATALOG_MISSING',
+				'src/i18n/messages.zh.json exists without a matching messages.en.json. Both supported locales are required.'
+			)
+		);
+	} else if (en && zh) {
+		for (const key of Object.keys(en)) {
+			if (!(key in zh)) {
+				diagnostics.push(
+					topologyDiagnostic(
+						'src/i18n/messages.zh.json',
+						'I18N_CATALOG_MISSING_KEY',
+						`Chinese catalog is missing key "${key}" present in messages.en.json`
+					)
+				);
+			}
+		}
+		for (const key of Object.keys(zh)) {
+			if (!(key in en)) {
+				diagnostics.push(
+					topologyDiagnostic(
+						'src/i18n/messages.zh.json',
+						'I18N_CATALOG_EXTRA_KEY',
+						`Chinese catalog has key "${key}" not present in messages.en.json`
+					)
+				);
+			}
+		}
+	}
+
+	return { present: true, en, zh };
+}
+
 async function discoverSeed(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
@@ -1193,6 +1317,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 			discoverSeed(absoluteRoot, diagnostics, inventory),
 			validateAuthoredSource(absoluteRoot, diagnostics, inventory)
 		]);
+	const i18n = await discoverI18n(absoluteRoot, diagnostics, inventory);
 	validateRoleDirectories(absoluteRoot, diagnostics, inventory);
 	diagnostics.sort(
 		(left, right) =>
@@ -1213,6 +1338,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		policies,
 		channels,
 		skills,
+		i18n,
 		agent: rootDeclarations.agent,
 		seed: rootDeclarations.seed,
 		env: rootDeclarations.env,
@@ -1480,8 +1606,21 @@ function clientRuntimeTypes(): string {
 	return `declare module 'virtual:pod/client-runtime' {\n\timport type { CollectionClient, ErasedCollectionRegistry } from '@norbital-ai/platform-utils/collection';\n\n\texport function createWorkspaceApiProxy(): { readonly db: object; readonly invoke: object };\n\texport function getInitializedWorkspaceClient(): CollectionClient<ErasedCollectionRegistry>;\n}\n`;
 }
 
-function renderWorkspaceTypes(): string {
-	return `import type { AfterHookApi as CollectionAfterHookApi, BeforeApi, HookApi as CollectionHookApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/pod/authoring';\nimport type { InputValuesForTables, MutationInsertFor, TablesForModels } from '@norbital-ai/pod/authoring/internals';\nimport type { Models } from './models.js';\n\nexport type { CustomKind, CustomValue } from './custom-types.js';\ntype WorkspaceTables = TablesForModels<Models>;\nexport type WorkspaceSchema = {\n\treadonly tables: WorkspaceTables;\n\treadonly relations: Readonly<Record<never, never>>;\n\treadonly inputs: InputValuesForTables<WorkspaceTables>;\n};\nexport type Api = BeforeApi<WorkspaceSchema>;\nexport type HookApi = CollectionHookApi<WorkspaceSchema>;\nexport type AfterHookApi = CollectionAfterHookApi<WorkspaceSchema>;\nexport type WorkspaceRow<\n\tN extends keyof WorkspaceSchema['tables'] & string,\n\tCfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined\n> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n\n/** The payload that creates one row — the counterpart to \`WorkspaceRow\`, for a helper module that writes. */\nexport type WorkspaceInsert<N extends keyof WorkspaceSchema['tables'] & string> = MutationInsertFor<\n\tWorkspaceSchema,\n\tN\n>;\n`;
+/**
+ * The typed tenant key union, derived from the authored `messages.en.json`.
+ *
+ * Template app files translate with `useI18n<TenantI18nKeys>()` from
+ * `@norbital-ai/ui/i18n`, importing the type from `$pod/i18n-keys`. Without an
+ * `src/i18n/` the union is the open `string`, which keeps the default
+ * workspace authorable while anything it adds becomes typed.
+ */
+function renderI18nKeys(i18n: DiscoveredI18n): string {
+	const keys = i18n.en ? Object.keys(i18n.en) : [];
+	if (keys.length === 0) return 'export type TenantI18nKeys = string;\n';
+	return `export type TenantI18nKeys =\n${keys.map((key) => `\t| ${JSON.stringify(key)}`).join('\n')};\n`;
+}
+
+function renderWorkspaceTypes(): string {	return `import type { AfterHookApi as CollectionAfterHookApi, BeforeApi, HookApi as CollectionHookApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/pod/authoring';\nimport type { InputValuesForTables, MutationInsertFor, TablesForModels } from '@norbital-ai/pod/authoring/internals';\nimport type { Models } from './models.js';\n\nexport type { CustomKind, CustomValue } from './custom-types.js';\ntype WorkspaceTables = TablesForModels<Models>;\nexport type WorkspaceSchema = {\n\treadonly tables: WorkspaceTables;\n\treadonly relations: Readonly<Record<never, never>>;\n\treadonly inputs: InputValuesForTables<WorkspaceTables>;\n};\nexport type Api = BeforeApi<WorkspaceSchema>;\nexport type HookApi = CollectionHookApi<WorkspaceSchema>;\nexport type AfterHookApi = CollectionAfterHookApi<WorkspaceSchema>;\nexport type WorkspaceRow<\n\tN extends keyof WorkspaceSchema['tables'] & string,\n\tCfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined\n> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n\n/** The payload that creates one row — the counterpart to \`WorkspaceRow\`, for a helper module that writes. */\nexport type WorkspaceInsert<N extends keyof WorkspaceSchema['tables'] & string> = MutationInsertFor<\n\tWorkspaceSchema,\n\tN\n>;\n`;
 }
 
 function collectionTypes(collection: DiscoveredCollection): string {
@@ -1674,6 +1813,7 @@ export async function compilePodFilesystem(
 			channels: [],
 			agentTools: [],
 			skills: [],
+			i18n: { present: false, en: null, zh: null },
 			seed: null,
 			env: null,
 			diagnostics: [diagnostic]
@@ -1732,6 +1872,7 @@ export async function compilePodFilesystem(
 			],
 			['.norbital/generated/types.ts', renderWorkspaceTypes()],
 			['.norbital/generated/authoring-types.ts', generatedAuthoringTypes(structure)],
+			['.norbital/generated/i18n-keys.ts', renderI18nKeys(structure.i18n)],
 			['.norbital/types/collections/$types.d.ts', relationshipTypes()],
 			['.norbital/types/policies/$types.d.ts', policyTypes()],
 			['.norbital/types/channels/$types.d.ts', channelTypes()],

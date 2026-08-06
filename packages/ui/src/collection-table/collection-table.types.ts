@@ -6,11 +6,33 @@ import type {
 	CollectionRow
 } from '@norbital-ai/platform-utils/collection';
 import type { Component, Snippet } from 'svelte';
+import type { CollectionFilterOperator } from './collection-table-filter-operators.js';
 
 export type CollectionName<TCollections extends CollectionRegistry> = Extract<
 	keyof TCollections,
 	string
 >;
+
+/**
+ * A filter condition the view opens with, seeded into the filter builder as an ordinary row.
+ *
+ * This is the *builder's* vocabulary, not the wire's: `field` is the same path the field picker
+ * uses (`effective_range`, or `relation.field`), and `value` is what the operand editor would
+ * produce — a calendar day for `contains_date`, which `collectionFilterClause` converts to an
+ * instant on its way out. Seeding the wire shape instead would mean reversing that conversion, and
+ * unwrapping the `%…%` an `ilike` operand is published with.
+ *
+ * A seed is a *default*, not a constraint. It arrives as a normal chip the operator can edit or
+ * remove, and removing it is remembered per view — unlike a condition baked into `query.where`,
+ * which is invisible, locked, and can only be narrated by the "Applied by this view" tooltip.
+ */
+export interface CollectionTableInitialFilter {
+	/** Field path as the picker addresses it: `status`, or `agreement_employment.employee_number`. */
+	readonly field: string;
+	readonly operator: CollectionFilterOperator;
+	/** Omitted for the operators that take none (`isNull`, `isNotNull`). */
+	readonly value?: unknown;
+}
 
 export type CollectionTableRow<
 	TCollections extends CollectionRegistry,
@@ -129,6 +151,15 @@ interface CollectionTableBaseProps<
 	collection: TName;
 	view?: string;
 	query?: CollectionQuery<NoInfer<TRow>>;
+	/**
+	 * Conditions the view opens with, shown in the filter UI as removable chips.
+	 *
+	 * Use this rather than `query.where` for anything that is a *default* the operator may
+	 * reasonably want to drop — "in force today", "open items only". `query.where` stays the right
+	 * home for scoping the view is not entitled to widen, such as the legal entity it belongs to.
+	 * Clearing a seeded chip is remembered against `view`, so it does not come back on reload.
+	 */
+	initialFilters?: readonly CollectionTableInitialFilter[];
 	disabled?: boolean;
 	selectable?: boolean;
 	class?: string;

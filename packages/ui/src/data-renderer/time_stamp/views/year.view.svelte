@@ -1,8 +1,11 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Columns, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		selectedYear,
@@ -26,7 +29,7 @@
 		<button
 			type="button"
 			class={buttonVariants({ variant: 'ghost', size: 'icon', class: 'size-8' })}
-			aria-label="Show previous years"
+			aria-label={t('dataRenderer.prevYears')}
 			disabled={minYear != null && pageStart <= minYear}
 			onclick={() => (pageStart -= 12)}
 		>
@@ -36,14 +39,14 @@
 		<button
 			type="button"
 			class={buttonVariants({ variant: 'ghost', size: 'icon', class: 'size-8' })}
-			aria-label="Show next years"
+			aria-label={t('dataRenderer.nextYears')}
 			disabled={maxYear != null && pageStart + 11 >= maxYear}
 			onclick={() => (pageStart += 12)}
 		>
 			<Icon icon="lucide:chevron-right" class="size-4" />
 		</button>
 	</Inline>
-	<Columns count={3} gap="xs" role="grid" aria-label="Choose year">
+	<Columns count={3} gap="xs" role="grid" aria-label={t('dataRenderer.chooseYear')}>
 		{#each Array.from({ length: 12 }, (_, index) => pageStart + index) as year (year)}
 			<button
 				type="button"

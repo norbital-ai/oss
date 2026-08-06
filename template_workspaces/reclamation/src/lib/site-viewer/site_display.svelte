@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { mount, unmount, type Component } from 'svelte';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import type { SiteViewerProps } from './site_viewer.types.js';
 
@@ -11,6 +13,8 @@
 	 * Every prop is forwarded, including the controlled layer visibility.
 	 */
 	let props: SiteViewerProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const viewerModule = import('./site_viewer.svelte');
 
@@ -31,7 +35,7 @@
 			justify="center"
 			class="absolute inset-0 bg-background/80 text-sm text-muted-foreground"
 		>
-			Loading the site viewer…
+			{t('component.loading_site_viewer')}
 		</Inline>
 	{:then module}
 		<div class="h-full w-full" use:mountViewer={module}></div>

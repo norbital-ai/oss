@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Badge } from '#lib/badge';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Editor, NodeViewRendererProps } from '@tiptap/core';
 
 	let {
@@ -16,6 +17,8 @@
 		onDelete?: (id: string) => void;
 		metadataItems?: MentionItem[];
 	} = $props();
+
+	const { t } = useI18n<UiKeys>();
 
 	let id = $derived(node.attrs.id);
 
@@ -120,7 +123,7 @@
 	<button
 		onclick={removeMentionTag}
 		class="ml-0.5 flex size-3.5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
-		title="Remove"
+		title={t('common.remove')}
 		type="button"
 	>
 		<Icon icon="lucide:x" class="size-3" />

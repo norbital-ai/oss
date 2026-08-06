@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { Button } from '@norbital-ai/ui/button';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import InfoHint from './info-hint.svelte';
 	import {
@@ -57,6 +59,8 @@
 		savedMessage?: string | null;
 	} = $props();
 
+	const { t } = useI18n<TenantI18nKeys>();
+
 	let levers = $state<CostLevers>({ ...DEFAULT_LEVERS });
 	// svelte-ignore state_referenced_locally -- reset explicitly when the model changes.
 	let design = $state<GeometrySimulation>(
@@ -105,19 +109,11 @@
 		simulationError = null;
 	}
 
-	const DESIGN_CONTROLS: readonly {
-		key: keyof GeometrySimulation;
-		label: string;
-		note: string;
-		min: number;
-		max: number;
-		step: number;
-		format: (value: number) => string;
-	}[] = [
+	const DESIGN_CONTROLS = $derived([
 		{
 			key: 'platformOffsetM',
-			label: 'Platform level',
-			note: 'Raise or lower the whole works. Every slope and width is preserved.',
+			label: t('component.control_platform_level'),
+			note: t('component.control_platform_level_note'),
 			min: -4,
 			max: 4,
 			step: 0.1,
@@ -125,8 +121,8 @@
 		},
 		{
 			key: 'bedOffsetM',
-			label: 'Bed level',
-			note: 'Survey tolerance, post-dredge level, or settlement under the fill.',
+			label: t('component.control_bed_level'),
+			note: t('component.control_bed_level_note'),
 			min: -3,
 			max: 3,
 			step: 0.1,
@@ -134,8 +130,8 @@
 		},
 		{
 			key: 'faceRunFactor',
-			label: 'Face batter',
-			note: 'Widen or steepen the seaward face; the platform keeps its width.',
+			label: t('component.control_face_batter'),
+			note: t('component.control_face_batter_note'),
 			min: 0.6,
 			max: 1.6,
 			step: 0.05,
@@ -143,37 +139,37 @@
 		},
 		{
 			key: 'armorThicknessM',
-			label: 'Armour thickness',
-			note: 'Perpendicular to the face. Scales armour and geofabric directly.',
+			label: t('component.control_armour_thickness'),
+			note: t('component.control_armour_thickness_note'),
 			min: 0,
 			max: 4,
 			step: 0.1,
-			format: (v) => (Number.isNaN(v) ? 'as drawn' : `${v.toFixed(2)} m`)
+			format: (v) => (Number.isNaN(v) ? t('component.as_drawn_value') : `${v.toFixed(2)} m`)
 		},
 		{
 			key: 'subGradeOffsetM',
-			label: 'Sub-grade inverts',
-			note: 'Deepen or raise every trench drawn on the section.',
+			label: t('component.control_sub_grade'),
+			note: t('component.control_sub_grade_note'),
 			min: -3,
 			max: 3,
 			step: 0.1,
 			format: (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)} m`
 		}
-	];
-
-	const COMMERCIAL_CONTROLS: readonly {
-		key: keyof CostLevers;
+	] satisfies readonly {
+		key: keyof GeometrySimulation;
 		label: string;
 		note: string;
 		min: number;
 		max: number;
 		step: number;
 		format: (value: number) => string;
-	}[] = [
+	}[]);
+
+	const COMMERCIAL_CONTROLS = $derived([
 		{
 			key: 'sandLossPct',
-			label: 'Sand placement loss',
-			note: 'Washout and bulking on hydraulic placement.',
+			label: t('component.control_sand_loss'),
+			note: t('component.control_sand_loss_note'),
 			min: 0,
 			max: 30,
 			step: 0.5,
@@ -181,8 +177,8 @@
 		},
 		{
 			key: 'dredgedFillLossPct',
-			label: 'Dredged fill loss',
-			note: 'Placement loss on dredged and excavated material.',
+			label: t('component.control_dredged_loss'),
+			note: t('component.control_dredged_loss_note'),
 			min: 0,
 			max: 30,
 			step: 0.5,
@@ -190,8 +186,8 @@
 		},
 		{
 			key: 'perimeterMarginPct',
-			label: 'Perimeter margin',
-			note: 'Allowance for an uneven reclaim edge, on every perimeter line.',
+			label: t('component.control_perimeter_margin'),
+			note: t('component.control_perimeter_margin_note'),
 			min: 0,
 			max: 25,
 			step: 0.5,
@@ -199,8 +195,8 @@
 		},
 		{
 			key: 'pvdAreaFraction',
-			label: 'PVD treated area',
-			note: 'Share of the platform receiving vertical drains.',
+			label: t('component.control_pvd_area'),
+			note: t('component.control_pvd_area_note'),
 			min: 0,
 			max: 1,
 			step: 0.05,
@@ -208,8 +204,8 @@
 		},
 		{
 			key: 'pvdSpacingM',
-			label: 'PVD spacing',
-			note: 'Triangular grid pitch. Drain count scales with 1/s².',
+			label: t('component.control_pvd_spacing'),
+			note: t('component.control_pvd_spacing_note'),
 			min: 0.8,
 			max: 3,
 			step: 0.1,
@@ -217,14 +213,22 @@
 		},
 		{
 			key: 'contingencyPct',
-			label: 'Contingency',
-			note: 'Applied to the subtotal.',
+			label: t('component.control_contingency'),
+			note: t('component.control_contingency_note'),
 			min: 0,
 			max: 40,
 			step: 1,
 			format: (v) => `${v}%`
 		}
-	];
+	] satisfies readonly {
+		key: keyof CostLevers;
+		label: string;
+		note: string;
+		min: number;
+		max: number;
+		step: number;
+		format: (value: number) => string;
+	}[]);
 
 	function number(value: number, digits = 0): string {
 		return value.toLocaleString(undefined, { maximumFractionDigits: digits });
@@ -245,10 +249,10 @@
 	<Stack as="section" gap="sm">
 		<Inline justify="between" align="center" gap="sm" class="border-b pb-2">
 			<div class="min-w-0">
-				<h3 class="text-sm font-semibold">Design simulation</h3>
-				<p class="text-xs text-muted-foreground">Changes the solid, then re-measures it.</p>
+				<h3 class="text-sm font-semibold">{t('component.design_simulation')}</h3>
+				<p class="text-xs text-muted-foreground">{t('component.design_simulation_description')}</p>
 			</div>
-			<Button size="sm" variant="ghost" onclick={resetDesign}>As drawn</Button>
+			<Button size="sm" variant="ghost" onclick={resetDesign}>{t('component.as_drawn')}</Button>
 		</Inline>
 
 		{#each DESIGN_CONTROLS as control (control.key)}
@@ -274,20 +278,22 @@
 
 		<Inline gap="sm" align="center">
 			<Button size="sm" variant="outline" disabled={simulating || !model} onclick={runSimulation}>
-				{simulating ? 'Re-measuring…' : 'Re-measure volumes'}
+				{simulating ? t('component.remeasuring') : t('component.remeasure_volumes')}
 			</Button>
 			{#if simulated}
 				<span class="text-xs tabular-nums text-muted-foreground">
-					{number(activeVolume)} m³ placed
+					{t('component.volume_placed', { volume: number(activeVolume) })}
 					<span class={activeVolume >= baseVolume ? 'text-amber-600' : 'text-brand'}>
-						({activeVolume >= baseVolume ? '+' : ''}{number(
-							((activeVolume - baseVolume) / Math.max(1, baseVolume)) * 100,
-							1
-						)}% vs as drawn)
+						{t('component.pct_vs_as_drawn', {
+							pct: `${activeVolume >= baseVolume ? '+' : ''}${number(
+								((activeVolume - baseVolume) / Math.max(1, baseVolume)) * 100,
+								1
+							)}`
+						})}
 					</span>
 				</span>
 			{:else if !simulating}
-				<span class="text-xs text-muted-foreground">Showing the design as drawn.</span>
+				<span class="text-xs text-muted-foreground">{t('component.showing_as_drawn')}</span>
 			{/if}
 		</Inline>
 		{#if simulationError}
@@ -299,13 +305,11 @@
 	<Stack as="section" gap="sm">
 		<Inline justify="between" align="center" gap="sm" class="border-b pb-2">
 			<Inline align="center" gap="xs" class="min-w-0">
-				<h3 class="text-sm font-semibold">Commercial levers</h3>
-				<InfoHint
-					text="These change only what is priced, and recompute instantly. The solid does not move, so the measured quantities are untouched."
-				/>
+				<h3 class="text-sm font-semibold">{t('component.commercial_levers')}</h3>
+				<InfoHint text={t('component.commercial_levers_hint')} />
 			</Inline>
 			<Button size="sm" variant="ghost" onclick={() => (levers = { ...DEFAULT_LEVERS })}>
-				Reset
+				{t('component.reset')}
 			</Button>
 		</Inline>
 
@@ -332,7 +336,7 @@
 	</Stack>
 
 	<Stack as="section" gap="sm">
-		<h3 class="border-b pb-2 text-sm font-semibold">Priced lines</h3>
+		<h3 class="border-b pb-2 text-sm font-semibold">{t('component.priced_lines')}</h3>
 		<div class="divide-y rounded-md border bg-card text-sm">
 			{#each estimate.lines as line (line.substrate)}
 				<div class={line.unpriced ? 'bg-destructive/5 p-3' : 'p-3'}>
@@ -340,16 +344,24 @@
 						<Inline align="center" gap="xs" class="min-w-0">
 							<p class="min-w-0 truncate font-medium">{line.label}</p>
 							<InfoHint
-								label={`About ${line.label}`}
-								text={`${substrateDefinition(line.substrate).note} — Measured ${formatQuantity(line.stitchedQuantity, line.unit)} by ${line.method}. ${line.basis}. ${
-									line.unpriced
-										? `No ${currency} rate in the cost matrix, so this line cannot be priced.`
-										: `Priced ${formatQuantity(line.pricedQuantity, line.unit)} × ${formatMoney(line.rate, currency)} = ${formatMoney(line.amount, currency)}.`
-								}`}
+								label={t('component.about_label', { label: line.label })}
+								text={t('component.line_hint', {
+									note: substrateDefinition(line.substrate).note,
+									quantity: formatQuantity(line.stitchedQuantity, line.unit),
+									method: line.method,
+									basis: line.basis,
+									result: line.unpriced
+										? t('component.line_hint_unpriced', { currency })
+										: t('component.line_hint_priced', {
+												quantity: formatQuantity(line.pricedQuantity, line.unit),
+												rate: formatMoney(line.rate, currency),
+												amount: formatMoney(line.amount, currency)
+											})
+								})}
 							/>
 						</Inline>
 						<p class="shrink-0 tabular-nums">
-							{line.unpriced ? 'no rate' : formatMoney(line.amount, currency)}
+							{line.unpriced ? t('component.no_rate') : formatMoney(line.amount, currency)}
 						</p>
 					</Inline>
 					<Inline justify="between" gap="sm" class="mt-1 text-xs text-muted-foreground">
@@ -366,47 +378,44 @@
 
 		<dl class="rounded-md border bg-card p-3 text-sm">
 			<Inline as="div" justify="between" class="py-1">
-				<dt>Subtotal</dt>
+				<dt>{t('component.subtotal')}</dt>
 				<dd class="font-medium tabular-nums">{formatMoney(estimate.subtotal, currency)}</dd>
 			</Inline>
 			<Inline as="div" justify="between" class="py-1">
-				<dt>Contingency</dt>
+				<dt>{t('component.contingency')}</dt>
 				<dd class="font-medium tabular-nums">{formatMoney(estimate.contingency, currency)}</dd>
 			</Inline>
 			<Inline as="div" justify="between" class="border-t pt-2">
-				<dt class="font-medium">Total</dt>
+				<dt class="font-medium">{t('component.total')}</dt>
 				<dd class="text-heading tabular-nums">{formatMoney(estimate.total, currency)}</dd>
 			</Inline>
 		</dl>
 
 		<Inline gap="sm" align="center">
 			<Button size="sm" disabled={saving || incomplete !== null} onclick={() => onSave(levers)}>
-				{saving ? 'Saving…' : 'Save as estimate'}
+				{saving ? t('component.saving') : t('component.save_as_estimate')}
 			</Button>
 			{#if savedMessage}
 				<span class="text-xs text-muted-foreground">{savedMessage}</span>
 			{/if}
 		</Inline>
 		<p class="text-xs text-muted-foreground">
-			Saving records the commercial levers against this reconstruction revision and re-prices
-			server-side. A design simulation is exploratory: to keep it, change the project and re-stitch.
+			{t('component.saving_explainer')}
 		</p>
 	</Stack>
 
 	<!-- What this estimate deliberately does not contain. -->
 	<Stack as="section" gap="sm">
 		<Inline align="center" gap="xs" class="border-b pb-2">
-			<h3 class="text-sm font-semibold">Priced separately — manual take-off</h3>
-			<InfoHint
-				text="Work a plan, a survey, and a section do not contain — the rate depends on method, material, or a structural drawing rather than on shape. The total above excludes all of it."
-			/>
+			<h3 class="text-sm font-semibold">{t('component.manual_take_off')}</h3>
+			<InfoHint text={t('component.manual_take_off_hint')} />
 		</Inline>
 		<dl class="divide-y rounded-md border bg-card text-sm">
 			{#each MANUAL_TAKE_OFF as item (item.id)}
 				<Inline align="start" justify="between" gap="sm" class="p-3">
 					<Inline align="center" gap="xs" class="min-w-0">
 						<dt class="min-w-0 truncate font-medium">{item.label}</dt>
-						<InfoHint label={`Why ${item.label} is manual`} text={item.why} />
+						<InfoHint label={t('component.why_label', { label: item.label })} text={item.why} />
 					</Inline>
 					<dd class="shrink-0 text-xs text-muted-foreground">{item.unit}</dd>
 				</Inline>

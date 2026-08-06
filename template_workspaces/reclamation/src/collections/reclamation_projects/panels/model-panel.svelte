@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { Column, Columns, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import InfoHint from './info-hint.svelte';
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { SiteLayer, SiteViewerStats } from '../../../lib/site-viewer/site_viewer.types.js';
@@ -34,6 +36,8 @@
 		report: StitchReport | null;
 	} = $props();
 
+	const { t } = useI18n<TenantI18nKeys>();
+
 	const errors = $derived((report?.warnings ?? []).filter((entry) => entry.severity === 'error'));
 	const cautions = $derived(
 		(report?.warnings ?? []).filter((entry) => entry.severity === 'warning')
@@ -45,13 +49,11 @@
 <Stack gap="lg" class="pb-4">
 	<Stack as="section" gap="sm">
 		<Inline align="center" gap="xs" class="border-b pb-2">
-			<h3 class="text-sm font-semibold">Layers</h3>
-			<InfoHint
-				text="Switch a layer off to look inside the solid. Visibility changes the live scene only — nothing is recalculated and no volume moves."
-			/>
+			<h3 class="text-sm font-semibold">{t('component.layers')}</h3>
+			<InfoHint text={t('component.layers_hint')} />
 		</Inline>
 		{#if layers.length === 0}
-			<p class="text-sm text-muted-foreground">Building the surfaces…</p>
+			<p class="text-sm text-muted-foreground">{t('component.building_surfaces')}</p>
 		{:else}
 			<ul class="divide-y rounded-md border bg-card">
 				{#each layers as layer (layer.id)}
@@ -70,7 +72,10 @@
 							<span class="min-w-0 flex-1 truncate">{layer.label}</span>
 							{#if SURFACE_NOTE[layer.id]}
 								<span class="shrink-0" title={SURFACE_NOTE[layer.id]}>
-									<InfoHint label={`About ${layer.label}`} text={SURFACE_NOTE[layer.id]} />
+									<InfoHint
+										label={t('component.about_label', { label: layer.label })}
+										text={SURFACE_NOTE[layer.id]}
+									/>
 								</span>
 							{/if}
 							<span class="shrink-0 text-xs tabular-nums text-muted-foreground">
@@ -91,38 +96,38 @@
 	{/if}
 
 	<Stack as="section" gap="sm">
-		<h3 class="border-b pb-2 text-sm font-semibold">Measured from the solid</h3>
+		<h3 class="border-b pb-2 text-sm font-semibold">{t('component.measured_from_solid')}</h3>
 		<Columns as="dl" count={2} gap="md" class="text-sm">
 			<Column>
-				<dt class="text-xs text-muted-foreground">Platform area</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.platform_area')}</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
 					{formatNumber(metrics.platformAreaM2 / 10_000, 1)} ha
 				</dd>
 			</Column>
 			<Column>
-				<dt class="text-xs text-muted-foreground">Works footprint</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.works_footprint')}</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
 					{formatNumber(metrics.worksFootprintM2 / 10_000, 1)} ha
 				</dd>
 			</Column>
 			<Column>
-				<dt class="text-xs text-muted-foreground">Seaward perimeter</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.seaward_perimeter')}</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">{formatNumber(metrics.shorelineLengthM)} m</dd>
 			</Column>
 			<Column>
-				<dt class="text-xs text-muted-foreground">Mean / max fill depth</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.mean_max_fill_depth')}</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
 					{formatNumber(metrics.meanFillDepthM, 2)} / {formatNumber(metrics.maxFillDepthM, 2)} m
 				</dd>
 			</Column>
 			<Column>
-				<dt class="text-xs text-muted-foreground">Existing bund displaced</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.existing_bund_displaced')}</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">
 					{formatNumber(metrics.structureDisplacementM3)} m³
 				</dd>
 			</Column>
 			<Column>
-				<dt class="text-xs text-muted-foreground">Below the surveyed bed</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.below_surveyed_bed')}</dt>
 				<dd class="mt-0.5 font-medium tabular-nums">{formatNumber(metrics.excavationM3)} m³</dd>
 			</Column>
 		</Columns>
@@ -131,14 +136,17 @@
 	{#if report}
 		<Stack as="section" gap="sm">
 			<h3 class="border-b pb-2 text-sm font-semibold">
-				Checks and calculation basis
+				{t('component.checks_basis')}
 				<span class="ml-1 font-normal text-muted-foreground">
-					({report.warnings.length} flagged · {assumptions.length} assumed)
+					{t('component.checks_basis_counts', {
+						flagged: report.warnings.length,
+						assumed: assumptions.length
+					})}
 				</span>
 			</h3>
 			{#if report.warnings.length === 0}
 				<p class="text-sm text-muted-foreground">
-					No document conflicts or extraction errors were flagged.
+					{t('component.no_checks_flagged')}
 				</p>
 			{/if}
 
@@ -157,10 +165,9 @@
 
 			{#if assumptions.length > 0}
 				<div class="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
-					<p class="font-medium">Not directly supplied by the source documents</p>
+					<p class="font-medium">{t('component.assumptions_not_supplied')}</p>
 					<p class="mt-1 text-xs text-muted-foreground">
-						These assumptions affect the model and its calculated quantities. Verify or replace them
-						before relying on the result.
+						{t('component.assumptions_verify')}
 					</p>
 				</div>
 				<div class="divide-y rounded-md border bg-card">
@@ -170,7 +177,7 @@
 							<Stack gap="sm" class="pt-2">
 								<p class="text-sm text-muted-foreground">{assumption.detail}</p>
 								<p class="text-sm">
-									<span class="font-medium">Effect if incorrect:</span>
+									<span class="font-medium">{t('component.effect_if_incorrect')}</span>
 									{assumption.effect}
 								</p>
 							</Stack>
@@ -182,7 +189,7 @@
 			{#if report.layerClassification && report.layerClassification.length > 0}
 				<details class="rounded-md border bg-card p-3">
 					<summary class="cursor-pointer text-sm font-medium">
-						How each section layer was read
+						{t('component.layer_read_heading')}
 					</summary>
 					<Stack gap="sm" class="pt-2">
 						<Columns as="ul" count={2} gap="sm" class="text-xs">
@@ -202,8 +209,7 @@
 							{/each}
 						</Columns>
 						<p class="text-xs text-muted-foreground">
-							A layer read as <span class="font-medium">internal</span> is excluded from the
-							finished surface. Correct any of these with <code>profileLayers</code> in the project overrides.
+							{t('component.layer_read_note')}
 						</p>
 					</Stack>
 				</details>

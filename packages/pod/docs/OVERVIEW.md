@@ -120,7 +120,6 @@ The templates are executable documentation as well as starter projects:
 | [Construction Operations](../../../template_workspaces/construction/) | Projects, permits, quality, BIM references, claims, and workforce compliance. |
 | [CRM](../../../template_workspaces/crm/)                              | Accounts, quoting, fulfilment, payments, and sales operations.                |
 | [HR & Payroll](../../../template_workspaces/hr-payroll/)              | Multi-country payroll, attendance, leave, and statutory reporting.            |
-| [Reclamation](../../../template_workspaces/reclamation/)              | Geospatial reclamation planning, costs, execution, and reconstruction.        |
 
 Use `sync`, `lint`, and `build` in a template before changing it. A production tenant receives an
 immutable template commit with its own committed package lockfile; editing a local template

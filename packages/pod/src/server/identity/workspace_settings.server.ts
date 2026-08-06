@@ -21,6 +21,7 @@ import { error } from '$lib/server/http.js';
 import { ensureOrganizationAdmin, getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { deleteRecord, updateRecord } from '$lib/server/collection/collection_ops.server.js';
 import { mintInvitation } from './invitation.server.js';
+import { requestI18n } from '$lib/server/i18n.js';
 import { z } from 'zod';
 
 export const InviteMemberSchema = z.object({
@@ -59,7 +60,7 @@ function invitationStatus(row: {
  * survive into the response.
  */
 export async function listWorkspaceInvitations(): Promise<readonly WorkspaceInvitationSummary[]> {
-	ensureOrganizationAdmin('Only workspace admins can see invitations');
+	ensureOrganizationAdmin(requestI18n().t('pod.settings.adminOnlySee'));
 	const ctx = getWorkspace({ provision: true });
 	const result = await ctx.tenantDb.query<{
 		norbital_id: string;
@@ -109,7 +110,7 @@ export async function listWorkspaceInvitations(): Promise<readonly WorkspaceInvi
 export async function inviteWorkspaceMember(
 	input: z.infer<typeof InviteMemberSchema>
 ): Promise<{ readonly invitationId: string; readonly acceptPath: string; readonly email: string }> {
-	ensureOrganizationAdmin('Only workspace admins can invite people');
+	ensureOrganizationAdmin(requestI18n().t('pod.settings.adminOnlyInvite'));
 	const email = input.email.trim().toLowerCase();
 	const invitedBy = getWorkspace({ provision: true }).baseScope.requestor.norbital_id;
 	const minted = await mintInvitation({
@@ -129,7 +130,7 @@ export async function inviteWorkspaceMember(
 export async function revokeWorkspaceInvitation(
 	input: z.infer<typeof RevokeInvitationSchema>
 ): Promise<{ readonly revoked: boolean }> {
-	ensureOrganizationAdmin('Only workspace admins can revoke invitations');
+	ensureOrganizationAdmin(requestI18n().t('pod.settings.adminOnlyRevoke'));
 	const ctx = getWorkspace({ provision: true });
 	const live = await ctx.tenantDb.query<{ norbital_id: string }>({
 		text: `SELECT norbital_id FROM invitation WHERE norbital_id = $1::uuid AND consumed_at IS NULL`,
@@ -153,7 +154,7 @@ export async function revokeWorkspaceInvitation(
 export async function setWorkspaceMemberRole(
 	input: z.infer<typeof SetMemberRoleSchema>
 ): Promise<{ readonly norbital_id: string; readonly role: string }> {
-	ensureOrganizationAdmin('Only workspace admins can change roles');
+	ensureOrganizationAdmin(requestI18n().t('pod.settings.adminOnlyRoles'));
 	const ctx = getWorkspace({ provision: true });
 	if (input.role !== 'admin') {
 		const admins = await ctx.tenantDb.query<{ norbital_id: string }>({
@@ -163,7 +164,7 @@ export async function setWorkspaceMemberRole(
 			values: [input.user_id]
 		});
 		if (!admins.rows[0]) {
-			throw error(409, 'A workspace must keep at least one admin.');
+			throw error(409, requestI18n().t('pod.settings.keepOneAdmin'));
 		}
 	}
 	await updateRecord(ctx, 'user', input.user_id, { role: input.role }, { isElevated: true });

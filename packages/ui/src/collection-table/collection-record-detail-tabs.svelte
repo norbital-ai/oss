@@ -1,9 +1,12 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import type { Snippet } from 'svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import * as Sheet from '#lib/sheet';
 	import { Tabs, type TabConfig } from '#lib/tabs';
 	import { Bound, Inline, Scroll } from '#lib/layout';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		title,
@@ -31,21 +34,21 @@
 		{
 			name: 'ui',
 			label: '',
-			description: 'UI',
+			description: t('table.tabUi'),
 			icon: 'lucide:layout-template',
 			content: uiContent
 		},
 		{
 			name: 'approval',
 			label: '',
-			description: 'Approval',
+			description: t('table.tabApproval'),
 			icon: 'lucide:shield-check',
 			content: approvalContent
 		},
 		{
 			name: 'raw',
 			label: '',
-			description: 'Raw',
+			description: t('table.tabRaw'),
 			icon: 'lucide:braces',
 			content: rawContent
 		}
@@ -73,16 +76,16 @@
 	{#if loading}
 		<Inline gap="sm" class="p-6 text-sm text-muted-foreground" role="status">
 			<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
-			Loading record…
+			{t('table.loadingRecord')}
 		</Inline>
 	{:else if error}
 		<div class="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-4" role="alert">
-			<p class="text-sm font-medium text-destructive">Record could not be loaded</p>
+			<p class="text-sm font-medium text-destructive">{t('table.recordLoadFailed')}</p>
 			<p class="mt-1 text-sm text-muted-foreground">{error}</p>
 		</div>
 	{:else if !found}
 		<div class="m-6 rounded-lg border bg-muted/20 p-4 text-sm text-muted-foreground">
-			This record is no longer available.
+			{t('table.recordUnavailable')}
 		</div>
 	{/if}
 {/snippet}
@@ -98,7 +101,7 @@
 {/snippet}
 
 {#snippet approvalContent()}
-	<Scroll name={`${title} approval`} class="p-5 sm:p-6">
+	<Scroll name={t('table.approvalRegion', { title })} class="p-5 sm:p-6">
 		{#if loading || error || !found}
 			{@render unavailableState()}
 		{:else}
@@ -108,7 +111,7 @@
 {/snippet}
 
 {#snippet rawContent()}
-	<Scroll name={`${title} raw data`} class="p-5 sm:p-6">
+	<Scroll name={t('table.rawRegion', { title })} class="p-5 sm:p-6">
 		{#if loading || error || !found}
 			{@render unavailableState()}
 		{:else}

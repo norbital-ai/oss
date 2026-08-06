@@ -22,6 +22,7 @@
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import { cn, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { Dialog as BitsDialog } from 'bits-ui';
@@ -29,6 +30,8 @@
 	import { onMount } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import SheetContentResize from './sheet-content-resize.svelte';
+
+	const { t } = useI18n<UiKeys>();
 	import { resolveSheetPortalTarget } from './sheet-portal-target.js';
 	import { sheetVariants } from './sheet-variants.js';
 	const SheetPortal = BitsDialog.Portal;
@@ -268,7 +271,7 @@
 					class="absolute top-4 right-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none data-[state=open]:bg-secondary"
 				>
 					<Icon icon="lucide:x" class="size-4" />
-					<span class="sr-only">Close</span>
+					<span class="sr-only">{t('common.close')}</span>
 				</BitsDialog.Close>
 			{/if}
 		</BitsDialog.Content>

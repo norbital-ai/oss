@@ -59,6 +59,10 @@
 			"types": "./build/json/index.d.ts",
 			"default": "./build/json/index.js"
 		},
+		"./i18n": {
+			"types": "./build/i18n/index.d.ts",
+			"default": "./build/i18n/index.js"
+		},
 		"./reckon": {
 			"types": "./build/reckon/index.d.ts",
 			"default": "./build/reckon/index.js"

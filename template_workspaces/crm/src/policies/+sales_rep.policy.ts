@@ -41,6 +41,40 @@ export default {
 		{ collection: 'quote_lines', action: 'delete' },
 
 		{ collection: 'activities', action: 'read' },
-		{ collection: 'activities', action: 'create' }
+		{ collection: 'activities', action: 'create' },
+
+		{
+			collection: 'sales_invoices',
+			action: 'read',
+			where: { owner_id: { eq: '${requestor.norbital_id}' } }
+		},
+		{ collection: 'sales_invoices', action: 'create' },
+		{
+			collection: 'sales_invoices',
+			action: 'update',
+			where: { owner_id: { eq: '${requestor.norbital_id}' } }
+		},
+
+		// Invoice lines carry no owner of their own, so they are granted unscoped, matching how
+		// the document — the thing the requestor is narrowed to — is the unit of ownership.
+		{ collection: 'sales_invoice_lines', action: 'read' },
+		{ collection: 'sales_invoice_lines', action: 'create' },
+		{ collection: 'sales_invoice_lines', action: 'update' },
+		{ collection: 'sales_invoice_lines', action: 'delete' },
+
+		{
+			collection: 'contract_signings',
+			action: 'read',
+			where: { owner_id: { eq: '${requestor.norbital_id}' } }
+		},
+		{ collection: 'contract_signings', action: 'create' },
+		{
+			collection: 'contract_signings',
+			action: 'update',
+			where: { owner_id: { eq: '${requestor.norbital_id}' } }
+		},
+
+		{ collection: 'settlements', action: 'read' },
+		{ collection: 'settlements', action: 'create' }
 	]
 } satisfies Policy;

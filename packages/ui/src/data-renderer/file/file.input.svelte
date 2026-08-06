@@ -5,6 +5,7 @@
 	import * as Carousel from '#lib/carousel';
 	import type { IFileUploadClient } from '#lib/file-upload';
 	import { isActiveUploadStage, UPLOAD_STAGE_MESSAGES } from '#lib/file-upload';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { FileMetadataTooltip } from '#lib/file-value';
@@ -56,6 +57,8 @@
 		onFileRejected
 	}: Props<T> = $props();
 
+	const { t } = useI18n<UiKeys>();
+
 	const maxFiles = $derived(maxFilesProp ?? (multiple ? 10 : 1));
 
 	const formatFileSize = (bytes: number): string => {
@@ -77,9 +80,11 @@
 		if (file.size > maxFileSize) {
 			return {
 				valid: false,
-				reason: `File "${file.name}" (${formatFileSize(
-					file.size
-				)}) exceeds the ${formatFileSize(maxFileSize)} limit`
+				reason: t('dataRenderer.fileTooLarge', {
+					name: file.name,
+					size: formatFileSize(file.size),
+					maxSize: formatFileSize(maxFileSize)
+				})
 			};
 		}
 		const accepted = accept.some(
@@ -91,7 +96,10 @@
 		if (!accepted) {
 			return {
 				valid: false,
-				reason: `File type "${file.type}" is not allowed for "${file.name}"`
+				reason: t('dataRenderer.fileTypeNotAllowed', {
+					type: file.type,
+					name: file.name
+				})
 			};
 		}
 		return { valid: true };
@@ -126,12 +134,12 @@
 
 	const triggerText = $derived.by(() => {
 		if (!hasValidFiles) {
-			return multiple ? 'No files uploaded' : 'No file uploaded';
+			return multiple ? t('dataRenderer.noFilesUploaded') : t('dataRenderer.noFileUploaded');
 		}
 		if (editingFiles.length === 1) {
 			return editingFiles[0].name;
 		}
-		return `${editingFiles.length} files selected`;
+		return t('dataRenderer.filesSelected', { count: editingFiles.length });
 	});
 
 	// For stacked previews in trigger
@@ -167,9 +175,7 @@
 			if (editingFiles.length + activePendingCount + validFiles.length >= maxFiles) {
 				rejectedFiles.push({
 					file,
-					reason: `Cannot add "${file.name}": maximum ${maxFiles} file${
-						maxFiles > 1 ? 's' : ''
-					} allowed`
+					reason: t('dataRenderer.maxFilesReached', { name: file.name, count: maxFiles })
 				});
 				continue;
 			}
@@ -185,7 +191,7 @@
 			if (results.length > 0) editingFiles = [...editingFiles, ...results];
 			notifyParent();
 		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Upload failed';
+			const message = error instanceof Error ? error.message : t('dataRenderer.uploadFailed');
 			onUploadError?.(message);
 		}
 	};
@@ -243,7 +249,7 @@
 	class="hidden"
 	onchange={handleFileInputChange}
 	{disabled}
-	aria-label="File upload input"
+	aria-label={t('dataRenderer.fileUploadInput')}
 />
 
 {#snippet triggerContent()}
@@ -291,7 +297,7 @@
 			variant="ghost"
 			class="invisible absolute top-1/2 right-1 h-6 w-6 -translate-y-1/2 rounded-full p-0 group-hover:visible focus:visible"
 			onclick={handleClear}
-			aria-label="Clear selection"
+			aria-label={t('dataRenderer.clearSelection')}
 			tabindex={-1}
 		>
 			<Icon icon="lucide:x" class="h-4 w-4" />
@@ -334,7 +340,7 @@
 							<Stack gap="sm" fill class="p-2">
 								<Inline gap="sm" class="text-sm font-medium text-secondary-foreground">
 									<Icon icon="lucide:eye" class="h-4 w-4" />
-									File Preview
+									{t('dataRenderer.filePreview')}
 								</Inline>
 								<FileThumbnail
 									file_value={file}
@@ -355,7 +361,7 @@
 	{:else}
 		<Stack gap="sm" align="center" class="py-8 text-center text-muted-foreground">
 			<Icon icon="lucide:paperclip" class="size-8 text-muted-foreground" />
-			<p class="text-sm">No files attached</p>
+			<p class="text-sm">{t('dataRenderer.noFilesAttached')}</p>
 		</Stack>
 	{/if}
 {/snippet}
@@ -364,8 +370,8 @@
 	{#if multiple && editingFiles.length === 0}
 		<Stack gap="sm" align="center" class="p-4 py-8 text-center">
 			<Icon icon="lucide:upload-cloud" class="size-12 text-muted-foreground" />
-			<h4 class="font-medium text-foreground">No files selected</h4>
-			<p class="text-sm text-muted-foreground">Upload your first file to get started</p>
+			<h4 class="font-medium text-foreground">{t('dataRenderer.noFilesSelected')}</h4>
+			<p class="text-sm text-muted-foreground">{t('dataRenderer.uploadFirstFile')}</p>
 			<Button
 				variant="outline"
 				onclick={openFileBrowser}
@@ -376,7 +382,7 @@
 				{#if clientUploadBusy}
 					{UPLOAD_STAGE_MESSAGES.uploading}
 				{:else}
-					Add first file
+					{t('dataRenderer.addFirstFile')}
 				{/if}
 			</Button>
 		</Stack>
@@ -405,7 +411,7 @@
 								onclick={() => cancelPendingUpload(pending.id)}
 								class="h-8 w-8 p-0 text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
 								{disabled}
-								title="Cancel upload"
+								title={t('dataRenderer.cancelUpload')}
 							>
 								<Icon icon="lucide:x" class="h-4 w-4" />
 							</Button>
@@ -416,7 +422,7 @@
 								onclick={() => removePendingUpload(pending.id)}
 								class="h-8 w-8 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive-foreground"
 								{disabled}
-								title="Remove"
+								title={t('common.remove')}
 							>
 								<Icon icon="lucide:x" class="h-4 w-4" />
 							</Button>
@@ -468,7 +474,7 @@
 					{#if clientUploadBusy}
 						{UPLOAD_STAGE_MESSAGES.uploading}
 					{:else}
-						Add file
+						{t('dataRenderer.addFile')}
 					{/if}
 				</Button>
 			{/if}
@@ -476,10 +482,15 @@
 			<!-- File constraints info -->
 			<Stack gap="xs" class="border-t pt-2 text-xs text-muted-foreground">
 				<div>
-					Max {maxFiles} file{maxFiles !== 1 ? 's' : ''} • {formatFileSize(maxFileSize)} limit
+					{t(maxFiles !== 1 ? 'dataRenderer.maxFilePlural' : 'dataRenderer.maxFileSingular', {
+						count: maxFiles,
+						size: formatFileSize(maxFileSize)
+					})}
 				</div>
 				<div>
-					Accepts: {accept.length > 3 ? `${accept.slice(0, 3).join(', ')}...` : accept.join(', ')}
+					{t('dataRenderer.accepts', {
+						types: accept.length > 3 ? `${accept.slice(0, 3).join(', ')}...` : accept.join(', ')
+					})}
 				</div>
 			</Stack>
 		</Stack>

@@ -1,11 +1,14 @@
 <script lang="ts" generics="T, TAdditionalProps extends Record<string, unknown> = {}">
 	import Icon from '@iconify/svelte';
 	import * as Command from '#lib/command';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import ComboboxListItem from './combobox-list-item.svelte';
 	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from './index.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	interface Props {
 		readonly: boolean;
@@ -186,7 +189,7 @@
 	{#if infiniteLoadingConfig && virtualItemsLength > 0}
 		{@const displayTotal = Math.max(infiniteLoadingConfig.total, optionsLength)}
 		<div class={cn('border-t p-2 text-center text-muted-foreground', compactTextClass)}>
-			Showing {optionsLength} of {displayTotal}
+			{t('common.showingCount', { count: optionsLength, total: displayTotal })}
 		</div>
 	{/if}
 {/if}

@@ -1,8 +1,11 @@
 <script lang="ts">
 	import type { Time } from '@internationalized/date';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { TimeField } from '#lib/time-field';
 	import { TimeRangeField, type TimeRange } from '#lib/time-range';
 	import { cn } from '#lib/utils';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		isSameDay,
@@ -31,7 +34,7 @@
 
 {#if isSameDay && hasEnd}
 	<TimeRangeField
-		label="Time Range"
+		label={t('dataRenderer.timeRange')}
 		{value}
 		onValueChange={onRangeChange}
 		{granularity}
@@ -47,7 +50,7 @@
 	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div class={cn('grid gap-4', hasEnd ? 'grid-cols-2' : 'grid-cols-1', className)}>
 		<TimeField
-			label="Start Time"
+			label={t('dataRenderer.startTime')}
 			value={value.start}
 			onValueChange={onStartChange}
 			{granularity}
@@ -60,7 +63,7 @@
 		/>
 		{#if hasEnd}
 			<TimeField
-				label="End Time"
+				label={t('dataRenderer.endTime')}
 				value={value.end}
 				onValueChange={onEndChange}
 				{granularity}

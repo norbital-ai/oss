@@ -1,9 +1,12 @@
 <script lang="ts">
 	import type { NumericRendererVariant } from '@norbital-ai/platform-utils/collection';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { DataRendererProps } from '../data-renderer.types.js';
 	import NumberView from './views/number.view.svelte';
 	import ProgressView from './views/progress.view.svelte';
 	import StarRatingView from './views/star_rating.view.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
@@ -11,11 +14,12 @@
 		id,
 		mode = 'display',
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
-		locale = 'en-US',
+		locale,
 		class: className
 	}: DataRendererProps = $props();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 
 	const variant = $derived.by((): NumericRendererVariant => {
 		const configured = field.variant ?? { type: 'number' as const };
@@ -52,7 +56,7 @@
 		{disabled}
 		{placeholder}
 		{onValueChange}
-		{locale}
+		locale={localeEffective}
 		denominator={variant.denominator}
 		class={className}
 	/>
@@ -65,7 +69,7 @@
 		{disabled}
 		{placeholder}
 		{onValueChange}
-		{locale}
+		locale={localeEffective}
 		class={className}
 	/>
 {/if}

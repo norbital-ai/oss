@@ -1,11 +1,14 @@
 <script lang="ts" generics="TValueMap extends Record<string, unknown>">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
 	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { SelectionDraft, StepsConfig } from './types.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		selections,
@@ -52,7 +55,7 @@
 		<Inline gap="none" justify="between" class="h-11 border-b px-3">
 			<Inline gap="sm" class="text-xs font-semibold text-muted-foreground">
 				<Icon icon="lucide:list-tree" class="h-3.5 w-3.5" />
-				<span>{multiple ? 'Selections' : 'Selection'}</span>
+				<span>{multiple ? t('common.selections') : t('common.selection')}</span>
 			</Inline>
 			{#if multiple && !disabled}
 				<Button
@@ -61,7 +64,7 @@
 					class="h-7 rounded-full px-3 text-micro"
 					onclick={onAdd}
 				>
-					<Icon icon="lucide:plus" class="mr-1 h-3 w-3" /> New
+					<Icon icon="lucide:plus" class="mr-1 h-3 w-3" /> {t('common.new')}
 				</Button>
 			{/if}
 		</Inline>
@@ -71,7 +74,7 @@
 				<li
 					class="rounded-md border border-dashed border-muted-foreground/30 bg-background px-4 py-6 text-center text-xs text-muted-foreground"
 				>
-					No selections yet. {#if multiple}Click "New" to start.{/if}
+					{t('common.noSelectionsYet')} {#if multiple}{t('common.clickNewToStart')}{/if}
 				</li>
 			{:else}
 				{#each selections as selection, idx (idx)}
@@ -97,11 +100,11 @@
 							{#if !complete}
 								<Inline gap="xs" class="text-micro font-medium text-yellow-800">
 									<Icon icon="lucide:alert-triangle" class="h-3 w-3" />
-									Partial selection
+									{t('common.partialSelection')}
 								</Inline>
 								{#if missing.length > 0}
 									<div class="mt-1 text-micro text-yellow-700">
-										Missing: {missing.map(String).join(MISSING_SEP)}
+										{t('common.missingKeys', { keys: missing.map(String).join(MISSING_SEP) })}
 									</div>
 								{/if}
 							{/if}
@@ -127,12 +130,12 @@
 							visible={true}
 							wrapperClass="relative inline-flex h-3 w-3 flex-none"
 						>
-							<span class="sr-only">{complete ? 'Complete' : 'Partial'}</span>
+							<span class="sr-only">{complete ? t('common.complete') : t('common.partial')}</span>
 						</Indicator>
 						{#if !disabled}
 							<button
 								type="button"
-								aria-label="Remove selection"
+								aria-label={t('common.removeSelection')}
 								class="rounded p-1 opacity-60 transition-opacity hover:bg-muted hover:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset"
 								onclick={(e) => onRemove(idx, e)}
 							>

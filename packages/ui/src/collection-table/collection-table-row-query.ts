@@ -5,6 +5,82 @@ import { z } from 'zod';
 
 const recordSchema = z.record(z.string(), z.unknown());
 
+/**
+ * A filter whose path cannot be resolved against the row in hand.
+ *
+ * This is thrown rather than answered with `false` because those two are not the same statement.
+ * "No row matched" is a result; "this predicate could not be evaluated" is a defect, and rendering
+ * it as an empty table shows a filter that looks like it worked and quietly hides every record.
+ * A caller filtering rows in memory should let this surface, or catch it and say the filter could
+ * not be applied — never fold it into the result set.
+ */
+export class CollectionFilterPathError extends Error {
+	readonly path: readonly string[];
+	readonly segment: string;
+
+	constructor(path: readonly string[], segment: string) {
+		super(
+			`Filter path "${path.join('.')}" cannot be resolved on this row: "${segment}" is not readable. ` +
+				'The row is missing that field or relation — it was probably not selected by the query.'
+		);
+		this.name = 'CollectionFilterPathError';
+		this.path = path;
+		this.segment = segment;
+	}
+}
+
+/**
+ * Expands to-many hops so a path can be walked through them.
+ *
+ * A relation with `many` cardinality arrives as an array, and every level of the walk has to be
+ * able to stand on one. Nested because a path may cross more than one of them.
+ */
+function flattenCandidates(values: readonly unknown[]): unknown[] {
+	const flattened: unknown[] = [];
+	for (const value of values) {
+		if (Array.isArray(value)) flattened.push(...flattenCandidates(value));
+		else flattened.push(value);
+	}
+	return flattened;
+}
+
+type PathResolution =
+	| { readonly resolved: true; readonly values: readonly unknown[] }
+	| { readonly resolved: false; readonly segment: string };
+
+/**
+ * Every value a filter path selects on one row.
+ *
+ * A path crossing a to-many relation selects one value per related record, and the caller matches
+ * **existentially** — the row qualifies when any of them satisfies the operator. That is what
+ * someone building `employment_employee.effective_range contains today` means, and it is what both
+ * of the other two implementations of this predicate already do: the server compiles a relation
+ * filter to Drizzle's `EXISTS`, and the local replica compiles one to an `EXISTS` subquery.
+ *
+ * An intermediate hop holding no record contributes nothing, so an unset to-one relation and an
+ * empty to-many both simply fail to match — `EXISTS` over an empty set, again matching the other
+ * two. A *leaf* that is null is a different thing and is kept, so `isNull` still works on a column.
+ *
+ * The values are returned unflattened at the leaf: an array-typed column has to reach
+ * `arrayContains` as the array itself, not as its elements.
+ */
+function resolveFilterPath(row: object, path: readonly string[]): PathResolution {
+	let frontier: unknown[] = [row];
+	for (const segment of path) {
+		const next: unknown[] = [];
+		for (const candidate of flattenCandidates(frontier)) {
+			if (candidate == null) continue;
+			// Descending into a scalar is the unresolvable case: the row does not have the shape the
+			// path describes, and no answer about matching can honestly be given.
+			if (!typeGuard(recordSchema, candidate)) return { resolved: false, segment };
+			if (!(segment in candidate)) return { resolved: false, segment };
+			next.push(Reflect.get(candidate, segment));
+		}
+		frontier = next;
+	}
+	return { resolved: true, values: frontier };
+}
+
 function searchableValue(value: unknown): string {
 	if (value == null) return '';
 	if (typeof value === 'object') return JSON.stringify(value) ?? '';
@@ -51,6 +127,36 @@ function dateRange(value: unknown): { start: string; end: string } | null {
 
 export function collectionTableRowMatchesSearch(row: object, search: string): boolean {
 	return textSearchMatches(Object.values(row).map(searchableValue).join(' '), search);
+}
+
+/**
+ * Every operator `matchesOperator` answers, which is what tells an operator map apart from a nested
+ * relation condition in a `where`. It must stay in step with the switch below: an operator missing
+ * here would make its condition read as a relation name and quietly match nothing.
+ */
+const FILTER_OPERATORS: ReadonlySet<string> = new Set([
+	'eq',
+	'ne',
+	'gt',
+	'gte',
+	'lt',
+	'lte',
+	'ilike',
+	'isNull',
+	'isNotNull',
+	'contains',
+	'in',
+	'notIn',
+	'arrayContains',
+	'arrayOverlaps',
+	'contains_date',
+	'overlaps'
+]);
+
+/** A condition is an operator map only when every key is one; otherwise it describes a relation. */
+function isOperatorMap(condition: Readonly<Record<string, unknown>>): boolean {
+	const keys = Object.keys(condition);
+	return keys.length > 0 && keys.every((key) => FILTER_OPERATORS.has(key));
 }
 
 function matchesOperator(value: unknown, operator: string, operand: unknown): boolean {
@@ -108,17 +214,22 @@ function matchesOperator(value: unknown, operator: string, operand: unknown): bo
 	}
 }
 
+/**
+ * @throws {CollectionFilterPathError} when a path cannot be resolved against `row`. A predicate
+ * that cannot be evaluated must not answer "did not match" — see the error's own note.
+ */
 export function collectionTableRowMatchesFilters(
 	row: object,
 	filters: readonly CollectionFilter[] | undefined
 ): boolean {
 	return (filters ?? []).every((filter) => {
-		let value: unknown = row;
-		for (const segment of filter.path) {
-			if (!typeGuard(recordSchema, value)) return false;
-			value = Reflect.get(value, segment);
+		const resolution = resolveFilterPath(row, filter.path);
+		if (!resolution.resolved) {
+			throw new CollectionFilterPathError(filter.path, resolution.segment);
 		}
-		return matchesOperator(value, filter.operator, filter.operand);
+		return resolution.values.some((value) =>
+			matchesOperator(value, filter.operator, filter.operand)
+		);
 	});
 }
 
@@ -153,6 +264,24 @@ export function collectionTableRowMatchesWhere(
 		const value = Reflect.get(row, field);
 		if (!typeGuard(recordSchema, condition)) {
 			if (value !== condition) return false;
+			continue;
+		}
+		// A relation name in `where` filters by the existence of a matching related record, so its
+		// condition is a nested `where` rather than an operator map. Read as an operator map it would
+		// hand a to-many's array to `matchesOperator`, which knows no operator called `effective_range`
+		// and answers `false` — emptying the table while looking like a filter that simply matched
+		// nothing. The keys decide which of the two this is.
+		if (!isOperatorMap(condition)) {
+			const related = flattenCandidates([value]).filter((candidate) => candidate != null);
+			if (
+				!related.some(
+					(candidate) =>
+						typeGuard(recordSchema, candidate) &&
+						collectionTableRowMatchesWhere(candidate, condition)
+				)
+			) {
+				return false;
+			}
 			continue;
 		}
 		for (const [operator, operand] of Object.entries(condition)) {

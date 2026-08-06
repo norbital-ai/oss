@@ -31,6 +31,10 @@
 			"svelte": "./build/*/index.js",
 			"default": "./build/*/index.js"
 		},
+		"./i18n/messages": {
+			"types": "./build/i18n/messages/index.d.ts",
+			"default": "./build/i18n/messages/index.js"
+		},
 		"./feature-colors": {
 			"types": "./build/feature-colors/index.d.ts",
 			"import": "./build/feature-colors/index.js",

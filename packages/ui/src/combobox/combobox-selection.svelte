@@ -5,9 +5,12 @@
 	import Icon from '@iconify/svelte';
 	import { AutoTruncator } from '#lib/auto-truncater';
 	import { Badge } from '#lib/badge';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { isEqual } from 'es-toolkit/predicate';
 	import type { TComboboxProps, TOption } from './index.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	type Option = TOption<T, TAdditionalProps>;
 
@@ -44,7 +47,9 @@
 	{:else if emptyPlaceholder}
 		{@render emptyPlaceholder()}
 	{:else}
-		<span class={cn('font-normal text-muted-foreground', compactTextClass)}>Select option</span>
+		<span class={cn('font-normal text-muted-foreground', compactTextClass)}>
+			{t('common.selectOption')}
+		</span>
 	{/if}
 {/snippet}
 
@@ -57,7 +62,7 @@
 					type="button"
 					class="ml-1 rounded-full hover:bg-secondary focus:ring-1 focus:ring-brand focus:outline-none"
 					onclick={(event: MouseEvent) => onRemove(option.value, event)}
-					aria-label="Remove {option.label}"
+					aria-label={t('common.removeOption', { label: option.label })}
 				>
 					<Icon icon="lucide:x" class="h-2.5 w-2.5" />
 				</button>

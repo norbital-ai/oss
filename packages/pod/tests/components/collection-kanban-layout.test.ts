@@ -14,7 +14,7 @@ const laneSource = readFileSync(
 describe('CollectionKanban layout boundary', () => {
 	it('gives authored rows the bounded board height and keeps each lane independently scrollable', () => {
 		expect(boardSource).toMatch(
-			/<Scroll[\s\S]*name="Kanban lanes"[\s\S]*<Grid[\s\S]*class="h-full content-start pb-1"/
+			/<Scroll[\s\S]*name=\{t\('kanban\.lanesRegion'\)\}[\s\S]*<Grid[\s\S]*class="h-full content-start pb-1"/
 		);
 		expect(laneSource).toMatch(/<Scroll[\s\S]*axis="y"[\s\S]*class="pr-1 pb-1"/);
 	});

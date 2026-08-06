@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 
 	type TagColor =
@@ -21,6 +22,8 @@
 		isSelected?: boolean; // <-- FIX: Added isSelected type
 		onDelete?: () => void;
 	} = $props();
+
+	const { t } = useI18n<UiKeys>();
 
 	const handleDelete = () => {
 		if (!disabled && !readonly && !isFixed && onDelete) {
@@ -96,7 +99,7 @@
 					'hover:bg-black/20 focus:bg-black/20': color === 'black'
 				}
 			)}
-			aria-label="Remove tag"
+			aria-label={t('misc.removeTag')}
 		>
 			<svg
 				class="h-2 w-2"

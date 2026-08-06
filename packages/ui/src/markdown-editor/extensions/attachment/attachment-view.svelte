@@ -8,6 +8,7 @@
 		UPLOAD_STAGE_MESSAGES
 	} from '../../../file-upload/index.js';
 	import * as Popover from '../../../popover/index.js';
+	import { useI18n, type UiKeys } from '../../../i18n/index.js';
 	import { ScrollArea } from '../../../scroll-area/index.js';
 	import { Tooltip } from '../../../tooltip/index.js';
 	import { cn } from '../../../utils/index.js';
@@ -21,6 +22,8 @@
 	import AttachmentPreviewCsv from './attachment-preview-csv.svelte';
 	import AttachmentPreviewText from './attachment-preview-text.svelte';
 	import { Inline, Stack } from '#lib/layout';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		editor,
@@ -122,7 +125,7 @@
 	async function fetchFileAsBlob(url: string): Promise<Blob> {
 		const response = await fetch(url);
 		if (!response.ok) {
-			toast.error('Failed to fetch file.');
+			toast.error(t('misc.failedToFetchFile'));
 		}
 		const contentType =
 			response.headers.get('Content-Type') || fileType || 'application/octet-stream';
@@ -138,7 +141,7 @@
 	async function loadPdfPreview(url: string): Promise<PreviewContent> {
 		const response = await fetch(url);
 		if (!response.ok) {
-			toast.error('Failed to load PDF');
+			toast.error(t('misc.failedToLoadPdf'));
 		}
 		const arrayBuffer = await response.arrayBuffer();
 		const base64 = btoa(
@@ -199,7 +202,7 @@
 		try {
 			preview.content = await previewLoaders[kind](fileUrl);
 		} catch {
-			preview.error = 'Error loading preview';
+			preview.error = t('misc.previewLoadError');
 		} finally {
 			preview.loading = false;
 		}
@@ -243,7 +246,7 @@
 				variant="ghost"
 				size="icon"
 				class="h-7 w-7 text-muted-foreground hover:text-foreground"
-				aria-label="Cancel upload"
+				aria-label={t('dataRenderer.cancelUpload')}
 				onclick={cancelUpload}
 			>
 				<Icon icon="lucide:x" width="16" height="16" />
@@ -254,12 +257,12 @@
 {#snippet Error()}
 	<Inline gap="sm" class="text-destructive">
 		<Icon icon="lucide:alert-circle" width="16" height="16" />
-		<span>Error uploading {fileName}</span>
+		<span>{t('misc.errorUploadingFile', { file: fileName })}</span>
 		<Button
 			variant="ghost"
 			size="icon"
 			class="text-muted-foreground hover:text-destructive"
-			aria-label="Remove file"
+			aria-label={t('misc.removeFile')}
 			onclick={removeFile}
 		>
 			<Icon icon="lucide:x" width="16" height="16" />
@@ -269,12 +272,12 @@
 {#snippet Aborted()}
 	<Inline gap="sm" class="text-muted-foreground">
 		<Icon icon="lucide:slash" width="16" height="16" />
-		<span>Cancelled {fileName}</span>
+		<span>{t('misc.cancelledFile', { file: fileName })}</span>
 		<Button
 			variant="ghost"
 			size="icon"
 			class="text-muted-foreground hover:text-destructive"
-			aria-label="Remove file"
+			aria-label={t('misc.removeFile')}
 			onclick={removeFile}
 		>
 			<Icon icon="lucide:x" width="16" height="16" />
@@ -292,7 +295,7 @@
 			variant="ghost"
 			size="icon"
 			class="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-			aria-label="Remove file"
+			aria-label={t('misc.removeFile')}
 			onclick={removeFile}
 		>
 			<Icon icon="lucide:x" width="16" height="16" />
@@ -305,7 +308,7 @@
 						{...props}
 						class="ml-auto inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
 						onclick={(e) => e.stopPropagation()}
-						aria-label="View summary"
+						aria-label={t('misc.viewSummary')}
 					>
 						<Icon icon="lucide:info" width="16" height="16" />
 					</button>
@@ -343,12 +346,12 @@
 						<div class="flex h-5 w-5 animate-spin items-center justify-center">
 							<Icon icon="eos-icons:loading" />
 						</div>
-						<span>Loading preview...</span>
+						<span>{t('misc.loadingPreview')}</span>
 					</Inline>
 				{:else if preview.error}
 					<div class="p-4 text-center text-destructive">
 						<Icon icon="lucide:alert-circle" width="16" height="16" class="mr-1 inline" />
-						<span>Failed to load preview: {preview.error}</span>
+						<span>{t('misc.failedToLoadPreview', { error: preview.error })}</span>
 					</div>
 				{:else if preview.content}
 					{#if preview.content.type === 'image'}

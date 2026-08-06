@@ -8,6 +8,7 @@
 
 import {
 	findSheet,
+	identifyRowByColumns,
 	readRows,
 	readSheetTable,
 	WorkbookImportError,
@@ -28,7 +29,6 @@ export interface TimeEntryImportRow {
 	readonly break_minutes?: number;
 	readonly overtime_in?: string;
 	readonly overtime_out?: string;
-	readonly overtime_authorized?: boolean;
 	readonly state?: (typeof STATES)[number];
 	readonly reason?: string;
 }
@@ -67,10 +67,7 @@ export function timeEntryImportTimezone(grids: WorkbookGrids): string {
 }
 
 function identifyTimeEntryRow(reader: RowReader): string {
-	const named = [reader.text('employee_number'), reader.text('work_date')]
-		.filter((part) => part != null)
-		.join(' on ');
-	return named === '' ? `Row ${reader.rowNumber}` : `Row ${reader.rowNumber} (${named})`;
+	return identifyRowByColumns(reader, ['employee_number', 'work_date']);
 }
 
 /** Builds the import payload from the `Time entries` sheet and the file's declared timezone. */
@@ -78,9 +75,15 @@ export function timeEntryImportPayload(grids: WorkbookGrids): TimeEntryImportPay
 	const timezone = timeEntryImportTimezone(grids);
 	const table = readSheetTable(grids, TIME_ENTRY_SHEET_NAME, REQUIRED_COLUMNS);
 	// An empty cell reads as absent, not as a value. The pipeline takes each of these as optional and
-	// derives from what it was given — an unwritten `overtime_authorized` is a third state, and an
-	// unwritten `state` is derived from whether both clocks arrived. `JSON.stringify` drops an
-	// undefined property on the way out, so absence travels as absence.
+	// derives from what it was given — an unwritten `state` is derived from whether both clocks
+	// arrived. `JSON.stringify` drops an undefined property on the way out, so absence travels as
+	// absence.
+	//
+	// Only cells naming what the clock did are read. A column the workbook still carries but this
+	// list does not name — `overtime_authorized`, on every file issued before overtime became a
+	// calculated value — is ignored rather than refused, so a file already in a customer's hands
+	// keeps importing. Nothing is silently dropped that payroll would otherwise have used: the run
+	// derives overtime from the punches on this sheet.
 	const rows = readRows(table, identifyTimeEntryRow, (reader): TimeEntryImportRow => ({
 		employee_number: reader.requiredText('employee_number') ?? '',
 		work_date: reader.calendarDate('work_date') ?? '',
@@ -89,7 +92,6 @@ export function timeEntryImportPayload(grids: WorkbookGrids): TimeEntryImportPay
 		break_minutes: reader.wholeNumber('break_minutes'),
 		overtime_in: reader.clockTime('overtime_in'),
 		overtime_out: reader.clockTime('overtime_out'),
-		overtime_authorized: reader.triStateBoolean('overtime_authorized'),
 		state: reader.choice('state', STATES, false),
 		reason: reader.text('reason')
 	}));

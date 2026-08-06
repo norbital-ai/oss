@@ -29,11 +29,14 @@
 <script lang="ts" generics="TFieldName extends string">
 	import { humanize } from '@norbital-ai/std/string';
 	import { DataRenderer } from '../data-renderer/index.js';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import type { CollectionFormFieldProps } from './collection-form.types.js';
 	import CollectionFormFieldHistory from './collection-form-field-history.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		name,
@@ -90,8 +93,8 @@
 			{#if dirty}
 				<span
 					class="size-1.5 rounded-full bg-brand"
-					aria-label="Unsaved change"
-					title="Unsaved change"
+					aria-label={t('form.unsavedChange')}
+					title={t('form.unsavedChange')}
 				></span>
 			{/if}
 		</Inline>

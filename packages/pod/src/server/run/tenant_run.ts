@@ -249,11 +249,13 @@ export const runtimeRunRequestSchema = z.union([
 		publicUrl: z.string().trim().min(1)
 	}),
 	// Mints the founding invitation for a freshly provisioned tenant. The token is generated here and
-	// leaves only by email, so the provisioning host never sees a redeemable credential.
+	// leaves only by email, so the provisioning host never sees a redeemable credential. `lang`
+	// carries the recipient-side locale the host resolved (e.g. from the `?lang=` the admin used).
 	z.object({
 		kind: z.literal('provision'),
 		adminEmail: z.string().trim().min(1).max(320),
-		publicUrl: z.string().trim().min(1)
+		publicUrl: z.string().trim().min(1),
+		lang: z.string().trim().min(1).max(32).optional()
 	})
 ]);
 
@@ -595,7 +597,8 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 		case 'provision':
 			return provisionFoundingInvitation({
 				adminEmail: request.adminEmail,
-				publicUrl: request.publicUrl
+				publicUrl: request.publicUrl,
+				...(request.lang ? { locale: request.lang } : {})
 			});
 		default:
 			request satisfies never;

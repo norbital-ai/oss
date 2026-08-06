@@ -9,9 +9,12 @@
 </script>
 
 <script lang="ts" generics="T extends TimeValue = Time">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { TimeRangeField } from 'bits-ui';
 	import { watch } from 'runed';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		value = $bindable(),
@@ -24,17 +27,17 @@
 		disabled = false,
 		readonly = false,
 		granularity = 'minute',
-		locale = 'en-US',
+		locale,
 		hourCycle,
 		minValue,
 		maxValue,
 		validate,
 		hideTimeZone = false,
 		readonlySegments,
-		separatorText = 'to',
+		separatorText = t('misc.timeRangeSeparator'),
 		autoAdjustConflicts = false,
 		allowStartAfterEnd = false,
-		startAfterEndError = 'Start time must be before end time',
+		startAfterEndError = t('misc.timeRangeStartAfterEnd'),
 		class: className,
 		inputClass,
 		labelClass,
@@ -79,6 +82,8 @@
 		onEndValueChange?: (value: T | undefined) => void;
 		onInvalid?: (reason: 'min' | 'max' | 'custom', msg?: string | string[]) => void;
 	} & Record<string, unknown> = $props();
+
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 
 	// Internal state
 	let isAdjusting = $state(false);
@@ -229,7 +234,7 @@
 	{disabled}
 	{readonly}
 	{granularity}
-	{locale}
+	locale={localeEffective}
 	{hourCycle}
 	{minValue}
 	{maxValue}

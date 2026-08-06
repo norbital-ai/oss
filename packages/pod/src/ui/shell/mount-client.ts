@@ -1,6 +1,7 @@
 import { mount, type Component } from 'svelte';
 import type { CollectionSurfaceRegistry } from '@norbital-ai/ui/collection-table';
 import type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';
+import type { LocaleCatalogs } from '@norbital-ai/std/i18n';
 import PodApp from './pod-app.svelte';
 import { initializeWorkspaceClient } from '../state/client.js';
 import { bootstrapClientSync } from '../sync/replica.js';
@@ -11,6 +12,8 @@ export interface PodWorkspaceClientModules {
 	readonly apps: Readonly<Record<string, () => Promise<Component>>>;
 	readonly collectionSurfaces: CollectionSurfaceRegistry;
 	readonly customTypeRenderers: CustomTypeRendererMap;
+	/** The merged platform + tenant message catalogs (from `virtual:pod/i18n`). */
+	readonly i18nMessages: LocaleCatalogs;
 }
 
 /** Mount a compiled tenant module set into the host-neutral Pod browser runtime. */
@@ -45,6 +48,7 @@ export function mountPodWorkspace(modules: PodWorkspaceClientModules): void {
 			apps: modules.apps,
 			collectionSurfaces: modules.collectionSurfaces,
 			customTypeRenderers: modules.customTypeRenderers,
+			i18nMessages: modules.i18nMessages,
 			shellData
 		}
 	});

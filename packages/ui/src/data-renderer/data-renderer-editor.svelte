@@ -2,6 +2,7 @@
 	import { humanize } from '@norbital-ai/std/string';
 	import { CodeEditor } from '#lib/code-editor';
 	import { Combobox } from '#lib/combobox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import BooleanRenderer from './boolean/boolean.renderer.svelte';
@@ -20,17 +21,19 @@
 
 	const NUMERIC_KINDS = new Set(['numeric', 'number', 'integer']);
 	const SIMPLE_INPUT_KINDS = new Set(['text', 'string', 'uuid']);
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
 		value,
 		id,
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
-		locale = 'en-US',
+		locale,
 		class: className
 	}: DataRendererProps = $props();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 	const rendererRuntime = getDataRendererRuntimeContext();
 	const enumOptions = $derived(
 		(field.values ?? []).map((option) => ({ value: option, label: humanize(option) }))
@@ -62,7 +65,7 @@
 			structuredError = '';
 			onValueChange?.(lastEmittedStructuredValue);
 		} catch {
-			structuredError = 'Enter valid JSON before saving.';
+			structuredError = t('dataRenderer.invalidJson');
 		}
 	}
 </script>
@@ -109,7 +112,7 @@
 		{disabled}
 		{placeholder}
 		{onValueChange}
-		{locale}
+		locale={localeEffective}
 		class={className}
 	/>
 {:else if field.kind === 'phone'}
@@ -120,7 +123,7 @@
 		{disabled}
 		{placeholder}
 		{onValueChange}
-		{locale}
+		locale={localeEffective}
 		class={className}
 	/>
 {:else if field.kind === 'clock_time'}

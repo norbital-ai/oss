@@ -80,6 +80,9 @@ src/
 ├── remotes/+<remote>.ts
 ├── policies/+<name>.policy.ts     # optional
 ├── channels/+<name>.channel.ts    # optional
+├── i18n/
+│   ├── messages.en.json           # optional — your English copy
+│   └── messages.zh.json           # required if messages.en.json exists
 ├── lib/**                         # optional, free-form helper code — no role, no `+` prefix
 ├── +agent.ts                      # optional
 ├── +env.ts                        # optional
@@ -102,6 +105,13 @@ Everything without a `+` is ordinary source the compiler does not claim. `src/li
 `collections/<c>/lib/**`, `collections/<c>/panels/`, co-located `*.test.ts`, and adjacent components such
 as `project-representation.svelte` are all legal — `lib` is listed as free-form helper code precisely so
 a workspace can keep engine and helper code somewhere.
+
+`src/i18n/` is special-cased, not ordinary source: it holds the tenant's translation overrides. The
+compiler enforces that `messages.en.json` and `messages.zh.json` carry exactly the same keys, and the
+pod runtime merges them over the platform chrome catalogs (pod + `@norbital-ai/ui`) at build time. Use
+`useI18n<TenantKeys>()` from `@norbital-ai/ui/i18n` in your app files, keyed by your own catalog keys
+(import your `messages.en.json` for the key type). App metadata stays static English in `<svelte:head>`;
+override the sidebar label per locale with an `app.<id>.title` key in your catalog.
 
 Two consequences worth stating, because the compiler will not state them for you:
 

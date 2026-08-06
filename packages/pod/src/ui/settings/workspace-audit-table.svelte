@@ -7,6 +7,10 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn, renderSnippet } from '@norbital-ai/ui/utils';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	type AuditRow = CollectionRecord;
 	let { client }: { client: CollectionClient<ErasedCollectionRegistry> } = $props();
@@ -28,7 +32,7 @@
 				: text(row, 'event_type') === 'delete'
 					? 'bg-destructive/10 text-destructive'
 					: 'bg-primary/10 text-primary'
-		)}>{text(row, 'event_type') ?? 'event'}</span
+		)}>{text(row, 'event_type') ?? t('pod.settings.event')}</span
 	>
 {/snippet}
 
@@ -37,28 +41,28 @@
 	collection="audit_event"
 	view="workspace-settings-audit"
 	query={{ orderBy: { norbital_created_at: 'desc' }, limit: 100 }}
-	title="Audit events"
-	description="Append-only tenant activity recorded beside the data it describes."
+	title={t('pod.settings.auditEvents')}
+	description={t('pod.settings.auditEventsDescription')}
 	features={{ search: true, filter: true, bulk: false, create: false }}
 	class="h-[min(42rem,calc(100dvh-14rem))] min-h-[28rem]"
 >
 	{#snippet columns({ Column })}
 		<Column
 			name="event_type"
-			label="Event"
+			label={t('pod.settings.event')}
 			width={120}
 			render={({ row }) => renderSnippet(eventCell, { row })}
 		/>
-		<Column name="collection_name" label="Collection" minWidth={170} />
+		<Column name="collection_name" label={t('pod.settings.collection')} minWidth={170} />
 		<Column
 			name="actor_id"
-			label="Actor"
+			label={t('pod.settings.actor')}
 			minWidth={150}
 			render={({ row }) => (text(row, 'actor_id') ? `${text(row, 'actor_id')!.slice(0, 8)}…` : '—')}
 		/>
 		<Column
 			name="norbital_created_at"
-			label="Timestamp"
+			label={t('pod.settings.timestamp')}
 			minWidth={190}
 			render={({ row }) => formatDate(text(row, 'norbital_created_at'))}
 		/>
@@ -71,7 +75,7 @@
 				></Inline
 			>
 			<p class="truncate text-xs text-muted-foreground">
-				{text(row, 'collection_name') ?? 'System'}
+				{text(row, 'collection_name') ?? t('pod.settings.system')}
 			</p>
 		</Stack>
 	{/snippet}

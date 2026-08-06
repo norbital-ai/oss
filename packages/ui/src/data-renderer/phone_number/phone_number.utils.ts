@@ -63,8 +63,8 @@ export function sanitizePhoneInput(value: string): string {
 	return `${hasInternationalPrefix ? '+' : ''}${digits}`;
 }
 
-export function phoneInputPlaceholder(country: CountryCode): string {
-	return getExampleNumber(country, examples)?.formatNational() ?? 'Phone number';
+export function phoneInputPlaceholder(country: CountryCode, fallback = 'Phone number'): string {
+	return getExampleNumber(country, examples)?.formatNational() ?? fallback;
 }
 
 export function normalizePhoneValue(value: string, country: CountryCode): string | null {

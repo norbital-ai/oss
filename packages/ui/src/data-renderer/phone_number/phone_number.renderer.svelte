@@ -1,25 +1,32 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import type { DataRendererProps } from '../data-renderer.types.js';
 	import PhoneInput from './phone_number.input.svelte';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
 		value,
 		id,
 		disabled = false,
-		placeholder = 'Value…',
+		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
-		locale = 'en-US',
+		locale,
 		class: className
 	}: DataRendererProps = $props();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 
 	const values = $derived(
 		Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 	);
-	const phonePlaceholder = $derived(placeholder === 'Value…' ? 'Phone number' : placeholder);
+	const valuePlaceholderText = t('dataRenderer.valuePlaceholder');
+	const phonePlaceholder = $derived(
+		placeholder === valuePlaceholderText ? t('dataRenderer.phonePlaceholder') : placeholder
+	);
 
 	function updateAt(index: number, next: string | null): void {
 		const updated = [...values];
@@ -40,7 +47,7 @@
 					id={id ? `${id}-${index}` : undefined}
 					value={phone}
 					placeholder={phonePlaceholder}
-					{locale}
+					locale={localeEffective}
 					{disabled}
 					class="min-w-0 flex-1"
 					onValueChange={(next) => updateAt(index, next)}
@@ -50,7 +57,7 @@
 					variant="outline"
 					size="icon"
 					class="shrink-0"
-					aria-label="Remove phone number"
+					aria-label={t('dataRenderer.removePhoneNumber')}
 					{disabled}
 					onclick={() => removeAt(index)}
 				>
@@ -67,7 +74,7 @@
 			onclick={() => onValueChange?.([...values, ''])}
 		>
 			<Icon icon="lucide:plus" />
-			Add phone number
+			{t('dataRenderer.addPhoneNumber')}
 		</Button>
 	</Stack>
 {:else}
@@ -75,7 +82,7 @@
 		{id}
 		value={typeof value === 'string' ? value : null}
 		placeholder={phonePlaceholder}
-		{locale}
+		locale={localeEffective}
 		{disabled}
 		class={className}
 		onValueChange={(next) => onValueChange?.(next)}

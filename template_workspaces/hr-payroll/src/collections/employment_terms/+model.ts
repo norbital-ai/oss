@@ -5,6 +5,7 @@ import {
 	defineModel,
 	enums,
 	numeric,
+	sql,
 	text,
 	uuid
 } from '@norbital-ai/pod/authoring';
@@ -53,12 +54,21 @@ export default defineModel(
 		work_pattern_id: uuid(),
 		/** Superseded by `work_pattern_id`. Retained for terms that predate work patterns. */
 		rest_day: enums(['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']).notNull(),
-		effective_range: dateRange().notNull()
+		effective_range: dateRange().notNull(),
+		/**
+		 * The terms' own title, composed in SQL.
+		 *
+		 * `recordLabel` compiles to a CEL concatenation and CEL has no `+` overload for anything but
+		 * strings; a null term throws outright in a multi-field label, and `job_title` is nullable.
+		 * The title keeps both halves of the old label — the role when there is one, the employment
+		 * type always — and lets the database, not CEL, decide what an absent job title composes to.
+		 */
+		summary: text().generatedAlwaysAs(sql`COALESCE(job_title || ' · ', '') || employment_type`)
 	},
 	{
 		description:
 			'The effective-dated terms of one employment — pay, hours, statutory work category, classification and the work pattern shaping its week. A change is an end-date plus a successor row, never an update in place.',
-		recordLabel: ['job_title', 'employment_type'],
+		recordLabel: 'summary',
 		icon: 'lucide:file-signature',
 		// Plan 02 §7: employment =, effective range &&. One employment has exactly one set of terms
 		// on any date, so the engine's terms lookup returns at most one row structurally.

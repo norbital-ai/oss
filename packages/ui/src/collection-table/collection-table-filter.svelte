@@ -1,9 +1,11 @@
 <script lang="ts">
 	import type { CollectionFilter } from '@norbital-ai/platform-utils/collection';
 	import Icon from '@iconify/svelte';
+	import { PersistedState } from 'runed';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import { DataRenderer } from '../data-renderer/index.js';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
 	import { Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
@@ -22,6 +24,7 @@
 		collectionFilterQueryOperator,
 		type CollectionFilterOperator
 	} from './collection-table-filter-operators.js';
+	import type { CollectionTableInitialFilter } from './collection-table.types.js';
 
 	type Filter = {
 		id: number;
@@ -33,19 +36,78 @@
 		definition,
 		collections,
 		disabled = false,
+		initialFilters = [],
+		persistenceKey,
 		onChange
 	}: {
 		definition: FilterCollectionDefinition;
 		collections: Readonly<Record<string, FilterCollectionDefinition>>;
 		disabled?: boolean;
+		/** Conditions this view opens with, seeded as ordinary removable rows. */
+		initialFilters?: readonly CollectionTableInitialFilter[];
+		/** View key the "operator cleared the seed" decision is remembered against. */
+		persistenceKey?: string;
 		onChange: (filters: readonly CollectionFilter[]) => void;
 	} = $props();
+
+	const { t } = useI18n<UiKeys>();
 
 	let filters = $state<Filter[]>([]);
 	let nextId = $state(0);
 	const filterFields = $derived(collectionFilterFields(definition, collections));
 	const fieldTree = $derived(collectionFilterFieldTree(filterFields));
 	const activeCount = $derived(filters.filter(filterIsActive).length);
+
+	/**
+	 * The seed, and whether this operator has already thrown it away.
+	 *
+	 * Interactive filters are deliberately not persisted — every mount starts from an empty builder —
+	 * so a seed would otherwise reappear on each reload no matter how many times it was dismissed.
+	 * What *is* remembered is the signature of the seed the operator cleared. Comparing signatures
+	 * rather than storing a bare boolean means an author who later changes the default gets it
+	 * applied again, instead of it staying invisible forever because of a decision taken about a
+	 * different condition.
+	 */
+	const seedSignature = $derived(
+		initialFilters.length === 0
+			? null
+			: JSON.stringify(
+					initialFilters.map((seed) => [seed.field, seed.operator, seed.value ?? null])
+				)
+	);
+	// svelte-ignore state_referenced_locally -- the view a builder belongs to is fixed for its lifetime.
+	const clearedSeed = new PersistedState<string | null>(
+		`${persistenceKey ?? 'unkeyed'}.filterSeed.cleared`,
+		null
+	);
+	/** Rows that arrived from the seed, so clearing one can be told apart from clearing your own. */
+	let seededIds = $state(new Set<number>());
+	let seedSettled = false;
+
+	$effect(() => {
+		if (seedSettled) return;
+		if (seedSignature === null) return;
+		// The field picker is derived from the collection definition, which may not have arrived yet;
+		// seeding against an empty field list would silently drop every row.
+		if (filterFields.length === 0) return;
+		if (clearedSeed.current === seedSignature) {
+			seedSettled = true;
+			return;
+		}
+		const seeded = initialFilters.flatMap((seed) => {
+			if (!filterFields.some((field) => field.value === seed.field)) return [];
+			return [{ id: nextId++, field: seed.field, operator: seed.operator, value: seed.value }];
+		});
+		seedSettled = true;
+		if (seeded.length === 0) return;
+		seededIds = new Set(seeded.map((row) => row.id));
+		filters = seeded;
+		publish();
+	});
+
+	function markSeedCleared(): void {
+		if (seedSignature !== null) clearedSeed.current = seedSignature;
+	}
 
 	function selectedField(filter: Filter): CollectionFilterField | undefined {
 		return filterFields.find((field) => field.value === filter.field);
@@ -102,11 +164,13 @@
 	}
 
 	function removeFilter(id: number): void {
+		if (seededIds.has(id)) markSeedCleared();
 		filters = filters.filter((filter) => filter.id !== id);
 		publish();
 	}
 
 	function clear(): void {
+		if (filters.some((filter) => seededIds.has(filter.id))) markSeedCleared();
 		filters = [];
 		publish();
 	}
@@ -122,7 +186,7 @@
 					variant="ghost"
 					size="icon"
 					class="size-8"
-					aria-label={activeCount > 0 ? 'Filters active' : 'Filter records'}
+					aria-label={activeCount > 0 ? t('table.filterActive') : t('table.filterRecords')}
 					aria-pressed={activeCount > 0}
 					{disabled}
 				>
@@ -134,21 +198,21 @@
 	<Popover.Content align="start" class="w-[min(calc(100vw-1rem),42rem)] max-w-full p-0">
 		<Inline justify="between" gap="sm" class="border-b px-3 py-2">
 			<Stack gap="none">
-				<p class="text-xs font-medium">Filters</p>
-				<p class="text-micro text-muted-foreground">All conditions must match.</p>
+				<p class="text-xs font-medium">{t('table.filters')}</p>
+				<p class="text-micro text-muted-foreground">{t('table.filtersAllMatch')}</p>
 			</Stack>
 			{#if filters.length > 0}<Button
 					type="button"
 					variant="ghost"
 					size="sm"
 					class="h-7 text-xs"
-					onclick={clear}>Clear all</Button
+					onclick={clear}>{t('table.clearAll')}</Button
 				>{/if}
 		</Inline>
-		<Scroll axis="y" name="Applied filters" class="max-h-80 min-w-0 p-3">
+		<Scroll axis="y" name={t('table.appliedFilters')} class="max-h-80 min-w-0 p-3">
 			<Stack gap="xs">
 				{#if filters.length === 0}
-					<p class="py-2 text-center text-xs text-muted-foreground">No filters applied.</p>
+					<p class="py-2 text-center text-xs text-muted-foreground">{t('table.noFiltersApplied')}</p>
 				{/if}
 				{#each filters as filter (filter.id)}
 					{@const field = selectedField(filter)}
@@ -161,9 +225,9 @@
 							<TreeCombobox
 								rootItems={fieldTree}
 								value={filter.field ?? undefined}
-								placeholder="Choose a field"
-								searchPlaceholder="Search fields…"
-								ariaLabel="Choose a filter field"
+								placeholder={t('table.chooseField')}
+								searchPlaceholder={t('table.searchFields')}
+								ariaLabel={t('table.chooseFilterField')}
 								allowCleared={false}
 								{disabled}
 								onValueChange={(nextField) => nextField && setField(filter.id, nextField)}
@@ -179,7 +243,7 @@
 							/>
 						{:else}
 							<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto"
-								>Choose a field</span
+								>{t('table.chooseField')}</span
 							>
 						{/if}
 						{#if field && filter.operator && collectionFilterOperatorNeedsValue(filter.operator)}
@@ -194,7 +258,7 @@
 							{/key}
 						{:else}
 							<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto">
-								{field && filter.operator ? 'No value needed' : 'Choose an operator'}
+								{field && filter.operator ? t('table.noValueNeeded') : t('table.chooseOperator')}
 							</span>
 						{/if}
 						<Button
@@ -202,7 +266,7 @@
 							variant="ghost"
 							size="icon"
 							class="col-start-2 row-start-1 size-8 sm:col-start-4"
-							aria-label="Remove filter"
+							aria-label={t('table.filterRemove')}
 							onclick={() => removeFilter(filter.id)}
 							><Icon icon="lucide:x" class="size-3.5" /></Button
 						>
@@ -217,7 +281,7 @@
 				size="sm"
 				class="h-7 gap-1.5 text-xs"
 				disabled={filterFields.length === 0}
-				onclick={addFilter}><Icon icon="lucide:plus" class="size-3.5" /> Add filter</Button
+				onclick={addFilter}><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
 			>
 		</footer>
 	</Popover.Content>

@@ -21,6 +21,19 @@
 import { accumulateBases } from './accumulate.js';
 import { readLog, resetReadLog, type PayrollApi, type PayrollReadApi } from './api.js';
 import { pickConfiguration, type Configuration } from './configuration.js';
+
+/**
+ * The statutory ceiling on total hours worked in one day, or null where the jurisdiction states
+ * none. Mirrors `monthlyOvertimeLimit` in `measure.ts`: one row, or a fault if the seed carries two.
+ */
+function dailyWorkLimitHours(configuration: Configuration): number | null {
+	const limits = configuration.overtimeLimits.filter(
+		(limit) => limit.period === 'DAY' && limit.measures === 'TOTAL_WORK_HOURS'
+	);
+	if (limits.length > 1)
+		throw new Error('More than one daily work limit is effective for this jurisdiction.');
+	return limits[0] == null ? null : Number(limits[0].max_hours);
+}
 import { contribute, type StatutoryFactStatus } from './contribute.js';
 import { coversDate } from './effective.js';
 import { gatherRun } from './gather.js';
@@ -38,8 +51,7 @@ import { settle } from './settle.js';
 import { requiredDateKey, shiftPeriod } from './dates.js';
 import { readSettlementPolicy } from './settlement.js';
 import {
-	blockers,
-	describeBlockers,
+	describeIssues,
 	validateConfiguration,
 	validateDailyWorkLimit,
 	validateOvertimeLimits,
@@ -47,12 +59,19 @@ import {
 	type RunIssue
 } from './validate.js';
 
+/**
+ * A run either produced payslips or it produced an error.
+ *
+ * There is no third outcome and therefore no list of issues to hand back: any issue at all stops
+ * the build and is thrown, so a result that exists is a result nothing was wrong with. The previous
+ * shape carried the warnings out to a caller that dropped them, which meant an unmapped rest-day
+ * rule or a breached hours-of-work limit reached nobody.
+ */
 export type PayrollRunResult = {
 	readonly window: PayrollWindow;
 	readonly configuration: Configuration;
 	readonly payslipCount: number;
 	readonly lineCount: number;
-	readonly issues: readonly RunIssue[];
 };
 
 /** Resolve the window and the governing configuration without building anything. */
@@ -109,7 +128,7 @@ export async function buildPayrollRun(options: {
 
 	// 2 — VALIDATE
 	const issues: RunIssue[] = validateConfiguration(configuration);
-	if (blockers(issues).length > 0) throw new Error(describeBlockers(issues));
+	if (issues.length > 0) throw new Error(describeIssues(issues));
 	lap('validate');
 
 	// 3 — GATHER
@@ -175,13 +194,19 @@ export async function buildPayrollRun(options: {
 				})
 			);
 		}
-		issues.push(
-			...validateDailyWorkLimit({
-				employeeNumber: bundle.employment.employee_number,
-				days: measured.overtimeDays,
-				maxWorkHours: 12
-			})
-		);
+		// The daily ceiling is the jurisdiction's, read from `overtime_limits` where `period = 'DAY'`.
+		// It used to be a literal 12 here, which meant Malaysia's cap was applied to every country in
+		// the workspace. A jurisdiction that states no daily limit now has none enforced, rather than
+		// inheriting one from a statute that does not govern it.
+		const dailyWorkLimit = dailyWorkLimitHours(configuration);
+		if (dailyWorkLimit != null)
+			issues.push(
+				...validateDailyWorkLimit({
+					employeeNumber: bundle.employment.employee_number,
+					days: measured.overtimeDays,
+					maxWorkHours: dailyWorkLimit
+				})
+			);
 
 		// 5 — ACCUMULATE
 		const bases = accumulateBases({
@@ -237,7 +262,10 @@ export async function buildPayrollRun(options: {
 		});
 	}
 
-	if (blockers(issues).length > 0) throw new Error(describeBlockers(issues));
+	// Nothing is persisted until every employment has been measured, so a run that breaches an
+	// hours-of-work limit for one person on one day writes no payslip for anybody. That is the point:
+	// a payroll is published whole or not at all, and the operator is told which person and which day.
+	if (issues.length > 0) throw new Error(describeIssues(issues));
 	lap('calculate');
 
 	// 8 — PERSIST
@@ -267,7 +295,6 @@ export async function buildPayrollRun(options: {
 		window,
 		configuration,
 		payslipCount: written.payslipCount,
-		lineCount: written.lineCount,
-		issues
+		lineCount: written.lineCount
 	};
 }

@@ -28,6 +28,39 @@ export { setLocalSchema, type LocalCollectionSchema, type LocalRelationship };
 const PKEY = 'norbital_id';
 
 /**
+ * Marker attached to a row whose write has not settled with the server yet.
+ *
+ * Not a column, and never sent anywhere: `absorbServerRows` projects rows down to real columns
+ * before any write, so this cannot leak back into the replica or onto the wire. It rides on the
+ * row for the same reason `norbital_approval_id` does — the surface that has to draw "this record
+ * is not final" already has the row in hand, and giving it a second channel to consult would be a
+ * second thing to keep in step with the first.
+ */
+export const PENDING_SYNC_FIELD = 'norbital_pending_sync';
+
+/**
+ * Flag the rows in this answer that are still waiting in the outbox.
+ *
+ * Read from `_pod_pending` itself rather than inferred from anything, so it is true exactly while
+ * the write is unsent and false the instant it settles — confirmed or rejected alike, because the
+ * outbox entry is deleted either way, and a rejected write also has its row rolled back.
+ */
+async function markPendingRows(
+	sync: ClientSync,
+	collection: string,
+	rows: Record<string, unknown>[]
+): Promise<Record<string, unknown>[]> {
+	if (rows.length === 0) return rows;
+	const pending = await sync.client.pendingRecordIds(collection);
+	if (pending.size === 0) return rows;
+	for (const row of rows) {
+		const id = row[PKEY];
+		if (typeof id === 'string' && pending.has(id)) row[PENDING_SYNC_FIELD] = true;
+	}
+	return rows;
+}
+
+/**
  * The client-sync layer: reads resolve from the local PGlite replica, writes route through the
  * authoritative `/_runtime/sync/mutate` endpoint.
  *
@@ -132,6 +165,7 @@ export async function localFindMany(
 
 	const hydrated = await hydrateRelations(sync, collection, rows, query.with);
 	if (hydrated === null) return null;
+	await markPendingRows(sync, collection, hydrated);
 
 	// One rule decides whether this answer may be served: can the replica PROVE it is the same
 	// answer the server would give? Anything less is a partial result presented as a complete one,
@@ -200,6 +234,7 @@ export async function localFindFirst(
 	const rows = await sync.client.queryLocal<Record<string, unknown>>(built.sql, built.params);
 	const hydrated = await hydrateRelations(sync, collection, rows, query.with);
 	if (hydrated === null) return undefined;
+	await markPendingRows(sync, collection, hydrated);
 	// A miss is not proof of absence while the collection is windowed (the row may lie beyond the
 	// window) or still catching up (it may not have arrived). A hit is always trustworthy: the
 	// replica only ever holds real, policy-scoped rows.

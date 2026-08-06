@@ -6,6 +6,10 @@
 		DetailSurfaceResolver
 	} from '$lib/ui/collection/detail/detail_stack.js';
 	import DetailSurfaceStack from './detail-surface-stack.svelte';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	let {
 		stack,
@@ -45,7 +49,7 @@
 		{:else if unresolvedFallback}
 			{@render unresolvedFallback({ entry })}
 		{:else}
-			<p class="p-4 text-sm text-muted-foreground">Record detail is unavailable.</p>
+			<p class="p-4 text-sm text-muted-foreground">{t('pod.collection.detailUnavailable')}</p>
 		{/if}
 	</section>
 	{#if nextEntry}

@@ -1,10 +1,15 @@
 <script lang="ts">
 	import { Input } from '@norbital-ai/ui/input';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import type { RendererProps, Value } from './$types.js';
 	import { projectAddressSchema } from './+definition.js';
 
 	let props: RendererProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
+
 	const disabled = $derived(props.mode === 'edit' ? props.disabled : true);
 	const parsed = $derived(projectAddressSchema.partial().safeParse(props.value));
 	const address = $derived(parsed.success ? parsed.data : {});
@@ -19,7 +24,7 @@
 
 <Grid class="rounded-md border border-border bg-muted/20 p-3" gap="sm" minimum="compact">
 	<label class="grid gap-1.5 text-sm font-medium">
-		Address line 1
+		{t('component.address_line_1')}
 		<Input
 			value={address.line_1 ?? ''}
 			{disabled}
@@ -27,7 +32,7 @@
 		/>
 	</label>
 	<label class="grid gap-1.5 text-sm font-medium">
-		Address line 2
+		{t('component.address_line_2')}
 		<Input
 			value={address.line_2 ?? ''}
 			{disabled}
@@ -35,7 +40,7 @@
 		/>
 	</label>
 	<label class="grid gap-1.5 text-sm font-medium">
-		City
+		{t('component.city')}
 		<Input
 			value={address.city ?? ''}
 			{disabled}
@@ -43,7 +48,7 @@
 		/>
 	</label>
 	<label class="grid gap-1.5 text-sm font-medium">
-		State
+		{t('component.state')}
 		<Input
 			value={address.state ?? ''}
 			{disabled}
@@ -51,7 +56,7 @@
 		/>
 	</label>
 	<label class="grid gap-1.5 text-sm font-medium">
-		Postal code
+		{t('component.postal_code')}
 		<Input
 			value={address.postal_code ?? ''}
 			{disabled}
@@ -59,7 +64,7 @@
 		/>
 	</label>
 	<label class="grid gap-1.5 text-sm font-medium">
-		Country
+		{t('component.country')}
 		<Input
 			value={address.country ?? ''}
 			{disabled}

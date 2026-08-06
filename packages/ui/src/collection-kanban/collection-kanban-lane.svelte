@@ -4,11 +4,14 @@
 	import type { Snippet } from 'svelte';
 	import * as CardPrimitive from '#lib/card';
 	import { Checkbox } from '#lib/checkbox';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { Sortable } from '#lib/sortable';
 	import { badgeColorClass } from '../collection-table/collection-card-colors.js';
 	import { cn } from '#lib/utils';
 	import { humanize } from '@norbital-ai/std/string';
+
+	const { t } = useI18n<UiKeys>();
 
 	interface LaneMove {
 		recordId: string;
@@ -109,11 +112,11 @@
 
 	function moveWithKeyboard(recordId: string, toLane: string | undefined): void {
 		if (!toLane) {
-			announcement = `No lane in that direction. ${humanize(lane)} is the board edge.`;
+			announcement = t('kanban.noLaneDirection', { lane: humanize(lane) });
 			return;
 		}
 		keyboardPickedId = null;
-		announcement = `Moved card to ${humanize(toLane)}.`;
+		announcement = t('kanban.cardMoved', { lane: humanize(toLane) });
 		onMove({ recordId, fromLane: lane, toLane });
 	}
 
@@ -122,16 +125,14 @@
 		if (event.key === 'Escape' && keyboardPickedId === recordId) {
 			event.preventDefault();
 			keyboardPickedId = null;
-			announcement = 'Card move cancelled.';
+			announcement = t('kanban.moveCancelled');
 			return;
 		}
 		if (event.key === ' ') {
 			event.preventDefault();
 			keyboardPickedId = keyboardPickedId === recordId ? null : recordId;
 			announcement =
-				keyboardPickedId === recordId
-					? 'Card picked up. Use Left or Right Arrow to move it, or Escape to cancel.'
-					: 'Card move cancelled.';
+				keyboardPickedId === recordId ? t('kanban.cardPickedUp') : t('kanban.moveCancelled');
 			return;
 		}
 		if (keyboardPickedId === recordId && event.key === 'ArrowLeft') {
@@ -173,8 +174,7 @@
 	top={laneHeader}
 >
 	<p id={instructionId} class="sr-only">
-		Press Enter to open a card. Press Space to pick it up, then Left or Right Arrow to move it
-		between lanes. Press Escape to cancel.
+		{t('kanban.keyboardInstructions')}
 	</p>
 	<p class="sr-only" aria-live="polite">{announcement}</p>
 	<Sortable.Root
@@ -242,7 +242,7 @@
 											selectedRecordIds.has(recordId) && 'pointer-events-auto opacity-100'
 										)}
 										onclick={(event) => event.stopPropagation()}
-										aria-label="Select card"
+										aria-label={t('kanban.selectCard')}
 										checked={selectedRecordIds.has(recordId)}
 										disabled={pendingRecordIds.has(recordId)}
 										onCheckedChange={() => onToggleSelection(recordId)}
@@ -256,7 +256,7 @@
 											(keyboardPickedId === recordId || draggedItemId === recordId) &&
 												'pointer-events-auto opacity-100'
 										)}
-										aria-label="Drag card"
+										aria-label={t('kanban.dragCard')}
 										onclick={(event) => event.stopPropagation()}
 									>
 										<Icon icon="lucide:grip-vertical" class="size-3.5" />
@@ -272,8 +272,10 @@
 							class="min-h-32 rounded-sm border border-dashed border-border bg-background/50 p-5 text-center"
 						>
 							<Icon icon="lucide:inbox" class="size-5 text-muted-foreground" />
-							<p class="text-sm font-medium">No {humanize(lane).toLowerCase()} jobs</p>
-							<p class="text-xs text-muted-foreground">This lane is clear for the selected view.</p>
+							<p class="text-sm font-medium">
+								{t('kanban.noLaneJobs', { lane: humanize(lane).toLowerCase() })}
+							</p>
+							<p class="text-xs text-muted-foreground">{t('kanban.laneClear')}</p>
 						</Stack>
 					{/each}
 				</Stack>

@@ -9,28 +9,32 @@
 	 * contribution*, so the set of bands that must not collide is exactly the set shown below.
 	 */
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import { Column, Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
-	import { todayInstant } from '../../lib/ui/calendar.js';
+	import { inForceTodayFilter } from '../../lib/ui/calendar.js';
 	import { formatRateAward, formatRateSelector } from '../../lib/ui/display-formatters.js';
 
 	let { record, close }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 
-	/**
-	 * Bands are effective-dated, so the ladder opens on the one in force *today* — the rung payroll
-	 * would actually use — and widens only when the operator asks. `contains_date` compares against a
-	 * `dateRange()` bound, which is an instant: `todayInstant()` resolves the payroll timezone, while
-	 * a bare calendar day is rejected by the query layer.
+	/*
+	 * Bands are effective-dated, so the ladder opens on the rung in force *today* — the one payroll
+	 * would actually use — seeded as a removable filter chip rather than a page-level toggle. The
+	 * chip says what is being hidden, the operator widens it in place, and clearing it is
+	 * remembered. `inForceTodayFilter()` writes the seed in the filter builder's vocabulary — a
+	 * plain calendar day — and the existing conversion turns it into the instant `contains_date`
+	 * compares against.
+	 *
+	 * `contribution_rates` carries `effective_range` itself, which is what the seed needs: an
+	 * unknown field is skipped in silence, so a seed pointed at a related collection's dating would
+	 * look like a working filter while filtering nothing.
 	 */
-	let effectiveWindow = $state<'current' | 'history'>('current');
-	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
-		effectiveWindow === 'history' ? {} : { effective_range: { contains_date: todayInstant() } }
-	);
 
 	const payerLabel = $derived(
 		record?.payer === 'BOTH' ? 'employee and employer' : (record?.payer?.toLowerCase() ?? 'nobody')
@@ -46,14 +50,14 @@
 		collection="statutory_contributions"
 		recordId={record?.norbital_id}
 		defaultValues={record ?? undefined}
-		submitLabel={record ? 'Save scheme' : 'Create scheme'}
+		submitLabel={record ? t('component.save_scheme') : t('component.create_scheme')}
 		onAfterSubmit={record ? undefined : close}
 	>
 		{#snippet children({ Field })}
 			<Grid gap="md" minimum="panel">
 				<Field
 					name="jurisdiction_id"
-					label="Jurisdiction"
+					label={t('component.jurisdiction')}
 					renderer={RelationshipRenderer}
 					rendererProps={{
 						target: 'jurisdictions',
@@ -70,14 +74,14 @@
 				<Field name="code" />
 				<Field name="name" />
 				<Field name="authority" />
-				<Field name="payer" label="Paid by" />
-				<Field name="keyed_by" label="Bands keyed by" />
+				<Field name="payer" label={t('component.paid_by')} />
+				<Field name="keyed_by" label={t('component.bands_keyed_by')} />
 				<Field name="rounding" />
-				<Field name="sequence" label="Applied at" />
+				<Field name="sequence" label={t('component.applied_at')} />
 				<Column span="all">
 					<Field
 						name="relief_for"
-						label="Gives relief for"
+						label={t('component.gives_relief_for')}
 						renderer={RelationshipRenderer}
 						rendererProps={{
 							target: 'statutory_contributions',
@@ -93,8 +97,12 @@
 						}}
 					/>
 				</Column>
-				<Column span="all"><Field name="special_rules" label="Named special rules" /></Column>
-				<Column span="all"><Field name="effective_range" label="Effective period" /></Column>
+				<Column span="all"
+					><Field name="special_rules" label={t('component.named_special_rules')} /></Column
+				>
+				<Column span="all"
+					><Field name="effective_range" label={t('component.effective_period')} /></Column
+				>
 			</Grid>
 		{/snippet}
 	</CollectionForm>
@@ -106,10 +114,11 @@
 			{client}
 			collection="contribution_rates"
 			view={`statutory_contributions:rates:${record.norbital_id}`}
-			title="Rate bands"
+			title={t('component.rate_bands')}
 			description="One rung of this scheme's ladder: the selector that picks it — wage, wage and age, headcount or risk class — and the award it pays. A floor is the first band, a ceiling the terminal one."
+			initialFilters={inForceTodayFilter()}
 			query={{
-				where: { statutory_contribution_id: { eq: record.norbital_id }, ...effectiveRange },
+				where: { statutory_contribution_id: { eq: record.norbital_id } },
 				orderBy: { norbital_created_at: 'desc' }
 			}}
 			searchPlaceholder="Search rate bands…"
@@ -117,17 +126,17 @@
 			{#snippet columns({ Column: TableColumn })}
 				<TableColumn
 					name="selector"
-					label="Applies to"
+					label={t('component.applies_to')}
 					card="title"
 					render={({ value }) => formatRateSelector(value)}
 				/>
 				<TableColumn
 					name="award"
-					label="Award"
+					label={t('component.award')}
 					card="subtitle"
 					render={({ value }) => formatRateAward(value)}
 				/>
-				<TableColumn name="effective_range" label="Effective" />
+				<TableColumn name="effective_range" label={t('component.effective')} />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -135,38 +144,15 @@
 
 {#if record}
 	{#snippet schemeSummary()}
-		<Stack gap="sm">
-			<Stack gap="xs">
-				<Inline gap="sm" align="baseline">
-					<h2 class="truncate text-lg font-semibold">{record.code} · {record.name}</h2>
-					<span class="text-sm text-muted-foreground">{record.authority}</span>
-				</Inline>
-				<p class="text-sm text-muted-foreground">
-					Paid by {payerLabel}, applied at step {record.sequence}, with bands keyed by {keyedByLabel}.
-					End-date a band and insert a successor; never update one in place.
-				</p>
-			</Stack>
-			<Inline gap="sm" align="center">
-				<span class="text-sm font-medium text-muted-foreground">Effective</span>
-				<ToggleGroup
-					type="single"
-					size="sm"
-					value={effectiveWindow}
-					onValueChange={(value) => {
-						effectiveWindow = value === 'history' ? 'history' : 'current';
-					}}
-				>
-					<ToggleGroupItem value="current" aria-label="Show only what is in force today">
-						In force today
-					</ToggleGroupItem>
-					<ToggleGroupItem
-						value="history"
-						aria-label="Show every version, including superseded ones"
-					>
-						All history
-					</ToggleGroupItem>
-				</ToggleGroup>
+		<Stack gap="xs">
+			<Inline gap="sm" align="baseline">
+				<h2 class="truncate text-lg font-semibold">{record.code} · {record.name}</h2>
+				<span class="text-sm text-muted-foreground">{record.authority}</span>
 			</Inline>
+			<p class="text-sm text-muted-foreground">
+				Paid by {payerLabel}, applied at step {record.sequence}, with bands keyed by {keyedByLabel}.
+				End-date a band and insert a successor; never update one in place.
+			</p>
 		</Stack>
 	{/snippet}
 

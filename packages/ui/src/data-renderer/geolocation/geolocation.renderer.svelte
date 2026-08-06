@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import type { DataRendererRuntime } from '../data-renderer-runtime.js';
 	import type { DataRendererProps } from '../data-renderer.types.js';
@@ -7,6 +8,8 @@
 		parseGeolocationPickerValues,
 		type TGeolocationPickerValue
 	} from './geolocation.internal.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		field,
@@ -45,6 +48,6 @@
 		class={cn('rounded-md border border-destructive/40 p-3 text-sm text-destructive', className)}
 		role="alert"
 	>
-		Geolocation editing is unavailable because no geolocation provider is configured.
+		{t('dataRenderer.geoProviderMissing')}
 	</p>
 {/if}

@@ -21,6 +21,18 @@ const ModelIdSchema = z
 	.max(200)
 	.regex(/^[a-zA-Z0-9~][a-zA-Z0-9._~:/-]*$/, 'Invalid model identifier.');
 
+/**
+ * One record the composer's "@" picker resolved.
+ *
+ * Shape-checked here, trust-checked server-side: the loop fetches each reference as the requestor,
+ * so a well-formed id the person cannot read injects nothing.
+ */
+const AgentMentionSchema = z.object({
+	collection: z.string().min(1).max(200),
+	recordId: z.uuid(),
+	label: z.string().min(1).max(500)
+});
+
 export const AgentChatInputSchema = z.object({
 	message: z.string().min(1),
 	/**
@@ -37,7 +49,12 @@ export const AgentChatInputSchema = z.object({
 	 * Research-only turn. When true the loop withholds write tools and records `plan_mode` on the
 	 * user message. Omitted / false is a normal turn.
 	 */
-	planMode: z.boolean().optional()
+	planMode: z.boolean().optional(),
+	/**
+	 * Records the caller referenced with "@" in the composer. An `@` that never matched a record is
+	 * simply text in the message and never appears here.
+	 */
+	mentions: z.array(AgentMentionSchema).max(20).optional()
 });
 
 export const AgentModelsInputSchema = z.object({});
@@ -176,7 +193,8 @@ export const agentChat = authenticated.command(
 			spec,
 			input: input.message,
 			...(input.runId ? { runId: input.runId } : {}),
-			...(input.planMode ? { planMode: true } : {})
+			...(input.planMode ? { planMode: true } : {}),
+			...(input.mentions?.length ? { mentions: input.mentions } : {})
 		});
 
 		const ctx = getWorkspace({ provision: true });
@@ -218,6 +236,7 @@ export const agentChatStart = authenticated.command(
 			spec,
 			input: input.message,
 			...(input.planMode ? { planMode: true } : {}),
+			...(input.mentions?.length ? { mentions: input.mentions } : {}),
 			...(compact ? { compact } : {})
 		}).catch(() => undefined);
 		return { ...conversation, accepted: true };

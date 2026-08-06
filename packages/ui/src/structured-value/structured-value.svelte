@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { humanize } from '@norbital-ai/std/string';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Scroll } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
@@ -10,6 +11,8 @@
 		value: unknown;
 		class?: string;
 	} = $props();
+
+	const { t } = useI18n<UiKeys>();
 
 	function primitiveLabel(item: unknown): string {
 		if (item == null || item === '') return '—';
@@ -38,11 +41,11 @@
 {#snippet renderValue(item: unknown)}
 	{#if Array.isArray(item)}
 		{#if item.length === 0}
-			<span class="text-muted-foreground">None</span>
+			<span class="text-muted-foreground">{t('misc.none')}</span>
 		{:else}
 			{@const columns = recordColumns(item)}
 			{#if columns}
-				<Scroll axis="x" name="Value table" class="rounded-md border bg-muted/20">
+				<Scroll axis="x" name={t('misc.valueTable')} class="rounded-md border bg-muted/20">
 					<table class="w-full border-collapse text-left text-xs">
 						<thead class="bg-muted/40 text-muted-foreground">
 							<tr>
@@ -77,7 +80,7 @@
 	{:else if item != null && typeof item === 'object'}
 		{@const entries = Object.entries(item)}
 		{#if entries.length === 0}
-			<span class="text-muted-foreground">None</span>
+			<span class="text-muted-foreground">{t('misc.none')}</span>
 		{:else}
 			<dl class="divide-y rounded-md border bg-muted/20">
 				{#each entries as [key, entry] (key)}

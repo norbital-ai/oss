@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, formatFileSize } from '#lib/utils';
 	import { useId } from 'bits-ui';
 	import { Inline, Scroll, Stack } from '#lib/layout';
@@ -8,6 +9,8 @@
 	import { Spinner } from '../spinner/index.js';
 	import { FileMetadataTooltip } from '../file-value/index.js';
 	import type { FileDropZoneProps } from './index.js';
+
+	const { t } = useI18n<UiKeys>();
 
 	type UploadStage = import('../file-upload/index.js').UploadStage;
 	type FileRejectedReason = import('./index.js').FileRejectedReason;
@@ -147,7 +150,7 @@
 			clearCompletedUploadEntries();
 		} catch (error) {
 			if ((error as Error).name !== 'AbortError') {
-				onUploadError?.(error instanceof Error ? error.message : 'Upload failed', item.file);
+				onUploadError?.(error instanceof Error ? error.message : t('dataRenderer.uploadFailed'), item.file);
 			}
 		}
 	}
@@ -186,7 +189,7 @@
 				</Inline>
 			{/each}
 		{:else}
-			<div class="text-sm text-muted-foreground">No files attached.</div>
+			<div class="text-sm text-muted-foreground">{t('dataRenderer.noFilesAttached')}</div>
 		{/if}
 	</Stack>
 {:else}
@@ -211,19 +214,21 @@
 					<div class="text-center">
 						<Icon icon="lucide:upload" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
 						<div class="text-sm font-medium text-muted-foreground">
-							{canUpload ? 'Drop files here or click to browse' : 'Maximum files reached'}
+							{canUpload ? t('misc.dropFilesHere') : t('misc.maximumFilesReached')}
 						</div>
 						{#if canUpload}
 							<div class="mt-1 text-xs text-muted-foreground">
 								{#if maxFiles}
-									Up to {maxFiles} files
+									{t('misc.upToFiles', { count: maxFiles })}
 								{/if}
 								{#if maxFileSize}
-									{maxFiles ? ' • ' : ''}Max {formatFileSize(maxFileSize)} each
+									{maxFiles ? ' • ' : ''}{t('misc.maxSizeEach', { size: formatFileSize(maxFileSize) })}
 								{/if}
 								{#if accept.length > 0}
 									{maxFiles || maxFileSize ? ' • ' : ''}
-									{accept.map((type) => type.replace(/^\./, '').toUpperCase()).join(', ')} files
+									{t('misc.fileTypes', {
+										types: accept.map((type) => type.replace(/^\./, '').toUpperCase()).join(', ')
+									})}
 								{/if}
 							</div>
 						{/if}
@@ -232,7 +237,7 @@
 			{:else}
 				<Stack gap="none" fill>
 					<Inline gap="sm" justify="between" class="border-b border-border px-3 py-2">
-						<span class="text-xs text-secondary-foreground">Total files ({allFiles.length})</span>
+						<span class="text-xs text-secondary-foreground">{t('misc.totalFiles', { count: allFiles.length })}</span>
 						{#if canUpload}
 							<button
 								type="button"
@@ -244,15 +249,15 @@
 								class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-brand hover:bg-brand-100 focus:ring-2 focus:ring-brand focus:ring-offset-1 focus:outline-none"
 							>
 								<Icon icon="lucide:plus" class="h-3 w-3" />
-								Add
+								{t('common.add')}
 							</button>
 						{/if}
 					</Inline>
-					<Scroll axis="y" name="Uploaded files" class="p-2">
+					<Scroll axis="y" name={t('misc.uploadedFiles')} class="p-2">
 						<Stack gap="sm">
 							{#each allFiles as item (item.id)}
 								{@const file = item.isUploaded ? item.result : item.file}
-								{@const fileName = file?.name || 'Unknown file'}
+								{@const fileName = file?.name || t('misc.unknownFile')}
 								{@const fileSize = file?.size || 0}
 								{@const fileType = file?.type || 'application/octet-stream'}
 								{@const fileUrl = item.result?.url}
@@ -314,7 +319,7 @@
 													retryUpload(item);
 												}}
 												class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
-												title="Retry upload"
+												title={t('misc.retryUpload')}
 											>
 												<Icon icon="lucide:refresh-cw" class="h-3 w-3" />
 											</button>
@@ -329,7 +334,7 @@
 													removeFile(item);
 												}}
 												class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-												title="Remove file"
+												title={t('misc.removeFile')}
 											>
 												<Icon icon="lucide:x" class="h-3 w-3" />
 											</button>

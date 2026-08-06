@@ -24,17 +24,20 @@
 
 <script lang="ts">
 	import * as Sidebar from '#lib/sidebar';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { PersistedState } from 'runed';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		navigation,
 		children,
 		mobileTitle,
-		mobileDescription = 'Browse this area and choose where to go.',
+		mobileDescription = t('misc.frameMobileDescription'),
 		mobileActions,
-		navigationLabel = 'Primary navigation',
+		navigationLabel = t('misc.primaryNavigation'),
 		persistenceKey = 'workspace-shell.expanded',
 		defaultExpanded = true,
 		sidebarWidth = '16rem',
@@ -84,7 +87,7 @@
 			shrink={false}
 			class="h-[calc(3.25rem+env(safe-area-inset-top))] border-b bg-background px-[max(0.75rem,env(safe-area-inset-left))] pt-[env(safe-area-inset-top)] md:hidden"
 		>
-			<Sidebar.Trigger aria-label={`Open ${navigationLabel.toLowerCase()}`} class="size-11" />
+			<Sidebar.Trigger aria-label={t('misc.openNavigation', { navigation: navigationLabel.toLowerCase() })} class="size-11" />
 			<p class="min-w-0 flex-1 truncate text-sm font-medium">{mobileTitle}</p>
 			{#if mobileActions}
 				<Inline gap="xs" shrink={false}>{@render mobileActions()}</Inline>

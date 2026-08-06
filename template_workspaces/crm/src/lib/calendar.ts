@@ -11,22 +11,17 @@
 /** The business timezone every calendar-day default on this desk resolves in. */
 export const DESK_TIME_ZONE = 'Asia/Singapore';
 
-/** Calendar date for an instant in an IANA timezone, formatted as YYYY-MM-DD. */
-export function calendarDateInTimeZone(value: Date, timeZone: string): string {
+/** Today's calendar day on this desk, as `YYYY-MM-DD`. */
+export function deskToday(): string {
 	const parts = new Intl.DateTimeFormat('en', {
-		timeZone,
+		timeZone: DESK_TIME_ZONE,
 		year: 'numeric',
 		month: '2-digit',
 		day: '2-digit'
-	}).formatToParts(value);
+	}).formatToParts(new Date());
 	const valueFor = (type: Intl.DateTimeFormatPartTypes) =>
 		parts.find((part) => part.type === type)?.value ?? '';
 	return `${valueFor('year')}-${valueFor('month')}-${valueFor('day')}`;
-}
-
-/** Today's calendar day on this desk, as `YYYY-MM-DD`. */
-export function deskToday(): string {
-	return calendarDateInTimeZone(new Date(), DESK_TIME_ZONE);
 }
 
 /**

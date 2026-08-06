@@ -30,6 +30,29 @@ const VERSION = 'norbital_row_version';
 const RECONNECT_DELAY_MS = 500;
 /** Quiet period before a newly subscribed collection rotates the open stream connection. */
 const SUBSCRIPTION_ROTATE_DELAY_MS = 250;
+/**
+ * How soon a queued write retries itself, and how far that retry is allowed to back off.
+ *
+ * The outbox used to drain in exactly one place: the top of a stream *iteration*, which is only
+ * reached when a new SSE connection is established. A healthy stream stays connected for minutes,
+ * so a write that queued behind one failed request sat there until a proxy timed the feed out —
+ * the reported "it committed a minute later for no reason". A queued write now retries on its own
+ * clock, and the ceiling bounds how long recovery can take once the server comes back.
+ */
+const OUTBOX_RETRY_MIN_MS = 1_000;
+const OUTBOX_RETRY_MAX_MS = 10_000;
+/**
+ * Ceiling on a single `sync/*` POST.
+ *
+ * These requests carried no signal and no deadline, so a connection that was accepted and then
+ * never answered — the ordinary failure mode of a dropped route, not an exotic one — left the
+ * awaiting promise pending for as long as the tab lived. That is worse than an error: a catch-up
+ * page that never returns holds the registry's serialized catch-up queue, and every other
+ * collection's `register()` waits behind it forever, so reads that depend on them never resolve
+ * and never retry. Generous, because a bulk catch-up page is 5,000 rows over whatever link the
+ * user has; the point is that it is finite.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
 /** Postgres binds at most this many parameters per statement: the count is a signed int16. */
 const MAX_BIND_PARAMETERS = 32_767;
 
@@ -186,6 +209,46 @@ export class SyncScopeChanged extends Error {
 	}
 }
 
+/**
+ * Statuses that mean the request never reached anything able to answer it.
+ *
+ * 502/503/504 are an edge reporting that it has no healthy upstream, and 408 is a request that
+ * timed out before it was handled. Every other status — 401, 403, 404, 409 included — is the
+ * server answering, and answering is proof of reachability however unwelcome the answer is.
+ */
+function isTransportFailureStatus(status: number): boolean {
+	return status === 408 || status === 502 || status === 503 || status === 504;
+}
+
+/** A request this client cancelled on purpose (stream rotation, teardown) — never a failure. */
+function isAbortError(error: unknown): boolean {
+	return error instanceof Error && error.name === 'AbortError';
+}
+
+/** One unsent outbox entry, as the planner needs to see it. */
+type PendingEntry = {
+	readonly clientId: string;
+	readonly action: WireMutation['action'];
+	readonly row: Record<string, unknown> | null;
+};
+
+/** How each mutation in a batch reaches the server, given what is still unsent for its record. */
+type OutboxPlan = {
+	/** Nothing unsent names this record: send it now. */
+	readonly direct: WireMutation[];
+	/** Something unsent names this record: append to the outbox so order is preserved. */
+	readonly sequenced: WireMutation[];
+	/** Resolved without a round trip, by folding into (or cancelling) what was already queued. */
+	readonly resolved: MutationResult[];
+	/** Collections the resolved/sequenced work touched, for the optimistic repaint. */
+	readonly touched: Set<string>;
+};
+
+/** Key for "this record", so pending entries can be found by collection and id together. */
+function recordKey(collection: string, id: string): string {
+	return `${collection}\u0000${id}`;
+}
+
 export class PodSyncClient {
 	readonly db: PgliteLike;
 	private readonly schemaSql: string;
@@ -203,6 +266,18 @@ export class PodSyncClient {
 	private connectionAbort: AbortController | null = null;
 	private streamLoop: Promise<void> | null = null;
 	private booted = false;
+	private closed = false;
+	private drainTimer: ReturnType<typeof setTimeout> | null = null;
+	private drainDueAt = Number.POSITIVE_INFINITY;
+	private drainDelayMs = OUTBOX_RETRY_MIN_MS;
+	private draining = false;
+	/**
+	 * Monotonic stamp for the next outbox entry. The drain orders by `created_at`, and two writes
+	 * can land inside the same millisecond — a programmatic pair, a fast double tap — so a wall
+	 * clock alone can tie, and a tie puts the queue's order back in the lap of the storage engine.
+	 * Each entry stamps strictly after the one before it.
+	 */
+	private outboxClock = 0;
 	lastError: unknown = undefined;
 
 	constructor(options: PodSyncClientOptions) {
@@ -213,6 +288,7 @@ export class PodSyncClient {
 		this.replicaEpoch = epoch;
 		this.httpFetch = options.fetch;
 		this.now = options.now ?? (() => Date.now());
+		this.watchBrowserConnectivity();
 	}
 
 	async bootstrap(): Promise<void> {
@@ -467,15 +543,34 @@ export class PodSyncClient {
 				}
 				this.connectionAbort = new AbortController();
 				const requestSignal = AbortSignal.any([signal, this.connectionAbort.signal]);
-				const response = await this.httpFetch(`sync/stream?${params.toString()}`, {
-					method: 'GET',
-					accept: 'text/event-stream',
-					signal: requestSignal
-				});
+				let response: Response;
+				try {
+					response = await this.httpFetch(`sync/stream?${params.toString()}`, {
+						method: 'GET',
+						accept: 'text/event-stream',
+						signal: requestSignal
+					});
+				} catch (err) {
+					// The feed could not be opened at all. That is the honest offline signal — unlike
+					// an apply failure further down, which says nothing about the network.
+					if (!isAbortError(err)) this.markUnreachable();
+					throw err;
+				}
+				if (!response.ok) {
+					if (isTransportFailureStatus(response.status)) this.markUnreachable();
+					throw new Error(`sync stream failed (${response.status})`);
+				}
 				if (!response.body) throw new Error('sync stream returned no body');
-				await this.flushPending().catch((err) => {
-					this.lastError = err;
-				});
+				// The feed is open, so the server is reachable — and a reconnection is exactly when the
+				// outbox should move.
+				this.markReachable();
+				// Scheduled, never awaited. This loop used to `await flushPending()` here, which parked
+				// it inside a `sync/mutate` POST — and `stopStream()` awaits this loop, while the
+				// registry's serialized catch-up queue awaits `stopStream()`. One slow mutate therefore
+				// stalled every collection's catch-up behind it, so reads waiting on those collections
+				// never resolved and never retried. The drain has its own scheduler; it does not belong
+				// on the critical path of the feed.
+				this.scheduleDrain(0);
 				await this.consumeSse(response.body, requestSignal);
 			} catch (err) {
 				if (signal.aborted) return;
@@ -489,7 +584,7 @@ export class PodSyncClient {
 					);
 					for (const listener of this.resetListeners) listener();
 					this.lastError = undefined;
-				} else if (err instanceof DOMException && err.name === 'AbortError') {
+				} else if (isAbortError(err)) {
 					// A newly subscribed collection rotates the connection so the server can stop
 					// resolving unrelated outbox rows. The outer loop reconnects with the new set.
 				} else {
@@ -709,7 +804,167 @@ export class PodSyncClient {
 				: mutation
 		);
 		const undo = await this.applyOptimistic(prepared);
-		return this.submit(prepared, undo);
+		const plan = await this.planAgainstOutbox(prepared);
+
+		const results = new Map<string, MutationResult>();
+		for (const result of plan.resolved) results.set(result.clientId, result);
+		if (plan.sequenced.length > 0) {
+			for (const result of await this.enqueueBatch(plan.sequenced, undo, { schedule: true })) {
+				results.set(result.clientId, result);
+			}
+		}
+		// Everything that stayed local still has to repaint; `submit` only announces what it sends.
+		for (const collection of plan.touched) this.notifyCollection(collection);
+		if (plan.direct.length > 0) {
+			for (const result of await this.submit(plan.direct, undo))
+				results.set(result.clientId, result);
+		}
+		// Answer in the caller's order. A batch of one — every write from the collection client —
+		// therefore behaves exactly as it did before any of this existed.
+		return prepared.flatMap((mutation) => {
+			const result = results.get(mutation.clientId);
+			return result ? [result] : [];
+		});
+	}
+
+	/**
+	 * Decide how each mutation reaches the server, given what is still sitting in the outbox.
+	 *
+	 * A mutation that names a record whose create has not been sent yet cannot go straight to the
+	 * server: the server has never seen that id, so the write arrives as `404 Record with ID … not
+	 * found`. It is a race — the outbox drains and the next attempt works — but a race the client is
+	 * in a position to remove outright, because it knows the create is still in its own hands.
+	 *
+	 * Two of the three answers avoid the round trip entirely:
+	 *
+	 *   create-then-delete  The record only ever existed on this device. Dropping both outbox
+	 *                       entries reaches the same end state as sending them, so it is not a
+	 *                       shortcut — it is the same operation with nothing left to say.
+	 *   create-then-update  Fold the edit into the create still waiting to be sent. One INSERT
+	 *                       carrying the latest values, instead of an UPDATE racing the row it edits.
+	 *
+	 * Anything else that names a busy record is appended to the outbox, which is already ordered by
+	 * `created_at` and drained in that order — so ordering is enforced by the queue rather than by a
+	 * second mechanism that would have to agree with it.
+	 */
+	private async planAgainstOutbox(prepared: readonly WireMutation[]): Promise<OutboxPlan> {
+		const plan: OutboxPlan = {
+			direct: [],
+			sequenced: [],
+			resolved: [],
+			touched: new Set<string>()
+		};
+		const wanted = new Set(
+			prepared.flatMap((mutation) => {
+				const id = mutation.row?.[PKEY];
+				return typeof id === 'string' ? [recordKey(mutation.collection, id)] : [];
+			})
+		);
+		if (wanted.size === 0) {
+			plan.direct.push(...prepared);
+			return plan;
+		}
+
+		const byRecord = await this.pendingByRecord(wanted);
+		if (byRecord.size === 0) {
+			plan.direct.push(...prepared);
+			return plan;
+		}
+
+		for (const mutation of prepared) {
+			const id = mutation.row?.[PKEY];
+			const key = typeof id === 'string' ? recordKey(mutation.collection, id) : null;
+			const entries = key ? byRecord.get(key) : undefined;
+			if (!key || typeof id !== 'string' || !entries || entries.length === 0) {
+				plan.direct.push(mutation);
+				continue;
+			}
+			const create = entries.find((entry) => entry.action === 'create');
+
+			if (create && mutation.action === 'delete') {
+				for (const entry of entries) {
+					await this.db.query(`DELETE FROM _pod_pending WHERE client_id = $1`, [entry.clientId]);
+				}
+				byRecord.delete(key);
+				plan.resolved.push({ clientId: mutation.clientId, status: 'confirmed', serverId: id });
+				plan.touched.add(mutation.collection);
+				continue;
+			}
+
+			// Only when the create is the *whole* of what is queued for this record. With an older
+			// queued update also waiting, merging would move this edit ahead of it.
+			if (create && entries.length === 1 && mutation.action === 'update') {
+				const merged = { ...(create.row ?? {}), ...(mutation.row ?? {}), [PKEY]: id };
+				await this.db.query(`UPDATE _pod_pending SET row = $1 WHERE client_id = $2`, [
+					JSON.stringify(merged),
+					create.clientId
+				]);
+				byRecord.set(key, [{ ...create, row: merged }]);
+				plan.resolved.push({
+					clientId: mutation.clientId,
+					status: 'rejected',
+					reason: 'OFFLINE_QUEUED'
+				});
+				plan.touched.add(mutation.collection);
+				continue;
+			}
+
+			plan.sequenced.push(mutation);
+			plan.touched.add(mutation.collection);
+		}
+		return plan;
+	}
+
+	/** Unsent outbox entries for the given records, oldest first — the order they will be sent in. */
+	private async pendingByRecord(wanted: ReadonlySet<string>): Promise<Map<string, PendingEntry[]>> {
+		const byRecord = new Map<string, PendingEntry[]>();
+		// The outbox only ever holds writes that have not settled, so this is a handful of rows in
+		// the worst case; filtering here keeps the record identity in one place rather than
+		// reproducing `row ->> id` matching in SQL as well.
+		const result = await this.db
+			.query<{
+				client_id: string;
+				collection: string;
+				action: string;
+				row: Record<string, unknown> | null;
+			}>(`SELECT client_id, collection, action, row FROM _pod_pending ORDER BY created_at ASC`)
+			.catch(() => ({ rows: [] as never[] }));
+		for (const entry of result.rows) {
+			const id = entry.row?.[PKEY];
+			if (typeof id !== 'string') continue;
+			const key = recordKey(entry.collection, id);
+			if (!wanted.has(key)) continue;
+			const bucket = byRecord.get(key) ?? [];
+			bucket.push({
+				clientId: entry.client_id,
+				action: entry.action as WireMutation['action'],
+				row: entry.row
+			});
+			byRecord.set(key, bucket);
+		}
+		return byRecord;
+	}
+
+	/**
+	 * Ids in `collection` whose write has not settled with the server yet.
+	 *
+	 * This is the outbox itself, not an inference from it: a record is listed exactly while an entry
+	 * naming it is still waiting to be sent, and stops being listed the moment that entry settles —
+	 * confirmed or rejected, since the entry is deleted either way.
+	 */
+	async pendingRecordIds(collection: string): Promise<Set<string>> {
+		const result = await this.db
+			.query<{
+				record_id: string | null;
+			}>(`SELECT row ->> '${PKEY}' AS record_id FROM _pod_pending WHERE collection = $1`, [
+				collection
+			])
+			.catch(() => ({ rows: [] as never[] }));
+		return new Set(
+			result.rows
+				.map((entry) => entry.record_id)
+				.filter((id): id is string => typeof id === 'string')
+		);
 	}
 
 	/**
@@ -722,25 +977,21 @@ export class PodSyncClient {
 	 */
 	private async submit(
 		prepared: readonly WireMutation[],
-		undo: ReadonlyMap<string, PendingUndo>
+		undo: ReadonlyMap<string, PendingUndo>,
+		options?: { readonly drain?: boolean }
 	): Promise<MutationResult[]> {
 		const touched = new Set(prepared.map((mutation) => mutation.collection));
 		for (const collection of touched) this.notifyCollection(collection);
 
-		const queue = async (): Promise<MutationResult[]> => {
-			// The write is queued, not lost — keep the optimistic state so the UI stays consistent
-			// with what will eventually be sent.
-			for (const mutation of prepared) {
-				await this.enqueuePending(mutation, undo.get(mutation.clientId) ?? null);
-			}
-			return prepared.map((mutation) => ({
-				clientId: mutation.clientId,
-				status: 'rejected' as const,
-				reason: 'OFFLINE_QUEUED'
-			}));
-		};
+		// The write is queued, not lost — keep the optimistic state so the UI stays consistent with
+		// what will eventually be sent. A drain schedules its own retry with backoff, so it must not
+		// also ask for the immediate one a fresh write gets.
+		const queue = (): Promise<MutationResult[]> =>
+			this.enqueueBatch(prepared, undo, { schedule: !options?.drain });
 
-		if (!this.isOnline()) return queue();
+		// A drain IS the probe: attempting the request is how an unreachable server is discovered to
+		// be reachable again, so it never consults the verdict it exists to refresh.
+		if (!options?.drain && !this.isOnline()) return queue();
 
 		let response: MutateResponse;
 		try {
@@ -802,41 +1053,105 @@ export class PodSyncClient {
 		return undo;
 	}
 
+	/**
+	 * Send everything still in the outbox, oldest first, and delete whatever settled.
+	 *
+	 * Deliberately not gated on `isOnline()`. Attempting the request is the only way an unreachable
+	 * server is ever observed to be reachable again, and the backoff below — not a stale verdict —
+	 * is what keeps a genuinely offline device from polling at write speed.
+	 */
 	async flushPending(): Promise<MutationResult[]> {
-		if (!this.isOnline()) return [];
-		const pending = await this.db.query<{
-			client_id: string;
-			collection: string;
-			action: string;
-			row: Record<string, unknown> | null;
-			snapshot: Record<string, unknown> | null;
-			base_version: number | null;
-		}>(
-			`SELECT client_id, collection, action, row, snapshot, base_version
-			   FROM _pod_pending ORDER BY created_at ASC`
-		);
-		if (pending.rows.length === 0) return [];
-		const mutations: WireMutation[] = pending.rows.map((entry) => ({
-			clientId: entry.client_id,
-			collection: entry.collection,
-			action: entry.action as WireMutation['action'],
-			row: entry.row ?? undefined,
-			version: entry.base_version ?? undefined
+		// One drain at a time. The stream reconnect, the retry timer and a recovering connection can
+		// all ask at once, and sending the same batch twice would race two answers into the replica.
+		if (this.draining) return [];
+		this.draining = true;
+		try {
+			const pending = await this.db.query<{
+				client_id: string;
+				collection: string;
+				action: string;
+				row: Record<string, unknown> | null;
+				snapshot: Record<string, unknown> | null;
+				base_version: number | null;
+			}>(
+				`SELECT client_id, collection, action, row, snapshot, base_version
+				   FROM _pod_pending ORDER BY created_at ASC`
+			);
+			if (pending.rows.length === 0) {
+				this.drainDelayMs = OUTBOX_RETRY_MIN_MS;
+				return [];
+			}
+			const mutations: WireMutation[] = pending.rows.map((entry) => ({
+				clientId: entry.client_id,
+				collection: entry.collection,
+				action: entry.action as WireMutation['action'],
+				row: entry.row ?? undefined,
+				version: entry.base_version ?? undefined
+			}));
+			// Already applied optimistically when it was queued; re-applying would overwrite the newer
+			// local state with the same proposal and, worse, capture it as the undo.
+			const undo = new Map<string, PendingUndo>();
+			for (const entry of pending.rows) {
+				if (entry.snapshot) undo.set(entry.client_id, entry.snapshot);
+			}
+			const results = await this.submit(mutations, undo, { drain: true });
+			const settled = results
+				.filter((r) => !(r.status === 'rejected' && r.reason === 'OFFLINE_QUEUED'))
+				.map((r) => r.clientId);
+			for (const clientId of settled) {
+				await this.db.query(`DELETE FROM _pod_pending WHERE client_id = $1`, [clientId]);
+			}
+			if (settled.length === results.length) {
+				this.drainDelayMs = OUTBOX_RETRY_MIN_MS;
+			} else {
+				this.drainDelayMs = Math.min(this.drainDelayMs * 2, OUTBOX_RETRY_MAX_MS);
+				this.scheduleDrain(this.drainDelayMs);
+			}
+			return results;
+		} finally {
+			this.draining = false;
+		}
+	}
+
+	/** Append a batch to the outbox and report it as queued. */
+	private async enqueueBatch(
+		mutations: readonly WireMutation[],
+		undo: ReadonlyMap<string, PendingUndo>,
+		options: { readonly schedule: boolean }
+	): Promise<MutationResult[]> {
+		for (const mutation of mutations) {
+			await this.enqueuePending(mutation, undo.get(mutation.clientId) ?? null);
+		}
+		if (options.schedule) this.scheduleDrain(OUTBOX_RETRY_MIN_MS);
+		return mutations.map((mutation) => ({
+			clientId: mutation.clientId,
+			status: 'rejected' as const,
+			reason: 'OFFLINE_QUEUED'
 		}));
-		// Already applied optimistically when it was queued; re-applying would overwrite the newer
-		// local state with the same proposal and, worse, capture it as the undo.
-		const undo = new Map<string, PendingUndo>();
-		for (const entry of pending.rows) {
-			if (entry.snapshot) undo.set(entry.client_id, entry.snapshot);
-		}
-		const results = await this.submit(mutations, undo);
-		const settled = results
-			.filter((r) => !(r.status === 'rejected' && r.reason === 'OFFLINE_QUEUED'))
-			.map((r) => r.clientId);
-		for (const clientId of settled) {
-			await this.db.query(`DELETE FROM _pod_pending WHERE client_id = $1`, [clientId]);
-		}
-		return results;
+	}
+
+	/**
+	 * Ask the outbox to drain in `delayMs`, unless something sooner is already scheduled.
+	 *
+	 * Earliest wins, so a fresh write always pulls a long backoff forward: a user who queues a
+	 * second write after five failed minutes should not inherit the wait the failures earned.
+	 */
+	private scheduleDrain(delayMs: number): void {
+		if (this.closed) return;
+		const dueAt = this.now() + delayMs;
+		if (this.drainTimer && dueAt >= this.drainDueAt) return;
+		if (this.drainTimer) clearTimeout(this.drainTimer);
+		this.drainDueAt = dueAt;
+		this.drainTimer = setTimeout(
+			() => {
+				this.drainTimer = null;
+				this.drainDueAt = Number.POSITIVE_INFINITY;
+				void this.flushPending().catch((err) => {
+					this.lastError = err;
+				});
+			},
+			Math.max(0, delayMs)
+		);
 	}
 
 	private async enqueuePending(mutation: WireMutation, undo: PendingUndo | null): Promise<void> {
@@ -851,9 +1166,15 @@ export class PodSyncClient {
 				mutation.row ? JSON.stringify(mutation.row) : null,
 				undo ? JSON.stringify(undo) : null,
 				mutation.version ?? null,
-				this.now()
+				this.nextOutboxTimestamp()
 			]
 		);
+	}
+
+	/** Strictly increasing, so `ORDER BY created_at` is the queue order even inside one millisecond. */
+	private nextOutboxTimestamp(): number {
+		this.outboxClock = Math.max(this.now(), this.outboxClock + 1);
+		return this.outboxClock;
 	}
 
 	// ── local reads ─────────────────────────────────────────────────────────────
@@ -978,18 +1299,86 @@ export class PodSyncClient {
 
 	private online = true;
 
+	/**
+	 * Whether the server is reachable, as this client last observed it.
+	 *
+	 * This used to be `navigator.onLine && this.online`, where `this.online` was never assigned by
+	 * anything — so the whole verdict was `navigator.onLine`. That property answers a different
+	 * question: whether the machine has a network interface it believes is up. A Wi-Fi handover, a
+	 * VPN reconnect or a NIC waking from sleep flips it false for a moment, and every mutation that
+	 * landed in that window was filed as "offline" while the server was reachable throughout.
+	 *
+	 * The verdict is therefore *observed*: the SSE stream reports whether it could be opened, and
+	 * every `sync/*` POST reports whether it got an answer. A status the server (or its edge)
+	 * produced counts as reachable however unwelcome it is. The device's own connectivity events
+	 * only ever pull the verdict one way: a browser reporting its radio is down marks the server
+	 * unreachable without spending a request on proving it, and nothing but an answered request is
+	 * ever allowed to put it back.
+	 */
 	isOnline(): boolean {
-		if (typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean') {
-			return navigator.onLine && this.online;
-		}
 		return this.online;
 	}
 
+	/** A request reached the server, whatever the server then said. */
+	private markReachable(): void {
+		if (this.online) return;
+		this.online = true;
+		// Recovery is the moment the outbox has to move — not the next SSE reconnect, which on a
+		// healthy feed is minutes away.
+		this.drainDelayMs = OUTBOX_RETRY_MIN_MS;
+		this.scheduleDrain(0);
+	}
+
+	/** A request did not reach the server. */
+	private markUnreachable(): void {
+		this.online = false;
+	}
+
+	/**
+	 * The browser's own connectivity events, wired only where a window exists.
+	 *
+	 * `offline` is trusted negatively: when the device says its radio is down, nothing will reach
+	 * the server, so writes queue at once instead of each paying a failed request first. `online`
+	 * is NOT trusted positively — an interface coming back up says nothing about our server — but
+	 * it is exactly the moment the outbox should find out, so it pulls the drain forward and lets
+	 * the attempt itself decide the verdict.
+	 */
+	private readonly browserOfflineListener = (): void => this.markUnreachable();
+	private readonly browserOnlineListener = (): void => {
+		this.drainDelayMs = OUTBOX_RETRY_MIN_MS;
+		this.scheduleDrain(0);
+	};
+
+	private watchBrowserConnectivity(): void {
+		if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+		window.addEventListener('offline', this.browserOfflineListener);
+		window.addEventListener('online', this.browserOnlineListener);
+	}
+
+	private unwatchBrowserConnectivity(): void {
+		if (typeof window === 'undefined' || typeof window.removeEventListener !== 'function') return;
+		window.removeEventListener('offline', this.browserOfflineListener);
+		window.removeEventListener('online', this.browserOnlineListener);
+	}
+
+	/**
+	 * Override the connectivity verdict.
+	 *
+	 * Ordinary operation never calls this — reachability is observed from real requests and device
+	 * events. It exists for tests and for a host that genuinely knows better (a service worker
+	 * running its own probe).
+	 */
 	setOnline(online: boolean): void {
-		this.online = online;
+		if (online) this.markReachable();
+		else this.markUnreachable();
 	}
 
 	async close(): Promise<void> {
+		this.closed = true;
+		this.unwatchBrowserConnectivity();
+		if (this.drainTimer) clearTimeout(this.drainTimer);
+		this.drainTimer = null;
+		this.drainDueAt = Number.POSITIVE_INFINITY;
 		await this.stopStream();
 		await this.db.close?.();
 	}
@@ -997,11 +1386,26 @@ export class PodSyncClient {
 	// ── helpers ──────────────────────────────────────────────────────────────────
 
 	private async postJson<T>(action: string, body: unknown): Promise<T> {
-		const response = await this.httpFetch(`sync/${action}`, {
-			method: 'POST',
-			body: JSON.stringify(body),
-			accept: 'application/json'
-		});
+		let response: Response;
+		try {
+			response = await this.httpFetch(`sync/${action}`, {
+				method: 'POST',
+				body: JSON.stringify(body),
+				accept: 'application/json',
+				// A deadline, not a policy: without one, a connection that is accepted and then never
+				// answered leaves this promise pending for the life of the tab.
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+			});
+		} catch (err) {
+			// `fetch` only rejects when the request never got an answer at all: DNS, a refused
+			// connection, a dropped TLS session, a dead radio. That is what offline actually is —
+			// and so is a request that ran out its deadline, which aborts as `TimeoutError` rather
+			// than the `AbortError` a deliberate cancellation raises.
+			if (!isAbortError(err)) this.markUnreachable();
+			throw err;
+		}
+		if (isTransportFailureStatus(response.status)) this.markUnreachable();
+		else this.markReachable();
 		if (!response.ok) throw new Error(`sync/${action} failed (${response.status})`);
 		return (await response.json()) as T;
 	}
