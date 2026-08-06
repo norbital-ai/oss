@@ -7,6 +7,13 @@
 	let { record, close }: RepresentationProps = $props();
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/reclamation/record-media/reclamation_projects-banner.svg"
+	/>
+</svelte:head>
+
 {#if record}
 	<ProjectRepresentation {record} />
 {:else}

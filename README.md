@@ -1,5 +1,7 @@
 # Reclamation Template
 
+![Reclamation workspace banner](assets/banner.svg)
+
 Land reclamation project workspace. Three survey documents per project — a floor plan, a
 bathymetric survey, and a section sheet — are stitched server-side into one 3D site solid; that
 solid is integrated for volumes, and the volumes are priced against a shared unit cost matrix.

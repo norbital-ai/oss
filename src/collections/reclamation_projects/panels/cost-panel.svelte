@@ -16,6 +16,13 @@
 		type RateRow
 	} from '../../../lib/reclamation/cost.js';
 	import {
+		manualTakeOffLabel,
+		manualTakeOffWhy,
+		methodLabel,
+		substrateLabel,
+		substrateNote
+	} from '../../../lib/reclamation/i18n.js';
+	import {
 		baseSimulation,
 		isIdentity,
 		type GeometrySimulation
@@ -59,7 +66,8 @@
 		savedMessage?: string | null;
 	} = $props();
 
-	const { t } = useI18n<TenantI18nKeys>();
+	const i18n = useI18n<TenantI18nKeys>();
+	const { t } = i18n;
 
 	let levers = $state<CostLevers>({ ...DEFAULT_LEVERS });
 	// svelte-ignore state_referenced_locally -- reset explicitly when the model changes.
@@ -86,7 +94,7 @@
 	const estimate = $derived(
 		buildEstimate({ quantities: activeQuantities, metrics: activeMetrics, rates, levers, currency })
 	);
-	const incomplete = $derived(unpricedMessage(estimate));
+	const incomplete = $derived(unpricedMessage(estimate, i18n));
 	const baseVolume = $derived(metrics.placedVolumeM3);
 	const activeVolume = $derived(activeMetrics.placedVolumeM3);
 
@@ -342,11 +350,19 @@
 				<div class={line.unpriced ? 'bg-destructive/5 p-3' : 'p-3'}>
 					<Inline align="start" justify="between" gap="sm">
 						<Inline align="center" gap="xs" class="min-w-0">
-							<p class="min-w-0 truncate font-medium">{line.label}</p>
+							<p class="min-w-0 truncate font-medium">
+								{substrateLabel(i18n, line.substrate, line.label)}
+							</p>
 							<InfoHint
-								label={t('component.about_label', { label: line.label })}
+								label={t('component.about_label', {
+									label: substrateLabel(i18n, line.substrate, line.label)
+								})}
 								text={t('component.line_hint', {
-									note: substrateDefinition(line.substrate).note,
+									note: substrateNote(
+										i18n,
+										line.substrate,
+										substrateDefinition(line.substrate).note
+									),
 									quantity: formatQuantity(line.stitchedQuantity, line.unit),
 									method: line.method,
 									basis: line.basis,
@@ -369,7 +385,7 @@
 							{formatQuantity(line.pricedQuantity, line.unit)}
 							{#if !line.unpriced}× {formatMoney(line.rate, currency)}{/if}
 						</span>
-						<span class="shrink-0 capitalize">{line.method}</span>
+						<span class="shrink-0">{methodLabel(i18n, line.method, line.method)}</span>
 					</Inline>
 					<p class="mt-1 text-xs text-muted-foreground">{line.basis}</p>
 				</div>
@@ -414,8 +430,15 @@
 			{#each MANUAL_TAKE_OFF as item (item.id)}
 				<Inline align="start" justify="between" gap="sm" class="p-3">
 					<Inline align="center" gap="xs" class="min-w-0">
-						<dt class="min-w-0 truncate font-medium">{item.label}</dt>
-						<InfoHint label={t('component.why_label', { label: item.label })} text={item.why} />
+						<dt class="min-w-0 truncate font-medium">
+							{manualTakeOffLabel(i18n, item.id, item.label)}
+						</dt>
+						<InfoHint
+							label={t('component.why_label', {
+								label: manualTakeOffLabel(i18n, item.id, item.label)
+							})}
+							text={manualTakeOffWhy(i18n, item.id, item.why)}
+						/>
 					</Inline>
 					<dd class="shrink-0 text-xs text-muted-foreground">{item.unit}</dd>
 				</Inline>

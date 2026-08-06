@@ -61,6 +61,14 @@
 	<title>Reclamation Projects</title>
 	<meta name="description" content="Reclamation projects and their stitched reconstructions." />
 	<meta name="pod:icon" content="lucide:waves" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/reclamation/app-media/reclamation_projects-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/reclamation/app-media/reclamation_projects-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet projectScopeActions()}

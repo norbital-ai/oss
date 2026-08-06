@@ -8,10 +8,12 @@
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { SUBSTRATES, substrateDefinition } from '../lib/reclamation/cost.js';
+	import { substrateLabel, substrateNote, driverLabel } from '../lib/reclamation/i18n.js';
 	import { calendarDateInTimeZone, PROJECT_TIME_ZONE, todayInstant } from '../lib/calendar.js';
 	import type { SubstrateId } from '../lib/reclamation/types.js';
 
-	const { t } = useI18n<TenantI18nKeys>();
+	const i18n = useI18n<TenantI18nKeys>();
+	const { t } = i18n;
 
 	type ReclamationProjectScopeRow = {
 		readonly norbital_id: string;
@@ -86,6 +88,14 @@
 	<title>Reclamation Cost Matrix</title>
 	<meta name="description" content="Unit rates per substrate and the estimates built from them." />
 	<meta name="pod:icon" content="lucide:table-2" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/reclamation/app-media/reclamation_cost_matrix-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/reclamation/app-media/reclamation_cost_matrix-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet projectScopeActions()}
@@ -130,7 +140,13 @@
 			<Column
 				name="substrate"
 				render={({ value }) =>
-					value != null && value !== '' ? substrateDefinition(value as SubstrateId).label : '—'}
+					value != null && value !== ''
+						? substrateLabel(
+								i18n,
+								value as SubstrateId,
+								substrateDefinition(value as SubstrateId).label
+							)
+						: '—'}
 			/>
 			<Column name="unit" />
 			<Column name="rate" />
@@ -145,7 +161,11 @@
 			</Inline>
 			<p class="mt-1 truncate text-sm text-muted-foreground">
 				{rate.substrate != null && rate.substrate !== ''
-					? substrateDefinition(rate.substrate as SubstrateId).label
+					? substrateLabel(
+							i18n,
+							rate.substrate as SubstrateId,
+							substrateDefinition(rate.substrate as SubstrateId).label
+						)
 					: '—'} · {rate.rate_basis ?? t('app.reclamation_cost_matrix.basis_not_stated')}
 			</p>
 		{/snippet}
@@ -205,12 +225,17 @@
 			{#each SUBSTRATES as substrate (substrate.id)}
 				<div class="p-3">
 					<Inline align="start" justify="between" gap="sm">
-						<p class="min-w-0 truncate font-medium">{substrate.label}</p>
+						<p class="min-w-0 truncate font-medium">
+							{substrateLabel(i18n, substrate.id, substrate.label)}
+						</p>
 						<span class="shrink-0 text-xs text-muted-foreground">
-							{substrate.unit === 'm3' ? 'm³' : substrate.unit === 'm2' ? 'm²' : 'm'} · {substrate.driver}
+							{substrate.unit === 'm3' ? 'm³' : substrate.unit === 'm2' ? 'm²' : 'm'} ·{' '}
+							{driverLabel(i18n, substrate.driver, substrate.driver)}
 						</span>
 					</Inline>
-					<p class="mt-1 text-xs text-muted-foreground">{substrate.note}</p>
+					<p class="mt-1 text-xs text-muted-foreground">
+						{substrateNote(i18n, substrate.id, substrate.note)}
+					</p>
 				</div>
 			{/each}
 		</div>

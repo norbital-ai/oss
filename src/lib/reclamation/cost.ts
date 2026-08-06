@@ -13,6 +13,7 @@
 
 import { z } from 'zod';
 import { MANUAL_TAKE_OFF, SUBSTRATES, substrateDefinition } from './substrates.js';
+import { pick, substrateLabel, type I18n } from './i18n.js';
 import type {
 	QuantityUnit,
 	ReconstructionMetrics,
@@ -87,24 +88,35 @@ export type CostEstimateResult = {
 	readonly wrongCurrencySubstrates: readonly SubstrateId[];
 };
 
-function leverFor(levers: CostLevers, substrate: SubstrateId): { factor: number; note: string } {
+function leverFor(
+	levers: CostLevers,
+	substrate: SubstrateId,
+	i18n?: I18n
+): { factor: number; note: string } {
 	const definition = substrateDefinition(substrate);
 	if (definition.driver === 'perimeter') {
 		return {
 			factor: 1 + levers.perimeterMarginPct / 100,
-			note: `perimeter margin +${levers.perimeterMarginPct}%`
+			note: pick(
+				i18n,
+				'recon.cost.perimeter_margin',
+				`perimeter margin +${levers.perimeterMarginPct}%`
+			)
 		};
 	}
 	if (substrate === 'sand_fill') {
-		return { factor: 1 + levers.sandLossPct / 100, note: `placement loss +${levers.sandLossPct}%` };
+		return {
+			factor: 1 + levers.sandLossPct / 100,
+			note: pick(i18n, 'recon.cost.placement_loss', `placement loss +${levers.sandLossPct}%`)
+		};
 	}
 	if (substrate === 'dredged_fill') {
 		return {
 			factor: 1 + levers.dredgedFillLossPct / 100,
-			note: `placement loss +${levers.dredgedFillLossPct}%`
+			note: pick(i18n, 'recon.cost.placement_loss', `placement loss +${levers.dredgedFillLossPct}%`)
 		};
 	}
-	return { factor: 1, note: 'no loss applied' };
+	return { factor: 1, note: pick(i18n, 'recon.cost.no_loss', 'no loss applied') };
 }
 
 /**
@@ -122,13 +134,16 @@ export function pvdLength(metrics: ReconstructionMetrics, levers: CostLevers): n
 }
 
 /** Price a stitched reconstruction. */
-export function buildEstimate(input: {
-	readonly quantities: readonly SubstrateQuantity[];
-	readonly metrics: ReconstructionMetrics;
-	readonly rates: readonly RateRow[];
-	readonly levers: CostLevers;
-	readonly currency: string;
-}): CostEstimateResult {
+export function buildEstimate(
+	input: {
+		readonly quantities: readonly SubstrateQuantity[];
+		readonly metrics: ReconstructionMetrics;
+		readonly rates: readonly RateRow[];
+		readonly levers: CostLevers;
+		readonly currency: string;
+	},
+	i18n?: I18n
+): CostEstimateResult {
 	const usable = new Map(
 		input.rates.filter((row) => row.currency === input.currency).map((row) => [row.substrate, row])
 	);
@@ -154,7 +169,7 @@ export function buildEstimate(input: {
 		if (!stitched) continue;
 
 		const rateRow = usable.get(definition.id);
-		const { factor, note } = leverFor(input.levers, definition.id);
+		const { factor, note } = leverFor(input.levers, definition.id, i18n);
 		const pricedQuantity = stitched.quantity * factor;
 		const unpriced = rateRow === undefined && pricedQuantity > 0;
 		if (unpriced) unpricedSubstrates.push(definition.id);
@@ -188,17 +203,36 @@ export function buildEstimate(input: {
 }
 
 /** The message a caller shows, or throws, when the matrix is incomplete. */
-export function unpricedMessage(result: CostEstimateResult): string | null {
+export function unpricedMessage(result: CostEstimateResult, i18n?: I18n): string | null {
 	if (result.unpricedSubstrates.length === 0) return null;
-	const names = result.unpricedSubstrates.map((id) => substrateDefinition(id).label).join(', ');
+	const name = (id: SubstrateId): string => substrateLabel(i18n, id, substrateDefinition(id).label);
+	const names = result.unpricedSubstrates.map(name).join(', ');
 	const currencyNote =
 		result.wrongCurrencySubstrates.length > 0
-			? ` A rate exists for ${result.wrongCurrencySubstrates.map((id) => substrateDefinition(id).label).join(', ')} in another currency; this workspace holds no exchange rates, so it was not applied.`
+			? pick(
+					i18n,
+					'recon.cost.rate_in_other_currency',
+					` A rate exists for ${result.wrongCurrencySubstrates.map(name).join(', ')} in another currency; this workspace holds no exchange rates, so it was not applied.`
+				)
 			: '';
 	return (
-		`The cost matrix has no ${result.currency} rate for: ${names}. ` +
-		`Those materials are measured but not priced, so the total understates the works.${currencyNote} ` +
-		'Add the missing rates in the cost matrix and re-price.'
+		pick(
+			i18n,
+			'recon.cost.no_rate_for',
+			`The cost matrix has no ${result.currency} rate for: ${names}. `
+		) +
+		pick(
+			i18n,
+			'recon.cost.measured_not_priced',
+			'Those materials are measured but not priced, so the total understates the works.'
+		) +
+		currencyNote +
+		' ' +
+		pick(
+			i18n,
+			'recon.cost.add_missing_rates',
+			'Add the missing rates in the cost matrix and re-price.'
+		)
 	);
 }
 

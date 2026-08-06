@@ -4,6 +4,7 @@
 	import { Bound, Grid, Inline, Scroll, Split, Stack } from '@norbital-ai/ui/layout';
 	import SiteDisplay from '../../lib/site-viewer/site_display.svelte';
 	import { formatQuantity, substrateDefinition } from '../../lib/reclamation/cost.js';
+	import { substrateLabel } from '../../lib/reclamation/i18n.js';
 	import {
 		parseReconstructionMetrics,
 		parseStitchReport,
@@ -27,7 +28,8 @@
 	 */
 	let { record }: RepresentationProps = $props();
 
-	const { t } = useI18n<TenantI18nKeys>();
+	const i18n = useI18n<TenantI18nKeys>();
+	const { t } = i18n;
 
 	const model = $derived(parseStitchedModel(record?.model_json));
 	const report = $derived(parseStitchReport(record?.report_json));
@@ -102,7 +104,11 @@
 						<div class="p-3">
 							<Inline align="start" justify="between" gap="sm">
 								<dt class="min-w-0 truncate font-medium">
-									{substrateDefinition(entry.substrate).label}
+									{substrateLabel(
+										i18n,
+										entry.substrate,
+										substrateDefinition(entry.substrate).label
+									)}
 								</dt>
 								<dd class="shrink-0 tabular-nums">
 									{formatQuantity(entry.quantity, entry.unit)}
@@ -175,7 +181,12 @@
 {#snippet viewer()}
 	<Bound size="full" clip class="rounded-md border bg-muted/20">
 		{#if model}
-			<SiteDisplay {model} label={`Revision ${record?.revision} reconstruction`} />
+			<SiteDisplay
+				{model}
+				label={t('component.revision_reconstruction', {
+					revision: record?.revision ?? ''
+				})}
+			/>
 		{:else}
 			<Inline
 				align="center"
