@@ -36,9 +36,16 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@norbital-ai'
 
+      # A template pins published `@norbital-ai/*` versions, so this install reaches the scoped
+      # registry rather than resolving them from the workspace. Without the credential it 401s the
+      # moment a repin names a version the lockfile cache has never fetched.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Validate template catalogue
         run: node scripts/project-templates.mjs --check
