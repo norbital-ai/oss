@@ -12,6 +12,13 @@
 	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/field-operations/record-media/sites-banner.svg"
+	/>
+</svelte:head>
+
 {#if record}
 	<SiteRepresentation {record} />
 {:else}

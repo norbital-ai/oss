@@ -126,6 +126,13 @@
 	}
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/field-operations/record-media/jobs-banner.svg"
+	/>
+</svelte:head>
+
 <CollectionForm
 	{client}
 	collection="jobs"

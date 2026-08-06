@@ -212,6 +212,14 @@
 	<title>Field Operations Controller</title>
 	<meta name="description" content="Schedule site jobs and dispatch qualified contractors" />
 	<meta name="pod:icon" content="lucide:building-2" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/field-operations/app-media/field_ops_controller-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/field-operations/app-media/field_ops_controller-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet dispatchSchedule()}

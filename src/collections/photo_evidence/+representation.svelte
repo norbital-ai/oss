@@ -23,6 +23,13 @@
 	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/field-operations/record-media/photo_evidence-banner.svg"
+	/>
+</svelte:head>
+
 {#if record}
 	<CollectionForm
 		{client}
