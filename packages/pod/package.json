@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/pod",
-	"version": "3.0.0",
+	"version": "4.0.0",
 	"description": "Tenant workspace authoring SDK, runtime, and Vite plugin for Norbital.",
 	"type": "module",
 	"license": "AGPL-3.0-only",
