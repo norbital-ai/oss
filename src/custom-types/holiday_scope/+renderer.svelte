@@ -67,7 +67,7 @@
 				value={current?.kind ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select a scope"
+				emptyPlaceholder={t('renderer.holiday_scope.select_scope')}
 				onValueChange={selectKind}
 			/>
 		</label>

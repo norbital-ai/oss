@@ -6,6 +6,8 @@
  * written by an older definition. There is no writing here — presentation only.
  */
 import { humanize } from '@norbital-ai/std/string';
+import type { TenantI18nKeys } from '$pod/i18n-keys';
+import type { Translator } from './roster/roster-month.js';
 import { PAYROLL_TIME_ZONE, calendarDateInTimeZone, calendarDayKey } from './calendar.js';
 import { componentDefinitionSchema } from '../../custom-types/component_definition/+definition.js';
 import { entryOriginSchema } from '../../custom-types/entry_origin/+definition.js';
@@ -50,13 +52,12 @@ const HOURS = new Intl.NumberFormat(undefined, {
  * and not be quietly reported as `0.5 h` — display that disagrees with storage is how a payroll
  * dispute starts.
  */
-export function formatDurationHours(value: unknown): string {
+export function formatDurationHours(value: unknown, t: Translator): string {
 	if (value == null || value === '') return '—';
 	const minutes = Number(value);
 	if (!Number.isFinite(minutes)) return '—';
-	return `${HOURS.format(minutes / 60)} h`;
+	return t('component.hours_short', { hours: HOURS.format(minutes / 60) });
 }
-
 const MONTH_NAMES = [
 	'Jan',
 	'Feb',
@@ -165,25 +166,32 @@ export function formatEffectiveRange(value: unknown): string {
 	return `${bound(Reflect.get(value, 'start'), '…')} → ${bound(Reflect.get(value, 'end'), '∞')}`;
 }
 
-export function formatEntryOrigin(value: unknown): string {
+export function formatEntryOrigin(value: unknown, t: Translator): string {
 	const parsed = entryOriginSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid origin';
+	if (!parsed.success) return t('component.origin_invalid');
 	const origin = parsed.data;
 	switch (origin.kind) {
 		case 'RECURRING':
-			return `Recurring each pay period · ${formatEffectiveRange(origin.effective_range)}`;
+			return t('component.origin_recurring', {
+				range: formatEffectiveRange(origin.effective_range)
+			});
 		case 'ONE_OFF':
-			return origin.note ? `One-off · ${origin.note}` : 'One-off';
+			return origin.note
+				? t('component.origin_one_off_note', { note: origin.note })
+				: t('component.origin_one_off');
 		case 'CLAIM':
-			return `Claim · incurred ${formatCalendarDate(origin.incurred_on)}${
-				origin.evidence_file ? ' · evidence attached' : ''
+			return `${t('component.origin_claim', { date: formatCalendarDate(origin.incurred_on) })}${
+				origin.evidence_file ? t('component.origin_evidence') : ''
 			}`;
 		case 'LOAN_INSTALMENT':
-			return `Instalment ${origin.sequence} of ${origin.of}`;
+			return t('component.origin_instalment', {
+				sequence: origin.sequence,
+				of: origin.of
+			});
 		case 'REVERSAL':
-			return `Reversal · ${origin.reason}`;
+			return t('component.origin_reversal', { reason: origin.reason });
 		case 'ARREARS':
-			return `Arrears · ${origin.covers_periods.join(', ')}`;
+			return t('component.origin_arrears', { periods: origin.covers_periods.join(', ') });
 		default:
 			return origin satisfies never;
 	}
@@ -199,55 +207,141 @@ export function entryOriginNote(value: unknown): string | null {
 	return null;
 }
 
-export function formatComponentDefinition(value: unknown): string {
+const UNIT_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	MONEY: 'component.definition_unit_money',
+	DAYS: 'component.definition_unit_days',
+	HOURS: 'component.definition_unit_hours',
+	RATE: 'component.definition_unit_rate'
+};
+
+const SETTLEMENT_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	PAYROLL: 'component.definition_settlement_payroll',
+	COMPANY_DIRECT: 'component.definition_settlement_company'
+};
+
+const CAP_PERIOD_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	CALENDAR_YEAR: 'component.definition_cap_calendar_year',
+	LEAVE_YEAR: 'component.definition_cap_leave_year',
+	MONTH: 'component.definition_cap_month',
+	LIFETIME: 'component.definition_cap_lifetime',
+	PER_EVENT: 'component.definition_cap_per_event'
+};
+
+const DAY_TYPE_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	ORDINARY: 'component.definition_day_ordinary',
+	REST_DAY: 'component.definition_day_rest',
+	PUBLIC_HOLIDAY: 'component.definition_day_holiday'
+};
+
+const MEASURE_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	BEYOND_NORMAL: 'component.definition_measure_beyond',
+	FROM_START_OF_DAY: 'component.definition_measure_from_start'
+};
+
+const ACCRUAL_KIND_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	MONTHLY: 'component.accrual_kind_monthly',
+	UPFRONT: 'component.accrual_kind_upfront'
+};
+
+const PRORATION_BASIS_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	CALENDAR_DAYS: 'component.proration_calendar_days',
+	WORKING_DAYS: 'component.proration_working_days'
+};
+
+const SELECTOR_BY_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	WAGE: 'component.selector_wage',
+	WAGE_AND_MARITAL: 'component.selector_wage_marital',
+	HEADCOUNT: 'component.selector_headcount'
+};
+
+const AWARD_KIND_LABELS: Readonly<Record<string, TenantI18nKeys>> = {
+	PERCENT: 'component.award_kind_percent',
+	FIXED: 'component.award_kind_fixed'
+};
+
+function labelOf(
+	t: Translator,
+	map: Readonly<Record<string, TenantI18nKeys>>,
+	code: string
+): string {
+	const key = map[code];
+	return key === undefined ? code : t(key);
+}
+
+export function formatComponentDefinition(value: unknown, t: Translator): string {
 	const parsed = componentDefinitionSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid definition';
+	if (!parsed.success) return t('component.definition_invalid');
 	const definition = parsed.data;
 	switch (definition.source) {
 		case 'ENTRY':
-			return `Entry · ${humanize(definition.unit)} · ${humanize(definition.settlement)}${
-				definition.cap ? ` · ${humanize(definition.cap.period)} cap` : ''
-			}`;
+			return t('component.definition_entry', {
+				unit: labelOf(t, UNIT_LABELS, definition.unit),
+				settlement: labelOf(t, SETTLEMENT_LABELS, definition.settlement),
+				cap: definition.cap
+					? t('component.definition_entry_cap', {
+							period: labelOf(t, CAP_PERIOD_LABELS, definition.cap.period)
+						})
+					: ''
+			});
 		case 'FORMULA':
-			return `Formula · ${humanize(definition.unit)} · ${definition.expr}`;
+			return t('component.definition_formula', {
+				unit: labelOf(t, UNIT_LABELS, definition.unit),
+				expr: definition.expr
+			});
 		case 'OVERTIME':
-			return `Overtime · ${humanize(definition.rule.day_type)} · ${humanize(
-				definition.rule.measure
-			)} from ${definition.rule.band_from}`;
+			return t('component.definition_overtime', {
+				day: labelOf(t, DAY_TYPE_LABELS, definition.rule.day_type),
+				measure: labelOf(t, MEASURE_LABELS, definition.rule.measure),
+				from: definition.rule.band_from
+			});
 		case 'OVERTIME_EXCESS':
-			return `Overtime excess · ${humanize(definition.rule.day_type)} · ${humanize(
-				definition.rule.measure
-			)} from ${definition.rule.band_from} · after ${definition.after_total_work_hours} total work hours`;
+			return t('component.definition_overtime_excess', {
+				day: labelOf(t, DAY_TYPE_LABELS, definition.rule.day_type),
+				measure: labelOf(t, MEASURE_LABELS, definition.rule.measure),
+				from: definition.rule.band_from,
+				hours: definition.after_total_work_hours
+			});
 		case 'SCHEDULE':
-			return `Schedule · ${definition.reducible ? 'reducible' : 'not reducible'}`;
+			return t('component.definition_schedule', {
+				reducible: definition.reducible
+					? t('component.definition_reducible')
+					: t('component.definition_not_reducible')
+			});
 		default:
 			return definition satisfies never;
 	}
 }
 
-export function formatLeaveAccrual(value: unknown): string {
+export function formatLeaveAccrual(value: unknown, t: Translator): string {
 	const parsed = leaveAccrualSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid accrual';
+	if (!parsed.success) return t('component.accrual_invalid');
 	const accrual = parsed.data;
-	if (accrual.kind === 'PER_EVENT') return 'Per event';
+	if (accrual.kind === 'PER_EVENT') return t('component.accrual_per_event');
 	const carry = accrual.carry
-		? ` · carry ${accrual.carry.limit_days} days for ${accrual.carry.expiry_months} months`
-		: ' · no carry-forward';
-	return `${humanize(accrual.kind)}${carry}`;
+		? t('component.accrual_carry', {
+				days: accrual.carry.limit_days,
+				months: accrual.carry.expiry_months
+			})
+		: t('component.accrual_no_carry');
+	return `${labelOf(t, ACCRUAL_KIND_LABELS, accrual.kind)}${carry}`;
 }
 
-export function formatLeavePayrollEffect(value: unknown): string {
+export function formatLeavePayrollEffect(value: unknown, t: Translator): string {
 	const parsed = leavePayrollEffectSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid payroll effect';
-	return parsed.data.kind === 'PAID' ? 'Paid' : 'Unpaid · deducts a pay component';
+	if (!parsed.success) return t('component.effect_invalid');
+	return parsed.data.kind === 'PAID' ? t('component.effect_paid') : t('component.effect_unpaid');
 }
 
-export function formatRepaymentSchedule(value: unknown): string {
+export function formatRepaymentSchedule(value: unknown, t: Translator): string {
 	const parsed = repaymentScheduleSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid schedule';
+	if (!parsed.success) return t('component.schedule_invalid');
 	const schedule = parsed.data;
 	const total = schedule.reduce((sum, entry) => sum + entry.amount, 0);
-	return `${schedule.length} instalment${schedule.length === 1 ? '' : 's'} · ${DECIMAL.format(total)}`;
+	return t('component.schedule_instalments', {
+		count: schedule.length,
+		s: schedule.length === 1 ? '' : 's',
+		total: DECIMAL.format(total)
+	});
 }
 
 /** Total the schedule commits to repay — the denominator of "settled". */
@@ -256,59 +350,75 @@ export function repaymentScheduleTotal(value: unknown): number | null {
 	return parsed.success ? parsed.data.reduce((sum, entry) => sum + entry.amount, 0) : null;
 }
 
-export function formatHolidayScope(value: unknown): string {
+export function formatHolidayScope(value: unknown, t: Translator): string {
 	const parsed = holidayScopeSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid scope';
+	if (!parsed.success) return t('component.scope_invalid');
 	return parsed.data.kind === 'NATIONAL'
-		? 'National'
-		: `Regional · ${parsed.data.location_codes.join(', ')}`;
+		? t('component.scope_national')
+		: t('component.scope_regional', { locations: parsed.data.location_codes.join(', ') });
 }
 
-export function formatProrationBasis(value: unknown): string {
+export function formatProrationBasis(value: unknown, t: Translator): string {
 	const parsed = prorationBasisSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid proration';
+	if (!parsed.success) return t('component.proration_invalid');
 	return parsed.data.by === 'FIXED_DAYS'
-		? `Fixed ${parsed.data.days} days`
-		: humanize(parsed.data.by);
+		? t('component.proration_fixed', { days: parsed.data.days })
+		: labelOf(t, PRORATION_BASIS_LABELS, parsed.data.by);
 }
 
-export function formatRateSelector(value: unknown): string {
+export function formatRateSelector(value: unknown, t: Translator): string {
 	const parsed = rateSelectorSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid selector';
+	if (!parsed.success) return t('component.selector_invalid');
 	const selector = parsed.data;
-	if (selector.by === 'RISK_CLASS') return `Risk class ${selector.class}`;
+	if (selector.by === 'RISK_CLASS')
+		return t('component.selector_risk_class', { class: selector.class });
 	const band = `${selector.from} → ${selector.to ?? '∞'}`;
 	if (selector.by === 'WAGE_AND_AGE')
-		return `Wage ${band} · age ${selector.age_from} → ${selector.age_to ?? '∞'}`;
-	return `${humanize(selector.by)} ${band}`;
+		return t('component.selector_wage_age', {
+			range: band,
+			from: selector.age_from,
+			to: selector.age_to ?? '∞'
+		});
+	return `${labelOf(t, SELECTOR_BY_LABELS, selector.by)} ${band}`;
 }
 
-export function formatRateAward(value: unknown): string {
+export function formatRateAward(value: unknown, t: Translator): string {
 	const parsed = rateAwardSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid award';
+	if (!parsed.success) return t('component.award_invalid');
 	const award = parsed.data;
 	if (award.kind === 'PROGRESSIVE')
-		return `Progressive · ${award.rate}% less ${DECIMAL.format(Math.abs(award.constant))}`;
+		return t('component.award_progressive', {
+			rate: award.rate,
+			constant: DECIMAL.format(Math.abs(award.constant))
+		});
 	const unit = award.kind === 'PERCENT' ? '%' : '';
-	return `${humanize(award.kind)} · employee ${award.employee}${unit} · employer ${award.employer}${unit}`;
+	return t('component.award_employee_employer', {
+		kind: labelOf(t, AWARD_KIND_LABELS, award.kind),
+		employee: award.employee,
+		employer: award.employer,
+		unit
+	});
 }
 
-export function formatOvertimeBand(value: unknown): string {
+export function formatOvertimeBand(value: unknown, t: Translator): string {
 	const parsed = overtimeBandSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid band';
+	if (!parsed.success) return t('component.band_invalid');
 	const band = parsed.data;
 	return band.measure === 'BEYOND_NORMAL'
-		? `Beyond normal ${band.from_hours}h → ${band.to_hours ?? '∞'}h`
-		: `From start of day ${band.from_fraction} → ${band.to_fraction ?? '∞'}`;
+		? t('component.band_beyond_normal', {
+				from: band.from_hours,
+				to: band.to_hours ?? '∞'
+			})
+		: t('component.band_from_day_start', { from: band.from_fraction, to: band.to_fraction ?? '∞' });
 }
 
-export function formatOvertimeAward(value: unknown): string {
+export function formatOvertimeAward(value: unknown, t: Translator): string {
 	const parsed = overtimeAwardSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid award';
+	if (!parsed.success) return t('component.award_invalid');
 	const award = parsed.data;
 	return award.kind === 'HOURLY_MULTIPLE'
-		? `${award.multiple}× hourly rate`
-		: `${award.multiple}× day wage`;
+		? t('component.award_hourly_multiple', { multiple: award.multiple })
+		: t('component.award_day_multiple', { multiple: award.multiple });
 }
 
 /**
@@ -317,9 +427,9 @@ export function formatOvertimeAward(value: unknown): string {
  * A statutory ceiling is a figure in one named currency, and dropping the code would let an
  * operator read a Malaysian ringgit threshold as though it were theirs.
  */
-export function formatMoney(value: unknown): string {
+export function formatMoney(value: unknown, t: Translator): string {
 	const parsed = moneySchema().safeParse(value);
-	if (!parsed.success) return 'Invalid amount';
+	if (!parsed.success) return t('component.money_invalid');
 	return `${parsed.data.currency} ${DECIMAL.format(parsed.data.value)}`;
 }
 
@@ -327,18 +437,20 @@ export function formatMoney(value: unknown): string {
  * A `text[]` of work categories. An empty array is printed as "None" and never as blank, because a
  * blank cell reads as "nobody filled this in" when it in fact means "the statute names nobody".
  */
-export function formatCategories(value: unknown): string {
-	if (!Array.isArray(value) || value.length === 0) return 'None';
+export function formatCategories(value: unknown, t: Translator): string {
+	if (!Array.isArray(value) || value.length === 0) return t('component.categories_none');
 	return value.map((entry) => humanize(String(entry))).join(', ');
 }
 
-export function formatStatutoryFactStatus(value: unknown): string {
+export function formatStatutoryFactStatus(value: unknown, t: Translator): string {
 	const parsed = statutoryFactStatusSchema.safeParse(value);
-	if (!parsed.success) return 'Invalid status';
+	if (!parsed.success) return t('component.status_invalid');
 	const status = parsed.data;
 	return status.kind === 'REGISTERED'
-		? `Registered · ${status.reference_number}${
-				status.rate_override == null ? '' : ` · override ${status.rate_override}`
+		? `${t('component.status_registered', { reference: status.reference_number })}${
+				status.rate_override == null
+					? ''
+					: t('component.status_override', { rate: status.rate_override })
 			}`
-		: `Not registered · ${status.reason}`;
+		: t('component.status_not_registered', { reason: status.reason });
 }

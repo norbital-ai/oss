@@ -127,13 +127,13 @@
 					name="band"
 					label={t('component.band')}
 					card="subtitle"
-					render={({ value }) => formatOvertimeBand(value)}
+					render={({ value }) => formatOvertimeBand(value, t)}
 				/>
 				<TableColumn
 					name="award"
 					label={t('component.award')}
 					card="badge"
-					render={({ value }) => formatOvertimeAward(value)}
+					render={({ value }) => formatOvertimeAward(value, t)}
 				/>
 				<TableColumn name="authority" />
 				<TableColumn name="effective_range" label={t('component.effective')} />
@@ -198,7 +198,7 @@
 					name="wage_ceiling"
 					label={t('component.wage_ceiling')}
 					card="title"
-					render={({ value }) => (value ? formatMoney(value) : t('component.no_ceiling'))}
+					render={({ value }) => (value ? formatMoney(value, t) : t('component.no_ceiling'))}
 				/>
 				<TableColumn
 					name="wage_basis"
@@ -216,13 +216,13 @@
 				<TableColumn
 					name="exempt_categories"
 					label={t('component.covered_whatever_the_wage')}
-					render={({ value }) => formatCategories(value)}
+					render={({ value }) => formatCategories(value, t)}
 				/>
 				<TableColumn
 					name="excluded_categories"
 					label={t('component.never_covered_short')}
 					card="badge"
-					render={({ value }) => formatCategories(value)}
+					render={({ value }) => formatCategories(value, t)}
 				/>
 				<TableColumn name="authority" />
 				<TableColumn name="effective_range" label={t('component.effective')} />

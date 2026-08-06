@@ -33,23 +33,23 @@
 	 * ledger row it could not match to a request. An existing one still edits below — it just
 	 * cannot be chosen for a new event.
 	 */
-	const KIND_OPTIONS: { value: EventKind; label: string; description: string }[] = [
+	const KIND_OPTIONS = $derived<{ value: EventKind; label: string; description: string }[]>([
 		{
 			value: 'TIME_OFF',
-			label: 'Time off',
-			description: 'A dated absence — the ordinary leave request'
+			label: t('renderer.leave_event.kind_time_off'),
+			description: t('renderer.leave_event.kind_time_off_desc')
 		},
 		{
 			value: 'BALANCE_ADJUSTMENT',
-			label: 'Balance adjustment',
-			description: 'A signed correction to the balance on one date'
+			label: t('renderer.leave_event.kind_balance_adjustment'),
+			description: t('renderer.leave_event.kind_balance_adjustment_desc')
 		},
 		{
 			value: 'ENCASHMENT',
-			label: 'Encashment',
-			description: 'Days paid out rather than taken'
+			label: t('renderer.leave_event.kind_encashment'),
+			description: t('renderer.leave_event.kind_encashment_desc')
 		}
-	];
+	]);
 
 	const CERTIFICATE_FIELD = {
 		name: 'certificate_file',
@@ -57,10 +57,10 @@
 		nullable: true
 	} satisfies CollectionField;
 
-	const HALF_DAY_OPTIONS = [
-		{ value: 'false', label: 'Full day' },
-		{ value: 'true', label: 'Half day' }
-	];
+	const HALF_DAY_OPTIONS = $derived([
+		{ value: 'false', label: t('renderer.leave_event.full_day') },
+		{ value: 'true', label: t('renderer.leave_event.half_day') }
+	]);
 
 	let props: RendererProps = $props();
 	const disabled = $derived(props.mode === 'edit' ? props.disabled : true);
@@ -71,7 +71,9 @@
 		if (current === null) return '—';
 		if (current.kind === 'TIME_OFF')
 			return `${formatCalendarDate(current.from_date)} → ${formatCalendarDate(current.to_date)} · ${current.days}d`;
-		return `${current.kind.replaceAll('_', ' ').toLowerCase()} · ${formatCalendarDate(current.effective_on)} · ${current.movement_days}d`;
+		return `${t(
+			`renderer.leave_event.kind_${current.kind === 'ENCASHMENT' ? 'encashment' : 'balance_adjustment'}`
+		)} · ${formatCalendarDate(current.effective_on)} · ${current.movement_days}d`;
 	});
 
 	function emit(next: Value | null): void {
@@ -131,21 +133,21 @@
 {:else}
 	<Grid class="rounded-md border border-border bg-muted/20 p-3" gap="sm" minimum="compact">
 		<label class="grid gap-1.5 text-sm font-medium">
-			Event
+			{t('renderer.leave_event.event')}
 			<Combobox
-				ariaLabel="Leave event"
+				ariaLabel={t('renderer.leave_event.event')}
 				options={KIND_OPTIONS}
 				value={current?.kind ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select what this row records"
+				emptyPlaceholder={t('renderer.leave_event.select_kind')}
 				onValueChange={(value) => selectKind(value)}
 			/>
 		</label>
 
 		{#if current?.kind === 'TIME_OFF'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				From
+				{t('component.from')}
 				<Input
 					type="date"
 					value={current.from_date}
@@ -154,7 +156,7 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				To
+				{t('component.to')}
 				<Input
 					type="date"
 					value={current.to_date}
@@ -163,7 +165,7 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Days
+				{t('component.days')}
 				<Input
 					type="number"
 					min="0.5"
@@ -174,31 +176,31 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				First day
+				{t('renderer.leave_event.first_day')}
 				<Combobox
-					ariaLabel="First day"
+					ariaLabel={t('renderer.leave_event.first_day')}
 					options={HALF_DAY_OPTIONS}
 					value={current.half_day_start ? 'true' : 'false'}
 					{disabled}
 					searchable={false}
-					emptyPlaceholder="Full day"
+					emptyPlaceholder={t('renderer.leave_event.full_day')}
 					onValueChange={(value) => emit({ ...current, half_day_start: value === 'true' })}
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Last day
+				{t('renderer.leave_event.last_day')}
 				<Combobox
-					ariaLabel="Last day"
+					ariaLabel={t('renderer.leave_event.last_day')}
 					options={HALF_DAY_OPTIONS}
 					value={current.half_day_end ? 'true' : 'false'}
 					{disabled}
 					searchable={false}
-					emptyPlaceholder="Full day"
+					emptyPlaceholder={t('renderer.leave_event.full_day')}
 					onValueChange={(value) => emit({ ...current, half_day_end: value === 'true' })}
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Reason
+				{t('renderer.leave_event.reason')}
 				<Input
 					value={current.reason ?? ''}
 					{disabled}
@@ -222,7 +224,7 @@
 			</Stack>
 		{:else if current !== null}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Effective on
+				{t('renderer.leave_event.effective_on')}
 				<Input
 					type="date"
 					value={current.effective_on}
@@ -231,7 +233,7 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Movement (days)
+				{t('renderer.leave_event.movement_days')}
 				<Input
 					type="number"
 					step="0.5"
@@ -241,11 +243,11 @@
 						emit({ ...current, movement_days: numberFrom(event.currentTarget.value, 0) })}
 				/>
 				<span class="text-xs font-normal text-muted-foreground">
-					Signed: negative takes days off the balance, positive adds them.
+					{t('renderer.leave_event.movement_hint')}
 				</span>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Note
+				{t('component.note')}
 				<Input
 					value={current.note ?? ''}
 					{disabled}

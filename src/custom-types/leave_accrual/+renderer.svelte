@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { numberFrom } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { leaveAccrualSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type AccrualKind = Value['kind'];
 	type Carry = { limit_days: number; expiry_months: number };
@@ -74,7 +77,7 @@
 				value={current?.kind ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select an accrual"
+				emptyPlaceholder={t('renderer.leave_accrual.select_accrual')}
 				onValueChange={selectKind}
 			/>
 		</label>

@@ -19,6 +19,7 @@
 import ExcelJSBrowser from 'exceljs/dist/exceljs.bare.min.js';
 import { importCollectionRecords } from '@norbital-ai/pod/client';
 import { toast } from 'svelte-sonner';
+import type { Translator } from './roster/roster-month.js';
 import {
 	csvGrid,
 	workbookGrids,
@@ -35,9 +36,9 @@ const FAILURE_TOAST_MS = 20_000;
  * The input is never attached to the page. A hidden control in the layout would be one more thing
  * that can be left behind by an unmounted table; this one lives exactly as long as the question.
  */
-export async function pickWorkbookFile(): Promise<File | null> {
+export async function pickWorkbookFile(t: Translator): Promise<File | null> {
 	if (typeof document === 'undefined') {
-		throw new Error('A workbook can only be chosen in a browser.');
+		throw new Error(t('component.workbook_browser_only'));
 	}
 	return new Promise<File | null>((resolve) => {
 		const input = document.createElement('input');
@@ -64,7 +65,7 @@ export async function pickWorkbookFile(): Promise<File | null> {
  * reading costs no new dependency. A CSV has one sheet and no name of its own, so it takes the
  * file's — `requireSheet` accepts a single-sheet file under any name.
  */
-export async function readWorkbookGrids(file: File): Promise<WorkbookGrids> {
+export async function readWorkbookGrids(file: File, t: Translator): Promise<WorkbookGrids> {
 	if (file.name.toLowerCase().endsWith('.csv')) {
 		return new Map([[file.name, csvGrid(await file.text())]]);
 	}
@@ -72,8 +73,8 @@ export async function readWorkbookGrids(file: File): Promise<WorkbookGrids> {
 	try {
 		await workbook.xlsx.load(await file.arrayBuffer());
 	} catch (cause) {
-		throw new WorkbookImportError(`"${file.name}" could not be opened as a spreadsheet.`, [
-			'Save it as .xlsx or .csv and try again.',
+		throw new WorkbookImportError(t('component.workbook_not_spreadsheet', { file: file.name }), [
+			t('component.workbook_save_as'),
 			cause instanceof Error ? cause.message : String(cause)
 		]);
 	}
@@ -88,7 +89,7 @@ export async function readWorkbookGrids(file: File): Promise<WorkbookGrids> {
  * followed by a bulleted list, so the first line becomes the toast and the rest its detail rather
  * than one unreadable run of text.
  */
-function reportImportFailure(fallbackHeadline: string, error: unknown): void {
+function reportImportFailure(fallbackHeadline: string, error: unknown, t: Translator): void {
 	const message = error instanceof Error ? error.message : String(error);
 	const [headline = '', ...detail] = message.split('\n');
 	toast.error(headline.trim() === '' ? fallbackHeadline : headline.trim(), {
@@ -113,17 +114,26 @@ export interface WorkbookImportOptions {
  * and toasts `error.message`, which for these refusals is a headline and a bulleted list of rows
  * collapsed into a single line — so this handles its own and hands the caller a quiet return.
  */
-export async function runWorkbookImport(options: WorkbookImportOptions): Promise<void> {
-	const file = await pickWorkbookFile();
+export async function runWorkbookImport(
+	options: WorkbookImportOptions,
+	t: Translator
+): Promise<void> {
+	const file = await pickWorkbookFile(t);
 	if (file == null) return;
 	try {
-		const payload = options.buildPayload(await readWorkbookGrids(file));
+		const payload = options.buildPayload(await readWorkbookGrids(file, t));
 		const created = await importCollectionRecords({
 			collection_name: options.collectionName,
 			import_data: payload
 		});
-		toast.success(`Imported ${created.length} ${options.recordLabel} from ${file.name}.`);
+		toast.success(
+			t('component.workbook_imported', {
+				count: created.length,
+				label: options.recordLabel,
+				file: file.name
+			})
+		);
 	} catch (error) {
-		reportImportFailure(`${file.name} could not be imported.`, error);
+		reportImportFailure(t('component.workbook_import_failed', { file: file.name }), error, t);
 	}
 }

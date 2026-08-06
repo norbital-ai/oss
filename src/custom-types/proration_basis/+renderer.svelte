@@ -1,9 +1,12 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { prorationBasisSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type Basis = Value['by'];
 
@@ -64,7 +67,7 @@
 				value={current?.by ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select a basis"
+				emptyPlaceholder={t('renderer.proration_basis.select_basis')}
 				onValueChange={selectBasis}
 			/>
 		</label>

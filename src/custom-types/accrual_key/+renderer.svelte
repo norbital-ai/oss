@@ -1,9 +1,12 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { accrualKeySchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type KeyBy = Value['by'];
 
@@ -64,7 +67,7 @@
 				value={current?.by ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select a key"
+				emptyPlaceholder={t('renderer.accrual_key.select_key')}
 				onValueChange={selectKey}
 			/>
 		</label>

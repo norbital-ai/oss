@@ -78,7 +78,7 @@
 				value={current?.by ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select a selector"
+				emptyPlaceholder={t('renderer.rate_selector.select_selector')}
 				onValueChange={selectKey}
 			/>
 		</label>
@@ -197,7 +197,7 @@
 					value={current.marital}
 					{disabled}
 					searchable={false}
-					emptyPlaceholder="Select a category"
+					emptyPlaceholder={t('renderer.rate_selector.select_category')}
 					onValueChange={(next) =>
 						emit({ ...current, marital: next === 'MARRIED' ? 'MARRIED' : 'SINGLE' })}
 				/>

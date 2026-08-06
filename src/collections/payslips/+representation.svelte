@@ -8,6 +8,13 @@
 	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/record-media/payslips-banner.svg"
+	/>
+</svelte:head>
+
 {#if record}
 	<PayslipRepresentation {record} />
 {:else}

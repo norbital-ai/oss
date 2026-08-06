@@ -13,27 +13,27 @@
 	/** What a single weekday is on a STANDARD week. Working days are the ones named as neither. */
 	type DayRole = 'WORK' | 'REST' | 'OFF';
 
-	const TYPE_OPTIONS: { value: VariantType; label: string; description: string }[] = [
+	const TYPE_OPTIONS = $derived<{ value: VariantType; label: string; description: string }[]>([
 		{
 			value: 'STANDARD',
-			label: 'Standard week',
-			description: 'The same week repeats; days are derived'
+			label: t('renderer.work_pattern_variant.type_standard'),
+			description: t('renderer.work_pattern_variant.type_standard_desc')
 		},
 		{
 			value: 'ROSTERED',
-			label: 'Rostered',
-			description: 'Every day comes from a published roster'
+			label: t('renderer.work_pattern_variant.type_rostered'),
+			description: t('renderer.work_pattern_variant.type_rostered_desc')
 		}
-	];
+	]);
 
 	const WEEKDAY_LABELS: Record<Weekday, string> = {
-		MON: 'Monday',
-		TUE: 'Tuesday',
-		WED: 'Wednesday',
-		THU: 'Thursday',
-		FRI: 'Friday',
-		SAT: 'Saturday',
-		SUN: 'Sunday'
+		MON: t('component.weekday_mon'),
+		TUE: t('component.weekday_tue'),
+		WED: t('component.weekday_wed'),
+		THU: t('component.weekday_thu'),
+		FRI: t('component.weekday_fri'),
+		SAT: t('component.weekday_sat'),
+		SUN: t('component.weekday_sun')
 	};
 
 	const WEEK_START_OPTIONS = WEEKDAYS.map((day) => ({
@@ -62,12 +62,18 @@
 	const summary = $derived.by(() => {
 		if (current === null) return '—';
 		if (current.type === 'ROSTERED') {
-			return `Rostered · week starts ${WEEKDAY_LABELS[current.week_starts_on]}`;
+			return t('renderer.work_pattern_variant.summary_rostered', {
+				weekday: WEEKDAY_LABELS[current.week_starts_on]
+			});
 		}
 		const working = orderedWeek.filter((day) => roleOf(day) === 'WORK');
-		const rest = current.rest_days.join(', ') || 'none';
-		const off = current.off_days.join(', ') || 'none';
-		return `${working.length} working days · rest ${rest} · off ${off}`;
+		const rest = current.rest_days.join(', ') || t('component.categories_none');
+		const off = current.off_days.join(', ') || t('component.categories_none');
+		return t('renderer.work_pattern_variant.summary_standard', {
+			count: working.length,
+			rest,
+			off
+		});
 	});
 
 	function emit(next: Value | null): void {
@@ -124,25 +130,25 @@
 	<Stack class="rounded-md border border-border bg-muted/20 p-3" gap="md">
 		<Grid gap="sm" minimum="compact">
 			<label class="grid gap-1.5 text-sm font-medium">
-				Scheduling strategy
+				{t('renderer.work_pattern_variant.scheduling_strategy')}
 				<Combobox
 					options={TYPE_OPTIONS}
 					value={current?.type ?? null}
 					{disabled}
 					searchable={false}
-					emptyPlaceholder="Select a strategy"
+					emptyPlaceholder={t('renderer.work_pattern_variant.select_strategy')}
 					onValueChange={selectType}
 				/>
 			</label>
 			{#if current !== null}
 				<label class="grid gap-1.5 text-sm font-medium">
-					Week starts on
+					{t('renderer.work_pattern_variant.week_starts_on')}
 					<Combobox
 						options={WEEK_START_OPTIONS}
 						value={current.week_starts_on}
 						{disabled}
 						searchable={false}
-						emptyPlaceholder="Select a weekday"
+						emptyPlaceholder={t('renderer.work_pattern_variant.select_weekday')}
 						onValueChange={selectWeekStart}
 					/>
 				</label>
@@ -151,10 +157,9 @@
 
 		{#if current?.type === 'STANDARD'}
 			<Stack gap="xs">
-				<span class="text-sm font-medium">Shape of the week</span>
+				<span class="text-sm font-medium">{t('renderer.work_pattern_variant.shape_of_week')}</span>
 				<span class="text-xs text-muted-foreground">
-					At least one rest day is required. Work on a rest day earns the rest-day multiple; work on
-					an off day earns the ordinary one.
+					{t('renderer.work_pattern_variant.shape_of_week_hint')}
 				</span>
 			</Stack>
 			<Stack gap="xs">
@@ -178,13 +183,14 @@
 			</Stack>
 			{#if current.rest_days.length === 0}
 				<span class="text-xs text-destructive">
-					A week with no rest day cannot be saved. Name at least one.
+					{t('renderer.work_pattern_variant.no_rest_day_error')}
 				</span>
 			{/if}
 		{:else if current?.type === 'ROSTERED'}
 			<span class="text-xs text-muted-foreground">
-				Days come from the published monthly roster. The weekly rest minimum is checked against the
-				week that begins on {WEEKDAY_LABELS[current.week_starts_on]}.
+				{t('renderer.work_pattern_variant.rostered_hint', {
+					weekday: WEEKDAY_LABELS[current.week_starts_on]
+				})}
 			</span>
 		{/if}
 	</Stack>

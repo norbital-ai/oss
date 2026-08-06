@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { client } from '$pod/client';
 	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 	import { MatrixRenderer, type MatrixColumn } from '@norbital-ai/ui/data-renderer/matrix';
@@ -15,6 +17,8 @@
 		type RepaymentPeriodRunRow,
 		type RepaymentScheduleMatrixRow
 	} from '../../lib/ui/repayment-schedule/repayment-consumption.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type RepaymentScheduleRendererProps = RendererProps & {
 		readonly row?: Record<string, unknown>;

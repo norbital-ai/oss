@@ -135,9 +135,9 @@
 			<Stack gap="lg">
 				<Grid gap="md" minimum="compact">
 					<label class="grid gap-1.5 text-sm font-medium">
-						Legal entity
+						{t('component.legal_entity')}
 						<Combobox
-							ariaLabel="Legal entity"
+							ariaLabel={t('component.legal_entity')}
 							options={companyOptions}
 							value={companyId}
 							onValueChange={(value) => {
@@ -145,23 +145,25 @@
 								period = null;
 								form.setValues({ company_id: value });
 							}}
-							searchPlaceholder="Search companies…"
-							emptyPlaceholder="Choose a legal entity"
+							searchPlaceholder={t('component.search_companies')}
+							emptyPlaceholder={t('component.choose_legal_entity')}
 							disabled={companiesQuery.loading || jurisdictionsQuery.loading}
 						/>
 					</label>
 					<label class="grid gap-1.5 text-sm font-medium">
-						Payroll period
+						{t('component.pay_period')}
 						<Combobox
-							ariaLabel="Payroll period"
+							ariaLabel={t('component.pay_period')}
 							options={periodOptions}
 							value={period}
 							onValueChange={(value) => {
 								period = value;
 								form.setValues({ company_id: companyId, period: value });
 							}}
-							searchPlaceholder="Search payroll periods…"
-							emptyPlaceholder={companyId ? 'Choose a payroll period' : 'Choose an entity first'}
+							searchPlaceholder={t('component.search_payroll_periods')}
+							emptyPlaceholder={companyId
+								? t('component.choose_payroll_period')
+								: t('component.choose_entity_first')}
 							disabled={!companyId || runsQuery.loading}
 						/>
 					</label>
@@ -169,7 +171,7 @@
 				{#if selectedWindow}
 					<Grid as="dl" gap="sm" minimum="compact">
 						<div>
-							<dt class="text-xs text-muted-foreground">Salary month</dt>
+							<dt class="text-xs text-muted-foreground">{t('component.salary_month')}</dt>
 							<dd class="mt-1 font-medium tabular-nums">
 								{formatCalendarDate(selectedWindow.salary.start)} → {formatCalendarDate(
 									selectedWindow.salary.end
@@ -177,7 +179,7 @@
 							</dd>
 						</div>
 						<div>
-							<dt class="text-xs text-muted-foreground">Attendance window</dt>
+							<dt class="text-xs text-muted-foreground">{t('component.attendance_window')}</dt>
 							<dd class="mt-1 font-medium tabular-nums">
 								{formatCalendarDate(selectedWindow.attendance.start)} → {formatCalendarDate(
 									selectedWindow.attendance.end
@@ -185,7 +187,7 @@
 							</dd>
 						</div>
 						<div>
-							<dt class="text-xs text-muted-foreground">Pay date</dt>
+							<dt class="text-xs text-muted-foreground">{t('component.pay_date')}</dt>
 							<dd class="mt-1 font-medium tabular-nums">
 								{formatCalendarDate(selectedWindow.payDate)}
 							</dd>
@@ -193,8 +195,7 @@
 					</Grid>
 				{/if}
 				<p class="text-sm text-muted-foreground">
-					Creating the run builds it: the payslips and their complete component lines are written
-					before this closes.
+					{t('component.create_run_hint')}
 				</p>
 			</Stack>
 		{/snippet}

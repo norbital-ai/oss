@@ -27,6 +27,8 @@
 -->
 <script lang="ts">
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Cluster, Cover, Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import {
@@ -40,6 +42,8 @@
 	} from './roster-month.js';
 
 	type Person = { readonly id: string; readonly number: string; readonly name: string };
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	let {
 		month,
@@ -82,10 +86,12 @@
 		cutoff == null ? null : days.find((date) => date >= cutoff.start && date <= cutoff.end)
 	);
 
-	const legendStatuses = Object.entries(STATUS_PRESENTATION) as [
-		DayStatus,
-		{ label: string; className: string }
-	][];
+	const legendStatuses = $derived(
+		Object.entries(STATUS_PRESENTATION) as [
+			DayStatus,
+			{ labelKey: TenantI18nKeys; className: string }
+		][]
+	);
 </script>
 
 {#snippet legend()}
@@ -93,18 +99,18 @@
 		{#each legendStatuses as [status, presentation] (status)}
 			<Inline gap="xs">
 				<span class={cn('inline-block size-3 rounded-sm', presentation.className)}></span>
-				<span>{presentation.label}</span>
+				<span>{t(presentation.labelKey)}</span>
 			</Inline>
 		{/each}
 		<Inline gap="xs">
 			<span class={cn('inline-block size-3 rounded-sm', HOLIDAY_PRESENTATION.headerClassName)}
 			></span>
-			<span>{HOLIDAY_PRESENTATION.label} (from the company calendar, marked on the day)</span>
+			<span>{t('roster.holiday_from_calendar', { label: t(HOLIDAY_PRESENTATION.labelKey) })}</span>
 		</Inline>
 		{#if cutoff != null}
 			<Inline gap="xs">
 				<IconWrapper name="lucide:scissors" class="size-3" />
-				<span>Cut-off {cutoff.start} to {cutoff.end}</span>
+				<span>{t('roster.cutoff_range', { start: cutoff.start, end: cutoff.end })}</span>
 			</Inline>
 		{/if}
 	</Cluster>
@@ -112,11 +118,11 @@
 
 {#if people.length === 0}
 	<p class="text-sm text-muted-foreground">
-		No active employments for this legal entity, so there is nobody to roster.
+		{t('roster.no_employments')}
 	</p>
 {:else}
 	<Cover as="div" gap="sm" bottom={legend}>
-		<Scroll axis="both" name="Month roster board" class="rounded-lg border bg-card">
+		<Scroll axis="both" name={t('roster.board_scroll_name')} class="rounded-lg border bg-card">
 			<!-- stupidity:allow UI3 -- a person-by-day board is a derived cross-tab of four collections, not one collection's rows. -->
 			<table class="border-separate border-spacing-0 text-left text-xs">
 				<thead>
@@ -125,13 +131,15 @@
 							scope="col"
 							class="sticky top-0 left-0 z-30 min-w-[10rem] border-r border-b bg-card px-3 py-2 text-xs font-semibold"
 						>
-							Person
+							{t('roster.person')}
 						</th>
 						{#each days as date (date)}
 							{@const holiday = holidayNames.get(date)}
 							<th
 								scope="col"
-								title={holiday == null ? undefined : `${HOLIDAY_PRESENTATION.label}: ${holiday}`}
+								title={holiday == null
+									? undefined
+									: `${t(HOLIDAY_PRESENTATION.labelKey)}: ${holiday}`}
 								class={cn(
 									'sticky top-0 z-20 w-9 min-w-9 border-b bg-card px-0 py-1 text-center font-medium',
 									// Every fill here is opaque: see HOLIDAY_PRESENTATION.headerClassName. `today` is
@@ -177,7 +185,7 @@
 									-->
 									<button
 										type="button"
-										title={describeDay(day, `${person.number} · ${date}`)}
+										title={describeDay(day, `${person.number} · ${date}`, t)}
 										class={cn(
 											'flex h-7 w-full items-center justify-center rounded-sm text-micro tabular-nums focus-visible:ring-2 focus-visible:ring-ring',
 											day == null ? 'bg-muted/20' : STATUS_PRESENTATION[day.status].className,

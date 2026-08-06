@@ -276,6 +276,14 @@
 		content="Workforce health, and one profile per person carrying their employments, contractual terms and statutory registrations"
 	/>
 	<meta name="pod:icon" content="lucide:users" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/hr-payroll/app-media/people-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/app-media/people-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet pageHeading()}

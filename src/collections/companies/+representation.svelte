@@ -54,13 +54,10 @@
 			<Stack gap="xs">
 				<Field name="risk_class" label={t('component.statutory_risk_class')} />
 				<p class="text-xs text-muted-foreground">
-					The occupational risk group the entity is rated in, where its regime prices a contribution
-					by risk. Indonesia's JKK is the one such scheme here: class
-					<span class="font-medium">IV</span>
-					is charged at 0.89% and class <span class="font-medium">I</span> at 0.24%, so an Indonesian
-					entity left blank matches no band and its payroll run stops by name rather than quietly charging
-					nothing. Malaysian and Philippine entities have no risk-keyed contribution and correctly leave
-					this empty.
+					{t('component.risk_class_hint', {
+						class_iv: 'IV',
+						class_i: 'I'
+					})}
 				</p>
 			</Stack>
 			<Column span="all"

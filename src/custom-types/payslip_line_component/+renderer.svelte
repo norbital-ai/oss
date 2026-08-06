@@ -1,4 +1,8 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
+	const { t, has } = useI18n<TenantI18nKeys>();
+
 	/**
 	 * What kind of thing a settled line links to — and only that.
 	 *
@@ -11,19 +15,20 @@
 	import { payslipLineComponentSchema } from './+definition.js';
 	import type { RendererProps } from './$types.js';
 
-	const KIND_LABELS: Record<string, string> = {
-		COMPONENT_ENTRY_ONCE: 'Single-use entry',
-		COMPONENT_ENTRY_RECURRING: 'Recurring entry',
-		STATUTORY_EMPLOYEE: 'Employee statutory',
-		STATUTORY_EMPLOYER: 'Employer statutory'
-	};
-
 	let props: RendererProps = $props();
 	const parsed = $derived(payslipLineComponentSchema.safeParse(props.value));
 	const summary = $derived.by(() => {
 		if (!parsed.success) return '—';
 		const { kind } = parsed.data;
-		return KIND_LABELS[kind] ?? kind.replaceAll('_', ' ').toLowerCase();
+		const key =
+			kind === 'COMPONENT_ENTRY_ONCE'
+				? 'renderer.payslip_line_component.entry_once'
+				: kind === 'COMPONENT_ENTRY_RECURRING'
+					? 'renderer.payslip_line_component.entry_recurring'
+					: kind === 'STATUTORY_EMPLOYEE'
+						? 'renderer.payslip_line_component.statutory_employee'
+						: 'renderer.payslip_line_component.statutory_employer';
+		return has(key) ? t(key as TenantI18nKeys) : kind.replaceAll('_', ' ').toLowerCase();
 	});
 </script>
 

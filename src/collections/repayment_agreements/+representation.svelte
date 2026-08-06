@@ -33,6 +33,13 @@
 	} satisfies CollectionFormValidation;
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/record-media/repayment_agreements-banner.svg"
+	/>
+</svelte:head>
+
 <CollectionForm
 	{client}
 	collection="repayment_agreements"
@@ -98,18 +105,18 @@
 			{#if !record}
 				<Stack gap="sm" shrink={false} class="rounded-md border border-border p-3">
 					<Stack gap="none">
-						<p class="text-sm font-medium">Provision equal instalments</p>
+						<p class="text-sm font-medium">{t('component.provision_equal_instalments')}</p>
 						<p class="text-xs text-muted-foreground">
-							The remainder, if any, is placed on the final instalment so the total is exact.
+							{t('component.provision_remainder_hint')}
 						</p>
 					</Stack>
 					<Grid gap="md" minimum="compact">
 						<label class="grid gap-1.5 text-sm font-medium">
-							First repayment date
+							{t('component.first_repayment_date')}
 							<Input type="date" bind:value={firstDueDate} />
 						</label>
 						<label class="grid gap-1.5 text-sm font-medium">
-							Number of instalments
+							{t('component.number_of_instalments')}
 							<Input type="number" min="1" max="600" step="1" bind:value={instalmentCount} />
 						</label>
 					</Grid>
@@ -131,7 +138,7 @@
 							}
 						}}
 					>
-						Generate equal schedule
+						{t('component.generate_equal_schedule')}
 					</Button>
 					{#if provisioningError}
 						<p class="text-sm text-destructive" role="alert">{provisioningError}</p>

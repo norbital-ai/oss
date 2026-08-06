@@ -15,6 +15,13 @@
 	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/record-media/rosters-banner.svg"
+	/>
+</svelte:head>
+
 <CollectionForm
 	{client}
 	collection="rosters"

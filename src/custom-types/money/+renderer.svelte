@@ -4,7 +4,6 @@
 	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 	import type { RendererProps, Value } from './$types.js';
 	import { moneySchema } from './+definition.js';
-
 	let props: RendererProps = $props();
 
 	/**

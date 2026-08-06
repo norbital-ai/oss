@@ -9,5 +9,9 @@
 		"collections": 26,
 		"apps": 9,
 		"automations": 0
-	}
+	},
+	"banner": "assets/banner.svg",
+	"tags": ["HR", "Finance", "Approvals"],
+	"name_zh": "HR 与薪资",
+	"description_zh": "基于生效日期的雇佣事实、考勤、休假与法定缴款规则，运行多国 HR 与薪资。"
 }
