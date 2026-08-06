@@ -1,10 +1,14 @@
 <script lang="ts">
+	/**
+	 * A job and a certification its workers must hold. Both sides are relationships: without this
+	 * file the auto `CollectionForm` is two uuid text boxes and nothing else.
+	 */
 	import { client } from '$pod/client';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
-	import { Column, Grid } from '@norbital-ai/ui/layout';
+	import { Grid } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 
 	let { record, close }: RepresentationProps = $props();
@@ -14,33 +18,13 @@
 
 <CollectionForm
 	{client}
-	collection="payment_claims"
+	collection="jobs_certification_types"
 	recordId={record?.norbital_id}
 	defaultValues={record ?? undefined}
 	onAfterSubmit={record ? undefined : close}
 >
 	{#snippet children({ Field })}
 		<Grid minimum="compact">
-			<Field name="claim_number" />
-			<Field
-				name="project_id"
-				label={t('component.project')}
-				renderer={RelationshipRenderer}
-				rendererProps={{
-					target: 'projects',
-					options: {
-						label: (record) => {
-							const number = record.project_number;
-							const name = record.project_name;
-							if (number && name) return `${number} · ${name}`;
-							const v = record.project_name;
-							return v != null && v !== '' ? String(v) : '—';
-						},
-						orderBy: { project_number: 'asc' },
-						limit: 500
-					}
-				}}
-			/>
 			<Field
 				name="job_id"
 				label={t('component.job')}
@@ -49,22 +33,34 @@
 					target: 'jobs',
 					options: {
 						label: (record) => {
-							const v = record.job_title;
-							return v != null && v !== '' ? String(v) : '—';
+							const code = record.job_number;
+							const name = record.job_title;
+							if (code && name) return `${code} · ${name}`;
+							return name != null && name !== '' ? String(name) : '—';
 						},
-						orderBy: { job_title: 'asc' },
+						orderBy: { job_number: 'asc' },
 						limit: 500
 					}
 				}}
 			/>
-			<Field name="claim_type" />
-			<Field name="status" />
-			<Field name="claimed_amount" />
-			<Field name="certified_amount" />
-			<Field name="claim_period" />
-			<Field name="submitted_date" />
-			<Field name="paid_date" />
-			<Column span="all"><Field name="description" /></Column>
+			<Field
+				name="certification_type_id"
+				label={t('component.certification')}
+				renderer={RelationshipRenderer}
+				rendererProps={{
+					target: 'certification_types',
+					options: {
+						label: (record) => {
+							const code = record.certification_code;
+							const name = record.certification_name;
+							if (code && name) return `${code} · ${name}`;
+							return name != null && name !== '' ? String(name) : '—';
+						},
+						orderBy: { certification_code: 'asc' },
+						limit: 500
+					}
+				}}
+			/>
 		</Grid>
 	{/snippet}
 </CollectionForm>

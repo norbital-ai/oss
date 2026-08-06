@@ -16,7 +16,7 @@ export default defineModel(
 	},
 	{
 		description: 'Construction projects and their operating context.',
-		recordLabel: ['project_number', 'project_name'],
+		recordLabel: 'project_name',
 		icon: 'lucide:building-2',
 		indexes: [{ columns: ['project_number'], unique: true }]
 	}

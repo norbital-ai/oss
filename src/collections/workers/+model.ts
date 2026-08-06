@@ -17,7 +17,7 @@ export default defineModel(
 	},
 	{
 		description: 'Worker roster used for job assignment and compliance checks.',
-		recordLabel: ['worker_number', 'worker_name'],
+		recordLabel: 'worker_name',
 		icon: 'lucide:users',
 		indexes: [{ columns: ['worker_number'], unique: true }]
 	}

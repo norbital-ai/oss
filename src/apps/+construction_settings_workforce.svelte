@@ -1,9 +1,13 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Cover } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const projectsQuery = client.db.projects.findMany({
 		columns: { norbital_id: true, project_name: true, project_number: true },
@@ -61,7 +65,7 @@
 			<Column name="job_number" />
 			<Column
 				name="project_id"
-				label="Project"
+				label={t('component.project')}
 				minWidth={200}
 				render={({ value }) =>
 					value == null || value === '' ? '—' : (projectLabelsById.get(String(value)) ?? '—')}
@@ -76,9 +80,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="Construction settings"
-		title="Workforce Settings"
-		description="Manage workers, certifications, and job requirements."
+		eyebrow={t('app.construction_settings_workforce.eyebrow')}
+		title={t('app.construction_settings_workforce.header_title')}
+		description={t('app.construction_settings_workforce.header_description')}
 	/>
 {/snippet}
 
@@ -87,16 +91,21 @@
 		lazyLoad={false}
 		animate={false}
 		config={[
-			{ name: 'workers', label: 'Workers', icon: 'lucide:users', content: workers },
+			{
+				name: 'workers',
+				label: t('app.construction_settings_workforce.tab_workers'),
+				icon: 'lucide:users',
+				content: workers
+			},
 			{
 				name: 'certifications',
-				label: 'Certifications',
+				label: t('app.construction_settings_workforce.tab_certifications'),
 				icon: 'lucide:badge-check',
 				content: certifications
 			},
 			{
 				name: 'job-requirements',
-				label: 'Job requirements',
+				label: t('app.construction_settings_workforce.tab_job_requirements'),
 				icon: 'lucide:briefcase',
 				content: jobRequirements
 			}

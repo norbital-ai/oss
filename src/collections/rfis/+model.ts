@@ -20,7 +20,7 @@ export default defineModel(
 	},
 	{
 		description: 'Design and coordination questions raised during delivery.',
-		recordLabel: ['rfi_number', 'title'],
+		recordLabel: 'title',
 		icon: 'lucide:messages-square',
 		indexes: [{ columns: ['rfi_number'], unique: true }]
 	}

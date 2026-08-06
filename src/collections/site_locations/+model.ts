@@ -14,7 +14,7 @@ export default defineModel(
 	},
 	{
 		description: 'Work fronts and delivery zones within a project.',
-		recordLabel: ['location_code', 'location_name'],
+		recordLabel: 'location_name',
 		icon: 'lucide:map-pin',
 		indexes: [{ columns: ['location_code'], unique: true }]
 	}

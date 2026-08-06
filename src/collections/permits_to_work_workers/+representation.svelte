@@ -1,4 +1,8 @@
 <script lang="ts">
+	/**
+	 * A permit and a worker named on it. Both sides are relationships: without this file the auto
+	 * `CollectionForm` is two uuid text boxes and nothing else.
+	 */
 	import { client } from '$pod/client';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
@@ -14,27 +18,25 @@
 
 <CollectionForm
 	{client}
-	collection="job_assignments"
+	collection="permits_to_work_workers"
 	recordId={record?.norbital_id}
 	defaultValues={record ?? undefined}
 	onAfterSubmit={record ? undefined : close}
 >
 	{#snippet children({ Field })}
 		<Grid minimum="compact">
-			<Field name="assignment_code" />
-			<Field name="status" />
 			<Field
-				name="job_id"
-				label={t('component.job')}
+				name="permits_to_work_id"
+				label={t('component.permit_to_work')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
-					target: 'jobs',
+					target: 'permits_to_work',
 					options: {
-						label: (record) => {
-							const v = record.job_title;
-							return v != null && v !== '' ? String(v) : '—';
-						},
-						orderBy: { job_title: 'asc' },
+						label: (record) =>
+							record.permit_number != null && record.permit_number !== ''
+								? String(record.permit_number)
+								: '—',
+						orderBy: { permit_number: 'asc' },
 						limit: 500
 					}
 				}}
@@ -47,39 +49,16 @@
 					target: 'workers',
 					options: {
 						label: (record) => {
-							const number = record.worker_number;
+							const code = record.worker_number;
 							const name = record.worker_name;
-							if (number && name) return `${number} · ${name}`;
-							const v = record.worker_name;
-							return v != null && v !== '' ? String(v) : '—';
+							if (code && name) return `${code} · ${name}`;
+							return name != null && name !== '' ? String(name) : '—';
 						},
 						orderBy: { worker_number: 'asc' },
 						limit: 500
 					}
 				}}
 			/>
-			<Field
-				name="site_location_id"
-				label={t('component.site_location')}
-				renderer={RelationshipRenderer}
-				rendererProps={{
-					target: 'site_locations',
-					options: {
-						label: (record) => {
-							const code = record.location_code;
-							const name = record.location_name;
-							if (code && name) return `${code} · ${name}`;
-							const v = record.location_name;
-							return v != null && v !== '' ? String(v) : '—';
-						},
-						orderBy: { location_code: 'asc' },
-						limit: 500
-					}
-				}}
-			/>
-			<Field name="role" />
-			<Field name="assignment_range" />
-			<Field name="hours_per_day" />
 		</Grid>
 	{/snippet}
 </CollectionForm>
