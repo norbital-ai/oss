@@ -1,5 +1,14 @@
 # @norbital-ai/pod
 
+## 4.0.1
+
+### Patch Changes
+
+- Updated dependencies [9594db9]
+  - @norbital-ai/std@4.0.1
+  - @norbital-ai/platform-utils@4.0.1
+  - @norbital-ai/ui@4.0.1
+
 ## 4.0.0
 
 ### Minor Changes
