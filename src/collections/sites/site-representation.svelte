@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { Row } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid, Stack } from '@norbital-ai/ui/layout';
@@ -8,8 +10,11 @@
 	import { calendarDateInTimeZone } from '../../lib/calendar.js';
 
 	let { record }: { record: Row } = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
+
 	const recordId = $derived(record.norbital_id);
-	const today = calendarDateInTimeZone(new Date(), 'Asia/Singapore');
+	const today = calendarDateInTimeZone(new Date());
 	const siteJobsQuery = $derived(
 		client.db.jobs.findMany({
 			where: { site_id: { eq: recordId } },
@@ -20,7 +25,7 @@
 	const upcomingJobIds = $derived(
 		siteJobs
 			.filter((job) => {
-				const jobDate = calendarDateInTimeZone(new Date(job.scheduled_for), 'Asia/Singapore');
+				const jobDate = calendarDateInTimeZone(new Date(job.scheduled_for));
 				return (
 					jobDate >= today ||
 					(jobDate < today && (job.status === 'unassigned' || job.status === 'assigned'))
@@ -41,16 +46,18 @@
 		{#snippet children({ Field })}
 			<Stack gap="md">
 				<div>
-					<h3 id="site-general-heading" class="text-sm font-semibold">General information</h3>
+					<h3 id="site-general-heading" class="text-sm font-semibold">
+						{t('component.general_information')}
+					</h3>
 					<p class="text-sm text-muted-foreground">
-						Client context and the exact location used for dispatch mapping.
+						{t('component.general_information_description')}
 					</p>
 				</div>
 				<Grid minimum="panel">
 					<Field name="name" />
-					<Field name="client_name" label="Client / tenant" />
-					<Field name="house_type" label="Site type" />
-					<Field name="floor_area_sqm" label="Floor area (sqm)" />
+					<Field name="client_name" label={t('component.client_tenant')} />
+					<Field name="house_type" label={t('component.site_type')} />
+					<Field name="floor_area_sqm" label={t('component.floor_area_sqm')} />
 					<Column span="all"><Field name="location" /></Column>
 				</Grid>
 			</Stack>
@@ -63,19 +70,19 @@
 		{client}
 		collection="jobs"
 		view={`field_ops_site:${recordId}:upcoming`}
-		title="Upcoming scheduled jobs"
-		description="Future-dated jobs and past-due jobs that are still pending assignment or dispatch. New jobs open the job form — pick this site on the form."
+		title={t('component.upcoming_scheduled_jobs')}
+		description={t('component.upcoming_scheduled_jobs_description')}
 		query={{
 			where: { norbital_id: { in: upcomingJobIds } },
 			orderBy: { scheduled_for: 'asc' }
 		}}
-		searchPlaceholder="Search upcoming jobs…"
+		searchPlaceholder={t('component.search_upcoming_jobs')}
 	>
 		{#snippet columns({ Column })}
 			<Column name="title" minWidth={240} card="title" />
-			<Column name="scheduled_for" label="Scheduled" card="badge" />
+			<Column name="scheduled_for" label={t('component.scheduled')} card="badge" />
 			<Column name="status" />
-			<Column name="nature" label="Job nature" minWidth={180} />
+			<Column name="nature" label={t('component.job_nature')} minWidth={180} />
 			<Column name="description" card="subtitle" minWidth={200} />
 		{/snippet}
 	</CollectionTable>
@@ -86,8 +93,8 @@
 		{client}
 		collection="job_assignments"
 		view={`field_ops_site:${recordId}:history`}
-		title="Activity history"
-		description="Jobs that have progressed past dispatch — work in progress or completed."
+		title={t('component.activity_history')}
+		description={t('component.activity_history_description')}
 		query={{
 			where: { job_id: { in: historicalJobIds } },
 			orderBy: { dispatched_at: 'desc' }
@@ -96,19 +103,19 @@
 		{#snippet columns({ Column })}
 			<Column
 				name="job_id"
-				label="Job · site · date"
+				label={t('component.job_site_date')}
 				minWidth={360}
 				card="title"
 				render={({ row }) => {
 					const job = jobById.get(row.job_id);
-					return job ? `${job.title} · ${record.name} · ${job.scheduled_for}` : 'Job';
+					return job ? `${job.title} · ${record.name} · ${job.scheduled_for}` : t('component.job');
 				}}
 			/>
-			<Column name="dispatched_at" label="Dispatched" />
+			<Column name="dispatched_at" label={t('component.dispatched')} />
 			<Column name="status" card="badge" />
-			<Column name="completed_at" label="Completed" />
-			<Column name="amount_charged" label="Value charged" />
-			<Column name="location" label="Reported location" minWidth={220} />
+			<Column name="completed_at" label={t('component.completed')} />
+			<Column name="amount_charged" label={t('component.value_charged')} />
+			<Column name="location" label={t('component.reported_location')} minWidth={220} />
 			<Column name="summary" card="subtitle" minWidth={200} />
 		{/snippet}
 	</CollectionTable>
@@ -120,19 +127,19 @@
 	config={[
 		{
 			name: 'general',
-			label: 'General information',
+			label: t('component.general_information'),
 			icon: 'lucide:building',
 			content: generalInformation
 		},
 		{
 			name: 'upcoming',
-			label: 'Upcoming jobs',
+			label: t('component.upcoming_jobs'),
 			icon: 'lucide:calendar-clock',
 			content: upcomingJobs
 		},
 		{
 			name: 'history',
-			label: 'Activity history',
+			label: t('component.activity_history'),
 			icon: 'lucide:history',
 			content: activityHistory
 		}

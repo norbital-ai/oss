@@ -23,7 +23,7 @@ export default defineModel(
 	{
 		description:
 			'Contractor assigned to a site job. Tracks dispatch, on-site progression, and photo evidence.',
-		recordLabel: ['status', 'dispatched_at'],
+		recordLabel: 'summary',
 		icon: 'lucide:clipboard-check',
 		indexes: [
 			{ columns: ['source_message_id'], unique: true },

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { client, type WorkspaceRow } from '$pod/client';
 	import { Button } from '@norbital-ai/ui/button';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionKanban } from '@norbital-ai/ui/collection-kanban';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
@@ -24,7 +26,9 @@
 		error: string | null;
 	}
 
-	const today = calendarDateInTimeZone(new Date(), 'Asia/Singapore');
+	const today = calendarDateInTimeZone(new Date());
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	let dispatchDay = $state(today);
 	let assignContractorOpen = $state(false);
@@ -41,12 +45,12 @@
 		orderBy: { dispatched_at: 'asc' as const }
 	});
 	// View-level lane presentation: labels/colors live here, not on the model (pure data schema).
-	const dispatchLanes = [
-		{ value: 'dispatched', label: 'Dispatched', color: 'blue' },
-		{ value: 'in_progress', label: 'In progress', color: 'amber' },
-		{ value: 'completed', label: 'Completed', color: 'green' },
-		{ value: 'flagged', label: 'Flagged', color: 'red' }
-	];
+	const dispatchLanes = $derived([
+		{ value: 'dispatched', label: t('component.status_dispatched'), color: 'blue' },
+		{ value: 'in_progress', label: t('component.status_in_progress'), color: 'amber' },
+		{ value: 'completed', label: t('component.status_completed'), color: 'green' },
+		{ value: 'flagged', label: t('component.status_flagged'), color: 'red' }
+	]);
 
 	// Assign-contractor sheet — filters unassigned jobs for the day to certified contractors.
 	const assignJobsQuery = $derived(
@@ -149,7 +153,7 @@
 		assignment.error = null;
 		try {
 			const create = client.db.job_assignments.create;
-			if (!create) throw new Error('Assignment creation is unavailable.');
+			if (!create) throw new Error(t('component.assignment_create_unavailable'));
 			await create({
 				job_id: assignment.jobId,
 				contractor_profile_id: assignment.contractorId,
@@ -161,7 +165,7 @@
 			assignContractorOpen = false;
 		} catch (reason) {
 			assignment.error =
-				reason instanceof Error ? reason.message : 'The assignment could not be created.';
+				reason instanceof Error ? reason.message : t('component.assignment_create_failed');
 		} finally {
 			assignment.saving = false;
 		}
@@ -216,20 +220,24 @@
 			{#snippet start()}
 				<Stack gap="xs" class="max-w-md">
 					<Inline justify="between" gap="sm">
-						<span class="text-xs font-medium text-muted-foreground">Dispatch date</span>
+						<span class="text-xs font-medium text-muted-foreground">
+							{t('app.field_ops_controller.dispatch_date')}
+						</span>
 						<Button
 							variant="ghost"
 							size="sm"
 							class="h-6 px-2 text-xs"
-							onclick={() => setDispatchDay(today)}>Today</Button
+							onclick={() => setDispatchDay(today)}
 						>
+							{t('app.field_ops_controller.today')}
+						</Button>
 					</Inline>
 					<Inline gap="xs">
 						<Button
 							variant="outline"
 							size="icon"
-							aria-label="Previous day"
-							hint="Previous day"
+							aria-label={t('app.field_ops_controller.previous_day')}
+							hint={t('app.field_ops_controller.previous_day')}
 							onclick={() => setDispatchDay(shiftCalendarDate(dispatchDay, -1))}
 						>
 							<Icon icon="lucide:chevron-left" class="size-4" />
@@ -239,15 +247,15 @@
 								field={{ name: 'dispatch_date', kind: 'date', nullable: false }}
 								value={dispatchDay}
 								mode="edit"
-								placeholder="Select dispatch date"
+								placeholder={t('app.field_ops_controller.select_dispatch_date')}
 								onValueChange={updateDispatchDate}
 							/>
 						</div>
 						<Button
 							variant="outline"
 							size="icon"
-							aria-label="Next day"
-							hint="Next day"
+							aria-label={t('app.field_ops_controller.next_day')}
+							hint={t('app.field_ops_controller.next_day')}
 							onclick={() => setDispatchDay(shiftCalendarDate(dispatchDay, 1))}
 						>
 							<Icon icon="lucide:chevron-right" class="size-4" />
@@ -259,13 +267,18 @@
 				<Cluster gap="sm" justify="end">
 					<Button variant="secondary" onclick={() => (assignContractorOpen = true)}>
 						<Icon icon="lucide:user-round-check" class="mr-1.5 size-4 shrink-0" />
-						Assign contractor
+						{t('app.field_ops_controller.assign_contractor')}
 					</Button>
 				</Cluster>
 			{/snippet}
 		</Split>
 
-		<Split ratio="wide" collapse="switch" switchLabels={['Board', 'Map']} gap="md">
+		<Split
+			ratio="wide"
+			collapse="switch"
+			switchLabels={[t('app.field_ops_controller.board'), t('app.field_ops_controller.map')]}
+			gap="md"
+		>
 			{#snippet start()}
 				<Bound size="tall" pad="sm" class="rounded-lg border bg-card">
 					<CollectionKanban
@@ -279,10 +292,12 @@
 						{#snippet Card(assignment)}
 							<Stack gap="xs">
 								<p class="text-sm font-medium">
-									{assignmentCardById.get(assignment.norbital_id)?.job ?? 'Job assignment'}
+									{assignmentCardById.get(assignment.norbital_id)?.job ??
+										t('component.job_assignment')}
 								</p>
 								<p class="text-xs text-muted-foreground">
-									{assignmentCardById.get(assignment.norbital_id)?.contractor ?? 'Contractor'}
+									{assignmentCardById.get(assignment.norbital_id)?.contractor ??
+										t('component.contractor')}
 								</p>
 							</Stack>
 						{/snippet}
@@ -293,8 +308,8 @@
 				<Bound size="tall" clip class="rounded-lg">
 					<StaticMap
 						markers={mapMarkers}
-						ariaLabel={`Dispatch map for ${dispatchDay}`}
-						emptyDescription={`No contractor assignment with a mapped site is scheduled for ${dispatchDay}.`}
+						ariaLabel={t('app.field_ops_controller.dispatch_map_for', { date: dispatchDay })}
+						emptyDescription={t('app.field_ops_controller.map_empty', { date: dispatchDay })}
 						class="size-full"
 						markerContent={mapMarkerContent}
 					/>
@@ -305,25 +320,25 @@
 		<CollectionTable
 			{client}
 			collection="jobs"
-			title={`Jobs scheduled on ${dispatchDay}`}
-			description="Every job on this dispatch date, including work that still needs a contractor. Scheduling a new job opens the job form."
+			title={t('app.field_ops_controller.jobs_scheduled_on', { date: dispatchDay })}
+			description={t('app.field_ops_controller.jobs_scheduled_description')}
 			query={{
 				where: { scheduled_for: { eq: dispatchDay } },
 				orderBy: { title: 'asc' }
 			}}
-			searchPlaceholder="Search jobs on this date…"
+			searchPlaceholder={t('app.field_ops_controller.search_jobs_on_date')}
 		>
 			{#snippet columns({ Column })}
 				<Column name="title" minWidth={240} card="title" />
 				<Column
 					name="site_id"
-					label="Site"
+					label={t('component.site')}
 					minWidth={200}
 					card="subtitle"
 					render={({ row }) => siteNameById.get(row.site_id) ?? '—'}
 				/>
 				<Column name="status" card="badge" />
-				<Column name="nature" label="Job nature" minWidth={180} />
+				<Column name="nature" label={t('component.job_nature')} minWidth={180} />
 				<Column name="description" minWidth={240} />
 			{/snippet}
 		</CollectionTable>
@@ -334,16 +349,21 @@
 	<CollectionTable
 		{client}
 		collection="sites"
-		title="Sites"
-		description="Site information, upcoming jobs, and completed activity evidence."
+		title={t('app.field_ops_controller.tab_sites')}
+		description={t('app.field_ops_controller.sites_description')}
 		query={{ orderBy: { name: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
 			<Column name="name" minWidth={200} card="title" />
-			<Column name="client_name" label="Client / tenant" minWidth={180} card="subtitle" />
+			<Column
+				name="client_name"
+				label={t('component.client_tenant')}
+				minWidth={180}
+				card="subtitle"
+			/>
 			<Column name="location" minWidth={260} />
-			<Column name="house_type" label="Site type" card="badge" />
-			<Column name="floor_area_sqm" label="Floor area (sqm)" />
+			<Column name="house_type" label={t('component.site_type')} card="badge" />
+			<Column name="floor_area_sqm" label={t('component.floor_area_sqm')} />
 		{/snippet}
 	</CollectionTable>
 {/snippet}
@@ -352,15 +372,15 @@
 	<CollectionTable
 		{client}
 		collection="contractor_profiles"
-		title="Contractors"
-		description="Portal-linked companies and the certifications that make them dispatch-eligible."
+		title={t('app.field_ops_controller.tab_contractors')}
+		description={t('app.field_ops_controller.contractors_description')}
 		query={{ orderBy: { company_name: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
 			<Column name="company_name" minWidth={240} card="title" />
 			<Column
 				name="user_id"
-				label="Portal user"
+				label={t('component.portal_user')}
 				minWidth={240}
 				card="subtitle"
 				render={({ value }) =>
@@ -386,15 +406,15 @@
 	<CollectionTable
 		{client}
 		collection="certification_types"
-		title="Certification catalogue"
-		description="One shared catalogue for job requirements and contractor holdings."
+		title={t('app.field_ops_controller.certification_catalogue')}
+		description={t('app.field_ops_controller.certifications_description')}
 		query={{ orderBy: { name: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
 			<Column name="code" minWidth={140} card="badge" />
 			<Column name="name" minWidth={240} card="title" />
 			<Column name="category" minWidth={160} card="subtitle" />
-			<Column name="issuing_body" label="Issuing body" minWidth={200} />
+			<Column name="issuing_body" label={t('component.issuing_body')} minWidth={200} />
 			<Column name="active" />
 		{/snippet}
 	</CollectionTable>
@@ -402,9 +422,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="Field Operations"
-		title="Dispatch control"
-		description="Coordinate scheduled work, sites, contractors, and certification requirements."
+		eyebrow={t('app.field_ops_controller.eyebrow')}
+		title={t('app.field_ops_controller.header_title')}
+		description={t('app.field_ops_controller.header_description')}
 	/>
 {/snippet}
 
@@ -414,15 +434,25 @@
 		config={[
 			{
 				name: 'dispatch',
-				label: 'Dispatch schedule',
+				label: t('app.field_ops_controller.tab_dispatch'),
 				icon: 'lucide:kanban',
 				content: dispatchSchedule
 			},
-			{ name: 'sites', label: 'Sites', icon: 'lucide:map-pinned', content: sites },
-			{ name: 'contractors', label: 'Contractors', icon: 'lucide:hard-hat', content: contractors },
+			{
+				name: 'sites',
+				label: t('app.field_ops_controller.tab_sites'),
+				icon: 'lucide:map-pinned',
+				content: sites
+			},
+			{
+				name: 'contractors',
+				label: t('app.field_ops_controller.tab_contractors'),
+				icon: 'lucide:hard-hat',
+				content: contractors
+			},
 			{
 				name: 'certifications',
-				label: 'Certifications',
+				label: t('app.field_ops_controller.tab_certifications'),
 				icon: 'lucide:badge-check',
 				content: certifications
 			}
@@ -433,9 +463,9 @@
 <Sheet.Root bind:open={assignContractorOpen}>
 	<Sheet.Content flush class="sm:max-w-lg">
 		<Sheet.Header class="border-b border-border px-5 py-4">
-			<Sheet.Title>Assign contractor</Sheet.Title>
+			<Sheet.Title>{t('app.field_ops_controller.sheet_title')}</Sheet.Title>
 			<Sheet.Description>
-				Choose an unassigned job on {dispatchDay}; only qualified contractors are offered.
+				{t('app.field_ops_controller.sheet_description', { date: dispatchDay })}
 			</Sheet.Description>
 		</Sheet.Header>
 		<Stack
@@ -448,12 +478,12 @@
 			}}
 		>
 			<label class="grid gap-1.5 text-sm">
-				<span class="font-medium">Job and site</span>
+				<span class="font-medium">{t('app.field_ops_controller.job_and_site')}</span>
 				<Combobox
 					options={assignJobOptions}
 					bind:value={assignment.jobId}
-					emptyPlaceholder="Select unassigned job…"
-					searchPlaceholder="Search unassigned jobs…"
+					emptyPlaceholder={t('app.field_ops_controller.select_unassigned_job')}
+					searchPlaceholder={t('app.field_ops_controller.search_unassigned_jobs')}
 					clientConfig={{
 						isLoading: assignJobsQuery.loading,
 						error: assignJobsQuery.error?.message ?? null
@@ -462,12 +492,12 @@
 			</label>
 
 			<label class="grid gap-1.5 text-sm">
-				<span class="font-medium">Contractor</span>
+				<span class="font-medium">{t('component.contractor')}</span>
 				<Combobox
 					options={assignContractorOptions}
 					bind:value={assignment.contractorId}
-					emptyPlaceholder="Select qualified contractor…"
-					searchPlaceholder="Search qualified contractors…"
+					emptyPlaceholder={t('app.field_ops_controller.select_qualified_contractor')}
+					searchPlaceholder={t('app.field_ops_controller.search_qualified_contractors')}
 					clientConfig={{
 						isLoading:
 							assignContractorsQuery.loading ||
@@ -481,7 +511,7 @@
 
 			{#if assignSelectedJob && assignQualifiedContractors.length === 0}
 				<p class="text-sm text-destructive" role="alert">
-					No contractor holds every required certification for this job.
+					{t('app.field_ops_controller.no_qualified_contractor')}
 				</p>
 			{/if}
 			{#if assignment.error}
@@ -489,7 +519,7 @@
 			{/if}
 			{#if (assignJobsQuery.current ?? []).length === 0 && !assignJobsQuery.loading}
 				<p class="text-sm text-muted-foreground">
-					There are no unassigned jobs on {dispatchDay}. Create a job first or choose another date.
+					{t('app.field_ops_controller.no_unassigned_jobs', { date: dispatchDay })}
 				</p>
 			{/if}
 
@@ -498,7 +528,9 @@
 				class="w-full"
 				disabled={!assignment.jobId || !assignment.contractorId || assignment.saving}
 			>
-				{assignment.saving ? 'Assigning…' : 'Assign contractor'}
+				{assignment.saving
+					? t('app.field_ops_controller.assigning')
+					: t('app.field_ops_controller.assign_contractor')}
 			</Button>
 		</Stack>
 	</Sheet.Content>

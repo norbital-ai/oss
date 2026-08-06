@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
@@ -13,10 +15,14 @@
 		certification_type_id: string;
 	}
 
-	const certificationColumns = [
+	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
+
+	const certificationColumns = $derived([
 		{
 			key: 'certification_type_id',
-			label: 'Certification',
+			label: t('component.certification'),
 			field: {
 				name: 'certification_type_id',
 				kind: 'uuid',
@@ -34,9 +40,7 @@
 			},
 			width: 320
 		}
-	] satisfies readonly MatrixColumn<CertificationRequirementRow>[];
-
-	let { record, close }: RepresentationProps = $props();
+	] satisfies readonly MatrixColumn<CertificationRequirementRow>[]);
 
 	const recordId = $derived(record?.norbital_id);
 	const formDefaults = $derived(record ?? { status: 'unassigned' as const });
@@ -77,7 +81,7 @@
 		const validRows = nextRows.filter((row) => row.certification_type_id.length > 0);
 		const nextIds = validRows.map((row) => row.certification_type_id);
 		if (new Set(nextIds).size !== nextIds.length) {
-			certificationError = 'Each certification can only be required once.';
+			certificationError = t('component.certification_duplicate');
 			return;
 		}
 
@@ -101,7 +105,7 @@
 		try {
 			const createMany = client.db.job_certification_requirements.createMany;
 			const remove = client.db.job_certification_requirements.delete;
-			if (!createMany || !remove) throw new Error('Certification editing is unavailable.');
+			if (!createMany || !remove) throw new Error(t('component.certification_editing_unavailable'));
 
 			await Promise.all(currentLinks.map((link) => remove(link.norbital_id)));
 			if (validRows.length > 0) {
@@ -127,14 +131,14 @@
 	collection="jobs"
 	{recordId}
 	defaultValues={formDefaults}
-	submitLabel={record ? undefined : 'Create job'}
+	submitLabel={record ? undefined : t('component.create_job')}
 	onAfterSubmit={record ? undefined : close}
 >
 	{#snippet children({ Field })}
 		<Grid minimum="panel">
 			<Field
 				name="site_id"
-				label="Site"
+				label={t('component.site')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'sites',
@@ -148,35 +152,37 @@
 					}
 				}}
 			/>
-			<Field name="title" label="Job title" />
-			<Field name="nature" label="Job nature" />
-			<Field name="scheduled_for" label="Scheduled date" />
+			<Field name="title" label={t('component.job_title')} />
+			<Field name="nature" label={t('component.job_nature')} />
+			<Field name="scheduled_for" label={t('component.scheduled_date')} />
 			<Column span="all">
-				<Field name="description" label="Job description and scope" />
+				<Field name="description" label={t('component.job_description_scope')} />
 			</Column>
 		</Grid>
 		{#if record}
 			<Stack as="section" gap="sm" aria-labelledby="job-certifications-heading">
 				<div>
 					<h3 id="job-certifications-heading" class="text-sm font-semibold">
-						Required certifications
+						{t('component.required_certifications')}
 					</h3>
 					<p class="text-sm text-muted-foreground">
-						Selected from the shared catalogue and enforced when a contractor is assigned.
+						{t('component.required_certifications_description')}
 					</p>
 				</div>
 				<MatrixRenderer
 					rows={certificationRows}
 					columns={certificationColumns}
 					disabled={certificationSaving || requirementsQuery?.loading === true}
-					emptyMessage="No certifications required."
+					emptyMessage={t('component.no_certifications_required')}
 					createRow={() => ({ id: crypto.randomUUID(), certification_type_id: '' })}
-					addRowLabel="Add certification"
+					addRowLabel={t('component.add_certification')}
 					bounded={false}
 					onChange={(nextRows) => void updateCertificationRequirements(nextRows)}
 				/>
 				<p class="text-xs text-muted-foreground">
-					{certificationSaving ? 'Saving certification requirements…' : 'Changes save immediately.'}
+					{certificationSaving
+						? t('component.certifications_saving')
+						: t('component.certifications_saved_immediately')}
 				</p>
 				{#if certificationError}
 					<p class="text-xs text-destructive" role="alert">{certificationError}</p>
@@ -184,7 +190,7 @@
 			</Stack>
 		{:else}
 			<p class="text-sm text-muted-foreground">
-				Certification requirements can be selected once the job exists.
+				{t('component.certifications_after_job')}
 			</p>
 		{/if}
 	{/snippet}
