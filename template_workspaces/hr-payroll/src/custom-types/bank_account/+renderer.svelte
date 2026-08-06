@@ -70,8 +70,8 @@
 				options={bankOptions}
 				value={account.bank_code ?? null}
 				{disabled}
-				searchPlaceholder="Search banks…"
-				emptyPlaceholder="No bank selected"
+				searchPlaceholder={t('renderer.bank_account.search_banks')}
+				emptyPlaceholder={t('renderer.bank_account.no_bank')}
 				onValueChange={(code) => {
 					const selected = availableBanks.find((bank) => bank.code === code);
 					if (selected) update({ bank_name: selected.name, bank_code: selected.code });

@@ -19,7 +19,7 @@
 		locale,
 		class: className
 	}: DataRendererProps = $props();
-	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 
 	const variant = $derived.by((): NumericRendererVariant => {
 		const configured = field.variant ?? { type: 'number' as const };

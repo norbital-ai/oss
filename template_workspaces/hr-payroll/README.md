@@ -1,5 +1,7 @@
 # HR & Payroll
 
+![HR & Payroll workspace banner](assets/banner.svg)
+
 This template turns approved employment, attendance, leave and money events into auditable payroll
 results. It supports effective-dated terms, roster-based day classification, statutory
 contributions, repayment schedules, draft recalculation, paid-run locking and source-linked

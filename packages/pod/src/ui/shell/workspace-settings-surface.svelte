@@ -87,10 +87,13 @@
 		invitationsLoaded = true;
 	}
 
-	$effect(() => {
-		if (!isAdmin || activeTab !== 'invitations' || invitationsLoaded) return;
-		void run(loadInvitations);
-	});
+	function onTabChange(tab: string): void {
+		activeTab = tab as SettingsTab;
+		// Invitations come from the host API, not the replica; load them once, on first visit.
+		if (tab === 'invitations' && isAdmin && !invitationsLoaded) {
+			void run(loadInvitations);
+		}
+	}
 
 	function changeRole(userId: string, role: string): void {
 		const parsed = UserRoleSchema.safeParse(role);
@@ -171,6 +174,7 @@
 
 				<Tabs
 					bind:value={activeTab}
+					onValueChange={onTabChange}
 					animate={false}
 					contentPadding={false}
 					listClass="mx-0 w-full"

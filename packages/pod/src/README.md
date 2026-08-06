@@ -31,7 +31,9 @@ src/
 
 Only `+model.ts` is required for each collection; the other collection roles and `+seed.ts` are optional.
 Apps contain static `<svelte:head>` metadata: a literal title, optional description, literal `pod:icon`, and
-optional static thumbnail/banner URLs. The shell owns document scroll; app bodies compose `PageHeader` with
+optional static `pod:thumbnail` / `pod:banner` URLs (missing media gets a same-size icon fallback). The
+collection-owned `+representation.svelte` can additionally declare a static `pod:banner` for the record
+detail sheet header. The shell owns document scroll; app bodies compose `PageHeader` with
 Pod layout primitives. Local scroll regions are explicit `Bound` + `Scroll` pairs.
 App, automation, remote, and agent-tool IDs come from their `+<lower_snake_case>` filenames.
 

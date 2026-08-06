@@ -18,6 +18,7 @@ Every application is `src/apps/**/+<app>.svelte`; filename and group directory o
 	<meta name="description" content="Manage daily operations" />
 	<meta name="pod:icon" content="lucide:briefcase" />
 	<meta name="pod:thumbnail" content="https://cdn.example.com/operations-card.webp" />
+	<meta name="pod:banner" content="https://cdn.example.com/operations-banner.webp" />
 </svelte:head>
 
 <Stack gap="lg">
@@ -39,6 +40,59 @@ import { group } from '@norbital-ai/pod/authoring';
 
 export default group({ label: 'Operations', icon: 'lucide:briefcase' });
 ```
+
+### App media — icons, thumbnails, banners
+
+| Field           | Where it renders                                                    | Required |
+| --------------- | ------------------------------------------------------------------- | -------- |
+| `pod:icon`      | Sidebar, overview app cards, omni finder (Iconify, e.g. `lucide:…`) | **yes**  |
+| `pod:thumbnail` | 16:9 card image on the workspace overview, thumbnail in omni finder | no       |
+| `pod:banner`    | Full-width image above the app page inside the shell                | no       |
+
+Not every app needs a thumbnail or banner. When one is missing the shell draws a **fixed-size
+fallback in the same slot**: overview cards keep their 16:9 media area with a centered icon tile,
+and the omni finder shows the app icon in the same 6×6 tile a thumbnail would occupy — so grids and
+rows stay aligned whether or not an app ships images.
+
+**Shipping images with a template.** Commit image files under `assets/` in the template workspace
+and reference them with the seed-asset URL — no external CDN needed:
+
+```text
+template_workspaces/<key>/assets/app-media/operations-banner.svg
+```
+
+```svelte
+<meta
+	name="pod:thumbnail"
+	content="/api/template-seed-assets/<key>/app-media/operations-banner.svg"
+/>
+<meta name="pod:banner" content="/api/template-seed-assets/<key>/app-media/operations-banner.svg" />
+```
+
+Any file under `assets/` is served by Core at `/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
+WebP, GIF, SVG, IFC, PDF, …). Reuse one wide image (e.g. 1600×900) for both thumbnail and banner:
+the thumbnail slot crops it 16:9 and the banner crops it to the page header height. Template
+assets are the standard place for this; a URL from any stable origin works the same.
+
+### Record detail banners (`+representation.svelte`)
+
+The collection-owned `+representation.svelte` may also declare a static `pod:banner` meta. The
+compiler reads it and the record detail sheet renders it as a fixed-height image above the sheet
+header — on both table and kanban detail surfaces. It is optional and independent of app media.
+
+```svelte
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/<key>/record-media/employments-banner.svg"
+	/>
+</svelte:head>
+```
+
+The same seed-asset pattern applies: commit the image under the template's `assets/` directory
+(e.g. `assets/record-media/<collection>-banner.svg`) and point at its
+`/api/template-seed-assets/<key>/…` URL. A missing or dynamic banner is ignored — the sheet header
+renders without one.
 
 The shell owns document scroll and one app query container. Use `Stack`, `Inline`, `Cluster`, `Split`,
 `Grid`, `Columns`, `Cover`, `Center`, and `Frame` for composition. Create local scrolling only with named,

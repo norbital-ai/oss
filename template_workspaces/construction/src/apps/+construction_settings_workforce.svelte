@@ -30,6 +30,14 @@
 	<title>Construction Workforce Settings</title>
 	<meta name="description" content="Manage workers, certifications, and job requirements." />
 	<meta name="pod:icon" content="lucide:users" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/construction/app-media/construction_settings_workforce-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/construction/app-media/construction_settings_workforce-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet workers()}

@@ -9,6 +9,7 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import * as Command from '#lib/command';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import type { MessageVars } from '@norbital-ai/std/i18n';
 	import { Inline } from '#lib/layout';
 	import * as ToggleGroup from '#lib/toggle-group';
 	import { cn } from '#lib/utils';
@@ -368,7 +369,12 @@
 				TableCell
 			);
 			if (fileAttachmentClient) {
-				base.push(createFileAttachmentExtension({ client: fileAttachmentClient }));
+				base.push(
+					createFileAttachmentExtension({
+						client: fileAttachmentClient,
+						translate: t as (key: string, vars?: MessageVars) => string
+					})
+				);
 			}
 		}
 

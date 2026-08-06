@@ -26,6 +26,7 @@ import {
 } from '$lib/server/collection/collection_ops.server.js';
 import { runWithBypassSecretIfValidAsync } from '$lib/server/collection/access_control/permission/permission_bypass_key.server.js';
 import { error } from '$lib/server/http.js';
+import { requestI18n } from '$lib/server/i18n.js';
 import {
 	CountWireSchema,
 	CreateManyWireSchema,
@@ -53,7 +54,7 @@ export const getCollectionDefinitions = authenticated.query(
 function requireCollection(collection: string): void {
 	const workspace = getWorkspace({ provision: true });
 	if (!(collection in workspace.manifestCtx.manifest.collections)) {
-		throw error(404, `Unknown collection "${collection}".`);
+		throw error(404, requestI18n().t('pod.server.unknownCollection', { collection }));
 	}
 }
 
@@ -198,7 +199,7 @@ export const exportPipeline = authenticated.command(ExportRecordsWireSchema, asy
 	requireCollection(collectionName);
 	const collectionMeta = ctx.manifestCtx.getCollection(collectionName);
 	if (!collectionMeta.pipelines?.export) {
-		throw error(404, `Collection '${collectionName}' has no export pipeline configured.`);
+		throw error(404, requestI18n().t('pod.server.noExportPipeline', { collection: collectionName }));
 	}
 
 	return runWithBypassSecretIfValidAsync(input.bypass_secret, async () => {
@@ -231,7 +232,7 @@ export const importPipeline = authenticated.command(ImportRecordsWireSchema, asy
 	requireCollection(collectionName);
 	const collectionMeta = ctx.manifestCtx.getCollection(collectionName);
 	if (!collectionMeta.pipelines?.import) {
-		throw error(404, `Collection '${collectionName}' has no import pipeline configured.`);
+		throw error(404, requestI18n().t('pod.server.noImportPipeline', { collection: collectionName }));
 	}
 
 	return runWithBypassSecretIfValidAsync(input.bypass_secret, async () => {
@@ -244,7 +245,7 @@ export const importPipeline = authenticated.command(ImportRecordsWireSchema, asy
 		});
 
 		if (!Array.isArray(payloads) || payloads.length === 0) {
-			throw error(400, 'Import pipeline returned no records.');
+			throw error(400, requestI18n().t('pod.server.importReturnedNoRecords'));
 		}
 
 		return runCreateMany(ctx, collectionName, payloads);

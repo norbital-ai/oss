@@ -53,7 +53,7 @@
 		locale,
 		class: className
 	}: DataRendererProps = $props();
-	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 	const rendererRuntime = getDataRendererRuntimeContext();
 	const autocompleteGeolocation =
 		rendererRuntime?.autocompleteGeolocation ?? (() => Promise.resolve([]));

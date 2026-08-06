@@ -46,6 +46,8 @@ Studio → Template updates using the explicit Template/Tenant choices.
 | Controller UI: inline, `$derived`, no UUIDs | [controller-surfaces.md](references/controller-surfaces.md)           |
 | Padding, gaps, the app inset                | [padding-and-spacing.md](references/padding-and-spacing.md)           |
 | Generated files and build lifecycle         | [generated-and-build.md](references/generated-and-build.md)           |
+| English + Chinese copy, catalogs, `useI18n` | [internationalization.md](references/internationalization.md)         |
+| Template manifest, README, zh README        | [template-repository.md](references/template-repository.md)           |
 
 Read only the relevant reference. Use `TENANT_WORKSPACE.md` for runtime internals,
 `ACCESS_CONTROL.md` for policy behavior, and the code-quality skill after edits.
@@ -187,7 +189,13 @@ filter never creates server work against a resident collection. For the full arc
 ## Apps, layout, and collection surfaces
 
 Apps are `src/apps/**/+<app>.svelte`. Their `<svelte:head>` metadata is static (`title`, optional
-description, literal `pod:icon`, optional static thumbnail/banner URLs). There is no host layout metadata.
+description, literal `pod:icon`, optional static `pod:thumbnail` / `pod:banner` URLs). There is no host layout metadata.
+Thumbnails and banners are optional — missing ones get a same-size icon fallback in the shell (overview
+cards keep their 16:9 media slot, omni finder keeps its 6×6 tile). Ship template images under `assets/`
+and reference `/api/template-seed-assets/<key>/<path>` URLs. The collection-owned `+representation.svelte`
+can also declare a static `pod:banner` meta, rendered above the record detail sheet header. See
+[apps-and-server-roles.md](references/apps-and-server-roles.md#app-media--icons-thumbnails-banners) for the
+full media contract.
 
 The pod shell owns the application region, default document scroll, query container, and app identity.
 Use ordinary `PageHeader` and `Tabs` from `@norbital-ai/ui` where their semantics fit; neither controls

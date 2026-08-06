@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import type { RepresentationProps } from './$types.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import type { CollectionRelationOptions } from '@norbital-ai/platform-utils/collection';
 
 	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -20,7 +24,7 @@
 		<Grid minimum="compact">
 			<Field
 				name="goods_receipt_id"
-				label="Goods receipt"
+				label={t('component.goods_receipt')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'goods_receipts',
@@ -34,7 +38,7 @@
 			/>
 			<Field
 				name="purchase_order_line_id"
-				label="Order line"
+				label={t('component.order_line')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'purchase_order_lines',
@@ -50,7 +54,7 @@
 					} satisfies CollectionRelationOptions
 				}}
 			/>
-			<Field name="quantity_received" label="Received quantity" />
+			<Field name="quantity_received" label={t('component.received_quantity')} />
 		</Grid>
 	{/snippet}
 </CollectionForm>

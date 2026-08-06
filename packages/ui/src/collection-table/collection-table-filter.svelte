@@ -17,6 +17,7 @@
 		type CollectionFilterField,
 		type FilterCollectionDefinition
 	} from './collection-table-filter-fields.js';
+	import { type Translate } from '../data-renderer/index.js';
 	import {
 		collectionFilterOperandField,
 		collectionFilterOperatorNeedsValue,
@@ -55,7 +56,7 @@
 	let filters = $state<Filter[]>([]);
 	let nextId = $state(0);
 	const filterFields = $derived(collectionFilterFields(definition, collections));
-	const fieldTree = $derived(collectionFilterFieldTree(filterFields));
+	const fieldTree = $derived(collectionFilterFieldTree(filterFields, t as Translate));
 	const activeCount = $derived(filters.filter(filterIsActive).length);
 
 	/**

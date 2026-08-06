@@ -10,6 +10,7 @@
 	 */
 	import Icon from '@iconify/svelte';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
+	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -64,8 +65,8 @@
 					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/compaction:rotate-90"
 				/>
 			</summary>
-			<div class="mt-1 ml-3.5 flex flex-col gap-2 border-l border-border/60 py-1 pl-3">
-				<div class="flex items-center gap-1" role="tablist" aria-label={t('pod.agent.compactedContextAria')}>
+			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
+				<Inline gap="xs" role="tablist" aria-label={t('pod.agent.compactedContextAria')}>
 					<button
 						type="button"
 						role="tab"
@@ -92,7 +93,7 @@
 					>
 						{t('pod.agent.fullConversation')}
 					</button>
-				</div>
+				</Inline>
 				<div role="tabpanel" class="min-w-0">
 					{#if checkpointTab === 'summary'}
 						<p
@@ -111,7 +112,7 @@
 						</ol>
 					{/if}
 				</div>
-			</div>
+			</Stack>
 		</details>
 	</li>
 {:else if message.kind === 'tool'}
@@ -151,19 +152,19 @@
 					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/tool:rotate-90"
 				/>
 			</summary>
-			<div class="mt-1 ml-3.5 flex flex-col gap-2 border-l border-border/60 py-1 pl-3">
+			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
 				{#if message.input}
-					<div class="flex min-w-0 flex-col gap-1">
+					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('pod.agent.input')}
 						</span>
 						<pre
 							class="m-0 max-h-56 overflow-auto rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90">{message.input}</pre>
-					</div>
+					</Stack>
 				{/if}
 				{#if message.children.length > 0}
 					<!-- The delegated agent's own transcript, rendered by this same component. -->
-					<div class="flex min-w-0 flex-col gap-1">
+					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('pod.agent.delegatedTranscript')}
 						</span>
@@ -172,27 +173,27 @@
 								<Self message={child} nested="subagent" />
 							{/each}
 						</ol>
-					</div>
+					</Stack>
 				{/if}
 				{#if message.error}
-					<div class="flex min-w-0 flex-col gap-1">
+					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-destructive uppercase">{t('pod.agent.error')}</span
 						>
 						<pre
 							class="m-0 max-h-56 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive">{message.error}</pre>
-					</div>
+					</Stack>
 				{:else if message.output}
-					<div class="flex min-w-0 flex-col gap-1">
+					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('pod.agent.result')}
 						</span>
 						<pre
 							class="m-0 max-h-56 overflow-auto rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90">{message.output}</pre>
-					</div>
+					</Stack>
 				{:else if message.state === 'running'}
 					<p class="m-0 text-micro text-muted-foreground">{t('pod.agent.waitingForResult')}</p>
 				{/if}
-			</div>
+			</Stack>
 		</details>
 	</li>
 {:else}

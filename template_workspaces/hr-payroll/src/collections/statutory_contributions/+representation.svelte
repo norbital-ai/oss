@@ -115,26 +115,26 @@
 			collection="contribution_rates"
 			view={`statutory_contributions:rates:${record.norbital_id}`}
 			title={t('component.rate_bands')}
-			description="One rung of this scheme's ladder: the selector that picks it — wage, wage and age, headcount or risk class — and the award it pays. A floor is the first band, a ceiling the terminal one."
+			description={t('component.rate_bands_description')}
 			initialFilters={inForceTodayFilter()}
 			query={{
 				where: { statutory_contribution_id: { eq: record.norbital_id } },
 				orderBy: { norbital_created_at: 'desc' }
 			}}
-			searchPlaceholder="Search rate bands…"
+			searchPlaceholder={t('component.search_rate_bands')}
 		>
 			{#snippet columns({ Column: TableColumn })}
 				<TableColumn
 					name="selector"
 					label={t('component.applies_to')}
 					card="title"
-					render={({ value }) => formatRateSelector(value)}
+					render={({ value }) => formatRateSelector(value, t)}
 				/>
 				<TableColumn
 					name="award"
 					label={t('component.award')}
 					card="subtitle"
-					render={({ value }) => formatRateAward(value)}
+					render={({ value }) => formatRateAward(value, t)}
 				/>
 				<TableColumn name="effective_range" label={t('component.effective')} />
 			{/snippet}

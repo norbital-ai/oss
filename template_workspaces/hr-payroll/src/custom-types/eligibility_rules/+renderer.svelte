@@ -239,7 +239,7 @@
 			value={null}
 			{disabled}
 			searchable={false}
-			emptyPlaceholder="Add a rule…"
+			emptyPlaceholder={t('renderer.eligibility_rules.add_rule')}
 			onValueChange={addRule}
 		/>
 	</Stack>

@@ -2,6 +2,7 @@
 	import { cn } from '#lib/utils';
 	import { assignLanes, isSameDay } from '../utils.js';
 	import type { CalendarEvent, EventRenderContext } from '../types.js';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Snippet } from 'svelte';
 	import EventBar from './event-bar.svelte';
 
@@ -24,6 +25,7 @@
 	} = $props();
 
 	const allDay = $derived(events.filter((e) => e.allDay || !isSameDay(e.start, e.end)));
+	const { t } = useI18n<UiKeys>();
 
 	const laneAssignments = $derived(assignLanes(allDay));
 	const maxLanes = $derived(Math.max(1, ...laneAssignments.map((a) => a.totalLanes)));
@@ -56,7 +58,7 @@
 					style="top: {LABEL_LANE * LONE_HEIGHT}px"
 					class="absolute left-2 text-tiny text-muted-foreground font-medium"
 				>
-					+{maxLanes - LABEL_LANE} more
+					{t('misc.moreItems', { count: maxLanes - LABEL_LANE })}
 				</div>
 			{/if}
 		</div>

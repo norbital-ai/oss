@@ -18,7 +18,7 @@
 		locale,
 		class: className
 	}: DataRendererProps = $props();
-	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 
 	const values = $derived(
 		Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []

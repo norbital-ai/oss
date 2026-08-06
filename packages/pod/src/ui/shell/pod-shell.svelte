@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, tick } from 'svelte';
 	import { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 	import { page, goto } from '$lib/ui/state/router.svelte.js';
 	import {
@@ -29,6 +29,7 @@
 		setDataRendererRuntimeContext,
 		type CustomTypeRendererMap
 	} from '@norbital-ai/ui/data-renderer';
+	import { shortcut } from '@norbital-ai/ui/keybindings';
 	import { WorkspaceShell, type WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Bound, Center, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
@@ -53,6 +54,8 @@
 	import WorkspaceSettingsSurface from './workspace-settings-surface.svelte';
 	import { workspaceSettingsApi } from './workspace-settings-api.js';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
+	import { requestAgentComposerFocus } from '../agent/agent-composer-focus.js';
+	import OmniFinder from './omni-finder.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 
 	let {
@@ -91,7 +94,7 @@
 	setCollectionClientContext(() => workspaceApi);
 	setDataRendererRuntimeContext({
 		autocompleteGeolocation: workspaceRuntimeOperations.autocompleteGeolocation,
-		createFileUploadClient: () => new WorkspaceFileUploadClient(),
+		createFileUploadClient: () => new WorkspaceFileUploadClient({ t }),
 		renderStaticMap: workspaceRuntimeOperations.renderStaticMap,
 		get customTypeRenderers() {
 			return customTypeRenderers;
@@ -170,6 +173,29 @@
 		topDetailFrame ? detailPreferences.isFullScreen(topDetailFrame.collection_name) : false
 	);
 	let agentSheetOpen = $state(false);
+	let omniOpen = $state(false);
+
+	/**
+	 * Cmd+K and the FAB are the same gesture: open the agent, then hand the composer focus.
+	 *
+	 * The full-page /agent surface and an already-open sheet only need the focus half. A sheet
+	 * mount is the slow half — its content appears in the DOM on open, but the composer sits
+	 * inside a portal, so the focus request must land after the panel has mounted; `tick` is that
+	 * boundary. The panel itself owns caret placement; the shell only asks for focus.
+	 */
+	function openAgent(): void {
+		if (agentSurfaceAllowed || agentSheetOpen) {
+			requestAgentComposerFocus();
+			return;
+		}
+		agentSheetOpen = true;
+		void tick().then(requestAgentComposerFocus);
+	}
+
+	/** Cmd+/ toggles the omni finder; the finder clears its query as it closes. */
+	function toggleOmniFinder(): void {
+		omniOpen = !omniOpen;
+	}
 	const navigationModel = $derived.by((): WorkspaceNavigationModel => ({
 		activeOrganization,
 		organizations: resolveWorkspaceOrganizationOptions({
@@ -324,8 +350,10 @@
 												navigate(app.href);
 											}}
 										>
-											{#if app.thumbnail}
-												<div class="aspect-[16/9] w-full overflow-hidden border-b bg-muted">
+											<div
+												class="relative flex aspect-[16/9] w-full items-center justify-center overflow-hidden border-b bg-muted"
+											>
+												{#if app.thumbnail}
 													<img
 														src={app.thumbnail}
 														alt=""
@@ -333,8 +361,17 @@
 														decoding="async"
 														class="size-full object-cover"
 													/>
-												</div>
-											{/if}
+												{:else}
+													<div
+														class="flex size-12 items-center justify-center rounded-xl border border-input bg-background text-foreground shadow-xs"
+													>
+														<IconWrapper
+															name={app.icon ?? 'lucide:layout-grid'}
+															class="size-6 text-muted-foreground"
+														/>
+													</div>
+												{/if}
+											</div>
 											<Inline align="start" gap="sm" class="p-3">
 												<div
 													class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
@@ -343,13 +380,11 @@
 												</div>
 												<div class="min-w-0 flex-1">
 													<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
-													{#if app.description}
-														<p
-															class="mt-0.5 line-clamp-2 text-micro leading-4 text-muted-foreground"
-														>
-															{app.description}
-														</p>
-													{/if}
+													<p
+														class="mt-0.5 line-clamp-2 min-h-8 text-micro leading-4 text-muted-foreground"
+													>
+														{app.description ?? ''}
+													</p>
 												</div>
 											</Inline>
 										</a>
@@ -411,6 +446,32 @@
 	</Bound>
 </WorkspaceShell>
 
+<svelte:window
+	use:shortcut={[
+		{
+			ctrl: true,
+			key: 'k',
+			callback: openAgent,
+			exactMatch: true
+		},
+		{
+			ctrl: true,
+			key: 'forward slash',
+			callback: toggleOmniFinder,
+			exactMatch: true
+		}
+	]}
+/>
+
+<OmniFinder
+	bind:open={omniOpen}
+	{manifestContext}
+	{navigationModel}
+	{agentAvailable}
+	onNavigate={navigate}
+	onAskAgent={openAgent}
+/>
+
 <!--
 	Billing toast and agent FAB sit outside WorkspaceShell / Bound so `position: fixed`
 	is viewport-relative. Bound sets `container-type: inline-size`, which would otherwise
@@ -429,7 +490,7 @@
 		aria-label={t('pod.shell.openWorkspaceAgent')}
 		aria-haspopup="dialog"
 		class="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 h-11 gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-6"
-		onclick={() => (agentSheetOpen = true)}
+		onclick={openAgent}
 		data-testid="workspace-agent-trigger"
 	>
 		<IconWrapper name="product:agent" class="size-4" />
@@ -447,18 +508,25 @@
 			class="w-[min(30rem,100%)] sm:max-w-[30rem]"
 			persistenceKey="pod-workspace-agent"
 			preventBackgroundClick="narrow"
+			onOpenAutoFocus={(event) => {
+				// The composer, not the sheet shell, owns focus: Cmd+K and the FAB both end in the
+				// textarea, and the sheet would otherwise grab the caret for itself.
+				event.preventDefault();
+			}}
 		>
-			<div class="flex h-full min-h-0 flex-col">
+			<Stack gap="none" fill>
 				<Sheet.Header class="shrink-0 border-b px-4 py-3.5 pr-12 text-left sm:px-5">
-					<Sheet.Title class="text-sm font-semibold">{t('pod.shell.workspaceAgentTitle')}</Sheet.Title>
+					<Sheet.Title class="text-sm font-semibold"
+						>{t('pod.shell.workspaceAgentTitle')}</Sheet.Title
+					>
 					<Sheet.Description class="text-xs leading-5 text-muted-foreground">
 						{t('pod.shell.workspaceAgentDescription')}
 					</Sheet.Description>
 				</Sheet.Header>
-				<div class="min-h-0 flex-1">
+				<Stack gap="none" grow>
 					<AgentChatPanel />
-				</div>
-			</div>
+				</Stack>
+			</Stack>
 		</Sheet.Content>
 	</Sheet.Root>
 {/if}

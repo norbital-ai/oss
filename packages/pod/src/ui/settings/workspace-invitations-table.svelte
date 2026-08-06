@@ -10,7 +10,7 @@
 	import { UserRoleSchema } from '@norbital-ai/platform-utils/system/types';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { renderSnippet } from '@norbital-ai/ui/utils';
 	import type { WorkspaceInvitation } from '../shell/workspace-settings.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -195,16 +195,16 @@
 		</p>
 	{/if}
 
-	<CollectionTable
-		client={invitationClient}
-		collection="invitation"
-		view="workspace-settings-invitations"
-		query={{ orderBy: { created_at: 'desc' }, limit: 25 }}
-		title={t('pod.settings.invitations')}
-		description={t('pod.settings.invitationsDescription')}
-		features={{ search: true, filter: false, bulk: false, create: false }}
-		class="h-[min(36rem,calc(100dvh-20rem))] min-h-[24rem]"
-	>
+	<Bound size="fit">
+		<CollectionTable
+			client={invitationClient}
+			collection="invitation"
+			view="workspace-settings-invitations"
+			query={{ orderBy: { created_at: 'desc' }, limit: 25 }}
+			title={t('pod.settings.invitations')}
+			description={t('pod.settings.invitationsDescription')}
+			features={{ search: true, filter: false, bulk: false, create: false }}
+		>
 		{#snippet columns({ Column })}
 			<Column
 				name="email"
@@ -235,5 +235,6 @@
 			/>
 		{/snippet}
 	</CollectionTable>
+	</Bound>
 	<p class="text-micro text-muted-foreground">{t('pod.settings.invitationsHint')}</p>
 </Stack>

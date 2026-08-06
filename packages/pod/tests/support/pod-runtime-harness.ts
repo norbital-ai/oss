@@ -15,7 +15,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Pool, type PoolClient } from 'pg';
+import { Client, Pool, type Notification, type PoolClient } from 'pg';
 import type {
 	HostAiBinding,
 	HostFileStorageBinding,
@@ -24,7 +24,7 @@ import type {
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
-import { startPostgres, type PgHarness } from './pg-harness.js';
+import { startPostgresFromTemplate, type PgHarness } from './pg-harness.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js');
@@ -80,6 +80,12 @@ type HandleHostCommand = (
 	identity: { userId: string; organizationId: string; organizationName: string }
 ) => Promise<unknown>;
 
+type NotificationSource = {
+	subscribe(listener: (channel: string, payload: string) => void): () => void;
+} | null;
+
+type RegisterDatabaseNotifications = (source: NotificationSource) => void;
+
 type TestHostDbBinding = {
 	query(
 		sql: unknown,
@@ -98,6 +104,46 @@ type TestHostDbBinding = {
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const ORG_NAME = 'Sync IT Org';
 const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
+
+/**
+ * The newest mtime under a directory, or 0 when it does not exist.
+ *
+ * Cheap enough to run per boot: a template's `src/` is a few hundred files and this walks it once.
+ */
+async function newestMtime(root: string): Promise<number> {
+	const entries = await readdir(root, { withFileTypes: true, recursive: true }).catch(() => null);
+	if (!entries) return 0;
+	let newest = 0;
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		const info = await stat(path.join(entry.parentPath, entry.name)).catch(() => null);
+		if (info && info.mtimeMs > newest) newest = info.mtimeMs;
+	}
+	return newest;
+}
+
+/**
+ * Whether the built tenant bundle already reflects both of its inputs.
+ *
+ * Fifteen suites boot this harness and all but two of them ask for the same template, so the build
+ * they each ran was the same build fifteen times — and because they wrote it to the same shared
+ * directory they had to take a lock to do it, which is what made the whole `node-runtime` project
+ * run one file at a time. The bundle is a pure function of the template source and the pod package
+ * it is built with, so a boot that finds both older than the artefact can simply use it.
+ *
+ * Both inputs are checked. Comparing against the template alone would hand back a stale bundle to
+ * every suite the moment `packages/pod` was rebuilt, which is exactly the case a runtime test is
+ * there to catch.
+ */
+async function isRuntimeBuildFresh(templateRoot: string, runtimePath: string): Promise<boolean> {
+	const built = await stat(runtimePath).catch(() => null);
+	if (!built) return false;
+	const [templateSource, podPackage] = await Promise.all([
+		newestMtime(path.join(templateRoot, 'src')),
+		newestMtime(path.join(REPO_ROOT, 'packages/pod/build'))
+	]);
+	return built.mtimeMs > templateSource && built.mtimeMs > podPackage;
+}
 
 async function withTemplateBuildLock<T>(templateRoot: string, run: () => Promise<T>): Promise<T> {
 	const lockDirectory = path.join(templateRoot, '.norbital', '.test-build-lock');
@@ -330,10 +376,10 @@ export async function bootPodRuntime(
 	const templateRoot = usesOverlay
 		? await materializeOverlay(sharedTemplateRoot, sources)
 		: sharedTemplateRoot;
-	const pg: PgHarness = await startPostgres();
-	const env = {
+	const runtimePath = path.join(templateRoot, '.norbital', 'build', 'output', 'server', 'index.js');
+	const podEnv = (databaseUrl: string) => ({
 		...process.env,
-		DATABASE_URL: pg.connectionString,
+		DATABASE_URL: databaseUrl,
 		POD_HOST: '127.0.0.1',
 		POD_PORT: '7799',
 		POD_ORG_ID: ORG_ID,
@@ -343,46 +389,77 @@ export async function bootPodRuntime(
 		POD_ADMIN_EMAIL: 'admin@it.local',
 		POD_TEMPLATE_KEY: template,
 		POD_TRUSTED_HOST_TOKEN: '0123456789abcdef0123456789abcdef-trusted-host-token'
-	};
-	// Everything past this point can fail (a bad build, a failed migration). Tear the container
-	// down on the way out rather than leaving it — and its data volume — behind.
+	});
+
+	/*
+	 * Build and migrate once per template, per worker; every suite then starts from a copy.
+	 *
+	 * Both were per suite, and both produced the same result every time: fifteen suites asked for
+	 * `construction` and each ran the same build into the same directory and the same migration into
+	 * its own empty database. The build is guarded by the cross-process lock because it writes to the
+	 * shared template tree; the migration is not, because it writes only to the template database
+	 * this worker just made for itself.
+	 *
+	 * An overlay gets its own key: its source differs per suite, so its build and schema are its own.
+	 */
+	const pg: PgHarness = await startPostgresFromTemplate(
+		usesOverlay ? templateRoot : `template:${template}`,
+		async (templateDatabaseUrl) => {
+			const env = podEnv(templateDatabaseUrl);
+			await withTemplateBuildLock(templateRoot, async () => {
+				if (usesOverlay || !(await isRuntimeBuildFresh(templateRoot, runtimePath))) {
+					execFileSync('node', [POD_BIN, 'build'], { cwd: templateRoot, env, stdio: 'ignore' });
+				}
+			});
+			execFileSync('node', [POD_BIN, 'migrate'], { cwd: templateRoot, env, stdio: 'ignore' });
+		}
+	);
+
+	// Everything past this point can fail. Drop the database on the way out rather than leaving it.
 	let handleTenantRequest: HandleTenantRequest;
 	let handleHostCommand: HandleHostCommand;
 	let pool: Pool;
 	let binding: ReturnType<typeof createPgBinding>;
 	let schemaSql: string;
+	let notifyClient: Client | undefined;
+	let registerNotifications: RegisterDatabaseNotifications | undefined;
 	try {
-		({ handleTenantRequest, handleHostCommand, pool, binding, schemaSql } =
-			await withTemplateBuildLock(templateRoot, async () => {
-				execFileSync('node', [POD_BIN, 'build'], { cwd: templateRoot, env, stdio: 'ignore' });
-				execFileSync('node', [POD_BIN, 'migrate'], { cwd: templateRoot, env, stdio: 'ignore' });
+		const runtimeModule = (await import(pathToFileURL(runtimePath).href)) as {
+			handlePodRequest?: HandleTenantRequest;
+			handlePodHostCommand?: HandleHostCommand;
+			registerPodDatabaseNotifications?: RegisterDatabaseNotifications;
+		};
+		if (!runtimeModule.handlePodRequest || !runtimeModule.handlePodHostCommand) {
+			throw new Error('built pod runtime is missing its request/host-command entry points');
+		}
+		handleTenantRequest = runtimeModule.handlePodRequest;
+		handleHostCommand = runtimeModule.handlePodHostCommand;
+		pool = new Pool({ connectionString: pg.connectionString, max: 12 });
+		binding = createPgBinding(pool);
+		schemaSql = await loadSchemaSql(templateRoot);
 
-				const runtimePath = path.join(
-					templateRoot,
-					'.norbital',
-					'build',
-					'output',
-					'server',
-					'index.js'
-				);
-				const runtimeModule = (await import(pathToFileURL(runtimePath).href)) as {
-					handlePodRequest?: HandleTenantRequest;
-					handlePodHostCommand?: HandleHostCommand;
-				};
-				if (!runtimeModule.handlePodRequest || !runtimeModule.handlePodHostCommand) {
-					throw new Error('built pod runtime is missing its request/host-command entry points');
+		// The change feed wakes an idle stream only through a real commit notification (see
+		// db-notifications.server.ts) — there is no timer fallback. Without this, every runtime
+		// harness suite would boot into the no-source branch and a still-connected stream would
+		// never learn about a later write. Mirrors installDatabaseNotifications in serve/standalone.ts.
+		registerNotifications = runtimeModule.registerPodDatabaseNotifications;
+		if (registerNotifications) {
+			notifyClient = new Client({ connectionString: pg.connectionString });
+			const listeners = new Set<(channel: string, payload: string) => void>();
+			await notifyClient.connect();
+			notifyClient.on('notification', (message: Notification) => {
+				for (const listener of listeners) listener(message.channel, message.payload ?? '');
+			});
+			await notifyClient.query('LISTEN norbital_sync');
+			registerNotifications({
+				subscribe(listener) {
+					listeners.add(listener);
+					return () => listeners.delete(listener);
 				}
-				const loadedPool = new Pool({ connectionString: pg.connectionString, max: 12 });
-				const loadedBinding = createPgBinding(loadedPool);
-				return {
-					handleTenantRequest: runtimeModule.handlePodRequest,
-					handleHostCommand: runtimeModule.handlePodHostCommand,
-					pool: loadedPool,
-					binding: loadedBinding,
-					schemaSql: await loadSchemaSql(templateRoot)
-				};
-			}));
+			});
+		}
 	} catch (err) {
+		await notifyClient?.end().catch(() => undefined);
 		pg.stop();
 		if (usesOverlay)
 			await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -437,6 +514,8 @@ export async function bootPodRuntime(
 			};
 		},
 		async stop() {
+			registerNotifications?.(null);
+			await notifyClient?.end().catch(() => undefined);
 			await pool.end().catch(() => undefined);
 			pg.stop();
 			if (usesOverlay)

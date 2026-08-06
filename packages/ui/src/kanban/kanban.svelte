@@ -4,6 +4,7 @@
 	 *************************************************************************/
 	import { fly } from 'svelte/transition';
 	import { Inline, Scroll } from '#lib/layout';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type {
 		KanbanCardMove,
 		TCardSnippet,
@@ -50,6 +51,7 @@
 	 * Local state                                                            *
 	 * --------------------------------------------------------------------- */
 	let localState = $derived(value);
+	const { t } = useI18n<UiKeys>();
 
 	// Track which columns have been animated to prevent re-animation
 	let animatedColumns: Set<string> = $state(new Set());
@@ -70,7 +72,7 @@
 </script>
 
 <!-- Board-wide horizontal scroll with full height ----------------------->
-<Scroll axis="x" name="Kanban board" class="p-3">
+<Scroll axis="x" name={t('kanban.boardRegion')} class="p-3">
 	<Inline gap="md" align="stretch" fill>
 		{#each localState as column, index (column._id)}
 			<Inline gap="none" align="stretch" fill>

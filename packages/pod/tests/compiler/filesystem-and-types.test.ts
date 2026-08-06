@@ -552,4 +552,58 @@ export default { kind: 'agent', task: 'Help here.', access: 'write' } satisfies 
 		const structure = await discoverPodFilesystem(root);
 		expect(structure.diagnostics.map((d) => d.code)).toContain('WORKSPACE_ROLE_UNKNOWN');
 	});
+
+	it('carries a static pod:banner from +representation.svelte into the collection surface', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/collections/things/+representation.svelte',
+			`<script lang="ts">
+	import type { RepresentationProps } from './$types.js';
+	let { record }: RepresentationProps = $props();
+</script>
+
+<svelte:head>
+	<meta name="pod:banner" content="https://cdn.example.com/things-banner.webp" />
+</svelte:head>
+
+<p>{record?.name}</p>`
+		);
+		const structure = await discoverPodFilesystem(root);
+		expect(structure.diagnostics).toEqual([]);
+		const things = structure.collections.find((collection) => collection.id === 'things');
+		expect(things?.representationBanner).toBe('https://cdn.example.com/things-banner.webp');
+
+		await compilePodFilesystem({ root });
+		const generated = await readFile(
+			path.join(root, '.norbital/generated/collection-surfaces.ts'),
+			'utf8'
+		);
+		expect(generated).toContain(
+			'"things": { representation: representation0, banner: "https://cdn.example.com/things-banner.webp" }'
+		);
+	});
+
+	it('ignores a non-static or missing pod:banner on +representation.svelte', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/collections/things/+representation.svelte',
+			`<script lang="ts">
+	import type { RepresentationProps } from './$types.js';
+	let { record }: RepresentationProps = $props();
+	const banner = 'https://cdn.example.com/dynamic.webp';
+</script>
+
+<svelte:head>
+	<meta name="pod:banner" content={banner} />
+</svelte:head>
+
+<p>{record?.name}</p>`
+		);
+		const structure = await discoverPodFilesystem(root);
+		expect(structure.diagnostics).toEqual([]);
+		const things = structure.collections.find((collection) => collection.id === 'things');
+		expect(things?.representationBanner).toBeUndefined();
+	});
 });

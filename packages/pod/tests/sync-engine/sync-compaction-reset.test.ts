@@ -101,9 +101,12 @@ describe('change feed resets a cursor below the compaction boundary', () => {
 		const stream = sseReader(response);
 
 		try {
-			// Let it catch up first. A heartbeat means the loop reached its idle wait, so the cursor
+			// Let it catch up first. `synced` means the loop reached its idle wait, so the cursor
 			// now sits at the head of the feed and everything after this is the case under test.
-			await stream.waitFor((events) => events.includes(': heartbeat'), 30_000);
+			await stream.waitFor(
+				(events) => events.some((event) => event.startsWith('event: synced')),
+				30_000
+			);
 			const delivered = stream.events.filter((event) => event.startsWith('data: ')).length;
 
 			// Retention overtakes the live stream. The boundary is what a prune leaves behind, and the

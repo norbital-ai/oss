@@ -13,6 +13,14 @@
 	<title>Construction Project Workspace</title>
 	<meta name="description" content="Browse construction projects and open project records." />
 	<meta name="pod:icon" content="lucide:layout-dashboard" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/construction/app-media/construction_project_workspace-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/construction/app-media/construction_project_workspace-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet pageHeading()}

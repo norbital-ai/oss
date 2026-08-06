@@ -6,11 +6,13 @@
 	import { Column, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import { formatMoney, formatQuantity, parseCostLines } from '../../lib/reclamation/cost.js';
+	import { methodLabel, substrateLabel } from '../../lib/reclamation/i18n.js';
 	import type { RepresentationProps } from './$types.js';
 
 	let { record, close }: RepresentationProps = $props();
 
-	const { t } = useI18n<TenantI18nKeys>();
+	const i18n = useI18n<TenantI18nKeys>();
+	const { t } = i18n;
 
 	/**
 	 * The priced lines are recomputed server-side on every write, so this panel
@@ -19,6 +21,13 @@
 	const lines = $derived(parseCostLines(record?.lines_json));
 	const currency = $derived(record?.currency ?? 'SGD');
 </script>
+
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/reclamation/record-media/cost_estimates-banner.svg"
+	/>
+</svelte:head>
 
 <Stack gap="lg">
 	<CollectionForm
@@ -101,7 +110,9 @@
 				{#each lines as line (line.substrate)}
 					<div class="p-3">
 						<Inline align="start" justify="between" gap="sm">
-							<p class="min-w-0 truncate font-medium">{line.label}</p>
+							<p class="min-w-0 truncate font-medium">
+								{substrateLabel(i18n, line.substrate, line.label)}
+							</p>
 							<p class="shrink-0 tabular-nums">{formatMoney(line.amount, currency)}</p>
 						</Inline>
 						<Inline justify="between" gap="sm" class="mt-1 text-xs text-muted-foreground">
@@ -118,7 +129,9 @@
 									</span>
 								{/if}
 							</span>
-							<span class="shrink-0 capitalize">{line.method}</span>
+							<span class="shrink-0">
+								{methodLabel(i18n, line.method, line.method)}
+							</span>
 						</Inline>
 						<p class="mt-1 text-xs text-muted-foreground">{line.basis}</p>
 					</div>

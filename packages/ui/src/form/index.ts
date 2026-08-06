@@ -9,7 +9,8 @@ export {
 	type FormStateConfig,
 	type FormStateHooks,
 	type FormSubmitFn,
-	type SubmitSuccessBehavior
+	type SubmitSuccessBehavior,
+	type TranslateFn
 } from './form_state.svelte';
 export type { FilterNull, FilterUndefined, FilterUndefinedAndNull, Get, Path } from './path';
 export { SubmissionHandledExternallyError } from './submission_handled_externally_error';

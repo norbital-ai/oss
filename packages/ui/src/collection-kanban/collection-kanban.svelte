@@ -20,6 +20,7 @@
 	import { Cover, Grid, Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { type Translate } from '../data-renderer/index.js';
 	import { onMount } from 'svelte';
 	import { getCollectionSurfaceRuntime } from '#lib/collection-runtime';
 	import { badgeColorClass } from '../collection-table/collection-card-colors.js';
@@ -437,7 +438,7 @@
 	);
 	function autoCardTitle(record: Row): string {
 		if (autoCard.title.kind === 'field') {
-			const text = formatAutoCardField(definition.fields, autoCard.title.name, record);
+			const text = formatAutoCardField(definition.fields, autoCard.title.name, record, t as Translate);
 			if (text && text !== '—') return text;
 		}
 		const label = resolveRecordLabel(definition.recordLabel ?? null, record);
@@ -448,8 +449,8 @@
 </script>
 
 {#snippet autoCardSnippet(record: Row)}
-	{@const subtitle = formatAutoCardSubtitle(autoCard, definition.fields, record)}
-	{@const badge = formatAutoCardBadge(autoCard, definition.fields, record)}
+	{@const subtitle = formatAutoCardSubtitle(autoCard, definition.fields, record, t as Translate)}
+	{@const badge = formatAutoCardBadge(autoCard, definition.fields, record, t as Translate)}
 	<Inline align="start" justify="between" gap="md">
 		<Stack gap="xs">
 			<p class="min-w-0 truncate font-medium">{autoCardTitle(record)}</p>

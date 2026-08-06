@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { CollapsibleTrigger } from '#lib/collapsible';
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Snippet } from 'svelte';
 	import { Shimmer } from '../shimmer';
 	import { getTimelineContext } from './timeline-context.svelte.js';
@@ -34,6 +35,7 @@
 
 	const context = getTimelineContext()();
 	const labelLength = $derived(isActive ? 12 : 8);
+	const { t } = useI18n<UiKeys>();
 </script>
 
 <CollapsibleTrigger
@@ -52,13 +54,13 @@
 				{#if children}
 					{@render children()}
 				{:else}
-					Timeline
+					{t('misc.timeline')}
 				{/if}
 			</Shimmer>
 		{:else if children}
 			{@render children()}
 		{:else}
-			Timeline
+			{t('misc.timeline')}
 		{/if}
 	</span>
 	<Icon

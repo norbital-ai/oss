@@ -36,6 +36,14 @@
 		content="The regime every payroll is calculated against: jurisdictions with the schemes, rates, overtime rules and limits configured inside them, and the companies bound to each"
 	/>
 	<meta name="pod:icon" content="lucide:scale" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/hr-payroll/app-media/settings-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/app-media/settings-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet jurisdictions()}
@@ -53,7 +61,7 @@
 			<Column name="code" card="title" />
 			<Column name="name" card="subtitle" />
 			<Column name="currency" />
-			<Column name="proration" render={({ value }) => formatProrationBasis(value)} />
+			<Column name="proration" render={({ value }) => formatProrationBasis(value, t)} />
 			<Column name="rounding" />
 			<Column name="ordinary_rate_basis" label={t('app.settings.ordinary_rate_basis')} />
 			<Column

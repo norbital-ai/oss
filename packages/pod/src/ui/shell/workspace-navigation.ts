@@ -45,7 +45,17 @@ export function resolveWorkspaceOrganizationOptions(input: {
 		[input.activeOrganization.id, input.activeOrganization]
 	]);
 	for (const organization of input.organizations) {
-		if (!organization.organizationId || optionsById.has(organization.organizationId)) continue;
+		if (!organization.organizationId) continue;
+		const existing = optionsById.get(organization.organizationId);
+		if (existing) {
+			if (!existing.logoUrl && organization.logoUrl) {
+				optionsById.set(organization.organizationId, {
+					...existing,
+					logoUrl: organization.logoUrl
+				});
+			}
+			continue;
+		}
 		optionsById.set(organization.organizationId, {
 			id: organization.organizationId,
 			name: organization.organizationName,
@@ -151,7 +161,9 @@ export function buildSystemNavigation(input: {
 	i18n?: NavigationLabelResolver;
 }): WorkspaceNavigationItem[] {
 	const { i18n } = input;
-	const visiblePlugins = input.plugins.filter((inputPlugin) => input.isAdmin || !inputPlugin.adminOnly);
+	const visiblePlugins = input.plugins.filter(
+		(inputPlugin) => input.isAdmin || !inputPlugin.adminOnly
+	);
 	const pluginItem = (plugin: (typeof visiblePlugins)[number]): WorkspaceNavigationItem => {
 		const href = hostPluginSurfaceHref(plugin.key);
 		return {

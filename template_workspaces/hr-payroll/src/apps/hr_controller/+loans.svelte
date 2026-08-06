@@ -122,6 +122,14 @@
 		content="Review staff loans, salary advances, and overpayment recoveries with their derived outstanding balance"
 	/>
 	<meta name="pod:icon" content="lucide:hand-coins" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/hr-payroll/app-media/loans-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/app-media/loans-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet companyScopeActions()}
@@ -214,7 +222,7 @@
 					<Column
 						name="schedule"
 						label={t('component.schedule')}
-						render={({ value }) => formatRepaymentSchedule(value)}
+						render={({ value }) => formatRepaymentSchedule(value, t)}
 					/>
 					<Column
 						name="disbursed_on"
@@ -236,7 +244,7 @@
 						</span>
 					</Inline>
 					<p class="mt-1 truncate text-sm text-muted-foreground">
-						{formatRepaymentSchedule(agreement.schedule)}
+						{formatRepaymentSchedule(agreement.schedule, t)}
 					</p>
 					<p class="mt-1 text-sm">
 						{progressLabel(agreement)}

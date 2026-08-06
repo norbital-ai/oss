@@ -83,7 +83,7 @@
 		onInvalid?: (reason: 'min' | 'max' | 'custom', msg?: string | string[]) => void;
 	} & Record<string, unknown> = $props();
 
-	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 
 	// Internal state
 	let isAdjusting = $state(false);

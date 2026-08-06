@@ -66,13 +66,15 @@
 <svelte:element
 	this={as}
 	class={cn(
-		className,
 		'mx-auto min-h-0 w-full min-w-0',
 		measureClasses[measure],
 		layoutClasses[layout],
 		layout !== 'block' && GAP_CLASSES[gap],
 		layout !== 'block' && alignClasses[resolvedAlign],
-		layout !== 'block' && justifyClasses[justify]
+		layout !== 'block' && justifyClasses[justify],
+		// Consumer classes last so marketing shells can tighten the measure
+		// (e.g. `measure="full" class="max-w-6xl"`) without twMerge dropping them.
+		className
 	)}
 	data-layout="center"
 	{...restProps}

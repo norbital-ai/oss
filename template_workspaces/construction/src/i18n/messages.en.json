@@ -122,5 +122,15 @@
 	"component.marker_legend": "Marker legend",
 	"component.highlights": "Highlights",
 	"component.ifc_model_preview": "IFC model preview",
-	"component.ifc_element_line": "Model {modelId} • Element #{elementId}"
+	"component.ifc_element_line": "Model {modelId} • Element #{elementId}",
+	"component.ifc_html_instead_of_bytes": "The model URL returned HTML instead of IFC data. This often happens when the link used a stale app origin or port. Refresh the page or reopen the record so the URL matches the current server.",
+	"component.ifc_download_failed": "Unable to download IFC model ({status}).",
+	"component.ifc_download_timed_out": "Timed out while downloading the IFC model.",
+	"component.ifc_load_failed": "Unable to load IFC model.",
+	"component.ifc_conversion": "IFC conversion",
+	"component.ifc_fragment_load": "Fragment load",
+	"component.ifc_unable_to_convert": "Unable to convert IFC model.",
+	"component.ifc_worker_crashed": "The IFC conversion worker stopped unexpectedly.",
+	"component.ifc_unknown_worker_error": "Unknown worker error",
+	"component.ifc_worker_communication_failed": "Unable to communicate with the IFC conversion worker."
 }

@@ -1,4 +1,8 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
+	const { t } = useI18n<TenantI18nKeys>();
+
 	/**
 	 * `component_id` is a foreign key the database cannot declare — a variant is one JSONB value —
 	 * so the picker is built here, from a query scoped to the leave type's own company. It used to
@@ -13,14 +17,18 @@
 
 	type EffectKind = Value['kind'];
 
-	const KIND_OPTIONS: { value: EffectKind; label: string; description: string }[] = [
-		{ value: 'PAID', label: 'Paid', description: 'No effect on pay' },
+	const KIND_OPTIONS = $derived<{ value: EffectKind; label: string; description: string }[]>([
+		{
+			value: 'PAID',
+			label: t('component.paid'),
+			description: t('renderer.leave_payroll_effect.kind_paid_desc')
+		},
 		{
 			value: 'UNPAID',
-			label: 'Unpaid',
-			description: 'Deducted through a named pay component'
+			label: t('component.unpaid'),
+			description: t('renderer.leave_payroll_effect.kind_unpaid_desc')
 		}
-	];
+	]);
 
 	type LeavePayrollEffectRendererProps = RendererProps & {
 		/** The leave type being edited, which is what scopes the pay catalogue below. */
@@ -36,7 +44,9 @@
 	 * lookup per table row — the N+1 `controller-surfaces.md` §5 forbids — and the id itself is not
 	 * an answer to any question an operator has.
 	 */
-	const summary = $derived(current === null ? '—' : current.kind === 'PAID' ? 'Paid' : 'Unpaid');
+	const summary = $derived(
+		current === null ? '—' : current.kind === 'PAID' ? t('component.paid') : t('component.unpaid')
+	);
 
 	const companyId = $derived(
 		typeof props.row?.company_id === 'string' ? props.row.company_id : null
@@ -93,26 +103,26 @@
 {:else}
 	<Grid class="rounded-md border border-border bg-muted/20 p-3" gap="sm" minimum="compact">
 		<label class="grid gap-1.5 text-sm font-medium">
-			Payroll effect
+			{t('renderer.leave_payroll_effect.payroll_effect')}
 			<Combobox
 				options={KIND_OPTIONS}
 				value={current?.kind ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select an effect"
+				emptyPlaceholder={t('renderer.leave_payroll_effect.select_effect')}
 				onValueChange={selectKind}
 			/>
 		</label>
 		{#if current?.kind === 'UNPAID'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Deducted on
+				{t('renderer.leave_payroll_effect.deducted_on')}
 				<Combobox
-					ariaLabel="Deduction component"
+					ariaLabel={t('renderer.leave_payroll_effect.aria_deduction_component')}
 					options={componentOptions}
 					value={current.component_id === '' ? null : current.component_id}
 					disabled={disabled || companyId == null}
-					searchPlaceholder="Search pay components…"
-					emptyPlaceholder="Choose the component that carries the lost wage"
+					searchPlaceholder={t('component.search_pay_components')}
+					emptyPlaceholder={t('renderer.leave_payroll_effect.choose_component_carries_wage')}
 					clientConfig={{
 						isLoading: componentsQuery?.loading ?? false,
 						error: componentsQuery?.error?.message ?? null

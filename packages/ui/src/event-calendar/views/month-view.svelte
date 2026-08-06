@@ -110,7 +110,7 @@
 
 					{#if overflow > 0}
 						<span class="text-tiny font-medium text-muted-foreground px-1.5">
-							+{overflow} more
+					{t('misc.moreItems', { count: overflow })}
 						</span>
 					{/if}
 				</Stack>

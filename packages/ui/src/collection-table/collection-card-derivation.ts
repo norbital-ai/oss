@@ -1,6 +1,6 @@
 import type { CollectionField } from '@norbital-ai/platform-utils/collection';
 import { humanize } from '@norbital-ai/std/string';
-import { formatDataValue } from '../data-renderer/data-renderer.utils.js';
+import { formatDataValue, type Translate } from '../data-renderer/data-renderer.utils.js';
 
 /**
  * Shared, framework-owned derivation for the collection-view auto-defaults (RFC V.2–V.4).
@@ -155,20 +155,22 @@ export function findEnumOption(
 export function formatAutoCardField(
 	fields: readonly CollectionField[],
 	name: string,
-	record: object
+	record: object,
+	t?: Translate
 ): string {
 	const field = fields.find((candidate) => candidate.name === name);
-	return field ? formatDataValue(field, Reflect.get(record, name)) : '';
+	return field ? formatDataValue(field, Reflect.get(record, name), undefined, t) : '';
 }
 
 /** Join the non-empty subtitle values selected by an auto-card model. */
 export function formatAutoCardSubtitle(
 	model: AutoCardModel,
 	fields: readonly CollectionField[],
-	record: object
+	record: object,
+	t?: Translate
 ): string {
 	return model.subtitles
-		.map((name) => formatAutoCardField(fields, name, record))
+		.map((name) => formatAutoCardField(fields, name, record, t))
 		.filter((text) => text && text !== '—')
 		.join(' · ');
 }
@@ -177,7 +179,8 @@ export function formatAutoCardSubtitle(
 export function formatAutoCardBadge(
 	model: AutoCardModel,
 	fields: readonly CollectionField[],
-	record: object
+	record: object,
+	t?: Translate
 ): { label: string; color?: string } | null {
 	if (!model.badge) return null;
 	const field = fields.find((candidate) => candidate.name === model.badge);
@@ -185,7 +188,10 @@ export function formatAutoCardBadge(
 	const value = Reflect.get(record, model.badge);
 	if (value == null || value === '') return null;
 	const option = findEnumOption(field, value);
-	return { label: option?.label ?? formatDataValue(field, value), color: option?.color };
+	return {
+		label: option?.label ?? formatDataValue(field, value, undefined, t),
+		color: option?.color
+	};
 }
 
 /** A kanban lane derived from a groupBy field's enum values in model order (RFC V.3). */
@@ -263,8 +269,10 @@ export function humanizedSingular(collectionName: string): string {
 }
 
 /** The create-action label: an explicit override, else `New <humanized singular collection>`. */
-export function createActionLabel(collectionName: string, override?: string): string {
-	return override ?? `New ${humanizedSingular(collectionName)}`;
+export function createActionLabel(collectionName: string, override?: string, t?: Translate): string {
+	const singular = humanizedSingular(collectionName);
+	if (override) return override;
+	return t ? `${t('common.new')} ${singular}` : `New ${singular}`;
 }
 
 /**

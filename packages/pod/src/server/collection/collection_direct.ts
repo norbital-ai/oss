@@ -31,6 +31,7 @@ import { z } from 'zod';
 import { v7 } from 'uuid';
 import { portableCollectionField } from '$lib/authoring/schema/table.js';
 import { error } from './http_error.js';
+import { requestI18nOrDefault } from '$lib/server/i18n.js';
 import type { TNorbitalDBRecord } from './norbital_db_record.js';
 import type { ManifestCollectionEntry } from '$lib/manifest/index.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
@@ -61,7 +62,7 @@ type FallbackQueryConfig = AnyDBQueryConfig | DBQueryConfigWithComment<'one'>;
 export function requireTable(ctx: ProvisionedContext, collectionName: string): PgTable {
 	const table = ctx.tableRegistry?.[collectionName];
 	if (!table) {
-		throw error(404, `Unknown collection "${collectionName}"`);
+		throw error(404, requestI18nOrDefault().t('pod.server.unknownCollection', { collection: collectionName }));
 	}
 	return table;
 }
@@ -709,7 +710,7 @@ export async function directFindFirst(
 	});
 	const record = rows[0];
 	if (!record) {
-		throw error(404, `Record with ID ${recordId} not found.`);
+		throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
 	}
 	return record as TNorbitalDBRecord;
 }
@@ -843,7 +844,7 @@ export async function directUpdate(
 	);
 
 	if (!updated) {
-		throw error(404, `Record with ID ${recordId} not found.`);
+		throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
 	}
 
 	await persistMutationRelationships(ctx, collection, recordId, links, nested);

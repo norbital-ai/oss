@@ -4,6 +4,7 @@ import type {
 	FileMetadata as TFileMetadata
 } from '../../../file-value/index.js';
 import { safeParse } from '@norbital-ai/std';
+import type { MessageVars } from '@norbital-ai/std/i18n';
 import type { Command, CommandProps, NodeViewRenderer, NodeViewRendererProps } from '@tiptap/core';
 import { Node, mergeAttributes } from '@tiptap/core';
 import type { Transaction as ProsemirrorTransaction } from '@tiptap/pm/state';
@@ -40,6 +41,7 @@ export interface FileAttachmentAttributes extends FileAttachmentMetadata {
 interface FileAttachmentOptions {
 	HTMLAttributes: Record<string, unknown>;
 	allowedFiletypes: TAllowedFileType[];
+	translate?: (key: string, vars?: MessageVars) => string;
 }
 
 interface FileAttachmentCommandAttrs {
@@ -163,8 +165,12 @@ export function extractFileMetadata(node: ProsemirrorNode): FileAttachmentMetada
 	};
 }
 
-export function createFileAttachmentExtension(options: { client: IFileUploadClient }) {
+export function createFileAttachmentExtension(options: {
+	client: IFileUploadClient;
+	translate?: (key: string, vars?: MessageVars) => string;
+}) {
 	const injectedClient = options.client;
+	const injectedTranslate = options.translate;
 
 	return Node.create<FileAttachmentOptions>({
 		name: 'fileAttachment',
@@ -247,6 +253,7 @@ export function createFileAttachmentExtension(options: { client: IFileUploadClie
 		addOptions() {
 			return {
 				HTMLAttributes: {},
+				translate: injectedTranslate,
 				allowedFiletypes: [
 					'application/pdf',
 					'text/csv',
@@ -311,7 +318,10 @@ export function createFileAttachmentExtension(options: { client: IFileUploadClie
 						const uploadClient = getUploadClient(this.storage);
 
 						if (!this.options.allowedFiletypes.includes(file.type as TAllowedFileType)) {
-							toast.error(`File type ${file.type} is not allowed.`);
+							toast.error(
+								this.options.translate?.('misc.fileTypeNotAllowed', { type: file.type }) ??
+									`File type ${file.type} is not allowed.`
+							);
 							return false;
 						}
 
@@ -409,7 +419,10 @@ export function createFileAttachmentExtension(options: { client: IFileUploadClie
 							const files = Array.from(event.dataTransfer.files);
 							files.forEach((file) => {
 								if (!extension.options.allowedFiletypes.includes(file.type as TAllowedFileType)) {
-									toast.warning(`File type ${file.type} is not allowed.`);
+									toast.warning(
+										extension.options.translate?.('misc.fileTypeNotAllowed', { type: file.type }) ??
+											`File type ${file.type} is not allowed.`
+									);
 									return;
 								}
 

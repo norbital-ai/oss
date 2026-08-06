@@ -324,7 +324,7 @@
 			{:else if emptyPlaceholder}
 				{@render emptyPlaceholder()}
 			{:else}
-				Pick date range(s)
+				{t('dataRenderer.pickDateRanges')}
 			{/if}
 		</span>
 	{:else if multi}

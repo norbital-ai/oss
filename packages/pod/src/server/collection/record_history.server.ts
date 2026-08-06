@@ -13,6 +13,7 @@ import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js'
 import type { ProvisionedContext, TenantDbClient } from '../bootstrap/workspace_store.js';
 import { findFirst } from './collection_ops.server.js';
 import { error } from './http_error.js';
+import { requestI18nOrDefault } from '$lib/server/i18n.js';
 
 type RecordHistoryInput = z.infer<typeof FindHistoryWireSchema>;
 
@@ -49,6 +50,6 @@ export async function findRecordHistory(ctx: ProvisionedContext, input: RecordHi
 	const current = await findFirst(ctx, input.collection, {
 		where: toRelationsFilter({ [SYSTEM_COLUMN_NAMES.PKEY]: input.record_id })
 	});
-	if (!current) throw error(404, 'Record not found.');
+	if (!current) throw error(404, requestI18nOrDefault().t('pod.server.recordNotFoundSimple'));
 	return loadRecordHistorySnapshots(ctx.tenantDb, input);
 }

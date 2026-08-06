@@ -188,7 +188,7 @@
 			<TableColumn
 				name="status"
 				label={t('component.registration')}
-				render={({ value }) => formatStatutoryFactStatus(value)}
+				render={({ value }) => formatStatutoryFactStatus(value, t)}
 			/>
 			<TableColumn name="effective_range" label={t('component.effective')} />
 		{/snippet}

@@ -30,7 +30,7 @@
 	import { cn, renderSnippet, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { DataRenderer } from '../data-renderer/index.js';
-	import { formatDataValue } from '../data-renderer/index.js';
+	import { formatDataValue, type Translate } from '../data-renderer/index.js';
 	import { Cluster, Grid, Inline, Stack, Bound } from '#lib/layout';
 	import { CollectionForm } from '../collection-form/index.js';
 	import {
@@ -258,8 +258,10 @@
 					enablePinning: column.pinnable ?? true,
 					enableSelection: effectiveSelectable
 				};
+
 			}),
-			effectiveSelectable
+			effectiveSelectable,
+			t as Translate
 		)
 	);
 
@@ -313,11 +315,11 @@
 			integrations.length > 0 ||
 			(bulkEnabled && (operations?.updateMany != null || operations?.delete != null))
 	);
-	const createLabel = $derived(createActionLabel(String(collection)));
+	const createLabel = $derived(createActionLabel(String(collection), undefined, t as Translate));
 
 	function autoCardTitle(record: Row): string {
 		if (autoCard.title.kind === 'field') {
-			const text = formatAutoCardField(definition.fields, autoCard.title.name, record);
+			const text = formatAutoCardField(definition.fields, autoCard.title.name, record, t as Translate);
 			if (text && text !== '—') return text;
 		}
 		return recordTitle(record);
@@ -412,7 +414,7 @@
 						const rendered = column.render?.({ row, field, value });
 						return typeof rendered === 'string' || typeof rendered === 'number'
 							? String(rendered)
-							: formatDataValue(field, value);
+							: formatDataValue(field, value, undefined, t as Translate);
 					});
 					return [
 						String(column.key),
@@ -541,7 +543,7 @@
 			throw new Error('CollectionTable requires a record navigation provider.');
 		const value = Reflect.get(row.record, recordIdField);
 		if (value == null) {
-			toast.error(`Cannot open detail without ${recordIdField}.`);
+			toast.error(t('table.detailMissingId', { field: recordIdField }));
 			return;
 		}
 		detailNavigation.open({
@@ -596,8 +598,8 @@
 
 	function recordActionClass(hovered: boolean, active: boolean): string {
 		return cn(
-			'inline-flex size-8 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:outline-none',
-			active && 'bg-accent text-accent-foreground',
+			'inline-flex size-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-xs outline-none transition-colors hover:bg-muted hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+			active && 'border-brand/40 bg-accent text-accent-foreground',
 			!active && !hovered && 'opacity-0'
 		);
 	}
@@ -609,7 +611,7 @@
 			(field) => !isSystemField(field.name) && field.kind !== 'uuid' && !field.name.endsWith('_id')
 		);
 		const fallback = fallbackField
-			? formatDataValue(fallbackField, Reflect.get(record, fallbackField.name))
+			? formatDataValue(fallbackField, Reflect.get(record, fallbackField.name), undefined, t as Translate)
 			: '';
 		return fallback && fallback !== '—' ? fallback : humanize(String(collection));
 	}
@@ -624,7 +626,7 @@
 					field.kind !== 'uuid' &&
 					!field.name.endsWith('_id')
 			)
-			.map((field) => formatDataValue(field, Reflect.get(record, field.name)))
+			.map((field) => formatDataValue(field, Reflect.get(record, field.name), undefined, t as Translate))
 			.find((value) => value && value !== '—');
 		return fallback ?? t('table.recordDescription', { name: humanize(String(collection)) });
 	}
@@ -993,8 +995,8 @@
 {/snippet}
 
 {#snippet autoListCard(record: Row)}
-	{@const subtitle = formatAutoCardSubtitle(autoCard, definition.fields, record)}
-	{@const badge = formatAutoCardBadge(autoCard, definition.fields, record)}
+	{@const subtitle = formatAutoCardSubtitle(autoCard, definition.fields, record, t as Translate)}
+	{@const badge = formatAutoCardBadge(autoCard, definition.fields, record, t as Translate)}
 	<Inline align="start" justify="between" gap="md">
 		<Stack gap="xs">
 			<p class="min-w-0 truncate font-medium">{autoCardTitle(record)}</p>
@@ -1152,7 +1154,6 @@
 		isLoading={tableLoading}
 		error={errorMessage}
 		enableSelection={effectiveSelectable}
-		onRowActivate={openRecord}
 		getRowLeadingAccent={rowLeadingAccent}
 		{activeRecordId}
 		rowActions={gridRowActions}

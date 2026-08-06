@@ -285,11 +285,13 @@
 	 * matches and drops the people it does not.
 	 */
 	const DAY_STATUSES = Object.keys(STATUS_PRESENTATION) as DayStatus[];
-	const statusOptions = DAY_STATUSES.map((status) => ({
-		value: status,
-		label: STATUS_PRESENTATION[status].label,
-		search_term: STATUS_PRESENTATION[status].label
-	}));
+	const statusOptions = $derived(
+		DAY_STATUSES.map((status) => ({
+			value: status,
+			label: t(STATUS_PRESENTATION[status].labelKey),
+			search_term: t(STATUS_PRESENTATION[status].labelKey)
+		}))
+	);
 	const shiftOptions = $derived(
 		(shiftsQuery?.current ?? []).map((shift) => ({
 			value: shift.code,
@@ -363,11 +365,14 @@
 		try {
 			// `runWorkbookImport` reports its own refusals: the pipeline answers with the rows the
 			// company's records contradict, and that list is the whole message worth showing.
-			await runWorkbookImport({
-				collectionName: 'roster_entries',
-				recordLabel: 'roster rows',
-				buildPayload: (grids) => rosterImportPayload(grids, rosterId)
-			});
+			await runWorkbookImport(
+				{
+					collectionName: 'roster_entries',
+					recordLabel: t('component.roster_rows'),
+					buildPayload: (grids) => rosterImportPayload(grids, rosterId)
+				},
+				t
+			);
 		} finally {
 			importing = false;
 		}
@@ -418,6 +423,14 @@
 		content="Plan the monthly roster on a calendar, publish it against the statutory rules, and manage the shifts a day is worked on and the patterns a week is shaped by"
 	/>
 	<meta name="pod:icon" content="lucide:calendar-clock" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/hr-payroll/app-media/scheduling-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/app-media/scheduling-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet companyScopeActions()}
@@ -618,7 +631,7 @@
 			{#each progress.exceptions as exception (exception.status)}
 				<Badge variant="destructive">
 					{exception.count.toLocaleString()}
-					{STATUS_PRESENTATION[exception.status].label.toLowerCase()}
+					{t(STATUS_PRESENTATION[exception.status].labelKey).toLowerCase()}
 				</Badge>
 			{/each}
 		</Cluster>
@@ -712,13 +725,13 @@
 					<Column
 						name="break_minutes"
 						label={t('app.scheduling.break')}
-						render={({ value }) => formatDurationHours(value)}
+						render={({ value }) => formatDurationHours(value, t)}
 					/>
 					<Column name="pays_overtime" label={t('app.scheduling.ot_eligible')} />
 					<Column
 						name="overtime_break_minutes"
 						label={t('app.scheduling.ot_break')}
-						render={({ value }) => formatDurationHours(value)}
+						render={({ value }) => formatDurationHours(value, t)}
 					/>
 					<Column name="crosses_midnight" label={t('app.scheduling.crosses_midnight')} />
 					<Column name="effective_range" label={t('component.effective')} />
@@ -797,7 +810,7 @@
 				<Column
 					name="scope"
 					label={t('component.scope')}
-					render={({ value }) => formatHolidayScope(value)}
+					render={({ value }) => formatHolidayScope(value, t)}
 				/>
 			{/snippet}
 		</CollectionTable>

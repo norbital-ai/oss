@@ -23,6 +23,7 @@ import merge from 'es-toolkit/compat/merge';
 import set from 'es-toolkit/compat/set';
 import type { JsonPatchOperation } from '@norbital-ai/std/json';
 import type { StandardSchemaIssue } from '@norbital-ai/std/schema';
+import type { MessageVars } from '@norbital-ai/std/i18n';
 import { toast } from 'svelte-sonner';
 import type { Get } from './path';
 import { fieldAndFormErrorsFromStandardIssues } from './standard_schema_form_errors';
@@ -32,6 +33,9 @@ import {
 	DraftStorage,
 	type DraftStorage as DraftStorageType
 } from './utilities/draft_storage.svelte';
+
+/** Catalog-backed translation handle, threaded in so this state class never renders hardcoded copy. */
+export type TranslateFn = (key: string, vars?: MessageVars) => string;
 
 // ============================================================================
 // TYPES
@@ -124,6 +128,12 @@ export type FormStateConfig<Schema extends FormSchema, TReturn> = {
 
 	/** Toast message on success. Set to null to disable. */
 	successMessage?: MaybeGetter<string | null>;
+
+	/**
+	 * Catalog-backed translate handle for built-in copy (success toast, validation
+	 * summary, generic failure). When omitted, English fallbacks are used.
+	 */
+	translate?: TranslateFn;
 
 	/** Optional description for debugging */
 	description?: MaybeGetter<string>;
@@ -230,6 +240,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	private _serverStateConfig: MaybeGetter<InferSchema<Schema> | null> = null;
 	private readonly _submitSuccessBehaviorConfig: MaybeGetter<SubmitSuccessBehavior> = 'none';
 	private _successMessageConfig: MaybeGetter<string | null> = 'Saved successfully';
+	private readonly _translate?: TranslateFn;
 
 	// ============================================================================
 	// DATA SOURCES (following the Merged State Model)
@@ -301,7 +312,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 		if (!this.hasValidationErrors) return null;
 		const fieldMessages = Object.values(this.errors.fieldErrors).flat();
 		if (fieldMessages.length > 0) return fieldMessages[0];
-		return this.errors.formErrors[0] ?? 'Please fix the highlighted errors.';
+		return this.errors.formErrors[0] ?? (this._translate?.('form.fixErrors') ?? 'Please fix the highlighted errors.');
 	});
 
 	// ============================================================================
@@ -377,7 +388,8 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 			onSuccess,
 			submitSuccessBehavior = 'none',
 			transform,
-			successMessage = 'Saved successfully',
+			successMessage,
+			translate,
 			description = 'unnamed form',
 			disabled = false,
 			draftKey,
@@ -388,7 +400,11 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 		this.onSuccess = onSuccess;
 		this._submitSuccessBehaviorConfig = submitSuccessBehavior;
 		this._transformConfig = transform;
-		this._successMessageConfig = successMessage;
+		this._translate = translate;
+		this._successMessageConfig =
+			successMessage !== undefined
+				? successMessage
+				: () => (translate?.('form.savedSuccessfully') ?? 'Saved successfully');
 		this.description = description;
 
 		// Store config as MaybeGetter (resolved reactively or at point of use)
@@ -852,7 +868,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 				this.setValidationIssuesFromStandardSchema(issues);
 				this.submissionState = { status: 'idle' };
 				if (!silent) {
-					toast.error('Please fix the highlighted errors.');
+					toast.error(this._translate?.('form.fixErrors') ?? 'Please fix the highlighted errors.');
 					console.error(issues);
 				}
 				return null;
@@ -904,7 +920,9 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 				return null;
 			}
 			const message =
-				err instanceof Error && err.message.trim().length > 0 ? err.message : 'An error occurred';
+				err instanceof Error && err.message.trim().length > 0
+					? err.message
+					: (this._translate?.('misc.toastError') ?? 'An error occurred');
 			this.submissionState = { status: 'error', message };
 			throw err;
 		} finally {

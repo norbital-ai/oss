@@ -137,6 +137,7 @@
 		error={activeRecordError}
 		found={Boolean(activeRecord)}
 		{actions}
+		banner={collectionSurface?.banner ?? null}
 		ui={uiDetails}
 		approval={approvalDetails}
 		raw={rawDetails}

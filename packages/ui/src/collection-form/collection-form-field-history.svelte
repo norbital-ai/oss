@@ -4,7 +4,7 @@
 		CollectionRecordHistoryEntry
 	} from '@norbital-ai/platform-utils/collection';
 	import Icon from '@iconify/svelte';
-	import { formatDataValue, formatStructuredValue } from '../data-renderer/index.js';
+	import { formatDataValue, formatStructuredValue, type Translate } from '../data-renderer/index.js';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Label } from '#lib/label';
 	import { Inline, Scroll } from '#lib/layout';
@@ -30,7 +30,7 @@
 		Props = $props();
 
 	const { t } = useI18n<UiKeys>();
-	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 
 	const fieldHistory = $derived(collectionFieldHistory(history, field.name));
 
@@ -58,7 +58,7 @@
 	function revisionText(entryValue: unknown): string {
 		return entryValue != null && typeof entryValue === 'object'
 			? formatStructuredValue(entryValue)
-			: formatDataValue(field, entryValue);
+			: formatDataValue(field, entryValue, localeEffective, t as Translate);
 	}
 </script>
 

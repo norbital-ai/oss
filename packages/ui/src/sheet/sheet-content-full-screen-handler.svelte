@@ -3,6 +3,7 @@
 
 	import { Button } from '#lib/button';
 	import { Tooltip } from '#lib/tooltip';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { onDestroy, onMount } from 'svelte';
 
@@ -21,6 +22,7 @@
 	} = $props();
 
 	const sidebar = document.getElementById('sidebar');
+	const { t } = useI18n<UiKeys>();
 
 	const handleClick = () => {
 		if (ref) {
@@ -126,7 +128,7 @@
 	{/snippet}
 	{#snippet content()}
 		<p>
-			{#if fullScreen}Collapse{:else}Expand{/if}
+			{#if fullScreen}{t('table.collapse')}{:else}{t('table.expand')}{/if}
 		</p>
 	{/snippet}
 </Tooltip>

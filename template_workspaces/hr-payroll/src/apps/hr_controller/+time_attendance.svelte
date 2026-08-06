@@ -120,6 +120,14 @@
 		content="Review missing punches, schedule mismatches, time entries, and overtime"
 	/>
 	<meta name="pod:icon" content="lucide:clock-3" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/hr-payroll/app-media/time_attendance-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/app-media/time_attendance-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet companyScopeActions()}
@@ -192,11 +200,14 @@
 					description: t('app.time_attendance.import_pipeline_description'),
 					icon: 'lucide:clock-arrow-up',
 					run: async () => {
-						await runWorkbookImport({
-							collectionName: 'time_entries',
-							recordLabel: 'time entries',
-							buildPayload: timeEntryImportPayload
-						});
+						await runWorkbookImport(
+							{
+								collectionName: 'time_entries',
+								recordLabel: t('component.time_entries'),
+								buildPayload: timeEntryImportPayload
+							},
+							t
+						);
 					}
 				}
 			]}
@@ -228,7 +239,7 @@
 				<Column
 					name="break_minutes"
 					label={t('app.time_attendance.break_hours')}
-					render={({ value }) => formatDurationHours(value)}
+					render={({ value }) => formatDurationHours(value, t)}
 				/>
 				<Column
 					name="overtime_in"

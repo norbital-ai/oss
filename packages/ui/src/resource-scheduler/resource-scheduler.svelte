@@ -68,7 +68,9 @@
 		onCellActivate
 	}: ResourceSchedulerProps<TResource, TItem> = $props();
 
-	const days = $derived(buildResourceSchedulerDays(anchorDate, view));
+	const days = $derived(
+		buildResourceSchedulerDays(anchorDate, view, useI18n<UiKeys>().intlLocale)
+	);
 	const rowHeight = $derived(configuredRowHeight ?? (layout === 'matrix' ? 88 : 56));
 	const dayWidth = $derived(
 		configuredDayWidth ?? (layout === 'matrix' ? 156 : view === 'week' ? 128 : 48)

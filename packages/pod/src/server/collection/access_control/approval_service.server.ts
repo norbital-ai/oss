@@ -22,6 +22,7 @@ import {
 import { v7 } from 'uuid';
 import { z } from 'zod';
 import { error } from '../http_error.js';
+import { requestI18nOrDefault } from '$lib/server/i18n.js';
 import { approvalRequestFromRow, parseApprovalStepStacks } from '$lib/shared/approval.js';
 import { withCollectionTransaction } from '../collection_transaction.server.js';
 import { emitSyncOutboxRow, type SyncOutboxAction } from '../sync/sync-outbox.server.js';
@@ -131,13 +132,9 @@ async function lockApprovalRequest(
 		[approvalRequestId]
 	);
 	const status = locked.rows[0]?.status;
-	if (!status) throw error(404, 'Approval request not found');
+	if (!status) throw error(404, requestI18nOrDefault().t('pod.server.approvalNotFound'));
 	if (TERMINAL_STATES.includes(status)) {
-		throw error(
-			409,
-			'Cannot modify approval request: it has already reached a terminal state. ' +
-				'Once approved or rejected, the decision is final.'
-		);
+		throw error(409, requestI18nOrDefault().t('pod.server.approvalTerminalState'));
 	}
 	return loadApprovalRequest(approvalRequestId);
 }
@@ -437,7 +434,7 @@ async function buildApprovalRequestDraft(params: {
 
 	const flow = await resolveApprovalFlow(approvalConfig, context, collectionName);
 	if (!flow) {
-		throw error(400, 'No valid approval steps found. Contact your system administrator.');
+		throw error(400, requestI18nOrDefault().t('pod.server.noValidApprovalSteps'));
 	}
 
 	const collectionMetadata = {
@@ -448,7 +445,7 @@ async function buildApprovalRequestDraft(params: {
 	const requestor = await loadUserById(context.scope.requestor.norbital_id);
 	const requestorUserId = requestor?.[SYSTEM_COLUMN_NAMES.PKEY];
 	if (typeof requestorUserId !== 'string') {
-		throw error(401, 'Requestor user not found.');
+		throw error(401, requestI18nOrDefault().t('pod.server.requestorNotFound'));
 	}
 
 	const now = new Date().toISOString();
@@ -688,7 +685,7 @@ export async function loadApprovalRequestRow(
 
 async function loadApprovalRequest(approvalRequestId: string): Promise<TApprovalRequest> {
 	const existing = await loadApprovalRequestRow(approvalRequestId);
-	if (!existing) throw error(404, 'Approval request not found');
+	if (!existing) throw error(404, requestI18nOrDefault().t('pod.server.approvalNotFound'));
 	return existing;
 }
 
@@ -755,13 +752,13 @@ export async function authorizeApprovalRequestRevision(params: {
 		approvalRequest.collection_name !== collectionName ||
 		!approvalRequest.has_lock
 	) {
-		throw error(409, 'Cannot revise record: its approval request is not active for this record.');
+		throw error(409, requestI18nOrDefault().t('pod.server.approvalNotActive'));
 	}
 	if (approvalRequest.requestor_id !== requestorId) {
-		throw error(403, 'Only the original requestor can revise this approval request.');
+		throw error(403, requestI18nOrDefault().t('pod.server.onlyRequestorRevises'));
 	}
 	if (approvalRequest.status !== 'REQUEST_FOR_CHANGE') {
-		throw error(409, 'Cannot revise record until an approver requests changes.');
+		throw error(409, requestI18nOrDefault().t('pod.server.approverMustRequestChanges'));
 	}
 
 	await tenantDb.query(`SELECT set_config('norbital.approval_revision_request_id', $1, true)`, [
@@ -796,7 +793,7 @@ export async function restartApprovalRequestForRevision(params: {
 		approvalConfig.collection_name
 	);
 	if (!newFlow) {
-		throw error(400, 'No valid approval steps found for the revised record.');
+		throw error(400, requestI18nOrDefault().t('pod.server.noValidApprovalStepsForRevision'));
 	}
 	const approvalStepNodes = [...toStepStacks(existing), newFlow];
 
@@ -864,7 +861,7 @@ export async function withdrawApprovalRequest(
 		const requestorRef = requestorMutationRef(Reflect.get(existing, 'requestor'));
 		const requestorId = requestorRef[0].record_id;
 		if (requestorId !== user.norbital_id) {
-			throw error(403, 'Only the requestor can withdraw their own approval request.');
+			throw error(403, requestI18nOrDefault().t('pod.server.onlyRequestorWithdraws'));
 		}
 
 		const currentFlow = getCurrentFlow(existing);

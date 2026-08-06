@@ -31,22 +31,38 @@
 		nullable: true
 	} satisfies CollectionField;
 
-	const KIND_OPTIONS: { value: OriginKind; label: string; description: string }[] = [
+	const KIND_OPTIONS = $derived<{ value: OriginKind; label: string; description: string }[]>([
 		{
 			value: 'RECURRING',
-			label: 'Recurring',
-			description: 'Applies to every pay period while the range is open'
+			label: t('renderer.entry_origin.kind_recurring'),
+			description: t('renderer.entry_origin.kind_recurring_desc')
 		},
-		{ value: 'ONE_OFF', label: 'One-off', description: 'A single ad-hoc entry' },
-		{ value: 'CLAIM', label: 'Claim', description: 'Reimbursement against evidence' },
+		{
+			value: 'ONE_OFF',
+			label: t('renderer.entry_origin.kind_one_off'),
+			description: t('renderer.entry_origin.kind_one_off_desc')
+		},
+		{
+			value: 'CLAIM',
+			label: t('renderer.entry_origin.kind_claim'),
+			description: t('renderer.entry_origin.kind_claim_desc')
+		},
 		{
 			value: 'LOAN_INSTALMENT',
-			label: 'Loan instalment',
-			description: 'One single-use leg of a repayment agreement'
+			label: t('renderer.entry_origin.kind_instalment'),
+			description: t('renderer.entry_origin.kind_instalment_desc')
 		},
-		{ value: 'REVERSAL', label: 'Reversal', description: 'Reverses an earlier entry' },
-		{ value: 'ARREARS', label: 'Arrears', description: 'Back-pay for earlier periods' }
-	];
+		{
+			value: 'REVERSAL',
+			label: t('renderer.entry_origin.kind_reversal'),
+			description: t('renderer.entry_origin.kind_reversal_desc')
+		},
+		{
+			value: 'ARREARS',
+			label: t('renderer.entry_origin.kind_arrears'),
+			description: t('renderer.entry_origin.kind_arrears_desc')
+		}
+	]);
 
 	let props: EntryOriginRendererProps = $props();
 	const disabled = $derived(props.mode === 'edit' ? props.disabled : true);
@@ -105,17 +121,29 @@
 		if (current === null) return '—';
 		switch (current.kind) {
 			case 'RECURRING':
-				return `Recurring each pay period · ${formatCalendarDate(dateOf(current.effective_range.start))} → ${formatCalendarDate(dateOf(current.effective_range.end))}`;
+				return t('renderer.entry_origin.summary_recurring', {
+					from: formatCalendarDate(dateOf(current.effective_range.start)),
+					to: formatCalendarDate(dateOf(current.effective_range.end))
+				});
 			case 'ONE_OFF':
-				return current.note.length === 0 ? 'One-off' : `One-off · ${current.note}`;
+				return current.note.length === 0
+					? t('renderer.entry_origin.summary_one_off')
+					: t('renderer.entry_origin.summary_one_off_note', { note: current.note });
 			case 'CLAIM':
-				return `Claim incurred ${formatCalendarDate(current.incurred_on)}`;
+				return t('renderer.entry_origin.summary_claim', {
+					date: formatCalendarDate(current.incurred_on)
+				});
 			case 'LOAN_INSTALMENT':
-				return `Instalment ${current.sequence} of ${current.of}`;
+				return t('renderer.entry_origin.summary_instalment', {
+					sequence: current.sequence,
+					of: current.of
+				});
 			case 'REVERSAL':
-				return `Reversal · ${current.reason}`;
+				return t('renderer.entry_origin.summary_reversal', { reason: current.reason });
 			case 'ARREARS':
-				return `Arrears ${current.covers_periods.join(', ')}`;
+				return t('renderer.entry_origin.summary_arrears', {
+					periods: current.covers_periods.join(', ')
+				});
 		}
 	});
 
@@ -188,13 +216,13 @@
 {:else}
 	<Grid class="rounded-md border border-border bg-muted/20 p-3" gap="sm" minimum="compact">
 		<label class="grid gap-1.5 text-sm font-medium">
-			Origin
+			{t('component.origin')}
 			<Combobox
 				options={KIND_OPTIONS}
 				value={current?.kind ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select an origin"
+				emptyPlaceholder={t('renderer.entry_origin.select_origin')}
 				onValueChange={selectKind}
 			/>
 		</label>
@@ -202,7 +230,7 @@
 		{#if current?.kind === 'RECURRING'}
 			{@const range = current.effective_range}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Effective from
+				{t('component.effective_from')}
 				<Input
 					type="date"
 					value={dateOf(range.start)}
@@ -219,7 +247,7 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Effective to
+				{t('component.effective_to')}
 				<Input
 					type="date"
 					value={dateOf(range.end)}
@@ -234,7 +262,7 @@
 			</label>
 		{:else if current?.kind === 'ONE_OFF'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Note
+				{t('component.note')}
 				<Input
 					value={current.note}
 					{disabled}
@@ -244,7 +272,7 @@
 			</label>
 		{:else if current?.kind === 'CLAIM'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Incurred on
+				{t('renderer.entry_origin.incurred_on')}
 				<Input
 					type="date"
 					value={current.incurred_on}
@@ -268,14 +296,14 @@
 			</Stack>
 		{:else if current?.kind === 'LOAN_INSTALMENT'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Repayment agreement
+				{t('renderer.entry_origin.repayment_agreement')}
 				<Combobox
-					ariaLabel="Repayment agreement"
+					ariaLabel={t('renderer.entry_origin.repayment_agreement')}
 					options={agreementOptions}
 					value={current.agreement_id === '' ? null : current.agreement_id}
 					disabled={disabled || employmentId == null}
-					searchPlaceholder="Search agreements…"
-					emptyPlaceholder="Choose the agreement this leg repays"
+					searchPlaceholder={t('renderer.entry_origin.search_agreements')}
+					emptyPlaceholder={t('renderer.entry_origin.choose_agreement')}
 					clientConfig={{
 						isLoading: agreementsQuery?.loading ?? false,
 						error: agreementsQuery?.error?.message ?? null
@@ -285,7 +313,7 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Sequence
+				{t('renderer.entry_origin.sequence')}
 				<Input
 					type="number"
 					min="1"
@@ -297,7 +325,7 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Of
+				{t('renderer.entry_origin.of')}
 				<Input
 					type="number"
 					min="1"
@@ -309,14 +337,14 @@
 			</label>
 		{:else if current?.kind === 'REVERSAL'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Reverses
+				{t('renderer.entry_origin.reverses')}
 				<Combobox
-					ariaLabel="Reversed entry"
+					ariaLabel={t('renderer.entry_origin.reversed_entry')}
 					options={entryOptions}
 					value={current.reverses_entry_id === '' ? null : current.reverses_entry_id}
 					disabled={disabled || employmentId == null}
-					searchPlaceholder="Search this person’s entries…"
-					emptyPlaceholder="Choose the entry being reversed"
+					searchPlaceholder={t('renderer.entry_origin.search_entries')}
+					emptyPlaceholder={t('renderer.entry_origin.choose_entry')}
 					clientConfig={{
 						isLoading: entriesQuery?.loading ?? false,
 						error: entriesQuery?.error?.message ?? null
@@ -326,7 +354,7 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Reason
+				{t('renderer.entry_origin.reason')}
 				<Input
 					value={current.reason}
 					{disabled}
@@ -335,7 +363,7 @@
 			</label>
 		{:else if current?.kind === 'ARREARS'}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Covers periods (comma separated YYYY-MM)
+				{t('renderer.entry_origin.covers_periods')}
 				<Input
 					value={current.covers_periods.join(', ')}
 					{disabled}
@@ -345,7 +373,7 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Reason
+				{t('renderer.entry_origin.reason')}
 				<Input
 					value={current.reason}
 					{disabled}

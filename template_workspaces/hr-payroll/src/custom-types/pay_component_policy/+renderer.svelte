@@ -162,7 +162,7 @@
 				value={current?.kind ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select an economic type"
+				emptyPlaceholder={t('renderer.pay_component_policy.select_economic_type')}
 				onValueChange={selectKind}
 			/>
 		</label>
@@ -191,14 +191,14 @@
 					<label class="grid gap-1.5 text-sm font-medium">
 						Statutory scheme
 						<Combobox
-							ariaLabel="Statutory contribution"
+							ariaLabel={t('component.statutory_scheme')}
 							options={contributionOptions}
 							value={row.layer.statutory_contribution_id === ''
 								? null
 								: row.layer.statutory_contribution_id}
 							disabled={row.disabled || jurisdictionId == null}
-							searchPlaceholder="Search this jurisdiction’s schemes…"
-							emptyPlaceholder="Choose the scheme this decision is about"
+							searchPlaceholder={t('renderer.pay_component_policy.search_schemes')}
+							emptyPlaceholder={t('renderer.pay_component_policy.choose_scheme')}
 							clientConfig={{
 								isLoading: contributionsQuery?.loading ?? false,
 								error: contributionsQuery?.error?.message ?? null

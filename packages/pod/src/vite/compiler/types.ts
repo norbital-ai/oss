@@ -26,6 +26,8 @@ export interface DiscoveredCollection {
 	readonly id: string;
 	readonly path: string;
 	readonly roles: CollectionRoles;
+	/** Static `pod:banner` URL declared on `+representation.svelte`, if any. */
+	readonly representationBanner?: string | null;
 }
 
 export interface DiscoveredCustomType {

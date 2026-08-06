@@ -1,0 +1,42 @@
+{
+	"$schema": "https://typedoc.org/schema.json",
+	"name": "Norbital API Reference",
+	"plugin": ["typedoc-plugin-markdown"],
+	"tsconfig": "typedoc.registry.tsconfig.json",
+	"entryPoints": [
+		"packages/pod/build",
+		"packages/platform-utils/build",
+		"packages/std/build",
+		"packages/ui/build"
+	],
+	"entryPointStrategy": "expand",
+	"excludeExternals": true,
+	"excludeInternal": true,
+	"excludePrivate": true,
+	"excludeProtected": true,
+	"skipErrorChecking": true,
+	"packagesRequiringDocumentation": [
+		"@norbital-ai/pod",
+		"@norbital-ai/platform-utils",
+		"@norbital-ai/std",
+		"@norbital-ai/ui"
+	],
+	"validation": {
+		"invalidLink": false,
+		"notDocumented": false,
+		"notExported": false
+	},
+	"treatWarningsAsErrors": false,
+	"readme": "none",
+	"out": "docs/api-reference",
+	"router": "module",
+	"publicPath": "/docs/api-reference/",
+	"includeVersion": true,
+	"useCodeBlocks": true,
+	"parametersFormat": "table",
+	"typeAliasPropertiesFormat": "table",
+	"useHTMLAnchors": true,
+	"searchInComments": true,
+	"useFirstParagraphOfCommentAsSummary": true,
+	"cleanOutputDir": true
+}

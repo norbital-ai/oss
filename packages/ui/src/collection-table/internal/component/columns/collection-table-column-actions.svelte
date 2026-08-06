@@ -33,7 +33,7 @@
 			aria-label={t('table.columnActions')}
 			class={cn(
 				buttonVariants({ variant: 'ghost', size: 'icon' }),
-				'mr-3 transition-opacity',
+				'mr-3 transition-opacity focus-visible:opacity-100',
 				isPopoverOpen || isColumnActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
 				isColumnActive && 'bg-muted-foreground/10 hover:bg-muted-foreground/20'
 			)}

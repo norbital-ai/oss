@@ -13,7 +13,7 @@
 		RemoteQuery
 	} from '@norbital-ai/platform-utils/collection';
 	import { Button } from '#lib/button';
-	import { FormState, type FormSchema } from '#lib/form';
+	import { FormState, type FormSchema, type TranslateFn } from '#lib/form';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Cover, Grid, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
@@ -194,6 +194,7 @@
 		disabled: () => loading || disabled,
 		submitSuccessBehavior: 'commit',
 		successMessage: null,
+		translate: t as TranslateFn,
 		remoteFn:
 			() =>
 			async (data): Promise<CollectionRow<TCollections[TName]>> => {

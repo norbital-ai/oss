@@ -36,6 +36,14 @@ const MAX_SOURCES = 12;
 /** Rows per source per query. The menu shows a short list, so the wire carries one. */
 const HITS_PER_SOURCE = 4;
 
+/** How the composer's "@" menu sizes its search, unless a caller opts into different limits. */
+export type MentionSourcesOptions = {
+	/** Cap on collections searched per burst, first N alphabetically. */
+	readonly maxSources?: number;
+	/** Cap on rows returned per collection per query. */
+	readonly hitsPerSource?: number;
+};
+
 export type MentionSources = {
 	/** The collections a bare `@` can narrow to, in menu order. */
 	collections(): readonly string[];
@@ -51,7 +59,13 @@ export type MentionSources = {
 	): Promise<readonly MentionRecordHit[]>;
 };
 
-export function createMentionSources(getManifestContext: () => ManifestContext): MentionSources {
+export function createMentionSources(
+	getManifestContext: () => ManifestContext,
+	options: MentionSourcesOptions = {}
+): MentionSources {
+	const maxSources = options.maxSources ?? MAX_SOURCES;
+	const hitsPerSource = options.hitsPerSource ?? HITS_PER_SOURCE;
+
 	function mentionableCollections(): string[] {
 		try {
 			return getManifestContext()
@@ -59,7 +73,7 @@ export function createMentionSources(getManifestContext: () => ManifestContext):
 				.filter((collection) => collection.system !== true)
 				.map((collection) => collection.collection_name)
 				.sort()
-				.slice(0, MAX_SOURCES);
+				.slice(0, maxSources);
 		} catch {
 			return [];
 		}
@@ -75,7 +89,7 @@ export function createMentionSources(getManifestContext: () => ManifestContext):
 			if (sync) {
 				const local = await localFindMany(sync, collection, {
 					search: query,
-					limit: HITS_PER_SOURCE
+					limit: hitsPerSource
 				});
 				if (local) return local.rows;
 			}
@@ -84,7 +98,7 @@ export function createMentionSources(getManifestContext: () => ManifestContext):
 		}
 		const page = await post<{ rows: Record<string, unknown>[] }>(
 			'collections/findMany',
-			{ collection, search: query, limit: HITS_PER_SOURCE },
+			{ collection, search: query, limit: hitsPerSource },
 			signal
 		);
 		return page.rows;

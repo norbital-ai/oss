@@ -10,6 +10,7 @@
 
 <script lang="ts">
 	import { Scroll, Stack } from '#lib/layout';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { getStickToBottomContext } from './stick-to-bottom-context.svelte.js';
 	import { watch } from 'runed';
 
@@ -21,6 +22,7 @@
 	}: ConversationContentProps = $props();
 
 	const context = getStickToBottomContext();
+	const { t } = useI18n<UiKeys>();
 
 	watch(
 		() => ref,
@@ -33,7 +35,7 @@
 	);
 </script>
 
-<Scroll axis="y" name="Conversation messages" grow class="min-h-0 min-w-0" bind:ref {...restProps}>
+<Scroll axis="y" name={t('misc.conversationMessages')} grow class="min-h-0 min-w-0" bind:ref {...restProps}>
 	<Stack
 		gap="xl"
 		data-stick-to-bottom-content

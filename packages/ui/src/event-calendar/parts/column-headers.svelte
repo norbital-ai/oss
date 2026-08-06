@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { addDays, getColumnDate, isSameDay, isWeekend } from '../utils.js';
 	import type { CalendarView } from '../types.js';
 
@@ -17,6 +18,7 @@
 		class?: string;
 	} = $props();
 
+	const intlLocale = $derived(useI18n<UiKeys>().intlLocale);
 	const today = $derived(new Date());
 
 	const columns = $derived.by(() => {
@@ -25,7 +27,8 @@
 			const colDate = getColumnDate(date, i);
 			result.push({
 				date: colDate,
-				label: view === 'month' ? '' : colDate.toLocaleDateString('en-US', { weekday: 'short' }),
+				label:
+					view === 'month' ? '' : colDate.toLocaleDateString(intlLocale, { weekday: 'short' }),
 				isToday: isSameDay(colDate, today),
 				isWeekend: isWeekend(colDate)
 			});
@@ -37,7 +40,7 @@
 
 	const dayLabels = $derived(
 		view === 'month'
-			? columns.map((c) => c.date.toLocaleDateString('en-US', { weekday: 'narrow' }))
+			? columns.map((c) => c.date.toLocaleDateString(intlLocale, { weekday: 'narrow' }))
 			: null
 	);
 </script>

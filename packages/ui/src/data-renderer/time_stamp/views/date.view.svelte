@@ -17,7 +17,7 @@
 	import YearView from './year.view.svelte';
 
 	const { t } = useI18n<UiKeys>();
-	const intlLocale = $derived(useI18n().intlLocale);
+	const intlLocale = $derived(useI18n<UiKeys>().intlLocale);
 
 	// ==================================================================================
 	// TYPES & INTERFACES

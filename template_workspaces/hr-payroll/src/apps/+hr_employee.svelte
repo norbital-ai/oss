@@ -158,6 +158,14 @@
 		content="View your schedule, leave, pay components, loans, payslips, and profile"
 	/>
 	<meta name="pod:icon" content="lucide:user-round" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/hr-payroll/app-media/hr_employee-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/app-media/hr_employee-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet contextGate()}
@@ -214,7 +222,7 @@
 		{#if employeeQuery.loading}
 			<div
 				class="h-56 animate-pulse rounded-lg bg-muted/40"
-				aria-label="Loading your profile"
+				aria-label={t('component.loading_profile')}
 			></div>
 		{:else if employeeQuery.current}
 			<section class="rounded-lg border bg-card shadow-card" aria-labelledby="my-profile-heading">
@@ -396,7 +404,7 @@
 					name="origin"
 					label={t('component.origin')}
 					card="subtitle"
-					render={({ value }) => formatEntryOrigin(value)}
+					render={({ value }) => formatEntryOrigin(value, t)}
 				/>
 			{/snippet}
 		</CollectionTable>
@@ -433,7 +441,7 @@
 					name="schedule"
 					label={t('component.schedule')}
 					card="subtitle"
-					render={({ value }) => formatRepaymentSchedule(value)}
+					render={({ value }) => formatRepaymentSchedule(value, t)}
 				/>
 				<Column
 					name="disbursed_on"

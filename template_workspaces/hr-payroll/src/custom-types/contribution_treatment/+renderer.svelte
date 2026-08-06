@@ -75,7 +75,7 @@
 				value={current?.kind ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select a treatment"
+				emptyPlaceholder={t('renderer.contribution_treatment.select_treatment')}
 				onValueChange={selectKind}
 			/>
 		</label>

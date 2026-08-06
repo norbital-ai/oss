@@ -656,7 +656,13 @@
 		aria-label={headerLabel}
 	>
 		{#if isCheckbox}
-			<Inline gap="none" justify="center" class="p-2.5">
+			<Inline
+				gap="none"
+				fill
+				grow
+				justify="center"
+				class="min-w-0 overflow-hidden px-3.5 py-1.5"
+			>
 				{#if headerContent instanceof RenderComponentConfig}
 					{@const { component: Component, props } = headerContent}
 					<Component {...props} />
@@ -711,10 +717,10 @@
 								: t('table.sortAscending')}
 						onclick={() => handleSort(inst)}
 						class={cn(
-							'flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-opacity duration-150 hover:bg-muted focus:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
+							'flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-opacity duration-150 hover:bg-muted focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
 							isSorted
 								? 'opacity-100'
-								: 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+								: 'opacity-0 group-hover:opacity-100'
 						)}
 					>
 						<Icon

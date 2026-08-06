@@ -14,17 +14,27 @@ const uploadResponseSchema = z.object({
 	size: z.number().int().nonnegative()
 });
 
-async function responsePayload(response: Response): Promise<unknown> {
+/**
+ * The subset of the i18n api the upload client needs, passed in rather than read from context:
+ * this class is constructed by the shell's runtime wiring, outside any component init, so it
+ * cannot call `useI18n` itself. The shell hands it `t` from its own typed hook; a caller that
+ * omits it keeps the source English so the client stays renderable in isolation.
+ */
+export type FileUploadI18n = {
+	t(key: string, vars?: { readonly [name: string]: string | number }): string;
+};
+
+async function responsePayload(response: Response, t: FileUploadI18n['t']): Promise<unknown> {
 	const payload: unknown = await response.json();
 	if (response.ok) return payload;
 	const message =
 		payload && typeof payload === 'object' && typeof Reflect.get(payload, 'message') === 'string'
 			? Reflect.get(payload, 'message')
-			: `File operation failed (${response.status})`;
+			: t('pod.fileUpload.operationFailed', { status: response.status });
 	throw new Error(message);
 }
 
-function readFileBase64(file: File, signal?: AbortSignal): Promise<string> {
+function readFileBase64(file: File, t: FileUploadI18n['t'], signal?: AbortSignal): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
 		const abort = () => reader.abort();
@@ -32,7 +42,7 @@ function readFileBase64(file: File, signal?: AbortSignal): Promise<string> {
 		signal?.addEventListener('abort', abort, { once: true });
 		reader.onerror = () => {
 			cleanup();
-			reject(reader.error ?? new Error('File could not be read.'));
+			reject(reader.error ?? new Error(t('pod.fileUpload.readError')));
 		};
 		reader.onabort = () => {
 			cleanup();
@@ -41,7 +51,7 @@ function readFileBase64(file: File, signal?: AbortSignal): Promise<string> {
 		reader.onload = () => {
 			cleanup();
 			const encoded = typeof reader.result === 'string' ? reader.result.split(',')[1] : undefined;
-			if (!encoded) reject(new Error('File could not be encoded.'));
+			if (!encoded) reject(new Error(t('pod.fileUpload.encodeError')));
 			else resolve(encoded);
 		};
 		reader.readAsDataURL(file);
@@ -52,6 +62,11 @@ export class WorkspaceFileUploadClient implements IFileUploadClient {
 	readonly uploads = $state<UploadEntry[]>([]);
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly recordIdByObjectUrl = new Map<string, string>();
+	private readonly t: FileUploadI18n['t'];
+
+	constructor(i18n?: FileUploadI18n) {
+		this.t = i18n ? (key, vars) => i18n.t(key, vars) : (key) => key;
+	}
 
 	upload(file: File, options?: UploadOptions): Promise<UploadResult> {
 		return this.beginUpload(file, options).promise;
@@ -96,7 +111,7 @@ export class WorkspaceFileUploadClient implements IFileUploadClient {
 	}
 
 	private async performUpload(entry: UploadEntry, signal: AbortSignal): Promise<UploadResult> {
-		const dataBase64 = await readFileBase64(entry.file, signal);
+		const dataBase64 = await readFileBase64(entry.file, this.t, signal);
 		const response = await fetch('/_runtime/files/upload', {
 			method: 'POST',
 			credentials: 'include',
@@ -109,7 +124,7 @@ export class WorkspaceFileUploadClient implements IFileUploadClient {
 			}),
 			signal
 		});
-		const parsed = uploadResponseSchema.parse(await responsePayload(response));
+		const parsed = uploadResponseSchema.parse(await responsePayload(response, this.t));
 		const objectUrl = URL.createObjectURL(entry.file);
 		this.recordIdByObjectUrl.set(objectUrl, parsed.norbital_id);
 		return { ...parsed, url: objectUrl };
@@ -124,7 +139,7 @@ export class WorkspaceFileUploadClient implements IFileUploadClient {
 			headers: { 'content-type': 'application/json', 'x-norbital-request-id': crypto.randomUUID() },
 			body: JSON.stringify({ record_id: recordId })
 		});
-		await responsePayload(response);
+		await responsePayload(response, this.t);
 		URL.revokeObjectURL(fileUrl);
 		this.recordIdByObjectUrl.delete(fileUrl);
 	}

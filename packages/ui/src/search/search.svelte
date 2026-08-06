@@ -25,7 +25,10 @@
 	import { Indicator } from '#lib/indicator';
 	import { Input } from '#lib/input';
 	import * as Popover from '#lib/popover';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
+
+	const { t } = useI18n<UiKeys>();
 
 	let {
 		onValueChange,
@@ -33,7 +36,7 @@
 		onDismiss,
 		value = $bindable(),
 		appliedValue,
-		placeholder = 'Search...',
+		placeholder = t('misc.searchEllipsis'),
 		indicatorVariant = 'default',
 		indicatorSize = 'md',
 		indicatorPosition = 'top-right',

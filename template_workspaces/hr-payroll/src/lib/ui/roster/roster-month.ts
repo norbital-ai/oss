@@ -19,6 +19,11 @@
  */
 
 import { calendarDayKey, daysInMonth } from '../calendar.js';
+import type { I18nApi } from '@norbital-ai/ui/i18n';
+import type { TenantI18nKeys } from '$pod/i18n-keys';
+
+/** The translation callback a display helper takes, so it stays locale-reactive at the call site. */
+export type Translator = I18nApi<TenantI18nKeys>['t'];
 
 export type Designation = 'WORK' | 'REST' | 'OFF';
 
@@ -204,23 +209,28 @@ export function buildRosterMonth(options: {
  *
  * The board's cells, its legend and the scheduling app's filter all read this one table, so a day
  * cannot be described one way in a cell and another way in the control that selects it. Classes are
- * literal variants, never assembled, so Tailwind can see every one of them.
+ * literal variants, never assembled, so Tailwind can see every one of them. The label is a catalog
+ * key so every surface resolves it through the same `t`; a locale switch re-reads it everywhere at
+ * once.
  */
 export const STATUS_PRESENTATION: Record<
 	DayStatus,
-	{ readonly label: string; readonly className: string }
+	{ readonly labelKey: TenantI18nKeys; readonly className: string }
 > = {
-	UNROSTERED: { label: 'Unrostered', className: 'bg-muted/30 text-muted-foreground' },
+	UNROSTERED: { labelKey: 'roster.unrostered', className: 'bg-muted/30 text-muted-foreground' },
 	PLANNED: {
-		label: 'Planned',
+		labelKey: 'roster.planned',
 		className: 'bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-200'
 	},
-	ATTENDED: { label: 'Attended', className: 'bg-success/15 text-success-foreground' },
-	OPEN: { label: 'Open punch', className: 'bg-warning/25 text-warning-foreground' },
-	ABSENT: { label: 'No attendance', className: 'bg-destructive/20 font-semibold text-destructive' },
-	ON_LEAVE: { label: 'Leave', className: 'bg-accent text-accent-foreground' },
-	REST: { label: 'Rest day', className: 'bg-muted text-muted-foreground' },
-	OFF: { label: 'Off day', className: 'bg-muted/60 text-muted-foreground' }
+	ATTENDED: { labelKey: 'roster.attended', className: 'bg-success/15 text-success-foreground' },
+	OPEN: { labelKey: 'roster.open_punch', className: 'bg-warning/25 text-warning-foreground' },
+	ABSENT: {
+		labelKey: 'roster.absent',
+		className: 'bg-destructive/20 font-semibold text-destructive'
+	},
+	ON_LEAVE: { labelKey: 'roster.leave', className: 'bg-accent text-accent-foreground' },
+	REST: { labelKey: 'roster.rest_day', className: 'bg-muted text-muted-foreground' },
+	OFF: { labelKey: 'roster.off_day', className: 'bg-muted/60 text-muted-foreground' }
 };
 
 /**
@@ -232,7 +242,7 @@ export const STATUS_PRESENTATION: Record<
  */
 export const HOLIDAY_PRESENTATION = {
 	mark: 'PH',
-	label: 'Public holiday',
+	labelKey: 'roster.public_holiday' as TenantI18nKeys,
 	/** Body cells: translucent, so the status chip sitting inside the cell stays legible through it. */
 	className: 'bg-brand/20',
 	/**
@@ -269,16 +279,18 @@ export function statusGlyph(day: DayFacts): string {
 }
 
 /** One line describing everything known about a day, for a cell's hover text. */
-export function describeDay(day: DayFacts | undefined, heading: string): string {
+export function describeDay(day: DayFacts | undefined, heading: string, t: Translator): string {
 	if (day == null) return heading;
 	return [
 		heading,
-		STATUS_PRESENTATION[day.status].label,
-		day.shiftCode == null ? null : `Shift ${day.shiftCode}`,
-		day.assignmentCode == null ? null : `Roster code ${day.assignmentCode}`,
-		day.holidayName == null ? null : `${HOLIDAY_PRESENTATION.label}: ${day.holidayName}`,
-		day.leaveCode == null ? null : `${day.leaveCode}${day.halfDayLeave ? ' (half day)' : ''}`,
-		day.withinCutoff ? 'Inside the current cut-off' : null
+		t(STATUS_PRESENTATION[day.status].labelKey),
+		day.shiftCode == null ? null : t('roster.shift_code', { code: day.shiftCode }),
+		day.assignmentCode == null ? null : t('roster.assignment_code', { code: day.assignmentCode }),
+		day.holidayName == null ? null : `${t(HOLIDAY_PRESENTATION.labelKey)}: ${day.holidayName}`,
+		day.leaveCode == null
+			? null
+			: `${day.leaveCode}${day.halfDayLeave ? ` (${t('roster.half_day')})` : ''}`,
+		day.withinCutoff ? t('roster.inside_cutoff') : null
 	]
 		.filter((part) => part != null && part !== '')
 		.join(' — ');

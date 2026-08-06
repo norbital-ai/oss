@@ -115,7 +115,7 @@ async function handleConvert(message: ConvertRequestMessage): Promise<void> {
 	} catch (error) {
 		self.postMessage({
 			type: 'error',
-			error: error instanceof Error ? getErrorMessage(error) : 'Unable to convert IFC model.'
+			error: error instanceof Error ? getErrorMessage(error) : 'ifc.unable_to_convert'
 		} satisfies ConvertErrorMessage);
 	}
 }
@@ -130,6 +130,6 @@ self.onmessage = (event: MessageEvent<WorkerRequestMessage>) => {
 self.onerror = (event: ErrorEvent) => {
 	self.postMessage({
 		type: 'error',
-		error: `Worker uncaught error: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`
+		error: 'ifc.worker_crashed'
 	} satisfies ConvertErrorMessage);
 };

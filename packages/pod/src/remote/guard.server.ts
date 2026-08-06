@@ -5,6 +5,7 @@ import {
 	type Middleware
 } from '@norbital-ai/platform-utils/remote';
 import { error } from '$lib/server/http.js';
+import { requestI18n } from '$lib/server/i18n.js';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 
@@ -47,7 +48,7 @@ export class Guard {
 		return async (input) => {
 			const validation = await schema['~standard'].validate(input);
 			if (validation.issues?.length || !('value' in validation)) {
-				error(400, validation.issues?.[0]?.message ?? 'Invalid remote input');
+				error(400, validation.issues?.[0]?.message ?? requestI18n().t('pod.server.invalidRemoteInput'));
 			}
 			return wrapped(validation.value);
 		};
@@ -95,7 +96,7 @@ function throwRemoteError(err: unknown): never {
 				? bodyMessage
 				: typeof topLevelMessage === 'string'
 					? topLevelMessage
-					: 'Remote operation failed';
+					: requestI18n().t('pod.server.remoteOperationFailed');
 		error(status, message);
 	}
 	throw err;

@@ -69,6 +69,34 @@ function extractAppIcon(
 	return { icon, diagnostics };
 }
 
+/**
+ * Lightweight static-meta reader for non-app roles (e.g. `+representation.svelte`).
+ *
+ * Returns the literal `content` of the first `<meta name="{name}" …>` whose value is a static
+ * non-empty string, or `null`. Unlike `extractAppMetadata` it does not diagnose or require a
+ * title/icon — a banner is an optional decoration, not identity.
+ */
+export function extractStaticMetaValue(source: string, name: string): string | null {
+	let root: AST.Root;
+	try {
+		root = parse(source, { modern: true });
+	} catch {
+		return null;
+	}
+	for (const head of root.fragment.nodes) {
+		if (head.type !== 'SvelteHead') continue;
+		for (const node of head.fragment.nodes) {
+			if (node.type !== 'RegularElement' || node.name !== 'meta') continue;
+			const metaName = staticAttribute(node, 'name');
+			if (metaName !== name) continue;
+			const content = staticAttribute(node, 'content');
+			if (!content) return null;
+			return content;
+		}
+	}
+	return null;
+}
+
 export function extractAppMetadata(source: string, file: string): AppMetadataResult {
 	let root: AST.Root;
 	try {

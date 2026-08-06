@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { SLIDING_INDICATOR_EXPAND_TRANSITION_CLASS } from '#lib/sliding-indicator';
 	import { getDefaultFileTreeEntryIcon } from './file-tree-icons';
 	import FileTreeNode from './file-tree-node.svelte';
@@ -31,19 +32,20 @@
 	let children: FileTreeEntry[] = $state([]);
 	let loading = $state(false);
 	let loadError = $state('');
+	const { t } = useI18n<UiKeys>();
 
 	const isDark = $derived(variant === 'dark');
 	const isDirectory = $derived(entry.type === 'directory');
 	const isSelected = $derived(selectedPath === entry.path);
 	const isMuted = $derived(isMutedEntry?.(entry) ?? entry.writable === false);
-	const displayName = $derived(entry.name || entry.path.split('/').pop() || '(unnamed)');
+	const displayName = $derived(entry.name || entry.path.split('/').pop() || t('misc.unnamed'));
 	const presencePeers = $derived(presenceByPath[entry.path] ?? []);
 	const entryIcon = $derived(getEntryIcon(entry, { open }));
 	const entryBadge = $derived(getEntryBadge?.(entry) ?? null);
 	const showDelete = $derived(
 		entry.type === 'file' && Boolean(canDelete?.(entry.path, entry) && onDelete)
 	);
-	const emptyMessage = $derived(loadError || 'Empty folder');
+	const emptyMessage = $derived(loadError || t('misc.emptyFolder'));
 	const emptyClass = $derived(
 		cn('py-1.5 pr-2 text-xs italic', isDark ? 'text-[#858585]' : 'text-muted-foreground')
 	);
@@ -55,7 +57,7 @@
 		try {
 			children = await onToggle(entry.path);
 		} catch (error) {
-			loadError = error instanceof Error ? error.message : 'Failed to load folder';
+			loadError = error instanceof Error ? error.message : t('misc.failedToLoadFolder');
 			children = [];
 		} finally {
 			loading = false;

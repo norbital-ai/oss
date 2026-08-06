@@ -36,7 +36,7 @@
 		class?: string;
 		onValueChange?: (value: string | null) => void;
 	} = $props();
-	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 
 	const fallbackCountry = $derived(phoneCountryFromLocale(localeEffective));
 	const countries = $derived(phoneCountryOptions(localeEffective));

@@ -191,7 +191,7 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 		id: PLATFORM_PRODUCT_ID,
 		name: 'Norbital Platform',
 		description:
-			'One subscription containing Standard and Builder seats plus separately metered CPU, RAM, disk, and AI usage.',
+			'One subscription containing Standard and Pro seats plus separately metered CPU, RAM, disk, and AI usage.',
 		prices: [
 			{
 				id: 'platform-standard-seat-monthly',
@@ -208,16 +208,18 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 			},
 			{
 				id: 'platform-builder-seat-monthly',
-				name: 'Builder seat (Monthly)',
-				description: 'License fee charged monthly at SGD 45.00 per agent and sandbox seat.',
+				name: 'Pro seat (Monthly)',
+				description:
+					'License fee charged monthly at SGD 50.00 per Pro seat (agent and sandbox access).',
 				model: 'per_seat',
 				interval: 'month',
 				checkout: true,
 				stripePriceIds: {
-					sandbox: 'price_1Ty7G6LvWjJB44nUKwKSAtsQ',
-					production: 'price_1Ty7GBLlQVSVzCBMl2eoU3xz'
+					// Sandbox + production: Pro · SGD 50 (2026-08-06). Old SGD 45 prices archived.
+					sandbox: 'price_1U1LEvLvWjJB44nUITBB7tR4',
+					production: 'price_1U1LZHLlQVSVzCBMq3ValfFX'
 				},
-				amount: '4500'
+				amount: '5000'
 			},
 			{
 				id: 'cpu-millicore-second-monthly',

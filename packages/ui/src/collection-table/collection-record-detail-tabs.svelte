@@ -17,7 +17,8 @@
 		actions,
 		ui,
 		approval,
-		raw
+		raw,
+		banner = null
 	}: {
 		title: string;
 		description: string;
@@ -28,6 +29,8 @@
 		ui: Snippet;
 		approval: Snippet;
 		raw: Snippet;
+		/** Full-width image above the sheet header, from the collection's `+representation.svelte`. */
+		banner?: string | null;
 	} = $props();
 
 	const config = $derived([
@@ -56,6 +59,11 @@
 </script>
 
 {#snippet detailHeader({ list }: { list: Snippet })}
+	{#if banner}
+		<div class="relative h-32 w-full shrink-0 overflow-clip border-b bg-muted">
+			<img src={banner} alt="" class="size-full object-cover" loading="lazy" decoding="async" />
+		</div>
+	{/if}
 	<Inline as="header" gap="md" shrink={false} class="border-b bg-background px-4 py-2.5 sm:px-5">
 		<div class="min-w-0 flex-1">
 			<Sheet.Description class="truncate text-micro leading-4 text-muted-foreground">

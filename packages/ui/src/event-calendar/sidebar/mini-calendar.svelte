@@ -6,7 +6,7 @@
 	import Icon from '@iconify/svelte';
 
 	const { t } = useI18n<UiKeys>();
-	const intlLocale = $derived(useI18n().intlLocale);
+	const intlLocale = $derived(useI18n<UiKeys>().intlLocale);
 
 	let {
 		date,

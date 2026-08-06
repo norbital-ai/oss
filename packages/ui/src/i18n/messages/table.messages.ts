@@ -167,7 +167,10 @@ export const tableMessages = defineMessages(
 		'table.run': 'Run',
 		'table.pipelineSelectRows': 'Select one or more rows to run {label}.',
 		'table.noIntegrationsConfigured': 'No integrations configured',
-		'table.noIntegrationsDescription': 'This collection is not currently connected to an external integration.'
+		'table.noIntegrationsDescription': 'This collection is not currently connected to an external integration.',
+		'table.filterFields': 'Filter fields',
+		'table.systemFields': 'System fields',
+		'table.detailMissingId': 'Cannot open detail without {field}.'
 	},
 	{
 		'table.emptyState': '暂无记录',
@@ -328,6 +331,9 @@ export const tableMessages = defineMessages(
 		'table.run': '运行',
 		'table.pipelineSelectRows': '选择一行或多行以运行{label}。',
 		'table.noIntegrationsConfigured': '未配置集成',
-		'table.noIntegrationsDescription': '此集合当前未连接到外部集成。'
+		'table.noIntegrationsDescription': '此集合当前未连接到外部集成。',
+		'table.filterFields': '筛选字段',
+		'table.systemFields': '系统字段',
+		'table.detailMissingId': '无法打开详情：缺少 {field}。'
 	}
 );

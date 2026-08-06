@@ -52,7 +52,8 @@ export const formMessages = defineMessages(
 		'form.fieldHistoryRegion': 'Field history',
 		'form.historyLoadFailed': 'History could not be loaded.',
 		'form.noSavedChanges': 'No saved changes yet.',
-		'form.savedHistoryLabel': '{label} saved history'
+		'form.savedHistoryLabel': '{label} saved history',
+		'form.savedSuccessfully': 'Saved successfully'
 	},
 	{
 		'form.requiredField': '请填写{label}',
@@ -100,6 +101,7 @@ export const formMessages = defineMessages(
 		'form.fieldHistoryRegion': '字段历史',
 		'form.historyLoadFailed': '无法加载历史记录。',
 		'form.noSavedChanges': '暂无保存的更改。',
-		'form.savedHistoryLabel': '{label} 已保存的历史'
+		'form.savedHistoryLabel': '{label} 已保存的历史',
+		'form.savedSuccessfully': '保存成功'
 	}
 );

@@ -30,7 +30,10 @@ export const kanbanMessages = defineMessages(
 		'kanban.noLaneJobs': 'No {lane} jobs',
 		'kanban.laneClear': 'This lane is clear for the selected view.',
 		'kanban.approvalLoading': 'Loading approval payload…',
-		'kanban.loadingBoard': 'Loading board'
+		'kanban.loadingBoard': 'Loading board',
+		'kanban.scrollForMore': 'Scroll for more',
+		'kanban.columnRegion': '{column} column',
+		'kanban.boardRegion': 'Kanban board'
 	},
 	{
 		'kanban.emptyState': '暂无卡片',
@@ -54,6 +57,9 @@ export const kanbanMessages = defineMessages(
 		'kanban.noLaneJobs': '没有{lane}任务',
 		'kanban.laneClear': '此列在当前视图下没有卡片。',
 		'kanban.approvalLoading': '正在加载审批数据…',
-		'kanban.loadingBoard': '正在加载看板'
+		'kanban.loadingBoard': '正在加载看板',
+		'kanban.scrollForMore': '向下滚动查看更多',
+		'kanban.columnRegion': '{column} 列',
+		'kanban.boardRegion': '看板'
 	}
 );

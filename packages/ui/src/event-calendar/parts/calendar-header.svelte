@@ -8,7 +8,7 @@
 	import type { CalendarView } from '../types.js';
 
 	const { t } = useI18n<UiKeys>();
-	const intlLocale = $derived(useI18n().intlLocale);
+	const intlLocale = $derived(useI18n<UiKeys>().intlLocale);
 
 	let {
 		view = 'week',

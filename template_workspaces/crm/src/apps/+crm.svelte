@@ -143,6 +143,8 @@
 		content="Sales pipeline, quotes, accounts, contacts, product catalogue, and activities"
 	/>
 	<meta name="pod:icon" content="lucide:handshake" />
+	<meta name="pod:thumbnail" content="/api/template-seed-assets/crm/app-media/crm-banner.svg" />
+	<meta name="pod:banner" content="/api/template-seed-assets/crm/app-media/crm-banner.svg" />
 </svelte:head>
 
 {#snippet accountScopeActions()}
@@ -415,24 +417,24 @@
 
 {#snippet billing()}
 	{#if selectedAccountId == null}
-		<p class="text-sm text-muted-foreground">Select an account to browse its invoices.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.empty_billing')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="sales_invoices"
 			view={`crm:billing:${selectedAccountId}`}
-			title="Invoices"
-			description="Billing documents raised against the selected account's confirmed quotes."
+			title={t('app.crm.billing_title')}
+			description={t('app.crm.billing_description')}
 			query={{
 				where: { account_id: { eq: selectedAccountId } },
 				orderBy: { doc_no: 'desc' }
 			}}
 		>
 			{#snippet columns({ Column })}
-				<Column name="doc_no" label="Doc #" minWidth={140} card="badge" />
+				<Column name="doc_no" label={t('component.doc_no')} minWidth={140} card="badge" />
 				<Column
 					name="quote_id"
-					label="Quote"
+					label={t('component.quote')}
 					minWidth={200}
 					card="title"
 					render={({ value }) =>
@@ -440,10 +442,10 @@
 				/>
 				<Column name="status" card="badge" />
 				<Column name="currency" card="badge" />
-				<Column name="gross" label="Gross amount" />
+				<Column name="gross" label={t('component.gross_amount')} />
 				<Column
 					name="owner_id"
-					label="Owner"
+					label={t('component.owner')}
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (userLabelsById.get(String(value)) ?? '—')}
 				/>
@@ -454,16 +456,16 @@
 
 {#snippet billingLines()}
 	{#if selectedAccountId == null}
-		<p class="text-sm text-muted-foreground">Select an account to browse invoice lines.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.empty_billing_lines')}</p>
 	{:else if scopedInvoiceIds.length === 0}
-		<p class="text-sm text-muted-foreground">No invoices exist for this account yet.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.no_invoice_lines')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="sales_invoice_lines"
 			view={`crm:billing-lines:${selectedAccountId}`}
-			title="Invoice lines"
-			description="Allocated quantities billed against the selected account's quotes."
+			title={t('app.crm.billing_lines_title')}
+			description={t('app.crm.billing_lines_description')}
 			query={{
 				where: { sales_invoice_id: { in: scopedInvoiceIds } },
 				orderBy: { sales_invoice_id: 'desc' }
@@ -472,17 +474,17 @@
 			{#snippet columns({ Column })}
 				<Column
 					name="sales_invoice_id"
-					label="Invoice"
+					label={t('component.invoice')}
 					minWidth={140}
 					card="badge"
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (invoiceLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="product_code" label="Code" minWidth={100} />
-				<Column name="product_name" label="Product" minWidth={200} card="title" />
+				<Column name="product_code" label={t('component.code')} minWidth={100} />
+				<Column name="product_name" label={t('component.product')} minWidth={200} card="title" />
 				<Column name="quantity" />
-				<Column name="unit_price" label="Unit price" />
-				<Column name="line_total" label="Total" />
+				<Column name="unit_price" label={t('component.unit_price')} />
+				<Column name="line_total" label={t('component.total')} />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -490,7 +492,7 @@
 
 {#snippet contracts()}
 	{#if selectedAccountId == null}
-		<p class="text-sm text-muted-foreground">Select an account to browse its contracts.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.empty_contracts')}</p>
 	{:else if scopedQuoteIds.length === 0}
 		<p class="text-sm text-muted-foreground">No quotes exist for this account yet.</p>
 	{:else}
@@ -498,14 +500,14 @@
 			{client}
 			collection="contract_signings"
 			view={`crm:contracts:${selectedAccountId}`}
-			title="Contracts"
-			description="Signing lifecycle of the selected account's confirmed quotes."
+			title={t('app.crm.contracts_title')}
+			description={t('app.crm.contracts_description')}
 			query={{ where: { quote_id: { in: scopedQuoteIds } } }}
 		>
 			{#snippet columns({ Column })}
 				<Column
 					name="quote_id"
-					label="Quote"
+					label={t('component.quote')}
 					minWidth={200}
 					card="title"
 					render={({ value }) =>
@@ -513,10 +515,10 @@
 				/>
 				<Column name="variant" card="badge" />
 				<Column name="status" card="badge" />
-				<Column name="acknowledged_at" label="Acknowledged" />
+				<Column name="acknowledged_at" label={t('component.acknowledged')} />
 				<Column
 					name="owner_id"
-					label="Owner"
+					label={t('component.owner')}
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (userLabelsById.get(String(value)) ?? '—')}
 				/>
@@ -527,7 +529,7 @@
 
 {#snippet payments()}
 	{#if selectedAccountId == null}
-		<p class="text-sm text-muted-foreground">Select an account to browse its settlements.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.empty_payments')}</p>
 	{:else if scopedQuoteIds.length === 0}
 		<p class="text-sm text-muted-foreground">No quotes exist for this account yet.</p>
 	{:else}
@@ -535,8 +537,8 @@
 			{client}
 			collection="settlements"
 			view={`crm:payments:${selectedAccountId}`}
-			title="Payments"
-			description="Settlements received against the selected account's confirmed quotes."
+			title={t('app.crm.payments_title')}
+			description={t('app.crm.payments_description')}
 			query={{
 				where: { regarding_type: { eq: 'quotes' }, regarding_id: { in: scopedQuoteIds } }
 			}}
@@ -544,7 +546,7 @@
 			{#snippet columns({ Column })}
 				<Column
 					name="regarding_id"
-					label="Quote"
+					label={t('component.quote')}
 					minWidth={200}
 					card="title"
 					render={({ value }) =>
@@ -552,7 +554,7 @@
 				/>
 				<Column name="amount" card="badge" />
 				<Column name="currency" card="badge" />
-				<Column name="settled_on" label="Settled on" />
+				<Column name="settled_on" label={t('component.settled_on')} />
 				<Column name="reference" minWidth={160} />
 			{/snippet}
 		</CollectionTable>
@@ -605,24 +607,34 @@
 			},
 			{
 				name: 'activities',
-				label: 'Activities',
+				label: t('app.crm.tab_activities'),
 				icon: 'lucide:calendar-check',
 				content: activities
 			},
-			{ name: 'billing', label: 'Invoices', icon: 'lucide:file-text', content: billing },
+			{
+				name: 'billing',
+				label: t('app.crm.billing_title'),
+				icon: 'lucide:file-text',
+				content: billing
+			},
 			{
 				name: 'billing-lines',
-				label: 'Invoice lines',
+				label: t('app.crm.billing_lines_title'),
 				icon: 'lucide:list-checks',
 				content: billingLines
 			},
 			{
 				name: 'contracts',
-				label: 'Contracts',
+				label: t('app.crm.contracts_title'),
 				icon: 'lucide:file-signature',
 				content: contracts
 			},
-			{ name: 'payments', label: 'Payments', icon: 'lucide:banknote', content: payments }
+			{
+				name: 'payments',
+				label: t('app.crm.payments_title'),
+				icon: 'lucide:banknote',
+				content: payments
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

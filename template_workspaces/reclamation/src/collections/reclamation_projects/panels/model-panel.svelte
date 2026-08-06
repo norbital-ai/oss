@@ -6,6 +6,7 @@
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { SiteLayer, SiteViewerStats } from '../../../lib/site-viewer/site_viewer.types.js';
 	import { SURFACE_NOTE } from '../../../lib/site-viewer/surface-notes.js';
+	import { surfaceLabel, surfaceNote } from '../../../lib/reclamation/i18n.js';
 	import { formatNumber } from '../../../lib/format.js';
 	import type { ReconstructionMetrics, StitchReport } from '../../../lib/reclamation/types.js';
 
@@ -36,7 +37,8 @@
 		report: StitchReport | null;
 	} = $props();
 
-	const { t } = useI18n<TenantI18nKeys>();
+	const i18n = useI18n<TenantI18nKeys>();
+	const { t } = i18n;
 
 	const errors = $derived((report?.warnings ?? []).filter((entry) => entry.severity === 'error'));
 	const cautions = $derived(
@@ -69,12 +71,16 @@
 						>
 							<span class="size-3 shrink-0 rounded-[3px] border" style={`background:${layer.color}`}
 							></span>
-							<span class="min-w-0 flex-1 truncate">{layer.label}</span>
+							<span class="min-w-0 flex-1 truncate">
+								{surfaceLabel(i18n, layer.id, layer.label)}
+							</span>
 							{#if SURFACE_NOTE[layer.id]}
-								<span class="shrink-0" title={SURFACE_NOTE[layer.id]}>
+								<span class="shrink-0" title={surfaceNote(i18n, layer.id, SURFACE_NOTE[layer.id])}>
 									<InfoHint
-										label={t('component.about_label', { label: layer.label })}
-										text={SURFACE_NOTE[layer.id]}
+										label={t('component.about_label', {
+											label: surfaceLabel(i18n, layer.id, layer.label)
+										})}
+										text={surfaceNote(i18n, layer.id, SURFACE_NOTE[layer.id])}
 									/>
 								</span>
 							{/if}

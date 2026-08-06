@@ -8,6 +8,7 @@
 	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { Skeleton } from '#lib/skeleton';
 	import { Sortable } from '#lib/sortable';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import type SortablePrimitive from 'sortablejs';
 	import { fade } from 'svelte/transition';
@@ -55,6 +56,7 @@
 	const ITEM_GAP = 8;
 	/** Fully loaded columns still virtualize above this count to avoid mounting hundreds of cards. */
 	const VIRTUALIZE_WHEN_LOADED_MIN_ITEMS = 8;
+	const { t } = useI18n<UiKeys>();
 
 	let containerRef: HTMLDivElement | null = $state(null);
 	let sortableColumn: HTMLElement | null = $state(null);
@@ -141,7 +143,7 @@
 	<Cover as="div" gap="sm" top={columnHeader}>
 		<Scroll
 			axis="y"
-			name={`${column.title} column`}
+			name={t('kanban.columnRegion', { column: column.title })}
 			bind:ref={containerRef}
 			class="rounded-md px-0.5"
 		>
@@ -155,7 +157,7 @@
 				</div>
 			{:else if column.items.length === 0}
 				<Stack gap="none" fill align="center" justify="center" class="p-4 text-muted-foreground">
-					<p>No items in this column</p>
+					<p>{t('kanban.emptyLane')}</p>
 				</Stack>
 			{:else if canSort}
 				<Sortable.Root
@@ -288,9 +290,9 @@
 {#snippet loadMoreIndicator({ loading }: { loading: boolean })}
 	<div class="flex items-center justify-center py-2 text-xs text-muted-foreground">
 		{#if loading}
-			<span class="animate-pulse">Loading…</span>
+			<span class="animate-pulse">{t('common.loading')}</span>
 		{:else}
-			<span>Scroll for more</span>
+			<span>{t('kanban.scrollForMore')}</span>
 		{/if}
 	</div>
 {/snippet}

@@ -119,6 +119,14 @@
 	<title>Leave</title>
 	<meta name="description" content="Review leave events and the leave types that entitle them" />
 	<meta name="pod:icon" content="lucide:calendar-check-2" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/hr-payroll/app-media/leave-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/app-media/leave-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet companyScopeActions()}
@@ -254,13 +262,13 @@
 				<Column
 					name="accrual"
 					label={t('app.leave.accrual')}
-					render={({ value }) => formatLeaveAccrual(value)}
+					render={({ value }) => formatLeaveAccrual(value, t)}
 				/>
 				<Column name="entitlement" label={t('app.leave.entitlement_matrix')} />
 				<Column
 					name="payroll_effect"
 					label={t('app.leave.payroll_effect')}
-					render={({ value }) => formatLeavePayrollEffect(value)}
+					render={({ value }) => formatLeavePayrollEffect(value, t)}
 				/>
 				<Column name="encash_on_exit" label={t('app.leave.encash_on_exit')} />
 				<Column name="effective_range" label={t('component.effective')} />

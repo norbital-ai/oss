@@ -363,8 +363,6 @@ function mutationError(clientId: string, err: unknown): MutationResult {
 // stream — GET ?cursor=<b64>|?since=<seq> → SSE diffs from the change feed
 // ---------------------------------------------------------------------------
 
-const STREAM_HEARTBEAT_MS = 15_000;
-
 /**
  * A committed row is only safe to emit once its xid drops below the snapshot horizon, which can
  * lag the COMMIT that notified us by the lifetime of an older concurrent transaction. So a wake-up
@@ -427,7 +425,6 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
 			let cursor = startCursor;
-			let lastBeat = Date.now();
 			const send = (payload: string): boolean => {
 				if (signal.aborted) return false;
 				try {
@@ -463,11 +460,15 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 				// snapshot horizon has not cleared it yet; at zero the loop sleeps until the
 				// next commit wakes it.
 				let settling = HORIZON_SETTLE_ATTEMPTS;
+				// Whether the client has already been told it is caught up, so the event fires once
+				// per catch-up rather than every idle wake — cleared the moment a batch has rows again.
+				let announcedSynced = false;
 				// stupidity:allow A6 -- this is the long-lived SSE pump, bounded by the abort signal.
 				while (!signal.aborted) {
 					if (await cursorTooOld()) break;
 					const batch = await runWithWorkspaceContext(ctx, () => readSyncOutboxBatch(ctx, cursor));
 					if (batch.rows.length > 0) {
+						announcedSynced = false;
 						// The request's base scope is immutable. A policy/team/user edit can therefore make
 						// every row in the replica wrong in either direction. Advance past the announcing
 						// batch and require a fresh context + collection catch-up on reconnect.
@@ -511,7 +512,6 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 						}
 						if (signal.aborted) break;
 						cursor = batch.cursor;
-						lastBeat = Date.now();
 						settling = HORIZON_SETTLE_ATTEMPTS;
 						continue; // drain fast when there is a backlog
 					}
@@ -520,17 +520,13 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 						await abortableDelay(HORIZON_SETTLE_MS, signal);
 						continue;
 					}
-					if (Date.now() - lastBeat >= STREAM_HEARTBEAT_MS) {
-						send(`: heartbeat\n\n`);
-						lastBeat = Date.now();
+					if (!announcedSynced) {
+						send(`event: synced\ndata: {}\n\n`);
+						announcedSynced = true;
 					}
-					// Idle: no queries and no cadence of our own. The next commit wakes this
-					// through the outbox trigger's NOTIFY; the keep-alive bounds the wait so a
-					// silent workspace still holds the connection open.
-					await Promise.race([
-						waitForSyncNotification(signal),
-						abortableDelay(STREAM_HEARTBEAT_MS, signal)
-					]);
+					// Idle: no queries and no cadence of our own. Nothing wakes this but a real
+					// commit, through the outbox trigger's NOTIFY — no keep-alive, no repoll.
+					await waitForSyncNotification(signal);
 					settling = HORIZON_SETTLE_ATTEMPTS;
 				}
 			} catch (err) {

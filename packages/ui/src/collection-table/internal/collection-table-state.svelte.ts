@@ -5,6 +5,7 @@ import { typeGuard } from '@norbital-ai/std/schema';
 import { uniqBy } from 'es-toolkit/array';
 import { omit } from 'es-toolkit/object';
 import { PersistedState, watch } from 'runed';
+import type { Translate } from '../../data-renderer/index.js';
 
 const looseRecordSchema = z.record(z.string(), z.unknown());
 
@@ -729,6 +730,11 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 				};
 				const end = () => {
 					activeColumnId = null;
+					// Resize handles are buttons; blur so header `group-focus-within`
+					// styles (sort / column actions) do not stick after drag.
+					if (document.activeElement instanceof HTMLElement) {
+						document.activeElement.blur();
+					}
 				};
 				window.addEventListener('mousemove', move);
 				window.addEventListener('mouseup', end);
@@ -765,7 +771,8 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 
 export function withSelectionColumn<TData extends Record<string, unknown>, TCondition = unknown>(
 	cols: TCreateColumnProps<TData, TCondition>[],
-	enabled: boolean
+	enabled: boolean,
+	t?: Translate
 ): TCreateColumnProps<TData, TCondition>[] {
 	if (!enabled) return cols.slice();
 
@@ -779,14 +786,14 @@ export function withSelectionColumn<TData extends Record<string, unknown>, TCond
 						checked: table.isAllPageRowsSelected,
 						indeterminate: table.isSomePageRowsSelected,
 						onCheckedChange: (value: boolean) => table.toggleAllPageRowsSelected(Boolean(value)),
-						'aria-label': 'Select all rows'
+						'aria-label': t ? t('table.selectAllRows') : 'Select all rows'
 					}),
 				cell: ({ row }) =>
 					renderComponent(CollectionTableCheckbox, {
 						controlledChecked: true,
 						checked: row.isSelected,
 						onCheckedChange: () => row.toggleSelection(),
-						'aria-label': 'Select row'
+						'aria-label': t ? t('table.selectRow') : 'Select row'
 					}),
 				enableSorting: false,
 				enablePinning: false,

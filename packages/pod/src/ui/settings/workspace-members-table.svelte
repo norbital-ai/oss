@@ -6,7 +6,7 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { UserRoleSchema } from '@norbital-ai/platform-utils/system/types';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { renderSnippet } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
@@ -44,42 +44,43 @@
 	<span data-testid="member-email">{text(row, 'email')}</span>
 {/snippet}
 
-<CollectionTable
-	{client}
-	collection="user"
-	view="workspace-settings-members"
-	query={{ where: { kind: 'human' }, orderBy: { email: 'asc' }, limit: 200 }}
-	title={t('pod.settings.members')}
-	description={t('pod.settings.membersDescription')}
-	features={{ search: true, filter: true, bulk: false, create: false }}
-	class="h-[min(42rem,calc(100dvh-14rem))] min-h-[28rem]"
->
-	{#snippet columns({ Column })}
-		<Column name="name" label={t('pod.settings.name')} minWidth={180} card="title" />
-		<Column
-			name="email"
-			label={t('pod.settings.email')}
-			minWidth={220}
-			card="subtitle"
-			render={({ row }) => renderSnippet(emailCell, { row })}
-		/>
-		<Column name="status" label={t('pod.settings.status')} width={110} card="badge" />
-		<Column
-			name="role"
-			label={t('pod.settings.memberRole')}
-			width={130}
-			render={({ row }) => renderSnippet(roleCell, { row })}
-		/>
-	{/snippet}
-	{#snippet ListCard(row)}
-		<Stack gap="sm">
-			<Inline justify="between" gap="md">
-				<div class="min-w-0">
-					<p class="truncate text-sm font-medium">{text(row, 'name') || text(row, 'email')}</p>
-					<p class="truncate text-xs text-muted-foreground">{text(row, 'email')}</p>
-				</div>
-				{@render roleCell({ row })}
-			</Inline>
-		</Stack>
-	{/snippet}
-</CollectionTable>
+<Bound size="fit">
+	<CollectionTable
+		{client}
+		collection="user"
+		view="workspace-settings-members"
+		query={{ where: { kind: 'human' }, orderBy: { email: 'asc' }, limit: 200 }}
+		title={t('pod.settings.members')}
+		description={t('pod.settings.membersDescription')}
+		features={{ search: true, filter: true, bulk: false, create: false }}
+	>
+		{#snippet columns({ Column })}
+			<Column name="name" label={t('pod.settings.name')} minWidth={180} card="title" />
+			<Column
+				name="email"
+				label={t('pod.settings.email')}
+				minWidth={220}
+				card="subtitle"
+				render={({ row }) => renderSnippet(emailCell, { row })}
+			/>
+			<Column name="status" label={t('pod.settings.status')} width={110} card="badge" />
+			<Column
+				name="role"
+				label={t('pod.settings.memberRole')}
+				width={130}
+				render={({ row }) => renderSnippet(roleCell, { row })}
+			/>
+		{/snippet}
+		{#snippet ListCard(row)}
+			<Stack gap="sm">
+				<Inline justify="between" gap="md">
+					<div class="min-w-0">
+						<p class="truncate text-sm font-medium">{text(row, 'name') || text(row, 'email')}</p>
+						<p class="truncate text-xs text-muted-foreground">{text(row, 'email')}</p>
+					</div>
+					{@render roleCell({ row })}
+				</Inline>
+			</Stack>
+		{/snippet}
+	</CollectionTable>
+</Bound>

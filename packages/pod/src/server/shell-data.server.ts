@@ -112,13 +112,19 @@ export async function loadTenantWorkspaceShellData(
 		fetchTeamsAndPolicies()
 	]);
 
+	const activeOrganizationId = workspace.organization.norbital_id;
+	const activeOrganizationLogoUrl =
+		workspace.userOrganizations.find(
+			(organization) => organization.organizationId === activeOrganizationId
+		)?.logoUrl ?? null;
+
 	return {
 		sync,
 		user: workspace.baseScope.requestor,
 		organization: {
-			id: workspace.organization.norbital_id,
+			id: activeOrganizationId,
 			name: workspace.organization.name,
-			logo_url: null
+			logo_url: activeOrganizationLogoUrl
 		},
 		initialWorkspaceLatest: {
 			nodeId: workspace.manifestCtx.nodeId,

@@ -115,7 +115,10 @@ the common cases automatically.
 
 **Clip regions** (no scrolling): `<Bound size="full" clip>` for maps, boards, video that fill a pane.
 
-**`Bound` sizes:** `compact` h-72, `standard` h-[28rem], `tall` h-[40rem], `full` h-full.
+**`Bound` sizes:** `compact` h-72, `standard` h-[28rem], `tall` h-[40rem], `fit`
+`h-[min(42rem,calc(100dvh-14rem))]` floored at `standard`, `full` h-full. `fit` is the viewer-aware
+contract: a scrollport that claims the space below a ~14rem chrome band, capped at `tall` — for a
+table/kanban/form that should track the viewport instead of guessing a pane size.
 
 Do not use generic `overflow` wrappers, flex/min-size chains, or raw layout flex/grid wrappers.
 Clipping is valid only for text truncation, `Frame` media, or an audited popup/sheet boundary.

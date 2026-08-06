@@ -16,3 +16,20 @@ export function requestI18n(): ServerI18n {
 	const acceptLanguage = event.request.headers.get('accept-language');
 	return serverI18n(lang ? [lang, acceptLanguage ?? ''] : acceptLanguage);
 }
+
+/**
+ * The request's locale when one is live, English otherwise.
+ *
+ * Deep collection, approval and file layers run both inside request handling (sync mutations,
+ * remote commands) and outside it (background jobs, host commands, control-plane dispatch).
+ * These layers resolve the request locale when one exists so the prose they raise reaches the
+ * caller in their language; outside a request the fallback yields English, which is exactly
+ * where an infra failure that only gets logged should stay.
+ */
+export function requestI18nOrDefault(): ServerI18n {
+	try {
+		return requestI18n();
+	} catch {
+		return serverI18n(null);
+	}
+}

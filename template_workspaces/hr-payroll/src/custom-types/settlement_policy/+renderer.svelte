@@ -1,4 +1,8 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
+	const { t } = useI18n<TenantI18nKeys>();
+
 	/**
 	 * The two ids inside this variant are foreign keys the database cannot declare, so nothing
 	 * resolves them for us: a `custom()` column is one JSONB value, and `RelationshipRenderer` only
@@ -20,35 +24,35 @@
 		readonly row?: Record<string, unknown>;
 	};
 
-	const FINAL_PERIOD_OPTIONS: { value: FinalPeriod; label: string; description: string }[] = [
+	const FINAL_PERIOD_OPTIONS = $derived<
+		{ value: FinalPeriod; label: string; description: string }[]
+	>([
 		{
 			value: 'SETTLE_IN_FINAL_PERIOD',
-			label: 'Settle in the final period',
-			description: 'The last run covers attendance up to the exit date'
+			label: t('renderer.settlement_policy.settle_final_period'),
+			description: t('renderer.settlement_policy.settle_final_period_desc')
 		},
 		{
 			value: 'FOLLOW_ATTENDANCE_WINDOW',
-			label: 'Follow the attendance window',
-			description: 'The tail after the cutoff is not measured'
+			label: t('renderer.settlement_policy.follow_attendance_window'),
+			description: t('renderer.settlement_policy.follow_attendance_window_desc')
 		}
-	];
+	]);
 
-	const FINAL_PERIOD_WAGES_OPTIONS: {
-		value: FinalPeriodWages;
-		label: string;
-		description: string;
-	}[] = [
+	const FINAL_PERIOD_WAGES_OPTIONS = $derived<
+		{ value: FinalPeriodWages; label: string; description: string }[]
+	>([
 		{
 			value: 'PRORATE_TO_EXIT',
-			label: 'Prorate to the exit date',
-			description: 'Recurring wages cover only the employment days in the final period'
+			label: t('renderer.settlement_policy.prorate_to_exit'),
+			description: t('renderer.settlement_policy.prorate_to_exit_desc')
 		},
 		{
 			value: 'FULL_PERIOD',
-			label: 'Pay the full period',
-			description: 'Full wages, with the period’s attendance deductions applied separately'
+			label: t('renderer.settlement_policy.full_period'),
+			description: t('renderer.settlement_policy.full_period_desc')
 		}
-	];
+	]);
 
 	/**
 	 * A stated policy that behaves exactly as no policy at all — `PLAIN_CALENDAR` in
@@ -107,14 +111,24 @@
 	const summary = $derived.by(() => {
 		if (current === null) return '—';
 		const parts = [
-			current.late_joiner_arrears ? 'late joiners deferred' : null,
-			current.final_period === 'SETTLE_IN_FINAL_PERIOD' ? 'final period settled' : null,
-			current.final_period_wages === 'FULL_PERIOD' ? 'full final-period wages' : null,
+			current.late_joiner_arrears
+				? t('renderer.settlement_policy.summary_late_joiners_deferred')
+				: null,
+			current.final_period === 'SETTLE_IN_FINAL_PERIOD'
+				? t('renderer.settlement_policy.summary_final_period_settled')
+				: null,
+			current.final_period_wages === 'FULL_PERIOD'
+				? t('renderer.settlement_policy.summary_full_period_wages')
+				: null,
 			current.extended_unpaid_leave
-				? `extended leave ≥ ${current.extended_unpaid_leave.minimum_calendar_days}d in month`
+				? t('renderer.settlement_policy.summary_extended_leave', {
+						days: current.extended_unpaid_leave.minimum_calendar_days
+					})
 				: null
 		].filter((part) => part !== null);
-		return parts.length === 0 ? 'Plain pay calendar' : parts.join(' · ');
+		return parts.length === 0
+			? t('renderer.settlement_policy.summary_plain_calendar')
+			: parts.join(' · ');
 	});
 
 	function emit(next: Value | null): void {
@@ -136,14 +150,14 @@
 {:else}
 	<Grid class="rounded-md border border-border bg-muted/20 p-3" gap="sm" minimum="compact">
 		<label class="grid gap-1.5 text-sm font-medium">
-			Late joiners are paid on
+			{t('renderer.settlement_policy.late_joiners_paid_on')}
 			<Combobox
-				ariaLabel="Late joiner arrears component"
+				ariaLabel={t('renderer.settlement_policy.aria_late_joiner_component')}
 				options={componentOptions}
 				value={current?.late_joiner_arrears?.defer_to_component_id ?? null}
 				disabled={disabled || companyId == null}
-				searchPlaceholder="Search pay components…"
-				emptyPlaceholder="Nothing deferred — pay late joiners in the period they join"
+				searchPlaceholder={t('component.search_pay_components')}
+				emptyPlaceholder={t('renderer.settlement_policy.nothing_deferred')}
 				clientConfig={{
 					isLoading: componentsQuery?.loading ?? false,
 					error: componentsQuery?.error?.message ?? null
@@ -155,32 +169,31 @@
 					})}
 			/>
 			<span class="text-xs font-normal text-muted-foreground">
-				The arrears component a skipped joining period is paid out on in the next run. Only
-				components measured from an entry can carry one.
+				{t('renderer.settlement_policy.hint_arrears_component')}
 			</span>
 		</label>
 		<label class="grid gap-1.5 text-sm font-medium">
-			Final period
+			{t('renderer.settlement_policy.final_period')}
 			<Combobox
-				ariaLabel="Final period"
+				ariaLabel={t('renderer.settlement_policy.final_period')}
 				options={FINAL_PERIOD_OPTIONS}
 				value={current?.final_period ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select how a leaver settles"
+				emptyPlaceholder={t('renderer.settlement_policy.select_leaver_settles')}
 				onValueChange={(value) =>
 					patch({ final_period: (value as FinalPeriod | null) ?? 'FOLLOW_ATTENDANCE_WINDOW' })}
 			/>
 		</label>
 		<label class="grid gap-1.5 text-sm font-medium">
-			Final period wages
+			{t('renderer.settlement_policy.final_period_wages')}
 			<Combobox
-				ariaLabel="Final period wages"
+				ariaLabel={t('renderer.settlement_policy.final_period_wages')}
 				options={FINAL_PERIOD_WAGES_OPTIONS}
 				value={current?.final_period_wages ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select how a leaver’s recurring wages are measured"
+				emptyPlaceholder={t('renderer.settlement_policy.select_final_wages_measure')}
 				onValueChange={(value) =>
 					patch({
 						final_period_wages: (value as FinalPeriodWages | null) ?? 'PRORATE_TO_EXIT'
@@ -188,7 +201,7 @@
 			/>
 		</label>
 		<label class="grid gap-1.5 text-sm font-medium">
-			Extended unpaid leave — minimum calendar days
+			{t('renderer.settlement_policy.extended_leave_min_days')}
 			<Input
 				type="number"
 				min="0"
@@ -213,7 +226,7 @@
 		</label>
 		{#if current?.extended_unpaid_leave}
 			<label class="grid gap-1.5 text-sm font-medium">
-				Bridged gap days
+				{t('renderer.settlement_policy.bridged_gap_days')}
 				<Input
 					type="number"
 					min="0"
@@ -230,14 +243,14 @@
 				/>
 			</label>
 			<label class="grid gap-1.5 text-sm font-medium">
-				Applies to employments registered for
+				{t('renderer.settlement_policy.applies_to_employments')}
 				<Combobox
-					ariaLabel="Extended leave population"
+					ariaLabel={t('renderer.settlement_policy.aria_extended_population')}
 					options={contributionOptions}
 					value={current.extended_unpaid_leave.population_contribution_id}
 					{disabled}
-					searchPlaceholder="Search statutory schemes…"
-					emptyPlaceholder="Every employment"
+					searchPlaceholder={t('renderer.settlement_policy.search_statutory_schemes')}
+					emptyPlaceholder={t('renderer.settlement_policy.every_employment')}
 					clientConfig={{
 						isLoading: contributionsQuery.loading,
 						error: contributionsQuery.error?.message ?? null

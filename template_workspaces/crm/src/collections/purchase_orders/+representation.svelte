@@ -13,6 +13,13 @@
 	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/crm/record-media/purchase_orders-banner.svg"
+	/>
+</svelte:head>
+
 <CollectionForm
 	{client}
 	collection="purchase_orders"

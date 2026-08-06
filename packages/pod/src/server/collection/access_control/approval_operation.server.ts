@@ -2,6 +2,7 @@ import { ApprovalRequestResolvedSchema } from '$lib/shared/approval.js';
 import type { TApprovalRequest } from '@norbital-ai/platform-utils/system/types';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { error } from '../http_error.js';
+import { requestI18nOrDefault } from '$lib/server/i18n.js';
 import { hydrateCollectionRecord } from '../scope_hydration.server.js';
 import {
 	findApprovalConfigInWorkspace,
@@ -45,7 +46,7 @@ export async function executeApprovalOperation(input: ApprovalOperation): Promis
 				runtime.manifestCtx,
 				approvalRequest.approval_config_id
 			);
-			if (!resolved) throw error(404, 'Approval config not found for this request.');
+			if (!resolved) throw error(404, requestI18nOrDefault().t('pod.server.approvalConfigNotFound'));
 			return processAction(
 				input.approval_action,
 				approvalRequest,

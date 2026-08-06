@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import type { RepresentationProps } from './$types.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import type { CollectionRelationOptions } from '@norbital-ai/platform-utils/collection';
 
 	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -19,12 +23,12 @@
 	{#snippet children({ Field, form })}
 		{@const values = form.values()}
 		<Grid minimum="compact">
-			<Field name="regarding_type" label="Document type" />
+			<Field name="regarding_type" label={t('component.document_type')} />
 			{#key values.regarding_type}
 				{#if values.regarding_type === 'purchase_orders'}
 					<Field
 						name="regarding_id"
-						label="Purchase order"
+						label={t('component.purchase_order')}
 						renderer={RelationshipRenderer}
 						rendererProps={{
 							target: 'purchase_orders',
@@ -39,7 +43,7 @@
 				{:else if values.regarding_type === 'purchase_invoices'}
 					<Field
 						name="regarding_id"
-						label="Purchase invoice"
+						label={t('component.purchase_invoice')}
 						renderer={RelationshipRenderer}
 						rendererProps={{
 							target: 'purchase_invoices',
@@ -54,7 +58,7 @@
 				{:else}
 					<Field
 						name="regarding_id"
-						label="Quote"
+						label={t('component.quote')}
 						renderer={RelationshipRenderer}
 						rendererProps={{
 							target: 'quotes',
@@ -74,11 +78,11 @@
 			{/key}
 			<Field name="amount" />
 			<Field name="currency" />
-			<Field name="settled_on" label="Settled on" />
+			<Field name="settled_on" label={t('component.settled_on')} />
 			<Field name="reference" />
 			<Field
 				name="owner_id"
-				label="Recorded by"
+				label={t('component.recorded_by')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'user',

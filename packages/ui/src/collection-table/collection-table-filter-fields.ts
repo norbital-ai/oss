@@ -8,6 +8,7 @@ import { humanize } from '@norbital-ai/std/string';
 import { ENTITY_ICONS } from '../icon-wrapper/entity-icons.js';
 import type { BaseTreeItem } from '#lib/tree-select';
 import { calendarDateToInstant } from '../data-renderer/time_stamp/date.utils.js';
+import type { Translate } from '../data-renderer/index.js';
 
 export interface FilterCollectionDefinition {
 	readonly name: string;
@@ -71,7 +72,8 @@ function collectionFilterFieldIcon(field: CollectionField): string {
 }
 
 export function collectionFilterFieldTree(
-	filterFields: readonly CollectionFilterField[]
+	filterFields: readonly CollectionFilterField[],
+	t?: Translate
 ): readonly BaseTreeItem<CollectionFilterField | null>[] {
 	const directFields: CollectionFilterField[] = [];
 	const systemFields: CollectionFilterField[] = [];
@@ -175,7 +177,7 @@ export function collectionFilterFieldTree(
 	return [
 		{
 			id: '__filter-fields',
-			title: 'Filter fields',
+			title: t ? t('table.filterFields') : 'Filter fields',
 			icon: ENTITY_ICONS.ui.filter,
 			metadata: null,
 			children: [
@@ -185,9 +187,9 @@ export function collectionFilterFieldTree(
 					? [
 							{
 								id: '__system-fields',
-								title: 'System fields',
+								title: t ? t('table.systemFields') : 'System fields',
 								icon: ENTITY_ICONS.ui.settings,
-								searchText: 'System fields system sys',
+								searchText: t ? t('table.systemFields') : 'System fields system sys',
 								metadata: null,
 								children: systemItems
 							} satisfies BaseTreeItem<CollectionFilterField | null>

@@ -6,6 +6,7 @@ import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/server/http.js';
+import { requestI18n } from '$lib/server/i18n.js';
 import { z } from 'zod';
 
 /**
@@ -92,9 +93,9 @@ async function hostModelCatalog(): Promise<AiModelCatalog | null> {
 async function resolveModel(model: string | undefined): Promise<string | undefined> {
 	if (model === undefined) return undefined;
 	const catalog = await hostModelCatalog();
-	if (!catalog) throw error(400, 'This workspace does not offer a choice of model');
+	if (!catalog) throw error(400, requestI18n().t('pod.server.noModelChoice'));
 	if (!catalog.options.some((option) => option.id === model)) {
-		throw error(400, `Model ${model} is not available in this workspace`);
+		throw error(400, requestI18n().t('pod.server.modelUnavailable', { model }));
 	}
 	return model;
 }
@@ -143,9 +144,12 @@ async function prepareConversation(
 			values: [runId]
 		});
 		const row = existing.rows[0];
-		if (!row || row.automation_name !== null) throw error(404, 'Agent conversation not found');
-		if (row.requested_by_user_id !== ownerUserId) throw error(403, 'Agent conversation is private');
-		if (row.status === 'running') throw error(409, 'The agent is already responding');
+		if (!row || row.automation_name !== null)
+			throw error(404, requestI18n().t('pod.server.agentConversationNotFound'));
+		if (row.requested_by_user_id !== ownerUserId)
+			throw error(403, requestI18n().t('pod.server.agentConversationPrivate'));
+		if (row.status === 'running')
+			throw error(409, requestI18n().t('pod.server.agentAlreadyResponding'));
 		if (row.chat_id) return { runId, chatId: row.chat_id };
 		return createSession(runId);
 	}

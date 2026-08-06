@@ -86,7 +86,7 @@
 					url: `/api/files/download/${encodeURIComponent(parsed.data.storage_key)}`,
 					flags: evidence.flags ?? [],
 					source: evidenceSource(evidence.source),
-					capturedAt: formatSingaporeInstant(evidence.norbital_created_at)
+					capturedAt: formatSingaporeInstant(evidence.norbital_created_at, t)
 				}
 			];
 		})
@@ -134,7 +134,7 @@
 		{:else if jobQuery.loading}
 			<div
 				class="h-32 rounded-md bg-muted/50 motion-safe:animate-pulse"
-				aria-label="Loading job"
+				aria-label={t('component.loading_job')}
 			></div>
 		{:else}
 			<Scroll name={t('component.job_scope_status')}>
@@ -204,7 +204,7 @@
 						</Inline>
 						<p class="text-xs text-muted-foreground">
 							{t('component.requested_at_instant', {
-								instant: formatSingaporeInstant(variation.requested_at)
+								instant: formatSingaporeInstant(variation.requested_at, t)
 							})}
 						</p>
 					</Stack>
@@ -242,7 +242,7 @@
 					{t('component.evidence_load_failed')}
 				</p>
 			{:else if evidenceLoading && photoCards.length === 0}
-				<Grid minimum="card" gap="md" aria-label="Loading photographic evidence">
+				<Grid minimum="card" gap="md" aria-label={t('component.loading_photo_evidence')}>
 					{#each Array(3) as _}
 						<div class="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse"></div>
 					{/each}

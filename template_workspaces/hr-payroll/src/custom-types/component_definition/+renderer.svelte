@@ -228,7 +228,7 @@
 				value={current?.source ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select a source"
+				emptyPlaceholder={t('renderer.component_definition.select_source')}
 				onValueChange={selectSource}
 			/>
 		</label>

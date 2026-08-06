@@ -139,5 +139,8 @@
 	"component.status_dispatched": "已派单",
 	"component.status_in_progress": "进行中",
 	"component.status_completed": "已完成",
-	"component.status_flagged": "已标记"
+	"component.status_flagged": "已标记",
+	"component.loading": "加载中…",
+	"component.loading_job": "正在加载作业",
+	"component.loading_photo_evidence": "正在加载照片证据"
 }

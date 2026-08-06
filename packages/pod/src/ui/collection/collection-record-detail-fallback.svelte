@@ -14,6 +14,10 @@
 	import { Grid } from '@norbital-ai/ui/layout';
 	import type { DetailStackEntry } from '$lib/ui/collection/detail/detail_stack.js';
 	import { resolveRecordDetailFields } from './collection-record-detail-fields.js';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
+
+	const { t } = useI18n<PodUiKeys>();
 
 	let {
 		entry,
@@ -90,21 +94,22 @@
 {#snippet approvalDetails()}
 	<CollectionRecordDetailEmpty
 		icon="lucide:shield-check"
-		title="No approval request"
-		description="This record has no registered approval detail surface."
+		title={t('pod.collection.noApprovalRequest')}
+		description={t('pod.collection.noApprovalDetailSurface')}
 	/>
 {/snippet}
 
 <CollectionRecordDetailTabs
 	title={recordLabel ?? humanize(collectionName)}
-	description={`${humanize(collectionName)} record details`}
+	description={t('pod.collection.recordDetails', { collection: humanize(collectionName) })}
 	loading={Boolean(recordQuery?.loading && record === null)}
 	error={errorMessage ??
 		(!collectionMetadata
-			? `Collection "${collectionName}" was not found in the workspace manifest.`
+			? t('pod.collection.notFoundInManifest', { collection: collectionName })
 			: undefined)}
 	found={Boolean(record)}
 	{actions}
+	banner={collectionSurface?.banner ?? null}
 	ui={uiDetails}
 	approval={approvalDetails}
 	raw={schemaDetails}

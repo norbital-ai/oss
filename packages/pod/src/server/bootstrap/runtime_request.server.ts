@@ -73,6 +73,7 @@ import {
 import { noInputSchema } from '@norbital-ai/platform-utils/remote';
 import { qualifiedTableName } from '@norbital-ai/platform-utils/tenant_db/schema';
 import { error, json } from '$lib/server/http.js';
+import { requestI18n } from '$lib/server/i18n.js';
 import type { PodRequestEvent } from '$lib/server/request-context.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import {
@@ -105,9 +106,9 @@ function decodeBase64File(encoded: string, expectedSize: number): Uint8Array {
 	try {
 		binary = atob(encoded);
 	} catch {
-		throw error(400, 'File payload is not valid base64.');
+		throw error(400, requestI18n().t('pod.server.fileNotValidBase64'));
 	}
-	if (binary.length !== expectedSize) throw error(400, 'File payload size does not match.');
+	if (binary.length !== expectedSize) throw error(400, requestI18n().t('pod.server.fileSizeMismatch'));
 	return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
@@ -165,9 +166,9 @@ async function deleteWorkspaceFile(event: PodRequestEvent, body: unknown) {
 	});
 	const rawRecord = result.rows[0];
 	const record = documentAssetSchema.safeParse(rawRecord);
-	if (!record.success) throw error(404, 'Uploaded file does not exist.');
+	if (!record.success) throw error(404, requestI18n().t('pod.server.fileDoesNotExist'));
 	if (record.data.owner_user_id !== workspace.baseScope.requestor.norbital_id) {
-		throw error(403, 'Only the uploader can remove this file.');
+		throw error(403, requestI18n().t('pod.server.onlyUploaderCanRemove'));
 	}
 	await fileStorage.delete(record.data.storage_key);
 	await deleteCollectionRecord(workspace, 'document_asset', record.data.norbital_id, {

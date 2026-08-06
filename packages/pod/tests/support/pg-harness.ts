@@ -146,13 +146,21 @@ function installExitHook(): void {
 	}
 }
 
-/** Boot a throwaway Postgres 18 container and return its connection string + teardown. */
-export async function startPostgres(): Promise<PgHarness> {
-	installExitHook();
-	reapAbandonedContainers();
-	ensurePostgresImage();
+/**
+ * The container this worker process owns, booted at most once.
+ *
+ * A suite needs its own *schema*, not its own machine, and a database gives it that. Booting a
+ * container per suite cost about six seconds each and there are more than twenty suites, which was
+ * the largest single item in the run — so the container is now per worker process and each suite
+ * gets a fresh database inside it. Isolation is unchanged: two databases share no tables, no
+ * sequences and no search path, and Vitest gives each worker its own module registry, so this is
+ * one container per worker rather than one shared by all of them.
+ */
+let ownedContainer: { readonly id: string; readonly port: number } | null = null;
+let databaseCounter = 0;
 
-	const containerId = execFileSync(
+function bootContainer(): { readonly id: string; readonly port: number } {
+	const id = execFileSync(
 		'docker',
 		[
 			'run',
@@ -165,27 +173,129 @@ export async function startPostgres(): Promise<PgHarness> {
 			'-e',
 			'POSTGRES_PASSWORD=postgres',
 			'-e',
-			'POSTGRES_DB=poddb',
+			'POSTGRES_DB=postgres',
 			IMAGE
 		],
 		{ encoding: 'utf8' }
 	).trim();
-	live.add(containerId);
+	live.add(id);
+	return { id, port: hostPort(id) };
+}
 
+function connectionStringFor(port: number, database: string): string {
+	return `postgresql://postgres:postgres@127.0.0.1:${port}/${database}`;
+}
+
+/** Run one statement as the superuser against the maintenance database. */
+async function withAdmin<T>(port: number, run: (admin: Client) => Promise<T>): Promise<T> {
+	const admin = new Client({ connectionString: connectionStringFor(port, 'postgres') });
+	await admin.connect();
 	try {
-		const port = hostPort(containerId);
-		const connectionString = `postgresql://postgres:postgres@127.0.0.1:${port}/poddb`;
-		await waitForReady(connectionString);
-		return {
-			connectionString,
-			stop() {
-				live.delete(containerId);
-				removeContainer(containerId);
-			}
-		};
-	} catch (err) {
-		live.delete(containerId);
-		removeContainer(containerId);
-		throw err;
+		return await run(admin);
+	} finally {
+		await admin.end().catch(() => {});
+	}
+}
+
+let containerPromise: Promise<{ readonly id: string; readonly port: number }> | null = null;
+
+/** The one container this worker owns, booted on first use. */
+function ensureContainer(): Promise<{ readonly id: string; readonly port: number }> {
+	installExitHook();
+	if (containerPromise) return containerPromise;
+	containerPromise = (async () => {
+		reapAbandonedContainers();
+		ensurePostgresImage();
+		const container = bootContainer();
+		try {
+			await waitForReady(connectionStringFor(container.port, 'postgres'));
+		} catch (err) {
+			live.delete(container.id);
+			removeContainer(container.id);
+			containerPromise = null;
+			throw err;
+		}
+		ownedContainer = container;
+		return container;
+	})();
+	return containerPromise;
+}
+
+/** Boot (or reuse) a Postgres 18 container and return a fresh empty database on it. */
+export async function startPostgres(): Promise<PgHarness> {
+	const container = await ensureContainer();
+	const database = `poddb_${process.pid}_${++databaseCounter}`;
+	await withAdmin(container.port, (admin) => admin.query(`CREATE DATABASE "${database}"`));
+	return {
+		connectionString: connectionStringFor(container.port, database),
+		stop() {
+			// Best effort, and deliberately not awaited: the suite's own pools may still be closing,
+			// which makes DROP DATABASE fail with "being accessed by other users". Nothing leaks
+			// either way — the container and every database in it go at process exit.
+			void dropDatabase(container.port, database);
+		}
+	};
+}
+
+/** Template databases this worker has already prepared, keyed by the caller's cache key. */
+const preparedTemplates = new Map<string, Promise<string>>();
+
+/**
+ * A fresh database cloned from one this worker prepared once.
+ *
+ * `prepare` is the expensive part — for the runtime harness it is a `pod migrate`, a whole Node
+ * process that builds and applies the schema — and it produced an identical database for every
+ * suite asking for the same template. Postgres can copy a database it has already got:
+ * `CREATE DATABASE … TEMPLATE …` is a file copy, so the twenty-second suite pays that instead of
+ * another migration.
+ *
+ * `prepare` runs at most once per key per worker, and its connections must be closed when it
+ * returns — Postgres refuses to clone a database anything else is connected to. A `pod migrate`
+ * subprocess satisfies that by exiting.
+ */
+export async function startPostgresFromTemplate(
+	key: string,
+	prepare: (connectionString: string) => Promise<void> | void
+): Promise<PgHarness> {
+	const container = await ensureContainer();
+	let templatePromise = preparedTemplates.get(key);
+	if (!templatePromise) {
+		templatePromise = (async () => {
+			const name = `podtpl_${process.pid}_${preparedTemplates.size}`;
+			await withAdmin(container.port, (admin) => admin.query(`CREATE DATABASE "${name}"`));
+			await prepare(connectionStringFor(container.port, name));
+			return name;
+		})();
+		preparedTemplates.set(key, templatePromise);
+	}
+	// A failed prepare must not be cached, or every later suite inherits one broken template.
+	const templateName = await templatePromise.catch((error: unknown) => {
+		preparedTemplates.delete(key);
+		throw error;
+	});
+
+	const database = `poddb_${process.pid}_${++databaseCounter}`;
+	await withAdmin(container.port, (admin) =>
+		admin.query(`CREATE DATABASE "${database}" TEMPLATE "${templateName}"`)
+	);
+	return {
+		connectionString: connectionStringFor(container.port, database),
+		stop() {
+			void dropDatabase(container.port, database);
+		}
+	};
+}
+
+async function dropDatabase(port: number, database: string): Promise<void> {
+	const admin = new Client({
+		connectionString: `postgresql://postgres:postgres@127.0.0.1:${port}/postgres`
+	});
+	try {
+		await admin.connect();
+		await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+	} catch {
+		// See stop(): reclaimed at exit regardless.
+	} finally {
+		await admin.end().catch(() => {});
 	}
 }

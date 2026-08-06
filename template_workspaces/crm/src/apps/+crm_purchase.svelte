@@ -64,7 +64,7 @@
 		)
 	);
 
-	const { t } = useI18n<TenantI18nKeys>();
+	const { t, has } = useI18n<TenantI18nKeys>();
 </script>
 
 <svelte:head>
@@ -74,6 +74,14 @@
 		content="Purchase orders, suppliers, and the buying side of the product catalogue"
 	/>
 	<meta name="pod:icon" content="lucide:shopping-cart" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/crm/app-media/crm_purchase-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/crm/app-media/crm_purchase-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet dashboardTab()}
@@ -81,7 +89,11 @@
 		<Grid minimum="card">
 			{#each Object.entries(dashboard.current?.status_counts ?? {}) as [status, count] (status)}
 				<div class="rounded-lg border bg-card p-4">
-					<p class="text-sm text-muted-foreground capitalize">{status.replace('_', ' ')}</p>
+					<p class="text-sm text-muted-foreground capitalize">
+						{has(`component.status_${status}`)
+							? t(`component.status_${status}` as TenantI18nKeys)
+							: status.replace('_', ' ')}
+					</p>
 					<p class="text-2xl font-semibold tabular-nums">{count}</p>
 				</div>
 			{/each}
@@ -192,24 +204,24 @@
 	<CollectionTable
 		{client}
 		collection="goods_receipts"
-		title="Goods receipts"
-		description="What arrived against confirmed purchase orders. Remaining-to-receive is derived, never stored."
+		title={t('app.crm_purchase.goods_receipts_title')}
+		description={t('app.crm_purchase.goods_receipts_description')}
 		query={{ orderBy: { doc_no: 'desc' } }}
 	>
 		{#snippet columns({ Column })}
-			<Column name="doc_no" label="Doc #" minWidth={140} card="badge" />
+			<Column name="doc_no" label={t('component.doc_no')} minWidth={140} card="badge" />
 			<Column
 				name="purchase_order_id"
-				label="Purchase order"
+				label={t('component.purchase_order')}
 				minWidth={200}
 				card="title"
 				render={({ value }) =>
 					value == null || value === '' ? '—' : (purchaseOrderLabelsById.get(String(value)) ?? '—')}
 			/>
-			<Column name="received_date" label="Received" />
+			<Column name="received_date" label={t('component.received')} />
 			<Column
 				name="owner_id"
-				label="Receiver"
+				label={t('component.receiver')}
 				render={({ value }) =>
 					value == null || value === '' ? '—' : (userLabelsById.get(String(value)) ?? '—')}
 			/>
@@ -219,19 +231,19 @@
 
 {#snippet goodsReceiptLines()}
 	{#if receiptIds.length === 0}
-		<p class="text-sm text-muted-foreground">No goods receipts exist yet.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm_purchase.empty_goods_receipts')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="goods_receipt_lines"
-			title="Receipt lines"
-			description="Received quantities per purchase order line."
+			title={t('app.crm_purchase.receipt_lines_title')}
+			description={t('app.crm_purchase.receipt_lines_description')}
 			query={{ where: { goods_receipt_id: { in: receiptIds } } }}
 		>
 			{#snippet columns({ Column })}
 				<Column
 					name="goods_receipt_id"
-					label="Receipt"
+					label={t('component.receipt')}
 					minWidth={140}
 					card="badge"
 					render={({ value }) =>
@@ -239,13 +251,13 @@
 				/>
 				<Column
 					name="purchase_order_line_id"
-					label="Order line"
+					label={t('component.order_line')}
 					minWidth={200}
 					card="title"
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (orderLineLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="quantity_received" label="Received" />
+				<Column name="quantity_received" label={t('component.received')} />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -255,42 +267,42 @@
 	<CollectionTable
 		{client}
 		collection="purchase_invoices"
-		title="Purchase invoices"
-		description="Supplier invoices booked against confirmed purchase orders — the three-way match checkpoint."
+		title={t('app.crm_purchase.purchase_invoices_title')}
+		description={t('app.crm_purchase.purchase_invoices_description')}
 		query={{ orderBy: { doc_no: 'desc' } }}
 	>
 		{#snippet columns({ Column })}
-			<Column name="doc_no" label="Doc #" minWidth={140} card="badge" />
+			<Column name="doc_no" label={t('component.doc_no')} minWidth={140} card="badge" />
 			<Column
 				name="purchase_order_id"
-				label="Purchase order"
+				label={t('component.purchase_order')}
 				minWidth={200}
 				render={({ value }) =>
 					value == null || value === '' ? '—' : (purchaseOrderLabelsById.get(String(value)) ?? '—')}
 			/>
-			<Column name="supplier_name" label="Supplier" minWidth={200} card="title" />
-			<Column name="invoice_reference" label="Supplier #" minWidth={140} />
+			<Column name="supplier_name" label={t('component.supplier')} minWidth={200} card="title" />
+			<Column name="invoice_reference" label={t('component.supplier_no')} minWidth={140} />
 			<Column name="status" card="badge" />
-			<Column name="gross" label="Gross amount" />
+			<Column name="gross" label={t('component.gross_amount')} />
 		{/snippet}
 	</CollectionTable>
 {/snippet}
 
 {#snippet purchaseInvoiceLines()}
 	{#if purchaseInvoiceIds.length === 0}
-		<p class="text-sm text-muted-foreground">No purchase invoices exist yet.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm_purchase.empty_purchase_invoices')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="purchase_invoice_lines"
-			title="Invoice lines"
-			description="Invoiced quantities and costs per purchase order line."
+			title={t('app.crm_purchase.invoice_lines_title')}
+			description={t('app.crm_purchase.invoice_lines_description')}
 			query={{ where: { purchase_invoice_id: { in: purchaseInvoiceIds } } }}
 		>
 			{#snippet columns({ Column })}
 				<Column
 					name="purchase_invoice_id"
-					label="Invoice"
+					label={t('component.invoice')}
 					minWidth={140}
 					card="badge"
 					render={({ value }) =>
@@ -298,11 +310,11 @@
 							? '—'
 							: (purchaseInvoiceLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="product_code" label="Code" minWidth={100} />
-				<Column name="product_name" label="Product" minWidth={200} card="title" />
+				<Column name="product_code" label={t('component.code')} minWidth={100} />
+				<Column name="product_name" label={t('component.product')} minWidth={200} card="title" />
 				<Column name="quantity" />
-				<Column name="unit_cost" label="Unit cost" />
-				<Column name="line_total" label="Total" />
+				<Column name="unit_cost" label={t('component.unit_cost')} />
+				<Column name="line_total" label={t('component.total')} />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -313,8 +325,8 @@
 		{client}
 		collection="settlements"
 		view="crm_purchase:payments"
-		title="Payments"
-		description="Settlements made against confirmed purchase orders and invoices."
+		title={t('app.crm_purchase.payments_title')}
+		description={t('app.crm_purchase.payments_description')}
 		query={{
 			where: {
 				OR: [
@@ -325,10 +337,10 @@
 		}}
 	>
 		{#snippet columns({ Column })}
-			<Column name="regarding_type" label="Document type" card="badge" />
+			<Column name="regarding_type" label={t('component.document_type')} card="badge" />
 			<Column
 				name="regarding_id"
-				label="Document"
+				label={t('component.document')}
 				minWidth={200}
 				card="title"
 				render={({ row, value }) => {
@@ -342,7 +354,7 @@
 			/>
 			<Column name="amount" card="badge" />
 			<Column name="currency" card="badge" />
-			<Column name="settled_on" label="Settled on" />
+			<Column name="settled_on" label={t('component.settled_on')} />
 			<Column name="reference" minWidth={160} />
 		{/snippet}
 	</CollectionTable>
@@ -386,29 +398,34 @@
 			},
 			{
 				name: 'goods-receipts',
-				label: 'Goods receipts',
+				label: t('app.crm_purchase.goods_receipts_title'),
 				icon: 'lucide:package-check',
 				content: goodsReceipts
 			},
 			{
 				name: 'receipt-lines',
-				label: 'Receipt lines',
+				label: t('app.crm_purchase.receipt_lines_title'),
 				icon: 'lucide:list-checks',
 				content: goodsReceiptLines
 			},
 			{
 				name: 'purchase-invoices',
-				label: 'Purchase invoices',
+				label: t('app.crm_purchase.purchase_invoices_title'),
 				icon: 'lucide:receipt',
 				content: purchaseInvoices
 			},
 			{
 				name: 'pi-lines',
-				label: 'Invoice lines',
+				label: t('app.crm_purchase.invoice_lines_title'),
 				icon: 'lucide:list-checks',
 				content: purchaseInvoiceLines
 			},
-			{ name: 'payments', label: 'Payments', icon: 'lucide:banknote', content: payments }
+			{
+				name: 'payments',
+				label: t('app.crm_purchase.payments_title'),
+				icon: 'lucide:banknote',
+				content: payments
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

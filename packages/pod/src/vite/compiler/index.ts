@@ -4,7 +4,7 @@ import path from 'node:path';
 import { sourceDiagnostic } from './diagnostics.js';
 import { safeParse } from '@norbital-ai/std/json';
 import { nearestName } from '@norbital-ai/std/string';
-import { extractAppMetadata } from './app-metadata.js';
+import { extractAppMetadata, extractStaticMetaValue } from './app-metadata.js';
 import { parseSkillDocument } from './skill-frontmatter.js';
 import { HOST_SKILLS } from '$lib/skills/skills.generated.js';
 import { isValidSkillName } from '$lib/skills/types.js';
@@ -466,6 +466,10 @@ async function discoverCollections(
 					);
 				}
 
+				const representationPath = path.join(collectionDirectory, '+representation.svelte');
+				const representationBanner = inventory.hasFile(representationPath)
+					? await extractStaticMetaValue(await inventory.source(representationPath), 'pod:banner')
+					: null;
 				const collection = inventory.hasFile(model)
 					? ({
 							id: entry.name,
@@ -481,10 +485,11 @@ async function discoverCollections(
 								...(inventory.hasFile(path.join(collectionDirectory, '+integrations.ts'))
 									? { integrations: `${collectionPath}/+integrations.ts` }
 									: {}),
-								...(inventory.hasFile(path.join(collectionDirectory, '+representation.svelte'))
+								...(inventory.hasFile(representationPath)
 									? { representation: `${collectionPath}/+representation.svelte` }
 									: {})
-							}
+							},
+							...(representationBanner ? { representationBanner } : {})
 						} satisfies DiscoveredCollection)
 					: null;
 				return { collectionDiagnostics, collection };
@@ -1159,7 +1164,10 @@ async function discoverI18n(
 		return messages;
 	}
 
-	const [en, zh] = await Promise.all([readLocale('messages.en.json'), readLocale('messages.zh.json')]);
+	const [en, zh] = await Promise.all([
+		readLocale('messages.en.json'),
+		readLocale('messages.zh.json')
+	]);
 
 	if (en && !zh) {
 		diagnostics.push(
@@ -1420,6 +1428,9 @@ function renderCollectionSurfaces(collections: readonly DiscoveredCollection[]):
 			);
 			properties.push(`representation: representation${index}`);
 		}
+		if (collection.representationBanner) {
+			properties.push(`banner: ${JSON.stringify(collection.representationBanner)}`);
+		}
 		if (properties.length > 0) {
 			entries.push(`\t${JSON.stringify(collection.id)}: { ${properties.join(', ')} }`);
 		}
@@ -1620,7 +1631,8 @@ function renderI18nKeys(i18n: DiscoveredI18n): string {
 	return `export type TenantI18nKeys =\n${keys.map((key) => `\t| ${JSON.stringify(key)}`).join('\n')};\n`;
 }
 
-function renderWorkspaceTypes(): string {	return `import type { AfterHookApi as CollectionAfterHookApi, BeforeApi, HookApi as CollectionHookApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/pod/authoring';\nimport type { InputValuesForTables, MutationInsertFor, TablesForModels } from '@norbital-ai/pod/authoring/internals';\nimport type { Models } from './models.js';\n\nexport type { CustomKind, CustomValue } from './custom-types.js';\ntype WorkspaceTables = TablesForModels<Models>;\nexport type WorkspaceSchema = {\n\treadonly tables: WorkspaceTables;\n\treadonly relations: Readonly<Record<never, never>>;\n\treadonly inputs: InputValuesForTables<WorkspaceTables>;\n};\nexport type Api = BeforeApi<WorkspaceSchema>;\nexport type HookApi = CollectionHookApi<WorkspaceSchema>;\nexport type AfterHookApi = CollectionAfterHookApi<WorkspaceSchema>;\nexport type WorkspaceRow<\n\tN extends keyof WorkspaceSchema['tables'] & string,\n\tCfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined\n> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n\n/** The payload that creates one row — the counterpart to \`WorkspaceRow\`, for a helper module that writes. */\nexport type WorkspaceInsert<N extends keyof WorkspaceSchema['tables'] & string> = MutationInsertFor<\n\tWorkspaceSchema,\n\tN\n>;\n`;
+function renderWorkspaceTypes(): string {
+	return `import type { AfterHookApi as CollectionAfterHookApi, BeforeApi, HookApi as CollectionHookApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/pod/authoring';\nimport type { InputValuesForTables, MutationInsertFor, TablesForModels } from '@norbital-ai/pod/authoring/internals';\nimport type { Models } from './models.js';\n\nexport type { CustomKind, CustomValue } from './custom-types.js';\ntype WorkspaceTables = TablesForModels<Models>;\nexport type WorkspaceSchema = {\n\treadonly tables: WorkspaceTables;\n\treadonly relations: Readonly<Record<never, never>>;\n\treadonly inputs: InputValuesForTables<WorkspaceTables>;\n};\nexport type Api = BeforeApi<WorkspaceSchema>;\nexport type HookApi = CollectionHookApi<WorkspaceSchema>;\nexport type AfterHookApi = CollectionAfterHookApi<WorkspaceSchema>;\nexport type WorkspaceRow<\n\tN extends keyof WorkspaceSchema['tables'] & string,\n\tCfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined\n> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n\n/** The payload that creates one row — the counterpart to \`WorkspaceRow\`, for a helper module that writes. */\nexport type WorkspaceInsert<N extends keyof WorkspaceSchema['tables'] & string> = MutationInsertFor<\n\tWorkspaceSchema,\n\tN\n>;\n`;
 }
 
 function collectionTypes(collection: DiscoveredCollection): string {

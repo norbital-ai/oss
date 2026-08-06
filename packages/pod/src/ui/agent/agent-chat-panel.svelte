@@ -1,11 +1,11 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { tick } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Textarea } from '@norbital-ai/ui/textarea';
-	import { Inline } from '@norbital-ai/ui/layout';
+	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 	import { getInitializedWorkspaceClient } from '$lib/ui/state/client.js';
 	import { getPlatformStateContext } from '$lib/ui/state/platform_state.svelte.js';
@@ -33,6 +33,7 @@
 		AGENT_COMPOSER_EDITOR_CLASS,
 		AGENT_COMPOSER_SHELL_CLASS
 	} from './composer-chrome.js';
+	import { AGENT_COMPOSER_FOCUS_EVENT } from './agent-composer-focus.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
 
@@ -90,50 +91,57 @@
 		return menuItems;
 	});
 
-	$effect(() => {
-		void menuEntries;
-		highlightIndex = 0;
-	});
+	// The search and its highlight are callback-driven, not effects: the trigger only ever moves
+	// through refreshTrigger, and the scope only through the menu's own callbacks, so those are
+	// the only places a search can start, restart, or die. Results depend on query + scope alone,
+	// so a trigger that moved to a new position with the same query is not a new search.
+	let mentionSearchTimer: ReturnType<typeof setTimeout> | undefined;
+	let lastSearchedQuery = '';
+	let lastSearchedScope: string | null = null;
 
-	// A new trigger position is a new search; whatever scope the previous one had does not follow.
-	$effect(() => {
-		void (trigger?.start ?? null);
-		menuScope = null;
-	});
-
-	$effect(() => {
+	function scheduleMentionSearch(): void {
+		clearTimeout(mentionSearchTimer);
 		const active = trigger;
-		const scope = menuScope;
 		const sources = mentionSources;
+		const scope = menuScope;
 		if (!active || !sources || !active.query.trim()) {
+			searchVersion++;
+			lastSearchedQuery = '';
+			lastSearchedScope = null;
 			menuItems = [];
 			menuLoading = false;
+			highlightIndex = 0;
 			return;
 		}
+		if (active.query === lastSearchedQuery && scope === lastSearchedScope) return;
+		lastSearchedQuery = active.query;
+		lastSearchedScope = scope;
 		const version = ++searchVersion;
 		menuLoading = true;
 		// Debounced so a fast typer pays a handful of queries, not one per keystroke.
-		const timer = setTimeout(() => {
+		mentionSearchTimer = setTimeout(() => {
 			void sources
 				.search(active.query, scope)
 				.then((hits) => {
 					if (version !== searchVersion) return;
 					menuItems = hits.map((hit): MentionMenuItem => ({ kind: 'record', hit }));
 					menuLoading = false;
+					highlightIndex = 0;
 				})
 				.catch(() => {
 					if (version !== searchVersion) return;
 					menuItems = [];
 					menuLoading = false;
+					highlightIndex = 0;
 				});
 		}, 150);
-		return () => clearTimeout(timer);
-	});
+	}
 
 	function refreshTrigger(): void {
 		const element = textareaElement;
 		if (!element) {
 			trigger = null;
+			scheduleMentionSearch();
 			return;
 		}
 		const found = findMentionTrigger(
@@ -143,10 +151,14 @@
 		);
 		if (found && found.start === suppressedTriggerStart) {
 			trigger = null;
+			scheduleMentionSearch();
 			return;
 		}
 		suppressedTriggerStart = null;
+		// A new trigger position is a new search; whatever scope the previous one had does not follow.
+		if (found?.start !== trigger?.start) menuScope = null;
 		trigger = found;
+		scheduleMentionSearch();
 	}
 
 	function onComposerInput(): void {
@@ -175,6 +187,8 @@
 		if (!item) return;
 		if (item.kind === 'scope') {
 			menuScope = item.collection;
+			highlightIndex = 0;
+			scheduleMentionSearch();
 			return;
 		}
 		const element = textareaElement;
@@ -222,18 +236,26 @@
 		sessions.map((session) => ({ value: session.norbital_id, label: session.title }))
 	);
 
-	$effect(() => {
-		if (chatId || composingNew || sessions.length === 0) return;
-		chatId = sessions[0].norbital_id;
-		runId = sessions[0].automation_run_id;
+	/**
+	 * The live conversation: the user's explicit pick, or the newest session once any exist.
+	 * `chatId` stays the user's choice (and `undefined` while composing fresh); the derivation is
+	 * what defaults to the latest session, so a session arriving over sync lights up the picker
+	 * without anyone having to watch for it.
+	 */
+	const activeChatId = $derived(
+		chatId ?? (composingNew || sessions.length === 0 ? undefined : sessions[0].norbital_id)
+	);
+	const activeRunId = $derived.by(() => {
+		if (!activeChatId) return runId;
+		return sessions.find((row) => row.norbital_id === activeChatId)?.automation_run_id ?? runId;
 	});
 
 	/** The tenant replica is the one live channel for both transcript text and turn state. */
 	const transcript = $derived.by(() => {
-		if (!chatId) return undefined;
+		if (!activeChatId) return undefined;
 		try {
 			return getInitializedWorkspaceClient().db.chat_message?.findMany({
-				where: { chat_id: chatId },
+				where: { chat_id: activeChatId },
 				orderBy: { seq: 'asc' },
 				limit: 500
 			});
@@ -242,10 +264,10 @@
 		}
 	});
 	const turns = $derived.by(() => {
-		if (!chatId) return undefined;
+		if (!activeChatId) return undefined;
 		try {
 			return getInitializedWorkspaceClient().db.chat_turn?.findMany({
-				where: { chat_id: chatId },
+				where: { chat_id: activeChatId },
 				orderBy: { started_at: 'asc' },
 				limit: 100
 			});
@@ -282,7 +304,7 @@
 	 */
 	const totals = $derived(
 		toSessionTotals(
-			(sessionQuery?.current ?? []).find((row) => row.norbital_id === chatId) as
+			(sessionQuery?.current ?? []).find((row) => row.norbital_id === activeChatId) as
 				Record<string, unknown> | undefined
 		)
 	);
@@ -313,10 +335,10 @@
 	 * leaves the catalog null and the picker unrendered — an absent control is honest about there
 	 * being no choice, where an empty one looks broken.
 	 */
-	$effect(() => {
+	onMount(() => {
 		const transport = getWorkspaceRemoteTransport();
 		// Called through a resolved promise so a transport without the endpoint rejects rather than
-		// throwing out of the effect. No catalog is a supported answer; a broken panel is not.
+		// throwing out of mount. No catalog is a supported answer; a broken panel is not.
 		void Promise.resolve()
 			.then(() => transport.agentModels())
 			.then((result) => {
@@ -368,6 +390,22 @@
 		});
 	});
 
+	/**
+	 * Cmd+K (and the FAB) ask for composer focus through a window event: the panel may live in the
+	 * sheet portal or on the full-page /agent surface, and the shell must not know which. The caret
+	 * goes to the end so an invocation lands ready to type, never in the middle of existing text.
+	 */
+	onMount(() => {
+		function onFocusRequest(): void {
+			const element = textareaElement;
+			if (!element) return;
+			element.focus();
+			element.setSelectionRange(element.value.length, element.value.length);
+		}
+		window.addEventListener(AGENT_COMPOSER_FOCUS_EVENT, onFocusRequest);
+		return () => window.removeEventListener(AGENT_COMPOSER_FOCUS_EVENT, onFocusRequest);
+	});
+
 	async function send(): Promise<void> {
 		const { message, references } = serializeMentions(draft, mentions);
 		if (!message || pending) return;
@@ -385,7 +423,7 @@
 				message,
 				// Only chips the picker created. An `@` that never matched is already in the text.
 				...(references.length > 0 ? { mentions: references } : {}),
-				...(runId ? { runId } : {}),
+				...(activeRunId ? { runId: activeRunId } : {}),
 				...(planMode ? { planMode: true } : {}),
 				// Only when the host offered a choice. Sending back its own default would turn a display
 				// value into a caller assertion, and the host would stop being free to change it.
@@ -481,11 +519,17 @@
 	}
 </script>
 
-<section class="flex h-full min-h-0 flex-col bg-background" aria-label={t('pod.shell.workspaceAgentTitle')}>
+<Stack
+	as="section"
+	gap="none"
+	fill
+	class="bg-background"
+	aria-label={t('pod.shell.workspaceAgentTitle')}
+>
 	<Inline as="header" justify="between" gap="sm" class="shrink-0 border-b px-3 py-2.5 sm:px-4">
 		<Combobox
 			options={sessionOptions}
-			value={chatId ?? null}
+			value={activeChatId ?? null}
 			onValueChange={selectConversation}
 			ariaLabel={t('pod.agent.conversationThread')}
 			searchPlaceholder={t('pod.agent.searchConversations')}
@@ -565,7 +609,11 @@
 					scope={menuScope}
 					onselect={(index) => selectMenuItem(menuEntries[index])}
 					onhighlight={(index) => (highlightIndex = index)}
-					onclearscope={() => (menuScope = null)}
+					onclearscope={() => {
+					menuScope = null;
+					highlightIndex = 0;
+					scheduleMentionSearch();
+				}}
 				/>
 			{/if}
 			<form
@@ -602,8 +650,9 @@
 					<!-- Plan mode is restored. Auto-send-after-step and attach remain deferred — turn stepping
 				     and a session file store are not in this package yet. Usage figures below are the
 				     provider's own; anything the provider did not report is absent rather than estimated. -->
-					<div
-						class={`flex min-w-0 items-center gap-2 text-muted-foreground ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
+					<Inline
+						gap="sm"
+						class={`min-w-0 text-muted-foreground ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
 						data-testid="agent-usage"
 					>
 						<button
@@ -622,7 +671,11 @@
 							{t('pod.agent.plan')}
 						</button>
 						{#if contextPercent !== null}
-							<span class="inline-flex items-center gap-1.5" title={t('pod.agent.contextWindowUsed')}>
+							<Inline
+								as="span"
+								gap="xs"
+								title={t('pod.agent.contextWindowUsed')}
+							>
 								<span
 									class="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted"
 									aria-hidden="true"
@@ -633,7 +686,7 @@
 									></span>
 								</span>
 								{contextPercent}%
-							</span>
+							</Inline>
 						{/if}
 						{#if tokenLabel}
 							<span class="truncate">{tokenLabel}</span>
@@ -641,7 +694,7 @@
 						{#if costLabel}
 							<span title={costHint}>{costLabel}</span>
 						{/if}
-					</div>
+					</Inline>
 					<Inline justify="end" align="center" gap="xs" class="min-w-0">
 						{#if catalog && selectedModel}
 							<div class="min-w-0" title={t('pod.agent.modelAndVariant')}>
@@ -671,4 +724,4 @@
 			</form>
 		</div>
 	</div>
-</section>
+</Stack>

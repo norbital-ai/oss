@@ -77,7 +77,7 @@
 				value={current?.kind ?? null}
 				{disabled}
 				searchable={false}
-				emptyPlaceholder="Select a status"
+				emptyPlaceholder={t('renderer.statutory_fact_status.select_status')}
 				onValueChange={selectKind}
 			/>
 		</label>

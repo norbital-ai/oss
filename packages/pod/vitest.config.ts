@@ -11,9 +11,12 @@ const alias = { $lib: fileURLToPath(new URL('./src', import.meta.url)) };
 // files cannot collide — these run in parallel.
 //
 // `node-runtime` is the real-runtime integration half: every suite here boots a workspace bundle
-// through tests/support/pod-runtime-harness.ts, and those builds serialize on a per-template lock
-// whose wait deadline does not survive six workers queueing on it. These run serially, one file at
-// a time, and the parallel half never overlaps them.
+// through tests/support/pod-runtime-harness.ts. These used to run one file at a time, because each
+// boot rebuilt the shared template tree and fifteen builds queueing on one lock outlived its wait
+// deadline. The harness now rebuilds only when the artefact is older than the template source or
+// the pod package, so the guarded section runs once per template instead of once per suite and the
+// files can overlap. Each still gets its own Postgres container on a dynamic port, so they do not
+// collide over data — the serialization was only ever about the build.
 //
 // `components` mounts Svelte surfaces in happy-dom. That is a DOM, not a browser: it has no layout,
 // no paint and no assistive-technology tree, so it can prove what a component renders and does and
@@ -49,7 +52,6 @@ export default defineConfig({
 					environment: 'node',
 					testTimeout: 60_000,
 					hookTimeout: 120_000,
-					fileParallelism: false,
 					maxWorkers: 6
 				}
 			},

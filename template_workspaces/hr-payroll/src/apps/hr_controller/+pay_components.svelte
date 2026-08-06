@@ -129,6 +129,14 @@
 		content="Review pay-component entries — allowances, claims, arrears, reversals, and loan instalments — and their payroll linkage"
 	/>
 	<meta name="pod:icon" content="lucide:coins" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/hr-payroll/app-media/pay_components-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/hr-payroll/app-media/pay_components-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet companyScopeActions()}
@@ -236,7 +244,7 @@
 					name="origin"
 					label={t('component.origin')}
 					card="subtitle"
-					render={({ value }) => formatEntryOrigin(value)}
+					render={({ value }) => formatEntryOrigin(value, t)}
 				/>
 			{/snippet}
 		</CollectionTable>

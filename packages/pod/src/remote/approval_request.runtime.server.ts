@@ -2,6 +2,7 @@ import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_n
 import type { TApprovalRequest } from '@norbital-ai/platform-utils/system/types';
 import { approvalRequestFromRow } from '$lib/shared/approval.js';
 import { error } from '$lib/server/http.js';
+import { requestI18n } from '$lib/server/i18n.js';
 
 type TApprovalLifecycleHookType =
 	'onApprovalRequestApproved' | 'onApprovalRequestRejected' | 'onApprovalRequestChangeRequested';
@@ -33,7 +34,7 @@ function approvalRequestOrThrow(value: unknown): TApprovalRequest {
 	try {
 		return approvalRequestFromRow(value);
 	} catch {
-		throw error(500, 'Approval operation did not return an approval request.');
+		throw error(500, requestI18n().t('pod.server.approvalOperationFailed'));
 	}
 }
 
@@ -106,7 +107,8 @@ export async function runProcessApprovalRequestAction({
 		await import('$lib/server/collection/access_control/approval_operation.server.js');
 	const workspace = getWorkspace({ provision: true });
 	const existingApprovalRequestData = await loadApprovalRequestRow(approval_request_id);
-	if (!existingApprovalRequestData) throw error(404, 'Approval request not found');
+	if (!existingApprovalRequestData)
+		throw error(404, requestI18n().t('pod.server.approvalNotFound'));
 
 	const updatedRequest = approvalRequestOrThrow(
 		await executeApprovalOperation({
@@ -133,7 +135,10 @@ export async function runProcessApprovalRequestAction({
 		event: actionHook.event
 	});
 
-	return approvalSyncReceipt('Action processed successfully', updatedRequest);
+	return approvalSyncReceipt(
+		requestI18n().t('pod.server.approvalActionProcessed'),
+		updatedRequest
+	);
 }
 
 export async function runWithdrawApprovalRequest({
@@ -148,7 +153,7 @@ export async function runWithdrawApprovalRequest({
 			getWorkspace({ provision: true }).baseScope.requestor
 		)
 	);
-	return approvalSyncReceipt('Approval request withdrawn successfully', updatedRequest);
+	return approvalSyncReceipt(requestI18n().t('pod.server.approvalWithdrawn'), updatedRequest);
 }
 
 /**

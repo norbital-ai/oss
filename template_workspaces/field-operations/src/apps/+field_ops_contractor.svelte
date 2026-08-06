@@ -30,6 +30,14 @@
 	<title>Contractor Workspace</title>
 	<meta name="description" content="Update dispatched day jobs" />
 	<meta name="pod:icon" content="lucide:hard-hat" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/field-operations/app-media/field_ops_contractor-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/field-operations/app-media/field_ops_contractor-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet pageHeading()}
@@ -47,7 +55,10 @@
 				{t('app.field_ops_contractor.profile_load_failed')}
 			</p>
 		{:else if contractorQuery.loading}
-			<div class="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse" aria-label="Loading"></div>
+			<div
+				class="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse"
+				aria-label={t('component.loading')}
+			></div>
 		{:else}
 			<CollectionTable
 				{client}

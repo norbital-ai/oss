@@ -139,5 +139,8 @@
 	"component.status_dispatched": "Dispatched",
 	"component.status_in_progress": "In progress",
 	"component.status_completed": "Completed",
-	"component.status_flagged": "Flagged"
+	"component.status_flagged": "Flagged",
+	"component.loading": "Loading…",
+	"component.loading_job": "Loading job",
+	"component.loading_photo_evidence": "Loading photographic evidence"
 }

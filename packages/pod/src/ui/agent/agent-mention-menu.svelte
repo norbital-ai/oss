@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Inline } from '@norbital-ai/ui/layout';
 	import type { MentionMenuItem } from './mention-sources.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
@@ -53,8 +54,10 @@
 	onmousedown={(event) => event.preventDefault()}
 >
 	{#if scope}
-		<div
-			class="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5 text-xs text-muted-foreground"
+		<Inline
+			justify="between"
+			gap="sm"
+			class="border-b border-border/60 px-3 py-1.5 text-xs text-muted-foreground"
 		>
 			<span class="inline-flex min-w-0 items-center gap-1.5">
 				<Icon icon="lucide:filter" class="size-3 shrink-0" />
@@ -67,7 +70,7 @@
 			>
 				{t('pod.agent.clearScope')}
 			</button>
-		</div>
+		</Inline>
 	{/if}
 	<div bind:this={listElement} class="max-h-64 overflow-y-auto p-1">
 		{#if loading && items.length === 0}
@@ -108,11 +111,12 @@
 			{/each}
 		{/if}
 	</div>
-	<div
-		class="flex items-center gap-3 border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground"
+	<Inline
+		gap="md"
+		class="border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground"
 	>
 		<span>{t('pod.agent.navigateHint')}</span>
 		<span>{t('pod.agent.selectHint')}</span>
 		<span>{t('pod.agent.dismissHint')}</span>
-	</div>
+	</Inline>
 </div>

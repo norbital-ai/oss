@@ -163,7 +163,15 @@ export const miscMessages = defineMessages(
 		'misc.breadcrumb': 'Breadcrumb',
 		'misc.noMessagesYet': 'No messages yet',
 		'misc.startConversation': 'Start a conversation to see messages here',
-		'misc.stepDetails': '{label}. Step details available.'
+		'misc.stepDetails': '{label}. Step details available.',
+		'misc.timeline': 'Timeline',
+		'misc.imagePreviewUnavailable': 'Image preview not available.',
+		'misc.sidebar': 'Sidebar',
+		'misc.conversationMessages': 'Conversation messages',
+		'misc.emptyFolder': 'Empty folder',
+		'misc.failedToLoadFolder': 'Failed to load folder',
+		'misc.unnamed': '(unnamed)',
+		'misc.fileTypeNotAllowed': 'File type {type} is not allowed'
 	},
 	{
 		'misc.today': '今天',
@@ -317,6 +325,14 @@ export const miscMessages = defineMessages(
 		'misc.breadcrumb': '面包屑',
 		'misc.noMessagesYet': '暂无消息',
 		'misc.startConversation': '开始对话以查看消息',
-		'misc.stepDetails': '{label}。可查看步骤详情。'
+		'misc.stepDetails': '{label}。可查看步骤详情。',
+		'misc.timeline': '时间线',
+		'misc.imagePreviewUnavailable': '图片预览不可用。',
+		'misc.sidebar': '侧边栏',
+		'misc.conversationMessages': '对话消息',
+		'misc.emptyFolder': '空文件夹',
+		'misc.failedToLoadFolder': '无法加载文件夹',
+		'misc.unnamed': '(未命名)',
+		'misc.fileTypeNotAllowed': '不允许文件类型 {type}'
 	}
 );

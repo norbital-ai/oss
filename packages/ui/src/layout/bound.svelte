@@ -2,9 +2,15 @@
 	import type { Snippet } from 'svelte';
 	import type { LayoutAttributes, LayoutElement, LayoutPad } from './layout.shared.js';
 
-	export type BoundSize = 'compact' | 'standard' | 'tall' | 'full';
+	export type BoundSize = 'compact' | 'standard' | 'tall' | 'fit' | 'full';
 	export interface BoundProps extends LayoutAttributes {
 		as?: LayoutElement;
+		/**
+		 * The named height contract. `compact`/`standard`/`tall` are fixed panes;
+		 * `fit` tracks the viewer: `min(42rem, 100dvh − 14rem)` with a `standard` floor, so a
+		 * scrollport claims the space below a ~14rem chrome band instead of guessing a pane size;
+		 * `full` fills whatever definite height the parent grants.
+		 */
 		size?: BoundSize;
 		pad?: LayoutPad;
 		inset?: boolean;
@@ -37,6 +43,7 @@
 		compact: 'h-72',
 		standard: 'h-[28rem]',
 		tall: 'h-[40rem]',
+		fit: 'h-[min(42rem,calc(100dvh-14rem))] min-h-[28rem]',
 		full: 'h-full'
 	};
 </script>

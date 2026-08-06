@@ -5,7 +5,7 @@
 		ErasedCollectionRegistry
 	} from '@norbital-ai/platform-utils/collection';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn, renderSnippet } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
@@ -36,47 +36,48 @@
 	>
 {/snippet}
 
-<CollectionTable
-	{client}
-	collection="audit_event"
-	view="workspace-settings-audit"
-	query={{ orderBy: { norbital_created_at: 'desc' }, limit: 100 }}
-	title={t('pod.settings.auditEvents')}
-	description={t('pod.settings.auditEventsDescription')}
-	features={{ search: true, filter: true, bulk: false, create: false }}
-	class="h-[min(42rem,calc(100dvh-14rem))] min-h-[28rem]"
->
-	{#snippet columns({ Column })}
-		<Column
-			name="event_type"
-			label={t('pod.settings.event')}
-			width={120}
-			render={({ row }) => renderSnippet(eventCell, { row })}
-		/>
-		<Column name="collection_name" label={t('pod.settings.collection')} minWidth={170} />
-		<Column
-			name="actor_id"
-			label={t('pod.settings.actor')}
-			minWidth={150}
-			render={({ row }) => (text(row, 'actor_id') ? `${text(row, 'actor_id')!.slice(0, 8)}…` : '—')}
-		/>
-		<Column
-			name="norbital_created_at"
-			label={t('pod.settings.timestamp')}
-			minWidth={190}
-			render={({ row }) => formatDate(text(row, 'norbital_created_at'))}
-		/>
-	{/snippet}
-	{#snippet ListCard(row)}
-		<Stack gap="sm">
-			<Inline justify="between" gap="md"
-				>{@render eventCell({ row })}<span class="text-xs text-muted-foreground"
-					>{formatDate(text(row, 'norbital_created_at'))}</span
-				></Inline
-			>
-			<p class="truncate text-xs text-muted-foreground">
-				{text(row, 'collection_name') ?? t('pod.settings.system')}
-			</p>
-		</Stack>
-	{/snippet}
-</CollectionTable>
+<Bound size="fit">
+	<CollectionTable
+		{client}
+		collection="audit_event"
+		view="workspace-settings-audit"
+		query={{ orderBy: { norbital_created_at: 'desc' }, limit: 100 }}
+		title={t('pod.settings.auditEvents')}
+		description={t('pod.settings.auditEventsDescription')}
+		features={{ search: true, filter: true, bulk: false, create: false }}
+	>
+		{#snippet columns({ Column })}
+			<Column
+				name="event_type"
+				label={t('pod.settings.event')}
+				width={120}
+				render={({ row }) => renderSnippet(eventCell, { row })}
+			/>
+			<Column name="collection_name" label={t('pod.settings.collection')} minWidth={170} />
+			<Column
+				name="actor_id"
+				label={t('pod.settings.actor')}
+				minWidth={150}
+				render={({ row }) => (text(row, 'actor_id') ? `${text(row, 'actor_id')!.slice(0, 8)}…` : '—')}
+			/>
+			<Column
+				name="norbital_created_at"
+				label={t('pod.settings.timestamp')}
+				minWidth={190}
+				render={({ row }) => formatDate(text(row, 'norbital_created_at'))}
+			/>
+		{/snippet}
+		{#snippet ListCard(row)}
+			<Stack gap="sm">
+				<Inline justify="between" gap="md"
+					>{@render eventCell({ row })}<span class="text-xs text-muted-foreground"
+						>{formatDate(text(row, 'norbital_created_at'))}</span
+					></Inline
+				>
+				<p class="truncate text-xs text-muted-foreground">
+					{text(row, 'collection_name') ?? t('pod.settings.system')}
+				</p>
+			</Stack>
+		{/snippet}
+	</CollectionTable>
+</Bound>

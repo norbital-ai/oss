@@ -43,7 +43,7 @@
 		segmentClass?: string;
 	} = $props();
 
-	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 
 	// Handle validation errors
 	function handleInvalid(reason: 'min' | 'max' | 'custom', msg?: string | string[]) {

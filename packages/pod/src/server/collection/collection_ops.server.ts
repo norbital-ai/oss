@@ -37,6 +37,7 @@ import {
 	SELF_SERVICE_WRITE_COLLECTIONS
 } from './access_control/permission/collection_permission.guard.server.js';
 import { error } from './http_error.js';
+import { requestI18nOrDefault } from '$lib/server/i18n.js';
 import { withConstraintErrors } from './constraint-errors.server.js';
 import { getCurrentPermissionBypassKey } from './access_control/permission/permission_bypass_key.server.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
@@ -263,7 +264,7 @@ async function createRecordUnguarded(
 ): Promise<Record<string, unknown>> {
 	const behavior = getWorkspaceCollection(collection);
 	if (!options?.isElevated && !allowsMutation(behavior, 'create')) {
-		throw error(403, `Collection "${collection}" does not allow create`);
+		throw error(403, requestI18nOrDefault().t('pod.server.createNotAllowed', { collection }));
 	}
 
 	const api = await getHookApi();
@@ -373,7 +374,7 @@ async function createManyUnguarded(
 	if (inputs.length === 0) return [];
 	const behavior = getWorkspaceCollection(collection);
 	if (!options?.isElevated && !allowsMutation(behavior, 'create')) {
-		throw error(403, `Collection "${collection}" does not allow create`);
+		throw error(403, requestI18nOrDefault().t('pod.server.createNotAllowed', { collection }));
 	}
 
 	const api = await getHookApi();
@@ -517,7 +518,7 @@ async function resolveApprovalRevision(params: {
 
 	const approvalRequest = await loadApprovalRequestRow(approvalRequestId);
 	if (!approvalRequest || approvalRequest.collection_name !== collection) {
-		throw error(409, 'Cannot revise record: its approval request is unavailable.');
+		throw error(409, requestI18nOrDefault().t('pod.server.approvalUnavailable'));
 	}
 	const configuredApproval = await findApprovalConfigInWorkspace(
 		ctx.manifestCtx,
@@ -527,7 +528,7 @@ async function resolveApprovalRevision(params: {
 		!configuredApproval ||
 		(configuredApproval.actionType !== 'create' && configuredApproval.actionType !== 'update')
 	) {
-		throw error(409, 'Cannot revise record: its approval workflow is no longer available.');
+		throw error(409, requestI18nOrDefault().t('pod.server.approvalWorkflowUnavailable'));
 	}
 
 	const approvalContext =
@@ -587,7 +588,7 @@ async function updateRecordUnguarded(
 		!authorDeclaredMutable &&
 		!SELF_SERVICE_WRITE_COLLECTIONS.has(collection)
 	) {
-		throw error(403, `Collection "${collection}" does not allow update`);
+		throw error(403, requestI18nOrDefault().t('pod.server.updateNotAllowed', { collection }));
 	}
 
 	const api = await getHookApi();
@@ -628,7 +629,7 @@ async function updateRecordUnguarded(
 		// where that claim is tested — including for an admin, whose role short-circuits the policy
 		// deny but does not turn a notification into an editable record.
 		if (!authorDeclaredMutable && !selfServiceWriteAllowed(collection, 'update', mutationContext)) {
-			throw error(403, `Collection "${collection}" does not allow update`);
+			throw error(403, requestI18nOrDefault().t('pod.server.updateNotAllowed', { collection }));
 		}
 		const decision = await resolveCollectionMutationPermission({
 			scope: {
@@ -705,13 +706,13 @@ async function updateRecordUnguarded(
 				const current = await directFindFirst(ctx, collection, recordId).catch(() => undefined);
 				if (current) {
 					throw error(409, {
-						message: 'Record was modified concurrently',
+						message: requestI18nOrDefault().t('pod.server.recordModifiedConcurrently'),
 						code: 'CONFLICT',
 						currentRow: current
 					});
 				}
 			}
-			throw error(404, `Record with ID ${recordId} not found.`);
+			throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
 		}
 		await persistMutationRelationships(ctx, collection, recordId, links, nested);
 
@@ -777,7 +778,7 @@ export async function updateMany(
 	if (updates.length === 0) return [];
 	const behavior = getWorkspaceCollection(collection);
 	if (!options?.isElevated && !allowsMutation(behavior, 'update')) {
-		throw error(403, `Collection "${collection}" does not allow update`);
+		throw error(403, requestI18nOrDefault().t('pod.server.updateNotAllowed', { collection }));
 	}
 
 	const api = await getHookApi();
@@ -894,7 +895,7 @@ export async function updateMany(
 						.where(eq(cols[SYSTEM_COLUMN_NAMES.PKEY], item.recordId))
 						.returning()
 				);
-				if (!record) throw error(404, `Record with ID ${item.recordId} not found.`);
+				if (!record) throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: item.recordId }));
 				out.push(record);
 			}
 			// Each row needs its own UPDATE (different values), but the feeds do not: emitting them
@@ -1026,7 +1027,7 @@ async function deleteManyUnguarded(
 	if (ids.length === 0) return;
 	const behavior = getWorkspaceCollection(collection);
 	if (!options?.isElevated && !allowsMutation(behavior, 'delete')) {
-		throw error(403, `Collection "${collection}" does not allow delete`);
+		throw error(403, requestI18nOrDefault().t('pod.server.deleteNotAllowed', { collection }));
 	}
 
 	const api = await getHookApi();
@@ -1053,14 +1054,14 @@ async function deleteManyUnguarded(
 		// stupidity:allow A6 -- delete hooks and permission checks must observe caller order.
 		for (const recordId of ids) {
 			// A repeated id names a row this very operation already removed.
-			if (seen.has(recordId)) throw error(404, `Record with ID ${recordId} not found.`);
+			if (seen.has(recordId)) throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
 			seen.add(recordId);
 			const originalRecord = originals.get(recordId);
-			if (!originalRecord) throw error(404, `Record with ID ${recordId} not found.`);
+			if (!originalRecord) throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
 
 			const existingStamp = originalRecord[SYSTEM_COLUMN_NAMES.APPROVAL_ID];
 			if (typeof existingStamp === 'string' && existingStamp.length > 0) {
-				throw error(409, 'Cannot delete record: a pending approval request is active.');
+				throw error(409, requestI18nOrDefault().t('pod.server.pendingApprovalBlocksDelete'));
 			}
 
 			const mutationContext = {

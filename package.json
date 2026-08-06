@@ -9,7 +9,7 @@
 	"scripts": {
 		"build": "turbo build --concurrency=1",
 		"lint": "turbo lint",
-		"test": "turbo test --concurrency=1",
+		"test": "turbo test",
 		"test:ci": "pnpm --filter @norbital-ai/platform-utils test && pnpm --filter @norbital-ai/pod test:ci",
 		"packages:build": "pnpm --filter @norbital-ai/pod... build",
 		"check": "pnpm packages:build && pnpm deps:sync && pnpm templates:sync && pnpm lint && pnpm test && pnpm test:scripts && pnpm build && pnpm templates:check && pnpm templates:lock:check && pnpm publication:check",
@@ -30,7 +30,8 @@
 		"templates:lock:verify": "node scripts/lock-templates.mjs --check --verify-install",
 		"templates:project": "node scripts/project-templates.mjs --update-local --output .tmp/template-revisions.json",
 		"skills:generate": "node scripts/generate-skills.mjs",
-		"skills:check": "node scripts/generate-skills.mjs --check"
+		"skills:check": "node scripts/generate-skills.mjs --check",
+		"docs:api": "typedoc --options typedoc.json && node scripts/generate-api-docs.mjs"
 	},
 	"devDependencies": {
 		"@changesets/cli": "2.31.1",
@@ -38,6 +39,8 @@
 		"@typescript/native-preview": "7.0.0-dev.20260707.2",
 		"prettier": "^3.9.5",
 		"prettier-plugin-svelte": "^4.1.1",
-		"turbo": "^2.10.5"
+		"turbo": "^2.10.5",
+		"typedoc": "0.28.20",
+		"typedoc-plugin-markdown": "^4.12.0"
 	}
 }
