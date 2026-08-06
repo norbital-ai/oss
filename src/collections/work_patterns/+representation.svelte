@@ -1,11 +1,14 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 
 	let { record, close }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -19,7 +22,7 @@
 		<Grid gap="md" minimum="compact">
 			<Field
 				name="company_id"
-				label="Company"
+				label={t('component.company')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'companies',
@@ -35,7 +38,7 @@
 			<Field name="name" />
 			<Field
 				name="default_shift_definition_id"
-				label="Default shift"
+				label={t('component.default_shift')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'shift_definitions',
@@ -49,12 +52,20 @@
 					}
 				}}
 			/>
-			<Column span="all"><Field name="variant" label="Shape of the week" /></Column>
-			<Field name="min_rest_days_per_week" label="Minimum rest days per week" />
-			<Field name="max_consecutive_work_days" label="Maximum consecutive working days" />
-			<Field name="max_daily_work_minutes" label="Maximum daily work (min)" />
-			<Field name="min_minutes_between_shifts" label="Minimum rest between shifts (min)" />
-			<Column span="all"><Field name="effective_range" label="Effective period" /></Column>
+			<Column span="all"><Field name="variant" label={t('component.shape_of_week')} /></Column>
+			<Field name="min_rest_days_per_week" label={t('component.minimum_rest_days_per_week')} />
+			<Field
+				name="max_consecutive_work_days"
+				label={t('component.maximum_consecutive_working_days')}
+			/>
+			<Field name="max_daily_work_minutes" label={t('component.maximum_daily_work_min')} />
+			<Field
+				name="min_minutes_between_shifts"
+				label={t('component.minimum_rest_between_shifts_min')}
+			/>
+			<Column span="all"
+				><Field name="effective_range" label={t('component.effective_period')} /></Column
+			>
 		</Grid>
 	{/snippet}
 </CollectionForm>

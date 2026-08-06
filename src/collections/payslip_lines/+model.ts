@@ -41,7 +41,7 @@ export default defineModel(
 	{
 		description:
 			'One settled component on a payslip and the only junction table. Its strict union links directly to a configured pay component, an entered component event, or a statutory scheme.',
-		recordLabel: ['sequence', 'amount'],
+		recordLabel: ['bucket', 'amount'],
 		icon: 'lucide:list',
 		indexes: [
 			{ columns: ['payslip_id'] },

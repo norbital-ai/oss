@@ -1,10 +1,14 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { splitList } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { holidayScopeSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type ScopeKind = Value['kind'];
 
@@ -73,7 +77,7 @@
 				<Input
 					value={current.location_codes.join(', ')}
 					{disabled}
-					placeholder="MY-10, MY-14"
+					placeholder={t('component.regions')}
 					oninput={(event) =>
 						emit({ kind: 'REGIONAL', location_codes: splitList(event.currentTarget.value) })}
 				/>

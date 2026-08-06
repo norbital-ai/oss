@@ -1,9 +1,13 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import { WEEKDAYS, workPatternVariantSchema, type Weekday } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type VariantType = Value['type'];
 	/** What a single weekday is on a STANDARD week. Working days are the ones named as neither. */
@@ -165,9 +169,9 @@
 								if (value) assignRole(day, value as DayRole);
 							}}
 						>
-							<ToggleGroupItem value="WORK">Working</ToggleGroupItem>
-							<ToggleGroupItem value="REST">Rest</ToggleGroupItem>
-							<ToggleGroupItem value="OFF">Off</ToggleGroupItem>
+							<ToggleGroupItem value="WORK">{t('component.working')}</ToggleGroupItem>
+							<ToggleGroupItem value="REST">{t('component.rest')}</ToggleGroupItem>
+							<ToggleGroupItem value="OFF">{t('component.off')}</ToggleGroupItem>
 						</ToggleGroup>
 					</Inline>
 				{/each}

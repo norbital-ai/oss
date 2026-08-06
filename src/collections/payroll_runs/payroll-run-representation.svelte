@@ -9,6 +9,8 @@
 	 */
 	import { client } from '$pod/client';
 	import { downloadCollectionExport } from '@norbital-ai/pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { Row } from './$types.js';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
@@ -18,6 +20,9 @@
 
 	let { record, refresh, close }: { record: Row; refresh(): Promise<void>; close(): void } =
 		$props();
+
+	const { t } = useI18n<TenantI18nKeys>();
+
 	let pendingAction = $state<'recalculate' | 'pay' | 'delete' | 'export' | null>(null);
 	let lockArmed = $state(false);
 
@@ -49,7 +54,7 @@
 	async function updateDraft(action: 'recalculate' | 'pay'): Promise<void> {
 		const update = client.db.payroll_runs.update;
 		if (!update) {
-			toast.error('Payroll runs cannot be updated in this workspace.');
+			toast.error(t('component.cannot_update'));
 			return;
 		}
 		pendingAction = action;
@@ -57,12 +62,12 @@
 			await update(record.norbital_id, {
 				lifecycle: action === 'pay' ? 'PAID' : 'DRAFT'
 			});
-			toast.success(action === 'pay' ? 'Payroll marked as paid.' : 'Draft payroll recalculated.');
+			toast.success(action === 'pay' ? t('component.marked_paid') : t('component.recalculated'));
 			void refresh().catch(() => {
-				toast.error('Payroll updated, but the detail did not refresh.');
+				toast.error(t('component.no_refresh'));
 			});
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'Payroll update failed.');
+			toast.error(error instanceof Error ? error.message : t('component.update_failed'));
 		} finally {
 			pendingAction = null;
 		}
@@ -75,9 +80,9 @@
 				{ collection_name: 'payroll_runs', record_ids: [record.norbital_id] },
 				{ includeAction: (action) => action.metadata?.kind === 'payroll-report-xlsx' }
 			);
-			if (manifest.length === 0) throw new Error('Build this run before exporting its report.');
+			if (manifest.length === 0) throw new Error(t('component.build_before_export'));
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'Payroll report export failed.');
+			toast.error(error instanceof Error ? error.message : t('component.export_failed'));
 		} finally {
 			pendingAction = null;
 		}
@@ -86,16 +91,16 @@
 	async function deleteDraft(): Promise<void> {
 		const remove = client.db.payroll_runs.delete;
 		if (!remove) {
-			toast.error('Payroll runs cannot be deleted in this workspace.');
+			toast.error(t('component.cannot_delete'));
 			return;
 		}
 		pendingAction = 'delete';
 		try {
 			await remove(record.norbital_id);
-			toast.success(`Draft payroll ${record.period} deleted.`);
+			toast.success(t('component.draft_deleted', { period: record.period }));
 			close();
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'Payroll run deletion failed.');
+			toast.error(error instanceof Error ? error.message : t('component.delete_failed'));
 		} finally {
 			pendingAction = null;
 		}
@@ -103,12 +108,15 @@
 </script>
 
 <Stack gap="lg">
-	<Stack as="section" gap="sm" aria-label="Payroll run summary">
+	<Stack as="section" gap="sm" aria-label={t('component.payroll_run_summary')}>
 		<Cluster align="start" justify="between" gap="sm">
 			<Stack gap="none" class="min-w-0">
-				<h2 class="truncate text-lg font-semibold">{company?.name ?? 'Company'}</h2>
+				<h2 class="truncate text-lg font-semibold">{company?.name ?? t('component.company')}</h2>
 				<p class="text-sm text-muted-foreground">
-					Period {record.period} · {payslipCountQuery.current ?? 0} payslips
+					{t('component.period_line', {
+						period: record.period,
+						count: payslipCountQuery.current ?? 0
+					})}
 				</p>
 			</Stack>
 			<Inline gap="xs" justify="end" shrink={false}>
@@ -122,7 +130,9 @@
 						disabled={pendingAction !== null}
 						onclick={downloadReport}
 					>
-						{pendingAction === 'export' ? 'Exporting…' : 'Export salary listing'}
+						{pendingAction === 'export'
+							? t('component.exporting')
+							: t('component.export_salary_listing')}
 					</Button>
 					<Button
 						variant="outline"
@@ -130,7 +140,9 @@
 						disabled={pendingAction !== null}
 						onclick={() => updateDraft('recalculate')}
 					>
-						{pendingAction === 'recalculate' ? 'Recalculating…' : 'Recalculate draft'}
+						{pendingAction === 'recalculate'
+							? t('component.recalculating')
+							: t('component.recalculate_draft')}
 					</Button>
 					<Button
 						size="sm"
@@ -144,10 +156,10 @@
 						}}
 					>
 						{pendingAction === 'pay'
-							? 'Locking…'
+							? t('component.locking')
 							: lockArmed
-								? 'Confirm lock & pay'
-								: 'Lock payroll'}
+								? t('component.confirm_lock_pay')
+								: t('component.lock_payroll')}
 					</Button>
 					{#if client.db.payroll_runs.delete}
 						<Button
@@ -156,7 +168,7 @@
 							disabled={pendingAction !== null}
 							onclick={deleteDraft}
 						>
-							{pendingAction === 'delete' ? 'Deleting…' : 'Delete draft'}
+							{pendingAction === 'delete' ? t('component.deleting') : t('component.delete_draft')}
 						</Button>
 					{/if}
 				{/if}
@@ -164,21 +176,21 @@
 		</Cluster>
 		<Grid as="dl" gap="sm" minimum="compact">
 			<div>
-				<dt class="text-xs text-muted-foreground">Attendance window</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.attendance_window')}</dt>
 				<dd class="mt-1 font-medium tabular-nums">
 					{formatCalendarDate(record.attendance_from)} → {formatCalendarDate(record.attendance_to)}
 				</dd>
 			</div>
 			<div>
-				<dt class="text-xs text-muted-foreground">Pay date</dt>
+				<dt class="text-xs text-muted-foreground">{t('app.payroll.pay_date')}</dt>
 				<dd class="mt-1 font-medium tabular-nums">{formatCalendarDate(record.pay_date)}</dd>
 			</div>
 			<div>
-				<dt class="text-xs text-muted-foreground">Run-level configuration snapshot</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.run_snapshot')}</dt>
 				<dd class="mt-1 text-sm font-medium">
 					{record.configuration_snapshot?.kind === 'CAPTURED'
-						? 'Captured at run time'
-						: 'Legacy snapshot'}
+						? t('component.captured_at_run_time')
+						: t('component.legacy_snapshot')}
 				</dd>
 			</div>
 		</Grid>
@@ -186,19 +198,18 @@
 
 	{#if lockArmed && record.lifecycle === 'DRAFT'}
 		<p class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-			Locking marks this payroll paid and makes its snapshot and payslips immutable. Select “Confirm
-			lock & pay” to continue.
+			{t('component.lock_warning')}
 		</p>
 	{/if}
 
 	<Stack as="section" gap="sm" aria-labelledby="run-payslips-heading">
-		<h3 id="run-payslips-heading" class="text-sm font-semibold">Payslips</h3>
+		<h3 id="run-payslips-heading" class="text-sm font-semibold">{t('component.payslips')}</h3>
 		<Bound size="tall">
 			<CollectionTable
 				{client}
 				collection="payslips"
-				title="Payslips"
-				description="Open a payslip for its direct component and statutory line breakdown."
+				title={t('component.payslips')}
+				description={t('component.payslips_description')}
 				features={{ create: false }}
 				query={{
 					where: { payroll_run_id: { eq: record.norbital_id } },
@@ -209,7 +220,7 @@
 				{#snippet columns({ Column })}
 					<Column
 						name="employment_id"
-						label="Employee"
+						label={t('component.employee')}
 						card="title"
 						render={({ value }) =>
 							value == null || value === ''
@@ -220,13 +231,13 @@
 					<Column name="gross" render={({ value }) => formatNumeric(value)} />
 					<Column
 						name="total_deductions"
-						label="Deductions"
+						label={t('component.deductions')}
 						render={({ value }) => formatNumeric(value)}
 					/>
 					<Column name="net" card="subtitle" render={({ value }) => formatNumeric(value)} />
 					<Column
 						name="employer_cost"
-						label="Employer cost"
+						label={t('component.employer_cost')}
 						render={({ value }) => formatNumeric(value)}
 					/>
 				{/snippet}

@@ -1,36 +1,33 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
-	import { Bound, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
+	import { Bound, Cover, Inline } from '@norbital-ai/ui/layout';
 	import {
 		formatCalendarDate,
 		formatNumeric,
 		formatRepaymentSchedule
 	} from '../../lib/ui/display-formatters.js';
-	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
+	import { inForceTodayFilter, todayInstant } from '../../lib/ui/calendar.js';
 	import {
 		repaymentProgress,
 		type RepaymentInstalmentLink
 	} from '../../collections/repayment_agreements/lib/repayment-progress.js';
 
+	const { t } = useI18n<TenantI18nKeys>();
+
 	let companyId = $state<string | null>(null);
-	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	/**
-	 * A repayment agreement is effective-dated, so the ledger opens on the agreements still running
-	 * *today* and widens to settled and future ones only when the operator asks. The legal-entity
-	 * selector below keeps `activeRange` whatever this is set to: it is the page's scope picker, not
-	 * a listing, and it has to default to an entity that still exists.
+	 * The ledger opens on the agreements still running today, as a filter chip the operator can drop
+	 * to see settled and future ones. The legal-entity selector keeps `activeRange` in its own query
+	 * regardless: that is the page's scope picker, not a listing, and it has to default to an entity
+	 * that still exists.
 	 */
-	let effectiveWindow = $state<'current' | 'history'>('current');
-	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
-		effectiveWindow === 'history' ? {} : activeRange
-	);
-
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
 		orderBy: { name: 'asc' },
@@ -95,8 +92,15 @@
 		);
 		if (!progress) return '—';
 		if (progress.settled)
-			return `Settled · ${progress.paidInstalments}/${progress.totalInstalments}`;
-		return `${formatNumeric(progress.outstandingAmount)} · ${progress.paidInstalments}/${progress.totalInstalments} paid`;
+			return t('app.loans.progress_settled', {
+				paid: progress.paidInstalments,
+				total: progress.totalInstalments
+			});
+		return t('app.loans.progress_partial', {
+			outstanding: formatNumeric(progress.outstandingAmount),
+			paid: progress.paidInstalments,
+			total: progress.totalInstalments
+		});
 	}
 
 	function employmentLabel(row: unknown): string {
@@ -123,9 +127,9 @@
 {#snippet companyScopeActions()}
 	<Inline gap="md" align="end">
 		<label class="grid gap-1.5 text-sm">
-			<span class="font-medium text-muted-foreground">Legal entity</span>
+			<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
 			<Combobox
-				ariaLabel="Legal entity"
+				ariaLabel={t('component.legal_entity')}
 				options={companyOptions}
 				value={selectedCompanyId}
 				onValueChange={(value) => {
@@ -135,8 +139,8 @@
 					}
 					companyId = companies[0]?.norbital_id ?? null;
 				}}
-				emptyPlaceholder="Select legal entity…"
-				searchPlaceholder="Search companies…"
+				emptyPlaceholder={t('component.select_legal_entity')}
+				searchPlaceholder={t('component.search_companies')}
 				clientConfig={{
 					isLoading: companiesQuery.loading,
 					error: companiesQuery.error?.message ?? null
@@ -144,32 +148,14 @@
 				class="min-w-[16rem]"
 			/>
 		</label>
-		<Stack gap="xs">
-			<span class="text-sm font-medium text-muted-foreground">Agreements</span>
-			<ToggleGroup
-				type="single"
-				size="sm"
-				value={effectiveWindow}
-				onValueChange={(value) => {
-					effectiveWindow = value === 'history' ? 'history' : 'current';
-				}}
-			>
-				<ToggleGroupItem value="current" aria-label="Show only agreements running today">
-					Running today
-				</ToggleGroupItem>
-				<ToggleGroupItem value="history" aria-label="Show every agreement, settled ones included">
-					All history
-				</ToggleGroupItem>
-			</ToggleGroup>
-		</Stack>
 	</Inline>
 {/snippet}
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="HR Controller"
-		title="Loans"
-		description="Repayment agreements deduct a principal over time — scoped to one legal entity. Outstanding is derived from scheduled instalments linked to payslips, never stored separately."
+		eyebrow={t('app.loans.eyebrow')}
+		title={t('app.loans.header_title')}
+		description={t('app.loans.header_description')}
 		actions={companyScopeActions}
 	/>
 {/snippet}
@@ -178,19 +164,19 @@
 	<Bound size="full" inset>
 		{#if selectedCompanyId == null}
 			<p class="text-sm text-muted-foreground">
-				Select a legal entity to review its repayment agreements.
+				{t('app.loans.empty')}
 			</p>
 		{:else}
 			<CollectionTable
 				{client}
 				collection="repayment_agreements"
 				view={`hr_controller:loans:${selectedCompanyId}`}
-				title="Repayment agreements"
-				description="Outstanding falls when a scheduled entry is linked to a payslip."
+				title={t('app.loans.repayment_agreements')}
+				description={t('app.loans.repayment_agreements_description')}
+				initialFilters={inForceTodayFilter()}
 				query={{
 					where: {
-						employment_id: { in: employmentIds },
-						...effectiveRange
+						employment_id: { in: employmentIds }
 					},
 					orderBy: { disbursed_on: 'desc' },
 					with: {
@@ -205,42 +191,42 @@
 						}
 					}
 				}}
-				searchPlaceholder="Search agreements…"
+				searchPlaceholder={t('app.loans.search_agreements')}
 			>
 				{#snippet columns({ Column })}
 					<Column name="reference" card="title" />
 					<Column
 						name="employment_id"
-						label="Employment"
+						label={t('component.employment')}
 						card="subtitle"
 						render={({ row }) => employmentLabel(row)}
 					/>
 					<Column
 						name="pay_component_id"
-						label="Deducted as"
+						label={t('app.loans.deducted_as')}
 						render={({ row }) => componentLabel(row)}
 					/>
 					<Column
 						name="principal"
-						label="Principal · outstanding"
+						label={t('app.loans.principal_outstanding')}
 						render={({ row, value }) => `${formatNumeric(value)} · ${progressLabel(row)}`}
 					/>
 					<Column
 						name="schedule"
-						label="Schedule"
+						label={t('component.schedule')}
 						render={({ value }) => formatRepaymentSchedule(value)}
 					/>
 					<Column
 						name="disbursed_on"
-						label="Disbursed"
+						label={t('component.disbursed')}
 						render={({ value }) => formatCalendarDate(value)}
 					/>
 					<Column
 						name="repay_by"
-						label="Repay by"
+						label={t('app.loans.repay_by')}
 						render={({ value }) => formatCalendarDate(value)}
 					/>
-					<Column name="effective_range" label="Effective" />
+					<Column name="effective_range" label={t('component.effective')} />
 				{/snippet}
 				{#snippet ListCard(agreement)}
 					<Inline align="start" justify="between" gap="sm">

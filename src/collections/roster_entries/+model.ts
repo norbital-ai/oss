@@ -54,7 +54,7 @@ export default defineModel(
 	{
 		description:
 			'One person-day of the roster: either a working day and the shift it is worked on, or a non-working rest or off day that schedules no shift. Optional — office staff on a fixed week have none.',
-		recordLabel: 'work_date',
+		recordLabel: ['work_date', 'designation'],
 		icon: 'lucide:calendar-days',
 		indexes: [{ columns: ['employment_id', 'work_date'], unique: true }]
 	}

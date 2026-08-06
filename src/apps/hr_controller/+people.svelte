@@ -1,15 +1,18 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Display, type ChartDisplaySpec } from '@norbital-ai/ui/chart';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { formatDataValue } from '@norbital-ai/ui/data-renderer';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Columns, Cover, Inline, Split, Stack } from '@norbital-ai/ui/layout';
-	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { formatCalendarDate } from '../../lib/ui/display-formatters.js';
-	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
+	import { employedTodayFilter, todayKey, todayInstant } from '../../lib/ui/calendar.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
@@ -17,12 +20,10 @@
 
 	/**
 	 * The profile list is membership in an effective-dated employment, so it opens on the people
-	 * employed here *today* and widens to past staff only when the operator asks. The legal-entity
-	 * selector below keeps `activeRange` whatever this is set to: it is the page's scope picker, not
-	 * a listing, and it has to default to an entity that still exists.
+	 * employed today as a filter chip the operator can drop to reach past staff. The legal-entity
+	 * selector keeps `activeRange` in its own query: it is the page's scope picker, not a listing,
+	 * and it has to default to an entity that still exists.
 	 */
-	let effectiveWindow = $state<'current' | 'history'>('current');
-
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
 		orderBy: { name: 'asc' },
@@ -76,11 +77,14 @@
 		)
 	);
 	const currentEmployees = $derived(currentEmployeeIds.size);
-	const employeeIds = $derived(
-		effectiveWindow === 'history'
-			? [...new Set((employmentsQuery?.current ?? []).map((employment) => employment.employee_id))]
-			: [...currentEmployeeIds]
-	);
+	/**
+	 * Everyone this entity has ever engaged — the *scope* of the list, which the operator is not
+	 * entitled to widen, so it stays in `query.where`. Which of them the list opens on is a separate
+	 * question, and it is answered by a filter chip the operator can drop.
+	 */
+	const employeeIds = $derived([
+		...new Set((employmentsQuery?.current ?? []).map((employment) => employment.employee_id))
+	]);
 	const workforceTrend = $derived.by(() => {
 		const ranges = (employmentsQuery?.current ?? []).flatMap((employment) =>
 			employment.effective_range
@@ -128,14 +132,14 @@
 	const workforceChart = $derived({
 		kind: 'line',
 		loading: employmentsQuery?.loading ?? false,
-		title: 'Turnover and hiring',
-		description: 'Monthly leavers and joiners against average headcount.',
+		title: t('app.people.chart_title'),
+		description: t('app.people.chart_description'),
 		data: workforceTrend,
 		xKey: 'month',
 		series: ['turnover', 'hireRate'],
 		config: {
-			turnover: { label: 'Turnover rate', color: 'var(--color-destructive)' },
-			hireRate: { label: 'Hire rate', color: 'var(--color-primary)' }
+			turnover: { label: t('app.people.chart_turnover_rate'), color: 'var(--color-destructive)' },
+			hireRate: { label: t('app.people.chart_hire_rate'), color: 'var(--color-primary)' }
 		},
 		valueFormat: { style: 'percent', maximumFractionDigits: 1 },
 		curve: 'linear'
@@ -145,9 +149,9 @@
 {#snippet companyScopeActions()}
 	<Inline gap="md" align="end">
 		<label class="grid gap-1.5 text-sm">
-			<span class="font-medium text-muted-foreground">Legal entity</span>
+			<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
 			<Combobox
-				ariaLabel="Legal entity"
+				ariaLabel={t('component.legal_entity')}
 				options={companyOptions}
 				value={selectedCompanyId}
 				onValueChange={(value) => {
@@ -157,8 +161,8 @@
 					}
 					companyId = companies[0]?.norbital_id ?? null;
 				}}
-				emptyPlaceholder="Select legal entity…"
-				searchPlaceholder="Search companies…"
+				emptyPlaceholder={t('component.select_legal_entity')}
+				searchPlaceholder={t('component.search_companies')}
 				clientConfig={{
 					isLoading: companiesQuery.loading,
 					error: companiesQuery.error?.message ?? null
@@ -166,46 +170,30 @@
 				class="min-w-[16rem]"
 			/>
 		</label>
-		<Stack gap="xs">
-			<span class="text-sm font-medium text-muted-foreground">Profiles</span>
-			<ToggleGroup
-				type="single"
-				size="sm"
-				value={effectiveWindow}
-				onValueChange={(value) => {
-					effectiveWindow = value === 'history' ? 'history' : 'current';
-				}}
-			>
-				<ToggleGroupItem value="current" aria-label="Show only people employed here today">
-					Employed today
-				</ToggleGroupItem>
-				<ToggleGroupItem value="history" aria-label="Show everyone ever employed here">
-					All history
-				</ToggleGroupItem>
-			</ToggleGroup>
-		</Stack>
 	</Inline>
 {/snippet}
 
 {#snippet workforceSummary()}
 	<Stack as="section" gap="md" aria-labelledby="workforce-summary-heading">
 		<div>
-			<h2 id="workforce-summary-heading" class="text-lg font-semibold">Workforce</h2>
+			<h2 id="workforce-summary-heading" class="text-lg font-semibold">
+				{t('app.people.workforce')}
+			</h2>
 			<p class="text-sm text-muted-foreground">
-				Current status is derived from effective employments, not a duplicated employee flag.
+				{t('app.people.workforce_description')}
 			</p>
 		</div>
 		{#if selectedCompanyId == null}
-			<p class="text-sm text-muted-foreground">Select a legal entity to load workforce metrics.</p>
+			<p class="text-sm text-muted-foreground">{t('app.people.empty_overview')}</p>
 		{:else}
 			<!-- stupidity:allow UI10 -- 1px hairline gutters via bg-border are not on the gap scale -->
 			<Columns count={2} gap="none" class="gap-px rounded-lg border bg-border">
 				<Stack gap="none" class="bg-card p-4">
-					<p class="text-xs font-medium text-muted-foreground">Current</p>
+					<p class="text-xs font-medium text-muted-foreground">{t('app.people.current')}</p>
 					<p class="text-2xl font-semibold tabular-nums">{currentEmployees}</p>
 				</Stack>
 				<Stack gap="none" class="bg-card p-4">
-					<p class="text-xs font-medium text-muted-foreground">12-month average turnover</p>
+					<p class="text-xs font-medium text-muted-foreground">{t('app.people.turnover_12m')}</p>
 					<p class="text-2xl font-semibold tabular-nums">
 						{averageTurnover.toLocaleString(undefined, {
 							style: 'percent',
@@ -220,7 +208,7 @@
 
 {#snippet workforceTrendPanel()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to load the trend chart.</p>
+		<p class="text-sm text-muted-foreground">{t('app.people.empty_trend')}</p>
 	{:else}
 		<div class="min-w-0 rounded-lg border bg-card p-4 shadow-card">
 			<Display spec={workforceChart} class="min-h-[18rem]" />
@@ -241,21 +229,20 @@
 
 {#snippet profiles()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to browse its people.</p>
+		<p class="text-sm text-muted-foreground">{t('app.people.empty_profiles')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="employees"
 			view={`hr_controller:people:profiles:${selectedCompanyId}`}
-			title="Employee profile"
-			description={effectiveWindow === 'history'
-				? 'Everyone ever employed by this entity, leavers included. Open a person for their employments, contractual terms and statutory registrations — everything job-shaped hangs off the engagement, not off the human being.'
-				: 'People whose employment with this entity is in force today; switch Profiles to All history in the header for past staff. Open a person for their employments, contractual terms and statutory registrations — everything job-shaped hangs off the engagement, not off the human being.'}
+			title={t('app.people.profiles_title')}
+			description={t('app.people.profiles_description')}
+			initialFilters={employedTodayFilter()}
 			query={{
 				where: { norbital_id: { in: employeeIds } },
 				orderBy: { name: 'asc' }
 			}}
-			searchPlaceholder="Search people…"
+			searchPlaceholder={t('app.people.search_people')}
 		>
 			{#snippet columns({ Column })}
 				<Column name="name" />
@@ -264,10 +251,10 @@
 				<Column name="nationality" />
 				<Column
 					name="date_of_birth"
-					label="Date of birth"
+					label={t('app.people.date_of_birth')}
 					render={({ value }) => formatCalendarDate(value)}
 				/>
-				<Column name="dependents_count" label="Dependents" />
+				<Column name="dependents_count" label={t('app.people.dependents')} />
 			{/snippet}
 			{#snippet ListCard(person)}
 				<p class="truncate font-medium">{person.name}</p>
@@ -293,9 +280,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="HR Controller"
-		title="People"
-		description="Facts about the human being stay on the person; engagements, dated terms and statutory registrations hang off the employment and are read from that person's profile — scoped to one legal entity."
+		eyebrow={t('app.people.eyebrow')}
+		title={t('app.people.header_title')}
+		description={t('app.people.header_description')}
 		actions={companyScopeActions}
 	/>
 {/snippet}
@@ -306,11 +293,16 @@
 		config={[
 			{
 				name: 'overview',
-				label: 'Overview',
+				label: t('component.tab_overview'),
 				icon: 'lucide:chart-no-axes-combined',
 				content: overview
 			},
-			{ name: 'profiles', label: 'Employee profile', icon: 'lucide:users', content: profiles }
+			{
+				name: 'profiles',
+				label: t('app.people.tab_profiles'),
+				icon: 'lucide:users',
+				content: profiles
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

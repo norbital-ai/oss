@@ -1,14 +1,29 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { nullableNumberFrom, numberFrom } from '../../lib/ui/renderer-input.js';
+	import { PAYROLL_TIME_ZONE, startOfDayInstant, todayKey } from '../../lib/ui/calendar.js';
+	import EffectiveLayerList from '../../lib/ui/policy-layers/effective-layer-list.svelte';
+	import LayerLevelPicker, {
+		type PolicyLayerLevel
+	} from '../../lib/ui/policy-layers/layer-level-picker.svelte';
+	import EligibilityRulesRenderer from '../eligibility_rules/+renderer.svelte';
 	import { Combobox } from '@norbital-ai/ui/combobox';
+	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 	import { Input } from '@norbital-ai/ui/input';
-	import { Grid } from '@norbital-ai/ui/layout';
+	import { Column, Grid, Stack } from '@norbital-ai/ui/layout';
 	import { componentDefinitionSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type Source = Value['source'];
 	type EntryArm = Extract<Value, { source: 'ENTRY' }>;
 	type Cap = NonNullable<EntryArm['cap']>;
+	type CapLayer = Cap['matrix']['layers'][number];
+	type CapAward = CapLayer['award'];
+	type AwardKind = CapAward['kind'];
+	type Eligibility = CapLayer['eligibility'];
 	type EntryUnit = EntryArm['unit'];
 	type Evidence = EntryArm['evidence'];
 	type Settlement = EntryArm['settlement'];
@@ -48,27 +63,98 @@
 		'PER_EVENT'
 	]);
 	const CAP_ON_EXCEED_OPTIONS = options<CapOnExceed>(['BLOCK', 'ALLOW']);
+	const AWARD_OPTIONS: { value: AwardKind; label: string; description: string }[] = [
+		{ value: 'FIXED', label: 'Fixed amount', description: 'The ceiling is a number' },
+		{
+			value: 'FORMULA',
+			label: 'Formula',
+			description: 'The ceiling is a CEL expression over the payslip context'
+		}
+	];
+	const ELIGIBILITY_FIELD = {
+		name: 'eligibility',
+		kind: 'eligibility_rules',
+		nullable: false
+	} satisfies CollectionField;
 
-	const DEFAULT_CAP: Cap = {
-		period: 'CALENDAR_YEAR',
-		matrix: {
-			merge: 'MAX_WITH_STATUTORY_FLOOR',
-			layers: [
-				{
-					level: 'ORGANISATION',
-					eligibility: [],
-					authority: 'Company policy',
-					award: { kind: 'FIXED', amount: 0 },
-					reimbursement_percentage: 100,
-					effective_range: { start: '2026-01-01', end: null }
-				}
-			]
-		},
-		on_exceed: 'BLOCK'
+	/** A ceiling the policy has not withdrawn; a successor layer end-dates it. */
+	const OPEN_ENDED = '9999-12-31T00:00:00.000Z';
+
+	function newCapLayer(level: PolicyLayerLevel): CapLayer {
+		const ceiling = {
+			eligibility: [],
+			authority: '',
+			award: { kind: 'FIXED' as const, amount: 0 },
+			reimbursement_percentage: 100,
+			effective_range: {
+				start: startOfDayInstant(todayKey(), PAYROLL_TIME_ZONE),
+				end: OPEN_ENDED
+			}
+		};
+		switch (level) {
+			case 'STATUTORY':
+				return { level: 'STATUTORY', ...ceiling };
+			case 'ORGANISATION':
+				return { level: 'ORGANISATION', ...ceiling };
+			case 'EMPLOYEE':
+				return { level: 'EMPLOYEE', employment_id: '', ...ceiling };
+		}
+	}
+
+	/**
+	 * Move a cap layer to another arm, carrying everything the arms share.
+	 *
+	 * Written out rather than spread so the EMPLOYEE arm's extra field is added and dropped
+	 * explicitly: a spread would leave it behind on a STATUTORY layer, which `strictObject` rejects
+	 * only at save time, long after the operator has moved on.
+	 */
+	function atCapLevel(layer: CapLayer, level: PolicyLayerLevel): CapLayer {
+		const { eligibility, authority, award, reimbursement_percentage, effective_range } = layer;
+		const ceiling = { eligibility, authority, award, reimbursement_percentage, effective_range };
+		switch (level) {
+			case 'STATUTORY':
+				return { level: 'STATUTORY', ...ceiling };
+			case 'ORGANISATION':
+				return { level: 'ORGANISATION', ...ceiling };
+			case 'EMPLOYEE':
+				return {
+					level: 'EMPLOYEE',
+					employment_id: layer.level === 'EMPLOYEE' ? layer.employment_id : '',
+					...ceiling
+				};
+		}
+	}
+
+	function defaultAward(kind: AwardKind): CapAward {
+		return kind === 'FIXED' ? { kind: 'FIXED', amount: 0 } : { kind: 'FORMULA', expr: '' };
+	}
+
+	/**
+	 * The cap a freshly ticked "Capped" box starts from.
+	 *
+	 * Built rather than declared as a constant because its bounds are instants resolved in the
+	 * payroll timezone. The literal this replaced read `{ start: '2026-01-01', end: null }`, which is
+	 * neither an instant nor a permitted `end` — `dateRangeZodSchema` requires both bounds — so
+	 * ticking the box seeded a cap the form could not save.
+	 */
+	function defaultCap(): Cap {
+		return {
+			period: 'CALENDAR_YEAR',
+			matrix: { merge: 'MAX_WITH_STATUTORY_FLOOR', layers: [newCapLayer('ORGANISATION')] },
+			on_exceed: 'BLOCK'
+		};
+	}
+
+	type ComponentDefinitionRendererProps = RendererProps & {
+		/** The pay component being edited, which is what scopes the people a cap layer may name. */
+		readonly row?: Record<string, unknown>;
 	};
 
-	let props: RendererProps = $props();
+	let props: ComponentDefinitionRendererProps = $props();
 	const disabled = $derived(props.mode === 'edit' ? props.disabled : true);
+	const companyId = $derived(
+		typeof props.row?.company_id === 'string' ? props.row.company_id : null
+	);
 	const parsed = $derived(componentDefinitionSchema.safeParse(props.value));
 	const current = $derived(parsed.success ? parsed.data : null);
 	const summary = $derived.by(() => {
@@ -191,7 +277,7 @@
 					checked={current.cap !== null}
 					{disabled}
 					onchange={(event) =>
-						emit({ ...current, cap: event.currentTarget.checked ? DEFAULT_CAP : null })}
+						emit({ ...current, cap: event.currentTarget.checked ? defaultCap() : null })}
 				/>
 				Capped
 			</label>
@@ -211,27 +297,6 @@
 					/>
 				</label>
 				<label class="grid gap-1.5 text-sm font-medium">
-					Layered entitlement matrix (JSON)
-					<textarea
-						class="min-h-48 rounded-md border bg-background p-3 font-mono text-xs"
-						value={JSON.stringify(cap.matrix, null, 2)}
-						{disabled}
-						onchange={(event) => {
-							try {
-								// stupidity:allow R6b -- componentDefinitionSchema.safeParse below is the validation.
-								const matrix = JSON.parse(event.currentTarget.value);
-								const next = componentDefinitionSchema.safeParse({
-									...current,
-									cap: { ...cap, matrix }
-								});
-								if (next.success) emit(next.data);
-								// stupidity:allow S1 -- half-typed JSON is the normal state of this field, not a fault.
-							} catch {
-								/* Invalid JSON is left uncommitted; the field keeps the operator's text. */
-							}
-						}}></textarea>
-				</label>
-				<label class="grid gap-1.5 text-sm font-medium">
 					On exceed
 					<Combobox
 						options={CAP_ON_EXCEED_OPTIONS}
@@ -243,6 +308,125 @@
 						}}
 					/>
 				</label>
+				<Column span="all">
+					<EffectiveLayerList
+						layers={cap.matrix.layers}
+						{disabled}
+						emptyMessage="No cap layers — the schema requires at least one before this saves."
+						addPlaceholder="Add a cap layer…"
+						additions={[
+							{
+								value: 'STATUTORY',
+								label: 'Statutory layer',
+								create: () => newCapLayer('STATUTORY')
+							},
+							{
+								value: 'ORGANISATION',
+								label: 'Organisation layer',
+								create: () => newCapLayer('ORGANISATION')
+							},
+							{ value: 'EMPLOYEE', label: 'Employee layer', create: () => newCapLayer('EMPLOYEE') }
+						]}
+						onChange={(layers) =>
+							emit({
+								...current,
+								cap: { ...cap, matrix: { merge: 'MAX_WITH_STATUTORY_FLOOR', layers } }
+							})}
+					>
+						{#snippet identity(row)}
+							<LayerLevelPicker
+								level={row.layer.level}
+								employmentId={row.layer.level === 'EMPLOYEE' ? row.layer.employment_id : null}
+								{companyId}
+								disabled={row.disabled}
+								onLevelChange={(level) => row.replace(atCapLevel(row.layer, level))}
+								onEmploymentChange={(employment) => {
+									if (row.layer.level === 'EMPLOYEE')
+										row.replace({ ...row.layer, employment_id: employment });
+								}}
+							/>
+						{/snippet}
+
+						{#snippet body(row)}
+							<Grid gap="sm" minimum="compact">
+								<label class="grid gap-1.5 text-sm font-medium">
+									Ceiling
+									<Combobox
+										options={AWARD_OPTIONS}
+										value={row.layer.award.kind}
+										disabled={row.disabled}
+										searchable={false}
+										onValueChange={(kind) => {
+											if (kind !== null && kind !== row.layer.award.kind)
+												row.replace({ ...row.layer, award: defaultAward(kind) });
+										}}
+									/>
+								</label>
+								{#if row.layer.award.kind === 'FIXED'}
+									<label class="grid gap-1.5 text-sm font-medium">
+										Amount
+										<Input
+											type="number"
+											min="0"
+											step="0.01"
+											value={row.layer.award.amount}
+											disabled={row.disabled}
+											oninput={(event) =>
+												row.replace({
+													...row.layer,
+													award: { kind: 'FIXED', amount: numberFrom(event.currentTarget.value, 0) }
+												})}
+										/>
+									</label>
+								{:else}
+									<label class="grid gap-1.5 text-sm font-medium">
+										Expression
+										<Input
+											value={row.layer.award.expr}
+											disabled={row.disabled}
+											placeholder={t('component.cel_expression')}
+											oninput={(event) =>
+												row.replace({
+													...row.layer,
+													award: { kind: 'FORMULA', expr: event.currentTarget.value }
+												})}
+										/>
+									</label>
+								{/if}
+								<label class="grid gap-1.5 text-sm font-medium">
+									Reimbursed (%)
+									<Input
+										type="number"
+										min="0"
+										max="100"
+										step="1"
+										value={row.layer.reimbursement_percentage}
+										disabled={row.disabled}
+										oninput={(event) =>
+											row.replace({
+												...row.layer,
+												reimbursement_percentage: numberFrom(event.currentTarget.value, 100)
+											})}
+									/>
+								</label>
+								<Column span="all">
+									<Stack gap="xs" class="text-sm font-medium">
+										<span>{t('component.who_this_layer_covers')}</span>
+										<EligibilityRulesRenderer
+											field={ELIGIBILITY_FIELD}
+											value={row.layer.eligibility}
+											mode="edit"
+											disabled={row.disabled}
+											onValueChange={(next: Eligibility | null) => {
+												if (next !== null) row.replace({ ...row.layer, eligibility: next });
+											}}
+										/>
+									</Stack>
+								</Column>
+							</Grid>
+						{/snippet}
+					</EffectiveLayerList>
+				</Column>
 			{/if}
 		{:else if current?.source === 'FORMULA'}
 			<label class="grid gap-1.5 text-sm font-medium">
@@ -262,7 +446,7 @@
 				<Input
 					value={current.expr}
 					{disabled}
-					placeholder="CEL expression"
+					placeholder={t('component.cel_expression')}
 					oninput={(event) => emit({ ...current, expr: event.currentTarget.value })}
 				/>
 			</label>

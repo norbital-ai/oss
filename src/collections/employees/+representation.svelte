@@ -8,6 +8,8 @@
 	 * one human being, so they are read from that human being's record.
 	 */
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
@@ -16,6 +18,7 @@
 	import { formatStatutoryFactStatus } from '../../lib/ui/display-formatters.js';
 
 	let { record, close }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 
 	const approved = { norbital_approval_id: { isNull: true } } as const;
 
@@ -67,7 +70,7 @@
 		collection="employees"
 		recordId={record?.norbital_id}
 		defaultValues={record ?? undefined}
-		submitLabel={record ? 'Save person' : 'Add person'}
+		submitLabel={record ? t('component.save_person') : t('component.add_person')}
 		onAfterSubmit={record ? undefined : close}
 	>
 		{#snippet children({ Field })}
@@ -75,13 +78,13 @@
 				<Field name="name" />
 				<Field name="email" />
 				<Field name="phone" />
-				<Field name="date_of_birth" label="Date of birth" />
+				<Field name="date_of_birth" label={t('component.date_of_birth')} />
 				<Field name="nationality" />
-				<Field name="identity_number" label="Identity number" />
+				<Field name="identity_number" label={t('component.identity_number')} />
 				<Field name="gender" />
-				<Field name="marital_status" label="Marital status" />
-				<Field name="spouse_status" label="Spouse" />
-				<Field name="dependents_count" label="Dependents" />
+				<Field name="marital_status" label={t('component.marital_status')} />
+				<Field name="spouse_status" label={t('component.spouse')} />
+				<Field name="dependents_count" label={t('component.dependents')} />
 				<Column span="all"><Field name="address" /></Column>
 			</Grid>
 		{/snippet}
@@ -94,8 +97,8 @@
 			{client}
 			collection="employments"
 			view={`employees:employments:${record.norbital_id}`}
-			title="Employments"
-			description="One row per company this person works for. hire_date drives service months and every leave accrual."
+			title={t('component.employments')}
+			description={t('component.employments_description')}
 			query={{
 				where: { employee_id: { eq: record.norbital_id } },
 				orderBy: { hire_date: 'desc' }
@@ -105,15 +108,15 @@
 				<TableColumn name="employee_number" card="title" />
 				<TableColumn
 					name="company_id"
-					label="Legal entity"
+					label={t('component.legal_entity')}
 					card="subtitle"
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (companyLabelsById.get(String(value)) ?? '—')}
 				/>
-				<TableColumn name="hire_date" label="Hired" />
-				<TableColumn name="exit_date" label="Exited" />
-				<TableColumn name="exit_reason" label="Exit reason" />
-				<TableColumn name="effective_range" label="Effective" />
+				<TableColumn name="hire_date" label={t('component.hired')} />
+				<TableColumn name="exit_date" label={t('component.exited')} />
+				<TableColumn name="exit_reason" label={t('component.exit_reason')} />
+				<TableColumn name="effective_range" label={t('component.effective')} />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -124,8 +127,8 @@
 		{client}
 		collection="employment_terms"
 		view={`employees:terms:${record?.norbital_id ?? 'none'}`}
-		title="Contractual terms"
-		description="Effective-dated pay and classification for each engagement. End-date and insert a successor; never update in place."
+		title={t('component.contractual_terms')}
+		description={t('component.contractual_terms_description')}
 		query={{
 			where: { employment_id: { in: employmentIds } },
 			orderBy: { norbital_created_at: 'desc' }
@@ -134,23 +137,23 @@
 		{#snippet columns({ Column: TableColumn })}
 			<TableColumn
 				name="employment_id"
-				label="Employment"
+				label={t('component.employment')}
 				card="title"
 				render={({ value }) =>
 					value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
 			/>
-			<TableColumn name="base_salary" label="Base salary" card="subtitle" />
-			<TableColumn name="pay_frequency" label="Frequency" card="badge" />
-			<TableColumn name="job_title" label="Job title" />
-			<TableColumn name="employment_type" label="Type" />
-			<TableColumn name="work_classification" label="Classification" />
+			<TableColumn name="base_salary" label={t('component.base_salary')} card="subtitle" />
+			<TableColumn name="pay_frequency" label={t('component.frequency')} card="badge" />
+			<TableColumn name="job_title" label={t('component.job_title')} />
+			<TableColumn name="employment_type" label={t('component.type')} />
+			<TableColumn name="work_classification" label={t('component.classification')} />
 			<TableColumn
 				name="work_pattern_id"
-				label="Work pattern"
+				label={t('component.work_pattern')}
 				render={({ value }) =>
 					value == null || value === '' ? '—' : (patternLabelsById.get(String(value)) ?? '—')}
 			/>
-			<TableColumn name="effective_range" label="Effective" />
+			<TableColumn name="effective_range" label={t('component.effective')} />
 		{/snippet}
 	</CollectionTable>
 {/snippet}
@@ -160,8 +163,8 @@
 		{client}
 		collection="employment_statutory_facts"
 		view={`employees:statutory-facts:${record?.norbital_id ?? 'none'}`}
-		title="Statutory registrations"
-		description="Where each engagement stands with each statutory scheme — registered with a reference, or not registered with a reason."
+		title={t('component.statutory_registrations')}
+		description={t('component.statutory_registrations_description')}
 		query={{
 			where: { employment_id: { in: employmentIds } },
 			orderBy: { norbital_created_at: 'desc' }
@@ -170,24 +173,24 @@
 		{#snippet columns({ Column: TableColumn })}
 			<TableColumn
 				name="employment_id"
-				label="Employment"
+				label={t('component.employment')}
 				card="title"
 				render={({ value }) =>
 					value == null || value === '' ? '—' : (employmentLabelsById.get(String(value)) ?? '—')}
 			/>
 			<TableColumn
 				name="statutory_contribution_id"
-				label="Contribution"
+				label={t('component.contribution')}
 				card="subtitle"
 				render={({ value }) =>
 					value == null || value === '' ? '—' : (contributionLabelsById.get(String(value)) ?? '—')}
 			/>
 			<TableColumn
 				name="status"
-				label="Registration"
+				label={t('component.registration')}
 				render={({ value }) => formatStatutoryFactStatus(value)}
 			/>
-			<TableColumn name="effective_range" label="Effective" />
+			<TableColumn name="effective_range" label={t('component.effective')} />
 		{/snippet}
 	</CollectionTable>
 {/snippet}
@@ -199,11 +202,15 @@
 				<h2 class="truncate text-lg font-semibold">{record.name}</h2>
 				<span class="text-sm text-muted-foreground">
 					{employments.length}
-					{employments.length === 1 ? 'employment' : 'employments'}
+					{t('component.employment_count', {
+						count: employments.length,
+						s: employments.length === 1 ? '' : 's'
+					})}
 				</span>
 			</Inline>
 			<p class="text-sm text-muted-foreground">
-				{record.email ?? 'No email recorded'} · {record.nationality ?? 'Nationality not recorded'}
+				{record.email ?? t('component.no_email_recorded')} · {record.nationality ??
+					t('component.nationality_not_recorded')}
 			</p>
 		</Stack>
 	{/snippet}
@@ -212,17 +219,22 @@
 		<Tabs
 			animate={false}
 			config={[
-				{ name: 'person', label: 'Person', icon: 'lucide:user', content: person },
+				{ name: 'person', label: t('component.person'), icon: 'lucide:user', content: person },
 				{
 					name: 'employments',
-					label: 'Employments',
+					label: t('component.employments'),
 					icon: 'lucide:briefcase',
 					content: engagements
 				},
-				{ name: 'terms', label: 'Terms', icon: 'lucide:file-signature', content: terms },
+				{
+					name: 'terms',
+					label: t('component.terms'),
+					icon: 'lucide:file-signature',
+					content: terms
+				},
 				{
 					name: 'statutory-facts',
-					label: 'Statutory facts',
+					label: t('component.statutory_facts'),
 					icon: 'lucide:id-card',
 					content: statutoryFacts
 				}

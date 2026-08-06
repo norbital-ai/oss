@@ -1,10 +1,13 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Button, buttonVariants } from '@norbital-ai/ui/button';
+	import { Alert, AlertDescription, AlertTitle } from '@norbital-ai/ui/alert';
 	import { Badge } from '@norbital-ai/ui/badge';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Indicator } from '@norbital-ai/ui/indicator';
@@ -38,6 +41,8 @@
 		type MonthDrafting
 	} from '../../lib/ui/roster/roster-month.js';
 
+	const { t } = useI18n<TenantI18nKeys>();
+
 	let companyId = $state<string | null>(null);
 	let month = $state<string>(monthKey(todayKey()));
 	let publishing = $state(false);
@@ -46,6 +51,15 @@
 	let personSearch = $state('');
 	let statusFilter = $state<DayStatus | null>(null);
 	let shiftFilter = $state<string | null>(null);
+	/**
+	 * Bumped to remount every board query after a failed load.
+	 *
+	 * The queries are keyed on the company and the month, so asking for the same month again is not
+	 * a change and would rebuild nothing. Each board query reads this token so that bumping it is a
+	 * real dependency change, which gives the operator a way out of a failed load without reloading
+	 * the page and losing the rest of it.
+	 */
+	let reloadToken = $state(0);
 
 	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
@@ -107,15 +121,15 @@
 		};
 	});
 
-	const employmentsQuery = $derived(
-		selectedCompanyId == null
-			? null
-			: client.db.employments.findMany({
-					where: { ...approved, company_id: { eq: selectedCompanyId } },
-					orderBy: { employee_number: 'asc' },
-					limit: 1000
-				})
-	);
+	const employmentsQuery = $derived.by(() => {
+		void reloadToken;
+		if (selectedCompanyId == null) return null;
+		return client.db.employments.findMany({
+			where: { ...approved, company_id: { eq: selectedCompanyId } },
+			orderBy: { employee_number: 'asc' },
+			limit: 1000
+		});
+	});
 	const employments = $derived(employmentsQuery?.current ?? []);
 	const employmentIds = $derived(employments.map((employment) => employment.norbital_id));
 	// One scoped query and a map, rather than a name lookup per row.
@@ -163,66 +177,85 @@
 		new Map((leaveTypesQuery?.current ?? []).map((type) => [type.norbital_id, type.code]))
 	);
 
-	const rosterEntriesQuery = $derived(
-		employmentIds.length === 0
-			? null
-			: client.db.roster_entries.findMany({
-					where: {
-						...approved,
-						employment_id: { in: employmentIds },
-						work_date: { gte: monthStart, lte: monthEnd }
-					},
-					limit: 5000
-				})
-	);
-	const timeEntriesQuery = $derived(
-		employmentIds.length === 0
-			? null
-			: client.db.time_entries.findMany({
-					where: {
-						...approved,
-						employment_id: { in: employmentIds },
-						work_date: { gte: monthStart, lte: monthEnd }
-					},
-					limit: 5000
-				})
-	);
+	const rosterEntriesQuery = $derived.by(() => {
+		void reloadToken;
+		if (employmentIds.length === 0) return null;
+		return client.db.roster_entries.findMany({
+			where: {
+				...approved,
+				employment_id: { in: employmentIds },
+				work_date: { gte: monthStart, lte: monthEnd }
+			},
+			limit: 5000
+		});
+	});
+	const timeEntriesQuery = $derived.by(() => {
+		void reloadToken;
+		if (employmentIds.length === 0) return null;
+		return client.db.time_entries.findMany({
+			where: {
+				...approved,
+				employment_id: { in: employmentIds },
+				work_date: { gte: monthStart, lte: monthEnd }
+			},
+			limit: 5000
+		});
+	});
 	/** Requests are stored once at `from_date`, so the window is widened to catch one spanning in. */
-	const leaveQuery = $derived(
-		employmentIds.length === 0
-			? null
-			: client.db.leave_requests.findMany({
-					where: {
-						...approved,
-						employment_id: { in: employmentIds },
-						kind: { eq: 'TIME_OFF' },
-						from_date: { lte: monthEnd },
-						to_date: { gte: monthStart }
-					},
-					limit: 2000
-				})
-	);
-	const holidaysQuery = $derived(
-		selectedCompanyId == null
-			? null
-			: client.db.company_holidays.findMany({
-					where: {
-						...approved,
-						company_id: { eq: selectedCompanyId },
-						date: { gte: monthStart, lte: monthEnd }
-					},
-					limit: 200
-				})
-	);
+	const leaveQuery = $derived.by(() => {
+		void reloadToken;
+		if (employmentIds.length === 0) return null;
+		return client.db.leave_requests.findMany({
+			where: {
+				...approved,
+				employment_id: { in: employmentIds },
+				kind: { eq: 'TIME_OFF' },
+				from_date: { lte: monthEnd },
+				to_date: { gte: monthStart }
+			},
+			limit: 2000
+		});
+	});
+	const holidaysQuery = $derived.by(() => {
+		void reloadToken;
+		if (selectedCompanyId == null) return null;
+		return client.db.company_holidays.findMany({
+			where: {
+				...approved,
+				company_id: { eq: selectedCompanyId },
+				date: { gte: monthStart, lte: monthEnd }
+			},
+			limit: 200
+		});
+	});
 
-	const loading = $derived(
-		Boolean(
-			rosterEntriesQuery?.loading ||
-			timeEntriesQuery?.loading ||
-			leaveQuery?.loading ||
-			holidaysQuery?.loading ||
-			employmentsQuery?.loading
+	/**
+	 * The five queries the board is assembled from, named so a failure can say which one failed.
+	 *
+	 * They are listed rather than OR-ed inline because "still loading" is not the only answer this
+	 * board needs to be able to give. A gate that only knows `loading` has no terminal state: a query
+	 * that errors — or that is aborted and never retried — leaves every flag exactly as it was, and
+	 * the board sits on `Loading …` forever with nothing on screen saying why. That is indistinguishable
+	 * from a slow month, so nobody reloads, and the surface looks hung rather than broken.
+	 */
+	const boardSources = $derived([
+		{ label: 'roster entries', query: rosterEntriesQuery },
+		{ label: 'attendance', query: timeEntriesQuery },
+		{ label: 'leave', query: leaveQuery },
+		{ label: 'holidays', query: holidaysQuery },
+		{ label: 'employments', query: employmentsQuery }
+	]);
+	const boardErrors = $derived(
+		boardSources.flatMap((source) =>
+			source.query?.error ? [`${source.label}: ${source.query.error.message}`] : []
 		)
+	);
+	/**
+	 * An error outranks loading. A handle that failed may keep reporting `loading`, and reporting that
+	 * in preference to the error is what turns a broken board into a hanging one.
+	 */
+	const loading = $derived(
+		boardErrors.length === 0 && boardSources.some((source) => source.query?.loading === true)
 	);
 
 	/** Overlaid onto the board from the company calendar; never a mark stored on a roster entry. */
@@ -319,8 +352,8 @@
 		draftRoster != null
 			? null
 			: rosters.length === 0
-				? `No roster is drafted for ${month}. Create the draft month first, then import into it.`
-				: `Roster ${month} is published, so its entries are fixed. Re-open the month to import into it.`
+				? t('app.scheduling.blocker_no_draft', { month })
+				: t('app.scheduling.blocker_published', { month })
 	);
 
 	async function importRoster(): Promise<void> {
@@ -343,16 +376,18 @@
 	async function publish(rosterId: string): Promise<void> {
 		const update = client.db.rosters.update;
 		if (update == null) {
-			toast.error('Publishing a roster is not permitted for this role.');
+			toast.error(t('app.scheduling.toast_publish_not_permitted'));
 			return;
 		}
 		publishing = true;
 		try {
 			await update(rosterId, { published_at: new Date() });
-			toast.success(`Roster ${month} published.`);
+			toast.success(t('app.scheduling.toast_published', { month }));
 		} catch (error) {
 			// The publish gate refuses with the statutory reason, which is the whole message.
-			toast.error(error instanceof Error ? error.message : 'The roster could not be published.');
+			toast.error(
+				error instanceof Error ? error.message : t('app.scheduling.toast_publish_failed')
+			);
 		} finally {
 			publishing = false;
 		}
@@ -361,15 +396,15 @@
 	async function reopen(rosterId: string): Promise<void> {
 		const update = client.db.rosters.update;
 		if (update == null) {
-			toast.error('Re-opening a roster is not permitted for this role.');
+			toast.error(t('app.scheduling.toast_reopen_not_permitted'));
 			return;
 		}
 		publishing = true;
 		try {
 			await update(rosterId, { published_at: null });
-			toast.success(`Roster ${month} re-opened for correction.`);
+			toast.success(t('app.scheduling.toast_reopened', { month }));
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'The roster could not be re-opened.');
+			toast.error(error instanceof Error ? error.message : t('app.scheduling.toast_reopen_failed'));
 		} finally {
 			publishing = false;
 		}
@@ -387,16 +422,16 @@
 
 {#snippet companyScopeActions()}
 	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Legal entity</span>
+		<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
 		<Combobox
-			ariaLabel="Legal entity"
+			ariaLabel={t('component.legal_entity')}
 			options={companyOptions}
 			value={selectedCompanyId}
 			onValueChange={(value) => {
 				companyId = typeof value === 'string' ? value : (companies[0]?.norbital_id ?? null);
 			}}
-			emptyPlaceholder="Select legal entity…"
-			searchPlaceholder="Search companies…"
+			emptyPlaceholder={t('component.select_legal_entity')}
+			searchPlaceholder={t('component.search_companies')}
 			clientConfig={{
 				isLoading: companiesQuery.loading,
 				error: companiesQuery.error?.message ?? null
@@ -412,7 +447,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				aria-label="Previous month"
+				aria-label={t('app.scheduling.previous_month')}
 				onclick={() => (month = shiftMonthKey(month, -1))}
 			>
 				‹
@@ -421,7 +456,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				aria-label="Next month"
+				aria-label={t('app.scheduling.next_month')}
 				onclick={() => (month = shiftMonthKey(month, 1))}
 			>
 				›
@@ -434,7 +469,7 @@
 						buttonVariants({ variant: 'ghost', size: 'icon' }),
 						searchActive && 'bg-accent'
 					)}
-					aria-label="Search people"
+					aria-label={t('app.scheduling.search_people')}
 					aria-pressed={searchActive}
 				>
 					<IconWrapper name="lucide:search" class="size-4" />
@@ -444,12 +479,12 @@
 						<Input
 							type="search"
 							class="h-9"
-							placeholder="Search people…"
+							placeholder={t('app.scheduling.search_people_placeholder')}
 							bind:value={personSearch}
 						/>
 						{#if searchActive}
 							<Button type="button" variant="ghost" size="sm" onclick={() => (personSearch = '')}>
-								Clear
+								{t('app.scheduling.clear')}
 							</Button>
 						{/if}
 					</Inline>
@@ -459,7 +494,9 @@
 				<Indicator visible={activeFilterCount > 0} variant="info" size="sm">
 					<Popover.Trigger
 						class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-						aria-label={activeFilterCount > 0 ? 'Filters active' : 'Filter the board'}
+						aria-label={activeFilterCount > 0
+							? t('app.scheduling.filters_active')
+							: t('app.scheduling.filter_board')}
 						aria-pressed={activeFilterCount > 0}
 					>
 						<IconWrapper name="lucide:list-filter" class="size-4" />
@@ -468,9 +505,9 @@
 				<Popover.Content align="end" class="w-[min(22rem,calc(100vw-1rem))] p-0">
 					<Inline justify="between" gap="sm" class="border-b px-3 py-2">
 						<Stack gap="none">
-							<p class="text-xs font-medium">Filters</p>
+							<p class="text-xs font-medium">{t('app.scheduling.filters')}</p>
 							<p class="text-micro text-muted-foreground">
-								All conditions must match, and they keep whole people.
+								{t('app.scheduling.filters_description')}
 							</p>
 						</Stack>
 						{#if activeFilterCount > 0}
@@ -483,34 +520,36 @@
 									shiftFilter = null;
 								}}
 							>
-								Clear all
+								{t('app.scheduling.clear_all')}
 							</Button>
 						{/if}
 					</Inline>
 					<Stack gap="sm" class="p-3">
 						<label class="grid gap-1.5 text-sm">
-							<span class="font-medium text-muted-foreground">Has a day that is</span>
+							<span class="font-medium text-muted-foreground">{t('app.scheduling.has_day')}</span>
 							<Combobox
-								ariaLabel="Day status"
+								ariaLabel={t('app.scheduling.day_status')}
 								options={statusOptions}
 								value={statusFilter}
 								allowClear
 								searchable={false}
-								emptyPlaceholder="Any status"
+								emptyPlaceholder={t('app.scheduling.any_status')}
 								onValueChange={(value) => {
 									statusFilter = DAY_STATUSES.find((status) => status === value) ?? null;
 								}}
 							/>
 						</label>
 						<label class="grid gap-1.5 text-sm">
-							<span class="font-medium text-muted-foreground">Rostered on shift</span>
+							<span class="font-medium text-muted-foreground">
+								{t('app.scheduling.rostered_on_shift')}
+							</span>
 							<Combobox
-								ariaLabel="Shift"
+								ariaLabel={t('component.shift')}
 								options={shiftOptions}
 								value={shiftFilter}
 								allowClear
-								emptyPlaceholder="Any shift"
-								searchPlaceholder="Search shifts…"
+								emptyPlaceholder={t('app.scheduling.any_shift')}
+								searchPlaceholder={t('app.scheduling.search_shifts')}
 								onValueChange={(value) => {
 									shiftFilter = typeof value === 'string' ? value : null;
 								}}
@@ -523,12 +562,11 @@
 				size="sm"
 				variant="outline"
 				disabled={importing || rosterImportBlocker != null}
-				title={rosterImportBlocker ??
-					`Import planned assignments into the ${month} draft from the roster template — one row per person per day, on its "Roster" sheet.`}
+				title={rosterImportBlocker ?? t('app.scheduling.import_title', { month })}
 				onclick={() => void importRoster()}
 			>
 				<IconWrapper name="lucide:upload" class="size-4" />
-				Import
+				{t('app.scheduling.import')}
 			</Button>
 		</Inline>
 	</Inline>
@@ -538,19 +576,21 @@
 	<Stack gap="sm">
 		<Cluster gap="sm">
 			{#if progress.drafting === 'NOT_DRAFTED'}
-				<Badge variant="outline">Not drafted for {month}</Badge>
+				<Badge variant="outline">{t('app.scheduling.not_drafted_for', { month })}</Badge>
 				<Badge variant="outline">
-					{progress.personDays.toLocaleString()} person-days to plan
+					{t('app.scheduling.person_days_to_plan', { count: progress.personDays.toLocaleString() })}
 				</Badge>
 			{:else}
 				{#each rosters as roster (roster.norbital_id)}
 					<Inline gap="xs">
 						<Badge variant={roster.published_at == null ? 'outline' : 'default'}>
-							{roster.published_at == null ? 'Draft' : 'Published'}
+							{roster.published_at == null
+								? t('app.scheduling.draft')
+								: t('app.scheduling.published')}
 						</Badge>
 						{#if roster.published_at == null}
 							<Button size="sm" disabled={publishing} onclick={() => publish(roster.norbital_id)}>
-								Publish {month}
+								{t('app.scheduling.publish_month', { month })}
 							</Button>
 						{:else}
 							<Button
@@ -559,7 +599,7 @@
 								disabled={publishing}
 								onclick={() => reopen(roster.norbital_id)}
 							>
-								Re-open
+								{t('app.scheduling.re_open')}
 							</Button>
 						{/if}
 					</Inline>
@@ -568,8 +608,10 @@
 					<!-- Progress, not a fault: a month is drafted a day at a time and is incomplete for most
 					     of the time it is being written. -->
 					<Badge variant="outline">
-						{progress.rostered.toLocaleString()} of {progress.personDays.toLocaleString()} person-days
-						drafted
+						{t('app.scheduling.person_days_drafted', {
+							rostered: progress.rostered.toLocaleString(),
+							total: progress.personDays.toLocaleString()
+						})}
 					</Badge>
 				{/if}
 			{/if}
@@ -582,16 +624,13 @@
 		</Cluster>
 		{#if progress.drafting === 'NOT_DRAFTED'}
 			<p class="text-sm text-muted-foreground">
-				Nothing has been planned for {month} yet, so every day on the board is blank. That is where a
-				month starts, not a fault to fix: create the draft month, then assign or import its days.
+				{t('app.scheduling.not_drafted_note', { month })}
 			</p>
 		{:else if rosterImportBlocker != null}
 			<p class="text-sm text-muted-foreground">{rosterImportBlocker}</p>
 		{/if}
 		<p class="text-sm text-muted-foreground">
-			Publishing checks the month against the work pattern: at least one rest day in every week,
-			plus any consecutive-day, daily-hours and between-shift limits the pattern promises. A
-			published month is frozen, so re-open it before correcting a day.
+			{t('app.scheduling.publishing_note')}
 		</p>
 	</Stack>
 {/snippet}
@@ -611,13 +650,35 @@
 -->
 {#snippet board()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to load its roster.</p>
+		<p class="text-sm text-muted-foreground">{t('app.scheduling.empty_board')}</p>
 	{:else}
 		<Cover gap="md" top={boardChrome}>
-			{#if loading}
-				<p class="text-sm text-muted-foreground">Loading {month}…</p>
+			{#if boardErrors.length > 0}
+				<!-- A terminal state, so a board that cannot be built says so instead of pretending to
+				     still be loading. Retry rebuilds the queries in place; the month, the search and the
+				     filters all survive it. -->
+				<Alert variant="destructive">
+					<AlertTitle>{t('app.scheduling.board_load_failed', { month })}</AlertTitle>
+					<AlertDescription>
+						<Stack gap="sm">
+							<Stack as="ul" gap="xs" class="list-disc pl-4">
+								{#each boardErrors as boardError (boardError)}
+									<li>{boardError}</li>
+								{/each}
+							</Stack>
+							<Inline>
+								<Button size="sm" variant="outline" onclick={() => (reloadToken += 1)}>
+									<IconWrapper name="lucide:refresh-cw" class="size-4" />
+									{t('app.scheduling.retry')}
+								</Button>
+							</Inline>
+						</Stack>
+					</AlertDescription>
+				</Alert>
+			{:else if loading}
+				<p class="text-sm text-muted-foreground">{t('app.scheduling.loading_month', { month })}</p>
 			{:else if people.length > 0 && boardPeople.length === 0}
-				<p class="text-sm text-muted-foreground">No people match the current search or filters.</p>
+				<p class="text-sm text-muted-foreground">{t('app.scheduling.no_matches')}</p>
 			{:else}
 				<RosterMonthBoard {month} people={boardPeople} {facts} {today} {holidayNames} {cutoff} />
 			{/if}
@@ -627,14 +688,11 @@
 
 {#snippet shifts()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to manage its shifts.</p>
+		<p class="text-sm text-muted-foreground">{t('app.scheduling.empty_shifts')}</p>
 	{:else}
 		<Stack gap="md">
 			<p class="text-sm text-muted-foreground">
-				A shift definition is one working <em>day</em>: when it starts, when it ends, the unpaid
-				break inside it and whether it runs past midnight. It says nothing about which days of the
-				week are worked — that is a work pattern, which arranges shifts into a week and names one of
-				these as the day it uses.
+				{t('app.scheduling.shift_intro')}
 			</p>
 			<CollectionTable
 				{client}
@@ -644,26 +702,26 @@
 					where: { company_id: { eq: selectedCompanyId }, ...activeRange },
 					orderBy: { code: 'asc' }
 				}}
-				searchPlaceholder="Search shifts…"
+				searchPlaceholder={t('app.scheduling.search_shifts_placeholder')}
 			>
 				{#snippet columns({ Column })}
 					<Column name="code" card="title" />
 					<Column name="name" card="subtitle" />
-					<Column name="start_time" label="Start" />
-					<Column name="end_time" label="End" />
+					<Column name="start_time" label={t('app.scheduling.start')} />
+					<Column name="end_time" label={t('app.scheduling.end')} />
 					<Column
 						name="break_minutes"
-						label="Break"
+						label={t('app.scheduling.break')}
 						render={({ value }) => formatDurationHours(value)}
 					/>
-					<Column name="pays_overtime" label="OT eligible" />
+					<Column name="pays_overtime" label={t('app.scheduling.ot_eligible')} />
 					<Column
 						name="overtime_break_minutes"
-						label="OT break"
+						label={t('app.scheduling.ot_break')}
 						render={({ value }) => formatDurationHours(value)}
 					/>
-					<Column name="crosses_midnight" label="Crosses midnight" />
-					<Column name="effective_range" label="Effective" />
+					<Column name="crosses_midnight" label={t('app.scheduling.crosses_midnight')} />
+					<Column name="effective_range" label={t('component.effective')} />
 				{/snippet}
 			</CollectionTable>
 		</Stack>
@@ -672,14 +730,11 @@
 
 {#snippet patterns()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to manage its work patterns.</p>
+		<p class="text-sm text-muted-foreground">{t('app.scheduling.empty_patterns')}</p>
 	{:else}
 		<Stack gap="md">
 			<p class="text-sm text-muted-foreground">
-				A work pattern is one <em>week</em>: which weekdays are working, rest and off, which weekday
-				the week starts on, and the scheduling limits a published roster must respect. It carries a
-				default shift for its ordinary days rather than restating one — a rostered pattern derives
-				nothing at all and takes every day from the published roster.
+				{t('app.scheduling.pattern_intro')}
 			</p>
 			<CollectionTable
 				{client}
@@ -689,21 +744,28 @@
 					where: { company_id: { eq: selectedCompanyId } },
 					orderBy: { code: 'asc' }
 				}}
-				searchPlaceholder="Search work patterns…"
+				searchPlaceholder={t('app.scheduling.search_patterns')}
 			>
 				{#snippet columns({ Column })}
 					<Column name="code" card="title" />
 					<Column name="name" card="subtitle" />
-					<Column name="variant" label="Shape of the week" />
+					<Column name="variant" label={t('app.scheduling.shape_of_week')} />
 					<Column
 						name="default_shift_definition_id"
-						label="Default shift"
+						label={t('app.scheduling.default_shift')}
 						render={({ value }) =>
 							value == null || value === '' ? '—' : (shiftLabelsById.get(String(value)) ?? '—')}
 					/>
-					<Column name="min_rest_days_per_week" label="Min rest days/week" card="badge" />
-					<Column name="max_consecutive_work_days" label="Max consecutive days" />
-					<Column name="effective_range" label="Effective" />
+					<Column
+						name="min_rest_days_per_week"
+						label={t('app.scheduling.min_rest_days')}
+						card="badge"
+					/>
+					<Column
+						name="max_consecutive_work_days"
+						label={t('app.scheduling.max_consecutive_days')}
+					/>
+					<Column name="effective_range" label={t('component.effective')} />
 				{/snippet}
 			</CollectionTable>
 		</Stack>
@@ -712,7 +774,7 @@
 
 {#snippet holidays()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to manage its holidays.</p>
+		<p class="text-sm text-muted-foreground">{t('app.scheduling.empty_holidays')}</p>
 	{:else}
 		<CollectionTable
 			{client}
@@ -722,17 +784,21 @@
 				where: { company_id: { eq: selectedCompanyId } },
 				orderBy: { date: 'desc' }
 			}}
-			searchPlaceholder="Search holidays…"
+			searchPlaceholder={t('app.scheduling.search_holidays')}
 		>
 			{#snippet columns({ Column })}
 				<Column
 					name="date"
-					label="Date"
+					label={t('component.date')}
 					card="title"
 					render={({ value }) => formatCalendarDate(value)}
 				/>
 				<Column name="name" card="subtitle" />
-				<Column name="scope" label="Scope" render={({ value }) => formatHolidayScope(value)} />
+				<Column
+					name="scope"
+					label={t('component.scope')}
+					render={({ value }) => formatHolidayScope(value)}
+				/>
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -740,9 +806,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="HR Controller"
-		title="Scheduling"
-		description="The month as a calendar — planned shifts and actual attendance in the same cell, with leave, public holidays and the payroll cut-off marked. Publishing a month checks it against the statutory rest rules."
+		eyebrow={t('app.scheduling.eyebrow')}
+		title={t('app.scheduling.header_title')}
+		description={t('app.scheduling.header_description')}
 		actions={companyScopeActions}
 	/>
 {/snippet}
@@ -751,10 +817,30 @@
 	<Tabs
 		animate={false}
 		config={[
-			{ name: 'board', label: 'Month board', icon: 'lucide:calendar-range', content: board },
-			{ name: 'shifts', label: 'Shift definitions', icon: 'lucide:clock-4', content: shifts },
-			{ name: 'patterns', label: 'Work patterns', icon: 'lucide:calendar-cog', content: patterns },
-			{ name: 'holidays', label: 'Holidays', icon: 'lucide:party-popper', content: holidays }
+			{
+				name: 'board',
+				label: t('app.scheduling.tab_board'),
+				icon: 'lucide:calendar-range',
+				content: board
+			},
+			{
+				name: 'shifts',
+				label: t('app.scheduling.tab_shifts'),
+				icon: 'lucide:clock-4',
+				content: shifts
+			},
+			{
+				name: 'patterns',
+				label: t('app.scheduling.tab_patterns'),
+				icon: 'lucide:calendar-cog',
+				content: patterns
+			},
+			{
+				name: 'holidays',
+				label: t('app.scheduling.tab_holidays'),
+				icon: 'lucide:party-popper',
+				content: holidays
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

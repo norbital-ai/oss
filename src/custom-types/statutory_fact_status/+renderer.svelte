@@ -1,10 +1,14 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { nullableNumberFrom } from '../../lib/ui/renderer-input.js';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { statutoryFactStatusSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type StatusKind = Value['kind'];
 
@@ -83,7 +87,7 @@
 				<Input
 					value={current.reference_number}
 					{disabled}
-					placeholder="Authority reference"
+					placeholder={t('component.authority_reference')}
 					oninput={(event) => emit({ ...current, reference_number: event.currentTarget.value })}
 				/>
 			</label>
@@ -105,7 +109,7 @@
 				<Input
 					value={current.reason}
 					{disabled}
-					placeholder="Why this employment is out of scope"
+					placeholder={t('component.why_out_of_scope')}
 					oninput={(event) => emit({ kind: 'NOT_REGISTERED', reason: event.currentTarget.value })}
 				/>
 			</label>

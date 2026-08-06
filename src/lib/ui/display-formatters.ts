@@ -12,6 +12,7 @@ import { entryOriginSchema } from '../../custom-types/entry_origin/+definition.j
 import { holidayScopeSchema } from '../../custom-types/holiday_scope/+definition.js';
 import { leaveAccrualSchema } from '../../custom-types/leave_accrual/+definition.js';
 import { leavePayrollEffectSchema } from '../../custom-types/leave_payroll_effect/+definition.js';
+import { moneySchema } from '../../custom-types/money/+definition.js';
 import { overtimeAwardSchema } from '../../custom-types/overtime_award/+definition.js';
 import { overtimeBandSchema } from '../../custom-types/overtime_band/+definition.js';
 import { prorationBasisSchema } from '../../custom-types/proration_basis/+definition.js';
@@ -308,6 +309,27 @@ export function formatOvertimeAward(value: unknown): string {
 	return award.kind === 'HOURLY_MULTIPLE'
 		? `${award.multiple}× hourly rate`
 		: `${award.multiple}× day wage`;
+}
+
+/**
+ * A `money` value, printed with its own currency rather than the reader's.
+ *
+ * A statutory ceiling is a figure in one named currency, and dropping the code would let an
+ * operator read a Malaysian ringgit threshold as though it were theirs.
+ */
+export function formatMoney(value: unknown): string {
+	const parsed = moneySchema().safeParse(value);
+	if (!parsed.success) return 'Invalid amount';
+	return `${parsed.data.currency} ${DECIMAL.format(parsed.data.value)}`;
+}
+
+/**
+ * A `text[]` of work categories. An empty array is printed as "None" and never as blank, because a
+ * blank cell reads as "nobody filled this in" when it in fact means "the statute names nobody".
+ */
+export function formatCategories(value: unknown): string {
+	if (!Array.isArray(value) || value.length === 0) return 'None';
+	return value.map((entry) => humanize(String(entry))).join(', ');
 }
 
 export function formatStatutoryFactStatus(value: unknown): string {

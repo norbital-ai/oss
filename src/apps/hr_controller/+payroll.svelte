@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { downloadCollectionExport } from '@norbital-ai/pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
@@ -15,6 +17,8 @@
 		todayKey,
 		todayInstant
 	} from '../../lib/ui/calendar.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	let companyId = $state<string | null>(null);
 	const today = todayKey();
@@ -112,20 +116,24 @@
 
 	function timingLabel(row: CycleRow): string {
 		const days = daysBetweenKeys(today, row.payDate);
-		if (row.status === 'late') return days === 0 ? 'Due today' : `${Math.abs(days)}d late`;
-		if (days <= 0) return 'Due today';
-		if (days === 1) return 'Due tomorrow';
-		return `In ${days} days`;
+		if (row.status === 'late') {
+			return days === 0
+				? t('app.payroll.due_today')
+				: t('app.payroll.days_late', { days: Math.abs(days) });
+		}
+		if (days <= 0) return t('app.payroll.due_today');
+		if (days === 1) return t('app.payroll.due_tomorrow');
+		return t('app.payroll.in_days', { days });
 	}
 
 	function statusLabel(status: CycleRow['status']): string {
 		switch (status) {
 			case 'late':
-				return 'Late';
+				return t('app.payroll.status_late');
 			case 'current':
-				return 'Current';
+				return t('app.payroll.status_current');
 			case 'next':
-				return 'Upcoming';
+				return t('app.payroll.status_upcoming');
 			default:
 				return status satisfies never;
 		}
@@ -134,10 +142,10 @@
 
 {#snippet companyScopeActions()}
 	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Legal entity</span>
+		<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
 		<Inline gap="sm">
 			<Combobox
-				ariaLabel="Legal entity"
+				ariaLabel={t('component.legal_entity')}
 				options={companyOptions}
 				value={selectedCompanyId}
 				onValueChange={(value) => {
@@ -147,8 +155,8 @@
 					}
 					companyId = companies[0]?.norbital_id ?? null;
 				}}
-				emptyPlaceholder="Select legal entity…"
-				searchPlaceholder="Search companies…"
+				emptyPlaceholder={t('component.select_legal_entity')}
+				searchPlaceholder={t('component.search_companies')}
 				clientConfig={{
 					isLoading: companiesQuery.loading,
 					error: companiesQuery.error?.message ?? null
@@ -161,44 +169,47 @@
 
 {#snippet overview()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to load payroll cycles.</p>
+		<p class="text-sm text-muted-foreground">{t('app.payroll.empty_overview')}</p>
 	{:else}
 		<Grid minimum="card">
 			<Stack as="section" gap="md" aria-labelledby="payroll-cycles-heading">
 				<Inline align="end" justify="between" gap="md">
 					<Stack gap="xs">
-						<h2 id="payroll-cycles-heading" class="text-lg font-semibold">Payroll cycles</h2>
+						<h2 id="payroll-cycles-heading" class="text-lg font-semibold">
+							{t('app.payroll.payroll_cycles')}
+						</h2>
 						<p class="text-sm text-muted-foreground">
-							Pay dates from the company's pay day. Late means the pay date passed without a paid
-							run.
+							{t('app.payroll.payroll_cycles_description')}
 						</p>
 					</Stack>
 					<p class="shrink-0 text-sm text-muted-foreground">
 						{#if lateCount > 0}
-							<span class="font-medium text-destructive">{lateCount} late</span>
+							<span class="font-medium text-destructive">
+								{t('app.payroll.late_count', { count: lateCount })}
+							</span>
 							·
 						{/if}
-						{draftRunCount} draft run{draftRunCount === 1 ? '' : 's'}
+						{draftRunCount === 1
+							? t('app.payroll.draft_run_one')
+							: t('app.payroll.draft_runs_many', { count: draftRunCount })}
 					</p>
 				</Inline>
 				<div class="rounded-lg border">
 					{#if companiesQuery.loading || payrollRunsQuery?.loading}
-						<div class="p-5 text-sm text-muted-foreground">Loading payroll cycles…</div>
+						<div class="p-5 text-sm text-muted-foreground">{t('app.payroll.loading_cycles')}</div>
 					{:else if cycleBoard.length === 0}
-						<div class="p-5 text-sm text-muted-foreground">
-							No open payroll cycles. Configure a company pay day, or every period is already paid.
-						</div>
+						<div class="p-5 text-sm text-muted-foreground">{t('app.payroll.no_open_cycles')}</div>
 					{:else}
 						<!-- stupidity:allow UI3 -- derived pay dates are not collection records. -->
 						<table class="w-full text-left text-sm">
 							<thead class="bg-muted/40 text-xs text-muted-foreground">
 								<tr>
-									<th class="px-3 py-2 font-semibold">Status</th>
-									<th class="px-3 py-2 font-semibold">Pay date</th>
-									<th class="px-3 py-2 font-semibold">Period</th>
-									<th class="px-3 py-2 font-semibold">Attendance</th>
-									<th class="px-3 py-2 font-semibold">Run</th>
-									<th class="px-3 py-2 text-right font-semibold">Timing</th>
+									<th class="px-3 py-2 font-semibold">{t('app.payroll.status')}</th>
+									<th class="px-3 py-2 font-semibold">{t('app.payroll.pay_date')}</th>
+									<th class="px-3 py-2 font-semibold">{t('app.payroll.period')}</th>
+									<th class="px-3 py-2 font-semibold">{t('app.payroll.attendance')}</th>
+									<th class="px-3 py-2 font-semibold">{t('app.payroll.run')}</th>
+									<th class="px-3 py-2 text-right font-semibold">{t('app.payroll.timing')}</th>
 								</tr>
 							</thead>
 							<tbody class="divide-y">
@@ -226,7 +237,7 @@
 										</td>
 										<td class="px-3 py-2.5 tabular-nums">{row.period}</td>
 										<td class="px-3 py-2.5 text-muted-foreground">{row.attendance ?? '—'}</td>
-										<td class="px-3 py-2.5">{row.runState ?? 'Not started'}</td>
+										<td class="px-3 py-2.5">{row.runState ?? t('app.payroll.not_started')}</td>
 										<td class="px-3 py-2.5 text-right font-medium">{timingLabel(row)}</td>
 									</tr>
 								{/each}
@@ -237,11 +248,11 @@
 			</Stack>
 			<Stack gap="md">
 				<ApprovalSummaryTable
-					title="Payroll decisions"
+					title={t('app.payroll.payroll_decisions')}
 					asOfDate={analytics.as_of_date}
 					summary={analytics.summary}
-					pendingLabel="Yet to approve"
-					note="Draft runs and runs held by an approval request count as yet to approve; paid runs count as approved. Speed is the mean completed workflow duration this year."
+					pendingLabel={t('app.payroll.yet_to_approve')}
+					note={t('app.payroll.payroll_decisions_note')}
 				/>
 			</Stack>
 		</Grid>
@@ -250,14 +261,14 @@
 
 {#snippet runs()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to review its payroll runs.</p>
+		<p class="text-sm text-muted-foreground">{t('app.payroll.empty_runs')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="payroll_runs"
 			view={`hr_controller:payroll:runs:${selectedCompanyId}`}
-			title="Payroll runs"
-			description="Review payslips against their shared run-level policy snapshot, reconcile totals, export, and pay."
+			title={t('app.payroll.runs_title')}
+			description={t('app.payroll.runs_description')}
 			query={{
 				where: { company_id: { eq: selectedCompanyId } },
 				orderBy: { period: 'desc' }
@@ -265,9 +276,8 @@
 			exportPipelines={[
 				{
 					id: 'bank-files',
-					label: 'Bank files',
-					description:
-						'Download bank instructions from stored payslips and the effective employment bank details.',
+					label: t('app.payroll.export_bank_files'),
+					description: t('app.payroll.export_bank_files_description'),
 					requiresSelection: true,
 					run: async ({ selectedRows }) => {
 						const manifest = await downloadCollectionExport(
@@ -277,14 +287,13 @@
 							},
 							{ includeAction: (action) => action.metadata?.kind === 'bank-files' }
 						);
-						if (manifest.length === 0)
-							throw new Error('The selected payroll has no bank payments to download.');
+						if (manifest.length === 0) throw new Error(t('app.payroll.export_bank_files_error'));
 					}
 				},
 				{
 					id: 'payslip-pdfs',
-					label: 'Payslip PDFs',
-					description: 'Download employee payslips for any selected run with built results.',
+					label: t('app.payroll.export_payslip_pdfs'),
+					description: t('app.payroll.export_payslip_pdfs_description'),
 					requiresSelection: true,
 					run: async ({ selectedRows }) => {
 						const manifest = await downloadCollectionExport(
@@ -294,14 +303,13 @@
 							},
 							{ includeAction: (action) => action.metadata?.kind === 'payslip-pdfs' }
 						);
-						if (manifest.length === 0)
-							throw new Error('The selected payroll runs do not contain built payslips yet.');
+						if (manifest.length === 0) throw new Error(t('app.payroll.export_pdfs_error'));
 					}
 				},
 				{
 					id: 'payroll-report-xlsx',
-					label: 'Payroll workbook',
-					description: 'Download the clean Infotech-style salary listing and complete breakdown.',
+					label: t('app.payroll.export_workbook'),
+					description: t('app.payroll.export_workbook_description'),
 					requiresSelection: true,
 					run: async ({ selectedRows }) => {
 						const manifest = await downloadCollectionExport(
@@ -311,21 +319,20 @@
 							},
 							{ includeAction: (action) => action.metadata?.kind === 'payroll-report-xlsx' }
 						);
-						if (manifest.length === 0)
-							throw new Error('The selected payroll runs do not contain built payslips yet.');
+						if (manifest.length === 0) throw new Error(t('app.payroll.export_pdfs_error'));
 					}
 				}
 			]}
 		>
 			{#snippet columns({ Column })}
-				<Column name="period" label="Period" card="title" />
-				<Column name="lifecycle" label="Lifecycle" card="badge" />
+				<Column name="period" label={t('app.payroll.period')} card="title" />
+				<Column name="lifecycle" label={t('app.payroll.lifecycle')} card="badge" />
 				<Column
 					name="pay_date"
-					label="Pay date"
+					label={t('app.payroll.pay_date')}
 					render={({ value }) => formatCalendarDate(value)}
 				/>
-				<Column name="configuration_snapshot" label="Policy snapshot" />
+				<Column name="configuration_snapshot" label={t('app.payroll.policy_snapshot')} />
 			{/snippet}
 			{#snippet ListCard(run)}
 				<Inline align="start" justify="between" gap="sm">
@@ -333,7 +340,7 @@
 					<span class="shrink-0 text-xs text-muted-foreground">{run.lifecycle}</span>
 				</Inline>
 				<p class="mt-1 truncate text-sm text-muted-foreground">
-					Pays {formatCalendarDate(run.pay_date)}
+					{t('app.payroll.pays_line', { date: formatCalendarDate(run.pay_date) })}
 				</p>
 			{/snippet}
 		</CollectionTable>
@@ -351,9 +358,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="HR Controller"
-		title="Payroll"
-		description="Create a payroll run for a company period, resolve calculation blockers, then review and export employee results — scoped to one legal entity."
+		eyebrow={t('app.payroll.eyebrow')}
+		title={t('app.payroll.header_title')}
+		description={t('app.payroll.header_description')}
 		actions={companyScopeActions}
 	/>
 {/snippet}
@@ -364,11 +371,16 @@
 		config={[
 			{
 				name: 'overview',
-				label: 'Overview',
+				label: t('component.tab_overview'),
 				icon: 'lucide:chart-no-axes-combined',
 				content: overview
 			},
-			{ name: 'runs', label: 'Payroll runs', icon: 'lucide:badge-dollar-sign', content: runs }
+			{
+				name: 'runs',
+				label: t('app.payroll.tab_runs'),
+				icon: 'lucide:badge-dollar-sign',
+				content: runs
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

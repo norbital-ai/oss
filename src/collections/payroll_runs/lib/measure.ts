@@ -18,7 +18,14 @@
  * column must never find an hourly rate inside it (plan 03 §2).
  */
 
-import type { Configuration, PayComponent } from './configuration.js';
+import type { Configuration, OvertimeCoverageRule, PayComponent } from './configuration.js';
+import {
+	classifyWageComparand,
+	decideOvertimeCoverage,
+	deriveStatutoryWages,
+	type Money,
+	type WageBasis
+} from './coverage.js';
 import type { PayslipLineComponent } from '../../../custom-types/payslip_line_component/+definition.js';
 import {
 	addDays,
@@ -161,22 +168,53 @@ function weekShapeOf(
 }
 
 function monthlyOvertimeLimit(configuration: Configuration): number | null {
-	const limits = configuration.overtimeLimits.filter((limit) => limit.period === 'MONTH');
+	const limits = configuration.overtimeLimits.filter(
+		(limit) => limit.period === 'MONTH' && limit.measures === 'OVERTIME_HOURS'
+	);
 	if (limits.length > 1)
 		throw new Error('More than one monthly overtime limit is effective for this jurisdiction.');
 	return limits[0] == null ? null : Number(limits[0].max_hours);
 }
 
-/** Statutory OT/rest-day/holiday pay coverage under the Malaysian First Schedule. */
+/**
+ * Statutory OT / rest-day / holiday pay coverage, from the jurisdiction's own cited rule.
+ *
+ * The wage figures are passed in by basis, each filed under the basis it genuinely is. The caller
+ * can produce both: `BASE_SALARY` from the employment terms, and `STATUTORY_WAGES` derived per
+ * Employment Act 1955 s.2 as narrowed by First Schedule para 3 — basic plus every other cash
+ * payment for work done, less overtime pay — from the pay components and their entries settling
+ * in this run (see `deriveStatutoryWages`). A rule is only ever answered from the basis it names.
+ */
 export function isStatutoryOvertimePayCovered(options: {
+	readonly rule: OvertimeCoverageRule | null;
 	readonly jurisdictionCode: string;
-	readonly monthlyBaseSalary: number;
+	readonly wages: Partial<Record<WageBasis, Money>>;
 	readonly statutoryWorkCategory: string | null;
+	readonly workClassification: string | null;
+	readonly employeeNumber: string;
 }): boolean {
-	if (options.jurisdictionCode !== 'MY') return false;
-	return (
-		options.monthlyBaseSalary <= 4000 ||
-		(options.statutoryWorkCategory != null && options.statutoryWorkCategory !== 'NON_MANUAL')
+	const decision = decideOvertimeCoverage(options.rule, {
+		statutoryWorkCategory: options.statutoryWorkCategory,
+		workClassification: options.workClassification,
+		wages: options.wages
+	});
+	if (decision.outcome !== 'UNDETERMINED') return decision.outcome === 'COVERED';
+
+	// There is no warning tier left — every run issue fails the run — so an input the rule needs and
+	// the engine cannot supply stops payroll and names itself, rather than being quietly rounded to
+	// a boolean that decides someone's overtime.
+	const authority = options.rule?.authority ?? 'the effective coverage rule';
+	if (decision.reason === 'CEILING_CURRENCY_MISMATCH')
+		throw new Error(
+			`${options.employeeNumber}: the ${options.jurisdictionCode} overtime coverage ceiling is ` +
+				`stated in a different currency from their wages, so it cannot be applied. Authority: ${authority}.`
+		);
+	throw new Error(
+		`${options.employeeNumber}: the ${options.jurisdictionCode} overtime coverage rule tests ` +
+			`${decision.requiredBasis === 'STATUTORY_WAGES' ? 'statutory wages' : 'base salary'}, and this ` +
+			'run could not produce that figure for them. Either record the figure, or set ' +
+			'`employment_terms.overtime_eligible` for this employment if entitlement is contractual. ' +
+			`Authority: ${authority}.`
 	);
 }
 
@@ -335,6 +373,58 @@ export function measureEmployment(options: {
 		workingDaysIn
 	});
 
+	// ── entries settling in this run ───────────────────────────────────────────────────────────
+	//
+	// Collected before the coverage test because the test reads them: the wage the ceiling is
+	// measured against is basic plus the cash-for-work entries settling here, so the set of entries
+	// is fixed before anyone asks who the ladder covers.
+	const cutoffDay = Number(configuration.company.pay_cutoff_day);
+	const entryById = new Map(bundle.entries.map((entry) => [entry.norbital_id, entry]));
+	// The arrears entry a previous build of *this* period wrote is the engine's own output, and this
+	// run is about to derive that figure again. Reading it back as an input would pay a late joiner's
+	// first month twice, once more on every rebuild. Everything else on that component — an arrears
+	// row HR keyed, a back-payment for any other period — is ordinary input and is read normally.
+	const ownedArrears = (entry: ComponentEntry): boolean =>
+		bundle.arrearsFor != null &&
+		entry.pay_component_id === options.policy.lateJoinerComponentId &&
+		entry.origin?.kind === 'ARREARS' &&
+		entry.origin.covers_periods.length === 1 &&
+		entry.origin.covers_periods[0] === bundle.arrearsFor.period;
+	const periodEntries = bundle.entries.filter((entry) => {
+		if (ownedArrears(entry)) return false;
+		const recurring = recurringRange(entry);
+		if (recurring == null) return entryPayPeriod(entry, cutoffDay) === options.period;
+		return (
+			recurring.start <= options.salary.end &&
+			(recurring.end == null || recurring.end >= options.salary.start)
+		);
+	});
+	const entriesByComponent = new Map<string, ComponentEntry[]>();
+	for (const entry of periodEntries) {
+		const bucket = entriesByComponent.get(entry.pay_component_id);
+		if (bucket) bucket.push(entry);
+		else entriesByComponent.set(entry.pay_component_id, [entry]);
+	}
+	const entryTotalByComponentId = new Map<string, number>();
+	for (const component of configuration.payComponents) {
+		entryTotalByComponentId.set(
+			component.norbital_id,
+			(entriesByComponent.get(component.norbital_id) ?? []).reduce(
+				(total, entry) => total + entrySign(entry, entryById) * Number(entry.amount),
+				0
+			)
+		);
+	}
+
+	const subject = {
+		employment_type: closingTerms.employment_type,
+		work_classification: closingTerms.work_classification,
+		service_months: bundle.serviceMonths,
+		gender: bundle.employee.gender,
+		department: closingTerms.department,
+		payroll_group: closingTerms.payroll_group
+	};
+
 	// ── overtime, derived from clocks and split only beyond the total-work-hours boundary ───────
 	const dailyWorkLimit = overtimeExcessWorkLimit(configuration.payComponents);
 	const overtimeAttendance = overtimeAttendanceWindow({
@@ -354,12 +444,35 @@ export function measureEmployment(options: {
 		const derived = deriveDailyOvertime(entry, day);
 		if (derived) overtimeDays.push(derived);
 	}
+	// Short-circuit deliberately: a contractual entitlement can only widen coverage, so an employment
+	// that is already eligible never needs the statutory test — and never fails the run for want of a
+	// wage figure the statutory test would have needed.
+	//
+	// The wage the ceiling is measured against is derived per Employment Act 1955 s.2 as narrowed by
+	// First Schedule para 3 — basic plus every other cash payment for work done, less overtime pay —
+	// from the employee's own components and entries. Only components this employment is eligible for
+	// count: an allowance someone is not entitled to is not part of their wages.
+	const statutoryWages = deriveStatutoryWages({
+		baseSalary: rateTerms.base_salary,
+		payments: configuration.payComponents
+			.filter((component) => isEligible(component.eligibility, subject))
+			.map((component) => ({
+				category: classifyWageComparand(component),
+				amount: entryTotalByComponentId.get(component.norbital_id) ?? 0
+			}))
+	});
 	const paymentEligible =
 		closingTerms.overtime_eligible ||
 		isStatutoryOvertimePayCovered({
+			rule: configuration.overtimeCoverageRule,
 			jurisdictionCode: configuration.jurisdiction.code,
-			monthlyBaseSalary: rateTerms.base_salary.value,
-			statutoryWorkCategory: closingTerms.statutory_work_category
+			wages: {
+				BASE_SALARY: rateTerms.base_salary,
+				STATUTORY_WAGES: statutoryWages
+			},
+			statutoryWorkCategory: closingTerms.statutory_work_category,
+			workClassification: closingTerms.work_classification,
+			employeeNumber: bundle.employment.employee_number
 		});
 	const classifiedOvertime = classifyOvertimeByCalendarMonth({
 		days: overtimeDays,
@@ -422,45 +535,13 @@ export function measureEmployment(options: {
 		unpaid.map((row) => [row.componentId, row])
 	);
 
-	// ── entries settling in this run ───────────────────────────────────────────────────────────
-	const cutoffDay = Number(configuration.company.pay_cutoff_day);
-	const entryById = new Map(bundle.entries.map((entry) => [entry.norbital_id, entry]));
-	// The arrears entry a previous build of *this* period wrote is the engine's own output, and this
-	// run is about to derive that figure again. Reading it back as an input would pay a late joiner's
-	// first month twice, once more on every rebuild. Everything else on that component — an arrears
-	// row HR keyed, a back-payment for any other period — is ordinary input and is read normally.
-	const ownedArrears = (entry: ComponentEntry): boolean =>
-		bundle.arrearsFor != null &&
-		entry.pay_component_id === options.policy.lateJoinerComponentId &&
-		entry.origin?.kind === 'ARREARS' &&
-		entry.origin.covers_periods.length === 1 &&
-		entry.origin.covers_periods[0] === bundle.arrearsFor.period;
-	const periodEntries = bundle.entries.filter((entry) => {
-		if (ownedArrears(entry)) return false;
-		const recurring = recurringRange(entry);
-		if (recurring == null) return entryPayPeriod(entry, cutoffDay) === options.period;
-		return (
-			recurring.start <= options.salary.end &&
-			(recurring.end == null || recurring.end >= options.salary.start)
-		);
-	});
-	const entriesByComponent = new Map<string, ComponentEntry[]>();
-	for (const entry of periodEntries) {
-		const bucket = entriesByComponent.get(entry.pay_component_id);
-		if (bucket) bucket.push(entry);
-		else entriesByComponent.set(entry.pay_component_id, [entry]);
-	}
-
 	// ── the formula context, emitted complete: CEL throws on a missing key ─────────────────────
 	const componentAmounts = new Map<string, number>();
 	const componentsByCode: Record<string, number> = {};
 	const entryTotals: Record<string, number> = {};
 	for (const component of configuration.payComponents) {
 		componentsByCode[component.code] = 0;
-		entryTotals[component.code] = (entriesByComponent.get(component.norbital_id) ?? []).reduce(
-			(total, entry) => total + entrySign(entry, entryById) * Number(entry.amount),
-			0
-		);
+		entryTotals[component.code] = entryTotalByComponentId.get(component.norbital_id) ?? 0;
 	}
 	const facts: Record<string, string | number | boolean> = {};
 	for (const contribution of configuration.contributions) {
@@ -581,15 +662,6 @@ export function measureEmployment(options: {
 			ordinary_rate_divisor: Number(configuration.jurisdiction.ordinary_rate_divisor)
 		}
 	});
-
-	const subject = {
-		employment_type: closingTerms.employment_type,
-		work_classification: closingTerms.work_classification,
-		service_months: bundle.serviceMonths,
-		gender: bundle.employee.gender,
-		department: closingTerms.department,
-		payroll_group: closingTerms.payroll_group
-	};
 
 	// ── what a deferred earlier period owes, measured the same way it would have been paid ──────
 	//

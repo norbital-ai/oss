@@ -9,12 +9,15 @@
 	 * a system identifier no operator can read or choose correctly.
 	 */
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
 
 	let { record, close }: RepresentationProps = $props();
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -22,7 +25,7 @@
 	collection="contribution_rates"
 	recordId={record?.norbital_id}
 	defaultValues={record ?? undefined}
-	submitLabel={record ? 'Save rate band' : 'Create rate band'}
+	submitLabel={record ? t('component.save_rate_band') : t('component.create_rate_band')}
 	onAfterSubmit={record ? undefined : close}
 >
 	{#snippet children({ Field })}
@@ -30,7 +33,7 @@
 			<Column span="all">
 				<Field
 					name="statutory_contribution_id"
-					label="Statutory scheme"
+					label={t('component.statutory_scheme')}
 					renderer={RelationshipRenderer}
 					rendererProps={{
 						target: 'statutory_contributions',
@@ -45,9 +48,11 @@
 					}}
 				/>
 			</Column>
-			<Column span="all"><Field name="selector" label="Applies to" /></Column>
-			<Column span="all"><Field name="award" label="Award" /></Column>
-			<Column span="all"><Field name="effective_range" label="Effective period" /></Column>
+			<Column span="all"><Field name="selector" label={t('component.applies_to')} /></Column>
+			<Column span="all"><Field name="award" label={t('component.award')} /></Column>
+			<Column span="all"
+				><Field name="effective_range" label={t('component.effective_period')} /></Column
+			>
 		</Grid>
 	{/snippet}
 </CollectionForm>

@@ -1,12 +1,16 @@
 <script lang="ts">
 	/** One person's settlement. Every row below is the physical payslip-to-component junction. */
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { Row } from './$types.js';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Grid, Stack } from '@norbital-ai/ui/layout';
 	import { formatCalendarDate, formatNumeric } from '../../lib/ui/display-formatters.js';
 
 	let { record }: { record: Row } = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type PayslipSummary = {
 		readonly payslip_employment?: {
@@ -52,7 +56,7 @@
 		const statutory = line.payslip_line_statutory_contribution;
 		if (statutory?.code)
 			return statutory.name ? `${statutory.code} · ${statutory.name}` : statutory.code;
-		return 'Derived line';
+		return t('component.derived_line');
 	}
 
 	function entryLabel(row: unknown): string {
@@ -65,26 +69,26 @@
 <Stack gap="lg">
 	<Stack as="section" gap="sm" aria-labelledby="payslip-summary-heading">
 		<h2 id="payslip-summary-heading" class="text-xl font-semibold">
-			{employment?.employment_employee?.name ?? 'Employee'}
+			{employment?.employment_employee?.name ?? t('component.employee')}
 		</h2>
 		<p class="text-sm text-muted-foreground">
-			{employment?.employee_number ?? 'Employment'} · {record.currency}
+			{employment?.employee_number ?? t('component.employment')} · {record.currency}
 		</p>
 		<Grid as="dl" gap="sm" minimum="compact">
 			<div>
-				<dt class="text-xs text-muted-foreground">Gross</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.gross')}</dt>
 				<dd class="mt-1 font-semibold tabular-nums">{formatNumeric(record.gross)}</dd>
 			</div>
 			<div>
-				<dt class="text-xs text-muted-foreground">Deductions</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.deductions')}</dt>
 				<dd class="mt-1 font-semibold tabular-nums">{formatNumeric(record.total_deductions)}</dd>
 			</div>
 			<div>
-				<dt class="text-xs text-muted-foreground">Net</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.net')}</dt>
 				<dd class="mt-1 text-lg font-bold tabular-nums">{formatNumeric(record.net)}</dd>
 			</div>
 			<div>
-				<dt class="text-xs text-muted-foreground">Employer cost</dt>
+				<dt class="text-xs text-muted-foreground">{t('component.employer_cost')}</dt>
 				<dd class="mt-1 font-semibold tabular-nums">{formatNumeric(record.employer_cost)}</dd>
 			</div>
 		</Grid>
@@ -96,17 +100,18 @@
 		class="border-t border-border pt-4"
 		aria-labelledby="payslip-lines-heading"
 	>
-		<h3 id="payslip-lines-heading" class="text-sm font-semibold">Component breakdown</h3>
+		<h3 id="payslip-lines-heading" class="text-sm font-semibold">
+			{t('component.component_breakdown')}
+		</h3>
 		<p class="text-xs text-muted-foreground">
-			Each row is the direct, queryable link from this payslip to its pay component, input entry, or
-			statutory scheme.
+			{t('component.component_breakdown_description')}
 		</p>
 		<Bound size="standard">
 			<CollectionTable
 				{client}
 				collection="payslip_lines"
-				title="Component breakdown"
-				description="The settled lines that make up this payslip."
+				title={t('component.component_breakdown')}
+				description={t('component.payslips_description')}
 				features={{ create: false }}
 				query={{
 					where: { payslip_id: { eq: record.norbital_id } },
@@ -120,17 +125,17 @@
 				}}
 			>
 				{#snippet columns({ Column })}
-					<Column name="sequence" label="#" />
+					<Column name="sequence" label={t('component.sequence_hash')} />
 					<Column
 						name="pay_component_id"
-						label="Component"
+						label={t('component.component')}
 						card="title"
 						render={({ row }) => componentLabel(row)}
 					/>
-					<Column name="component" label="Line kind" card="subtitle" />
+					<Column name="component" label={t('component.line_kind')} card="subtitle" />
 					<Column
 						name="component_entry_id"
-						label="Input entry"
+						label={t('component.input_entry')}
 						render={({ row }) => entryLabel(row)}
 					/>
 					<Column name="bucket" card="badge" />

@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Display, type ChartDisplaySpec } from '@norbital-ai/ui/chart';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { ToggleGroup, ToggleGroupItem } from '@norbital-ai/ui/toggle-group';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
 	import {
 		formatCalendarDate,
@@ -14,23 +15,19 @@
 		formatLeavePayrollEffect,
 		formatNumeric
 	} from '../../lib/ui/display-formatters.js';
-	import { todayKey, todayInstant } from '../../lib/ui/calendar.js';
+	import { inForceTodayFilter, todayInstant, todayKey } from '../../lib/ui/calendar.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	let companyId = $state<string | null>(null);
-	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
 
 	/**
-	 * Leave types are effective-dated, so the catalogue opens on the entitlements in force *today*
-	 * and widens to superseded versions only when the operator asks. The legal-entity selector below
-	 * keeps `activeRange` whatever this is set to: it is the page's scope picker, not a listing, and
-	 * it has to default to an entity that still exists.
+	 * The leave-type catalogue opens on the entitlements in force today, as a filter chip the
+	 * operator can drop to reach superseded versions. The legal-entity selector keeps `activeRange`
+	 * in its own query: it is the page's scope picker, not a listing, and it has to default to an
+	 * entity that still exists.
 	 */
-	let effectiveWindow = $state<'current' | 'history'>('current');
-	const effectiveRange: { effective_range?: { contains_date: string } } = $derived(
-		effectiveWindow === 'history' ? {} : activeRange
-	);
-
 	const companiesQuery = client.db.companies.findMany({
 		where: { norbital_approval_id: { isNull: true }, ...activeRange },
 		orderBy: { name: 'asc' },
@@ -81,15 +78,14 @@
 	const leaveTrendChart = $derived({
 		kind: 'line',
 		loading: analyticsQuery.loading,
-		title: 'Annual leave applications',
-		description:
-			'Application volume across the five completed calendar years, with a least-squares regression line.',
+		title: t('app.leave.chart_title'),
+		description: t('app.leave.chart_description'),
 		data: analytics.annual_trend,
 		xKey: 'year',
 		series: ['applications', 'regression'],
 		config: {
-			applications: { label: 'Applications', color: 'var(--color-primary)' },
-			regression: { label: 'Regression trend', color: 'var(--color-muted-foreground)' }
+			applications: { label: t('component.chart_applications'), color: 'var(--color-primary)' },
+			regression: { label: t('component.chart_regression'), color: 'var(--color-muted-foreground)' }
 		},
 		valueFormat: { style: 'number', maximumFractionDigits: 1 },
 		curve: 'linear'
@@ -128,9 +124,9 @@
 {#snippet companyScopeActions()}
 	<Inline gap="md" align="end">
 		<label class="grid gap-1.5 text-sm">
-			<span class="font-medium text-muted-foreground">Legal entity</span>
+			<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
 			<Combobox
-				ariaLabel="Legal entity"
+				ariaLabel={t('component.legal_entity')}
 				options={companyOptions}
 				value={selectedCompanyId}
 				onValueChange={(value) => {
@@ -140,8 +136,8 @@
 					}
 					companyId = companies[0]?.norbital_id ?? null;
 				}}
-				emptyPlaceholder="Select legal entity…"
-				searchPlaceholder="Search companies…"
+				emptyPlaceholder={t('component.select_legal_entity')}
+				searchPlaceholder={t('component.search_companies')}
 				clientConfig={{
 					isLoading: companiesQuery.loading,
 					error: companiesQuery.error?.message ?? null
@@ -149,45 +145,26 @@
 				class="min-w-[16rem]"
 			/>
 		</label>
-		<Stack gap="xs">
-			<span class="text-sm font-medium text-muted-foreground">Leave types</span>
-			<ToggleGroup
-				type="single"
-				size="sm"
-				value={effectiveWindow}
-				onValueChange={(value) => {
-					effectiveWindow = value === 'history' ? 'history' : 'current';
-				}}
-			>
-				<ToggleGroupItem value="current" aria-label="Show only leave types in force today">
-					In force today
-				</ToggleGroupItem>
-				<ToggleGroupItem value="history" aria-label="Show every version, including superseded ones">
-					All history
-				</ToggleGroupItem>
-			</ToggleGroup>
-		</Stack>
 	</Inline>
 {/snippet}
 
 {#snippet overview()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to load leave activity.</p>
+		<p class="text-sm text-muted-foreground">{t('app.leave.empty_overview')}</p>
 	{:else}
 		<Grid gap="xl" minimum="panel">
 			<Stack gap="md">
 				<div>
-					<h2 class="text-lg font-semibold">Leave activity</h2>
+					<h2 class="text-lg font-semibold">{t('app.leave.leave_activity')}</h2>
 					<p class="text-sm text-muted-foreground">
-						{analytics.total.toLocaleString()} time-off requests. Balances are derived directly from approved
-						leave events at read time — there is no duplicate ledger, stored balance, or accrual job.
+						{t('app.leave.leave_activity_description', { count: analytics.total.toLocaleString() })}
 					</p>
 				</div>
 				<ApprovalSummaryTable
-					title="Leave decisions"
+					title={t('app.leave.leave_decisions')}
 					asOfDate={analytics.as_of_date}
 					summary={analytics.summary}
-					note="Counts use the leave period start date. Approval speed is shown only when completed workflow history exists; imported records do not invent a duration."
+					note={t('app.leave.leave_decisions_note')}
 				/>
 			</Stack>
 			<div class="min-w-0 rounded-lg border bg-card p-4 shadow-card">
@@ -199,7 +176,7 @@
 
 {#snippet requests()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to review its leave requests.</p>
+		<p class="text-sm text-muted-foreground">{t('app.leave.empty_requests')}</p>
 	{:else}
 		<CollectionTable
 			{client}
@@ -213,29 +190,41 @@
 					leave_request_employment: { columns: { employee_number: true } }
 				}
 			}}
-			searchPlaceholder="Search leave requests…"
+			searchPlaceholder={t('app.leave.search_requests')}
 		>
 			{#snippet columns({ Column })}
 				<Column
 					name="leave_type_id"
-					label="Leave type"
+					label={t('component.leave_type')}
 					card="title"
 					render={({ row }) => leaveTypeLabel(row)}
 				/>
 				<Column
 					name="employment_id"
-					label="Employment"
+					label={t('component.employment')}
 					card="subtitle"
 					render={({ row }) => employmentLabel(row)}
 				/>
-				<Column name="from_date" label="From" render={({ value }) => formatCalendarDate(value)} />
-				<Column name="to_date" label="To" render={({ value }) => formatCalendarDate(value)} />
-				<Column name="kind" label="Event" card="badge" />
-				<Column name="days" label="Days" render={({ value }) => formatNumeric(value)} />
+				<Column
+					name="from_date"
+					label={t('component.from')}
+					render={({ value }) => formatCalendarDate(value)}
+				/>
+				<Column
+					name="to_date"
+					label={t('component.to')}
+					render={({ value }) => formatCalendarDate(value)}
+				/>
+				<Column name="kind" label={t('component.event')} card="badge" />
+				<Column
+					name="days"
+					label={t('component.days')}
+					render={({ value }) => formatNumeric(value)}
+				/>
 				<Column
 					name="certificate_file"
-					label="Certificate"
-					render={({ value }) => (value == null || value === '' ? '—' : 'Attached')}
+					label={t('component.certificate')}
+					render={({ value }) => (value == null || value === '' ? '—' : t('app.leave.attached'))}
 				/>
 			{/snippet}
 		</CollectionTable>
@@ -244,33 +233,37 @@
 
 {#snippet types()}
 	{#if selectedCompanyId == null}
-		<p class="text-sm text-muted-foreground">Select a legal entity to manage its leave types.</p>
+		<p class="text-sm text-muted-foreground">{t('app.leave.empty_types')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="leave_types"
 			view={`hr_controller:leave:types:${selectedCompanyId}`}
+			initialFilters={inForceTodayFilter()}
 			query={{
 				where: {
-					company_id: { eq: selectedCompanyId },
-					...effectiveRange
+					company_id: { eq: selectedCompanyId }
 				},
 				orderBy: { code: 'asc' }
 			}}
-			searchPlaceholder="Search leave types…"
+			searchPlaceholder={t('app.leave.search_types')}
 		>
 			{#snippet columns({ Column })}
 				<Column name="code" card="title" />
 				<Column name="name" card="subtitle" />
-				<Column name="accrual" label="Accrual" render={({ value }) => formatLeaveAccrual(value)} />
-				<Column name="entitlement" label="Entitlement matrix" />
+				<Column
+					name="accrual"
+					label={t('app.leave.accrual')}
+					render={({ value }) => formatLeaveAccrual(value)}
+				/>
+				<Column name="entitlement" label={t('app.leave.entitlement_matrix')} />
 				<Column
 					name="payroll_effect"
-					label="Payroll effect"
+					label={t('app.leave.payroll_effect')}
 					render={({ value }) => formatLeavePayrollEffect(value)}
 				/>
-				<Column name="encash_on_exit" label="Encash on exit" />
-				<Column name="effective_range" label="Effective" />
+				<Column name="encash_on_exit" label={t('app.leave.encash_on_exit')} />
+				<Column name="effective_range" label={t('component.effective')} />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -278,9 +271,9 @@
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="HR Controller"
-		title="Leave"
-		description="Decide time-off requests against the leave type's layered entitlement matrix — scoped to one legal entity."
+		eyebrow={t('app.leave.eyebrow')}
+		title={t('app.leave.header_title')}
+		description={t('app.leave.header_description')}
 		actions={companyScopeActions}
 	/>
 {/snippet}
@@ -291,12 +284,22 @@
 		config={[
 			{
 				name: 'overview',
-				label: 'Overview',
+				label: t('component.tab_overview'),
 				icon: 'lucide:chart-no-axes-combined',
 				content: overview
 			},
-			{ name: 'requests', label: 'Requests', icon: 'lucide:calendar-check-2', content: requests },
-			{ name: 'types', label: 'Leave types', icon: 'lucide:palmtree', content: types }
+			{
+				name: 'requests',
+				label: t('app.leave.tab_requests'),
+				icon: 'lucide:calendar-check-2',
+				content: requests
+			},
+			{
+				name: 'types',
+				label: t('app.leave.tab_types'),
+				icon: 'lucide:palmtree',
+				content: types
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

@@ -2,24 +2,23 @@
  * Clocks become hours; hours become money.
  *
  * Overtime is the one place payroll depends on what actually happened rather than what was agreed,
- * and it is where a rebuild is most likely to silently change someone's pay. Six independent facts
- * decide whether a clocked hour earns anything, and every one of them exists because a population
- * needed it:
+ * and it is where a rebuild is most likely to silently change someone's pay. Overtime is **computed
+ * here, never stored**: a time entry records punches, and every hour of overtime on this payslip is
+ * derived from those punches, the statutory day type and the effective employment terms. Nothing
+ * upstream may hand payroll a duration it did not derive, because a stored duration and the clock it
+ * came from can disagree, and only one of them is what the employee actually worked.
+ *
+ * Five independent facts decide whether a clocked hour earns anything, and every one of them exists
+ * because a population needed it:
  *
  * 1. `shift_definitions.pays_overtime` — a fixed office shift never pays overtime, whatever the
  *    clock says. Without it, office staff start earning for staying late.
- * 2. `time_entries.overtime_authorized === false` — a recorded refusal for that day. `null` is not
- *    the same answer: it means the population does not track per-day authorisation, and the clock
- *    rule decides alone.
- * 3. `time_entries.approved_ot_*_hours` — where approval states an explicit number of hours, that
- *    total is the payable duration. Its legacy multiplier labels remain audit evidence; the
- *    statutory day type decides the rate.
- * 4. `time_entries.overtime_in` / `overtime_out` — where a jurisdiction punches overtime
+ * 2. `time_entries.overtime_in` / `overtime_out` — where a jurisdiction punches overtime
  *    separately, **that punch is the overtime** and a regular-clock overrun earns nothing.
- * 5. `shift_definitions.overtime_break_minutes` — unpaid rest between the shift ending and overtime
+ * 3. `shift_definitions.overtime_break_minutes` — unpaid rest between the shift ending and overtime
  *    starting, deducted from the overtime.
- * 6. the clock-in is clamped forward to the shift start — arriving early is not working.
- * 7. hours are floored to the half hour below, with no one-hour minimum.
+ * 4. the clock-in is clamped forward to the shift start — arriving early is not working.
+ * 5. hours are floored to the half hour below, with no one-hour minimum.
  *
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  * REST-DAY AND PUBLIC-HOLIDAY WORK IS PRICED BY STATUTE, FROM THE SEEDED RULES.
@@ -73,12 +72,6 @@ export type TimeEntryLike = {
 	readonly break_minutes: number;
 	/** Widened: a generated enum column is nullable, so `OPEN` is tested for rather than assumed. */
 	readonly state: string | null;
-	readonly overtime_authorized: boolean | null;
-	readonly approved_ot_1x_hours: number | null;
-	readonly approved_ot_15x_hours: number | null;
-	readonly approved_ot_2x_hours: number | null;
-	readonly approved_ot_3x_hours: number | null;
-	readonly approved_ot_flat_hours: number | null;
 	readonly overtime_in: Date | string | null;
 	readonly overtime_out: Date | string | null;
 };
@@ -208,28 +201,18 @@ export function deriveDailyOvertime(entry: TimeEntryLike, day: ScheduledDay): Da
 	const workDate = requiredDateKey(entry.work_date, 'time_entries.work_date');
 	if (entry.state === 'OPEN') throw new Error(`Time entry on ${workDate} is still open.`);
 	if (day.shift?.pays_overtime === false) return null;
-	if (entry.overtime_authorized === false) return null;
 
 	const shift = day.shift;
 	// A rest, off or holiday day has no shift to run past, and neither has a fixed-week employee
 	// with no roster: on those days every clocked hour is overtime.
 	const shiftToRunPast = day.dayType === 'ORDINARY' ? shift : null;
-	const approvedBuckets = [
-		entry.approved_ot_1x_hours,
-		entry.approved_ot_15x_hours,
-		entry.approved_ot_2x_hours,
-		entry.approved_ot_3x_hours,
-		entry.approved_ot_flat_hours
-	];
-	const hasApprovedBucketBreakdown = approvedBuckets.some((value) => value != null);
 
+	// Three sources, in descending order of how directly they record the overtime itself. Each is a
+	// clock, never an assertion about hours: a dedicated punch says exactly when overtime ran; a day
+	// with no shift to run past is overtime from the first minute; otherwise the overrun past the
+	// scheduled end is what the employee stayed for.
 	let raw: number;
-	if (entry.overtime_authorized === true && hasApprovedBucketBreakdown) {
-		// The bucket labels came from a legacy system and are not legal rate instructions. Their
-		// sum is nevertheless the supervisor-approved duration, which is stronger evidence than
-		// reconstructing a flat break from clocks when no break window was recorded.
-		raw = approvedBuckets.reduce<number>((total, value) => total + Number(value ?? 0), 0);
-	} else if (entry.overtime_in != null && entry.overtime_out != null) {
+	if (entry.overtime_in != null && entry.overtime_out != null) {
 		raw = overtimePunchHours(entry.overtime_in, entry.overtime_out);
 	} else if (shiftToRunPast == null) {
 		raw = clockedWorkHours({

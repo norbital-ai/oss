@@ -1,9 +1,13 @@
 <script lang="ts">
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Grid } from '@norbital-ai/ui/layout';
 	import { contributionTreatmentSchema } from './+definition.js';
 	import type { RendererProps, Value } from './$types.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type TreatmentKind = Value['kind'];
 
@@ -81,7 +85,7 @@
 				<Input
 					value={current.rule}
 					{disabled}
-					placeholder="Must be listed on the contribution"
+					placeholder={t('component.must_be_listed_on_contribution')}
 					oninput={(event) => emit({ kind: 'SPECIAL', rule: event.currentTarget.value })}
 				/>
 			</label>
