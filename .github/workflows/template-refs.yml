@@ -16,8 +16,11 @@ concurrency:
   group: template-refs-${{ github.ref }}
   cancel-in-progress: true
 
+# `packages: read` resolves the published `@norbital-ai/*` versions a template pins, the same
+# reason the CI workflow grants it.
 permissions:
   contents: write
+  packages: read
 
 jobs:
   project:
