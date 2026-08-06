@@ -40,6 +40,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # Build every publishable package once, before `changeset publish` starts.
+      #
+      # Each package's `prepack` is `turbo run build --filter=<pkg>`, and changeset publish runs
+      # those concurrently. Turbo's `build` depends on `^build`, so the pod, ui and platform-utils
+      # packs each rebuild platform-utils — three processes, three `build-package.mjs`, one staging
+      # directory. The first line of that script removes `build.staging`, so one pack deletes the
+      # directory another is compiling into and the compiler dies with a bare `exited (2)` and no
+      # diagnostics. Turbo deduplicates tasks inside a single run, never across concurrent ones.
+      #
+      # Building here leaves each prepack a cache hit, so the concurrent packs do no work at all.
+      # It must run through turbo, and not `pnpm packages:build`, so that turbo's cache is the thing
+      # that gets populated — a pnpm-driven build produces the same output and still leaves every
+      # prepack a cache miss. `...@norbital-ai/pod` is pod and its dependencies, which is exactly the
+      # five publishable packages and none of the templates.
+      - name: Build publishable packages
+        run: pnpm exec turbo run build --filter=...@norbital-ai/pod
+
       - name: Create release pull request or publish
         uses: changesets/action@v1
         with:
