@@ -19,6 +19,14 @@ export default defineModel(
 		currency: enums(['CNY', 'USD', 'EUR', 'GBP', 'JPY', 'SGD', 'HKD']),
 		tax_inclusive: boolean().notNull(),
 		valid_until: date(),
+		payment_terms: text(),
+		shipping_terms: text(),
+		place_of_loading: text(),
+		place_of_delivery: text(),
+		packaging: text(),
+		shipping_mark: text(),
+		time_of_shipment: text(),
+		other_terms: text(),
 		net: numeric(),
 		tax: numeric(),
 		gross: numeric(),
@@ -27,12 +35,13 @@ export default defineModel(
 		revision_of: uuid(),
 		revision_number: numeric(),
 		confirmed_at: timestamp(),
+		credit_acknowledged: boolean(),
 		cancelled_at: timestamp(),
 		cancel_reason: text()
 	},
 	{
 		description:
-			'Sales document — the CRM pipeline. Moves draft→sent→won, then confirmed once accepted and pushed out to Kingdee. Lost and cancelled are terminal. Sent documents can be reopened to draft for revision, incrementing the revision number.',
+			'Sales document — the CRM pipeline. Moves draft→sent→won, then confirmed once accepted and pushed out to the third-party ERP. Lost and cancelled are terminal. Sent documents can be reopened to draft for revision, incrementing the revision number.',
 		recordLabel: 'doc_no',
 		icon: 'lucide:file-text',
 		indexes: [

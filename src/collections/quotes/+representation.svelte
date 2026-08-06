@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import type { RepresentationProps } from './$types.js';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid } from '@norbital-ai/ui/layout';
@@ -7,6 +9,8 @@
 	import type { CollectionRelationOptions } from '@norbital-ai/platform-utils/collection';
 
 	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 </script>
 
 <CollectionForm
@@ -19,10 +23,10 @@
 	{#snippet children({ Field, form })}
 		{@const values = form.values()}
 		<Grid minimum="compact">
-			<Field name="doc_no" label="Doc #" />
+			<Field name="doc_no" label={t('component.doc_no')} />
 			<Field
 				name="account_id"
-				label="Account"
+				label={t('component.account')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'accounts',
@@ -37,7 +41,7 @@
 			{#key values.account_id}
 				<Field
 					name="contact_id"
-					label="Contact"
+					label={t('component.contact')}
 					renderer={RelationshipRenderer}
 					rendererProps={{
 						target: 'contacts',
@@ -58,11 +62,19 @@
 			<Field name="title" />
 			<Field name="status" />
 			<Field name="currency" />
-			<Field name="tax_inclusive" label="Tax inclusive" />
-			<Field name="valid_until" label="Valid until" />
+			<Field name="tax_inclusive" label={t('component.tax_inclusive')} />
+			<Field name="valid_until" label={t('component.valid_until')} />
+			<Field name="payment_terms" label={t('component.payment_terms')} />
+			<Field name="shipping_terms" label={t('component.shipping_terms')} />
+			<Field name="place_of_loading" label={t('component.place_of_loading')} />
+			<Field name="place_of_delivery" label={t('component.place_of_delivery')} />
+			<Field name="packaging" />
+			<Field name="shipping_mark" label={t('component.shipping_mark')} />
+			<Field name="time_of_shipment" label={t('component.time_of_shipment')} />
+			<Column span="all"><Field name="other_terms" label={t('component.other_terms')} /></Column>
 			<Field
 				name="owner_id"
-				label="Owner"
+				label={t('component.owner')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'user',
@@ -76,7 +88,7 @@
 			/>
 			<Field
 				name="revision_of"
-				label="Revision of"
+				label={t('component.revision_of')}
 				renderer={RelationshipRenderer}
 				rendererProps={{
 					target: 'quotes',
@@ -92,7 +104,7 @@
 					} satisfies CollectionRelationOptions
 				}}
 			/>
-			<Field name="revision_number" label="Revision number" />
+			<Field name="revision_number" label={t('component.revision_number')} />
 			<Column span="all"><Field name="description" /></Column>
 		</Grid>
 	{/snippet}

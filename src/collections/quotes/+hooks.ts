@@ -20,6 +20,9 @@ export default {
 				where: { norbital_id: { eq: input.account_id } }
 			});
 			if (!account) throw new Error('Referenced account does not exist.');
+			if (!account.active) {
+				throw new Error('Cannot create a quote for an inactive account.');
+			}
 			if (input.contact_id != null) {
 				const contact = await api.db.query.contacts.findFirst({
 					where: { norbital_id: { eq: input.contact_id } }
@@ -54,7 +57,7 @@ export default {
 		}
 	},
 	update: {
-		before: async ({ input, existing }) => {
+		before: async ({ input, existing, api }) => {
 			const newStatus = (input.status ?? existing.status) as QuoteStatus;
 			const oldStatus = existing.status as QuoteStatus;
 
@@ -73,6 +76,62 @@ export default {
 			}
 
 			const updates: Record<string, unknown> = { ...input };
+
+			if (newStatus === 'confirmed') {
+				const account = await api.db.query.accounts.findFirst({
+					where: { norbital_id: { eq: existing.account_id } }
+				});
+				if (!account) throw new Error('Referenced account does not exist.');
+				if (!account.active) {
+					throw new Error('Cannot confirm a quote for an inactive account.');
+				}
+
+				// Credit is warn-never-blocks: an adverse verdict does not refuse the confirm, it
+				// demands an explicit acknowledgment that lands on the document and in its audit trail.
+				const creditAdverse =
+					account.credit_hold === true ||
+					(account.credit_limit != null &&
+						account.credit_used != null &&
+						Number(account.credit_used) + Number(existing.gross ?? 0) >
+							Number(account.credit_limit));
+				const acknowledged =
+					input.credit_acknowledged === true || existing.credit_acknowledged === true;
+				if (creditAdverse && !acknowledged) {
+					throw new Error(
+						'Credit check is adverse (hold or over-limit). Set credit_acknowledged to confirm anyway.'
+					);
+				}
+
+				const lines = await api.db.query.quote_lines.findMany({
+					where: { quote_id: { eq: existing.norbital_id } },
+					columns: { product_id: true },
+					limit: 5000
+				});
+				if (lines.length === 0) {
+					throw new Error('A quote must have at least one line before it can be confirmed.');
+				}
+
+				const productIds = [
+					...new Set(
+						lines
+							.map((line) => line.product_id)
+							.filter((id): id is string => typeof id === 'string')
+					)
+				];
+				const products = await api.db.query.products.findMany({
+					where: { norbital_id: { in: productIds } },
+					columns: { name: true, active: true },
+					limit: 5000
+				});
+				const inactiveProducts = products
+					.filter((product) => !product.active)
+					.map((product) => product.name);
+				if (inactiveProducts.length > 0) {
+					throw new Error(
+						`Cannot confirm a quote with inactive products: ${inactiveProducts.join(', ')}.`
+					);
+				}
+			}
 
 			if (newStatus === 'confirmed' && existing.confirmed_at == null) {
 				updates.confirmed_at = new Date();

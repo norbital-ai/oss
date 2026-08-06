@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionKanban } from '@norbital-ai/ui/collection-kanban';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
@@ -22,13 +24,15 @@
 		return active?.norbital_id ?? rows[0]?.norbital_id ?? null;
 	}
 
-	const quoteLanes = [
-		{ value: 'draft', label: 'Draft', color: 'gray' },
-		{ value: 'sent', label: 'Sent', color: 'blue' },
-		{ value: 'won', label: 'Won', color: 'amber' },
-		{ value: 'confirmed', label: 'Confirmed', color: 'green' },
-		{ value: 'lost', label: 'Lost', color: 'red' }
-	];
+	const { t } = useI18n<TenantI18nKeys>();
+
+	const quoteLanes = $derived([
+		{ value: 'draft', label: t('component.status_draft'), color: 'gray' },
+		{ value: 'sent', label: t('component.status_sent'), color: 'blue' },
+		{ value: 'won', label: t('component.status_won'), color: 'amber' },
+		{ value: 'confirmed', label: t('component.status_confirmed'), color: 'green' },
+		{ value: 'lost', label: t('component.status_lost'), color: 'red' }
+	]);
 
 	let accountId = $state<string | null>(null);
 	let selectedOwnerId = $state('');
@@ -57,7 +61,7 @@
 	});
 
 	const ownerOptions = $derived([
-		{ value: '', label: 'All reps' },
+		{ value: '', label: t('app.crm.all_reps') },
 		...(usersQuery.current ?? []).map((user) => ({
 			value: user.norbital_id,
 			label: user.name || '—'
@@ -88,6 +92,25 @@
 	);
 	const scopedQuoteIds = $derived(
 		(scopedQuotesQuery?.current ?? []).map((quote) => quote.norbital_id)
+	);
+
+	const scopedInvoicesQuery = $derived(
+		selectedAccountId == null
+			? null
+			: client.db.sales_invoices.findMany({
+					where: { account_id: { eq: selectedAccountId } },
+					columns: { norbital_id: true, doc_no: true },
+					orderBy: { doc_no: 'desc' },
+					limit: 5000
+				})
+	);
+	const invoiceLabelsById = $derived(
+		new Map(
+			(scopedInvoicesQuery?.current ?? []).map((invoice) => [invoice.norbital_id, invoice.doc_no])
+		)
+	);
+	const scopedInvoiceIds = $derived(
+		(scopedInvoicesQuery?.current ?? []).map((invoice) => invoice.norbital_id)
 	);
 
 	const pipelineKanbanQuery = $derived(
@@ -124,10 +147,10 @@
 
 {#snippet accountScopeActions()}
 	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Account</span>
+		<span class="font-medium text-muted-foreground">{t('app.crm.account_filter')}</span>
 		<Inline gap="sm">
 			<Combobox
-				ariaLabel="Account"
+				ariaLabel={t('app.crm.account_filter')}
 				options={accountOptions}
 				value={selectedAccountId}
 				onValueChange={(value) => {
@@ -137,8 +160,8 @@
 					}
 					accountId = resolveScopedId(null, accountRows);
 				}}
-				emptyPlaceholder="Select account…"
-				searchPlaceholder="Search accounts…"
+				emptyPlaceholder={t('app.crm.select_account')}
+				searchPlaceholder={t('app.crm.search_accounts')}
 				clientConfig={{
 					isLoading: accountsQuery.loading,
 					error: accountsQuery.error?.message ?? null
@@ -152,12 +175,12 @@
 {#snippet pipeline()}
 	<Stack gap="md">
 		<label class="grid max-w-72 gap-1.5 text-sm">
-			<span class="font-medium">Owner</span>
+			<span class="font-medium">{t('component.owner')}</span>
 			<Combobox
 				options={ownerOptions}
 				bind:value={selectedOwnerId}
-				emptyPlaceholder="Select a rep…"
-				searchPlaceholder="Search reps…"
+				emptyPlaceholder={t('app.crm.select_rep')}
+				searchPlaceholder={t('app.crm.search_reps')}
 				clientConfig={{ isLoading: usersQuery.loading }}
 			/>
 		</label>
@@ -192,30 +215,30 @@
 
 {#snippet quotes()}
 	{#if selectedAccountId == null}
-		<p class="text-sm text-muted-foreground">Select an account to browse its quotes.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.empty_quotes')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="quotes"
 			view={`crm:quotes:${selectedAccountId}`}
-			title="Quotes"
-			description="Every sales document for the selected account, including lost and cancelled deals."
+			title={t('app.crm.tab_quotes')}
+			description={t('app.crm.quotes_description')}
 			query={{
 				where: { account_id: { eq: selectedAccountId } },
 				orderBy: { doc_no: 'desc' }
 			}}
 		>
 			{#snippet columns({ Column })}
-				<Column name="doc_no" label="Doc #" minWidth={140} card="badge" />
+				<Column name="doc_no" label={t('component.doc_no')} minWidth={140} card="badge" />
 				<Column name="title" minWidth={240} card="title" />
 				<Column name="status" card="badge" />
-				<Column name="gross" label="Amount" />
+				<Column name="gross" label={t('component.amount')} />
 				<Column name="currency" />
-				<Column name="valid_until" label="Valid until" />
-				<Column name="confirmed_at" label="Confirmed" />
+				<Column name="valid_until" label={t('component.valid_until')} />
+				<Column name="confirmed_at" label={t('component.confirmed')} />
 				<Column
 					name="owner_id"
-					label="Owner"
+					label={t('component.owner')}
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (userLabelsById.get(String(value)) ?? '—')}
 				/>
@@ -226,16 +249,16 @@
 
 {#snippet quoteLines()}
 	{#if selectedAccountId == null}
-		<p class="text-sm text-muted-foreground">Select an account to browse its quote lines.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.empty_quote_lines')}</p>
 	{:else if scopedQuoteIds.length === 0}
-		<p class="text-sm text-muted-foreground">No quotes exist for this account yet.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.no_quote_lines')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="quote_lines"
 			view={`crm:quote-lines:${selectedAccountId}`}
-			title="Quote lines"
-			description="Line items for quotes on the selected account."
+			title={t('app.crm.tab_quote_lines')}
+			description={t('app.crm.quote_lines_description')}
 			query={{
 				where: { quote_id: { in: scopedQuoteIds } },
 				orderBy: { quote_id: 'desc' }
@@ -244,18 +267,18 @@
 			{#snippet columns({ Column })}
 				<Column
 					name="quote_id"
-					label="Quote"
+					label={t('component.quote')}
 					minWidth={200}
 					card="title"
 					render={({ value }) =>
 						value == null || value === '' ? '—' : (quoteLabelsById.get(String(value)) ?? '—')}
 				/>
-				<Column name="product_code" label="Code" minWidth={100} />
-				<Column name="product_name" label="Product" minWidth={200} />
+				<Column name="product_code" label={t('component.code')} minWidth={100} />
+				<Column name="product_name" label={t('component.product')} minWidth={200} />
 				<Column name="quantity" />
-				<Column name="unit_price" label="Unit price" />
-				<Column name="discount_pct" label="Discount %" />
-				<Column name="line_total" label="Total" />
+				<Column name="unit_price" label={t('component.unit_price')} />
+				<Column name="discount_pct" label={t('component.discount_pct')} />
+				<Column name="line_total" label={t('component.total')} />
 			{/snippet}
 		</CollectionTable>
 	{/if}
@@ -265,8 +288,8 @@
 	<CollectionTable
 		{client}
 		collection="accounts"
-		title="Accounts"
-		description="Companies and organizations in your pipeline."
+		title={t('app.crm.tab_accounts')}
+		description={t('app.crm.accounts_description')}
 		query={{ where: { active: { eq: true } }, orderBy: { name: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
@@ -274,6 +297,15 @@
 			<Column name="industry" minWidth={160} card="subtitle" />
 			<Column name="phone" minWidth={140} />
 			<Column name="currency" card="badge" />
+			<Column
+				name="credit_limit"
+				label={t('component.credit_available')}
+				render={({ row }) => {
+					if (row.credit_hold === true) return t('component.hold');
+					if (row.credit_limit == null) return '—';
+					return (Number(row.credit_limit) - Number(row.credit_used ?? 0)).toLocaleString();
+				}}
+			/>
 			<Column name="active" />
 		{/snippet}
 	</CollectionTable>
@@ -281,22 +313,22 @@
 
 {#snippet contacts()}
 	{#if selectedAccountId == null}
-		<p class="text-sm text-muted-foreground">Select an account to browse its contacts.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.empty_contacts')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="contacts"
 			view={`crm:contacts:${selectedAccountId}`}
-			title="Contacts"
-			description="People at the selected account — decision-makers and day-to-day contacts."
+			title={t('app.crm.tab_contacts')}
+			description={t('app.crm.contacts_description')}
 			query={{
 				where: { account_id: { eq: selectedAccountId }, active: { eq: true } },
 				orderBy: { first_name: 'asc' }
 			}}
 		>
 			{#snippet columns({ Column })}
-				<Column name="first_name" label="First name" card="title" />
-				<Column name="last_name" label="Last name" card="subtitle" />
+				<Column name="first_name" label={t('component.first_name')} card="title" />
+				<Column name="last_name" label={t('component.last_name')} card="subtitle" />
 				<Column name="email" minWidth={200} />
 				<Column name="title" />
 				<Column name="department" />
@@ -310,15 +342,17 @@
 	<CollectionTable
 		{client}
 		collection="products"
-		title="Products"
-		description="Sellable catalogue. Quote lines snapshot from here at creation."
+		title={t('app.crm.tab_products')}
+		description={t('app.crm.products_description')}
 		query={{ where: { active: { eq: true } }, orderBy: { name: 'asc' } }}
 	>
 		{#snippet columns({ Column })}
 			<Column name="code" minWidth={120} card="badge" />
 			<Column name="name" minWidth={240} card="title" />
+			<Column name="spec" minWidth={160} />
 			<Column name="unit" />
-			<Column name="unit_price" label="Unit price" />
+			<Column name="qty_on_hand" label={t('component.on_hand')} />
+			<Column name="unit_price" label={t('component.unit_price')} />
 			<Column name="active" />
 		{/snippet}
 	</CollectionTable>
@@ -326,17 +360,17 @@
 
 {#snippet activities()}
 	{#if selectedAccountId == null}
-		<p class="text-sm text-muted-foreground">Select an account to browse related activities.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.empty_activities')}</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="activities"
 			view={`crm:activities:${selectedAccountId}`}
-			title="Activities"
-			description="Calls, meetings, emails, tasks, and notes linked to the selected account or its quotes."
+			title={t('app.crm.tab_activities')}
+			description={t('app.crm.activities_description')}
 			query={{
 				where: {
-					or: [
+					OR: [
 						{
 							regarding_type: { eq: 'accounts' },
 							regarding_id: { eq: selectedAccountId }
@@ -359,15 +393,54 @@
 				<Column name="type" card="badge" />
 				<Column
 					name="regarding_id"
-					label="Regarding"
+					label={t('component.regarding')}
 					minWidth={200}
 					render={({ row, value }) => {
 						const map = row.regarding_type === 'accounts' ? accountLabelsById : quoteLabelsById;
 						return value == null || value === '' ? '—' : (map.get(String(value)) ?? '—');
 					}}
 				/>
-				<Column name="due_date" label="Due" />
-				<Column name="completed_at" label="Completed" />
+				<Column name="due_date" label={t('component.due')} />
+				<Column name="completed_at" label={t('component.completed')} />
+				<Column
+					name="owner_id"
+					label={t('component.owner')}
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (userLabelsById.get(String(value)) ?? '—')}
+				/>
+			{/snippet}
+		</CollectionTable>
+	{/if}
+{/snippet}
+
+{#snippet billing()}
+	{#if selectedAccountId == null}
+		<p class="text-sm text-muted-foreground">Select an account to browse its invoices.</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="sales_invoices"
+			view={`crm:billing:${selectedAccountId}`}
+			title="Invoices"
+			description="Billing documents raised against the selected account's confirmed quotes."
+			query={{
+				where: { account_id: { eq: selectedAccountId } },
+				orderBy: { doc_no: 'desc' }
+			}}
+		>
+			{#snippet columns({ Column })}
+				<Column name="doc_no" label="Doc #" minWidth={140} card="badge" />
+				<Column
+					name="quote_id"
+					label="Quote"
+					minWidth={200}
+					card="title"
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (quoteLabelsById.get(String(value)) ?? '—')}
+				/>
+				<Column name="status" card="badge" />
+				<Column name="currency" card="badge" />
+				<Column name="gross" label="Gross amount" />
 				<Column
 					name="owner_id"
 					label="Owner"
@@ -379,11 +452,118 @@
 	{/if}
 {/snippet}
 
+{#snippet billingLines()}
+	{#if selectedAccountId == null}
+		<p class="text-sm text-muted-foreground">Select an account to browse invoice lines.</p>
+	{:else if scopedInvoiceIds.length === 0}
+		<p class="text-sm text-muted-foreground">No invoices exist for this account yet.</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="sales_invoice_lines"
+			view={`crm:billing-lines:${selectedAccountId}`}
+			title="Invoice lines"
+			description="Allocated quantities billed against the selected account's quotes."
+			query={{
+				where: { sales_invoice_id: { in: scopedInvoiceIds } },
+				orderBy: { sales_invoice_id: 'desc' }
+			}}
+		>
+			{#snippet columns({ Column })}
+				<Column
+					name="sales_invoice_id"
+					label="Invoice"
+					minWidth={140}
+					card="badge"
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (invoiceLabelsById.get(String(value)) ?? '—')}
+				/>
+				<Column name="product_code" label="Code" minWidth={100} />
+				<Column name="product_name" label="Product" minWidth={200} card="title" />
+				<Column name="quantity" />
+				<Column name="unit_price" label="Unit price" />
+				<Column name="line_total" label="Total" />
+			{/snippet}
+		</CollectionTable>
+	{/if}
+{/snippet}
+
+{#snippet contracts()}
+	{#if selectedAccountId == null}
+		<p class="text-sm text-muted-foreground">Select an account to browse its contracts.</p>
+	{:else if scopedQuoteIds.length === 0}
+		<p class="text-sm text-muted-foreground">No quotes exist for this account yet.</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="contract_signings"
+			view={`crm:contracts:${selectedAccountId}`}
+			title="Contracts"
+			description="Signing lifecycle of the selected account's confirmed quotes."
+			query={{ where: { quote_id: { in: scopedQuoteIds } } }}
+		>
+			{#snippet columns({ Column })}
+				<Column
+					name="quote_id"
+					label="Quote"
+					minWidth={200}
+					card="title"
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (quoteLabelsById.get(String(value)) ?? '—')}
+				/>
+				<Column name="variant" card="badge" />
+				<Column name="status" card="badge" />
+				<Column name="acknowledged_at" label="Acknowledged" />
+				<Column
+					name="owner_id"
+					label="Owner"
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (userLabelsById.get(String(value)) ?? '—')}
+				/>
+			{/snippet}
+		</CollectionTable>
+	{/if}
+{/snippet}
+
+{#snippet payments()}
+	{#if selectedAccountId == null}
+		<p class="text-sm text-muted-foreground">Select an account to browse its settlements.</p>
+	{:else if scopedQuoteIds.length === 0}
+		<p class="text-sm text-muted-foreground">No quotes exist for this account yet.</p>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="settlements"
+			view={`crm:payments:${selectedAccountId}`}
+			title="Payments"
+			description="Settlements received against the selected account's confirmed quotes."
+			query={{
+				where: { regarding_type: { eq: 'quotes' }, regarding_id: { in: scopedQuoteIds } }
+			}}
+		>
+			{#snippet columns({ Column })}
+				<Column
+					name="regarding_id"
+					label="Quote"
+					minWidth={200}
+					card="title"
+					render={({ value }) =>
+						value == null || value === '' ? '—' : (quoteLabelsById.get(String(value)) ?? '—')}
+				/>
+				<Column name="amount" card="badge" />
+				<Column name="currency" card="badge" />
+				<Column name="settled_on" label="Settled on" />
+				<Column name="reference" minWidth={160} />
+			{/snippet}
+		</CollectionTable>
+	{/if}
+{/snippet}
+
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="CRM"
-		title="Sales workspace"
-		description="Manage the pipeline, quotes, accounts, contacts, catalogue, and team activities."
+		eyebrow={t('app.crm.eyebrow')}
+		title={t('app.crm.header_title')}
+		description={t('app.crm.header_description')}
 		actions={accountScopeActions}
 	/>
 {/snippet}
@@ -392,23 +572,57 @@
 	<Tabs
 		animate={false}
 		config={[
-			{ name: 'pipeline', label: 'Pipeline', icon: 'lucide:kanban', content: pipeline },
-			{ name: 'quotes', label: 'Quotes', icon: 'lucide:file-text', content: quotes },
+			{
+				name: 'pipeline',
+				label: t('app.crm.tab_pipeline'),
+				icon: 'lucide:kanban',
+				content: pipeline
+			},
+			{ name: 'quotes', label: t('app.crm.tab_quotes'), icon: 'lucide:file-text', content: quotes },
 			{
 				name: 'quote-lines',
-				label: 'Quote lines',
+				label: t('app.crm.tab_quote_lines'),
 				icon: 'lucide:list-checks',
 				content: quoteLines
 			},
-			{ name: 'accounts', label: 'Accounts', icon: 'lucide:building-2', content: accounts },
-			{ name: 'contacts', label: 'Contacts', icon: 'lucide:contact-round', content: contacts },
-			{ name: 'products', label: 'Products', icon: 'lucide:package', content: products },
+			{
+				name: 'accounts',
+				label: t('app.crm.tab_accounts'),
+				icon: 'lucide:building-2',
+				content: accounts
+			},
+			{
+				name: 'contacts',
+				label: t('app.crm.tab_contacts'),
+				icon: 'lucide:contact-round',
+				content: contacts
+			},
+			{
+				name: 'products',
+				label: t('app.crm.tab_products'),
+				icon: 'lucide:package',
+				content: products
+			},
 			{
 				name: 'activities',
 				label: 'Activities',
 				icon: 'lucide:calendar-check',
 				content: activities
-			}
+			},
+			{ name: 'billing', label: 'Invoices', icon: 'lucide:file-text', content: billing },
+			{
+				name: 'billing-lines',
+				label: 'Invoice lines',
+				icon: 'lucide:list-checks',
+				content: billingLines
+			},
+			{
+				name: 'contracts',
+				label: 'Contracts',
+				icon: 'lucide:file-signature',
+				content: contracts
+			},
+			{ name: 'payments', label: 'Payments', icon: 'lucide:banknote', content: payments }
 		] satisfies TabConfig[]}
 	/>
 </Cover>
