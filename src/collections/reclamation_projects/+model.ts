@@ -59,7 +59,7 @@ export default defineModel(
 	{
 		description:
 			'Land reclamation projects and the floor plan, bathymetry, and cross-section documents that the 3D reconstruction is stitched from.',
-		recordLabel: ['project_code', 'project_name'],
+		recordLabel: 'project_name',
 		icon: 'lucide:waves',
 		indexes: [{ columns: ['project_code'], unique: true }]
 	}

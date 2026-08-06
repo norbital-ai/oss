@@ -1,5 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Bound, Cluster, Columns, Inline } from '@norbital-ai/ui/layout';
 	import { onDestroy } from 'svelte';
 	import { watch } from 'runed';
@@ -18,6 +20,8 @@
 	} from './site_viewer.types.js';
 
 	let { model, label, visible, renderCellM, onLayers, onStats }: SiteViewerProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	/**
 	 * Vertical exaggeration.
@@ -295,12 +299,12 @@
 	 */
 	const VIEWS = ['iso', 'plan', 'north', 'east'] as const;
 	type ViewId = (typeof VIEWS)[number];
-	const VIEW_LABEL: Record<ViewId, string> = {
-		iso: 'Iso',
-		plan: 'Plan',
-		north: 'North',
-		east: 'East'
-	};
+	const VIEW_LABEL = $derived<Record<ViewId, string>>({
+		iso: t('component.view_iso'),
+		plan: t('component.view_plan'),
+		north: t('component.view_north'),
+		east: t('component.view_east')
+	});
 	let view = $state<ViewId>('iso');
 
 	function applyView(next: ViewId): void {
@@ -468,7 +472,7 @@
 		class="block h-full w-full appearance-none border-0 bg-transparent p-0 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
 		aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
 		onkeydown={navigateByKeyboard}
-		aria-label={label ?? 'Reclamation site model'}
+		aria-label={label ?? t('component.site_model_aria')}
 	></button>
 
 	{#if status === 'building' || status === 'idle'}
@@ -477,7 +481,7 @@
 			justify="center"
 			class="absolute inset-0 bg-background/70 text-sm text-muted-foreground"
 		>
-			Tessellating the stitched solid…
+			{t('component.tessellating')}
 		</Inline>
 	{:else if typeof status === 'object'}
 		<Inline
@@ -495,13 +499,13 @@
 			gap="xs"
 			class="absolute bottom-3 left-3 rounded-md border bg-background/90 p-1 text-muted-foreground shadow-sm"
 			role="group"
-			aria-label="Move view"
+			aria-label={t('component.move_view')}
 		>
 			<span></span>
 			<button
 				type="button"
 				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
-				aria-label="Move up"
+				aria-label={t('component.move_up')}
 				aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
 				onkeydown={navigateByKeyboard}
 				onclick={() => pan(0, 1)}
@@ -512,7 +516,7 @@
 			<button
 				type="button"
 				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
-				aria-label="Move left"
+				aria-label={t('component.move_left')}
 				onkeydown={navigateByKeyboard}
 				onclick={() => pan(-1, 0)}
 			>
@@ -521,7 +525,7 @@
 			<button
 				type="button"
 				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
-				aria-label="Centre view"
+				aria-label={t('component.centre_view')}
 				onkeydown={navigateByKeyboard}
 				onclick={() => applyView(view)}
 			>
@@ -530,7 +534,7 @@
 			<button
 				type="button"
 				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
-				aria-label="Move right"
+				aria-label={t('component.move_right')}
 				onkeydown={navigateByKeyboard}
 				onclick={() => pan(1, 0)}
 			>
@@ -540,7 +544,7 @@
 			<button
 				type="button"
 				class="grid size-8 place-items-center rounded hover:bg-muted focus-visible:outline-2"
-				aria-label="Move down"
+				aria-label={t('component.move_down')}
 				onkeydown={navigateByKeyboard}
 				onclick={() => pan(0, -1)}
 			>
@@ -554,7 +558,7 @@
 			gap="sm"
 			class="absolute right-3 bottom-3 max-w-[calc(100%-7.5rem)] rounded-md border bg-background/90 px-2 py-1 text-tiny text-muted-foreground shadow-sm"
 		>
-			<div class="flex divide-x rounded border" role="group" aria-label="Viewpoint">
+			<div class="flex divide-x rounded border" role="group" aria-label={t('component.viewpoint')}>
 				{#each VIEWS as id (id)}
 					<button
 						type="button"
@@ -570,8 +574,12 @@
 				{/each}
 			</div>
 			<span aria-hidden="true">·</span>
-			<span class="font-medium">Vertical</span>
-			<div class="flex divide-x rounded border" role="group" aria-label="Vertical exaggeration">
+			<span class="font-medium">{t('component.vertical')}</span>
+			<div
+				class="flex divide-x rounded border"
+				role="group"
+				aria-label={t('component.vertical_exaggeration')}
+			>
 				{#each EXAGGERATIONS as factor (factor)}
 					<button
 						type="button"
@@ -596,7 +604,7 @@
 				aria-pressed={clipping}
 				onclick={() => setClipping(!clipping)}
 			>
-				Cut
+				{t('component.cut')}
 			</button>
 			{#if clipping}
 				<input
@@ -606,7 +614,7 @@
 					max="1"
 					step="0.005"
 					value={clipAt}
-					aria-label="Cut position"
+					aria-label={t('component.cut_position')}
 					oninput={(event) => setClipAt(Number(event.currentTarget.value))}
 				/>
 			{/if}
@@ -619,7 +627,7 @@
 			<p
 				class="absolute top-3 left-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-tiny font-medium text-amber-700 shadow-xs backdrop-blur dark:text-amber-300"
 			>
-				Heights ×{exaggeration} — not to scale
+				{t('component.heights_not_to_scale', { exaggeration })}
 			</p>
 		{/if}
 	{/if}

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { cn } from '@norbital-ai/ui/utils';
 	import InfoHint from './info-hint.svelte';
 	import type {
@@ -10,6 +12,9 @@
 
 	/** Source check: only geometry decoded from the section drawing is shown here. */
 	let { model, report }: { model: StitchedModel; report: StitchReport | null } = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
+
 	const source = $derived(report?.documents.find((document) => document.kind === 'cross_section'));
 	const drawingNative = $derived(source?.format === 'dxf' || source?.format === 'dwg');
 	/**
@@ -110,34 +115,33 @@
 
 <Stack gap="lg" class="pb-4">
 	{#if names.length === 0}
-		<p class="text-sm text-muted-foreground">No section geometry was decoded from the drawing.</p>
+		<p class="text-sm text-muted-foreground">{t('component.no_section_geometry')}</p>
 	{:else}
 		<Stack as="section" gap="sm">
 			<Inline align="center" gap="xs" class="border-b pb-2">
 				<h3 class="text-sm font-semibold">
-					{drawingNative ? 'Drawing geometry' : 'Legacy profile data'}
+					{drawingNative ? t('component.drawing_geometry') : t('component.legacy_profile_data')}
 				</h3>
 				<InfoHint
 					text={drawingNative
-						? 'Authored CAD entities only. Horizontal and vertical metres use one common scale; no bathymetry, material shading, or interpolated model geometry is added here.'
-						: 'This reconstruction came from a legacy profile table, not a CAD drawing. It can be plotted at equal axis scale but cannot prove that drawing entities were identified correctly.'}
+						? t('component.drawing_geometry_hint')
+						: t('component.legacy_profile_hint')}
 				/>
 			</Inline>
 			{#if !drawingNative}
 				<p class="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
-					Source is {source?.fileName ?? 'a non-CAD profile document'}. Replace it with the authored
-					cross-section drawing before treating this reconstruction as verified.
+					{t('component.legacy_source_warning', {
+						source: source?.fileName ?? t('component.legacy_source_named')
+					})}
 				</p>
 			{:else if archivedDwg}
 				<p class="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs">
-					This revision was stitched from a native DWG, which the reconstruction no longer reads.
-					The geometry below stands, but rebuilding the project needs the same sheet exported to
-					DXF.
+					{t('component.dwg_warning')}
 				</p>
 			{/if}
 
 			{#if names.length > 1}
-				<Cluster gap="xs" role="group" aria-label="Section">
+				<Cluster gap="xs" role="group" aria-label={t('component.section_selector')}>
 					{#each names as name (name)}
 						<button
 							type="button"
@@ -158,14 +162,14 @@
 				<Scroll
 					as="figure"
 					axis="x"
-					name={`Section ${active}`}
+					name={t('component.section_figure', { name: active })}
 					class="rounded-md border bg-card p-2"
 				>
 					<svg
 						viewBox={`0 0 ${W} ${H}`}
 						class="block h-auto min-w-[36rem] w-full"
 						role="img"
-						aria-label={`Section ${active}, drawn with equal horizontal and vertical scale`}
+						aria-label={t('component.section_aria', { name: active })}
 					>
 						{#each zTicks as z (z)}
 							<line
@@ -237,7 +241,7 @@
 						>
 					</svg>
 					<p class="mt-1 text-tiny text-muted-foreground tabular-nums">
-						{points.length} decoded points · true scale (1:1 horizontal to vertical)
+						{t('component.section_points', { points: points.length })}
 					</p>
 				</Scroll>
 
@@ -256,15 +260,16 @@
 		</Stack>
 
 		<Stack as="section" gap="sm">
-			<h3 class="border-b pb-2 text-sm font-semibold">Decoded coordinates</h3>
-			<Scroll axis="x" name="Decoded coordinates" class="rounded-md border bg-card">
+			<h3 class="border-b pb-2 text-sm font-semibold">{t('component.decoded_coordinates')}</h3>
+			<Scroll axis="x" name={t('component.decoded_coordinates')} class="rounded-md border bg-card">
+				<!-- stupidity:allow UI3 -- decoded profile points are engine-derived geometry, not collection rows. -->
 				<table class="w-full text-xs">
 					<thead class="border-b text-muted-foreground">
 						<tr>
-							<th class="px-2 py-1.5 text-left font-medium">Layer</th>
-							<th class="px-2 py-1.5 text-left font-medium">Role</th>
-							<th class="px-2 py-1.5 text-right font-medium">Station m</th>
-							<th class="px-2 py-1.5 text-right font-medium">Level m CD</th>
+							<th class="px-2 py-1.5 text-left font-medium">{t('component.table_layer')}</th>
+							<th class="px-2 py-1.5 text-left font-medium">{t('component.table_role')}</th>
+							<th class="px-2 py-1.5 text-right font-medium">{t('component.table_station')}</th>
+							<th class="px-2 py-1.5 text-right font-medium">{t('component.table_level')}</th>
 						</tr>
 					</thead>
 					<tbody class="divide-y">

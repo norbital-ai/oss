@@ -1,27 +1,22 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import { Column, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
-	import { formatMoney, formatQuantity } from '../../lib/reclamation/cost.js';
-	import type { CostLine } from '../../lib/reclamation/cost.js';
+	import { formatMoney, formatQuantity, parseCostLines } from '../../lib/reclamation/cost.js';
 	import type { RepresentationProps } from './$types.js';
 
 	let { record, close }: RepresentationProps = $props();
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	/**
 	 * The priced lines are recomputed server-side on every write, so this panel
 	 * only ever displays them. Editing a lever and saving re-prices the estimate.
 	 */
-	const lines = $derived.by((): CostLine[] => {
-		if (!record?.lines_json) return [];
-		try {
-			const parsed: unknown = JSON.parse(record.lines_json);
-			return Array.isArray(parsed) ? (parsed as CostLine[]) : [];
-		} catch {
-			return [];
-		}
-	});
+	const lines = $derived(parseCostLines(record?.lines_json));
 	const currency = $derived(record?.currency ?? 'SGD');
 </script>
 
@@ -39,7 +34,7 @@
 				<Field name="estimate_name" />
 				<Field
 					name="project_id"
-					label="Project"
+					label={t('component.project')}
 					renderer={RelationshipRenderer}
 					rendererProps={{
 						target: 'reclamation_projects',
@@ -59,12 +54,14 @@
 				{#key values.project_id}
 					<Field
 						name="reconstruction_id"
-						label="Reconstruction"
+						label={t('component.reconstruction')}
 						renderer={RelationshipRenderer}
 						rendererProps={{
 							target: 'site_reconstructions',
 							disabled: !values.project_id,
-							placeholder: values.project_id ? 'Select reconstruction…' : 'Choose a project first',
+							placeholder: values.project_id
+								? t('component.select_reconstruction')
+								: t('component.choose_project_first'),
 							options: {
 								where: values.project_id
 									? { project_id: { eq: values.project_id } }
@@ -95,9 +92,9 @@
 	{#if lines.length > 0}
 		<Stack as="section" gap="sm">
 			<div class="border-b pb-2">
-				<h3 class="text-sm font-semibold">Priced lines</h3>
+				<h3 class="text-sm font-semibold">{t('component.priced_lines')}</h3>
 				<p class="text-xs text-muted-foreground">
-					Quantities come from the stitched solid; the levers above adjust what is priced.
+					{t('component.priced_lines_description')}
 				</p>
 			</div>
 			<div class="divide-y rounded-md border bg-card text-sm">
@@ -115,7 +112,9 @@
 								)}
 								{#if line.pricedQuantity !== line.stitchedQuantity}
 									<span class="ml-1">
-										(stitched {formatQuantity(line.stitchedQuantity, line.unit)})
+										{t('component.stitched_qty', {
+											quantity: formatQuantity(line.stitchedQuantity, line.unit)
+										})}
 									</span>
 								{/if}
 							</span>
@@ -127,19 +126,19 @@
 			</div>
 			<dl class="rounded-md border bg-card p-3 text-sm">
 				<Inline as="div" justify="between" class="py-1">
-					<dt>Subtotal</dt>
+					<dt>{t('component.subtotal')}</dt>
 					<dd class="font-medium tabular-nums">
 						{formatMoney(record?.subtotal?.value ?? 0, currency)}
 					</dd>
 				</Inline>
 				<Inline as="div" justify="between" class="py-1">
-					<dt>Contingency</dt>
+					<dt>{t('component.contingency')}</dt>
 					<dd class="font-medium tabular-nums">
 						{formatMoney(record?.contingency?.value ?? 0, currency)}
 					</dd>
 				</Inline>
 				<Inline as="div" justify="between" class="border-t pt-2">
-					<dt class="font-medium">Total</dt>
+					<dt class="font-medium">{t('component.total')}</dt>
 					<dd class="text-heading tabular-nums">
 						{formatMoney(record?.total?.value ?? 0, currency)}
 					</dd>

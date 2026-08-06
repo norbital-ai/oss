@@ -27,6 +27,10 @@ async function inspectPdf(document: RawDocument): Promise<never> {
 			OPS.paintImageMaskXObject,
 			OPS.paintSolidColorImageMask
 		]);
+		// Pages are inspected one at a time on purpose: a single decoded operator list is the peak,
+		// inside the ~139 MiB tenant envelope `refuseDwg` names; holding every page's operators at
+		// once would multiply that peak by the page count.
+		// stupidity:allow A6 -- the sequencing is the point.
 		for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
 			const page = await pdf.getPage(pageNumber);
 			const operators = await page.getOperatorList();

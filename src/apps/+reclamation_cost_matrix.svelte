@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Inline, Stack } from '@norbital-ai/ui/layout';
@@ -8,6 +10,8 @@
 	import { SUBSTRATES, substrateDefinition } from '../lib/reclamation/cost.js';
 	import { calendarDateInTimeZone, PROJECT_TIME_ZONE, todayInstant } from '../lib/calendar.js';
 	import type { SubstrateId } from '../lib/reclamation/types.js';
+
+	const { t } = useI18n<TenantI18nKeys>();
 
 	type ReclamationProjectScopeRow = {
 		readonly norbital_id: string;
@@ -86,10 +90,12 @@
 
 {#snippet projectScopeActions()}
 	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">Project</span>
+		<span class="font-medium text-muted-foreground">
+			{t('app.reclamation_cost_matrix.project_filter')}
+		</span>
 		<Inline gap="sm">
 			<Combobox
-				ariaLabel="Project"
+				ariaLabel={t('app.reclamation_cost_matrix.project_filter')}
 				options={projectOptions}
 				value={selectedProjectId}
 				onValueChange={(value) => {
@@ -99,8 +105,8 @@
 					}
 					projectId = resolveScopedId(null, projects);
 				}}
-				emptyPlaceholder="Select project…"
-				searchPlaceholder="Search projects…"
+				emptyPlaceholder={t('app.reclamation_cost_matrix.select_project')}
+				searchPlaceholder={t('app.reclamation_cost_matrix.search_projects')}
 				clientConfig={{
 					isLoading: projectsQuery.loading,
 					error: projectsQuery.error?.message ?? null
@@ -115,8 +121,8 @@
 	<CollectionTable
 		{client}
 		collection="cost_rates"
-		title="Unit cost matrix"
-		description="One rate per substrate, shared by every project. Rates never change a volume."
+		title={t('app.reclamation_cost_matrix.unit_cost_matrix')}
+		description={t('app.reclamation_cost_matrix.unit_cost_matrix_description')}
 		query={{ where: activeRates }}
 	>
 		{#snippet columns({ Column })}
@@ -128,9 +134,9 @@
 			/>
 			<Column name="unit" />
 			<Column name="rate" />
-			<Column name="rate_basis" label="Basis" />
+			<Column name="rate_basis" label={t('component.basis')} />
 			<Column name="source" />
-			<Column name="validity_range" label="Valid" />
+			<Column name="validity_range" label={t('component.valid')} />
 		{/snippet}
 		{#snippet ListCard(rate)}
 			<Inline align="start" justify="between" gap="sm">
@@ -140,7 +146,7 @@
 			<p class="mt-1 truncate text-sm text-muted-foreground">
 				{rate.substrate != null && rate.substrate !== ''
 					? substrateDefinition(rate.substrate as SubstrateId).label
-					: '—'} · {rate.rate_basis ?? 'basis not stated'}
+					: '—'} · {rate.rate_basis ?? t('app.reclamation_cost_matrix.basis_not_stated')}
 			</p>
 		{/snippet}
 	</CollectionTable>
@@ -148,13 +154,15 @@
 
 {#snippet estimates()}
 	{#if selectedProjectId == null}
-		<p class="text-sm text-muted-foreground">Select a project to browse its estimates.</p>
+		<p class="text-sm text-muted-foreground">
+			{t('app.reclamation_cost_matrix.empty_estimates')}
+		</p>
 	{:else}
 		<CollectionTable
 			{client}
 			collection="cost_estimates"
-			title="Estimates"
-			description="Each estimate prices one reconstruction revision. Totals recompute on every save."
+			title={t('app.reclamation_cost_matrix.tab_estimates')}
+			description={t('app.reclamation_cost_matrix.estimates_description')}
 			view={`reclamation_cost_matrix:estimates:${selectedProjectId}`}
 			query={{
 				where: { project_id: { eq: selectedProjectId } },
@@ -165,7 +173,7 @@
 				<Column name="estimate_name" minWidth={200} />
 				<Column
 					name="reconstruction_id"
-					label="Reconstruction"
+					label={t('component.reconstruction')}
 					minWidth={160}
 					render={({ value }) =>
 						value == null || value === ''
@@ -177,12 +185,14 @@
 				<Column name="subtotal" />
 				<Column name="contingency" />
 				<Column name="total" />
-				<Column name="priced_at" label="Priced" />
+				<Column name="priced_at" label={t('app.reclamation_cost_matrix.priced')} />
 			{/snippet}
 			{#snippet ListCard(estimate)}
 				<Inline align="start" justify="between" gap="sm">
 					<p class="truncate font-medium">{estimate.estimate_name}</p>
-					<span class="shrink-0 text-xs text-muted-foreground">{estimate.status ?? 'draft'}</span>
+					<span class="shrink-0 text-xs text-muted-foreground">
+						{estimate.status ?? t('app.reclamation_cost_matrix.draft')}
+					</span>
 				</Inline>
 			{/snippet}
 		</CollectionTable>
@@ -205,18 +215,16 @@
 			{/each}
 		</div>
 		<p class="max-w-[70ch] text-xs text-muted-foreground">
-			The catalogue is fixed by the engine: a substrate exists because the solid can measure it. A
-			rate row without a matching substrate is never priced, and a substrate without a rate row
-			prices at zero and is listed on the estimate as a missing rate.
+			{t('app.reclamation_cost_matrix.catalogue_description')}
 		</p>
 	</Stack>
 {/snippet}
 
 {#snippet pageHeading()}
 	<PageHeader
-		eyebrow="Reclamation settings"
-		title="Cost Matrix"
-		description="Unit rates per substrate, the estimates built from them, and what each substrate measures."
+		eyebrow={t('app.reclamation_cost_matrix.eyebrow')}
+		title={t('app.reclamation_cost_matrix.header_title')}
+		description={t('app.reclamation_cost_matrix.header_description')}
 		actions={projectScopeActions}
 	/>
 {/snippet}
@@ -226,9 +234,24 @@
 		lazyLoad={false}
 		animate={false}
 		config={[
-			{ name: 'rates', label: 'Unit rates', icon: 'lucide:table-2', content: rates },
-			{ name: 'estimates', label: 'Estimates', icon: 'lucide:calculator', content: estimates },
-			{ name: 'catalogue', label: 'Substrate catalogue', icon: 'lucide:layers', content: catalogue }
+			{
+				name: 'rates',
+				label: t('app.reclamation_cost_matrix.tab_rates'),
+				icon: 'lucide:table-2',
+				content: rates
+			},
+			{
+				name: 'estimates',
+				label: t('app.reclamation_cost_matrix.tab_estimates'),
+				icon: 'lucide:calculator',
+				content: estimates
+			},
+			{
+				name: 'catalogue',
+				label: t('app.reclamation_cost_matrix.tab_catalogue'),
+				icon: 'lucide:layers',
+				content: catalogue
+			}
 		] satisfies TabConfig[]}
 	/>
 </Cover>

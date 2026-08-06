@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { client } from '$pod/client';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import InfoHint from './info-hint.svelte';
@@ -27,6 +29,8 @@
 		provenance: readonly DocumentProvenance[];
 	} = $props();
 
+	const { t } = useI18n<TenantI18nKeys>();
+
 	function number(value: number, digits = 0): string {
 		return value.toLocaleString(undefined, { maximumFractionDigits: digits });
 	}
@@ -35,10 +39,8 @@
 <Stack gap="lg" class="pb-4">
 	<Stack as="section" gap="sm">
 		<Inline align="center" gap="xs" class="border-b pb-2">
-			<h3 class="text-sm font-semibold">Reconstruction inputs</h3>
-			<InfoHint
-				text="All three are required. Elevations come from the sections, plan extents from the floor plan, and the existing bed from the survey. Edit the project record to attach or replace one."
-			/>
+			<h3 class="text-sm font-semibold">{t('component.reconstruction_inputs')}</h3>
+			<InfoHint text={t('component.reconstruction_inputs_hint')} />
 		</Inline>
 		<div class="divide-y rounded-md border bg-card">
 			{#each slots as slot (slot.kind)}
@@ -51,12 +53,12 @@
 								? 'shrink-0 text-xs text-muted-foreground'
 								: 'shrink-0 text-xs font-medium text-destructive'}
 						>
-							{slot.uploaded ? (source?.format ?? 'attached') : 'missing'}
+							{slot.uploaded ? (source?.format ?? t('component.attached')) : t('component.missing')}
 						</span>
 					</Inline>
 					{#if source}
 						<p class="mt-1 truncate text-xs text-muted-foreground" title={source.fileName ?? ''}>
-							{source.fileName ?? 'unnamed'} · {number(source.byteSize / 1024)} kB
+							{source.fileName ?? t('component.unnamed')} · {number(source.byteSize / 1024)} kB
 						</p>
 						<p class="mt-0.5 text-xs text-muted-foreground">{source.summary}</p>
 						<p class="mt-0.5 font-mono text-tiny text-muted-foreground">
@@ -72,10 +74,8 @@
 
 	<Stack as="section" gap="sm">
 		<Inline align="center" gap="xs" class="border-b pb-2">
-			<h3 class="text-sm font-semibold">Further reconstruction documents</h3>
-			<InfoHint
-				text="Extra section sheets and surveys that also feed the model. Another perimeter section is the most useful thing you can add: it replaces a stretch of interpolation with measurement. Saving one re-runs the stitch."
-			/>
+			<h3 class="text-sm font-semibold">{t('component.further_documents')}</h3>
+			<InfoHint text={t('component.further_documents_hint')} />
 		</Inline>
 		<!-- Both tables read project_documents, so each names its own view: the -->
 		<!-- default is one view per collection, and it is also the key column -->
@@ -91,8 +91,8 @@
 		>
 			{#snippet columns({ Column })}
 				<Column name="title" minWidth={200} />
-				<Column name="document_role" label="Role" />
-				<Column name="document_number" label="Number" />
+				<Column name="document_role" label={t('component.role')} />
+				<Column name="document_number" label={t('component.number')} />
 				<Column name="revision" />
 				<Column name="status" />
 			{/snippet}
@@ -107,10 +107,8 @@
 
 	<Stack as="section" gap="sm">
 		<Inline align="center" gap="xs" class="border-b pb-2">
-			<h3 class="text-sm font-semibold">Tender and reference</h3>
-			<InfoHint
-				text="Filed against the project and never parsed: tender returns, correspondence, permits, method statements. Nothing here can change a quantity."
-			/>
+			<h3 class="text-sm font-semibold">{t('component.tender_reference')}</h3>
+			<InfoHint text={t('component.tender_reference_hint')} />
 		</Inline>
 		<CollectionTable
 			{client}
@@ -125,10 +123,10 @@
 				<Column name="title" minWidth={200} />
 				<Column name="category" />
 				<Column name="discipline" />
-				<Column name="document_number" label="Number" />
+				<Column name="document_number" label={t('component.number')} />
 				<Column name="revision" />
-				<Column name="issued_on" label="Issued" />
-				<Column name="issued_by" label="By" />
+				<Column name="issued_on" label={t('component.issued')} />
+				<Column name="issued_by" label={t('component.by')} />
 				<Column name="status" />
 			{/snippet}
 			{#snippet ListCard(document)}
@@ -137,7 +135,8 @@
 					<span class="shrink-0 text-xs text-muted-foreground">{document.category}</span>
 				</Inline>
 				<p class="mt-1 truncate text-sm text-muted-foreground">
-					{document.document_number ?? 'no number'} · {document.status ?? 'no status'}
+					{document.document_number ?? t('component.no_code')} · {document.status ??
+						t('component.no_status')}
 				</p>
 			{/snippet}
 		</CollectionTable>
