@@ -1,5 +1,13 @@
 # @norbital-ai/platform-utils
 
+## 4.0.0
+
+### Patch Changes
+
+- Updated dependencies [fd8435e]
+- Updated dependencies [fd8435e]
+  - @norbital-ai/std@4.0.0
+
 ## 3.0.0
 
 ### Patch Changes
