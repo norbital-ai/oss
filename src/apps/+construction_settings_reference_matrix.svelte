@@ -13,6 +13,14 @@
 	<title>Construction Reference Matrix</title>
 	<meta name="description" content="Maintain the BIM reference matrix." />
 	<meta name="pod:icon" content="lucide:grid-3x3" />
+	<meta
+		name="pod:thumbnail"
+		content="/api/template-seed-assets/construction/app-media/construction_settings_reference_matrix-banner.svg"
+	/>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/construction/app-media/construction_settings_reference_matrix-banner.svg"
+	/>
 </svelte:head>
 
 {#snippet pageHeading()}

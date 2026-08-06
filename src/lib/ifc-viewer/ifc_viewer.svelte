@@ -136,13 +136,10 @@
 		}
 	}
 
-	const IFC_HTML_INSTEAD_OF_BYTES_MESSAGE =
-		'The model URL returned HTML instead of IFC data. This often happens when the link used a stale app origin or port. Refresh the page or reopen the record so the URL matches the current server.';
-
 	function assertIfcBodyNotHtml(response: Response, buffer: Uint8Array): void {
 		const contentType = response.headers.get('content-type') ?? '';
 		if (contentType.toLowerCase().includes('text/html')) {
-			throw new Error(IFC_HTML_INSTEAD_OF_BYTES_MESSAGE);
+			throw new Error(t('component.ifc_html_instead_of_bytes'));
 		}
 
 		const headLen = Math.min(120, buffer.length);
@@ -152,7 +149,7 @@
 		const trimmed = head.trimStart();
 		const lower = trimmed.toLowerCase();
 		if (lower.startsWith('<!doctype html') || lower.startsWith('<html')) {
-			throw new Error(IFC_HTML_INSTEAD_OF_BYTES_MESSAGE);
+			throw new Error(t('component.ifc_html_instead_of_bytes'));
 		}
 	}
 
@@ -342,7 +339,7 @@
 
 		const response = await fetchIfcModelResponse(fetchUrl);
 		if (!response.ok) {
-			throw new Error(`Unable to download IFC model (${response.status}).`);
+			throw new Error(t('component.ifc_download_failed', { status: response.status }));
 		}
 
 		const buffer = new Uint8Array(await response.arrayBuffer());
@@ -350,9 +347,9 @@
 
 		const modelName = getModelName(fetchUrl);
 		const fragmentBytes = await withTimeout(
-			() => convertIfcToFragments(buffer),
+			() => convertIfcToFragments(buffer, t),
 			IFC_CONVERSION_TIMEOUT_MS,
-			'IFC conversion'
+			t('component.ifc_conversion')
 		);
 
 		const group = await withTimeout(
@@ -362,7 +359,7 @@
 					camera: runtime.world.camera.three
 				}),
 			IFC_FRAGMENT_LOAD_TIMEOUT_MS,
-			'Fragment load'
+			t('component.ifc_fragment_load')
 		);
 
 		runtime.world.scene.three.add(group.object);
@@ -410,10 +407,10 @@
 					loadBanner = {
 						error:
 							error instanceof DOMException && error.name === 'AbortError'
-								? 'Timed out while downloading the IFC model.'
+								? t('component.ifc_download_timed_out')
 								: error instanceof Error
 									? getErrorMessage(error)
-									: 'Unable to load IFC model.'
+									: t('component.ifc_load_failed')
 					};
 					const runtime = myRuntime;
 					if (runtime) {

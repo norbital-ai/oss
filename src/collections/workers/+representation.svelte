@@ -7,6 +7,13 @@
 	let { record, close }: RepresentationProps = $props();
 </script>
 
+<svelte:head>
+	<meta
+		name="pod:banner"
+		content="/api/template-seed-assets/construction/record-media/workers-banner.svg"
+	/>
+</svelte:head>
+
 <CollectionForm
 	{client}
 	collection="workers"

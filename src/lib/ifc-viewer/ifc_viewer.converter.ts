@@ -1,4 +1,19 @@
 import converterWorkerUrl from './ifc_viewer.converter.worker.ts?worker&url';
+import type { I18nApi } from '@norbital-ai/ui/i18n';
+import type { TenantI18nKeys } from '$pod/i18n-keys';
+
+export type Translator = I18nApi<TenantI18nKeys>['t'];
+
+/** Error codes the converter worker posts instead of display copy. */
+const WORKER_ERROR_KEYS: Readonly<Record<string, TenantI18nKeys>> = {
+	'ifc.unable_to_convert': 'component.ifc_unable_to_convert',
+	'ifc.worker_crashed': 'component.ifc_worker_crashed'
+};
+
+function resolveWorkerError(raw: string, t: Translator): string {
+	const key = WORKER_ERROR_KEYS[raw];
+	return key === undefined ? raw : t(key);
+}
 
 type WorkerSuccessMessage = {
 	type: 'success';
@@ -43,7 +58,7 @@ function getTransferBuffer(bytes: Uint8Array): ArrayBuffer {
 	return bytes.slice().buffer;
 }
 
-export async function convertIfcToFragments(bytes: Uint8Array): Promise<Uint8Array> {
+export async function convertIfcToFragments(bytes: Uint8Array, t: Translator): Promise<Uint8Array> {
 	const worker = await createConverterWorker();
 	const transferBuffer = getTransferBuffer(bytes);
 
@@ -65,7 +80,7 @@ export async function convertIfcToFragments(bytes: Uint8Array): Promise<Uint8Arr
 				settle(() => resolve(new Uint8Array(message.fragmentBytes)));
 				return;
 			}
-			settle(() => reject(new Error(message.error)));
+			settle(() => reject(new Error(resolveWorkerError(message.error, t))));
 		};
 
 		worker.onerror = (event: ErrorEvent) => {
@@ -78,7 +93,7 @@ export async function convertIfcToFragments(bytes: Uint8Array): Promise<Uint8Arr
 				.filter(Boolean)
 				.join(', ');
 
-			const errorMessage = details || 'Unknown worker error';
+			const errorMessage = details || t('component.ifc_unknown_worker_error');
 			console.error('[IFCViewer] Converter worker error event:', {
 				message: event.message,
 				filename: event.filename,
@@ -92,7 +107,7 @@ export async function convertIfcToFragments(bytes: Uint8Array): Promise<Uint8Arr
 
 		worker.onmessageerror = (event: MessageEvent) => {
 			console.error('[IFCViewer] Converter worker message error:', event);
-			settle(() => reject(new Error('Unable to communicate with the IFC conversion worker.')));
+			settle(() => reject(new Error(t('component.ifc_worker_communication_failed'))));
 		};
 
 		try {
