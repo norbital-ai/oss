@@ -1,8 +1,15 @@
 # Template Repository Metadata and READMEs
 
+Templates live in their own repositories, one directory per key at the repository root:
+`norbital-ai/templates` (public) and `norbital-ai/templates-private`. The split decides one thing
+only — **whether a template is advertised**. The website generates its gallery from the templates
+the public repository publishes, so a template in the private one is structurally invisible to it.
+A host resolves both remotes into one catalogue, so a private template is a first-class template in
+the picker, in seeding, and in tenant forking.
+
 The website (`norbital.ai/templates/*` and the homepage cards) is generated from the template
-workspace itself — there is no rewritten copy anywhere. Every display fact comes from two files
-in `template_workspaces/<key>/`, fetched at build time:
+workspace itself — there is no rewritten copy anywhere, and no list of slugs. Every display fact
+comes from two files in `<key>/`, fetched at build time:
 
 | File                     | Supplies                                                                        |
 | ------------------------ | ------------------------------------------------------------------------------- |
@@ -55,7 +62,7 @@ The website serves `/zh/templates/<key>` from `README.zh.md` when present, and f
 keep the file name and structure mirrored, and reference the same relative assets:
 
 ```text
-template_workspaces/hr-payroll/
+hr-payroll/
 ├── README.md        # English (source of truth)
 ├── README.zh.md     # Simplified Chinese, same structure
 ├── assets/banner.svg
@@ -72,3 +79,5 @@ the same rule: present only when the translation is kept current.
 - Change a card title, chips, or banner → edit `norbital.template.json`.
 - Add Chinese support → add `README.zh.md` (and the manifest zh fields) next to the English ones.
 - The website rebuild picks the changes up from the repository; nothing else moves.
+- Publish a template to the public repository and it is advertised; publish it to the private one
+  and it is not. There is no third place to update.

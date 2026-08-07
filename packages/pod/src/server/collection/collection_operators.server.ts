@@ -2,6 +2,7 @@ import { type AnyRelationsFilter, type Operators, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { isUtcIsoInstant } from '@norbital-ai/std/date';
 import { error } from './http_error.js';
+import { vectorDistanceOperatorKeys } from './collection_vector.server.js';
 
 /**
  * The vocabulary a collection `where` may use inside a single column's condition, and the only
@@ -113,6 +114,7 @@ export const FIELD_CONDITION_STRUCTURAL_KEYS = ['AND', 'OR', 'NOT'] as const;
 export const ACCEPTED_FIELD_OPERATORS: ReadonlySet<string> = new Set<string>([
 	...DRIZZLE_FIELD_OPERATORS,
 	...Object.keys(DATE_RANGE_PREDICATES),
+	...vectorDistanceOperatorKeys(),
 	...FIELD_CONDITION_STRUCTURAL_KEYS
 ]);
 

@@ -71,6 +71,9 @@ export async function applyMigrations(input: ApplyMigrationsInput): Promise<void
 	}
 
 	const client = new Client({ connectionString: connStr });
+	client.on('error', (error) => {
+		console.warn('[tenant-db] migration apply connection dropped; DDL aborted', error);
+	});
 	await client.connect();
 	try {
 		await client.query('BEGIN');

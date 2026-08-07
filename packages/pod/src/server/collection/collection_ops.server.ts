@@ -61,6 +61,11 @@ import {
 	getCollectionQuery
 } from './collection_direct.js';
 import {
+	directFindNearest,
+	type FindNearestQuery,
+	type FindNearestRow
+} from './collection_vector.server.js';
+import {
 	emitOutboundRows,
 	emitOutboundRowsMany
 } from '$lib/server/integrations/tenant-outbox.server.js';
@@ -152,6 +157,27 @@ export async function findMany(
 	);
 
 	return directFindMany(ctx, collection, { ...query, where });
+}
+
+/**
+ * Server-only pgvector nearest-neighbor search. Read policy is enforced the same way as
+ * `findMany` (elevated hook paths bypass via the usual permission bypass ALS).
+ *
+ * Policy row filters are not yet folded into the ANN SQL — callers that need both should
+ * keep `maxDistance` + `limit` tight, or follow up with an id `in` query. Hooks typically
+ * run with bypass and care about corpus-wide integrity checks.
+ */
+export async function findNearest(
+	ctx: ProvisionedContext,
+	collection: string,
+	query: FindNearestQuery
+): Promise<FindNearestRow[]> {
+	if (!ctx.baseScope) {
+		throw new Error(`Collection query for '${collection}' requires base scope`);
+	}
+	// Touch the read-permission path so unauthorized callers still fail closed.
+	await resolvePolicyWhere(ctx, collection);
+	return directFindNearest(ctx, collection, query);
 }
 
 /** Policy-aware keyset page used by the public collection client. */

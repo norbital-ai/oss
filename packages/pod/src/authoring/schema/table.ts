@@ -71,7 +71,16 @@ export type TableMeta = {
 };
 
 /** Index method supported by the authoring layer. */
-export type TableIndexMethod = 'btree' | 'hash' | 'gist' | 'gin' | 'brin' | 'spgist';
+export type TableIndexMethod =
+	| 'btree'
+	| 'hash'
+	| 'gist'
+	| 'gin'
+	| 'brin'
+	| 'spgist'
+	/** pgvector approximate nearest neighbor (requires the `vector` extension). */
+	| 'hnsw'
+	| 'ivfflat';
 
 export type TableIndex = {
 	/** REQUIRED when any member is an expression — drizzle-kit cannot derive a name from SQL. */
@@ -152,6 +161,8 @@ function portableColumnKind(column: AnyPgColumn): string {
 		case 'PgVarchar':
 		case 'PgChar':
 			return 'text';
+		case 'PgVector':
+			return 'vector';
 		default:
 			return column.getSQLType().toLowerCase();
 	}
@@ -166,6 +177,12 @@ export function portableCollectionField(name: string, column: AnyPgColumn): Coll
 	const values = enumCustom?.values ?? (column.enumValues?.length ? column.enumValues : undefined);
 	const options = custom && 'definitionBacked' in custom ? custom.options : undefined;
 
+	const embeddingDimensions = columnCustomIsKind(custom, 'vector')
+		? custom.dimensions
+		: column.columnType === 'PgVector'
+			? column.length
+			: undefined;
+
 	return {
 		name,
 		kind: systemSpec?.kindName ?? portableColumnKind(column),
@@ -174,6 +191,9 @@ export function portableCollectionField(name: string, column: AnyPgColumn): Coll
 		...(readOnly ? { readOnly: true } : {}),
 		...(values ? { values } : {}),
 		...(options ? { options } : {}),
+		...(embeddingDimensions != null
+			? { options: { ...(options ?? {}), dimensions: embeddingDimensions } }
+			: {}),
 		...(columnCustomIsKind(custom, 'money') && custom.currencies
 			? { currencies: custom.currencies }
 			: {}),
@@ -371,8 +391,11 @@ function isSearchableTextBuilder(builder: AnyPgColumnBuilder): boolean {
 	const config = Reflect.get(builder, 'config');
 	if (!config || typeof config !== 'object') return false;
 	if (Number(Reflect.get(config, 'dimensions') ?? 0) > 0) return false;
+	const columnType = Reflect.get(config, 'columnType');
+	if (columnType === 'PgVector') return false;
 	const customKind = readBuilderCustom(builder)?.kind;
-	return Reflect.get(config, 'columnType') === 'PgText' || customKind === 'enum';
+	if (customKind === 'vector') return false;
+	return columnType === 'PgText' || customKind === 'enum';
 }
 
 function assertTimezoneAwareTimestamps(

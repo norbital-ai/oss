@@ -13,12 +13,18 @@ export {
 	dateRange,
 	file,
 	geolocation,
+	hexToBinaryEmbedding,
 	numeric,
 	phone,
 	clockTime,
-	timestamp
+	timestamp,
+	vector
 } from './builtin/columns.js';
-export type { CustomTypeOptionsMap, CustomTypeValueMap } from './builtin/columns.js';
+export type {
+	CustomTypeOptionsMap,
+	CustomTypeValueMap,
+	EmbeddingColumnOptions
+} from './builtin/columns.js';
 export { defineCustomType } from './custom-type.js';
 export type {
 	AnyCustomTypeDefinition,

@@ -40,6 +40,9 @@ export async function assertUuidV7Available(client: QueryableClient): Promise<vo
 
 export async function resetTenantDatabase(connectionString: string): Promise<void> {
 	const client = new Client({ connectionString });
+	client.on('error', (error) => {
+		console.warn('[tenant-db] reset connection dropped', error);
+	});
 	await client.connect();
 	try {
 		await client.query('DROP SCHEMA IF EXISTS public CASCADE');
@@ -53,6 +56,9 @@ export async function resetTenantDatabase(connectionString: string): Promise<voi
 
 export async function ensureDatabaseBootstrap(connectionString: string): Promise<void> {
 	const client = new Client({ connectionString });
+	client.on('error', (error) => {
+		console.warn('[tenant-db] bootstrap connection dropped', error);
+	});
 	await client.connect();
 	try {
 		await assertPostgresMajorVersion(client);

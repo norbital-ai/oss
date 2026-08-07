@@ -503,6 +503,11 @@ export class NeonTenantDbProvider implements TenantDbProvider {
 		// stupidity:allow A6 -- connection probes are ordered retries with a delay
 		while (Date.now() < deadline) {
 			const client = new Client({ connectionString });
+			client.on('error', (error) => {
+				// A dropped connection rejects the pending query (caught below) and fires 'error';
+				// without a listener the latter kills the process on a probe.
+				console.warn('[neon-provider] connect probe connection dropped', error);
+			});
 			try {
 				await client.connect();
 				await client.query('SELECT 1');

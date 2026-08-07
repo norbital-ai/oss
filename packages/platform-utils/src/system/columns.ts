@@ -32,6 +32,13 @@ export type SystemColumnSpec = {
 	readonly implicitQuery: boolean;
 };
 
+/**
+ * System columns injected into every tenant collection table.
+ *
+ * Future: a per-record omni embedding (`vector(n)` via Gemini multimodal) may land here as
+ * another system column — same `vector()` + HNSW + `findNearest` path used by PDQ photo
+ * embeddings today (`metric: 'cosine'` for omni, `'l2'` for binary PDQ). One path only.
+ */
 const SYSTEM_COLUMN_SPECS: readonly SystemColumnSpec[] = [
 	{
 		key: 'PKEY',

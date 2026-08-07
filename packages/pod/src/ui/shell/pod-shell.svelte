@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { onDestroy, tick } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 	import { page, goto } from '$lib/ui/state/router.svelte.js';
 	import {
@@ -32,7 +33,8 @@
 	import { shortcut } from '@norbital-ai/ui/keybindings';
 	import { WorkspaceShell, type WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Bound, Center, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { CollapsingMediaBanner } from '@norbital-ai/ui/media-banner';
+	import { Bound, Center, Cover, Frame, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { WorkspaceFileUploadClient } from '$lib/ui/state/workspace-file-upload.svelte.js';
 	import { workspaceRuntimeOperations, type WorkspaceAppLoader } from '../state/client.js';
 	import BillingBanner from './billing-banner.svelte';
@@ -174,6 +176,8 @@
 	);
 	let agentSheetOpen = $state(false);
 	let omniOpen = $state(false);
+	let appSurfaceEl = $state<HTMLElement | null>(null);
+	const failedThumbnails = new SvelteSet<string>();
 
 	/**
 	 * Cmd+K and the FAB are the same gesture: open the agent, then hand the composer focus.
@@ -290,9 +294,7 @@
 
 {#snippet activeAppBanner()}
 	{#if activeAppManifest?.banner}
-		<div class="relative h-[clamp(8rem,24vh,18rem)] w-full overflow-clip border-b bg-muted">
-			<img src={activeAppManifest.banner} alt="" class="size-full object-cover" />
-		</div>
+		<CollapsingMediaBanner src={activeAppManifest.banner} scrollRoot={appSurfaceEl} />
 	{/if}
 {/snippet}
 
@@ -350,43 +352,52 @@
 												navigate(app.href);
 											}}
 										>
-											<div
-												class="relative flex aspect-[16/9] w-full items-center justify-center overflow-hidden border-b bg-muted"
-											>
-												{#if app.thumbnail}
-													<img
-														src={app.thumbnail}
-														alt=""
-														loading="lazy"
-														decoding="async"
-														class="size-full object-cover"
-													/>
-												{:else}
-													<div
-														class="flex size-12 items-center justify-center rounded-xl border border-input bg-background text-foreground shadow-xs"
-													>
-														<IconWrapper
-															name={app.icon ?? 'lucide:layout-grid'}
-															class="size-6 text-muted-foreground"
+											<Stack gap="none">
+												{#if app.thumbnail && !failedThumbnails.has(app.key)}
+													<Frame ratio="banner" shrink={false}>
+														<img
+															src={app.thumbnail}
+															alt=""
+															loading="lazy"
+															decoding="async"
+															onerror={() => failedThumbnails.add(app.key)}
 														/>
-													</div>
-												{/if}
-											</div>
-											<Inline align="start" gap="sm" class="p-3">
-												<div
-													class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
-												>
-													<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
-												</div>
-												<div class="min-w-0 flex-1">
-													<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
-													<p
-														class="mt-0.5 line-clamp-2 min-h-8 text-micro leading-4 text-muted-foreground"
+													</Frame>
+												{:else}
+													<Frame
+														ratio="banner"
+														shrink={false}
+														class="bg-linear-to-br from-muted via-background to-brand/10"
 													>
-														{app.description ?? ''}
-													</p>
-												</div>
-											</Inline>
+														<Inline fill justify="center" align="center" aria-hidden="true">
+															<IconWrapper
+																name={app.icon ?? 'lucide:layout-grid'}
+																class="size-10 text-brand/45"
+															/>
+														</Inline>
+													</Frame>
+												{/if}
+												<Inline align="start" gap="sm" class="p-3">
+													<Inline
+														shrink={false}
+														justify="center"
+														align="center"
+														class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
+													>
+														<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
+													</Inline>
+													<Stack gap="xs" grow class="min-w-0">
+														<p class="truncate text-xs font-semibold text-foreground">
+															{app.label}
+														</p>
+														<p
+															class="line-clamp-2 min-h-8 text-micro leading-4 text-muted-foreground"
+														>
+															{app.description ?? ''}
+														</p>
+													</Stack>
+												</Inline>
+											</Stack>
 										</a>
 									{/each}
 								</Grid>
@@ -417,31 +428,32 @@
 			<Bound size="full" clip grow data-workspace-app-region>
 				<Cover gap="none" top={activeAppBanner}>
 					<div
+						bind:this={appSurfaceEl}
 						data-workspace-app-surface
 						class="h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:pod-app] [container-type:inline-size]"
 					>
 						{#await activeApp}
-							<div class="grid h-full min-h-0 place-items-center text-sm text-muted-foreground">
+							<Stack fill justify="center" align="center" class="text-sm text-muted-foreground">
 								{t('pod.shell.loadingApplication')}
-							</div>
+							</Stack>
 						{:then ActiveApp}
 							<ActiveApp />
 						{:catch error}
-							<div class="grid h-full min-h-0 place-items-center p-6 text-sm text-destructive">
+							<Stack fill justify="center" align="center" class="p-6 text-sm text-destructive">
 								{error instanceof Error ? error.message : String(error)}
-							</div>
+							</Stack>
 						{/await}
 					</div>
 				</Cover>
 			</Bound>
 		{:else if appName && !accessible}
-			<div class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-destructive">
+			<Stack grow fill justify="center" align="center" class="p-6 text-sm text-destructive">
 				{t('pod.shell.accessDenied')}
-			</div>
+			</Stack>
 		{:else}
-			<div class="grid min-h-0 flex-1 place-items-center p-6 text-sm text-muted-foreground">
+			<Stack grow fill justify="center" align="center" class="p-6 text-sm text-muted-foreground">
 				{t('pod.shell.appNotFound')}
-			</div>
+			</Stack>
 		{/if}
 	</Bound>
 </WorkspaceShell>

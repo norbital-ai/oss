@@ -85,6 +85,21 @@ type DirectRqbQueryConfig<
 	_RelationType extends 'many' | 'one'
 > = SchemaQueryConfig<S, N>;
 
+export type FindNearestMetric = 'cosine' | 'l2' | 'ip';
+
+export type FindNearestConfig<S extends AnySchema, N extends TableName<S>> = {
+	readonly column: keyof SchemaRow<S, N> & string;
+	readonly probe: readonly number[];
+	readonly metric: FindNearestMetric;
+	readonly maxDistance?: number;
+	readonly limit: number;
+	readonly excludeIds?: readonly string[];
+};
+
+export type FindNearestRow<S extends AnySchema, N extends TableName<S>> = SchemaRow<S, N> & {
+	readonly distance: number;
+};
+
 type DirectDbRelationalQueryApi<S extends AnySchema, N extends TableName<S>> = {
 	readonly findMany: <Cfg extends DirectRqbQueryConfig<S, N, 'many'>>(
 		cfg?: Cfg & {
@@ -96,6 +111,11 @@ type DirectDbRelationalQueryApi<S extends AnySchema, N extends TableName<S>> = {
 			readonly comment?: SqlCommenterInput;
 		}
 	) => Promise<SchemaQueryRow<S, N, Cfg> | undefined>;
+	/**
+	 * Server-only pgvector ANN / distance scan (`ORDER BY column <op> probe`).
+	 * Not available on the browser remote transport — PGlite has no pgvector.
+	 */
+	readonly findNearest: (cfg: FindNearestConfig<S, N>) => Promise<FindNearestRow<S, N>[]>;
 };
 
 type RemoteDbRelationalQueryApi<S extends AnySchema, N extends TableName<S>> = {
@@ -195,6 +215,18 @@ export type DirectDbTransport = {
 			bypass_secret?: string;
 		}
 	) => Promise<Record<string, Record<string, unknown>[]>>;
+	readonly findNearest: (
+		collection: string,
+		query: {
+			readonly column: string;
+			readonly probe: readonly number[];
+			readonly metric: FindNearestMetric;
+			readonly maxDistance?: number;
+			readonly limit: number;
+			readonly excludeIds?: readonly string[];
+			readonly bypass_secret?: string;
+		}
+	) => Promise<Array<Record<string, unknown> & { distance: number }>>;
 	readonly count: (
 		collection: string,
 		query: CollectionQuery & { bypass_secret?: string }

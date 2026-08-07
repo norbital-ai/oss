@@ -192,9 +192,11 @@ async function buildClientSchema(ctx: ProvisionedContext): Promise<string> {
 	return statements.join('\n') + '\n';
 }
 
-/** PGlite tracks an earlier Postgres core, so remap types it doesn't ship (uuidv7-era, xid8). */
+/** PGlite tracks an earlier Postgres core, so remap types it doesn't ship (uuidv7-era, xid8, pgvector). */
 function clientColumnType(type: string): string {
 	if (type === 'xid8' || type === 'xid') return 'text';
+	// bit(n) / vector(n) need the `vector` extension; store opaque text on the replica.
+	if (/^bit(\(|$)/i.test(type) || /^vector(\(|$)/i.test(type)) return 'text';
 	return type;
 }
 

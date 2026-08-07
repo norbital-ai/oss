@@ -74,6 +74,9 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
     -- members such as uuid/text scalars beside a range member. Without it, an exclusion
     -- of the form \`(tenant_id WITH =, period WITH &&)\` cannot be created at all.
     CREATE EXTENSION IF NOT EXISTS "btree_gist";
+    -- Float embedding nearest-neighbor (cosine / L2 / IP on vector(n)).
+    -- Neon ships pgvector; PGlite replicas remap vector types to text and never create HNSW.
+    CREATE EXTENSION IF NOT EXISTS "vector";
 
     -- Immutable daterange projection of a date-range JSONB value.
     --

@@ -96,6 +96,10 @@ describe('schema-functions.sql', () => {
 		expect(SCHEMA_FUNCTIONS_SQL).toContain('FUNCTION _norbital_versioning()');
 	});
 
+	it('installs pgvector for bit/vector nearest-neighbor indexes', () => {
+		expect(SCHEMA_FUNCTIONS_SQL).toContain('CREATE EXTENSION IF NOT EXISTS "vector"');
+	});
+
 	it('declares an IMMUTABLE daterange projection for date-range JSONB columns', () => {
 		expect(SCHEMA_FUNCTIONS_SQL).toContain('FUNCTION norbital_daterange(payload JSONB)');
 		expect(SCHEMA_FUNCTIONS_SQL).toContain('IMMUTABLE');

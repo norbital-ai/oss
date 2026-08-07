@@ -98,6 +98,22 @@ function buildCollectionQueryOps(
 				return dbTransport.transport.findFirst(collectionName, query);
 			}
 			return dbTransport.transport.findFirst(toRemoteFindFirstInput(collectionName, query));
+		},
+		findNearest: (query: {
+			readonly column: string;
+			readonly probe: readonly number[];
+			readonly metric: 'cosine' | 'l2' | 'ip';
+			readonly maxDistance?: number;
+			readonly limit: number;
+			readonly excludeIds?: readonly string[];
+			readonly bypass_secret?: string;
+		}) => {
+			if (dbTransport.mode !== 'direct') {
+				throw new Error(
+					'findNearest is server-only (pgvector). Use a hook, remote handler, or automation.'
+				);
+			}
+			return dbTransport.transport.findNearest(collectionName, query);
 		}
 	};
 }

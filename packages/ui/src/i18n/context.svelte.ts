@@ -1,4 +1,4 @@
-import { createContext } from 'svelte';
+import { getContext, setContext } from 'svelte';
 import {
 	type Locale,
 	type LocaleCatalogs,
@@ -60,9 +60,20 @@ class I18nState<C extends LocaleCatalogs> {
 	}
 }
 
-const [useI18nContext, setI18nContext] = createContext<
-	() => I18nState<LocaleCatalogs> | null
->();
+/**
+ * Private context key for the ui's translation state.
+ *
+ * Deliberately NOT `createContext()` from svelte: since 5.40 its `use` throws
+ * `missing_context` when no provider is installed, which would make the global
+ * fallback in `useI18n` unreachable for apps that never install the ui provider
+ * (the website and the Core shell provide their own catalogs, not this one).
+ * `getContext` returns `undefined` instead, so the fallback stays live.
+ */
+const I18N_CONTEXT_KEY = Symbol('@norbital-ai/ui/i18n');
+
+function useI18nContext(): (() => I18nState<LocaleCatalogs> | null) | undefined {
+	return getContext(I18N_CONTEXT_KEY);
+}
 
 /**
  * Install the application's catalog pair and initial locale for the whole
@@ -82,7 +93,7 @@ export function provideI18n<C extends LocaleCatalogs>(
 		catalogs,
 		initialLocale ?? storedLocale() ?? pickLocale(browserLanguages)
 	);
-	setI18nContext(() => state);
+	setContext(I18N_CONTEXT_KEY, () => state);
 	return state;
 }
 
@@ -95,7 +106,7 @@ export function provideI18n<C extends LocaleCatalogs>(
  * mechanism still switch the shared ui chrome.
  */
 export function useI18n<Keys extends string = string>(): I18nApi<Keys> {
-	const state = useI18nContext()?.() ?? globalI18nState;
+	const state = useI18nContext()?.() ?? ensureGlobalState();
 	return state as I18nApi<Keys>;
 }
 

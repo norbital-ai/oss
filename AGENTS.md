@@ -1,15 +1,18 @@
 # Norbital OSS
 
-This pnpm and Turborepo monorepo owns all `@norbital-ai/*` packages and the public reference tenant
-workspaces.
+This pnpm and Turborepo monorepo owns all `@norbital-ai/*` packages.
+
+> **Templates have moved.** Template source now lives in its own repositories —
+> [`norbital-ai/templates`](https://github.com/norbital-ai/templates) (public, advertised on the
+> website) and `norbital-ai/templates-private` (not advertised). Those are the source of truth and
+> the only place `refs/heads/templates/*` is published from; this repository no longer publishes
+> them. **Do not author template changes here.**
+>
+> `template_workspaces/` is retained for one reason only: the Pod test suites boot a real workspace
+> and have not yet been moved onto a vendored fixture. It is a stale copy — edits to it reach no
+> tenant and no website. Removing it is tracked work.
 
 - Package implementation and package-specific documentation stay together under `packages/<name>/`.
-- Template source is authored under `template_workspaces/<slug>/src`; generated `.norbital` output
-  is not hand-edited.
-- Each template is self-describing: `norbital.template.json` holds its picker metadata and
-  `pnpm-lock.yaml` pins its own dependencies, including its exact `@norbital-ai/pod` version.
-  Nothing outside the tree pins them, and publishing a pod propagates into no template. Run
-  `pnpm templates:lock` when you deliberately move a template's dependencies.
 - Run `pnpm lint`, `pnpm test`, and `pnpm build` after changes.
 - Add a changeset for publishable package changes.
 - `skills/` holds the canonical Agent Skills Pod ships (`norbital-platform`,

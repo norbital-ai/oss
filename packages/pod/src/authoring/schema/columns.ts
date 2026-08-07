@@ -11,7 +11,8 @@ export const BUILTIN_COLUMN_CUSTOM_KINDS = [
 	...PLATFORM_ZOD_BUILTIN_KINDS,
 	'enum',
 	'numeric',
-	'json'
+	'json',
+	'vector'
 ] as const;
 
 export type BuiltinColumnCustomKind = (typeof BUILTIN_COLUMN_CUSTOM_KINDS)[number];
@@ -52,6 +53,10 @@ export type ColumnCustomMeta =
 	| {
 			readonly kind: 'json';
 			readonly zodSchema?: z.ZodType;
+	  }
+	| {
+			readonly kind: 'vector';
+			readonly dimensions: number;
 	  }
 	| {
 			readonly kind: Exclude<ColumnCustomKind, BuiltinColumnCustomKind>;

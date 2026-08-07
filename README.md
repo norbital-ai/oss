@@ -1,7 +1,9 @@
 # Norbital OSS
 
-The open-source workspace framework, UI system, shared libraries, and reference tenant workspaces
-used by Norbital.
+The open-source workspace framework, UI system, and shared libraries used by Norbital.
+
+Starter workspaces live in their own repository:
+[**norbital-ai/templates**](https://github.com/norbital-ai/templates).
 
 ## Packages
 
@@ -12,9 +14,10 @@ used by Norbital.
 - [`@norbital-ai/std`](./packages/std) — common schema, date, CEL, finance, and utility modules
 - [`@norbital-ai/config`](./packages/config) — shared TypeScript and Svelte configuration
 
-The open-source reference workspaces live in [`template_workspaces/`](./template_workspaces).
-They are tested as workspace members but marked private because they are source templates, not npm
-packages.
+`template_workspaces/` is a retained copy, not the source of truth. Templates are authored in
+[`norbital-ai/templates`](https://github.com/norbital-ai/templates), which is also where
+`refs/heads/templates/*` is published from. The copy here exists only until the Pod test suites
+that boot a real workspace are moved onto a vendored fixture.
 
 ## Documentation
 
@@ -24,7 +27,7 @@ Docs live next to the code they describe — there is no root `docs/` folder:
 | ------------------------------- | ---------------------------------------------------------------------------- |
 | Pod framework                   | [`packages/pod/docs/`](./packages/pod/docs)                                  |
 | UI, std, config, platform-utils | `packages/<name>/docs/`                                                      |
-| Template workspaces             | `template_workspaces/<slug>/docs/`                                           |
+| Template workspaces             | [`norbital-ai/templates`](https://github.com/norbital-ai/templates)          |
 | Release contracts               | [`release/README.md`](./release/README.md), [`RELEASING.md`](./RELEASING.md) |
 
 ## Development

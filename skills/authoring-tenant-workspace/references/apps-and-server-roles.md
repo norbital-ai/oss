@@ -46,19 +46,21 @@ export default group({ label: 'Operations', icon: 'lucide:briefcase' });
 | Field           | Where it renders                                                    | Required |
 | --------------- | ------------------------------------------------------------------- | -------- |
 | `pod:icon`      | Sidebar, overview app cards, omni finder (Iconify, e.g. `lucide:…`) | **yes**  |
-| `pod:thumbnail` | 16:9 card image on the workspace overview, thumbnail in omni finder | no       |
-| `pod:banner`    | Full-width image above the app page inside the shell                | no       |
+| `pod:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; omni finder tile | no       |
+| `pod:banner`    | Full-width image above the app page inside the shell                     | no       |
 
-Not every app needs a thumbnail or banner. When one is missing the shell draws a **fixed-size
-fallback in the same slot**: overview cards keep their 16:9 media area with a centered icon tile,
-and the omni finder shows the app icon in the same 6×6 tile a thumbnail would occupy — so grids and
-rows stay aligned whether or not an app ships images.
+Not every app needs a thumbnail or banner. Overview cards keep a `Frame ratio="banner"` media slot
+with a website-style gradient and app-icon fallback when `pod:thumbnail` is missing or fails to load;
+the omni finder shows the app icon in the same 6×6 tile a thumbnail would occupy — so grids and rows
+stay aligned whether or not an app ships images. App and page banners are omitted entirely when
+`pod:banner` is missing or fails to load; when present they are compact and collapse on scroll as the
+app surface moves.
 
 **Shipping images with a template.** Commit image files under `assets/` in the template workspace
 and reference them with the seed-asset URL — no external CDN needed:
 
 ```text
-template_workspaces/<key>/assets/app-media/operations-banner.svg
+<key>/assets/app-media/operations-banner.svg
 ```
 
 ```svelte
@@ -70,9 +72,10 @@ template_workspaces/<key>/assets/app-media/operations-banner.svg
 ```
 
 Any file under `assets/` is served by Core at `/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
-WebP, GIF, SVG, IFC, PDF, …). Reuse one wide image (e.g. 1600×900) for both thumbnail and banner:
-the thumbnail slot crops it 16:9 and the banner crops it to the page header height. Template
-assets are the standard place for this; a URL from any stable origin works the same.
+WebP, GIF, SVG, IFC, PDF, …). Reuse one wide image (e.g. 1600×800) for both thumbnail and banner:
+the overview `Frame ratio="banner"` crops it 2:1 and the shell banner crops it to the compact
+collapsing height. Template assets are the standard place for this; a URL from any stable origin
+works the same.
 
 ### Record detail banners (`+representation.svelte`)
 

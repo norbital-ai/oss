@@ -6,6 +6,7 @@ import {
 	text,
 	timestamp as pgTimestamp,
 	uuid,
+	vector as pgVector,
 	type AnyPgColumnBuilder
 } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
@@ -24,6 +25,10 @@ export type FileColumnOptions = {
 
 export type NumericColumnOptions = {
 	readonly variant?: NumericRendererVariant;
+};
+
+export type EmbeddingColumnOptions = {
+	readonly dimensions: number;
 };
 
 const customFactoryOptionsSchema = z.record(z.string(), z.unknown());
@@ -118,6 +123,43 @@ export function custom(kind: string, ...arguments_: readonly unknown[]) {
 	const candidate = arguments_[0];
 	const options = candidate === undefined ? undefined : customFactoryOptionsSchema.parse(candidate);
 	return namedJsonbColumn<CustomTypeValue<typeof kind>>(kind, options);
+}
+
+/**
+ * Float embedding (`vector(n)` via pgvector). Store as a `number[]` of length `n`.
+ *
+ * One path for every ANN use case: Meta PDQ as a 256-dim 0/1 embedding (L2 ≈ Hamming),
+ * Gemini multimodal / omni embeddings (cosine), etc. Index with HNSW + the matching
+ * opclass (`vector_l2_ops` / `vector_cosine_ops` / `vector_ip_ops`) and query via
+ * `findNearest`.
+ */
+export function vector(options: EmbeddingColumnOptions) {
+	const dimensions = z.number().int().positive().max(16_000).parse(options.dimensions);
+	const column = pgVector({ dimensions });
+	attachColumnCustom(column, { kind: 'vector', dimensions });
+	return column;
+}
+
+/**
+ * Expand even-length hex (e.g. 64-char Meta PDQ) to a 0/1 float embedding for `vector(n)`.
+ * For binary embeddings, L2 distance equals √Hamming — use `findNearest({ metric: 'l2' })`
+ * with `maxDistance: Math.sqrt(hammingThreshold)`.
+ */
+export function hexToBinaryEmbedding(hex: string): number[] {
+	if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) {
+		throw new Error('hexToBinaryEmbedding expects an even-length hexadecimal string.');
+	}
+	const embedding: number[] = [];
+	for (const char of hex.toLowerCase()) {
+		const nibble = Number.parseInt(char, 16);
+		embedding.push(
+			(nibble >> 3) & 1,
+			(nibble >> 2) & 1,
+			(nibble >> 1) & 1,
+			nibble & 1
+		);
+	}
+	return embedding;
 }
 
 export type BuiltinColumnBuilder = AnyPgColumnBuilder;

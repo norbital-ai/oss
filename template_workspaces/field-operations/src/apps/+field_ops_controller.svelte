@@ -288,7 +288,7 @@
 			gap="md"
 		>
 			{#snippet start()}
-				<Bound size="tall" pad="sm" class="rounded-lg border bg-card">
+				<Bound size="fit" pad="sm" class="rounded-lg border bg-card">
 					<CollectionKanban
 						{client}
 						collection="job_assignments"
@@ -313,7 +313,7 @@
 				</Bound>
 			{/snippet}
 			{#snippet end()}
-				<Bound size="tall" clip class="rounded-lg">
+				<Bound size="fit" clip class="rounded-lg">
 					<StaticMap
 						markers={mapMarkers}
 						ariaLabel={t('app.field_ops_controller.dispatch_map_for', { date: dispatchDay })}
@@ -324,32 +324,6 @@
 				</Bound>
 			{/snippet}
 		</Split>
-
-		<CollectionTable
-			{client}
-			collection="jobs"
-			title={t('app.field_ops_controller.jobs_scheduled_on', { date: dispatchDay })}
-			description={t('app.field_ops_controller.jobs_scheduled_description')}
-			query={{
-				where: { scheduled_for: { eq: dispatchDay } },
-				orderBy: { title: 'asc' }
-			}}
-			searchPlaceholder={t('app.field_ops_controller.search_jobs_on_date')}
-		>
-			{#snippet columns({ Column })}
-				<Column name="title" minWidth={240} card="title" />
-				<Column
-					name="site_id"
-					label={t('component.site')}
-					minWidth={200}
-					card="subtitle"
-					render={({ row }) => siteNameById.get(row.site_id) ?? '—'}
-				/>
-				<Column name="status" card="badge" />
-				<Column name="nature" label={t('component.job_nature')} minWidth={180} />
-				<Column name="description" minWidth={240} />
-			{/snippet}
-		</CollectionTable>
 	</Stack>
 {/snippet}
 

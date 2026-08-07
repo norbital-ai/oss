@@ -283,8 +283,12 @@ async function loadSchemaSql(templateRoot: string): Promise<string> {
 			const statement = raw.trim();
 			if (!statement) continue;
 			// The client replica needs tables only — not server-side search infrastructure that
-			// depends on contrib extensions PGlite doesn't bundle (pg_trgm's gin_trgm_ops).
+			// depends on contrib extensions PGlite doesn't bundle (pg_trgm's gin_trgm_ops,
+			// pgvector HNSW/IVFFlat).
 			if (/gin_trgm_ops/i.test(statement)) continue;
+			if (/\busing\s+(hnsw|ivfflat)\b/i.test(statement)) continue;
+			if (/\b(bit_hamming_ops|bit_jaccard_ops|vector_(l2|ip|cosine|l1)_ops)\b/i.test(statement))
+				continue;
 			if (/^create\s+extension/i.test(statement)) continue;
 			// The replica has no temporal history at all, so skip every statement that touches one —
 			// not just the create. A column default or type change on a record table also emits an

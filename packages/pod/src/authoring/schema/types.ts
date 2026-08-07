@@ -85,6 +85,12 @@ export type SchemaFieldFilter<T> = {
 	readonly overlaps?: unknown;
 	readonly isNull?: boolean;
 	readonly isNotNull?: boolean;
+	/** pgvector distance filter on `vector(n)`. Prefer `findNearest` when ANN ordering is needed. */
+	readonly withinDistance?: {
+		readonly probe: readonly number[];
+		readonly maxDistance: number;
+		readonly metric?: 'cosine' | 'l2' | 'ip';
+	};
 };
 
 export type SchemaRawOperators = {

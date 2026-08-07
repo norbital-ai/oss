@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { text, uuid } from 'drizzle-orm/pg-core';
+import { vector } from '$lib/authoring/builtin/columns.js';
 import { norbitalTableInternal, type TableExclusion } from '$lib/authoring/schema/table.js';
 import { workspaceExclusionsDdl } from '$lib/vite/workspace-exclusions-sql.js';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
@@ -191,5 +192,56 @@ describe('table index extensions', () => {
 		expect(() =>
 			norbitalTableInternal('bad_column', { code: text() }, { indexes: [{ columns: ['nope'] }] })
 		).toThrow(/Unknown index column "bad_column.nope"/);
+	});
+
+	it('authors an HNSW index with vector_l2_ops for binary embeddings (PDQ-as-vector)', () => {
+		const table = norbitalTableInternal(
+			'photo_evidence',
+			{ perceptual_embedding: vector({ dimensions: 256 }) },
+			{
+				indexes: [
+					{
+						name: 'photo_evidence_pdq_hnsw',
+						method: 'hnsw',
+						columns: ['perceptual_embedding'],
+						opclass: { perceptual_embedding: 'vector_l2_ops' }
+					}
+				]
+			}
+		);
+		const authored = getTableConfig(table).indexes.find(
+			(idx) => idx.config.name === 'photo_evidence_pdq_hnsw'
+		);
+		expect(authored?.config.method).toBe('hnsw');
+		const [column] = authored!.config.columns;
+		expect((column as { name?: string }).name).toBe('perceptual_embedding');
+		expect((column as { indexConfig?: { opClass?: string } }).indexConfig?.opClass).toBe(
+			'vector_l2_ops'
+		);
+	});
+
+	it('authors an HNSW index with vector_cosine_ops for float embeddings', () => {
+		const table = norbitalTableInternal(
+			'records',
+			{ embedding: vector({ dimensions: 768 }) },
+			{
+				indexes: [
+					{
+						name: 'records_embedding_hnsw',
+						method: 'hnsw',
+						columns: ['embedding'],
+						opclass: { embedding: 'vector_cosine_ops' }
+					}
+				]
+			}
+		);
+		const authored = getTableConfig(table).indexes.find(
+			(idx) => idx.config.name === 'records_embedding_hnsw'
+		);
+		expect(authored?.config.method).toBe('hnsw');
+		const [column] = authored!.config.columns;
+		expect((column as { indexConfig?: { opClass?: string } }).indexConfig?.opClass).toBe(
+			'vector_cosine_ops'
+		);
 	});
 });

@@ -6,7 +6,8 @@ export type PgHarness = {
 	stop(): void;
 };
 
-const IMAGE = 'postgres:18-alpine';
+/** Postgres 18 with pgvector — matches Neon’s extension surface used by SCHEMA_FUNCTIONS_SQL. */
+const IMAGE = 'pgvector/pgvector:pg18';
 /** Marks every container this harness creates, so strays can be found and reaped. */
 const LABEL = 'norbital-pg-harness';
 /** Records the owning process, so a reaper can tell a live run from an abandoned one. */

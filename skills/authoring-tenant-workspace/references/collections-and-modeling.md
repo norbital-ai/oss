@@ -28,6 +28,34 @@ The directory owns the collection ID. Models hold storage and data identity only
 applications own presentation. Use `enums([...])` for closed values. Do not put visual metadata, enum
 colors, default sorting, or renderer variants in a model.
 
+## Embeddings (pgvector)
+
+One column type: `vector({ dimensions })`. Use it for Meta PDQ (256-dim 0/1 via
+`hexToBinaryEmbedding`, L2 ≈ √Hamming), Gemini multimodal / omni embeddings (cosine), and anything
+else. Index with HNSW and the matching opclass:
+
+```ts
+indexes: [
+	{
+		name: 'photo_evidence_pdq_hnsw',
+		method: 'hnsw',
+		columns: ['perceptual_embedding'],
+		opclass: { perceptual_embedding: 'vector_l2_ops' }
+	},
+	{
+		name: 'items_embedding_hnsw',
+		method: 'hnsw',
+		columns: ['embedding'],
+		opclass: { embedding: 'vector_cosine_ops' }
+	}
+]
+```
+
+Nearest-neighbor search is **server-only** (`api.db.query.<collection>.findNearest` in hooks /
+remotes / automations). The PGlite replica remaps `vector` to text and cannot evaluate distance
+operators. A future per-record omni embedding system column reuses this same path — do not invent a
+parallel one.
+
 ## Temporal fields
 
 Choose temporal primitives by domain meaning, not by maximum precision: `date()` for calendar days,

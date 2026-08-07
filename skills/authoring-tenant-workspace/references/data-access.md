@@ -15,6 +15,7 @@ for architecture and invariants.
 - [Eliminate query-per-record loops](#eliminate-query-per-record-loops)
 - [Treat 5,000 rows as a ceiling](#treat-5000-rows-as-a-ceiling)
 - [Keep temporal filters canonical](#keep-temporal-filters-canonical)
+- [Nearest-neighbor search (server-only)](#nearest-neighbor-search-server-only)
 
 ## Describe queries declaratively
 
@@ -207,3 +208,24 @@ const employments = await api.db.query.employments.findMany({
 	limit: 5000
 });
 ```
+
+## Nearest-neighbor search (server-only)
+
+`findNearest` runs on the tenant Postgres with pgvector (`ORDER BY column <op> probe`) against a
+`vector(n)` column. Available on hook / remote / automation `api.db.query.<collection>` only — not
+on the browser client. Metrics: `cosine`, `l2`, `ip`.
+
+```typescript
+const near = await api.db.query.photo_evidence.findNearest({
+	column: 'perceptual_embedding',
+	probe: record.perceptual_embedding, // number[]
+	metric: 'l2', // binary PDQ embedding; use 'cosine' for Gemini omni
+	maxDistance: Math.sqrt(31),
+	limit: 50,
+	excludeIds: [record.norbital_id]
+});
+// each row includes `.distance`
+```
+
+`withinDistance` is the filter-only where operator; it does not drive ANN ordering — prefer
+`findNearest` when you need the index path.

@@ -2,10 +2,13 @@
 	import type { Snippet } from 'svelte';
 	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
 
-	export type FrameRatio = 'square' | 'portrait' | 'landscape' | 'widescreen';
+	/** Named media crops. `banner` is the compact overview / sheet hero (2:1). */
+	export type FrameRatio = 'square' | 'portrait' | 'landscape' | 'widescreen' | 'banner';
 	export interface FrameProps extends LayoutAttributes {
 		as?: LayoutElement;
 		ratio?: FrameRatio;
+		/** Allow this region to shrink when its parent is constrained. */
+		shrink?: boolean;
 		children: Snippet;
 	}
 </script>
@@ -16,6 +19,7 @@
 	let {
 		as = 'div',
 		ratio = 'landscape',
+		shrink = true,
 		class: className,
 		children,
 		...restProps
@@ -24,7 +28,8 @@
 		square: 'aspect-square',
 		portrait: 'aspect-[3/4]',
 		landscape: 'aspect-[4/3]',
-		widescreen: 'aspect-video'
+		widescreen: 'aspect-video',
+		banner: 'aspect-[2/1]'
 	};
 </script>
 
@@ -33,7 +38,8 @@
 	class={cn(
 		className,
 		'min-w-0 overflow-clip [&>img]:size-full [&>img]:object-cover',
-		ratioClasses[ratio]
+		ratioClasses[ratio],
+		!shrink && 'shrink-0'
 	)}
 	data-layout="frame"
 	{...restProps}

@@ -28,6 +28,7 @@ import {
 	deleteRecord,
 	findFirst,
 	findMany,
+	findNearest,
 	findGrouped,
 	countRecords,
 	updateMany,
@@ -62,6 +63,13 @@ function buildDirectTransport(): DirectDbTransport {
 			const { bypass_secret, ...rest } = query;
 			return runWithBypassSecretIfValidAsync(bypass_secret, () =>
 				findGrouped(ctx, collection, rest)
+			);
+		},
+		findNearest: (collection, query) => {
+			const ctx = getWorkspace({ provision: true });
+			const { bypass_secret, ...rest } = query;
+			return runWithBypassSecretIfValidAsync(bypass_secret, () =>
+				findNearest(ctx, collection, rest)
 			);
 		},
 		count: (collection, query) => {
@@ -104,6 +112,8 @@ function buildElevatedReadTransport(): DirectDbTransport {
 			runWithPermissionBypassAsync(() => transport.findFirst(collection, query)),
 		findGrouped: (collection, query) =>
 			runWithPermissionBypassAsync(() => transport.findGrouped(collection, query)),
+		findNearest: (collection, query) =>
+			runWithPermissionBypassAsync(() => transport.findNearest(collection, query)),
 		count: (collection, query) =>
 			runWithPermissionBypassAsync(() => transport.count(collection, query))
 	};

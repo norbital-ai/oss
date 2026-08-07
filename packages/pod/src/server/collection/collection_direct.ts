@@ -25,6 +25,10 @@ import {
 	isKnownFieldOperator,
 	rejectUnknownFieldOperator
 } from './collection_operators.server.js';
+import {
+	isVectorDistanceOperator,
+	vectorDistanceFilter
+} from './collection_vector.server.js';
 import { typeGuard } from '@norbital-ai/std/schema';
 import { isTemporalOperand, temporalKindForFieldKind } from '@norbital-ai/std/date';
 import { z } from 'zod';
@@ -131,6 +135,10 @@ function compileCondition(
 		}
 		if (isDateRangeOperator(operator)) {
 			lifted.push(dateRangeFilter(field, operator, operand));
+			continue;
+		}
+		if (isVectorDistanceOperator(operator)) {
+			lifted.push(vectorDistanceFilter(field, operator, operand));
 			continue;
 		}
 		if (!isKnownFieldOperator(operator)) {

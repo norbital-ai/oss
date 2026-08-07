@@ -324,6 +324,9 @@ function buildOperator(
 		return `((${col}->>'start')::timestamptz <= ${end} AND ${start} <= (${col}->>'end')::timestamptz)`;
 	}
 
+	// pgvector distance filters are server-only — PGlite has no `vector` extension.
+	if (op === 'withinDistance') return null;
+
 	const sqlOp = OPERATORS[op];
 	if (!sqlOp) return null;
 	params.push(value);
