@@ -1,5 +1,22 @@
 # @norbital-ai/pod
 
+## 1.0.0
+
+### Minor Changes
+
+- c0991df: Allow server-side authoring AI calls to send explicitly selected workspace image assets and receive schema-validated structured output. Image bytes remain binary across the host boundary, image access is checked through `document_asset`, and transactional hook capability restrictions are unchanged.
+- af71711: Add pgvector support: bootstrap the `vector` extension, a single `vector()` column builder, HNSW/IVFFlat indexes, and server-only `findNearest` / `withinDistance` (cosine, L2, IP). One embedding path for PDQ-as-binary-vector, Gemini omni embeddings, and a future per-record system column.
+
+### Patch Changes
+
+- c0991df: Polish workspace navigation and app media: add a compact collapsed organization switcher and expand affordance, reduce banner height, make banner collapse binding resilient, and overlap the app icon on loaded banners.
+- Updated dependencies [c0991df]
+- Updated dependencies [af71711]
+- Updated dependencies [c0991df]
+  - @norbital-ai/platform-utils@1.0.0
+  - @norbital-ai/ui@1.0.0
+  - @norbital-ai/std@1.0.0
+
 ## 4.0.1
 
 ### Patch Changes
