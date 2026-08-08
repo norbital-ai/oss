@@ -50,7 +50,7 @@ importers:
         version: 4.1.1(prettier@3.9.6)(svelte@5.56.8)
       svelte-check:
         specifier: ^4.7.3
-        version: 4.7.4(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3)
+        version: 4.7.5(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3)
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -416,7 +416,7 @@ packages:
     resolution: {integrity: sha512-dTNfRri6S8J5vI6ilaNyIsggHPis2r4v6To14/n6rP3zlLa6itf7zfAZzb23EYcxR+wzYa3CynlueIhPGYn4uw==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/7b2646bcf5362c4b15778ed0f7878d81fd1df0c0}
 
   '@norbital-ai/pod@0.0.1':
-    resolution: {integrity: sha512-GKW2tAIAmYC7TOhVcLwu4zvSO/cqp+PqUKelw9I35qVXAzFGIoSwW5gSYP2f4wtZaXbM8kNQtunJig7oCpP77g==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/69ad3bb0d1d1be0fc7ffb2695fe8ed6dcc2834b8}
+    resolution: {integrity: sha512-vuT0qEpZzgEIvaIZh8vjG5t6+9jc3in2O9KWqUSwKELAWiSvFIF8MvtN+AQoxEM4KYOeBKzhGZHPJDyLRJE2+Q==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/a820f3e8dc4d0356467a13173cdcbc95de93f631}
     hasBin: true
     peerDependencies:
       '@iconify/svelte': ^5.2.2
@@ -548,8 +548,8 @@ packages:
     peerDependencies:
       acorn: ^8.9.0
 
-  '@sveltejs/load-config@0.2.1':
-    resolution: {integrity: sha512-5m3B2cbqQ4TbwW6Xkh66Ntw6dD7gNc77cCxABTTesWcq9jxIzMgTk97pZx5vEtvQx8iokgi7GIphqZe+PGwcZA==}
+  '@sveltejs/load-config@0.2.2':
+    resolution: {integrity: sha512-K7dsJDQxBOF+f+epuhMactcjK2VP4MRkLKtwSykNtEI+cKVEyzrmmhQ1pmoxI800m4JKcyJ05L2M4yPwAGiBNw==}
     engines: {node: '>= 18.0.0'}
 
   '@sveltejs/vite-plugin-svelte@7.2.0':
@@ -1761,8 +1761,8 @@ packages:
   style-to-object@1.0.14:
     resolution: {integrity: sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw==}
 
-  svelte-check@4.7.4:
-    resolution: {integrity: sha512-IW9ot9YqAoyv8FvyN+eb4ZTe8zgcKZrJLNYU6dzSKkGwEBsSPc4K7lmQ8bKn8W2YMXM6WDfZSSVOaGtekyUfOQ==}
+  svelte-check@4.7.5:
+    resolution: {integrity: sha512-NnkHGCTPH6k4ka1E9IpTuNv40uLArHnX52kLEuaHSGqRlPYTnkbFs529jSWG+y+wDy+v+jA2PQ0soN1umVK+OA==}
     engines: {node: '>= 18.0.0'}
     hasBin: true
     peerDependencies:
@@ -2284,7 +2284,7 @@ snapshots:
       pg: 8.22.0
       runed: 0.37.1(svelte@5.56.8)(zod@4.4.3)
       svelte: 5.56.8
-      svelte-check: 4.7.4(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3)
+      svelte-check: 4.7.5(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3)
       svelte-sonner: 1.1.1(svelte@5.56.8)
       tailwindcss: 4.3.3
       uuid: 14.0.1
@@ -2471,7 +2471,7 @@ snapshots:
     dependencies:
       acorn: 8.18.0
 
-  '@sveltejs/load-config@0.2.1': {}
+  '@sveltejs/load-config@0.2.2': {}
 
   '@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.56.8)(vite@8.2.1(jiti@2.7.0))':
     dependencies:
@@ -3519,10 +3519,10 @@ snapshots:
     dependencies:
       inline-style-parser: 0.2.7
 
-  svelte-check@4.7.4(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3):
+  svelte-check@4.7.5(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
-      '@sveltejs/load-config': 0.2.1
+      '@sveltejs/load-config': 0.2.2
       chokidar: 4.0.3
       fdir: 6.5.0(picomatch@4.0.5)
       picocolors: 1.1.1

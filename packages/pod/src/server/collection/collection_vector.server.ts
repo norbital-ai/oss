@@ -27,6 +27,23 @@ const findNearestSchema = z.object({
 
 export type FindNearestQuery = z.infer<typeof findNearestSchema>;
 
+/**
+ * Structural input accepted from the client surface.
+ *
+ * The client-facing `FindNearestConfig` declares `probe`/`excludeIds` as readonly and `metric`
+ * as the named `FindNearestMetric` union, which the zod-inferred `FindNearestQuery` (mutable
+ * arrays, literal metric) does not accept. The zod parse inside validates the same shape, so
+ * the server entry points take this wider type and parse before use.
+ */
+export type FindNearestInput = {
+	readonly column: string;
+	readonly probe: readonly number[];
+	readonly metric: VectorDistanceMetric;
+	readonly maxDistance?: number;
+	readonly limit: number;
+	readonly excludeIds?: readonly string[];
+};
+
 export type FindNearestRow = Record<string, unknown> & { readonly distance: number };
 
 type VectorSql = (column: unknown, sqlFn: Operators['sql']) => SQL;
@@ -131,7 +148,7 @@ function tableForCollection(ctx: ProvisionedContext, collectionName: string): Pg
 export async function directFindNearest(
 	ctx: ProvisionedContext,
 	collection: string,
-	query: FindNearestQuery
+	query: FindNearestInput
 ): Promise<FindNearestRow[]> {
 	const parsed = findNearestSchema.parse(query);
 	const table = tableForCollection(ctx, collection);

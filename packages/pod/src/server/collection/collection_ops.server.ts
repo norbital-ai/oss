@@ -62,7 +62,7 @@ import {
 } from './collection_direct.js';
 import {
 	directFindNearest,
-	type FindNearestQuery,
+	type FindNearestInput,
 	type FindNearestRow
 } from './collection_vector.server.js';
 import {
@@ -170,7 +170,7 @@ export async function findMany(
 export async function findNearest(
 	ctx: ProvisionedContext,
 	collection: string,
-	query: FindNearestQuery
+	query: FindNearestInput
 ): Promise<FindNearestRow[]> {
 	if (!ctx.baseScope) {
 		throw new Error(`Collection query for '${collection}' requires base scope`);
