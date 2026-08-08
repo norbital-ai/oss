@@ -45,9 +45,9 @@ export default group({ label: 'Operations', icon: 'lucide:briefcase' });
 
 | Field           | Where it renders                                                    | Required |
 | --------------- | ------------------------------------------------------------------- | -------- |
-| `pod:icon`      | Sidebar, overview app cards, omni finder (Iconify, e.g. `lucide:…`) | **yes**  |
+| `pod:icon`      | Sidebar, overview app cards, omni finder; overlaps the app banner bottom-left when a banner is present | **yes**  |
 | `pod:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; omni finder tile | no       |
-| `pod:banner`    | Full-width image above the app page inside the shell                     | no       |
+| `pod:banner`    | Compact full-width image above the app page; collapses on scroll         | no       |
 
 Not every app needs a thumbnail or banner. Overview cards keep a `Frame ratio="banner"` media slot
 with a website-style gradient and app-icon fallback when `pod:thumbnail` is missing or fails to load;
@@ -141,12 +141,29 @@ schedule or collection event trigger:
 
 ```ts
 export default defineAutomation(
-	{ trigger: { collection: 'sites', event: 'create' } },
+	{ trigger: { collection: 'sites', event: 'created' } },
 	async (api, { scope }) => ({ count: await api.db.sites.count({}) })
 );
 ```
 
-Do not put external delivery in transactional hooks.
+Automations and server handlers may make one schema-validated inference over explicitly selected workspace
+images. Pass only `document_asset` IDs already associated with the record being processed; Pod re-checks
+asset access and rejects non-images, more than eight images, or more than 20 MiB total:
+
+```ts
+const result = await api.ai({
+	model: 'stepfun/step-3.7-flash',
+	prompt: 'Read the visibly printed site name and unit number. Use null when absent.',
+	images: [{ assetId: scope.incoming_record.document_asset_id, detail: 'high' }],
+	schema: z.object({
+		site_name: z.string().nullable(),
+		unit_number: z.string().nullable()
+	})
+});
+```
+
+AI and external delivery stay outside transactional hooks. Trigger a post-commit automation when the work
+depends on a committed record or file.
 
 ## Remotes
 

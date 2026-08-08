@@ -29,6 +29,13 @@ export type ReadFileAssetResult = {
 	readonly bytes: Uint8Array;
 };
 
+export type AiImageInput = {
+	/** A workspace `document_asset` ID. Pod resolves it under the current requestor's access scope. */
+	readonly assetId: string;
+	/** Provider image-detail hint. `auto` is the portable default. */
+	readonly detail?: 'auto' | 'low' | 'high';
+};
+
 /** Server hook/automation/handler API — direct `db` ops (Promise, not RemoteQuery) + builtins. */
 export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 	readonly db: string extends TableName<S>
@@ -40,6 +47,8 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 		readonly schema?: TSchema;
 		readonly model?: string;
 		readonly profile?: string;
+		/** Only these selected workspace image assets are sent to the model. */
+		readonly images?: readonly AiImageInput[];
 	}) => Promise<TSchema extends z.ZodType ? z.infer<TSchema> : string>;
 	readonly readFileAsset: (assetId: string) => Promise<ReadFileAssetResult>;
 };

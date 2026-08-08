@@ -80,9 +80,15 @@
 </script>
 
 {#snippet organizationAvatar(organization: WorkspaceOrganizationOption)}
-	<Avatar.Root class="size-6 shrink-0">
+	<Avatar.Root
+		class={cn('shrink-0', displayExpanded ? 'size-6' : 'size-full rounded-md')}
+	>
 		{#if organization.logoUrl}
-			<Avatar.Image src={organization.logoUrl} alt={organization.name} />
+			<Avatar.Image
+				src={organization.logoUrl}
+				alt={organization.name}
+				class={displayExpanded ? undefined : 'object-cover'}
+			/>
 		{/if}
 		<Avatar.Fallback identifier={organization.id}>
 			{organizationFallback(organization)}
@@ -111,8 +117,10 @@
 			scrollToSelection={true}
 			disabled={switchingOrganizationId !== null || !onOrganizationChange}
 			hideChevron={!displayExpanded}
-			class={displayExpanded ? 'w-full' : 'w-8'}
-			triggerClass={displayExpanded ? 'h-8 pl-2 pr-1' : 'size-8 justify-center p-1'}
+			class={displayExpanded ? 'w-full' : 'w-6'}
+			triggerClass={displayExpanded
+				? 'h-8 pl-2 pr-1'
+				: 'size-6 justify-center p-0 shadow-xs [&>div]:grow-0 [&>div]:py-0'}
 			minWidth={256}
 			align="start"
 			snapToEnds={true}
@@ -136,8 +144,17 @@
 				aria-label={sidebar.isMobile ? t('misc.closeWorkspaceNavigation') : t('misc.collapseSidebar')}
 			/>
 		{:else}
-			<div class="relative mx-auto size-8">
-				{@render organizationSwitcher()}
+			<div class="group/org relative mx-auto flex size-8 items-center justify-center">
+				<div class="transition-opacity group-hover/org:pointer-events-none group-hover/org:opacity-0">
+					{@render organizationSwitcher()}
+				</div>
+				<!-- Hover-only expand affordance; keyboard users keep the org combobox + Cmd/Ctrl+B. -->
+				<Sidebar.Trigger
+					target="expansion"
+					tabindex={-1}
+					class="pointer-events-none absolute inset-0 m-auto size-6 opacity-0 group-hover/org:pointer-events-auto group-hover/org:opacity-100"
+					aria-label={t('misc.expandSidebar')}
+				/>
 			</div>
 		{/if}
 	</Inline>
