@@ -1,5 +1,15 @@
 # @norbital-ai/ui
 
+## 1.0.0
+
+### Patch Changes
+
+- c0991df: Polish workspace navigation and app media: add a compact collapsed organization switcher and expand affordance, reduce banner height, make banner collapse binding resilient, and overlap the app icon on loaded banners.
+- Updated dependencies [c0991df]
+- Updated dependencies [af71711]
+  - @norbital-ai/platform-utils@1.0.0
+  - @norbital-ai/std@1.0.0
+
 ## 4.0.1
 
 ### Patch Changes
