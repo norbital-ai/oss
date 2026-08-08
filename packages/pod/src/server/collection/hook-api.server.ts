@@ -45,6 +45,8 @@ const fileAssetSchema = zod.object({
 	file_size: zod.number().int().nonnegative().nullable(),
 	storage_key: zod.string()
 });
+const MAX_AI_IMAGES = 8;
+const MAX_AI_IMAGE_BYTES = 20 * 1024 * 1024;
 
 function buildDirectTransport(): DirectDbTransport {
 	return {
@@ -123,6 +125,32 @@ function readWorkspaceSchema(workspace: ReturnType<typeof getTenantWorkspace>) {
 	return workspace.schema;
 }
 
+async function readFileAsset(assetId: string) {
+	const parsedAssetId = zod.string().uuid().parse(assetId);
+	const workspace = getWorkspace({ provision: true });
+	const result = await workspace.tenantDb.query({
+		text: `SELECT norbital_id, owner_user_id, file_name, mime_type, file_size, storage_key FROM ${qualifiedTableName('document_asset')} WHERE norbital_id = $1::uuid LIMIT 1`,
+		values: [parsedAssetId]
+	});
+	const asset = fileAssetSchema.safeParse(result.rows[0]);
+	if (!asset.success) throw new Error('The selected file asset does not exist.');
+	if (asset.data.owner_user_id !== workspace.baseScope.requestor.norbital_id) {
+		throw new Error('The selected file asset is not accessible to this requestor.');
+	}
+	const bytes = await requireRuntimeFacility('fileStorage').get(asset.data.storage_key);
+	if (bytes == null) throw new Error('The selected file asset is unavailable in storage.');
+	if (asset.data.file_size != null && bytes.byteLength !== asset.data.file_size) {
+		throw new Error('The selected file asset size does not match its stored record.');
+	}
+	return {
+		id: asset.data.norbital_id,
+		name: asset.data.file_name,
+		mimeType: asset.data.mime_type,
+		size: bytes.byteLength,
+		bytes
+	};
+}
+
 function sharedBuiltinApi() {
 	return {
 		sendNotification: async (input: Parameters<BeforeApi['sendNotification']>[0]) => {
@@ -181,9 +209,45 @@ function sharedBuiltinApi() {
 			readonly schema?: zod.ZodType;
 			readonly model?: string;
 			readonly profile?: string;
+			readonly images?: readonly {
+				readonly assetId: string;
+				readonly detail?: 'auto' | 'low' | 'high';
+			}[];
 		}) => {
+			const imageInputs = input.images ?? [];
+			if (imageInputs.length > MAX_AI_IMAGES) {
+				throw new Error(`AI inference accepts at most ${MAX_AI_IMAGES} images per request.`);
+			}
+			const imageAssets = await Promise.all(
+				imageInputs.map(async (image) => ({
+					input: image,
+					asset: await readFileAsset(image.assetId)
+				}))
+			);
+			let totalImageBytes = 0;
+			for (const { asset } of imageAssets) {
+				if (asset.mimeType == null || !asset.mimeType.toLowerCase().startsWith('image/')) {
+					throw new Error(`AI image input ${asset.id} is not an image asset.`);
+				}
+				totalImageBytes += asset.size;
+			}
+			if (totalImageBytes > MAX_AI_IMAGE_BYTES) {
+				throw new Error('AI image inputs exceed the 20 MiB request limit.');
+			}
+			const content =
+				imageAssets.length === 0
+					? input.prompt
+					: [
+							{ type: 'text' as const, text: input.prompt },
+							...imageAssets.map(({ input: image, asset }) => ({
+								type: 'image' as const,
+								bytes: asset.bytes,
+								mimeType: asset.mimeType as string,
+								...(image.detail ? { detail: image.detail } : {})
+							}))
+						];
 			const result = await requireRuntimeFacility('ai').chat({
-				messages: [{ role: 'user', content: input.prompt }],
+				messages: [{ role: 'user', content }],
 				...(input.schema ? { outputSchema: zod.toJSONSchema(input.schema) } : {}),
 				...(input.model ? { model: input.model } : {}),
 				...(input.profile ? { profile: input.profile } : {})
@@ -197,31 +261,7 @@ function sharedBuiltinApi() {
 			}
 			return input.schema.parse(parsed);
 		},
-		readFileAsset: async (assetId: string) => {
-			const parsedAssetId = zod.string().uuid().parse(assetId);
-			const workspace = getWorkspace({ provision: true });
-			const result = await workspace.tenantDb.query({
-				text: `SELECT norbital_id, owner_user_id, file_name, mime_type, file_size, storage_key FROM ${qualifiedTableName('document_asset')} WHERE norbital_id = $1::uuid LIMIT 1`,
-				values: [parsedAssetId]
-			});
-			const asset = fileAssetSchema.safeParse(result.rows[0]);
-			if (!asset.success) throw new Error('The selected file asset does not exist.');
-			if (asset.data.owner_user_id !== workspace.baseScope.requestor.norbital_id) {
-				throw new Error('The selected file asset is not accessible to this requestor.');
-			}
-			const bytes = await requireRuntimeFacility('fileStorage').get(asset.data.storage_key);
-			if (bytes == null) throw new Error('The selected file asset is unavailable in storage.');
-			if (asset.data.file_size != null && bytes.byteLength !== asset.data.file_size) {
-				throw new Error('The selected file asset size does not match its stored record.');
-			}
-			return {
-				id: asset.data.norbital_id,
-				name: asset.data.file_name,
-				mimeType: asset.data.mime_type,
-				size: bytes.byteLength,
-				bytes
-			};
-		}
+		readFileAsset
 	};
 }
 

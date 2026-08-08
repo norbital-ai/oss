@@ -294,7 +294,11 @@
 
 {#snippet activeAppBanner()}
 	{#if activeAppManifest?.banner}
-		<CollapsingMediaBanner src={activeAppManifest.banner} scrollRoot={appSurfaceEl} />
+		<CollapsingMediaBanner
+			src={activeAppManifest.banner}
+			icon={activeAppManifest.icon}
+			scrollRoot={appSurfaceEl}
+		/>
 	{/if}
 {/snippet}
 

@@ -71,9 +71,24 @@ export type HostFileStorageBinding = {
 	delete(key: string): Promise<void>;
 };
 
+export type AiTextMessagePart = {
+	readonly type: 'text';
+	readonly text: string;
+};
+
+/** Image bytes stay binary across the isolate boundary; the trusted host encodes for its provider. */
+export type AiImageMessagePart = {
+	readonly type: 'image';
+	readonly bytes: Uint8Array;
+	readonly mimeType: string;
+	readonly detail?: 'auto' | 'low' | 'high';
+};
+
+export type AiMessagePart = AiTextMessagePart | AiImageMessagePart;
+
 export type AiMessage = {
 	readonly role: 'system' | 'user' | 'assistant' | 'tool';
-	readonly content: string;
+	readonly content: string | readonly AiMessagePart[];
 	readonly toolCallId?: string;
 	readonly toolCalls?: readonly AiToolCall[];
 };
