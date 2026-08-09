@@ -45,8 +45,9 @@ create temporary standalone archives, validate their contents, and delete the ar
 Consumers install released packages from the configured registry; no consumer reads this repository
 through a sibling path.
 
-Run `pnpm changeset` with any change to a publishable package. See
-[`RELEASING.md`](./RELEASING.md) for the release workflow.
+Public packages intentionally remain at `0.0.1` throughout beta. A package change on `main` replaces
+the complete fixed-version package set in GitHub Packages; consumers must commit the resulting
+lockfile integrity update. See [`RELEASING.md`](./RELEASING.md) for the release workflow.
 
 Template source is published as deterministic root-projected Git refs, each carrying its own
 `norbital.template.json` and its own committed `pnpm-lock.yaml`. There is no platform release and no

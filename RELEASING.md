@@ -1,27 +1,29 @@
 # Releasing
 
-Changesets records release intent in pull requests, maintains package changelogs and versions in a
-release pull request, and publishes merged releases from GitHub Actions.
+All public packages intentionally use the fixed version `0.0.1` while Norbital is in beta. A package
+change on `main` replaces the complete five-package set in GitHub Packages so internal package
+versions and archive integrity stay coherent.
 
 ## Contributor flow
 
 1. Make and verify the package or template change with `pnpm check`.
-2. Run `pnpm changeset` when a publishable package changed.
-3. Commit the generated `.changeset/*.md` file with the change.
-4. Merge to `main`. The release workflow opens or updates the `Version packages` pull request.
-5. Merge that pull request when the listed versions are ready to publish.
+2. Keep every public package manifest at exactly `0.0.1`.
+3. Merge to `main`. The release workflow builds all five packages, removes their prior registry
+   versions, and publishes one new `0.0.1` set sequentially.
+4. Re-resolve and commit every consumer lockfile because replacing fixed-version archives changes
+   their integrity hashes.
 
-Package versions are independent. When a released package changes an internal `workspace:*`
-dependency, Changesets applies the configured patch bump to affected dependents.
+The release workflow and script tests reject a public package version other than `0.0.1`. Normal
+SemVer releases can replace this policy when the beta period ends.
 
 ## Package registry
 
-The workflow uses standard npm protocol and defaults the repository variable
+The workflow defaults the repository variable
 `NORBITAL_PACKAGE_REGISTRY` to GitHub Packages (`https://npm.pkg.github.com`). GitHub's workflow
-token publishes there; set `NPM_REGISTRY_TOKEN` when the configured registry needs a separate
-credential. Consumers configure the `@norbital-ai` scope and a read token through normal npm/pnpm
-configuration. No application code depends on GitHub's API, so Verdaccio, Artifactory, npmjs, or
-another compatible registry can replace it without a code change.
+token deletes and republishes the five repository-owned packages there; set `NPM_REGISTRY_TOKEN`
+when publication needs a separate credential. Consumers configure the `@norbital-ai` scope and a
+read token through normal npm/pnpm configuration. The fixed-version replacement policy depends on
+GitHub Packages' delete-and-republish behavior and is intentionally limited to the beta period.
 
 ## Template refs
 
