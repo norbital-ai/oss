@@ -413,10 +413,10 @@ packages:
     engines: {node: '>=19.0.0'}
 
   '@norbital-ai/platform-utils@0.0.1':
-    resolution: {integrity: sha512-dTNfRri6S8J5vI6ilaNyIsggHPis2r4v6To14/n6rP3zlLa6itf7zfAZzb23EYcxR+wzYa3CynlueIhPGYn4uw==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/7b2646bcf5362c4b15778ed0f7878d81fd1df0c0}
+    resolution: {integrity: sha512-+QTarcoLvtOz+RbiD+RGrUxKd3IMFjRGEiEJ8UB5epBpAHxwJwyikZ8xXh3tlu75SgYzzgHAlOTtacmYr6SEVA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/0be8501a34b40718e6e25c2d54fa206770338b3e}
 
   '@norbital-ai/pod@0.0.1':
-    resolution: {integrity: sha512-vuT0qEpZzgEIvaIZh8vjG5t6+9jc3in2O9KWqUSwKELAWiSvFIF8MvtN+AQoxEM4KYOeBKzhGZHPJDyLRJE2+Q==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/a820f3e8dc4d0356467a13173cdcbc95de93f631}
+    resolution: {integrity: sha512-PdNpgotAZXO1fGMxJkDVCQcI04GePenMmsMRkm9fzWdXbwTXx1Dc/ZJHNKQM/kZran5ul5byUki1Uuyajh5c/A==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/e811338361518f23785848068ed5e786cc315c99}
     hasBin: true
     peerDependencies:
       '@iconify/svelte': ^5.2.2
@@ -430,7 +430,7 @@ packages:
     resolution: {integrity: sha512-VVrsAKAmB0lMU3JvdNn5pMtnCQbIEIrq3otwtshn61evc5dHP54vt5y8AHBt6QyPv0rJ3W1CX8ESEz48Tf374g==, tarball: https://npm.pkg.github.com/download/@norbital-ai/std/0.0.1/a6ed26c51bb230c5bd8b71f33cfd69181fdfd996}
 
   '@norbital-ai/ui@0.0.1':
-    resolution: {integrity: sha512-hv1UPCbz3AhX7bYYDc/q9LRNrOQ410iI0pa8VKtFLtBCcPIo45sTR89/HCy6L2JzxuUPDhSVeJe3BbRETmKzbw==, tarball: https://npm.pkg.github.com/download/@norbital-ai/ui/0.0.1/a9fbfdeb2ddd519219e56f4e6c8d2d4fb6781706}
+    resolution: {integrity: sha512-w5vbSLOGOnYeQKFym9H5iKjl3UzWDa002NknCxuSquH2DvHyhMD0lIydQ/gMzOGeBniJ2ZfxWEwwebFh5/joHg==, tarball: https://npm.pkg.github.com/download/@norbital-ai/ui/0.0.1/8e59234d3d892549d19e71b771e18f36612cbd7d}
     peerDependencies:
       '@norbital-ai/platform-utils': 0.0.1
       '@norbital-ai/std': 0.0.1
