@@ -108,6 +108,9 @@ jobs:
             }
 
       - name: Publish one coherent beta package set
-        run: pnpm --recursive --workspace-concurrency=1 --filter './packages/**' publish --access public --no-git-checks --force
+        run: |
+          for package in config std platform-utils ui pod; do
+            pnpm --dir "packages/$package" publish --access public --no-git-checks --force
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
