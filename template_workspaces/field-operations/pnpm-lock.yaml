@@ -16,7 +16,7 @@ importers:
         version: 0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0)
       '@norbital-ai/pod':
         specifier: 0.0.1
-        version: 0.0.1(@iconify/svelte@5.2.2(svelte@5.56.8))(@neondatabase/serverless@1.1.0)(mode-watcher@1.1.0(svelte@5.56.8))(picomatch@4.0.5)(runed@0.37.1(svelte@5.56.8)(zod@4.4.3))(svelte@5.56.8)(typescript@6.0.3)(vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0))(zod@4.4.3)
+        version: 0.0.1(@iconify/svelte@5.2.2(svelte@5.56.8))(@neondatabase/serverless@1.1.0)(mode-watcher@1.1.0(svelte@5.56.8))(picomatch@4.0.5)(runed@0.37.1(svelte@5.56.8)(zod@4.4.3))(svelte@5.56.8)(typescript@6.0.3)(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0))(zod@4.4.3)
       '@norbital-ai/std':
         specifier: 0.0.1
         version: 0.0.1
@@ -43,7 +43,7 @@ importers:
         version: 5.56.8
       vite:
         specifier: ^8.1.5
-        version: 8.2.1(@types/node@26.1.2)(jiti@2.7.0)
+        version: 8.2.1(@types/node@26.2.0)(jiti@2.7.0)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -811,8 +811,8 @@ packages:
   '@types/hast@3.0.5':
     resolution: {integrity: sha512-rp/ezSWaD1m44dPKICGhiskI13nVr7qTloFwDa/IYkhhf5nzwP+zIQcIJh3WIFSBOy/H1PzB40jPjMDksN4F+g==}
 
-  '@types/node@26.1.2':
-    resolution: {integrity: sha512-Vu4a5UFA9rIIFJ7rB/Vaafh9lrCQszopTCx6KjFboXTGQbPNasehVR5TEiithSDGyd1DEiUByggTZsg8jukeIg==}
+  '@types/node@26.2.0':
+    resolution: {integrity: sha512-5IviulTZeRNp2vAJ514cc/HUlY5nZ9fCbq9DMyC52BrhFZACo3nI0R7qBxhQmo/d27NFe96ur/b7Wwxklda+kg==}
 
   '@types/pngjs@6.0.5':
     resolution: {integrity: sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==}
@@ -2163,7 +2163,7 @@ snapshots:
       - typebox
       - valibot
 
-  '@norbital-ai/pod@0.0.1(@iconify/svelte@5.2.2(svelte@5.56.8))(@neondatabase/serverless@1.1.0)(mode-watcher@1.1.0(svelte@5.56.8))(picomatch@4.0.5)(runed@0.37.1(svelte@5.56.8)(zod@4.4.3))(svelte@5.56.8)(typescript@6.0.3)(vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0))(zod@4.4.3)':
+  '@norbital-ai/pod@0.0.1(@iconify/svelte@5.2.2(svelte@5.56.8))(@neondatabase/serverless@1.1.0)(mode-watcher@1.1.0(svelte@5.56.8))(picomatch@4.0.5)(runed@0.37.1(svelte@5.56.8)(zod@4.4.3))(svelte@5.56.8)(typescript@6.0.3)(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0))(zod@4.4.3)':
     dependencies:
       '@electric-sql/pglite': 0.3.16
       '@iconify/svelte': 5.2.2(svelte@5.56.8)
@@ -2172,8 +2172,8 @@ snapshots:
       '@norbital-ai/std': 0.0.1
       '@norbital-ai/ui': 0.0.1(@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0))(@norbital-ai/std@0.0.1)(svelte@5.56.8)(tailwindcss@4.3.3)
       '@standard-schema/spec': 1.1.0
-      '@sveltejs/vite-plugin-svelte': 7.2.0(svelte@5.56.8)(vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0))
-      '@tailwindcss/vite': 4.3.3(vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0))
+      '@sveltejs/vite-plugin-svelte': 7.2.0(svelte@5.56.8)(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0))
+      '@tailwindcss/vite': 4.3.3(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0))
       '@xyflow/svelte': 1.6.2(svelte@5.56.8)
       dedent: 1.7.2
       drizzle-kit: 1.0.0-rc.4
@@ -2186,7 +2186,7 @@ snapshots:
       svelte-sonner: 1.1.1(svelte@5.56.8)
       tailwindcss: 4.3.3
       uuid: 14.0.1
-      vite: 8.2.1(@types/node@26.1.2)(jiti@2.7.0)
+      vite: 8.2.1(@types/node@26.2.0)(jiti@2.7.0)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -2371,14 +2371,14 @@ snapshots:
 
   '@sveltejs/load-config@0.2.2': {}
 
-  '@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.56.8)(vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0))':
+  '@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.56.8)(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0))':
     dependencies:
       deepmerge: 4.3.1
       magic-string: 0.30.21
       obug: 2.1.4
       svelte: 5.56.8
-      vite: 8.2.1(@types/node@26.1.2)(jiti@2.7.0)
-      vitefu: 1.1.3(vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0))
+      vite: 8.2.1(@types/node@26.2.0)(jiti@2.7.0)
+      vitefu: 1.1.3(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0))
 
   '@swc/helpers@0.5.23':
     dependencies:
@@ -2450,12 +2450,12 @@ snapshots:
       postcss-selector-parser: 6.0.10
       tailwindcss: 4.3.3
 
-  '@tailwindcss/vite@4.3.3(vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0))':
+  '@tailwindcss/vite@4.3.3(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0))':
     dependencies:
       '@tailwindcss/node': 4.3.3
       '@tailwindcss/oxide': 4.3.3
       tailwindcss: 4.3.3
-      vite: 8.2.1(@types/node@26.1.2)(jiti@2.7.0)
+      vite: 8.2.1(@types/node@26.2.0)(jiti@2.7.0)
 
   '@tiptap/core@3.29.2(@tiptap/pm@3.29.2)':
     dependencies:
@@ -2684,13 +2684,13 @@ snapshots:
     dependencies:
       '@types/unist': 3.0.3
 
-  '@types/node@26.1.2':
+  '@types/node@26.2.0':
     dependencies:
       undici-types: 8.3.0
 
   '@types/pngjs@6.0.5':
     dependencies:
-      '@types/node': 26.1.2
+      '@types/node': 26.2.0
 
   '@types/trusted-types@2.0.7': {}
 
@@ -3518,7 +3518,7 @@ snapshots:
       svelte: 5.56.8
       svelte-toolbelt: 0.7.1(svelte@5.56.8)
 
-  vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0):
+  vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.5
@@ -3526,13 +3526,13 @@ snapshots:
       rolldown: 1.2.3
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 26.1.2
+      '@types/node': 26.2.0
       fsevents: 2.3.3
       jiti: 2.7.0
 
-  vitefu@1.1.3(vite@8.2.1(@types/node@26.1.2)(jiti@2.7.0)):
+  vitefu@1.1.3(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0)):
     optionalDependencies:
-      vite: 8.2.1(@types/node@26.1.2)(jiti@2.7.0)
+      vite: 8.2.1(@types/node@26.2.0)(jiti@2.7.0)
 
   w3c-keyname@2.2.8: {}
 

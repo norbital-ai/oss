@@ -16,10 +16,6 @@
 		"check:ci": "pnpm packages:build && pnpm deps:sync && pnpm templates:sync && pnpm lint && pnpm test:ci && pnpm test:scripts && pnpm build && pnpm templates:check && pnpm templates:lock:check && pnpm publication:check",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
-		"changeset": "changeset",
-		"version-packages": "changeset version",
-		"release": "pnpm check && pnpm release:publish",
-		"release:publish": "changeset publish",
 		"test:scripts": "node --test scripts/tests/*.test.mjs",
 		"publication:check": "node scripts/validate-package-publication.mjs",
 		"deps:sync": "node scripts/sync-injected-deps.mjs",
@@ -34,7 +30,6 @@
 		"docs:api": "typedoc --options typedoc.json && node scripts/generate-api-docs.mjs"
 	},
 	"devDependencies": {
-		"@changesets/cli": "2.31.1",
 		"@types/node": "^26.1.1",
 		"@typescript/native-preview": "7.0.0-dev.20260707.2",
 		"prettier": "^3.9.5",
