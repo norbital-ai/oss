@@ -413,10 +413,10 @@ packages:
     engines: {node: '>=19.0.0'}
 
   '@norbital-ai/platform-utils@0.0.1':
-    resolution: {integrity: sha512-G4Y/ROiL/TfwlOMc2OCSaazuKG3Lz+BsUJnMD1e/v94Og4qSE2ztfmU/myubRAjy8ynqglsYp4SICEqeEUiozQ==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/a2040817c4417f73d95ac0f70ec518773eca3b0d}
+    resolution: {integrity: sha512-NjdOj8vjuMfvryxp/I6UhbzxZFWH5GF9uVtFry9Vh/lHkh5A4e/KFH6CrtPqD30Q6WmzDzd2xqdqWrhxGv394g==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/8c74fcf23d1e069cdf0b6f4a16244a65c7b16cde}
 
   '@norbital-ai/pod@0.0.1':
-    resolution: {integrity: sha512-kPopmfLs/rYi4UcwOZA1yYe2osQHY9qDLJO713F3mGL3u0/w3xMki/X70gvSlvij9X6K8c/rizDpQLyJpB97YA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/c45e7919e5dc342f75acc142c073578bc728e0de}
+    resolution: {integrity: sha512-T5DLe1DaD4uCE5Wth/xbqoypjqCUdCCtC+CfAQ8nJHPwpHkxfc5uGIL9Z0E9MjP8PqT7c+OfPYEXf0aGxKfrcg==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/d8a044af2fcd7dcca1b32b350eeb38546df5fca1}
     hasBin: true
     peerDependencies:
       '@iconify/svelte': ^5.2.2
@@ -427,10 +427,10 @@ packages:
       zod: ^4.4.3
 
   '@norbital-ai/std@0.0.1':
-    resolution: {integrity: sha512-UrU1XcFqjCdFpPnNtLH+Ab8nfOAXqsszBOMMeuL704ZEsm/enz9bPL6aIEOtjMoVe1pAzNg3aJA9byczCw6HTA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/std/0.0.1/10e57df7c9fdea7f5a40c0708f68fa0522b6e243}
+    resolution: {integrity: sha512-ArSCyXw+nl1prlSBbYcqYn5a9jtW/M6+cMmDBZsAay54fePJrdU0pWdRdLVfFe0Eb3pMzRhDWtuKq8VI6FXyjg==, tarball: https://npm.pkg.github.com/download/@norbital-ai/std/0.0.1/3b2f2f5e4a7790695a9be0358f79098a1ea42c87}
 
   '@norbital-ai/ui@0.0.1':
-    resolution: {integrity: sha512-7+Ydo3ZzXoEXEXz8OhgfGPb7PH6jeXmklr5St66U09TQnql0l6gk3owDq0bFO6cfX0dN8OH8ytKOKc1tPgnduA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/ui/0.0.1/1115a60d383c65cedbeab5766e51e23a9fd06a57}
+    resolution: {integrity: sha512-yJFWbnuM4VDMmlp65p7ifH4v8/FIxMOGbHEcdlrsJ6T1TQ6q38WezRN9q84NClDnFcAkszLhQnuoxPIXobYr7g==, tarball: https://npm.pkg.github.com/download/@norbital-ai/ui/0.0.1/132608605324b9b17be82e365b9347a71070e4fb}
     peerDependencies:
       '@norbital-ai/platform-utils': 0.0.1
       '@norbital-ai/std': 0.0.1
