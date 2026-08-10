@@ -295,9 +295,15 @@
 								<!-- Visual indicator for entry state -->
 								<div class="flex shrink-0">
 									{#if entryState === 'valid'}
-										<div class="h-2 w-2 rounded-full bg-green-500" title={t('misc.progressComplete')}></div>
+										<div
+											class="h-2 w-2 rounded-full bg-green-500"
+											title={t('misc.progressComplete')}
+										></div>
 									{:else}
-										<div class="h-2 w-2 rounded-full bg-border" title={t('misc.progressEmpty')}></div>
+										<div
+											class="h-2 w-2 rounded-full bg-border"
+											title={t('misc.progressEmpty')}
+										></div>
 									{/if}
 								</div>
 

@@ -13,7 +13,7 @@ importers:
         version: 5.2.2(svelte@5.56.8)
       '@norbital-ai/platform-utils':
         specifier: 0.0.1
-        version: 0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0)
+        version: 0.0.1(@electric-sql/pglite@0.3.16)(pg@8.23.0)
       '@norbital-ai/pod':
         specifier: 0.0.1
         version: 0.0.1(@iconify/svelte@5.2.2(svelte@5.56.8))(@neondatabase/serverless@1.1.0)(mode-watcher@1.1.0(svelte@5.56.8))(picomatch@4.0.5)(runed@0.37.1(svelte@5.56.8)(zod@4.4.3))(svelte@5.56.8)(typescript@6.0.3)(vite@8.2.1(jiti@2.7.0))(zod@4.4.3)
@@ -22,7 +22,7 @@ importers:
         version: 0.0.1
       '@norbital-ai/ui':
         specifier: 0.0.1
-        version: 0.0.1(@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0))(@norbital-ai/std@0.0.1)(svelte@5.56.8)(tailwindcss@4.3.3)
+        version: 0.0.1(@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.23.0))(@norbital-ai/std@0.0.1)(svelte@5.56.8)(tailwindcss@4.3.3)
       mode-watcher:
         specifier: ^1.1.0
         version: 1.1.0(svelte@5.56.8)
@@ -335,10 +335,10 @@ packages:
     engines: {node: '>=19.0.0'}
 
   '@norbital-ai/platform-utils@0.0.1':
-    resolution: {integrity: sha512-+QTarcoLvtOz+RbiD+RGrUxKd3IMFjRGEiEJ8UB5epBpAHxwJwyikZ8xXh3tlu75SgYzzgHAlOTtacmYr6SEVA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/0be8501a34b40718e6e25c2d54fa206770338b3e}
+    resolution: {integrity: sha512-G4Y/ROiL/TfwlOMc2OCSaazuKG3Lz+BsUJnMD1e/v94Og4qSE2ztfmU/myubRAjy8ynqglsYp4SICEqeEUiozQ==, tarball: https://npm.pkg.github.com/download/@norbital-ai/platform-utils/0.0.1/a2040817c4417f73d95ac0f70ec518773eca3b0d}
 
   '@norbital-ai/pod@0.0.1':
-    resolution: {integrity: sha512-PdNpgotAZXO1fGMxJkDVCQcI04GePenMmsMRkm9fzWdXbwTXx1Dc/ZJHNKQM/kZran5ul5byUki1Uuyajh5c/A==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/e811338361518f23785848068ed5e786cc315c99}
+    resolution: {integrity: sha512-kPopmfLs/rYi4UcwOZA1yYe2osQHY9qDLJO713F3mGL3u0/w3xMki/X70gvSlvij9X6K8c/rizDpQLyJpB97YA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/pod/0.0.1/c45e7919e5dc342f75acc142c073578bc728e0de}
     hasBin: true
     peerDependencies:
       '@iconify/svelte': ^5.2.2
@@ -349,10 +349,10 @@ packages:
       zod: ^4.4.3
 
   '@norbital-ai/std@0.0.1':
-    resolution: {integrity: sha512-VVrsAKAmB0lMU3JvdNn5pMtnCQbIEIrq3otwtshn61evc5dHP54vt5y8AHBt6QyPv0rJ3W1CX8ESEz48Tf374g==, tarball: https://npm.pkg.github.com/download/@norbital-ai/std/0.0.1/a6ed26c51bb230c5bd8b71f33cfd69181fdfd996}
+    resolution: {integrity: sha512-UrU1XcFqjCdFpPnNtLH+Ab8nfOAXqsszBOMMeuL704ZEsm/enz9bPL6aIEOtjMoVe1pAzNg3aJA9byczCw6HTA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/std/0.0.1/10e57df7c9fdea7f5a40c0708f68fa0522b6e243}
 
   '@norbital-ai/ui@0.0.1':
-    resolution: {integrity: sha512-w5vbSLOGOnYeQKFym9H5iKjl3UzWDa002NknCxuSquH2DvHyhMD0lIydQ/gMzOGeBniJ2ZfxWEwwebFh5/joHg==, tarball: https://npm.pkg.github.com/download/@norbital-ai/ui/0.0.1/8e59234d3d892549d19e71b771e18f36612cbd7d}
+    resolution: {integrity: sha512-7+Ydo3ZzXoEXEXz8OhgfGPb7PH6jeXmklr5St66U09TQnql0l6gk3owDq0bFO6cfX0dN8OH8ytKOKc1tPgnduA==, tarball: https://npm.pkg.github.com/download/@norbital-ai/ui/0.0.1/1115a60d383c65cedbeab5766e51e23a9fd06a57}
     peerDependencies:
       '@norbital-ai/platform-utils': 0.0.1
       '@norbital-ai/std': 0.0.1
@@ -474,8 +474,8 @@ packages:
     resolution: {integrity: sha512-K7dsJDQxBOF+f+epuhMactcjK2VP4MRkLKtwSykNtEI+cKVEyzrmmhQ1pmoxI800m4JKcyJ05L2M4yPwAGiBNw==}
     engines: {node: '>= 18.0.0'}
 
-  '@sveltejs/vite-plugin-svelte@7.2.0':
-    resolution: {integrity: sha512-1SpkuMSRLfugrVX+IrKfE1RUegzo8AQzKQ6qQPfVzbcWi5IhuTPaKb5ZrLpucleFznkc4/RTeSPoRnGWFxX+EQ==}
+  '@sveltejs/vite-plugin-svelte@7.3.0':
+    resolution: {integrity: sha512-QbRoJyD92e9R0ufeQIWRHrCC0ObcqSv/aBDdrQMoU+sypav3cDx5wytdQ6GLdXjEMO6xjrXGzfkUygng8JMv0A==}
     engines: {node: ^20.19 || ^22.12 || >=24}
     peerDependencies:
       svelte: ^5.46.4
@@ -1437,6 +1437,9 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
+  magic-string@1.1.0:
+    resolution: {integrity: sha512-kS3VHe0nEPST2saQV4Rbkchcd3UBRkVTQHo1D3h/ZTwFDhai/mfKkmtPAtD129EOI7K3HlHIsFOt0WrI2/oU9g==}
+
   marked@17.0.6:
     resolution: {integrity: sha512-gB0gkNafnonOw0obSTEGZTT86IuhILt2Wfx0mWH/1Au83kybTayroZ/V6nS25mN7u8ASy+5fMhgB3XPNrOZdmA==}
     engines: {node: '>= 20'}
@@ -1494,15 +1497,15 @@ packages:
     peerDependencies:
       pg: '>=8.0'
 
-  pg-protocol@1.15.0:
-    resolution: {integrity: sha512-cq9sECI5s0+uPUXjbz8ioyPJni6RzsRib0US67i5IoTZKw8fNeYlVE7u8F4dG7vEJJtc5wdD1K189lCCUwqWTQ==}
+  pg-protocol@1.16.0:
+    resolution: {integrity: sha512-sILXutLVjCLjcDuOmvhX5e2Z4cS5qG/6Bu3VkpFwdf/633ElGLpEh9bgmuI5I4sqKqkifQiGyiCcx1HdtrK7tg==}
 
   pg-types@2.2.0:
     resolution: {integrity: sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==}
     engines: {node: '>=4'}
 
-  pg@8.22.0:
-    resolution: {integrity: sha512-8wih1vVIBMxoUM2oB4soJsD9tDnDpLv4OXBJ+EJzFsvycD+lfyIreC2gGHq78f8jbLLt+bvlPTFdFZfJkOuzAA==}
+  pg@8.23.0:
+    resolution: {integrity: sha512-Ip2EQCngowJLGOfCwkFhPXU7/ljlhn6Rxlmy4XYfL2Y+vyRM59+8uR2xqRWKdYmbXmxCFOAmKxBuSUCdF34qLg==}
     engines: {node: '>= 16.0.0'}
     peerDependencies:
       pg-native: '>=3.0.1'
@@ -2076,13 +2079,13 @@ snapshots:
 
   '@neondatabase/serverless@1.1.0': {}
 
-  '@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0)':
+  '@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.23.0)':
     dependencies:
       '@neondatabase/serverless': 1.1.0
       '@norbital-ai/std': 0.0.1
       '@standard-schema/spec': 1.1.0
       drizzle-kit: 1.0.0-rc.4
-      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(pg@8.22.0)(zod@4.4.3)
+      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(pg@8.23.0)(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -2137,18 +2140,18 @@ snapshots:
       '@electric-sql/pglite': 0.3.16
       '@iconify/svelte': 5.2.2(svelte@5.56.8)
       '@internationalized/date': 3.12.3
-      '@norbital-ai/platform-utils': 0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0)
+      '@norbital-ai/platform-utils': 0.0.1(@electric-sql/pglite@0.3.16)(pg@8.23.0)
       '@norbital-ai/std': 0.0.1
-      '@norbital-ai/ui': 0.0.1(@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0))(@norbital-ai/std@0.0.1)(svelte@5.56.8)(tailwindcss@4.3.3)
+      '@norbital-ai/ui': 0.0.1(@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.23.0))(@norbital-ai/std@0.0.1)(svelte@5.56.8)(tailwindcss@4.3.3)
       '@standard-schema/spec': 1.1.0
-      '@sveltejs/vite-plugin-svelte': 7.2.0(svelte@5.56.8)(vite@8.2.1(jiti@2.7.0))
+      '@sveltejs/vite-plugin-svelte': 7.3.0(svelte@5.56.8)(vite@8.2.1(jiti@2.7.0))
       '@tailwindcss/vite': 4.3.3(vite@8.2.1(jiti@2.7.0))
       '@xyflow/svelte': 1.6.2(svelte@5.56.8)
       dedent: 1.7.2
       drizzle-kit: 1.0.0-rc.4
-      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(pg@8.22.0)(zod@4.4.3)
+      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(pg@8.23.0)(zod@4.4.3)
       mode-watcher: 1.1.0(svelte@5.56.8)
-      pg: 8.22.0
+      pg: 8.23.0
       runed: 0.37.1(svelte@5.56.8)(zod@4.4.3)
       svelte: 5.56.8
       svelte-check: 4.7.5(picomatch@4.0.5)(svelte@5.56.8)(typescript@6.0.3)
@@ -2217,7 +2220,7 @@ snapshots:
     transitivePeerDependencies:
       - babel-plugin-macros
 
-  '@norbital-ai/ui@0.0.1(@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0))(@norbital-ai/std@0.0.1)(svelte@5.56.8)(tailwindcss@4.3.3)':
+  '@norbital-ai/ui@0.0.1(@norbital-ai/platform-utils@0.0.1(@electric-sql/pglite@0.3.16)(pg@8.23.0))(@norbital-ai/std@0.0.1)(svelte@5.56.8)(tailwindcss@4.3.3)':
     dependencies:
       '@codemirror/lang-javascript': 6.2.5
       '@codemirror/lang-json': 6.0.2
@@ -2230,7 +2233,7 @@ snapshots:
       '@iconify/svelte': 5.2.2(svelte@5.56.8)
       '@internationalized/date': 3.12.3
       '@lezer/highlight': 1.2.3
-      '@norbital-ai/platform-utils': 0.0.1(@electric-sql/pglite@0.3.16)(pg@8.22.0)
+      '@norbital-ai/platform-utils': 0.0.1(@electric-sql/pglite@0.3.16)(pg@8.23.0)
       '@norbital-ai/std': 0.0.1
       '@tailwindcss/typography': 0.5.20(tailwindcss@4.3.3)
       '@tiptap/core': 3.29.2(@tiptap/pm@3.29.2)
@@ -2340,10 +2343,10 @@ snapshots:
 
   '@sveltejs/load-config@0.2.2': {}
 
-  '@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.56.8)(vite@8.2.1(jiti@2.7.0))':
+  '@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.2.1(jiti@2.7.0))':
     dependencies:
       deepmerge: 4.3.1
-      magic-string: 0.30.21
+      magic-string: 1.1.0
       obug: 2.1.4
       svelte: 5.56.8
       vite: 8.2.1(jiti@2.7.0)
@@ -2880,11 +2883,11 @@ snapshots:
       get-tsconfig: 4.14.1
       jiti: 2.7.0
 
-  drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(pg@8.22.0)(zod@4.4.3):
+  drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(pg@8.23.0)(zod@4.4.3):
     optionalDependencies:
       '@electric-sql/pglite': 0.3.16
       '@neondatabase/serverless': 1.1.0
-      pg: 8.22.0
+      pg: 8.23.0
       zod: 4.4.3
 
   embla-carousel-reactive-utils@8.6.0(embla-carousel@8.6.0):
@@ -3132,6 +3135,10 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
+  magic-string@1.1.0:
+    dependencies:
+      '@jridgewell/sourcemap-codec': 1.5.5
+
   marked@17.0.6: {}
 
   marked@18.0.6: {}
@@ -3165,11 +3172,11 @@ snapshots:
 
   pg-int8@1.0.1: {}
 
-  pg-pool@3.14.0(pg@8.22.0):
+  pg-pool@3.14.0(pg@8.23.0):
     dependencies:
-      pg: 8.22.0
+      pg: 8.23.0
 
-  pg-protocol@1.15.0: {}
+  pg-protocol@1.16.0: {}
 
   pg-types@2.2.0:
     dependencies:
@@ -3179,11 +3186,11 @@ snapshots:
       postgres-date: 1.0.7
       postgres-interval: 1.2.0
 
-  pg@8.22.0:
+  pg@8.23.0:
     dependencies:
       pg-connection-string: 2.14.0
-      pg-pool: 3.14.0(pg@8.22.0)
-      pg-protocol: 1.15.0
+      pg-pool: 3.14.0(pg@8.23.0)
+      pg-protocol: 1.16.0
       pg-types: 2.2.0
       pgpass: 1.0.5
     optionalDependencies:

@@ -494,7 +494,7 @@
 	{#if selectedAccountId == null}
 		<p class="text-sm text-muted-foreground">{t('app.crm.empty_contracts')}</p>
 	{:else if scopedQuoteIds.length === 0}
-		<p class="text-sm text-muted-foreground">No quotes exist for this account yet.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.no_quote_lines')}</p>
 	{:else}
 		<CollectionTable
 			{client}
@@ -531,7 +531,7 @@
 	{#if selectedAccountId == null}
 		<p class="text-sm text-muted-foreground">{t('app.crm.empty_payments')}</p>
 	{:else if scopedQuoteIds.length === 0}
-		<p class="text-sm text-muted-foreground">No quotes exist for this account yet.</p>
+		<p class="text-sm text-muted-foreground">{t('app.crm.no_quote_lines')}</p>
 	{:else}
 		<CollectionTable
 			{client}

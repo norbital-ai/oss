@@ -199,7 +199,10 @@ export const exportPipeline = authenticated.command(ExportRecordsWireSchema, asy
 	requireCollection(collectionName);
 	const collectionMeta = ctx.manifestCtx.getCollection(collectionName);
 	if (!collectionMeta.pipelines?.export) {
-		throw error(404, requestI18n().t('pod.server.noExportPipeline', { collection: collectionName }));
+		throw error(
+			404,
+			requestI18n().t('pod.server.noExportPipeline', { collection: collectionName })
+		);
 	}
 
 	return runWithBypassSecretIfValidAsync(input.bypass_secret, async () => {
@@ -232,7 +235,10 @@ export const importPipeline = authenticated.command(ImportRecordsWireSchema, asy
 	requireCollection(collectionName);
 	const collectionMeta = ctx.manifestCtx.getCollection(collectionName);
 	if (!collectionMeta.pipelines?.import) {
-		throw error(404, requestI18n().t('pod.server.noImportPipeline', { collection: collectionName }));
+		throw error(
+			404,
+			requestI18n().t('pod.server.noImportPipeline', { collection: collectionName })
+		);
 	}
 
 	return runWithBypassSecretIfValidAsync(input.bypass_secret, async () => {

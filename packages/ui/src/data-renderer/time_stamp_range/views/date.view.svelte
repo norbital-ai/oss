@@ -330,7 +330,8 @@
 	{:else if multi}
 		<Inline gap="sm" grow>
 			<span class="shrink-0 rounded-full bg-brand-100 px-2 py-0.5 text-xs text-brand-700">
-				{ranges.length} {t(ranges.length === 1 ? 'dataRenderer.rangeSingular' : 'dataRenderer.rangePlural')}
+				{ranges.length}
+				{t(ranges.length === 1 ? 'dataRenderer.rangeSingular' : 'dataRenderer.rangePlural')}
 			</span>
 			<span class="truncate text-xs">
 				{#if ranges.length <= maxTriggerRanges}
@@ -350,7 +351,9 @@
 	{#if multi}
 		<Stack gap="md" class="min-w-[280px] border-l border-border bg-muted p-4">
 			<Inline justify="between" gap="sm">
-				<h4 class="text-sm font-semibold text-foreground">{t('dataRenderer.selectedRangesHeading', { count: ranges.length })}</h4>
+				<h4 class="text-sm font-semibold text-foreground">
+					{t('dataRenderer.selectedRangesHeading', { count: ranges.length })}
+				</h4>
 				{#if hasSelection && !cantMutate}
 					<button
 						type="button"

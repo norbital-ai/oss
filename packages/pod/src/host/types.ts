@@ -373,7 +373,9 @@ export function parseHostPlugins(value: unknown): readonly HostAppPlugin[] {
 				? 'sidebar'
 				: plugin?.placement === 'settings'
 					? 'settings'
-					: null;
+					: plugin?.placement === 'footer'
+						? 'footer'
+						: null;
 		if (
 			typeof key !== 'string' ||
 			typeof label !== 'string' ||
@@ -381,7 +383,7 @@ export function parseHostPlugins(value: unknown): readonly HostAppPlugin[] {
 			placement == null
 		) {
 			throw new Error(
-				`Host plugin at index ${index} is missing a string key, label and entry, or a placement of sidebar or settings`
+				`Host plugin at index ${index} is missing a string key, label and entry, or a placement of sidebar, settings or footer`
 			);
 		}
 		const icon = plugin?.icon;

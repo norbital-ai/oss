@@ -287,12 +287,8 @@
 </svelte:head>
 
 {#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.people.eyebrow')}
-		title={t('app.people.header_title')}
-		description={t('app.people.header_description')}
-		actions={companyScopeActions}
-	/>
+	<!-- Identity lives in the shell AppMediaHeader; this bar keeps the legal-entity scope control. -->
+	<PageHeader actions={companyScopeActions} />
 {/snippet}
 
 <Cover top={pageHeading}>

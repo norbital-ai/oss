@@ -58,7 +58,8 @@
 				name="actor_id"
 				label={t('pod.settings.actor')}
 				minWidth={150}
-				render={({ row }) => (text(row, 'actor_id') ? `${text(row, 'actor_id')!.slice(0, 8)}…` : '—')}
+				render={({ row }) =>
+					text(row, 'actor_id') ? `${text(row, 'actor_id')!.slice(0, 8)}…` : '—'}
 			/>
 			<Column
 				name="norbital_created_at"

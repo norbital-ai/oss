@@ -68,9 +68,7 @@
 		onCellActivate
 	}: ResourceSchedulerProps<TResource, TItem> = $props();
 
-	const days = $derived(
-		buildResourceSchedulerDays(anchorDate, view, useI18n<UiKeys>().intlLocale)
-	);
+	const days = $derived(buildResourceSchedulerDays(anchorDate, view, useI18n<UiKeys>().intlLocale));
 	const rowHeight = $derived(configuredRowHeight ?? (layout === 'matrix' ? 88 : 56));
 	const dayWidth = $derived(
 		configuredDayWidth ?? (layout === 'matrix' ? 156 : view === 'week' ? 128 : 48)
@@ -407,7 +405,11 @@
 											type="button"
 											class="flex w-full items-center justify-between rounded-sm text-left text-micro font-medium focus-visible:ring-2 focus-visible:ring-ring"
 											disabled={disabled || !onCellActivate}
-											aria-label={t('misc.cellAssignments', { count: cell.items.length, day: day.label, resource: resource.label })}
+											aria-label={t('misc.cellAssignments', {
+												count: cell.items.length,
+												day: day.label,
+												resource: resource.label
+											})}
 											onclick={() => onCellActivate?.(cell)}
 										>
 											{#if cellContent}

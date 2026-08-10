@@ -65,7 +65,12 @@
 
 {#snippet listToolbar()}
 	<Cluster gap="sm" align="center" justify="between">
-		<Scroll axis="x" name={t('table.toolbarRegion')} grow class="collection-table-list-toolbar min-w-0">
+		<Scroll
+			axis="x"
+			name={t('table.toolbarRegion')}
+			grow
+			class="collection-table-list-toolbar min-w-0"
+		>
 			<Inline gap="xs">
 				{@render toolbar()}
 			</Inline>
@@ -138,7 +143,9 @@
 						{/if}
 						{#if selectable}
 							<label class="flex min-h-11 w-11 shrink-0 cursor-pointer items-center justify-center">
-								<span class="sr-only">{t('table.selectRecordLabel', { label: recordTitle(row.record) })}</span>
+								<span class="sr-only"
+									>{t('table.selectRecordLabel', { label: recordTitle(row.record) })}</span
+								>
 								<Checkbox
 									checked={row.selected}
 									{disabled}

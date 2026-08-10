@@ -7,8 +7,8 @@ import { defineMessages } from '@norbital-ai/std/i18n';
  * Owned by the collection-table migration pass. Keys must stay in the
  * `table.*` namespace and must not collide with other namespaces.
  */
-export const tableMessages = defineMessages(
-	{
+export const tableMessages = defineMessages({
+	en: {
 		'table.emptyState': 'No records yet',
 		'table.emptyStateFiltered': 'No records match the current filters',
 		'table.loading': 'Loading records…',
@@ -96,7 +96,8 @@ export const tableMessages = defineMessages(
 		'table.searchTextFields': 'Search text fields…',
 		'table.refreshCollectionData': 'Refresh collection data',
 		'table.noCustomView': 'No custom record view',
-		'table.noCustomViewDesc': 'This collection has no dedicated UI representation. Use Raw to inspect its fields.',
+		'table.noCustomViewDesc':
+			'This collection has no dedicated UI representation. Use Raw to inspect its fields.',
 		'table.approvalRequest': 'Approval request',
 		'table.noApprovalRequest': 'No approval request',
 		'table.noApprovalRequestDesc': 'This record has no approval workflow activity yet.',
@@ -106,7 +107,8 @@ export const tableMessages = defineMessages(
 		'table.withdrawRequest': 'Withdraw request',
 		'table.recordDetails': '{name} record details',
 		'table.createFormDescription': '{label} form',
-		'table.requestChangesDescription': 'Explain what must change before this request can be approved.',
+		'table.requestChangesDescription':
+			'Explain what must change before this request can be approved.',
 		'table.changeRequestReason': 'Change request reason',
 		'table.describeChangesPlaceholder': 'Describe the required changes',
 		'table.requesting': 'Requesting…',
@@ -154,10 +156,12 @@ export const tableMessages = defineMessages(
 		'table.deleteSelectedLabel': 'Delete {label}.',
 		'table.reviewDeletion': 'Review deletion',
 		'table.confirmUpdateTitle': 'Update {label}?',
-		'table.confirmUpdateDescription': 'Every selected record will receive the same value for {field}.',
+		'table.confirmUpdateDescription':
+			'Every selected record will receive the same value for {field}.',
 		'table.confirmUpdate': 'Confirm update',
 		'table.confirmDeleteTitle': 'Delete {label}?',
-		'table.confirmDeleteDescription': 'This permanently removes the selected records. Linked records or collection policy may block the deletion.',
+		'table.confirmDeleteDescription':
+			'This permanently removes the selected records. Linked records or collection policy may block the deletion.',
 		'table.openCollectionActions': 'Open collection actions',
 		'table.closeRecordDetail': 'Close record detail',
 		'table.noPipelinesConfigured': 'No {kind} pipelines configured',
@@ -167,12 +171,13 @@ export const tableMessages = defineMessages(
 		'table.run': 'Run',
 		'table.pipelineSelectRows': 'Select one or more rows to run {label}.',
 		'table.noIntegrationsConfigured': 'No integrations configured',
-		'table.noIntegrationsDescription': 'This collection is not currently connected to an external integration.',
+		'table.noIntegrationsDescription':
+			'This collection is not currently connected to an external integration.',
 		'table.filterFields': 'Filter fields',
 		'table.systemFields': 'System fields',
 		'table.detailMissingId': 'Cannot open detail without {field}.'
 	},
-	{
+	zh: {
 		'table.emptyState': '暂无记录',
 		'table.emptyStateFiltered': '没有符合当前筛选条件的记录',
 		'table.loading': '正在加载记录…',
@@ -336,4 +341,4 @@ export const tableMessages = defineMessages(
 		'table.systemFields': '系统字段',
 		'table.detailMissingId': '无法打开详情：缺少 {field}。'
 	}
-);
+});

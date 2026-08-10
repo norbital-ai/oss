@@ -29,10 +29,7 @@ export type HostAgentTool<TInput extends z.ZodType = z.ZodType> = {
 	readonly name: string;
 	readonly description: string;
 	readonly input: TInput;
-	run(
-		input: z.infer<TInput>,
-		context?: HostAgentToolRunContext
-	): unknown | Promise<unknown>;
+	run(input: z.infer<TInput>, context?: HostAgentToolRunContext): unknown | Promise<unknown>;
 };
 
 /** Tool names a provider will accept; also what the agent loop's built-ins are named. */

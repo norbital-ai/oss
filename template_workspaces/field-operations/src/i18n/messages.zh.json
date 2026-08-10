@@ -139,5 +139,18 @@
 	"component.status_flagged": "已标记",
 	"component.loading": "加载中…",
 	"component.loading_job": "正在加载作业",
-	"component.loading_photo_evidence": "正在加载照片证据"
+	"component.loading_photo_evidence": "正在加载照片证据",
+	"app.field_ops_controller.download_roster_template": "下载排班模板",
+	"app.field_ops_controller.import_weekly_roster": "导入周排班",
+	"app.field_ops_controller.importing_roster": "正在导入排班…",
+	"app.field_ops_controller.roster_imported": "已从排班导入 {count} 条分配。",
+	"app.field_ops_controller.roster_import_failed": "无法导入排班。",
+	"app.field_ops_controller.suspect_scrutiny_title": "本月有 {count} 条可疑分配",
+	"app.field_ops_controller.no_suspect_assignments": "本月没有可疑分配。",
+	"app.field_ops_controller.jobs_scheduled_on": "计划于 {date} 的任务",
+	"app.field_ops_controller.jobs_scheduled_description": "此派单日期的所有任务，包括仍需承包商的作业。新建任务会打开任务表单。",
+	"app.field_ops_controller.search_jobs_on_date": "搜索当日任务…",
+	"component.status": "状态",
+	"component.status_suspect": "可疑",
+	"component.status_assigned": "已分配"
 }

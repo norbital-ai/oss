@@ -25,10 +25,7 @@ import {
 	isKnownFieldOperator,
 	rejectUnknownFieldOperator
 } from './collection_operators.server.js';
-import {
-	isVectorDistanceOperator,
-	vectorDistanceFilter
-} from './collection_vector.server.js';
+import { isVectorDistanceOperator, vectorDistanceFilter } from './collection_vector.server.js';
 import { typeGuard } from '@norbital-ai/std/schema';
 import { isTemporalOperand, temporalKindForFieldKind } from '@norbital-ai/std/date';
 import { z } from 'zod';
@@ -66,7 +63,10 @@ type FallbackQueryConfig = AnyDBQueryConfig | DBQueryConfigWithComment<'one'>;
 export function requireTable(ctx: ProvisionedContext, collectionName: string): PgTable {
 	const table = ctx.tableRegistry?.[collectionName];
 	if (!table) {
-		throw error(404, requestI18nOrDefault().t('pod.server.unknownCollection', { collection: collectionName }));
+		throw error(
+			404,
+			requestI18nOrDefault().t('pod.server.unknownCollection', { collection: collectionName })
+		);
 	}
 	return table;
 }

@@ -1,8 +1,8 @@
 import { defineMessages } from '@norbital-ai/std/i18n';
 
 /** Generic action verbs shared across the component library. */
-export const commonMessages = defineMessages(
-	{
+export const commonMessages = defineMessages({
+	en: {
 		'common.cancel': 'Cancel',
 		'common.save': 'Save',
 		'common.delete': 'Delete',
@@ -99,7 +99,7 @@ export const commonMessages = defineMessages(
 		'common.buildItemsStepByStep': 'Build items step by step…',
 		'common.existingSelections': 'Existing selections'
 	},
-	{
+	zh: {
 		'common.cancel': '取消',
 		'common.save': '保存',
 		'common.delete': '删除',
@@ -196,4 +196,4 @@ export const commonMessages = defineMessages(
 		'common.buildItemsStepByStep': '逐步构建条目…',
 		'common.existingSelections': '已有选择'
 	}
-);
+});

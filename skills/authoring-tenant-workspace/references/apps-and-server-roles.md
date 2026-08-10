@@ -43,18 +43,25 @@ export default group({ label: 'Operations', icon: 'lucide:briefcase' });
 
 ### App media — icons, thumbnails, banners
 
-| Field           | Where it renders                                                    | Required |
-| --------------- | ------------------------------------------------------------------- | -------- |
-| `pod:icon`      | Sidebar, overview app cards, omni finder; overlaps the app banner bottom-left when a banner is present | **yes**  |
-| `pod:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; omni finder tile | no       |
-| `pod:banner`    | Compact full-width image above the app page; collapses on scroll         | no       |
+These fields are **in-product** app chrome. They are not the template's website marketing image —
+that is `assets/thumbnail.svg` at the template root (see
+[template-repository.md](template-repository.md#marketing-thumbnail-declare-once)).
+
+| Field           | Where it renders                                                                                             | Required |
+| --------------- | ------------------------------------------------------------------------------------------------------------ | -------- |
+| `pod:icon`      | Sidebar, overview app cards, omni finder; opaque chip on the shell app media header when a banner is present | **yes**  |
+| `pod:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; omni finder tile                                     | no       |
+| `pod:banner`    | Always-visible compact shell chrome (`AppMediaHeader`): full-bleed image + dark scrim + title/description    | no       |
 
 Not every app needs a thumbnail or banner. Overview cards keep a `Frame ratio="banner"` media slot
 with a website-style gradient and app-icon fallback when `pod:thumbnail` is missing or fails to load;
 the omni finder shows the app icon in the same 6×6 tile a thumbnail would occupy — so grids and rows
-stay aligned whether or not an app ships images. App and page banners are omitted entirely when
-`pod:banner` is missing or fails to load; when present they are compact and collapse on scroll as the
-app surface moves.
+stay aligned whether or not an app ships images. App banners are omitted entirely when `pod:banner`
+is missing or fails to load. When present, the shell renders a fixed Airbnb-style media header
+(image + bottom-weighted dark scrim + icon chip + localized title/description). Copy always sits on
+the scrim — never on the raw banner art — so contrast does not depend on light or dark imagery.
+Apps with a banner should not repeat the same title block in `PageHeader`; keep `PageHeader` only
+for in-app actions (scope pickers) or dynamic titles.
 
 **Shipping images with a template.** Commit image files under `assets/` in the template workspace
 and reference them with the seed-asset URL — no external CDN needed:
@@ -73,9 +80,9 @@ and reference them with the seed-asset URL — no external CDN needed:
 
 Any file under `assets/` is served by Core at `/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
 WebP, GIF, SVG, IFC, PDF, …). Reuse one wide image (e.g. 1600×800) for both thumbnail and banner:
-the overview `Frame ratio="banner"` crops it 2:1 and the shell banner crops it to the compact
-collapsing height. Template assets are the standard place for this; a URL from any stable origin
-works the same.
+the overview `Frame ratio="banner"` crops it 2:1 and the shell media header crops it `object-top`
+into a fixed compact strip. Keep the interesting composition in the top ~260px of the art.
+Template assets are the standard place for this; a URL from any stable origin works the same.
 
 ### Record detail banners (`+representation.svelte`)
 

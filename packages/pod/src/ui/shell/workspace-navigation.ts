@@ -33,6 +33,39 @@ export function resolveNavigationLabel(
 	return i18n.has(key) ? i18n.t(key) : fallback;
 }
 
+/**
+ * Compact app chrome title: page header copy first, then the nav label, then the
+ * static manifest / humanized fallback.
+ */
+export function resolveAppHeaderTitle(
+	i18n: NavigationLabelResolver | undefined,
+	id: string,
+	fallback: string
+): string {
+	if (i18n) {
+		const headerKey = `app.${id}.header_title`;
+		if (i18n.has(headerKey)) return i18n.t(headerKey);
+	}
+	return resolveNavigationLabel(i18n, id, fallback);
+}
+
+/**
+ * Compact app chrome description: dedicated header copy, else the manifest
+ * description. Returns null when neither exists so the chrome can omit the line.
+ */
+export function resolveAppHeaderDescription(
+	i18n: NavigationLabelResolver | undefined,
+	id: string,
+	fallback: string | null | undefined
+): string | null {
+	if (i18n) {
+		const key = `app.${id}.header_description`;
+		if (i18n.has(key)) return i18n.t(key);
+	}
+	const trimmed = fallback?.trim();
+	return trimmed ? trimmed : null;
+}
+
 export function resolveWorkspaceOrganizationOptions(input: {
 	activeOrganization: WorkspaceOrganizationOption;
 	organizations: readonly {
@@ -152,7 +185,7 @@ export function buildSystemNavigation(input: {
 		readonly label: string;
 		readonly icon: string | null;
 		readonly entry: string;
-		readonly placement?: 'sidebar' | 'settings';
+		readonly placement?: 'sidebar' | 'settings' | 'footer';
 		readonly adminOnly?: boolean;
 	}[];
 	isAdmin: boolean;
@@ -162,7 +195,7 @@ export function buildSystemNavigation(input: {
 }): WorkspaceNavigationItem[] {
 	const { i18n } = input;
 	const visiblePlugins = input.plugins.filter(
-		(inputPlugin) => input.isAdmin || !inputPlugin.adminOnly
+		(inputPlugin) => inputPlugin.placement !== 'footer' && (input.isAdmin || !inputPlugin.adminOnly)
 	);
 	const pluginItem = (plugin: (typeof visiblePlugins)[number]): WorkspaceNavigationItem => {
 		const href = hostPluginSurfaceHref(plugin.key);
@@ -208,6 +241,35 @@ export function buildSystemNavigation(input: {
 		...settings,
 		...visiblePlugins.filter((plugin) => plugin.placement !== 'settings').map(pluginItem)
 	];
+}
+
+/** Account-adjacent host tools such as admin impersonation. */
+export function buildUtilityNavigation(input: {
+	plugins: readonly {
+		readonly key: string;
+		readonly label: string;
+		readonly icon: string | null;
+		readonly entry: string;
+		readonly placement?: 'sidebar' | 'settings' | 'footer';
+		readonly adminOnly?: boolean;
+	}[];
+	isAdmin: boolean;
+	currentPath: string;
+}): WorkspaceNavigationItem[] {
+	return input.plugins
+		.filter(
+			(plugin) => plugin.placement === 'footer' && (input.isAdmin || plugin.adminOnly !== true)
+		)
+		.map((plugin) => {
+			const href = hostPluginSurfaceHref(plugin.key);
+			return {
+				key: plugin.key,
+				label: plugin.label,
+				icon: plugin.icon,
+				href,
+				active: isUnder(input.currentPath, href)
+			};
+		});
 }
 
 export function appAccessAllowed(

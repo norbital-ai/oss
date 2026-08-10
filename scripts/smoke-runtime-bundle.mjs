@@ -1,6 +1,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+	copyFileSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -13,6 +14,7 @@ import { createServer as createNetServer } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { prepareDepset } from './lib/depset.mjs';
+import { publicPackageDirectories } from './lib/package-release.mjs';
 import { discoverTemplates, repositoryRoot } from './lib/templates.mjs';
 
 /**
@@ -74,6 +76,51 @@ function materializeTrackedTemplate(template, destination) {
 		execFileSync('cp', [source, target]);
 	}
 	return destination;
+}
+
+function packageCandidateArchives(temporaryDirectory) {
+	const archives = new Map();
+	for (const directory of publicPackageDirectories) {
+		const destination = path.join(temporaryDirectory, 'packages', directory);
+		mkdirSync(destination, { recursive: true });
+		execFileSync(
+			'pnpm',
+			['--filter', `@norbital-ai/${directory}`, 'pack', '--pack-destination', destination],
+			{ cwd: repositoryRoot, stdio: 'ignore' }
+		);
+		const files = readdirSync(destination).filter((entry) => entry.endsWith('.tgz'));
+		if (files.length !== 1) fail(`Expected one candidate archive for @norbital-ai/${directory}.`);
+		archives.set(`@norbital-ai/${directory}`, path.join(destination, files[0]));
+	}
+	return archives;
+}
+
+function lockCandidatePackages(workspace, archives) {
+	const workspacePath = path.join(workspace, 'pnpm-workspace.yaml');
+	const workspaceConfiguration = readFileSync(workspacePath, 'utf8').trimEnd();
+	const overrides = [...archives.entries()]
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([name, archive]) => `  ${JSON.stringify(name)}: ${JSON.stringify(`file:${archive}`)}`)
+		.join('\n');
+	writeFileSync(workspacePath, `${workspaceConfiguration}\n\noverrides:\n${overrides}\n`);
+	rmSync(path.join(workspace, 'pnpm-lock.yaml'), { force: true });
+	execFileSync('pnpm', ['install', '--lockfile-only', '--no-frozen-lockfile', '--ignore-scripts'], {
+		cwd: workspace,
+		stdio: 'ignore'
+	});
+}
+
+function mirrorCandidateArchives(archives, mirrorRoot) {
+	for (const archive of archives.values()) {
+		const destination = path.join(
+			mirrorRoot,
+			path.basename(path.dirname(archive)),
+			path.basename(archive)
+		);
+		mkdirSync(path.dirname(destination), { recursive: true });
+		copyFileSync(archive, destination);
+	}
+	return mirrorRoot;
 }
 
 /**
@@ -185,8 +232,20 @@ try {
 	mkdirSync(workspace, { recursive: true });
 	mkdirSync(storeDirectory, { recursive: true });
 	materializeTrackedTemplate(template, workspace);
+	const candidateArchives = packageCandidateArchives(temporaryDirectory);
+	lockCandidatePackages(workspace, candidateArchives);
 
-	depset = prepareDepset({ templateDirectory: workspace, storeDirectory, depsetRoot });
+	const archiveMirrors = [
+		mirrorCandidateArchives(candidateArchives, path.join(storeDirectory, '.warm', 'packages')),
+		mirrorCandidateArchives(candidateArchives, path.join(depsetRoot, 'packages'))
+	];
+	try {
+		depset = prepareDepset({ templateDirectory: workspace, storeDirectory, depsetRoot });
+	} finally {
+		for (const archiveMirror of archiveMirrors) {
+			rmSync(archiveMirror, { recursive: true, force: true });
+		}
+	}
 	execFileSync('ln', ['-sfn', depset.path, path.join(workspace, 'node_modules')]);
 
 	const podBin = path.join(

@@ -310,15 +310,25 @@
 <Dialog.Root bind:open={dialogOpen}>
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
-			<Dialog.Title>{editingTeamId ? t('pod.settings.editTeamTitle') : t('pod.settings.createTeam')}</Dialog.Title>
+			<Dialog.Title
+				>{editingTeamId
+					? t('pod.settings.editTeamTitle')
+					: t('pod.settings.createTeam')}</Dialog.Title
+			>
 			<Dialog.Description>{t('pod.settings.teamDialogDescription')}</Dialog.Description>
 		</Dialog.Header>
 		<Stack gap="md">
 			<label class="space-y-1 text-xs font-medium"
-				>{t('pod.settings.name')}<Input bind:value={teamName} placeholder={t('pod.settings.teamNamePlaceholder')} /></label
+				>{t('pod.settings.name')}<Input
+					bind:value={teamName}
+					placeholder={t('pod.settings.teamNamePlaceholder')}
+				/></label
 			>
 			<label class="space-y-1 text-xs font-medium"
-				>{t('pod.settings.description')}<Input bind:value={teamDescription} placeholder={t('pod.settings.teamDescriptionPlaceholder')} /></label
+				>{t('pod.settings.description')}<Input
+					bind:value={teamDescription}
+					placeholder={t('pod.settings.teamDescriptionPlaceholder')}
+				/></label
 			>
 			<label class="space-y-1 text-xs font-medium"
 				>{t('pod.settings.parentTeam')}

@@ -16,8 +16,22 @@ export interface PodWorkspaceClientModules {
 	readonly i18nMessages: LocaleCatalogs;
 }
 
+/** The most-specific authored app addressed by a workspace URL. */
+export function initialWorkspaceAppName(
+	pathname: string,
+	appNames: readonly string[]
+): string | undefined {
+	return [...appNames]
+		.sort((left, right) => right.length - left.length)
+		.find((name) => pathname === `/app/${name}` || pathname.startsWith(`/app/${name}/`));
+}
+
 /** Mount a compiled tenant module set into the host-neutral Pod browser runtime. */
 export function mountPodWorkspace(modules: PodWorkspaceClientModules): void {
+	// Start the route chunk beside the bootstrap request. Previously these two independent network
+	// waits were serialized, which was especially visible from high-latency regions.
+	const initialAppName = initialWorkspaceAppName(location.pathname, Object.keys(modules.apps));
+	if (initialAppName) void modules.apps[initialAppName]?.().catch(() => undefined);
 	const shellData = fetch('/_pod/bootstrap', { credentials: 'include' }).then(
 		async (
 			response

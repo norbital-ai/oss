@@ -216,7 +216,9 @@
 							type="button"
 							class="ml-1 rounded-full hover:bg-secondary focus:ring-2 focus:ring-brand focus:outline-none"
 							onclick={(e) => handleLocationRemove(geoValue, e)}
-							aria-label={t('dataRenderer.removeLocation', { location: geoValue.formatted_address })}
+							aria-label={t('dataRenderer.removeLocation', {
+								location: geoValue.formatted_address
+							})}
 						>
 							<Icon icon="lucide:x" class="h-3 w-3" />
 						</button>
@@ -249,7 +251,9 @@
 			<div class="min-w-0 flex-1">
 				<p class="text-xs font-semibold text-foreground">{location.formatted_address}</p>
 				<p class="truncate text-xs text-muted-foreground">
-					{location.geometry ? formatCoordinates(location.geometry) : t('dataRenderer.noCoordinatesAvailable')}
+					{location.geometry
+						? formatCoordinates(location.geometry)
+						: t('dataRenderer.noCoordinatesAvailable')}
 				</p>
 			</div>
 		</Inline>

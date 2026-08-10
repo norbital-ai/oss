@@ -4,7 +4,11 @@
 		CollectionRecordHistoryEntry
 	} from '@norbital-ai/platform-utils/collection';
 	import Icon from '@iconify/svelte';
-	import { formatDataValue, formatStructuredValue, type Translate } from '../data-renderer/index.js';
+	import {
+		formatDataValue,
+		formatStructuredValue,
+		type Translate
+	} from '../data-renderer/index.js';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Label } from '#lib/label';
 	import { Inline, Scroll } from '#lib/layout';
@@ -26,8 +30,19 @@
 		locale?: string;
 	}
 
-	let { field, fieldId, label, value, dirty, available, history, loading, error, load, locale }:
-		Props = $props();
+	let {
+		field,
+		fieldId,
+		label,
+		value,
+		dirty,
+		available,
+		history,
+		loading,
+		error,
+		load,
+		locale
+	}: Props = $props();
 
 	const { t } = useI18n<UiKeys>();
 	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
@@ -103,7 +118,12 @@
 						<span class="shrink-0 text-tiny text-brand">{t('form.unsaved')}</span>
 					</Inline>
 				{/if}
-				<Scroll axis="y" name={t('form.fieldHistoryRegion')} grow class="px-2.5 pt-0.5 pb-2 text-left">
+				<Scroll
+					axis="y"
+					name={t('form.fieldHistoryRegion')}
+					grow
+					class="px-2.5 pt-0.5 pb-2 text-left"
+				>
 					{#if loading}
 						<Inline gap="xs" class="py-1 text-xs text-muted-foreground" role="status">
 							<Icon icon="lucide:loader-circle" class="size-3 animate-spin" />

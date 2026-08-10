@@ -11,6 +11,10 @@ This pnpm and Turborepo monorepo owns all `@norbital-ai/*` packages.
 > `template_workspaces/` is retained for one reason only: the Pod test suites boot a real workspace
 > and have not yet been moved onto a vendored fixture. It is a stale copy — edits to it reach no
 > tenant and no website. Removing it is tracked work.
+>
+> Template marketing image (website gallery / `og:image`): `<key>/assets/thumbnail.svg`. That is
+> not `pod:banner` / `pod:thumbnail`. See
+> `skills/authoring-tenant-workspace/references/template-repository.md`.
 
 - Package implementation and package-specific documentation stay together under `packages/<name>/`.
 - Run `pnpm lint`, `pnpm test`, and `pnpm build` after changes.

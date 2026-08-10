@@ -192,7 +192,12 @@
 							icon: 'lucide:mail-plus',
 							content: invitationsContent
 						},
-						{ name: 'teams', label: t('pod.settings.teams'), icon: 'lucide:network', content: teamsContent },
+						{
+							name: 'teams',
+							label: t('pod.settings.teams'),
+							icon: 'lucide:network',
+							content: teamsContent
+						},
 						{
 							name: 'audit',
 							label: t('pod.settings.auditLog'),

@@ -9,8 +9,8 @@ import { defineMessages } from '@norbital-ai/std/i18n';
  * `pod.*` and `server.*` namespaces so they never collide with
  * `@norbital-ai/ui` keys.
  */
-export const podMessages = defineMessages(
-	{
+export const podMessages = defineMessages({
+	en: {
 		'pod.shell.prepareWorkspace': 'Preparing your workspace…',
 		'pod.shell.workspace': 'Workspace',
 		'pod.shell.settings': 'Settings',
@@ -93,8 +93,7 @@ export const podMessages = defineMessages(
 		'pod.agent.working': 'Working…',
 		'pod.agent.agentIsWorking': 'Agent is working',
 		'pod.agent.messageAgent': 'Message the agent',
-		'pod.agent.composerPlaceholder':
-			'What would you like to know? Type @ to reference a record',
+		'pod.agent.composerPlaceholder': 'What would you like to know? Type @ to reference a record',
 		'pod.agent.planModeOn': 'Plan mode on — research only, no changes',
 		'pod.agent.planModeOff': 'Plan mode — research and return a plan without making changes',
 		'pod.agent.plan': 'Plan',
@@ -264,7 +263,8 @@ export const podMessages = defineMessages(
 		'pod.identity.headingAcceptInvitation': 'Accept your invitation',
 		'pod.identity.confirmEmailLabel': 'Confirm your email address',
 		'pod.identity.acceptAndSignIn': 'Accept and sign in',
-		'pod.identity.confirmCodeMuted': "We'll email a code to confirm it's you before creating your account.",
+		'pod.identity.confirmCodeMuted':
+			"We'll email a code to confirm it's you before creating your account.",
 		'pod.identity.secureAccess': 'Secure access',
 		'pod.identity.invalidEmail': 'Enter a valid email address.',
 		'pod.identity.tooManyRequests': 'Too many requests. Try again shortly.',
@@ -307,10 +307,8 @@ export const podMessages = defineMessages(
 		'pod.server.invalidRemoteInput': 'Invalid remote input',
 		'pod.server.remoteOperationFailed': 'Remote operation failed',
 		'pod.server.unknownCollection': 'Unknown collection "{collection}".',
-		'pod.server.noExportPipeline':
-			"Collection '{collection}' has no export pipeline configured.",
-		'pod.server.noImportPipeline':
-			"Collection '{collection}' has no import pipeline configured.",
+		'pod.server.noExportPipeline': "Collection '{collection}' has no export pipeline configured.",
+		'pod.server.noImportPipeline': "Collection '{collection}' has no import pipeline configured.",
 		'pod.server.importReturnedNoRecords': 'Import pipeline returned no records.',
 		'pod.server.noModelChoice': 'This workspace does not offer a choice of model',
 		'pod.server.modelUnavailable': 'Model {model} is not available in this workspace',
@@ -318,8 +316,7 @@ export const podMessages = defineMessages(
 		'pod.server.agentConversationPrivate': 'Agent conversation is private',
 		'pod.server.agentAlreadyResponding': 'The agent is already responding',
 		'pod.server.approvalNotFound': 'Approval request not found',
-		'pod.server.approvalOperationFailed':
-			'Approval operation did not return an approval request.',
+		'pod.server.approvalOperationFailed': 'Approval operation did not return an approval request.',
 		'pod.server.approvalActionProcessed': 'Action processed successfully',
 		'pod.server.approvalWithdrawn': 'Approval request withdrawn successfully',
 		'pod.server.approvalConfigNotFound': 'Approval config not found for this request.',
@@ -344,8 +341,7 @@ export const podMessages = defineMessages(
 		'pod.server.recordNotFound': 'Record with ID {id} not found.',
 		'pod.server.recordNotFoundSimple': 'Record not found.',
 		'pod.server.recordModifiedConcurrently': 'Record was modified concurrently',
-		'pod.server.approvalUnavailable':
-			'Cannot revise record: its approval request is unavailable.',
+		'pod.server.approvalUnavailable': 'Cannot revise record: its approval request is unavailable.',
 		'pod.server.approvalWorkflowUnavailable':
 			'Cannot revise record: its approval workflow is no longer available.',
 		'pod.server.pendingApprovalBlocksDelete':
@@ -355,7 +351,7 @@ export const podMessages = defineMessages(
 		'pod.server.fileDoesNotExist': 'Uploaded file does not exist.',
 		'pod.server.onlyUploaderCanRemove': 'Only the uploader can remove this file.'
 	},
-	{
+	zh: {
 		'pod.shell.prepareWorkspace': '正在准备您的工作区…',
 		'pod.shell.workspace': '工作区',
 		'pod.shell.settings': '设置',
@@ -399,7 +395,8 @@ export const podMessages = defineMessages(
 		'pod.shell.billingNeedsAttention': '您的账单需要处理。请更新付款信息以解决问题。',
 		'pod.shell.manageBilling': '管理账单',
 		'pod.shell.addPaymentMethod': '添加付款方式',
-		'pod.shell.trialEndsAddPayment': '您的免费试用期将于 {date} 结束。请添加付款方式以保持工作区可用。',
+		'pod.shell.trialEndsAddPayment':
+			'您的免费试用期将于 {date} 结束。请添加付款方式以保持工作区可用。',
 		'pod.shell.noPaymentMethod': '尚未登记付款方式。请添加以避免服务中断。',
 		'pod.shell.dismissBillingNotice': '关闭账单提醒',
 		'pod.shell.omniTitle': '搜索工作区',
@@ -498,7 +495,8 @@ export const podMessages = defineMessages(
 		'pod.settings.workspaceName': '工作区名称',
 		'pod.settings.saveWorkspace': '保存更改',
 		'pod.settings.people': '成员',
-		'pod.settings.peopleDescription': '谁可以打开此工作区、他们所属的团队以及他们在其中的操作记录。',
+		'pod.settings.peopleDescription':
+			'谁可以打开此工作区、他们所属的团队以及他们在其中的操作记录。',
 		'pod.settings.invitations': '邀请',
 		'pod.settings.teams': '团队',
 		'pod.settings.auditLog': '审计日志',
@@ -517,7 +515,8 @@ export const podMessages = defineMessages(
 		'pod.settings.invitationsDescription': '租户身份服务中待处理及已完成的邀请。',
 		'pod.settings.invited': '邀请时间',
 		'pod.settings.expires': '过期时间',
-		'pod.settings.invitationsHint': '邀请凭据不会进入实时同步；CollectionTable 仅接收此服务端投影的安全视图。',
+		'pod.settings.invitationsHint':
+			'邀请凭据不会进入实时同步；CollectionTable 仅接收此服务端投影的安全视图。',
 		'pod.settings.auditEvents': '审计事件',
 		'pod.settings.auditEventsDescription': '仅追加的租户活动记录，与其描述的数据一同保存。',
 		'pod.settings.event': '事件',
@@ -584,7 +583,8 @@ export const podMessages = defineMessages(
 		'pod.identity.codeExpiresMuted': '验证码十分钟内有效。{link}。',
 		'pod.identity.titleCheckEmail': '请查收邮件',
 		'pod.identity.headingCheckEmail': '请查收邮件',
-		'pod.identity.checkEmailBody': '我们已向您注册时填写的地址发送邀请链接。打开链接即可完成工作区设置。',
+		'pod.identity.checkEmailBody':
+			'我们已向您注册时填写的地址发送邀请链接。打开链接即可完成工作区设置。',
 		'pod.identity.linkSingleUse': '链接一次性有效，三天后过期。已可访问？{link}。',
 		'pod.identity.titleInviteRequired': '需要邀请链接',
 		'pod.identity.headingLinkIncomplete': '链接不完整',
@@ -648,7 +648,8 @@ export const podMessages = defineMessages(
 		'pod.server.approvalActionProcessed': '操作已成功处理',
 		'pod.server.approvalWithdrawn': '审批请求已成功撤回',
 		'pod.server.approvalConfigNotFound': '未找到此请求的审批配置。',
-		'pod.server.approvalTerminalState': '无法修改审批请求：它已达到终态。一旦批准或拒绝，决定即为最终结果。',
+		'pod.server.approvalTerminalState':
+			'无法修改审批请求：它已达到终态。一旦批准或拒绝，决定即为最终结果。',
 		'pod.server.noValidApprovalSteps': '未找到有效的审批步骤，请联系您的系统管理员。',
 		'pod.server.requestorNotFound': '未找到请求人用户。',
 		'pod.server.approvalNotActive': '无法修改记录：该记录的审批请求未处于活动状态。',
@@ -670,4 +671,4 @@ export const podMessages = defineMessages(
 		'pod.server.fileDoesNotExist': '上传的文件不存在。',
 		'pod.server.onlyUploaderCanRemove': '只有上传者才能移除该文件。'
 	}
-);
+});

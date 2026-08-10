@@ -35,7 +35,14 @@
 	);
 </script>
 
-<Scroll axis="y" name={t('misc.conversationMessages')} grow class="min-h-0 min-w-0" bind:ref {...restProps}>
+<Scroll
+	axis="y"
+	name={t('misc.conversationMessages')}
+	grow
+	class="min-h-0 min-w-0"
+	bind:ref
+	{...restProps}
+>
 	<Stack
 		gap="xl"
 		data-stick-to-bottom-content

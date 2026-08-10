@@ -108,7 +108,8 @@ function decodeBase64File(encoded: string, expectedSize: number): Uint8Array {
 	} catch {
 		throw error(400, requestI18n().t('pod.server.fileNotValidBase64'));
 	}
-	if (binary.length !== expectedSize) throw error(400, requestI18n().t('pod.server.fileSizeMismatch'));
+	if (binary.length !== expectedSize)
+		throw error(400, requestI18n().t('pod.server.fileSizeMismatch'));
 	return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 

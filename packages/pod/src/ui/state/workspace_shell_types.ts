@@ -71,5 +71,5 @@ export type TenantWorkspaceHostPlugin = {
 	readonly label: string;
 	readonly icon: string | null;
 	readonly entry: string;
-	readonly placement: 'sidebar' | 'settings';
+	readonly placement: 'sidebar' | 'settings' | 'footer';
 };

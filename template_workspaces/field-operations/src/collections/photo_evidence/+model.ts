@@ -1,4 +1,13 @@
-import { custom, defineModel, enums, file, sql, text, uuid } from '@norbital-ai/pod/authoring';
+import {
+	custom,
+	defineModel,
+	enums,
+	file,
+	sql,
+	text,
+	uuid,
+	vector
+} from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
@@ -8,13 +17,16 @@ export default defineModel(
 		source_key: text().notNull(),
 		source: custom('photo_source').notNull(),
 		sha256: text().notNull(),
-		perceptual_hash: text().notNull(),
+		/** Meta PDQ as a 256-dim 0/1 embedding — same `vector` + `findNearest` path as omni embeds. */
+		perceptual_embedding: vector({ dimensions: 256 }).notNull(),
 		flags: enums([
 			'exact_duplicate',
 			'visual_duplicate',
 			'metadata_anomaly',
 			'edited_metadata',
-			'low_quality'
+			'low_quality',
+			'missing_geolocation',
+			'location_mismatch'
 		])
 			.array()
 			.notNull(),
@@ -43,7 +55,12 @@ export default defineModel(
 		indexes: [
 			{ columns: ['source_key'], unique: true },
 			{ columns: ['sha256'] },
-			{ columns: ['perceptual_hash'] }
+			{
+				name: 'photo_evidence_pdq_hnsw',
+				method: 'hnsw',
+				columns: ['perceptual_embedding'],
+				opclass: { perceptual_embedding: 'vector_l2_ops' }
+			}
 		]
 	}
 );

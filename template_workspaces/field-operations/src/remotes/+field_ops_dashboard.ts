@@ -1,6 +1,18 @@
 import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
 
+function monthBounds(scheduledFor: string): { start: string; end: string } {
+	const monthPrefix = scheduledFor.slice(0, 7);
+	const [yearText, monthText] = monthPrefix.split('-');
+	const year = Number(yearText);
+	const month = Number(monthText);
+	const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+	return {
+		start: `${monthPrefix}-01`,
+		end: `${monthPrefix}-${String(lastDay).padStart(2, '0')}`
+	};
+}
+
 export default defineQueryHandler({
 	schema: z.object({ scheduled_for: z.iso.date() }),
 	handler: async ({ scheduled_for }, api) => {
@@ -15,7 +27,34 @@ export default defineQueryHandler({
 			orderBy: { title: 'asc' },
 			limit: 1000
 		});
-		if (jobs.length === 0) return { assignment_cards: [], assignment_ids: [], map_points: [] };
+		const month = monthBounds(scheduled_for);
+		const monthJobs = await api.db.query.jobs.findMany({
+			where: {
+				scheduled_for: { gte: month.start, lte: month.end }
+			},
+			columns: { norbital_id: true, title: true },
+			limit: 1000
+		});
+		const monthJobById = new Map(monthJobs.map((job) => [job.norbital_id, job.title]));
+		const monthSuspectAssignments =
+			monthJobById.size === 0
+				? []
+				: await api.db.query.job_assignments.findMany({
+						where: {
+							job_id: { in: [...monthJobById.keys()] },
+							status: { eq: 'suspect' }
+						},
+						columns: { norbital_id: true, job_id: true },
+						limit: 1000
+					});
+		const month_suspects = monthSuspectAssignments.flatMap((assignment) => {
+			const title = monthJobById.get(assignment.job_id);
+			return title ? [{ id: assignment.norbital_id, job: title }] : [];
+		});
+
+		if (jobs.length === 0) {
+			return { assignment_cards: [], assignment_ids: [], map_points: [], month_suspects };
+		}
 
 		const assignments = await api.db.query.job_assignments.findMany({
 			where: { job_id: { in: jobs.map((job) => job.norbital_id) } },
@@ -27,8 +66,9 @@ export default defineQueryHandler({
 			},
 			limit: 1000
 		});
-		if (assignments.length === 0)
-			return { assignment_cards: [], assignment_ids: [], map_points: [] };
+		if (assignments.length === 0) {
+			return { assignment_cards: [], assignment_ids: [], map_points: [], month_suspects };
+		}
 
 		const jobById = new Map(jobs.map((job) => [job.norbital_id, job]));
 		const contractorIds = [
@@ -77,6 +117,7 @@ export default defineQueryHandler({
 
 		return {
 			assignment_ids: assignments.map((assignment) => assignment.norbital_id),
+			month_suspects,
 			assignment_cards: assignments.flatMap((assignment) => {
 				const job = jobById.get(assignment.job_id);
 				return job

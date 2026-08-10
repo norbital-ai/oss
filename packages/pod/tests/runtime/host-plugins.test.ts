@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { assertHostPlugins } from '../../src/host/types.js';
 import { visibleHostPlugins } from '../../src/server/host-plugins.js';
-import { buildSystemNavigation } from '../../src/ui/shell/workspace-navigation.js';
+import {
+	buildSystemNavigation,
+	buildUtilityNavigation
+} from '../../src/ui/shell/workspace-navigation.js';
 import type { HostAppPlugin } from '@norbital-ai/platform-utils/runtime/binding';
 
 function plugin(overrides: Partial<HostAppPlugin> = {}): HostAppPlugin {
@@ -27,6 +30,10 @@ describe('assertHostPlugins', () => {
 
 	it('accepts host facilities nested under Pod settings', () => {
 		expect(() => assertHostPlugins([plugin({ placement: 'settings' })])).not.toThrow();
+	});
+
+	it('accepts account-adjacent footer tools', () => {
+		expect(() => assertHostPlugins([plugin({ placement: 'footer' })])).not.toThrow();
 	});
 
 	/**
@@ -155,5 +162,29 @@ describe('buildSystemNavigation', () => {
 			currentPath
 		}).find((entry) => entry.key === 'studio');
 		expect(item?.active).toBe(active);
+	});
+});
+
+describe('buildUtilityNavigation', () => {
+	it('keeps an admin-only footer tool out of system navigation and exposes it to admins only', () => {
+		const plugins = [
+			{
+				key: 'impersonation',
+				label: 'Impersonate',
+				icon: 'lucide:eye',
+				entry: '/_host/app/impersonation',
+				placement: 'footer' as const,
+				adminOnly: true
+			}
+		];
+		expect(buildSystemNavigation({ plugins, isAdmin: true, currentPath: '/' })).not.toContainEqual(
+			expect.objectContaining({ key: 'impersonation' })
+		);
+		expect(buildUtilityNavigation({ plugins, isAdmin: false, currentPath: '/' })).toEqual([]);
+		expect(
+			buildUtilityNavigation({ plugins, isAdmin: true, currentPath: '/__host/impersonation' })
+		).toEqual([
+			expect.objectContaining({ key: 'impersonation', label: 'Impersonate', active: true })
+		]);
 	});
 });

@@ -46,7 +46,8 @@ export async function executeApprovalOperation(input: ApprovalOperation): Promis
 				runtime.manifestCtx,
 				approvalRequest.approval_config_id
 			);
-			if (!resolved) throw error(404, requestI18nOrDefault().t('pod.server.approvalConfigNotFound'));
+			if (!resolved)
+				throw error(404, requestI18nOrDefault().t('pod.server.approvalConfigNotFound'));
 			return processAction(
 				input.approval_action,
 				approvalRequest,

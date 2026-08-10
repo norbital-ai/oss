@@ -7,7 +7,7 @@ import type { CheckerDiagnostic } from '../../vite/checker.js';
 import type { compilePodFilesystem as CompilePodFilesystem } from '../../vite/compiler/index.js';
 
 const usage =
-	'Usage: pod sync [--watch] | pod check | pod build | pod migration create <name> [--custom] | pod migrate | pod seed | pod invite <email> | pod start | pod dev [--seed] | pod platform build <out-dir> <package-key>';
+	'Usage: pod sync [--watch | --hints <json>] | pod check | pod build | pod migration create <name> [--custom] | pod migrate | pod seed | pod invite <email> | pod start | pod dev [--seed] | pod platform build <out-dir> <package-key>';
 
 type CompilationResult = Awaited<ReturnType<typeof CompilePodFilesystem>>;
 
@@ -95,6 +95,12 @@ async function createMigration(root: string, name: string, custom: boolean): Pro
 	});
 	console.log(`Pod ${custom ? 'data' : 'schema'} migration created in .norbital/migrations.`);
 	return 0;
+}
+
+function parseMigrationHints(value: string): readonly unknown[] {
+	const parsed: unknown = JSON.parse(value);
+	if (!Array.isArray(parsed)) throw new Error('pod sync --hints expects a JSON array.');
+	return parsed;
 }
 
 async function seed(root: string): Promise<number> {
@@ -236,7 +242,11 @@ export async function runPodCli(
 	if (args[0] === 'dev' && (args.length === 1 || (args.length === 2 && args[1] === '--seed'))) {
 		return develop(root, args[1] === '--seed');
 	}
-	if (args[0] !== 'sync' || args.length > 2 || (args.length === 2 && args[1] !== '--watch')) {
+	const syncWithHints = args[0] === 'sync' && args[1] === '--hints' && args.length === 3;
+	if (
+		args[0] !== 'sync' ||
+		(!syncWithHints && (args.length > 2 || (args.length === 2 && args[1] !== '--watch')))
+	) {
 		console.error(usage);
 		return 1;
 	}
@@ -249,7 +259,8 @@ export async function runPodCli(
 	const path = await import('node:path');
 	await generatePodMigrations({
 		root,
-		migrationsRoot: path.join(root, '.norbital', 'migrations')
+		migrationsRoot: path.join(root, '.norbital', 'migrations'),
+		...(syncWithHints ? { hints: parseMigrationHints(args[2]!) } : {})
 	});
 	return 0;
 }

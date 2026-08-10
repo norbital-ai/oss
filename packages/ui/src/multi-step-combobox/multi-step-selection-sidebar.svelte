@@ -64,7 +64,8 @@
 					class="h-7 rounded-full px-3 text-micro"
 					onclick={onAdd}
 				>
-					<Icon icon="lucide:plus" class="mr-1 h-3 w-3" /> {t('common.new')}
+					<Icon icon="lucide:plus" class="mr-1 h-3 w-3" />
+					{t('common.new')}
 				</Button>
 			{/if}
 		</Inline>
@@ -74,7 +75,8 @@
 				<li
 					class="rounded-md border border-dashed border-muted-foreground/30 bg-background px-4 py-6 text-center text-xs text-muted-foreground"
 				>
-					{t('common.noSelectionsYet')} {#if multiple}{t('common.clickNewToStart')}{/if}
+					{t('common.noSelectionsYet')}
+					{#if multiple}{t('common.clickNewToStart')}{/if}
 				</li>
 			{:else}
 				{#each selections as selection, idx (idx)}

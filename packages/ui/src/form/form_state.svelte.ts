@@ -312,7 +312,11 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 		if (!this.hasValidationErrors) return null;
 		const fieldMessages = Object.values(this.errors.fieldErrors).flat();
 		if (fieldMessages.length > 0) return fieldMessages[0];
-		return this.errors.formErrors[0] ?? (this._translate?.('form.fixErrors') ?? 'Please fix the highlighted errors.');
+		return (
+			this.errors.formErrors[0] ??
+			this._translate?.('form.fixErrors') ??
+			'Please fix the highlighted errors.'
+		);
 	});
 
 	// ============================================================================
@@ -404,7 +408,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 		this._successMessageConfig =
 			successMessage !== undefined
 				? successMessage
-				: () => (translate?.('form.savedSuccessfully') ?? 'Saved successfully');
+				: () => translate?.('form.savedSuccessfully') ?? 'Saved successfully';
 		this.description = description;
 
 		// Store config as MaybeGetter (resolved reactively or at point of use)

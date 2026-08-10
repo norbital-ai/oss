@@ -116,8 +116,8 @@
 		<EffectiveLayerList
 			{layers}
 			{disabled}
-			emptyMessage="No entitlement layers — this leave type grants nothing until one is added."
-			addPlaceholder="Add an entitlement layer…"
+			emptyMessage={t('renderer.leave_entitlement.empty')}
+			addPlaceholder={t('renderer.leave_entitlement.add_placeholder')}
 			additions={[
 				{ value: 'STATUTORY', label: 'Statutory layer', create: () => newLayer('STATUTORY') },
 				{

@@ -53,7 +53,9 @@
 	let lastEmittedValue: string | null | undefined;
 	const phonePlaceholderText = t('dataRenderer.phonePlaceholder');
 	const inputPlaceholder = $derived(
-		placeholder === phonePlaceholderText ? phoneInputPlaceholder(country, phonePlaceholderText) : placeholder
+		placeholder === phonePlaceholderText
+			? phoneInputPlaceholder(country, phonePlaceholderText)
+			: placeholder
 	);
 	const invalid = $derived(hasBlurred && draft !== '' && !normalizePhoneValue(draft, country));
 	const errorId = $derived(id ? `${id}-error` : undefined);

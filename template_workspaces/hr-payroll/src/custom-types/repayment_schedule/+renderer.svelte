@@ -206,7 +206,7 @@
 		{rows}
 		{columns}
 		disabled={locked}
-		emptyMessage="No repayment instalments."
+		emptyMessage={t('renderer.repayment_schedule.empty')}
 		createRow={(): RepaymentScheduleMatrixRow => {
 			const dueDate = nextDate();
 			return {

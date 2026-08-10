@@ -33,7 +33,7 @@
 	import { shortcut } from '@norbital-ai/ui/keybindings';
 	import { WorkspaceShell, type WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { CollapsingMediaBanner } from '@norbital-ai/ui/media-banner';
+	import { AppMediaHeader } from '@norbital-ai/ui/media-banner';
 	import { Bound, Center, Cover, Frame, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { WorkspaceFileUploadClient } from '$lib/ui/state/workspace-file-upload.svelte.js';
 	import { workspaceRuntimeOperations, type WorkspaceAppLoader } from '../state/client.js';
@@ -45,7 +45,11 @@
 		appAccessAllowed,
 		buildApplicationNavigation,
 		buildSystemNavigation,
+		buildUtilityNavigation,
+		resolveAppHeaderDescription,
+		resolveAppHeaderTitle,
 		resolveBillingSettingsHref,
+		hostPluginSurfaceHref,
 		resolveHostPluginSurface,
 		resolveApplicationLandingAppId,
 		resolveWorkspaceOrganizationOptions,
@@ -159,6 +163,31 @@
 		return promise;
 	}
 	const activeApp = $derived(loadableAppName ? loadWorkspaceApp(loadableAppName) : undefined);
+	const prefetchedSurfaces = new Set<string>();
+	function prefetchWorkspaceSurface(href: string): void {
+		if (prefetchedSurfaces.has(href)) return;
+		prefetchedSurfaces.add(href);
+		if (href.startsWith('/app/')) {
+			const requested = decodeURIComponent(href.slice('/app/'.length).split(/[?#]/, 1)[0] ?? '');
+			const name = resolveApplicationLandingAppId({
+				requestedAppId: requested,
+				appIds: appNames,
+				apps: manifestContext.getAppsRecord(),
+				accessibleAppNames: data.accessibleAppNames
+			});
+			if (name) void loadWorkspaceApp(name)?.catch(() => undefined);
+			return;
+		}
+		const plugin = (data.hostPlugins ?? []).find(
+			(candidate) => hostPluginSurfaceHref(candidate.key) === href
+		);
+		if (!plugin || typeof document === 'undefined') return;
+		const link = document.createElement('link');
+		link.rel = 'prefetch';
+		link.as = 'document';
+		link.href = plugin.entry;
+		document.head.append(link);
+	}
 	const activeAppManifest = $derived(appName ? manifestContext.findApp(appName) : undefined);
 	const detailStack = $derived.by((): DetailStackEntry[] =>
 		platformState.state.navStack.map((item) => ({
@@ -176,8 +205,21 @@
 	);
 	let agentSheetOpen = $state(false);
 	let omniOpen = $state(false);
-	let appSurfaceEl = $state<HTMLElement | null>(null);
 	const failedThumbnails = new SvelteSet<string>();
+	const activeAppHeaderTitle = $derived(
+		appName && activeAppManifest
+			? resolveAppHeaderTitle(
+					i18nResolver,
+					appName,
+					activeAppManifest.label ?? activeAppManifest.name
+				)
+			: null
+	);
+	const activeAppHeaderDescription = $derived(
+		appName && activeAppManifest
+			? resolveAppHeaderDescription(i18nResolver, appName, activeAppManifest.description)
+			: null
+	);
 
 	/**
 	 * Cmd+K and the FAB are the same gesture: open the agent, then hand the composer focus.
@@ -219,6 +261,11 @@
 			currentPath,
 			i18n: i18nResolver
 		}),
+		utilities: buildUtilityNavigation({
+			plugins: data.hostPlugins ?? [],
+			isAdmin: data.user.role === 'admin',
+			currentPath
+		}),
 		applications: buildApplicationNavigation({
 			appIds: appNames,
 			apps: manifestContext.getAppsRecord(),
@@ -250,6 +297,7 @@
 	}
 
 	function navigate(href: string): void {
+		prefetchWorkspaceSurface(href);
 		void goto(href);
 	}
 
@@ -294,10 +342,11 @@
 
 {#snippet activeAppBanner()}
 	{#if activeAppManifest?.banner}
-		<CollapsingMediaBanner
+		<AppMediaHeader
 			src={activeAppManifest.banner}
 			icon={activeAppManifest.icon}
-			scrollRoot={appSurfaceEl}
+			title={activeAppHeaderTitle}
+			description={activeAppHeaderDescription}
 		/>
 	{/if}
 {/snippet}
@@ -315,6 +364,7 @@
 	model={navigationModel}
 	onNavigate={navigate}
 	onOrganizationChange={switchOrganization}
+	onPrefetch={prefetchWorkspaceSurface}
 	{notifications}
 	{onSignOut}
 >
@@ -432,7 +482,6 @@
 			<Bound size="full" clip grow data-workspace-app-region>
 				<Cover gap="none" top={activeAppBanner}>
 					<div
-						bind:this={appSurfaceEl}
 						data-workspace-app-surface
 						class="h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:pod-app] [container-type:inline-size]"
 					>

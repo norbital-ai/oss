@@ -83,24 +83,24 @@
 				name: 'invitation',
 				recordLabel: 'email',
 				system: true,
-			fields: [
-				{ name: 'norbital_id', kind: 'uuid', nullable: false },
-				{ name: 'email', kind: 'text', nullable: false, label: t('pod.settings.email') },
-				{ name: 'role', kind: 'text', nullable: false, label: t('pod.settings.memberRole') },
-				{ name: 'status', kind: 'text', nullable: false, label: t('pod.settings.status') },
-				{
-					name: 'created_at',
-					kind: 'timestamptz',
-					nullable: false,
-					label: t('pod.settings.invited')
-				},
-				{
-					name: 'expires_at',
-					kind: 'timestamptz',
-					nullable: false,
-					label: t('pod.settings.expires')
-				}
-			]
+				fields: [
+					{ name: 'norbital_id', kind: 'uuid', nullable: false },
+					{ name: 'email', kind: 'text', nullable: false, label: t('pod.settings.email') },
+					{ name: 'role', kind: 'text', nullable: false, label: t('pod.settings.memberRole') },
+					{ name: 'status', kind: 'text', nullable: false, label: t('pod.settings.status') },
+					{
+						name: 'created_at',
+						kind: 'timestamptz',
+						nullable: false,
+						label: t('pod.settings.invited')
+					},
+					{
+						name: 'expires_at',
+						kind: 'timestamptz',
+						nullable: false,
+						label: t('pod.settings.expires')
+					}
+				]
 			}
 		},
 		db: {
@@ -205,36 +205,36 @@
 			description={t('pod.settings.invitationsDescription')}
 			features={{ search: true, filter: false, bulk: false, create: false }}
 		>
-		{#snippet columns({ Column })}
-			<Column
-				name="email"
-				label={t('pod.settings.email')}
-				minWidth={220}
-				card="title"
-				render={({ row }) => renderSnippet(emailCell, { row })}
-			/>
-			<Column name="role" label={t('pod.settings.memberRole')} width={110} card="subtitle" />
-			<Column name="status" label={t('pod.settings.status')} width={110} card="badge" />
-			<Column
-				name="created_at"
-				label={t('pod.settings.invited')}
-				minWidth={180}
-				render={({ row }) => date(String(row.created_at))}
-			/>
-			<Column
-				name="expires_at"
-				label={t('pod.settings.expires')}
-				minWidth={180}
-				render={({ row }) => date(String(row.expires_at))}
-			/>
-			<Column
-				name="norbital_id"
-				label=""
-				width={90}
-				render={({ row }) => renderSnippet(revokeCell, { row })}
-			/>
-		{/snippet}
-	</CollectionTable>
+			{#snippet columns({ Column })}
+				<Column
+					name="email"
+					label={t('pod.settings.email')}
+					minWidth={220}
+					card="title"
+					render={({ row }) => renderSnippet(emailCell, { row })}
+				/>
+				<Column name="role" label={t('pod.settings.memberRole')} width={110} card="subtitle" />
+				<Column name="status" label={t('pod.settings.status')} width={110} card="badge" />
+				<Column
+					name="created_at"
+					label={t('pod.settings.invited')}
+					minWidth={180}
+					render={({ row }) => date(String(row.created_at))}
+				/>
+				<Column
+					name="expires_at"
+					label={t('pod.settings.expires')}
+					minWidth={180}
+					render={({ row }) => date(String(row.expires_at))}
+				/>
+				<Column
+					name="norbital_id"
+					label=""
+					width={90}
+					render={({ row }) => renderSnippet(revokeCell, { row })}
+				/>
+			{/snippet}
+		</CollectionTable>
 	</Bound>
 	<p class="text-micro text-muted-foreground">{t('pod.settings.invitationsHint')}</p>
 </Stack>

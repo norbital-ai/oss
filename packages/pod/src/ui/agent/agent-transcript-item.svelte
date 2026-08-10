@@ -168,7 +168,10 @@
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('pod.agent.delegatedTranscript')}
 						</span>
-						<ol class="m-0 flex list-none flex-col gap-1.5 p-0" aria-label={t('pod.agent.subagentTranscriptAria')}>
+						<ol
+							class="m-0 flex list-none flex-col gap-1.5 p-0"
+							aria-label={t('pod.agent.subagentTranscriptAria')}
+						>
 							{#each message.children as child (child.key)}
 								<Self message={child} nested="subagent" />
 							{/each}
@@ -177,7 +180,8 @@
 				{/if}
 				{#if message.error}
 					<Stack gap="xs" class="min-w-0">
-						<span class="text-tiny font-medium tracking-wide text-destructive uppercase">{t('pod.agent.error')}</span
+						<span class="text-tiny font-medium tracking-wide text-destructive uppercase"
+							>{t('pod.agent.error')}</span
 						>
 						<pre
 							class="m-0 max-h-56 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive">{message.error}</pre>
@@ -206,7 +210,9 @@
 		data-role={message.role}
 	>
 		<span class="px-1 text-tiny font-medium text-muted-foreground">
-			{nested === 'subagent' && message.role === 'user' ? t('pod.agent.task') : roleLabel(message.role)}
+			{nested === 'subagent' && message.role === 'user'
+				? t('pod.agent.task')
+				: roleLabel(message.role)}
 		</span>
 		<div
 			class={nested

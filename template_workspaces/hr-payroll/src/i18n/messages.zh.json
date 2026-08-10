@@ -179,6 +179,9 @@
 	"app.scheduling.tab_holidays": "假日",
 	"app.scheduling.previous_month": "上个月",
 	"app.scheduling.next_month": "下个月",
+	"app.scheduling.previous_page": "上一组员工",
+	"app.scheduling.next_page": "下一组员工",
+	"app.scheduling.actions": "集合操作",
 	"app.scheduling.search_people": "搜索人员",
 	"app.scheduling.search_people_placeholder": "搜索人员…",
 	"app.scheduling.clear": "清除",
@@ -865,5 +868,14 @@
 	"component.workbook_imported": "已从 {file} 导入 {count} 条{label}。",
 	"component.workbook_import_failed": "无法导入 {file}。",
 	"component.time_entries": "条考勤记录",
-	"component.roster_rows": "条排班记录"
+	"component.roster_rows": "条排班记录",
+	"renderer.leave_entitlement.empty": "暂无权益层级——在添加一层之前，此假期类型不授予任何权益。",
+	"renderer.leave_entitlement.add_placeholder": "添加权益层级…",
+	"renderer.pay_component_policy.empty": "暂无法定决定——此组件不针对任何项目计费。",
+	"renderer.pay_component_policy.add_placeholder": "添加法定决定…",
+	"renderer.component_definition.empty": "暂无上限层级——在保存前架构至少需要一个层级。",
+	"renderer.component_definition.add_placeholder": "添加上限层级…",
+	"renderer.repayment_schedule.empty": "暂无还款分期。",
+	"app.hr_employee.employment_affiliation": " · 员工 {number}",
+	"app.hr_employee.company_fallback": "公司"
 }

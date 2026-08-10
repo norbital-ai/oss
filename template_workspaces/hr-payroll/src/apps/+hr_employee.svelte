@@ -87,7 +87,7 @@
 	const employmentOptions = $derived(
 		activeEmployments.map((employment) => ({
 			value: employment.norbital_id,
-			label: `${companyById.get(employment.company_id)?.name ?? 'Company'} · Employee ${employment.employee_number}`,
+			label: `${companyById.get(employment.company_id)?.name ?? t('app.hr_employee.company_fallback')}${t('app.hr_employee.employment_affiliation', { number: employment.employee_number })}`,
 			search_term: `${companyById.get(employment.company_id)?.name ?? ''} ${employment.employee_number}`
 		}))
 	);
@@ -199,8 +199,11 @@
 			<Stack gap="none">
 				<p class="text-sm font-medium">{t('app.hr_employee.working_in')}</p>
 				<p class="text-sm text-muted-foreground">
-					{companyById.get(selectedEmployment.company_id)?.name ?? 'Company'} · Employee
-					{selectedEmployment.employee_number}
+					{companyById.get(selectedEmployment.company_id)?.name ??
+						t('app.hr_employee.company_fallback')}
+					{t('app.hr_employee.employment_affiliation', {
+						number: selectedEmployment.employee_number
+					})}
 				</p>
 			</Stack>
 			<label class="grid w-full gap-1.5 text-sm font-medium">

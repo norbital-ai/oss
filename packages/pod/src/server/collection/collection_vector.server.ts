@@ -76,14 +76,11 @@ const VECTOR_PREDICATES = {
 		const { maxDistance, metric } = parsed.data;
 		switch (metric) {
 			case 'cosine':
-				return (column, sqlFn) =>
-					sqlFn`(${column} <=> ${vectorLiteral}::vector) <= ${maxDistance}`;
+				return (column, sqlFn) => sqlFn`(${column} <=> ${vectorLiteral}::vector) <= ${maxDistance}`;
 			case 'l2':
-				return (column, sqlFn) =>
-					sqlFn`(${column} <-> ${vectorLiteral}::vector) <= ${maxDistance}`;
+				return (column, sqlFn) => sqlFn`(${column} <-> ${vectorLiteral}::vector) <= ${maxDistance}`;
 			case 'ip':
-				return (column, sqlFn) =>
-					sqlFn`(${column} <#> ${vectorLiteral}::vector) <= ${maxDistance}`;
+				return (column, sqlFn) => sqlFn`(${column} <#> ${vectorLiteral}::vector) <= ${maxDistance}`;
 			default: {
 				const _exhaustive: never = metric;
 				return _exhaustive;

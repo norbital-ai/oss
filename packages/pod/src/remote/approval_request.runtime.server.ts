@@ -135,10 +135,7 @@ export async function runProcessApprovalRequestAction({
 		event: actionHook.event
 	});
 
-	return approvalSyncReceipt(
-		requestI18n().t('pod.server.approvalActionProcessed'),
-		updatedRequest
-	);
+	return approvalSyncReceipt(requestI18n().t('pod.server.approvalActionProcessed'), updatedRequest);
 }
 
 export async function runWithdrawApprovalRequest({

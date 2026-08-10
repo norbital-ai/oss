@@ -135,7 +135,11 @@
 			await pipeline.run(context);
 			if (kind === 'import') await refresh();
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('table.pipelineFailed', { label: pipeline.label }));
+			toast.error(
+				error instanceof Error
+					? error.message
+					: t('table.pipelineFailed', { label: pipeline.label })
+			);
 		} finally {
 			pendingOperation = null;
 		}
@@ -257,25 +261,25 @@
 						</span>
 					</Inline>
 				</Accordion.Trigger>
-			<Accordion.Content class="px-1">
-				<Stack gap="md" class="rounded-md border bg-muted/30 p-3">
-					<Stack gap="xs">
-						<p class="text-xs font-medium">{t('table.bulkStep1')}</p>
-						<Combobox
-							options={fieldOptions}
-							value={selectedFieldName}
-							searchable={fieldOptions.length > 8}
-							emptyPlaceholder={t('table.selectFieldPlaceholder')}
-							ariaLabel={t('table.chooseFieldToUpdate')}
-							disabled={disabled || selectedRows.length === 0}
-							onValueChange={chooseField}
-						/>
-					</Stack>
-					{#if selectedField}
+				<Accordion.Content class="px-1">
+					<Stack gap="md" class="rounded-md border bg-muted/30 p-3">
 						<Stack gap="xs">
-							<label class="text-xs font-medium" for="collection-bulk-update-value">
-								{t('table.bulkStep2')}
-							</label>
+							<p class="text-xs font-medium">{t('table.bulkStep1')}</p>
+							<Combobox
+								options={fieldOptions}
+								value={selectedFieldName}
+								searchable={fieldOptions.length > 8}
+								emptyPlaceholder={t('table.selectFieldPlaceholder')}
+								ariaLabel={t('table.chooseFieldToUpdate')}
+								disabled={disabled || selectedRows.length === 0}
+								onValueChange={chooseField}
+							/>
+						</Stack>
+						{#if selectedField}
+							<Stack gap="xs">
+								<label class="text-xs font-medium" for="collection-bulk-update-value">
+									{t('table.bulkStep2')}
+								</label>
 								<DataRenderer
 									id="collection-bulk-update-value"
 									field={selectedField}
@@ -289,17 +293,17 @@
 								/>
 							</Stack>
 						{/if}
-					<Inline justify="between" gap="md" class="border-t pt-3">
-						<p class="text-xs text-muted-foreground">{selectionLabel}</p>
-						<Button
-							type="button"
-							size="sm"
-							disabled={disabled || pendingOperation != null || !canSubmitUpdate}
-							onclick={() => void reviewBulkOperation('update')}
-						>
-							{t('table.bulkStep3')}
-						</Button>
-					</Inline>
+						<Inline justify="between" gap="md" class="border-t pt-3">
+							<p class="text-xs text-muted-foreground">{selectionLabel}</p>
+							<Button
+								type="button"
+								size="sm"
+								disabled={disabled || pendingOperation != null || !canSubmitUpdate}
+								onclick={() => void reviewBulkOperation('update')}
+							>
+								{t('table.bulkStep3')}
+							</Button>
+						</Inline>
 					</Stack>
 				</Accordion.Content>
 			</Accordion.Item>
@@ -343,7 +347,9 @@
 <AlertDialog.Root bind:open={confirmUpdateOpen}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>{t('table.confirmUpdateTitle', { label: selectionLabel })}</AlertDialog.Title>
+			<AlertDialog.Title
+				>{t('table.confirmUpdateTitle', { label: selectionLabel })}</AlertDialog.Title
+			>
 			<AlertDialog.Description>
 				{t('table.confirmUpdateDescription', {
 					field: selectedField?.label ?? selectedFieldName ?? ''
@@ -362,7 +368,9 @@
 <AlertDialog.Root bind:open={confirmDeleteOpen}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>{t('table.confirmDeleteTitle', { label: selectionLabel })}</AlertDialog.Title>
+			<AlertDialog.Title
+				>{t('table.confirmDeleteTitle', { label: selectionLabel })}</AlertDialog.Title
+			>
 			<AlertDialog.Description>{t('table.confirmDeleteDescription')}</AlertDialog.Description>
 		</AlertDialog.Header>
 		<AlertDialog.Footer>

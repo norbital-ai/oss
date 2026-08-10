@@ -3,7 +3,7 @@
 	import { provideI18n, useI18n } from '@norbital-ai/ui/i18n';
 	import type { LocaleCatalogs } from '@norbital-ai/std/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import type {
 		CollectionClient,
 		ErasedCollectionRegistry
@@ -33,7 +33,7 @@
 		}>;
 	} = $props();
 
-	provideI18n(i18nMessages);
+	provideI18n(untrack(() => i18nMessages));
 
 	const { t } = useI18n<PodUiKeys>();
 

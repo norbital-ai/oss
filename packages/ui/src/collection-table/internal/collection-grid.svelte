@@ -16,6 +16,7 @@
 	import { onMount, tick, type Snippet } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import CollectionTableColumnActions from './component/columns/collection-table-column-actions.svelte';
+	import CollectionActionToolbar from '../collection-action-toolbar.svelte';
 	import { ColumnAPI, RowAPI, TableAPI } from './collection-table-state.svelte';
 
 	const { t } = useI18n<UiKeys>();
@@ -405,29 +406,18 @@
 </script>
 
 {#snippet actionsRow()}
-	<Cluster
-		gap="sm"
-		align="center"
-		justify={leftActions ? 'between' : 'end'}
-		data-collection-grid-toolbar
-	>
-		{#if leftActions}
-			<Scroll axis="x" name={t('table.toolbarRegion')} grow class="min-w-0">
-				<Inline gap="sm" fill class="min-w-0">
-					{#each leftActions as action}
-						{@render action({ table: tableApi })}
-					{/each}
-				</Inline>
-			</Scroll>
-		{/if}
-		{#if rightActions}
-			<Inline gap="xs" shrink={false}>
-				{#each rightActions as action}
-					{@render action({ table: tableApi })}
-				{/each}
-			</Inline>
-		{/if}
-	</Cluster>
+	{#snippet view()}
+		{#each leftActions ?? [] as action}{@render action({ table: tableApi })}{/each}
+	{/snippet}
+	{#snippet actions()}
+		{#each rightActions ?? [] as action}{@render action({ table: tableApi })}{/each}
+	{/snippet}
+	<div data-collection-grid-toolbar>
+		<CollectionActionToolbar
+			view={leftActions ? view : undefined}
+			actions={rightActions ? actions : undefined}
+		/>
+	</div>
 {/snippet}
 
 <Cover
@@ -656,13 +646,7 @@
 		aria-label={headerLabel}
 	>
 		{#if isCheckbox}
-			<Inline
-				gap="none"
-				fill
-				grow
-				justify="center"
-				class="min-w-0 overflow-hidden px-3.5 py-1.5"
-			>
+			<Inline gap="none" fill grow justify="center" class="min-w-0 overflow-hidden px-3.5 py-1.5">
 				{#if headerContent instanceof RenderComponentConfig}
 					{@const { component: Component, props } = headerContent}
 					<Component {...props} />
@@ -718,9 +702,7 @@
 						onclick={() => handleSort(inst)}
 						class={cn(
 							'flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-opacity duration-150 hover:bg-muted focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
-							isSorted
-								? 'opacity-100'
-								: 'opacity-0 group-hover:opacity-100'
+							isSorted ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
 						)}
 					>
 						<Icon

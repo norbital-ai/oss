@@ -3,20 +3,14 @@ import {
 	contractorSatisfiesCertificationRequirements,
 	missingCertificationIds
 } from '../../lib/certification-eligibility.js';
+import { coordinatesOf, exceedsSiteTolerance, type LocationLike } from '../../lib/haversine.js';
 
 type AssignmentIdentity = {
 	job_id?: string | null;
 	contractor_profile_id?: string | null;
 };
 
-type AssignmentStatus = 'dispatched' | 'in_progress' | 'completed' | 'flagged';
-
-type LocationLike =
-	| {
-			geometry?: { lat?: number | null; lon?: number | null } | null;
-	  }
-	| null
-	| undefined;
+type AssignmentStatus = 'dispatched' | 'in_progress' | 'completed' | 'suspect';
 
 function requireId(value: string | null | undefined, message: string): string {
 	if (!value) throw new Error(message);
@@ -37,7 +31,7 @@ function assignmentStatus(value: string | null | undefined): AssignmentStatus {
 		case 'dispatched':
 		case 'in_progress':
 		case 'completed':
-		case 'flagged':
+		case 'suspect':
 			return value;
 		case undefined:
 		case null:
@@ -47,18 +41,23 @@ function assignmentStatus(value: string | null | undefined): AssignmentStatus {
 	}
 }
 
+export function applySuspectOneWay(
+	current: AssignmentStatus,
+	forceSuspect: boolean
+): AssignmentStatus {
+	if (current === 'suspect' || forceSuspect) return 'suspect';
+	return current;
+}
+
 export function assignmentStatusForLocation(
 	status: AssignmentStatus,
 	assignmentLocation: LocationLike,
 	siteLocation: LocationLike
 ): AssignmentStatus {
-	const distanceM = haversineMeters(
-		assignmentLocation?.geometry?.lat,
-		assignmentLocation?.geometry?.lon,
-		siteLocation?.geometry?.lat,
-		siteLocation?.geometry?.lon
+	return applySuspectOneWay(
+		status,
+		exceedsSiteTolerance(coordinatesOf(assignmentLocation), coordinatesOf(siteLocation))
 	);
-	return distanceM != null && distanceM > 500 ? 'flagged' : status;
 }
 
 export function assertAssignmentIdentityUnchanged(
@@ -169,34 +168,49 @@ export default {
 					: input;
 			const jobId = input.job_id ?? existing.job_id;
 			const location = input.location ?? existing.location;
-			if (location == null || jobId == null) return withCompletion;
+			const existingStatus = assignmentStatus(existing.status);
+			const baseStatus = assignmentStatus(input.status ?? existing.status);
+			const preserveSuspect = existingStatus === 'suspect';
+
+			if (location == null || jobId == null) {
+				return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
+			}
 
 			const job = await api.db.query.jobs.findFirst({
 				where: { norbital_id: { eq: jobId } }
 			});
-			if (job == null) return withCompletion;
+			if (job == null) {
+				return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
+			}
 
 			const site = await api.db.query.sites.findFirst({
 				where: { norbital_id: { eq: job.site_id } }
 			});
-			if (site?.location == null) return withCompletion;
-
-			const distanceM = haversineMeters(
-				location.geometry?.lat,
-				location.geometry?.lon,
-				site.location.geometry?.lat,
-				site.location.geometry?.lon
-			);
-			if (distanceM != null && distanceM > 500) {
-				return { ...withCompletion, status: 'flagged' };
+			if (site?.location == null) {
+				return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
 			}
-			return withCompletion;
+
+			const forceSuspect =
+				preserveSuspect ||
+				exceedsSiteTolerance(coordinatesOf(location), coordinatesOf(site.location));
+			return { ...withCompletion, status: applySuspectOneWay(baseStatus, forceSuspect) };
 		},
 		after: async ({ record, api }) => {
 			const status = record.status;
 			if (status == null) return;
+			// Suspect is an integrity overlay — never rewind job progression already recorded.
+			if (status === 'suspect') {
+				const job = await api.db.query.jobs.findFirst({
+					where: { norbital_id: { eq: record.job_id } },
+					columns: { status: true }
+				});
+				if (job?.status === 'unassigned') {
+					await api.db.mutate('jobs', [{ norbital_id: record.job_id, status: 'assigned' }]);
+				}
+				return;
+			}
 			const jobStatus = mapAssignmentStatusToJobStatus(
-				status as 'dispatched' | 'in_progress' | 'completed' | 'flagged'
+				status as 'dispatched' | 'in_progress' | 'completed' | 'suspect'
 			);
 			await api.db.mutate('jobs', [{ norbital_id: record.job_id, status: jobStatus }]);
 		}
@@ -204,14 +218,14 @@ export default {
 } satisfies Hooks;
 
 export function mapAssignmentStatusToJobStatus(
-	status: 'dispatched' | 'in_progress' | 'completed' | 'flagged'
+	status: 'dispatched' | 'in_progress' | 'completed' | 'suspect'
 ): 'assigned' | 'in_progress' | 'completed' {
 	switch (status) {
 		case 'completed':
 			return 'completed';
 		case 'in_progress':
 			return 'in_progress';
-		case 'flagged':
+		case 'suspect':
 		case 'dispatched':
 			return 'assigned';
 		default: {
@@ -219,21 +233,4 @@ export function mapAssignmentStatusToJobStatus(
 			return _exhaustive;
 		}
 	}
-}
-
-function haversineMeters(
-	lat1: number | null | undefined,
-	lon1: number | null | undefined,
-	lat2: number | null | undefined,
-	lon2: number | null | undefined
-): number | null {
-	if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
-	const R = 6371000;
-	const toRad = (deg: number) => (deg * Math.PI) / 180;
-	const dLat = toRad(lat2 - lat1);
-	const dLon = toRad(lon2 - lon1);
-	const a =
-		Math.sin(dLat / 2) ** 2 +
-		Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-	return Math.round(2 * R * Math.asin(Math.sqrt(a)));
 }

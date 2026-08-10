@@ -54,4 +54,6 @@ export interface WorkspaceNavigationModel {
 	readonly user: WorkspaceUserSummary;
 	readonly system: readonly WorkspaceNavigationItem[];
 	readonly applications: readonly WorkspaceNavigationItem[];
+	/** Compact account-adjacent tools, rendered above notifications in the sidebar footer. */
+	readonly utilities?: readonly WorkspaceNavigationItem[];
 }

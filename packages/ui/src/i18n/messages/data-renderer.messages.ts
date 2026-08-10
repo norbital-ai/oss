@@ -7,8 +7,8 @@ import { defineMessages } from '@norbital-ai/std/i18n';
  * Owned by the data-renderer migration pass. Keys must stay in the
  * `dataRenderer.*` namespace.
  */
-export const dataRendererMessages = defineMessages(
-	{
+export const dataRendererMessages = defineMessages({
+	en: {
 		'dataRenderer.present': 'Present',
 		'dataRenderer.absent': 'Not provided',
 		'dataRenderer.true': 'Yes',
@@ -130,7 +130,7 @@ export const dataRendererMessages = defineMessages(
 		'dataRenderer.locationTypeCountry': 'Country',
 		'dataRenderer.noLocations': 'No locations selected'
 	},
-	{
+	zh: {
 		'dataRenderer.present': '已填写',
 		'dataRenderer.absent': '未提供',
 		'dataRenderer.true': '是',
@@ -250,4 +250,4 @@ export const dataRendererMessages = defineMessages(
 		'dataRenderer.locationTypeCountry': '国家',
 		'dataRenderer.noLocations': '未选择位置'
 	}
-);
+});

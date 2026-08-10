@@ -5,8 +5,8 @@ import { defineMessages } from '@norbital-ai/std/i18n';
  *
  * Owned by the form migration pass. Keys must stay in the `form.*` namespace.
  */
-export const formMessages = defineMessages(
-	{
+export const formMessages = defineMessages({
+	en: {
 		'form.requiredField': '{label} is required',
 		'form.invalidValue': 'Invalid value',
 		'form.maxLength': 'At most {count} characters',
@@ -55,7 +55,7 @@ export const formMessages = defineMessages(
 		'form.savedHistoryLabel': '{label} saved history',
 		'form.savedSuccessfully': 'Saved successfully'
 	},
-	{
+	zh: {
 		'form.requiredField': '请填写{label}',
 		'form.invalidValue': '值无效',
 		'form.maxLength': '最多 {count} 个字符',
@@ -104,4 +104,4 @@ export const formMessages = defineMessages(
 		'form.savedHistoryLabel': '{label} 已保存的历史',
 		'form.savedSuccessfully': '保存成功'
 	}
-);
+});

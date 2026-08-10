@@ -9,6 +9,7 @@
 	import { Inline } from '#lib/layout';
 	import * as Sidebar from '#lib/sidebar';
 	import { Spinner } from '#lib/spinner';
+	import { LocaleToggle } from '#lib/locale-toggle';
 	import { ThemeToggle } from '#lib/theme-toggle';
 	import { cn } from '#lib/utils';
 	import type {
@@ -16,6 +17,7 @@
 		WorkspaceOrganizationOption
 	} from './workspace-shell.types.js';
 	import WorkspaceSidebarNavigationSection from './workspace-sidebar-navigation-section.svelte';
+	import WorkspaceSidebarNavigationItem from './workspace-sidebar-navigation-item.svelte';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -80,15 +82,9 @@
 </script>
 
 {#snippet organizationAvatar(organization: WorkspaceOrganizationOption)}
-	<Avatar.Root
-		class={cn('shrink-0', displayExpanded ? 'size-6' : 'size-full rounded-md')}
-	>
+	<Avatar.Root class="size-6 shrink-0 rounded-md">
 		{#if organization.logoUrl}
-			<Avatar.Image
-				src={organization.logoUrl}
-				alt={organization.name}
-				class={displayExpanded ? undefined : 'object-cover'}
-			/>
+			<Avatar.Image src={organization.logoUrl} alt={organization.name} class="object-cover" />
 		{/if}
 		<Avatar.Fallback identifier={organization.id}>
 			{organizationFallback(organization)}
@@ -117,10 +113,10 @@
 			scrollToSelection={true}
 			disabled={switchingOrganizationId !== null || !onOrganizationChange}
 			hideChevron={!displayExpanded}
-			class={displayExpanded ? 'w-full' : 'w-6'}
+			class={displayExpanded ? 'w-full' : 'w-8'}
 			triggerClass={displayExpanded
 				? 'h-8 pl-2 pr-1'
-				: 'size-6 justify-center p-0 shadow-xs [&>div]:grow-0 [&>div]:py-0'}
+				: 'size-8 justify-center p-0 shadow-xs [&>div]:grow-0 [&>div]:py-0'}
 			minWidth={256}
 			align="start"
 			snapToEnds={true}
@@ -141,18 +137,22 @@
 			<Sidebar.Trigger
 				target="expansion"
 				class="size-8 shrink-0"
-				aria-label={sidebar.isMobile ? t('misc.closeWorkspaceNavigation') : t('misc.collapseSidebar')}
+				aria-label={sidebar.isMobile
+					? t('misc.closeWorkspaceNavigation')
+					: t('misc.collapseSidebar')}
 			/>
 		{:else}
 			<div class="group/org relative mx-auto flex size-8 items-center justify-center">
-				<div class="transition-opacity group-hover/org:pointer-events-none group-hover/org:opacity-0">
+				<div
+					class="flex size-8 items-center justify-center transition-opacity group-hover/org:pointer-events-none group-hover/org:opacity-0"
+				>
 					{@render organizationSwitcher()}
 				</div>
 				<!-- Hover-only expand affordance; keyboard users keep the org combobox + Cmd/Ctrl+B. -->
 				<Sidebar.Trigger
 					target="expansion"
 					tabindex={-1}
-					class="pointer-events-none absolute inset-0 m-auto size-6 opacity-0 group-hover/org:pointer-events-auto group-hover/org:opacity-100"
+					class="pointer-events-none absolute inset-0 size-8 opacity-0 group-hover/org:pointer-events-auto group-hover/org:opacity-100"
 					aria-label={t('misc.expandSidebar')}
 				/>
 			</div>
@@ -179,6 +179,15 @@
 
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-2 text-xs">
 	<Sidebar.Menu class="gap-2">
+		<Sidebar.MenuItem>
+			<LocaleToggle
+				showLabel={displayExpanded}
+				class={displayExpanded ? 'h-8 w-full justify-start gap-2 px-2' : 'mx-auto size-8'}
+			/>
+		</Sidebar.MenuItem>
+		{#each model.utilities ?? [] as item (item.key)}
+			<WorkspaceSidebarNavigationItem {item} open={displayExpanded} {onNavigate} {onPrefetch} />
+		{/each}
 		{#if notifications}
 			<Sidebar.MenuItem>{@render notifications({ expanded: displayExpanded })}</Sidebar.MenuItem>
 		{/if}

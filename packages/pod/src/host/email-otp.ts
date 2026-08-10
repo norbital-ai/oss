@@ -290,9 +290,14 @@ export function emailOtpIdentity(options: EmailOtpIdentityOptions): HostIdentity
 				if (!constantTimeEquals(expected, pending.mac)) {
 					return brandedCodeEntryPage(i18n, pending.email, i18n.t('pod.identity.codeIncorrect'));
 				}
+				// Claim before issuing a session. A mobile OTP autofill often submits twice (keyboard
+				// Done + Verify, or two autofill-driven posts); the second must not mint another session.
 				// Single-use is enforced here, not by clearing the cookie: the digest stays valid until
 				// expiry, so a client that simply keeps its own cookie could otherwise mint unlimited
 				// sessions from one code. The cookie is still cleared, for the honest client's benefit.
+				if (consumed.has(pending.mac)) {
+					return brandedLoginPage(i18n, i18n.t('pod.identity.codeAlreadyUsed'));
+				}
 				consumed.set(pending.mac, pending.expiry);
 				const session = options.sessions.issue(
 					{

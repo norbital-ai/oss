@@ -7,8 +7,8 @@ import { defineMessages } from '@norbital-ai/std/i18n';
  * Owned by the kanban migration pass. Keys must stay in the `kanban.*`
  * namespace.
  */
-export const kanbanMessages = defineMessages(
-	{
+export const kanbanMessages = defineMessages({
+	en: {
 		'kanban.emptyState': 'No cards yet',
 		'kanban.emptyLane': 'No cards in this lane',
 		'kanban.addCard': 'Add card',
@@ -23,8 +23,10 @@ export const kanbanMessages = defineMessages(
 		'kanban.noLaneDirection': 'No lane in that direction. {lane} is the board edge.',
 		'kanban.cardMoved': 'Moved card to {lane}.',
 		'kanban.moveCancelled': 'Card move cancelled.',
-		'kanban.cardPickedUp': 'Card picked up. Use Left or Right Arrow to move it, or Escape to cancel.',
-		'kanban.keyboardInstructions': 'Press Enter to open a card. Press Space to pick it up, then Left or Right Arrow to move it between lanes. Press Escape to cancel.',
+		'kanban.cardPickedUp':
+			'Card picked up. Use Left or Right Arrow to move it, or Escape to cancel.',
+		'kanban.keyboardInstructions':
+			'Press Enter to open a card. Press Space to pick it up, then Left or Right Arrow to move it between lanes. Press Escape to cancel.',
 		'kanban.selectCard': 'Select card',
 		'kanban.dragCard': 'Drag card',
 		'kanban.noLaneJobs': 'No {lane} jobs',
@@ -35,7 +37,7 @@ export const kanbanMessages = defineMessages(
 		'kanban.columnRegion': '{column} column',
 		'kanban.boardRegion': 'Kanban board'
 	},
-	{
+	zh: {
 		'kanban.emptyState': '暂无卡片',
 		'kanban.emptyLane': '此列暂无卡片',
 		'kanban.addCard': '添加卡片',
@@ -51,7 +53,8 @@ export const kanbanMessages = defineMessages(
 		'kanban.cardMoved': '已将卡片移至{lane}。',
 		'kanban.moveCancelled': '已取消卡片移动。',
 		'kanban.cardPickedUp': '已拿起卡片。使用左或右方向键移动它，或按 Esc 取消。',
-		'kanban.keyboardInstructions': '按回车键打开卡片。按空格键拿起卡片，然后用左或右方向键在列间移动，按 Esc 取消。',
+		'kanban.keyboardInstructions':
+			'按回车键打开卡片。按空格键拿起卡片，然后用左或右方向键在列间移动，按 Esc 取消。',
 		'kanban.selectCard': '选择卡片',
 		'kanban.dragCard': '拖动卡片',
 		'kanban.noLaneJobs': '没有{lane}任务',
@@ -62,4 +65,4 @@ export const kanbanMessages = defineMessages(
 		'kanban.columnRegion': '{column} 列',
 		'kanban.boardRegion': '看板'
 	}
-);
+});

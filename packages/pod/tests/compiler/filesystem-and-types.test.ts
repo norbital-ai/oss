@@ -38,7 +38,17 @@ export default defineModel({ name: text().notNull() });`
 	<meta name="description" content="Home" />
 	<meta name="pod:icon" content="lucide:home" />
 </svelte:head>
-<p>Home</p>`
+<p>{t('home.greeting')}</p>`
+	);
+	await write(
+		root,
+		'src/i18n/messages.en.json',
+		JSON.stringify({ 'home.greeting': 'Welcome' }, null, '\t')
+	);
+	await write(
+		root,
+		'src/i18n/messages.zh.json',
+		JSON.stringify({ 'home.greeting': '欢迎' }, null, '\t')
 	);
 	await write(
 		root,
@@ -605,5 +615,122 @@ export default { kind: 'agent', task: 'Help here.', access: 'write' } satisfies 
 		expect(structure.diagnostics).toEqual([]);
 		const things = structure.collections.find((collection) => collection.id === 'things');
 		expect(things?.representationBanner).toBeUndefined();
+	});
+
+	it('requires i18n catalogs for every supported locale when apps exist', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/apps/+home.svelte',
+			`<svelte:head><title>Home</title></svelte:head>
+<p>{t('home.greeting')}</p>`
+		);
+		await rm(path.join(root, 'src/i18n'), { recursive: true, force: true });
+
+		const structure = await discoverPodFilesystem(root);
+		const missing = structure.diagnostics.filter(
+			(diagnostic) => diagnostic.code === 'I18N_CATALOG_MISSING'
+		);
+		expect(missing.map((diagnostic) => diagnostic.file)).toEqual(['src/i18n/messages.en.json']);
+		expect(missing[0]?.message).toContain('every supported locale');
+
+		await write(
+			root,
+			'src/i18n/messages.en.json',
+			JSON.stringify({ 'home.greeting': 'Welcome' }, null, '\t')
+		);
+		const structureWithPrimary = await discoverPodFilesystem(root);
+		const missingAfter = structureWithPrimary.diagnostics.filter(
+			(diagnostic) => diagnostic.code === 'I18N_CATALOG_MISSING'
+		);
+		expect(missingAfter.map((diagnostic) => diagnostic.file)).toEqual([
+			'src/i18n/messages.zh.json'
+		]);
+	});
+
+	it('flags raw text nodes and raw copy props that bypass t()', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/apps/+home.svelte',
+			`<svelte:head>
+	<title>Home</title>
+	<meta name="pod:icon" content="lucide:home" />
+</svelte:head>
+<p>Track and resolve RFIs.</p>
+<PageHeader title="Requests" description="Track and resolve project RFIs." />
+<Column name="rfi_number" />
+<Button aria-hidden="true">&nbsp;</Button>
+<p>{record?.name} · Employee</p>`
+		);
+
+		const structure = await discoverPodFilesystem(root);
+		const raw = structure.diagnostics.filter(
+			(diagnostic) =>
+				diagnostic.code === 'I18N_RAW_TEXT' || diagnostic.code === 'I18N_RAW_COPY_PROP'
+		);
+		expect(raw.map((diagnostic) => diagnostic.message)).toEqual([
+			"User-facing text must come from t('key'); add the string to both catalogs",
+			"PageHeader title expects a localized string; pass t('key') from both catalogs",
+			"PageHeader description expects a localized string; pass t('key') from both catalogs",
+			"User-facing text must come from t('key'); add the string to both catalogs"
+		]);
+		expect(
+			structure.diagnostics.filter(
+				(diagnostic) =>
+					diagnostic.code !== 'I18N_RAW_TEXT' && diagnostic.code !== 'I18N_RAW_COPY_PROP'
+			)
+		).toEqual([]);
+	});
+
+	it('keeps svelte:head metadata, identifiers, and expression-driven copy exempt from the raw-copy rule', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/apps/+home.svelte',
+			`<svelte:head>
+	<title>Home</title>
+	<meta name="pod:icon" content="lucide:home" />
+</svelte:head>
+<PageHeader title={t('app.home.header_title')} description={label} />
+<Column name="status" />
+<a href="/docs">{t('app.home.docs_link')}</a>
+<Combobox emptyPlaceholder={t('component.empty')} searchPlaceholder={t('component.search')} />
+<Button disabled>{condition ? 'Yes' : 'No'}</Button>`
+		);
+
+		const structure = await discoverPodFilesystem(root);
+		expect(structure.diagnostics).toEqual([]);
+	});
+
+	it('limits the raw-copy rule to app surfaces', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/collections/items/+representation.svelte',
+			'<p>Collection representations retain their existing localization contract.</p>'
+		);
+
+		const structure = await discoverPodFilesystem(root);
+		expect(
+			structure.diagnostics.filter(
+				(diagnostic) =>
+					diagnostic.code === 'I18N_RAW_TEXT' || diagnostic.code === 'I18N_RAW_COPY_PROP'
+			)
+		).toEqual([]);
+	});
+
+	it('enforces key parity across all supported locale catalogs', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/i18n/messages.zh.json',
+			JSON.stringify({ 'home.extra': '额外' }, null, '\t')
+		);
+
+		const structure = await discoverPodFilesystem(root);
+		const codes = structure.diagnostics.map((diagnostic) => diagnostic.code);
+		expect(codes).toContain('I18N_CATALOG_MISSING_KEY');
+		expect(codes).toContain('I18N_CATALOG_EXTRA_KEY');
 	});
 });

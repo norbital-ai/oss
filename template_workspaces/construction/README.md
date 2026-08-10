@@ -1,6 +1,6 @@
 # Construction Template
 
-![Construction workspace banner](assets/banner.svg)
+![Construction workspace thumbnail](assets/thumbnail.svg)
 
 Construction project management workspace covering projects, jobs, workers, permits to work, defects,
 RFIs, payment claims, and a BIM reference matrix for cost and embodied-carbon baselines. It provides the

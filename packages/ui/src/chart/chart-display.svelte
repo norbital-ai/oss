@@ -178,7 +178,11 @@
 			value: key,
 			color: chartConfig[key]?.color ?? getSeriesColor(index, spec.config[key])
 		}))}
-		<Scroll axis="x" name={t('misc.chartScrollable', { title: spec.title ?? t('misc.dataChart') })} class="max-">
+		<Scroll
+			axis="x"
+			name={t('misc.chartScrollable', { title: spec.title ?? t('misc.dataChart') })}
+			class="max-"
+		>
 			<ChartContainer
 				config={chartConfig}
 				class="h-[clamp(14rem,45dvh,18rem)] min-w-full"

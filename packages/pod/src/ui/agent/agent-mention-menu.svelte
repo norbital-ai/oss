@@ -104,17 +104,16 @@
 						<span class="min-w-0 flex-1 truncate">{item.hit.label}</span>
 						<span class="shrink-0 text-xs text-muted-foreground">{item.hit.collection}</span>
 					{:else}
-						<span class="min-w-0 flex-1 truncate">{t('pod.agent.searchCollection', { collection: item.collection })}</span>
+						<span class="min-w-0 flex-1 truncate"
+							>{t('pod.agent.searchCollection', { collection: item.collection })}</span
+						>
 						<span class="shrink-0 text-xs text-muted-foreground">{t('pod.agent.scope')}</span>
 					{/if}
 				</button>
 			{/each}
 		{/if}
 	</div>
-	<Inline
-		gap="md"
-		class="border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground"
-	>
+	<Inline gap="md" class="border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground">
 		<span>{t('pod.agent.navigateHint')}</span>
 		<span>{t('pod.agent.selectHint')}</span>
 		<span>{t('pod.agent.dismissHint')}</span>

@@ -213,7 +213,9 @@
 		<Scroll axis="y" name={t('table.appliedFilters')} class="max-h-80 min-w-0 p-3">
 			<Stack gap="xs">
 				{#if filters.length === 0}
-					<p class="py-2 text-center text-xs text-muted-foreground">{t('table.noFiltersApplied')}</p>
+					<p class="py-2 text-center text-xs text-muted-foreground">
+						{t('table.noFiltersApplied')}
+					</p>
 				{/if}
 				{#each filters as filter (filter.id)}
 					{@const field = selectedField(filter)}
@@ -282,7 +284,8 @@
 				size="sm"
 				class="h-7 gap-1.5 text-xs"
 				disabled={filterFields.length === 0}
-				onclick={addFilter}><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
+				onclick={addFilter}
+				><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
 			>
 		</footer>
 	</Popover.Content>

@@ -309,7 +309,9 @@
 		)
 	);
 	const tokenLabel = $derived(
-		totals && totals.totalTokens > 0 ? t('pod.agent.tokens', { count: totals.totalTokens.toLocaleString() }) : null
+		totals && totals.totalTokens > 0
+			? t('pod.agent.tokens', { count: totals.totalTokens.toLocaleString() })
+			: null
 	);
 	// A turn whose host reported no cost makes the total a floor. Saying so costs one character and
 	// stops an unmeasured conversation reading as a cheap one.
@@ -576,7 +578,9 @@
 			{/each}
 			{#if pending && !agentHasSpoken}
 				<li class="my-1.5 flex flex-col gap-1.5" aria-label={t('pod.agent.agentIsWorking')}>
-					<span class="px-1 text-tiny font-medium text-muted-foreground">{t('pod.agent.agent')}</span>
+					<span class="px-1 text-tiny font-medium text-muted-foreground"
+						>{t('pod.agent.agent')}</span
+					>
 					<div
 						class="inline-flex w-fit items-center gap-2 rounded-xl bg-muted px-3.5 py-2.5 text-sm"
 					>
@@ -610,10 +614,10 @@
 					onselect={(index) => selectMenuItem(menuEntries[index])}
 					onhighlight={(index) => (highlightIndex = index)}
 					onclearscope={() => {
-					menuScope = null;
-					highlightIndex = 0;
-					scheduleMentionSearch();
-				}}
+						menuScope = null;
+						highlightIndex = 0;
+						scheduleMentionSearch();
+					}}
 				/>
 			{/if}
 			<form
@@ -671,11 +675,7 @@
 							{t('pod.agent.plan')}
 						</button>
 						{#if contextPercent !== null}
-							<Inline
-								as="span"
-								gap="xs"
-								title={t('pod.agent.contextWindowUsed')}
-							>
+							<Inline as="span" gap="xs" title={t('pod.agent.contextWindowUsed')}>
 								<span
 									class="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted"
 									aria-hidden="true"

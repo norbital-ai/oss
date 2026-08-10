@@ -12,6 +12,8 @@ export interface GenerateDrizzleMigrationInput {
 	readonly name: string;
 	readonly schemaFiles: readonly string[];
 	readonly custom?: boolean;
+	/** Explicit Drizzle create/rename decisions for otherwise ambiguous schema additions. */
+	readonly hints?: readonly unknown[];
 }
 
 /** Generate a Drizzle migration from the supplied workspace and framework schema files. */
@@ -37,6 +39,7 @@ export async function generateDrizzleMigration(
 
 	const args = [drizzleBin, 'generate', `--config=${configFile}`, `--name=${input.name}`];
 	if (input.custom) args.push('--custom');
+	if (input.hints?.length) args.push(`--hints=${JSON.stringify(input.hints)}`);
 	try {
 		await execFileAsync(process.execPath, args, {
 			cwd: sourceDir,

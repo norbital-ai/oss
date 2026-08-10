@@ -1,6 +1,6 @@
 import type { CollectionField } from '@norbital-ai/platform-utils/collection';
 import type { MessageVars } from '@norbital-ai/std/i18n';
-import { INTL_LOCALE } from '@norbital-ai/std/i18n';
+import { intlLocale } from '@norbital-ai/std/i18n';
 import { formatDateRangeLocal } from '@norbital-ai/std/date';
 import { humanize } from '@norbital-ai/std/string';
 import { getGlobalLocale } from '#lib/i18n';
@@ -150,12 +150,10 @@ function formatScalar(
 export function formatDataValue(
 	field: CollectionField,
 	value: unknown,
-	locale = INTL_LOCALE[getGlobalLocale()],
+	locale = intlLocale(getGlobalLocale()),
 	t?: Translate
 ): string {
 	return field.array && Array.isArray(value)
-		? value
-				.map((item) => formatScalar(field, item, locale, t))
-				.join(', ')
+		? value.map((item) => formatScalar(field, item, locale, t)).join(', ')
 		: formatScalar(field, value, locale, t);
 }
