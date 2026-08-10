@@ -138,24 +138,20 @@ export default {
 		},
 		after: async ({ record, api }) => {
 			const columns = { norbital_id: true, sha256: true } as const;
-			const visualMatchesPromise =
-				record.perceptual_embedding == null
-					? Promise.resolve([])
-					: api.db.query.photo_evidence.findNearest({
-							column: 'perceptual_embedding',
-							probe: record.perceptual_embedding,
-							metric: 'l2',
-							maxDistance: VISUAL_DUPLICATE_MAX_L2,
-							limit: 50,
-							excludeIds: [record.norbital_id]
-						});
 			const [exactMatches, visualMatches] = await Promise.all([
 				api.db.query.photo_evidence.findMany({
 					where: { sha256: { eq: record.sha256 } },
 					columns,
 					limit: 21
 				}),
-				visualMatchesPromise
+				api.db.query.photo_evidence.findNearest({
+					column: 'perceptual_embedding',
+					probe: record.perceptual_embedding,
+					metric: 'l2',
+					maxDistance: VISUAL_DUPLICATE_MAX_L2,
+					limit: 50,
+					excludeIds: [record.norbital_id]
+				})
 			]);
 
 			const flags = new Set<PhotoIntegrityFlag>(

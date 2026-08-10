@@ -75,7 +75,7 @@ interface DecodedImage {
 let pdqReady: Promise<void> | null = null;
 
 function ensurePdq(): Promise<void> {
-	if (pdqReady === null) pdqReady = PDQ.init().then(() => undefined);
+	pdqReady ??= PDQ.init().then(() => undefined);
 	return pdqReady;
 }
 

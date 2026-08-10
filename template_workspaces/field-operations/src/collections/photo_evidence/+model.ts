@@ -18,8 +18,7 @@ export default defineModel(
 		source: custom('photo_source').notNull(),
 		sha256: text().notNull(),
 		/** Meta PDQ as a 256-dim 0/1 embedding — same `vector` + `findNearest` path as omni embeds. */
-		// Legacy evidence predates PDQ extraction, so this stays nullable during the beta migration.
-		perceptual_embedding: vector({ dimensions: 256 }),
+		perceptual_embedding: vector({ dimensions: 256 }).notNull(),
 		flags: enums([
 			'exact_duplicate',
 			'visual_duplicate',

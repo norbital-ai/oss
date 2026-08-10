@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "b9a27653-5da5-42fa-bd12-5066bad6d3e7",
+  "id": "71214bff-9af2-4fc5-a559-ac8e974ddfdf",
   "prevIds": [
     "723e7f13-77cb-4f88-9083-3260ddefa81e"
   ],
@@ -1255,7 +1255,7 @@
     {
       "type": "vector(256)",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
