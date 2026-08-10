@@ -1,9 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { text, uuid } from 'drizzle-orm/pg-core';
-import { vector } from '$lib/authoring/builtin/columns.js';
-import { norbitalTableInternal, type TableExclusion } from '$lib/authoring/schema/table.js';
+import {
+	enums,
+	phone,
+	searchable,
+	vector
+} from '$lib/authoring/builtin/columns.js';
+import {
+	norbitalTableInternal,
+	portableCollectionField,
+	type TableExclusion
+} from '$lib/authoring/schema/table.js';
 import { workspaceExclusionsDdl } from '$lib/vite/workspace-exclusions-sql.js';
+import {
+	collectionSearchTrigramIndexName,
+	isSearchableCollectionField
+} from '@norbital-ai/platform-utils/collection';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 
 /** Minimal manifest carrying exactly the exclusions under test. */
@@ -243,5 +256,62 @@ describe('table index extensions', () => {
 		expect((column as { indexConfig?: { opClass?: string } }).indexConfig?.opClass).toBe(
 			'vector_cosine_ops'
 		);
+	});
+});
+
+describe('searchable fields', () => {
+	const table = norbitalTableInternal(
+		'products',
+		{
+			// Explicitly in: same as the kind default, stated on purpose.
+			title: searchable(text('title'), true),
+			// Kind default: non-array text gets an index and is searched.
+			summary: text('summary'),
+			// Opted out: no index, no search participation.
+			internal_code: searchable(text('internal_code'), false),
+			// Opted out enum: same rule for every text-ish kind.
+			status: searchable(enums(['active', 'draft']), false),
+			phone: phone()
+		},
+		{}
+	);
+
+	const tableConfig = getTableConfig(table);
+
+	/** The trigram index the table config carries for a field, or null. */
+	function searchIndex(column: string) {
+		const name = collectionSearchTrigramIndexName(tableConfig.name, column);
+		return tableConfig.indexes.find((idx) => idx.config.name === name) ?? null;
+	}
+
+	const fields = Object.fromEntries(
+		tableConfig.columns.map((column) => [
+			column.name,
+			portableCollectionField(column.name, column)
+		])
+	);
+
+	it('creates a trigram search index per searchable field, none for opted-out ones', () => {
+		expect(searchIndex('title')).not.toBeNull();
+		expect(searchIndex('summary')).not.toBeNull();
+		expect(searchIndex('phone')).not.toBeNull();
+		expect(searchIndex('internal_code')).toBeNull();
+		expect(searchIndex('status')).toBeNull();
+	});
+
+	it('carries the searchable flag into the manifest field for the runtime', () => {
+		expect(fields.title!.searchable).toBe(true);
+		expect(fields.summary!.searchable).toBeUndefined();
+		expect(fields.phone!.searchable).toBeUndefined();
+		expect(fields.internal_code!.searchable).toBe(false);
+		expect(fields.status!.searchable).toBe(false);
+	});
+
+	it('agrees with the runtime predicate every search path uses', () => {
+		expect(isSearchableCollectionField(fields.title!)).toBe(true);
+		expect(isSearchableCollectionField(fields.summary!)).toBe(true);
+		expect(isSearchableCollectionField(fields.phone!)).toBe(true);
+		expect(isSearchableCollectionField(fields.internal_code!)).toBe(false);
+		expect(isSearchableCollectionField(fields.status!)).toBe(false);
 	});
 });

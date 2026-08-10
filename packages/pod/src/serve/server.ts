@@ -15,9 +15,8 @@
  * assets and single-page document, and has no token at all — the socket is loopback and the
  * trusted authenticated host is expected in front of it.
  */
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';
-import { hostTokenMatches, TRUSTED_HOST_TOKEN_HEADER } from '../host/identity.js';
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';import { hostTokenMatches, TRUSTED_HOST_TOKEN_HEADER } from '../host/identity.js';
 import {
 	isVerifiedSubject,
 	type HostIdentity,
@@ -370,6 +369,12 @@ export type PodHttpServer = {
  */
 export async function createPodHttpServer(options: PodHttpServerOptions): Promise<PodHttpServer> {
 	const label = options.label ?? '[pod]';
+	// `node:http` is loaded here, not at module scope, because the module graph is captured into
+	// a V8 startup snapshot at build time and `node:http`'s native HTTPParser handle is not
+	// serializable. The snapshot deserializes with the server bundle already parsed; the one
+	// built-in that cannot cross the snapshot boundary is pulled in lazily at boot, which is
+	// exactly where it is needed.
+	const { createServer } = await import('node:http');
 	const server = createServer((request, response) => {
 		void handleConnection(options, request, response).catch((cause: unknown) => {
 			console.error(`${label} request failed`, cause);

@@ -17,6 +17,7 @@ export {
 	numeric,
 	phone,
 	clockTime,
+	searchable,
 	timestamp,
 	vector
 } from './builtin/columns.js';

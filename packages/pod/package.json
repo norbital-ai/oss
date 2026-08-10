@@ -102,6 +102,7 @@
 		"drizzle-kit": "catalog:",
 		"drizzle-orm": "catalog:",
 		"pg": "^8.22.0",
+		"rolldown": "catalog:",
 		"svelte-check": "^4.7.3",
 		"svelte-sonner": "^1.1.1",
 		"tailwindcss": "^4.3.3",

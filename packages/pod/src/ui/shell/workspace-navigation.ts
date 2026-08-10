@@ -179,6 +179,22 @@ function isUnder(currentPath: string, entry: string): boolean {
  * only — every route behind these entries, Pod's included, authorizes its own requests, since the
  * URL is visible in the markup whether or not a link to it is.
  */
+/**
+ * The host-plugin label localization chokepoint.
+ *
+ * Host plugin labels are host-owned English by default; a pod/tenant catalog can override them
+ * under `pod.shell.hostPlugin.<key>` (or `app.<key>.title`) without touching the shell.
+ */
+export function resolveHostPluginLabel(
+	i18n: NavigationLabelResolver | undefined,
+	pluginKey: string,
+	fallback: string
+): string {
+	if (!i18n) return fallback;
+	const key = `pod.shell.hostPlugin.${pluginKey}`;
+	return i18n.has(key) ? i18n.t(key) : fallback;
+}
+
 export function buildSystemNavigation(input: {
 	plugins: readonly {
 		readonly key: string;
@@ -201,7 +217,7 @@ export function buildSystemNavigation(input: {
 		const href = hostPluginSurfaceHref(plugin.key);
 		return {
 			key: plugin.key,
-			label: plugin.label,
+			label: resolveHostPluginLabel(i18n, plugin.key, plugin.label),
 			icon: plugin.icon,
 			href,
 			active: isUnder(input.currentPath, href),

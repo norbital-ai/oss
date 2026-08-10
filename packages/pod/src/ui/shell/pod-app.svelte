@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Toaster } from '@norbital-ai/ui/sonner';
 	import { provideI18n, useI18n } from '@norbital-ai/ui/i18n';
-	import type { LocaleCatalogs } from '@norbital-ai/std/i18n';
+	import { STORED_LOCALE_KEY, parseLocale, type LocaleCatalogs } from '@norbital-ai/std/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
 	import { onMount, untrack } from 'svelte';
 	import type {
@@ -35,7 +35,22 @@
 
 	provideI18n(untrack(() => i18nMessages));
 
-	const { t } = useI18n<PodUiKeys>();
+	const i18n = useI18n<PodUiKeys>();
+	const { t } = i18n;
+
+	// Cross-frame propagation: the host surfaces this workspace mounts live in same-origin frames,
+	// and a locale toggle inside one of them must reach the shell. `storage` fires in every
+	// same-origin window except the writer's, so listening here plus the host-side listener covers
+	// both directions, and open tabs of the same origin sync too.
+	$effect(() => {
+		const onStorage = (event: StorageEvent): void => {
+			if (event.key !== STORED_LOCALE_KEY) return;
+			const locale = parseLocale(event.newValue);
+			if (locale && locale !== i18n.locale) i18n.setLocale(locale);
+		};
+		window.addEventListener('storage', onStorage);
+		return () => window.removeEventListener('storage', onStorage);
+	});
 
 	onMount(() => {
 		document.body.dataset.hydrated = 'true';

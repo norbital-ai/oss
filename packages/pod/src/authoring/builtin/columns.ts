@@ -10,7 +10,7 @@ import {
 	type AnyPgColumnBuilder
 } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
-import { attachColumnCustom } from '../schema/columns.js';
+import { attachColumnCustom, setColumnSearchable } from '../schema/columns.js';
 import {
 	dateRangeJsonbColumn,
 	jsonbColumn,
@@ -76,6 +76,23 @@ export function phone() {
 export function clockTime() {
 	const column = text();
 	attachColumnCustom(column, { kind: 'clock_time' });
+	return column;
+}
+
+/**
+ * Mark a text-ish column searchable (the default), or opt it out with `searchable(false)`.
+ *
+ * Search — the collection search box, the omni finder, @ mentions, relation pickers — runs only
+ * over fields with a trigram search index, and that set is exactly this: non-array
+ * text/phone/enum fields not opted out. `false` drops the field from the search index and from
+ * every search path at once; the flag travels into the manifest field, so the runtime's search
+ * predicate (`isSearchableCollectionField`) and the index creator make the same decision.
+ *
+ * On a non text-ish column (numbers, dates, JSON, relations) the flag is inert: there is no
+ * trigram index to remove and no search path that ever matched it.
+ */
+export function searchable<T extends AnyPgColumnBuilder>(column: T, value = true): T {
+	setColumnSearchable(column, value);
 	return column;
 }
 

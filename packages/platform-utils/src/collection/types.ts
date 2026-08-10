@@ -74,6 +74,15 @@ export interface CollectionField<TName extends string = string> {
 	readonly mimeTypes?: readonly string[];
 	readonly variant?: NumericRendererVariant;
 	/**
+	 * Explicit search opt-in, authored as `text({ search: true })`.
+	 *
+	 * Search is opt-in: only a non-array text/phone/enum field carrying `search: true` gets a
+	 * trigram search index and participates in any search path — the collection search box, the
+	 * omni finder and @ mentions, relation pickers. Absent means the field is never searched and
+	 * never indexed, however text-like its kind.
+	 */
+	readonly search?: boolean;
+	/**
 	 * Carries no label: how a related record reads is a view decision, declared where the relation
 	 * is rendered (a table column's `relation.label`), not inherited from the target collection.
 	 */
@@ -85,8 +94,22 @@ export interface CollectionField<TName extends string = string> {
 
 export const COLLECTION_SEARCH_MAX_LENGTH = 200;
 
+/**
+ * Whether a field is searchable — the predicate every search path and the trigram index creation
+ * agree on. Search runs over exactly the fields that got a trigram index, and both are explicit
+ * opt-ins: a non-array text/phone/enum field is only searchable when the author wrote
+ * `text({ search: true })` (or the equivalent on `phone()`/`enums()`).
+ *
+ * The trigram index itself is language-agnostic: `gin_trgm_ops` indexes character trigrams, not
+ * words, so the same index serves substring search in any script — CJK, accented Latin, RTL —
+ * without dictionaries or tokenizers. The index and the search must never assume a language.
+ */
 export function isSearchableCollectionField(field: CollectionField): boolean {
-	return !field.array && ['text', 'phone', 'enum'].includes(field.kind);
+	return (
+		!field.array &&
+		['text', 'phone', 'enum'].includes(field.kind) &&
+		field.search === true
+	);
 }
 
 export function collectionSearchTrigramIndexName(tableName: string, columnName: string): string {

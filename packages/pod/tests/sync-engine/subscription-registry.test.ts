@@ -237,4 +237,52 @@ describe('SubscriptionRegistry', () => {
 			expect(registry.isResident('orders')).toBe(false);
 		});
 	});
+
+	describe('collections larger than the row cap', () => {
+		it('stops at the row cap even when the byte budget is untouched', async () => {
+			// A wide table of narrow rows: a 20k-row roster is a few MB and "fits" a 1 GiB byte
+			// budget, yet downloading it is five-plus serialized round trips. The row cap must
+			// window it the same way the byte budget windows a fat one.
+			const { client, calls, recorded } = stubClient({
+				page: (_request, index) => morePages(rowsOf(100, index * 100))
+			});
+			const registry = new SubscriptionRegistry(client, { maxResidentRows: 250 });
+
+			await registry.register('orders');
+			await settle();
+
+			expect(registry.has('orders')).toBe(true);
+			expect(registry.isResident('orders')).toBe(false);
+			// Stops on the first page that crosses the cap; never speculatively pulls the rest.
+			expect(calls.length).toBe(3);
+			expect(recorded).toEqual([{ collection: 'orders', resident: false, rows: 300 }]);
+		});
+
+		it('still marks a collection resident when it ends before the row cap', async () => {
+			// The cap is a ceiling, not a target: a collection that genuinely ends early is fully
+			// local and gets the resident experience (counts, search, offline).
+			const { client, recorded } = stubClient({
+				page: (_request, index) =>
+					index === 0 ? morePages(rowsOf(100)) : lastPage(rowsOf(100, 100))
+			});
+			const registry = new SubscriptionRegistry(client, { maxResidentRows: 1000 });
+
+			await registry.register('orders');
+			await settle();
+			expect(registry.isResident('orders')).toBe(true);
+			expect(recorded).toEqual([{ collection: 'orders', resident: true, rows: 200 }]);
+		});
+
+		it('exhaustion on a page boundary still wins over the row cap', async () => {
+			// 250 rows exactly: the first page is also the last, so the collection is resident even
+			// though it sits right at the default cap — nothing was left on the server to fetch.
+			const { client, recorded } = stubClient({ page: () => lastPage(rowsOf(250)) });
+			const registry = new SubscriptionRegistry(client);
+
+			await registry.register('orders');
+			await settle();
+			expect(registry.isResident('orders')).toBe(true);
+			expect(recorded).toEqual([{ collection: 'orders', resident: true, rows: 250 }]);
+		});
+	});
 });

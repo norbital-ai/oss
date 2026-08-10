@@ -6,6 +6,7 @@
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Inline } from '@norbital-ai/ui/layout';
+	import { humanize } from '@norbital-ai/std/string';
 	import type { WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
 	import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
@@ -21,6 +22,9 @@
 	 * pin, and a search that matches in the palette matches in the mention menu. Apps and commands
 	 * are indexed in memory; only records pay the search fan-out, debounced exactly like the
 	 * mention menu so one burst of typing stays a handful of queries.
+	 *
+	 * Record hits render as their sources resolve rather than waiting for the slowest collection
+	 * of the fan-out, so the palette fills instead of spinning.
 	 */
 	let {
 		open = $bindable(false),
@@ -52,7 +56,9 @@
 
 	// ── Record search: the mention menu's debounce, at the palette's limits. The input handler
 	// is the only writer — a callback pipeline, not an effect — and the version guard discards
-	// responses that raced a newer query.
+	// responses that raced a newer query. Hits stream in per source as they resolve (the engine's
+	// `onHits`), so the records group appears as soon as the fastest collection answers instead
+	// of after the slowest one does; the final merged list replaces the streamed one.
 	function onQueryInput(event: Event): void {
 		query = (event.currentTarget as HTMLInputElement).value;
 		clearTimeout(searchTimer);
@@ -67,7 +73,12 @@
 		recordsLoading = true;
 		searchTimer = setTimeout(() => {
 			void mentionSources
-				.search(active, null)
+				.search(active, null, {
+					onHits: (hits) => {
+						if (version !== searchVersion) return;
+						recordHits = [...recordHits, ...hits];
+					}
+				})
 				.then((hits) => {
 					if (version !== searchVersion) return;
 					recordHits = hits;
@@ -198,12 +209,20 @@
 			.map((entry) => entry.row);
 	});
 
+	/**
+	 * How many record rows the palette shows at once. The fan-out returns up to `hitsPerSource`
+	 * per collection, which would overflow a palette; the first arrivals — in source order —
+	 * keep the list compact, and the pick is one record, not a browse.
+	 */
+	const RECORD_ROW_CAP = 12;
+
 	const recordRows = $derived(
-		recordHits.map((hit): OmniRow => ({
+		recordHits.slice(0, RECORD_ROW_CAP).map((hit): OmniRow => ({
 			value: rowValue('record', `${hit.collection}:${hit.recordId}`),
 			kind: 'record',
 			label: hit.label,
-			description: hit.collection,
+			// The tenant label the sidebar would use, not the raw snake_case collection name.
+			description: humanize(hit.collection),
 			run: () => {
 				const navigation = getCollectionTableNavigationContext();
 				if (!navigation) return;
@@ -313,7 +332,7 @@
 
 <Dialog.Root bind:open {onOpenChange}>
 	<Dialog.Content
-		class="w-[min(42rem,calc(100vw-2rem))] gap-0 overflow-hidden p-0 shadow-2xl [&>button]:hidden"
+		class="w-[min(36rem,calc(100vw-2rem))] gap-0 overflow-hidden p-0 shadow-2xl [&>button]:hidden"
 		onOpenAutoFocus={(event) => {
 			// The palette input, not the dialog shell, takes the caret on open; the default would
 			// focus the content container and swallow the first keystroke.
@@ -338,13 +357,13 @@
 				oninput={onQueryInput}
 				placeholder={t('pod.shell.omniPlaceholder')}
 				aria-label={t('pod.shell.omniTitle')}
-				class="h-12 text-sm"
+				class="h-9 text-sm"
 			>
 				{#snippet prefix()}
-					<Icon icon="lucide:search" class="size-4 shrink-0 text-muted-foreground" />
+					<Icon icon="lucide:search" class="size-3.5 shrink-0 text-muted-foreground" />
 				{/snippet}
 			</Command.Input>
-			<Command.List itemHeight={44} gap={0} class="max-h-[min(60vh,26rem)]">
+			<Command.List itemHeight={34} gap={0} class="max-h-[min(60vh,22rem)]">
 				{#snippet itemSnippet({ item, isIndicator })}
 					{@const row = item as OmniRow}
 					{@const highlighted = isIndicator && row.kind !== 'group' && row.kind !== 'empty'}
@@ -354,10 +373,10 @@
 						justify={row.kind === 'empty' ? 'center' : 'start'}
 						class={`${
 							row.kind === 'group'
-								? 'px-3 text-tiny font-medium tracking-wide text-muted-foreground uppercase'
+								? 'px-3 text-micro font-normal uppercase tracking-wide text-muted-foreground sm:text-tiny'
 								: 'px-3'
 						} ${highlighted ? 'bg-accent text-accent-foreground' : ''} ${
-							row.kind === 'app' && row.depth === 1 ? 'pl-8' : ''
+							row.kind === 'app' && row.depth === 1 ? 'pl-7' : ''
 						}`}
 					>
 						{#if row.kind === 'group'}
@@ -365,18 +384,16 @@
 						{:else if row.kind === 'loading'}
 							<Icon
 								icon="lucide:loader-circle"
-								class="size-3.5 shrink-0 animate-spin text-muted-foreground"
+								class="size-3 shrink-0 animate-spin text-muted-foreground"
 							/>
-							<span class="text-sm text-muted-foreground"
+							<span class="text-xs text-muted-foreground"
 								>{t('pod.shell.omniSearchingRecords')}</span
 							>
 						{:else if row.kind === 'empty'}
-							<span class="truncate text-sm text-muted-foreground">{row.label}</span>
+							<span class="truncate text-xs text-muted-foreground">{row.label}</span>
 						{:else}
-							<span
-								class="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded border border-border/80 bg-muted/40"
-							>
-								{#if row.thumbnail}
+							{#if row.thumbnail}
+								<span class="size-4 shrink-0 overflow-hidden rounded-sm">
 									<img
 										src={row.thumbnail}
 										alt=""
@@ -384,17 +401,20 @@
 										loading="lazy"
 										decoding="async"
 									/>
-								{:else if row.icon}
-									<IconWrapper name={row.icon} class="size-3.5 text-muted-foreground" />
-								{:else if row.kind === 'record'}
-									<Icon icon="lucide:file-text" class="size-3.5 text-muted-foreground" />
-								{:else}
-									<Icon icon="lucide:circle" class="size-3.5 text-muted-foreground" />
-								{/if}
-							</span>
-							<span class="min-w-0 flex-1 truncate text-sm text-foreground">{row.label}</span>
+								</span>
+							{:else if row.icon}
+								<IconWrapper name={row.icon} class="size-3.5 shrink-0 text-muted-foreground" />
+							{:else}
+								<Icon
+									icon={row.kind === 'record' ? 'lucide:file-text' : 'lucide:circle'}
+									class="size-3.5 shrink-0 text-muted-foreground"
+								/>
+							{/if}
+							<span class="min-w-0 flex-1 truncate text-xs font-normal text-foreground sm:text-micro"
+								>{row.label}</span
+							>
 							{#if row.description}
-								<span class="max-w-48 shrink-0 truncate text-xs text-muted-foreground"
+								<span class="max-w-40 shrink-0 truncate text-micro text-muted-foreground"
 									>{row.description}</span
 								>
 							{/if}

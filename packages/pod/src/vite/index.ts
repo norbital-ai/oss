@@ -12,6 +12,7 @@ import {
 	type PodClientPlatformManifest
 } from './platform-contract.js';
 import { STDIO_FRAME_GUARD_SOURCE } from '../serve/stdio.js';
+import { generateRuntimeSnapshot } from './snapshot.js';
 import type {
 	PodFilesystemCompilation,
 	PodFilesystemCompilerOptions,
@@ -401,6 +402,10 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 							await builder.build(builder.environments.server);
 							await builder.build(builder.environments.client);
 							await finalizeArtifacts();
+							await generateRuntimeSnapshot({
+								artifactRoot,
+								log: (message) => console.log(message)
+							});
 							return;
 						}
 						const isolatedConfig = {
@@ -413,6 +418,10 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 						await runIsolatedBuild(isolatedConfig);
 						await builder.build(builder.environments.client);
 						await finalizeArtifacts();
+						await generateRuntimeSnapshot({
+							artifactRoot,
+							log: (message) => console.log(message)
+						});
 					}
 				},
 				environments: {

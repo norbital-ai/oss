@@ -5,6 +5,7 @@
 	import { Inline } from '#lib/layout';
 	import { Spinner } from '#lib/spinner';
 	import type {
+		WorkspaceImpersonation,
 		WorkspaceNavigationModel,
 		WorkspaceOrganizationOption
 	} from './workspace-shell.types.js';
@@ -19,6 +20,9 @@
 		onOrganizationChange,
 		onSignOut,
 		notifications,
+		impersonation,
+		onImpersonate,
+		onStopImpersonating,
 		children
 	}: {
 		model: WorkspaceNavigationModel;
@@ -34,6 +38,15 @@
 		 * answer. `expanded` mirrors the sidebar's own state so the surface can collapse with it.
 		 */
 		notifications?: Snippet<[{ expanded: boolean }]>;
+		/**
+		 * Admin team impersonation state, when the host supplies it. Absent for
+		 * non-admins, so the account menu hides the picker rather than asking.
+		 */
+		impersonation?: WorkspaceImpersonation | null;
+		/** Switch the impersonation scope to a single team. */
+		onImpersonate?: (teamId: string) => void | Promise<void>;
+		/** Return to the requestor's own team scope. */
+		onStopImpersonating?: () => void | Promise<void>;
 		children: Snippet;
 	} = $props();
 
@@ -92,6 +105,9 @@
 				onOrganizationChange={changeOrganization}
 				{onSignOut}
 				{notifications}
+				{impersonation}
+				{onImpersonate}
+				{onStopImpersonating}
 			/>
 		{/snippet}
 		{@render children()}

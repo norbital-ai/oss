@@ -13,6 +13,9 @@ import {
 	columnCustomIsKind,
 	readColumnCustom,
 	readBuilderCustom,
+	readBuilderSearchable,
+	readColumnSearchable,
+	setColumnSearchable,
 	type ColumnCustomMeta,
 	type ColumnMetadataHost
 } from './columns.js';
@@ -200,7 +203,10 @@ export function portableCollectionField(name: string, column: AnyPgColumn): Coll
 		...(columnCustomIsKind(custom, 'file') && custom.mimeTypes
 			? { mimeTypes: custom.mimeTypes }
 			: {}),
-		...(columnCustomIsKind(custom, 'numeric') ? { variant: custom.variant } : {})
+		...(columnCustomIsKind(custom, 'numeric') ? { variant: custom.variant } : {}),
+		...(readColumnSearchable(column) !== undefined
+			? { searchable: readColumnSearchable(column) }
+			: {})
 	};
 }
 
@@ -235,6 +241,8 @@ function copyColumnCustomFromBuilders(
 		if (!built) continue;
 		const meta = readBuilderCustom(builder);
 		if (meta) attachColumnCustom(built, meta);
+		const searchable = readBuilderSearchable(builder);
+		if (searchable !== undefined) setColumnSearchable(built, searchable);
 	}
 }
 
@@ -388,6 +396,8 @@ function finalizeOpaqueNorbitalTable<
 }
 
 function isSearchableTextBuilder(builder: AnyPgColumnBuilder): boolean {
+	// `searchable(false)` opts the field out of the search index and every search path at once.
+	if (readBuilderSearchable(builder) === false) return false;
 	const config = Reflect.get(builder, 'config');
 	if (!config || typeof config !== 'object') return false;
 	if (Number(Reflect.get(config, 'dimensions') ?? 0) > 0) return false;

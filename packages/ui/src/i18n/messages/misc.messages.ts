@@ -175,7 +175,10 @@ export const miscMessages = defineMessages({
 		'misc.language': 'Language',
 		'misc.switchLocale': 'Switch to {locale}',
 		'misc.localeName.en': 'English',
-		'misc.localeName.zh': '中文'
+		'misc.localeName.zh': '中文',
+		'misc.impersonate': 'Impersonate',
+		'misc.impersonateHint': 'Preview the workspace under another team\u2019s policy scope.',
+		'misc.stopImpersonating': 'Stop impersonating'
 	},
 	zh: {
 		'misc.today': '今天',
@@ -342,6 +345,9 @@ export const miscMessages = defineMessages({
 		'misc.language': '语言',
 		'misc.switchLocale': '切换到 {locale}',
 		'misc.localeName.en': 'English',
-		'misc.localeName.zh': '中文'
+		'misc.localeName.zh': '中文',
+		'misc.impersonate': '身份模拟',
+		'misc.impersonateHint': '以其他团队的策略范围预览此工作区。',
+		'misc.stopImpersonating': '停止模拟'
 	}
 });

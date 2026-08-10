@@ -9,17 +9,17 @@
 	import { Inline } from '#lib/layout';
 	import * as Sidebar from '#lib/sidebar';
 	import { Spinner } from '#lib/spinner';
-	import { LocaleToggle } from '#lib/locale-toggle';
 	import { ThemeToggle } from '#lib/theme-toggle';
 	import { cn } from '#lib/utils';
 	import type {
+		WorkspaceImpersonation,
 		WorkspaceNavigationModel,
 		WorkspaceOrganizationOption
 	} from './workspace-shell.types.js';
 	import WorkspaceSidebarNavigationSection from './workspace-sidebar-navigation-section.svelte';
-	import WorkspaceSidebarNavigationItem from './workspace-sidebar-navigation-item.svelte';
 
-	const { t } = useI18n<UiKeys>();
+	const i18n = useI18n<UiKeys>();
+	const { t } = i18n;
 
 	let {
 		model,
@@ -27,7 +27,10 @@
 		onPrefetch,
 		onOrganizationChange,
 		onSignOut,
-		notifications
+		notifications,
+		impersonation,
+		onImpersonate,
+		onStopImpersonating
 	}: {
 		model: WorkspaceNavigationModel;
 		onNavigate?: (href: string) => void;
@@ -35,6 +38,9 @@
 		onOrganizationChange?: (organizationId: string) => void | Promise<void>;
 		onSignOut?: () => void | Promise<void>;
 		notifications?: Snippet<[{ expanded: boolean }]>;
+		impersonation?: WorkspaceImpersonation | null;
+		onImpersonate?: (teamId: string) => void | Promise<void>;
+		onStopImpersonating?: () => void | Promise<void>;
 	} = $props();
 
 	let switchingOrganizationId = $state<string | null>(null);
@@ -77,6 +83,37 @@
 			await onSignOut();
 		} finally {
 			signOutPending = false;
+		}
+	}
+
+	const impersonationAvailable = $derived(
+		Boolean(impersonation && impersonation.isAdmin && impersonation.teams.length > 0)
+	);
+	const impersonationTeams = $derived(impersonation?.teams ?? []);
+	const impersonationActiveTeamId = $derived(
+		impersonation && impersonation.isActive
+			? (impersonation.activeTeamIds[0] ?? null)
+			: null
+	);
+	let impersonationBusy = $state(false);
+
+	async function selectImpersonationTeam(teamId: string): Promise<void> {
+		if (impersonationBusy || teamId === impersonationActiveTeamId || !onImpersonate) return;
+		impersonationBusy = true;
+		try {
+			await onImpersonate(teamId);
+		} finally {
+			impersonationBusy = false;
+		}
+	}
+
+	async function stopImpersonating(): Promise<void> {
+		if (impersonationBusy || !onStopImpersonating) return;
+		impersonationBusy = true;
+		try {
+			await onStopImpersonating();
+		} finally {
+			impersonationBusy = false;
 		}
 	}
 </script>
@@ -179,15 +216,6 @@
 
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-2 text-xs">
 	<Sidebar.Menu class="gap-2">
-		<Sidebar.MenuItem>
-			<LocaleToggle
-				showLabel={displayExpanded}
-				class={displayExpanded ? 'h-8 w-full justify-start gap-2 px-2' : 'mx-auto size-8'}
-			/>
-		</Sidebar.MenuItem>
-		{#each model.utilities ?? [] as item (item.key)}
-			<WorkspaceSidebarNavigationItem {item} open={displayExpanded} {onNavigate} {onPrefetch} />
-		{/each}
 		{#if notifications}
 			<Sidebar.MenuItem>{@render notifications({ expanded: displayExpanded })}</Sidebar.MenuItem>
 		{/if}
@@ -238,7 +266,7 @@
 					side={displayExpanded ? 'top' : 'right'}
 					align={displayExpanded ? 'center' : 'start'}
 					sideOffset={8}
-					class="w-64"
+					class="w-72"
 				>
 					<div class="px-2 py-1.5">
 						<p class="text-xs font-medium">{model.user.name}</p>
@@ -247,6 +275,50 @@
 							{t('misc.roleLabel', { role: model.user.role })}
 						</p>
 					</div>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Label
+						class="px-2 pt-2 pb-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase"
+						>{t('misc.language')}</DropdownMenu.Label
+					>
+					<DropdownMenu.RadioGroup
+						value={i18n.locale}
+						onValueChange={(locale) => i18n.setLocale(locale as (typeof i18n.locale))}
+					>
+						{#each i18n.locales as locale (locale)}
+							<DropdownMenu.RadioItem value={locale}>
+								{t(`misc.localeName.${locale}` as UiKeys)}
+							</DropdownMenu.RadioItem>
+						{/each}
+					</DropdownMenu.RadioGroup>
+					{#if impersonationAvailable}
+						<DropdownMenu.Separator />
+						<DropdownMenu.Label
+							class="px-2 pt-2 pb-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase"
+							>{t('misc.impersonate')}</DropdownMenu.Label
+						>
+						<div class="max-h-56 overflow-y-auto overscroll-contain">
+							<DropdownMenu.RadioGroup
+								value={impersonationActiveTeamId ?? ''}
+								onValueChange={(teamId) => void selectImpersonationTeam(teamId)}
+							>
+								{#each impersonationTeams as team (team.id)}
+									<DropdownMenu.RadioItem value={team.id} disabled={impersonationBusy}>
+										<span class="truncate">{team.name ?? team.id}</span>
+									</DropdownMenu.RadioItem>
+								{/each}
+							</DropdownMenu.RadioGroup>
+						</div>
+						{#if impersonation?.isActive}
+							<DropdownMenu.Item
+								class="gap-2 text-destructive data-[highlighted]:bg-destructive/10 data-[highlighted]:text-destructive"
+								disabled={impersonationBusy}
+								onclick={() => void stopImpersonating()}
+							>
+								<Icon icon="lucide:user-x" class="size-3.5" />
+								<span>{t('misc.stopImpersonating')}</span>
+							</DropdownMenu.Item>
+						{/if}
+					{/if}
 					<DropdownMenu.Separator />
 					<Button
 						type="button"

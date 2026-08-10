@@ -63,6 +63,11 @@ export type TenantWorkspaceShellData = {
 	 * on `pod start` by default.
 	 */
 	readonly hostPlugins: readonly TenantWorkspaceHostPlugin[];
+	/**
+	 * Admin team impersonation state, when the host supplies it. Absent for
+	 * non-admins, so the account menu hides the picker rather than asking.
+	 */
+	readonly impersonation?: TenantWorkspaceImpersonation;
 };
 
 /** The client-visible projection of a `HostAppPlugin`; `adminOnly` is resolved server-side. */
@@ -72,4 +77,12 @@ export type TenantWorkspaceHostPlugin = {
 	readonly icon: string | null;
 	readonly entry: string;
 	readonly placement: 'sidebar' | 'settings' | 'footer';
+};
+
+/** Admin team impersonation state projected from the host, mirroring `WorkspaceImpersonation`. */
+export type TenantWorkspaceImpersonation = {
+	readonly isAdmin: boolean;
+	readonly isActive: boolean;
+	readonly activeTeamIds: readonly string[];
+	readonly teams: readonly { norbital_id: string; name: string | null }[];
 };

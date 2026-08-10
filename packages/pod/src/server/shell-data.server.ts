@@ -9,7 +9,7 @@ import type {
 import type { TPolicy, TTeam } from '@norbital-ai/platform-utils/system/types';
 import type { CollectionColumnMap } from '@norbital-ai/platform-utils/manifest/context';
 import type { PodRequestEvent } from './request-context.js';
-import { NORBITAL_BILLING_HEADER } from '@norbital-ai/platform-utils/runtime/binding';
+import { NORBITAL_BILLING_HEADER, NORBITAL_IMPERSONATION_HEADER } from '@norbital-ai/platform-utils/runtime/binding';
 import { safeParse } from '@norbital-ai/std/json';
 import { z } from 'zod';
 
@@ -17,6 +17,18 @@ const billingSummarySchema = z.object({
 	status: z.string(),
 	currentPeriodEnd: z.string().datetime().nullable(),
 	hasPaymentMethod: z.boolean()
+});
+
+const impersonationSchema = z.object({
+	isAdmin: z.boolean(),
+	isActive: z.boolean(),
+	activeTeamIds: z.array(z.string()),
+	teams: z.array(
+		z.object({
+			norbital_id: z.string(),
+			name: z.string().nullable()
+		})
+	)
 });
 
 async function fetchTeamsAndPolicies(): Promise<{
@@ -96,6 +108,10 @@ export async function loadTenantWorkspaceShellData(
 	const billing = billingHeader
 		? billingSummarySchema.safeParse(safeParse(billingHeader))
 		: { success: false as const };
+	const impersonationHeader = event.request.headers.get(NORBITAL_IMPERSONATION_HEADER);
+	const impersonation = impersonationHeader
+		? impersonationSchema.safeParse(safeParse(impersonationHeader))
+		: { success: false as const };
 
 	// This response is the whole critical path of a workspace load, and everything on it that
 	// touches the database is independent, so none of it waits for the rest.
@@ -150,6 +166,7 @@ export async function loadTenantWorkspaceShellData(
 		hostPlugins: visibleHostPlugins(
 			getHostPlugins(),
 			workspace.baseScope.requestor.role === 'admin'
-		)
+		),
+		...(impersonation.success ? { impersonation: impersonation.data } : {})
 	};
 }

@@ -17,6 +17,19 @@ export const CHECKPOINT_MANIFEST_FILENAME = 'manifest.json';
  */
 export const SERVE_ENTRY_FILENAME = 'serve.mjs';
 
+/**
+ * V8 startup-snapshot blob of the server bundle, produced at build time in the build sandbox.
+ *
+ * The runtime guest boots with `node --snapshot-blob=<this file>` instead of importing `serve.mjs`:
+ * the snapshot carries the whole server bundle already parsed and compiled, so a cold guest pays
+ * the deserialize cost instead of a 3.3 MB module-graph parse. The blob is node-version-specific,
+ * which is safe here because the build and runtime templates run the same node image.
+ *
+ * A checkpoint without this file is still valid: the guest falls back to `serve.mjs`, which is the
+ * same behaviour every checkpoint had before snapshots existed.
+ */
+export const RUNTIME_SNAPSHOT_FILENAME = 'runtime.snap';
+
 export const CHECKPOINT_BUILD_REQUIRED_PATHS = [
 	CHECKPOINT_MANIFEST_FILENAME,
 	'dist/index.html',

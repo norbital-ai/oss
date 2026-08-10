@@ -34,17 +34,28 @@ const FIRST_PAGE_SIZE = 250;
  * Note this measures *policy-scoped* data. A million-row table is often a few thousand rows for
  * any one user, and those users get the fully-local experience with no special handling.
  *
- * A row count is the wrong unit for a storage budget: 25,000 rows of a four-column lookup table
- * and 25,000 rows of a wide document collection differ by orders of magnitude on disk, and the
- * browser's quota is measured in bytes. The budget is shared, so a large collection consumes the
- * allowance that would otherwise have made three small ones resident, which is the correct
- * trade — the small ones are the ones that pay off.
- *
  * Reaching it is not an error. A collection that does not fit is *windowed*: reads that provably
  * fall inside what is local are answered locally, and anything else is answered by the server,
  * which has the indexes for it.
  */
 export const DEFAULT_RESIDENCY_BYTES = 1_073_741_824; // 1 GiB
+
+/**
+ * How many rows a single collection may hold before it is windowed regardless of byte size.
+ *
+ * Bytes are the right unit for a storage budget, but they are the wrong unit for the *download*
+ * cost: a 23,000-row table of narrow rows is a few MB and "fits" the 1 GiB budget, yet pulling it
+ * means five-plus serialized browser → Core → microVM → Postgres round trips before the replica
+ * can answer. A page that filters to one company's month needs tens of rows, not the whole table.
+ *
+ * The row cap is what makes the windowed tier engage for collections like that: the catch-up
+ * stops at the cap, the collection reports itself windowed, reads that cannot be proven local fall
+ * to the server (which has the indexes and the scoped `where`), and `absorbServerRows` folds every
+ * server answer back into the replica — so the window converges on exactly the rows the user
+ * actually walks, and repeat visits are local. A collection that genuinely ends before the cap is
+ * still resident: full local counts, search, sorts and offline.
+ */
+export const DEFAULT_MAX_RESIDENT_ROWS = 5_000;
 
 type CollectionMeta = {
 	/** Rows are local and safe to read. */
@@ -100,6 +111,7 @@ export class SubscriptionRegistry {
 	private catchUpQueue: Promise<void> = Promise.resolve();
 	private restoring: Promise<void> | null = null;
 	private readonly residencyBytes: number;
+	private readonly maxResidentRows: number;
 
 	private publishSubscriptions(): void {
 		this.client.setSubscribedCollections(
@@ -109,9 +121,10 @@ export class SubscriptionRegistry {
 
 	constructor(
 		private readonly client: PodSyncClient,
-		options?: { readonly residencyBytes?: number }
+		options?: { readonly residencyBytes?: number; readonly maxResidentRows?: number }
 	) {
 		this.residencyBytes = options?.residencyBytes ?? DEFAULT_RESIDENCY_BYTES;
+		this.maxResidentRows = options?.maxResidentRows ?? DEFAULT_MAX_RESIDENT_ROWS;
 		// The server's data was reset out from under us and the replica has been discarded. Forget
 		// what we believed was local, or every collection would still report itself resident while
 		// holding nothing.
@@ -277,10 +290,18 @@ export class SubscriptionRegistry {
 				// answers every read locally with nothing. Leaving it untrusted sends reads to the
 				// server, which is the only party that can say whether the collection is really empty.
 				if (page.rows.length === 0) break;
-				// Over the shared budget: this collection is windowed. Stop rather than keep pulling —
-				// the rows already here still serve reads that fall inside them, and the server owns
-				// everything past the edge.
+				// Over the shared byte budget: this collection is windowed. Stop rather than keep
+				// pulling — the rows already here still serve reads that fall inside them, and the
+				// server owns everything past the edge.
 				if (bytes >= budget) {
+					trustworthy = true;
+					break;
+				}
+				// Past the row cap: windowed the same way. A wide table of narrow rows can be a few
+				// MB yet cost a round trip per page to download, so bytes alone never windows a
+				// table like a 20k-row roster. Reads that cannot be proven local go to the server,
+				// whose scoped `where` answers them in one trip.
+				if (rows >= this.maxResidentRows) {
 					trustworthy = true;
 					break;
 				}

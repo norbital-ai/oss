@@ -68,6 +68,38 @@ export type ColumnCustomMeta =
 export type ColumnMetadataHost = Column | AnyPgColumnBuilder;
 
 const COLUMN_CUSTOM = Symbol('column-custom');
+/** Explicit search opt-in, set by `text({ search: true })`; absent means "not searchable". */
+const COLUMN_SEARCHABLE = Symbol('column-searchable');
+
+/**
+ * Whether a text-ish column carries the explicit search opt-in.
+ *
+ * Search is opt-in: only `true` grants a trigram search index and search participation. Absent or
+ * `false` means the column is never indexed and never searched, however text-like its kind. Stored
+ * on the builder so the index creator (`isSearchableTextBuilder`) reads it at authoring time, and
+ * copied onto the built column so `portableCollectionField` carries it into the manifest for the
+ * runtime's search paths.
+ */
+export function setColumnSearchable(host: ColumnMetadataHost, searchable: boolean): void {
+	Reflect.set(host, COLUMN_SEARCHABLE, searchable);
+}
+
+export function readColumnSearchable(host: ColumnMetadataHost): boolean | undefined {
+	const value = Reflect.get(host, COLUMN_SEARCHABLE);
+	return typeof value === 'boolean' ? value : undefined;
+}
+
+/** Resolve the searchable flag from a column builder, including `.array()` wrappers. */
+export function readBuilderSearchable(builder: AnyPgColumnBuilder): boolean | undefined {
+	const direct = readColumnSearchable(builder);
+	if (direct !== undefined) return direct;
+
+	const config = Reflect.get(builder, 'config');
+	const inner = config && typeof config === 'object' ? Reflect.get(config, 'base') : undefined;
+	if (inner) return readColumnSearchable(inner);
+
+	return undefined;
+}
 
 declare module 'drizzle-orm' {
 	interface Column {

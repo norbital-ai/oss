@@ -54,14 +54,23 @@ let sent: SentInput[] = [];
 
 const manifestContext = {
 	getCollections: () => [
-		{ collection_name: 'companies', system: null },
-		{ collection_name: 'contacts', system: null },
+		{ collection_name: 'companies', system: null, fields: textField('name') },
+		{ collection_name: 'contacts', system: null, fields: textField('name') },
 		// Platform plumbing must never surface as something a person can reference.
-		{ collection_name: 'chat_session', system: true }
+		{ collection_name: 'chat_session', system: true, fields: textField('name') }
 	],
-	findCollection: (name: string) => ({ collection_name: name, record_label: null }),
+	findCollection: (name: string) => ({
+		collection_name: name,
+		record_label: null,
+		fields: textField('name')
+	}),
 	columnsFor: () => ({ name: { dataType: 'text', notNull: false } })
 };
+
+/** A searchable (indexed) field, the way the compiled manifest always carries one. */
+function textField(name: string) {
+	return [{ name, kind: 'text', nullable: false }];
+}
 
 beforeEach(() => {
 	replica = new FakeReplica();

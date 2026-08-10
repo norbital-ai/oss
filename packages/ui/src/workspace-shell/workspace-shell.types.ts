@@ -30,6 +30,25 @@ export interface WorkspaceNavigationItem {
 	readonly children?: readonly WorkspaceNavigationItem[];
 }
 
+/** A team a workspace admin can preview the workspace under. */
+export interface WorkspaceImpersonationTeam {
+	readonly id: string;
+	readonly name: string | null;
+}
+
+/**
+ * Admin team impersonation state for the account menu.
+ *
+ * The shell renders the picker only when the host supplies the data; the host
+ * decides who qualifies (admins only) and what teams exist.
+ */
+export interface WorkspaceImpersonation {
+	readonly isAdmin: boolean;
+	readonly isActive: boolean;
+	readonly activeTeamIds: readonly string[];
+	readonly teams: readonly WorkspaceImpersonationTeam[];
+}
+
 export function toggleWorkspaceNavigationBranch({
 	open,
 	href,

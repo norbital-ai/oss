@@ -32,6 +32,19 @@ export type WorkspaceBillingSummary = {
 };
 
 /**
+ * Admin team impersonation state projected into the guest shell, so the account menu can render the
+ * team picker without the guest reaching the host's directory. Absent for non-admins.
+ */
+export const NORBITAL_IMPERSONATION_HEADER = 'x-norbital-impersonation-json';
+
+export type WorkspaceImpersonationSummary = {
+	readonly isAdmin: boolean;
+	readonly isActive: boolean;
+	readonly activeTeamIds: readonly string[];
+	readonly teams: readonly { norbital_id: string; name: string | null }[];
+};
+
+/**
  * A host-owned application the pod shell links into its navigation — Workspace Studio, Core
  * services. The pod renders a navigation entry and links to `entry`; it never loads the plugin's
  * code, so a host surface stays a host route and nothing of it enters the workspace bundle.

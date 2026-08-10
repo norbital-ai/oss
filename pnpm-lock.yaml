@@ -13,6 +13,9 @@ catalogs:
     '@sveltejs/kit':
       specifier: ^2.70.1
       version: 2.70.2
+    rolldown:
+      specifier: ^1.2.1
+      version: 1.2.1
     runed:
       specifier: ^0.37.1
       version: 0.37.1
@@ -138,6 +141,9 @@ importers:
       pg:
         specifier: ^8.22.0
         version: 8.22.0
+      rolldown:
+        specifier: 'catalog:'
+        version: 1.2.1
       runed:
         specifier: 'catalog:'
         version: 0.37.1(@sveltejs/kit@2.70.2(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.56.8)(vite@8.2.0(@types/node@26.1.2)(jiti@2.7.0)(yaml@2.9.0)))(svelte@5.56.8)(typescript@6.0.3)(vite@8.2.0(@types/node@26.1.2)(jiti@2.7.0)(yaml@2.9.0)))(svelte@5.56.8)(zod@4.4.3)

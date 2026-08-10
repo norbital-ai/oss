@@ -11,7 +11,9 @@
 import { post } from '$lib/ui/state/client.js';
 import { clientSyncReady } from '$lib/ui/sync/replica.js';
 import { localFindMany } from '$lib/ui/sync/client-sync.js';
+import { isSearchableCollectionField } from '@norbital-ai/platform-utils/collection';
 import { resolveRecordDisplayLabel } from '@norbital-ai/platform-utils/manifest/context';
+import type { ManifestCollectionEntry } from '@norbital-ai/platform-utils/manifest/types';
 import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 
 /** One record the menu can offer, already labelled for display. */
@@ -30,6 +32,10 @@ export type MentionMenuItem =
  * How many collections one keystroke burst may search. Tenant schemas are small, but the cap keeps
  * the fan-out bounded no matter how large one grows; which collections make the cut is
  * alphabetical, which is arbitrary but at least deterministic.
+ *
+ * Only collections with at least one searchable (indexed) field are candidates at all — a
+ * collection of pure numbers, dates, JSON or relations has nothing a search can match, and
+ * searching it returns either nothing or, server-side, rows the query never filtered.
  */
 const MAX_SOURCES = 12;
 
@@ -44,6 +50,16 @@ export type MentionSourcesOptions = {
 	readonly hitsPerSource?: number;
 };
 
+export type MentionSearchOptions = {
+	readonly signal?: AbortSignal;
+	/**
+	 * Called with each source's hits as that source resolves, before the merged answer. A palette
+	 * that renders progressively stops waiting on the slowest collection of the fan-out; the
+	 * mention menu ignores it and renders only the final merged list.
+	 */
+	readonly onHits?: (hits: readonly MentionRecordHit[]) => void;
+};
+
 export type MentionSources = {
 	/** The collections a bare `@` can narrow to, in menu order. */
 	collections(): readonly string[];
@@ -55,7 +71,7 @@ export type MentionSources = {
 	search(
 		query: string,
 		scope: string | null,
-		signal?: AbortSignal
+		options?: MentionSearchOptions
 	): Promise<readonly MentionRecordHit[]>;
 };
 
@@ -66,11 +82,25 @@ export function createMentionSources(
 	const maxSources = options.maxSources ?? MAX_SOURCES;
 	const hitsPerSource = options.hitsPerSource ?? HITS_PER_SOURCE;
 
+	/**
+	 * A collection can only be searched when it has at least one searchable field — the same
+	 * text/phone/enum fields the server indexes and the normal collection search matches on. A
+	 * collection without one has nothing to match against, so it is not part of the fan-out at
+	 * all: the server would otherwise return its rows unfiltered (its search clause compiles to
+	 * nothing) and every local query would be a scan over a predicate that can never hold.
+	 */
+	function isSearchableCollection(entry: ManifestCollectionEntry | null): boolean {
+		return (entry?.fields ?? []).some((field) => isSearchableCollectionField(field));
+	}
+
 	function mentionableCollections(): string[] {
 		try {
 			return getManifestContext()
 				.getCollections()
-				.filter((collection) => collection.system !== true)
+				.filter(
+					(collection) =>
+						collection.system !== true && isSearchableCollection(collection)
+				)
 				.map((collection) => collection.collection_name)
 				.sort()
 				.slice(0, maxSources);
@@ -123,16 +153,27 @@ export function createMentionSources(
 
 	return {
 		collections: mentionableCollections,
-		async search(query, scope, signal) {
+		async search(query, scope, searchOptions) {
 			const trimmed = query.trim();
 			if (!trimmed) return [];
-			const names = scope ? [scope] : mentionableCollections();
+			let names: string[];
+			try {
+				names = scope
+					? isSearchableCollection(getManifestContext().findCollection(scope))
+						? [scope]
+						: []
+					: mentionableCollections();
+			} catch {
+				return [];
+			}
 			const settled = await Promise.allSettled(
 				names.map(async (collection) => {
-					const rows = await rowsFor(collection, trimmed, signal);
-					return rows
+					const rows = await rowsFor(collection, trimmed, searchOptions?.signal);
+					const hits = rows
 						.map((row) => toHit(collection, row))
 						.filter((hit): hit is MentionRecordHit => hit !== null);
+					searchOptions?.onHits?.(hits);
+					return hits;
 				})
 			);
 			return settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));

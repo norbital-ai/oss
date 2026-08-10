@@ -70,7 +70,8 @@
 					onclick={toggle}
 					class={cn(
 						typeof props.class === 'string' ? props.class : undefined,
-						'relative w-full pr-7'
+						'relative w-full',
+						open && 'pr-7'
 					)}
 				>
 					<div
@@ -138,6 +139,11 @@
 					onfocus={() => onPrefetch?.(item.href)}
 					onclick={(event) => navigate(event, item.href)}
 					aria-current={item.active ? 'page' : undefined}
+					class={cn(
+						typeof props.class === 'string' ? props.class : undefined,
+						'relative w-full',
+						open && 'pr-7'
+					)}
 				>
 					<div
 						class={cn(

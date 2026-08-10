@@ -109,7 +109,7 @@ export function announceClientSyncReady(): void {
 
 export function enableClientSync(
 	client: PodSyncClient,
-	options?: { readonly residencyBytes?: number }
+	options?: { readonly residencyBytes?: number; readonly maxResidentRows?: number }
 ): ClientSync {
 	if (active) return active;
 	const registry = new SubscriptionRegistry(client, options);

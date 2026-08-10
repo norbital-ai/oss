@@ -45,7 +45,6 @@
 		appAccessAllowed,
 		buildApplicationNavigation,
 		buildSystemNavigation,
-		buildUtilityNavigation,
 		resolveAppHeaderDescription,
 		resolveAppHeaderTitle,
 		resolveBillingSettingsHref,
@@ -63,6 +62,7 @@
 	import { requestAgentComposerFocus } from '../agent/agent-composer-focus.js';
 	import OmniFinder from './omni-finder.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import { writeImpersonationTeamIds } from './workspace-impersonation.js';
 
 	let {
 		apps,
@@ -242,8 +242,20 @@
 	function toggleOmniFinder(): void {
 		omniOpen = !omniOpen;
 	}
-	const navigationModel = $derived.by((): WorkspaceNavigationModel => ({
-		activeOrganization,
+	const impersonation = $derived(
+		data.impersonation
+			? {
+					isAdmin: data.impersonation.isAdmin,
+					isActive: data.impersonation.isActive,
+					activeTeamIds: data.impersonation.activeTeamIds,
+					teams: data.impersonation.teams.map((team) => ({
+						id: team.norbital_id,
+						name: team.name
+					}))
+				}
+			: undefined
+	);
+	const navigationModel = $derived.by((): WorkspaceNavigationModel => ({		activeOrganization,
 		organizations: resolveWorkspaceOrganizationOptions({
 			activeOrganization,
 			organizations: data.userOrganizations ?? []
@@ -260,11 +272,6 @@
 			isAdmin: data.user.role === 'admin',
 			currentPath,
 			i18n: i18nResolver
-		}),
-		utilities: buildUtilityNavigation({
-			plugins: data.hostPlugins ?? [],
-			isAdmin: data.user.role === 'admin',
-			currentPath
 		}),
 		applications: buildApplicationNavigation({
 			appIds: appNames,
@@ -319,6 +326,21 @@
 		window.location.assign('/login');
 	}
 
+	/**
+	 * Switching the impersonation scope is a cookie write and a reload: Core resolves the simulated
+	 * teams from the cookie on the next request, so there is no intermediate state to keep the shell
+	 * in — the reloaded shell data carries the new scope and the account menu reflects it.
+	 */
+	function impersonate(teamId: string): void {
+		writeImpersonationTeamIds([teamId]);
+		window.location.reload();
+	}
+
+	function stopImpersonating(): void {
+		writeImpersonationTeamIds([]);
+		window.location.reload();
+	}
+
 	onDestroy(() => platformState.destroy());
 </script>
 
@@ -367,6 +389,9 @@
 	onPrefetch={prefetchWorkspaceSurface}
 	{notifications}
 	{onSignOut}
+	{impersonation}
+	onImpersonate={impersonate}
+	onStopImpersonating={stopImpersonating}
 >
 	<Bound size="full" clip grow>
 		{#if currentPath === '/'}
