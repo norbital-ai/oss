@@ -3,7 +3,8 @@ name: authoring-tenant-workspace
 description: >-
   Author filesystem-first Pod tenant workspaces in the public OSS repository. Load for collections,
   custom types, apps, automations, remotes, seeds, generated $types, the unified $pod/client,
-  temporal values, filters, and client rendering.
+  temporal values, filters, client rendering, and template repository metadata including the
+  marketing thumbnail (`assets/thumbnail.svg`).
 ---
 
 # Authoring Pod Tenant Workspaces
@@ -35,19 +36,19 @@ Studio → Template updates using the explicit Template/Tenant choices.
 
 ## Reference routing
 
-| Task                                        | Reference                                                             |
-| ------------------------------------------- | --------------------------------------------------------------------- |
-| Collections, relationships, hooks, values   | [collections-and-modeling.md](references/collections-and-modeling.md) |
-| Dates, clock times, timestamps, filters     | [dates-and-time.md](references/dates-and-time.md)                     |
-| Queries: `$derived`, no N+1, batching       | [data-access.md](references/data-access.md)                           |
-| Apps, client, automation, remotes, seed     | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |
-| Why the layout system is shaped this way    | [interface-ideology.md](references/interface-ideology.md)             |
-| Composition, scrolling, scroll traps        | [layout-and-scrolling.md](references/layout-and-scrolling.md)         |
-| Controller UI: inline, `$derived`, no UUIDs | [controller-surfaces.md](references/controller-surfaces.md)           |
-| Padding, gaps, the app inset                | [padding-and-spacing.md](references/padding-and-spacing.md)           |
-| Generated files and build lifecycle         | [generated-and-build.md](references/generated-and-build.md)           |
-| English + Chinese copy, catalogs, `useI18n` | [internationalization.md](references/internationalization.md)         |
-| Template manifest, README, zh README        | [template-repository.md](references/template-repository.md)           |
+| Task                                                                    | Reference                                                             |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Collections, relationships, hooks, values                               | [collections-and-modeling.md](references/collections-and-modeling.md) |
+| Dates, clock times, timestamps, filters                                 | [dates-and-time.md](references/dates-and-time.md)                     |
+| Queries: `$derived`, no N+1, batching                                   | [data-access.md](references/data-access.md)                           |
+| Apps, client, automation, remotes, seed                                 | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |
+| Why the layout system is shaped this way                                | [interface-ideology.md](references/interface-ideology.md)             |
+| Composition, scrolling, scroll traps                                    | [layout-and-scrolling.md](references/layout-and-scrolling.md)         |
+| Controller UI: inline, `$derived`, no UUIDs                             | [controller-surfaces.md](references/controller-surfaces.md)           |
+| Padding, gaps, the app inset                                            | [padding-and-spacing.md](references/padding-and-spacing.md)           |
+| Generated files and build lifecycle                                     | [generated-and-build.md](references/generated-and-build.md)           |
+| Mandatory bilingual copy, catalogs, the raw-text rule                   | [internationalization.md](references/internationalization.md)         |
+| Template manifest, README, marketing thumbnail (`assets/thumbnail.svg`) | [template-repository.md](references/template-repository.md)           |
 
 Read only the relevant reference. Use `TENANT_WORKSPACE.md` for runtime internals,
 `ACCESS_CONTROL.md` for policy behavior, and the code-quality skill after edits.
@@ -83,8 +84,8 @@ src/
 ├── policies/+<name>.policy.ts     # optional
 ├── channels/+<name>.channel.ts    # optional
 ├── i18n/
-│   ├── messages.en.json           # optional — your English copy
-│   └── messages.zh.json           # required if messages.en.json exists
+│   ├── messages.en.json           # required — English copy
+│   └── messages.zh.json           # required — Chinese copy, exact same keys
 ├── lib/**                         # optional, free-form helper code — no role, no `+` prefix
 ├── +agent.ts                      # optional
 ├── +env.ts                        # optional
@@ -108,12 +109,17 @@ Everything without a `+` is ordinary source the compiler does not claim. `src/li
 as `project-representation.svelte` are all legal — `lib` is listed as free-form helper code precisely so
 a workspace can keep engine and helper code somewhere.
 
-`src/i18n/` is special-cased, not ordinary source: it holds the tenant's translation overrides. The
-compiler enforces that `messages.en.json` and `messages.zh.json` carry exactly the same keys, and the
-pod runtime merges them over the platform chrome catalogs (pod + `@norbital-ai/ui`) at build time. Use
-`useI18n<TenantKeys>()` from `@norbital-ai/ui/i18n` in your app files, keyed by your own catalog keys
-(import your `messages.en.json` for the key type). App metadata stays static English in `<svelte:head>`;
-override the sidebar label per locale with an `app.<id>.title` key in your catalog.
+`src/i18n/` is special-cased, not ordinary source: it holds the tenant's translation catalogs, and
+**both `messages.en.json` and `messages.zh.json` are required** in every workspace — bilingual wiring
+is mandatory even when the tenant only ships English today (the zh file mirrors the English copy
+until real translations land). The compiler enforces that the two files carry exactly the same keys,
+and the pod runtime merges them over the platform chrome catalogs (pod + `@norbital-ai/ui`) at build
+time. Use `useI18n<TenantKeys>()` from `@norbital-ai/ui/i18n` in your app files, keyed by your own
+catalog keys (import your `messages.en.json` for the key type). Every user-facing string in an app
+file must come from `t(...)`; the compiler rejects raw text in Svelte markup (see
+[internationalization.md](references/internationalization.md#the-raw-text-rule-statically-enforced)).
+App metadata stays static English in `<svelte:head>`; override the sidebar label per locale with an
+`app.<id>.title` key in your catalog.
 
 Two consequences worth stating, because the compiler will not state them for you:
 
@@ -190,12 +196,17 @@ filter never creates server work against a resident collection. For the full arc
 
 Apps are `src/apps/**/+<app>.svelte`. Their `<svelte:head>` metadata is static (`title`, optional
 description, literal `pod:icon`, optional static `pod:thumbnail` / `pod:banner` URLs). There is no host layout metadata.
-Thumbnails and banners are optional — missing ones get a same-size icon fallback in the shell (overview
-cards keep their 16:9 media slot, omni finder keeps its 6×6 tile). Ship template images under `assets/`
+App thumbnails and banners are optional — missing ones get a same-size icon fallback in the shell (overview
+cards keep their 16:9 media slot, omni finder keeps its 6×6 tile). Ship product images under `assets/`
 and reference `/api/template-seed-assets/<key>/<path>` URLs. The collection-owned `+representation.svelte`
 can also declare a static `pod:banner` meta, rendered above the record detail sheet header. See
 [apps-and-server-roles.md](references/apps-and-server-roles.md#app-media--icons-thumbnails-banners) for the
-full media contract.
+in-product media contract.
+
+**Template marketing thumbnail is separate:** website gallery / homepage cards / `og:image` read
+`<key>/assets/thumbnail.svg` once (optional manifest `thumbnail` override only if the path differs).
+Do not configure that image a second time as `pod:thumbnail`. Details in
+[template-repository.md](references/template-repository.md#marketing-thumbnail-declare-once).
 
 The pod shell owns the application region, default document scroll, query container, and app identity.
 Use ordinary `PageHeader` and `Tabs` from `@norbital-ai/ui` where their semantics fit; neither controls

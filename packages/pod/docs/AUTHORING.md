@@ -74,6 +74,8 @@ optional — the shell draws a same-size icon fallback in the thumbnail slot. Th
 `+representation.svelte` may declare a static `pod:banner` for the record detail sheet header.
 Template images ship under `assets/` and are referenced as `/api/template-seed-assets/<key>/<path>`
 (see [apps-and-server-roles.md](../../../skills/authoring-tenant-workspace/references/apps-and-server-roles.md)).
+The website gallery marketing image is separate: declare it once as `assets/thumbnail.svg` (see
+[template-repository.md](../../../skills/authoring-tenant-workspace/references/template-repository.md#marketing-thumbnail-declare-once)).
 
 Adding a file adds the thing. Deleting it removes the thing. Renaming it renames the thing. A role
 file whose name Pod does not recognise is a compile error rather than a file that silently does

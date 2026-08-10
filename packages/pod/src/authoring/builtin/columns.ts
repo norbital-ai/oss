@@ -152,12 +152,7 @@ export function hexToBinaryEmbedding(hex: string): number[] {
 	const embedding: number[] = [];
 	for (const char of hex.toLowerCase()) {
 		const nibble = Number.parseInt(char, 16);
-		embedding.push(
-			(nibble >> 3) & 1,
-			(nibble >> 2) & 1,
-			(nibble >> 1) & 1,
-			nibble & 1
-		);
+		embedding.push((nibble >> 3) & 1, (nibble >> 2) & 1, (nibble >> 1) & 1, nibble & 1);
 	}
 	return embedding;
 }

@@ -1,4 +1,4 @@
-import { type Locale, INTL_LOCALE } from './locale.js';
+import { type Locale, DEFAULT_LOCALE } from './locale.js';
 
 /**
  * Flat, dot-namespaced message catalogs.
@@ -7,22 +7,28 @@ import { type Locale, INTL_LOCALE } from './locale.js';
  * convention (`table.emptyState`, `form.required`), never nested structure, so
  * catalogs merge and override by spread with no shape surprises.
  *
- * Every catalog has both supported locales, and `defineMessages` enforces at
- * compile time that the Chinese catalog carries exactly the keys the English
- * catalog carries. English is the source of truth; the runtime falls back
- * locale -> en -> key, so a future third language can be partial without
- * breaking the type contract.
+ * A catalog record carries every supported locale. `defineMessages` enforces
+ * exact key parity between locales: the runtime falls back locale -> primary
+ * (`DEFAULT_LOCALE`) -> key, and `KeysOf` intersects the per-locale key sets,
+ * so a key missing from any locale is a compile-time error at the first
+ * `t(...)` call. English is the source of truth.
  */
 export type MessageCatalog = Readonly<Record<string, string>>;
 
-/** A complete catalog pair for the supported locales. */
-export type LocaleCatalogs = { readonly en: MessageCatalog; readonly zh: MessageCatalog };
+/** A complete set of message catalogs, keyed by application locale. */
+export type LocaleCatalogs = Readonly<Record<string, MessageCatalog>>;
 
 /** Interpolation variables for a message template. */
 export type MessageVars = Readonly<Record<string, string | number>>;
 
-/** Extract the key union of a catalog pair, for typing `t`. */
-export type KeysOf<C extends LocaleCatalogs> = keyof C['en'] & string;
+/**
+ * Extract the key union of a catalog set, for typing `t`.
+ *
+ * The intersection over the per-locale key sets: with parity this is the
+ * shared key set, and a key missing from any locale drops out of the union and
+ * becomes a compile-time error at its call site.
+ */
+export type KeysOf<C extends LocaleCatalogs> = keyof C[keyof C] & string;
 
 const INTERPOLATION = /\{([a-zA-Z0-9_]+)\}/g;
 
@@ -42,20 +48,41 @@ export function interpolate(template: string, vars?: MessageVars): string {
 }
 
 /**
- * Define one message catalog pair with exact key parity between locales.
+ * Define a set of message catalogs with exact key parity between locales.
  *
- * The `zh` parameter's keys are checked against `en` at compile time; the
- * `satisfies` clause keeps `en` from widening to a bare `Record<string,string>`.
+ * The primary catalog (keyed by `DEFAULT_LOCALE`, conventionally `en`) is the
+ * source of truth; every other locale must carry exactly the same keys, which
+ * `KeysOf` enforces at compile time. The runtime check keeps a mismatched
+ * catalog from silently shipping when the type contract is bypassed (e.g. a
+ * JSON round trip).
  */
-export function defineMessages<const E extends MessageCatalog>(
-	en: E,
-	zh: { [K in keyof E]: string }
-): { en: E; zh: { [K in keyof E]: string } } {
-	return { en, zh };
+export function defineMessages<const C extends LocaleCatalogs>(catalogs: C): C {
+	const entries = Object.entries(catalogs);
+	const [primaryLocale, primary] = entries[0] ?? [null, null];
+	if (primaryLocale == null || primary == null) {
+		throw new Error('defineMessages requires at least one locale catalog');
+	}
+	for (const [locale, catalog] of entries.slice(1)) {
+		for (const key of Object.keys(primary)) {
+			if (!(key in catalog)) {
+				throw new Error(
+					`Catalog "${locale}" is missing key "${key}" present in "${primaryLocale}"`
+				);
+			}
+		}
+		for (const key of Object.keys(catalog)) {
+			if (!(key in primary)) {
+				throw new Error(
+					`Catalog "${locale}" has extra key "${key}" not present in "${primaryLocale}"`
+				);
+			}
+		}
+	}
+	return catalogs;
 }
 
 /**
- * Pure lookup: translate `key` in `locale`, falling back locale -> en -> key.
+ * Pure lookup: translate `key` in `locale`, falling back locale -> primary -> key.
  */
 export function translate(
 	catalogs: LocaleCatalogs,
@@ -63,23 +90,17 @@ export function translate(
 	key: string,
 	vars?: MessageVars
 ): string {
-	const template =
-		catalogs[locale][key] ?? catalogs.en[key] ?? key;
+	const template = catalogs[locale]?.[key] ?? catalogs[DEFAULT_LOCALE]?.[key] ?? key;
 	return interpolate(template, vars);
 }
 
-/** The Intl locale the catalog pair formats with, per application locale. */
-export function intlLocale(locale: Locale): string {
-	return INTL_LOCALE[locale];
-}
-
 /**
- * True when a key exists in either locale of the catalog pair.
+ * True when a key exists in any locale of the catalog set.
  *
  * Lets callers distinguish "translated to the raw key" from "not in the
  * catalog at all" — e.g. label overrides that fall back to authored text when
  * a tenant did not supply one.
  */
 export function hasKey(catalogs: LocaleCatalogs, key: string): boolean {
-	return key in catalogs.en || key in catalogs.zh;
+	return Object.values(catalogs).some((catalog) => key in catalog);
 }

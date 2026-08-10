@@ -13,8 +13,8 @@ import { miscMessages } from './misc.messages.js';
  * The spread merge keeps each namespace file a single owner, so parallel
  * migration passes can extend a namespace without touching this file.
  */
-export const uiMessages = defineMessages(
-	{
+export const uiMessages = defineMessages({
+	en: {
 		...commonMessages.en,
 		...tableMessages.en,
 		...kanbanMessages.en,
@@ -22,7 +22,7 @@ export const uiMessages = defineMessages(
 		...dataRendererMessages.en,
 		...miscMessages.en
 	},
-	{
+	zh: {
 		...commonMessages.zh,
 		...tableMessages.zh,
 		...kanbanMessages.zh,
@@ -30,7 +30,7 @@ export const uiMessages = defineMessages(
 		...dataRendererMessages.zh,
 		...miscMessages.zh
 	}
-);
+});
 
 /** The typed key union of the ui catalog, for `useI18n<UiKeys>()`. */
 export type UiKeys = KeysOf<typeof uiMessages>;

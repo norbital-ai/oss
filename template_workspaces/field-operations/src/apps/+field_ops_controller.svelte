@@ -49,7 +49,7 @@
 		{ value: 'dispatched', label: t('component.status_dispatched'), color: 'blue' },
 		{ value: 'in_progress', label: t('component.status_in_progress'), color: 'amber' },
 		{ value: 'completed', label: t('component.status_completed'), color: 'green' },
-		{ value: 'flagged', label: t('component.status_flagged'), color: 'red' }
+		{ value: 'suspect', label: t('component.status_suspect'), color: 'red' }
 	]);
 
 	// Assign-contractor sheet — filters unassigned jobs for the day to certified contractors.
@@ -157,7 +157,8 @@
 			await create({
 				job_id: assignment.jobId,
 				contractor_profile_id: assignment.contractorId,
-				status: 'dispatched'
+				status: 'dispatched',
+				site_identity_unverified: true
 			});
 			assignment.jobId = null;
 			assignment.contractorId = null;
@@ -178,7 +179,7 @@
 			longitude: point.longitude,
 			...(index < 26 ? { label: String.fromCharCode(65 + index) } : {}),
 			ariaLabel: point.name,
-			tone: point.assignments.some((assignment) => assignment.status === 'flagged')
+			tone: point.assignments.some((assignment) => assignment.status === 'suspect')
 				? 'alert'
 				: 'default'
 		}))

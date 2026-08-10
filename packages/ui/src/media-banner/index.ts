@@ -1,1 +1,3 @@
-export { default as CollapsingMediaBanner } from './collapsing-media-banner.svelte';
+export { default as AppMediaHeader } from './app-media-header.svelte';
+/** @deprecated Use `AppMediaHeader`. */
+export { default as CollapsingMediaBanner } from './app-media-header.svelte';

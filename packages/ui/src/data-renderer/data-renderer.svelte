@@ -119,7 +119,14 @@
 		class={className}
 	/>
 {:else if NUMERIC_KINDS.has(field.kind) && mode === 'display'}
-	<NumericRenderer {field} {value} mode="display" placeholder={t('dataRenderer.null')} locale={localeEffective} class={className} />
+	<NumericRenderer
+		{field}
+		{value}
+		mode="display"
+		placeholder={t('dataRenderer.null')}
+		locale={localeEffective}
+		class={className}
+	/>
 {:else if field.kind === 'file' && mode === 'edit'}
 	<DataRendererEditor
 		{field}

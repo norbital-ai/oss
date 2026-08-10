@@ -297,7 +297,9 @@
 						{#each validProgress as progress, index (index)}
 							<Inline justify="between" gap="sm" class="rounded-md bg-muted/40 p-3">
 								<span class="text-sm font-medium">
-									{multiple ? t('misc.progressIndex', { index: index + 1 }) : t('misc.currentProgress')}
+									{multiple
+										? t('misc.progressIndex', { index: index + 1 })
+										: t('misc.currentProgress')}
 								</span>
 								<Inline gap="sm">
 									<Progress value={progress} class="h-2 w-20" />
@@ -391,9 +393,15 @@
 								<!-- Visual indicator for entry state -->
 								<div class="flex shrink-0">
 									{#if entryState === 'valid'}
-										<div class="h-2 w-2 rounded-full bg-success" title={t('misc.progressComplete')}></div>
+										<div
+											class="h-2 w-2 rounded-full bg-success"
+											title={t('misc.progressComplete')}
+										></div>
 									{:else}
-										<div class="h-2 w-2 rounded-full bg-border" title={t('misc.progressEmpty')}></div>
+										<div
+											class="h-2 w-2 rounded-full bg-border"
+											title={t('misc.progressEmpty')}
+										></div>
 									{/if}
 								</div>
 

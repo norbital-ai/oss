@@ -67,9 +67,7 @@ function podBuildFile(relativePath: string): string {
 }
 
 /** Read a tenant message JSON file, returning null when absent or unparsable. */
-async function readMessageFile(
-	file: string
-): Promise<Readonly<Record<string, string>> | null> {
+async function readMessageFile(file: string): Promise<Readonly<Record<string, string>> | null> {
 	try {
 		const raw = await readFile(file, 'utf8');
 		const parsed = JSON.parse(raw) as unknown;
@@ -517,15 +515,27 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 					import('../i18n/messages.js'),
 					import('@norbital-ai/ui/i18n/messages')
 				]);
+				const { SUPPORTED_LOCALES } = await import('@norbital-ai/std/i18n');
 				const i18nDirectory = path.join(root, 'src', 'i18n');
-				const [tenantEn, tenantZh] = await Promise.all([
-					readMessageFile(path.join(i18nDirectory, 'messages.en.json')),
-					readMessageFile(path.join(i18nDirectory, 'messages.zh.json'))
-				]);
-				return `export const i18nMessages = ${JSON.stringify({
-					en: { ...podMessages.en, ...uiMessages.en, ...(tenantEn ?? {}) },
-					zh: { ...podMessages.zh, ...uiMessages.zh, ...(tenantZh ?? {}) }
-				})};\n`;
+				const tenantCatalogs = Object.fromEntries(
+					await Promise.all(
+						SUPPORTED_LOCALES.map(async (locale) => [
+							locale,
+							await readMessageFile(path.join(i18nDirectory, `messages.${locale}.json`))
+						])
+					)
+				);
+				const merged = Object.fromEntries(
+					SUPPORTED_LOCALES.map((locale) => [
+						locale,
+						{
+							...((podMessages as Record<string, Readonly<Record<string, string>>>)[locale] ?? {}),
+							...((uiMessages as Record<string, Readonly<Record<string, string>>>)[locale] ?? {}),
+							...(tenantCatalogs[locale] ?? {})
+						}
+					])
+				);
+				return `export const i18nMessages = ${JSON.stringify(merged)};\n`;
 			}
 			if (id === `\0${SERVER_ENTRY}`) {
 				return `import workspace from ${JSON.stringify(generatedWorkspace.split(path.sep).join('/'))};

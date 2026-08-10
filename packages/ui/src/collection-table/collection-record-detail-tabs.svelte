@@ -4,7 +4,8 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import * as Sheet from '#lib/sheet';
 	import { Tabs, type TabConfig } from '#lib/tabs';
-	import { Bound, Frame, Inline, Scroll, Stack } from '#lib/layout';
+	import { Bound, Frame, Inline, INSET_X_CLASS, Scroll, Stack } from '#lib/layout';
+	import { cn } from '#lib/utils';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -75,7 +76,12 @@
 				/>
 			</Frame>
 		{/if}
-		<Inline as="header" gap="md" shrink={false} class="border-b bg-background px-4 py-2.5 sm:px-5">
+		<Inline
+			as="header"
+			gap="md"
+			shrink={false}
+			class={cn('border-b bg-background py-2.5', INSET_X_CLASS)}
+		>
 			<Stack gap="none" grow class="min-w-0">
 				<Sheet.Description class="truncate text-micro leading-4 text-muted-foreground">
 					{description}
@@ -94,24 +100,25 @@
 
 {#snippet unavailableState()}
 	{#if loading}
-		<Inline gap="sm" class="p-6 text-sm text-muted-foreground" role="status">
+		<Inline gap="sm" class="py-4 text-sm text-muted-foreground" role="status">
 			<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
 			{t('table.loadingRecord')}
 		</Inline>
 	{:else if error}
-		<div class="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-4" role="alert">
+		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-4" role="alert">
 			<p class="text-sm font-medium text-destructive">{t('table.recordLoadFailed')}</p>
 			<p class="mt-1 text-sm text-muted-foreground">{error}</p>
 		</div>
 	{:else if !found}
-		<div class="m-6 rounded-lg border bg-muted/20 p-4 text-sm text-muted-foreground">
+		<div class="rounded-lg border bg-muted/20 p-4 text-sm text-muted-foreground">
 			{t('table.recordUnavailable')}
 		</div>
 	{/if}
 {/snippet}
 
 {#snippet uiContent()}
-	<Bound size="full" clip class="p-5 sm:p-6">
+	<!-- Shell owns the one horizontal inset; nested representations must not add another. -->
+	<Bound size="full" clip inset>
 		{#if loading || error || !found}
 			{@render unavailableState()}
 		{:else}
@@ -121,7 +128,7 @@
 {/snippet}
 
 {#snippet approvalContent()}
-	<Scroll name={t('table.approvalRegion', { title })} class="p-5 sm:p-6">
+	<Scroll name={t('table.approvalRegion', { title })} inset>
 		{#if loading || error || !found}
 			{@render unavailableState()}
 		{:else}
@@ -131,7 +138,7 @@
 {/snippet}
 
 {#snippet rawContent()}
-	<Scroll name={t('table.rawRegion', { title })} class="p-5 sm:p-6">
+	<Scroll name={t('table.rawRegion', { title })} inset>
 		{#if loading || error || !found}
 			{@render unavailableState()}
 		{:else}

@@ -99,11 +99,9 @@
 		{#snippet child({ props })}
 			<Sidebar.MenuButton
 				{...props}
-				aria-label={
-					unread.length > 0
-						? t('pod.shell.notificationsUnread', { count: unread.length })
-						: t('pod.shell.notifications')
-				}
+				aria-label={unread.length > 0
+					? t('pod.shell.notificationsUnread', { count: unread.length })
+					: t('pod.shell.notifications')}
 				class={cn(
 					'relative rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',
 					expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'
@@ -128,20 +126,20 @@
 		{/snippet}
 	</Popover.Trigger>
 	<Popover.Content side={expanded ? 'top' : 'right'} align="start" sideOffset={8} class="w-80 p-0">
-	<Inline justify="between" gap="sm" class="border-b px-3 py-2">
-		<p class="text-xs font-medium">{t('pod.shell.notifications')}</p>
-		{#if unread.length > 0}
-			<Button
-				type="button"
-				variant="ghost"
-				class="h-6 px-2 text-tiny"
-				disabled={busy}
-				onclick={() => void markRead(unread.map((row) => row.norbital_id))}
-			>
-				{t('pod.shell.markAllRead')}
-			</Button>
-		{/if}
-	</Inline>
+		<Inline justify="between" gap="sm" class="border-b px-3 py-2">
+			<p class="text-xs font-medium">{t('pod.shell.notifications')}</p>
+			{#if unread.length > 0}
+				<Button
+					type="button"
+					variant="ghost"
+					class="h-6 px-2 text-tiny"
+					disabled={busy}
+					onclick={() => void markRead(unread.map((row) => row.norbital_id))}
+				>
+					{t('pod.shell.markAllRead')}
+				</Button>
+			{/if}
+		</Inline>
 
 		{#if failure}
 			<p class="border-b px-3 py-2 text-tiny text-destructive" role="alert">{failure}</p>

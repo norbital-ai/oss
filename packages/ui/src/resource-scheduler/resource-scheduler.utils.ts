@@ -1,4 +1,4 @@
-import { INTL_LOCALE } from '@norbital-ai/std/i18n';
+import { intlLocale } from '@norbital-ai/std/i18n';
 import { getGlobalLocale } from '#lib/i18n';
 
 export interface ResourceSchedulerDay {
@@ -19,7 +19,7 @@ function utcDay(value: string): Date {
 export function buildResourceSchedulerDays(
 	anchorDate: string,
 	view: 'week' | 'month',
-	locale = INTL_LOCALE[getGlobalLocale()]
+	locale = intlLocale(getGlobalLocale())
 ): ResourceSchedulerDay[] {
 	const anchor = utcDay(anchorDate);
 	const start = new Date(anchor);

@@ -5,7 +5,7 @@ import { emailOtp, isIdentityDescriptor } from '../../src/host/types.js';
 
 const SECRET = 'a'.repeat(32);
 
-type Sent = { email: string; code: string; locale: 'en' | 'zh' };
+type Sent = { email: string; code: string; locale: string };
 
 function provider(
 	options: {
@@ -112,6 +112,8 @@ describe('emailOtpIdentity', () => {
 		expect(body?.match(/aria-label="Digit [1-6] of 6"/g)).toHaveLength(6);
 		expect(body).toContain('autocomplete="one-time-code"');
 		expect(body).toContain('name="code"');
+		expect(body).toContain('data-otp-form');
+		expect(body).toContain('let submitting = false');
 		expect(sent).toHaveLength(1);
 	});
 
@@ -270,9 +272,7 @@ describe('emailOtpIdentity', () => {
 			form('/accept-invite', { token: 'tok', email: 'bob@example.com' })
 		);
 		expect(response?.status).toBe(200);
-		expect(sent).toEqual([
-			{ email: 'bob@example.com', code: expect.any(String), locale: 'en' }
-		]);
+		expect(sent).toEqual([{ email: 'bob@example.com', code: expect.any(String), locale: 'en' }]);
 	});
 
 	it('declines routes it does not own so the workspace still serves them', async () => {

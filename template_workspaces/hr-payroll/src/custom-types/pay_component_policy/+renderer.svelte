@@ -175,8 +175,8 @@
 			<EffectiveLayerList
 				layers={treatments}
 				{disabled}
-				emptyMessage="No statutory decisions — this component is charged against nothing."
-				addPlaceholder="Add a statutory decision…"
+				emptyMessage={t('renderer.pay_component_policy.empty')}
+				addPlaceholder={t('renderer.pay_component_policy.add_placeholder')}
 				additions={[
 					{
 						value: 'TREATMENT',

@@ -921,7 +921,11 @@ export async function updateMany(
 						.where(eq(cols[SYSTEM_COLUMN_NAMES.PKEY], item.recordId))
 						.returning()
 				);
-				if (!record) throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: item.recordId }));
+				if (!record)
+					throw error(
+						404,
+						requestI18nOrDefault().t('pod.server.recordNotFound', { id: item.recordId })
+					);
 				out.push(record);
 			}
 			// Each row needs its own UPDATE (different values), but the feeds do not: emitting them
@@ -1080,10 +1084,12 @@ async function deleteManyUnguarded(
 		// stupidity:allow A6 -- delete hooks and permission checks must observe caller order.
 		for (const recordId of ids) {
 			// A repeated id names a row this very operation already removed.
-			if (seen.has(recordId)) throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
+			if (seen.has(recordId))
+				throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
 			seen.add(recordId);
 			const originalRecord = originals.get(recordId);
-			if (!originalRecord) throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
+			if (!originalRecord)
+				throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
 
 			const existingStamp = originalRecord[SYSTEM_COLUMN_NAMES.APPROVAL_ID];
 			if (typeof existingStamp === 'string' && existingStamp.length > 0) {

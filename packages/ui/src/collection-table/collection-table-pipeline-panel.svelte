@@ -60,7 +60,8 @@
 						<p class="text-sm font-medium">{pipeline.label}</p>
 						<Stack gap="sm">
 							<p class="text-xs leading-relaxed text-muted-foreground">
-								{pipeline.description ?? t('table.pipelineDescription', { label: pipeline.label, kind })}
+								{pipeline.description ??
+									t('table.pipelineDescription', { label: pipeline.label, kind })}
 							</p>
 							{#if reason}
 								<p class="text-xs leading-relaxed text-muted-foreground">{reason}</p>

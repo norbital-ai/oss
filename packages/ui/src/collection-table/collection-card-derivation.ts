@@ -269,7 +269,11 @@ export function humanizedSingular(collectionName: string): string {
 }
 
 /** The create-action label: an explicit override, else `New <humanized singular collection>`. */
-export function createActionLabel(collectionName: string, override?: string, t?: Translate): string {
+export function createActionLabel(
+	collectionName: string,
+	override?: string,
+	t?: Translate
+): string {
 	const singular = humanizedSingular(collectionName);
 	if (override) return override;
 	return t ? `${t('common.new')} ${singular}` : `New ${singular}`;

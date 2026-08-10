@@ -48,7 +48,10 @@ export class Guard {
 		return async (input) => {
 			const validation = await schema['~standard'].validate(input);
 			if (validation.issues?.length || !('value' in validation)) {
-				error(400, validation.issues?.[0]?.message ?? requestI18n().t('pod.server.invalidRemoteInput'));
+				error(
+					400,
+					validation.issues?.[0]?.message ?? requestI18n().t('pod.server.invalidRemoteInput')
+				);
 			}
 			return wrapped(validation.value);
 		};

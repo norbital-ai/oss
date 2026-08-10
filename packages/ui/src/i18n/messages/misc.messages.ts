@@ -8,8 +8,8 @@ import { defineMessages } from '@norbital-ai/std/i18n';
  * owned by the other message files (`common.*`, `table.*`, `kanban.*`,
  * `form.*`, `dataRenderer.*`).
  */
-export const miscMessages = defineMessages(
-	{
+export const miscMessages = defineMessages({
+	en: {
 		'misc.today': 'Today',
 		'misc.week': 'Week',
 		'misc.month': 'Month',
@@ -104,8 +104,7 @@ export const miscMessages = defineMessages(
 		'misc.previewLoadError': 'Error loading preview',
 		'misc.pdfPreview': 'PDF Preview',
 		'misc.pdfPreviewUnavailable': 'PDF preview not available. Please open in a new tab.',
-		'misc.csvParsingWarnings':
-			'{count} parsing warning(s) - some data may not display correctly',
+		'misc.csvParsingWarnings': '{count} parsing warning(s) - some data may not display correctly',
 		'misc.csvShowingRows': 'Showing first 50 rows of {count} rows',
 		'misc.noProgressSelected': 'No progress selected',
 		'misc.selectProgress': 'Select progress',
@@ -172,9 +171,13 @@ export const miscMessages = defineMessages(
 		'misc.emptyFolder': 'Empty folder',
 		'misc.failedToLoadFolder': 'Failed to load folder',
 		'misc.unnamed': '(unnamed)',
-		'misc.fileTypeNotAllowed': 'File type {type} is not allowed'
+		'misc.fileTypeNotAllowed': 'File type {type} is not allowed',
+		'misc.language': 'Language',
+		'misc.switchLocale': 'Switch to {locale}',
+		'misc.localeName.en': 'English',
+		'misc.localeName.zh': '中文'
 	},
-	{
+	zh: {
 		'misc.today': '今天',
 		'misc.week': '周',
 		'misc.month': '月',
@@ -335,6 +338,10 @@ export const miscMessages = defineMessages(
 		'misc.emptyFolder': '空文件夹',
 		'misc.failedToLoadFolder': '无法加载文件夹',
 		'misc.unnamed': '(未命名)',
-		'misc.fileTypeNotAllowed': '不允许文件类型 {type}'
+		'misc.fileTypeNotAllowed': '不允许文件类型 {type}',
+		'misc.language': '语言',
+		'misc.switchLocale': '切换到 {locale}',
+		'misc.localeName.en': 'English',
+		'misc.localeName.zh': '中文'
 	}
-);
+});

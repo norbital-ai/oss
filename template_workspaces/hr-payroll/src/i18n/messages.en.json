@@ -179,6 +179,9 @@
 	"app.scheduling.tab_holidays": "Holidays",
 	"app.scheduling.previous_month": "Previous month",
 	"app.scheduling.next_month": "Next month",
+	"app.scheduling.previous_page": "Previous people",
+	"app.scheduling.next_page": "Next people",
+	"app.scheduling.actions": "Collection actions",
 	"app.scheduling.search_people": "Search people",
 	"app.scheduling.search_people_placeholder": "Search people…",
 	"app.scheduling.clear": "Clear",
@@ -865,5 +868,14 @@
 	"component.workbook_imported": "Imported {count} {label} from {file}.",
 	"component.workbook_import_failed": "{file} could not be imported.",
 	"component.time_entries": "time entries",
-	"component.roster_rows": "roster rows"
+	"component.roster_rows": "roster rows",
+	"renderer.leave_entitlement.empty": "No entitlement layers — this leave type grants nothing until one is added.",
+	"renderer.leave_entitlement.add_placeholder": "Add an entitlement layer…",
+	"renderer.pay_component_policy.empty": "No statutory decisions — this component is charged against nothing.",
+	"renderer.pay_component_policy.add_placeholder": "Add a statutory decision…",
+	"renderer.component_definition.empty": "No cap layers — the schema requires at least one before this saves.",
+	"renderer.component_definition.add_placeholder": "Add a cap layer…",
+	"renderer.repayment_schedule.empty": "No repayment instalments.",
+	"app.hr_employee.employment_affiliation": " · Employee {number}",
+	"app.hr_employee.company_fallback": "Company"
 }

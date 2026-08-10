@@ -37,7 +37,17 @@ export default defineModel({ name: text().notNull() });`
 	<meta name="description" content="Home" />
 	<meta name="pod:icon" content="lucide:home" />
 </svelte:head>
-<p>Home</p>`
+<p>{t('home.greeting')}</p>`
+	);
+	await write(
+		root,
+		'src/i18n/messages.en.json',
+		JSON.stringify({ 'home.greeting': 'Welcome' }, null, '\t')
+	);
+	await write(
+		root,
+		'src/i18n/messages.zh.json',
+		JSON.stringify({ 'home.greeting': '欢迎' }, null, '\t')
 	);
 	return root;
 }

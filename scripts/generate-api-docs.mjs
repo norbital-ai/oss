@@ -124,26 +124,26 @@ function main() {
 			? parseModuleLinks(readmeMarkdown)
 			: listMarkdownFiles(path.join(packageRoot, entry.name))
 					.filter((filePath) => !filePath.endsWith('README.md'))
-						.map((filePath) => {
-							const slug = slugFromRelativePath(path.relative(OUTPUT_DIR, filePath));
-							const page = pagesBySlug.get(slug);
-							return (
-								page ?? {
-									title: path.basename(filePath, '.md'),
-									slug,
-									href: hrefFromSlug(slug)
-								}
-							);
-						})
-						.sort((left, right) => left.title.localeCompare(right.title));
+					.map((filePath) => {
+						const slug = slugFromRelativePath(path.relative(OUTPUT_DIR, filePath));
+						const page = pagesBySlug.get(slug);
+						return (
+							page ?? {
+								title: path.basename(filePath, '.md'),
+								slug,
+								href: hrefFromSlug(slug)
+							}
+						);
+					})
+					.sort((left, right) => left.title.localeCompare(right.title));
 
-			packages.push({
-				id: packageId,
-				title: packageId,
-				slug: packageSlug,
-				href: hrefFromSlug(packageSlug),
-				children
-			});
+		packages.push({
+			id: packageId,
+			title: packageId,
+			slug: packageSlug,
+			href: hrefFromSlug(packageSlug),
+			children
+		});
 	}
 
 	packages.sort((left, right) => left.title.localeCompare(right.title));

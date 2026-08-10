@@ -117,8 +117,7 @@ export async function channelAgentSpec(input: {
 	const systemPrompt = layerAuthoredPrompts(authored?.systemPrompt, input.standingInstruction);
 	const hostTools = [...(input.hostTools ?? [])];
 	const hostSandbox =
-		input.hostSandbox ??
-		(hostTools.length > 0 ? ({ workspace: 'read-only' } as const) : undefined);
+		input.hostSandbox ?? (hostTools.length > 0 ? ({ workspace: 'read-only' } as const) : undefined);
 	return {
 		kind: 'agent',
 		task: input.standingInstruction,

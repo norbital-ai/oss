@@ -123,7 +123,9 @@
 		snapToEnds = false
 	}: TMultiStepComboboxProps<TMultiple> = $props();
 
-	const ariaLabelSelectionsEffective = $derived(ariaLabelSelections ?? t('common.existingSelections'));
+	const ariaLabelSelectionsEffective = $derived(
+		ariaLabelSelections ?? t('common.existingSelections')
+	);
 	const ariaLabelListEffective = $derived(ariaLabelList ?? t('common.options'));
 
 	const normalizeValue = (input: TOutputValue<TMultiple> | null): TValueMap[] => {

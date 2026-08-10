@@ -67,7 +67,8 @@
 	{...attributes}
 >
 	{#if top}
-		<div class="min-w-0 shrink-0">{@render top()}</div>
+		<!-- Stack above the body so overlapping chrome (e.g. app banner icon) is not painted under. -->
+		<div class="relative z-10 min-w-0 shrink-0">{@render top()}</div>
 	{/if}
 	<!-- stupidity:allow UI5 -- the Cover primitive owns this clip region -->
 	<div class="min-h-0 min-w-0 overflow-clip">{@render children()}</div>

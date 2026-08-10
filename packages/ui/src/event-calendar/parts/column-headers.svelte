@@ -27,8 +27,7 @@
 			const colDate = getColumnDate(date, i);
 			result.push({
 				date: colDate,
-				label:
-					view === 'month' ? '' : colDate.toLocaleDateString(intlLocale, { weekday: 'short' }),
+				label: view === 'month' ? '' : colDate.toLocaleDateString(intlLocale, { weekday: 'short' }),
 				isToday: isSameDay(colDate, today),
 				isWeekend: isWeekend(colDate)
 			});

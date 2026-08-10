@@ -42,7 +42,9 @@
 		value={Array.isArray(pickerValue) ? pickerValue : []}
 		multi={true}
 		allowTime={field.kind === 'tstzrange'}
-		emptyPlaceholder={placeholder === valuePlaceholderText ? t('dataRenderer.pickDateRanges') : placeholder}
+		emptyPlaceholder={placeholder === valuePlaceholderText
+			? t('dataRenderer.pickDateRanges')
+			: placeholder}
 		{disabled}
 		class={className}
 		onValueChange={(next) => onValueChange?.(next)}
@@ -52,7 +54,9 @@
 		value={!Array.isArray(pickerValue) ? pickerValue : {}}
 		multi={false}
 		allowTime={field.kind === 'tstzrange'}
-		emptyPlaceholder={placeholder === valuePlaceholderText ? t('dataRenderer.pickDateRanges') : placeholder}
+		emptyPlaceholder={placeholder === valuePlaceholderText
+			? t('dataRenderer.pickDateRanges')
+			: placeholder}
 		{disabled}
 		class={className}
 		onValueChange={(next) => onValueChange?.(next)}

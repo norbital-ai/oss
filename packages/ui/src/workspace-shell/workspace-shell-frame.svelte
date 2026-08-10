@@ -87,7 +87,10 @@
 			shrink={false}
 			class="h-[calc(3.25rem+env(safe-area-inset-top))] border-b bg-background px-[max(0.75rem,env(safe-area-inset-left))] pt-[env(safe-area-inset-top)] md:hidden"
 		>
-			<Sidebar.Trigger aria-label={t('misc.openNavigation', { navigation: navigationLabel.toLowerCase() })} class="size-11" />
+			<Sidebar.Trigger
+				aria-label={t('misc.openNavigation', { navigation: navigationLabel.toLowerCase() })}
+				class="size-11"
+			/>
 			<p class="min-w-0 flex-1 truncate text-sm font-medium">{mobileTitle}</p>
 			{#if mobileActions}
 				<Inline gap="xs" shrink={false}>{@render mobileActions()}</Inline>

@@ -65,8 +65,7 @@ describe('pgvector findNearest', () => {
 
 		const tenantDb: TenantDbClient = {
 			query: async (textOrConfig, params) => {
-				const text =
-					typeof textOrConfig === 'string' ? textOrConfig : (textOrConfig.text ?? '');
+				const text = typeof textOrConfig === 'string' ? textOrConfig : (textOrConfig.text ?? '');
 				const values =
 					typeof textOrConfig === 'string'
 						? params

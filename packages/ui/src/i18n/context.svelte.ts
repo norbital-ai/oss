@@ -4,7 +4,7 @@ import {
 	type LocaleCatalogs,
 	type KeysOf,
 	type MessageVars,
-	INTL_LOCALE,
+	intlLocale,
 	pickLocale,
 	storedLocale,
 	storeLocale,
@@ -17,11 +17,13 @@ import { uiMessages, type UiKeys } from './messages/index.js';
 export interface I18nApi<Keys extends string = string> {
 	/** The active application locale. */
 	readonly locale: Locale;
+	/** The locale order the catalogs ship (toggle order, primary first). */
+	readonly locales: readonly string[];
 	/** The `Intl.*` locale string for the active locale (`en-US` / `zh-CN`). */
 	readonly intlLocale: string;
 	/** Translate a typed key, with `{placeholder}` interpolation. */
 	readonly t: (key: Keys, vars?: MessageVars) => string;
-	/** True when the key exists in either locale of the catalog pair. */
+	/** True when the key exists in any locale of the catalog set. */
 	has(key: string): boolean;
 	/** Switch the active locale; persists the choice and sets `<html lang>`. */
 	setLocale(locale: Locale): void;
@@ -46,7 +48,7 @@ class I18nState<C extends LocaleCatalogs> {
 	t = (key: KeysOf<C>, vars?: MessageVars): string =>
 		translate(this.#catalogs, this.locale, key, vars);
 
-	has = (key: string): boolean => key in this.#catalogs.en || key in this.#catalogs.zh;
+	has = (key: string): boolean => Object.values(this.#catalogs).some((catalog) => key in catalog);
 
 	setLocale(next: Locale): void {
 		if (next === this.locale) return;
@@ -55,8 +57,12 @@ class I18nState<C extends LocaleCatalogs> {
 		setHtmlLang(next);
 	}
 
+	get locales(): readonly string[] {
+		return Object.keys(this.#catalogs);
+	}
+
 	get intlLocale(): string {
-		return INTL_LOCALE[this.locale];
+		return intlLocale(this.locale);
 	}
 }
 

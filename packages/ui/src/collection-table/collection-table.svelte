@@ -207,9 +207,7 @@
 	});
 
 	const metadataError = $derived(
-		activeColumns.length === 0
-			? t('table.metadataError', { collection: String(collection) })
-			: ''
+		activeColumns.length === 0 ? t('table.metadataError', { collection: String(collection) }) : ''
 	);
 
 	function metadataFor(column: ColumnConfig): CollectionField<Extract<keyof Row, string>> {
@@ -258,7 +256,6 @@
 					enablePinning: column.pinnable ?? true,
 					enableSelection: effectiveSelectable
 				};
-
 			}),
 			effectiveSelectable,
 			t as Translate
@@ -319,7 +316,12 @@
 
 	function autoCardTitle(record: Row): string {
 		if (autoCard.title.kind === 'field') {
-			const text = formatAutoCardField(definition.fields, autoCard.title.name, record, t as Translate);
+			const text = formatAutoCardField(
+				definition.fields,
+				autoCard.title.name,
+				record,
+				t as Translate
+			);
 			if (text && text !== '—') return text;
 		}
 		return recordTitle(record);
@@ -611,7 +613,12 @@
 			(field) => !isSystemField(field.name) && field.kind !== 'uuid' && !field.name.endsWith('_id')
 		);
 		const fallback = fallbackField
-			? formatDataValue(fallbackField, Reflect.get(record, fallbackField.name), undefined, t as Translate)
+			? formatDataValue(
+					fallbackField,
+					Reflect.get(record, fallbackField.name),
+					undefined,
+					t as Translate
+				)
 			: '';
 		return fallback && fallback !== '—' ? fallback : humanize(String(collection));
 	}
@@ -626,7 +633,9 @@
 					field.kind !== 'uuid' &&
 					!field.name.endsWith('_id')
 			)
-			.map((field) => formatDataValue(field, Reflect.get(record, field.name), undefined, t as Translate))
+			.map((field) =>
+				formatDataValue(field, Reflect.get(record, field.name), undefined, t as Translate)
+			)
 			.find((value) => value && value !== '—');
 		return fallback ?? t('table.recordDescription', { name: humanize(String(collection)) });
 	}
@@ -651,45 +660,45 @@
 	function describeFilters(where: unknown): string[] {
 		if (Array.isArray(where)) return where.flatMap(describeFilters);
 		if (typeof where !== 'object' || where == null) return [];
-	return Object.entries(where).flatMap(([fieldName, condition]) => {
-		if (fieldName === 'AND') return describeFilters(condition);
-		if (fieldName === 'OR') {
-			const alternatives = describeFilters(condition);
-			return alternatives.length > 0
-				? [t('table.filterAnyOf', { values: alternatives.join('; ') })]
-				: [];
-		}
-		if (fieldName === 'NOT')
-			return describeFilters(condition).map((label) => t('table.filterNot', { label }));
-		const field = definition.fields.find((candidate) => candidate.name === fieldName);
-		const label = field?.label ?? humanize(fieldName);
-		if (typeof condition !== 'object' || condition == null || Array.isArray(condition)) {
-			return [t('table.filterIs', { label, value: formatFilterValue(condition) })];
-		}
-		return Object.entries(condition).map(([operator, operand]) => {
-			switch (operator) {
-				case 'ilike':
-				case 'contains_date':
-					return t('table.filterContains', { label, value: formatFilterValue(operand) });
-				case 'ne':
-					return t('table.filterIsNot', { label, value: formatFilterValue(operand) });
-				case 'gt':
-					return t('table.filterGreaterThan', { label, value: formatFilterValue(operand) });
-				case 'gte':
-					return t('table.filterAtLeast', { label, value: formatFilterValue(operand) });
-				case 'lt':
-					return t('table.filterLessThan', { label, value: formatFilterValue(operand) });
-				case 'lte':
-					return t('table.filterAtMost', { label, value: formatFilterValue(operand) });
-				case 'isNull':
-					return t('table.filterIsEmpty', { label });
-				case 'isNotNull':
-					return t('table.filterIsNotEmpty', { label });
-				default:
-					return t('table.filterIs', { label, value: formatFilterValue(operand) });
+		return Object.entries(where).flatMap(([fieldName, condition]) => {
+			if (fieldName === 'AND') return describeFilters(condition);
+			if (fieldName === 'OR') {
+				const alternatives = describeFilters(condition);
+				return alternatives.length > 0
+					? [t('table.filterAnyOf', { values: alternatives.join('; ') })]
+					: [];
 			}
+			if (fieldName === 'NOT')
+				return describeFilters(condition).map((label) => t('table.filterNot', { label }));
+			const field = definition.fields.find((candidate) => candidate.name === fieldName);
+			const label = field?.label ?? humanize(fieldName);
+			if (typeof condition !== 'object' || condition == null || Array.isArray(condition)) {
+				return [t('table.filterIs', { label, value: formatFilterValue(condition) })];
+			}
+			return Object.entries(condition).map(([operator, operand]) => {
+				switch (operator) {
+					case 'ilike':
+					case 'contains_date':
+						return t('table.filterContains', { label, value: formatFilterValue(operand) });
+					case 'ne':
+						return t('table.filterIsNot', { label, value: formatFilterValue(operand) });
+					case 'gt':
+						return t('table.filterGreaterThan', { label, value: formatFilterValue(operand) });
+					case 'gte':
+						return t('table.filterAtLeast', { label, value: formatFilterValue(operand) });
+					case 'lt':
+						return t('table.filterLessThan', { label, value: formatFilterValue(operand) });
+					case 'lte':
+						return t('table.filterAtMost', { label, value: formatFilterValue(operand) });
+					case 'isNull':
+						return t('table.filterIsEmpty', { label });
+					case 'isNotNull':
+						return t('table.filterIsNotEmpty', { label });
+					default:
+						return t('table.filterIs', { label, value: formatFilterValue(operand) });
+				}
+			});
 		});
-	});
 	}
 
 	async function processApproval(
@@ -1231,33 +1240,33 @@
 	</Sheet.Content>
 </Sheet.Root>
 
-	<Dialog.Root open={changeRequestOpen} onOpenChange={(open) => !open && closeChangeRequest()}>
-		<Dialog.Content class="max-w-md">
-			<Dialog.Header>
-				<Dialog.Title>{t('table.requestChanges')}</Dialog.Title>
-				<Dialog.Description>{t('table.requestChangesDescription')}</Dialog.Description>
-			</Dialog.Header>
-			<label class="grid gap-1.5 text-sm font-medium">
-				{t('table.changeRequestReason')}
-				<Textarea
-					value={changeRequestReason}
-					placeholder={t('table.describeChangesPlaceholder')}
-					maxlength={1000}
-					required
-					oninput={(event) => updateChangeRequestReason(event.currentTarget.value)}
-				/>
-			</label>
-			<Dialog.Footer>
-				<Dialog.Close disabled={approvalActionPending}>{t('common.cancel')}</Dialog.Close>
-				<Button
-					disabled={approvalActionPending || changeRequestReason.trim().length === 0}
-					onclick={() => void requestChanges()}
-				>
-					{approvalActionPending ? t('table.requesting') : t('table.requestChanges')}
-				</Button>
-			</Dialog.Footer>
-		</Dialog.Content>
-	</Dialog.Root>
+<Dialog.Root open={changeRequestOpen} onOpenChange={(open) => !open && closeChangeRequest()}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>{t('table.requestChanges')}</Dialog.Title>
+			<Dialog.Description>{t('table.requestChangesDescription')}</Dialog.Description>
+		</Dialog.Header>
+		<label class="grid gap-1.5 text-sm font-medium">
+			{t('table.changeRequestReason')}
+			<Textarea
+				value={changeRequestReason}
+				placeholder={t('table.describeChangesPlaceholder')}
+				maxlength={1000}
+				required
+				oninput={(event) => updateChangeRequestReason(event.currentTarget.value)}
+			/>
+		</label>
+		<Dialog.Footer>
+			<Dialog.Close disabled={approvalActionPending}>{t('common.cancel')}</Dialog.Close>
+			<Button
+				disabled={approvalActionPending || changeRequestReason.trim().length === 0}
+				onclick={() => void requestChanges()}
+			>
+				{approvalActionPending ? t('table.requesting') : t('table.requestChanges')}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <style>
 	/* These classes are forwarded to child-component roots. They must be global:

@@ -1,6 +1,6 @@
 # Field Operations
 
-![Field Operations workspace banner](assets/banner.svg)
+![Field Operations workspace thumbnail](assets/thumbnail.svg)
 
 Field Operations manages field-service work from scheduled site job through contractor dispatch, field progress,
 variation request, and evidence capture. It is a deliberately focused construction-operations template:

@@ -139,5 +139,18 @@
 	"component.status_flagged": "Flagged",
 	"component.loading": "Loading…",
 	"component.loading_job": "Loading job",
-	"component.loading_photo_evidence": "Loading photographic evidence"
+	"component.loading_photo_evidence": "Loading photographic evidence",
+	"app.field_ops_controller.download_roster_template": "Download roster template",
+	"app.field_ops_controller.import_weekly_roster": "Import weekly roster",
+	"app.field_ops_controller.importing_roster": "Importing roster…",
+	"app.field_ops_controller.roster_imported": "Imported {count} assignment(s) from the roster.",
+	"app.field_ops_controller.roster_import_failed": "The roster could not be imported.",
+	"app.field_ops_controller.suspect_scrutiny_title": "{count} suspect assignment(s) this month",
+	"app.field_ops_controller.no_suspect_assignments": "No suspect assignments this month.",
+	"app.field_ops_controller.jobs_scheduled_on": "Jobs scheduled on {date}",
+	"app.field_ops_controller.jobs_scheduled_description": "Every job on this dispatch date, including work that still needs a contractor. Scheduling a new job opens the job form.",
+	"app.field_ops_controller.search_jobs_on_date": "Search jobs on this date…",
+	"component.status": "Status",
+	"component.status_suspect": "Suspect",
+	"component.status_assigned": "Assigned"
 }

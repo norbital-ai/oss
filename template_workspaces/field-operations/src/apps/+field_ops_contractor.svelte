@@ -4,8 +4,7 @@
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Bound, Cover } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
+	import { Bound } from '@norbital-ai/ui/layout';
 
 	const { t } = useI18n<TenantI18nKeys>();
 
@@ -14,7 +13,6 @@
 		where: { user_id: { eq: user.norbital_id } },
 		limit: 1
 	});
-	const contractor = $derived(contractorQuery.current?.[0]);
 	const jobsQuery = client.db.jobs.findMany({
 		orderBy: { scheduled_for: 'desc' },
 		limit: 250
@@ -40,52 +38,65 @@
 	/>
 </svelte:head>
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.field_ops_contractor.eyebrow')}
-		title={contractor?.company_name ?? t('app.field_ops_contractor.header_title')}
-		description={t('app.field_ops_contractor.header_description')}
-	/>
-{/snippet}
-
-<Cover as="main" top={pageHeading}>
-	<Bound size="full" inset>
-		{#if contractorQuery.error}
-			<p class="text-sm text-destructive">
-				{t('app.field_ops_contractor.profile_load_failed')}
-			</p>
-		{:else if contractorQuery.loading}
-			<div
-				class="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse"
-				aria-label={t('component.loading')}
-			></div>
-		{:else}
-			<CollectionTable
-				{client}
-				collection="job_assignments"
-				title={t('app.field_ops_contractor.dispatched_jobs')}
-				description={t('app.field_ops_contractor.dispatched_jobs_description')}
-				query={{ orderBy: { dispatched_at: 'desc' } }}
-			>
-				{#snippet columns({ Column })}
-					<Column
-						name="job_id"
-						label={t('component.job_site_date')}
-						minWidth={360}
-						card="title"
-						render={({ row }) => {
+<!-- App identity (title/description/icon) is rendered by the shell AppMediaHeader. -->
+<Bound as="main" size="full" inset>
+	{#if contractorQuery.error}
+		<p class="text-sm text-destructive">
+			{t('app.field_ops_contractor.profile_load_failed')}
+		</p>
+	{:else if contractorQuery.loading}
+		<div
+			class="h-48 rounded-md bg-muted/50 motion-safe:animate-pulse"
+			aria-label={t('component.loading')}
+		></div>
+	{:else}
+		<CollectionTable
+			{client}
+			collection="job_assignments"
+			title={t('app.field_ops_contractor.dispatched_jobs')}
+			description={t('app.field_ops_contractor.dispatched_jobs_description')}
+			query={{ orderBy: { dispatched_at: 'desc' } }}
+		>
+			{#snippet columns({ Column })}
+				<Column
+					name="job_id"
+					label={t('component.job_site_date')}
+					minWidth={360}
+					card="title"
+					render={({ row }) => {
+						const job = jobById.get(row.job_id);
+						return job
+							? `${job.title} · ${siteById.get(job.site_id) ?? '—'} · ${job.scheduled_for}`
+							: t('component.job');
+					}}
+				/>
+				<Column name="dispatched_at" label={t('component.dispatched')} />
+				<Column
+					name="status"
+					card="badge"
+					render={({ row, value }) => {
+						// The contractor sees their assignment's progress, never the controller-only
+						// integrity overlay: a `suspect` row reads as the linked job's own progression,
+						// which the assignment hooks keep in lockstep for every non-flagged path.
+						if (value === 'suspect') {
 							const job = jobById.get(row.job_id);
-							return job
-								? `${job.title} · ${siteById.get(job.site_id) ?? '—'} · ${job.scheduled_for}`
-								: t('component.job');
-						}}
-					/>
-					<Column name="dispatched_at" label={t('component.dispatched')} />
-					<Column name="status" card="badge" />
-					<Column name="location" label={t('component.reported_location')} minWidth={220} />
-					<Column name="summary" card="subtitle" minWidth={200} />
-				{/snippet}
-			</CollectionTable>
-		{/if}
-	</Bound>
-</Cover>
+							switch (job?.status) {
+								case 'assigned':
+									return t('component.status_assigned');
+								case 'in_progress':
+									return t('component.status_in_progress');
+								case 'completed':
+									return t('component.status_completed');
+								default:
+									return '—';
+							}
+						}
+						return typeof value === 'string' ? value : '—';
+					}}
+				/>
+				<Column name="location" label={t('component.reported_location')} minWidth={220} />
+				<Column name="summary" card="subtitle" minWidth={200} />
+			{/snippet}
+		</CollectionTable>
+	{/if}
+</Bound>

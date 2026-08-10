@@ -93,14 +93,20 @@ export interface DiscoveredSkill {
 /**
  * Tenant translation overrides, authored under `src/i18n/`.
  *
- * The tenant supplies its own copy for the supported locales; the platform
- * catalogs (pod chrome + `@norbital-ai/ui`) are merged underneath at build
- * time, so these files only need to name what the workspace changes or adds.
+ * The tenant supplies its own copy for every supported locale
+ * (`messages.<locale>.json`, one file per entry in `SUPPORTED_LOCALES`); the
+ * platform catalogs (pod chrome + `@norbital-ai/ui`) are merged underneath at
+ * build time, so these files only need to name what the workspace changes or
+ * adds. The primary locale (English) is the source of truth.
  */
 export interface DiscoveredI18n {
 	/** True when `src/i18n/` exists at all. */
 	readonly present: boolean;
-	/** `src/i18n/messages.en.json`, when present and valid. */
+	/** The per-locale catalogs, keyed by locale code, when present and valid. */
+	readonly catalogs: Readonly<Record<string, Readonly<Record<string, string>> | null>>;
+	/** The primary (source-of-truth) locale the parity checks run against. */
+	readonly primary: string;
+	/** `src/i18n/messages.<locale>.json`, when present and valid. */
 	readonly en: Readonly<Record<string, string>> | null;
 	/** `src/i18n/messages.zh.json`, when present and valid. */
 	readonly zh: Readonly<Record<string, string>> | null;

@@ -312,8 +312,8 @@
 					<EffectiveLayerList
 						layers={cap.matrix.layers}
 						{disabled}
-						emptyMessage="No cap layers — the schema requires at least one before this saves."
-						addPlaceholder="Add a cap layer…"
+						emptyMessage={t('renderer.component_definition.empty')}
+						addPlaceholder={t('renderer.component_definition.add_placeholder')}
 						additions={[
 							{
 								value: 'STATUTORY',

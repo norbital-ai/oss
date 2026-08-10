@@ -150,7 +150,10 @@
 			clearCompletedUploadEntries();
 		} catch (error) {
 			if ((error as Error).name !== 'AbortError') {
-				onUploadError?.(error instanceof Error ? error.message : t('dataRenderer.uploadFailed'), item.file);
+				onUploadError?.(
+					error instanceof Error ? error.message : t('dataRenderer.uploadFailed'),
+					item.file
+				);
 			}
 		}
 	}
@@ -222,7 +225,9 @@
 									{t('misc.upToFiles', { count: maxFiles })}
 								{/if}
 								{#if maxFileSize}
-									{maxFiles ? ' • ' : ''}{t('misc.maxSizeEach', { size: formatFileSize(maxFileSize) })}
+									{maxFiles ? ' • ' : ''}{t('misc.maxSizeEach', {
+										size: formatFileSize(maxFileSize)
+									})}
 								{/if}
 								{#if accept.length > 0}
 									{maxFiles || maxFileSize ? ' • ' : ''}
@@ -237,7 +242,9 @@
 			{:else}
 				<Stack gap="none" fill>
 					<Inline gap="sm" justify="between" class="border-b border-border px-3 py-2">
-						<span class="text-xs text-secondary-foreground">{t('misc.totalFiles', { count: allFiles.length })}</span>
+						<span class="text-xs text-secondary-foreground"
+							>{t('misc.totalFiles', { count: allFiles.length })}</span
+						>
 						{#if canUpload}
 							<button
 								type="button"

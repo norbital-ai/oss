@@ -1,6 +1,6 @@
 [**Norbital API Reference v0.0.1**](../README.md)
 
-***
+---
 
 [Norbital API Reference](/docs/api-reference/README.md) / std/build
 
@@ -26,7 +26,7 @@ Defined in: packages/std/build/text/dedent/index.d.ts:1
 
 Re-exports [addAmount](/docs/api-reference/std/build/finance/money.md#addamount)
 
-***
+---
 
 <a id="allsettled"></a>
 
@@ -34,7 +34,7 @@ Re-exports [addAmount](/docs/api-reference/std/build/finance/money.md#addamount)
 
 Re-exports [allSettled](/docs/api-reference/std/build/async.md#allsettled)
 
-***
+---
 
 <a id="amount"></a>
 
@@ -42,7 +42,7 @@ Re-exports [allSettled](/docs/api-reference/std/build/async.md#allsettled)
 
 Re-exports [amount](/docs/api-reference/std/build/finance/money.md#amount)
 
-***
+---
 
 <a id="assertsamecurrency"></a>
 
@@ -50,7 +50,7 @@ Re-exports [amount](/docs/api-reference/std/build/finance/money.md#amount)
 
 Re-exports [assertSameCurrency](/docs/api-reference/std/build/finance/money.md#assertsamecurrency)
 
-***
+---
 
 <a id="batchcollectfn"></a>
 
@@ -58,7 +58,7 @@ Re-exports [assertSameCurrency](/docs/api-reference/std/build/finance/money.md#a
 
 Re-exports [BatchCollectFn](/docs/api-reference/std/build/async/batch.md#batchcollectfn)
 
-***
+---
 
 <a id="batchcontext"></a>
 
@@ -66,7 +66,7 @@ Re-exports [BatchCollectFn](/docs/api-reference/std/build/async/batch.md#batchco
 
 Re-exports [BatchContext](/docs/api-reference/std/build/async/batch.md#batchcontext)
 
-***
+---
 
 <a id="batchoperation"></a>
 
@@ -74,7 +74,7 @@ Re-exports [BatchContext](/docs/api-reference/std/build/async/batch.md#batchcont
 
 Re-exports [batchOperation](/docs/api-reference/std/build/async/batch.md#batchoperation)
 
-***
+---
 
 <a id="batchoperationflatoptions"></a>
 
@@ -82,7 +82,7 @@ Re-exports [batchOperation](/docs/api-reference/std/build/async/batch.md#batchop
 
 Re-exports [BatchOperationFlatOptions](/docs/api-reference/std/build/async/batch.md#batchoperationflatoptions)
 
-***
+---
 
 <a id="batchoperationmapoptions"></a>
 
@@ -90,7 +90,7 @@ Re-exports [BatchOperationFlatOptions](/docs/api-reference/std/build/async/batch
 
 Re-exports [BatchOperationMapOptions](/docs/api-reference/std/build/async/batch.md#batchoperationmapoptions)
 
-***
+---
 
 <a id="batchoperationoptions"></a>
 
@@ -98,7 +98,7 @@ Re-exports [BatchOperationMapOptions](/docs/api-reference/std/build/async/batch.
 
 Re-exports [BatchOperationOptions](/docs/api-reference/std/build/async/batch.md#batchoperationoptions)
 
-***
+---
 
 <a id="batchoperationresult"></a>
 
@@ -106,7 +106,7 @@ Re-exports [BatchOperationOptions](/docs/api-reference/std/build/async/batch.md#
 
 Re-exports [BatchOperationResult](/docs/api-reference/std/build/async/batch.md#batchoperationresult)
 
-***
+---
 
 <a id="batchrunfn"></a>
 
@@ -114,7 +114,7 @@ Re-exports [BatchOperationResult](/docs/api-reference/std/build/async/batch.md#b
 
 Re-exports [BatchRunFn](/docs/api-reference/std/build/async/batch.md#batchrunfn)
 
-***
+---
 
 <a id="batchsource"></a>
 
@@ -122,7 +122,7 @@ Re-exports [BatchRunFn](/docs/api-reference/std/build/async/batch.md#batchrunfn)
 
 Re-exports [BatchSource](/docs/api-reference/std/build/async/batch.md#batchsource)
 
-***
+---
 
 <a id="batchsourceitem"></a>
 
@@ -130,7 +130,7 @@ Re-exports [BatchSource](/docs/api-reference/std/build/async/batch.md#batchsourc
 
 Re-exports [BatchSourceItem](/docs/api-reference/std/build/async/batch.md#batchsourceitem)
 
-***
+---
 
 <a id="currencyfractiondigits"></a>
 
@@ -138,7 +138,7 @@ Re-exports [BatchSourceItem](/docs/api-reference/std/build/async/batch.md#batchs
 
 Re-exports [currencyFractionDigits](/docs/api-reference/std/build/finance/currency.md#currencyfractiondigits)
 
-***
+---
 
 <a id="dedup"></a>
 
@@ -146,7 +146,7 @@ Re-exports [currencyFractionDigits](/docs/api-reference/std/build/finance/curren
 
 Re-exports [dedup](/docs/api-reference/std/build/cache.md#dedup)
 
-***
+---
 
 <a id="deepdiff"></a>
 
@@ -154,7 +154,7 @@ Re-exports [dedup](/docs/api-reference/std/build/cache.md#dedup)
 
 Re-exports [deepDiff](/docs/api-reference/std/build/json.md#deepdiff)
 
-***
+---
 
 <a id="delay"></a>
 
@@ -162,7 +162,7 @@ Re-exports [deepDiff](/docs/api-reference/std/build/json.md#deepdiff)
 
 Re-exports [delay](/docs/api-reference/std/build/async.md#delay)
 
-***
+---
 
 <a id="errorsummary"></a>
 
@@ -170,7 +170,7 @@ Re-exports [delay](/docs/api-reference/std/build/async.md#delay)
 
 Re-exports [ErrorSummary](/docs/api-reference/std/build/error.md#errorsummary)
 
-***
+---
 
 <a id="evaluatecelexpression"></a>
 
@@ -178,7 +178,7 @@ Re-exports [ErrorSummary](/docs/api-reference/std/build/error.md#errorsummary)
 
 Re-exports [evaluateCelExpression](/docs/api-reference/std/build/cel.md#evaluatecelexpression)
 
-***
+---
 
 <a id="failure"></a>
 
@@ -186,7 +186,7 @@ Re-exports [evaluateCelExpression](/docs/api-reference/std/build/cel.md#evaluate
 
 Re-exports [failure](/docs/api-reference/std/build/result/outcome.md#failure)
 
-***
+---
 
 <a id="flattentreeoptions"></a>
 
@@ -194,7 +194,7 @@ Re-exports [failure](/docs/api-reference/std/build/result/outcome.md#failure)
 
 Re-exports [flattenTreeOptions](/docs/api-reference/std/build/tree.md#flattentreeoptions)
 
-***
+---
 
 <a id="formatamount"></a>
 
@@ -202,7 +202,7 @@ Re-exports [flattenTreeOptions](/docs/api-reference/std/build/tree.md#flattentre
 
 Re-exports [formatAmount](/docs/api-reference/std/build/finance/money.md#formatamount)
 
-***
+---
 
 <a id="fromminorunits"></a>
 
@@ -210,7 +210,7 @@ Re-exports [formatAmount](/docs/api-reference/std/build/finance/money.md#formata
 
 Re-exports [fromMinorUnits](/docs/api-reference/std/build/finance/money.md#fromminorunits)
 
-***
+---
 
 <a id="geterrormessage"></a>
 
@@ -218,7 +218,7 @@ Re-exports [fromMinorUnits](/docs/api-reference/std/build/finance/money.md#fromm
 
 Re-exports [getErrorMessage](/docs/api-reference/std/build/error.md#geterrormessage)
 
-***
+---
 
 <a id="humanize"></a>
 
@@ -226,7 +226,7 @@ Re-exports [getErrorMessage](/docs/api-reference/std/build/error.md#geterrormess
 
 Re-exports [humanize](/docs/api-reference/std/build/string.md#humanize)
 
-***
+---
 
 <a id="isfailure"></a>
 
@@ -234,7 +234,7 @@ Re-exports [humanize](/docs/api-reference/std/build/string.md#humanize)
 
 Re-exports [isFailure](/docs/api-reference/std/build/result/outcome.md#isfailure)
 
-***
+---
 
 <a id="iso_currency"></a>
 
@@ -242,7 +242,7 @@ Re-exports [isFailure](/docs/api-reference/std/build/result/outcome.md#isfailure
 
 Re-exports [ISO_CURRENCY](/docs/api-reference/std/build/finance/currency.md#iso_currency)
 
-***
+---
 
 <a id="issuccess"></a>
 
@@ -250,7 +250,7 @@ Re-exports [ISO_CURRENCY](/docs/api-reference/std/build/finance/currency.md#iso_
 
 Re-exports [isSuccess](/docs/api-reference/std/build/result/outcome.md#issuccess)
 
-***
+---
 
 <a id="isvalidcurrencycode"></a>
 
@@ -258,7 +258,7 @@ Re-exports [isSuccess](/docs/api-reference/std/build/result/outcome.md#issuccess
 
 Re-exports [isValidCurrencyCode](/docs/api-reference/std/build/finance/currency.md#isvalidcurrencycode)
 
-***
+---
 
 <a id="itemsbatchsource"></a>
 
@@ -266,7 +266,7 @@ Re-exports [isValidCurrencyCode](/docs/api-reference/std/build/finance/currency.
 
 Re-exports [ItemsBatchSource](/docs/api-reference/std/build/async/batch.md#itemsbatchsource)
 
-***
+---
 
 <a id="itemssource"></a>
 
@@ -274,7 +274,7 @@ Re-exports [ItemsBatchSource](/docs/api-reference/std/build/async/batch.md#items
 
 Re-exports [itemsSource](/docs/api-reference/std/build/async/batch.md#itemssource)
 
-***
+---
 
 <a id="jsonpatchoperation"></a>
 
@@ -282,7 +282,7 @@ Re-exports [itemsSource](/docs/api-reference/std/build/async/batch.md#itemssourc
 
 Re-exports [JsonPatchOperation](/docs/api-reference/std/build/json.md#jsonpatchoperation)
 
-***
+---
 
 <a id="lru"></a>
 
@@ -290,7 +290,7 @@ Re-exports [JsonPatchOperation](/docs/api-reference/std/build/json.md#jsonpatcho
 
 Re-exports [lru](/docs/api-reference/std/build/cache.md#lru)
 
-***
+---
 
 <a id="lrucache"></a>
 
@@ -298,7 +298,7 @@ Re-exports [lru](/docs/api-reference/std/build/cache.md#lru)
 
 Re-exports [LruCache](/docs/api-reference/std/build/cache.md#lrucache)
 
-***
+---
 
 <a id="lrucacheoptions"></a>
 
@@ -306,7 +306,7 @@ Re-exports [LruCache](/docs/api-reference/std/build/cache.md#lrucache)
 
 Re-exports [LruCacheOptions](/docs/api-reference/std/build/cache.md#lrucacheoptions)
 
-***
+---
 
 <a id="moneyamount"></a>
 
@@ -314,7 +314,7 @@ Re-exports [LruCacheOptions](/docs/api-reference/std/build/cache.md#lrucacheopti
 
 Re-exports [MoneyAmount](/docs/api-reference/std/build/finance/money.md#moneyamount)
 
-***
+---
 
 <a id="outcome"></a>
 
@@ -322,7 +322,7 @@ Re-exports [MoneyAmount](/docs/api-reference/std/build/finance/money.md#moneyamo
 
 Re-exports [Outcome](/docs/api-reference/std/build/result/outcome.md#outcome)
 
-***
+---
 
 <a id="paginatedbatchsource"></a>
 
@@ -330,7 +330,7 @@ Re-exports [Outcome](/docs/api-reference/std/build/result/outcome.md#outcome)
 
 Re-exports [PaginatedBatchSource](/docs/api-reference/std/build/async/batch.md#paginatedbatchsource)
 
-***
+---
 
 <a id="paginatedsource"></a>
 
@@ -338,7 +338,7 @@ Re-exports [PaginatedBatchSource](/docs/api-reference/std/build/async/batch.md#p
 
 Re-exports [paginatedSource](/docs/api-reference/std/build/async/batch.md#paginatedsource)
 
-***
+---
 
 <a id="rendertreeascii"></a>
 
@@ -346,7 +346,7 @@ Re-exports [paginatedSource](/docs/api-reference/std/build/async/batch.md#pagina
 
 Re-exports [renderTreeAscii](/docs/api-reference/std/build/tree.md#rendertreeascii)
 
-***
+---
 
 <a id="safeparse"></a>
 
@@ -354,7 +354,7 @@ Re-exports [renderTreeAscii](/docs/api-reference/std/build/tree.md#rendertreeasc
 
 Re-exports [safeParse](/docs/api-reference/std/build/json.md#safeparse)
 
-***
+---
 
 <a id="safestringify"></a>
 
@@ -362,7 +362,7 @@ Re-exports [safeParse](/docs/api-reference/std/build/json.md#safeparse)
 
 Re-exports [safeStringify](/docs/api-reference/std/build/json.md#safestringify)
 
-***
+---
 
 <a id="settledresult"></a>
 
@@ -370,7 +370,7 @@ Re-exports [safeStringify](/docs/api-reference/std/build/json.md#safestringify)
 
 Re-exports [SettledResult](/docs/api-reference/std/build/async.md#settledresult)
 
-***
+---
 
 <a id="success"></a>
 
@@ -378,7 +378,7 @@ Re-exports [SettledResult](/docs/api-reference/std/build/async.md#settledresult)
 
 Re-exports [success](/docs/api-reference/std/build/result/outcome.md#success)
 
-***
+---
 
 <a id="sumamounts"></a>
 
@@ -386,7 +386,7 @@ Re-exports [success](/docs/api-reference/std/build/result/outcome.md#success)
 
 Re-exports [sumAmounts](/docs/api-reference/std/build/finance/money.md#sumamounts)
 
-***
+---
 
 <a id="summarizeerror"></a>
 
@@ -394,7 +394,7 @@ Re-exports [sumAmounts](/docs/api-reference/std/build/finance/money.md#sumamount
 
 Re-exports [summarizeError](/docs/api-reference/std/build/error.md#summarizeerror)
 
-***
+---
 
 <a id="tisocurrencycode"></a>
 
@@ -402,7 +402,7 @@ Re-exports [summarizeError](/docs/api-reference/std/build/error.md#summarizeerro
 
 Re-exports [TISOCurrencyCode](/docs/api-reference/std/build/finance/currency.md#tisocurrencycode)
 
-***
+---
 
 <a id="toasciitree"></a>
 
@@ -410,7 +410,7 @@ Re-exports [TISOCurrencyCode](/docs/api-reference/std/build/finance/currency.md#
 
 Re-exports [toAsciiTree](/docs/api-reference/std/build/tree.md#toasciitree)
 
-***
+---
 
 <a id="tominorunits"></a>
 
@@ -418,7 +418,7 @@ Re-exports [toAsciiTree](/docs/api-reference/std/build/tree.md#toasciitree)
 
 Re-exports [toMinorUnits](/docs/api-reference/std/build/finance/money.md#tominorunits)
 
-***
+---
 
 <a id="treebuildindex"></a>
 
@@ -426,7 +426,7 @@ Re-exports [toMinorUnits](/docs/api-reference/std/build/finance/money.md#tominor
 
 Re-exports [treeBuildIndex](/docs/api-reference/std/build/tree.md#treebuildindex)
 
-***
+---
 
 <a id="treefilterleaves"></a>
 
@@ -434,7 +434,7 @@ Re-exports [treeBuildIndex](/docs/api-reference/std/build/tree.md#treebuildindex
 
 Re-exports [treeFilterLeaves](/docs/api-reference/std/build/tree.md#treefilterleaves)
 
-***
+---
 
 <a id="treefind"></a>
 
@@ -442,7 +442,7 @@ Re-exports [treeFilterLeaves](/docs/api-reference/std/build/tree.md#treefilterle
 
 Re-exports [treeFind](/docs/api-reference/std/build/tree.md#treefind)
 
-***
+---
 
 <a id="treeflatten"></a>
 
@@ -450,7 +450,7 @@ Re-exports [treeFind](/docs/api-reference/std/build/tree.md#treefind)
 
 Re-exports [treeFlatten](/docs/api-reference/std/build/tree.md#treeflatten)
 
-***
+---
 
 <a id="treeinsert"></a>
 
@@ -458,7 +458,7 @@ Re-exports [treeFlatten](/docs/api-reference/std/build/tree.md#treeflatten)
 
 Re-exports [treeInsert](/docs/api-reference/std/build/tree.md#treeinsert)
 
-***
+---
 
 <a id="treemap"></a>
 
@@ -466,7 +466,7 @@ Re-exports [treeInsert](/docs/api-reference/std/build/tree.md#treeinsert)
 
 Re-exports [treeMap](/docs/api-reference/std/build/tree.md#treemap)
 
-***
+---
 
 <a id="treemaprecordasync"></a>
 
@@ -474,7 +474,7 @@ Re-exports [treeMap](/docs/api-reference/std/build/tree.md#treemap)
 
 Re-exports [treeMapRecordAsync](/docs/api-reference/std/build/tree.md#treemaprecordasync)
 
-***
+---
 
 <a id="treemaprecordasyncconfig"></a>
 
@@ -482,7 +482,7 @@ Re-exports [treeMapRecordAsync](/docs/api-reference/std/build/tree.md#treemaprec
 
 Re-exports [TreeMapRecordAsyncConfig](/docs/api-reference/std/build/tree.md#treemaprecordasyncconfig)
 
-***
+---
 
 <a id="treereduce"></a>
 
@@ -490,7 +490,7 @@ Re-exports [TreeMapRecordAsyncConfig](/docs/api-reference/std/build/tree.md#tree
 
 Re-exports [treeReduce](/docs/api-reference/std/build/tree.md#treereduce)
 
-***
+---
 
 <a id="treeremove"></a>
 
@@ -498,7 +498,7 @@ Re-exports [treeReduce](/docs/api-reference/std/build/tree.md#treereduce)
 
 Re-exports [treeRemove](/docs/api-reference/std/build/tree.md#treeremove)
 
-***
+---
 
 <a id="treeupdate"></a>
 
@@ -506,7 +506,7 @@ Re-exports [treeRemove](/docs/api-reference/std/build/tree.md#treeremove)
 
 Re-exports [treeUpdate](/docs/api-reference/std/build/tree.md#treeupdate)
 
-***
+---
 
 <a id="treewalk"></a>
 
@@ -514,7 +514,7 @@ Re-exports [treeUpdate](/docs/api-reference/std/build/tree.md#treeupdate)
 
 Re-exports [treeWalk](/docs/api-reference/std/build/tree.md#treewalk)
 
-***
+---
 
 <a id="truncate"></a>
 
@@ -522,7 +522,7 @@ Re-exports [treeWalk](/docs/api-reference/std/build/tree.md#treewalk)
 
 Re-exports [truncate](/docs/api-reference/std/build/truncate.md#truncate)
 
-***
+---
 
 <a id="truncationoptions"></a>
 
@@ -530,7 +530,7 @@ Re-exports [truncate](/docs/api-reference/std/build/truncate.md#truncate)
 
 Re-exports [TruncationOptions](/docs/api-reference/std/build/truncate.md#truncationoptions)
 
-***
+---
 
 <a id="truncationresult"></a>
 
@@ -538,7 +538,7 @@ Re-exports [TruncationOptions](/docs/api-reference/std/build/truncate.md#truncat
 
 Re-exports [TruncationResult](/docs/api-reference/std/build/truncate.md#truncationresult)
 
-***
+---
 
 <a id="trycatch"></a>
 
@@ -546,7 +546,7 @@ Re-exports [TruncationResult](/docs/api-reference/std/build/truncate.md#truncati
 
 Re-exports [tryCatch](/docs/api-reference/std/build/result.md#trycatch)
 
-***
+---
 
 <a id="withabortableoperation"></a>
 
@@ -554,7 +554,7 @@ Re-exports [tryCatch](/docs/api-reference/std/build/result.md#trycatch)
 
 Re-exports [withAbortableOperation](/docs/api-reference/std/build/async.md#withabortableoperation)
 
-***
+---
 
 <a id="withtimeout"></a>
 

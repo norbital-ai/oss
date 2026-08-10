@@ -52,7 +52,7 @@ export type HostAppPlugin = {
 	 */
 	readonly entry: string;
 	/** Top-level platform tool, or a host-owned child of Pod's Settings folder. */
-	readonly placement: 'sidebar' | 'settings';
+	readonly placement: 'sidebar' | 'settings' | 'footer';
 	/**
 	 * Show the entry only to workspace admins. Hiding an entry is not authorization — the host route
 	 * behind `entry` must still authorize the request itself, since a URL is guessable.

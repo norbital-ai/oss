@@ -169,9 +169,9 @@ export function codeEntryPage(input: {
 <h1>${escapeHtml(codeHeading)}</h1>
 <p class="sub">${escapeHtml(i18n.t('pod.identity.sentTo', { email }))}</p>
 ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
-<form method="post" action="/login/code">
+<form method="post" action="/login/code" data-otp-form>
   <label for="code-1">${escapeHtml(i18n.t('pod.identity.codeLabel'))}</label>
-  <input class="pin-hidden" id="code" name="code" pattern="[0-9]{6}" required tabindex="-1" aria-hidden="true" />
+  <input class="pin-hidden" id="code" name="code" pattern="[0-9]{6}" required tabindex="-1" aria-hidden="true" autocomplete="one-time-code" />
   <div class="pin" data-pin-group>
     ${Array.from(
 			{ length: 6 },
@@ -190,18 +190,55 @@ ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
 			})}</p>
 <script>
 (() => {
-  const group = document.querySelector('[data-pin-group]');
-  if (!group) return;
+  const form = document.querySelector('[data-otp-form]');
+  const group = form?.querySelector('[data-pin-group]');
+  if (!form || !group) return;
   const cells = [...group.querySelectorAll('[data-pin]')];
-  const hidden = document.querySelector('#code');
+  const hidden = form.querySelector('#code');
+  const button = form.querySelector('button[type="submit"]');
+  let submitting = false;
   const sync = () => { hidden.value = cells.map((cell) => cell.value).join(''); };
-  const fill = (text) => { [...text.replace(/\\D/g, '').slice(0, 6)].forEach((digit, i) => { cells[i].value = digit; }); sync(); cells[Math.min(text.length, 5)].focus(); };
+  const fill = (text) => {
+    const digits = [...String(text).replace(/\\D/g, '').slice(0, 6)];
+    cells.forEach((cell, i) => { cell.value = digits[i] ?? ''; });
+    sync();
+    cells[Math.min(Math.max(digits.length, 1), 6) - 1]?.focus();
+  };
+  const lock = () => {
+    submitting = true;
+    form.setAttribute('aria-busy', 'true');
+    if (button) button.disabled = true;
+    cells.forEach((cell) => { cell.readOnly = true; });
+  };
   cells.forEach((cell, index) => {
-    cell.addEventListener('input', () => { cell.value = cell.value.replace(/\\D/g, '').slice(-1); sync(); if (cell.value && cells[index + 1]) cells[index + 1].focus(); });
-    cell.addEventListener('keydown', (event) => { if (event.key === 'Backspace' && !cell.value && cells[index - 1]) cells[index - 1].focus(); });
-    cell.addEventListener('paste', (event) => { event.preventDefault(); fill(event.clipboardData.getData('text')); });
+    cell.addEventListener('input', () => {
+      const digits = cell.value.replace(/\\D/g, '');
+      // SMS autofill often dumps the whole code into the focused cell.
+      if (digits.length > 1) { fill(digits); return; }
+      cell.value = digits.slice(-1);
+      sync();
+      if (cell.value && cells[index + 1]) cells[index + 1].focus();
+    });
+    cell.addEventListener('keydown', (event) => {
+      if (event.key === 'Backspace' && !cell.value && cells[index - 1]) cells[index - 1].focus();
+    });
+    cell.addEventListener('paste', (event) => {
+      event.preventDefault();
+      fill(event.clipboardData?.getData('text') ?? '');
+    });
   });
-  group.closest('form').addEventListener('submit', (event) => { sync(); if (!/^[0-9]{6}$/.test(hidden.value)) { event.preventDefault(); cells.find((cell) => !cell.value)?.focus(); } });
+  // Mobile keyboards / OTP autofill often submit the form without a tap on Verify.
+  // Accept the first valid submit, then ignore duplicates so the single-use code is not replayed.
+  form.addEventListener('submit', (event) => {
+    if (submitting) { event.preventDefault(); return; }
+    sync();
+    if (!/^[0-9]{6}$/.test(hidden.value)) {
+      event.preventDefault();
+      cells.find((cell) => !cell.value)?.focus();
+      return;
+    }
+    lock();
+  });
 })();
 </script>`,
 			input.branding

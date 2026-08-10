@@ -1,6 +1,6 @@
 # CRM — How It Works
 
-![CRM workspace banner](assets/banner.svg)
+![CRM workspace thumbnail](assets/thumbnail.svg)
 
 A B2B trade workspace with two sides, integrated with the company's external system of record (a
 third-party ERP or accounting system that owns the master data): the **sales side** qualifies accounts and

@@ -48,7 +48,7 @@ indexes: [
 		columns: ['embedding'],
 		opclass: { embedding: 'vector_cosine_ops' }
 	}
-]
+];
 ```
 
 Nearest-neighbor search is **server-only** (`api.db.query.<collection>.findNearest` in hooks /

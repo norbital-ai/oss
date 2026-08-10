@@ -1,23 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-label="Purchasing">
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-label="Crm Purchase">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0f766e"/>
-      <stop offset="100%" stop-color="#134e4a"/>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0.55">
+      <stop offset="0%" stop-color="#1b84a7"/>
+      <stop offset="55%" stop-color="#1a3b75"/>
+      <stop offset="100%" stop-color="#10102d"/>
     </linearGradient>
-    <radialGradient id="glow" cx="78%" cy="28%" r="45%">
-      <stop offset="0%" stop-color="#2dd4bf" stop-opacity="0.45"/>
-      <stop offset="100%" stop-color="#2dd4bf" stop-opacity="0"/>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="45%" stop-color="#a0cbee" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="25%" cy="14%" r="38%">
+      <stop offset="0%" stop-color="#6ec0ed" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#6ec0ed" stop-opacity="0"/>
     </radialGradient>
-    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
-      <path d="M48 0H0V48" fill="none" stroke="white" stroke-opacity="0.06" stroke-width="1"/>
+    <radialGradient id="glowB" cx="79%" cy="12%" r="42%">
+      <stop offset="0%" stop-color="#6ec0ed" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#6ec0ed" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="39" height="39" patternUnits="userSpaceOnUse">
+      <path d="M39 0H0V39" fill="none" stroke="white" stroke-opacity="0.07" stroke-width="1"/>
+    </pattern>
+    <pattern id="dots" width="25" height="25" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="white" fill-opacity="0.1"/>
     </pattern>
   </defs>
   <rect width="1600" height="900" fill="url(#g)"/>
   <rect width="1600" height="900" fill="url(#grid)"/>
-  <rect width="1600" height="900" fill="url(#glow)"/>
-  <circle cx="1320" cy="180" r="220" fill="#2dd4bf" fill-opacity="0.12"/>
-  <circle cx="1480" cy="720" r="280" fill="white" fill-opacity="0.05"/>
+  <rect width="1600" height="220" fill="url(#sheen)"/>
+  <rect width="1600" height="900" fill="url(#glowA)"/>
+  <rect width="1600" height="900" fill="url(#glowB)"/>
+  <rect width="1600" height="260" fill="url(#dots)"/>
+  <circle cx="221" cy="107" r="135" fill="#6ec0ed" fill-opacity="0.15"/>
+  <circle cx="1392" cy="78" r="177" fill="#6ec0ed" fill-opacity="0.12"/>
+  <circle cx="1091" cy="157" r="89" fill="#ffffff" fill-opacity="0.05"/>
+  <path d="M960 20 L1040 100 L960 180 L880 100 Z" fill="#6ec0ed" fill-opacity="0.1"/>
+  <path d="M1080 12 L1140 72 L1080 132 L1020 72 Z" fill="#6ec0ed" fill-opacity="0.06"/>
+  <circle cx="420" cy="95" r="58" fill="none" stroke="#6ec0ed" stroke-opacity="0.16" stroke-width="3"/>
+  <path d="M0 210 C265 150 422.5 240 720 190 C980 150 1217.5 90 1600 141.66666666666666 V260 H0 Z" fill="#10102d" fill-opacity="0.22"/>
+  <path d="M0 0 H1600 V8 H0 Z" fill="#ffffff" fill-opacity="0.08"/>
   <path d="M0 680 C280 620 420 760 700 720 C980 680 1180 560 1600 610 V900 H0 Z" fill="black" fill-opacity="0.18"/>
-  <text x="96" y="760" fill="white" fill-opacity="0.92" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="64" font-weight="650">Purchasing</text>
+  <text x="96" y="760" fill="white" fill-opacity="0.92" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="64" font-weight="650">Crm Purchase</text>
 </svg>

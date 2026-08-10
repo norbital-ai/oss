@@ -10,7 +10,6 @@
 		"apps": 3,
 		"automations": 4
 	},
-	"banner": "assets/banner.svg",
 	"tags": ["Operations", "Compliance", "Projects"],
 	"name_zh": "施工",
 	"description_zh": "在统一运营模型中管理项目、许可证、劳动力合规、缺陷、RFI、索赔与 BIM 参考数据。"

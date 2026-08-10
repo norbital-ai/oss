@@ -267,6 +267,7 @@ export async function generatePodMigrations(input: {
 	migrationsRoot: string;
 	name?: string;
 	custom?: boolean;
+	hints?: readonly unknown[];
 }): Promise<void> {
 	const sourceMigrations = path.join(input.root, '.norbital/migrations');
 	const schemaFiles = [
@@ -303,6 +304,7 @@ export async function generatePodMigrations(input: {
 			outDir: input.migrationsRoot,
 			name: input.name ?? 'auto',
 			custom: input.custom,
+			hints: input.hints,
 			schemaFiles
 		});
 		const generatedEntries = (await readdir(input.migrationsRoot))

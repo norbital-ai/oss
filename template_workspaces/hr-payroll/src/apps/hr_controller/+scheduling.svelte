@@ -4,7 +4,7 @@
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { CollectionTable } from '@norbital-ai/ui/collection-table';
+	import { CollectionActionToolbar, CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Button, buttonVariants } from '@norbital-ai/ui/button';
 	import { Alert, AlertDescription, AlertTitle } from '@norbital-ai/ui/alert';
@@ -60,6 +60,8 @@
 	 * the page and losing the rest of it.
 	 */
 	let reloadToken = $state(0);
+	let boardPage = $state(0);
+	const BOARD_PAGE_SIZE = 50;
 
 	const today = todayKey();
 	const activeRange = { effective_range: { contains_date: todayInstant() } } as const;
@@ -98,7 +100,7 @@
 	 *
 	 * Read from the payroll run when one exists, because that is the window the engine actually used.
 	 * Only when no run has been opened yet is it derived from the company's cut-off day, which is the
-	 * same rule stated in `docs/architecture/time-overtime-and-cutoffs.md`.
+	 * same rule stated in `docs/architecture.md`.
 	 */
 	const runQuery = $derived(
 		selectedCompanyId == null
@@ -320,6 +322,11 @@
 			});
 		})
 	);
+	const boardPageCount = $derived(Math.max(1, Math.ceil(boardPeople.length / BOARD_PAGE_SIZE)));
+	const visibleBoardPage = $derived(Math.min(boardPage, boardPageCount - 1));
+	const visibleBoardPeople = $derived(
+		boardPeople.slice(visibleBoardPage * BOARD_PAGE_SIZE, (visibleBoardPage + 1) * BOARD_PAGE_SIZE)
+	);
 
 	const rostersQuery = $derived(
 		selectedCompanyId == null
@@ -442,6 +449,7 @@
 			value={selectedCompanyId}
 			onValueChange={(value) => {
 				companyId = typeof value === 'string' ? value : (companies[0]?.norbital_id ?? null);
+				boardPage = 0;
 			}}
 			emptyPlaceholder={t('component.select_legal_entity')}
 			searchPlaceholder={t('component.search_companies')}
@@ -454,126 +462,135 @@
 	</label>
 {/snippet}
 
-{#snippet boardToolbar()}
-	<Inline gap="xs" justify="between" class="min-w-0">
-		<Inline gap="xs" shrink={false}>
-			<Button
-				variant="outline"
-				size="icon"
-				aria-label={t('app.scheduling.previous_month')}
-				onclick={() => (month = shiftMonthKey(month, -1))}
+{#snippet boardViewControls()}
+	<Button
+		variant="outline"
+		size="icon"
+		aria-label={t('app.scheduling.previous_month')}
+		onclick={() => {
+			month = shiftMonthKey(month, -1);
+			boardPage = 0;
+		}}>‹</Button
+	>
+	<span class="min-w-[6rem] text-center text-sm font-medium tabular-nums">{month}</span>
+	<Button
+		variant="outline"
+		size="icon"
+		aria-label={t('app.scheduling.next_month')}
+		onclick={() => {
+			month = shiftMonthKey(month, 1);
+			boardPage = 0;
+		}}>›</Button
+	>
+	<Popover.Root>
+		<Popover.Trigger
+			class={cn(buttonVariants({ variant: 'ghost', size: 'icon' }), searchActive && 'bg-accent')}
+			aria-label={t('app.scheduling.search_people')}
+			aria-pressed={searchActive}
+		>
+			<IconWrapper name="lucide:search" class="size-4" />
+		</Popover.Trigger>
+		<Popover.Content align="end" class="w-[min(24rem,calc(100vw-1rem))] p-2">
+			<Inline gap="sm">
+				<Input
+					type="search"
+					class="h-9"
+					placeholder={t('app.scheduling.search_people_placeholder')}
+					bind:value={personSearch}
+					oninput={() => (boardPage = 0)}
+				/>
+				{#if searchActive}
+					<Button type="button" variant="ghost" size="sm" onclick={() => (personSearch = '')}>
+						{t('app.scheduling.clear')}
+					</Button>
+				{/if}
+			</Inline>
+		</Popover.Content>
+	</Popover.Root>
+	<Popover.Root>
+		<Indicator visible={activeFilterCount > 0} variant="info" size="sm">
+			<Popover.Trigger
+				class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+				aria-label={activeFilterCount > 0
+					? t('app.scheduling.filters_active')
+					: t('app.scheduling.filter_board')}
+				aria-pressed={activeFilterCount > 0}
 			>
-				‹
-			</Button>
-			<span class="min-w-[6rem] text-center text-sm font-medium tabular-nums">{month}</span>
-			<Button
-				variant="outline"
-				size="icon"
-				aria-label={t('app.scheduling.next_month')}
-				onclick={() => (month = shiftMonthKey(month, 1))}
-			>
-				›
-			</Button>
-		</Inline>
-		<Inline gap="xs" shrink={false}>
-			<Popover.Root>
-				<Popover.Trigger
-					class={cn(
-						buttonVariants({ variant: 'ghost', size: 'icon' }),
-						searchActive && 'bg-accent'
-					)}
-					aria-label={t('app.scheduling.search_people')}
-					aria-pressed={searchActive}
-				>
-					<IconWrapper name="lucide:search" class="size-4" />
-				</Popover.Trigger>
-				<Popover.Content align="end" class="w-[min(24rem,calc(100vw-1rem))] p-2">
-					<Inline gap="sm">
-						<Input
-							type="search"
-							class="h-9"
-							placeholder={t('app.scheduling.search_people_placeholder')}
-							bind:value={personSearch}
-						/>
-						{#if searchActive}
-							<Button type="button" variant="ghost" size="sm" onclick={() => (personSearch = '')}>
-								{t('app.scheduling.clear')}
-							</Button>
-						{/if}
-					</Inline>
-				</Popover.Content>
-			</Popover.Root>
-			<Popover.Root>
-				<Indicator visible={activeFilterCount > 0} variant="info" size="sm">
-					<Popover.Trigger
-						class={buttonVariants({ variant: 'ghost', size: 'icon' })}
-						aria-label={activeFilterCount > 0
-							? t('app.scheduling.filters_active')
-							: t('app.scheduling.filter_board')}
-						aria-pressed={activeFilterCount > 0}
+				<IconWrapper name="lucide:list-filter" class="size-4" />
+			</Popover.Trigger>
+		</Indicator>
+		<Popover.Content align="end" class="w-[min(22rem,calc(100vw-1rem))] p-0">
+			<Inline justify="between" gap="sm" class="border-b px-3 py-2">
+				<Stack gap="none">
+					<p class="text-xs font-medium">{t('app.scheduling.filters')}</p>
+					<p class="text-micro text-muted-foreground">{t('app.scheduling.filters_description')}</p>
+				</Stack>
+				{#if activeFilterCount > 0}
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						onclick={() => {
+							statusFilter = null;
+							shiftFilter = null;
+							boardPage = 0;
+						}}>{t('app.scheduling.clear_all')}</Button
 					>
-						<IconWrapper name="lucide:list-filter" class="size-4" />
-					</Popover.Trigger>
-				</Indicator>
-				<Popover.Content align="end" class="w-[min(22rem,calc(100vw-1rem))] p-0">
-					<Inline justify="between" gap="sm" class="border-b px-3 py-2">
-						<Stack gap="none">
-							<p class="text-xs font-medium">{t('app.scheduling.filters')}</p>
-							<p class="text-micro text-muted-foreground">
-								{t('app.scheduling.filters_description')}
-							</p>
-						</Stack>
-						{#if activeFilterCount > 0}
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								onclick={() => {
-									statusFilter = null;
-									shiftFilter = null;
-								}}
-							>
-								{t('app.scheduling.clear_all')}
-							</Button>
-						{/if}
-					</Inline>
-					<Stack gap="sm" class="p-3">
-						<label class="grid gap-1.5 text-sm">
-							<span class="font-medium text-muted-foreground">{t('app.scheduling.has_day')}</span>
-							<Combobox
-								ariaLabel={t('app.scheduling.day_status')}
-								options={statusOptions}
-								value={statusFilter}
-								allowClear
-								searchable={false}
-								emptyPlaceholder={t('app.scheduling.any_status')}
-								onValueChange={(value) => {
-									statusFilter = DAY_STATUSES.find((status) => status === value) ?? null;
-								}}
-							/>
-						</label>
-						<label class="grid gap-1.5 text-sm">
-							<span class="font-medium text-muted-foreground">
-								{t('app.scheduling.rostered_on_shift')}
-							</span>
-							<Combobox
-								ariaLabel={t('component.shift')}
-								options={shiftOptions}
-								value={shiftFilter}
-								allowClear
-								emptyPlaceholder={t('app.scheduling.any_shift')}
-								searchPlaceholder={t('app.scheduling.search_shifts')}
-								onValueChange={(value) => {
-									shiftFilter = typeof value === 'string' ? value : null;
-								}}
-							/>
-						</label>
-					</Stack>
-				</Popover.Content>
-			</Popover.Root>
+				{/if}
+			</Inline>
+			<Stack gap="sm" class="p-3">
+				<label class="grid gap-1.5 text-sm">
+					<span class="font-medium text-muted-foreground">{t('app.scheduling.has_day')}</span>
+					<Combobox
+						ariaLabel={t('app.scheduling.day_status')}
+						options={statusOptions}
+						value={statusFilter}
+						allowClear
+						searchable={false}
+						emptyPlaceholder={t('app.scheduling.any_status')}
+						onValueChange={(value) => {
+							statusFilter = DAY_STATUSES.find((status) => status === value) ?? null;
+							boardPage = 0;
+						}}
+					/>
+				</label>
+				<label class="grid gap-1.5 text-sm">
+					<span class="font-medium text-muted-foreground"
+						>{t('app.scheduling.rostered_on_shift')}</span
+					>
+					<Combobox
+						ariaLabel={t('component.shift')}
+						options={shiftOptions}
+						value={shiftFilter}
+						allowClear
+						emptyPlaceholder={t('app.scheduling.any_shift')}
+						searchPlaceholder={t('app.scheduling.search_shifts')}
+						onValueChange={(value) => {
+							shiftFilter = typeof value === 'string' ? value : null;
+							boardPage = 0;
+						}}
+					/>
+				</label>
+			</Stack>
+		</Popover.Content>
+	</Popover.Root>
+{/snippet}
+
+{#snippet boardActions()}
+	<Popover.Root>
+		<Popover.Trigger
+			class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+			aria-label={t('app.scheduling.actions')}
+			title={t('app.scheduling.actions')}
+		>
+			<IconWrapper name="lucide:zap" class="size-4" />
+		</Popover.Trigger>
+		<Popover.Content align="end" class="w-64 p-1">
 			<Button
+				type="button"
+				class="w-full justify-start"
+				variant="ghost"
 				size="sm"
-				variant="outline"
 				disabled={importing || rosterImportBlocker != null}
 				title={rosterImportBlocker ?? t('app.scheduling.import_title', { month })}
 				onclick={() => void importRoster()}
@@ -581,8 +598,35 @@
 				<IconWrapper name="lucide:upload" class="size-4" />
 				{t('app.scheduling.import')}
 			</Button>
-		</Inline>
-	</Inline>
+		</Popover.Content>
+	</Popover.Root>
+	{#if boardPageCount > 1}
+		<span class="text-xs tabular-nums text-muted-foreground">
+			{visibleBoardPage + 1}/{boardPageCount}
+		</span>
+		<Button
+			variant="ghost"
+			size="icon"
+			aria-label={t('app.scheduling.previous_page')}
+			disabled={visibleBoardPage === 0}
+			onclick={() => (boardPage = Math.max(0, visibleBoardPage - 1))}
+		>
+			<IconWrapper name="lucide:chevron-left" class="size-4" />
+		</Button>
+		<Button
+			variant="ghost"
+			size="icon"
+			aria-label={t('app.scheduling.next_page')}
+			disabled={visibleBoardPage >= boardPageCount - 1}
+			onclick={() => (boardPage = Math.min(boardPageCount - 1, visibleBoardPage + 1))}
+		>
+			<IconWrapper name="lucide:chevron-right" class="size-4" />
+		</Button>
+	{/if}
+{/snippet}
+
+{#snippet boardToolbar()}
+	<CollectionActionToolbar view={boardViewControls} actions={boardActions} />
 {/snippet}
 
 {#snippet monthStatus()}
@@ -693,7 +737,14 @@
 			{:else if people.length > 0 && boardPeople.length === 0}
 				<p class="text-sm text-muted-foreground">{t('app.scheduling.no_matches')}</p>
 			{:else}
-				<RosterMonthBoard {month} people={boardPeople} {facts} {today} {holidayNames} {cutoff} />
+				<RosterMonthBoard
+					{month}
+					people={visibleBoardPeople}
+					{facts}
+					{today}
+					{holidayNames}
+					{cutoff}
+				/>
 			{/if}
 		</Cover>
 	{/if}

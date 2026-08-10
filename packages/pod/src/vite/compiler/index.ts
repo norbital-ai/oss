@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import path from 'node:path';
 import { sourceDiagnostic } from './diagnostics.js';
 import { safeParse } from '@norbital-ai/std/json';
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@norbital-ai/std/i18n';
 import { nearestName } from '@norbital-ai/std/string';
 import { extractAppMetadata, extractStaticMetaValue } from './app-metadata.js';
 import { parseSkillDocument } from './skill-frontmatter.js';
@@ -138,6 +139,255 @@ function topologyDiagnostic(file: string, code: string, message: string): Struct
 		start: { line: 1, column: 1 },
 		message
 	};
+}
+
+/**
+ * Attributes that carry identifiers, data keys, geometry, or URLs rather than
+ * user-facing copy. Everything else that receives a quoted string literal with
+ * copy-like content (an uppercase letter or whitespace) is a raw-copy error.
+ */
+const I18N_NON_COPY_ATTRIBUTES = new Set([
+	'as',
+	'class',
+	'classname',
+	'contentclass',
+	'style',
+	'name',
+	'collection',
+	'view',
+	'icon',
+	'href',
+	'src',
+	'id',
+	'key',
+	'type',
+	'target',
+	'rel',
+	'role',
+	'slot',
+	'group',
+	'variant',
+	'size',
+	'gap',
+	'align',
+	'justify',
+	'measure',
+	'side',
+	'order',
+	'inset',
+	'shape',
+	'orientation',
+	'tabindex',
+	'value',
+	'alt',
+	'data',
+	'format',
+	'dismissible',
+	'strict',
+	'loading',
+	'frozen',
+	'compact',
+	'grow',
+	'shrink',
+	'fill',
+	'reverse',
+	'open',
+	'active',
+	'element',
+	'action',
+	'spellcheck',
+	'autocomplete',
+	'cols',
+	'rows',
+	'min',
+	'max',
+	'step',
+	'multiline',
+	'required',
+	'disabled',
+	'readonly',
+	'default',
+	'sortable',
+	'pinned',
+	'collapsed',
+	'expandable',
+	'muted',
+	'color',
+	'density',
+	'part',
+	'exportparts',
+	'dir',
+	'aria-hidden'
+]);
+
+/**
+ * Values that look like identifiers, icons, URLs, or file paths — never copy.
+ * Copy has an uppercase letter or whitespace, so anything matching this is exempt.
+ */
+const I18N_IDENTIFIER_VALUE_PATTERN = /^[a-z0-9_\-:.@/?&=%#~+*()]+$/;
+
+const I18N_ATTRIBUTE_PATTERN = /\b([A-Za-z][\w:-]*)\s*=\s*("([^"]*)"|'([^']*)')/g;
+
+/**
+ * A minimal, brace- and quote-aware scan of a Svelte source file. Emits text
+ * nodes (content between tags) and component tags (attribute bodies) with
+ * absolute offsets, so diagnostics can point at the offending string.
+ */
+type SvelteTag = { readonly start: number; readonly body: string };
+type SvelteTextNode = { readonly start: number; readonly value: string };
+
+function scanSvelteSource(source: string): { text: SvelteTextNode[]; tags: SvelteTag[] } {
+	const text: SvelteTextNode[] = [];
+	const tags: SvelteTag[] = [];
+	let i = 0;
+	while (i < source.length) {
+		const open = source.indexOf('<', i);
+		if (open < 0) break;
+		if (open > i) text.push({ start: i, value: source.slice(i, open) });
+		if (source.startsWith('<!--', open)) {
+			const end = source.indexOf('-->', open + 4);
+			i = end < 0 ? source.length : end + 3;
+			continue;
+		}
+		if (source[open + 1] === '/') {
+			const end = findTagEnd(source, open + 2);
+			i = end < 0 ? source.length : end + 1;
+			continue;
+		}
+		if (source[open + 1] === '!') {
+			const end = source.indexOf('>', open);
+			i = end < 0 ? source.length : end + 1;
+			continue;
+		}
+		const end = findTagEnd(source, open + 1);
+		if (end < 0) break;
+		const body = source.slice(open + 1, end);
+		if (/^[A-Z][\w.]*/.test(body)) {
+			tags.push({ start: open + 1, body });
+		}
+		i = end + 1;
+	}
+	return { text, tags };
+}
+
+/**
+ * Find the `>` that closes a tag started at `start`, skipping quoted attribute
+ * values and `{...}` expressions (which may themselves contain `>` or quotes).
+ */
+function findTagEnd(source: string, start: number): number {
+	let quote: '"' | "'" | null = null;
+	let braceDepth = 0;
+	for (let i = start; i < source.length; i++) {
+		const char = source[i];
+		if (quote !== null) {
+			if (char === quote) quote = null;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (char === '{') {
+			braceDepth++;
+			continue;
+		}
+		if (char === '}') {
+			if (braceDepth > 0) braceDepth--;
+			continue;
+		}
+		if (char === '>' && braceDepth === 0) return i;
+	}
+	return -1;
+}
+
+/**
+ * The offset of the first user-facing letter or digit in a text node, ignoring
+ * everything inside `{...}` expressions (balanced braces) and HTML entities
+ * (`&nbsp;`, `&middot;`), or -1 when the text is empty, decorative-only, or
+ * fully expression-driven.
+ */
+function firstRawTextOffset(value: string): number {
+	let braceDepth = 0;
+	for (let i = 0; i < value.length; i++) {
+		const char = value[i];
+		if (char === '{') {
+			braceDepth++;
+			continue;
+		}
+		if (char === '}') {
+			if (braceDepth > 0) braceDepth--;
+			continue;
+		}
+		if (char === '&') {
+			const entityEnd = value.indexOf(';', i);
+			if (entityEnd >= 0) i = entityEnd;
+			continue;
+		}
+		if (braceDepth === 0 && /[\p{L}\p{N}]/u.test(char)) return i;
+	}
+	return -1;
+}
+
+/**
+ * The raw-copy guard: user-facing text in authored Svelte surfaces must come
+ * from the tenant catalogs through `t(...)`. This is the static, analyzable
+ * half of the i18n contract — a raw string is a missing catalog entry by
+ * definition, so it is a structural error, not a style warning.
+ */
+function authoredI18nDiagnostics(source: string, file: string): StructuralDiagnostic[] {
+	const diagnostics: StructuralDiagnostic[] = [];
+
+	const ignoredRanges: Array<[number, number]> = [];
+	for (const match of source.matchAll(
+		/<script\b[\s\S]*?<\/script>|<style\b[\s\S]*?<\/style>|<svelte:head\b[\s\S]*?<\/svelte:head>/gi
+	)) {
+		const start = match.index ?? 0;
+		ignoredRanges.push([start, start + match[0].length]);
+	}
+	const inIgnored = (offset: number): boolean =>
+		ignoredRanges.some(([start, end]) => offset >= start && offset < end);
+
+	const { text, tags } = scanSvelteSource(source);
+
+	for (const node of text) {
+		if (inIgnored(node.start)) continue;
+		const rawOffset = firstRawTextOffset(node.value);
+		if (rawOffset < 0) continue;
+		diagnostics.push(
+			sourceDiagnostic(
+				source,
+				file,
+				node.start + rawOffset,
+				'I18N_RAW_TEXT',
+				"User-facing text must come from t('key'); add the string to both catalogs"
+			)
+		);
+	}
+
+	for (const tag of tags) {
+		const component = tag.body.match(/^[A-Z][\w.]*/)?.[0] ?? '';
+		for (const attribute of tag.body.matchAll(I18N_ATTRIBUTE_PATTERN)) {
+			const attributeName = attribute[1]!.toLowerCase();
+			const rawValue = attribute[2] ?? '';
+			const value = rawValue.slice(1, -1);
+			const offset = tag.start + (attribute.index ?? 0);
+			if (inIgnored(offset)) continue;
+			if (I18N_NON_COPY_ATTRIBUTES.has(attributeName)) continue;
+			if (!value.trim() || I18N_IDENTIFIER_VALUE_PATTERN.test(value)) continue;
+			if (!/[A-Z]|\s/.test(value)) continue;
+			diagnostics.push(
+				sourceDiagnostic(
+					source,
+					file,
+					offset,
+					'I18N_RAW_COPY_PROP',
+					`${component} ${attribute[1]} expects a localized string; pass t('key') from both catalogs`
+				)
+			);
+		}
+	}
+
+	return diagnostics;
 }
 
 /**
@@ -349,7 +599,10 @@ async function validateAuthoredSource(
 				diagnostics.push(
 					...authoredLayoutDiagnostics(source, authoredPath, {
 						checkPodLayout: !authoredPath.startsWith('src/apps/')
-					})
+					}),
+					...(authoredPath.startsWith('src/apps/')
+						? authoredI18nDiagnostics(source, authoredPath)
+						: [])
 				);
 			}
 		})
@@ -1088,14 +1341,20 @@ const WORKSPACE_ROOT_DECLARATIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Tenant translation overrides: `src/i18n/messages.{en,zh}.json`.
+ * Tenant translation overrides: `src/i18n/messages.<locale>.json`, one file per
+ * entry in the platform's `SUPPORTED_LOCALES` list.
  *
- * Both files must agree on their key sets — a Chinese catalog missing an
- * English key (or carrying a stray one) is an authoring error, not a fallback
- * decision; the runtime fallback exists for languages, not for this locale
- * pair. Anything else in `src/i18n/` is rejected like an unknown root role.
+ * Every supported locale must carry exactly the same key set — a catalog
+ * missing a primary-locale key (or carrying a stray one) is an authoring
+ * error, not a fallback decision; the runtime fallback exists for languages,
+ * not for this locale pair. Anything else in `src/i18n/` is rejected like an
+ * unknown root role. Adding a language is a one-line change in
+ * `@norbital-ai/std/i18n` (`SUPPORTED_LOCALES`); the tenant contract follows
+ * automatically.
  */
-const I18N_MESSAGE_FILES: ReadonlySet<string> = new Set(['messages.en.json', 'messages.zh.json']);
+const I18N_MESSAGE_FILES: ReadonlySet<string> = new Set(
+	SUPPORTED_LOCALES.map((locale) => `messages.${locale}.json`)
+);
 
 async function discoverI18n(
 	root: string,
@@ -1103,8 +1362,20 @@ async function discoverI18n(
 	inventory: SourceInventory
 ): Promise<DiscoveredI18n> {
 	const i18nDirectory = path.join(root, 'src', 'i18n');
+	const hasAppSurfaces = inventory
+		.filesBelow(path.join(root, 'src', 'apps'))
+		.some((file) => file.endsWith('.svelte'));
 	if (!inventory.hasDirectory(i18nDirectory)) {
-		return { present: false, en: null, zh: null };
+		if (hasAppSurfaces) {
+			diagnostics.push(
+				topologyDiagnostic(
+					`src/i18n/messages.${DEFAULT_LOCALE}.json`,
+					'I18N_CATALOG_MISSING',
+					`Workspaces with apps ship src/i18n/messages.<locale>.json for every supported locale (${SUPPORTED_LOCALES.join(', ')}), with exact same keys. Wire i18n even when the workspace ships one language — mirror the copy in the other locales.`
+				)
+			);
+		}
+		return { present: false, catalogs: {}, primary: DEFAULT_LOCALE, en: null, zh: null };
 	}
 	for (const entry of inventory.entries(i18nDirectory)) {
 		if (entry.isFile() && !I18N_MESSAGE_FILES.has(entry.name)) {
@@ -1113,15 +1384,14 @@ async function discoverI18n(
 				topologyDiagnostic(
 					file,
 					'I18N_FILE_UNKNOWN',
-					`Unknown i18n file ${entry.name}. Only messages.en.json and messages.zh.json are allowed.`
+					`Unknown i18n file ${entry.name}. Only messages.<locale>.json for the supported locales (${SUPPORTED_LOCALES.join(', ')}) are allowed.`
 				)
 			);
 		}
 	}
 
-	async function readLocale(
-		fileName: 'messages.en.json' | 'messages.zh.json'
-	): Promise<Readonly<Record<string, string>> | null> {
+	async function readLocale(locale: string): Promise<Readonly<Record<string, string>> | null> {
+		const fileName = `messages.${locale}.json`;
 		const file = path.join(i18nDirectory, fileName);
 		if (!inventory.hasFile(file)) return null;
 		const source = await inventory.source(file);
@@ -1164,53 +1434,65 @@ async function discoverI18n(
 		return messages;
 	}
 
-	const [en, zh] = await Promise.all([
-		readLocale('messages.en.json'),
-		readLocale('messages.zh.json')
-	]);
+	const catalogs = Object.fromEntries(
+		await Promise.all(
+			SUPPORTED_LOCALES.map(async (locale) => [locale, await readLocale(locale)] as const)
+		)
+	);
 
-	if (en && !zh) {
-		diagnostics.push(
-			topologyDiagnostic(
-				'src/i18n/messages.zh.json',
-				'I18N_CATALOG_MISSING',
-				'src/i18n/messages.en.json exists without a matching messages.zh.json. Both supported locales are required.'
-			)
-		);
-	} else if (zh && !en) {
-		diagnostics.push(
-			topologyDiagnostic(
-				'src/i18n/messages.en.json',
-				'I18N_CATALOG_MISSING',
-				'src/i18n/messages.zh.json exists without a matching messages.en.json. Both supported locales are required.'
-			)
-		);
-	} else if (en && zh) {
-		for (const key of Object.keys(en)) {
-			if (!(key in zh)) {
-				diagnostics.push(
-					topologyDiagnostic(
-						'src/i18n/messages.zh.json',
-						'I18N_CATALOG_MISSING_KEY',
-						`Chinese catalog is missing key "${key}" present in messages.en.json`
-					)
-				);
-			}
+	const primary = catalogs[DEFAULT_LOCALE] ?? null;
+	for (const locale of SUPPORTED_LOCALES) {
+		const catalog = catalogs[locale] ?? null;
+		const fileName = `messages.${locale}.json`;
+		if (catalog) continue;
+		if (hasAppSurfaces || locale !== DEFAULT_LOCALE) {
+			diagnostics.push(
+				topologyDiagnostic(
+					`src/i18n/${fileName}`,
+					'I18N_CATALOG_MISSING',
+					`src/i18n/${fileName} is missing. Every supported locale (${SUPPORTED_LOCALES.join(', ')}) ships a catalog with the same keys; mirror the ${DEFAULT_LOCALE} copy when a translation is not ready.`
+				)
+			);
 		}
-		for (const key of Object.keys(zh)) {
-			if (!(key in en)) {
-				diagnostics.push(
-					topologyDiagnostic(
-						'src/i18n/messages.zh.json',
-						'I18N_CATALOG_EXTRA_KEY',
-						`Chinese catalog has key "${key}" not present in messages.en.json`
-					)
-				);
+	}
+
+	if (primary) {
+		for (const locale of SUPPORTED_LOCALES) {
+			const catalog = catalogs[locale];
+			if (!catalog) continue;
+			const fileName = `messages.${locale}.json`;
+			for (const key of Object.keys(primary)) {
+				if (!(key in catalog)) {
+					diagnostics.push(
+						topologyDiagnostic(
+							`src/i18n/${fileName}`,
+							'I18N_CATALOG_MISSING_KEY',
+							`${fileName} is missing key "${key}" present in messages.${DEFAULT_LOCALE}.json`
+						)
+					);
+				}
+			}
+			for (const key of Object.keys(catalog)) {
+				if (!(key in primary)) {
+					diagnostics.push(
+						topologyDiagnostic(
+							`src/i18n/${fileName}`,
+							'I18N_CATALOG_EXTRA_KEY',
+							`${fileName} has key "${key}" not present in messages.${DEFAULT_LOCALE}.json`
+						)
+					);
+				}
 			}
 		}
 	}
 
-	return { present: true, en, zh };
+	return {
+		present: true,
+		catalogs,
+		primary: DEFAULT_LOCALE,
+		en: catalogs.en ?? null,
+		zh: catalogs.zh ?? null
+	};
 }
 
 async function discoverSeed(
@@ -1626,7 +1908,8 @@ function clientRuntimeTypes(): string {
  * workspace authorable while anything it adds becomes typed.
  */
 function renderI18nKeys(i18n: DiscoveredI18n): string {
-	const keys = i18n.en ? Object.keys(i18n.en) : [];
+	const primary = i18n.catalogs[i18n.primary] ?? null;
+	const keys = primary ? Object.keys(primary) : [];
 	if (keys.length === 0) return 'export type TenantI18nKeys = string;\n';
 	return `export type TenantI18nKeys =\n${keys.map((key) => `\t| ${JSON.stringify(key)}`).join('\n')};\n`;
 }
@@ -1825,7 +2108,7 @@ export async function compilePodFilesystem(
 			channels: [],
 			agentTools: [],
 			skills: [],
-			i18n: { present: false, en: null, zh: null },
+			i18n: { present: false, catalogs: {}, primary: DEFAULT_LOCALE, en: null, zh: null },
 			seed: null,
 			env: null,
 			diagnostics: [diagnostic]

@@ -45,6 +45,7 @@
 	import CollectionKanbanRecordDetail from './collection-kanban-record-detail.svelte';
 	import CollectionQueryControls from '../collection-table/collection-query-controls.svelte';
 	import CollectionTableOperations from '../collection-table/collection-table-operations.svelte';
+	import CollectionActionToolbar from '../collection-table/collection-action-toolbar.svelte';
 	import { laneMoveUpdate, runOptimisticKanbanMove } from './collection-kanban-move.js';
 	import type { CollectionKanbanName, CollectionKanbanProps } from './collection-kanban.types.js';
 	import {
@@ -438,7 +439,12 @@
 	);
 	function autoCardTitle(record: Row): string {
 		if (autoCard.title.kind === 'field') {
-			const text = formatAutoCardField(definition.fields, autoCard.title.name, record, t as Translate);
+			const text = formatAutoCardField(
+				definition.fields,
+				autoCard.title.name,
+				record,
+				t as Translate
+			);
 			if (text && text !== '—') return text;
 		}
 		const label = resolveRecordLabel(definition.recordLabel ?? null, record);
@@ -493,32 +499,37 @@
 	/>
 {/if}
 
+{#snippet kanbanViewControls()}
+	<CollectionTableOperations
+		collectionName={String(collection)}
+		{exportPipelines}
+		{importPipelines}
+		{integrations}
+		selectedRows={selectedRecords}
+		fields={definition.fields}
+		updateSelected={updateSelectedAction}
+		deleteSelected={deleteSelectedAction}
+		{clearSelection}
+		{selectionControls}
+		disabled={actionsDisabled}
+		{refresh}
+	/>
+{/snippet}
+
+{#snippet kanbanActions()}
+	<CollectionQueryControls
+		{definition}
+		collections={workspaceClient.collections}
+		align="end"
+		searchPlaceholder={t('kanban.searchRecords')}
+		onSearchChange={(search) => (boardQuery.search = search)}
+		onFilterChange={(filters) => (boardQuery.filters = filters)}
+	/>
+{/snippet}
+
 {#snippet kanbanToolbar()}
 	<Stack gap="xs">
-		<Inline gap="xs" justify="between">
-			<CollectionTableOperations
-				collectionName={String(collection)}
-				{exportPipelines}
-				{importPipelines}
-				{integrations}
-				selectedRows={selectedRecords}
-				fields={definition.fields}
-				updateSelected={updateSelectedAction}
-				deleteSelected={deleteSelectedAction}
-				{clearSelection}
-				{selectionControls}
-				disabled={actionsDisabled}
-				{refresh}
-			/>
-			<CollectionQueryControls
-				{definition}
-				collections={workspaceClient.collections}
-				align="end"
-				searchPlaceholder={t('kanban.searchRecords')}
-				onSearchChange={(search) => (boardQuery.search = search)}
-				onFilterChange={(filters) => (boardQuery.filters = filters)}
-			/>
-		</Inline>
+		<CollectionActionToolbar view={kanbanViewControls} actions={kanbanActions} />
 		{#if moveError}
 			<p role="alert" class="shrink-0 text-sm text-destructive">{moveError}</p>
 		{/if}
