@@ -14,6 +14,7 @@
 		"packages:build": "pnpm --filter @norbital-ai/pod... build",
 		"check": "pnpm packages:build && pnpm deps:sync && pnpm templates:sync && pnpm lint && pnpm test && pnpm test:scripts && pnpm build && pnpm templates:check && pnpm templates:lock:check && pnpm publication:check",
 		"check:ci": "pnpm packages:build && pnpm deps:sync && pnpm templates:sync && pnpm lint && pnpm test:ci && pnpm test:scripts && pnpm build && pnpm templates:check && pnpm templates:lock:check && pnpm publication:check",
+		"check:packages:ci": "pnpm exec turbo run build --filter=...@norbital-ai/pod --concurrency=1 && pnpm exec turbo run lint --filter=...@norbital-ai/pod --concurrency=1 && pnpm test:ci && pnpm test:scripts && pnpm skills:check && pnpm publication:check",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"test:scripts": "node --test scripts/tests/*.test.mjs",

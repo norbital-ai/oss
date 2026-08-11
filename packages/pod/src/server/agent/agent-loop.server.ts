@@ -428,6 +428,7 @@ async function executeTool(
 		const binding = requireRuntimeFacility('agentTools');
 		return objectValue(
 			await binding.run(call.name, call.input, {
+				sandboxPrincipalId: ctx.baseScope.requestor.norbital_id,
 				...(spec.hostSandbox?.workspace ? { sandboxWorkspace: spec.hostSandbox.workspace } : {})
 			})
 		);

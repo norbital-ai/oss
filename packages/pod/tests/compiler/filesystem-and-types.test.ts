@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { compilePodFilesystem, discoverPodFilesystem } from '../../src/vite/compiler/index.js';
+import { linkCurrentPodWorkspaceDependencies } from '../support/current-package-node-modules.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const temporaryRoots: string[] = [];
@@ -19,10 +20,7 @@ async function workspace(): Promise<string> {
 	const root = await mkdtemp(path.join(parent, 'compiler-'));
 	temporaryRoots.push(root);
 	await write(root, 'package.json', JSON.stringify({ name: 'compiler-conformance' }));
-	await symlink(
-		path.join(REPO_ROOT, 'template_workspaces/construction/node_modules'),
-		path.join(root, 'node_modules')
-	);
+	await linkCurrentPodWorkspaceDependencies(REPO_ROOT, root);
 	await write(
 		root,
 		'src/collections/things/+model.ts',

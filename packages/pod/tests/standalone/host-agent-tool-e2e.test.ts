@@ -5,12 +5,14 @@ import path from 'node:path';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import { linkCurrentPodWorkspaceDependencies } from '../support/current-package-node-modules.js';
 
 requireDocker();
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js');
 
 const AUTOMATION = 'sandbox_deploy_watch';
+const POD_ADMIN_ID = '66666666-6666-4666-8666-666666666666';
 /**
  * A value only the *host process* holds.
  *
@@ -175,10 +177,11 @@ export default definePodHost({
 			name: deployToolName,
 			description: 'Deploy the workspace from the host sandbox.',
 			input: z.object({ target: z.string().min(1) }),
-			run: async (input) => ({
+			run: async (input, context) => ({
 				ran: 'host',
 				receipt: env('POD_TEST_HOST_RECEIPT'),
-				target: input.target
+				target: input.target,
+				principal: context?.sandboxPrincipalId
 			})
 		},
 		{
@@ -234,6 +237,8 @@ async function writeWorkspace(root: string): Promise<void> {
 		recursive: true,
 		filter: (source) => !source.includes(`${path.sep}.norbital${path.sep}build`)
 	});
+	await rm(path.join(root, 'node_modules'), { recursive: true, force: true });
+	await linkCurrentPodWorkspaceDependencies(REPO_ROOT, root);
 	await mkdir(path.join(root, 'src', 'tools'), { recursive: true });
 	await writeFile(path.join(root, 'src', 'tools', '+list_quotes.tool.ts'), WORKSPACE_TOOL_SOURCE);
 	await writeFile(path.join(root, 'src', 'automation', `+${AUTOMATION}.ts`), AUTOMATION_SOURCE);
@@ -283,14 +288,14 @@ describe('Pod standalone host agent tools — E2E', () => {
 			POD_PORT: String(port),
 			POD_ORG_ID: '55555555-5555-4555-8555-555555555555',
 			POD_ORG_NAME: 'Host Agent Tool Test',
-			POD_ADMIN_ID: '66666666-6666-4666-8666-666666666666',
+			POD_ADMIN_ID,
 			POD_ADMIN_NAME: 'Sandbox Admin',
 			POD_ADMIN_EMAIL: 'admin@sandbox.test',
 			POD_TEMPLATE_KEY: 'crm',
 			POD_TEST_HOST_RECEIPT: RECEIPT
 		};
-		execFileSync('node', [POD_BIN, 'build'], { cwd: root, env: environment, stdio: 'ignore' });
-		execFileSync('node', [POD_BIN, 'migrate'], { cwd: root, env: environment, stdio: 'ignore' });
+		execFileSync('node', [POD_BIN, 'build'], { cwd: root, env: environment, encoding: 'utf8' });
+		execFileSync('node', [POD_BIN, 'migrate'], { cwd: root, env: environment, encoding: 'utf8' });
 
 		running = spawn('node', [POD_BIN, 'start'], { cwd: root, env: environment, stdio: 'pipe' });
 		running.stdout.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
@@ -352,8 +357,14 @@ describe('Pod standalone host agent tools — E2E', () => {
 			ran?: string;
 			receipt?: string;
 			target?: string;
+			principal?: string;
 		};
-		expect(deployResult).toEqual({ ran: 'host', receipt: RECEIPT, target: 'staging' });
+		expect(deployResult).toEqual({
+			ran: 'host',
+			receipt: RECEIPT,
+			target: 'staging',
+			principal: POD_ADMIN_ID
+		});
 
 		// And the tool the agent did not name is refused, though the host registered it.
 		const secretResult = JSON.parse(transcript[3]?.parts?.[0]?.content ?? '{}') as {

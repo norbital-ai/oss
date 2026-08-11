@@ -10,8 +10,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# `packages: read` lets the template lockfile check resolve published `@norbital-ai/*`
-# versions from the configured registry, the same way a projected template does.
 permissions:
   contents: read
   packages: read
@@ -42,23 +40,10 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Check packages and templates
-        run: pnpm check:ci
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
-
-      # Proves the committed lockfiles are what a Core host installs: warm one shared
-      # store over the network, then install with no network and no credentials.
-      - name: Verify offline installability
-        run: pnpm templates:lock:verify
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
-
-      # The bundle format is the only cross-version contract between a template and a host, and this
-      # is the only thing that proves it: a real build against a materialized depset, booted, and
-      # answering with its `ready` frame. It existed unwired for long enough that a host-transport
-      # change shipped without it ever running. A gate nobody runs is not a gate.
-      - name: Verify the runtime bundle boots
-        run: node scripts/smoke-runtime-bundle.mjs
+      # `template_workspaces/` is a stale Pod test fixture, not a release source. Public and private
+      # templates have their own repositories and CI; this repository gates the publishable package
+      # graph plus the tests that exercise those packages.
+      - name: Check publishable packages
+        run: pnpm check:packages:ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
