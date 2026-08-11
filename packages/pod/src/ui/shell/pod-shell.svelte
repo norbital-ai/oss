@@ -38,7 +38,7 @@
 	} from '@norbital-ai/ui/workspace-shell';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { AppMediaHeader } from '@norbital-ai/ui/media-banner';
-	import { Bound, Center, Cover, Frame, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Center, Cover, Frame, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { WorkspaceFileUploadClient } from '$lib/ui/state/workspace-file-upload.svelte.js';
 	import { workspaceRuntimeOperations, type WorkspaceAppLoader } from '../state/client.js';
 	import BillingBanner from './billing-banner.svelte';
@@ -274,6 +274,15 @@
 				}
 			: undefined
 	);
+	const applicationNavigation = $derived(
+		buildApplicationNavigation({
+			appIds: appNames,
+			apps: manifestContext.getAppsRecord(),
+			accessibleAppNames: data.accessibleAppNames,
+			currentPath,
+			i18n: i18nResolver
+		})
+	);
 	const navigationModel = $derived.by((): WorkspaceNavigationModel => ({
 		activeOrganization,
 		organizations: resolveWorkspaceOrganizationOptions({
@@ -293,15 +302,18 @@
 			currentPath,
 			i18n: i18nResolver
 		}),
-		applications: buildApplicationNavigation({
-			appIds: appNames,
-			apps: manifestContext.getAppsRecord(),
-			accessibleAppNames: data.accessibleAppNames,
-			currentPath,
-			i18n: i18nResolver
-		})
+		applications: [
+			{
+				key: 'app-directory',
+				label: t('pod.shell.appDirectory'),
+				href: '/',
+				icon: 'lucide:layout-grid',
+				active: currentPath === '/'
+			},
+			...applicationNavigation
+		]
 	}));
-	type OverviewApplication = WorkspaceNavigationItem & {
+	type OverviewApplication = Omit<WorkspaceNavigationItem, 'children'> & {
 		readonly description: string | null;
 		readonly thumbnail: string | null;
 		readonly children: readonly OverviewApplication[];
@@ -323,9 +335,7 @@
 			children: (item.children ?? []).map(overviewApplication)
 		};
 	}
-	const overviewApplications = $derived.by(() =>
-		navigationModel.applications.map(overviewApplication)
-	);
+	const overviewApplications = $derived.by(() => applicationNavigation.map(overviewApplication));
 	const agentSurfaceAllowed = $derived(workspaceAuthorizesAgentSurface(currentPath));
 	/** Every tenant workspace gets the interactive agent surface; authored `+agent.ts` only customizes it. */
 	const agentAvailable = $derived(workspaceProvidesAgentSurface());
@@ -426,10 +436,16 @@
 	/>
 {/snippet}
 
-{#snippet applicationCard({ app }: { app: OverviewApplication })}
+{#snippet applicationCard({
+	app,
+	priority = false
+}: {
+	app: OverviewApplication;
+	priority?: boolean;
+})}
 	<a
 		href={app.href}
-		class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+		class="group w-[17rem] shrink-0 snap-start overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
 		onclick={(event) => {
 			event.preventDefault();
 			navigate(app.href);
@@ -441,8 +457,11 @@
 					<img
 						src={app.thumbnail}
 						alt=""
-						loading="lazy"
+						loading={priority ? 'eager' : 'lazy'}
+						fetchpriority={priority ? 'high' : 'auto'}
 						decoding="async"
+						width="544"
+						height="272"
 						class="size-full object-cover"
 						onerror={() => failedThumbnails.add(app.key)}
 					/>
@@ -478,6 +497,23 @@
 	</a>
 {/snippet}
 
+{#snippet applicationRow({
+	apps,
+	priority = false
+}: {
+	apps: readonly OverviewApplication[];
+	priority?: boolean;
+})}
+	<div
+		class="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain px-1 pb-2"
+		aria-label={t('pod.shell.applications')}
+	>
+		{#each apps as app, index (app.key)}
+			{@render applicationCard({ app, priority: priority && index < 4 })}
+		{/each}
+	</div>
+{/snippet}
+
 {#snippet applicationHierarchy({
 	app,
 	nested = false
@@ -488,6 +524,8 @@
 	{#if app.children.length === 0}
 		{@render applicationCard({ app })}
 	{:else}
+		{@const leafApps = app.children.filter((child) => child.children.length === 0)}
+		{@const childGroups = app.children.filter((child) => child.children.length > 0)}
 		<Stack
 			as="section"
 			gap="md"
@@ -511,11 +549,12 @@
 					{/if}
 				</Stack>
 			</Inline>
-			<Grid gap="md" minimum="card">
-				{#each app.children as child (child.key)}
-					{@render applicationHierarchy({ app: child, nested: true })}
-				{/each}
-			</Grid>
+			{#if leafApps.length > 0}
+				{@render applicationRow({ apps: leafApps, priority: !nested })}
+			{/if}
+			{#each childGroups as child (child.key)}
+				{@render applicationHierarchy({ app: child, nested: true })}
+			{/each}
 		</Stack>
 	{/if}
 {/snippet}
@@ -559,11 +598,17 @@
 									</span>
 								</Stack>
 							{:else}
-								<Grid gap="xl" minimum="card">
-									{#each overviewApplications as app (app.key)}
+								<Stack gap="xl">
+									{@const rootApps = overviewApplications.filter(
+										(app) => app.children.length === 0
+									)}
+									{#if rootApps.length > 0}
+										{@render applicationRow({ apps: rootApps, priority: true })}
+									{/if}
+									{#each overviewApplications.filter((app) => app.children.length > 0) as app (app.key)}
 										{@render applicationHierarchy({ app })}
 									{/each}
-								</Grid>
+								</Stack>
 							{/if}
 						</Stack>
 					</Stack>

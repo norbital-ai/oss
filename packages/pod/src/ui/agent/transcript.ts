@@ -118,9 +118,13 @@ export function toPanelMessages(
 	// `runSubagent` tags the child's turn `subagent:<spawn call id>`, so the call that started a
 	// delegated agent names the turn that carries its transcript. That is the whole join.
 	const turnByCallId = new Map<string, string>();
+	const turnStatus = new Map<string, string>();
 	const subagentTurnIds = new Set<string>();
 	for (const turn of turns) {
 		const turnId = turn.norbital_id;
+		if (typeof turnId === 'string' && typeof turn.status === 'string') {
+			turnStatus.set(turnId, turn.status);
+		}
 		const subagentId = turn.subagent_id;
 		if (typeof turnId !== 'string' || typeof subagentId !== 'string') continue;
 		subagentTurnIds.add(turnId);
@@ -137,7 +141,7 @@ export function toPanelMessages(
 		byTurn.set(turnId, bucket);
 	}
 
-	const context: ProjectionContext = { results, turnByCallId, byTurn };
+	const context: ProjectionContext = { results, turnByCallId, byTurn, turnStatus };
 	// A subagent's rows belong to its call, not to the conversation they share a session with.
 	const roots = records.filter((record) => {
 		const turnId = record.turn_id;
@@ -166,6 +170,7 @@ type ProjectionContext = {
 	readonly results: ReadonlyMap<string, unknown>;
 	readonly turnByCallId: ReadonlyMap<string, string>;
 	readonly byTurn: ReadonlyMap<string, readonly Readonly<Record<string, unknown>>[]>;
+	readonly turnStatus: ReadonlyMap<string, string>;
 };
 
 /**
@@ -203,6 +208,15 @@ function toPanelRow(
 
 	const body = stored.message.content;
 	const content = typeof body === 'string' ? body : '';
+	const owningTurnStatus =
+		typeof record.turn_id === 'string' ? context.turnStatus.get(record.turn_id) : undefined;
+	const durableStatus =
+		record.status === 'streaming' && owningTurnStatus === 'succeeded'
+			? 'complete'
+			: record.status === 'streaming' &&
+				  (owningTurnStatus === 'failed' || owningTurnStatus === 'aborted')
+				? 'aborted'
+				: record.status;
 	// An assistant turn that only called a tool has empty content by construction. The calls above
 	// already say what it did, so a blank bubble beside them is noise.
 	if (content.trim().length === 0 && rows.length > 0) return rows;
@@ -212,7 +226,7 @@ function toPanelRow(
 			key: id,
 			role: stored.role,
 			content,
-			...(typeof record.status === 'string' ? { status: record.status } : {})
+			...(typeof durableStatus === 'string' ? { status: durableStatus } : {})
 		},
 		...rows
 	];

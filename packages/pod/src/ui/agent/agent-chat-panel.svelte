@@ -382,6 +382,14 @@
 			// error message is visible instead of depending on a second replica event.
 			pending = false;
 			failure = terminalMessage.content.trim() || t('pod.agent.couldNotFinish');
+		} else if (
+			terminalMessage?.kind === 'text' &&
+			terminalMessage.role === 'assistant' &&
+			terminalMessage.status === 'complete'
+		) {
+			// The message and turn terminal writes can arrive through sync in either render frame.
+			pending = false;
+			failure = null;
 		}
 	});
 

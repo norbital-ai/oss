@@ -117,8 +117,10 @@ Agent state lives in the tenant database:
 | `channel_conversation`    | Declared channel plus external conversation to `chat_session` binding       |
 | `channel_inbound_message` | Provider-message deduplication and delivery outcome                         |
 
-An assistant row is created with `status: streaming` on its first text delta, updated in place as
-batches arrive, and marked `complete` only after provider completion. A spawned child writes a
+Provider deltas remain transient transport fragments. Pod accumulates them in memory and creates or
+updates the assistant row only at a semantic, size, or latency-bounded text-part checkpoint; the
+terminal provider result is always written once with `status: complete`. Ordinary tenant sync carries
+those durable parts to every replica without turning individual tokens into database writes. A spawned child writes a
 `chat_turn` with `parent_turn_id` and `subagent_id`; its messages use the same session and therefore
 stream through the same tenant sync connection. Root replay excludes child-turn messages and keeps
 the parent's tool call/result exchange, so a nested transcript does not leak into the next root
@@ -133,8 +135,8 @@ transcript authorization decision to make.
 
 `HostAiBinding` accepts the current messages, tool specifications and optional model/profile
 selection. Streaming hosts implement `startStream`, `readStream` and `cancelStream`; the opaque id
-names only a transient host queue. Pod pulls normalized text/tool/finish events and writes every
-durable state transition. `chat` is the final-result compatibility path for hosts without live
+names only a transient host queue. Pod pulls normalized text/tool/finish events, coalesces text into
+durable parts, and writes lifecycle transitions. `chat` is the final-result compatibility path for hosts without live
 streaming. Either shape is exactly one inference turn: Pod decides whether to execute tools, append
 results, continue, stop, or mark the run failed.
 

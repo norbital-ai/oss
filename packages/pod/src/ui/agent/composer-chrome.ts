@@ -6,7 +6,7 @@
  */
 
 export const AGENT_COMPOSER_SHELL_CLASS =
-	'flex min-w-0 flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-card shadow-deep';
+	'flex min-w-0 flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-popover text-popover-foreground shadow-deep';
 
 export const AGENT_COMPOSER_EDITOR_CLASS =
 	'max-h-40 min-h-14 flex-1 overflow-y-auto resize-none border-0 bg-transparent p-0 text-sm leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0';
