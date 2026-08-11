@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import { linkCurrentPodWorkspaceDependencies } from '../support/current-package-node-modules.js';
 
 requireDocker();
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
@@ -236,6 +237,8 @@ async function writeWorkspace(root: string): Promise<void> {
 		recursive: true,
 		filter: (source) => !source.includes(`${path.sep}.norbital${path.sep}build`)
 	});
+	await rm(path.join(root, 'node_modules'), { recursive: true, force: true });
+	await linkCurrentPodWorkspaceDependencies(REPO_ROOT, root);
 	await mkdir(path.join(root, 'src', 'tools'), { recursive: true });
 	await writeFile(path.join(root, 'src', 'tools', '+list_quotes.tool.ts'), WORKSPACE_TOOL_SOURCE);
 	await writeFile(path.join(root, 'src', 'automation', `+${AUTOMATION}.ts`), AUTOMATION_SOURCE);

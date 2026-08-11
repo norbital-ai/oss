@@ -10,7 +10,6 @@ import {
 	stat,
 	writeFile
 } from 'node:fs/promises';
-import { symlink } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -23,6 +22,7 @@ import type {
 	HostMessagingBinding,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
+import { linkCurrentPodWorkspaceDependencies } from './current-package-node-modules.js';
 import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
 import { startPostgresFromTemplate, type PgHarness } from './pg-harness.js';
 
@@ -305,8 +305,8 @@ async function loadSchemaSql(templateRoot: string): Promise<string> {
 /**
  * Copy a template into `.test-workspaces/` and write the caller's extra sources over it.
  *
- * Inside the repo, because pnpm resolves the injected `@norbital-ai/*` copies through relative
- * symlinks that do not survive a move outside it. The copy is taken under the shared build lock:
+ * Inside the repo, because package resolution stays local to this checkout. The copy is taken under
+ * the shared build lock:
  * without it the snapshot can catch another suite's `.norbital` mid-write, which fails the copy's
  * build for a reason that has nothing to do with the test.
  */
@@ -335,7 +335,11 @@ async function materializeOverlay(
 			}
 		});
 	});
-	await symlink(path.join(templateRoot, 'node_modules'), path.join(root, 'node_modules'));
+	await linkCurrentPodWorkspaceDependencies(
+		REPO_ROOT,
+		root,
+		path.join(templateRoot, 'node_modules')
+	);
 	for (const [relative, contents] of Object.entries(sources)) {
 		const file = path.join(root, relative);
 		await mkdir(path.dirname(file), { recursive: true });
@@ -376,10 +380,11 @@ export async function bootPodRuntime(
 ): Promise<PodRuntimeHarness> {
 	const sharedTemplateRoot = path.join(REPO_ROOT, 'template_workspaces', template);
 	const sources = options.sources ?? {};
-	const usesOverlay = Object.keys(sources).length > 0;
-	const templateRoot = usesOverlay
-		? await materializeOverlay(sharedTemplateRoot, sources)
-		: sharedTemplateRoot;
+	// The checked-in template is source-only. Always build an isolated copy linked to the package
+	// graph under test; its installed 0.0.1 dependencies intentionally model an old consumer and must
+	// never decide whether current package tests pass.
+	const usesOverlay = true;
+	const templateRoot = await materializeOverlay(sharedTemplateRoot, sources);
 	const runtimePath = path.join(templateRoot, '.norbital', 'build', 'output', 'server', 'index.js');
 	const podEnv = (databaseUrl: string) => ({
 		...process.env,
