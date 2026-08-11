@@ -385,7 +385,8 @@ export async function seedStandalone(
 			adminId: environment.adminId,
 			liveUrl: databaseUrl,
 			log: (message) => console.log(message),
-			client: seedClient
+			client: seedClient,
+			transaction: 'external'
 		});
 		// Reconcile again, because the seed is where teams come from.
 		//

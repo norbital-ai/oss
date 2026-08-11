@@ -34,9 +34,13 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: ${{ env.NORBITAL_PACKAGE_REGISTRY }}
+          scope: '@norbital-ai'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Check packages and templates
         run: pnpm check:ci
