@@ -1,4 +1,10 @@
 export { default as CollectionTable } from './collection-table.svelte';
+export {
+	default as DataGrid,
+	type DataGridCellContext,
+	type DataGridColumn,
+	type DataGridProps
+} from './data-grid.svelte';
 export { default as CollectionDetailActions } from './collection-detail-actions.svelte';
 export { default as CollectionRecordDetailEmpty } from './collection-record-detail-empty.svelte';
 export { default as CollectionRecordDetailTabs } from './collection-record-detail-tabs.svelte';
