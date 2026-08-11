@@ -4,7 +4,6 @@
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Cover } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 
 	const { t } = useI18n<TenantI18nKeys>();
@@ -32,11 +31,11 @@
 	<meta name="pod:icon" content="lucide:users" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/construction/app-media/construction_settings_workforce-banner.svg"
+		content="/api/template-seed-assets/construction/app-media/construction_settings_workforce-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/construction/app-media/construction_settings_workforce-banner.svg"
+		content="/api/template-seed-assets/construction/app-media/construction_settings_workforce-banner.webp"
 	/>
 </svelte:head>
 
@@ -86,15 +85,7 @@
 	</CollectionTable>
 {/snippet}
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.construction_settings_workforce.eyebrow')}
-		title={t('app.construction_settings_workforce.header_title')}
-		description={t('app.construction_settings_workforce.header_description')}
-	/>
-{/snippet}
-
-<Cover as="main" top={pageHeading}>
+<Cover as="main">
 	<Tabs
 		lazyLoad={false}
 		animate={false}

@@ -23,4 +23,9 @@ export const leaveAccrualSchema = z.discriminatedUnion('kind', [
 
 export type LeaveAccrual = z.infer<typeof leaveAccrualSchema>;
 
-export default defineCustomType({ name: 'leave_accrual', schema: leaveAccrualSchema });
+export default defineCustomType({
+	name: 'leave_accrual',
+	description:
+		'How entitlement for a leave type comes into being — pro-rata each completed month, granted whole at the start of the leave year, or granted per event with no balance — plus any carry-forward limit and its expiry.',
+	schema: leaveAccrualSchema
+});

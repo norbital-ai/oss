@@ -14,7 +14,7 @@ import type { Hooks } from './$types.js';
  */
 async function assertReferences(
 	policy: unknown,
-	api: Parameters<NonNullable<NonNullable<Hooks['create']>['before']>>[0]['api']
+	api: Parameters<NonNullable<NonNullable<Hooks['create']>['before']>['handler']>[0]['api']
 ): Promise<void> {
 	if (policy == null || typeof policy !== 'object') return;
 	const { late_joiner_arrears, extended_unpaid_leave } = policy as {
@@ -54,16 +54,24 @@ async function assertReferences(
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			await assertReferences(input.settlement_policy, api);
-			return input;
+		before: {
+			description:
+				'Refuses a company whose settlement policy defers late-joiner arrears to a pay component that does not exist or cannot carry an entry, or names an unknown statutory contribution as the extended-unpaid-leave population.',
+			handler: async ({ input, api }) => {
+				await assertReferences(input.settlement_policy, api);
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, api }) => {
-			if (input.settlement_policy !== undefined)
-				await assertReferences(input.settlement_policy, api);
-			return input;
+		before: {
+			description:
+				'Re-checks the company settlement policy whenever it is edited, so an arrears component or extended-leave contribution scheme cannot be pointed at an id that no longer resolves.',
+			handler: async ({ input, api }) => {
+				if (input.settlement_policy !== undefined)
+					await assertReferences(input.settlement_policy, api);
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

@@ -9,7 +9,6 @@
 	import { DataRenderer } from '@norbital-ai/ui/data-renderer';
 	import { RelationshipRenderer } from '@norbital-ai/ui/data-renderer/relationship';
 	import { Bound, Cluster, Cover, Inline, Split, Stack } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import * as Sheet from '@norbital-ai/ui/sheet';
 	import { StaticMap, type StaticMapMarker } from '@norbital-ai/ui/static-map';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
@@ -215,11 +214,11 @@
 	<meta name="pod:icon" content="lucide:building-2" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/field-operations/app-media/field_ops_controller-banner.svg"
+		content="/api/template-seed-assets/field-operations/app-media/field_ops_controller-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/field-operations/app-media/field_ops_controller-banner.svg"
+		content="/api/template-seed-assets/field-operations/app-media/field_ops_controller-banner.webp"
 	/>
 </svelte:head>
 
@@ -403,15 +402,7 @@
 	</CollectionTable>
 {/snippet}
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.field_ops_controller.eyebrow')}
-		title={t('app.field_ops_controller.header_title')}
-		description={t('app.field_ops_controller.header_description')}
-	/>
-{/snippet}
-
-<Cover as="main" top={pageHeading}>
+<Cover as="main">
 	<Tabs
 		animate={false}
 		config={[

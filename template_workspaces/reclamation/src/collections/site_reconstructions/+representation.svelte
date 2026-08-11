@@ -200,7 +200,7 @@
 	</Bound>
 {/snippet}
 
-<main class="h-full min-h-0 p-1">
+<main class="h-full min-h-0">
 	<Split
 		ratio="half"
 		collapse="stack"

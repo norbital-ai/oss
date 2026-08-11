@@ -6,7 +6,6 @@
 		CollectionApprovalRequest,
 		CollectionDefinition,
 		CollectionField,
-		CollectionFilter,
 		CollectionFieldName,
 		CollectionOperations,
 		CollectionPageQuery,
@@ -26,12 +25,17 @@
 	import { Textarea } from '#lib/textarea';
 	import * as Popover from '#lib/popover';
 	import * as Sheet from '#lib/sheet';
-	import { Tooltip } from '#lib/tooltip';
 	import { cn, renderSnippet, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { DataRenderer } from '../data-renderer/index.js';
 	import { formatDataValue, type Translate } from '../data-renderer/index.js';
-	import { Cluster, Grid, Inline, Stack, Bound } from '#lib/layout';
+	import { Cluster, Cover, Grid, Inline, Stack, Bound } from '#lib/layout';
+	import { CollectionQueryState } from '#lib/collection-query';
+	import {
+		CollectionActionToolbar,
+		CollectionPagination,
+		type CollectionToolbarComposition
+	} from '#lib/collection-toolbar';
 	import { CollectionForm } from '../collection-form/index.js';
 	import {
 		collectionRecordId,
@@ -50,8 +54,6 @@
 	} from './collection-table-part.svelte';
 	import CollectionGrid from './internal/collection-grid.svelte';
 	import CollectionTableDetailRegistration from './internal/collection-table-detail-registration.svelte';
-	import CollectionQueryControls from './collection-query-controls.svelte';
-	import CollectionTableOperations from './collection-table-operations.svelte';
 	import CollectionTableList from './collection-table-list.svelte';
 	import CollectionRecordDetailTabs from './collection-record-detail-tabs.svelte';
 	import CollectionRecordDetailEmpty from './collection-record-detail-empty.svelte';
@@ -162,7 +164,6 @@
 			importPipelines.some((pipeline) => pipeline.requiresSelection) ||
 			(bulkEnabled && (operations?.updateMany != null || operations?.delete != null))
 	);
-	let interactiveFilters: readonly CollectionFilter[] = $state([]);
 	let registeredColumns: readonly ColumnConfig[] = $state([]);
 	let initialFitApplied = $state(false);
 	let queries = $state<CollectionTableQueries>({
@@ -185,11 +186,22 @@
 		viewKey: resolvedView,
 		// svelte-ignore state_referenced_locally
 		conditionDefault: undefined,
-		parseCondition: (condition) => condition,
-		initialState: {
-			// svelte-ignore state_referenced_locally
-			pageSize: query?.limit ?? 25
-		}
+		parseCondition: (condition) => condition
+	});
+	/**
+	 * The one search + filter + page model this table runs on.
+	 *
+	 * `TableAPI` used to hold a second copy of the search string and the page, and every narrowing
+	 * had to remember to call `resetToFirstPage()` before it took effect. The reset is a property of
+	 * the model, not a courtesy each handler pays it, so it lives in `CollectionQueryState` now and
+	 * the table only keeps what is genuinely its own: the cursor for each page it has visited.
+	 */
+	// svelte-ignore state_referenced_locally
+	const queryState = new CollectionQueryState<Row>({
+		// svelte-ignore state_referenced_locally
+		pageSize: query?.limit ?? 25,
+		// svelte-ignore state_referenced_locally
+		persistenceKey: resolvedView
 	});
 	function syncColumns(): void {
 		registeredColumns = [...configuredColumns.values()];
@@ -327,18 +339,35 @@
 		return recordTitle(record);
 	}
 
+	/**
+	 * Every cursor past the first belongs to the query that produced it. A new search, filter set,
+	 * page size or sort order makes the rest of the chain point into a result set that no longer
+	 * exists, so it is thrown away rather than re-walked. The page index resets itself inside the
+	 * query model; the cursor ledger is this surface's own bookkeeping.
+	 */
+	watch(
+		// A signature, not the values: `orderBy` is rebuilt whenever the column registry settles, and
+		// comparing identities would throw the ledger away on a change that never happened.
+		() =>
+			JSON.stringify([queryState.search, queryState.filters, queryState.pageSize, orderBy ?? null]),
+		() => {
+			queries.cursors = [undefined];
+			queryState.setPageIndex(0);
+		}
+	);
+
 	const rowsQueryInput = $derived.by(() => {
 		if (disabled) return null;
 		return {
 			operations,
 			query: {
 				...query,
-				search: tableApi.search.current || undefined,
+				search: queryState.search || undefined,
 				orderBy: orderBy ?? defaultOrderBy,
-				limit: tableApi.pagination.current.pageSize,
-				after: queries.cursors[tableApi.pagination.current.pageIndex]
+				limit: queryState.pageSize,
+				after: queries.cursors[queryState.pageIndex]
 			},
-			filters: interactiveFilters
+			filterOptions: queryState.queryOptions
 		};
 	});
 	watch(
@@ -348,11 +377,24 @@
 				queries.rows = null;
 				return;
 			}
-			queries.rows = input.operations.findMany(input.query, { filters: input.filters });
+			queries.rows = input.operations.findMany(input.query, input.filterOptions);
 		},
 		{ lazy: false }
 	);
 	const pageRows = $derived(queries.rows?.current);
+
+	/**
+	 * The cursor for the next page is learned as soon as this one loads, rather than at the moment
+	 * someone presses "next". The shared pagination bar moves the page index and knows nothing about
+	 * cursors — it should not have to.
+	 */
+	watch(
+		() => ({ pageIndex: queryState.pageIndex, cursor: queries.rows?.nextCursor }),
+		({ pageIndex, cursor }) => {
+			if (cursor) queries.cursors[pageIndex + 1] = cursor;
+		},
+		{ lazy: false }
+	);
 
 	const countQueryInput = $derived.by(() => {
 		if (disabled) return null;
@@ -360,11 +402,11 @@
 			operations,
 			query: {
 				where: query?.where,
-				search: tableApi.search.current || undefined,
+				search: queryState.search || undefined,
 				columns: query?.columns,
 				bypass_secret: query?.bypass_secret
 			},
-			filters: interactiveFilters
+			filterOptions: queryState.queryOptions
 		};
 	});
 	watch(
@@ -374,7 +416,7 @@
 				queries.count = null;
 				return;
 			}
-			queries.count = input.operations.count(input.query, { filters: input.filters });
+			queries.count = input.operations.count(input.query, input.filterOptions);
 		},
 		{ lazy: false }
 	);
@@ -488,9 +530,6 @@
 	const activeRecordLoading = $derived(Boolean(queries.record?.loading));
 	const activeRecordError = $derived(queries.record?.error?.message);
 	const tableLoading = $derived(queries.rows?.loading ?? false);
-	const pageCount = $derived(
-		Math.max(1, Math.ceil(tableApi.totalRows / tableApi.pagination.current.pageSize))
-	);
 	let approvalActionState = $state<ApprovalActionState>({ status: 'idle' });
 	let changeRequestOpen = $state(false);
 	const approvalActionPending = $derived(
@@ -831,37 +870,6 @@
 		await Promise.all(rows.map((record) => deleteRecord(collectionRecordId(record))));
 	}
 
-	function updateInteractiveFilters(filters: readonly CollectionFilter[]): void {
-		resetToFirstPage();
-		interactiveFilters = filters;
-	}
-
-	function resetToFirstPage(): void {
-		queries.cursors = [undefined];
-		if (tableApi.pagination.current.pageIndex === 0) return;
-		tableApi.setPagination({ pageIndex: 0, pageSize: tableApi.pagination.current.pageSize });
-	}
-
-	function setPage(pageIndex: number): void {
-		tableApi.setPagination({
-			pageIndex,
-			pageSize: tableApi.pagination.current.pageSize
-		});
-	}
-
-	function previousPage(): void {
-		if (tableApi.pagination.current.pageIndex === 0) return;
-		setPage(tableApi.pagination.current.pageIndex - 1);
-	}
-
-	function nextPage(): void {
-		const nextCursor = queries.rows?.nextCursor;
-		if (!nextCursor) return;
-		const nextIndex = tableApi.pagination.current.pageIndex + 1;
-		queries.cursors[nextIndex] = nextCursor;
-		setPage(nextIndex);
-	}
-
 	const listRows = $derived(
 		tableApi.rowInstances.map((row) => ({
 			id: row.id,
@@ -912,95 +920,64 @@
 	</button>
 {/snippet}
 
-{#snippet tableToolbar()}
-	{#if title}<h2 class="shrink-0 truncate text-sm font-semibold">{title}</h2>{/if}
-	{#if showAbout}
-		<Tooltip align="start" contentClass="max-w-sm space-y-2" delayDuration={100}>
-			{#snippet trigger({ props })}
-				<Button
-					{...props}
-					type="button"
-					variant="ghost"
-					size="icon"
-					class="size-8"
-					aria-label={t('table.aboutCollection')}
-				>
-					<Icon icon="lucide:info" class="size-4" />
-				</Button>
-			{/snippet}
-			{#snippet content()}
-				{#if description}<p>{description}</p>{/if}
-				{#if query?.where}
-					<Stack gap="xs">
-						<p class="font-medium">{t('table.appliedByView')}</p>
-						<Stack as="ul" gap="xs">
-							{#each prefilterDescriptions as filterDescription}
-								<Inline as="li" align="start" gap="xs" class="text-xs">
-									<Icon icon="lucide:filter" class="mt-0.5 size-3 shrink-0 opacity-70" />
-									<span>{filterDescription}</span>
-								</Inline>
-							{/each}
-						</Stack>
-					</Stack>
-				{/if}
-			{/snippet}
-		</Tooltip>
-	{/if}
-	<CollectionQueryControls
-		{definition}
-		collections={workspaceClient.collections}
-		{disabled}
-		searchEnabled={searchEnabled && definition.fields.length > 0}
-		{filterEnabled}
-		initialSearch={tableApi.search.current}
-		{initialFilters}
-		filterPersistenceKey={resolvedView}
-		searchPlaceholder={searchPlaceholder ?? t('table.searchTextFields')}
-		onSearchChange={(search) => {
-			resetToFirstPage();
-			tableApi.setSearch(search);
-		}}
-		onFilterChange={updateInteractiveFilters}
-	/>
-	{#if operationsEnabled}
-		<CollectionTableOperations
-			collectionName={String(collection)}
-			{exportPipelines}
-			{importPipelines}
-			{integrations}
-			selectedRows={selectedRecords}
-			fields={definition.fields}
-			updateSelected={updateSelectedAction}
-			deleteSelected={deleteSelectedAction}
-			clearSelection={() => tableApi.setRowSelection({})}
-			{disabled}
-			{refresh}
+{#snippet toolbarActions({ Action }: CollectionToolbarComposition<Row>)}
+	{#if createEnabled}
+		<Action
+			label={createLabel}
+			icon="lucide:plus"
+			variant="default"
+			unavailable={disabled ? t('table.viewDisabled') : undefined}
+			onRun={() => {
+				createOpen = true;
+			}}
 		/>
 	{/if}
+	<Action
+		label={t('table.refreshCollectionData')}
+		icon="lucide:refresh-cw"
+		iconOnly
+		pending={tableLoading}
+		unavailable={disabled ? t('table.viewDisabled') : undefined}
+		onRun={() => refreshData()}
+	/>
 {/snippet}
 
-{#snippet createTools()}
-	<Button size="sm" {disabled} onclick={() => (createOpen = true)}>
-		<Icon icon="lucide:plus" class="size-4" />
-		{createLabel}
-	</Button>
+{#snippet toolbar()}
+	<CollectionActionToolbar
+		{client}
+		{collection}
+		query={queryState}
+		{title}
+		about={showAbout ? { description, applied: prefilterDescriptions } : undefined}
+		{disabled}
+		{searchPlaceholder}
+		features={{ search: searchEnabled, filter: filterEnabled }}
+		{initialFilters}
+		filterPersistenceKey={resolvedView}
+		operations={operationsEnabled
+			? {
+					exportPipelines,
+					importPipelines,
+					integrations,
+					selectedRows: selectedRecords,
+					updateSelected: updateSelectedAction,
+					deleteSelected: deleteSelectedAction,
+					clearSelection: () => tableApi.setRowSelection({}),
+					refresh
+				}
+			: undefined}
+		actions={toolbarActions}
+	/>
 {/snippet}
 
-{#snippet toolbarTools()}
-	{#if createEnabled}
-		{@render createTools()}
-	{/if}
-	<Button
-		type="button"
-		variant="ghost"
-		size="icon"
-		aria-label={t('table.refreshCollectionData')}
-		title={t('table.refreshCollectionData')}
-		disabled={disabled || tableLoading}
-		onclick={() => void refreshData()}
-	>
-		<Icon icon="lucide:refresh-cw" class={tableLoading ? 'size-4 animate-spin' : 'size-4'} />
-	</Button>
+{#snippet paginationBar()}
+	<CollectionPagination
+		query={queryState}
+		total={tableApi.totalRows}
+		hasNextPage={Boolean(queries.rows?.nextCursor)}
+		{disabled}
+		selectedCount={effectiveSelectable ? selectedRecords.length : undefined}
+	/>
 {/snippet}
 
 {#snippet autoListCard(record: Row)}
@@ -1156,55 +1133,50 @@
 <!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
 <!-- stupidity:allow UI15 -- the table keeps a usable empty/loading viewport before rows establish intrinsic height -->
 <Bound size="full" class="collection-table-responsive min-h-[24rem]" data-collection-table-surface>
-	<CollectionGrid
-		table={tableApi}
-		{disabled}
-		class={cn('collection-table-wide', className)}
-		isLoading={tableLoading}
-		error={errorMessage}
-		enableSelection={effectiveSelectable}
-		getRowLeadingAccent={rowLeadingAccent}
-		{activeRecordId}
-		rowActions={gridRowActions}
-		leftActions={[tableToolbar]}
-		rightActions={[toolbarTools]}
-		stickyRowActions={true}
-		hasNextPage={Boolean(queries.rows?.nextCursor)}
-		onPreviousPage={previousPage}
-		onNextPage={nextPage}
-		{emptyPlaceholder}
-	/>
+	<!--
+		One toolbar and one pagination bar for both halves of the surface. The wide grid and the narrow
+		list show the same page of the same query; only their body differs, so only their body is
+		rendered twice.
+	-->
+	<Cover as="div" gap="sm" top={toolbar} bottom={paginationBar}>
+		<CollectionGrid
+			table={tableApi}
+			{disabled}
+			class={cn('collection-table-wide', className)}
+			isLoading={tableLoading}
+			error={errorMessage}
+			getRowLeadingAccent={rowLeadingAccent}
+			{activeRecordId}
+			rowActions={gridRowActions}
+			rowIndexOffset={queryState.pageIndex * queryState.pageSize}
+			stickyRowActions={true}
+			{emptyPlaceholder}
+		/>
 
-	<CollectionTableList
-		rows={listRows}
-		loading={tableLoading}
-		error={errorMessage}
-		selectable={effectiveSelectable}
-		{disabled}
-		class={cn('collection-table-narrow', className)}
-		pageIndex={tableApi.pagination.current.pageIndex}
-		{pageCount}
-		hasNextPage={Boolean(queries.rows?.nextCursor)}
-		toolbar={tableToolbar}
-		{toolbarTools}
-		ListCard={ListCard ?? autoListCard}
-		{emptyPlaceholder}
-		{rowActions}
-		{recordTitle}
-		{activeRecordId}
-		recordHref={(record) =>
-			recordDetailHref({
-				record,
-				__collectionTableRowId: String(Reflect.get(record, recordIdField))
-			})}
-		onOpen={(record) =>
-			openRecord({
-				record,
-				__collectionTableRowId: String(Reflect.get(record, recordIdField))
-			})}
-		onPreviousPage={previousPage}
-		onNextPage={nextPage}
-	/>
+		<CollectionTableList
+			rows={listRows}
+			loading={tableLoading}
+			error={errorMessage}
+			selectable={effectiveSelectable}
+			{disabled}
+			class={cn('collection-table-narrow', className)}
+			ListCard={ListCard ?? autoListCard}
+			{emptyPlaceholder}
+			{rowActions}
+			{recordTitle}
+			{activeRecordId}
+			recordHref={(record) =>
+				recordDetailHref({
+					record,
+					__collectionTableRowId: String(Reflect.get(record, recordIdField))
+				})}
+			onOpen={(record) =>
+				openRecord({
+					record,
+					__collectionTableRowId: String(Reflect.get(record, recordIdField))
+				})}
+		/>
+	</Cover>
 </Bound>
 
 <Sheet.Root bind:open={createOpen}>

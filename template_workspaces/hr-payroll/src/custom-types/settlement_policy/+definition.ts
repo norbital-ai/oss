@@ -104,4 +104,9 @@ export const settlementPolicySchema = z.strictObject({
 
 export type SettlementPolicy = z.infer<typeof settlementPolicySchema>;
 
-export default defineCustomType({ name: 'settlement_policy', schema: settlementPolicySchema });
+export default defineCustomType({
+	name: 'settlement_policy',
+	description:
+		'A company’s deviations from its plain pay calendar: deferring a late joiner’s first pay to arrears, how a leaver’s final days are measured and paid, which divisor values an unpaid day, when a long absence counts as a leave of absence, and any narrower overtime window.',
+	schema: settlementPolicySchema
+});

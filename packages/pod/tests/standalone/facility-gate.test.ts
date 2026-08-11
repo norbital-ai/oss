@@ -79,8 +79,13 @@ describe('standalone facility gate', () => {
 		const agentWorkspace = manifest({
 			automations: {
 				triage: {
+					description: 'Sorts the overnight records into the queues that handle them.',
 					trigger: { schedule: '0 6 * * *' },
-					spec: { kind: 'agent', task: 'Triage records' }
+					spec: {
+						kind: 'agent',
+						description: 'Sorts the overnight records into the queues that handle them.',
+						task: 'Triage records'
+					}
 				}
 			}
 		});
@@ -135,7 +140,12 @@ describe('standalone facility gate', () => {
 
 	it('refuses a workspace whose automations have no queue to run them', () => {
 		const scheduled = manifest({
-			automations: { nightly: { trigger: { schedule: '0 6 * * *' } } }
+			automations: {
+				nightly: {
+					description: 'Runs the nightly bookkeeping pass.',
+					trigger: { schedule: '0 6 * * *' }
+				}
+			}
 		});
 		expect(() => assertStandaloneFacilities(scheduled, satisfiedFacilities(hostConfig()))).toThrow(
 			/queue/
@@ -169,7 +179,15 @@ describe('pod dev facility gate', () => {
 		const available = await developmentFacilities();
 		const agentWorkspace = manifest({
 			automations: {
-				triage: { trigger: { schedule: '0 6 * * *' }, spec: { kind: 'agent', task: 'Triage' } }
+				triage: {
+					description: 'Sorts the overnight records into the queues that handle them.',
+					trigger: { schedule: '0 6 * * *' },
+					spec: {
+						kind: 'agent',
+						description: 'Sorts the overnight records into the queues that handle them.',
+						task: 'Triage'
+					}
+				}
 			}
 		});
 		// Starting anyway would fail at the first inference call, far from the cause.
@@ -186,9 +204,24 @@ describe('pod dev facility gate', () => {
 			manifestChannelTransports(
 				manifest({
 					channels: {
-						sales_desk: { key: 'sales_desk', transport: 'telegram', policy: 'sales_rep' },
-						support: { key: 'support', transport: 'whatsapp', policy: 'sales_rep' },
-						escalations: { key: 'escalations', transport: 'telegram', policy: 'sales_rep' }
+						sales_desk: {
+							key: 'sales_desk',
+							transport: 'telegram',
+							policy: 'sales_rep',
+							description: 'Prospects reaching the sales desk over Telegram.'
+						},
+						support: {
+							key: 'support',
+							transport: 'whatsapp',
+							policy: 'sales_rep',
+							description: 'Existing customers asking for help over WhatsApp.'
+						},
+						escalations: {
+							key: 'escalations',
+							transport: 'telegram',
+							policy: 'sales_rep',
+							description: 'Deals the sales desk hands upward for a decision.'
+						}
 					}
 				})
 			)

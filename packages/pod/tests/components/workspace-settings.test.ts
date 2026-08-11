@@ -138,10 +138,39 @@ function memberEmails(container: HTMLElement): string[] {
 	);
 }
 
-function select(container: HTMLElement, label: string): HTMLSelectElement {
-	const node = container.querySelector(`select[aria-label="${label}"]`);
-	if (!(node instanceof HTMLSelectElement)) throw new Error(`no select for ${label}`);
+/**
+ * Enums render through `Combobox` now, not a native `<select>`.
+ *
+ * A native select is one element with a `.value`; a combobox is a trigger that opens a listbox, so
+ * driving it means opening it and choosing the option a person would click. The trigger keeps the
+ * accessible name the select had, which is what these lookups still key on.
+ */
+function comboboxTrigger(container: HTMLElement, label: string): HTMLElement {
+	const node = container.querySelector(`[role="combobox"][aria-label="${label}"]`);
+	if (!(node instanceof HTMLElement)) throw new Error(`no combobox for ${label}`);
 	return node;
+}
+
+async function chooseOption(
+	container: HTMLElement,
+	label: string,
+	optionLabel: string,
+	settleFn: () => Promise<void>,
+	inspectOptions?: (labels: string[]) => void
+): Promise<void> {
+	comboboxTrigger(container, label).click();
+	await settleFn();
+	// Scoped to the open listbox: `[data-value]` alone also matches the surface's own tab triggers.
+	const options = [...document.querySelectorAll('[role="listbox"] [data-value]')];
+	inspectOptions?.(
+		options.map((node) => node.textContent?.replace(/\s+/g, ' ').trim() ?? '').filter(Boolean)
+	);
+	const option = options.find(
+		(node) => node.textContent?.replace(/\s+/g, ' ').trim() === optionLabel
+	);
+	if (!(option instanceof HTMLElement)) throw new Error(`no option ${optionLabel} for ${label}`);
+	option.click();
+	await settleFn();
 }
 
 describe('workspace settings surface', () => {
@@ -159,7 +188,7 @@ describe('workspace settings surface', () => {
 		await settle();
 
 		expect(memberEmails(container)).toEqual(['admin@it.local', 'engineer@it.local']);
-		expect(select(container, 'Role for engineer@it.local').value).toBe('basic');
+		expect(comboboxTrigger(container, 'Role for engineer@it.local').textContent).toContain('Basic');
 
 		// Somebody accepted an invitation in another tab. Nothing here polls; the sync engine re-fires
 		// the read this surface already has open.
@@ -184,10 +213,7 @@ describe('workspace settings surface', () => {
 		const { container, destroy } = mount();
 		await settle();
 
-		const roleSelect = select(container, 'Role for engineer@it.local');
-		roleSelect.value = 'advanced';
-		roleSelect.dispatchEvent(new Event('change', { bubbles: true }));
-		await settle();
+		await chooseOption(container, 'Role for engineer@it.local', 'Advanced', settle);
 
 		// A role is not writable from a browser replica — it goes to an endpoint that checks admin.
 		expect(api.calls).toEqual([{ method: 'setMemberRole', args: ['user-member', 'advanced'] }]);
@@ -242,15 +268,10 @@ describe('workspace settings surface', () => {
 		await settle();
 		// A policy only reaches a person through membership, so the candidates are the members who are
 		// not in this team yet — offering one who already is would create a duplicate row.
-		const adder = select(container, 'Add someone to Site');
-		expect([...adder.options].map((option) => option.textContent?.trim())).toEqual([
-			'Add member…',
-			'engineer@it.local'
-		]);
-
-		adder.value = 'user-member';
-		adder.dispatchEvent(new Event('change', { bubbles: true }));
-		await settle();
+		await chooseOption(container, 'Add someone to Site', 'engineer@it.local', settle, (labels) => {
+			// Offering somebody already in the team would create a duplicate membership row.
+			expect(labels).toEqual(['engineer@it.local']);
+		});
 		(
 			container.querySelector('[aria-label="Add member to Site"]') as HTMLButtonElement | null
 		)?.click();
@@ -286,17 +307,38 @@ describe('workspace settings surface', () => {
 		expect(rows(container, 'invitation-email')).toEqual(['waiting@example.test']);
 		expect(container.textContent).toContain('Invitations');
 
-		const email = container.querySelector('input[aria-label="Invitation email"]');
-		if (!(email instanceof HTMLInputElement)) throw new Error('no email field');
+		// Inviting is the table's own create action now, not a form bolted above the table, so this
+		// drives the same create sheet every other collection surface opens.
+		const createButton = [...container.querySelectorAll('button')].find(
+			(node) => node.textContent?.trim() === 'New Invitation'
+		);
+		if (!(createButton instanceof HTMLButtonElement)) throw new Error('no create action');
+		createButton.click();
+		await settle();
+
+		const email = document.querySelector('input#invitation-email');
+		if (!(email instanceof HTMLInputElement)) throw new Error('no email field in the create sheet');
 		email.value = 'new.person@example.test';
 		email.dispatchEvent(new Event('input', { bubbles: true }));
-		const roleSelect = select(container, 'Invitation role');
-		roleSelect.value = 'advanced';
-		roleSelect.dispatchEvent(new Event('change', { bubbles: true }));
 		await settle();
-		container
-			.querySelector('form')
-			?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+		const roleTrigger = email.closest('form')?.querySelector('[role="combobox"]');
+		if (!(roleTrigger instanceof HTMLElement))
+			throw new Error('no role combobox in the create sheet');
+		roleTrigger.click();
+		await settle();
+		const advanced = [...document.querySelectorAll('[role="listbox"] [data-value]')].find(
+			(node) => node.textContent?.trim() === 'Advanced'
+		);
+		if (!(advanced instanceof HTMLElement)) throw new Error('no Advanced role option');
+		advanced.click();
+		await settle();
+
+		const submit = [...(email.closest('form')?.querySelectorAll('button') ?? [])].find(
+			(node) => node.type === 'submit'
+		);
+		if (!(submit instanceof HTMLButtonElement)) throw new Error('no submit in the create sheet');
+		submit.click();
 		await settle();
 
 		expect(api.calls[1]).toEqual({

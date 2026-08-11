@@ -18,4 +18,9 @@ export const overtimeAwardSchema = z.discriminatedUnion('kind', [
 
 export type OvertimeAward = z.infer<typeof overtimeAwardSchema>;
 
-export default defineCustomType({ name: 'overtime_award', schema: overtimeAwardSchema });
+export default defineCustomType({
+	name: 'overtime_award',
+	description:
+		'What an overtime band pays: a multiple of the hourly ordinary rate, or a multiple of the ordinary day wage.',
+	schema: overtimeAwardSchema
+});

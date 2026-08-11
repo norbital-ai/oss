@@ -45,6 +45,8 @@ function dateKey(value: string | Date): string {
  */
 export default {
 	import: {
+		description:
+			'Loads a workbook of rostered days into one draft roster month, matching each row to an employment by employee number and to a shift by code, and dropping the shift on rest and off days.',
 		input: importSchema,
 		handler: async ({ input }, api) => {
 			// Re-parsed rather than cast: the pipeline type erases the schema's output type, and a

@@ -22,6 +22,8 @@ const itemsSchema = z.object({
  */
 export default {
 	import: {
+		description:
+			'Mirrors the delivered ERP item feed into the product catalogue, skipping any item whose external_code is already on file.',
 		input: itemsSchema,
 		handler: async ({ input }, api) => {
 			const items = itemsSchema.parse(input).items;

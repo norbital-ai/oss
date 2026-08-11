@@ -21,6 +21,8 @@ const customersSchema = z.object({
  */
 export default {
 	import: {
+		description:
+			'Mirrors the delivered ERP customer feed into accounts, skipping any customer whose external_code is already on file.',
 		input: customersSchema,
 		handler: async ({ input }, api) => {
 			const customers = customersSchema.parse(input).customers;

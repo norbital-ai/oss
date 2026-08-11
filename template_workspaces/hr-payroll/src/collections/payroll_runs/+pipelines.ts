@@ -15,6 +15,8 @@ import { loadRunExports } from './lib/export-data.js';
 
 export default {
 	export: {
+		description:
+			'Turns the selected payroll runs into the three artefacts a settled period hands out: a bank payment CSV, one PDF payslip per employee, and the payroll report workbook.',
 		handler: async ({ records }, api) => {
 			const { bankFileRows, payrollReportXlsx, payslipPdf } = await import('./lib/export.js');
 			const exports = await loadRunExports(api, records);

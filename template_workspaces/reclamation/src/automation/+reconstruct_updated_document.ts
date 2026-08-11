@@ -9,8 +9,13 @@ import { reconstructForDocument } from '../lib/reclamation/stitch-driver.js';
  */
 export default defineAutomation(
 	{ trigger: { collection: 'project_documents', event: 'updated' } },
-	async (api, { scope }) => ({
-		project_id: scope.incoming_record.project_id,
-		outcome: await reconstructForDocument(api, scope.incoming_record)
-	})
+	{
+		kind: 'deterministic',
+		description:
+			'Appends a new site reconstruction when a re-filed document changes what the engine reads, and skips the run when only the document name changed.',
+		handler: async (api, { scope }) => ({
+			project_id: scope.incoming_record.project_id,
+			outcome: await reconstructForDocument(api, scope.incoming_record)
+		})
+	}
 );

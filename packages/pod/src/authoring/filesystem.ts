@@ -351,6 +351,14 @@ export function defineRuntimeCollection(
 
 export type GroupDefinition = {
 	readonly label: string;
+	/**
+	 * What the applications under this group are collectively for.
+	 *
+	 * Required, and carried into the manifest as the group's app entry: a group is a first-class row
+	 * in the studio's application list, and one that says only "HR Controller" leaves a reader to
+	 * infer the whole of it from an icon.
+	 */
+	readonly description: string;
 	readonly icon: string;
 	/** Child app key used when navigating to the group itself. */
 	readonly defaultChild?: string;

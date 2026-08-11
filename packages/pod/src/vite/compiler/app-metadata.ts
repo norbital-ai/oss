@@ -193,6 +193,19 @@ export function extractAppMetadata(source: string, file: string): AppMetadataRes
 	diagnostics.push(...iconResult.diagnostics);
 
 	const descriptionEntries = values.get('description') ?? [];
+	// An app with nothing said about it is the one thing the studio cannot compensate for: the title
+	// names the surface and the icon decorates it, and neither says what the app is for.
+	if (descriptionEntries.length === 0) {
+		diagnostics.push(
+			sourceDiagnostic(
+				source,
+				file,
+				heads[0]?.start ?? 0,
+				'APP_DESCRIPTION_MISSING',
+				'App head requires one static description meta tag'
+			)
+		);
+	}
 	for (const entry of descriptionEntries.slice(1)) {
 		diagnostics.push(
 			sourceDiagnostic(
@@ -204,14 +217,14 @@ export function extractAppMetadata(source: string, file: string): AppMetadataRes
 			)
 		);
 	}
-	if (descriptionEntries[0] && descriptionEntries[0].value == null) {
+	if (descriptionEntries[0] && !descriptionEntries[0].value) {
 		diagnostics.push(
 			sourceDiagnostic(
 				source,
 				file,
 				descriptionEntries[0].element.start,
 				'APP_DESCRIPTION_DYNAMIC',
-				'App description must be a static string'
+				'App description must be a non-empty static string'
 			)
 		);
 	}
@@ -249,10 +262,10 @@ export function extractAppMetadata(source: string, file: string): AppMetadataRes
 	const banner = values.get('pod:banner')?.[0]?.value ?? null;
 	return {
 		metadata:
-			diagnostics.length === 0 && title && iconResult.icon
+			diagnostics.length === 0 && title && iconResult.icon && descriptionEntries[0]?.value
 				? {
 						title,
-						description: descriptionEntries[0]?.value ?? null,
+						description: descriptionEntries[0].value,
 						icon: iconResult.icon,
 						thumbnail,
 						banner

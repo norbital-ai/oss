@@ -1,22 +1,16 @@
 <script lang="ts" generics="TData extends Record<string, unknown>, TCondition = unknown">
 	import Icon from '@iconify/svelte';
 	import * as Alert from '#lib/alert';
-	import { Button } from '#lib/button';
-	import { Input } from '#lib/input';
-	import { Cluster, Cover, Inline, Scroll, Stack } from '#lib/layout';
-	import { Separator } from '#lib/separator';
+	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { Skeleton } from '#lib/skeleton';
 	import { Sortable } from '#lib/sortable';
-	import { Tooltip } from '#lib/tooltip';
 	import { cn, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { debounce } from 'es-toolkit/function';
 	import { watch } from 'runed';
 	import { onMount, tick, type Snippet } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import CollectionTableColumnActions from './component/columns/collection-table-column-actions.svelte';
-	import CollectionActionToolbar from '../collection-action-toolbar.svelte';
 	import { ColumnAPI, RowAPI, TableAPI } from './collection-table-state.svelte';
 
 	const { t } = useI18n<UiKeys>();
@@ -59,22 +53,21 @@
 		enableRowReordering?: boolean;
 		enableColumnReordering?: boolean;
 		enableSorting?: boolean;
-		enableSelection?: boolean;
 
-		hidePaginationWhenSinglePage?: boolean;
-		hasNextPage?: boolean;
-		onPreviousPage?: () => void;
-		onNextPage?: () => void;
 		borderless?: boolean;
 		defaultExpanded?: boolean;
 
-		leftActions?: Snippet<[{ table: TableAPI<TData, TCondition> }]>[];
-		rightActions?: Snippet<[{ table: TableAPI<TData, TCondition> }]>[];
+		/**
+		 * Index of this page's first row within the whole result set, so `aria-rowindex` counts from
+		 * the set rather than restarting at 1 on every page. The grid renders one page and does not
+		 * own the paging, so it cannot work this out for itself.
+		 */
+		rowIndexOffset?: number;
+
 		rowActions?: Snippet<
 			[{ row: RowAPI<TData, TCondition>; table: TableAPI<TData, TCondition>; hovered: boolean }]
 		>[];
 		stickyRowActions?: boolean;
-		bottomRightActions?: Snippet<[{ table: TableAPI<TData, TCondition> }]>[];
 		subComponent?: Snippet<
 			[{ row: RowAPI<TData, TCondition>; table: TableAPI<TData, TCondition> }]
 		>;
@@ -108,19 +101,12 @@
 		enableRowReordering = false,
 		enableColumnReordering = true,
 		enableSorting = true,
-		enableSelection = true,
-		hidePaginationWhenSinglePage = false,
-		hasNextPage = false,
-		onPreviousPage,
-		onNextPage,
 		borderless = false,
 		defaultExpanded = false,
+		rowIndexOffset = 0,
 
-		leftActions,
-		rightActions,
 		rowActions,
 		stickyRowActions = false,
-		bottomRightActions,
 		subComponent,
 		emptyPlaceholder,
 
@@ -168,7 +154,6 @@
 	let bodyScrollElement: HTMLDivElement | null = $state(null);
 	let tableHeaderElement: HTMLDivElement | null = $state(null);
 	let hoveredRowId = $state<string | null>(null);
-	let pageSizeError = $state(false);
 
 	// ----------------------------------------------------------------------------------
 	// Table API (single source of truth)
@@ -200,8 +185,9 @@
 
 	function handleSort(inst: ColumnAPI<TData, TCondition>) {
 		if (!sortingEnabled || !inst.enableSorting) return;
+		// Re-ordering the set invalidates the page you are on, but the grid does not own the page:
+		// the surface watches `tableApi.sort` and resets its query model.
 		inst.toggleSort();
-		tableApi.setPagination({ pageIndex: 0, pageSize: tableApi.pagination.current.pageSize });
 	}
 
 	function activateRow(event: MouseEvent | KeyboardEvent, row: TData): void {
@@ -367,70 +353,22 @@
 	function measureRow(_expanded: boolean): Attachment {
 		return (el) => rowVirtualizer.measureElement(el as HTMLElement);
 	}
-
-	// --------------------- Pagination helpers ---------------------
-	const pageCount = $derived(
-		Math.max(1, Math.ceil(tableApi.totalRows / tableApi.pagination.current.pageSize))
-	);
-
-	const debouncedPageSizeChange = debounce((size: number) => {
-		tableApi.setPagination({ pageIndex: 0, pageSize: Math.max(1, Math.min(500, size)) });
-	}, 300);
-
-	function handlePageSizeInput(event: Event) {
-		if (disabled) return;
-		const input = event.currentTarget as HTMLInputElement;
-		if (input.value === '') {
-			pageSizeError = false;
-			return debouncedPageSizeChange.cancel();
-		}
-		const value = parseInt(input.value, 10);
-		if (!Number.isNaN(value) && value >= 1 && value <= 500) {
-			pageSizeError = false;
-			debouncedPageSizeChange(value);
-		} else {
-			pageSizeError = true;
-			debouncedPageSizeChange.cancel();
-		}
-	}
-
-	function formatNumber(num: number): string {
-		if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M';
-		if (num >= 1_000) return (num / 1_000).toFixed(num >= 10_000 ? 0 : 1) + 'K';
-		return num.toLocaleString();
-	}
-
-	const selectedCount = $derived(
-		Object.values(tableApi.rowSelection.current).filter(Boolean).length
-	);
 </script>
 
-{#snippet actionsRow()}
-	{#snippet view()}
-		{#each leftActions ?? [] as action}{@render action({ table: tableApi })}{/each}
-	{/snippet}
-	{#snippet actions()}
-		{#each rightActions ?? [] as action}{@render action({ table: tableApi })}{/each}
-	{/snippet}
-	<div data-collection-grid-toolbar>
-		<CollectionActionToolbar
-			view={leftActions ? view : undefined}
-			actions={rightActions ? actions : undefined}
-		/>
-	</div>
-{/snippet}
-
+<!--
+	Rows only. The toolbar above the grid and the pagination bar below it belong to the surface, which
+	is the only thing that knows there are two of these — a wide grid and a narrow list — showing the
+	same page of the same query.
+-->
 <Cover
 	as="div"
-	gap={leftActions || rightActions ? 'sm' : 'none'}
+	gap="none"
 	class={className}
 	style={bounded ? undefined : 'height: auto; max-height: none;'}
 	role="grid"
 	aria-rowcount={tableApi.totalRows}
 	aria-colcount={layouts.length}
 	aria-busy={isLoading}
-	top={leftActions || rightActions ? actionsRow : undefined}
-	bottom={pagination}
 >
 	<Cover
 		as="div"
@@ -452,102 +390,6 @@
 		</Scroll>
 	</Cover>
 </Cover>
-
-{#snippet pagination()}
-	{@const pageCountLocal = pageCount}
-	{@const shouldHide =
-		hidePaginationWhenSinglePage && tableApi.pagination.current.pageIndex === 0 && !hasNextPage}
-	{@const hasBR = bottomRightActions && bottomRightActions.length > 0}
-
-	{#if !shouldHide}
-		<Cluster
-			gap="md"
-			justify="between"
-			align="center"
-			shrink={false}
-			class="p-1 text-xs text-muted-foreground"
-		>
-			<Cluster gap="sm">
-				{#if enableSelection}
-					<span
-						class="whitespace-nowrap"
-						title={t('common.selectedOfTotal', {
-							selected: selectedCount.toLocaleString(),
-							total: tableApi.totalRows.toLocaleString()
-						})}
-					>
-						{t('table.selectedFraction', {
-							selected: formatNumber(selectedCount),
-							total: formatNumber(tableApi.totalRows)
-						})}
-					</span>
-					<Separator orientation="vertical" class="h-4" />
-				{/if}
-				<Tooltip delayDuration={0} text={disabled ? t('table.pageSizeDisabled') : undefined}>
-					{#snippet trigger({ props })}
-						<Inline gap="xs" {...props}>
-							<Input
-								type="number"
-								class={cn('h-6 w-14 text-xs', pageSizeError && 'border-red-500')}
-								max={500}
-								min={1}
-								value={tableApi.pagination.current.pageSize}
-								oninput={handlePageSizeInput}
-								{disabled}
-							/>
-							<span class="text-xs text-muted-foreground">{t('table.perPage')}</span>
-						</Inline>
-					{/snippet}
-				</Tooltip>
-			</Cluster>
-
-			<Inline gap="sm" justify="center">
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					class="size-8"
-					aria-label={t('table.previousPage')}
-					disabled={disabled || tableApi.pagination.current.pageIndex === 0}
-					onclick={onPreviousPage}
-				>
-					<Icon icon="lucide:chevron-left" class="size-4" />
-				</Button>
-				<span class="min-w-20 text-center tabular-nums">
-					{t('table.pageOf', {
-						page: tableApi.pagination.current.pageIndex + 1,
-						pages: pageCountLocal
-					})}
-				</span>
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					class="size-8"
-					aria-label={t('table.nextPage')}
-					disabled={disabled || !hasNextPage}
-					onclick={onNextPage}
-				>
-					<Icon icon="lucide:chevron-right" class="size-4" />
-				</Button>
-			</Inline>
-
-			{#if hasBR}
-				<Inline gap="xs" justify="end">
-					{#each bottomRightActions as action}
-						{@render action({ table: tableApi })}
-					{/each}
-				</Inline>
-			{/if}
-		</Cluster>
-	{:else if bottomRightActions}
-		<Inline gap="xs" justify="end">
-			{#each bottomRightActions as action}
-				{@render action({ table: tableApi })}
-			{/each}
-		</Inline>
-	{/if}
-{/snippet}
 
 {#snippet renderTableHeader()}
 	<div
@@ -889,10 +731,7 @@
 										data-record-id={rowId}
 										data-detail-active={isDetailActive ? 'true' : undefined}
 										role="row"
-										aria-rowindex={tableApi.pagination.current.pageIndex *
-											tableApi.pagination.current.pageSize +
-											vi.index +
-											2}
+										aria-rowindex={rowIndexOffset + vi.index + 2}
 										aria-selected={isRowSelected}
 										aria-current={isDetailActive ? 'true' : undefined}
 										aria-expanded={enableRowExpansion ? isRowExpanded : undefined}

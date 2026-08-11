@@ -12,4 +12,9 @@ export const accrualKeySchema = z.discriminatedUnion('by', [
 
 export type AccrualKey = z.infer<typeof accrualKeySchema>;
 
-export default defineCustomType({ name: 'accrual_key', schema: accrualKeySchema });
+export default defineCustomType({
+	name: 'accrual_key',
+	description:
+		'How a leave accrual band is selected: from a number of completed months of service upward, or flat for every employee regardless of service.',
+	schema: accrualKeySchema
+});

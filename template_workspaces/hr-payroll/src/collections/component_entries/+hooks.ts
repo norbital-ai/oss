@@ -2,7 +2,9 @@ import { refuse } from '@norbital-ai/pod/authoring';
 import type { Hooks } from './$types.js';
 import { instalmentOrigin } from '../../lib/variant.js';
 
-type BeforeApi = Parameters<NonNullable<NonNullable<Hooks['create']>['before']>>[0]['api'];
+type BeforeApi = Parameters<
+	NonNullable<NonNullable<Hooks['create']>['before']>['handler']
+>[0]['api'];
 
 /**
  * Amounts are magnitudes. Direction comes from the pay component's policy and from the treatment,
@@ -77,63 +79,75 @@ async function assertInstalmentMatchesAgreement(
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			assertMagnitude(input.amount);
-			await assertInstalmentMatchesAgreement(api, {
-				employment_id: input.employment_id,
-				pay_component_id: input.pay_component_id,
-				amount: input.amount,
-				event_date: input.event_date,
-				pay_period: input.pay_period ?? null,
-				origin: input.origin
-			});
-			return input;
+		before: {
+			description:
+				'Rejects a negative entry amount, and checks that a loan-instalment entry matches the amount, due date and pay period of the numbered instalment on its repayment agreement instead of being keyed in by hand.',
+			handler: async ({ input, api }) => {
+				assertMagnitude(input.amount);
+				await assertInstalmentMatchesAgreement(api, {
+					employment_id: input.employment_id,
+					pay_component_id: input.pay_component_id,
+					amount: input.amount,
+					event_date: input.event_date,
+					pay_period: input.pay_period ?? null,
+					origin: input.origin
+				});
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			assertMagnitude(input.amount);
-			const existingInstalment = instalmentOrigin(existing.origin);
-			if (existingInstalment) {
-				const nextOrigin = instalmentOrigin(input.origin ?? existing.origin);
-				if (
-					!nextOrigin ||
-					nextOrigin.agreement_id !== existingInstalment.agreement_id ||
-					nextOrigin.sequence !== existingInstalment.sequence
-				)
-					refuse(
-						'Loan instalments cannot be detached from their repayment agreement. Edit the agreement schedule instead.'
+		before: {
+			description:
+				'Keeps an edited entry amount a positive magnitude, and stops a loan instalment from being detached from its repayment agreement or edited away from the scheduled amount and due date.',
+			handler: async ({ input, existing, api }) => {
+				assertMagnitude(input.amount);
+				const existingInstalment = instalmentOrigin(existing.origin);
+				if (existingInstalment) {
+					const nextOrigin = instalmentOrigin(input.origin ?? existing.origin);
+					if (
+						!nextOrigin ||
+						nextOrigin.agreement_id !== existingInstalment.agreement_id ||
+						nextOrigin.sequence !== existingInstalment.sequence
+					)
+						refuse(
+							'Loan instalments cannot be detached from their repayment agreement. Edit the agreement schedule instead.'
+						);
+					await assertInstalmentMatchesAgreement(
+						api,
+						{
+							employment_id: input.employment_id ?? existing.employment_id,
+							pay_component_id: input.pay_component_id ?? existing.pay_component_id,
+							amount: input.amount ?? existing.amount,
+							event_date: input.event_date ?? existing.event_date,
+							pay_period: input.pay_period ?? existing.pay_period,
+							origin: input.origin ?? existing.origin
+						},
+						existing.norbital_id
 					);
-				await assertInstalmentMatchesAgreement(
-					api,
-					{
-						employment_id: input.employment_id ?? existing.employment_id,
-						pay_component_id: input.pay_component_id ?? existing.pay_component_id,
-						amount: input.amount ?? existing.amount,
-						event_date: input.event_date ?? existing.event_date,
-						pay_period: input.pay_period ?? existing.pay_period,
-						origin: input.origin ?? existing.origin
-					},
-					existing.norbital_id
-				);
+				}
+				return input;
 			}
-			return input;
 		}
 	},
 	delete: {
-		before: async ({ existing, api }) => {
-			const origin = instalmentOrigin(existing.origin);
-			if (!origin) return;
-			const agreement = (
-				await api.db.query.repayment_agreements.findMany({
-					where: { norbital_id: { eq: origin.agreement_id } },
-					limit: 1
-				})
-			)[0];
-			if (agreement?.schedule?.[origin.sequence - 1])
-				refuse(
-					'Loan instalments cannot be deleted directly. Remove the unpaid row from the repayment agreement schedule.'
-				);
+		before: {
+			description:
+				'Blocks deleting a loan instalment entry while its row still exists on the repayment agreement schedule, so instalments are removed by shortening the schedule.',
+			handler: async ({ existing, api }) => {
+				const origin = instalmentOrigin(existing.origin);
+				if (!origin) return;
+				const agreement = (
+					await api.db.query.repayment_agreements.findMany({
+						where: { norbital_id: { eq: origin.agreement_id } },
+						limit: 1
+					})
+				)[0];
+				if (agreement?.schedule?.[origin.sequence - 1])
+					refuse(
+						'Loan instalments cannot be deleted directly. Remove the unpaid row from the repayment agreement schedule.'
+					);
+			}
 		}
 	}
 } satisfies Hooks;

@@ -46,4 +46,9 @@ export const rateSelectorSchema = z.discriminatedUnion('by', [
 
 export type RateSelector = z.infer<typeof rateSelectorSchema>;
 
-export default defineCustomType({ name: 'rate_selector', schema: rateSelectorSchema });
+export default defineCustomType({
+	name: 'rate_selector',
+	description:
+		'Which row of a statutory contribution table a rate applies to, keyed by wage, wage and age, wage and marital category, headcount, or risk class.',
+	schema: rateSelectorSchema
+});

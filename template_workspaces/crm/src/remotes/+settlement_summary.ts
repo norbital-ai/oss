@@ -8,6 +8,8 @@ import { z } from 'zod';
  * and shows an em-dash for anything that is not committed.
  */
 export default defineQueryHandler({
+	description:
+		'Totals the amount settled to date against each quote, purchase order or purchase invoice of the requested type.',
 	schema: z.object({
 		regarding_type: z.enum(['quotes', 'purchase_orders', 'purchase_invoices'])
 	}),

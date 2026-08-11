@@ -40,4 +40,9 @@ export const entryOriginSchema = z.discriminatedUnion('kind', [
 
 export type EntryOrigin = z.infer<typeof entryOriginSchema>;
 
-export default defineCustomType({ name: 'entry_origin', schema: entryOriginSchema });
+export default defineCustomType({
+	name: 'entry_origin',
+	description:
+		'Why a component entry exists — a recurring allowance, a one-off, a claim with its evidence and incurred date, a numbered loan instalment, a reversal of an earlier entry, or arrears covering named past periods.',
+	schema: entryOriginSchema
+});

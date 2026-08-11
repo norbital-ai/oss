@@ -67,17 +67,25 @@ function assertOvertimePunch(row: Record<string, unknown>): void {
 
 export default {
 	create: {
-		before: async ({ input }) => {
-			assertClock({ ...input });
-			assertOvertimePunch({ ...input });
-			return input;
+		before: {
+			description:
+				'Requires a CLOSED time entry to carry both clock_in and clock_out with the clock running forwards, and the separate overtime punch to be given as a pair or not at all.',
+			handler: async ({ input }) => {
+				assertClock({ ...input });
+				assertOvertimePunch({ ...input });
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing }) => {
-			assertClock({ ...existing, ...input });
-			assertOvertimePunch({ ...existing, ...input });
-			return input;
+		before: {
+			description:
+				'Judges the patched time entry as the row it becomes, so closing a shift or amending one stamp cannot leave a clock that ends before it starts or half an overtime punch.',
+			handler: async ({ input, existing }) => {
+				assertClock({ ...existing, ...input });
+				assertOvertimePunch({ ...existing, ...input });
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

@@ -9,6 +9,8 @@ import type { Pipelines } from './$types.js';
  */
 export default {
 	export: {
+		description:
+			'Packages each confirmed quote with its lines as a JSON attachment for the downstream system to receive.',
 		handler: async ({ records }, api) => {
 			const quoteIds = records
 				.map((quote) => quote.norbital_id)

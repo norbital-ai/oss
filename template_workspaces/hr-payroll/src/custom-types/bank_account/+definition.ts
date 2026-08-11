@@ -11,4 +11,9 @@ export const bankAccountDraftSchema = z.nullable(z.partial(bankAccountSchema));
 
 export type BankAccount = z.infer<typeof bankAccountSchema>;
 
-export default defineCustomType({ name: 'bank_account', schema: bankAccountSchema });
+export default defineCustomType({
+	name: 'bank_account',
+	description:
+		'The bank name, bank code, account number and account holder name a salary payment is credited to.',
+	schema: bankAccountSchema
+});

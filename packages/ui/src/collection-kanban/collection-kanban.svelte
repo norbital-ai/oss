@@ -5,7 +5,6 @@
 	import type {
 		CollectionApprovalRequest,
 		CollectionDefinition,
-		CollectionFilter,
 		CollectionGroupedResult,
 		CollectionQuery,
 		CollectionRegistry,
@@ -43,9 +42,8 @@
 	import CollectionKanbanSkeleton from './collection-kanban-skeleton.svelte';
 	import CollectionKanbanLane from './collection-kanban-lane.svelte';
 	import CollectionKanbanRecordDetail from './collection-kanban-record-detail.svelte';
-	import CollectionQueryControls from '../collection-table/collection-query-controls.svelte';
-	import CollectionTableOperations from '../collection-table/collection-table-operations.svelte';
-	import CollectionActionToolbar from '../collection-table/collection-action-toolbar.svelte';
+	import { CollectionQueryState } from '#lib/collection-query';
+	import { CollectionActionToolbar } from '#lib/collection-toolbar';
 	import { laneMoveUpdate, runOptimisticKanbanMove } from './collection-kanban-move.js';
 	import type { CollectionKanbanName, CollectionKanbanProps } from './collection-kanban.types.js';
 	import {
@@ -54,9 +52,7 @@
 	} from '#lib/collection-runtime';
 
 	type Row = CollectionRow<TCollections[TName]>;
-	interface BoardQueryState {
-		search: string;
-		filters: readonly CollectionFilter[];
+	interface BoardResultState {
 		result: CollectionGroupedResult<Row>;
 		hasLoaded: boolean;
 	}
@@ -121,30 +117,30 @@
 
 	// Query inputs are pure derived data. Creating the stateful RemoteQuery belongs in the watcher
 	// callback so query resource writes never occur inside a derived computation.
-	let boardQuery = $state<BoardQueryState>({
-		search: '',
-		filters: [],
+	let boardQuery = $state<BoardResultState>({
 		result: {},
 		hasLoaded: false
 	});
+	// No page size to remember: a board asks for lanes, not pages.
+	const queryState = new CollectionQueryState<Row>();
 	const queryInput = $derived.by(() => ({
 		operations: client.db[collection],
 		query: {
 			...collectionQuery,
-			search: boardQuery.search || collectionQuery?.search,
+			search: queryState.search || collectionQuery?.search,
 			orderBy: collectionQuery?.orderBy,
 			group: {
 				by: groupBy,
 				lanes: resolvedLaneValues.length > 0 ? [...resolvedLaneValues] : undefined
 			}
 		},
-		filters: boardQuery.filters
+		filterOptions: queryState.queryOptions
 	}));
 	let query = $state<RemoteQuery<CollectionGroupedResult<Row>>>();
 	watch(
 		() => queryInput,
 		(input) => {
-			query = input.operations.findGrouped(input.query, { filters: input.filters });
+			query = input.operations.findGrouped(input.query, input.filterOptions);
 		},
 		{ lazy: false }
 	);
@@ -499,37 +495,27 @@
 	/>
 {/if}
 
-{#snippet kanbanViewControls()}
-	<CollectionTableOperations
-		collectionName={String(collection)}
-		{exportPipelines}
-		{importPipelines}
-		{integrations}
-		selectedRows={selectedRecords}
-		fields={definition.fields}
-		updateSelected={updateSelectedAction}
-		deleteSelected={deleteSelectedAction}
-		{clearSelection}
-		{selectionControls}
-		disabled={actionsDisabled}
-		{refresh}
-	/>
-{/snippet}
-
-{#snippet kanbanActions()}
-	<CollectionQueryControls
-		{definition}
-		collections={workspaceClient.collections}
-		align="end"
-		searchPlaceholder={t('kanban.searchRecords')}
-		onSearchChange={(search) => (boardQuery.search = search)}
-		onFilterChange={(filters) => (boardQuery.filters = filters)}
-	/>
-{/snippet}
-
 {#snippet kanbanToolbar()}
 	<Stack gap="xs">
-		<CollectionActionToolbar view={kanbanViewControls} actions={kanbanActions} />
+		<CollectionActionToolbar
+			{client}
+			{collection}
+			query={queryState}
+			searchPlaceholder={t('kanban.searchRecords')}
+			filterPersistenceKey={resolvedView}
+			operations={{
+				exportPipelines,
+				importPipelines,
+				integrations,
+				selectedRows: selectedRecords,
+				updateSelected: updateSelectedAction,
+				deleteSelected: deleteSelectedAction,
+				clearSelection,
+				selectionControls,
+				disabled: actionsDisabled,
+				refresh
+			}}
+		/>
 		{#if moveError}
 			<p role="alert" class="shrink-0 text-sm text-destructive">{moveError}</p>
 		{/if}

@@ -7,6 +7,8 @@ import { z } from 'zod';
  * Cancelled invoices do not count toward invoiced; receipts are immutable events.
  */
 export default defineQueryHandler({
+	description:
+		'Reports ordered, received and invoiced quantities line by line for one purchase order, plus what is still outstanding to receive.',
 	schema: z.object({ purchase_order_id: z.string() }),
 	handler: async (input, api) => {
 		const orderLines = await api.db.query.purchase_order_lines.findMany({

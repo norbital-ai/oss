@@ -4,13 +4,14 @@ import type {
 	CollectionType
 } from '../collection/types.js';
 import type { SystemRecordFields } from './columns.js';
+import { UserKindSchema, UserRoleSchema, UserStatusSchema } from './types.js';
 
 type JsonObject = Record<string, unknown>;
 
 export interface PlatformUserRow extends SystemRecordFields {
 	readonly email: string;
 	readonly name: string | null;
-	readonly avatar_url: string | null;
+	readonly avatar_asset_id: string | null;
 	readonly status: string | null;
 	readonly role: string | null;
 	readonly kind: string | null;
@@ -20,7 +21,7 @@ export interface PlatformUserRow extends SystemRecordFields {
 export interface PlatformUserCreateInput {
 	readonly email: string;
 	readonly name?: string | null;
-	readonly avatar_url?: string | null;
+	readonly avatar_asset_id?: string | null;
 	readonly status?: string | null;
 	readonly role?: string | null;
 	readonly kind?: string | null;
@@ -30,7 +31,7 @@ export interface PlatformUserCreateInput {
 export interface PlatformUserUpdateInput {
 	readonly email?: string;
 	readonly name?: string | null;
-	readonly avatar_url?: string | null;
+	readonly avatar_asset_id?: string | null;
 	readonly status?: string | null;
 	readonly role?: string | null;
 	readonly kind?: string | null;
@@ -476,15 +477,53 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 	},
 	user: {
 		name: 'user',
+		/**
+		 * `status`, `role` and `kind` are closed sets in `system/types.ts`, and declaring them as
+		 * `text` here was what made the user detail sheet render three free-text boxes: the data
+		 * renderer picks its control from `kind`, so a value with three legal options was offered as
+		 * a field you could type anything into. Declared as `enum` they render through the shared
+		 * `Combobox`, and the option list stays derived from the schema rather than retyped.
+		 *
+		 * `avatar_asset_id` is a `file`, which is the renderer branch that gives an upload control
+		 * backed by `document_asset`. It was a `text` URL, so the only way to set an avatar was to
+		 * paste a link to an image hosted somewhere else — and nothing in the product ever wrote
+		 * one, so every avatar in every workspace was the initials fallback.
+		 */
 		fields: [
 			...SYSTEM_FIELDS,
 			{ name: 'email', kind: 'text', nullable: false, label: 'Email' },
 			{ name: 'name', kind: 'text', nullable: true, label: 'Name' },
-			{ name: 'avatar_url', kind: 'text', nullable: true, label: 'Avatar' },
-			{ name: 'status', kind: 'text', nullable: true, label: 'Status' },
-			{ name: 'role', kind: 'text', nullable: true, label: 'Role' },
-			{ name: 'kind', kind: 'text', nullable: true, label: 'Kind' },
-			{ name: 'channels', kind: 'json', nullable: true, array: true, label: 'Channels' }
+			{
+				name: 'avatar_asset_id',
+				kind: 'file',
+				nullable: true,
+				label: 'Avatar',
+				// Narrows the file picker only — nothing downstream re-checks it — so this is the
+				// list of formats an avatar is expected to be, not a trust boundary.
+				mimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+			},
+			{
+				name: 'status',
+				kind: 'enum',
+				nullable: true,
+				values: [...UserStatusSchema.options],
+				label: 'Status'
+			},
+			{
+				name: 'role',
+				kind: 'enum',
+				nullable: true,
+				values: [...UserRoleSchema.options],
+				label: 'Role'
+			},
+			{
+				name: 'kind',
+				kind: 'enum',
+				nullable: true,
+				values: [...UserKindSchema.options],
+				label: 'Kind'
+			},
+			{ name: 'channels', kind: 'channels', nullable: true, array: true, label: 'Channels' }
 		]
 	},
 	team: {

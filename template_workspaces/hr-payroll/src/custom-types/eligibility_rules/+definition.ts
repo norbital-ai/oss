@@ -42,4 +42,9 @@ export const eligibilityRulesSchema = z.array(eligibilityRuleSchema);
 
 export type EligibilityRules = z.infer<typeof eligibilityRulesSchema>;
 
-export default defineCustomType({ name: 'eligibility_rules', schema: eligibilityRulesSchema });
+export default defineCustomType({
+	name: 'eligibility_rules',
+	description:
+		'Conditions on employment type, work classification, months of service, gender, department or payroll group that must all match for an employee to qualify; an empty list qualifies everyone.',
+	schema: eligibilityRulesSchema
+});

@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import AppHeaderActions from '@norbital-ai/pod/client/app-header-actions';
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { SUBSTRATES, substrateDefinition } from '../lib/reclamation/cost.js';
 	import { substrateLabel, substrateNote, driverLabel } from '../lib/reclamation/i18n.js';
@@ -90,41 +90,34 @@
 	<meta name="pod:icon" content="lucide:table-2" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/reclamation/app-media/reclamation_cost_matrix-banner.svg"
+		content="/api/template-seed-assets/reclamation/app-media/reclamation_cost_matrix-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/reclamation/app-media/reclamation_cost_matrix-banner.svg"
+		content="/api/template-seed-assets/reclamation/app-media/reclamation_cost_matrix-banner.webp"
 	/>
 </svelte:head>
 
 {#snippet projectScopeActions()}
-	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">
-			{t('app.reclamation_cost_matrix.project_filter')}
-		</span>
-		<Inline gap="sm">
-			<Combobox
-				ariaLabel={t('app.reclamation_cost_matrix.project_filter')}
-				options={projectOptions}
-				value={selectedProjectId}
-				onValueChange={(value) => {
-					if (typeof value === 'string') {
-						projectId = value;
-						return;
-					}
-					projectId = resolveScopedId(null, projects);
-				}}
-				emptyPlaceholder={t('app.reclamation_cost_matrix.select_project')}
-				searchPlaceholder={t('app.reclamation_cost_matrix.search_projects')}
-				clientConfig={{
-					isLoading: projectsQuery.loading,
-					error: projectsQuery.error?.message ?? null
-				}}
-				class="min-w-[16rem]"
-			/>
-		</Inline>
-	</label>
+	<Combobox
+		ariaLabel={t('app.reclamation_cost_matrix.project_filter')}
+		options={projectOptions}
+		value={selectedProjectId}
+		onValueChange={(value) => {
+			if (typeof value === 'string') {
+				projectId = value;
+				return;
+			}
+			projectId = resolveScopedId(null, projects);
+		}}
+		emptyPlaceholder={t('app.reclamation_cost_matrix.select_project')}
+		searchPlaceholder={t('app.reclamation_cost_matrix.search_projects')}
+		clientConfig={{
+			isLoading: projectsQuery.loading,
+			error: projectsQuery.error?.message ?? null
+		}}
+		class="min-w-[16rem]"
+	/>
 {/snippet}
 
 {#snippet rates()}
@@ -245,16 +238,11 @@
 	</Stack>
 {/snippet}
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.reclamation_cost_matrix.eyebrow')}
-		title={t('app.reclamation_cost_matrix.header_title')}
-		description={t('app.reclamation_cost_matrix.header_description')}
-		actions={projectScopeActions}
-	/>
-{/snippet}
+<AppHeaderActions>
+	{@render projectScopeActions()}
+</AppHeaderActions>
 
-<Cover as="main" top={pageHeading}>
+<Cover as="main">
 	<Tabs
 		lazyLoad={false}
 		animate={false}

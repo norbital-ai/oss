@@ -857,7 +857,7 @@ async function discoverCustomTypes(
 						topologyDiagnostic(
 							`${entryPath}/+definition.ts`,
 							'CUSTOM_TYPE_DEFINITION_INVALID',
-							'Custom-type definitions must default-export defineCustomType({ name, schema })'
+							'Custom-type definitions must default-export defineCustomType({ name, description, schema })'
 						)
 					);
 				} else if (declared[2] !== entry.name) {
@@ -1691,7 +1691,7 @@ function renderApps(nodes: readonly DiscoveredAppNode[]): string {
 					return `${indentation}${JSON.stringify(key)}: {\n${indentation}\tname: ${JSON.stringify(node.metadata.title)},\n${indentation}\tdescription: ${JSON.stringify(node.metadata.description)},\n${indentation}\ticon: ${JSON.stringify(node.metadata.icon)},\n${indentation}\tthumbnail: ${JSON.stringify(node.metadata.thumbnail)},\n${indentation}\tbanner: ${JSON.stringify(node.metadata.banner)}\n${indentation}}`;
 				}
 				const index = groupIndexes.get(node.id);
-				return `${indentation}${JSON.stringify(key)}: {\n${indentation}\tname: group${index}Metadata.label,\n${indentation}\tdescription: null,\n${indentation}\ticon: group${index}Metadata.icon,\n${indentation}\tdefaultChild: group${index}Metadata.defaultChild,\n${indentation}\tcomponent: {\n${renderWorkspaceApps(node.id, depth + 2)}\n${indentation}\t}\n${indentation}}`;
+				return `${indentation}${JSON.stringify(key)}: {\n${indentation}\tname: group${index}Metadata.label,\n${indentation}\tdescription: group${index}Metadata.description,\n${indentation}\ticon: group${index}Metadata.icon,\n${indentation}\tdefaultChild: group${index}Metadata.defaultChild,\n${indentation}\tcomponent: {\n${renderWorkspaceApps(node.id, depth + 2)}\n${indentation}\t}\n${indentation}}`;
 			})
 			.join(',\n');
 	}
@@ -1790,6 +1790,7 @@ function renderWorkspace(
 	const imports: string[] = [
 		"import { defineRuntimeCollection, defineRuntimeWorkspace } from '@norbital-ai/pod/authoring/internals';",
 		"import { apps } from './apps.js';",
+		"import { customTypes } from './custom-types.js';",
 		"import { registry } from './registry.js';"
 	];
 	const entries: string[] = [];
@@ -1863,7 +1864,7 @@ function renderWorkspace(
 		.join(',\n');
 	const skills = structure.skills.map((skill) => renderSkill(skill)).join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.skills.length ? `,\n\tskills: [\n${skills}\n\t]` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tcustomTypes,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.skills.length ? `,\n\tskills: [\n${skills}\n\t]` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(

@@ -216,8 +216,10 @@
 	{/snippet}
 
 	<Cover as="main" gap="md" top={personSummary}>
+		<!-- The detail sheet already insets this surface; the list must not inset itself again. -->
 		<Tabs
 			animate={false}
+			listClass="mx-0 w-full"
 			config={[
 				{ name: 'person', label: t('component.person'), icon: 'lucide:user', content: person },
 				{

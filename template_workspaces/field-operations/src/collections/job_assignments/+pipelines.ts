@@ -40,6 +40,8 @@ function rowLabel(row: z.infer<typeof rowSchema>, index: number): string {
 
 export default {
 	import: {
+		description:
+			'Turns a week of roster rows into dispatched assignments, matching each row to a single unassigned job by site, date and title, and rejecting the whole week if a contractor lacks a certification their job requires.',
 		input: importSchema,
 		handler: async ({ input }, api) => {
 			const { week_start: weekStart, rows } = importSchema.parse(input);

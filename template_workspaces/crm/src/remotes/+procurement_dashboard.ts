@@ -18,6 +18,8 @@ const TOP_SUPPLIER_LIMIT = 5;
 const COMMITTED_SCAN_LIMIT = 5000;
 
 export default defineQueryHandler({
+	description:
+		'Counts purchase orders at each stage and totals committed spend by currency and by top supplier.',
 	schema: z.object({}),
 	handler: async (_input, api) => {
 		const [committedOrders, ...stageTotals] = await Promise.all([

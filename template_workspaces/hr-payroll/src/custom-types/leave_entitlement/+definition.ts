@@ -23,4 +23,9 @@ export const leaveEntitlementSchema = z.strictObject({
 
 export type LeaveEntitlement = z.infer<typeof leaveEntitlementSchema>;
 
-export default defineCustomType({ name: 'leave_entitlement', schema: leaveEntitlementSchema });
+export default defineCustomType({
+	name: 'leave_entitlement',
+	description:
+		'The statutory, organisation and per-employee layers of leave days for one leave type, each with its authority and effective range, merged by taking the most generous layer above the statutory floor.',
+	schema: leaveEntitlementSchema
+});

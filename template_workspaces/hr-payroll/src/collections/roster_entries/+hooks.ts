@@ -60,37 +60,49 @@ async function assertRosterOpen(api: HookApi, rosterId: string | null | undefine
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			await assertRosterOpen(api, input.roster_id);
-			assertDesignationArm(
-				input.designation,
-				input.shift_definition_id ?? null,
-				dateKey(input.work_date)
-			);
-			return input;
+		before: {
+			description:
+				'Refuses a rostered day added to an already-published month, and requires a WORK day to name a shift while a REST or OFF day names none.',
+			handler: async ({ input, api }) => {
+				await assertRosterOpen(api, input.roster_id);
+				assertDesignationArm(
+					input.designation,
+					input.shift_definition_id ?? null,
+					dateKey(input.work_date)
+				);
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			await assertRosterOpen(api, existing.roster_id);
-			if (input.roster_id != null && input.roster_id !== existing.roster_id) {
-				await assertRosterOpen(api, input.roster_id);
+		before: {
+			description:
+				'Refuses edits to a day in a published month, and judges the patched row so changing only the designation cannot leave a REST or OFF day still naming a shift, or a WORK day with none.',
+			handler: async ({ input, existing, api }) => {
+				await assertRosterOpen(api, existing.roster_id);
+				if (input.roster_id != null && input.roster_id !== existing.roster_id) {
+					await assertRosterOpen(api, input.roster_id);
+				}
+				// The patch is judged as the row it produces, not on its own: changing only the
+				// designation of a day that still names a shift is exactly how the two arms drift apart.
+				assertDesignationArm(
+					input.designation ?? existing.designation,
+					(input.shift_definition_id === undefined
+						? existing.shift_definition_id
+						: input.shift_definition_id) ?? null,
+					dateKey(input.work_date ?? existing.work_date)
+				);
+				return input;
 			}
-			// The patch is judged as the row it produces, not on its own: changing only the
-			// designation of a day that still names a shift is exactly how the two arms drift apart.
-			assertDesignationArm(
-				input.designation ?? existing.designation,
-				(input.shift_definition_id === undefined
-					? existing.shift_definition_id
-					: input.shift_definition_id) ?? null,
-				dateKey(input.work_date ?? existing.work_date)
-			);
-			return input;
 		}
 	},
 	delete: {
-		before: async ({ existing, api }) => {
-			await assertRosterOpen(api, existing.roster_id);
+		before: {
+			description:
+				'Refuses to remove a rostered day from a published month, so the schedule the payroll engine reads cannot lose a day underneath it.',
+			handler: async ({ existing, api }) => {
+				await assertRosterOpen(api, existing.roster_id);
+			}
 		}
 	}
 } satisfies Hooks;

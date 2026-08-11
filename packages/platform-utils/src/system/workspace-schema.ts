@@ -9,6 +9,7 @@ import {
 	text,
 	timestamp,
 	uuid,
+	type AnyPgColumn,
 	type AnyPgColumnBuilder,
 	type ExtraConfigColumn,
 	type PgTable
@@ -158,7 +159,21 @@ const _user = systemTable(
 	{
 		email: text().notNull().unique(),
 		name: text(),
-		avatar_url: text(),
+		/**
+		 * The person's avatar, as a reference to the `document_asset` they uploaded.
+		 *
+		 * The two tables reference each other — an asset records the user who owns it, and a user
+		 * records the asset that pictures them — so the target is named through a callback with an
+		 * explicit return type: the annotation is what stops the circular inference from collapsing
+		 * to `any`, and the callback is what defers the lookup past `_document_asset`'s declaration.
+		 *
+		 * Nullable, and `set null` on delete, because the cycle would otherwise be unresolvable in
+		 * both directions: a user could not be inserted before an asset that requires an owner, and
+		 * deleting an avatar would fail against the row pointing at it rather than clearing it.
+		 */
+		avatar_asset_id: uuid().references((): AnyPgColumn => _document_asset.norbital_id, {
+			onDelete: 'set null'
+		}),
 		status: text().default('active'),
 		role: text().default('basic'),
 		kind: text().default('human'),

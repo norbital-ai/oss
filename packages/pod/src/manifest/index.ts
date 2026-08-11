@@ -1,7 +1,10 @@
 import type { CollectionPipelinesDef } from '$lib/authoring/automations/pipelines.js';
 import type { RegisteredWorkspaceState } from '$lib/authoring/workspace/define-workspace.js';
 import { hooksDeclaredFromBehavior } from '$lib/server/collection/hook-context.js';
-import { isCollectionBehavior } from '$lib/authoring/schema/collection-behavior.js';
+import {
+	isCollectionBehavior,
+	type AnyCollectionBehavior
+} from '$lib/authoring/schema/collection-behavior.js';
 import {
 	getTableColumnDefs,
 	getTableMeta,
@@ -55,8 +58,7 @@ export type CollectionHookKey = (typeof COLLECTION_HOOK_KEYS)[number];
 export type ManifestPipelineKey = keyof CollectionPipelinesDef;
 
 function buildCollectionEntries(
-	collections: Record<string, unknown>,
-	pipelines: Record<string, Record<string, unknown>> | undefined
+	collections: Record<string, unknown>
 ): Record<string, ManifestCollectionEntry> {
 	const out: Record<string, ManifestCollectionEntry> = {};
 	for (const [, handle] of Object.entries(collections)) {
@@ -79,7 +81,7 @@ function buildCollectionEntries(
 			},
 			enabled_semantic_search: meta?.semanticSearch === true ? true : null,
 			hooks: collectHooks(declaredHooks),
-			pipelines: collectPipelines(pipelines?.[collectionName]),
+			pipelines: collectPipelines(handle),
 			system: meta?.system === true ? true : null
 		};
 	}
@@ -87,24 +89,40 @@ function buildCollectionEntries(
 }
 
 function collectHooks(
-	declared: Record<string, unknown> | undefined
+	declared: Record<string, { readonly description: string }>
 ): Partial<Record<CollectionHookKey, ManifestHookEntry>> {
 	const out: Partial<Record<CollectionHookKey, ManifestHookEntry>> = {};
-	if (!declared) return out;
 	for (const hookKey of COLLECTION_HOOK_KEYS) {
-		const value = declared[hookKey];
-		if (value === true || typeof value === 'function') out[hookKey] = true;
+		const declaration = declared[hookKey];
+		if (declaration) out[hookKey] = { description: declaration.description };
 	}
 	return out;
 }
 
+/**
+ * Read pipelines off the behavior rather than off the registered handler map.
+ *
+ * The registry holds the normalized handlers, which is what dispatch needs and all a `typeof ===
+ * 'function'` probe could ever see. The description lives on the behavior beside them, so taking both
+ * from one place is what stops a pipeline from appearing in the manifest with nothing said about it.
+ */
 function collectPipelines(
-	declared: Record<string, unknown> | undefined
+	behavior: AnyCollectionBehavior
 ): Partial<Record<ManifestPipelineKey, ManifestPipelineEntry>> {
 	const out: Partial<Record<ManifestPipelineKey, ManifestPipelineEntry>> = {};
-	if (!declared) return out;
 	for (const pipelineKey of ['import', 'export'] as const) {
-		if (typeof declared[pipelineKey] === 'function') out[pipelineKey] = true;
+		if (!behavior[pipelineKey]) continue;
+		const description = behavior.pipelineDescriptions?.[pipelineKey];
+		// Empty would satisfy this function and then fail `nonEmpty` when the built manifest is
+		// parsed — a schema error naming a path rather than the pipeline that has nothing said
+		// about it. Authoring already requires the description, so reaching here is a bug in the
+		// behavior builder, and it should say which pipeline lost its text.
+		if (!description) {
+			throw new Error(
+				`Collection "${behavior.name}" declares a ${pipelineKey} pipeline with no description.`
+			);
+		}
+		out[pipelineKey] = { description };
 	}
 	return out;
 }
@@ -120,6 +138,7 @@ function buildAutomationEntries(
 				| { trigger?: { collection?: string; event?: 'created' | 'updated' | 'deleted' } };
 			spec?: {
 				kind: string;
+				description?: string;
 				task?: string;
 				model?: string;
 				systemPrompt?: string;
@@ -143,6 +162,7 @@ function buildAutomationEntries(
 				: undefined;
 		const agentSpec = buildAgentEntry(tpl.spec);
 		out[key] = {
+			description: tpl.spec?.description ?? '',
 			trigger: isSchedule ? { schedule: trigger.schedule! } : eventTrigger!,
 			...(agentSpec ? { spec: agentSpec } : {})
 		};
@@ -155,6 +175,7 @@ function buildAgentEntry(raw: unknown): ManifestAutomationAgentSpec | undefined 
 	if (!spec || spec.kind !== 'agent' || typeof spec.task !== 'string') return undefined;
 	return {
 		kind: 'agent',
+		description: spec.description ?? '',
 		task: spec.task,
 		...(spec.model ? { model: spec.model } : {}),
 		...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
@@ -174,7 +195,7 @@ function buildAppEntries(apps: Record<string, unknown> | undefined): Record<stri
 	function flatten(key: string, raw: unknown, parent: string | null) {
 		const app = raw as {
 			name?: string | null;
-			description?: string | null;
+			description?: string;
 			icon?: string | null;
 			defaultChild?: string | null;
 			thumbnail?: string | null;
@@ -186,7 +207,7 @@ function buildAppEntries(apps: Record<string, unknown> | undefined): Record<stri
 		out[appId] = {
 			name: appId,
 			label: app.name ?? null,
-			description: app.description ?? null,
+			description: app.description ?? '',
 			icon: app.icon ?? null,
 			...(app.defaultChild ? { defaultChild: `${appId}/${app.defaultChild}` } : {}),
 			thumbnail: app.thumbnail ?? null,
@@ -218,10 +239,10 @@ function buildHandlerEntries(
 ): Record<string, ManifestHandlerEntry> {
 	const out: Record<string, ManifestHandlerEntry> = {};
 	for (const [key, raw] of Object.entries(handlers ?? {})) {
-		const handler = raw as { name?: string; description?: string | null };
+		const handler = raw as { name?: string; description?: string };
 		out[key] = {
 			name: handler.name ?? key,
-			description: handler.description ?? null
+			description: handler.description ?? ''
 		};
 	}
 	return out;
@@ -241,8 +262,8 @@ function buildAgentToolEntries(
 	if (!agentTools || Object.keys(agentTools).length === 0) return undefined;
 	const out: Record<string, ManifestHandlerEntry> = {};
 	for (const [key, raw] of Object.entries(agentTools)) {
-		const tool = raw as { description?: string | null };
-		out[key] = { name: key, description: tool.description ?? null };
+		const tool = raw as { description?: string };
+		out[key] = { name: key, description: tool.description ?? '' };
 	}
 	return out;
 }
@@ -280,7 +301,7 @@ function buildPolicyEntries(
 	for (const [key, value] of Object.entries(policies)) {
 		const policy = value as {
 			name?: string;
-			description?: string | null;
+			description?: string;
 			apps?: readonly string[];
 			grants?: readonly {
 				collection?: string;
@@ -292,7 +313,7 @@ function buildPolicyEntries(
 		out[key] = {
 			key,
 			name: policy.name ?? key,
-			...(policy.description == null ? {} : { description: policy.description }),
+			description: policy.description ?? '',
 			...(policy.apps ? { apps: [...policy.apps] } : {}),
 			grants: (policy.grants ?? []).map((grant) => ({
 				collection: grant.collection ?? '',
@@ -321,7 +342,7 @@ function buildChannelEntries(
 		const channel = value as {
 			transport?: string;
 			policy?: string;
-			description?: string | null;
+			description?: string;
 			task?: string;
 			hostTools?: readonly string[];
 			hostSandbox?: { readonly workspace: 'read-only' | 'read-write' };
@@ -330,7 +351,7 @@ function buildChannelEntries(
 			key,
 			transport: channel.transport ?? '',
 			policy: String(channel.policy ?? ''),
-			...(channel.description == null ? {} : { description: channel.description }),
+			description: channel.description ?? '',
 			...(channel.task == null ? {} : { task: channel.task }),
 			...(channel.hostTools && channel.hostTools.length > 0
 				? { hostTools: [...channel.hostTools] }
@@ -341,9 +362,29 @@ function buildChannelEntries(
 	return out as NorbitalManifest['channels'];
 }
 
+/**
+ * The custom column types this workspace declares, by name — the description only.
+ *
+ * The schema itself compiles into the guest bundle and stays there; what a reader outside the tenant
+ * needs is what `settlement_policy` on a column actually means, which is otherwise only discoverable
+ * by opening `src/custom-types` in the repository the workspace was built from.
+ */
+function buildCustomTypeEntries(
+	customTypes: Readonly<Record<string, { readonly description?: string }>> | undefined
+): NorbitalManifest['customTypes'] {
+	if (!customTypes || Object.keys(customTypes).length === 0) return undefined;
+	return Object.fromEntries(
+		Object.entries(customTypes).map(([name, definition]) => [
+			name,
+			{ name, description: definition.description ?? '' }
+		])
+	);
+}
+
 export function buildNorbitalManifest(workspace: {
 	readonly collections: Record<string, unknown>;
 	readonly relationships?: Record<string, ManifestRelationship>;
+	readonly customTypes?: Readonly<Record<string, { readonly description?: string }>>;
 	readonly env?: NorbitalManifest['env'];
 	readonly registered?: RegisteredWorkspaceState;
 	readonly secrets?: Readonly<
@@ -356,8 +397,9 @@ export function buildNorbitalManifest(workspace: {
 }): NorbitalManifest {
 	return {
 		version: MANIFEST_VERSION,
-		collections: buildCollectionEntries(workspace.collections, workspace.registered?.pipelines),
+		collections: buildCollectionEntries(workspace.collections),
 		relationships: workspace.relationships ?? {},
+		customTypes: buildCustomTypeEntries(workspace.customTypes),
 		apps: buildAppEntries(workspace.registered?.apps),
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
 		agentTools: buildAgentToolEntries(workspace.registered?.agentTools),

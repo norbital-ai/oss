@@ -10,6 +10,7 @@
 	import { Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { TreeCombobox } from '#lib/tree-combobox';
+	import { cn } from '#lib/utils';
 	import {
 		collectionFilterClause,
 		collectionFilterFieldTree,
@@ -26,6 +27,7 @@
 		type CollectionFilterOperator
 	} from './collection-table-filter-operators.js';
 	import type { CollectionTableInitialFilter } from './collection-table.types.js';
+	import type { CollectionToolbarFilterDeclaration } from '../collection-toolbar/collection-toolbar.types.js';
 
 	type Filter = {
 		id: number;
@@ -37,18 +39,30 @@
 		definition,
 		collections,
 		disabled = false,
+		builderEnabled = true,
+		customFilters = [],
 		initialFilters = [],
 		persistenceKey,
-		onChange
+		onChange,
+		onCustomFilterChange
 	}: {
 		definition: FilterCollectionDefinition;
 		collections: Readonly<Record<string, FilterCollectionDefinition>>;
 		disabled?: boolean;
+		/**
+		 * The schema-derived builder. A surface whose conditions are all derived turns it off and
+		 * still gets this popover for its declared controls.
+		 */
+		builderEnabled?: boolean;
+		/** Controls for predicates the collection has no field for, declared by the surface. */
+		customFilters?: readonly CollectionToolbarFilterDeclaration[];
 		/** Conditions this view opens with, seeded as ordinary removable rows. */
 		initialFilters?: readonly CollectionTableInitialFilter[];
 		/** View key the "operator cleared the seed" decision is remembered against. */
 		persistenceKey?: string;
 		onChange: (filters: readonly CollectionFilter[]) => void;
+		/** Fired after a declared control changes, so the surface can drop back to the first page. */
+		onCustomFilterChange?: () => void;
 	} = $props();
 
 	const { t } = useI18n<UiKeys>();
@@ -57,7 +71,12 @@
 	let nextId = $state(0);
 	const filterFields = $derived(collectionFilterFields(definition, collections));
 	const fieldTree = $derived(collectionFilterFieldTree(filterFields, t as Translate));
-	const activeCount = $derived(filters.filter(filterIsActive).length);
+	// One count for both kinds. A derived predicate narrows the set exactly as a field condition
+	// does, so leaving it out of the badge would let an operator stare at a filtered board that
+	// claims to be unfiltered.
+	const activeCustomCount = $derived(customFilters.filter((filter) => filter.value != null).length);
+	const activeCount = $derived(filters.filter(filterIsActive).length + activeCustomCount);
+	const builderRows = $derived(builderEnabled ? filters : []);
 
 	/**
 	 * The seed, and whether this operator has already thrown it away.
@@ -87,6 +106,7 @@
 
 	$effect(() => {
 		if (seedSettled) return;
+		if (!builderEnabled) return;
 		if (seedSignature === null) return;
 		// The field picker is derived from the collection definition, which may not have arrived yet;
 		// seeding against an empty field list would silently drop every row.
@@ -174,6 +194,22 @@
 		if (filters.some((filter) => seededIds.has(filter.id))) markSeedCleared();
 		filters = [];
 		publish();
+		clearCustomFilters();
+	}
+
+	function clearCustomFilters(): void {
+		let cleared = false;
+		for (const filter of customFilters) {
+			if (filter.value == null) continue;
+			filter.change(null);
+			cleared = true;
+		}
+		if (cleared) onCustomFilterChange?.();
+	}
+
+	function setCustomFilter(filter: CollectionToolbarFilterDeclaration, value: unknown): void {
+		filter.change(typeof value === 'string' && value.length > 0 ? value : null);
+		onCustomFilterChange?.();
 	}
 </script>
 
@@ -196,13 +232,20 @@
 			</Indicator>
 		{/snippet}
 	</Popover.Trigger>
-	<Popover.Content align="start" class="w-[min(calc(100vw-1rem),42rem)] max-w-full p-0">
+	<!-- The builder needs three columns of controls per row; declared controls are one each. -->
+	<Popover.Content
+		align="start"
+		class={cn(
+			'max-w-full p-0',
+			builderEnabled ? 'w-[min(calc(100vw-1rem),42rem)]' : 'w-[min(calc(100vw-1rem),22rem)]'
+		)}
+	>
 		<Inline justify="between" gap="sm" class="border-b px-3 py-2">
 			<Stack gap="none">
 				<p class="text-xs font-medium">{t('table.filters')}</p>
 				<p class="text-micro text-muted-foreground">{t('table.filtersAllMatch')}</p>
 			</Stack>
-			{#if filters.length > 0}<Button
+			{#if filters.length > 0 || activeCustomCount > 0}<Button
 					type="button"
 					variant="ghost"
 					size="sm"
@@ -212,12 +255,28 @@
 		</Inline>
 		<Scroll axis="y" name={t('table.appliedFilters')} class="max-h-80 min-w-0 p-3">
 			<Stack gap="xs">
-				{#if filters.length === 0}
+				{#each customFilters as customFilter (customFilter.id)}
+					<label class="grid gap-1.5 text-sm">
+						<span class="font-medium text-muted-foreground">{customFilter.label}</span>
+						<Combobox
+							ariaLabel={customFilter.label}
+							options={[...customFilter.options]}
+							value={customFilter.value}
+							allowClear
+							searchable={customFilter.searchable ?? customFilter.options.length > 8}
+							emptyPlaceholder={customFilter.placeholder}
+							searchPlaceholder={customFilter.searchPlaceholder}
+							{disabled}
+							onValueChange={(value) => setCustomFilter(customFilter, value)}
+						/>
+					</label>
+				{/each}
+				{#if builderEnabled && filters.length === 0}
 					<p class="py-2 text-center text-xs text-muted-foreground">
 						{t('table.noFiltersApplied')}
 					</p>
 				{/if}
-				{#each filters as filter (filter.id)}
+				{#each builderRows as filter (filter.id)}
 					{@const field = selectedField(filter)}
 					{@const operatorOptions = field ? collectionFilterOperatorOptions(field.field) : []}
 					<!-- stupidity:allow UI6 -- filter-builder row grid needs explicit responsive tracks and placements the auto-fit Grid cannot express -->
@@ -277,16 +336,18 @@
 				{/each}
 			</Stack>
 		</Scroll>
-		<footer class="border-t p-2">
-			<Button
-				type="button"
-				variant="ghost"
-				size="sm"
-				class="h-7 gap-1.5 text-xs"
-				disabled={filterFields.length === 0}
-				onclick={addFilter}
-				><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
-			>
-		</footer>
+		{#if builderEnabled}
+			<footer class="border-t p-2">
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					class="h-7 gap-1.5 text-xs"
+					disabled={filterFields.length === 0}
+					onclick={addFilter}
+					><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
+				>
+			</footer>
+		{/if}
 	</Popover.Content>
 </Popover.Root>

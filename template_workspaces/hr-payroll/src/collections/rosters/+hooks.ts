@@ -151,55 +151,67 @@ async function assertPublishable(
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			if (!MONTH_PATTERN.test(input.month)) {
-				throw new Error(`Roster month must be written YYYY-MM, not "${input.month}".`);
-			}
-			const pattern = await api.db.query.work_patterns.findFirst({
-				where: {
-					norbital_id: { eq: input.work_pattern_id },
-					company_id: { eq: input.company_id }
+		before: {
+			description:
+				'Requires the roster month to be written YYYY-MM and its work pattern to belong to the same company, and refuses a roster created already published before any day has been assigned.',
+			handler: async ({ input, api }) => {
+				if (!MONTH_PATTERN.test(input.month)) {
+					throw new Error(`Roster month must be written YYYY-MM, not "${input.month}".`);
 				}
-			});
-			if (pattern == null) {
-				throw new Error(
-					"That work pattern does not belong to this company, so it cannot own the company's roster."
-				);
+				const pattern = await api.db.query.work_patterns.findFirst({
+					where: {
+						norbital_id: { eq: input.work_pattern_id },
+						company_id: { eq: input.company_id }
+					}
+				});
+				if (pattern == null) {
+					throw new Error(
+						"That work pattern does not belong to this company, so it cannot own the company's roster."
+					);
+				}
+				if (input.published_at != null) {
+					throw new Error(
+						'A roster is created as a draft and published once its entries exist. Create it first, ' +
+							'assign the month, then publish.'
+					);
+				}
+				return input;
 			}
-			if (input.published_at != null) {
-				throw new Error(
-					'A roster is created as a draft and published once its entries exist. Create it first, ' +
-						'assign the month, then publish.'
-				);
-			}
-			return input;
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			if (input.month != null && input.month !== existing.month) {
-				throw new Error(
-					'A roster month cannot be moved; its entries are dated. Create the other month instead.'
-				);
+		before: {
+			description:
+				'Pins a roster to the month and work pattern it was drafted for, and on publication checks every rostered day against the pattern’s rest-day, consecutive-day, daily-hours and inter-shift-gap limits.',
+			handler: async ({ input, existing, api }) => {
+				if (input.month != null && input.month !== existing.month) {
+					throw new Error(
+						'A roster month cannot be moved; its entries are dated. Create the other month instead.'
+					);
+				}
+				if (input.work_pattern_id != null && input.work_pattern_id !== existing.work_pattern_id) {
+					throw new Error(
+						'A roster belongs to the pattern it was drafted for. Create a roster for the other ' +
+							'pattern instead.'
+					);
+				}
+				const publishing = input.published_at != null && existing.published_at == null;
+				if (publishing) await assertPublishable(api, existing);
+				return input;
 			}
-			if (input.work_pattern_id != null && input.work_pattern_id !== existing.work_pattern_id) {
-				throw new Error(
-					'A roster belongs to the pattern it was drafted for. Create a roster for the other ' +
-						'pattern instead.'
-				);
-			}
-			const publishing = input.published_at != null && existing.published_at == null;
-			if (publishing) await assertPublishable(api, existing);
-			return input;
 		}
 	},
 	delete: {
-		before: async ({ existing }) => {
-			if (existing.published_at != null) {
-				throw new Error(
-					`Roster ${existing.month} is published and the payroll engine reads it. Re-open it ` +
-						'before deleting, so the change is deliberate.'
-				);
+		before: {
+			description:
+				'Refuses to delete a published roster, because the payroll engine reads it to price the month; the month must be re-opened first.',
+			handler: async ({ existing }) => {
+				if (existing.published_at != null) {
+					throw new Error(
+						`Roster ${existing.month} is published and the payroll engine reads it. Re-open it ` +
+							'before deleting, so the change is deliberate.'
+					);
+				}
 			}
 		}
 	}

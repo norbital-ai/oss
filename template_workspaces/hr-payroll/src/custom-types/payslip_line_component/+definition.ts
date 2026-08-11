@@ -33,5 +33,7 @@ export type PayslipLineComponent = z.infer<typeof payslipLineComponentSchema>;
 
 export default defineCustomType({
 	name: 'payslip_line_component',
+	description:
+		'What one payslip line stands for — contracted salary, a formula, overtime or excess overtime, a derived or entered component, or an employee or employer statutory contribution — and the pay component, component entry or scheme it is linked to.',
 	schema: payslipLineComponentSchema
 });

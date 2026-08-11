@@ -114,7 +114,11 @@ describe('assertHostAgentTools', () => {
 		expect(() =>
 			assertHostAgentTools(
 				[{ ...sandboxEcho, name: 'create_quote' }],
-				manifest({ agentTools: { create_quote: { name: 'create_quote', description: null } } })
+				manifest({
+					agentTools: {
+						create_quote: { name: 'create_quote', description: 'Drafts a quote for an account.' }
+					}
+				})
 			)
 		).toThrow(/collides with the workspace agent tool/);
 	});
@@ -139,8 +143,14 @@ describe('assertHostAgentTools', () => {
 		const declared = manifest({
 			automations: {
 				nightly_deploy: {
+					description: 'Pushes the workspace out overnight through the host sandbox.',
 					trigger: { schedule: '0 3 * * *' },
-					spec: { kind: 'agent', task: 'Deploy.', hostTools: ['deploy_workspace'] }
+					spec: {
+						kind: 'agent',
+						description: 'Pushes the workspace out overnight through the host sandbox.',
+						task: 'Deploy.',
+						hostTools: ['deploy_workspace']
+					}
 				}
 			}
 		});
@@ -156,6 +166,7 @@ describe('assertHostAgentTools', () => {
 		const declared = manifest({
 			agent: {
 				kind: 'agent',
+				description: 'The workspace assistant people talk to directly.',
 				task: 'Help in this workspace.',
 				hostTools: ['sandbox_read']
 			}
@@ -179,6 +190,7 @@ describe('assertHostAgentTools', () => {
 					key: 'field_ops_whatsapp',
 					transport: 'whatsapp',
 					policy: 'field_ops_controller',
+					description: 'Field controllers reaching the workspace over WhatsApp.',
 					hostTools: ['sandbox_bash']
 				}
 			}
@@ -198,8 +210,14 @@ describe('assertHostAgentTools', () => {
 				manifest({
 					automations: {
 						nightly_deploy: {
+							description: 'Pushes the workspace out overnight through the host sandbox.',
 							trigger: { schedule: '0 3 * * *' },
-							spec: { kind: 'agent', task: 'Deploy.', hostTools: ['deploy_workspace'] }
+							spec: {
+								kind: 'agent',
+								description: 'Pushes the workspace out overnight through the host sandbox.',
+								task: 'Deploy.',
+								hostTools: ['deploy_workspace']
+							}
 						}
 					}
 				})

@@ -45,15 +45,18 @@ const RFI_NOTIFY_HOOK = `import type { Hooks } from './$types.js';
 
 export default {
 	create: {
-		after: async ({ record, api }) => {
-			await api.sendNotification({
-				recipient_user_id: '${recipient.userId}',
-				subject: 'RFI raised: ' + record.title,
-				message: 'An RFI is waiting on your answer.',
-				channels: ['system', 'email'],
-				notification_category: 'rfi',
-				cta: { label: 'Open RFI', url: '/app/construction_project_workspace' }
-			});
+		after: {
+			description: 'Notifies the assigned answerer that a new RFI is waiting.',
+			handler: async ({ record, api }) => {
+				await api.sendNotification({
+					recipient_user_id: '${recipient.userId}',
+					subject: 'RFI raised: ' + record.title,
+					message: 'An RFI is waiting on your answer.',
+					channels: ['system', 'email'],
+					notification_category: 'rfi',
+					cta: { label: 'Open RFI', url: '/app/construction_project_workspace' }
+				});
+			}
 		}
 	}
 } satisfies Hooks;

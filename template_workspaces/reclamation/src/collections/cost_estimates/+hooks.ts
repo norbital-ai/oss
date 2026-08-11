@@ -28,7 +28,7 @@ import type { Hooks } from './$types.js';
  */
 
 type CreateBefore = NonNullable<NonNullable<Hooks['create']>['before']>;
-type HookApi = Parameters<CreateBefore>[0]['api'];
+type HookApi = Parameters<CreateBefore['handler']>[0]['api'];
 
 const RECONSTRUCTION_COLUMNS = {
 	norbital_id: true,
@@ -156,12 +156,20 @@ async function price(estimate: EstimateInput, api: HookApi): Promise<Record<stri
 
 export default {
 	create: {
-		before: async ({ input, api }) => ({ ...input, ...(await price(input, api)) })
+		before: {
+			description:
+				'Prices a new estimate against the newest ready site reconstruction and the cost rates valid today, filling in subtotal, contingency, total and the per-substrate lines_json before the row is written.',
+			handler: async ({ input, api }) => ({ ...input, ...(await price(input, api)) })
+		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => ({
-			...input,
-			...(await price({ ...existing, ...input } as EstimateInput, api))
-		})
+		before: {
+			description:
+				'Reprices the estimate from its edited loss, PVD and contingency levers, so the stored total can never disagree with the levers shown beside it.',
+			handler: async ({ input, existing, api }) => ({
+				...input,
+				...(await price({ ...existing, ...input } as EstimateInput, api))
+			})
+		}
 	}
 } satisfies Hooks;

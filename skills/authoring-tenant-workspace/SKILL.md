@@ -157,7 +157,7 @@ Classify temporal fields before choosing `date()`, `clockTime()`, `timestamp()`,
 touches dates or time.
 
 Inline custom schemas do not exist. Structured domain values live in `custom-types/<name>/` with exactly a
-`+definition.ts` default-exporting `defineCustomType({ name, schema })` and a mandatory
+`+definition.ts` default-exporting `defineCustomType({ name, description, schema })` and a mandatory
 `+renderer.svelte`. Models use `custom('<name>')`; a schema factory infers its optional second argument,
 such as `custom('money', { allowedCurrencies: ['MYR'] })`. The definition is the only schema and inferred
 value-type source, and named values use JSONB storage. Scalar references stay ordinary `uuid()`/`text()`
@@ -194,8 +194,8 @@ filter never creates server work against a resident collection. For the full arc
 
 ## Apps, layout, and collection surfaces
 
-Apps are `src/apps/**/+<app>.svelte`. Their `<svelte:head>` metadata is static (`title`, optional
-description, literal `pod:icon`, optional static `pod:thumbnail` / `pod:banner` URLs). There is no host layout metadata.
+Apps are `src/apps/**/+<app>.svelte`. Their `<svelte:head>` metadata is static (`title`, a required
+`description`, literal `pod:icon`, optional static `pod:thumbnail` / `pod:banner` URLs). There is no host layout metadata.
 App thumbnails and banners are optional — missing ones get a same-size icon fallback in the shell (overview
 cards keep their 16:9 media slot, omni finder keeps its 6×6 tile). Ship product images under `assets/`
 and reference `/api/template-seed-assets/<key>/<path>` URLs. The collection-owned `+representation.svelte`
@@ -293,6 +293,12 @@ description, and never expose `norbital_id`, UUID fields, or `*_id` keys as a li
 duplication, and data-renderer rules are in [interface-ideology.md](references/interface-ideology.md).
 
 ## Server roles
+
+**Every declaration carries a mandatory `description`.** Hooks and pipelines are `{ description, handler }`;
+automations, remotes, policies, channels, agent tools, custom types, apps, and groups each take one as a
+field. They are not comments — they are compiled into the manifest, and the Workspace Studio has nothing
+else to show somebody who will never open the source. Write what the code does to this data in one
+sentence; "runs before create" restates the key and is worse than nothing.
 
 - Hooks validate and return the exact input/patch, then make only same-transaction database or asset reads.
   Hooks never send network traffic, queue work, email, AI, or notifications.

@@ -15,6 +15,8 @@ const moneyValueSchema = {
 
 export default defineCustomType({
 	name: 'money',
+	description:
+		'A monetary amount stored with its ISO 4217 currency code, so claim and contract totals can never silently mix currencies.',
 	schema: (options: MoneyOptions = {}) =>
 		z
 			.object({

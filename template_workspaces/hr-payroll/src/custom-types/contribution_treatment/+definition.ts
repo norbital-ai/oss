@@ -19,5 +19,7 @@ export type ContributionTreatment = z.infer<typeof contributionTreatmentSchema>;
 
 export default defineCustomType({
 	name: 'contribution_treatment',
+	description:
+		'Whether one pay component is included in, excluded from, reduced against or specially ruled by one statutory contribution, with UNSET meaning that pair has not been decided yet.',
 	schema: contributionTreatmentSchema
 });

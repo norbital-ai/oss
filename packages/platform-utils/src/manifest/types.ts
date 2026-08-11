@@ -21,6 +21,33 @@ export const ManifestExclusionSchema = z
 	})
 	.strict();
 
+/**
+ * One declared collection hook, reduced to the only thing a reader outside the tenant can use.
+ *
+ * The entry used to be the literal `true`, which said a hook exists and nothing else. A name from a
+ * closed vocabulary — `beforeUpdate` — tells a reader when the code runs but never what it does, and
+ * "what does this refuse" is the question anyone looking at a workspace they did not write is
+ * actually asking. The description is authored next to the handler, so it moves when the code does.
+ */
+export const ManifestHookEntrySchema = z.object({ description: nonEmpty }).strict();
+
+/** One declared collection pipeline. See {@link ManifestHookEntrySchema}. */
+export const ManifestPipelineEntrySchema = z.object({ description: nonEmpty }).strict();
+
+/**
+ * One filesystem-backed custom type, by name.
+ *
+ * The schema itself is compiled into the guest bundle and stays there — what travels is the name a
+ * column refers to and what the type means, so a reader looking at `settlement_policy` on a column
+ * can find out what that is without opening `src/custom-types`.
+ */
+export const ManifestCustomTypeSchema = z
+	.object({
+		name: nonEmpty,
+		description: nonEmpty
+	})
+	.strict();
+
 export const ManifestCollectionEntrySchema = z
 	.object({
 		collection_name: nonEmpty,
@@ -37,8 +64,8 @@ export const ManifestCollectionEntrySchema = z
 			})
 			.strict(),
 		enabled_semantic_search: z.boolean().nullable().optional(),
-		hooks: z.record(z.string(), z.literal(true)),
-		pipelines: z.record(z.string(), z.literal(true)),
+		hooks: z.record(z.string(), ManifestHookEntrySchema),
+		pipelines: z.record(z.string(), ManifestPipelineEntrySchema),
 		system: z.boolean().nullable()
 	})
 	.strict();
@@ -60,7 +87,7 @@ export const ManifestAppSchema = z
 	.object({
 		name: nonEmpty,
 		label: z.string().nullable().optional(),
-		description: z.string().nullable(),
+		description: nonEmpty,
 		icon: z.string().nullable(),
 		defaultChild: z.string().nullable().optional(),
 		thumbnail: z.string().nullable().optional(),
@@ -83,13 +110,21 @@ export const ManifestAppSchema = z
 export const ManifestHandlerEntrySchema = z
 	.object({
 		name: nonEmpty,
-		description: z.string().nullable()
+		description: nonEmpty
 	})
 	.strict();
 
 export const ManifestAutomationAgentSpecSchema = z
 	.object({
 		kind: z.literal('agent'),
+		/**
+		 * What this agent is for, in prose — not what it is told to do.
+		 *
+		 * `task` is the instruction handed to the model and reads as one; it answers "what is being
+		 * asked" rather than "why does this exist and what will it touch", which is the question a
+		 * reader browsing a workspace has.
+		 */
+		description: nonEmpty,
 		task: nonEmpty,
 		model: nonEmpty.optional(),
 		systemPrompt: nonEmpty.optional(),
@@ -112,6 +147,7 @@ export const ManifestAutomationAgentSpecSchema = z
 
 export const ManifestAutomationSchema = z
 	.object({
+		description: nonEmpty,
 		trigger: z.union([
 			z.object({ schedule: nonEmpty }).strict(),
 			z
@@ -368,7 +404,7 @@ export const ManifestPolicySchema = z
 	.object({
 		key: nonEmpty,
 		name: nonEmpty,
-		description: z.string().nullable().optional(),
+		description: nonEmpty,
 		apps: z.array(nonEmpty).optional(),
 		grants: z.array(ManifestPolicyGrantSchema)
 	})
@@ -387,7 +423,7 @@ export const ManifestChannelSchema = z
 		key: nonEmpty,
 		transport: nonEmpty,
 		policy: nonEmpty,
-		description: z.string().nullable().optional(),
+		description: nonEmpty,
 		task: z.string().optional(),
 		/** Host tool names this channel opts into; omitted / empty means none. */
 		hostTools: z.array(nonEmpty).optional(),
@@ -442,6 +478,8 @@ export const NorbitalManifestSchema = z
 		 * outside the tenant can act on: which skills exist and what each claims to cover.
 		 */
 		skills: z.record(z.string(), ManifestSkillSchema).optional(),
+		/** Workspace-declared custom column types, by name. See {@link ManifestCustomTypeSchema}. */
+		customTypes: z.record(z.string(), ManifestCustomTypeSchema).optional(),
 		/** Pod-owned interactive agent permissions, authored by the workspace in `src/+agent.ts`. */
 		agent: ManifestAutomationAgentSpecSchema.optional(),
 		automations: z.record(z.string(), ManifestAutomationSchema),
@@ -514,8 +552,9 @@ type DeepReadonly<T> = T extends (...args: never[]) => unknown
 			? { readonly [TKey in keyof T]: DeepReadonly<T[TKey]> }
 			: T;
 
-export type ManifestHookEntry = true;
-export type ManifestPipelineEntry = true;
+export type ManifestHookEntry = DeepReadonly<z.infer<typeof ManifestHookEntrySchema>>;
+export type ManifestPipelineEntry = DeepReadonly<z.infer<typeof ManifestPipelineEntrySchema>>;
+export type ManifestCustomType = DeepReadonly<z.infer<typeof ManifestCustomTypeSchema>>;
 export type ManifestHookKey = string;
 export type ManifestExclusionElement = DeepReadonly<z.infer<typeof ManifestExclusionElementSchema>>;
 export type ManifestExclusion = DeepReadonly<z.infer<typeof ManifestExclusionSchema>>;

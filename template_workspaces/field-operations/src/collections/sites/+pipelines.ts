@@ -2,6 +2,8 @@ import type { Pipelines } from './$types.js';
 
 export default {
 	export: {
+		description:
+			'Bundles each site with its jobs, assignments, variation requests and photo evidence into one JSON file plus a CSV per table, for handover to another system.',
 		handler: async ({ records }, api) => {
 			const siteIds = records.map((site) => site.norbital_id);
 			if (siteIds.length === 0) return [];

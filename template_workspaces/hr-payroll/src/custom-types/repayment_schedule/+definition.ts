@@ -13,4 +13,9 @@ export const repaymentScheduleSchema = z
 
 export type RepaymentSchedule = z.infer<typeof repaymentScheduleSchema>;
 
-export default defineCustomType({ name: 'repayment_schedule', schema: repaymentScheduleSchema });
+export default defineCustomType({
+	name: 'repayment_schedule',
+	description:
+		'The dated instalments a staff loan is recovered by, each with its due date and amount, in the order payroll will deduct them.',
+	schema: repaymentScheduleSchema
+});

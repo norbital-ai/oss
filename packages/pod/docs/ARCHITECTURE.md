@@ -318,6 +318,7 @@ export default defineAutomation(
 	{ schedule: '0 6 * * *' },
 	{
 		kind: 'agent',
+		description: 'Keeps permits from lapsing by drafting their renewals a fortnight ahead.',
 		task: 'Draft renewals for permits expiring within 14 days.',
 		collections: ['permits', 'permit_renewals'],
 		access: 'write',

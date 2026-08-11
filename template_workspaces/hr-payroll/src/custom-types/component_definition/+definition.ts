@@ -95,5 +95,7 @@ export type ComponentDefinition = z.infer<typeof componentDefinitionSchema>;
 
 export default defineCustomType({
 	name: 'component_definition',
+	description:
+		'How a pay component gets its number — typed in as an entry under a layered claim cap, computed from a formula, derived from overtime rules, reclassified as overtime beyond the daily boundary, or taken from the contracted salary.',
 	schema: componentDefinitionSchema
 });

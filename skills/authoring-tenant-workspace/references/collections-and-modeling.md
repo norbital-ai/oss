@@ -90,17 +90,25 @@ import type { Hooks } from './$types.js';
 
 export default {
 	create: {
-		before: async ({ input, db }) => {
-			const site = await db.sites.findFirst({ where: { norbital_id: { eq: input.site_id } } });
-			if (!site) throw new Error('Referenced site does not exist.');
-			return { ...input, visited_at: input.visited_at ?? new Date() };
+		before: {
+			description: 'Rejects a visit against an unknown site and defaults the visit date to today.',
+			handler: async ({ input, db }) => {
+				const site = await db.sites.findFirst({ where: { norbital_id: { eq: input.site_id } } });
+				if (!site) throw new Error('Referenced site does not exist.');
+				return { ...input, visited_at: input.visited_at ?? new Date() };
+			}
 		}
 	}
 } satisfies Hooks;
 ```
 
-`before` returns the accepted payload or patch. `after` makes same-transaction database or asset changes.
-Neither may send traffic, queue work, email, invoke AI, or notify.
+Every hook is `{ description, handler }`. The bare-function form does not exist: the description is
+mandatory because it travels into the manifest, and the Workspace Studio shows it to people reading a
+collection who will never open `+hooks.ts`. Write what this hook does to this data — "runs before
+create" repeats the key and says nothing.
+
+`handler` returns the accepted payload or patch on `before`; `after` makes same-transaction database or
+asset changes. Neither may send traffic, queue work, email, invoke AI, or notify.
 
 ## Pipelines and integrations
 
@@ -108,7 +116,12 @@ Neither may send traffic, queue work, email, invoke AI, or notify.
 import type { Pipelines } from './$types.js';
 import { exportPipeline } from './lib/export.js';
 
-export default { export: exportPipeline } satisfies Pipelines;
+export default {
+	export: {
+		description: 'Emits a confirmed visit and its photos as the JSON payload the ERP accepts.',
+		handler: exportPipeline
+	}
+} satisfies Pipelines;
 ```
 
 ```ts
@@ -127,7 +140,9 @@ query, policy, hooks, or lifecycle. Represent mutually exclusive owned variants 
 discriminated union, never nullable columns that can disagree.
 
 An owned structured value lives in `custom-types/<name>/` with exactly a `+definition.ts` default-exporting
-`defineCustomType({ name, schema })` and a mandatory `+renderer.svelte`. Models reference it through
+`defineCustomType({ name, description, schema })` and a mandatory `+renderer.svelte`. The description is
+required and reaches the manifest, because a `custom('settlement_policy')` column says nothing about what
+it holds. Models reference it through
 `custom('<name>')`. A typed schema factory may accept a second options argument; for example,
 `custom('money', { allowedCurrencies: ['MYR'] })`. The definition owns its schema and inferred value type,
 and named custom values use JSONB storage. Collection helpers import that definition; a custom-type

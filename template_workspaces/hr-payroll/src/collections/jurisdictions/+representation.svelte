@@ -300,8 +300,10 @@
 	{/snippet}
 
 	<Cover as="main" gap="md" top={jurisdictionSummary}>
+		<!-- The detail sheet already insets this surface; the list must not inset itself again. -->
 		<Tabs
 			animate={false}
+			listClass="mx-0 w-full"
 			config={[
 				{ name: 'regime', label: t('component.regime'), icon: 'lucide:globe', content: regime },
 				{

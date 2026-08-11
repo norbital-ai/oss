@@ -19,46 +19,57 @@ function requireId(value: string | null | undefined, what: string): string {
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			const employmentId = requireId(input.employment_id, 'an employment');
-			const contributionId = requireId(input.statutory_contribution_id, 'a statutory contribution');
-			const siblings = await api.db.query.employment_statutory_facts.findMany({
-				where: {
-					employment_id: { eq: employmentId },
-					statutory_contribution_id: { eq: contributionId }
-				}
-			});
-			assertNoOverlap({
-				candidate: input.effective_range,
-				existing: siblings,
-				identity: `employment ${employmentId} × contribution ${contributionId}`
-			});
-			return input;
+		before: {
+			description:
+				'Requires a statutory fact to name both its employment and its contribution scheme, and refuses one whose effective range overlaps an existing standing for that same employment and scheme.',
+			handler: async ({ input, api }) => {
+				const employmentId = requireId(input.employment_id, 'an employment');
+				const contributionId = requireId(
+					input.statutory_contribution_id,
+					'a statutory contribution'
+				);
+				const siblings = await api.db.query.employment_statutory_facts.findMany({
+					where: {
+						employment_id: { eq: employmentId },
+						statutory_contribution_id: { eq: contributionId }
+					}
+				});
+				assertNoOverlap({
+					candidate: input.effective_range,
+					existing: siblings,
+					identity: `employment ${employmentId} × contribution ${contributionId}`
+				});
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			const employmentId = requireId(
-				input.employment_id ?? existing.employment_id,
-				'an employment'
-			);
-			const contributionId = requireId(
-				input.statutory_contribution_id ?? existing.statutory_contribution_id,
-				'a statutory contribution'
-			);
-			const siblings = await api.db.query.employment_statutory_facts.findMany({
-				where: {
-					employment_id: { eq: employmentId },
-					statutory_contribution_id: { eq: contributionId }
-				}
-			});
-			assertNoOverlap({
-				candidate: input.effective_range ?? existing.effective_range,
-				existing: siblings,
-				identity: `employment ${employmentId} × contribution ${contributionId}`,
-				excludeId: existing.norbital_id
-			});
-			return input;
+		before: {
+			description:
+				'Re-checks an edited statutory fact so an employment never ends up with two overlapping standings in the same contribution scheme at one instant.',
+			handler: async ({ input, existing, api }) => {
+				const employmentId = requireId(
+					input.employment_id ?? existing.employment_id,
+					'an employment'
+				);
+				const contributionId = requireId(
+					input.statutory_contribution_id ?? existing.statutory_contribution_id,
+					'a statutory contribution'
+				);
+				const siblings = await api.db.query.employment_statutory_facts.findMany({
+					where: {
+						employment_id: { eq: employmentId },
+						statutory_contribution_id: { eq: contributionId }
+					}
+				});
+				assertNoOverlap({
+					candidate: input.effective_range ?? existing.effective_range,
+					existing: siblings,
+					identity: `employment ${employmentId} × contribution ${contributionId}`,
+					excludeId: existing.norbital_id
+				});
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

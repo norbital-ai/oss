@@ -6,7 +6,6 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cluster, Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import {
 		formatCalendarDate,
@@ -160,11 +159,11 @@
 	<meta name="pod:icon" content="lucide:user-round" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/hr-payroll/app-media/hr_employee-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/hr_employee-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/hr-payroll/app-media/hr_employee-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/hr_employee-banner.webp"
 	/>
 </svelte:head>
 
@@ -506,15 +505,7 @@
 	</Stack>
 {/snippet}
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.hr_employee.eyebrow')}
-		title={t('app.hr_employee.header_title')}
-		description={t('app.hr_employee.header_description')}
-	/>
-{/snippet}
-
-<Cover top={pageHeading}>
+<Cover>
 	<Tabs
 		animate={false}
 		config={[

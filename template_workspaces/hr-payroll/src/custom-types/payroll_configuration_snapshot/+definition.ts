@@ -19,5 +19,7 @@ export type PayrollConfigurationSnapshot = z.infer<typeof payrollConfigurationSn
 
 export default defineCustomType({
 	name: 'payroll_configuration_snapshot',
+	description:
+		'The frozen copy of the rates, rules and terms a payroll run was calculated under, so every payslip stays traceable to the configuration that produced it.',
 	schema: payrollConfigurationSnapshotSchema
 });

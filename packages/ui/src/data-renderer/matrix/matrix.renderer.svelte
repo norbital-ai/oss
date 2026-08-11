@@ -192,8 +192,7 @@
 		viewKey: 'matrix-renderer',
 		persistState: false,
 		conditionDefault: undefined,
-		parseCondition: (condition) => condition,
-		initialState: { pageSize: 500 }
+		parseCondition: (condition) => condition
 	});
 
 	function compareValues(left: unknown, right: unknown): number {
@@ -361,12 +360,10 @@
 					{disabled}
 					isLoading={false}
 					error=""
-					hidePaginationWhenSinglePage={true}
 					enableSorting={true}
 					enableColumnReordering={false}
 					enableRowExpansion={false}
 					enableRowReordering={false}
-					enableSelection={false}
 					borderless={true}
 					stickyRowActions={true}
 					bounded={true}
@@ -381,12 +378,10 @@
 				{disabled}
 				isLoading={false}
 				error=""
-				hidePaginationWhenSinglePage={true}
 				enableSorting={true}
 				enableColumnReordering={false}
 				enableRowExpansion={false}
 				enableRowReordering={false}
-				enableSelection={false}
 				borderless={true}
 				stickyRowActions={true}
 				bounded={false}

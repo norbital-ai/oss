@@ -10,6 +10,8 @@ import type { Pipelines } from './$types.js';
  */
 export default {
 	export: {
+		description:
+			'Packages each confirmed purchase order with its lines as a JSON attachment for the downstream system to receive.',
 		handler: async ({ records }, api) => {
 			const orderIds = records
 				.map((order) => order.norbital_id)

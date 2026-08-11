@@ -38,15 +38,23 @@ function validateTuning(input: {
 
 export default {
 	create: {
-		before: async ({ input }) => {
-			validateTuning(input);
-			return input;
+		before: {
+			description:
+				'Refuses a new project whose stitch_overrides blob is not valid JSON or whose integration_cell_m or render_cell_m falls outside 0.5 m to 100 m.',
+			handler: async ({ input }) => {
+				validateTuning(input);
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input }) => {
-			validateTuning(input);
-			return input;
+		before: {
+			description:
+				'Re-checks the stitch_overrides JSON and the integration_cell_m and render_cell_m grid sizes on every edit, so a bad tuning value cannot reach the reconstruction engine.',
+			handler: async ({ input }) => {
+				validateTuning(input);
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

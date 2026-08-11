@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import AppHeaderActions from '@norbital-ai/pod/client/app-header-actions';
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Bound, Cover, Inline } from '@norbital-ai/ui/layout';
@@ -124,51 +124,41 @@
 	<meta name="pod:icon" content="lucide:hand-coins" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/hr-payroll/app-media/loans-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/loans-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/hr-payroll/app-media/loans-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/loans-banner.webp"
 	/>
 </svelte:head>
 
 {#snippet companyScopeActions()}
-	<Inline gap="md" align="end">
-		<label class="grid gap-1.5 text-sm">
-			<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
-			<Combobox
-				ariaLabel={t('component.legal_entity')}
-				options={companyOptions}
-				value={selectedCompanyId}
-				onValueChange={(value) => {
-					if (typeof value === 'string') {
-						companyId = value;
-						return;
-					}
-					companyId = companies[0]?.norbital_id ?? null;
-				}}
-				emptyPlaceholder={t('component.select_legal_entity')}
-				searchPlaceholder={t('component.search_companies')}
-				clientConfig={{
-					isLoading: companiesQuery.loading,
-					error: companiesQuery.error?.message ?? null
-				}}
-				class="min-w-[16rem]"
-			/>
-		</label>
-	</Inline>
-{/snippet}
-
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.loans.eyebrow')}
-		title={t('app.loans.header_title')}
-		description={t('app.loans.header_description')}
-		actions={companyScopeActions}
+	<Combobox
+		ariaLabel={t('component.legal_entity')}
+		options={companyOptions}
+		value={selectedCompanyId}
+		onValueChange={(value) => {
+			if (typeof value === 'string') {
+				companyId = value;
+				return;
+			}
+			companyId = companies[0]?.norbital_id ?? null;
+		}}
+		emptyPlaceholder={t('component.select_legal_entity')}
+		searchPlaceholder={t('component.search_companies')}
+		clientConfig={{
+			isLoading: companiesQuery.loading,
+			error: companiesQuery.error?.message ?? null
+		}}
+		class="min-w-[16rem]"
 	/>
 {/snippet}
 
-<Cover top={pageHeading}>
+<AppHeaderActions>
+	{@render companyScopeActions()}
+</AppHeaderActions>
+
+<Cover>
 	<Bound size="full" inset>
 		{#if selectedCompanyId == null}
 			<p class="text-sm text-muted-foreground">

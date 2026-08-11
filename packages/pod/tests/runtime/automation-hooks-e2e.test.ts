@@ -54,23 +54,60 @@ const RFI_HOOKS = `import type { Hooks } from './$types.js';
 
 export default {
 	create: {
-		before: async ({ input }) => {
-			if (input.title === 'refuse-before') {
-				throw new Error('probe before hook refused this RFI');
+		before: {
+			description: 'Normalizes status, priority, and subject before an RFI is stored.',
+			handler: async ({ input }) => {
+				if (input.title === 'refuse-before') {
+					throw new Error('probe before hook refused this RFI');
+				}
+				// The mutation on the way in. \`status\` is deliberately overwritten rather than defaulted:
+				// the caller submits 'closed' below, so an unchanged stored row cannot be mistaken for a
+				// hook that ran and happened to agree with the input.
+				return { ...input, status: 'open', priority: 'high', subject: 'normalized:' + input.title };
 			}
-			// The mutation on the way in. \`status\` is deliberately overwritten rather than defaulted:
-			// the caller submits 'closed' below, so an unchanged stored row cannot be mistaken for a
-			// hook that ran and happened to agree with the input.
-			return { ...input, status: 'open', priority: 'high', subject: 'normalized:' + input.title };
 		},
-		after: async ({ record, api }) => {
-			if (record.title === 'refuse-after') {
-				throw new Error('probe after hook refused this RFI');
+		after: {
+			description: 'Opens a companion defect for an RFI that asks for one.',
+			handler: async ({ record, api }) => {
+				if (record.title === 'refuse-after') {
+					throw new Error('probe after hook refused this RFI');
+				}
+				if (typeof record.title === 'string' && record.title.startsWith('derive:')) {
+					await api.db.mutate('defects', [
+						{
+							title: 'derived-from:' + record.title,
+							status: 'open',
+							severity: 'low',
+							description: String(record.norbital_id)
+						}
+					]);
+				}
 			}
-			if (typeof record.title === 'string' && record.title.startsWith('derive:')) {
+		}
+	},
+	update: {
+		before: {
+			description: 'Normalizes the answer and restamps the subject from the stored title.',
+			handler: async ({ input, existing }) => {
+				if (input.answer === 'refuse-update-before') {
+					throw new Error('probe before hook refused this RFI update');
+				}
+				return {
+					...input,
+					answer: 'normalized:' + input.answer,
+					subject: 'updated-from:' + existing.title
+				};
+			}
+		},
+		after: {
+			description: 'Records the answered RFI as a defect for follow-up.',
+			handler: async ({ record, api }) => {
+				if (record.answer === 'normalized:refuse-update-after') {
+					throw new Error('probe after hook refused this RFI update');
+				}
 				await api.db.mutate('defects', [
 					{
-						title: 'derived-from:' + record.title,
+						title: 'updated:' + record.title + ':' + record.answer,
 						status: 'open',
 						severity: 'low',
 						description: String(record.norbital_id)
@@ -79,49 +116,30 @@ export default {
 			}
 		}
 	},
-	update: {
-		before: async ({ input, existing }) => {
-			if (input.answer === 'refuse-update-before') {
-				throw new Error('probe before hook refused this RFI update');
-			}
-			return {
-				...input,
-				answer: 'normalized:' + input.answer,
-				subject: 'updated-from:' + existing.title
-			};
-		},
-		after: async ({ record, api }) => {
-			if (record.answer === 'normalized:refuse-update-after') {
-				throw new Error('probe after hook refused this RFI update');
-			}
-			await api.db.mutate('defects', [
-				{
-					title: 'updated:' + record.title + ':' + record.answer,
-					status: 'open',
-					severity: 'low',
-					description: String(record.norbital_id)
-				}
-			]);
-		}
-	},
 	delete: {
-		before: async ({ existing }) => {
-			if (existing.title === 'refuse-delete-before' || existing.title === 'batch-delete-refusal:3') {
-				throw new Error('probe before hook refused this RFI delete');
+		before: {
+			description: 'Refuses to delete an RFI that is still under review.',
+			handler: async ({ existing }) => {
+				if (existing.title === 'refuse-delete-before' || existing.title === 'batch-delete-refusal:3') {
+					throw new Error('probe before hook refused this RFI delete');
+				}
 			}
 		},
-		after: async ({ record, api }) => {
-			if (record.title === 'refuse-delete-after') {
-				throw new Error('probe after hook refused this RFI delete');
-			}
-			await api.db.mutate('defects', [
-				{
-					title: 'deleted:' + record.title,
-					status: 'open',
-					severity: 'low',
-					description: String(record.norbital_id)
+		after: {
+			description: 'Leaves a defect noting which RFI was removed.',
+			handler: async ({ record, api }) => {
+				if (record.title === 'refuse-delete-after') {
+					throw new Error('probe after hook refused this RFI delete');
 				}
-			]);
+				await api.db.mutate('defects', [
+					{
+						title: 'deleted:' + record.title,
+						status: 'open',
+						severity: 'low',
+						description: String(record.norbital_id)
+					}
+				]);
+			}
 		}
 	}
 } satisfies Hooks;
@@ -140,18 +158,21 @@ const DEFECTS_HOOKS = `import type { Hooks } from './$types.js';
 
 export default {
 	create: {
-		after: async ({ record, api }) => {
-			if (record.title !== 'delete-rfi-batch-success' && record.title !== 'delete-rfi-batch-refusal') {
-				return;
+		after: {
+			description: 'Clears the RFIs a batch-cleanup defect names.',
+			handler: async ({ record, api }) => {
+				if (record.title !== 'delete-rfi-batch-success' && record.title !== 'delete-rfi-batch-refusal') {
+					return;
+				}
+				const prefix = record.title === 'delete-rfi-batch-success'
+					? 'batch-delete-success:'
+					: 'batch-delete-refusal:';
+				const rfis = await api.db.query.rfis.findMany({ limit: 500 });
+				const ids = rfis
+					.filter((rfi) => typeof rfi.title === 'string' && rfi.title.startsWith(prefix))
+					.map((rfi) => String(rfi.norbital_id));
+				await api.db.delete('rfis', ids);
 			}
-			const prefix = record.title === 'delete-rfi-batch-success'
-				? 'batch-delete-success:'
-				: 'batch-delete-refusal:';
-			const rfis = await api.db.query.rfis.findMany({ limit: 500 });
-			const ids = rfis
-				.filter((rfi) => typeof rfi.title === 'string' && rfi.title.startsWith(prefix))
-				.map((rfi) => String(rfi.norbital_id));
-			await api.db.delete('rfis', ids);
 		}
 	}
 } satisfies Hooks;
@@ -160,16 +181,23 @@ export default {
 /** A scheduled automation: the job set derives \`pod:automation:probe_scheduled_sweep\` from this. */
 const SCHEDULED_AUTOMATION = `import { defineAutomation } from '@norbital-ai/pod/authoring';
 
-export default defineAutomation({ schedule: '0 3 * * *' }, async (api) => {
-	const rfis = await api.db.query.rfis.findMany({ limit: 500 });
-	await api.db.defects.create({
-		title: 'scheduled-sweep-marker',
-		status: 'open',
-		severity: 'low',
-		description: 'swept ' + rfis.length
-	});
-	return { swept: rfis.length };
-});
+export default defineAutomation(
+	{ schedule: '0 3 * * *' },
+	{
+		kind: 'deterministic',
+		description: 'Sweeps the open RFIs overnight and files a marker defect with the count.',
+		handler: async (api) => {
+			const rfis = await api.db.query.rfis.findMany({ limit: 500 });
+			await api.db.defects.create({
+				title: 'scheduled-sweep-marker',
+				status: 'open',
+				severity: 'low',
+				description: 'swept ' + rfis.length
+			});
+			return { swept: rfis.length };
+		}
+	}
+);
 `;
 
 /** An event-triggered automation. Subscribes to `rfis.created` only — never `updated`. */
@@ -177,15 +205,19 @@ const EVENT_AUTOMATION = `import { defineAutomation } from '@norbital-ai/pod/aut
 
 export default defineAutomation(
 	{ trigger: { collection: 'rfis', event: 'created' } },
-	async (api, { scope }) => {
-		const rfi = scope.incoming_record;
-		await api.db.defects.create({
-			title: 'event-automation:' + rfi.title,
-			status: 'open',
-			severity: 'low',
-			description: String(rfi.norbital_id)
-		});
-		return { rfi_id: rfi.norbital_id };
+	{
+		kind: 'deterministic',
+		description: 'Opens a tracking defect whenever a new RFI is created.',
+		handler: async (api, { scope }) => {
+			const rfi = scope.incoming_record;
+			await api.db.defects.create({
+				title: 'event-automation:' + rfi.title,
+				status: 'open',
+				severity: 'low',
+				description: String(rfi.norbital_id)
+			});
+			return { rfi_id: rfi.norbital_id };
+		}
 	}
 );
 `;

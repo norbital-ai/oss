@@ -45,4 +45,9 @@ export const payComponentPolicySchema = z.discriminatedUnion('kind', [
 ]);
 
 export type PayComponentPolicy = z.infer<typeof payComponentPolicySchema>;
-export default defineCustomType({ name: 'pay_component_policy', schema: payComponentPolicySchema });
+export default defineCustomType({
+	name: 'pay_component_policy',
+	description:
+		'Whether a pay component adds to net pay, deducts from it, costs the employer alone or is information only, together with how each statutory contribution charges it over each effective range.',
+	schema: payComponentPolicySchema
+});

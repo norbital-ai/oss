@@ -145,7 +145,14 @@ export type PolicyGrant<S extends AnySchema = DefaultWorkspaceSchema> = {
  */
 export type PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> = {
 	readonly name: string;
-	readonly description?: string | null;
+	/**
+	 * Who this permission set is for and what it lets them reach, carried into the manifest.
+	 *
+	 * A policy is the hardest declaration in a workspace to read back: the grants are exact but they
+	 * are a list of collection/action pairs, and reconstructing "this is the contractor who may see
+	 * only their own jobs" out of nine of them is work nobody browsing does.
+	 */
+	readonly description: string;
 	/**
 	 * App ids this policy may open. Omitted means every app.
 	 *
@@ -206,6 +213,9 @@ function assertSerialisableWhere(
  */
 export function definePolicy<const TPolicy extends PolicyDefinition>(policy: TPolicy): TPolicy {
 	if (!policy.name.trim()) throw new Error('Policy name cannot be empty');
+	if (!policy.description.trim()) {
+		throw new Error(`Policy "${policy.name}" requires a non-empty description`);
+	}
 	if (policy.grants.length === 0) {
 		throw new Error(`Policy "${policy.name}" declares no grants; remove the file or add one`);
 	}

@@ -5,6 +5,7 @@ import type { z } from 'zod';
 import { systemWorkspace } from '../schema/system-workspace.js';
 import type { SchemaBuilder } from '../schema/define-schema.js';
 import type { AnySchema } from '../schema/types.js';
+import type { AnyCustomTypeDefinition } from '../custom-type.js';
 import {
 	isCollectionBehavior,
 	type AnyCollectionBehavior,
@@ -41,7 +42,7 @@ type InvokeMapInput = InvokeMap;
 
 export type WorkspaceAppDef = {
 	readonly name: string;
-	readonly description: string | null;
+	readonly description: string;
 	readonly icon: string | null;
 	/** Child key used as this application group's landing destination. */
 	readonly defaultChild?: string | null;
@@ -81,6 +82,14 @@ export type DefineWorkspaceInput<
 	/** Channel declarations from `src/channels`, keyed by filename. */
 	readonly channels?: Readonly<Record<string, ChannelDefinition>>;
 	readonly apps?: Readonly<Record<string, WorkspaceAppDef>>;
+	/**
+	 * `src/custom-types` — carried so the manifest can name them and say what they hold.
+	 *
+	 * The registry already binds these to columns; this is a second reference on purpose, because the
+	 * schema builder erases everything but the resolved zod schema and the description would have no
+	 * way out of the bundle otherwise.
+	 */
+	readonly customTypes?: Readonly<Record<string, AnyCustomTypeDefinition>>;
 	readonly invoke?: InvokeMapInput;
 	readonly meta?: WorkspaceMeta;
 	readonly seed?: import('@norbital-ai/platform-utils/seed/plan').WorkspaceSeedDefinition;
@@ -132,6 +141,7 @@ export type WorkspaceInstance<
 	readonly tables: Readonly<Record<string, PgTable>>;
 	readonly relations: S['relations'];
 	readonly relationships: WorkspaceRelationshipMap;
+	readonly customTypes?: Readonly<Record<string, AnyCustomTypeDefinition>>;
 	readonly meta?: WorkspaceMeta;
 	readonly seed?: DefineWorkspaceInput<S, TCollections>['seed'];
 	readonly env?: { readonly public?: Readonly<Record<string, string>> };
@@ -586,6 +596,7 @@ export function defineWorkspace<
 		tables,
 		relations: schema.relations,
 		relationships,
+		customTypes: input.customTypes,
 		meta: input.meta,
 		seed: input.seed,
 		env: input.env
@@ -614,6 +625,7 @@ export type RuntimeWorkspaceInstance = {
 	readonly tables: Readonly<Record<string, PgTable>>;
 	readonly relations: AnySchema['relations'];
 	readonly relationships: WorkspaceRelationshipMap;
+	readonly customTypes?: Readonly<Record<string, AnyCustomTypeDefinition>>;
 	readonly meta?: WorkspaceMeta;
 	readonly seed?: import('@norbital-ai/platform-utils/seed/plan').WorkspaceSeedDefinition;
 	readonly env?: { readonly public?: Readonly<Record<string, string>> };

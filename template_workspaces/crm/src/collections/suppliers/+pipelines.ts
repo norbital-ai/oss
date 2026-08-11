@@ -22,6 +22,8 @@ const vendorsSchema = z.object({
  */
 export default {
 	import: {
+		description:
+			'Mirrors the delivered ERP vendor feed into suppliers, skipping any vendor whose external_code is already on file.',
 		input: vendorsSchema,
 		handler: async ({ input }, api) => {
 			const vendors = vendorsSchema.parse(input).vendors;

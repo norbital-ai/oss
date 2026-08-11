@@ -19,32 +19,40 @@ function requireEmployment(value: string | null | undefined): string {
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			const employmentId = requireEmployment(input.employment_id);
-			const siblings = await api.db.query.employment_terms.findMany({
-				where: { employment_id: { eq: employmentId } }
-			});
-			assertNoOverlap({
-				candidate: input.effective_range,
-				existing: siblings,
-				identity: `employment ${employmentId}`
-			});
-			return input;
+		before: {
+			description:
+				'Requires terms to name an employment and refuses a set whose effective range overlaps terms already in force, so payroll never finds two salaries or work patterns for one person on one day.',
+			handler: async ({ input, api }) => {
+				const employmentId = requireEmployment(input.employment_id);
+				const siblings = await api.db.query.employment_terms.findMany({
+					where: { employment_id: { eq: employmentId } }
+				});
+				assertNoOverlap({
+					candidate: input.effective_range,
+					existing: siblings,
+					identity: `employment ${employmentId}`
+				});
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			const employmentId = requireEmployment(input.employment_id ?? existing.employment_id);
-			const siblings = await api.db.query.employment_terms.findMany({
-				where: { employment_id: { eq: employmentId } }
-			});
-			assertNoOverlap({
-				candidate: input.effective_range ?? existing.effective_range,
-				existing: siblings,
-				identity: `employment ${employmentId}`,
-				excludeId: existing.norbital_id
-			});
-			return input;
+		before: {
+			description:
+				'Re-checks edited terms so extending or moving their effective range cannot leave an employment with two sets of terms in force at the same instant.',
+			handler: async ({ input, existing, api }) => {
+				const employmentId = requireEmployment(input.employment_id ?? existing.employment_id);
+				const siblings = await api.db.query.employment_terms.findMany({
+					where: { employment_id: { eq: employmentId } }
+				});
+				assertNoOverlap({
+					candidate: input.effective_range ?? existing.effective_range,
+					existing: siblings,
+					identity: `employment ${employmentId}`,
+					excludeId: existing.norbital_id
+				});
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

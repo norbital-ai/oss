@@ -129,8 +129,13 @@ export default definePodHost({
 			automations: Record<string, unknown>;
 		};
 		manifest.automations.missing_ai = {
+			description: 'Asks the model for a summary every morning.',
 			trigger: { schedule: '0 6 * * *' },
-			spec: { kind: 'agent', task: 'Require inference' }
+			spec: {
+				kind: 'agent',
+				description: 'Asks the model for a summary every morning.',
+				task: 'Require inference'
+			}
 		};
 		await writeFile(manifestPath, JSON.stringify(manifest));
 

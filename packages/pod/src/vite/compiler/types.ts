@@ -39,7 +39,7 @@ export interface DiscoveredCustomType {
 
 export interface AppMetadata {
 	readonly title: string;
-	readonly description: string | null;
+	readonly description: string;
 	readonly icon: string;
 	readonly thumbnail: string | null;
 	readonly banner: string | null;

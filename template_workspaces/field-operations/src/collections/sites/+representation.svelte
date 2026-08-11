@@ -137,7 +137,7 @@
 		lazyLoad={false}
 		animate={false}
 		contentPadding={false}
-		listClass="mb-0"
+		listClass="mx-0 w-full"
 		config={[
 			{
 				name: 'general',

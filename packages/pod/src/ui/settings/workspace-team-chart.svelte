@@ -3,6 +3,7 @@
 	import { Background, Controls, Position, SvelteFlow, type Edge, type Node } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 	import { Button } from '@norbital-ai/ui/button';
+	import { Combobox } from '@norbital-ai/ui/combobox';
 	import * as Dialog from '@norbital-ai/ui/dialog';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Cluster, Inline, Stack } from '@norbital-ai/ui/layout';
@@ -282,17 +283,18 @@
 							<p class="text-xs text-muted-foreground">{t('pod.settings.noMembersInTeam')}</p>
 						{/each}
 						<Inline gap="xs" class="pt-1">
-							<select
-								class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
-								aria-label={t('pod.settings.addSomeoneTo', { name: selectedTeam.name })}
-								value={memberToAdd}
-								onchange={(event) => (memberToAdd = event.currentTarget.value)}
-							>
-								<option value="">{t('pod.settings.addMemberPlaceholder')}</option>
-								{#each availableMembers as member (member.norbital_id)}<option
-										value={member.norbital_id}>{member.email}</option
-									>{/each}
-							</select>
+							<Combobox
+								class="h-8 min-w-0 flex-1 text-xs"
+								ariaLabel={t('pod.settings.addSomeoneTo', { name: selectedTeam.name })}
+								options={availableMembers.map((member) => ({
+									value: member.norbital_id,
+									label: member.email
+								}))}
+								value={memberToAdd || null}
+								allowClear
+								emptyPlaceholder={t('pod.settings.addMemberPlaceholder')}
+								onValueChange={(next) => (memberToAdd = typeof next === 'string' ? next : '')}
+							/>
 							<Button
 								size="sm"
 								aria-label={t('pod.settings.addMemberTo', { name: selectedTeam.name })}
@@ -332,27 +334,29 @@
 			>
 			<label class="space-y-1 text-xs font-medium"
 				>{t('pod.settings.parentTeam')}
-				<select
-					class="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
-					bind:value={teamParentId}
-				>
-					<option value="">{t('pod.settings.noParent')}</option>
-					{#each teams.filter((team) => team.norbital_id !== editingTeamId) as team (team.norbital_id)}<option
-							value={team.norbital_id}>{team.name}</option
-						>{/each}
-				</select>
+				<Combobox
+					class="h-9 w-full text-xs"
+					ariaLabel={t('pod.settings.parentTeam')}
+					options={teams
+						.filter((team) => team.norbital_id !== editingTeamId)
+						.map((team) => ({ value: team.norbital_id, label: team.name }))}
+					value={teamParentId || null}
+					allowClear
+					emptyPlaceholder={t('pod.settings.noParent')}
+					onValueChange={(next) => (teamParentId = typeof next === 'string' ? next : '')}
+				/>
 			</label>
 			<label class="space-y-1 text-xs font-medium"
 				>{t('pod.settings.policy')}
-				<select
-					class="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
-					bind:value={teamPolicyId}
-				>
-					<option value="">{t('pod.settings.noPolicy')}</option>
-					{#each policies as policy (policy.norbital_id)}<option value={policy.norbital_id}
-							>{policy.name}</option
-						>{/each}
-				</select>
+				<Combobox
+					class="h-9 w-full text-xs"
+					ariaLabel={t('pod.settings.policy')}
+					options={policies.map((policy) => ({ value: policy.norbital_id, label: policy.name }))}
+					value={teamPolicyId || null}
+					allowClear
+					emptyPlaceholder={t('pod.settings.noPolicy')}
+					onValueChange={(next) => (teamPolicyId = typeof next === 'string' ? next : '')}
+				/>
 			</label>
 		</Stack>
 		<Dialog.Footer>

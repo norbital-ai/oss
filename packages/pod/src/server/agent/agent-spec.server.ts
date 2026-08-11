@@ -61,6 +61,10 @@ export async function interactiveAgentSpec(
 	if (authored) return { ...authored, task: message, ...chosen };
 	return {
 		kind: 'agent',
+		// Synthesized per turn rather than authored, so the description states what this spec is for
+		// rather than what any one message asks — the manifest never sees it, but the same shape is
+		// what an authored `+agent.ts` fills, and a required field with no honest value is a lie.
+		description: 'Answers one interactive request from a person in this workspace.',
 		task: message,
 		access: 'write',
 		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],
@@ -120,6 +124,7 @@ export async function channelAgentSpec(input: {
 		input.hostSandbox ?? (hostTools.length > 0 ? ({ workspace: 'read-only' } as const) : undefined);
 	return {
 		kind: 'agent',
+		description: 'Handles one inbound channel conversation under its standing instruction.',
 		task: input.standingInstruction,
 		access: 'write',
 		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],

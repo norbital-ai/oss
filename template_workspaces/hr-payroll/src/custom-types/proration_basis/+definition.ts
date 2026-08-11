@@ -13,4 +13,9 @@ export const prorationBasisSchema = z.discriminatedUnion('by', [
 
 export type ProrationBasis = z.infer<typeof prorationBasisSchema>;
 
-export default defineCustomType({ name: 'proration_basis', schema: prorationBasisSchema });
+export default defineCustomType({
+	name: 'proration_basis',
+	description:
+		'The divisor a jurisdiction prorates a monthly wage by across a partial period: calendar days, working days, or a fixed number of days such as 26.',
+	schema: prorationBasisSchema
+});
