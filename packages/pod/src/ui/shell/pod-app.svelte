@@ -57,7 +57,7 @@
 	});
 </script>
 
-<ModeWatcher disableHeadScriptInjection />
+<ModeWatcher />
 <Toaster />
 
 {#await shellData}

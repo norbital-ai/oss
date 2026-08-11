@@ -1,16 +1,18 @@
 <script lang="ts">
 	import { mode, toggleMode } from 'mode-watcher';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 
 	let { class: className = '' }: { class?: string } = $props();
 
 	const isDark = $derived(mode.current === 'dark');
+	const { t } = useI18n<UiKeys>();
 </script>
 
 <button
 	type="button"
 	onclick={() => toggleMode()}
-	aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+	aria-label={t(isDark ? 'misc.switchToLightMode' : 'misc.switchToDarkMode')}
 	class={cn(
 		'inline-flex size-9 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground',
 		className
