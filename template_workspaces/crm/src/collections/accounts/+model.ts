@@ -3,7 +3,7 @@ import { boolean, defineModel, enums, numeric, text } from '@norbital-ai/pod/aut
 export default defineModel(
 	{
 		external_code: text().notNull(),
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		industry: text(),
 		website: text(),
 		phone: text(),

@@ -67,9 +67,9 @@ const manifestContext = {
 	columnsFor: () => ({ name: { dataType: 'text', notNull: false } })
 };
 
-/** A searchable (indexed) field, the way the compiled manifest always carries one. */
+/** A searchable (indexed) field, the way the compiled manifest carries one after opt-in. */
 function textField(name: string) {
-	return [{ name, kind: 'text', nullable: false }];
+	return [{ name, kind: 'text', nullable: false, search: true }];
 }
 
 beforeEach(() => {

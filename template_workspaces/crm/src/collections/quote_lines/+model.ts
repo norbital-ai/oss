@@ -5,7 +5,7 @@ export default defineModel(
 		quote_id: uuid().notNull(),
 		product_id: uuid().notNull(),
 		product_code: text().notNull(),
-		product_name: text().notNull(),
+		product_name: text({ search: true }).notNull(),
 		product_unit: text(),
 		quantity: numeric().notNull(),
 		unit_price: numeric().notNull(),

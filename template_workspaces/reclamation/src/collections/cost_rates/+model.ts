@@ -18,7 +18,7 @@ export default defineModel(
 			'dredged_fill',
 			'pvd'
 		]).notNull(),
-		label: text().notNull(),
+		label: text({ search: true }).notNull(),
 		unit: enums(['m3', 'm2', 'm']).notNull(),
 		rate: custom('money'),
 		/** Where the rate came from: tender return, benchmark, or an assumption. */

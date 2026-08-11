@@ -3,7 +3,7 @@ import { NumericRendererVariantSchema } from '@norbital-ai/platform-utils/collec
 import {
 	date as pgDate,
 	numeric as pgNumeric,
-	text,
+	text as drizzleText,
 	timestamp as pgTimestamp,
 	uuid,
 	vector as pgVector,
@@ -32,6 +32,27 @@ export type EmbeddingColumnOptions = {
 };
 
 const customFactoryOptionsSchema = z.record(z.string(), z.unknown());
+
+/** Options every searchable text-ish column accepts. */
+export type TextSearchableOptions = {
+	/**
+	 * Opt the column into full-text substring search: it gets a trigram GIN index and matches the
+	 * collection search box, the omni finder, @ mentions and relation pickers. Search is opt-in —
+	 * omit it and the column is stored and displayed but never indexed and never searched.
+	 */
+	readonly search?: boolean;
+};
+
+/**
+ * Text column. Search is opt-in: only `text({ search: true })` grants the trigram search index
+ * and search participation; the trigram index is language-agnostic (character trigrams, no
+ * dictionary), so the same opt-in serves any language a tenant stores.
+ */
+export function text(config: TextSearchableOptions = {}) {
+	const column = drizzleText();
+	if (config.search === true) setColumnSearchable(column, true);
+	return column;
+}
 
 /** Numeric column read as a JS number (drizzle defaults numeric to string mode). */
 export function numeric(options: NumericColumnOptions = {}) {
@@ -66,8 +87,8 @@ export function geolocation() {
 }
 
 /** Telephone number stored as text with telephone-specific editing semantics. */
-export function phone() {
-	const column = text();
+export function phone(options: TextSearchableOptions = {}) {
+	const column = text(options);
 	attachColumnCustom(column, { kind: 'phone' });
 	return column;
 }
@@ -76,23 +97,6 @@ export function phone() {
 export function clockTime() {
 	const column = text();
 	attachColumnCustom(column, { kind: 'clock_time' });
-	return column;
-}
-
-/**
- * Mark a text-ish column searchable (the default), or opt it out with `searchable(false)`.
- *
- * Search — the collection search box, the omni finder, @ mentions, relation pickers — runs only
- * over fields with a trigram search index, and that set is exactly this: non-array
- * text/phone/enum fields not opted out. `false` drops the field from the search index and from
- * every search path at once; the flag travels into the manifest field, so the runtime's search
- * predicate (`isSearchableCollectionField`) and the index creator make the same decision.
- *
- * On a non text-ish column (numbers, dates, JSON, relations) the flag is inert: there is no
- * trigram index to remove and no search path that ever matched it.
- */
-export function searchable<T extends AnyPgColumnBuilder>(column: T, value = true): T {
-	setColumnSearchable(column, value);
 	return column;
 }
 
@@ -124,11 +128,16 @@ export function file(options: FileColumnOptions = {}) {
 }
 
 /** Text column restricted to a fixed set of values. Use `.array()` for list columns. */
-export function enums(values: readonly [string, ...string[]]) {
-	return textEnumColumn(z.enum(values), {
+export function enums(
+	values: readonly [string, ...string[]],
+	options: TextSearchableOptions = {}
+) {
+	const column = textEnumColumn(z.enum(values), {
 		kind: 'enum',
 		values
 	});
+	if (options.search === true) setColumnSearchable(column, true);
+	return column;
 }
 
 /** Named custom value; factory-backed definitions accept their inferred options as argument two. */

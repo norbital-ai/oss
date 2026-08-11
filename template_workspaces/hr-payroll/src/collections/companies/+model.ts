@@ -11,7 +11,7 @@ import {
 export default defineModel(
 	{
 		jurisdiction_id: uuid().notNull(),
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		registration_number: text().notNull(),
 		pay_cutoff_day: integer().notNull(),
 		pay_day: integer().notNull(),

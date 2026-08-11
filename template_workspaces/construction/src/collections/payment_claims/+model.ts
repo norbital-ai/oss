@@ -11,7 +11,7 @@ import {
 
 export default defineModel(
 	{
-		claim_number: text().notNull(),
+		claim_number: text({ search: true }).notNull(),
 		project_id: uuid(),
 		job_id: uuid(),
 		claim_type: enums(['progress', 'variation', 'final']),

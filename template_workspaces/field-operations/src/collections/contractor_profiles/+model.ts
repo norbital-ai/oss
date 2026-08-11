@@ -3,7 +3,7 @@ import { defineModel, text, uuid } from '@norbital-ai/pod/authoring';
 export default defineModel(
 	{
 		user_id: uuid().notNull(),
-		company_name: text().notNull()
+		company_name: text({ search: true }).notNull()
 	},
 
 	{

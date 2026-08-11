@@ -4,7 +4,7 @@ export default defineModel(
 	{
 		job_assignment_id: uuid().notNull(),
 		requested_at: timestamp().notNull(),
-		title: text().notNull(),
+		title: text({ search: true }).notNull(),
 		description: text().notNull(),
 		amount: custom('money'),
 		source_message_id: text()

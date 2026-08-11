@@ -18,7 +18,7 @@ export default defineModel(
 		completed_at: timestamp(),
 		amount_charged: custom('money'),
 		location: geolocation(),
-		summary: text(),
+		summary: text({ search: true }),
 		source_message_id: text(),
 		/** Fail closed until a linked photo visibly establishes a site identifier. */
 		site_identity_unverified: boolean().notNull().default(true),

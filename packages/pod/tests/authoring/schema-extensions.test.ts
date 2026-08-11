@@ -1,12 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { getTableConfig } from 'drizzle-orm/pg-core';
-import { text, uuid } from 'drizzle-orm/pg-core';
-import {
-	enums,
-	phone,
-	searchable,
-	vector
-} from '$lib/authoring/builtin/columns.js';
+import { uuid } from 'drizzle-orm/pg-core';
+import { enums, phone, text, vector } from '$lib/authoring/builtin/columns.js';
 import {
 	norbitalTableInternal,
 	portableCollectionField,
@@ -263,14 +258,15 @@ describe('searchable fields', () => {
 	const table = norbitalTableInternal(
 		'products',
 		{
-			// Explicitly in: same as the kind default, stated on purpose.
-			title: searchable(text('title'), true),
-			// Kind default: non-array text gets an index and is searched.
-			summary: text('summary'),
-			// Opted out: no index, no search participation.
-			internal_code: searchable(text('internal_code'), false),
-			// Opted out enum: same rule for every text-ish kind.
-			status: searchable(enums(['active', 'draft']), false),
+			// Opted in: gets a trigram search index and matches every search path.
+			title: text({ search: true }),
+			// Opted in phone: same rule for every text-ish kind.
+			hotline: phone({ search: true }),
+			// Opted in enum: same rule for every text-ish kind.
+			status: enums(['active', 'draft'], { search: true }),
+			// Default is opt-out: ordinary text, no index, no search participation.
+			summary: text(),
+			internal_code: text(),
 			phone: phone()
 		},
 		{}
@@ -291,27 +287,30 @@ describe('searchable fields', () => {
 		])
 	);
 
-	it('creates a trigram search index per searchable field, none for opted-out ones', () => {
+	it('creates a trigram search index per opted-in field, none by default', () => {
 		expect(searchIndex('title')).not.toBeNull();
-		expect(searchIndex('summary')).not.toBeNull();
-		expect(searchIndex('phone')).not.toBeNull();
+		expect(searchIndex('hotline')).not.toBeNull();
+		expect(searchIndex('status')).not.toBeNull();
+		expect(searchIndex('summary')).toBeNull();
 		expect(searchIndex('internal_code')).toBeNull();
-		expect(searchIndex('status')).toBeNull();
+		expect(searchIndex('phone')).toBeNull();
 	});
 
-	it('carries the searchable flag into the manifest field for the runtime', () => {
-		expect(fields.title!.searchable).toBe(true);
-		expect(fields.summary!.searchable).toBeUndefined();
-		expect(fields.phone!.searchable).toBeUndefined();
-		expect(fields.internal_code!.searchable).toBe(false);
-		expect(fields.status!.searchable).toBe(false);
+	it('carries the search flag into the manifest field for the runtime', () => {
+		expect(fields.title!.search).toBe(true);
+		expect(fields.hotline!.search).toBe(true);
+		expect(fields.status!.search).toBe(true);
+		expect(fields.summary!.search).toBeUndefined();
+		expect(fields.internal_code!.search).toBeUndefined();
+		expect(fields.phone!.search).toBeUndefined();
 	});
 
 	it('agrees with the runtime predicate every search path uses', () => {
 		expect(isSearchableCollectionField(fields.title!)).toBe(true);
-		expect(isSearchableCollectionField(fields.summary!)).toBe(true);
-		expect(isSearchableCollectionField(fields.phone!)).toBe(true);
+		expect(isSearchableCollectionField(fields.hotline!)).toBe(true);
+		expect(isSearchableCollectionField(fields.status!)).toBe(true);
+		expect(isSearchableCollectionField(fields.summary!)).toBe(false);
 		expect(isSearchableCollectionField(fields.internal_code!)).toBe(false);
-		expect(isSearchableCollectionField(fields.status!)).toBe(false);
+		expect(isSearchableCollectionField(fields.phone!)).toBe(false);
 	});
 });

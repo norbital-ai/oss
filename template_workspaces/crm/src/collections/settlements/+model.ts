@@ -7,7 +7,7 @@ export default defineModel(
 		amount: numeric().notNull(),
 		currency: enums(['CNY', 'USD', 'EUR', 'GBP', 'JPY', 'SGD', 'HKD']),
 		settled_on: date(),
-		reference: text(),
+		reference: text({ search: true }),
 		owner_id: uuid().notNull()
 	},
 	{

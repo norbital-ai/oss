@@ -11,7 +11,7 @@ import {
 
 export default defineModel(
 	{
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		date_of_birth: date(),
 		gender: enums(['MALE', 'FEMALE']),
 		marital_status: enums(['SINGLE', 'MARRIED', 'DIVORCED', 'WIDOWED']),

@@ -2,7 +2,7 @@ import { custom, dateRange, defineModel, enums, text } from '@norbital-ai/pod/au
 
 export default defineModel(
 	{
-		project_name: text().notNull(),
+		project_name: text({ search: true }).notNull(),
 		project_number: text(),
 		client: text(),
 		main_contractor: text(),

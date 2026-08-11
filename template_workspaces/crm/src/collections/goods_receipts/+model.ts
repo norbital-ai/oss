@@ -2,7 +2,7 @@ import { date, defineModel, text, timestamp, uuid } from '@norbital-ai/pod/autho
 
 export default defineModel(
 	{
-		doc_no: text().notNull(),
+		doc_no: text({ search: true }).notNull(),
 		purchase_order_id: uuid().notNull(),
 		received_date: date(),
 		note: text(),

@@ -3,8 +3,8 @@ import { dateRange, defineModel, enums, integer, text, uuid } from '@norbital-ai
 export default defineModel(
 	{
 		jurisdiction_id: uuid().notNull(),
-		code: text().notNull(),
-		name: text().notNull(),
+		code: text({ search: true }).notNull(),
+		name: text({ search: true }).notNull(),
 		authority: text().notNull(),
 		payer: enums(['EMPLOYEE', 'EMPLOYER', 'BOTH']).notNull(),
 		keyed_by: enums([

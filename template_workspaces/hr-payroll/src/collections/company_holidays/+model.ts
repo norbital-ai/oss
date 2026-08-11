@@ -6,7 +6,7 @@ export default defineModel(
 		date: date().notNull(),
 		/** Original holiday date when this row is an explicitly scheduled substitute holiday. */
 		substitutes_date: date(),
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		scope: custom('holiday_scope').notNull()
 	},
 	{

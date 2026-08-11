@@ -47,7 +47,7 @@ export default defineModel(
 		 * disapplies a whole Part to a class of worker outranks any wage test.
 		 */
 		excluded_categories: text().array().notNull(),
-		authority: text().notNull(),
+		authority: text({ search: true }).notNull(),
 		effective_range: dateRange().notNull()
 	},
 	{

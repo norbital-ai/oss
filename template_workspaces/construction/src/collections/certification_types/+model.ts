@@ -2,7 +2,7 @@ import { boolean, defineModel, numeric, text } from '@norbital-ai/pod/authoring'
 
 export default defineModel(
 	{
-		certification_name: text().notNull(),
+		certification_name: text({ search: true }).notNull(),
 		certification_code: text(),
 		category: text(),
 		issuing_body: text(),

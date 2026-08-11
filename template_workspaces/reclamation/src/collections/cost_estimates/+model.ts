@@ -18,7 +18,7 @@ import {
  */
 export default defineModel(
 	{
-		estimate_name: text().notNull(),
+		estimate_name: text({ search: true }).notNull(),
 		project_id: uuid().notNull(),
 		/** The exact reconstruction revision priced. Blank means the latest at write time. */
 		reconstruction_id: uuid(),

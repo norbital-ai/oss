@@ -4,7 +4,7 @@ export default defineModel(
 	{
 		company_id: uuid().notNull(),
 		code: text().notNull(),
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		variant: custom('work_pattern_variant').notNull(),
 		/**
 		 * The shift worked on an ordinary day of a STANDARD week. Required for STANDARD and refused

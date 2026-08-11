@@ -8,7 +8,7 @@ export default defineModel(
 		total_deductions: numeric().notNull(),
 		net: numeric().notNull(),
 		employer_cost: numeric().notNull(),
-		currency: text().notNull()
+		currency: text({ search: true }).notNull()
 	},
 	{
 		description:

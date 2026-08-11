@@ -13,7 +13,7 @@ import { date, defineModel, enums, file, text, uuid } from '@norbital-ai/pod/aut
  */
 export default defineModel(
 	{
-		title: text().notNull(),
+		title: text({ search: true }).notNull(),
 		project_id: uuid().notNull(),
 		/** Whether the stitch reads this document, or it is filed for the record. */
 		category: enums(['reconstruction', 'tender', 'reference']).notNull(),

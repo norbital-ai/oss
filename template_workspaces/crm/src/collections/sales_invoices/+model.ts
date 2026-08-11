@@ -10,7 +10,7 @@ import {
 
 export default defineModel(
 	{
-		doc_no: text().notNull(),
+		doc_no: text({ search: true }).notNull(),
 		quote_id: uuid().notNull(),
 		account_id: uuid().notNull(),
 		status: enums(['draft', 'issued', 'cancelled']),

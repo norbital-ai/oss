@@ -12,7 +12,7 @@ export default defineModel(
 	{
 		employment_id: uuid().notNull(),
 		pay_component_id: uuid().notNull(),
-		reference: text().notNull(),
+		reference: text({ search: true }).notNull(),
 		principal: numeric().notNull(),
 		// Nullable because a loan is frequently evidenced by its recovery, not its payment. Employer
 		// loan trackers state the amount lent and the instalment schedule — both required above — and

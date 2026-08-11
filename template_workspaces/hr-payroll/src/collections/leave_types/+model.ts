@@ -11,8 +11,8 @@ import {
 export default defineModel(
 	{
 		company_id: uuid().notNull(),
-		code: text().notNull(),
-		name: text().notNull(),
+		code: text({ search: true }).notNull(),
+		name: text({ search: true }).notNull(),
 		eligibility: custom('eligibility_rules').notNull(),
 		aggregates_with: text(),
 		encash_on_exit: boolean().notNull(),

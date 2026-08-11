@@ -11,7 +11,7 @@ import {
 
 export default defineModel(
 	{
-		doc_no: text().notNull(),
+		doc_no: text({ search: true }).notNull(),
 		supplier_id: uuid().notNull(),
 		supplier_code: text().notNull(),
 		supplier_name: text().notNull(),

@@ -2,7 +2,7 @@ import { custom, date, defineModel, enums, text } from '@norbital-ai/pod/authori
 
 export default defineModel(
 	{
-		worker_name: text().notNull(),
+		worker_name: text({ search: true }).notNull(),
 		worker_number: text(),
 		trade: text(),
 		status: enums(['active', 'inactive', 'suspended']),

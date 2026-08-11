@@ -2,7 +2,7 @@ import { custom, defineModel, text, uuid } from '@norbital-ai/pod/authoring';
 
 export default defineModel(
 	{
-		location_name: text().notNull(),
+		location_name: text({ search: true }).notNull(),
 		location_code: text(),
 		project_id: uuid(),
 		location_type: text(),

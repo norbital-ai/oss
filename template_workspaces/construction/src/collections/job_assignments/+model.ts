@@ -2,7 +2,7 @@ import { dateRange, defineModel, enums, numeric, text, uuid } from '@norbital-ai
 
 export default defineModel(
 	{
-		assignment_code: text(),
+		assignment_code: text({ search: true }),
 		job_id: uuid(),
 		worker_id: uuid(),
 		site_location_id: uuid(),

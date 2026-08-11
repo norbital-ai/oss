@@ -39,7 +39,7 @@ export default defineModel(
 		 * title fell back to joining every scalar column, which printed `job_assignment_id` and the
 		 * hashes. No coercion turns an object into a title; where the photo came from is the answer.
 		 */
-		summary: text().generatedAlwaysAs(
+		summary: text({ search: true }).generatedAlwaysAs(
 			sql`CASE source ->> 'kind'
 				WHEN 'workspace_upload' THEN 'Workspace upload'
 				WHEN 'channel' THEN 'From ' || COALESCE(NULLIF(source ->> 'provider', ''), 'a channel') || COALESCE(' · ' || LEFT(source ->> 'sent_at', 10), '')

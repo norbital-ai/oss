@@ -4,7 +4,7 @@ export default defineModel(
 	{
 		employee_id: uuid().notNull(),
 		company_id: uuid().notNull(),
-		employee_number: text().notNull(),
+		employee_number: text({ search: true }).notNull(),
 		hire_date: date().notNull(),
 		exit_date: date(),
 		exit_reason: text(),

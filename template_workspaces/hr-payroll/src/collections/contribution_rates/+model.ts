@@ -16,7 +16,7 @@ export default defineModel(
 		 * title; the band has to say what it is. This mirrors `bandReference` in
 		 * `payroll_runs/lib/bands.ts`, which is what a payslip already cites.
 		 */
-		summary: text().generatedAlwaysAs(
+		summary: text({ search: true }).generatedAlwaysAs(
 			sql`CASE selector ->> 'by'
 				WHEN 'WAGE' THEN (selector ->> 'from') || ' – ' || COALESCE(selector ->> 'to', '∞')
 				WHEN 'WAGE_AND_AGE' THEN (selector ->> 'from') || ' – ' || COALESCE(selector ->> 'to', '∞') || ' · age ' || (selector ->> 'age_from') || '–' || COALESCE(selector ->> 'age_to', '∞')

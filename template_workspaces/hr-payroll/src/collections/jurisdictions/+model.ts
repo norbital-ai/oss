@@ -11,7 +11,7 @@ import {
 export default defineModel(
 	{
 		code: text().notNull(),
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		currency: text().notNull(),
 		tax_year_start_month: integer().notNull(),
 		leave_year_start_month: integer().notNull(),

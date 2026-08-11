@@ -4,7 +4,7 @@ export default defineModel(
 	{
 		jurisdiction_id: uuid().notNull(),
 		day_type: enums(['ORDINARY', 'REST_DAY', 'PUBLIC_HOLIDAY']).notNull(),
-		authority: text().notNull(),
+		authority: text({ search: true }).notNull(),
 		band: custom('overtime_band').notNull(),
 		award: custom('overtime_award').notNull(),
 		effective_range: dateRange().notNull()

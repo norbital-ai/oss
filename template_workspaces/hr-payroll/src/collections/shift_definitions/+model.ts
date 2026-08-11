@@ -11,8 +11,8 @@ import {
 export default defineModel(
 	{
 		company_id: uuid().notNull(),
-		code: text().notNull(),
-		name: text().notNull(),
+		code: text({ search: true }).notNull(),
+		name: text({ search: true }).notNull(),
 		start_time: clockTime().notNull(),
 		end_time: clockTime().notNull(),
 		/**

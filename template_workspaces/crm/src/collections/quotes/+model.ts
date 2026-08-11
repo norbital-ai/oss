@@ -11,7 +11,7 @@ import {
 
 export default defineModel(
 	{
-		doc_no: text().notNull(),
+		doc_no: text({ search: true }).notNull(),
 		account_id: uuid().notNull(),
 		contact_id: uuid(),
 		title: text().notNull(),

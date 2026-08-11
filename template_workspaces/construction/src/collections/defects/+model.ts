@@ -2,7 +2,7 @@ import { date, defineModel, enums, file, text, uuid } from '@norbital-ai/pod/aut
 
 export default defineModel(
 	{
-		title: text().notNull(),
+		title: text({ search: true }).notNull(),
 		defect_number: text(),
 		project_id: uuid(),
 		site_location_id: uuid(),

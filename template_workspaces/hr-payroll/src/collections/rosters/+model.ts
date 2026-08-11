@@ -5,7 +5,7 @@ export default defineModel(
 		company_id: uuid().notNull(),
 		work_pattern_id: uuid().notNull(),
 		/** `YYYY-MM`. A roster is drafted and published one calendar month at a time. */
-		month: text().notNull(),
+		month: text({ search: true }).notNull(),
 		/**
 		 * When the month was published. `null` is a draft: incomplete, unvalidated and freely
 		 * editable. Setting it runs the statutory checks and freezes the month's entries, so the

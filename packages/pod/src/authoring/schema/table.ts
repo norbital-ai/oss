@@ -204,9 +204,7 @@ export function portableCollectionField(name: string, column: AnyPgColumn): Coll
 			? { mimeTypes: custom.mimeTypes }
 			: {}),
 		...(columnCustomIsKind(custom, 'numeric') ? { variant: custom.variant } : {}),
-		...(readColumnSearchable(column) !== undefined
-			? { searchable: readColumnSearchable(column) }
-			: {})
+		...(readColumnSearchable(column) === true ? { search: true } : {})
 	};
 }
 
@@ -396,8 +394,9 @@ function finalizeOpaqueNorbitalTable<
 }
 
 function isSearchableTextBuilder(builder: AnyPgColumnBuilder): boolean {
-	// `searchable(false)` opts the field out of the search index and every search path at once.
-	if (readBuilderSearchable(builder) === false) return false;
+	// Search is opt-in: only `text({ search: true })` (or `phone`/`enums` with the same option)
+	// creates the trigram search index. Everything else stays an ordinary text column.
+	if (readBuilderSearchable(builder) !== true) return false;
 	const config = Reflect.get(builder, 'config');
 	if (!config || typeof config !== 'object') return false;
 	if (Number(Reflect.get(config, 'dimensions') ?? 0) > 0) return false;

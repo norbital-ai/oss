@@ -9,7 +9,7 @@ import { defineModel, enums, file, numeric, text } from '@norbital-ai/pod/author
  */
 export default defineModel(
 	{
-		project_name: text().notNull(),
+		project_name: text({ search: true }).notNull(),
 		project_code: text(),
 		client: text(),
 		consultant: text(),

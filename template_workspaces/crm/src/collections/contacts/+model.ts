@@ -3,8 +3,8 @@ import { boolean, defineModel, text, uuid } from '@norbital-ai/pod/authoring';
 export default defineModel(
 	{
 		account_id: uuid().notNull(),
-		first_name: text().notNull(),
-		last_name: text().notNull(),
+		first_name: text({ search: true }).notNull(),
+		last_name: text({ search: true }).notNull(),
 		email: text(),
 		title: text(),
 		department: text(),

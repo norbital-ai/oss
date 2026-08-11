@@ -10,7 +10,7 @@ import {
 
 export default defineModel(
 	{
-		permit_number: text().notNull(),
+		permit_number: text({ search: true }).notNull(),
 		permit_type: enums([
 			'work_at_height',
 			'site_supervision',

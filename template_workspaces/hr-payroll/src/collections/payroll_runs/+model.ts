@@ -3,7 +3,7 @@ import { custom, date, defineModel, enums, text, uuid } from '@norbital-ai/pod/a
 export default defineModel(
 	{
 		company_id: uuid().notNull(),
-		period: text().notNull(),
+		period: text({ search: true }).notNull(),
 		lifecycle: enums(['DRAFT', 'PAID']).notNull(),
 		configuration_hash: text().notNull(),
 		configuration_snapshot: custom('payroll_configuration_snapshot').notNull(),

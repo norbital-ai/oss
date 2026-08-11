@@ -4,7 +4,7 @@
 export interface WorkspaceAuthoringTypes {}
 
 export { sql } from 'drizzle-orm';
-export { boolean, index, integer, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+export { boolean, index, integer, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 export {
 	date,
@@ -17,14 +17,15 @@ export {
 	numeric,
 	phone,
 	clockTime,
-	searchable,
+	text,
 	timestamp,
 	vector
 } from './builtin/columns.js';
 export type {
 	CustomTypeOptionsMap,
 	CustomTypeValueMap,
-	EmbeddingColumnOptions
+	EmbeddingColumnOptions,
+	TextSearchableOptions
 } from './builtin/columns.js';
 export { defineCustomType } from './custom-type.js';
 export type {

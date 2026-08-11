@@ -5,7 +5,7 @@ export default defineModel(
 		regarding_type: enums(['accounts', 'quotes']).notNull(),
 		regarding_id: uuid().notNull(),
 		type: enums(['call', 'meeting', 'email', 'task', 'note']),
-		subject: text().notNull(),
+		subject: text({ search: true }).notNull(),
 		description: text(),
 		due_date: date(),
 		completed_at: timestamp(),

@@ -3,7 +3,7 @@ import { boolean, defineModel, text } from '@norbital-ai/pod/authoring';
 export default defineModel(
 	{
 		code: text().notNull(),
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		category: text(),
 		issuing_body: text(),
 		description: text(),

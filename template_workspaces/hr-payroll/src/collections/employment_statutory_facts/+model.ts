@@ -15,7 +15,7 @@ export default defineModel(
 		 * printed `employment_id` and `statutory_contribution_id` as raw uuids. No coercion turns an
 		 * object into a title.
 		 */
-		summary: text().generatedAlwaysAs(
+		summary: text({ search: true }).generatedAlwaysAs(
 			sql`CASE status ->> 'kind'
 				WHEN 'REGISTERED' THEN 'Registered · ' || COALESCE(NULLIF(status ->> 'reference_number', ''), 'no reference')
 				WHEN 'NOT_REGISTERED' THEN 'Not registered · ' || COALESCE(NULLIF(status ->> 'reason', ''), 'no reason given')

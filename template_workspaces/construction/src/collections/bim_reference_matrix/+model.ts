@@ -2,7 +2,7 @@ import { custom, defineModel, numeric, text, uuid } from '@norbital-ai/pod/autho
 
 export default defineModel(
 	{
-		reference_name: text().notNull(),
+		reference_name: text({ search: true }).notNull(),
 		reference_code: text(),
 		project_id: uuid(),
 		category: text(),

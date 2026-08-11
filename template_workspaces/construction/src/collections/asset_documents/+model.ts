@@ -2,7 +2,7 @@ import { dateRange, defineModel, enums, text, uuid } from '@norbital-ai/pod/auth
 
 export default defineModel(
 	{
-		title: text().notNull(),
+		title: text({ search: true }).notNull(),
 		document_number: text(),
 		project_id: uuid(),
 		site_location_id: uuid(),

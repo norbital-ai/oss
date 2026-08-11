@@ -2,7 +2,7 @@ import { defineModel, enums, geolocation, numeric, text } from '@norbital-ai/pod
 
 export default defineModel(
 	{
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		location: geolocation(),
 		client_name: text(),
 		house_type: enums(['hdb_flat', 'condo', 'landed', 'commercial', 'industrial', 'other']),

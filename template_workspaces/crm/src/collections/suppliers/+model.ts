@@ -4,7 +4,7 @@ export default defineModel(
 	{
 		external_code: text().notNull(),
 		code: text().notNull(),
-		name: text().notNull(),
+		name: text({ search: true }).notNull(),
 		contact: text(),
 		category: text(),
 		currency: enums(['CNY', 'USD', 'EUR', 'GBP', 'JPY', 'SGD', 'HKD']),

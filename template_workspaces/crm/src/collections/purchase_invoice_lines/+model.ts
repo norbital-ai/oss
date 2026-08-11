@@ -5,7 +5,7 @@ export default defineModel(
 		purchase_invoice_id: uuid().notNull(),
 		purchase_order_line_id: uuid().notNull(),
 		product_code: text().notNull(),
-		product_name: text().notNull(),
+		product_name: text({ search: true }).notNull(),
 		quantity: numeric().notNull(),
 		unit_cost: numeric().notNull(),
 		tax_rate: numeric(),
