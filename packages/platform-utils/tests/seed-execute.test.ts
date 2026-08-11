@@ -59,15 +59,17 @@ const COLUMNS: Record<string, readonly string[]> = {
 };
 
 /** One tenant database: a `user` table keyed by email, and a `team_members` table with its FK. */
-function fakeTenant() {
+function fakeTenant(options: { readonly failOnTeamInsert?: boolean } = {}) {
 	const userIdByEmail = new Map<string, string>();
 	const memberships: { userId: string; teamId: string }[] = [];
+	const statements: string[] = [];
 
 	const client = {
 		async query(
 			sql: string,
 			values: readonly unknown[] = []
 		): Promise<{ rows: readonly Record<string, unknown>[] }> {
+			statements.push(sql);
 			if (sql.includes('information_schema.columns')) {
 				const table = String(values[0]);
 				return {
@@ -93,6 +95,10 @@ function fakeTenant() {
 				}
 				return { rows: [] };
 			}
+			if (sql.includes('INSERT INTO') && sql.includes('"team"')) {
+				if (options.failOnTeamInsert) throw new Error('synthetic seed write failure');
+				return { rows: [] };
+			}
 			if (sql.includes('INSERT INTO') && sql.includes('"team_members"')) {
 				const present = new Set(userIdByEmail.values());
 				for (const [userId, teamId] of chunk(values, 2)) {
@@ -110,7 +116,7 @@ function fakeTenant() {
 		}
 	} as unknown as Client;
 
-	return { client, userIdByEmail, memberships };
+	return { client, userIdByEmail, memberships, statements };
 }
 
 function insertColumns(sql: string): string[] {
@@ -207,5 +213,28 @@ describe('seeding two tenants in one process', () => {
 		await seedTenant(tenant, 'field-operations', FIELD_OPS_ZUYAO);
 
 		assert.deepEqual(tenant.memberships, [{ userId: provisionedId, teamId: TEAM }]);
+	});
+
+	it('commits the complete seed in one authorized transaction', async () => {
+		const tenant = fakeTenant();
+
+		await seedTenant(tenant, 'crm', CRM_ZUYAO);
+
+		const begin = tenant.statements.indexOf('BEGIN');
+		const authorize = tenant.statements.findIndex((sql) => sql.includes('set_config'));
+		assert.ok(begin >= 0 && authorize > begin);
+		assert.equal(tenant.statements.at(-1), 'COMMIT');
+	});
+
+	it('rolls back the whole seed when a later write fails', async () => {
+		const tenant = fakeTenant({ failOnTeamInsert: true });
+
+		await assert.rejects(
+			() => seedTenant(tenant, 'crm', CRM_ZUYAO),
+			/synthetic seed write failure/
+		);
+
+		assert.equal(tenant.statements.at(-1), 'ROLLBACK');
+		assert.ok(!tenant.statements.includes('COMMIT'));
 	});
 });

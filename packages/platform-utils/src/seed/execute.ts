@@ -420,11 +420,11 @@ async function insertSeedRows(input: {
 /**
  * Template seeding is an authoritative bulk load that writes tenant collection tables
  * with raw INSERT/DELETE rather than through collection_ops. The _ops_guard trigger
- * rejects writes that do not carry the `norbital.via_ops` GUC, so the seed connection
- * declares itself as an authorized writer for its (dedicated, short-lived) session.
+ * rejects writes that do not carry the `norbital.via_ops` GUC, so the seed transaction
+ * declares itself as an authorized writer without leaking that authority to later work.
  */
 async function authorizeSeedWrites(client: PgClient): Promise<void> {
-	await client.query(`SELECT set_config('norbital.via_ops', 'on', false)`);
+	await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
 }
 
 /**
@@ -557,6 +557,8 @@ export async function seedTemplateDataFromPlan(input: {
 	readonly liveUrl: string;
 	readonly log: (message: string) => void;
 	readonly client?: PgClient;
+	/** The caller already owns the transaction containing this seed and its follow-up work. */
+	readonly transaction?: 'external';
 	/** Payload keys the caller consumes itself before seeding; see {@link SeedSidecarKeys}. */
 	readonly sidecarKeys?: SeedSidecarKeys;
 }): Promise<void> {
@@ -569,8 +571,13 @@ export async function seedTemplateDataFromPlan(input: {
 		`Seeding template "${input.templateKey}" (${input.plan.mutations.length} bulk seed steps)...`
 	);
 
+	if (input.transaction === 'external' && !input.client) {
+		throw new Error('An external seed transaction requires a client.');
+	}
 	const client = input.client ?? new PgClient({ connectionString: input.liveUrl });
+	const ownsTransaction = input.transaction !== 'external';
 	if (!input.client) await client.connect();
+	let transactionOpen = false;
 	try {
 		// Before `clearBefore` deletes anything: a plan that cannot land in full must not have
 		// emptied the tenant's collections on its way to failing.
@@ -586,6 +593,10 @@ export async function seedTemplateDataFromPlan(input: {
 		const sidecarNote = describeHonouredSidecars(input.sidecarKeys);
 		if (sidecarNote) input.log(sidecarNote);
 
+		if (ownsTransaction) {
+			await client.query('BEGIN');
+			transactionOpen = true;
+		}
 		await authorizeSeedWrites(client);
 		if (input.plan.clearBefore?.length) {
 			// stupidity:allow A6 -- deletes are dependency-ordered by the authored seed plan
@@ -625,6 +636,13 @@ export async function seedTemplateDataFromPlan(input: {
 		});
 		await insertSeedRows({ client, collection: 'audit_event', rows: provenance });
 		input.log(`Recorded ${provenance.length} seed provenance events.`);
+		if (ownsTransaction) {
+			await client.query('COMMIT');
+			transactionOpen = false;
+		}
+	} catch (cause) {
+		if (transactionOpen) await client.query('ROLLBACK');
+		throw cause;
 	} finally {
 		if (!input.client) await client.end();
 	}
