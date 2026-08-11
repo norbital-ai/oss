@@ -266,10 +266,9 @@ export type HostAgentToolSpec = AiToolSpec;
  * structured clone, so a tool that returns a function or a class instance returns nothing usable —
  * the same rule every other binding lives under.
  *
- * Note what is *absent*: the guest passes no caller identity. A tenant isolate's claim about who is
- * asking is not something the host can verify, so a host tool authorizes against what the host
- * already knows — which tenant this container belongs to — and never against an assertion that
- * arrived over this wire.
+ * The guest may attach the Pod-selected sandbox principal below. That id is a lookup key, never an
+ * authorization result: the host resolves it again in the tenant directory before opening a
+ * workbench, so an isolate cannot grant itself another principal's filesystem.
  */
 /**
  * How a host-tool call may touch the tenant worktree.
@@ -297,7 +296,7 @@ export type HostAgentToolBinding = {
 	list(): Promise<readonly HostAgentToolSpec[]>;
 	/**
 	 * Run one host tool by name. The host validates `input`; the guest never sees the implementation.
-	 * Optional `context` carries authored sandbox policy (workspace read-only vs read-write).
+	 * Optional `context` carries the Pod-selected principal plus authored workspace mount policy.
 	 */
 	run(name: string, input: unknown, context?: HostAgentToolRunContext): Promise<unknown>;
 };
