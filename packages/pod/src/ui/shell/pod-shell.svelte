@@ -31,7 +31,11 @@
 		type CustomTypeRendererMap
 	} from '@norbital-ai/ui/data-renderer';
 	import { shortcut } from '@norbital-ai/ui/keybindings';
-	import { WorkspaceShell, type WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
+	import {
+		WorkspaceShell,
+		type WorkspaceNavigationItem,
+		type WorkspaceNavigationModel
+	} from '@norbital-ai/ui/workspace-shell';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { AppMediaHeader } from '@norbital-ai/ui/media-banner';
 	import { Bound, Center, Cover, Frame, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
@@ -297,12 +301,30 @@
 			i18n: i18nResolver
 		})
 	}));
-	const overviewApplications = $derived(
-		navigationModel.applications.map((item) => ({
+	type OverviewApplication = WorkspaceNavigationItem & {
+		readonly description: string | null;
+		readonly thumbnail: string | null;
+		readonly children: readonly OverviewApplication[];
+	};
+
+	/**
+	 * The overview keeps the navigation tree intact. A group is an application holder, not an
+	 * application in its own right, so only leaves receive a launch card and media treatment.
+	 */
+	function overviewApplication(item: WorkspaceNavigationItem): OverviewApplication {
+		const manifest = manifestContext.findApp(item.key);
+		const descriptionKey = `app.${item.key}.description`;
+		return {
 			...item,
-			description: manifestContext.findApp(item.key)?.description ?? null,
-			thumbnail: manifestContext.findApp(item.key)?.thumbnail ?? null
-		}))
+			description: i18nResolver.has(descriptionKey)
+				? i18nResolver.t(descriptionKey)
+				: (manifest?.description ?? null),
+			thumbnail: manifest?.thumbnail ?? null,
+			children: (item.children ?? []).map(overviewApplication)
+		};
+	}
+	const overviewApplications = $derived.by(() =>
+		navigationModel.applications.map(overviewApplication)
 	);
 	const agentSurfaceAllowed = $derived(workspaceAuthorizesAgentSurface(currentPath));
 	/** Every tenant workspace gets the interactive agent surface; authored `+agent.ts` only customizes it. */
@@ -404,6 +426,100 @@
 	/>
 {/snippet}
 
+{#snippet applicationCard({ app }: { app: OverviewApplication })}
+	<a
+		href={app.href}
+		class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+		onclick={(event) => {
+			event.preventDefault();
+			navigate(app.href);
+		}}
+	>
+		<Stack gap="none">
+			{#if app.thumbnail && !failedThumbnails.has(app.key)}
+				<Frame ratio="banner" shrink={false} class="bg-muted">
+					<img
+						src={app.thumbnail}
+						alt=""
+						loading="lazy"
+						decoding="async"
+						class="size-full object-cover"
+						onerror={() => failedThumbnails.add(app.key)}
+					/>
+				</Frame>
+			{:else}
+				<Frame
+					ratio="banner"
+					shrink={false}
+					class="bg-linear-to-br from-muted via-background to-brand/10"
+				>
+					<Inline fill justify="center" align="center" aria-hidden="true">
+						<IconWrapper name={app.icon ?? 'lucide:layout-grid'} class="size-10 text-brand/45" />
+					</Inline>
+				</Frame>
+			{/if}
+			<Inline align="start" gap="sm" class="p-3">
+				<Inline
+					shrink={false}
+					justify="center"
+					align="center"
+					class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
+				>
+					<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
+				</Inline>
+				<Stack gap="xs" grow class="min-w-0">
+					<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
+					<p class="line-clamp-2 min-h-8 text-micro leading-4 text-muted-foreground">
+						{app.description ?? ''}
+					</p>
+				</Stack>
+			</Inline>
+		</Stack>
+	</a>
+{/snippet}
+
+{#snippet applicationHierarchy({
+	app,
+	nested = false
+}: {
+	app: OverviewApplication;
+	nested?: boolean;
+})}
+	{#if app.children.length === 0}
+		{@render applicationCard({ app })}
+	{:else}
+		<Stack
+			as="section"
+			gap="md"
+			class={nested
+				? 'border-s border-border/70 ps-4'
+				: 'col-span-full border-s-2 border-brand/55 ps-4'}
+		>
+			<Inline align="start" gap="sm">
+				<Inline
+					shrink={false}
+					justify="center"
+					align="center"
+					class="size-9 rounded-md border border-border bg-background text-foreground shadow-xs"
+				>
+					<IconWrapper name={app.icon ?? 'lucide:folder-kanban'} class="size-4" />
+				</Inline>
+				<Stack gap="xs" class="min-w-0">
+					<h3 class="text-sm font-semibold text-foreground">{app.label}</h3>
+					{#if app.description}
+						<p class="text-xs leading-5 text-muted-foreground">{app.description}</p>
+					{/if}
+				</Stack>
+			</Inline>
+			<Grid gap="md" minimum="card">
+				{#each app.children as child (child.key)}
+					{@render applicationHierarchy({ app: child, nested: true })}
+				{/each}
+			</Grid>
+		</Stack>
+	{/if}
+{/snippet}
+
 <WorkspaceShell
 	model={navigationModel}
 	onNavigate={navigate}
@@ -443,63 +559,9 @@
 									</span>
 								</Stack>
 							{:else}
-								<Grid gap="md" minimum="card">
+								<Grid gap="xl" minimum="card">
 									{#each overviewApplications as app (app.key)}
-										<a
-											href={app.href}
-											class="group min-w-0 overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-											onclick={(event) => {
-												event.preventDefault();
-												navigate(app.href);
-											}}
-										>
-											<Stack gap="none">
-												{#if app.thumbnail && !failedThumbnails.has(app.key)}
-													<Frame ratio="banner" shrink={false}>
-														<img
-															src={app.thumbnail}
-															alt=""
-															loading="lazy"
-															decoding="async"
-															onerror={() => failedThumbnails.add(app.key)}
-														/>
-													</Frame>
-												{:else}
-													<Frame
-														ratio="banner"
-														shrink={false}
-														class="bg-linear-to-br from-muted via-background to-brand/10"
-													>
-														<Inline fill justify="center" align="center" aria-hidden="true">
-															<IconWrapper
-																name={app.icon ?? 'lucide:layout-grid'}
-																class="size-10 text-brand/45"
-															/>
-														</Inline>
-													</Frame>
-												{/if}
-												<Inline align="start" gap="sm" class="p-3">
-													<Inline
-														shrink={false}
-														justify="center"
-														align="center"
-														class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
-													>
-														<IconWrapper name={app.icon ?? 'lucide:file-text'} class="size-4" />
-													</Inline>
-													<Stack gap="xs" grow class="min-w-0">
-														<p class="truncate text-xs font-semibold text-foreground">
-															{app.label}
-														</p>
-														<p
-															class="line-clamp-2 min-h-8 text-micro leading-4 text-muted-foreground"
-														>
-															{app.description ?? ''}
-														</p>
-													</Stack>
-												</Inline>
-											</Stack>
-										</a>
+										{@render applicationHierarchy({ app })}
 									{/each}
 								</Grid>
 							{/if}
