@@ -15,6 +15,7 @@
 	import CollectionTableFilter from './collection-table-filter.svelte';
 	import type { FilterCollectionDefinition } from './collection-table-filter-fields.js';
 	import type { CollectionTableInitialFilter } from './collection-table.types.js';
+	import type { CollectionToolbarFilterDeclaration } from '../collection-toolbar/collection-toolbar.types.js';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -24,19 +25,24 @@
 		disabled = false,
 		searchEnabled = true,
 		filterEnabled = true,
+		customFilters = [],
 		initialSearch = '',
 		initialFilters = [],
 		filterPersistenceKey,
 		searchPlaceholder = t('table.searchTextFields'),
 		align = 'start',
 		onSearchChange,
-		onFilterChange
+		onFilterChange,
+		onCustomFilterChange
 	}: {
 		definition: FilterCollectionDefinition;
 		collections: Readonly<Record<string, FilterCollectionDefinition>>;
 		disabled?: boolean;
 		searchEnabled?: boolean;
+		/** The schema-derived filter builder; declared controls are unaffected by it. */
 		filterEnabled?: boolean;
+		/** Controls for predicates the collection has no field for, declared by the surface. */
+		customFilters?: readonly CollectionToolbarFilterDeclaration[];
 		initialSearch?: string;
 		/** Conditions the view opens with, seeded as removable rows in the filter builder. */
 		initialFilters?: readonly CollectionTableInitialFilter[];
@@ -46,6 +52,7 @@
 		align?: 'start' | 'center' | 'end';
 		onSearchChange: (search: string) => void;
 		onFilterChange: (filters: readonly CollectionFilter[]) => void;
+		onCustomFilterChange?: () => void;
 	} = $props();
 
 	// svelte-ignore state_referenced_locally -- the input owns its draft independently of query refreshes.
@@ -108,13 +115,16 @@
 		</Popover.Content>
 	</Popover.Root>
 {/if}
-{#if filterEnabled}
+{#if filterEnabled || customFilters.length > 0}
 	<CollectionTableFilter
 		{definition}
 		{collections}
 		{disabled}
+		builderEnabled={filterEnabled}
+		{customFilters}
 		{initialFilters}
 		persistenceKey={filterPersistenceKey}
 		onChange={onFilterChange}
+		{onCustomFilterChange}
 	/>
 {/if}

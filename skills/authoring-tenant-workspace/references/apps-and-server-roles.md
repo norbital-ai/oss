@@ -38,8 +38,15 @@ An optional group directory contains `+group.ts`:
 ```ts
 import { group } from '@norbital-ai/pod/authoring';
 
-export default group({ label: 'Operations', icon: 'lucide:briefcase' });
+export default group({
+	label: 'Operations',
+	description: 'Day-to-day site running: jobs, visits, and the people assigned to them.',
+	icon: 'lucide:briefcase'
+});
 ```
+
+The app `description` meta and the group `description` are both **required** — they are the manifest's
+only account of what an application is for, and the studio's application list is built from them.
 
 ### App media — icons, thumbnails, banners
 
@@ -60,8 +67,31 @@ stay aligned whether or not an app ships images. App banners are omitted entirel
 is missing or fails to load. When present, the shell renders a fixed Airbnb-style media header
 (image + bottom-weighted dark scrim + icon chip + localized title/description). Copy always sits on
 the scrim — never on the raw banner art — so contrast does not depend on light or dark imagery.
-Apps with a banner should not repeat the same title block in `PageHeader`; keep `PageHeader` only
-for in-app actions (scope pickers) or dynamic titles.
+
+### App identity is rendered once
+
+The media header **is** the app's header. An app must not repeat its own title or description in a
+`PageHeader` underneath it — that is the same identity twice, one directly above the other.
+
+A scope picker is the reason apps used to do it anyway: `PageHeader` was the only thing that could
+hold a control, and it renders a title as soon as you give it one. Hand the control to the shell
+instead and it lands at the trailing edge of the media header:
+
+```svelte
+<script lang="ts">
+	import AppHeaderActions from '@norbital-ai/pod/client/app-header-actions';
+	import { Combobox } from '@norbital-ai/ui/combobox';
+</script>
+
+<AppHeaderActions>
+	<Combobox ariaLabel="Legal entity" options={companyOptions} bind:value={companyId} />
+</AppHeaderActions>
+```
+
+The controls sit on the dark scrim, so keep them compact and self-labelling — an `ariaLabel` and a
+placeholder rather than a stacked visible label. An app that registers actions but ships no
+`pod:banner` still gets the header, on its base wash, so the controls have somewhere to live.
+Reach for `PageHeader` only for a heading the manifest cannot know, such as a dynamic record title.
 
 **Shipping images with a template.** Commit image files under `assets/` in the template workspace
 and reference them with the seed-asset URL — no external CDN needed:
@@ -137,19 +167,32 @@ Server roles use the same database method names with promises.
 ```ts
 import { defineAutomation } from '@norbital-ai/pod/authoring';
 
-export default defineAutomation({ schedule: '0 6 * * *' }, async (api) => {
-	const sites = await api.db.query.sites.findMany({ limit: 250 });
-	return { count: sites.length };
-});
+export default defineAutomation(
+	{ schedule: '0 6 * * *' },
+	{
+		kind: 'deterministic',
+		description:
+			'Counts every active site each morning so the ops desk opens on a fresh roll-call.',
+		handler: async (api) => {
+			const sites = await api.db.query.sites.findMany({ limit: 250 });
+			return { count: sites.length };
+		}
+	}
+);
 ```
 
-Automations run after commit, are durable and idempotent, and never repeat their filename as an ID. Use a
-schedule or collection event trigger:
+The spec is always an object and its `description` is mandatory — it is what the manifest, and so the
+studio, says this automation is for. Automations run after commit, are durable and idempotent, and never
+repeat their filename as an ID. Use a schedule or collection event trigger:
 
 ```ts
 export default defineAutomation(
 	{ trigger: { collection: 'sites', event: 'created' } },
-	async (api, { scope }) => ({ count: await api.db.sites.count({}) })
+	{
+		kind: 'deterministic',
+		description: 'Recounts sites whenever one is added, so the desk total never drifts.',
+		handler: async (api, { scope }) => ({ count: await api.db.sites.count({}) })
+	}
 );
 ```
 
@@ -182,13 +225,16 @@ import { z } from 'zod';
 import type { Api } from './$types.js';
 
 export default defineQueryHandler({
+	description: 'Counts the visits recorded against one site, for the site header badge.',
 	schema: z.object({ site_id: z.string() }),
 	handler: async ({ site_id }, api: Api) =>
 		api.db.site_visits.count({ where: { site_id: { eq: site_id } } })
 });
 ```
 
-Remotes are imperative request/response calls; reactive reads belong to `client.db`. The filename becomes the
+`description` is required on both handler kinds and reaches `manifest.handlers`: a remote's name is
+author-chosen and its payload schema describes the request, not the effect. Remotes are imperative
+request/response calls; reactive reads belong to `client.db`. The filename becomes the
 generated `client.invoke` property. Use `defineQueryHandler` for reactive, read-only server computation and
 `defineCommandHandler` for imperative work that may mutate data.
 

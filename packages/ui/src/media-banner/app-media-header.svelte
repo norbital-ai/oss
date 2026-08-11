@@ -1,30 +1,43 @@
 <!-- fallow-ignore-file unrendered-component -- exported package app chrome rendered by the pod shell -->
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { IconWrapper } from '#lib/icon-wrapper';
-	import { INSET_X_CLASS, Inline, Stack } from '#lib/layout';
+	import { INSET_X_CLASS, Cluster, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	let {
-		src,
+		src = null,
 		icon = null,
 		title = null,
 		description = null,
+		actions,
 		class: className
 	}: {
-		/** App banner image (`pod:banner`). Decorative only — copy sits on the dark scrim. */
-		src: string;
+		/**
+		 * App banner image (`pod:banner`). Decorative only — copy sits on the dark scrim.
+		 * Optional: without one the header keeps its base wash and stays legible.
+		 */
+		src?: string | null;
 		/** App icon (`pod:icon`). Opaque chip so it stays readable on any banner. */
 		icon?: string | null;
 		title?: string | null;
 		description?: string | null;
+		/**
+		 * Trailing controls for the running app — a scope picker, an export button.
+		 *
+		 * This exists so an app does not have to repeat its own title in a second `PageHeader` just
+		 * to hang a control off it. Identity is rendered once, here, and the app contributes only
+		 * the part the shell cannot know.
+		 */
+		actions?: Snippet;
 		class?: string;
 	} = $props();
 
 	let failedSrc = $state<string | null>(null);
 	let loadedSrc = $state<string | null>(null);
 
-	const imageFailed = $derived(src === failedSrc);
-	const imageLoaded = $derived(src === loadedSrc);
+	const imageFailed = $derived(src == null || src === failedSrc);
+	const imageLoaded = $derived(src != null && src === loadedSrc);
 </script>
 
 <!--
@@ -34,7 +47,7 @@
 <div class={cn('relative h-28 shrink-0 overflow-clip', className)} data-layout="app-media-header">
 	<!-- Base wash while the image loads, or when it fails. -->
 	<div class="absolute inset-0 bg-neutral-900" aria-hidden="true"></div>
-	{#if !imageFailed}
+	{#if src != null && !imageFailed}
 		<img
 			{src}
 			alt=""
@@ -69,6 +82,9 @@
 					<p class="truncate text-xs leading-snug text-white/80">{description}</p>
 				{/if}
 			</Stack>
+		{/if}
+		{#if actions}
+			<Cluster justify="end" class="shrink-0">{@render actions()}</Cluster>
 		{/if}
 	</Inline>
 </div>

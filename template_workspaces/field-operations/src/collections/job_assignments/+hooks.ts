@@ -77,142 +77,161 @@ export function assertAssignmentIdentityUnchanged(
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			const jobId = requireId(input.job_id, 'Job assignment must reference a job.');
-			const contractorId = requireId(
-				input.contractor_profile_id,
-				'Job assignment must reference a contractor profile.'
-			);
-
-			const [foundJob, foundContractor, existingAssignment, existingSource] = await Promise.all([
-				api.db.query.jobs.findFirst({
-					where: { norbital_id: { eq: jobId } }
-				}),
-				api.db.query.contractor_profiles.findFirst({
-					where: { norbital_id: { eq: contractorId } }
-				}),
-				api.db.query.job_assignments.findFirst({
-					where: { job_id: { eq: jobId } }
-				}),
-				input.source_message_id != null && input.source_message_id !== ''
-					? api.db.query.job_assignments.findFirst({
-							where: { source_message_id: { eq: input.source_message_id } }
-						})
-					: Promise.resolve(undefined)
-			]);
-
-			const job = requireFound(foundJob, 'Referenced job does not exist.');
-			requireFound(foundContractor, 'Referenced contractor profile does not exist.');
-			assertAbsent(existingAssignment, 'This job already has an assignment.');
-			assertAbsent(existingSource, 'A job assignment with this source_message_id already exists.');
-			const [requirements, holdings] = await Promise.all([
-				api.db.query.job_certification_requirements.findMany({
-					where: { job_id: { eq: jobId } },
-					limit: 250
-				}),
-				api.db.query.contractor_certifications.findMany({
-					where: { contractor_profile_id: { eq: contractorId } },
-					limit: 250
-				})
-			]);
-			if (!contractorSatisfiesCertificationRequirements(holdings, requirements)) {
-				const missingIds = missingCertificationIds(holdings, requirements);
-				const missingTypes = await api.db.query.certification_types.findMany({
-					where: { norbital_id: { in: missingIds } },
-					columns: { norbital_id: true, name: true },
-					limit: missingIds.length
-				});
-				const missingNames = new Map(
-					missingTypes.map((certification) => [certification.norbital_id, certification.name])
+		before: {
+			description:
+				'Dispatches a contractor to a job only when the job has no assignment yet and the contractor holds every certification the job requires, stamps the dispatch time, and marks the assignment suspect when the reported location sits outside the site tolerance.',
+			handler: async ({ input, api }) => {
+				const jobId = requireId(input.job_id, 'Job assignment must reference a job.');
+				const contractorId = requireId(
+					input.contractor_profile_id,
+					'Job assignment must reference a contractor profile.'
 				);
-				throw new Error(
-					`Contractor is missing required certifications: ${missingIds
-						.map((certificationId) => missingNames.get(certificationId) ?? '—')
-						.join(', ')}.`
+
+				const [foundJob, foundContractor, existingAssignment, existingSource] = await Promise.all([
+					api.db.query.jobs.findFirst({
+						where: { norbital_id: { eq: jobId } }
+					}),
+					api.db.query.contractor_profiles.findFirst({
+						where: { norbital_id: { eq: contractorId } }
+					}),
+					api.db.query.job_assignments.findFirst({
+						where: { job_id: { eq: jobId } }
+					}),
+					input.source_message_id != null && input.source_message_id !== ''
+						? api.db.query.job_assignments.findFirst({
+								where: { source_message_id: { eq: input.source_message_id } }
+							})
+						: Promise.resolve(undefined)
+				]);
+
+				const job = requireFound(foundJob, 'Referenced job does not exist.');
+				requireFound(foundContractor, 'Referenced contractor profile does not exist.');
+				assertAbsent(existingAssignment, 'This job already has an assignment.');
+				assertAbsent(
+					existingSource,
+					'A job assignment with this source_message_id already exists.'
 				);
+				const [requirements, holdings] = await Promise.all([
+					api.db.query.job_certification_requirements.findMany({
+						where: { job_id: { eq: jobId } },
+						limit: 250
+					}),
+					api.db.query.contractor_certifications.findMany({
+						where: { contractor_profile_id: { eq: contractorId } },
+						limit: 250
+					})
+				]);
+				if (!contractorSatisfiesCertificationRequirements(holdings, requirements)) {
+					const missingIds = missingCertificationIds(holdings, requirements);
+					const missingTypes = await api.db.query.certification_types.findMany({
+						where: { norbital_id: { in: missingIds } },
+						columns: { norbital_id: true, name: true },
+						limit: missingIds.length
+					});
+					const missingNames = new Map(
+						missingTypes.map((certification) => [certification.norbital_id, certification.name])
+					);
+					throw new Error(
+						`Contractor is missing required certifications: ${missingIds
+							.map((certificationId) => missingNames.get(certificationId) ?? '—')
+							.join(', ')}.`
+					);
+				}
+
+				const site =
+					input.location == null
+						? undefined
+						: await api.db.query.sites.findFirst({
+								where: { norbital_id: { eq: job.site_id } }
+							});
+				const status = assignmentStatusForLocation(
+					assignmentStatus(input.status),
+					input.location,
+					site?.location
+				);
+
+				return {
+					...input,
+					dispatched_at: input.dispatched_at ?? new Date(),
+					status
+				};
 			}
-
-			const site =
-				input.location == null
-					? undefined
-					: await api.db.query.sites.findFirst({
-							where: { norbital_id: { eq: job.site_id } }
-						});
-			const status = assignmentStatusForLocation(
-				assignmentStatus(input.status),
-				input.location,
-				site?.location
-			);
-
-			return {
-				...input,
-				dispatched_at: input.dispatched_at ?? new Date(),
-				status
-			};
 		},
-		after: async ({ record, api }) => {
-			const job = await api.db.query.jobs.findFirst({
-				where: { norbital_id: { eq: record.job_id } }
-			});
-			if (job?.status === 'unassigned') {
-				await api.db.mutate('jobs', [{ norbital_id: record.job_id, status: 'assigned' }]);
-			}
-		}
-	},
-	update: {
-		before: async ({ input, existing, api }) => {
-			assertAssignmentIdentityUnchanged(input, existing);
-			const withCompletion =
-				input.status === 'completed' && input.completed_at == null
-					? { ...input, completed_at: new Date() }
-					: input;
-			const jobId = input.job_id ?? existing.job_id;
-			const location = input.location ?? existing.location;
-			const existingStatus = assignmentStatus(existing.status);
-			const baseStatus = assignmentStatus(input.status ?? existing.status);
-			const preserveSuspect = existingStatus === 'suspect';
-
-			if (location == null || jobId == null) {
-				return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
-			}
-
-			const job = await api.db.query.jobs.findFirst({
-				where: { norbital_id: { eq: jobId } }
-			});
-			if (job == null) {
-				return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
-			}
-
-			const site = await api.db.query.sites.findFirst({
-				where: { norbital_id: { eq: job.site_id } }
-			});
-			if (site?.location == null) {
-				return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
-			}
-
-			const forceSuspect =
-				preserveSuspect ||
-				exceedsSiteTolerance(coordinatesOf(location), coordinatesOf(site.location));
-			return { ...withCompletion, status: applySuspectOneWay(baseStatus, forceSuspect) };
-		},
-		after: async ({ record, api }) => {
-			const status = record.status;
-			if (status == null) return;
-			// Suspect is an integrity overlay — never rewind job progression already recorded.
-			if (status === 'suspect') {
+		after: {
+			description:
+				'Moves a job from unassigned to assigned as soon as its first contractor is dispatched.',
+			handler: async ({ record, api }) => {
 				const job = await api.db.query.jobs.findFirst({
-					where: { norbital_id: { eq: record.job_id } },
-					columns: { status: true }
+					where: { norbital_id: { eq: record.job_id } }
 				});
 				if (job?.status === 'unassigned') {
 					await api.db.mutate('jobs', [{ norbital_id: record.job_id, status: 'assigned' }]);
 				}
-				return;
 			}
-			const jobStatus = mapAssignmentStatusToJobStatus(
-				status as 'dispatched' | 'in_progress' | 'completed' | 'suspect'
-			);
-			await api.db.mutate('jobs', [{ norbital_id: record.job_id, status: jobStatus }]);
+		}
+	},
+	update: {
+		before: {
+			description:
+				'Holds an assignment on its original job and contractor, stamps the completion time when the status turns completed, and keeps the suspect mark once the reported location has fallen outside the site tolerance.',
+			handler: async ({ input, existing, api }) => {
+				assertAssignmentIdentityUnchanged(input, existing);
+				const withCompletion =
+					input.status === 'completed' && input.completed_at == null
+						? { ...input, completed_at: new Date() }
+						: input;
+				const jobId = input.job_id ?? existing.job_id;
+				const location = input.location ?? existing.location;
+				const existingStatus = assignmentStatus(existing.status);
+				const baseStatus = assignmentStatus(input.status ?? existing.status);
+				const preserveSuspect = existingStatus === 'suspect';
+
+				if (location == null || jobId == null) {
+					return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
+				}
+
+				const job = await api.db.query.jobs.findFirst({
+					where: { norbital_id: { eq: jobId } }
+				});
+				if (job == null) {
+					return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
+				}
+
+				const site = await api.db.query.sites.findFirst({
+					where: { norbital_id: { eq: job.site_id } }
+				});
+				if (site?.location == null) {
+					return { ...withCompletion, status: applySuspectOneWay(baseStatus, preserveSuspect) };
+				}
+
+				const forceSuspect =
+					preserveSuspect ||
+					exceedsSiteTolerance(coordinatesOf(location), coordinatesOf(site.location));
+				return { ...withCompletion, status: applySuspectOneWay(baseStatus, forceSuspect) };
+			}
+		},
+		after: {
+			description:
+				'Carries assignment progress onto its job, and never rewinds progress already recorded when the assignment is flagged suspect.',
+			handler: async ({ record, api }) => {
+				const status = record.status;
+				if (status == null) return;
+				// Suspect is an integrity overlay — never rewind job progression already recorded.
+				if (status === 'suspect') {
+					const job = await api.db.query.jobs.findFirst({
+						where: { norbital_id: { eq: record.job_id } },
+						columns: { status: true }
+					});
+					if (job?.status === 'unassigned') {
+						await api.db.mutate('jobs', [{ norbital_id: record.job_id, status: 'assigned' }]);
+					}
+					return;
+				}
+				const jobStatus = mapAssignmentStatusToJobStatus(
+					status as 'dispatched' | 'in_progress' | 'completed' | 'suspect'
+				);
+				await api.db.mutate('jobs', [{ norbital_id: record.job_id, status: jobStatus }]);
+			}
 		}
 	}
 } satisfies Hooks;

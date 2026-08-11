@@ -9,6 +9,10 @@ import {
 	isSystemColumnName
 } from '@norbital-ai/platform-utils/system/column_names';
 import {
+	SYSTEM_COLLECTION_DEFINITIONS,
+	type SystemCollectionName
+} from '@norbital-ai/platform-utils/system/collections';
+import {
 	attachColumnCustom,
 	columnCustomIsKind,
 	readColumnCustom,
@@ -209,6 +213,43 @@ export function portableCollectionField(name: string, column: AnyPgColumn): Coll
 }
 
 /** Portable collection metadata for runtime clients; no Drizzle values escape this projection. */
+/**
+ * How a platform column is meant to be *presented*, where the drizzle type cannot say.
+ *
+ * A field kind is derived from the column, which is right for tenant tables: the author declares
+ * `text()` or `jsonbColumn(schema, custom)` and the custom metadata rides along. The platform's own
+ * tables are declared in `platform-utils`, which cannot attach that metadata — the key is a symbol
+ * private to this package, and the dependency runs pod → platform-utils, never back. So a `user`
+ * row's `role` derived to `text` and rendered as a box you could type anything into, and `channels`
+ * derived to `jsonb` and rendered as a JSON editor, no matter what `SYSTEM_COLLECTION_DEFINITIONS`
+ * said — because nothing on this path read it.
+ *
+ * Only the presentational facets are taken. Existence, nullability and read-only-ness stay derived
+ * from the real column, so a renamed or dropped platform column shows up as an overlay that matches
+ * nothing rather than as a phantom field the table does not have.
+ */
+function overlaySystemPresentation(name: string, derived: CollectionField[]): CollectionField[] {
+	// `SYSTEM_COLLECTION_DEFINITIONS` infers each field as its own literal shape, so the union has no
+	// common `values`/`label` member to read. Widening to the declared field type is what the
+	// constant already satisfies structurally; the narrow literals only exist for callers indexing a
+	// known collection by name.
+	const authored = SYSTEM_COLLECTION_DEFINITIONS[name as SystemCollectionName]?.fields as
+		readonly CollectionField[] | undefined;
+	if (!authored) return derived;
+	const byName = new Map<string, CollectionField>(authored.map((field) => [field.name, field]));
+	return derived.map((field) => {
+		const override = byName.get(field.name);
+		if (!override) return field;
+		return {
+			...field,
+			kind: override.kind,
+			...(override.values ? { values: [...override.values] } : {}),
+			...(override.mimeTypes ? { mimeTypes: [...override.mimeTypes] } : {}),
+			...(override.label ? { label: override.label } : {})
+		};
+	});
+}
+
 export function buildCollectionDefinitions(
 	tables: Readonly<Record<string, PgTable>>
 ): Readonly<Record<string, CollectionDefinition>> {
@@ -217,8 +258,11 @@ export function buildCollectionDefinitions(
 			name,
 			{
 				name,
-				fields: Object.entries(getTableColumns(table)).map(([fieldName, column]) =>
-					portableCollectionField(fieldName, column)
+				fields: overlaySystemPresentation(
+					name,
+					Object.entries(getTableColumns(table)).map(([fieldName, column]) =>
+						portableCollectionField(fieldName, column)
+					)
 				)
 			} satisfies CollectionDefinition
 		])

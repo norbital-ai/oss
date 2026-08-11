@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import AppHeaderActions from '@norbital-ai/pod/client/app-header-actions';
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Display, type ChartDisplaySpec } from '@norbital-ai/ui/chart';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
@@ -122,39 +122,34 @@
 	<meta name="pod:icon" content="lucide:clock-3" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/hr-payroll/app-media/time_attendance-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/time_attendance-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/hr-payroll/app-media/time_attendance-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/time_attendance-banner.webp"
 	/>
 </svelte:head>
 
 {#snippet companyScopeActions()}
-	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
-		<Inline gap="sm">
-			<Combobox
-				ariaLabel={t('component.legal_entity')}
-				options={companyOptions}
-				value={selectedCompanyId}
-				onValueChange={(value) => {
-					if (typeof value === 'string') {
-						companyId = value;
-						return;
-					}
-					companyId = companies[0]?.norbital_id ?? null;
-				}}
-				emptyPlaceholder={t('component.select_legal_entity')}
-				searchPlaceholder={t('component.search_companies')}
-				clientConfig={{
-					isLoading: companiesQuery.loading,
-					error: companiesQuery.error?.message ?? null
-				}}
-				class="min-w-[16rem]"
-			/>
-		</Inline>
-	</label>
+	<Combobox
+		ariaLabel={t('component.legal_entity')}
+		options={companyOptions}
+		value={selectedCompanyId}
+		onValueChange={(value) => {
+			if (typeof value === 'string') {
+				companyId = value;
+				return;
+			}
+			companyId = companies[0]?.norbital_id ?? null;
+		}}
+		emptyPlaceholder={t('component.select_legal_entity')}
+		searchPlaceholder={t('component.search_companies')}
+		clientConfig={{
+			isLoading: companiesQuery.loading,
+			error: companiesQuery.error?.message ?? null
+		}}
+		class="min-w-[16rem]"
+	/>
 {/snippet}
 
 {#snippet overview()}
@@ -257,16 +252,11 @@
 	{/if}
 {/snippet}
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.time_attendance.eyebrow')}
-		title={t('app.time_attendance.header_title')}
-		description={t('app.time_attendance.header_description')}
-		actions={companyScopeActions}
-	/>
-{/snippet}
+<AppHeaderActions>
+	{@render companyScopeActions()}
+</AppHeaderActions>
 
-<Cover top={pageHeading}>
+<Cover>
 	<Tabs
 		animate={false}
 		config={[

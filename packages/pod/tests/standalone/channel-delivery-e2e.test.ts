@@ -143,6 +143,7 @@ const AGENT_SOURCE = `import type { AgentAutomationSpec } from '@norbital-ai/pod
 
 export default {
 	kind: 'agent',
+	description: 'The workspace assistant sales staff talk to about quotes.',
 	task: 'Assist with this sales workspace.',
 	systemPrompt: '${AUTHORED_MARKER} — the workspace speaking to its own agent.',
 	collections: ['quotes'],

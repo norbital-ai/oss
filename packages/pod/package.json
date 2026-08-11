@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/pod",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "Tenant workspace authoring SDK, runtime, and Vite plugin for Norbital.",
 	"type": "module",
 	"license": "AGPL-3.0-only",
@@ -70,6 +70,11 @@
 			"types": "./build/ui/agent/agent-chat-panel.svelte.d.ts",
 			"svelte": "./build/ui/agent/agent-chat-panel.svelte",
 			"default": "./build/ui/agent/agent-chat-panel.svelte"
+		},
+		"./client/app-header-actions": {
+			"types": "./build/ui/shell/app-header-actions.svelte.d.ts",
+			"svelte": "./build/ui/shell/app-header-actions.svelte",
+			"default": "./build/ui/shell/app-header-actions.svelte"
 		}
 	},
 	"imports": {

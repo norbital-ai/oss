@@ -14,6 +14,8 @@ import { reconstructProject } from '../lib/reclamation/stitch-driver.js';
  * append an identical revision. `force` is the explicit opt-out.
  */
 export default defineCommandHandler({
+	description:
+		'Re-runs the stitch for one project on demand and returns its newest site reconstruction, for documents loaded by a seed or an import that never fired a write.',
 	schema: z.object({
 		project_id: z.string().uuid(),
 		/** Append a revision even when the inputs are unchanged. */

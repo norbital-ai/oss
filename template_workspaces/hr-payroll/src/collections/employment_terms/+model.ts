@@ -63,7 +63,9 @@ export default defineModel(
 		 * The title keeps both halves of the old label — the role when there is one, the employment
 		 * type always — and lets the database, not CEL, decide what an absent job title composes to.
 		 */
-		summary: text({ search: true }).generatedAlwaysAs(sql`COALESCE(job_title || ' · ', '') || employment_type`)
+		summary: text({ search: true }).generatedAlwaysAs(
+			sql`COALESCE(job_title || ' · ', '') || employment_type`
+		)
 	},
 	{
 		description:

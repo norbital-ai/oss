@@ -19,5 +19,7 @@ export type StatutoryFactStatus = z.infer<typeof statutoryFactStatusSchema>;
 
 export default defineCustomType({
 	name: 'statutory_fact_status',
+	description:
+		'Whether an employment is registered with a statutory scheme and under which reference number, with an optional rate that replaces the band’s own, or the stated reason it is not registered.',
 	schema: statutoryFactStatusSchema
 });

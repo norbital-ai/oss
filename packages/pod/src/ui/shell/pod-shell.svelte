@@ -57,6 +57,10 @@
 		WORKSPACE_SETTINGS_PATH
 	} from './workspace-navigation.js';
 	import WorkspaceSettingsSurface from './workspace-settings-surface.svelte';
+	import {
+		setAppHeaderActionsSlot,
+		type AppHeaderActionsSlot
+	} from './app-header-actions.svelte.js';
 	import { workspaceSettingsApi } from './workspace-settings-api.js';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
 	import { requestAgentComposerFocus } from '../agent/agent-composer-focus.js';
@@ -222,6 +226,16 @@
 	);
 
 	/**
+	 * The running app's contribution to its own header chrome — a scope picker, usually.
+	 *
+	 * The shell owns app identity and paints it once on the media header. Anything that depends on
+	 * app state cannot come from the manifest, so the app writes it here through `AppHeaderActions`
+	 * and the header renders it at the trailing edge.
+	 */
+	const appHeaderActions: AppHeaderActionsSlot = $state({ current: null });
+	setAppHeaderActionsSlot(appHeaderActions);
+
+	/**
 	 * Cmd+K and the FAB are the same gesture: open the agent, then hand the composer focus.
 	 *
 	 * The full-page /agent surface and an already-open sheet only need the focus half. A sheet
@@ -255,7 +269,8 @@
 				}
 			: undefined
 	);
-	const navigationModel = $derived.by((): WorkspaceNavigationModel => ({		activeOrganization,
+	const navigationModel = $derived.by((): WorkspaceNavigationModel => ({
+		activeOrganization,
 		organizations: resolveWorkspaceOrganizationOptions({
 			activeOrganization,
 			organizations: data.userOrganizations ?? []
@@ -363,12 +378,18 @@
 {/snippet}
 
 {#snippet activeAppBanner()}
-	{#if activeAppManifest?.banner}
+	<!--
+		Rendered for a banner, and also for an app that has no banner but did register header
+		actions — otherwise the picker an app handed us would have nowhere to land. A bannerless app
+		that contributes nothing still gets no chrome.
+	-->
+	{#if activeAppManifest?.banner || appHeaderActions.current}
 		<AppMediaHeader
-			src={activeAppManifest.banner}
-			icon={activeAppManifest.icon}
+			src={activeAppManifest?.banner ?? null}
+			icon={activeAppManifest?.icon}
 			title={activeAppHeaderTitle}
 			description={activeAppHeaderDescription}
+			actions={appHeaderActions.current ?? undefined}
 		/>
 	{/if}
 {/snippet}

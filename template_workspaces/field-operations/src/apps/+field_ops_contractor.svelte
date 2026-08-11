@@ -30,11 +30,11 @@
 	<meta name="pod:icon" content="lucide:hard-hat" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/field-operations/app-media/field_ops_contractor-banner.svg"
+		content="/api/template-seed-assets/field-operations/app-media/field_ops_contractor-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/field-operations/app-media/field_ops_contractor-banner.svg"
+		content="/api/template-seed-assets/field-operations/app-media/field_ops_contractor-banner.webp"
 	/>
 </svelte:head>
 

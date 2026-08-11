@@ -32,6 +32,7 @@ function manifestWith(approval: unknown, action = 'create') {
 			field_agent: {
 				key: 'field_agent',
 				name: 'Field agent',
+				description: 'Lets a field agent raise quotes for review.',
 				grants: [{ collection: 'quotes', action, approval }]
 			}
 		}

@@ -9,7 +9,7 @@
 
 import type { Hooks } from '../$types.js';
 
-type CreateAfterHook = NonNullable<NonNullable<Hooks['create']>['after']>;
+type CreateAfterHook = NonNullable<NonNullable<Hooks['create']>['after']>['handler'];
 
 /** Reads plus the elevated `mutate`/`delete` the build needs to write its four result collections. */
 export type PayrollApi = Parameters<CreateAfterHook>[0]['api'];

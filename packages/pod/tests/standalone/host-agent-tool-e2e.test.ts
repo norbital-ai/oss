@@ -111,6 +111,7 @@ export default defineAutomation(
 	{ schedule: '* * * * *' },
 	{
 		kind: 'agent',
+		description: 'Deploys the workspace through the host sandbox and reports the outcome.',
 		task: 'Deploy this workspace through the host sandbox and report what it said.',
 		hostTools: ['sandbox_deploy']
 	}

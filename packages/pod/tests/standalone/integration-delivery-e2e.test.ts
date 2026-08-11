@@ -186,6 +186,7 @@ const SEND_PIPELINES_SOURCE = `import type { Pipelines } from './$types.js';
 
 export default {
 	export: {
+		description: 'Emits the certification types as one JSON attachment.',
 		handler: async (ctx) => [
 			{
 				label: 'certification_types',
@@ -222,6 +223,7 @@ const catalogue = z.object({
 
 export default {
 	import: {
+		description: 'Turns the remote location catalogue into rows.',
 		input: catalogue,
 		handler: async (ctx) => {
 			const input = ctx.input as z.infer<typeof catalogue>;
@@ -245,6 +247,7 @@ const announcement = z.object({
 
 export default {
 	import: {
+		description: 'Turns one announced system event into a row per record it names.',
 		input: announcement,
 		handler: async (ctx) => {
 			const input = ctx.input as z.infer<typeof announcement>;
@@ -387,6 +390,7 @@ const report = z.object({
 
 export default {
 	import: {
+		description: 'Turns an inbound field report into an open RFI.',
 		input: report,
 		handler: async (ctx) => {
 			const input = ctx.input as z.infer<typeof report>;

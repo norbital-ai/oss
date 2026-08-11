@@ -42,7 +42,8 @@ export type ChannelDefinition = {
 	 * not exist — that failure would otherwise surface as an agent silently reaching nothing.
 	 */
 	readonly policy: DefaultPolicyName;
-	readonly description?: string | null;
+	/** Who reaches the workspace through this channel and what for. Carried into the manifest. */
+	readonly description: string;
 	/** Overrides the agent's default instruction for this channel. */
 	readonly task?: string;
 	/**
@@ -71,6 +72,7 @@ export function defineChannel<const TChannel extends ChannelDefinition>(
 ): TChannel {
 	if (!channel.transport.trim()) throw new Error('Channel transport cannot be empty');
 	if (!String(channel.policy).trim()) throw new Error('Channel policy cannot be empty');
+	if (!channel.description.trim()) throw new Error('Channel description cannot be empty');
 	return channel;
 }
 

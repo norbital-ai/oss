@@ -95,6 +95,7 @@ export const tableMessages = defineMessages({
 		'table.appliedByView': 'Applied by this view',
 		'table.searchTextFields': 'Search text fields…',
 		'table.refreshCollectionData': 'Refresh collection data',
+		'table.viewDisabled': 'This view is not accepting changes right now.',
 		'table.noCustomView': 'No custom record view',
 		'table.noCustomViewDesc':
 			'This collection has no dedicated UI representation. Use Raw to inspect its fields.',
@@ -264,6 +265,7 @@ export const tableMessages = defineMessages({
 		'table.appliedByView': '由当前视图应用',
 		'table.searchTextFields': '搜索文本字段…',
 		'table.refreshCollectionData': '刷新集合数据',
+		'table.viewDisabled': '此视图当前不接受更改。',
 		'table.noCustomView': '没有自定义记录视图',
 		'table.noCustomViewDesc': '此集合没有专用的界面表示。使用原始视图检查其字段。',
 		'table.approvalRequest': '审批请求',

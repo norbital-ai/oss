@@ -4,7 +4,7 @@ const ASSIGNMENT_ERROR =
 	'Worker must satisfy at least one site-location job requirement with all required active certifications before assignment.';
 
 type CreateBefore = NonNullable<NonNullable<Hooks['create']>['before']>;
-type HookApi = Parameters<CreateBefore>[0]['api'];
+type HookApi = Parameters<CreateBefore['handler']>[0]['api'];
 type ComplianceInput = {
 	readonly site_location_id: string | null | undefined;
 	readonly worker_id: string | null | undefined;
@@ -12,22 +12,30 @@ type ComplianceInput = {
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			await validateJobAssignmentCompliance(
-				{ site_location_id: input.site_location_id, worker_id: input.worker_id },
-				api
-			);
-			return input;
+		before: {
+			description:
+				'Refuses a new job assignment unless the worker holds active permits to work covering every certification required by a job at that site location.',
+			handler: async ({ input, api }) => {
+				await validateJobAssignmentCompliance(
+					{ site_location_id: input.site_location_id, worker_id: input.worker_id },
+					api
+				);
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			const record = { ...existing, ...input };
-			await validateJobAssignmentCompliance(
-				{ site_location_id: record.site_location_id, worker_id: record.worker_id },
-				api
-			);
-			return input;
+		before: {
+			description:
+				'Re-checks the worker against the site location whenever either is changed, so an assignment cannot be moved onto work the worker is not certified for.',
+			handler: async ({ input, existing, api }) => {
+				const record = { ...existing, ...input };
+				await validateJobAssignmentCompliance(
+					{ site_location_id: record.site_location_id, worker_id: record.worker_id },
+					api
+				);
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

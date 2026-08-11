@@ -45,18 +45,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Enforce the fixed beta version
-        run: |
-          node --input-type=module <<'NODE'
-          import {
-            assertBetaPackageVersions,
-            readPublicPackageEntries
-          } from './scripts/lib/package-release.mjs';
-          const entries = readPublicPackageEntries(process.cwd());
-          assertBetaPackageVersions(entries);
-          console.log(entries.map(({ name, version }) => `${name}@${version}`).join('\n'));
-          NODE
-
       # Build every publishable package once, before pnpm runs each package's prepack.
       #
       # Each package's `prepack` is `turbo run build --filter=<pkg>`. Building here avoids repeating
@@ -68,41 +56,6 @@ jobs:
       # five publishable packages and none of the templates.
       - name: Build publishable packages
         run: pnpm exec turbo run build --filter=...@norbital-ai/pod
-
-      - name: Remove prior beta package records
-        uses: actions/github-script@v8
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const path = require('node:path');
-            const { pathToFileURL } = require('node:url');
-            const moduleUrl = pathToFileURL(
-              path.join(process.env.GITHUB_WORKSPACE, 'scripts/lib/package-release.mjs')
-            ).href;
-            const { publicPackageDirectories } = await import(moduleUrl);
-            for (const packageName of publicPackageDirectories) {
-              const versions = await github.paginate(
-                'GET /orgs/{org}/packages/{package_type}/{package_name}/versions',
-                {
-                  org: context.repo.owner,
-                  package_type: 'npm',
-                  package_name: packageName,
-                  per_page: 100
-                }
-              );
-              core.info(`Removing ${versions.length} version(s) of @${context.repo.owner}/${packageName}`);
-              for (const version of versions) {
-                await github.request(
-                  'DELETE /orgs/{org}/packages/{package_type}/{package_name}/versions/{package_version_id}',
-                  {
-                    org: context.repo.owner,
-                    package_type: 'npm',
-                    package_name: packageName,
-                    package_version_id: version.id
-                  }
-                );
-              }
-            }
 
       - name: Publish one coherent beta package set
         run: |

@@ -1,7 +1,7 @@
 import { documentTotals, lineAmounts } from '../../lib/pricing.js';
 import type { Hooks, WorkspaceRow } from './$types.js';
 
-type AfterApi = Parameters<NonNullable<NonNullable<Hooks['create']>['after']>>[0]['api'];
+type AfterApi = Parameters<NonNullable<NonNullable<Hooks['create']>['after']>['handler']>[0]['api'];
 
 const LINE_LIMIT = 5000;
 
@@ -83,78 +83,98 @@ const afterRollup = async ({
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			if (!input.purchase_order_id) {
-				throw new Error('A purchase order line must reference a purchase order.');
-			}
-			const order = await api.db.query.purchase_orders.findFirst({
-				where: { norbital_id: { eq: input.purchase_order_id } }
-			});
-			if (!order) throw new Error('Referenced purchase order does not exist.');
-			if (order.status !== 'draft') {
-				throw new Error('Line items can only be added to draft purchase orders.');
-			}
+		before: {
+			description:
+				'Adds a line only to a draft order for an active product, fills the product code, name, unit and tax rate from the catalogue, and prices the line net, tax and total from quantity and unit cost.',
+			handler: async ({ input, api }) => {
+				if (!input.purchase_order_id) {
+					throw new Error('A purchase order line must reference a purchase order.');
+				}
+				const order = await api.db.query.purchase_orders.findFirst({
+					where: { norbital_id: { eq: input.purchase_order_id } }
+				});
+				if (!order) throw new Error('Referenced purchase order does not exist.');
+				if (order.status !== 'draft') {
+					throw new Error('Line items can only be added to draft purchase orders.');
+				}
 
-			if (!input.product_id) throw new Error('A purchase order line must reference a product.');
-			const product = await api.db.query.products.findFirst({
-				where: { norbital_id: { eq: input.product_id } }
-			});
-			if (!product) throw new Error('Referenced product does not exist.');
-			if (!product.active) {
-				throw new Error('Cannot add a line for an inactive product.');
+				if (!input.product_id) throw new Error('A purchase order line must reference a product.');
+				const product = await api.db.query.products.findFirst({
+					where: { norbital_id: { eq: input.product_id } }
+				});
+				if (!product) throw new Error('Referenced product does not exist.');
+				if (!product.active) {
+					throw new Error('Cannot add a line for an inactive product.');
+				}
+
+				const resolved = {
+					...input,
+					product_code: input.product_code ?? product.code,
+					product_name: input.product_name ?? product.name,
+					product_unit: input.product_unit ?? product.unit ?? '',
+					unit_cost: input.unit_cost,
+					tax_rate: input.tax_rate ?? product.tax_rate ?? 0
+				};
+				validateLineFields(resolved);
+
+				const amounts = computeLineAmounts(order, resolved);
+				return {
+					...resolved,
+					net: amounts.net,
+					tax: amounts.tax,
+					line_total: amounts.gross
+				};
 			}
-
-			const resolved = {
-				...input,
-				product_code: input.product_code ?? product.code,
-				product_name: input.product_name ?? product.name,
-				product_unit: input.product_unit ?? product.unit ?? '',
-				unit_cost: input.unit_cost,
-				tax_rate: input.tax_rate ?? product.tax_rate ?? 0
-			};
-			validateLineFields(resolved);
-
-			const amounts = computeLineAmounts(order, resolved);
-			return {
-				...resolved,
-				net: amounts.net,
-				tax: amounts.tax,
-				line_total: amounts.gross
-			};
 		},
-		after: afterRollup
+		after: {
+			description:
+				'Recomputes the purchase order net, tax and gross from its lines after a line is added.',
+			handler: afterRollup
+		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			if (
-				input.purchase_order_id != null &&
-				input.purchase_order_id !== existing.purchase_order_id
-			) {
-				throw new Error('A line item cannot be moved to a different purchase order.');
+		before: {
+			description:
+				'Keeps a line on its own draft order and re-prices its net, tax and total from the changed quantity, unit cost or tax rate.',
+			handler: async ({ input, existing, api }) => {
+				if (
+					input.purchase_order_id != null &&
+					input.purchase_order_id !== existing.purchase_order_id
+				) {
+					throw new Error('A line item cannot be moved to a different purchase order.');
+				}
+
+				const order = await api.db.query.purchase_orders.findFirst({
+					where: { norbital_id: { eq: existing.purchase_order_id } }
+				});
+				if (!order) throw new Error('Referenced purchase order does not exist.');
+				if (order.status !== 'draft') {
+					throw new Error('Line items can only be modified on draft purchase orders.');
+				}
+
+				const resolved = { ...existing, ...input };
+				validateLineFields(resolved);
+
+				const amounts = computeLineAmounts(order, resolved);
+				return {
+					...input,
+					net: amounts.net,
+					tax: amounts.tax,
+					line_total: amounts.gross
+				};
 			}
-
-			const order = await api.db.query.purchase_orders.findFirst({
-				where: { norbital_id: { eq: existing.purchase_order_id } }
-			});
-			if (!order) throw new Error('Referenced purchase order does not exist.');
-			if (order.status !== 'draft') {
-				throw new Error('Line items can only be modified on draft purchase orders.');
-			}
-
-			const resolved = { ...existing, ...input };
-			validateLineFields(resolved);
-
-			const amounts = computeLineAmounts(order, resolved);
-			return {
-				...input,
-				net: amounts.net,
-				tax: amounts.tax,
-				line_total: amounts.gross
-			};
 		},
-		after: afterRollup
+		after: {
+			description:
+				'Recomputes the purchase order net, tax and gross from its lines after a line is changed.',
+			handler: afterRollup
+		}
 	},
 	delete: {
-		after: afterRollup
+		after: {
+			description:
+				'Recomputes the purchase order net, tax and gross from its lines after a line is removed.',
+			handler: afterRollup
+		}
 	}
 } satisfies Hooks;

@@ -18,5 +18,7 @@ export const photoSourceSchema = z.discriminatedUnion('kind', [
 
 export default defineCustomType({
 	name: 'photo_source',
+	description:
+		'Where a photo came from: either a workspace upload, or the messaging conversation, message, attachment and sender that delivered it.',
 	schema: photoSourceSchema
 });

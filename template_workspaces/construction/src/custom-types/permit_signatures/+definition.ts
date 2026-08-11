@@ -18,5 +18,7 @@ export const permitSignaturesSchema = z
 
 export default defineCustomType({
 	name: 'permit_signatures',
+	description:
+		'The applicant, issuer, and acceptor sign-offs on a permit to work, each a name and a date, with a party who has not yet signed left explicitly empty.',
 	schema: permitSignaturesSchema
 });

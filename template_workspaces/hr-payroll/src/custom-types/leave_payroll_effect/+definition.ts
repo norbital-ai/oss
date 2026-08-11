@@ -15,5 +15,7 @@ export type LeavePayrollEffect = z.infer<typeof leavePayrollEffectSchema>;
 
 export default defineCustomType({
 	name: 'leave_payroll_effect',
+	description:
+		'Whether taking this leave is paid, or unpaid and deducted through the pay component named here.',
 	schema: leavePayrollEffectSchema
 });

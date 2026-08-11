@@ -3,8 +3,8 @@ import { instalmentOrigin } from '../../lib/variant.js';
 import { assertRepaymentSchedule } from './lib/repayment-schedule.js';
 
 const LIMIT = 5000;
-type AfterApi = Parameters<NonNullable<NonNullable<Hooks['create']>['after']>>[0]['api'];
-type ReadApi = Parameters<NonNullable<NonNullable<Hooks['create']>['before']>>[0]['api'];
+type AfterApi = Parameters<NonNullable<NonNullable<Hooks['create']>['after']>['handler']>[0]['api'];
+type ReadApi = Parameters<NonNullable<NonNullable<Hooks['create']>['before']>['handler']>[0]['api'];
 
 function checked<T>(rows: T[], what: string): T[] {
 	if (rows.length >= LIMIT)
@@ -124,36 +124,56 @@ async function synchronizeInstalments(
 
 export default {
 	create: {
-		before: async ({ input }) => {
-			assertRepaymentSchedule({
-				principal: input.principal,
-				repayBy: input.repay_by,
-				schedule: input.schedule
-			});
-			return input;
+		before: {
+			description:
+				'Checks that the instalments add up to the principal and finish on or before the repay-by date, so a loan cannot be booked against a schedule that never clears it.',
+			handler: async ({ input }) => {
+				assertRepaymentSchedule({
+					principal: input.principal,
+					repayBy: input.repay_by,
+					schedule: input.schedule
+				});
+				return input;
+			}
 		},
-		after: async ({ record, api }) => synchronizeInstalments(api, record)
+		after: {
+			description:
+				'Writes one deduction entry per scheduled instalment against the agreement’s employment and pay component, so the loan is recovered automatically by each payroll run.',
+			handler: async ({ record, api }) => synchronizeInstalments(api, record)
+		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			const principal = input.principal ?? existing.principal;
-			const repayBy = input.repay_by ?? existing.repay_by;
-			const schedule = input.schedule ?? existing.schedule;
-			assertRepaymentSchedule({ principal, repayBy, schedule });
-			await protectPaidInstalments(api, existing, {
-				employment_id: input.employment_id ?? existing.employment_id,
-				pay_component_id: input.pay_component_id ?? existing.pay_component_id,
-				schedule
-			});
-			return input;
+		before: {
+			description:
+				'Re-checks that the amended schedule still clears the principal by the repay-by date, and refuses to change the amount, due date, employment or component of any instalment already paid out on a payslip.',
+			handler: async ({ input, existing, api }) => {
+				const principal = input.principal ?? existing.principal;
+				const repayBy = input.repay_by ?? existing.repay_by;
+				const schedule = input.schedule ?? existing.schedule;
+				assertRepaymentSchedule({ principal, repayBy, schedule });
+				await protectPaidInstalments(api, existing, {
+					employment_id: input.employment_id ?? existing.employment_id,
+					pay_component_id: input.pay_component_id ?? existing.pay_component_id,
+					schedule
+				});
+				return input;
+			}
 		},
-		after: async ({ record, api }) => synchronizeInstalments(api, record)
+		after: {
+			description:
+				'Realigns the deduction entries with the amended schedule, updating each instalment in place and deleting the entries for instalments the schedule no longer has.',
+			handler: async ({ record, api }) => synchronizeInstalments(api, record)
+		}
 	},
 	delete: {
-		before: async () => {
-			throw new Error(
-				'Repayment agreements are auditable records and cannot be deleted. Correct the unpaid schedule instead.'
-			);
+		before: {
+			description:
+				'Refuses to delete a repayment agreement at all, because it is the auditable record of what an employee owes; an unwanted balance is cleared by shortening the unpaid schedule.',
+			handler: async () => {
+				throw new Error(
+					'Repayment agreements are auditable records and cannot be deleted. Correct the unpaid schedule instead.'
+				);
+			}
 		}
 	}
 } satisfies Hooks;

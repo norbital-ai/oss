@@ -78,7 +78,14 @@ export default defineAgentTool({
 		`import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
-	{ kind: 'agent', task: 'Triage things', collections: ['things'], access: 'write', tools: ['lookup'] }
+	{
+		kind: 'agent',
+		description: 'Reviews new things each morning and files the ones that need attention.',
+		task: 'Triage things',
+		collections: ['things'],
+		access: 'write',
+		tools: ['lookup']
+	}
 );`
 	);
 	return root;
@@ -96,7 +103,7 @@ describe('Pod filesystem compiler conformance', () => {
 		await write(
 			root,
 			'src/apps/+home.svelte',
-			`<svelte:head><title>Home</title></svelte:head>
+			`<svelte:head><title>Home</title><meta name="description" content="Home" /></svelte:head>
 <Stack fill grow shrink={false}><Inline fill grow><Cluster grow /></Inline></Stack>
 <Bound grow shrink={false} /><Cover grow /><Scroll name="Rows" grow />`
 		);
@@ -109,7 +116,7 @@ describe('Pod filesystem compiler conformance', () => {
 		await write(
 			root,
 			'src/apps/+home.svelte',
-			`<svelte:head><title>Home</title></svelte:head>
+			`<svelte:head><title>Home</title><meta name="description" content="Home" /></svelte:head>
 <Grid fill /><Center grow /><Widget shrink={false} /><Tabs contentClass="h-full" />`
 		);
 		structure = await discoverPodFilesystem(root);
@@ -163,15 +170,22 @@ describe('Pod filesystem compiler conformance', () => {
 			'src/automation/+notify.ts',
 			`import { defineAutomation } from '@norbital-ai/pod/authoring';
 import type { Api } from './$types.js';
-export default defineAutomation({ schedule: '0 7 * * *' }, async (api: Api) => {
-	await api.sendNotification({
-		recipient_user_id: '00000000-0000-4000-8000-000000000000',
-		subject: 'Portable',
-		message: 'The active host chooses the provider',
-		channels: ['sms']
-	});
-	return {};
-});`
+export default defineAutomation(
+	{ schedule: '0 7 * * *' },
+	{
+		kind: 'deterministic',
+		description: 'Sends the daily digest notification to the standing recipient.',
+		handler: async (api: Api) => {
+			await api.sendNotification({
+				recipient_user_id: '00000000-0000-4000-8000-000000000000',
+				subject: 'Portable',
+				message: 'The active host chooses the provider',
+				channels: ['sms']
+			});
+			return {};
+		}
+	}
+);`
 		);
 		const result = await compilePodFilesystem({ root });
 		expect(result.valid, JSON.stringify(result.diagnostics, null, 2)).toBe(true);
@@ -193,7 +207,13 @@ export default defineAutomation({ schedule: '0 7 * * *' }, async (api: Api) => {
 			`import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
-	{ kind: 'agent', task: 'Invalid', collections: ['missing_collection'], tools: ['missing_tool'] }
+	{
+		kind: 'agent',
+		description: 'Names a collection and a tool the workspace does not have.',
+		task: 'Invalid',
+		collections: ['missing_collection'],
+		tools: ['missing_tool']
+	}
 );`
 		);
 		let diagnostics = '';
@@ -220,10 +240,14 @@ export default defineAutomation(
 			`import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
 	{ trigger: { collection: 'things', event: 'created' } },
-	async (api, { scope }) => {
-		const name: string = scope.incoming_record.name;
-		await api.db.query.things.findMany({ where: { name: { eq: name } }, limit: 1 });
-		return { name };
+	{
+		kind: 'deterministic',
+		description: 'Counts the things sharing a name with the one just created.',
+		handler: async (api, { scope }) => {
+			const name: string = scope.incoming_record.name;
+			await api.db.query.things.findMany({ where: { name: { eq: name } }, limit: 1 });
+			return { name };
+		}
 	}
 );`
 		);
@@ -248,7 +272,11 @@ export default defineAutomation(
 			`import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
 	{ trigger: { collection: 'thingz', event: 'created' } },
-	async () => ({})
+	{
+		kind: 'deterministic',
+		description: 'Names a collection the workspace does not have.',
+		handler: async () => ({})
+	}
 );`
 		);
 		let diagnostics = '';
@@ -272,6 +300,7 @@ export default defineAutomation(
 			`import type { Policy } from './$types.js';
 export default {
 	name: 'Viewer',
+	description: 'Reads every thing that has been given a name.',
 	grants: [{ collection: 'things', action: 'read', where: { name: { isNotNull: true } } }]
 } satisfies Policy;`
 		);
@@ -297,6 +326,7 @@ export default {
 			`import type { Policy } from './$types.js';
 export default {
 	name: 'Viewer',
+	description: 'Reads every thing that has been given a name.',
 	grants: [{ collection: 'things', action: 'read', where: { nope: { isNotNull: true } } }]
 } satisfies Policy;`
 		);
@@ -318,7 +348,11 @@ export default {
 		await write(
 			root,
 			'src/policies/+ok.policy.ts',
-			`export default { name: 'Ok', grants: [{ collection: 'things', action: 'read' }] };`
+			`export default {
+	name: 'Ok',
+	description: 'Reads things.',
+	grants: [{ collection: 'things', action: 'read' }]
+};`
 		);
 		await write(root, 'src/policies/NotAPolicy.ts', `export default {};`);
 
@@ -337,6 +371,7 @@ export default {
 			`import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
 export default defineQueryHandler({
+	description: 'Lists the names of things whose name starts with the given prefix.',
 	schema: z.object({ prefix: z.string() }),
 	handler: async ({ prefix }, api) => {
 		const rows = await api.db.query.things.findMany({
@@ -402,6 +437,7 @@ export default defineAutomation(
 	{ trigger: { collection: 'things', event: 'created' } },
 	{
 		kind: 'deterministic',
+		description: 'Counts the things sharing a name with the one just created.',
 		handler: async (api, { scope }) => {
 			const name: string = scope.incoming_record.name;
 			await api.db.query.things.findMany({ where: { name: { eq: name } }, limit: 1 });
@@ -433,6 +469,7 @@ export default defineAutomation(
 	{ trigger: { collection: 'things', event: 'created' } },
 	{
 		kind: 'deterministic',
+		description: 'Reads the name off the thing that was just created.',
 		handler: async (_api, { scope }) => {
 			const name: number = scope.incoming_record.name;
 			return { name };
@@ -468,6 +505,7 @@ export default defineAutomation(
 			`import type { Policy } from './$types.js';
 export default {
 	name: 'Support agent',
+	description: 'Lets the support agent read things while answering a message.',
 	grants: [{ collection: 'things', action: 'read' }]
 } satisfies Policy;`
 		);
@@ -475,7 +513,11 @@ export default {
 			root,
 			'src/channels/+support_inbox.channel.ts',
 			`import type { Channel } from './$types.js';
-export default { transport: 'telegram', policy: 'support_agent' } satisfies Channel;`
+export default {
+	transport: 'telegram',
+	policy: 'support_agent',
+	description: 'Customers reaching support over Telegram.'
+} satisfies Channel;`
 		);
 		const result = await compilePodFilesystem({ root });
 		expect(result.valid, JSON.stringify(result.diagnostics, null, 2)).toBe(true);
@@ -490,7 +532,11 @@ export default { transport: 'telegram', policy: 'support_agent' } satisfies Chan
 			root,
 			'src/channels/+support_inbox.channel.ts',
 			`import type { Channel } from './$types.js';
-export default { transport: 'telegram', policy: 'support_agentt' } satisfies Channel;`
+export default {
+	transport: 'telegram',
+	policy: 'support_agentt',
+	description: 'Customers reaching support over Telegram.'
+} satisfies Channel;`
 		);
 		await compilePodFilesystem({ root });
 		let diagnostics = '';
@@ -543,7 +589,12 @@ export default defineEnv({ private: { REGISTRY_KEY: { description: 'Registry API
 			root,
 			'src/+agent.ts',
 			`import type { AgentAutomationSpec } from '@norbital-ai/pod/authoring';
-export default { kind: 'agent', task: 'Help here.', access: 'write' } satisfies AgentAutomationSpec;`
+export default {
+	kind: 'agent',
+	description: 'The workspace assistant people talk to directly.',
+	task: 'Help here.',
+	access: 'write'
+} satisfies AgentAutomationSpec;`
 		);
 		const structure = await discoverPodFilesystem(root);
 		expect(structure.diagnostics).toEqual([]);
@@ -622,7 +673,7 @@ export default { kind: 'agent', task: 'Help here.', access: 'write' } satisfies 
 		await write(
 			root,
 			'src/apps/+home.svelte',
-			`<svelte:head><title>Home</title></svelte:head>
+			`<svelte:head><title>Home</title><meta name="description" content="Home" /></svelte:head>
 <p>{t('home.greeting')}</p>`
 		);
 		await rm(path.join(root, 'src/i18n'), { recursive: true, force: true });
@@ -655,6 +706,7 @@ export default { kind: 'agent', task: 'Help here.', access: 'write' } satisfies 
 			'src/apps/+home.svelte',
 			`<svelte:head>
 	<title>Home</title>
+	<meta name="description" content="Home" />
 	<meta name="pod:icon" content="lucide:home" />
 </svelte:head>
 <p>Track and resolve RFIs.</p>
@@ -690,6 +742,7 @@ export default { kind: 'agent', task: 'Help here.', access: 'write' } satisfies 
 			'src/apps/+home.svelte',
 			`<svelte:head>
 	<title>Home</title>
+	<meta name="description" content="Home" />
 	<meta name="pod:icon" content="lucide:home" />
 </svelte:head>
 <PageHeader title={t('app.home.header_title')} description={label} />

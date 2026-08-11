@@ -9,8 +9,6 @@ import {
 	sha512Integrity
 } from '../lib/package-archive.mjs';
 import {
-	assertBetaPackageVersions,
-	betaPackageVersion,
 	platformPackageKey,
 	publicPackageDirectories,
 	readPublicPackageEntries
@@ -34,16 +32,6 @@ const entries = [
 ];
 
 describe('published package identity', () => {
-	it('keeps every public beta package at exactly 0.0.1', () => {
-		const packages = readPublicPackageEntries(repositoryRoot);
-		assert.equal(betaPackageVersion, '0.0.1');
-		assert.doesNotThrow(() => assertBetaPackageVersions(packages));
-		assert.throws(
-			() => assertBetaPackageVersions([{ name: '@norbital-ai/pod', version: '0.0.2' }]),
-			/@norbital-ai\/pod@0\.0\.2/
-		);
-	});
-
 	it('emits and verifies exact sha512 SRI', () => {
 		const bytes = Buffer.from('published archive bytes');
 		const integrity = sha512Integrity(bytes);

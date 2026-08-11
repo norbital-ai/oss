@@ -2,6 +2,8 @@ import { defineQueryHandler } from '@norbital-ai/pod/authoring';
 import { z } from 'zod';
 
 export default defineQueryHandler({
+	description:
+		'Lists quotes as pipeline cards carrying the account name, status, gross and expiry date, optionally narrowed to one owner or one account.',
 	schema: z.object({
 		owner_id: z.string().optional(),
 		account_id: z.string().optional()

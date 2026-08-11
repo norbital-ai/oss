@@ -21,9 +21,12 @@ import { HttpError } from '../server/collection/http_error.js';
  * ```ts
  * export default {
  *   update: {
- *     before: async ({ existing }) => {
- *       if (existing.lifecycle === 'PAID')
- *         refuse('A paid payroll run is immutable. Correct it with a later run.');
+ *     before: {
+ *       description: 'Freezes a payroll run once it is paid; corrections go in a later run.',
+ *       handler: async ({ existing }) => {
+ *         if (existing.lifecycle === 'PAID')
+ *           refuse('A paid payroll run is immutable. Correct it with a later run.');
+ *       }
  *     }
  *   }
  * } satisfies Hooks;

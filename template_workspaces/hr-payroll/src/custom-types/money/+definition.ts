@@ -21,5 +21,7 @@ export function moneySchema(options: MoneyOptions = {}) {
 
 export default defineCustomType({
 	name: 'money',
+	description:
+		'A monetary amount carried with its ISO 4217 currency code, so totals never silently mix currencies.',
 	schema: moneySchema
 });

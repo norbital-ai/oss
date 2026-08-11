@@ -33,4 +33,9 @@ export const rateAwardSchema = z.discriminatedUnion('kind', [
 
 export type RateAward = z.infer<typeof rateAwardSchema>;
 
-export default defineCustomType({ name: 'rate_award', schema: rateAwardSchema });
+export default defineCustomType({
+	name: 'rate_award',
+	description:
+		'What a matched contribution band charges: employee and employer percentages, fixed employee and employer amounts, or a progressive step of the cumulative tax at the band floor plus a rate on the wage above it.',
+	schema: rateAwardSchema
+});

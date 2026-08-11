@@ -163,12 +163,20 @@ import type { Hooks } from './$types.js';
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			// `input` is the quotes create input; `api.db.query.accounts` is exact.
+		before: {
+			description: 'Opens a quote against an active account and numbers it for the year.',
+			handler: async ({ input, api }) => {
+				// `input` is the quotes create input; `api.db.query.accounts` is exact.
+			}
 		}
 	}
 } satisfies Hooks;
 ```
+
+Every declaration carries a mandatory `description`, and hooks and pipelines are always
+`{ description, handler }` — there is no bare-function form. The description is not a comment: it is
+compiled into the manifest, which is all the Workspace Studio has to explain a workspace to somebody
+who will never open its source.
 
 You rarely need to name a type at all. `defineAutomation`, `defineQueryHandler`, and
 `defineCommandHandler` default their schema generic to the compiler-merged workspace schema, so an
@@ -177,8 +185,12 @@ unannotated `api` is already exact:
 ```ts
 export default defineAutomation(
 	{ trigger: { collection: 'quotes', event: 'created' } },
-	async (api, { scope }) => {
-		// `scope.incoming_record` is a quotes row. `'quotez'` above would not compile.
+	{
+		kind: 'deterministic',
+		description: 'Recomputes the account pipeline total whenever a quote is raised against it.',
+		handler: async (api, { scope }) => {
+			// `scope.incoming_record` is a quotes row. `'quotez'` above would not compile.
+		}
 	}
 );
 ```

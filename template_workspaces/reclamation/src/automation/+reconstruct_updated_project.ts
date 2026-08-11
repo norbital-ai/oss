@@ -11,8 +11,13 @@ import { reconstructProject } from '../lib/reclamation/stitch-driver.js';
  */
 export default defineAutomation(
 	{ trigger: { collection: 'reclamation_projects', event: 'updated' } },
-	async (api, { scope }) => ({
-		project_id: scope.incoming_record.norbital_id,
-		outcome: await reconstructProject(api, scope.incoming_record.norbital_id)
-	})
+	{
+		kind: 'deterministic',
+		description:
+			'Re-integrates the site whenever a project edit changes its three source drawings or its grid tuning, and leaves the existing revision alone for a rename or a status change.',
+		handler: async (api, { scope }) => ({
+			project_id: scope.incoming_record.norbital_id,
+			outcome: await reconstructProject(api, scope.incoming_record.norbital_id)
+		})
+	}
 );

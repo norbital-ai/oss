@@ -2,10 +2,10 @@
 	import { client } from '$pod/client';
 	import { downloadCollectionExport } from '@norbital-ai/pod/client';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import AppHeaderActions from '@norbital-ai/pod/client/app-header-actions';
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import ApprovalSummaryTable from '../../lib/ui/approval-summary-table.svelte';
@@ -141,30 +141,25 @@
 </script>
 
 {#snippet companyScopeActions()}
-	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground">{t('component.legal_entity')}</span>
-		<Inline gap="sm">
-			<Combobox
-				ariaLabel={t('component.legal_entity')}
-				options={companyOptions}
-				value={selectedCompanyId}
-				onValueChange={(value) => {
-					if (typeof value === 'string') {
-						companyId = value;
-						return;
-					}
-					companyId = companies[0]?.norbital_id ?? null;
-				}}
-				emptyPlaceholder={t('component.select_legal_entity')}
-				searchPlaceholder={t('component.search_companies')}
-				clientConfig={{
-					isLoading: companiesQuery.loading,
-					error: companiesQuery.error?.message ?? null
-				}}
-				class="min-w-[16rem]"
-			/>
-		</Inline>
-	</label>
+	<Combobox
+		ariaLabel={t('component.legal_entity')}
+		options={companyOptions}
+		value={selectedCompanyId}
+		onValueChange={(value) => {
+			if (typeof value === 'string') {
+				companyId = value;
+				return;
+			}
+			companyId = companies[0]?.norbital_id ?? null;
+		}}
+		emptyPlaceholder={t('component.select_legal_entity')}
+		searchPlaceholder={t('component.search_companies')}
+		clientConfig={{
+			isLoading: companiesQuery.loading,
+			error: companiesQuery.error?.message ?? null
+		}}
+		class="min-w-[16rem]"
+	/>
 {/snippet}
 
 {#snippet overview()}
@@ -356,24 +351,19 @@
 	<meta name="pod:icon" content="lucide:badge-dollar-sign" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/hr-payroll/app-media/payroll-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/payroll-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/hr-payroll/app-media/payroll-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/payroll-banner.webp"
 	/>
 </svelte:head>
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.payroll.eyebrow')}
-		title={t('app.payroll.header_title')}
-		description={t('app.payroll.header_description')}
-		actions={companyScopeActions}
-	/>
-{/snippet}
+<AppHeaderActions>
+	{@render companyScopeActions()}
+</AppHeaderActions>
 
-<Cover top={pageHeading}>
+<Cover>
 	<Tabs
 		animate={false}
 		config={[

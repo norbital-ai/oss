@@ -22,6 +22,7 @@ function manifestWith(where: unknown) {
 			field_agent: {
 				key: 'field_agent',
 				name: 'Field agent',
+				description: 'Lets a field agent read the quotes they own.',
 				grants: [{ collection: 'quotes', action: 'read', where }]
 			}
 		}

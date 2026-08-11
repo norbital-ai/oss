@@ -65,16 +65,27 @@ export function adaptHookContextForAction(
 	}
 }
 
+/**
+ * The hooks a collection declares, each with the sentence its author wrote about it.
+ *
+ * The description is read from the section rather than from the handler because dispatch is given a
+ * plain function — `buildMutationSection` splits the authored `{ description, handler }` so no
+ * mutation path carries a wrapper it never reads.
+ */
 export function hooksDeclaredFromBehavior(
 	behavior: AnyCollectionBehavior | undefined
-): Record<string, true> {
-	const hooks: Record<string, true> = {};
+): Record<string, { readonly description: string }> {
+	const hooks: Record<string, { readonly description: string }> = {};
 	if (!behavior) return hooks;
-	if (collectionHooks(behavior, 'create')?.before) hooks.beforeCreate = true;
-	if (collectionHooks(behavior, 'create')?.after) hooks.afterCreate = true;
-	if (collectionHooks(behavior, 'update')?.before) hooks.beforeUpdate = true;
-	if (collectionHooks(behavior, 'update')?.after) hooks.afterUpdate = true;
-	if (collectionHooks(behavior, 'delete')?.before) hooks.beforeDelete = true;
-	if (collectionHooks(behavior, 'delete')?.after) hooks.afterDelete = true;
+	for (const [action, keys] of [
+		['create', { before: 'beforeCreate', after: 'afterCreate' }],
+		['update', { before: 'beforeUpdate', after: 'afterUpdate' }],
+		['delete', { before: 'beforeDelete', after: 'afterDelete' }]
+	] as const) {
+		const bundle = collectionHooks(behavior, action);
+		const descriptions = behavior[action]?.descriptions;
+		if (bundle?.before) hooks[keys.before] = { description: descriptions?.before ?? '' };
+		if (bundle?.after) hooks[keys.after] = { description: descriptions?.after ?? '' };
+	}
 	return hooks;
 }

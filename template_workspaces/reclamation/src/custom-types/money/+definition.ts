@@ -15,6 +15,8 @@ const moneyValueSchema = {
 
 export default defineCustomType({
 	name: 'money',
+	description:
+		'A finite amount paired with its ISO 4217 currency code, stored together so a rate, a subtotal and a total can never be summed across currencies.',
 	schema: (options: MoneyOptions = {}) =>
 		z
 			.object({

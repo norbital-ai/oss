@@ -1,6 +1,6 @@
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import type { TBaseScope, TScopeRequestor } from '$lib/shared/scope.js';
-import { UserInfoSchema } from '@norbital-ai/platform-utils/scope/types';
+import { documentAssetDownloadUrl, UserInfoSchema } from '@norbital-ai/platform-utils/scope/types';
 import {
 	qualifiedRelationshipTable,
 	qualifiedTableName
@@ -36,7 +36,12 @@ function scopeRequestorFromRows(
 			parent_id: member.parent_id,
 			is_active: member.is_active
 		})),
-		avatar_url: userRow.avatar_url,
+		// The joined asset's key, resolved to a URL the shell can load directly. A user with no
+		// uploaded avatar joins to nothing and renders the initials fallback.
+		avatar_url:
+			typeof userRow.avatar_storage_key === 'string'
+				? documentAssetDownloadUrl(userRow.avatar_storage_key)
+				: null,
 		deactivated_at: null
 	};
 	const parsed = UserInfoSchema.safeParse(candidate);
@@ -80,9 +85,14 @@ export async function resolveRequestorBaseScope(params: {
 }): Promise<{ baseScope: TBaseScope } | null> {
 	const userTable = qualifiedTableName('user');
 	const teamTable = qualifiedTableName('team');
+	const assetTable = qualifiedTableName('document_asset');
 	const teamMembersTable = qualifiedRelationshipTable('team_members', 'user', 'team');
 	const userResult = await params.tenantDb.query(
-		`SELECT * FROM ${userTable} WHERE norbital_id = $1 LIMIT 1`,
+		`SELECT u.*, a.storage_key AS avatar_storage_key
+		   FROM ${userTable} u
+		   LEFT JOIN ${assetTable} a ON a.norbital_id = u.avatar_asset_id
+		  WHERE u.norbital_id = $1
+		  LIMIT 1`,
 		[params.userId]
 	);
 	const row = userResult.rows[0];

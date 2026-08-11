@@ -4,7 +4,6 @@
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Cover } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 
 	const { t } = useI18n<TenantI18nKeys>();
 </script>
@@ -15,23 +14,15 @@
 	<meta name="pod:icon" content="lucide:grid-3x3" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/construction/app-media/construction_settings_reference_matrix-banner.svg"
+		content="/api/template-seed-assets/construction/app-media/construction_settings_reference_matrix-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/construction/app-media/construction_settings_reference_matrix-banner.svg"
+		content="/api/template-seed-assets/construction/app-media/construction_settings_reference_matrix-banner.webp"
 	/>
 </svelte:head>
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.construction_settings_reference_matrix.eyebrow')}
-		title={t('app.construction_settings_reference_matrix.header_title')}
-		description={t('app.construction_settings_reference_matrix.header_description')}
-	/>
-{/snippet}
-
-<Cover as="main" top={pageHeading}>
+<Cover as="main">
 	<Bound size="full" inset>
 		<CollectionTable
 			{client}

@@ -24,8 +24,12 @@ const PRIVATE_ENV = { REGISTRY_KEY: { description: 'Registry API key' } };
 
 /** The minimum a collection needs to be allowed to send and receive: both pipelines. */
 const PIPELINES = {
-	export: { handler: async () => [] },
-	import: { input: z.unknown(), handler: async () => [] }
+	export: { description: 'Emits the collection as a flat manifest.', handler: async () => [] },
+	import: {
+		description: 'Accepts a payload and turns it into rows.',
+		input: z.unknown(),
+		handler: async () => []
+	}
 };
 
 /**

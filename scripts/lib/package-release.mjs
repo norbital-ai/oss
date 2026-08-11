@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export const publicPackageDirectories = ['config', 'platform-utils', 'pod', 'std', 'ui'];
-export const betaPackageVersion = '0.0.1';
 
 export function readPublicPackageEntries(repositoryRoot) {
 	return publicPackageDirectories
@@ -21,17 +20,6 @@ export function readPublicPackageEntries(repositoryRoot) {
 			return { name: manifest.name, version: manifest.version };
 		})
 		.sort((left, right) => left.name.localeCompare(right.name));
-}
-
-export function assertBetaPackageVersions(entries) {
-	const invalid = entries.filter(({ version }) => version !== betaPackageVersion);
-	if (invalid.length > 0) {
-		throw new Error(
-			`Beta packages must stay at ${betaPackageVersion}: ${invalid
-				.map(({ name, version }) => `${name}@${version}`)
-				.join(', ')}`
-		);
-	}
 }
 
 export function platformPackageKey(entries) {

@@ -29,34 +29,45 @@ function bandsOverlap(a: unknown, b: unknown): boolean {
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			const siblings = await api.db.query.overtime_rules.findMany({
-				where: { jurisdiction_id: { eq: input.jurisdiction_id }, day_type: { eq: input.day_type } }
-			});
-			assertNoOverlap({
-				candidate: input.effective_range,
-				existing: siblings.filter((row) => bandsOverlap(input.band, row.band)),
-				identity: `overtime band on a ${input.day_type} day`
-			});
-			return input;
+		before: {
+			description:
+				'Refuses an overtime rule whose hour band overlaps another rule for the same jurisdiction and day type over the same dates, so one overtime hour is never paid at two multiples.',
+			handler: async ({ input, api }) => {
+				const siblings = await api.db.query.overtime_rules.findMany({
+					where: {
+						jurisdiction_id: { eq: input.jurisdiction_id },
+						day_type: { eq: input.day_type }
+					}
+				});
+				assertNoOverlap({
+					candidate: input.effective_range,
+					existing: siblings.filter((row) => bandsOverlap(input.band, row.band)),
+					identity: `overtime band on a ${input.day_type} day`
+				});
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			const jurisdiction_id = input.jurisdiction_id ?? existing.jurisdiction_id;
-			const day_type = input.day_type ?? existing.day_type;
-			const band = input.band ?? existing.band;
-			const effective_range = input.effective_range ?? existing.effective_range;
-			const siblings = await api.db.query.overtime_rules.findMany({
-				where: { jurisdiction_id: { eq: jurisdiction_id }, day_type: { eq: day_type } }
-			});
-			assertNoOverlap({
-				candidate: effective_range,
-				existing: siblings.filter((row) => bandsOverlap(band, row.band)),
-				identity: `overtime band on a ${day_type} day`,
-				excludeId: existing.norbital_id
-			});
-			return input;
+		before: {
+			description:
+				'Re-checks an edited overtime rule so a widened hour band or effective range cannot make two multiples apply to the same overtime hour on a rest, holiday or ordinary day.',
+			handler: async ({ input, existing, api }) => {
+				const jurisdiction_id = input.jurisdiction_id ?? existing.jurisdiction_id;
+				const day_type = input.day_type ?? existing.day_type;
+				const band = input.band ?? existing.band;
+				const effective_range = input.effective_range ?? existing.effective_range;
+				const siblings = await api.db.query.overtime_rules.findMany({
+					where: { jurisdiction_id: { eq: jurisdiction_id }, day_type: { eq: day_type } }
+				});
+				assertNoOverlap({
+					candidate: effective_range,
+					existing: siblings.filter((row) => bandsOverlap(band, row.band)),
+					identity: `overtime band on a ${day_type} day`,
+					excludeId: existing.norbital_id
+				});
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

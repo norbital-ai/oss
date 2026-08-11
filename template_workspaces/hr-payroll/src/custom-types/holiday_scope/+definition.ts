@@ -16,4 +16,9 @@ export const holidayScopeSchema = z.discriminatedUnion('kind', [
 
 export type HolidayScope = z.infer<typeof holidayScopeSchema>;
 
-export default defineCustomType({ name: 'holiday_scope', schema: holidayScopeSchema });
+export default defineCustomType({
+	name: 'holiday_scope',
+	description:
+		'Whether a company holiday falls nationally or only at the named location codes, so a gazetted state holiday reaches only the people it covers.',
+	schema: holidayScopeSchema
+});

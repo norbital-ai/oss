@@ -94,6 +94,8 @@ function approvalDurationHours(
 }
 
 export default defineQueryHandler({
+	description:
+		'Counts this year’s pending and approved payroll runs, time-off requests or expense claims, reports the average hours an approval took to close, and fits a five-year trend line over the annual application counts.',
 	schema: z.object({ subject: subjectSchema }),
 	handler: async ({ subject }: { subject: Subject }, api) => {
 		const now = new Date();

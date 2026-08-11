@@ -35,17 +35,6 @@
 		onRevoke: (invitationId: string) => void;
 		onRefresh: () => Promise<void>;
 	} = $props();
-	let email = $state('');
-	let role = $state<TUserRole>('basic');
-
-	function submit(event: SubmitEvent): void {
-		event.preventDefault();
-		const value = email.trim();
-		if (!value) return;
-		onInvite(value, role);
-		email = '';
-	}
-
 	function projected(query?: CollectionBaseQuery<WorkspaceInvitation>): WorkspaceInvitation[] {
 		let rows = [...invitations];
 		if (query?.search) {
@@ -83,21 +72,42 @@
 				name: 'invitation',
 				recordLabel: 'email',
 				system: true,
+				/**
+				 * Only `email` and `role` are writable, which is what makes the create sheet a usable
+				 * invite form: the rest are decided by the server when the invitation is minted, and a
+				 * form that asked an administrator to type an expiry or a status would be asking for
+				 * something it then ignores. `role` is an `enum` rather than free text so it renders
+				 * through the shared `Combobox` like every other enum in the product.
+				 */
 				fields: [
-					{ name: 'norbital_id', kind: 'uuid', nullable: false },
+					{ name: 'norbital_id', kind: 'uuid', nullable: false, readOnly: true },
 					{ name: 'email', kind: 'text', nullable: false, label: t('pod.settings.email') },
-					{ name: 'role', kind: 'text', nullable: false, label: t('pod.settings.memberRole') },
-					{ name: 'status', kind: 'text', nullable: false, label: t('pod.settings.status') },
+					{
+						name: 'role',
+						kind: 'enum',
+						nullable: false,
+						values: [...UserRoleSchema.options],
+						label: t('pod.settings.memberRole')
+					},
+					{
+						name: 'status',
+						kind: 'text',
+						nullable: false,
+						readOnly: true,
+						label: t('pod.settings.status')
+					},
 					{
 						name: 'created_at',
 						kind: 'timestamptz',
 						nullable: false,
+						readOnly: true,
 						label: t('pod.settings.invited')
 					},
 					{
 						name: 'expires_at',
 						kind: 'timestamptz',
 						nullable: false,
+						readOnly: true,
 						label: t('pod.settings.expires')
 					}
 				]
@@ -105,6 +115,20 @@
 		},
 		db: {
 			invitation: {
+				/**
+				 * Minting an invitation is a create, so it is the table's create action rather than a
+				 * form bolted above the table. The mutation is still the server command — this only
+				 * routes the collection surface's create at it, so the administrator gets the same
+				 * sheet, validation and enum controls they get for creating anything else.
+				 */
+				async create(input: Partial<WorkspaceInvitation>) {
+					const address = typeof input.email === 'string' ? input.email.trim() : '';
+					if (!address) throw new Error(t('pod.settings.invitationEmailRequired'));
+					const parsedRole = UserRoleSchema.safeParse(input.role);
+					onInvite(address, parsedRole.success ? parsedRole.data : 'basic');
+					await onRefresh();
+					return input as WorkspaceInvitation;
+				},
 				findMany(query?: CollectionQuery<WorkspaceInvitation>) {
 					const offset = Number.parseInt(query?.after ?? '0', 10) || 0;
 					const limit = query?.limit ?? 25;
@@ -162,30 +186,6 @@
 {/snippet}
 
 <Stack gap="md" data-testid="settings-invitations">
-	<Inline as="form" gap="sm" onsubmit={submit} class="rounded-lg border bg-card p-3">
-		<input
-			class="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-xs"
-			type="email"
-			placeholder={t('pod.settings.invitePlaceholder')}
-			aria-label={t('pod.settings.invitationEmail')}
-			bind:value={email}
-			required
-		/>
-		<select
-			class="h-9 rounded-md border border-input bg-background px-2 text-xs"
-			aria-label={t('pod.settings.invitationRole')}
-			value={role}
-			onchange={(event) => {
-				const parsed = UserRoleSchema.safeParse(event.currentTarget.value);
-				if (parsed.success) role = parsed.data;
-			}}
-		>
-			{#each UserRoleSchema.options as option (option)}<option value={option}>{option}</option
-				>{/each}
-		</select>
-		<Button type="submit" disabled={busy}>{t('pod.settings.invite')}</Button>
-	</Inline>
-
 	{#if mintedLink}
 		<p
 			class="rounded-md border bg-muted/40 px-3 py-2 text-tiny break-all"
@@ -203,7 +203,7 @@
 			query={{ orderBy: { created_at: 'desc' }, limit: 25 }}
 			title={t('pod.settings.invitations')}
 			description={t('pod.settings.invitationsDescription')}
-			features={{ search: true, filter: false, bulk: false, create: false }}
+			features={{ search: true, filter: false, bulk: false, create: true }}
 		>
 			{#snippet columns({ Column })}
 				<Column

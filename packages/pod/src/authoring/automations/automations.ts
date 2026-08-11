@@ -56,6 +56,14 @@ type WorkspaceAgentToolName = WorkspaceAuthoringTypes extends {
 
 export type AgentAutomationSpec = {
 	readonly kind: 'agent';
+	/**
+	 * What this agent is for, in prose — not what it is told to do.
+	 *
+	 * `task` is the instruction handed to the model and reads as one; it answers "what is being asked"
+	 * rather than "why does this exist and what will it touch", which is the question a reader
+	 * browsing the workspace has. Carried into the manifest, so it is not a comment.
+	 */
+	readonly description: string;
 	readonly task: string;
 	readonly model?: string;
 	readonly systemPrompt?: string;
@@ -103,6 +111,8 @@ export type DeterministicAutomationSpec<
 	TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
 > = {
 	readonly kind: 'deterministic';
+	/** What this automation does each time its trigger fires. Carried into the manifest. */
+	readonly description: string;
 	readonly handler: AutomationHandler<S, TTrigger>;
 };
 
@@ -123,23 +133,27 @@ export type AutomationDefinition = {
 
 export type AutomationDeclaration = AutomationDefinition & { readonly name: string };
 
+/**
+ * Declare one automation. The bare-function form is gone: a spec is always an object, because that is
+ * the only place a mandatory `description` can live, and a description nobody is forced to write is a
+ * description the studio never has.
+ */
 export function defineAutomation<
 	S extends AnySchema = DefaultWorkspaceSchema,
 	const TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
->(
-	trigger: TTrigger,
-	specOrHandler: AutomationSpec<S, TTrigger> | AutomationHandler<S, TTrigger>
-): AutomationDefinition {
-	// Both forms erase at the same boundary. The object form now carries the author's generics too, so
-	// it needs the same unwrapping the bare function always had — otherwise the typed handler cannot be
-	// stored in the erased registry.
-	const spec: AutomationSpec =
-		typeof specOrHandler === 'function'
-			? { kind: 'deterministic', handler: eraseAutomationHandler(specOrHandler) }
-			: specOrHandler.kind === 'deterministic'
-				? { kind: 'deterministic', handler: eraseAutomationHandler(specOrHandler.handler) }
-				: specOrHandler;
-	return { trigger: trigger as AutomationTrigger, spec };
+>(trigger: TTrigger, spec: AutomationSpec<S, TTrigger>): AutomationDefinition {
+	if (!spec.description.trim()) throw new Error('Automation description cannot be empty');
+	// The object form carries the author's generics, so it needs the unwrapping the bare function used
+	// to get — otherwise the typed handler cannot be stored in the erased registry.
+	const erased: AutomationSpec =
+		spec.kind === 'deterministic'
+			? {
+					kind: 'deterministic',
+					description: spec.description,
+					handler: eraseAutomationHandler(spec.handler)
+				}
+			: spec;
+	return { trigger: trigger as AutomationTrigger, spec: erased };
 }
 
 /**

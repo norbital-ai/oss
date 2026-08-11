@@ -1,10 +1,9 @@
 <script lang="ts" generics="TRow extends object">
 	import Icon from '@iconify/svelte';
 	import type { Snippet } from 'svelte';
-	import { Button } from '#lib/button';
 	import { Checkbox } from '#lib/checkbox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Cluster, Cover, Inline, Scroll, Stack } from '#lib/layout';
+	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { CollectionTableRowActionContext } from './collection-table.types.js';
 
@@ -24,19 +23,12 @@
 		selectable,
 		disabled,
 		class: className,
-		pageIndex,
-		pageCount,
-		hasNextPage,
-		toolbar,
-		toolbarTools,
 		ListCard,
 		emptyPlaceholder,
 		rowActions,
 		recordTitle,
 		recordHref,
 		onOpen,
-		onPreviousPage,
-		onNextPage,
 		activeRecordId = null
 	}: {
 		rows: readonly ListRow[];
@@ -45,11 +37,6 @@
 		selectable: boolean;
 		disabled: boolean;
 		class?: string;
-		pageIndex: number;
-		pageCount: number;
-		hasNextPage: boolean;
-		toolbar: Snippet;
-		toolbarTools?: Snippet;
 		ListCard: Snippet<[TRow]>;
 		emptyPlaceholder?: Snippet;
 		rowActions?: readonly Snippet<[CollectionTableRowActionContext<TRow>]>[];
@@ -58,39 +45,15 @@
 		onOpen(record: TRow): void;
 		/** Record id currently open in the detail stack; drives the row active indicator. */
 		activeRecordId?: string | null;
-		onPreviousPage(): void;
-		onNextPage(): void;
 	} = $props();
 </script>
 
-{#snippet listToolbar()}
-	<Cluster gap="sm" align="center" justify="between">
-		<Scroll
-			axis="x"
-			name={t('table.toolbarRegion')}
-			grow
-			class="collection-table-list-toolbar min-w-0"
-		>
-			<Inline gap="xs">
-				{@render toolbar()}
-			</Inline>
-		</Scroll>
-		{#if toolbarTools}
-			<Inline gap="xs">
-				{@render toolbarTools()}
-			</Inline>
-		{/if}
-	</Cluster>
-{/snippet}
-
-<Cover
-	as="div"
-	gap="sm"
-	class={cn('collection-table-list', className)}
-	top={listToolbar}
-	aria-busy={loading}
-	bottom={listPagination}
->
+<!--
+	Records only. This is the narrow half of one collection surface, and the surface renders the
+	toolbar and the pagination bar once for both halves — the list used to carry its own copies, which
+	is how the same table ended up with two spellings of the same page stepper.
+-->
+<Cover as="div" gap="sm" class={cn('collection-table-list', className)} aria-busy={loading}>
 	<Scroll axis="y" name={t('table.recordsRegion')} class="rounded-md border bg-card">
 		{#if loading}
 			<div class="divide-y" aria-label={t('table.loading')}>
@@ -179,39 +142,3 @@
 		{/if}
 	</Scroll>
 </Cover>
-
-{#snippet listPagination()}
-	<Inline gap="md" justify="between" align="center">
-		<Button
-			type="button"
-			variant="outline"
-			size="icon"
-			class="size-11"
-			aria-label={t('table.previousPage')}
-			disabled={disabled || pageIndex === 0}
-			onclick={onPreviousPage}
-		>
-			<Icon icon="lucide:chevron-left" class="size-4" />
-		</Button>
-		<p class="text-xs tabular-nums text-muted-foreground">
-			{t('table.pageOf', { page: pageIndex + 1, pages: pageCount })}
-		</p>
-		<Button
-			type="button"
-			variant="outline"
-			size="icon"
-			class="size-11"
-			aria-label={t('table.nextPage')}
-			disabled={disabled || !hasNextPage}
-			onclick={onNextPage}
-		>
-			<Icon icon="lucide:chevron-right" class="size-4" />
-		</Button>
-	</Inline>
-{/snippet}
-
-<style>
-	:global(.collection-table-list-toolbar button) {
-		min-height: 2.75rem;
-	}
-</style>

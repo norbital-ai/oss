@@ -23,4 +23,9 @@ export const overtimeBandSchema = z.discriminatedUnion('measure', [
 
 export type OvertimeBand = z.infer<typeof overtimeBandSchema>;
 
-export default defineCustomType({ name: 'overtime_band', schema: overtimeBandSchema });
+export default defineCustomType({
+	name: 'overtime_band',
+	description:
+		'The slice of a working day an overtime rule covers, counted either as hours beyond the normal daily hours or as fractions of a normal day worked from the first minute.',
+	schema: overtimeBandSchema
+});

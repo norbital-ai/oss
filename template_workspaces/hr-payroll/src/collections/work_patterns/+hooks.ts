@@ -114,50 +114,62 @@ async function referenceCount(api: HookApi, workPatternId: string): Promise<numb
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			await assertCoherent(api, input, `work pattern ${input.code}`);
-			const siblings = await api.db.query.work_patterns.findMany({
-				where: { company_id: { eq: input.company_id }, code: { eq: input.code } }
-			});
-			assertNoOverlap({
-				candidate: input.effective_range,
-				existing: siblings,
-				identity: `work pattern ${input.code}`
-			});
-			return input;
+		before: {
+			description:
+				'Refuses a self-contradicting week — a day named as both rest and off, fewer rest days than the pattern promises, no working day left, or a standard week without a valid default shift — and refuses a pattern whose effective range overlaps another with the same code.',
+			handler: async ({ input, api }) => {
+				await assertCoherent(api, input, `work pattern ${input.code}`);
+				const siblings = await api.db.query.work_patterns.findMany({
+					where: { company_id: { eq: input.company_id }, code: { eq: input.code } }
+				});
+				assertNoOverlap({
+					candidate: input.effective_range,
+					existing: siblings,
+					identity: `work pattern ${input.code}`
+				});
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			if ((await referenceCount(api, existing.norbital_id)) > 0) {
-				throw new Error(
-					`Work pattern ${existing.code} already governs employment terms or a roster, so ` +
-						'changing it would silently reprice days that have already been worked. End-date ' +
-						'this pattern and create a successor instead.'
-				);
+		before: {
+			description:
+				'Freezes a work pattern once it governs employment terms or a roster, because editing it would silently reprice days already worked; an untouched pattern is re-checked for a coherent week and a non-overlapping effective range.',
+			handler: async ({ input, existing, api }) => {
+				if ((await referenceCount(api, existing.norbital_id)) > 0) {
+					throw new Error(
+						`Work pattern ${existing.code} already governs employment terms or a roster, so ` +
+							'changing it would silently reprice days that have already been worked. End-date ' +
+							'this pattern and create a successor instead.'
+					);
+				}
+				const code = input.code ?? existing.code;
+				const merged = { ...existing, ...input };
+				await assertCoherent(api, merged, `work pattern ${code}`);
+				const siblings = await api.db.query.work_patterns.findMany({
+					where: { company_id: { eq: merged.company_id }, code: { eq: code } }
+				});
+				assertNoOverlap({
+					candidate: merged.effective_range,
+					existing: siblings,
+					identity: `work pattern ${code}`,
+					excludeId: existing.norbital_id
+				});
+				return input;
 			}
-			const code = input.code ?? existing.code;
-			const merged = { ...existing, ...input };
-			await assertCoherent(api, merged, `work pattern ${code}`);
-			const siblings = await api.db.query.work_patterns.findMany({
-				where: { company_id: { eq: merged.company_id }, code: { eq: code } }
-			});
-			assertNoOverlap({
-				candidate: merged.effective_range,
-				existing: siblings,
-				identity: `work pattern ${code}`,
-				excludeId: existing.norbital_id
-			});
-			return input;
 		}
 	},
 	delete: {
-		before: async ({ existing, api }) => {
-			if ((await referenceCount(api, existing.norbital_id)) > 0) {
-				throw new Error(
-					`Work pattern ${existing.code} still governs employment terms or a roster and cannot ` +
-						'be deleted. End-date it instead so the days it already priced stay explicable.'
-				);
+		before: {
+			description:
+				'Blocks deleting a work pattern that any employment terms or roster still points at, so the days it already priced stay explicable.',
+			handler: async ({ existing, api }) => {
+				if ((await referenceCount(api, existing.norbital_id)) > 0) {
+					throw new Error(
+						`Work pattern ${existing.code} still governs employment terms or a roster and cannot ` +
+							'be deleted. End-date it instead so the days it already priced stay explicable.'
+					);
+				}
 			}
 		}
 	}

@@ -134,6 +134,8 @@ function optionalLocalInstant(
  */
 export default {
 	import: {
+		description:
+			'Loads a workbook of attendance punches into time_entries, converting each local wall-clock time to an instant in the given IANA timezone and rolling a clock_out that falls at or before clock_in onto the next day.',
 		input: importSchema,
 		handler: async ({ input }, api) => {
 			// Re-parsed rather than cast: the pipeline type erases the schema's output type, and a

@@ -6,6 +6,8 @@
 	} from '@norbital-ai/platform-utils/collection';
 	import { UserRoleSchema } from '@norbital-ai/platform-utils/system/types';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
+	import { Combobox } from '@norbital-ai/ui/combobox';
+	import { humanize } from '@norbital-ai/std/string';
 	import { Bound, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { renderSnippet } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -24,20 +26,31 @@
 		onRoleChange: (userId: string, role: string) => void;
 	} = $props();
 	const roles = UserRoleSchema.options;
+	const roleOptions = roles.map((role) => ({ value: role, label: humanize(role) }));
 	const text = (row: UserRow, field: string): string =>
 		typeof row[field] === 'string' ? row[field] : '';
 </script>
 
+<!--
+	`Combobox`, not a bare `<select>`.
+
+	A native select renders the operating system's own menu — on macOS a blue system-highlight popup
+	that matches nothing else in the product and ignores the theme entirely. Every other enum in the
+	product goes through `Combobox`, including the one the collection table's own data renderer uses
+	for `field.kind === 'enum'`, so this cell was the odd one out rather than the rule.
+-->
 {#snippet roleCell({ row }: { row: UserRow })}
-	<select
-		class="h-8 rounded-md border border-input bg-background px-2 text-xs"
-		aria-label={t('pod.settings.roleFor', { email: text(row, 'email') })}
-		disabled={busy}
+	<Combobox
+		options={roleOptions}
 		value={text(row, 'role') || 'basic'}
-		onchange={(event) => onRoleChange(text(row, 'norbital_id'), event.currentTarget.value)}
-	>
-		{#each roles as role (role)}<option value={role}>{role}</option>{/each}
-	</select>
+		ariaLabel={t('pod.settings.roleFor', { email: text(row, 'email') })}
+		searchable={false}
+		disabled={busy}
+		class="h-8 text-xs"
+		onValueChange={(next) => {
+			if (typeof next === 'string') onRoleChange(text(row, 'norbital_id'), next);
+		}}
+	/>
 {/snippet}
 
 {#snippet emailCell({ row }: { row: UserRow })}
@@ -73,11 +86,11 @@
 		{/snippet}
 		{#snippet ListCard(row)}
 			<Stack gap="sm">
-				<Inline justify="between" gap="md">
-					<div class="min-w-0">
+				<Inline justify="between" gap="md" align="start">
+					<Stack gap="none" grow class="min-w-0">
 						<p class="truncate text-sm font-medium">{text(row, 'name') || text(row, 'email')}</p>
 						<p class="truncate text-xs text-muted-foreground">{text(row, 'email')}</p>
-					</div>
+					</Stack>
 					{@render roleCell({ row })}
 				</Inline>
 			</Stack>

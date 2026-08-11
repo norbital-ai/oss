@@ -21,6 +21,7 @@ function manifest(schedule: string): NorbitalManifest {
 		relationships: {},
 		automations: {
 			job: {
+				description: 'Runs the scheduled sweep the host registers this job for.',
 				trigger: { schedule }
 			}
 		}

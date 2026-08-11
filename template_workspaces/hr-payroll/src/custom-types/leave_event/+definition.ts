@@ -47,4 +47,9 @@ export const leaveEventSchema = z.discriminatedUnion('kind', [
 
 export type LeaveEvent = z.infer<typeof leaveEventSchema>;
 
-export default defineCustomType({ name: 'leave_event', schema: leaveEventSchema });
+export default defineCustomType({
+	name: 'leave_event',
+	description:
+		'What a leave request row records: a dated time-off request with its days and half-day ends, a balance adjustment, an encashment, or a migrated legacy taken-leave movement.',
+	schema: leaveEventSchema
+});

@@ -42,4 +42,9 @@ export const workPatternVariantSchema = z.discriminatedUnion('type', [
 
 export type WorkPatternVariant = z.infer<typeof workPatternVariantSchema>;
 
-export default defineCustomType({ name: 'work_pattern_variant', schema: workPatternVariantSchema });
+export default defineCustomType({
+	name: 'work_pattern_variant',
+	description:
+		'How a week is shaped for the people on a pattern: a standard week naming its rest days and off days outright from a chosen week start, or a rostered pattern that derives nothing and takes every day from a published roster.',
+	schema: workPatternVariantSchema
+});

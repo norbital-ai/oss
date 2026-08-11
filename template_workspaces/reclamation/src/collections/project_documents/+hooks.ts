@@ -14,13 +14,17 @@ import type { Hooks } from './$types.js';
  */
 export default {
 	create: {
-		before: async ({ input }) => {
-			if (input.category === 'reconstruction' && input.document_role == null) {
-				throw new Error(
-					'A reconstruction document needs a role: additional sections, additional bathymetry, or supporting.'
-				);
+		before: {
+			description:
+				'Rejects a reconstruction-category document that arrives without a document_role, since the stitch engine decides what to read from the role rather than the file name.',
+			handler: async ({ input }) => {
+				if (input.category === 'reconstruction' && input.document_role == null) {
+					throw new Error(
+						'A reconstruction document needs a role: additional sections, additional bathymetry, or supporting.'
+					);
+				}
+				return input;
 			}
-			return input;
 		}
 	}
 } satisfies Hooks;

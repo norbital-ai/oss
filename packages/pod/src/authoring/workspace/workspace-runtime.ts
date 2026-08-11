@@ -38,6 +38,8 @@ export type RuntimeWorkspace = {
 	readonly tables: Readonly<Record<string, PgTable>>;
 	readonly relations: TablesRelationalConfig;
 	readonly relationships: WorkspaceRelationshipMap;
+	/** Carried for the same reason `integrations` is: the manifest is built from this projection. */
+	readonly customTypes?: Readonly<Record<string, { readonly description: string }>>;
 	readonly meta?: WorkspaceMeta;
 	readonly seed?: WorkspaceSeedDefinition;
 	readonly env?: RuntimeWorkspaceEnv;
@@ -78,6 +80,7 @@ export function toRuntimeWorkspace(ws: RuntimeWorkspaceSource): RuntimeWorkspace
 		tables: ws.tables,
 		relations: ws.relations,
 		relationships: ws.relationships,
+		customTypes: ws.customTypes,
 		meta: ws.meta,
 		seed: ws.seed,
 		env: ws.env,

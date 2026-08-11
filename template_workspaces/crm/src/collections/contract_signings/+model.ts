@@ -5,7 +5,7 @@ export default defineModel(
 		quote_id: uuid().notNull(),
 		variant: enums(['advance', 'credit']),
 		status: enums(['unstamped', 'counterparty_stamped', 'acknowledged', 'voided']),
-		binding_hash: text().notNull(),
+		binding_hash: text({ search: true }).notNull(),
 		generated_file: file({ mimeTypes: ['application/pdf'] }),
 		counterparty_file: file({
 			mimeTypes: ['application/pdf', 'image/jpeg', 'image/png']

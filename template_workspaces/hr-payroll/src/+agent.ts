@@ -2,6 +2,8 @@ import type { AgentAutomationSpec } from '@norbital-ai/pod/authoring';
 
 /** Permissions for the Pod-owned agent embedded in this tenant workspace. */
 export default {
+	description:
+		'The in-workspace assistant a payroll administrator can ask about this tenant’s companies and payroll configuration, with write access to the company record and no reach beyond it.',
 	kind: 'agent',
 	task: 'Assist with this payroll workspace.',
 	systemPrompt:

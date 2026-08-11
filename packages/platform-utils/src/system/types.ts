@@ -44,6 +44,17 @@ export function billableSeats(census: TSeatCensus): {
 export const UserStatusSchema = z.enum(['active', 'inactive', 'pending_invitation']);
 export type TUserStatus = z.infer<typeof UserStatusSchema>;
 
+/**
+ * What kind of principal a `user` row is.
+ *
+ * `human` is a person who signs in; `agent` is an automation identity that acts on the workspace's
+ * behalf and never authenticates interactively. The column already defaulted to `'human'` and the
+ * members table already filtered on `kind: 'human'`, but the set was never written down, so the
+ * detail sheet had no options to offer.
+ */
+export const UserKindSchema = z.enum(['human', 'agent']);
+export type TUserKind = z.infer<typeof UserKindSchema>;
+
 export const ApprovalRequestStatusSchema = z.enum([
 	'ONGOING',
 	'APPROVED',
@@ -100,7 +111,7 @@ const ChannelSchema = z
 export const UserSchema = SystemRecordFieldsSchema.extend({
 	email: z.string(),
 	name: z.string().nullable(),
-	avatar_url: z.string().nullable(),
+	avatar_asset_id: z.string().nullable(),
 	status: UserStatusSchema.nullable(),
 	role: UserRoleSchema.nullable(),
 	kind: z.string().nullable(),

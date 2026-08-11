@@ -12,33 +12,41 @@ import type { Hooks } from './$types.js';
  */
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			const existing = await api.db.query.pay_components.findMany({
-				where: { company_id: { eq: input.company_id }, code: { eq: input.code } }
-			});
-			assertNoOverlap({
-				candidate: input.effective_range,
-				existing,
-				identity: `pay component ${input.code}`
-			});
-			return input;
+		before: {
+			description:
+				'Refuses a pay component whose effective range overlaps another component with the same code in the same company, so a payslip line can only ever resolve one definition for that code.',
+			handler: async ({ input, api }) => {
+				const existing = await api.db.query.pay_components.findMany({
+					where: { company_id: { eq: input.company_id }, code: { eq: input.code } }
+				});
+				assertNoOverlap({
+					candidate: input.effective_range,
+					existing,
+					identity: `pay component ${input.code}`
+				});
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			const company_id = input.company_id ?? existing.company_id;
-			const code = input.code ?? existing.code;
-			const effective_range = input.effective_range ?? existing.effective_range;
-			const siblings = await api.db.query.pay_components.findMany({
-				where: { company_id: { eq: company_id }, code: { eq: code } }
-			});
-			assertNoOverlap({
-				candidate: effective_range,
-				existing: siblings,
-				identity: `pay component ${code}`,
-				excludeId: existing.norbital_id
-			});
-			return input;
+		before: {
+			description:
+				'Re-checks an edited pay component so a catalogue change becomes an end-date plus a successor row rather than two versions of one code in force at once.',
+			handler: async ({ input, existing, api }) => {
+				const company_id = input.company_id ?? existing.company_id;
+				const code = input.code ?? existing.code;
+				const effective_range = input.effective_range ?? existing.effective_range;
+				const siblings = await api.db.query.pay_components.findMany({
+					where: { company_id: { eq: company_id }, code: { eq: code } }
+				});
+				assertNoOverlap({
+					candidate: effective_range,
+					existing: siblings,
+					identity: `pay component ${code}`,
+					excludeId: existing.norbital_id
+				});
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

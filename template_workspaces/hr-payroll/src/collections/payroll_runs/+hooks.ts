@@ -81,112 +81,132 @@ export async function buildPayrollRun(
 export default {
 	create: {
 		input: createPayrollRunInput,
-		before: async ({ input, api }) => {
-			const existing = await api.db.query.payroll_runs.findFirst({
-				where: { company_id: { eq: input.company_id }, period: { eq: input.period } }
-			});
-			if (existing) {
-				const lifecycle = existing.lifecycle;
-				if (lifecycle == null) refuse(`Payroll ${input.period} already exists.`);
-				refuse(
-					`Payroll ${input.period} already exists (${lifecycle.toLowerCase()}). ` +
-						'Open that run, or delete it first if it is still a draft.'
-				);
-			}
-			const { window, configuration } = await preparePayrollRun({
-				api,
-				companyId: input.company_id,
-				period: input.period
-			});
-			// The previous period must be settled before this one is calculated, so a year-to-date
-			// figure can never be assembled from a period that is still moving.
-			const previous = await api.db.query.payroll_runs.findMany({
-				where: { company_id: { eq: input.company_id }, period: { lt: input.period } },
-				limit: 1000
-			});
-			const unsettled = previous
-				.toSorted((left, right) => right.period.localeCompare(left.period))
-				.find((run) => run.lifecycle === 'DRAFT');
-			if (unsettled)
-				refuse(
-					`Payroll ${unsettled.period} is still a draft. Settle it before calculating ${input.period}: ` +
-						'its figures are this period’s year-to-date.'
-				);
-			return {
-				...input,
-				lifecycle: 'DRAFT' as const,
-				configuration_hash: configuration.hash,
-				configuration_snapshot: {
-					kind: 'CAPTURED' as const,
-					configuration_hash: configuration.hash,
-					configuration: configurationSnapshot(configuration, input.period)
-				},
-				pay_date: window.payDate,
-				attendance_from: window.attendance.start,
-				attendance_to: window.attendance.end
-			};
-		},
-		after: async ({ record, api }) => {
-			await runEngine({
-				api,
-				runId: record.norbital_id,
-				companyId: record.company_id,
-				period: record.period
-			});
-		}
-	},
-
-	update: {
-		before: async ({ input, existing, api }) => {
-			for (const column of DERIVED_COLUMNS)
-				if (input[column] != null && String(input[column]) !== String(existing[column]))
+		before: {
+			description:
+				'Refuses a second run for a company and period, and refuses one while an earlier period is still a draft, then resolves the pay date, attendance window and configuration snapshot the run will be computed under.',
+			handler: async ({ input, api }) => {
+				const existing = await api.db.query.payroll_runs.findFirst({
+					where: { company_id: { eq: input.company_id }, period: { eq: input.period } }
+				});
+				if (existing) {
+					const lifecycle = existing.lifecycle;
+					if (lifecycle == null) refuse(`Payroll ${input.period} already exists.`);
 					refuse(
-						`Payroll run ${column} is derived from the period and the configuration, and cannot be edited.`
+						`Payroll ${input.period} already exists (${lifecycle.toLowerCase()}). ` +
+							'Open that run, or delete it first if it is still a draft.'
 					);
-			const next = input.lifecycle ?? existing.lifecycle;
-			if (next === existing.lifecycle) {
-				if (next !== 'DRAFT') return input;
+				}
 				const { window, configuration } = await preparePayrollRun({
 					api,
-					companyId: existing.company_id,
-					period: existing.period
+					companyId: input.company_id,
+					period: input.period
 				});
+				// The previous period must be settled before this one is calculated, so a year-to-date
+				// figure can never be assembled from a period that is still moving.
+				const previous = await api.db.query.payroll_runs.findMany({
+					where: { company_id: { eq: input.company_id }, period: { lt: input.period } },
+					limit: 1000
+				});
+				const unsettled = previous
+					.toSorted((left, right) => right.period.localeCompare(left.period))
+					.find((run) => run.lifecycle === 'DRAFT');
+				if (unsettled)
+					refuse(
+						`Payroll ${unsettled.period} is still a draft. Settle it before calculating ${input.period}: ` +
+							'its figures are this period’s year-to-date.'
+					);
 				return {
 					...input,
+					lifecycle: 'DRAFT' as const,
 					configuration_hash: configuration.hash,
 					configuration_snapshot: {
 						kind: 'CAPTURED' as const,
 						configuration_hash: configuration.hash,
-						configuration: configurationSnapshot(configuration, existing.period)
+						configuration: configurationSnapshot(configuration, input.period)
 					},
 					pay_date: window.payDate,
 					attendance_from: window.attendance.start,
 					attendance_to: window.attendance.end
 				};
 			}
-			if (existing.lifecycle === 'PAID')
-				refuse('A paid payroll run is immutable. Correct it with a later adjustment entry.');
-			return input;
 		},
-		after: async ({ record, api }) => {
-			// A same-state DRAFT update is the explicit recalculation action after source entries
-			// change. The platform carries the approval/revision context; payroll only rebuilds.
-			if (record.lifecycle !== 'DRAFT') return;
-			await runEngine({
-				api,
-				runId: record.norbital_id,
-				companyId: record.company_id,
-				period: record.period
-			});
+		after: {
+			description:
+				'Runs the payroll engine for the newly created run, producing its payslips and payslip lines from the attendance, entries and statutory rules in the resolved window.',
+			handler: async ({ record, api }) => {
+				await runEngine({
+					api,
+					runId: record.norbital_id,
+					companyId: record.company_id,
+					period: record.period
+				});
+			}
+		}
+	},
+
+	update: {
+		before: {
+			description:
+				'Refuses hand edits to the engine-owned period, pay date, attendance window and configuration hash, refuses any change to a PAID run, and re-resolves that window and configuration when a draft is recalculated.',
+			handler: async ({ input, existing, api }) => {
+				for (const column of DERIVED_COLUMNS)
+					if (input[column] != null && String(input[column]) !== String(existing[column]))
+						refuse(
+							`Payroll run ${column} is derived from the period and the configuration, and cannot be edited.`
+						);
+				const next = input.lifecycle ?? existing.lifecycle;
+				if (next === existing.lifecycle) {
+					if (next !== 'DRAFT') return input;
+					const { window, configuration } = await preparePayrollRun({
+						api,
+						companyId: existing.company_id,
+						period: existing.period
+					});
+					return {
+						...input,
+						configuration_hash: configuration.hash,
+						configuration_snapshot: {
+							kind: 'CAPTURED' as const,
+							configuration_hash: configuration.hash,
+							configuration: configurationSnapshot(configuration, existing.period)
+						},
+						pay_date: window.payDate,
+						attendance_from: window.attendance.start,
+						attendance_to: window.attendance.end
+					};
+				}
+				if (existing.lifecycle === 'PAID')
+					refuse('A paid payroll run is immutable. Correct it with a later adjustment entry.');
+				return input;
+			}
+		},
+		after: {
+			description:
+				'Rebuilds a draft run’s payslips and lines from scratch after its source time entries, component entries or rules have changed, and leaves a paid run untouched.',
+			handler: async ({ record, api }) => {
+				// A same-state DRAFT update is the explicit recalculation action after source entries
+				// change. The platform carries the approval/revision context; payroll only rebuilds.
+				if (record.lifecycle !== 'DRAFT') return;
+				await runEngine({
+					api,
+					runId: record.norbital_id,
+					companyId: record.company_id,
+					period: record.period
+				});
+			}
 		}
 	},
 
 	delete: {
-		before: async ({ existing }) => {
-			if (existing.lifecycle !== 'DRAFT')
-				refuse(
-					`Payroll run ${existing.period} is ${existing.lifecycle}. Only a draft run can be deleted.`
-				);
+		before: {
+			description:
+				'Allows a payroll run to be deleted only while it is still a draft, so a period that has been paid can never be erased.',
+			handler: async ({ existing }) => {
+				if (existing.lifecycle !== 'DRAFT')
+					refuse(
+						`Payroll run ${existing.period} is ${existing.lifecycle}. Only a draft run can be deleted.`
+					);
+			}
 		}
 	}
 } satisfies Hooks;

@@ -157,8 +157,10 @@
 	{/snippet}
 
 	<Cover as="main" gap="md" top={schemeSummary}>
+		<!-- The detail sheet already insets this surface; the list must not inset itself again. -->
 		<Tabs
 			animate={false}
+			listClass="mx-0 w-full"
 			config={[
 				{ name: 'scheme', label: 'Scheme', icon: 'lucide:landmark', content: scheme },
 				{ name: 'rates', label: 'Rate bands', icon: 'lucide:percent', content: rates }

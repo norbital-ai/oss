@@ -47,9 +47,7 @@ export type TableCallbacks<TCondition> = {
 	onSelectionChange?: (selectedIds: string[]) => void;
 	onExpandedChange?: (expandedIds: string[]) => void;
 	onSortChange?: (sort: TableSortEntry[]) => void;
-	onPaginationChange?: (pagination: { pageIndex: number; pageSize: number }) => void;
 	onConditionChange?: (condition: TCondition) => void;
-	onSearchChange?: (search: string) => void;
 	onColumnVisibilityChange?: (visibility: Record<string, boolean>) => void;
 	onColumnSizingChange?: (sizing: Record<string, number>) => void;
 	onColumnOrderChange?: (order: string[]) => void;
@@ -188,9 +186,7 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	totalRows = $state<number>(0);
 
 	condition!: TableState<TCondition>;
-	search!: TableState<string>;
 	sort!: TableState<TableSortEntry[]>;
-	pagination!: TableState<{ pageIndex: number; pageSize: number }>;
 
 	rowSelection!: TableState<Record<string, boolean>>;
 	expanded!: TableState<Record<string, boolean>>;
@@ -240,7 +236,6 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		initialState?: {
 			conditions?: TCondition;
 			sort?: TableSortEntry[];
-			pageSize?: number;
 		};
 	}) {
 		this.rowKey = args.rowKey as keyof T;
@@ -258,16 +253,7 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 			args.conditionDefault,
 			persistState
 		);
-		this.search = createTableState<string>(`${this.persistenceKey}.search`, '', persistState);
 		this.sort = createTableState<TableSortEntry[]>(`${this.persistenceKey}.sort`, [], persistState);
-		this.pagination = createTableState(
-			`${this.persistenceKey}.pagination`,
-			{
-				pageIndex: 0,
-				pageSize: 25
-			},
-			persistState
-		);
 		this.rowSelection = createTableState(`${this.persistenceKey}.rowSelection`, {}, persistState);
 		this.expanded = createTableState(`${this.persistenceKey}.expanded`, {}, persistState);
 		this.columnVisibility = createTableState(
@@ -293,9 +279,6 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 				field: s.field.startsWith('default.') ? s.field : `default.${s.field}`,
 				order: s.order
 			}));
-		}
-		if (init?.pageSize != null && init.pageSize !== Infinity && init.pageSize > 0) {
-			this.pagination.current = { pageIndex: 0, pageSize: init.pageSize };
 		}
 
 		this.rowInstances = $derived(this.data.map((raw, index) => this.createRowInstance(raw, index)));
@@ -643,11 +626,6 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		for (const column of this.columns) this.fitColumn(column.id);
 	}
 
-	setPagination(updater: { pageIndex: number; pageSize: number }) {
-		this.pagination.current = { ...this.pagination.current, ...updater };
-		this.callbacks?.onPaginationChange?.({ ...this.pagination.current });
-	}
-
 	setData(data: T[]) {
 		this.data = data;
 		if (!this.totalRows) this.totalRows = data.length;
@@ -671,11 +649,6 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		const next = this.parseCondition(condition);
 		this.condition.current = next;
 		this.callbacks?.onConditionChange?.(next);
-	}
-
-	setSearch(search: string) {
-		this.search.current = search;
-		this.callbacks?.onSearchChange?.(search);
 	}
 
 	setSort(sort: TableSortEntry[]) {

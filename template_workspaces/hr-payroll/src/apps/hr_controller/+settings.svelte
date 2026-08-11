@@ -4,7 +4,6 @@
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Cover } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { inForceTodayFilter } from '../../lib/ui/calendar.js';
 	import { formatNumeric, formatProrationBasis } from '../../lib/ui/display-formatters.js';
@@ -38,11 +37,11 @@
 	<meta name="pod:icon" content="lucide:scale" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/hr-payroll/app-media/settings-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/settings-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/hr-payroll/app-media/settings-banner.svg"
+		content="/api/template-seed-assets/hr-payroll/app-media/settings-banner.webp"
 	/>
 </svelte:head>
 
@@ -104,15 +103,7 @@
 	</CollectionTable>
 {/snippet}
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.settings.eyebrow')}
-		title={t('app.settings.header_title')}
-		description={t('app.settings.header_description')}
-	/>
-{/snippet}
-
-<Cover top={pageHeading}>
+<Cover>
 	<Tabs
 		animate={false}
 		config={[

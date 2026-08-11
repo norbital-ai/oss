@@ -40,34 +40,42 @@ function selectorsOverlap(a: unknown, b: unknown): boolean {
 
 export default {
 	create: {
-		before: async ({ input, api }) => {
-			const siblings = await api.db.query.contribution_rates.findMany({
-				where: { statutory_contribution_id: { eq: input.statutory_contribution_id } }
-			});
-			assertNoOverlap({
-				candidate: input.effective_range,
-				existing: siblings.filter((row) => selectorsOverlap(input.selector, row.selector)),
-				identity: 'this contribution band'
-			});
-			return input;
+		before: {
+			description:
+				'Refuses a new contribution band whose wage, age or risk-class selector overlaps another band of the same statutory contribution over the same effective range, so no wage can match two rates at once.',
+			handler: async ({ input, api }) => {
+				const siblings = await api.db.query.contribution_rates.findMany({
+					where: { statutory_contribution_id: { eq: input.statutory_contribution_id } }
+				});
+				assertNoOverlap({
+					candidate: input.effective_range,
+					existing: siblings.filter((row) => selectorsOverlap(input.selector, row.selector)),
+					identity: 'this contribution band'
+				});
+				return input;
+			}
 		}
 	},
 	update: {
-		before: async ({ input, existing, api }) => {
-			const statutory_contribution_id =
-				input.statutory_contribution_id ?? existing.statutory_contribution_id;
-			const selector = input.selector ?? existing.selector;
-			const effective_range = input.effective_range ?? existing.effective_range;
-			const siblings = await api.db.query.contribution_rates.findMany({
-				where: { statutory_contribution_id: { eq: statutory_contribution_id } }
-			});
-			assertNoOverlap({
-				candidate: effective_range,
-				existing: siblings.filter((row) => selectorsOverlap(selector, row.selector)),
-				identity: 'this contribution band',
-				excludeId: existing.norbital_id
-			});
-			return input;
+		before: {
+			description:
+				'Re-checks an edited contribution band against its siblings so a widened selector or effective range cannot make two rates of the same scheme apply to one wage.',
+			handler: async ({ input, existing, api }) => {
+				const statutory_contribution_id =
+					input.statutory_contribution_id ?? existing.statutory_contribution_id;
+				const selector = input.selector ?? existing.selector;
+				const effective_range = input.effective_range ?? existing.effective_range;
+				const siblings = await api.db.query.contribution_rates.findMany({
+					where: { statutory_contribution_id: { eq: statutory_contribution_id } }
+				});
+				assertNoOverlap({
+					candidate: effective_range,
+					existing: siblings.filter((row) => selectorsOverlap(selector, row.selector)),
+					identity: 'this contribution band',
+					excludeId: existing.norbital_id
+				});
+				return input;
+			}
 		}
 	}
 } satisfies Hooks;

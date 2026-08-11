@@ -53,7 +53,8 @@ export type {
 export type {
 	CollectionHooks,
 	CollectionIntegrations,
-	CollectionPipelines
+	CollectionPipelines,
+	DescribedHook
 } from './schema/collection-behavior.js';
 export type {
 	AnySchema,

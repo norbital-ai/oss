@@ -6,6 +6,7 @@
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import BooleanRenderer from './boolean/boolean.renderer.svelte';
+	import ChannelsRenderer from './channels/channels.renderer.svelte';
 	import { getDataRendererRuntimeContext } from './data-renderer-runtime.js';
 	import type { DataRendererProps } from './data-renderer.types.js';
 	import { formatStructuredValue } from './data-renderer.utils.js';
@@ -87,6 +88,8 @@
 		{disabled}
 		onValueChange={(next) => onValueChange?.(next ?? (field.array ? [] : null))}
 	/>
+{:else if field.kind === 'channels'}
+	<ChannelsRenderer {value} {disabled} {onValueChange} class={className} />
 {:else if field.kind === 'boolean'}
 	<BooleanRenderer
 		{field}

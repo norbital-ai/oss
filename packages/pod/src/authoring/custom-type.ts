@@ -9,6 +9,13 @@ export type CustomTypeDefinition<
 	TSchema extends CustomTypeSchema | ((options: never) => CustomTypeSchema) = CustomTypeSchema
 > = Readonly<{
 	name: TName;
+	/**
+	 * What this type holds and why it is a type rather than a column, carried into the manifest.
+	 *
+	 * A custom type is the one thing on a collection whose meaning is not visible from the model: the
+	 * column reads `settlement_policy` and the shape behind it lives in another directory entirely.
+	 */
+	description: string;
 	schema: TSchema;
 }>;
 
@@ -48,7 +55,14 @@ export function defineCustomType<
 	if (!/^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(definition.name)) {
 		throw new Error(`Custom type name "${definition.name}" must be lower_snake_case.`);
 	}
-	return Object.freeze({ name: definition.name, schema: definition.schema });
+	if (!definition.description.trim()) {
+		throw new Error(`Custom type "${definition.name}" requires a non-empty description.`);
+	}
+	return Object.freeze({
+		name: definition.name,
+		description: definition.description,
+		schema: definition.schema
+	});
 }
 
 export function resolveCustomTypeSchema(

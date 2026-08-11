@@ -14,6 +14,8 @@ function monthBounds(scheduledFor: string): { start: string; end: string } {
 }
 
 export default defineQueryHandler({
+	description:
+		"Builds the controller's view of one scheduled day: an assignment card per dispatched job, a map point per site with the assignments on it, and every suspect assignment in that month.",
 	schema: z.object({ scheduled_for: z.iso.date() }),
 	handler: async ({ scheduled_for }, api) => {
 		const jobs = await api.db.query.jobs.findMany({

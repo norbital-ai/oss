@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { client } from '$pod/client';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import AppHeaderActions from '@norbital-ai/pod/client/app-header-actions';
 	import type { TenantI18nKeys } from '$pod/i18n-keys';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Cover, Inline } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 
 	const { t } = useI18n<TenantI18nKeys>();
@@ -63,41 +63,34 @@
 	<meta name="pod:icon" content="lucide:waves" />
 	<meta
 		name="pod:thumbnail"
-		content="/api/template-seed-assets/reclamation/app-media/reclamation_projects-banner.svg"
+		content="/api/template-seed-assets/reclamation/app-media/reclamation_projects-banner.webp"
 	/>
 	<meta
 		name="pod:banner"
-		content="/api/template-seed-assets/reclamation/app-media/reclamation_projects-banner.svg"
+		content="/api/template-seed-assets/reclamation/app-media/reclamation_projects-banner.webp"
 	/>
 </svelte:head>
 
 {#snippet projectScopeActions()}
-	<label class="grid gap-1.5 text-sm">
-		<span class="font-medium text-muted-foreground"
-			>{t('app.reclamation_projects.project_filter')}</span
-		>
-		<Inline gap="sm">
-			<Combobox
-				ariaLabel={t('app.reclamation_projects.project_filter')}
-				options={projectOptions}
-				value={selectedProjectId}
-				onValueChange={(value) => {
-					if (typeof value === 'string') {
-						projectId = value;
-						return;
-					}
-					projectId = resolveScopedId(null, projectRows);
-				}}
-				emptyPlaceholder={t('app.reclamation_projects.select_project')}
-				searchPlaceholder={t('app.reclamation_projects.search_projects')}
-				clientConfig={{
-					isLoading: projectsQuery.loading,
-					error: projectsQuery.error?.message ?? null
-				}}
-				class="min-w-[16rem]"
-			/>
-		</Inline>
-	</label>
+	<Combobox
+		ariaLabel={t('app.reclamation_projects.project_filter')}
+		options={projectOptions}
+		value={selectedProjectId}
+		onValueChange={(value) => {
+			if (typeof value === 'string') {
+				projectId = value;
+				return;
+			}
+			projectId = resolveScopedId(null, projectRows);
+		}}
+		emptyPlaceholder={t('app.reclamation_projects.select_project')}
+		searchPlaceholder={t('app.reclamation_projects.search_projects')}
+		clientConfig={{
+			isLoading: projectsQuery.loading,
+			error: projectsQuery.error?.message ?? null
+		}}
+		class="min-w-[16rem]"
+	/>
 {/snippet}
 
 {#snippet projects()}
@@ -176,16 +169,11 @@
 	{/if}
 {/snippet}
 
-{#snippet pageHeading()}
-	<PageHeader
-		eyebrow={t('app.reclamation_projects.eyebrow')}
-		title={t('app.reclamation_projects.header_title')}
-		description={t('app.reclamation_projects.header_description')}
-		actions={projectScopeActions}
-	/>
-{/snippet}
+<AppHeaderActions>
+	{@render projectScopeActions()}
+</AppHeaderActions>
 
-<Cover as="main" top={pageHeading}>
+<Cover as="main">
 	<Tabs
 		lazyLoad={false}
 		animate={false}

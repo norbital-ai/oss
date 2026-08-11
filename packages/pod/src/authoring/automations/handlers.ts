@@ -10,6 +10,13 @@ export type HandlerDefinition<
 	TOutput = unknown
 > = {
 	readonly kind: TKind;
+	/**
+	 * What this endpoint answers or does, carried into `manifest.handlers`.
+	 *
+	 * A remote is the one part of a workspace with no shape a reader can infer from: the name is
+	 * author-chosen and the payload schema describes the request, not the effect.
+	 */
+	readonly description: string;
 	readonly schema: TSchema;
 	readonly handler: (payload: unknown, api: BeforeApi) => Promise<TOutput> | TOutput;
 };
@@ -48,11 +55,14 @@ export function defineQueryHandler<
 	S extends AnySchema = DefaultWorkspaceSchema,
 	TOutput = unknown
 >(def: {
+	readonly description: string;
 	readonly schema: TSchema;
 	readonly handler: TypedHandlerFn<S, TSchema, TOutput>;
 }): QueryHandlerDefinition<TSchema, TOutput> {
+	if (!def.description.trim()) throw new Error('Query handler description cannot be empty');
 	return {
 		kind: 'query',
+		description: def.description,
 		schema: def.schema,
 		handler: eraseTypedHandler(def.handler)
 	};
@@ -63,11 +73,14 @@ export function defineCommandHandler<
 	S extends AnySchema = DefaultWorkspaceSchema,
 	TOutput = unknown
 >(def: {
+	readonly description: string;
 	readonly schema: TSchema;
 	readonly handler: TypedHandlerFn<S, TSchema, TOutput>;
 }): CommandHandlerDefinition<TSchema, TOutput> {
+	if (!def.description.trim()) throw new Error('Command handler description cannot be empty');
 	return {
 		kind: 'command',
+		description: def.description,
 		schema: def.schema,
 		handler: eraseTypedHandler(def.handler)
 	};
