@@ -282,10 +282,13 @@ export type HostSandboxWorkspaceMode = 'read-only' | 'read-write';
 /**
  * Per-call context the guest may attach to a host tool run.
  *
- * Deliberately small and non-identity: the guest still cannot assert who is asking. This only carries
- * sandbox *policy* the workspace authored in source (e.g. a channel's `hostSandbox.workspace`).
+ * Deliberately small. `sandboxPrincipalId` is the Pod requestor already selected by the authenticated
+ * request or channel delivery; the host must still resolve and authorize that id in the tenant
+ * directory before opening a workbench. `sandboxWorkspace` carries the workspace policy authored in
+ * source (e.g. a channel's `hostSandbox.workspace`).
  */
 export type HostAgentToolRunContext = {
+	readonly sandboxPrincipalId?: string;
 	readonly sandboxWorkspace?: HostSandboxWorkspaceMode;
 };
 
