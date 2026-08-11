@@ -45,6 +45,23 @@ startupSnapshot.setDeserializeMainFunction(() => startPodHttpServer());
 }
 
 /**
+ * Node restores a startup snapshot's deserialize callback through `vm.Script`. A dynamic import
+ * captured in that callback has no `importModuleDynamically` hook after restore and crashes with
+ * `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING`. The ordinary ESM runtime still needs the lazy import,
+ * but this generated artifact is CommonJS, so its one lazy `node:http` load can use `require`.
+ */
+export function makeSnapshotBundleVmCompatible(code: string): string {
+	const lazyNodeHttpImport = /import\((['"])node:http\1\)/g;
+	const matches = [...code.matchAll(lazyNodeHttpImport)];
+	if (matches.length !== 1) {
+		throw new Error(
+			`Expected exactly one lazy node:http import in the snapshot bundle, found ${matches.length}`
+		);
+	}
+	return code.replace(lazyNodeHttpImport, "Promise.resolve(require('node:http'))");
+}
+
+/**
  * Produce `runtime.snap` at the artifact root, or leave it absent when anything fails.
  *
  * Runs rolldown (already a dependency of the tenant build via vite) to roll `output/server/index.js`
@@ -73,7 +90,7 @@ export async function generateRuntimeSnapshot(input: {
 		});
 		const { output } = await bundle.generate({ format: 'cjs', codeSplitting: false });
 		const bundleFile = path.join(scratch, 'server-bundle.cjs');
-		await writeFile(bundleFile, output[0].code);
+		await writeFile(bundleFile, makeSnapshotBundleVmCompatible(output[0].code));
 
 		// 2. The snapshot builder: guard stdout, then start the server on deserialise.
 		const builderFile = path.join(scratch, 'snapshot-builder.cjs');
@@ -98,10 +115,7 @@ export async function generateRuntimeSnapshot(input: {
 		await writeFile(configFile, JSON.stringify({ builder: builderBundled }));
 		execFileSync(
 			process.execPath,
-			[
-				'--build-snapshot-config=' + configFile,
-				'--max-old-space-size=420'
-			],
+			['--build-snapshot-config=' + configFile, '--max-old-space-size=420'],
 			{ cwd: scratch, stdio: ['ignore', 'ignore', 'pipe'], timeout: 120_000 }
 		);
 		const blob = path.join(scratch, 'snapshot.blob');

@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { RUNTIME_SNAPSHOT_FILENAME } from '@norbital-ai/platform-utils/tenant_workspace/build-output';
+import {
+	generateRuntimeSnapshot,
+	makeSnapshotBundleVmCompatible
+} from '../../src/vite/snapshot.ts';
 
 function source(relativePath: string): string {
 	return readFileSync(new URL(`../../src/${relativePath}`, import.meta.url), 'utf8');
@@ -28,7 +36,9 @@ describe('the runtime startup snapshot stays buildable', () => {
 
 	it('names the snapshot file on the bundle contract', () => {
 		const buildOutput = source('../../platform-utils/src/tenant_workspace/build-output.ts');
-		expect(buildOutput).toContain(`export const RUNTIME_SNAPSHOT_FILENAME = '${RUNTIME_SNAPSHOT_FILENAME}'`);
+		expect(buildOutput).toContain(
+			`export const RUNTIME_SNAPSHOT_FILENAME = '${RUNTIME_SNAPSHOT_FILENAME}'`
+		);
 	});
 
 	it('snapshot builder guards stdout then starts the server on deserialise', () => {
@@ -45,5 +55,36 @@ describe('the runtime startup snapshot stays buildable', () => {
 	it('keeps node:http external in the re-bundled single file', () => {
 		const snapshot = source('vite/snapshot.ts');
 		expect(snapshot).toMatch(/id !== 'node:http'/);
+	});
+
+	it('rewrites the lazy built-in import for Node startup-snapshot VM restore', () => {
+		const bundled = `async function boot() { return await import('node:http'); }`;
+		const compatible = makeSnapshotBundleVmCompatible(bundled);
+		expect(compatible).not.toContain("import('node:http')");
+		expect(compatible).toContain("require('node:http')");
+	});
+
+	it('boots a generated snapshot without a dynamic-import callback', async () => {
+		const artifactRoot = await mkdtemp(path.join(tmpdir(), 'norbital-snapshot-contract-'));
+		try {
+			const serverDir = path.join(artifactRoot, 'output', 'server');
+			await mkdir(serverDir, { recursive: true });
+			await writeFile(
+				path.join(serverDir, 'index.js'),
+				`export async function startPodHttpServer() {
+	const { createServer } = await import('node:http');
+	if (typeof createServer !== 'function') throw new Error('node:http did not load');
+}
+`
+			);
+			expect(await generateRuntimeSnapshot({ artifactRoot, log: () => {} })).toBe(true);
+			execFileSync(
+				process.execPath,
+				[`--snapshot-blob=${path.join(artifactRoot, RUNTIME_SNAPSHOT_FILENAME)}`],
+				{ stdio: 'pipe', timeout: 10_000 }
+			);
+		} finally {
+			await rm(artifactRoot, { recursive: true, force: true });
+		}
 	});
 });
