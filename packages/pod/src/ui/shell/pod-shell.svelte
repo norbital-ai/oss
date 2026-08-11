@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { onDestroy, tick } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 	import { page, goto } from '$lib/ui/state/router.svelte.js';
 	import {
@@ -215,6 +215,29 @@
 	let agentSheetOpen = $state(false);
 	let omniOpen = $state(false);
 	const failedThumbnails = new SvelteSet<string>();
+	const thumbnailAttempts = new SvelteMap<string, number>();
+
+	function thumbnailSrc(app: OverviewApplication): string | null {
+		if (!app.thumbnail) return null;
+		const attempt = thumbnailAttempts.get(app.key) ?? 0;
+		if (attempt === 0) return app.thumbnail;
+		const url = new URL(app.thumbnail, page.url);
+		url.searchParams.set('pod-media-retry', String(attempt));
+		return `${url.pathname}${url.search}${url.hash}`;
+	}
+
+	function retryThumbnail(app: OverviewApplication): void {
+		const attempt = thumbnailAttempts.get(app.key) ?? 0;
+		if (attempt >= 4) {
+			failedThumbnails.add(app.key);
+			return;
+		}
+		setTimeout(() => thumbnailAttempts.set(app.key, attempt + 1), 250 * 2 ** attempt);
+	}
+
+	function settleThumbnail(app: OverviewApplication): void {
+		failedThumbnails.delete(app.key);
+	}
 	const activeAppHeaderTitle = $derived(
 		appName && activeAppManifest
 			? resolveAppHeaderTitle(
@@ -443,6 +466,7 @@
 	app: OverviewApplication;
 	priority?: boolean;
 })}
+	{@const resolvedThumbnail = thumbnailSrc(app)}
 	<a
 		href={app.href}
 		class="group w-[17rem] shrink-0 snap-start overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
@@ -452,18 +476,27 @@
 		}}
 	>
 		<Stack gap="none">
-			{#if app.thumbnail && !failedThumbnails.has(app.key)}
+			{#if resolvedThumbnail && !failedThumbnails.has(app.key)}
 				<Frame ratio="banner" shrink={false} class="bg-muted">
+					<!--
+						The directory already limits every group to one horizontal row. Native lazy
+						loading has an observable blind spot when a card is below a nested vertical
+						scroller and outside that row's horizontal viewport: Chromium may never request
+						it after the user reaches the row. App media is deliberately compact (the HR
+						directory is under 1 MiB in total), so start every request immediately and use
+						fetch priority only to decide which four should win the connection first.
+					-->
 					<img
-						src={app.thumbnail}
+						src={resolvedThumbnail}
 						alt=""
-						loading={priority ? 'eager' : 'lazy'}
+						loading="eager"
 						fetchpriority={priority ? 'high' : 'auto'}
 						decoding="async"
 						width="544"
 						height="272"
 						class="size-full object-cover"
-						onerror={() => failedThumbnails.add(app.key)}
+						onload={() => settleThumbnail(app)}
+						onerror={() => retryThumbnail(app)}
 					/>
 				</Frame>
 			{:else}

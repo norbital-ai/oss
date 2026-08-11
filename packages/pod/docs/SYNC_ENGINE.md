@@ -151,6 +151,13 @@ Pod's server has a **single global change feed** (`sync_outbox`, tailed by `(xid
 that, the correct client sync unit is the **collection**, not the query shape. That is the
 central design decision below.
 
+Liveness is PostgreSQL `NOTIFY`, correctness is the durable outbox. The stream snapshots a
+monotonic notification generation before reading the outbox and waits against that same generation
+afterward. A commit that lands in the check-to-sleep window therefore makes the wait resolve
+immediately instead of leaving later agent text, tool results, titles, or terminal statuses invisible
+until another unrelated mutation or a refresh. One host subscription fans out to all stream waiters;
+Pod does not install a database listener per browser.
+
 ### 2.1 Where Pod landed relative to them
 
 | Problem                       | Electric                                                | Zero                          | Pod                                    |

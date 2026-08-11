@@ -18,11 +18,9 @@ import { z } from 'zod';
  * `run` receives input already validated against `input`, and returns a value that has to survive
  * structured clone on its way back into the isolate — plain data, no functions, no class instances.
  *
- * It receives no caller identity. The tenant runtime cannot prove who is asking (an isolate's claim
- * about its own requestor is unverifiable from out here), so a host tool authorizes against what the
- * host already knows — which tenant this process serves — never against something that arrived over
- * the binding wire. Optional `context` carries only authored sandbox *policy* (read-only vs
- * read-write worktree), not an identity claim.
+ * Optional context carries the Pod-selected sandbox principal and authored mount policy. A host
+ * must resolve and authorize that principal itself before opening a workbench; the id crossing this
+ * binding is a directory lookup key, not a trusted role or permission claim.
  */
 export type HostAgentTool<TInput extends z.ZodType = z.ZodType> = {
 	/** How the model names it. Shares one namespace with the workspace's own agent tools. */

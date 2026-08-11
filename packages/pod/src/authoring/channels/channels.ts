@@ -49,11 +49,9 @@ export type ChannelDefinition = {
 	/**
 	 * Host tools this channel's agent may call — empty / omitted means none.
 	 *
-	 * Channel runs default to no host tools: a host tool authorizes as the host's builder principal,
-	 * which the channel's policy cannot reach, so a WhatsApp or Telegram group must not inherit
-	 * sandbox write / branch / deploy reach by accident. Naming tools here is an explicit opt-in for
-	 * that channel (e.g. analysis-only `sandbox_bash` + read tools), checked at startup against what
-	 * the host actually supplies.
+	 * Channel runs default to no host tools. Naming tools here is an explicit opt-in for that channel
+	 * (for example analysis-only `sandbox_bash` plus read tools), checked at startup against what the
+	 * host supplies. The host re-resolves the channel agent's principal before opening its worktree.
 	 */
 	readonly hostTools?: readonly string[];
 	/**

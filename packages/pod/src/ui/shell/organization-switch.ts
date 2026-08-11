@@ -11,7 +11,7 @@
  * Throws if the switch is refused, so the caller can keep rendering the organization it still has.
  *
  * The caller owns the "switching" flag rather than this module: the request has to reach Core, Core
- * has to warm the target runtime, and only then does the document navigate. For that whole window
+ * has to issue the target session, and only then does the document navigate. For that whole window
  * the previous organization's records are still mounted, and a translucent overlay leaves them
  * legible under the new organization's name — so the shell must evict them, not cover them. Keeping
  * the flag in the component also keeps this module plain TypeScript, which is what lets the switch

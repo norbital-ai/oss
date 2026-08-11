@@ -689,37 +689,40 @@ async function settleTurnUsage(turnId: string): Promise<void> {
 	}
 	// A turn that produced no accounting at all still counts as unreported: the request happened.
 	if (!reported) unreported = true;
-	const settled = await ctx.tenantDb.query<{ chat_id: string }>({
-		text: `UPDATE chat_turn
-		          SET usage_settled_at = now()
-		        WHERE norbital_id = $1::uuid
-		          AND usage_settled_at IS NULL
-		    RETURNING chat_id`,
-		values: [turnId]
-	});
-	const chatId = settled.rows[0]?.chat_id;
-	if (typeof chatId !== 'string') return;
 	const totals = await ctx.tenantDb.query<{
+		norbital_id: string;
 		usage_cost_usd: number;
 		usage_total_tokens: number;
 		usage_turns_counted: number;
 		usage_turns_unreported: number;
 	}>({
-		text: `UPDATE chat_session
-		          SET usage_cost_usd = usage_cost_usd + $2,
-		              usage_total_tokens = usage_total_tokens + $3,
-		              usage_turns_counted = usage_turns_counted + 1,
-		              usage_turns_unreported = usage_turns_unreported + $4
-		        WHERE norbital_id = $1::uuid
-		    RETURNING usage_cost_usd, usage_total_tokens, usage_turns_counted, usage_turns_unreported`,
-		values: [chatId, cost, tokens, unreported ? 1 : 0]
+		text: `WITH claimed AS (
+		        UPDATE chat_turn
+		           SET usage_settled_at = now()
+		         WHERE norbital_id = $1::uuid
+		           AND usage_settled_at IS NULL
+		     RETURNING chat_id
+		      )
+		      UPDATE chat_session AS session
+		         SET usage_cost_usd = session.usage_cost_usd + $2,
+		             usage_total_tokens = session.usage_total_tokens + $3,
+		             usage_turns_counted = session.usage_turns_counted + 1,
+		             usage_turns_unreported = session.usage_turns_unreported + $4
+		        FROM claimed
+		       WHERE session.norbital_id = claimed.chat_id
+		   RETURNING session.norbital_id,
+		             session.usage_cost_usd,
+		             session.usage_total_tokens,
+		             session.usage_turns_counted,
+		             session.usage_turns_unreported`,
+		values: [turnId, cost, tokens, unreported ? 1 : 0]
 	});
 	const row = totals.rows[0];
 	if (!row) return;
 	// The increment above is authoritative and atomic; this republishes the same numbers through the
 	// ordinary write path so the sync outbox carries them to the reader, who otherwise would never
 	// see a counter that only ever moved by raw SQL.
-	await updateRecord(ctx, 'chat_session', chatId, { ...row }, { isElevated: true }).catch(
+	await updateRecord(ctx, 'chat_session', row.norbital_id, { ...row }, { isElevated: true }).catch(
 		() => undefined
 	);
 }
@@ -822,7 +825,13 @@ async function streamProviderTurn(input: {
 				}
 			}
 			const pendingPart = text.slice(persistedText.length);
-			if (shouldPersistStreamPart({ pending: pendingPart, elapsedMs: Date.now() - lastPartAt })) {
+			// The first non-empty provider part establishes the durable streaming row immediately. Later
+			// deltas are coalesced into semantic/size/time-bounded parts, so a short tool or subagent
+			// response becomes visible without turning every provider token into a database mutation.
+			if (
+				(!assistantMessageId && text.length > 0) ||
+				shouldPersistStreamPart({ pending: pendingPart, elapsedMs: Date.now() - lastPartAt })
+			) {
 				const message: AiMessage = { role: 'assistant', content: text };
 				if (assistantMessageId) {
 					await input.writer.update(assistantMessageId, { parts: [message], status: 'streaming' });

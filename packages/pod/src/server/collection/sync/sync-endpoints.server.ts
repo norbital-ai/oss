@@ -4,7 +4,7 @@ import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js';
 import { abortableDelay } from '$lib/shared/abortable-delay.js';
-import { waitForSyncNotification } from './db-notifications.server.js';
+import { syncNotificationGeneration, waitForSyncNotification } from './db-notifications.server.js';
 import { error } from '../http_error.js';
 import { isUnexpectedMutationError, mutationRejection } from './mutation-rejection.server.js';
 import {
@@ -467,6 +467,9 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 				let announcedSynced = false;
 				// stupidity:allow A6 -- this is the long-lived SSE pump, bounded by the abort signal.
 				while (!signal.aborted) {
+					// Snapshot before reading. If a commit lands after the query but before the idle wait,
+					// the changed generation makes that wait resolve immediately and the loop re-reads.
+					const notificationGeneration = syncNotificationGeneration();
 					if (await cursorTooOld()) break;
 					const batch = await runWithWorkspaceContext(ctx, () => readSyncOutboxBatch(ctx, cursor));
 					if (batch.rows.length > 0) {
@@ -528,7 +531,7 @@ async function handleStream(event: PodRequestEvent, ctx: ProvisionedContext): Pr
 					}
 					// Idle: no queries and no cadence of our own. Nothing wakes this but a real
 					// commit, through the outbox trigger's NOTIFY — no keep-alive, no repoll.
-					await waitForSyncNotification(signal);
+					await waitForSyncNotification(notificationGeneration, signal);
 					settling = HORIZON_SETTLE_ATTEMPTS;
 				}
 			} catch (err) {

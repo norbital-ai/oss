@@ -32,8 +32,15 @@ describe('workspace tab composition', () => {
 		expect(reclamationProjects).not.toContain('variant="underline"');
 		expect(reclamationCostMatrix).not.toContain('variant="underline"');
 
-		for (const file of svelteFilesUnder(resolve('../../template_workspaces'))) {
-			expect(readFileSync(file, 'utf8'), file).not.toContain('variant="underline"');
+		for (const template of readdirSync(resolve('../../template_workspaces'), {
+			withFileTypes: true
+		})) {
+			if (!template.isDirectory()) continue;
+			for (const file of svelteFilesUnder(
+				resolve('../../template_workspaces', template.name, 'src')
+			)) {
+				expect(readFileSync(file, 'utf8'), file).not.toContain('variant="underline"');
+			}
 		}
 	});
 });

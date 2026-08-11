@@ -61,10 +61,8 @@ differently, because one of them has no user to point at.
 **Interactive usage** — the web chat panel and the `/agent` route — runs as the signed-in user, with
 that user's permissions. The agent is a faster hand on the same controls rather than a wider set of
 them, and a refusal it meets is a refusal the person would have met. That is the data half, and it
-is the half a `read_collection` or `write_collection` call obeys. Host tools do not obey it: they run
-outside the guest, on whatever principal the host resolved, which under a host that runs one runtime
-per organization is one principal for everybody — see
-[The principal a host tool cannot know](#the-principal-a-host-tool-cannot-know).
+is the half a `read_collection` or `write_collection` call obeys. Host tools carry the same person's
+id as a lookup key; the host re-resolves it before opening that person's worktree.
 
 **Channel usage** — Telegram, WhatsApp — runs under the channel's own agent profile instead. A
 channel may be a group chat, so there is no single person behind it to inherit permissions from:
@@ -74,28 +72,18 @@ before the loop starts. This is what makes `policy` on a channel declaration loa
 decorative: the host command that carries an inbound message arrives as an administrator, and running
 the agent there would make every channel omnipotent.
 
-Host tools are the one thing that boundary does not cover, so a channel run is offered none of them.
-A host tool authorizes on the principal it _acts as_, and nothing in a channel declaration chooses
-that principal — Core, for one, resolves it to the organization's own builder for every caller. A
-channel run holding `sandbox_bash` or `sandbox_write` would therefore not be refused by its policy;
-it would succeed as the organization's builder, with shell and git access to the workspace's source
-tree, from a Telegram or WhatsApp group that anyone in the group can post to. `channelAgentSpec`
-consequently names `hostTools: []` while keeping write access and the entire workspace tool surface,
-and the hold is on the identity gap rather than on channel agents: when a binding call can carry
-an acting principal, a channel run should get the host tools its own principal is entitled to.
-
-Interactive chat keeps its host tools, on a narrower version of the same problem. Those calls also
-act as the host's chosen principal rather than as the signed-in user, but a signed-in user on a
-deployment that holds a builder seat is not a semi-public group conversation, and the fallback
-profile documents the trade where it is made.
+Channels default to no host tools. A channel that explicitly names a narrow host-tool allowlist
+carries its own reconciled agent principal, never the arbitrary external sender and never the
+organization's builder. The host validates that principal and defaults its worktree mount to
+read-only unless the channel declaration deliberately opts into authoring.
 
 What each entry point _declares_ is a second axis, independent of whose permissions apply:
 
-| Entry point      | Acts as                                         | Spec comes from                                        | Reach when nothing is authored               |
-| ---------------- | ----------------------------------------------- | ------------------------------------------------------ | -------------------------------------------- |
-| Interactive chat | the signed-in user                              | `src/+agent.ts`, else `interactiveAgentSpec`           | write, every workspace tool, every host tool |
-| Channel message  | the channel's agent principal, under its policy | `channelAgentSpec`, plus the channel declaration       | write, every workspace tool, no host tools   |
-| Agent automation | the principal its host command carries          | the automation's declared `collections`/`access`/tools | whatever the file declares                   |
+| Entry point      | Acts as                                         | Spec comes from                                        | Reach when nothing is authored                        |
+| ---------------- | ----------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- |
+| Interactive chat | the signed-in user                              | `src/+agent.ts`, else `interactiveAgentSpec`           | write, every workspace tool, every host tool          |
+| Channel message  | the channel's agent principal, under its policy | `channelAgentSpec`, plus the channel declaration       | write, every workspace tool, declared host tools only |
+| Agent automation | the principal its host command carries          | the automation's declared `collections`/`access`/tools | whatever the file declares                            |
 
 A channel run is the one place an authored `src/+agent.ts` does not win outright. Its prompt, model
 and budgets are carried; its `collections`, `access`, `tools` and `hostTools` are not, because
@@ -205,8 +193,8 @@ not repair it, which is the part worth reading twice — one process environment
 different directory per person, and the runtime is shared by the whole organization, so anything it
 pointed at would be organization-wide skills called personal. Nor is there a writer on that path:
 Core's `sandbox_write_file` edits the build sandbox, a different guest from the one that reads this.
-The missing piece is an acting principal, not a path; see
-[The principal a host tool cannot know](#the-principal-a-host-tool-cannot-know).
+The runtime discovery path is intentionally organization-wide; actor-specific skills need a host
+tool that reads the actor worktree, not a process environment variable in the shared runtime.
 
 There is deliberately no user id anywhere in the discovery path, and that stays right under either
 shape. Discovery asks the filesystem what is on it, which is a fact the process already has. Asking
@@ -300,65 +288,34 @@ profile still wins outright: a workspace that wrote its own boundary meant it, a
 the fallback would make that file advisory.
 
 When the workspace authored none, interactive chat runs under a fallback profile with `access:
-'write'`, every workspace agent tool, and every host tool the deployment offers. That is a deliberate
-operator decision and it is not the conservative one. A channel run takes the same write access and
-the same workspace tools whether or not a profile was authored, and no host tools at all.
+'write'`, every workspace agent tool, and every host tool the deployment offers. A channel run takes
+the same write access and workspace tools whether or not a profile was authored, plus only the host
+tools its channel declaration explicitly names.
 
 Data access is the safe half. `read_collection` and `write_collection` both run unelevated, so
 policy, hooks and approval gates apply exactly as they would to the same person clicking in the
 app: the agent is a faster hand on the same controls, not a wider set of them. Leaving `collections`
 unset is part of that — the ceiling comes from policy rather than from the spec.
 
-Host tools are the half that trades something away. A host tool carries no requestor — the binding
-frame has nowhere to put one, and the runtime is a single microVM shared by the whole organization
-— so it authorizes on the principal it _acts as_, which is the tenant's builder principal. Naming
-them in the fallback therefore hands a `basic` user the reach of a builder: the workspace's source
-tree, its shell, its dependencies. The one remaining gate is that the tenant must hold a builder seat
-at all. Narrowing this back to a per-requestor decision needs a requestor on the host-tool binding
-first; until that exists the choice is all users or no users, and this deployment chose all.
+## Actor workbench boundary
 
-`run(name, input)` carries no caller identity. A tenant isolate cannot make a trustworthy assertion
-about a host principal; the host authorizes using the tenant identity already bound to that runtime.
+Host tools cross a stricter principal boundary than workspace tools. Pod attaches only the
+`sandboxPrincipalId` selected by the authenticated request or channel delivery plus the authored
+read-only/read-write mount policy. It does not attach roles or grants. The host resolves that id in
+the tenant directory again, checks the actor kind and billing entitlement, and only then opens the
+actor's worktree. An isolate can name a lookup key; it cannot make the host believe a role claim.
 
-## The principal a host tool cannot know
+This supports both workspace actors without conflating them:
 
-This is the gap the two sections above keep referring to, written out once so it does not have to be
-rediscovered from the symptoms.
+- an interactive human and their agent use that human's worktree and ephemeral workbench guest;
+- a declared channel uses its independent `kind='agent'` principal, policy and worktree, regardless
+  of which external person or group sent the message.
 
-A guest reaches a host facility through the facility proxy in
-`packages/pod/src/serve/hosted.ts`: a call crosses as a `binding` frame carrying
-`{ facility, method, args }` down the stdio channel the host opened
-(`packages/pod/src/serve/stdio.ts`), the arguments escaped by `encodeWireValue` in
-`packages/platform-utils/src/runtime/wire.ts` — a facility name, a method name, arguments, and
-nothing else. There is nowhere in it to say who is asking. The omission is one-directional rather
-than a property of the transport: the host's private command plane (`/_host/command`) carries an
-`identity` of `userId`, `organizationId` and `organizationName`, so identity crosses this wire
-perfectly well in the direction the host is the one asserting it.
-
-Every layer above the call has the same shape, because none of them could have more than the call
-does. `HostAgentToolBinding.run(name, input)` in
-`packages/platform-utils/src/runtime/binding.ts` takes a tool name and the model's raw input, and the
-comment immediately above it already says what is absent and why: a tenant isolate's claim about who
-is asking is not something the host can verify, so a host tool authorizes against what the host
-already knows. `HostAgentTool.run(input)` in `packages/pod/src/host/agent-tools.ts` receives only
-the validated input, and its type comment says the same. The guest end matches — the agent loop
-dispatches `binding.run(call.name, call.input)` and has no third argument to pass even if it wanted
-one.
-
-Correlating a binding call with an in-flight request cannot stand in for the missing field, which is
-the plausible-looking repair worth ruling out explicitly. An interactive turn is started detached, so
-the request that began it has already returned by the time the loop calls a tool: a binding call can
-arrive with no request pending at all. A channel run does not have a request in that sense either,
-and one channel multiplexes many conversations whose message ids are independent of the binding
-correlation ids. Whatever the host guessed from concurrency would be a guess, and a guess is exactly
-the thing an authorization decision must not be.
-
-Until a binding call carries the acting principal, three things are not implementable rather than
-merely unbuilt. Interactive runs cannot have per-user sandboxes, because the host cannot tell which user's
-sandbox to open. Channel runs cannot have per-channel sandboxes, for the same reason and with the
-same consequence — which is why `channelAgentSpec` offers no host tools at all. And personal skills
-cannot exist under a host that runs one runtime per organization, because the filesystem discovery
-reads is chosen per process and a process serves everybody.
+The runtime microVM remains one traffic-serving process for the tenant revision. It never doubles as
+an authoring shell. Host tools acquire a separate actor workbench for one call and destroy its guest
+afterward; the Git worktree and shared content-addressed dependencies remain on the host. Channels
+still default to no host tools, and an explicit channel allowlist defaults its workspace mount to
+read-only. That is a product permission boundary, not a transport limitation.
 
 ## UI and replication
 
