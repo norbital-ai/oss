@@ -66,6 +66,7 @@
 	import { requestAgentComposerFocus } from '../agent/agent-composer-focus.js';
 	import OmniFinder from './omni-finder.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import { cn } from '@norbital-ai/ui/utils';
 	import { writeImpersonationTeamIds } from './workspace-impersonation.js';
 
 	let {
@@ -529,7 +530,10 @@
 				<Cover gap="none" top={activeAppBanner}>
 					<div
 						data-workspace-app-surface
-						class="h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:pod-app] [container-type:inline-size]"
+						class={cn(
+							'h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:pod-app] [container-type:inline-size]',
+							(activeAppManifest?.banner || appHeaderActions.current) && 'pt-2 sm:pt-3'
+						)}
 					>
 						{#await activeApp}
 							<Stack fill justify="center" align="center" class="text-sm text-muted-foreground">
