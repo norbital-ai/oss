@@ -16,6 +16,7 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { composeSystemPrompt } from '$lib/server/agent/system-prompt.js';
 import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
+import { shouldPersistStreamPart } from '$lib/server/agent/stream-parts.js';
 import {
 	composeMentionContext,
 	type AgentMentionInput
@@ -805,14 +806,14 @@ async function streamProviderTurn(input: {
 	const toolCalls: AiToolCall[] = [];
 	let done = false;
 	let lastHeartbeat = Date.now();
+	let persistedText = '';
+	let lastPartAt = Date.now();
 	try {
 		while (!done) {
 			const batch = await ai.readStream(streamId);
-			let textChanged = false;
 			for (const event of batch.events) {
 				if (event.type === 'text_delta') {
 					text += event.delta;
-					textChanged = true;
 				} else if (event.type === 'tool_call') {
 					toolCalls.push(event.call);
 				} else {
@@ -820,7 +821,8 @@ async function streamProviderTurn(input: {
 					usage = event.usage;
 				}
 			}
-			if (textChanged) {
+			const pendingPart = text.slice(persistedText.length);
+			if (shouldPersistStreamPart({ pending: pendingPart, elapsedMs: Date.now() - lastPartAt })) {
 				const message: AiMessage = { role: 'assistant', content: text };
 				if (assistantMessageId) {
 					await input.writer.update(assistantMessageId, { parts: [message], status: 'streaming' });
@@ -830,6 +832,8 @@ async function streamProviderTurn(input: {
 						model: input.spec.model ?? null
 					});
 				}
+				persistedText = text;
+				lastPartAt = Date.now();
 			}
 			if (Date.now() - lastHeartbeat >= 5_000) {
 				lastHeartbeat = Date.now();
@@ -849,6 +853,16 @@ async function streamProviderTurn(input: {
 				status: 'complete',
 				...(usage ? { usage: objectValue(usage) } : {})
 			});
+		} else if (text) {
+			assistantMessageId = await input.writer.persist(
+				{ role: 'assistant', content: text },
+				input.turnId,
+				{
+					status: 'complete',
+					model: input.spec.model ?? null,
+					...(usage ? { usage: objectValue(usage) } : {})
+				}
+			);
 		}
 		return { text, toolCalls, stopReason, ...(usage !== undefined ? { usage } : {}) };
 	} catch (cause) {

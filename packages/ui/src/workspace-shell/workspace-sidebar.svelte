@@ -90,12 +90,18 @@
 		Boolean(impersonation && impersonation.isAdmin && impersonation.teams.length > 0)
 	);
 	const impersonationTeams = $derived(impersonation?.teams ?? []);
+	const impersonationOptions = $derived(
+		impersonationTeams.map((team) => ({ value: team.id, label: team.name ?? team.id }))
+	);
 	const impersonationActiveTeamId = $derived(
-		impersonation && impersonation.isActive
-			? (impersonation.activeTeamIds[0] ?? null)
-			: null
+		impersonation && impersonation.isActive ? (impersonation.activeTeamIds[0] ?? null) : null
 	);
 	let impersonationBusy = $state(false);
+	const nextLocale = $derived(i18n.locale === 'en' ? 'zh' : 'en');
+
+	function toggleLocale(): void {
+		i18n.setLocale(nextLocale);
+	}
 
 	async function selectImpersonationTeam(teamId: string): Promise<void> {
 		if (impersonationBusy || teamId === impersonationActiveTeamId || !onImpersonate) return;
@@ -276,37 +282,38 @@
 						</p>
 					</div>
 					<DropdownMenu.Separator />
-					<DropdownMenu.Label
-						class="px-2 pt-2 pb-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase"
-						>{t('misc.language')}</DropdownMenu.Label
+					<Button
+						type="button"
+						variant="ghost"
+						class="h-9 w-full justify-start gap-2 px-2 text-xs"
+						onclick={toggleLocale}
 					>
-					<DropdownMenu.RadioGroup
-						value={i18n.locale}
-						onValueChange={(locale) => i18n.setLocale(locale as (typeof i18n.locale))}
-					>
-						{#each i18n.locales as locale (locale)}
-							<DropdownMenu.RadioItem value={locale}>
-								{t(`misc.localeName.${locale}` as UiKeys)}
-							</DropdownMenu.RadioItem>
-						{/each}
-					</DropdownMenu.RadioGroup>
+						<Icon icon="lucide:languages" class="size-3.5" />
+						<span>{t('misc.language')}</span>
+						<span class="ml-auto text-muted-foreground">
+							{t(`misc.localeName.${nextLocale}` as UiKeys)}
+						</span>
+					</Button>
 					{#if impersonationAvailable}
 						<DropdownMenu.Separator />
 						<DropdownMenu.Label
 							class="px-2 pt-2 pb-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase"
 							>{t('misc.impersonate')}</DropdownMenu.Label
 						>
-						<div class="max-h-56 overflow-y-auto overscroll-contain">
-							<DropdownMenu.RadioGroup
-								value={impersonationActiveTeamId ?? ''}
-								onValueChange={(teamId) => void selectImpersonationTeam(teamId)}
-							>
-								{#each impersonationTeams as team (team.id)}
-									<DropdownMenu.RadioItem value={team.id} disabled={impersonationBusy}>
-										<span class="truncate">{team.name ?? team.id}</span>
-									</DropdownMenu.RadioItem>
-								{/each}
-							</DropdownMenu.RadioGroup>
+						<div class="px-1 pb-1">
+							<Combobox
+								value={impersonationActiveTeamId}
+								options={impersonationOptions}
+								searchPlaceholder={t('misc.impersonate')}
+								emptyPlaceholder={t('misc.impersonate')}
+								preserveOptionOrder={true}
+								disabled={impersonationBusy}
+								class="w-full"
+								triggerClass="h-9 text-xs"
+								onValueChange={(teamId) => {
+									if (teamId) void selectImpersonationTeam(teamId);
+								}}
+							/>
 						</div>
 						{#if impersonation?.isActive}
 							<DropdownMenu.Item

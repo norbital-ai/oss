@@ -101,10 +101,10 @@ function shell(
   .brand-mark { width: 32px; height: 32px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: var(--card); box-shadow: 0 1px 2px rgb(0 0 0 / .08); font-size: 11px; font-weight: 750; }
   .brand-mark img { width: 100%; height: 100%; object-fit: cover; }
   .brand-controls { display: flex; align-items: center; gap: 6px; }
-  .control { width: auto; min-height: 32px; margin: 0; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
-  .control:hover { background: var(--field); opacity: 1; }
+  .control { width: auto; height: 36px; min-height: 36px; margin: 0; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--foreground); box-shadow: none; }
+  .control:hover { background: color-mix(in srgb, var(--foreground) 7%, transparent); opacity: 1; }
   .language-toggle { font-size: .6875rem; font-weight: 650; }
-  .theme-toggle { width: 32px; padding: 0; }
+  .theme-toggle { width: 36px; padding: 0; }
   .theme-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.75; }
   .theme-toggle .icon-sun { display: none; }
   :root[data-color-scheme="dark"] .theme-toggle .icon-sun { display: block; }

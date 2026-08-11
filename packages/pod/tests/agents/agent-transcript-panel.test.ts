@@ -6,6 +6,25 @@ import {
 	withPendingEcho
 } from '$lib/ui/agent/transcript.js';
 import { parseCompactDirective } from '$lib/server/agent/agent-loop.server.js';
+import { shouldPersistStreamPart } from '$lib/server/agent/stream-parts.js';
+
+describe('durable stream parts', () => {
+	it('does not persist token-sized provider deltas', () => {
+		expect(shouldPersistStreamPart({ pending: 'hello', elapsedMs: 5_000 })).toBe(false);
+		expect(shouldPersistStreamPart({ pending: 'a'.repeat(63), elapsedMs: 399 })).toBe(false);
+	});
+
+	it('persists semantic, latency, and size-bounded parts', () => {
+		expect(
+			shouldPersistStreamPart({
+				pending: 'A complete sentence with enough substance.',
+				elapsedMs: 10
+			})
+		).toBe(true);
+		expect(shouldPersistStreamPart({ pending: 'a'.repeat(64), elapsedMs: 400 })).toBe(true);
+		expect(shouldPersistStreamPart({ pending: 'a'.repeat(240), elapsedMs: 1 })).toBe(true);
+	});
+});
 
 describe('compact directive', () => {
 	it('matches the whole message, so a sentence starting with the word is still a sentence', () => {
@@ -66,6 +85,30 @@ describe('conversation usage', () => {
 });
 
 describe('agent panel transcript', () => {
+	it('converges a streaming row when its owning turn is already terminal', () => {
+		expect(
+			toPanelMessages(
+				[
+					{
+						norbital_id: 'm-terminal',
+						turn_id: 'turn-terminal',
+						status: 'streaming',
+						parts: [{ role: 'assistant', content: 'Finished.' }]
+					}
+				],
+				[{ norbital_id: 'turn-terminal', status: 'succeeded' }]
+			)
+		).toEqual([
+			{
+				kind: 'text',
+				key: 'm-terminal',
+				role: 'assistant',
+				content: 'Finished.',
+				status: 'complete'
+			}
+		]);
+	});
+
 	it('projects a stored message without a second model of it', () => {
 		expect(
 			toPanelMessages([

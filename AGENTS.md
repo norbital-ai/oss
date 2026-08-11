@@ -18,8 +18,8 @@ This pnpm and Turborepo monorepo owns all `@norbital-ai/*` packages.
 
 - Package implementation and package-specific documentation stay together under `packages/<name>/`.
 - Run `pnpm lint`, `pnpm test`, and `pnpm build` after changes.
-- Keep every public package manifest at `0.0.1` while the platform is in beta. Package changes merge
-  directly; the release workflow replaces the fixed beta package set in GitHub Packages.
+- Keep the five public package manifests on one explicit release version. Package changes merge only
+  after `pnpm publication:check`; the release workflow publishes that immutable version together.
 - `skills/` holds the canonical Agent Skills Pod ships (`norbital-platform`,
   `authoring-tenant-workspace`, and any future host skills). `.agents/skills/` symlinks them for
   local agent discovery in Cursor and similar tools. Run `pnpm skills:generate` after editing anything
