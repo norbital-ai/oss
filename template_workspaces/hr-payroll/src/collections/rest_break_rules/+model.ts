@@ -54,7 +54,9 @@ export default defineModel(
 		 * rule from another, so it stays in the label — spelled out as text here, where
 		 * concatenation works.
 		 */
-		summary: text({ search: true }).generatedAlwaysAs(sql`applies_when || ' · ' || minimum_minutes || ' min'`)
+		summary: text({ search: true }).generatedAlwaysAs(
+			sql`applies_when || ' · ' || minimum_minutes || ' min'`
+		)
 	},
 	{
 		description:
