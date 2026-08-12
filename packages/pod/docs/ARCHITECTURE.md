@@ -120,6 +120,16 @@ A channel declared in `src/channels/` is the exception: its `transport` is knowa
 it is checked at startup against the host's `listTransports()` rather than at the first message.
 There is no parallel tenant capability declaration and no provider name in the manifest.
 
+File hooks never receive a host storage key directly. `readFileAsset` first resolves the tenant's
+`document_asset` row and applies the requestor-or-validated-host-bypass ownership boundary. Hosts may
+also expose immutable, versioned inspection facts for an asset. `readFileAssetInspection` keeps the
+single-record path; `readFileAssetInspections` accepts at most 512 ids, resolves them with one
+ordered tenant query, applies the same authorization to every result, and then performs one aligned
+host call. Duplicate ids and cache misses remain aligned with the inputs. An inaccessible or missing
+asset fails before the host is called, and a malformed host response fails closed. Batch hooks may
+therefore reuse trusted facts without moving tenant policy, geolocation, duplicate detection, audit,
+or derived writes into the host; a cache miss still falls back to authoritative byte inspection.
+
 ## Request lifecycle
 
 ```text
