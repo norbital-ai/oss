@@ -3,6 +3,7 @@ import { integration_outbox } from '@norbital-ai/platform-utils/system/workspace
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { z } from 'zod';
+import { rowsPerMutationStatement } from '$lib/server/collection/mutation-batching.js';
 
 type MutationAction = 'create' | 'update' | 'delete';
 export const OUTBOX_CLAIM_LEASE_MS = 5 * 60 * 1000;
@@ -55,7 +56,7 @@ export async function emitOutboundRows(
 }
 
 /** Rows per INSERT — six bind parameters each, far inside Postgres' 65,535 limit. */
-const OUTBOUND_CHUNK = 1_000;
+const OUTBOUND_CHUNK = rowsPerMutationStatement(6);
 
 /**
  * The same delivery rows for a whole batch, in as few statements as the batch allows.

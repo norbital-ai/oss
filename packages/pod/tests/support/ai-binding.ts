@@ -15,7 +15,8 @@ export function testAiBinding(chat: (input: AiChatInput) => Promise<AiChatResult
 			const result = await chat(input);
 			const id = `test-stream-${(nextId += 1)}`;
 			streams.set(id, [
-				...(result.text ? [{ type: 'text_delta' as const, delta: result.text }] : []),
+				...(result.reasoning ? [{ type: 'reasoning_part' as const, text: result.reasoning }] : []),
+				...(result.text ? [{ type: 'text_part' as const, text: result.text }] : []),
 				...(result.toolCalls ?? []).map((call) => ({ type: 'tool_call' as const, call })),
 				{
 					type: 'finish',

@@ -15,6 +15,13 @@ export type PanelText = {
 	readonly status?: string;
 };
 
+/** One provider reasoning part, intentionally separate from the answer and collapsed in the UI. */
+export type PanelReasoning = {
+	readonly kind: 'reasoning';
+	readonly key: string;
+	readonly content: string;
+};
+
 /**
  * One call the agent made, with the answer it got back.
  *
@@ -67,7 +74,7 @@ export type PanelCheckpoint = {
 	readonly before: readonly PanelMessage[];
 };
 
-export type PanelMessage = PanelText | PanelToolCall | PanelCheckpoint;
+export type PanelMessage = PanelText | PanelReasoning | PanelToolCall | PanelCheckpoint;
 
 /**
  * Tool payloads are held behind a disclosure and capped.
@@ -197,6 +204,13 @@ function toPanelRow(
 	const id = record.norbital_id;
 	const stored = storedMessage(record);
 	if (typeof id !== 'string' || !stored) return [];
+	if (record.kind === 'usage') return [];
+	if (record.kind === 'reasoning') {
+		const content = stored.message.content;
+		return typeof content === 'string' && content.trim()
+			? [{ kind: 'reasoning', key: id, content }]
+			: [];
+	}
 	// A tool result is not dropped — it is shown on the call it answers, which names the arguments
 	// that produced it. On its own it is an unattributed blob of JSON.
 	if (stored.role === 'tool') return [];

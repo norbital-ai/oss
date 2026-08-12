@@ -2,6 +2,7 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { requireTable } from '$lib/server/collection/collection_direct.js';
 import { runWithPermissionBypassAsync } from '$lib/server/collection/access_control/permission/permission_bypass_key.server.js';
 import { validate as uuidValidate, v7 as uuidv7 } from 'uuid';
+import { rowsPerMutationStatement } from '$lib/server/collection/mutation-batching.js';
 
 export type AuditEventParams = {
 	action: string;
@@ -66,9 +67,14 @@ async function writeAuditEvents(events: readonly AuditEventInput[]): Promise<voi
 		);
 	if (payloads.length === 0) return;
 
-	await runWithPermissionBypassAsync(() =>
-		db.insert(requireTable(runtime, 'audit_event')).values(payloads)
-	);
+	await runWithPermissionBypassAsync(async () => {
+		const auditInsertChunk = rowsPerMutationStatement(8, 5_000);
+		for (let from = 0; from < payloads.length; from += auditInsertChunk) {
+			await db
+				.insert(requireTable(runtime, 'audit_event'))
+				.values(payloads.slice(from, from + auditInsertChunk));
+		}
+	});
 }
 
 export async function sendAuditEvent(

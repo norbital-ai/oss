@@ -10,26 +10,6 @@ import {
 	parseCompactDirective,
 	shouldAutomaticallyCompact
 } from '$lib/server/agent/agent-loop.server.js';
-import { shouldPersistStreamPart } from '$lib/server/agent/stream-parts.js';
-
-describe('durable stream parts', () => {
-	it('does not persist token-sized provider deltas', () => {
-		expect(shouldPersistStreamPart({ pending: 'hello', elapsedMs: 5_000 })).toBe(false);
-		expect(shouldPersistStreamPart({ pending: 'a'.repeat(63), elapsedMs: 399 })).toBe(false);
-	});
-
-	it('persists semantic, latency, and size-bounded parts', () => {
-		expect(
-			shouldPersistStreamPart({
-				pending: 'A complete sentence with enough substance.',
-				elapsedMs: 10
-			})
-		).toBe(true);
-		expect(shouldPersistStreamPart({ pending: 'a'.repeat(64), elapsedMs: 400 })).toBe(true);
-		expect(shouldPersistStreamPart({ pending: 'a'.repeat(240), elapsedMs: 1 })).toBe(true);
-	});
-});
-
 describe('compact directive', () => {
 	it('matches the whole message, so a sentence starting with the word is still a sentence', () => {
 		expect(parseCompactDirective('/compact')).toEqual({});
@@ -128,6 +108,35 @@ describe('conversation usage', () => {
 });
 
 describe('agent panel transcript', () => {
+	it('projects reasoning as its own supplementary part instead of answer text', () => {
+		expect(
+			toPanelMessages([
+				{
+					norbital_id: 'reason-1',
+					kind: 'reasoning',
+					parts: [{ role: 'assistant', content: 'Check the available skills first.' }]
+				},
+				{
+					norbital_id: 'answer-1',
+					kind: 'normal',
+					parts: [{ role: 'assistant', content: 'Two skills are available.' }]
+				}
+			])
+		).toEqual([
+			{
+				kind: 'reasoning',
+				key: 'reason-1',
+				content: 'Check the available skills first.'
+			},
+			{
+				kind: 'text',
+				key: 'answer-1',
+				role: 'assistant',
+				content: 'Two skills are available.'
+			}
+		]);
+	});
+
 	it('converges a streaming row when its owning turn is already terminal', () => {
 		expect(
 			toPanelMessages(

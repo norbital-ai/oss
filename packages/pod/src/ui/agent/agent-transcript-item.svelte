@@ -198,6 +198,27 @@
 			</Stack>
 		</details>
 	</li>
+{:else if message.kind === 'reasoning'}
+	<li class="message" data-role="reasoning">
+		<details class="group/reasoning w-full">
+			<!-- stupidity:allow UI6 -- reasoning is supplementary detail behind a disclosure. -->
+			<summary
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+			>
+				<Icon icon="lucide:brain" class="size-3.5 shrink-0" />
+				<span class="font-medium text-foreground/80">{t('pod.agent.reasoning')}</span>
+				<Icon
+					icon="lucide:chevron-right"
+					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/reasoning:rotate-90"
+				/>
+			</summary>
+			<div
+				class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3 text-micro leading-relaxed text-foreground/80"
+			>
+				<ReadonlyMarkdown scale="reading" content={message.content} class="content" />
+			</div>
+		</details>
+	</li>
 {:else}
 	<!-- The list gap is tuned for consecutive tool rows; the margin restores the wider rhythm between
 	     spoken messages without re-spacing the trace. A nested transcript keeps the tighter rhythm. -->

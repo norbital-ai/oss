@@ -36,7 +36,6 @@
 		allowClear = false,
 		allowClickToSetNull = false,
 		hideChevron = false,
-		chevronOnHover = false,
 		disabled = false,
 		invalid = false,
 		readonly = false,
@@ -433,7 +432,6 @@
 		{showClearButton}
 		{isLoading}
 		{hideChevron}
-		{chevronOnHover}
 		{error}
 		{comboboxId}
 		{selectionDescription}

@@ -128,6 +128,8 @@ export type AiChatInput = {
 
 export type AiChatResult = {
 	readonly text: string;
+	/** Provider-visible reasoning, when the adapter exposes it. Never folded into the answer text. */
+	readonly reasoning?: string;
 	readonly toolCalls?: readonly AiToolCall[];
 	readonly stopReason: 'end' | 'tool_use' | 'max_tokens' | 'refusal';
 	readonly usage?: unknown;
@@ -135,7 +137,8 @@ export type AiChatResult = {
 
 /** One provider-stream event normalized at the host boundary. */
 export type AiChatStreamEvent =
-	| { readonly type: 'text_delta'; readonly delta: string }
+	| { readonly type: 'text_part'; readonly text: string }
+	| { readonly type: 'reasoning_part'; readonly text: string }
 	| { readonly type: 'tool_call'; readonly call: AiToolCall }
 	| {
 			readonly type: 'finish';

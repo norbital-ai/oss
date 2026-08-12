@@ -10,6 +10,7 @@
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { AgentModelOption } from './models.js';
+	import type { AgentModelCatalogStatus } from './agent-model-state.svelte.js';
 	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
@@ -27,6 +28,7 @@
 		value = $bindable<string>(),
 		options,
 		disabled = false,
+		status = 'ready',
 		compact = false,
 		class: className,
 		onValueChange
@@ -34,6 +36,7 @@
 		value: string;
 		options: readonly AgentModelOption[];
 		disabled?: boolean;
+		status?: AgentModelCatalogStatus;
 		compact?: boolean;
 		class?: string;
 		onValueChange?: (value: string) => void;
@@ -52,6 +55,7 @@
 	// A selection the catalog does not list still has to be selectable, or the trigger renders blank
 	// on a model the host resolved from an authored profile.
 	const availableOptions = $derived.by(() => {
+		if (!value) return options;
 		if (options.some((option) => option.id === value)) return options;
 		return [...options, { id: value, label: value, canonicalSlug: baseModelId(value) }];
 	});
@@ -91,6 +95,9 @@
 			search_term: `${option.label} ${option.id}`
 		}))
 	);
+	const unavailableLabel = $derived(
+		status === 'loading' || status === 'idle' ? t('common.loading') : t('common.notAvailable')
+	);
 
 	function selectModel(modelId: string | null): void {
 		if (!modelId) return;
@@ -108,6 +115,7 @@
 			value={selectedFamily?.defaultOption.id ?? value}
 			onValueChange={selectModel}
 			searchPlaceholder={t('pod.agent.searchAllModels')}
+			emptyPlaceholder={unavailableLabel}
 			itemHeight={36}
 			maxHeight={360}
 			class="min-w-0"
@@ -122,26 +130,28 @@
 			{disabled}
 		/>
 	</Stack>
-	<Stack gap="xs" class="min-w-0">
-		{#if !compact}<span class="text-sm font-medium">{t('pod.agent.variant')}</span>{/if}
-		<Combobox
-			options={variantOptions}
-			ariaLabel={t('pod.agent.modelVariantAria')}
-			{value}
-			onValueChange={selectModel}
-			searchable={false}
-			class="min-w-0"
-			triggerClass={compact
-				? cn(
-						'border-0 bg-transparent shadow-none hover:bg-muted',
-						AGENT_COMPOSER_CONTROL_TEXT_CLASS
-					)
-				: undefined}
-			minWidth={compact ? 112 : undefined}
-			sameWidth={!compact}
-			disabled={disabled || variantOptions.length < 2}
-		/>
-	</Stack>
+	{#if variantOptions.length > 1}
+		<Stack gap="xs" class="min-w-0">
+			{#if !compact}<span class="text-sm font-medium">{t('pod.agent.variant')}</span>{/if}
+			<Combobox
+				options={variantOptions}
+				ariaLabel={t('pod.agent.modelVariantAria')}
+				{value}
+				onValueChange={selectModel}
+				searchable={false}
+				class="min-w-0"
+				triggerClass={compact
+					? cn(
+							'border-0 bg-transparent shadow-none hover:bg-muted',
+							AGENT_COMPOSER_CONTROL_TEXT_CLASS
+						)
+					: undefined}
+				minWidth={compact ? 112 : undefined}
+				sameWidth={!compact}
+				{disabled}
+			/>
+		</Stack>
+	{/if}
 {/snippet}
 
 {#if compact}

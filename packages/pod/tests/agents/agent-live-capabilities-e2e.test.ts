@@ -120,7 +120,10 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			if (lastUser === 'Return the exact child sentinel.') {
 				if (stream.read === 1) {
 					return {
-						events: [{ type: 'text_delta', delta: 'child-' }],
+						events: [
+							{ type: 'reasoning_part', text: 'I should return the exact sentinel.' },
+							{ type: 'text_part', text: 'child-' }
+						],
 						done: false
 					};
 				}
@@ -128,7 +131,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				streams.delete(streamId);
 				return {
 					events: [
-						{ type: 'text_delta', delta: 'streamed' },
+						{ type: 'text_part', text: 'streamed' },
 						{ type: 'finish', stopReason: 'end', usage: { totalTokens: 4 } }
 					],
 					done: true
@@ -138,7 +141,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				streams.delete(streamId);
 				return {
 					events: [
-						{ type: 'text_delta', delta: 'parent-complete' },
+						{ type: 'text_part', text: 'parent-complete' },
 						{ type: 'finish', stopReason: 'end', usage: { totalTokens: 5 } }
 					],
 					done: true
@@ -166,6 +169,26 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 	});
 
 	it('streams every committed text, tool, title, and terminal part into an already-open replica', async () => {
+		await harness.pool.query(`
+			CREATE TABLE agent_completed_part_audit (
+				kind text NOT NULL,
+				content text NOT NULL
+			);
+			CREATE OR REPLACE FUNCTION audit_agent_completed_part() RETURNS trigger AS $$
+			DECLARE appended jsonb;
+			BEGIN
+				IF jsonb_array_length(NEW.messages) > jsonb_array_length(OLD.messages) THEN
+					appended := NEW.messages -> jsonb_array_length(OLD.messages);
+					INSERT INTO agent_completed_part_audit (kind, content)
+					VALUES (appended ->> 'kind', appended -> 'parts' -> 0 ->> 'content');
+				END IF;
+				RETURN NEW;
+			END;
+			$$ LANGUAGE plpgsql;
+			CREATE TRIGGER audit_agent_completed_part
+			AFTER UPDATE ON chat_session
+			FOR EACH ROW EXECUTE FUNCTION audit_agent_completed_part();
+		`);
 		const schemaSql = await harness
 			.request({ method: 'GET', path: 'sync/schema' }, member)
 			.then((response) => response.text());
@@ -233,11 +256,18 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 					(message) =>
 						message.turn_id === childTurn?.norbital_id &&
 						message.role === 'assistant' &&
-						message.status === 'streaming'
+						message.kind === 'normal' &&
+						message.parts[0]?.content === 'child-'
 				);
-				return childTurn && childMessage ? { childTurn, childMessage } : null;
+				const reasoning = storedArray(session.messages).find(
+					(message) => message.turn_id === childTurn?.norbital_id && message.kind === 'reasoning'
+				);
+				return childTurn && childMessage && reasoning
+					? { childTurn, childMessage, reasoning }
+					: null;
 			});
 			expect(liveChild.childMessage.parts[0]?.content).toBe('child-');
+			expect(liveChild.reasoning.parts[0]?.content).toBe('I should return the exact sentinel.');
 			expect(liveChild.childTurn.parent_turn_id).toBeTruthy();
 			expect(liveChild.childTurn.subagent_id).toBe('subagent:spawn-1');
 
@@ -272,7 +302,11 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				expect.arrayContaining([
 					expect.objectContaining({
 						status: 'complete',
-						parts: [expect.objectContaining({ content: 'child-streamed' })]
+						parts: [expect.objectContaining({ content: 'child-' })]
+					}),
+					expect.objectContaining({
+						status: 'complete',
+						parts: [expect.objectContaining({ content: 'streamed' })]
 					}),
 					expect.objectContaining({
 						status: 'complete',
@@ -280,6 +314,26 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 					})
 				])
 			);
+			const partWrites = await harness.pool.query<{ kind: string; content: string }>(
+				`SELECT kind, content
+				   FROM agent_completed_part_audit
+				  WHERE content IN (
+				        'I should return the exact sentinel.',
+				        'child-',
+				        'streamed',
+				        'parent-complete'
+				  )
+				  ORDER BY content`
+			);
+			// One insert per completed provider part. The five text deltas that Core used to expose for
+			// the child answer cannot multiply these PostgreSQL writes, while `child-` already reached
+			// the open replica before `streamed` was released above.
+			expect(partWrites.rows).toEqual([
+				{ kind: 'normal', content: 'child-' },
+				{ kind: 'reasoning', content: 'I should return the exact sentinel.' },
+				{ kind: 'normal', content: 'parent-complete' },
+				{ kind: 'normal', content: 'streamed' }
+			]);
 
 			const toolResultArrived = await waitFor(async () => {
 				const rows = await client.queryLocal<LocalSession>(
@@ -317,6 +371,11 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			});
 		} finally {
 			await client.close();
+			await harness.pool.query(`
+				DROP TRIGGER IF EXISTS audit_agent_completed_part ON chat_session;
+				DROP FUNCTION IF EXISTS audit_agent_completed_part();
+				DROP TABLE IF EXISTS agent_completed_part_audit;
+			`);
 		}
 	});
 });

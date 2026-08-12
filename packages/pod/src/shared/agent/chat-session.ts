@@ -10,7 +10,7 @@ export type ChatSessionMessage = {
 	readonly model: string | null;
 	readonly usage: Readonly<Record<string, unknown>> | null;
 	readonly plan_mode: boolean;
-	readonly kind: 'normal' | 'summary' | 'usage';
+	readonly kind: 'normal' | 'reasoning' | 'summary' | 'usage';
 	readonly status: 'streaming' | 'complete' | 'aborted';
 	readonly queue_status: 'live' | 'queued' | 'released' | 'removed';
 	readonly release_mode: 'step' | 'turn' | null;

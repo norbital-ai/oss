@@ -144,7 +144,10 @@ export async function appendChatMessage(
 					? (extra.usage as Readonly<Record<string, unknown>>)
 					: null,
 			plan_mode: extra.plan_mode === true,
-			kind: extra.kind === 'summary' || extra.kind === 'usage' ? extra.kind : 'normal',
+			kind:
+				extra.kind === 'reasoning' || extra.kind === 'summary' || extra.kind === 'usage'
+					? extra.kind
+					: 'normal',
 			status:
 				extra.status === 'streaming' || extra.status === 'aborted' ? extra.status : 'complete',
 			queue_status:

@@ -44,22 +44,25 @@ function deferred(): {
 
 let inFlight = deferred();
 let sent: { message: string; model?: string; planMode?: boolean }[] = [];
-let catalog: {
+type ModelCatalog = {
 	defaultModel: string;
 	options: { id: string; label: string; canonicalSlug: string; contextLength?: number }[];
-} | null = null;
+};
+let catalog: ModelCatalog | null = null;
+let modelsPromise: Promise<ModelCatalog | null> = Promise.resolve(null);
 
 beforeEach(() => {
 	replica = new FakeReplica();
 	inFlight = deferred();
 	sent = [];
 	catalog = null;
+	modelsPromise = Promise.resolve(catalog);
 	setWorkspaceRemoteTransport({
 		agentChatStart: (input: { message: string; model?: string; planMode?: boolean }) => {
 			sent.push(input);
 			return inFlight.promise;
 		},
-		agentModels: () => Promise.resolve(catalog)
+		agentModels: () => modelsPromise
 	} as never);
 });
 
@@ -174,6 +177,37 @@ describe('agent chat panel', () => {
 			{ role: 'user', content: 'What is on site?' },
 			{ role: 'assistant', content: 'Two crews.' }
 		]);
+		destroy();
+	});
+
+	it('renders captured reasoning separately in a collapsed markdown disclosure', async () => {
+		const { container, destroy } = mountPanel();
+		arriveSession({
+			messages: [
+				message({
+					id: 'reason-1',
+					seq: 1,
+					role: 'assistant',
+					kind: 'reasoning',
+					content: '**Check** the available skills.'
+				}),
+				message({
+					id: 'answer-1',
+					seq: 2,
+					role: 'assistant',
+					content: 'Two skills are available.'
+				})
+			]
+		});
+		await settle();
+		const reasoning = container.querySelector('[data-role="reasoning"]');
+		expect(reasoning?.querySelector('details')?.open).toBe(false);
+		expect(reasoning?.querySelector('summary')?.textContent).toContain('Reasoning');
+		expect(reasoning?.querySelector('strong')?.textContent).toBe('Check');
+		expect(transcript(container).at(-1)).toEqual({
+			role: 'assistant',
+			content: 'Two skills are available.'
+		});
 		destroy();
 	});
 
@@ -322,11 +356,20 @@ describe('agent chat panel', () => {
 					label: 'Default',
 					canonicalSlug: 'provider/default',
 					contextLength: 1_000_000
+				},
+				{
+					id: 'provider/default:fast',
+					label: 'Default Fast',
+					canonicalSlug: 'provider/default',
+					contextLength: 1_000_000
 				}
 			]
 		};
+		modelsPromise = Promise.resolve(catalog);
 		const { container, destroy } = mountPanel();
 		await settle();
+		expect(container.querySelector('[aria-label="Model"]')?.textContent).toContain('Default');
+		expect(container.querySelector('[aria-label="Model variant"]')).not.toBeNull();
 		container.querySelector<HTMLButtonElement>('[aria-pressed="false"]')?.click();
 		type(container, 'Outline the migration');
 		submit(container);
@@ -334,6 +377,66 @@ describe('agent chat panel', () => {
 		// length for occupancy/compaction, while the host remains the one source of truth for selection.
 		expect(sent).toEqual([{ message: 'Outline the migration', planMode: true }]);
 		destroy();
+	});
+
+	it('keeps the model selector present while its shared catalog is loading or unavailable', async () => {
+		modelsPromise = new Promise(() => undefined);
+		const loading = mountPanel();
+		const loadingPicker =
+			loading.container.querySelector<HTMLButtonElement>('[aria-label="Model"]');
+		expect(loadingPicker?.textContent).toContain('Loading');
+		expect(loadingPicker?.disabled).toBe(true);
+		const chevron = loadingPicker?.parentElement?.querySelector('span[aria-hidden="true"]');
+		expect(chevron?.className).toContain('opacity-0');
+		expect(chevron?.className).toContain('group-focus-within:border-ring');
+		expect(chevron?.className).toContain('group-focus-within:outline-ring');
+		expect(chevron?.className).toContain('group-hover:outline-ring');
+		expect(chevron?.className).toContain('[@media(hover:none)]:opacity-60');
+		loading.destroy();
+
+		// A new transport represents the next workspace and lets the shared state make a fresh request.
+		modelsPromise = Promise.reject(new Error('catalog unavailable'));
+		setWorkspaceRemoteTransport({
+			agentChatStart: () => inFlight.promise,
+			agentModels: () => modelsPromise
+		} as never);
+		const unavailable = mountPanel();
+		await settle();
+		const unavailablePicker =
+			unavailable.container.querySelector<HTMLButtonElement>('[aria-label="Model"]');
+		expect(unavailablePicker?.textContent).toContain('Not available');
+		expect(unavailablePicker?.disabled).toBe(true);
+		unavailable.destroy();
+	});
+
+	it('shares the last valid model selection between panels and sends with it', async () => {
+		catalog = {
+			defaultModel: 'provider/default',
+			options: [
+				{ id: 'provider/default', label: 'Default', canonicalSlug: 'provider/default' },
+				{ id: 'provider/other', label: 'Other', canonicalSlug: 'provider/other' }
+			]
+		};
+		modelsPromise = Promise.resolve(catalog);
+		const first = mountPanel();
+		await settle();
+		first.container.querySelector<HTMLButtonElement>('[aria-label="Model"]')?.click();
+		await settle();
+		const other = [...document.querySelectorAll<HTMLElement>('[role="listbox"] [data-value]')].find(
+			(option) => option.textContent?.trim() === 'Other'
+		);
+		expect(other).toBeDefined();
+		other?.click();
+		await settle();
+
+		const second = mountPanel();
+		await settle();
+		expect(second.container.querySelector('[aria-label="Model"]')?.textContent).toContain('Other');
+		type(second.container, 'Use the selected model');
+		submit(second.container);
+		expect(sent.at(-1)).toEqual({ message: 'Use the selected model', model: 'provider/other' });
+		first.destroy();
+		second.destroy();
 	});
 
 	it('opens the most recent replicated conversation in the selector', async () => {

@@ -11,9 +11,9 @@
 	import { getPlatformStateContext } from '$lib/ui/state/platform_state.svelte.js';
 	import { toPanelMessages, toPanelUsage, toSessionTotals, withPendingEcho } from './transcript.js';
 	import AgentModelPicker from './agent-model-picker.svelte';
+	import { getAgentModelState, loadAgentModelCatalog } from './agent-model-state.svelte.js';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
-	import type { AgentModelCatalog } from './models.js';
 	import {
 		findMentionTrigger,
 		insertMention,
@@ -40,9 +40,7 @@
 	const { t } = useI18n<PodUiKeys>();
 
 	let draft = $state('');
-	let catalog = $state<AgentModelCatalog | null>(null);
-	/** Empty until the host answers; the picker is not rendered before then. */
-	let selectedModel = $state('');
+	const modelState = getAgentModelState();
 	let runId = $state<string | undefined>(undefined);
 	let chatId = $state<string | undefined>(undefined);
 	let pending = $state(false);
@@ -274,8 +272,9 @@
 	 * — an absolute token count is still true, where a percentage against a guessed window is not.
 	 */
 	const contextLength = $derived(
-		catalog?.options.find((option) => option.id === (selectedModel || catalog?.defaultModel))
-			?.contextLength ?? null
+		modelState.catalog?.options.find(
+			(option) => option.id === (modelState.selectedModel || modelState.catalog?.defaultModel)
+		)?.contextLength ?? null
 	);
 	const usage = $derived(toPanelUsage(activeSession?.messages ?? [], contextLength));
 	const contextPercent = $derived(
@@ -317,33 +316,23 @@
 	);
 
 	/**
-	 * The catalog and the selected model both come from the host, once.
+	 * The catalog and selected model are shared by every route/sheet panel.
 	 *
-	 * `selectedModel` starts as the host's own default rather than the first catalog entry, so the
-	 * picker opens showing the model that would run if nobody touched it. A host with no `models()`
-	 * leaves the catalog null and the picker unrendered — an absent control is honest about there
-	 * being no choice, where an empty one looks broken.
+	 * The picker itself never disappears: while this request is pending or unavailable it remains a
+	 * disabled, named control, and a second mounted panel reuses the last valid selection.
 	 */
 	onMount(() => {
-		const transport = getWorkspaceRemoteTransport();
-		// Called through a resolved promise so a transport without the endpoint rejects rather than
-		// throwing out of mount. No catalog is a supported answer; a broken panel is not.
-		void Promise.resolve()
-			.then(() => transport.agentModels())
-			.then((result) => {
-				catalog = result;
-				if (!selectedModel) selectedModel = result?.defaultModel ?? '';
-			})
-			.catch(() => {
-				catalog = null;
-			});
+		void loadAgentModelCatalog(getWorkspaceRemoteTransport());
 	});
 	// A tool call is the agent doing something. Once one is on screen it carries its own progress, and
 	// a second "Working…" placeholder beside it says less than the call already does.
 	const agentHasSpoken = $derived(
 		messages.some(
 			(message) =>
-				message.kind === 'tool' || message.kind === 'checkpoint' || message.role === 'assistant'
+				message.kind === 'tool' ||
+				message.kind === 'checkpoint' ||
+				message.kind === 'reasoning' ||
+				message.role === 'assistant'
 		)
 	);
 
@@ -424,8 +413,10 @@
 				...(planMode ? { planMode: true } : {}),
 				// Only when the host offered a choice. Sending back its own default would turn a display
 				// value into a caller assertion, and the host would stop being free to change it.
-				...(catalog && selectedModel && selectedModel !== catalog.defaultModel
-					? { model: selectedModel }
+				...(modelState.catalog &&
+				modelState.selectedModel &&
+				modelState.selectedModel !== modelState.catalog.defaultModel
+					? { model: modelState.selectedModel }
 					: {})
 			});
 			runId = result.runId;
@@ -533,7 +524,6 @@
 			emptyPlaceholder={t('pod.agent.noConversations')}
 			class="min-w-0 flex-1"
 			triggerClass="border-0 bg-transparent shadow-none"
-			chevronOnHover={true}
 		/>
 		<Button
 			variant="ghost"
@@ -691,16 +681,15 @@
 						{/if}
 					</Inline>
 					<Inline justify="end" align="center" gap="xs" class="min-w-0">
-						{#if catalog && selectedModel}
-							<div class="min-w-0" title={t('pod.agent.modelAndVariant')}>
-								<AgentModelPicker
-									bind:value={selectedModel}
-									options={catalog.options}
-									compact={true}
-									disabled={pending}
-								/>
-							</div>
-						{/if}
+						<div class="min-w-0" title={t('pod.agent.modelAndVariant')}>
+							<AgentModelPicker
+								bind:value={modelState.selectedModel}
+								options={modelState.catalog?.options ?? []}
+								status={modelState.status}
+								compact={true}
+								disabled={pending || modelState.status !== 'ready'}
+							/>
+						</div>
 						<Button
 							type="submit"
 							disabled={!canSend}

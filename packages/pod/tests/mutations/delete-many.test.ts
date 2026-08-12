@@ -385,7 +385,8 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 	});
 
 	it('splits a batch past the statement ceiling into chunks, not into round trips per record', async () => {
-		// Past DELETE_CHUNK / OUTBOX_CHUNK (1,000), so the chunking is actually exercised.
+		// Past DELETE_CHUNK (1,000). The outbox has its own 60k-parameter budget and can retain one
+		// statement for this batch while the record lookup/delete statements split.
 		await client.query('BEGIN');
 		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
 		const seeded = await client.query<{ norbital_id: string }>(
@@ -406,9 +407,9 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 			`SELECT record_id FROM sync_outbox ORDER BY seq`
 		);
 		expect(feed.rows.map((row) => row.record_id)).toEqual(ids);
-		// Two chunks of each statement for 1,100 records — not 1,100 of anything.
+		// Two record chunks and one parameter-budgeted outbox statement — not 1,100 of anything.
 		expect(matching(/^select .*from "orders"/is)).toHaveLength(2);
 		expect(matching(/^delete from "orders"/i)).toHaveLength(2);
-		expect(matching(/insert into sync_outbox/i)).toHaveLength(2);
+		expect(matching(/insert into sync_outbox/i)).toHaveLength(1);
 	});
 });

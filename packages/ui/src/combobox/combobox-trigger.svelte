@@ -27,7 +27,6 @@
 		showClearButton: boolean;
 		isLoading: boolean;
 		hideChevron: boolean;
-		chevronOnHover: boolean;
 		error: string | null;
 		comboboxId: string;
 		selectionDescription: string;
@@ -102,7 +101,6 @@
 		showClearButton,
 		isLoading,
 		hideChevron,
-		chevronOnHover,
 		error,
 		comboboxId,
 		selectionDescription,
@@ -224,22 +222,19 @@
 		)
 	);
 	/**
-	 * The chevron glyph stays visible at rest by default — it is the only affordance that says
-	 * "this opens a dropdown", and keyboard and touch users have no hover state to
-	 * reveal it with. Only its chrome (background + outline) fades in, on hover *and*
-	 * focus-within, matching the clear button above. The transparent resting border
-	 * reserves the space so revealing the chrome does not shift the glyph. Triggers that
-	 * read as plain text opt into `chevronOnHover`, which hides the glyph at rest too but
-	 * still reveals it on focus-within so keyboard users keep the affordance.
+	 * Mouse/keyboard chrome stays quiet at rest and appears with an outline on hover or focus.
+	 * Coarse pointers cannot hover, so their glyph remains visible. Disabled controls remain muted,
+	 * and simple read-only values take the non-trigger path in Combobox.
 	 */
 	const chevronChromeClasses = $derived(
 		cn(
 			'flex size-5 flex-none items-center justify-center rounded-md',
-			'border border-transparent bg-transparent text-muted-foreground',
-			chevronOnHover ? 'opacity-0' : 'opacity-60',
-			'transition-[background-color,border-color,opacity]',
-			'group-hover:border-input group-hover:bg-background group-hover:opacity-100',
-			'group-focus-within:border-input group-focus-within:bg-background group-focus-within:opacity-100'
+			'border border-transparent bg-transparent text-muted-foreground outline outline-0 outline-transparent',
+			'opacity-0 [@media(hover:none)]:opacity-60',
+			'transition-[background-color,border-color,opacity,outline-color,outline-width]',
+			'group-hover:border-ring group-hover:bg-background group-hover:opacity-100 group-hover:outline-1 group-hover:outline-ring',
+			'group-focus-within:border-ring group-focus-within:bg-background group-focus-within:opacity-100 group-focus-within:outline-1 group-focus-within:outline-ring',
+			'group-has-[:disabled]:group-hover:border-transparent group-has-[:disabled]:group-hover:bg-transparent group-has-[:disabled]:group-hover:opacity-40 group-has-[:disabled]:group-hover:outline-0'
 		)
 	);
 </script>

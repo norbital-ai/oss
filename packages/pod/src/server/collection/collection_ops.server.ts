@@ -71,6 +71,7 @@ import {
 } from '$lib/server/integrations/tenant-outbox.server.js';
 import { emitSyncOutbox, emitSyncOutboxMany } from './sync/sync-outbox.server.js';
 import { withCollectionTransaction, withMutationDb } from './collection_transaction.server.js';
+import { rowsPerMutationStatement } from './mutation-batching.js';
 import { collectionFiltersWhere } from './collection_filters.server.js';
 import { collectionSearchWhere } from './collection_search.server.js';
 import {
@@ -482,23 +483,28 @@ async function createManyUnguarded(
 		}
 
 		const created = await withMutationDb(ctx, async (db) => {
-			const rows = await db
-				.insert(table)
-				.values(prepared.map(({ values }) => values))
-				.returning();
 			const normalized: Record<string, unknown>[] = [];
-			for (const row of rows) {
-				const record = firstRowAsRecord([row]);
-				if (!record) throw error(500, `Failed to create a record in "${collection}"`);
-				normalized.push(record);
+			const insertedColumns = new Set(prepared.flatMap(({ values }) => Object.keys(values))).size;
+			const insertChunk = rowsPerMutationStatement(insertedColumns, 5_000);
+			for (let from = 0; from < prepared.length; from += insertChunk) {
+				const rows = await db
+					.insert(table)
+					.values(prepared.slice(from, from + insertChunk).map(({ values }) => values))
+					.returning();
+				for (const row of rows) {
+					const record = firstRowAsRecord([row]);
+					if (!record) throw error(500, `Failed to create a record in "${collection}"`);
+					normalized.push(record);
+				}
 			}
-			// stupidity:allow A6 -- outbox writes share the mutation transaction connection.
-			for (const record of normalized) {
-				await emitOutboundRows(db, ctx, collection, 'create', record);
-			}
-			// The batch was inserted with one statement, so its change-feed rows go the same way.
-			// Per row this was one network round trip each, which on a remote database made the
-			// feed — not the data — the cost of every bulk write.
+			await emitOutboundRowsMany(
+				db,
+				ctx,
+				collection,
+				'create',
+				normalized.map((record) => ({ record }))
+			);
+			// Root and feed statements use independent parameter-aware chunks inside this transaction.
 			await emitSyncOutboxMany(db, collection, 'create', normalized);
 			return normalized;
 		});

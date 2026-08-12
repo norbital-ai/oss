@@ -16,13 +16,11 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { composeSystemPrompt } from '$lib/server/agent/system-prompt.js';
 import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
-import { shouldPersistStreamPart } from '$lib/server/agent/stream-parts.js';
 import {
 	appendChatMessage,
 	appendChatTurn,
 	mutateChatSession,
 	readChatSession,
-	updateChatMessage,
 	updateChatTurn
 } from '$lib/server/agent/chat-session.server.js';
 import { runPendingConversationTitle } from '$lib/server/agent/conversation-title.server.js';
@@ -170,7 +168,6 @@ type TranscriptWriter = {
 		turnId: string,
 		extra?: Record<string, unknown>
 	): Promise<string | null>;
-	update(messageId: string, values: Record<string, unknown>): Promise<void>;
 };
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -522,7 +519,9 @@ async function loadMessages(sessionId: string): Promise<{ messages: AiMessage[] 
 	// prompt. The latest root summary is the only replay floor.
 	const roots = session.messages.filter(
 		(message) =>
-			message.kind !== 'usage' && (message.turn_id === null || !subagentTurns.has(message.turn_id))
+			message.kind !== 'usage' &&
+			message.kind !== 'reasoning' &&
+			(message.turn_id === null || !subagentTurns.has(message.turn_id))
 	);
 	const anchor = roots.findLastIndex((message) => message.kind === 'summary');
 	const replay = anchor < 0 ? roots : roots.slice(anchor);
@@ -560,9 +559,6 @@ function createTranscriptWriter(sessionId: string): TranscriptWriter {
 		sessionId,
 		async persist(message, turnId, extra): Promise<string | null> {
 			return appendChatMessage(sessionId, turnId, message, extra);
-		},
-		async update(messageId, values): Promise<void> {
-			await updateChatMessage(sessionId, messageId, values);
 		}
 	};
 }
@@ -671,17 +667,19 @@ function combinedTurnFailure(cause: unknown, settlementCause: unknown): Aggregat
 
 type ProviderTurnResult = {
 	readonly text: string;
+	readonly reasoning: string;
 	readonly toolCalls: readonly AiToolCall[];
 	readonly stopReason: AiChatResult['stopReason'];
 	readonly usage?: unknown;
 };
 
 /**
- * Pull one provider stream through the host boundary and make its text visible in tenant sync.
+ * Pull one provider stream through the host boundary and make its completed parts visible in sync.
  *
- * The host owns only a short-lived event queue. The first text delta creates the assistant row and
- * every following batch updates that same row, so the replica observes a real `streaming` ->
- * `complete` transition without Core retaining a second copy of the conversation.
+ * The host owns only a short-lived event queue. It accumulates provider deltas in memory and emits a
+ * `text_part` or `reasoning_part` only when TanStack closes that part. Each event is inserted once;
+ * no token or delta ever causes a PostgreSQL update. Ordinary chat-session sync still makes a part
+ * visible as soon as it completes without Core retaining a second durable transcript.
  */
 async function streamProviderTurn(input: {
 	readonly messages: readonly AiMessage[];
@@ -700,15 +698,21 @@ async function streamProviderTurn(input: {
 			...(input.spec.model ? { model: input.spec.model } : {}),
 			...(input.spec.profile ? { profile: input.spec.profile } : {})
 		});
+		if (result.reasoning) {
+			await input.writer.persist({ role: 'assistant', content: result.reasoning }, input.turnId, {
+				kind: 'reasoning',
+				model: input.spec.model ?? null
+			});
+		}
 		if (result.text) {
 			await input.writer.persist({ role: 'assistant', content: result.text }, input.turnId, {
 				status: 'complete',
-				model: input.spec.model ?? null,
-				...(result.usage ? { usage: objectValue(result.usage) } : {})
+				model: input.spec.model ?? null
 			});
 		}
 		return {
 			text: result.text,
+			reasoning: result.reasoning ?? '',
 			toolCalls: result.toolCalls ?? [],
 			stopReason: result.stopReason,
 			...(result.usage !== undefined ? { usage: result.usage } : {})
@@ -721,46 +725,35 @@ async function streamProviderTurn(input: {
 		...(input.spec.profile ? { profile: input.spec.profile } : {})
 	});
 	let text = '';
-	let assistantMessageId: string | null = null;
+	let reasoning = '';
 	let stopReason: AiChatResult['stopReason'] = 'end';
 	let usage: unknown;
 	const toolCalls: AiToolCall[] = [];
 	let done = false;
 	let lastHeartbeat = Date.now();
-	let persistedText = '';
-	let lastPartAt = Date.now();
 	try {
 		while (!done) {
 			const batch = await ai.readStream(streamId);
 			for (const event of batch.events) {
-				if (event.type === 'text_delta') {
-					text += event.delta;
+				if (event.type === 'text_part') {
+					text += event.text;
+					await input.writer.persist({ role: 'assistant', content: event.text }, input.turnId, {
+						status: 'complete',
+						model: input.spec.model ?? null
+					});
+				} else if (event.type === 'reasoning_part') {
+					reasoning += event.text;
+					await input.writer.persist({ role: 'assistant', content: event.text }, input.turnId, {
+						kind: 'reasoning',
+						status: 'complete',
+						model: input.spec.model ?? null
+					});
 				} else if (event.type === 'tool_call') {
 					toolCalls.push(event.call);
 				} else {
 					stopReason = event.stopReason;
 					usage = event.usage;
 				}
-			}
-			const pendingPart = text.slice(persistedText.length);
-			// The first non-empty provider part establishes the durable streaming row immediately. Later
-			// deltas are coalesced into semantic/size/time-bounded parts, so a short tool or subagent
-			// response becomes visible without turning every provider token into a database mutation.
-			if (
-				(!assistantMessageId && text.length > 0) ||
-				shouldPersistStreamPart({ pending: pendingPart, elapsedMs: Date.now() - lastPartAt })
-			) {
-				const message: AiMessage = { role: 'assistant', content: text };
-				if (assistantMessageId) {
-					await input.writer.update(assistantMessageId, { parts: [message], status: 'streaming' });
-				} else {
-					assistantMessageId = await input.writer.persist(message, input.turnId, {
-						status: 'streaming',
-						model: input.spec.model ?? null
-					});
-				}
-				persistedText = text;
-				lastPartAt = Date.now();
 			}
 			if (Date.now() - lastHeartbeat >= 5_000) {
 				lastHeartbeat = Date.now();
@@ -770,34 +763,9 @@ async function streamProviderTurn(input: {
 			}
 			done = batch.done;
 		}
-		if (assistantMessageId) {
-			await input.writer.update(assistantMessageId, {
-				parts: [{ role: 'assistant', content: text }],
-				status: 'complete',
-				...(usage ? { usage: objectValue(usage) } : {})
-			});
-		} else if (text) {
-			assistantMessageId = await input.writer.persist(
-				{ role: 'assistant', content: text },
-				input.turnId,
-				{
-					status: 'complete',
-					model: input.spec.model ?? null,
-					...(usage ? { usage: objectValue(usage) } : {})
-				}
-			);
-		}
-		return { text, toolCalls, stopReason, ...(usage !== undefined ? { usage } : {}) };
+		return { text, reasoning, toolCalls, stopReason, ...(usage !== undefined ? { usage } : {}) };
 	} catch (cause) {
 		await ai.cancelStream(streamId).catch(() => undefined);
-		if (assistantMessageId) {
-			await input.writer
-				.update(assistantMessageId, {
-					parts: [{ role: 'assistant', content: text }],
-					status: 'aborted'
-				})
-				.catch(() => undefined);
-		}
 		throw cause;
 	}
 }
@@ -909,10 +877,10 @@ async function runAgentLoop(input: {
 			input.messages.push({ role: 'assistant', content: result.text });
 		}
 		const calls = result.toolCalls;
-		// Empty and refused completions are still completed provider calls. Keep a hidden accounting
-		// part so tenant-side totals reconcile with the Core ledger even when there is no prose or tool
-		// call to carry the provider's usage object.
-		if (!result.text && calls.length === 0 && result.usage !== undefined) {
+		// Provider accounting is its own hidden part. Content parts are immutable once completed, so
+		// usage arriving on RUN_FINISHED never forces an UPDATE of the last visible part. This also
+		// gives empty, refused, and tool-only completions the same one-row accounting path.
+		if (result.usage !== undefined) {
 			await input.writer.persist({ role: 'assistant', content: '' }, input.turnId, {
 				kind: 'usage',
 				status: 'complete',
@@ -923,15 +891,7 @@ async function runAgentLoop(input: {
 		if (calls.length > 0) {
 			const callMessage: AiMessage = { role: 'assistant', content: '', toolCalls: calls };
 			input.messages.push(callMessage);
-			// An iteration that chose a tool instead of prose produces no text message, so its usage had
-			// nowhere to be stored and was simply lost — the tokens were spent and nothing recorded it.
-			// It belongs on the call message. Only when there was no text, or the accounting for one
-			// provider round trip would be attached twice.
-			await input.writer.persist(
-				callMessage,
-				input.turnId,
-				!result.text && result.usage ? { usage: objectValue(result.usage) } : undefined
-			);
+			await input.writer.persist(callMessage, input.turnId);
 		}
 		// Checked after the iteration's own usage is persisted: a turn that dies on the budget must
 		// still show what it spent, or the session total reads lower than the error that stopped it.

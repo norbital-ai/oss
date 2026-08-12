@@ -1,11 +1,12 @@
 import { sql } from 'drizzle-orm';
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import { rowsPerMutationStatement } from '../mutation-batching.js';
 
 export type SyncOutboxAction = 'create' | 'update' | 'delete';
 
 /** Rows per INSERT. Four bind parameters each, so this stays far inside Postgres' 65,535 limit. */
-const OUTBOX_CHUNK = 1_000;
+const OUTBOX_CHUNK = rowsPerMutationStatement(4);
 
 function outboxValues(
 	collection: string,
