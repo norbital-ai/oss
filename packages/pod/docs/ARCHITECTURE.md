@@ -166,6 +166,15 @@ The record, typed temporal snapshot, audit event, and sync row share one transac
 failure rolls the entire mutation back. Pod installs the native history function with its schema;
 the PostgreSQL provider needs no custom extension.
 
+Bulk `createMany` and `deleteMany` keep that same collection-level atomic boundary. Hooks and policy
+checks still run once per record in caller order, while PostgreSQL statements are chunked inside the
+single transaction with a 60,000 bind-parameter budget (headroom below PostgreSQL's 65,535 limit).
+Create roots derive their chunk from the inserted column count and cap it at 5,000; delete roots use
+independent 1,000-id select/delete chunks. Integration outbox, sync outbox, and audit ledger inserts
+each derive their own chunks from their statement's parameter shape. They are not lockstep 1,000-row
+batches: one caller batch can become several root statements, a different number of feed statements,
+and a different number of audit statements without weakening all-or-nothing commit semantics.
+
 ## Filesystem compiler
 
 The compiler treats the workspace filesystem as the source of truth. One source inventory is shared

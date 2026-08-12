@@ -326,6 +326,19 @@ Partial and completed messages, generated title, terminal state and usage theref
 ordinary sync stream; refresh, reconnect, offline catch-up and multi-tab convergence do not require
 an agent-specific browser stream or a race-prone collection fan-out.
 
+Provider text and reasoning deltas stay in the host's short-lived stream queue. Pod appends one
+durable `chat_session` message only when each provider text or reasoning part completes, so a token
+delta never causes a PostgreSQL write. Reasoning is retained as its own transcript kind rather than
+being folded into visible answer text. Provider usage is appended separately after the provider
+finishes; this keeps content immutable while giving empty, tool-only, and refused completions the
+same auditable accounting path.
+
+Every mounted agent surface shares one model catalog and next-turn selection through
+`agent-model-state.svelte.ts`. The first surface starts the load, concurrent surfaces join that
+promise, and the picker remains disabled until the catalog is ready. Changing workspace transport
+clears the catalog and selection before loading the new tenant's defaults, preventing a stale model
+choice from crossing an organization boundary.
+
 ## Channels
 
 Pod declarations choose the channel key, transport, policy and standing agent task. The host owns the
