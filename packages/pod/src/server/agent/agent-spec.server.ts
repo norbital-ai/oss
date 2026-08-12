@@ -128,7 +128,6 @@ export async function channelAgentSpec(input: {
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		...(authored?.model === undefined ? {} : { model: authored.model }),
 		...(authored?.profile === undefined ? {} : { profile: authored.profile }),
-		...(authored?.maxIterations === undefined ? {} : { maxIterations: authored.maxIterations }),
 		...(authored?.maxTokens === undefined ? {} : { maxTokens: authored.maxTokens })
 	};
 }

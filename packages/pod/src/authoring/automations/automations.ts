@@ -94,7 +94,6 @@ export type AgentAutomationSpec = {
 		readonly workspace: 'read-only' | 'read-write';
 	};
 	readonly profile?: string;
-	readonly maxIterations?: number;
 	readonly maxTokens?: number;
 };
 

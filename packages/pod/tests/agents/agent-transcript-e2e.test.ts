@@ -27,6 +27,29 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	let calls = 0;
 	const ai = testAiBinding(async (input) => {
+		const firstUser = input.messages.find((message) => message.role === 'user')?.content;
+		if (firstUser === 'Keep using tools past eight turns.') {
+			const completedCalls = input.messages.filter((message) => message.role === 'tool').length;
+			if (completedCalls < 9) {
+				return {
+					text: '',
+					toolCalls: [
+						{
+							id: `long-tool-${completedCalls + 1}`,
+							name: 'describe_workspace',
+							input: {}
+						}
+					],
+					stopReason: 'tool_use',
+					usage: { totalTokens: 1 }
+				};
+			}
+			return {
+				text: 'Completed after nine tool calls.',
+				stopReason: 'end',
+				usage: { totalTokens: 1 }
+			};
+		}
 		calls += 1;
 		if (calls === 1) {
 			// `construction` authors no `src/+agent.ts`, so this is the fallback profile: the skill tools
@@ -207,5 +230,20 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 			[turnId.rows[0]!.norbital_id]
 		);
 		expect(reclaim.rows).toHaveLength(0);
+	});
+
+	it('continues past the former eight-iteration ceiling until the model finishes', async () => {
+		const response = await harness.request(
+			{
+				method: 'POST',
+				path: 'agent/start',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ message: 'Keep using tools past eight turns.' })
+			},
+			admin
+		);
+		expect(response.status, await response.clone().text()).toBe(200);
+		const result = (await response.json()) as { text: string };
+		expect(result.text).toBe('Completed after nine tool calls.');
 	});
 });

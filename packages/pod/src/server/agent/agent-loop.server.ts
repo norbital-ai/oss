@@ -123,12 +123,41 @@ export function parseCompactDirective(message: string): { readonly instructions?
  * wrong costs one call. It is never shown to anyone — a number a reader sees comes from the
  * provider's own accounting on `chat_message.usage`, never from this.
  */
-function estimateTokens(messages: readonly AiMessage[]): number {
-	return Math.ceil(JSON.stringify(messages).length / 4);
+function estimateTokens(value: unknown): number {
+	return Math.ceil(JSON.stringify(value).length / 4);
 }
 
-/** Leaves room for the turn's own reasoning inside the window the summary has to fit. */
-const COMPACTION_TRIGGER_TOKENS = 120_000;
+/** Compact only when the selected model's prompt is genuinely near its advertised context limit. */
+export const COMPACTION_CONTEXT_RATIO = 0.95;
+
+export function shouldAutomaticallyCompact(input: {
+	readonly messages: readonly AiMessage[];
+	readonly tools: readonly AiToolSpec[];
+	readonly systemPrompt: string;
+	readonly contextLength: number | null;
+}): boolean {
+	if (!input.contextLength || !Number.isFinite(input.contextLength) || input.contextLength <= 0) {
+		return false;
+	}
+	const promptTokens = estimateTokens({
+		messages: [{ role: 'system', content: input.systemPrompt }, ...input.messages],
+		tools: input.tools
+	});
+	return promptTokens >= Math.floor(input.contextLength * COMPACTION_CONTEXT_RATIO);
+}
+
+async function selectedModelContextLength(spec: AgentAutomationSpec): Promise<number | null> {
+	const models = requireRuntimeFacility('ai').models;
+	if (!models) return null;
+	try {
+		const catalog = await models();
+		const selected = spec.model ?? catalog.defaultModel;
+		return catalog.options.find((option) => option.id === selected)?.contextLength ?? null;
+	} catch {
+		// A catalog outage must not invent a denominator. Manual `/compact` remains available.
+		return null;
+	}
+}
 
 /** Below this there is nothing a summary would usefully replace. */
 const COMPACTION_FLOOR_MESSAGES = 4;
@@ -945,34 +974,42 @@ async function runAgentLoop(input: {
 	readonly turnId: string;
 	readonly depth: number;
 	readonly planMode: boolean;
-	readonly iterationLimit?: number;
 }): Promise<LoopResult> {
 	const ctx = getWorkspace({ provision: true });
 	const resolved = await resolveTools(input.spec, {
 		canSpawnSubagent: input.depth === 0 && !input.planMode,
 		planMode: input.planMode
 	});
-	const maxIterations = input.iterationLimit ?? input.spec.maxIterations ?? 8;
+	const systemPrompt = composeSystemPrompt(input.spec.systemPrompt, { planMode: input.planMode });
+	const contextLength = input.depth === 0 ? await selectedModelContextLength(input.spec) : null;
 	let consumedTokens = 0;
 	let finalText = '';
-	// Once per turn, and never for a subagent: a child's window is its task and one loop, and a
-	// checkpoint written into the shared session from inside a child would anchor its parent too.
-	let compacted = input.depth !== 0;
-	for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+	// Never compact a child into the shared session: its checkpoint would become the parent's replay
+	// anchor. A failed root summarisation is attempted only once per run so an outage cannot hot-loop.
+	let compactionUnavailable = input.depth !== 0;
+	while (true) {
 		if (
-			!compacted &&
+			!compactionUnavailable &&
 			input.messages.length >= COMPACTION_FLOOR_MESSAGES &&
-			estimateTokens(input.messages) >= COMPACTION_TRIGGER_TOKENS
+			shouldAutomaticallyCompact({
+				messages: input.messages,
+				tools: resolved.specs,
+				systemPrompt,
+				contextLength
+			})
 		) {
-			compacted = true;
 			// A failed summarisation must not fail the turn: the window it would have replaced is still
 			// valid, and losing a conversation to a summariser outage is worse than a large prompt.
-			await compactWindow({
-				messages: input.messages,
-				writer: input.writer,
-				turnId: input.turnId,
-				spec: input.spec
-			}).catch(() => undefined);
+			try {
+				await compactWindow({
+					messages: input.messages,
+					writer: input.writer,
+					turnId: input.turnId,
+					spec: input.spec
+				});
+			} catch {
+				compactionUnavailable = true;
+			}
 		}
 		const result = await streamProviderTurn({
 			messages: input.messages,
@@ -1051,7 +1088,6 @@ async function runAgentLoop(input: {
 			);
 		}
 	}
-	throw new Error(`Agent exceeded maxIterations (${maxIterations})`);
 }
 
 async function runSubagent(input: {
@@ -1083,8 +1119,7 @@ async function runSubagent(input: {
 			writer: input.writer,
 			turnId,
 			depth: input.depth,
-			planMode: input.planMode,
-			iterationLimit: Math.min(input.spec.maxIterations ?? 8, 4)
+			planMode: input.planMode
 		});
 		await finishTurn(turnId, 'succeeded');
 		return { text: result.text, turnId };

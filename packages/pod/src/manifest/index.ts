@@ -147,7 +147,6 @@ function buildAutomationEntries(
 				tools?: string[];
 				hostTools?: string[];
 				profile?: string;
-				maxIterations?: number;
 				maxTokens?: number;
 			};
 		};
@@ -184,7 +183,6 @@ function buildAgentEntry(raw: unknown): ManifestAutomationAgentSpec | undefined 
 		...(spec.tools ? { tools: spec.tools } : {}),
 		...(spec.hostTools ? { hostTools: spec.hostTools } : {}),
 		...(spec.profile ? { profile: spec.profile } : {}),
-		...(spec.maxIterations ? { maxIterations: spec.maxIterations } : {}),
 		...(spec.maxTokens ? { maxTokens: spec.maxTokens } : {})
 	};
 }

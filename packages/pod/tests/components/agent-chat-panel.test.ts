@@ -190,7 +190,7 @@ describe('agent chat panel', () => {
 			norbital_id: 'm2',
 			chat_id: 'c1',
 			seq: 2,
-			parts: [{ role: 'system', content: 'Agent exceeded maxIterations (12)' }]
+			parts: [{ role: 'system', content: 'Agent run failed after provider error' }]
 		});
 		await settle();
 
@@ -199,7 +199,7 @@ describe('agent chat panel', () => {
 			'Send message'
 		);
 		expect(container.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
-			'Agent exceeded maxIterations (12)'
+			'Agent run failed after provider error'
 		);
 		destroy();
 	});
@@ -518,7 +518,12 @@ describe('agent chat panel', () => {
 			turn_id: 'parent-turn',
 			seq: 2,
 			kind: 'summary',
-			parts: [{ role: 'system', content: 'They asked about sites.' }]
+			parts: [
+				{
+					role: 'system',
+					content: '## What changed\n\n- Kept the site identifiers\n- Preserved unresolved work'
+				}
+			]
 		});
 		replica.arrive('chat_message', {
 			norbital_id: 'p1',
@@ -544,6 +549,13 @@ describe('agent chat panel', () => {
 
 		const delegated = container.querySelector('[aria-label="Subagent transcript"] li span');
 		expect(delegated?.textContent?.trim()).toBe('Task');
+		// The model writes Markdown summaries; the checkpoint must render its structure, not raw syntax.
+		expect(container.querySelector('[data-role="checkpoint"] h2')?.textContent).toBe(
+			'What changed'
+		);
+		expect(
+			container.querySelectorAll('[data-role="checkpoint"] [role="tabpanel"] ul li')
+		).toHaveLength(2);
 
 		// The raw conversation is the checkpoint's second tab, so it has to be asked for.
 		const rawTab = [...container.querySelectorAll('[role="tab"]')].find(

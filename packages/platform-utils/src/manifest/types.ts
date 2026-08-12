@@ -140,7 +140,6 @@ export const ManifestAutomationAgentSpecSchema = z
 		 */
 		hostTools: z.array(nonEmpty).optional(),
 		profile: nonEmpty.optional(),
-		maxIterations: z.number().int().positive().optional(),
 		maxTokens: z.number().int().positive().optional()
 	})
 	.strict();

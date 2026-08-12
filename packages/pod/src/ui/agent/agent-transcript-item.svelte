@@ -96,11 +96,9 @@
 				</Inline>
 				<div role="tabpanel" class="min-w-0">
 					{#if checkpointTab === 'summary'}
-						<p
-							class="m-0 max-h-72 overflow-auto text-micro leading-relaxed break-words whitespace-pre-wrap text-foreground/90"
-						>
-							{message.summary}
-						</p>
+						<div class="max-h-72 overflow-auto text-micro leading-relaxed text-foreground/90">
+							<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
+						</div>
 					{:else}
 						<ol
 							class="m-0 flex max-h-72 list-none flex-col gap-1.5 overflow-auto p-0"

@@ -5,7 +5,11 @@ import {
 	toSessionTotals,
 	withPendingEcho
 } from '$lib/ui/agent/transcript.js';
-import { parseCompactDirective } from '$lib/server/agent/agent-loop.server.js';
+import {
+	COMPACTION_CONTEXT_RATIO,
+	parseCompactDirective,
+	shouldAutomaticallyCompact
+} from '$lib/server/agent/agent-loop.server.js';
 import { shouldPersistStreamPart } from '$lib/server/agent/stream-parts.js';
 
 describe('durable stream parts', () => {
@@ -37,6 +41,45 @@ describe('compact directive', () => {
 		expect(parseCompactDirective('/compacting the schema')).toBeNull();
 		expect(parseCompactDirective('can you /compact this')).toBeNull();
 		expect(parseCompactDirective('compact the report')).toBeNull();
+	});
+});
+
+describe('automatic context compaction', () => {
+	it('uses 95% of the selected model context instead of a fixed prompt size', () => {
+		expect(COMPACTION_CONTEXT_RATIO).toBe(0.95);
+		expect(
+			shouldAutomaticallyCompact({
+				messages: [{ role: 'user', content: 'small prompt' }],
+				tools: [],
+				systemPrompt: '',
+				contextLength: 1_000_000
+			})
+		).toBe(false);
+		expect(
+			shouldAutomaticallyCompact({
+				messages: [{ role: 'user', content: 'x'.repeat(3_900_000) }],
+				tools: [],
+				systemPrompt: '',
+				contextLength: 1_000_000
+			})
+		).toBe(true);
+	});
+
+	it('counts system and tool definitions, and does not guess when model metadata is absent', () => {
+		const input = {
+			messages: [{ role: 'user' as const, content: 'hello' }],
+			tools: [
+				{
+					name: 'large_tool',
+					description: 'x'.repeat(4_000),
+					inputSchema: { type: 'object' }
+				}
+			],
+			systemPrompt: 'system',
+			contextLength: 1_000
+		};
+		expect(shouldAutomaticallyCompact(input)).toBe(true);
+		expect(shouldAutomaticallyCompact({ ...input, contextLength: null })).toBe(false);
 	});
 });
 

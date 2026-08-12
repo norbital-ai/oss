@@ -557,7 +557,6 @@ export default defineAutomation(
 		collections: ['tickets', 'queues'],
 		access: 'write',
 		tools: ['lookup_service_status'],
-		maxIterations: 8,
 		maxTokens: 4000
 	}
 );

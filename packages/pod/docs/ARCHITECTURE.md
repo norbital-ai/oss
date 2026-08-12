@@ -323,7 +323,6 @@ export default defineAutomation(
 		collections: ['permits', 'permit_renewals'],
 		access: 'write',
 		tools: ['check_registry'],
-		maxIterations: 12,
 		maxTokens: 40_000
 	}
 );
