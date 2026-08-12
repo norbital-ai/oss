@@ -19,6 +19,7 @@ host decides when work runs, while Pod owns what the job means.
 Collection-event dispatch has two durable stages. The feed scanner records a uniquely keyed job before
 advancing its tenant cursor; repeated scans therefore neither lose nor duplicate work. Workers lease
 pending jobs with `SKIP LOCKED`, run them serially while provider billing lacks atomic spend reservation,
-and retry with backoff before a terminal dead-letter state. External effects never belong to the transaction or request that created the
+heartbeat the lease for long-running work, and retry with backoff before a terminal dead-letter state.
+External effects never belong to the transaction or request that created the
 collection row, and callers such as environment reset may request enqueue-only progress without running
 the effect inline.

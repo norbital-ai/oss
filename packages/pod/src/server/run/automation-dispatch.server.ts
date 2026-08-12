@@ -39,6 +39,7 @@ type AutomationJob = {
 const AUTOMATION_JOB_CONCURRENCY = 1;
 const AUTOMATION_JOB_MAX_ATTEMPTS = 5;
 const AUTOMATION_JOB_LEASE_SECONDS = 120;
+const AUTOMATION_JOB_HEARTBEAT_SECONDS = 30;
 
 /** Pure: the automations whose collection-event trigger matches this change. */
 export function matchChangeAutomations(
@@ -205,6 +206,18 @@ async function claimAutomationJobs(
 }
 
 async function runAutomationJob(ctx: ProvisionedContext, job: AutomationJob): Promise<void> {
+	const heartbeat = setInterval(() => {
+		void ctx.tenantDb
+			.query(
+				`UPDATE _norbital_automation_job
+				    SET lease_until = CURRENT_TIMESTAMP + ($2 * INTERVAL '1 second'),
+				        updated_at = CURRENT_TIMESTAMP
+				  WHERE norbital_id = $1::uuid AND status = 'processing'`,
+				[job.norbital_id, AUTOMATION_JOB_LEASE_SECONDS]
+			)
+			.catch((cause) => console.error('[automation-job-heartbeat]', cause));
+	}, AUTOMATION_JOB_HEARTBEAT_SECONDS * 1000);
+	heartbeat.unref?.();
 	try {
 		const record =
 			job.action === 'delete'
@@ -237,6 +250,8 @@ async function runAutomationJob(ctx: ProvisionedContext, job: AutomationJob): Pr
 			  WHERE norbital_id = $1::uuid`,
 			[job.norbital_id, dead ? 'dead' : 'pending', retrySeconds, message]
 		);
+	} finally {
+		clearInterval(heartbeat);
 	}
 }
 

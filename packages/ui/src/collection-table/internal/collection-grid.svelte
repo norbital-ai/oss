@@ -307,17 +307,52 @@
 
 	// --------------------- Virtualization ---------------------
 	// Using custom Svelte 5 virtualizer - no store workarounds needed
+	const measuredRowHeights = new Map<string, number>();
 	const rowVirtualizer = createVirtualizer({
 		count: () => tableApi.data.length,
 		scrollElement: () => bodyScrollElement,
-		estimateSize: () => ROW_HEIGHT,
+		estimateSize: (i: number) => measuredRowHeights.get(tableApi.rowIds[i] ?? '') ?? ROW_HEIGHT,
 		overscan: ROW_OVERSCAN,
 		getItemKey: (i: number) => tableApi.rowIds[i] ?? `idx:${i}`
 	});
 
+	const mountedRowElements = new Set<HTMLElement>();
+
+	function measureRowElement(rowElement: HTMLElement) {
+		const recordId = rowElement.dataset.recordId;
+		const height = rowElement.offsetHeight;
+		const measuredHeight = recordId ? measuredRowHeights.get(recordId) : undefined;
+		const expanded =
+			rowElement.getAttribute('aria-expanded') === 'true' ||
+			(!!recordId && !!tableApi.expanded.current[recordId]);
+
+		// During a same-key polling reconciliation Svelte can refresh this attachment before the
+		// expanded snippet has been committed. Keep the last expanded extent through that transient
+		// collapsed reading; the post-tick measurement below records the final DOM height. A genuine
+		// collapse has aria-expanded=false and therefore still shrinks the virtual item immediately.
+		if (
+			expanded &&
+			height <= ROW_HEIGHT &&
+			measuredHeight !== undefined &&
+			measuredHeight > height
+		) {
+			return;
+		}
+
+		if (recordId && height > 0) {
+			measuredRowHeights.set(recordId, height);
+		}
+		rowVirtualizer.measureElement(rowElement);
+	}
+
 	function remeasureRows() {
-		tick().then(() => {
-			rowVirtualizer.measure();
+		// Clear only the index-keyed measurements when the data snapshot changes. Stable-id height
+		// estimates bridge the reconciliation without changing the scroll offset.
+		rowVirtualizer.measure();
+		void tick().then(() => {
+			for (const rowElement of mountedRowElements) {
+				measureRowElement(rowElement);
+			}
 		});
 	}
 
@@ -344,29 +379,38 @@
 	);
 
 	watch(
-		() => tableApi.rowIds.join(','),
+		() => tableApi.data,
 		() => {
+			// A polling result normally replaces row objects while retaining the same stable record ids.
+			// Watching ids alone misses that refresh. If the virtualizer reconciles its cache back to the
+			// collapsed estimate, the already-open detail is clipped even though disclosure state is still
+			// true, and ResizeObserver has nothing to report because the DOM row itself never resized.
+			// Re-measure every data snapshot so the stable identity keeps both state and virtual extent.
 			remeasureRows();
 		}
 	);
 
-	function measureRow(_expanded: boolean): Attachment {
+	function measureRow(): Attachment {
 		return (element) => {
 			const rowElement = element as HTMLElement;
-			const measure = () => rowVirtualizer.measureElement(rowElement);
+			const measure = () => measureRowElement(rowElement);
+			mountedRowElements.add(rowElement);
 			measure();
+			void tick().then(measure);
 
 			// Row details are mounted after the disclosure control changes state. Measuring only when the
 			// attachment is installed can therefore capture the collapsed 48px row and leave the expanded
 			// panel outside the virtual spacer, where the grid's scroll boundary clips it. Observe the row
 			// itself so every disclosure/content resize updates the virtual extent.
 			if (typeof ResizeObserver === 'undefined') {
-				void tick().then(measure);
-				return;
+				return () => mountedRowElements.delete(rowElement);
 			}
 			const resizeObserver = new ResizeObserver(measure);
 			resizeObserver.observe(rowElement);
-			return () => resizeObserver.disconnect();
+			return () => {
+				mountedRowElements.delete(rowElement);
+				resizeObserver.disconnect();
+			};
 		};
 	}
 </script>
@@ -758,7 +802,7 @@
 										onclick={(event) => activateRow(event, row)}
 										onmouseenter={() => (hoveredRowId = rowId)}
 										onmouseleave={() => (hoveredRowId = null)}
-										{@attach measureRow(isRowExpanded)}
+										{@attach measureRow()}
 									>
 										<div
 											class={rowSurfaceClass(isDetailActive, isRowExpanded)}

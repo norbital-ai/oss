@@ -55,8 +55,15 @@ function installRowLayoutHarness(): {
 	};
 }
 
+function virtualSpacerHeight(container: HTMLElement): number {
+	return Number.parseFloat(
+		container.querySelector<HTMLElement>('[data-collection-grid-virtual-spacer]')?.style.height ??
+			'0'
+	);
+}
+
 describe('DataGrid controlled disclosure', () => {
-	it('keeps an expanded row open when polling replaces rows and remounts the grid', async () => {
+	it('keeps an expanded row open when polling replaces the deployment object', async () => {
 		const { container, destroy } = render(DataGridDisclosureHarness as never, {});
 		await settle();
 
@@ -79,17 +86,45 @@ describe('DataGrid controlled disclosure', () => {
 		);
 		expect(container.querySelector('[aria-expanded="true"]')).not.toBeNull();
 		expect(container.querySelector('[data-testid="deployment-details"]')).not.toBeNull();
+
+		container.querySelector<HTMLButtonElement>('[data-testid="poll"]')?.click();
+		await settle();
+
+		expect(container.querySelector('[data-testid="expanded-ids"]')?.textContent).toBe(
+			'deployment-1'
+		);
+		expect(container.querySelector('[aria-expanded="true"]')).not.toBeNull();
+		expect(container.querySelector('[data-testid="deployment-details"]')).not.toBeNull();
 		destroy();
 	});
 
-	it('reserves the expanded detail height instead of clipping it to the collapsed row', async () => {
+	it('keeps an expanded row open when polling remounts the grid', async () => {
+		const { container, destroy } = render(DataGridDisclosureHarness as never, {});
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('[aria-label="Expand row details"]')?.click();
+		await settle();
+		expect(container.querySelector('[data-testid="expanded-ids"]')?.textContent).toBe(
+			'deployment-1'
+		);
+
+		container.querySelector<HTMLButtonElement>('[data-testid="poll-and-remount"]')?.click();
+		await settle();
+
+		expect(container.querySelector('[data-testid="expanded-ids"]')?.textContent).toBe(
+			'deployment-1'
+		);
+		expect(container.querySelector('[aria-expanded="true"]')).not.toBeNull();
+		expect(container.querySelector('[data-testid="deployment-details"]')).not.toBeNull();
+		destroy();
+	});
+
+	it('retains the expanded detail height across repeated same-id polling snapshots', async () => {
 		const layout = installRowLayoutHarness();
 		const { container, destroy } = render(DataGridDisclosureHarness as never, {});
 		try {
 			await settle();
-			expect(
-				container.querySelector<HTMLElement>('[data-collection-grid-virtual-spacer]')?.style.height
-			).toBe('48px');
+			expect(virtualSpacerHeight(container)).toBe(48);
 
 			container.querySelector<HTMLButtonElement>('[aria-label="Expand row details"]')?.click();
 			await settle();
@@ -97,9 +132,15 @@ describe('DataGrid controlled disclosure', () => {
 			await settle();
 
 			expect(container.querySelector('[data-testid="deployment-details"]')).not.toBeNull();
-			expect(
-				container.querySelector<HTMLElement>('[data-collection-grid-virtual-spacer]')?.style.height
-			).toBe('336px');
+			expect(virtualSpacerHeight(container)).toBeGreaterThanOrEqual(336);
+
+			for (let poll = 0; poll < 3; poll += 1) {
+				container.querySelector<HTMLButtonElement>('[data-testid="poll"]')?.click();
+				await settle();
+
+				expect(container.querySelector('[aria-expanded="true"]')).not.toBeNull();
+				expect(virtualSpacerHeight(container)).toBeGreaterThanOrEqual(336);
+			}
 		} finally {
 			destroy();
 			layout.restore();

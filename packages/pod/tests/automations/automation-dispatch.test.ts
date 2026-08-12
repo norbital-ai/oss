@@ -50,5 +50,7 @@ describe('durable automation jobs', () => {
 		expect(source).toContain("status = 'processing' AND lease_until <= CURRENT_TIMESTAMP");
 		expect(source).toContain('AUTOMATION_JOB_MAX_ATTEMPTS = 5');
 		expect(source).toContain('AUTOMATION_JOB_CONCURRENCY = 1');
+		expect(source).toContain('AUTOMATION_JOB_HEARTBEAT_SECONDS = 30');
+		expect(source).toContain("norbital_id = $1::uuid AND status = 'processing'");
 	});
 });
