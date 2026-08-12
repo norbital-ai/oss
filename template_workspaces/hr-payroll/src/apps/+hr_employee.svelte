@@ -77,6 +77,7 @@
 		(employmentsQuery?.current ?? []).filter(
 			(employment) =>
 				employment.effective_range != null &&
+				employment.effective_range.start != null &&
 				employment.effective_range.start.slice(0, 10) <= today &&
 				(employment.effective_range.end == null ||
 					employment.effective_range.end.slice(0, 10) >= today)

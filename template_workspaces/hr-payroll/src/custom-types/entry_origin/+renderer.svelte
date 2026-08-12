@@ -158,12 +158,14 @@
 	 * boundary eight hours into the adjacent local day — which is what
 	 * `dates-and-time.md` forbids.
 	 */
-	function dateOf(instant: string): string {
-		return calendarDateInTimeZone(new Date(instant), PAYROLL_TIME_ZONE);
+	function dateOf(instant: string | undefined): string {
+		return instant == null ? '' : calendarDateInTimeZone(new Date(instant), PAYROLL_TIME_ZONE);
 	}
 
-	function instantOf(date: string, fallback: string): string {
-		return date.trim().length === 0 ? fallback : startOfDayInstant(date, PAYROLL_TIME_ZONE);
+	function instantOf(date: string, fallback: string | undefined): string {
+		return date.trim().length === 0
+			? (fallback ?? startOfDayInstant(todayKey(), PAYROLL_TIME_ZONE))
+			: startOfDayInstant(date, PAYROLL_TIME_ZONE);
 	}
 
 	function defaultFor(kind: OriginKind): Value {

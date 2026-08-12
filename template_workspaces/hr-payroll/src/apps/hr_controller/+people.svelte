@@ -69,6 +69,7 @@
 				.filter(
 					(employment) =>
 						employment.effective_range != null &&
+						employment.effective_range.start != null &&
 						employment.effective_range.start.slice(0, 10) <= today &&
 						(employment.effective_range.end == null ||
 							employment.effective_range.end.slice(0, 10) >= today)
@@ -87,7 +88,7 @@
 	]);
 	const workforceTrend = $derived.by(() => {
 		const ranges = (employmentsQuery?.current ?? []).flatMap((employment) =>
-			employment.effective_range
+			employment.effective_range?.start
 				? [
 						{
 							start: employment.effective_range.start.slice(0, 10),
