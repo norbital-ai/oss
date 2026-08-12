@@ -351,7 +351,23 @@
 	);
 
 	function measureRow(_expanded: boolean): Attachment {
-		return (el) => rowVirtualizer.measureElement(el as HTMLElement);
+		return (element) => {
+			const rowElement = element as HTMLElement;
+			const measure = () => rowVirtualizer.measureElement(rowElement);
+			measure();
+
+			// Row details are mounted after the disclosure control changes state. Measuring only when the
+			// attachment is installed can therefore capture the collapsed 48px row and leave the expanded
+			// panel outside the virtual spacer, where the grid's scroll boundary clips it. Observe the row
+			// itself so every disclosure/content resize updates the virtual extent.
+			if (typeof ResizeObserver === 'undefined') {
+				void tick().then(measure);
+				return;
+			}
+			const resizeObserver = new ResizeObserver(measure);
+			resizeObserver.observe(rowElement);
+			return () => resizeObserver.disconnect();
+		};
 	}
 </script>
 
@@ -708,7 +724,7 @@
 	>
 		{#snippet child({ draggedItemId })}
 			<div class="relative w-full">
-				<div style="height: {totalVirtualRowSize}px;"></div>
+				<div data-collection-grid-virtual-spacer style="height: {totalVirtualRowSize}px;"></div>
 				<div
 					bind:this={bodySortableElement}
 					class={bodySortableClass}
