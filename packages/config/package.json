@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/config",
-	"version": "0.0.22",
+	"version": "0.0.23",
 	"description": "Shared TypeScript and Svelte configuration for Norbital packages.",
 	"type": "module",
 	"sideEffects": false,
