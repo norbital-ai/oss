@@ -12,6 +12,7 @@ import {
 	defineConnection,
 	type HttpConnection
 } from '../../src/authoring/integrations/integrations.js';
+import { toRuntimeWorkspace } from '../../src/authoring/workspace/workspace-runtime.js';
 import { buildNorbitalManifest } from '../../src/manifest/index.js';
 
 const connection = () =>
@@ -209,6 +210,19 @@ describe('a webhook receive binding', () => {
 
 /** Both directions are checked, so a reference and its declaration cannot drift apart silently. */
 describe('private environment declarations', () => {
+	it('keeps private declarations in manifest.secrets across the runtime projection', () => {
+		const runtime = toRuntimeWorkspace(
+			workspace({ quotes: sendBinding(connection(), '/quotes'), env: { private: PRIVATE_ENV } })
+		);
+		const built = buildNorbitalManifest(runtime);
+
+		expect(built.env).toEqual({ public: {} });
+		expect(built.env).not.toHaveProperty('secret');
+		expect(built.secrets).toEqual({
+			REGISTRY_KEY: { description: 'Registry API key', required: true }
+		});
+	});
+
 	it('refuses a reference to a name src/+env.ts does not declare', () => {
 		expect(() => workspace({ quotes: sendBinding(connection(), '/quotes') })).toThrow(
 			/undeclared private environment key "REGISTRY_KEY".*src\/\+env\.ts/s

@@ -23,7 +23,6 @@ import { buildCollectionDefinitions } from '../schema/table.js';
 
 export type RuntimeWorkspaceEnv = {
 	readonly public?: Readonly<Record<string, string>>;
-	readonly secret?: Readonly<Record<string, string>>;
 };
 
 /**

@@ -484,8 +484,7 @@ export const NorbitalManifestSchema = z
 		automations: z.record(z.string(), ManifestAutomationSchema),
 		env: z
 			.object({
-				public: stringRecord.optional(),
-				secret: stringRecord.optional()
+				public: stringRecord.optional()
 			})
 			.strict()
 			.optional(),
