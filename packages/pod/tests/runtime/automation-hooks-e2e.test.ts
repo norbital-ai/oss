@@ -724,6 +724,7 @@ describe('Pod automations and hooks — E2E', () => {
 		const systemCreated = await command('collections/createMany', {
 			collection: 'team',
 			bypass_secret: TEST_PERMISSION_BYPASS_KEY,
+			returning: 'ids',
 			inputs: [
 				{
 					norbital_id: teamId,
@@ -735,6 +736,7 @@ describe('Pod automations and hooks — E2E', () => {
 			]
 		});
 		expect(systemCreated.status, systemCreated.body).toBe(200);
+		expect(JSON.parse(systemCreated.body)).toEqual([{ norbital_id: teamId }]);
 		const hostElevated = await harness.request(
 			{
 				method: 'POST',

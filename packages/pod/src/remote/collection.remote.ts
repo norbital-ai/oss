@@ -123,7 +123,7 @@ export const create = authenticated.command(CreateWireSchema, async (params) => 
 export const createMany = authenticated.command(CreateManyWireSchema, async (params) => {
 	const ctx = getWorkspace({ provision: true });
 	requireCollection(params.collection);
-	return runWithBypassSecretIfValidAsync(params.bypass_secret, () => {
+	return runWithBypassSecretIfValidAsync(params.bypass_secret, async () => {
 		const isElevated = getCurrentPermissionBypassKey() != null;
 		const inputs = isElevated
 			? params.inputs.map(
@@ -138,7 +138,7 @@ export const createMany = authenticated.command(CreateManyWireSchema, async (par
 		const recordIds = isElevated
 			? params.inputs.map((input) => String(input[SYSTEM_COLUMN_NAMES.PKEY] ?? ''))
 			: undefined;
-		return runCreateMany(ctx, params.collection, inputs, {
+		const created = await runCreateMany(ctx, params.collection, inputs, {
 			// A valid host bypass is the standard elevated collection-op path. It may create
 			// platform collections and hookless template collections, but create hooks still run
 			// whenever the workspace authored them. Invalid or absent secrets remain ordinary calls.
@@ -151,6 +151,12 @@ export const createMany = authenticated.command(CreateManyWireSchema, async (par
 					}
 				: {})
 		});
+		if (isElevated && params.returning === 'ids') {
+			return created.map((record) => ({
+				[SYSTEM_COLUMN_NAMES.PKEY]: record[SYSTEM_COLUMN_NAMES.PKEY]
+			}));
+		}
+		return created;
 	});
 });
 

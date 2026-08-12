@@ -418,12 +418,25 @@ async function createManyUnguarded(
 	}
 
 	const api = await getHookApi();
-	const beforeHook = collectionHooks(behavior, 'create')?.before;
-	const afterHook = collectionHooks(behavior, 'create')?.after;
+	const createHooks = collectionHooks(behavior, 'create');
+	const beforeHook = createHooks?.before;
+	const beforeBatchHook = createHooks?.beforeBatch;
+	const afterHook = createHooks?.after;
+	const afterBatchHook = createHooks?.afterBatch;
 	const metadata = collectionMetadata(ctx, collection);
 	const table = requireTable(ctx, collection);
 	const now = new Date().toISOString();
 	const records = await withCollectionTransaction(ctx, async () => {
+		const batchHookPayloads = beforeBatchHook ? await beforeBatchHook({ inputs, api }) : undefined;
+		if (beforeBatchHook && !Array.isArray(batchHookPayloads)) {
+			throw error(500, `Create before batch hook for "${collection}" must return an array`);
+		}
+		if (batchHookPayloads && batchHookPayloads.length !== inputs.length) {
+			throw error(
+				500,
+				`Create before batch hook for "${collection}" returned ${batchHookPayloads.length} records for ${inputs.length} inputs`
+			);
+		}
 		const prepared: Array<{
 			values: Record<string, unknown>;
 			links: Record<string, string[]>;
@@ -436,7 +449,20 @@ async function createManyUnguarded(
 		// stupidity:allow A6 -- hooks and permission checks run in caller order within one transaction.
 		for (const [index, input] of inputs.entries()) {
 			let payload = flattenWithOntoPayload(parseMutationInput(collection, 'create', input));
-			if (beforeHook) {
+			const batchPayload = batchHookPayloads?.[index];
+			if (batchHookPayloads) {
+				if (
+					batchPayload == null ||
+					typeof batchPayload !== 'object' ||
+					Array.isArray(batchPayload)
+				) {
+					throw error(
+						500,
+						`Create before batch hook for "${collection}" returned an invalid record at index ${index}`
+					);
+				}
+				payload = flattenWithOntoPayload(batchPayload);
+			} else if (beforeHook) {
 				const hookResult = await beforeHook({ input, api });
 				if (hookResult != null) payload = hookResult;
 			}
@@ -512,25 +538,38 @@ async function createManyUnguarded(
 			throw error(500, `Failed to create all records in "${collection}"`);
 		}
 
-		const afterApi = afterHook ? await getElevatedAfterHookApi() : undefined;
-		// stupidity:allow A6 -- relationship, approval, and after-hook side effects preserve input order.
-		for (const [index, record] of created.entries()) {
-			const item = prepared[index];
-			if (!item) throw error(500, `Missing prepared record in "${collection}"`);
-			const sourceId = String(record[SYSTEM_COLUMN_NAMES.PKEY] ?? '');
-			await persistMutationRelationships(ctx, collection, sourceId, item.links, item.nested);
-			if (item.gatedConfig && item.approvalRequestId) {
-				await createApprovalRequestForGatedWrite({
-					approvalConfig: item.gatedConfig,
-					collectionName: collection,
-					context: item.mutationContext,
-					rootRecord: record,
-					lockType: 'record_mutation',
-					requestId: item.approvalRequestId
-				});
+		const afterApi = afterHook || afterBatchHook ? await getElevatedAfterHookApi() : undefined;
+		const hasPerRecordEffects =
+			(afterHook != null && afterBatchHook == null) ||
+			prepared.some(
+				(item) =>
+					Object.keys(item.links).length > 0 ||
+					Object.keys(item.nested).length > 0 ||
+					(item.gatedConfig != null && item.approvalRequestId != null)
+			);
+		if (hasPerRecordEffects) {
+			// stupidity:allow A6 -- relationship, approval, and after-hook side effects preserve input order.
+			for (const [index, record] of created.entries()) {
+				const item = prepared[index];
+				if (!item) throw error(500, `Missing prepared record in "${collection}"`);
+				const sourceId = String(record[SYSTEM_COLUMN_NAMES.PKEY] ?? '');
+				if (Object.keys(item.links).length > 0 || Object.keys(item.nested).length > 0) {
+					await persistMutationRelationships(ctx, collection, sourceId, item.links, item.nested);
+				}
+				if (item.gatedConfig && item.approvalRequestId) {
+					await createApprovalRequestForGatedWrite({
+						approvalConfig: item.gatedConfig,
+						collectionName: collection,
+						context: item.mutationContext,
+						rootRecord: record,
+						lockType: 'record_mutation',
+						requestId: item.approvalRequestId
+					});
+				}
+				if (afterHook && !afterBatchHook && afterApi) await afterHook({ record, api: afterApi });
 			}
-			if (afterHook && afterApi) await afterHook({ record, api: afterApi });
 		}
+		if (afterBatchHook && afterApi) await afterBatchHook({ records: created, api: afterApi });
 
 		await sendAuditEvents(
 			created.map((record) => ({

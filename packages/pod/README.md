@@ -275,6 +275,13 @@ Hook capabilities are deliberately phase-specific:
 - AI is available to server handlers and automations, but not inside the authoritative mutation
   transaction.
 
+An authored create hook may additionally provide `batchHandler` beside its ordinary `handler`.
+`createMany` calls that batch function once, in caller order and inside the same authoritative
+transaction; a single-record create continues to call `handler`. The batch before hook must return
+exactly one payload per input in the original order. This is intended for set-aware validation and
+derived work that can replace query-per-record loops without weakening audit, outbox, hook, or
+rollback semantics.
+
 All derived mutations still re-enter Pod collection operations. Direct SQL is guarded and cannot
 bypass policy, approvals, hooks, history, audit, or sync.
 

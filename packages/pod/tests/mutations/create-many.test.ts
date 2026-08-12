@@ -38,7 +38,11 @@ type CreateHookEvent = {
 
 const state = vi.hoisted(() => ({
 	beforeHook: undefined as undefined | ((event: CreateHookEvent) => unknown),
-	afterHook: undefined as undefined | ((event: CreateHookEvent) => unknown)
+	afterHook: undefined as undefined | ((event: CreateHookEvent) => unknown),
+	beforeBatchHook: undefined as
+		undefined | ((event: { inputs: readonly Record<string, unknown>[] }) => unknown),
+	afterBatchHook: undefined as
+		undefined | ((event: { records: readonly Record<string, unknown>[] }) => unknown)
 }));
 
 vi.mock('$lib/server/collection/workspace-collections.js', () => ({
@@ -48,7 +52,9 @@ vi.mock('$lib/server/collection/workspace-collections.js', () => ({
 		action === 'create'
 			? {
 					...(state.beforeHook ? { before: state.beforeHook } : {}),
-					...(state.afterHook ? { after: state.afterHook } : {})
+					...(state.afterHook ? { after: state.afterHook } : {}),
+					...(state.beforeBatchHook ? { beforeBatch: state.beforeBatchHook } : {}),
+					...(state.afterBatchHook ? { afterBatch: state.afterBatchHook } : {})
 				}
 			: undefined
 }));
@@ -163,6 +169,8 @@ describe('Batched collection create (real Postgres)', () => {
 	beforeEach(async () => {
 		state.beforeHook = undefined;
 		state.afterHook = undefined;
+		state.beforeBatchHook = undefined;
+		state.afterBatchHook = undefined;
 		await client.query('ROLLBACK').catch(() => undefined);
 		await client.query('BEGIN');
 		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
@@ -228,6 +236,79 @@ describe('Batched collection create (real Postgres)', () => {
 				createMany(ctx, 'orders', inputs, { isElevated: true, recordIds: ids })
 			)
 		).rejects.toThrow('late hook failure');
+
+		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 0 });
+		expect(await pool.query('SELECT 1 FROM sync_outbox')).toMatchObject({ rowCount: 0 });
+		expect(await pool.query('SELECT 1 FROM audit_event')).toMatchObject({ rowCount: 0 });
+	});
+
+	it('runs create batch hooks once in caller order and keeps audit and sync atomic', async () => {
+		const { ids, inputs } = batch(6);
+		const events: string[] = [];
+		state.beforeHook = () => {
+			throw new Error('single before hook must not run');
+		};
+		state.afterHook = () => {
+			throw new Error('single after hook must not run');
+		};
+		state.beforeBatchHook = ({ inputs: batchInputs }) => {
+			events.push(`before:${batchInputs.map((input) => input.status).join(',')}`);
+			return batchInputs.map((input) => ({ status: `${input.status}-prepared` }));
+		};
+		state.afterBatchHook = ({ records }) => {
+			events.push(`after:${records.map((record) => record.status).join(',')}`);
+		};
+
+		const created = await withRequestWorkspaceCtx(ctx, () =>
+			createMany(ctx, 'orders', inputs, { isElevated: true, recordIds: ids })
+		);
+
+		expect(created.map((record) => record.status)).toEqual(
+			inputs.map(({ status }) => `${status}-prepared`)
+		);
+		expect(events).toEqual([
+			`before:${inputs.map(({ status }) => status).join(',')}`,
+			`after:${inputs.map(({ status }) => `${status}-prepared`).join(',')}`
+		]);
+		expect(
+			(
+				await pool.query<{ record_id: string }>('SELECT record_id FROM sync_outbox ORDER BY seq')
+			).rows.map((record) => record.record_id)
+		).toEqual(ids);
+		expect(
+			(
+				await pool.query<{ record_id: string }>('SELECT record_id FROM audit_event ORDER BY ctid')
+			).rows.map((record) => record.record_id)
+		).toEqual(ids);
+	});
+
+	it('rolls back batch-hook inserts and sync when the batch after hook fails', async () => {
+		const { ids, inputs } = batch(6);
+		state.beforeBatchHook = ({ inputs: batchInputs }) => batchInputs;
+		state.afterBatchHook = () => {
+			throw new Error('batch after failure');
+		};
+
+		await expect(
+			withRequestWorkspaceCtx(ctx, () =>
+				createMany(ctx, 'orders', inputs, { isElevated: true, recordIds: ids })
+			)
+		).rejects.toThrow('batch after failure');
+
+		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 0 });
+		expect(await pool.query('SELECT 1 FROM sync_outbox')).toMatchObject({ rowCount: 0 });
+		expect(await pool.query('SELECT 1 FROM audit_event')).toMatchObject({ rowCount: 0 });
+	});
+
+	it('rejects a before batch hook that does not return one result per input', async () => {
+		const { ids, inputs } = batch(6);
+		state.beforeBatchHook = ({ inputs: batchInputs }) => batchInputs.slice(0, -1);
+
+		await expect(
+			withRequestWorkspaceCtx(ctx, () =>
+				createMany(ctx, 'orders', inputs, { isElevated: true, recordIds: ids })
+			)
+		).rejects.toThrow('returned 5 records for 6 inputs');
 
 		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 0 });
 		expect(await pool.query('SELECT 1 FROM sync_outbox')).toMatchObject({ rowCount: 0 });

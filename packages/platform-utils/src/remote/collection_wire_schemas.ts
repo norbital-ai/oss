@@ -102,6 +102,8 @@ export const CreateWireSchema = z.object({
 export const CreateManyWireSchema = z.object({
 	collection: z.string(),
 	bypass_secret: z.string().optional(),
+	/** Elevated bulk callers may avoid serializing complete rows they already own. */
+	returning: z.enum(['records', 'ids']).optional(),
 	inputs: z.array(z.record(z.string(), z.unknown()))
 });
 

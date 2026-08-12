@@ -167,8 +167,11 @@ failure rolls the entire mutation back. Pod installs the native history function
 the PostgreSQL provider needs no custom extension.
 
 Bulk `createMany` and `deleteMany` keep that same collection-level atomic boundary. Hooks and policy
-checks still run once per record in caller order, while PostgreSQL statements are chunked inside the
-single transaction with a 60,000 bind-parameter budget (headroom below PostgreSQL's 65,535 limit).
+checks run once per record in caller order by default. A create hook may opt into a `batchHandler`;
+then `createMany` calls it once with the caller-ordered batch inside that same transaction, while
+ordinary single-record create continues to use `handler`. A batch before hook must return exactly one
+payload per input in the original order. PostgreSQL statements are chunked inside the single
+transaction with a 60,000 bind-parameter budget (headroom below PostgreSQL's 65,535 limit).
 Create roots derive their chunk from the inserted column count and cap it at 5,000; delete roots use
 independent 1,000-id select/delete chunks. Integration outbox, sync outbox, and audit ledger inserts
 each derive their own chunks from their statement's parameter shape. They are not lockstep 1,000-row

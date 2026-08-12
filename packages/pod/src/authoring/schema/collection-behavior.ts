@@ -92,6 +92,15 @@ export type DescribedHook<THandler> = {
 	readonly handler: THandler;
 };
 
+type DescribedBatchHook<THandler, TBatchHandler> = DescribedHook<THandler> & {
+	/**
+	 * Optional createMany fast path. It receives the whole caller batch once, inside the same
+	 * authoritative transaction as the inserts, outbox, derived writes and audit events. Results
+	 * must have exactly the same length and order as `inputs`. Ordinary create still calls `handler`.
+	 */
+	readonly batchHandler?: TBatchHandler;
+};
+
 type CreateHookHandlers<S extends AnySchema, N extends TableName<S>, TInput> = {
 	readonly before?: (ctx: {
 		readonly input: TInput;
@@ -99,6 +108,14 @@ type CreateHookHandlers<S extends AnySchema, N extends TableName<S>, TInput> = {
 	}) => Promise<TInput | CreateMutationPayload<S, N>>;
 	readonly after?: (ctx: {
 		readonly record: SchemaRow<S, N>;
+		readonly api: AfterHookApi<S>;
+	}) => Promise<void>;
+	readonly beforeBatch?: (ctx: {
+		readonly inputs: readonly TInput[];
+		readonly api: HookApi<S>;
+	}) => Promise<readonly (TInput | CreateMutationPayload<S, N>)[]>;
+	readonly afterBatch?: (ctx: {
+		readonly records: ReadonlyArray<SchemaRow<S, N>>;
 		readonly api: AfterHookApi<S>;
 	}) => Promise<void>;
 };
@@ -127,8 +144,20 @@ type DeleteHookHandlers<S extends AnySchema, N extends TableName<S>> = {
 };
 
 type CreateHooks<S extends AnySchema, N extends TableName<S>, TInput> = {
-	readonly before?: DescribedHook<NonNullable<CreateHookHandlers<S, N, TInput>['before']>>;
-	readonly after?: DescribedHook<NonNullable<CreateHookHandlers<S, N, TInput>['after']>>;
+	readonly before?: DescribedBatchHook<
+		NonNullable<CreateHookHandlers<S, N, TInput>['before']>,
+		(ctx: {
+			readonly inputs: readonly TInput[];
+			readonly api: HookApi<S>;
+		}) => Promise<readonly (TInput | CreateMutationPayload<S, N>)[]>
+	>;
+	readonly after?: DescribedBatchHook<
+		NonNullable<CreateHookHandlers<S, N, TInput>['after']>,
+		(ctx: {
+			readonly records: ReadonlyArray<SchemaRow<S, N>>;
+			readonly api: AfterHookApi<S>;
+		}) => Promise<void>
+	>;
 };
 
 type UpdateHooks<S extends AnySchema, N extends TableName<S>, TInput> = {
@@ -419,6 +448,14 @@ export type AnyHookBundle = {
 		readonly record: Record<string, unknown>;
 		readonly api: AfterHookApi;
 	}) => Promise<void>;
+	readonly beforeBatch?: (ctx: {
+		readonly inputs: readonly Record<string, unknown>[];
+		readonly api: HookApi;
+	}) => Promise<readonly Record<string, unknown>[]>;
+	readonly afterBatch?: (ctx: {
+		readonly records: readonly Record<string, unknown>[];
+		readonly api: AfterHookApi;
+	}) => Promise<void>;
 };
 
 /**
@@ -477,20 +514,27 @@ function describedHook(
 	kind: 'create' | 'update' | 'delete',
 	phase: 'before' | 'after',
 	value: unknown
-): { handler: unknown; description: string } {
+): { handler: unknown; batchHandler?: unknown; description: string } {
 	if (typeof value === 'function') {
 		throw new Error(
 			`Collection ${kind}.${phase} must be declared as { description, handler }, not a bare function`
 		);
 	}
-	const described = value as { handler?: unknown; description?: unknown };
+	const described = value as { handler?: unknown; batchHandler?: unknown; description?: unknown };
 	if (typeof described?.handler !== 'function') {
 		throw new Error(`Collection ${kind}.${phase} is missing a handler function`);
 	}
 	if (typeof described.description !== 'string' || !described.description.trim()) {
 		throw new Error(`Collection ${kind}.${phase} requires a non-empty description`);
 	}
-	return { handler: described.handler, description: described.description };
+	if (described.batchHandler !== undefined && typeof described.batchHandler !== 'function') {
+		throw new Error(`Collection ${kind}.${phase}.batchHandler must be a function`);
+	}
+	return {
+		handler: described.handler,
+		...(described.batchHandler ? { batchHandler: described.batchHandler } : {}),
+		description: described.description
+	};
 }
 
 /**
@@ -518,7 +562,11 @@ function buildMutationSection(
 		before || after
 			? {
 					...(before ? { before: before.handler } : {}),
-					...(after ? { after: after.handler } : {})
+					...(after ? { after: after.handler } : {}),
+					...(kind === 'create' && before?.batchHandler
+						? { beforeBatch: before.batchHandler }
+						: {}),
+					...(kind === 'create' && after?.batchHandler ? { afterBatch: after.batchHandler } : {})
 				}
 			: undefined;
 	const descriptions =
