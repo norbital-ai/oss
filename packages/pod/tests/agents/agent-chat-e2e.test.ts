@@ -94,6 +94,30 @@ describe('Pod agent chat — runtime E2E', () => {
 		expect(rows.rows.map((row) => row.seq)).toEqual([1, 2, 3, 4]);
 	});
 
+	it('keeps history beyond forty rows until model-aware compaction replaces it', async () => {
+		const first = await chat({ message: 'Sentinel from the beginning.' });
+		expect(first.status).toBe(200);
+		const opened = (await first.json()) as { runId: string; chatId: string };
+
+		// Cross the former row-count replay boundary without approaching any model context limit.
+		await harness.pool.query(
+			`INSERT INTO chat_message (chat_id, role, seq, parts)
+			 SELECT $1::uuid,
+			        CASE WHEN seq % 2 = 1 THEN 'user' ELSE 'assistant' END,
+			        seq,
+			        jsonb_build_array(jsonb_build_object(
+			          'role', CASE WHEN seq % 2 = 1 THEN 'user' ELSE 'assistant' END,
+			          'content', 'filler ' || seq::text
+			        ))
+			   FROM generate_series(3, 44) AS seq`,
+			[opened.chatId]
+		);
+
+		const continued = await chat({ message: 'What was the sentinel?', runId: opened.runId });
+		expect(continued.status, await continued.clone().text()).toBe(200);
+		expect(seen.at(-1)).toContain('user:Sentinel from the beginning.');
+	});
+
 	it('refuses to continue a conversation belonging to someone else', async () => {
 		const mine = await chat({ message: 'Mine.' });
 		const { runId } = (await mine.json()) as { runId: string };

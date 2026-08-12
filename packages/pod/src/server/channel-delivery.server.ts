@@ -51,9 +51,6 @@ export type ChannelInboundOutcome = {
 	readonly delivered?: boolean;
 };
 
-/** How many trailing transcript messages a channel turn replays. */
-const CHANNEL_HISTORY_LIMIT = 40;
-
 function declaredChannel(key: string): ManifestChannel {
 	const channel = getTenantManifest().channels?.[key];
 	if (!channel) {
@@ -235,7 +232,6 @@ export async function deliverChannelMessage(
 			const result = await runAgent({
 				automationName: `channel:${command.channel}`,
 				sessionId: bound.chatId,
-				historyLimit: CHANNEL_HISTORY_LIMIT,
 				input: command.text,
 				inputMetadata: {
 					source_provider: channel.transport,

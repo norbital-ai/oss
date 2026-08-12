@@ -66,14 +66,6 @@ type AgentRunOptions = {
 	 * appends to, and the run row stays what it always was — the record of one turn.
 	 */
 	readonly sessionId?: string;
-	/**
-	 * How many trailing messages of an existing transcript to replay. Ignored without `sessionId`.
-	 *
-	 * A channel conversation has no end, so replaying all of it would grow every prompt until the
-	 * model refused it. The window is trimmed to start at a `user` message: cutting between an
-	 * assistant's tool call and its result leaves an orphaned result, which providers reject.
-	 */
-	readonly historyLimit?: number;
 	/** Extra `chat_message` columns for the input message only — where it came from, and from whom. */
 	readonly inputMetadata?: Record<string, unknown>;
 	/**
@@ -509,13 +501,14 @@ async function ensureRunSession(runId: string, ownerUserId: string): Promise<str
  * "this conversation so far", which is exactly what the `WHERE` decides.
  */
 async function loadMessages(
-	scope: { readonly runId: string } | { readonly sessionId: string; readonly limit?: number }
+	scope: { readonly runId: string } | { readonly sessionId: string }
 ): Promise<{ messages: AiMessage[]; sequence: number }> {
 	const ctx = getWorkspace({ provision: true });
 	// A compaction checkpoint is a durable, explicit floor for the window. Resolving it from a stored
-	// column means two runs over the same transcript build the same window, where the recency limit
-	// below moves under the conversation as it grows and drops history with no record of having done
-	// it. Subagent rows are excluded here exactly as they are from every other window query.
+	// column means two runs over the same transcript build the same window. There is deliberately no
+	// message-count limit: the model catalog's context length and the explicit checkpoint below own
+	// window reduction, so history never disappears merely because a conversation crossed 40 rows.
+	// Subagent rows are excluded here exactly as they are from every other window query.
 	const anchor =
 		'sessionId' in scope
 			? await ctx.tenantDb.query<{ seq: number | null }>({
@@ -555,15 +548,12 @@ async function loadMessages(
 						values: [scope.sessionId, anchorSeq]
 					}
 				: {
-						text: `SELECT seq, parts, kind FROM (
-						         SELECT m.seq, m.parts, m.kind FROM chat_message m
-						          LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
-						          WHERE m.chat_id = $1::uuid
-						            AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
-						          ORDER BY seq DESC
-						          LIMIT $2
-						       ) recent ORDER BY seq`,
-						values: [scope.sessionId, scope.limit ?? 40]
+						text: `SELECT m.seq, m.parts, m.kind FROM chat_message m
+						    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
+						        WHERE m.chat_id = $1::uuid
+						          AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
+						        ORDER BY m.seq`,
+						values: [scope.sessionId]
 					};
 	const result = await ctx.tenantDb.query<{
 		seq: number;
@@ -595,14 +585,6 @@ async function loadMessages(
 					text: `SELECT COALESCE(MAX(seq), 0) AS seq FROM chat_message WHERE chat_id = $1::uuid`,
 					values: [scope.sessionId]
 				});
-	if ('sessionId' in scope && anchorSeq === null) {
-		// Only without a checkpoint. A window that opens on a `tool` result carries a result whose call
-		// was cut away, and a provider rejects the whole request rather than ignoring it — so the
-		// recency window is aligned to a user message. A checkpoint already opens on one by
-		// construction, and re-aligning would skip past the summary itself.
-		const start = messages.findIndex((message) => message.role === 'user');
-		messages.splice(0, start === -1 ? messages.length : start);
-	}
 	return { messages, sequence: Number(highest.rows[0]?.seq ?? 0) };
 }
 
@@ -1176,12 +1158,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 		);
 	}
 	const restored = await loadMessages(
-		options.sessionId
-			? {
-					sessionId: options.sessionId,
-					...(options.historyLimit ? { limit: options.historyLimit } : {})
-				}
-			: { runId }
+		options.sessionId ? { sessionId: options.sessionId } : { runId }
 	);
 	const messages: AiMessage[] = [...restored.messages];
 	const sessionId = options.sessionId ?? (await ensureRunSession(runId, ownerUserId));
