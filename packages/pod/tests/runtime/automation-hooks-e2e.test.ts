@@ -717,6 +717,7 @@ describe('Pod automations and hooks — E2E', () => {
 		const refused = await command('collections/createMany', {
 			collection: 'team',
 			bypass_secret: 'not-the-host-secret',
+			returning: 'ids',
 			inputs: [{ norbital_id: teamId, name: 'Seeded through collection ops', is_active: true }]
 		});
 		expect(refused.status).toBe(403);

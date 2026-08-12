@@ -143,6 +143,7 @@ export const createMany = authenticated.command(CreateManyWireSchema, async (par
 			// platform collections and hookless template collections, but create hooks still run
 			// whenever the workspace authored them. Invalid or absent secrets remain ordinary calls.
 			isElevated,
+			returnIdsOnly: isElevated && params.returning === 'ids',
 			...(recordIds?.every(Boolean) ? { recordIds } : {}),
 			...(isElevated
 				? {

@@ -1,9 +1,23 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
-import { customType, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+	boolean,
+	customType,
+	date,
+	integer,
+	jsonb,
+	numeric,
+	pgEnum,
+	pgTable,
+	text,
+	timestamp,
+	uuid
+} from 'drizzle-orm/pg-core';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { applyPodSchema } from '../support/pod-schema.js';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import { namedJsonbColumn } from '$lib/authoring/schema/table.js';
+import { attachColumnCustom } from '$lib/authoring/schema/columns.js';
 
 /**
  * Parameter-aware create batching against the real tenant DDL.
@@ -20,6 +34,7 @@ const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
 const ROOT_CHUNK_BOUNDARY = 5_000;
 const tstzrange = customType<{ data: string }>({ dataType: () => 'tstzrange' });
+const orderState = pgEnum('test_order_state', ['OPEN', 'CLOSED']);
 
 const orders = pgTable('orders', {
 	norbital_id: uuid('norbital_id').primaryKey().defaultRandom(),
@@ -28,7 +43,28 @@ const orders = pgTable('orders', {
 	norbital_sys_period: tstzrange('norbital_sys_period'),
 	norbital_row_version: integer('norbital_row_version'),
 	norbital_approval_id: uuid('norbital_approval_id'),
-	status: text('status')
+	status: text('status'),
+	work_date: date('work_date'),
+	occurred_at: timestamp('occurred_at', { withTimezone: true }),
+	optional_at: timestamp('optional_at', { withTimezone: true }),
+	enabled: boolean('enabled').default(true),
+	quantity: integer('quantity').default(7),
+	metadata: jsonb('metadata'),
+	state: orderState('state')
+});
+
+const unsupportedNumericOrders = pgTable('unsupported_numeric_orders', {
+	norbital_id: uuid('norbital_id'),
+	amount: numeric('amount')
+});
+
+const unsupportedCustomOrders = pgTable('unsupported_custom_orders', {
+	norbital_id: uuid('norbital_id'),
+	custom_value: namedJsonbColumn('workspace-specific')
+});
+attachColumnCustom(unsupportedCustomOrders.custom_value, {
+	kind: 'workspace-specific',
+	definitionBacked: true
 });
 
 type CreateHookEvent = {
@@ -81,6 +117,9 @@ vi.mock('$lib/server/collection/hook-api-context.server.js', async () => {
 const { createWorkspaceContext, withRequestWorkspaceCtx } =
 	await import('$lib/server/bootstrap/workspace_store.js');
 const { createMany } = await import('$lib/server/collection/collection_ops.server.js');
+const { withCollectionTransaction } =
+	await import('$lib/server/collection/collection_transaction.server.js');
+const { supportsServerCreatedAuditProjection } = await import('$lib/server/audit_event.server.js');
 
 let statements: string[] = [];
 
@@ -156,6 +195,17 @@ describe('Batched collection create (real Postgres)', () => {
 		pg = await startPostgres();
 		pool = new Pool({ connectionString: pg.connectionString, max: 4 });
 		await applyPodSchema(pool);
+		await pool.query(`
+			CREATE TYPE test_order_state AS ENUM ('OPEN', 'CLOSED');
+			ALTER TABLE orders
+				ADD COLUMN work_date DATE,
+				ADD COLUMN occurred_at TIMESTAMPTZ,
+				ADD COLUMN optional_at TIMESTAMPTZ,
+				ADD COLUMN enabled BOOLEAN DEFAULT TRUE,
+				ADD COLUMN quantity INTEGER DEFAULT 7,
+				ADD COLUMN metadata JSONB,
+				ADD COLUMN state test_order_state
+		`);
 		client = await pool.connect();
 		ctx = contextOn(client);
 	}, 180_000);
@@ -223,6 +273,113 @@ describe('Batched collection create (real Postgres)', () => {
 		expect(matching(/^insert into "audit_event"/i)).toHaveLength(2);
 		// BEGIN + set_config + two roots + sync + two audits + COMMIT.
 		expect(statements).toHaveLength(8);
+	}, 180_000);
+
+	it('returns only ids with audit JSON exactly equivalent to the ordinary returned-row path', async () => {
+		const normalId = '40000000-0000-4000-8000-000000000001';
+		const projectedId = '40000000-0000-4000-8000-000000000002';
+		const writtenAt = '2026-08-12T03:04:05.678Z';
+		const input = {
+			status: 'same-shape',
+			work_date: '2026-08-12',
+			occurred_at: new Date('2026-08-12T08:09:10.123Z'),
+			optional_at: null,
+			metadata: { nested: ['value', null], count: 2 },
+			state: 'CLOSED'
+		};
+
+		const [normal, projected] = await withRequestWorkspaceCtx(ctx, () =>
+			withCollectionTransaction(ctx, async () => {
+				const ordinary = await createMany(ctx, 'orders', [input], {
+					isElevated: true,
+					recordIds: [normalId],
+					createdAts: [writtenAt],
+					updatedAts: [writtenAt]
+				});
+				const idsOnly = await createMany(ctx, 'orders', [input], {
+					isElevated: true,
+					returnIdsOnly: true,
+					recordIds: [projectedId],
+					createdAts: [writtenAt],
+					updatedAts: [writtenAt]
+				});
+				return [ordinary, idsOnly] as const;
+			})
+		);
+
+		expect(normal[0]).toMatchObject({ norbital_id: normalId, enabled: true, quantity: 7 });
+		expect(projected).toEqual([{ norbital_id: projectedId }]);
+
+		const audits = (
+			await pool.query<{ record_id: string; changes_after: Record<string, unknown> }>(`
+				SELECT record_id, details->'changes_after' AS changes_after
+				FROM audit_event
+				ORDER BY ctid
+			`)
+		).rows;
+		expect(audits).toHaveLength(2);
+		const ordinaryAudit = audits[0]!.changes_after;
+		const projectedAudit = audits[1]!.changes_after;
+		expect({ ...projectedAudit, norbital_id: normalId }).toEqual(ordinaryAudit);
+		expect(projectedAudit).toMatchObject({
+			norbital_created_at: writtenAt,
+			norbital_updated_at: writtenAt,
+			occurred_at: '2026-08-12T08:09:10.123Z',
+			optional_at: null,
+			work_date: '2026-08-12',
+			enabled: true,
+			quantity: 7,
+			metadata: input.metadata,
+			state: 'CLOSED'
+		});
+
+		expect(
+			(
+				await pool.query<{ record_id: string; action: string; row_version: number }>(
+					'SELECT record_id, action, row_version FROM sync_outbox ORDER BY seq'
+				)
+			).rows
+		).toEqual([
+			{ record_id: normalId, action: 'create', row_version: 1 },
+			{ record_id: projectedId, action: 'create', row_version: 1 }
+		]);
+	});
+
+	it('keeps unsafe driver-normalized SQL types on the ordinary full-row audit path', () => {
+		expect(supportsServerCreatedAuditProjection(orders)).toBe(true);
+		expect(supportsServerCreatedAuditProjection(unsupportedNumericOrders)).toBe(false);
+		expect(supportsServerCreatedAuditProjection(unsupportedCustomOrders)).toBe(false);
+	});
+
+	it('bounds id-projected root and audit statements above 5,000 rows', async () => {
+		const { ids, inputs } = batch(ROOT_CHUNK_BOUNDARY + 1);
+		const created = await withRequestWorkspaceCtx(ctx, () =>
+			createMany(ctx, 'orders', inputs, {
+				isElevated: true,
+				returnIdsOnly: true,
+				recordIds: ids
+			})
+		);
+
+		expect(created).toEqual(ids.map((norbital_id) => ({ norbital_id })));
+		expect(matching(/^insert into "orders"/i)).toHaveLength(2);
+		expect(matching(/insert into sync_outbox/i)).toHaveLength(1);
+		expect(matching(/WITH requested\(audit_id, record_id, ordinal\)/i)).toHaveLength(2);
+		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: ids.length });
+		expect(
+			(
+				await pool.query<{ record_id: string; action: string; row_version: number }>(
+					'SELECT record_id, action, row_version FROM sync_outbox ORDER BY seq'
+				)
+			).rows
+		).toEqual(ids.map((record_id) => ({ record_id, action: 'create', row_version: 1 })));
+		expect(
+			(
+				await pool.query<{ record_id: string }>(
+					'SELECT record_id FROM audit_event ORDER BY record_id'
+				)
+			).rows.map(({ record_id }) => record_id)
+		).toEqual(ids);
 	}, 180_000);
 
 	it('rolls back root rows and sync when a late after hook throws', async () => {
@@ -343,6 +500,47 @@ describe('Batched collection create (real Postgres)', () => {
 		} finally {
 			await client.query('DROP TRIGGER IF EXISTS test_reject_create_audit ON audit_event');
 			await client.query('DROP FUNCTION IF EXISTS test_reject_create_audit()');
+		}
+
+		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 0 });
+		expect(await pool.query('SELECT 1 FROM sync_outbox')).toMatchObject({ rowCount: 0 });
+		expect(await pool.query('SELECT 1 FROM audit_event')).toMatchObject({ rowCount: 0 });
+	});
+
+	it('rolls back an id-projected create when its server-side audit insert fails', async () => {
+		await client.query(`
+			CREATE FUNCTION test_reject_projected_create_audit() RETURNS trigger AS $$
+			BEGIN
+				RAISE EXCEPTION 'injected projected audit failure';
+			END;
+			$$ LANGUAGE plpgsql
+		`);
+		await client.query(`
+			CREATE TRIGGER test_reject_projected_create_audit
+			BEFORE INSERT ON audit_event
+			FOR EACH STATEMENT EXECUTE FUNCTION test_reject_projected_create_audit()
+		`);
+
+		const { ids, inputs } = batch(6);
+		try {
+			const failure = await withRequestWorkspaceCtx(ctx, () =>
+				createMany(ctx, 'orders', inputs, {
+					isElevated: true,
+					returnIdsOnly: true,
+					recordIds: ids
+				})
+			).then(
+				() => null,
+				(cause: unknown) => cause
+			);
+			expect(String((failure as { cause?: unknown })?.cause ?? failure)).toContain(
+				'injected projected audit failure'
+			);
+		} finally {
+			await client.query(
+				'DROP TRIGGER IF EXISTS test_reject_projected_create_audit ON audit_event'
+			);
+			await client.query('DROP FUNCTION IF EXISTS test_reject_projected_create_audit()');
 		}
 
 		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 0 });

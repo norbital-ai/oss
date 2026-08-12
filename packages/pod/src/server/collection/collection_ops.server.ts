@@ -13,7 +13,12 @@ import {
 	collectionHooks,
 	allowsMutation
 } from './workspace-collections.js';
-import { sendAuditEvent, sendAuditEvents } from '$lib/server/audit_event.server.js';
+import {
+	sendAuditEvent,
+	sendAuditEvents,
+	sendCreatedAuditEventsFromTable,
+	supportsServerCreatedAuditProjection
+} from '$lib/server/audit_event.server.js';
 import { v7 } from 'uuid';
 import { and, eq, getColumns, inArray, sql, type AnyRelationsFilter } from 'drizzle-orm';
 import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js';
@@ -387,6 +392,7 @@ export function createMany(
 	inputs: readonly Record<string, unknown>[],
 	options?: {
 		isElevated?: boolean;
+		returnIdsOnly?: boolean;
 		recordIds?: readonly string[];
 		createdAts?: readonly unknown[];
 		updatedAts?: readonly unknown[];
@@ -403,6 +409,7 @@ async function createManyUnguarded(
 	inputs: readonly Record<string, unknown>[],
 	options?: {
 		isElevated?: boolean;
+		returnIdsOnly?: boolean;
 		recordIds?: readonly string[];
 		createdAts?: readonly unknown[];
 		updatedAts?: readonly unknown[];
@@ -508,28 +515,55 @@ async function createManyUnguarded(
 			});
 		}
 
+		const hasPerRecordEffects =
+			(afterHook != null && afterBatchHook == null) ||
+			prepared.some(
+				(item) =>
+					Object.keys(item.links).length > 0 ||
+					Object.keys(item.nested).length > 0 ||
+					(item.gatedConfig != null && item.approvalRequestId != null)
+			);
+		const canProjectCreatedIds =
+			options?.returnIdsOnly === true &&
+			!hasPerRecordEffects &&
+			afterBatchHook == null &&
+			Object.keys(ctx.manifestCtx.manifest.integrations ?? {}).length === 0 &&
+			supportsServerCreatedAuditProjection(table);
 		const created = await withMutationDb(ctx, async (db) => {
 			const normalized: Record<string, unknown>[] = [];
 			const insertedColumns = new Set(prepared.flatMap(({ values }) => Object.keys(values))).size;
 			const insertChunk = rowsPerMutationStatement(insertedColumns, 5_000);
+			const tableColumns = getColumns(table);
+			const idColumn = tableColumns[SYSTEM_COLUMN_NAMES.PKEY];
+			const versionColumn = tableColumns[SYSTEM_COLUMN_NAMES.ROW_VERSION];
+			if (!idColumn || !versionColumn) {
+				throw error(500, `Collection "${collection}" is missing system identity columns`);
+			}
 			for (let from = 0; from < prepared.length; from += insertChunk) {
-				const rows = await db
+				const insertion = db
 					.insert(table)
-					.values(prepared.slice(from, from + insertChunk).map(({ values }) => values))
-					.returning();
+					.values(prepared.slice(from, from + insertChunk).map(({ values }) => values));
+				const rows = canProjectCreatedIds
+					? await insertion.returning({
+							[SYSTEM_COLUMN_NAMES.PKEY]: idColumn,
+							[SYSTEM_COLUMN_NAMES.ROW_VERSION]: versionColumn
+						})
+					: await insertion.returning();
 				for (const row of rows) {
 					const record = firstRowAsRecord([row]);
 					if (!record) throw error(500, `Failed to create a record in "${collection}"`);
 					normalized.push(record);
 				}
 			}
-			await emitOutboundRowsMany(
-				db,
-				ctx,
-				collection,
-				'create',
-				normalized.map((record) => ({ record }))
-			);
+			if (!canProjectCreatedIds) {
+				await emitOutboundRowsMany(
+					db,
+					ctx,
+					collection,
+					'create',
+					normalized.map((record) => ({ record }))
+				);
+			}
 			// Root and feed statements use independent parameter-aware chunks inside this transaction.
 			await emitSyncOutboxMany(db, collection, 'create', normalized);
 			return normalized;
@@ -539,14 +573,6 @@ async function createManyUnguarded(
 		}
 
 		const afterApi = afterHook || afterBatchHook ? await getElevatedAfterHookApi() : undefined;
-		const hasPerRecordEffects =
-			(afterHook != null && afterBatchHook == null) ||
-			prepared.some(
-				(item) =>
-					Object.keys(item.links).length > 0 ||
-					Object.keys(item.nested).length > 0 ||
-					(item.gatedConfig != null && item.approvalRequestId != null)
-			);
 		if (hasPerRecordEffects) {
 			// stupidity:allow A6 -- relationship, approval, and after-hook side effects preserve input order.
 			for (const [index, record] of created.entries()) {
@@ -571,6 +597,11 @@ async function createManyUnguarded(
 		}
 		if (afterBatchHook && afterApi) await afterBatchHook({ records: created, api: afterApi });
 
+		if (canProjectCreatedIds) {
+			const ids = created.map((record) => String(record[SYSTEM_COLUMN_NAMES.PKEY] ?? ''));
+			await sendCreatedAuditEventsFromTable(collection, table, ids);
+			return ids.map((id) => ({ [SYSTEM_COLUMN_NAMES.PKEY]: id }));
+		}
 		await sendAuditEvents(
 			created.map((record) => ({
 				collectionName: collection,

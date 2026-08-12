@@ -177,6 +177,11 @@ independent 1,000-id select/delete chunks. Integration outbox, sync outbox, and 
 each derive their own chunks from their statement's parameter shape. They are not lockstep 1,000-row
 batches: one caller batch can become several root statements, a different number of feed statements,
 and a different number of audit statements without weakening all-or-nothing commit semantics.
+When an authenticated host-bypass caller requests only created ids and the collection has no
+per-record or integration effects, Pod may keep the full inserted rows inside PostgreSQL and build
+the same complete audit snapshots there. This projection is limited to driver-equivalent scalar,
+JSON, enum, date, timestamp, and system-range columns; numeric, binary, vector, array, or
+workspace-defined custom driver types retain the ordinary full-row return-and-audit path.
 
 ## Filesystem compiler
 
