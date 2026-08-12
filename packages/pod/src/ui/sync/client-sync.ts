@@ -322,9 +322,10 @@ export async function reconcileServerRow(
  * `with`, relation-path filters, and search across direct relations — are registered before
  * compiling SQL.
  *
- * Registration resolves on the first page, so this is one round-trip the first time a collection
- * is touched and zero after that, including across reloads (the registry restores persisted
- * state at boot).
+ * A cold registration starts in the background and this call declines the local answer
+ * immediately. The authoritative scoped query can therefore run as the first useful round trip;
+ * its rows are absorbed into the replica while collection materialisation continues. Warm and
+ * restored collections still answer locally with zero network work.
  */
 async function ensureCollections(
 	sync: ClientSync,
@@ -351,7 +352,13 @@ async function ensureCollections(
 	}
 
 	await sync.registry.restore();
-	await Promise.all([...needed].map((name) => sync.registry.register(name)));
+	const missing = [...needed].filter(
+		(name) => !sync.registry.has(name) || !sync.registry.isFresh(name)
+	);
+	if (missing.length > 0) {
+		for (const name of missing) void sync.registry.register(name);
+		return false;
+	}
 	return [...needed].every((name) => sync.registry.has(name) && sync.registry.isFresh(name));
 }
 

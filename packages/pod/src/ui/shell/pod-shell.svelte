@@ -325,16 +325,8 @@
 			currentPath,
 			i18n: i18nResolver
 		}),
-		applications: [
-			{
-				key: 'app-directory',
-				label: t('pod.shell.appDirectory'),
-				href: '/',
-				icon: 'lucide:layout-grid',
-				active: currentPath === '/'
-			},
-			...applicationNavigation
-		]
+		applications: applicationNavigation,
+		applicationsHref: '/'
 	}));
 	type OverviewApplication = Omit<WorkspaceNavigationItem, 'children'> & {
 		readonly description: string | null;

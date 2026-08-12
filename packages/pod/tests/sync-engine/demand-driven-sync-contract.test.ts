@@ -14,6 +14,16 @@ describe('demand-driven browser synchronization', () => {
 		expect(clientSync).not.toContain('localSchemaCollections');
 	});
 
+	it('does not block an authoritative cold read behind replica startup or shape warm-up', () => {
+		const stateClient = source('ui/state/client.ts');
+		const clientSync = source('ui/sync/client-sync.ts');
+		expect(stateClient).toMatch(
+			/async \(signal\) => \{[\s\S]*?if \(local && getClientSync\(\)\)[\s\S]*?const value = await post/
+		);
+		expect(clientSync).toContain('for (const name of missing) void sync.registry.register(name)');
+		expect(clientSync).toContain('if (missing.length > 0)');
+	});
+
 	it('closes the replica only when a page is discarded, not when it enters bfcache', () => {
 		const replica = source('ui/sync/replica.ts');
 		expect(replica).toContain("window.addEventListener('pagehide'");

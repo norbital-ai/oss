@@ -71,6 +71,7 @@ describe('integration jobs', () => {
 			organizationId: 'org-1'
 		});
 		expect(jobs.map((job) => [job.name, job.schedule])).toEqual([
+			['pod:agent-conversation-titles', 'continuous'],
 			['pod:integration-pull:registry:quotes.receive.catalogue', '*/5 * * * *']
 		]);
 	});
@@ -100,7 +101,7 @@ describe('integration jobs', () => {
 				});
 			}
 		});
-		await jobs[0]!.run();
+		await jobs.find((job) => job.name.includes('integration-pull'))!.run();
 
 		// The stored cursor becomes the declared query parameter, and the credential is resolved here —
 		// the workspace only ever named it.
@@ -129,7 +130,9 @@ describe('integration jobs', () => {
 			secrets: () => 'live-value',
 			fetch: async () => new Response('nope', { status: 503 })
 		});
-		await expect(jobs[0]!.run()).rejects.toThrow(/refused/);
+		await expect(jobs.find((job) => job.name.includes('integration-pull'))!.run()).rejects.toThrow(
+			/refused/
+		);
 		expect(seen.at(-1)).toMatchObject({ action: 'write', cursor: 'page-1' });
 		expect(String(seen.at(-1)?.error)).toMatch(/503/);
 	});
@@ -144,7 +147,9 @@ describe('integration jobs', () => {
 			secrets: () => undefined,
 			fetch: async () => new Response('{}')
 		});
-		await expect(jobs[0]!.run()).rejects.toThrow(/REGISTRY_KEY/);
+		await expect(jobs.find((job) => job.name.includes('integration-pull'))!.run()).rejects.toThrow(
+			/REGISTRY_KEY/
+		);
 	});
 
 	/**

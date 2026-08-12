@@ -59,6 +59,7 @@ import {
 	deliverChannelMessage
 } from '$lib/server/channel-delivery.server.js';
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
+import { runPendingConversationTitles } from '$lib/server/agent/conversation-title.server.js';
 
 const recordSchema = z.record(z.string(), z.unknown());
 const collectionSchema = z.object({ id: z.string(), name: z.string() });
@@ -217,6 +218,10 @@ export const runtimeRunRequestSchema = z.union([
 	z.object({
 		kind: z.literal('automation-events'),
 		limit: z.number().int().min(1).max(1000).optional()
+	}),
+	z.object({
+		kind: z.literal('agent-conversation-titles'),
+		limit: z.number().int().min(1).max(50).optional()
 	}),
 	// A channel message the host already authenticated on its own wire. Deliberately reachable only
 	// here: Pod holds no transport credential, so it cannot verify a webhook signature, and a public
@@ -564,6 +569,8 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 			return runNotificationOutbox(request);
 		case 'automation-events':
 			return pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
+		case 'agent-conversation-titles':
+			return runPendingConversationTitles(request.limit);
 		case 'channel':
 			return deliverChannelMessage(request);
 		case 'getManifest':

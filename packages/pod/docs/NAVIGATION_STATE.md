@@ -33,9 +33,9 @@ The host proxies tenant requests into the checkpoint isolate; the Pod runtime sh
               └──────────────────────────────────────┘
 ```
 
-**Applications** is the uppercase muted section label in the sidebar. The implementation lives in
-[`pod-shell.svelte`](../src/ui/shell/pod-shell.svelte); the shell renders tenant applications
-directly and has no host-provided application registry.
+**Applications** is the uppercase muted section label in the sidebar and links to the application
+directory. The implementation lives in [`pod-shell.svelte`](../src/ui/shell/pod-shell.svelte); the
+shell renders tenant applications directly and has no host-provided application registry.
 
 Opening a record does **not** navigate to a new document route. The app stays on
 `/app/{appName}`; the selected record stack lives in `?stack=` and the shell renders the detail

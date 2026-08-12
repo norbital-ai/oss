@@ -215,6 +215,7 @@
 		label={t('misc.applications')}
 		items={model.applications}
 		open={displayExpanded}
+		href={model.applicationsHref}
 		{onNavigate}
 		{onPrefetch}
 	/>

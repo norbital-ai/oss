@@ -123,14 +123,12 @@ function query<T>(
 	return manager.query(
 		key,
 		async (signal) => {
-			// Local-first, and deliberately an await rather than a peek. Asking whether sync happened
-			// to be ready yet made every page load a race the replica lost: PGlite takes longer to
-			// open than the shell takes to arrive, so the first reads went to the server even when
-			// the device already held every row. That is why a refresh cost the same as a cold load.
-			//
-			// A null/undefined result still means this particular read reaches past what is local (a
-			// windowed collection, an untranslatable operator) — go to the server for correctness.
-			if (local && (await clientSyncReady())) {
+			// Never put the first useful server answer behind replica startup or a collection warm-up.
+			// If sync is already open, a provably complete local answer wins. Otherwise the authoritative
+			// query starts now; the replica-ready invalidator re-runs it locally once startup completes.
+			// This keeps workspace switches and cold scoped reads to one useful round trip instead of
+			// serialising "open PGlite -> download a generic shape -> run the actual query".
+			if (local && getClientSync()) {
 				const localResult = await local();
 				if (localResult !== null && localResult !== undefined) return localResult;
 			}

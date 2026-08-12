@@ -36,7 +36,6 @@ export const podMessages = defineMessages({
 		'pod.shell.people': 'People',
 		'pod.shell.pickApplication': 'Pick an application to get started.',
 		'pod.shell.applications': 'Applications',
-		'pod.shell.appDirectory': 'All applications',
 		'pod.shell.noApplications': 'No applications yet',
 		'pod.shell.noApplicationsHint':
 			'Author an app in the tenant workspace source to make it available here.',
@@ -386,7 +385,6 @@ export const podMessages = defineMessages({
 		'pod.shell.people': '成员',
 		'pod.shell.pickApplication': '选择一个应用开始使用。',
 		'pod.shell.applications': '应用',
-		'pod.shell.appDirectory': '全部应用',
 		'pod.shell.noApplications': '暂无应用',
 		'pod.shell.noApplicationsHint': '在租户工作区源码中编写应用即可在此展示。',
 		'pod.shell.hostSurfaceTitle': '宿主工作区界面',

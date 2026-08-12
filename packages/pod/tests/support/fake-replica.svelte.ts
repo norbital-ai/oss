@@ -97,7 +97,13 @@ export class FakeReplica {
 	 * Nothing local was clicked; the sync engine simply put it in the replica and re-fired the reads.
 	 */
 	arrive(collection: string, row: Row): void {
-		this.seed(collection, [row]);
+		const rows = this.#rows.get(collection) ?? [];
+		const id = row.norbital_id;
+		const index =
+			typeof id === 'string' ? rows.findIndex((candidate) => candidate.norbital_id === id) : -1;
+		if (index === -1) rows.push(row);
+		else rows[index] = { ...rows[index], ...row };
+		this.#rows.set(collection, rows);
 		this.#refire(collection);
 	}
 
