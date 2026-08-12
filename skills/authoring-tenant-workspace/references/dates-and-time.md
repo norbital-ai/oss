@@ -3,12 +3,12 @@
 Classify the domain value before choosing storage. Precision does not make every value an instant:
 a birthday and “opens at 09:00” must not move when a viewer changes timezone.
 
-| Meaning               | Authoring primitive | Wire value                         | Client behavior                                               |
-| --------------------- | ------------------- | ---------------------------------- | ------------------------------------------------------------- |
-| Calendar day          | `date()`            | `YYYY-MM-DD`                       | Display and edit the same day; never timezone-shift           |
-| Local wall-clock time | `clockTime()`       | `HH:mm`                            | Display and edit the same time; never attach a date or offset |
-| Absolute instant      | `timestamp()`       | canonical UTC ISO ending in `Z`    | Edit/display in the client timezone; send UTC                 |
-| Instant interval      | `dateRange()`       | `{ start, end }` canonical UTC ISO | Pick/display in the client timezone; store UTC bounds         |
+| Meaning               | Authoring primitive | Wire value                           | Client behavior                                               |
+| --------------------- | ------------------- | ------------------------------------ | ------------------------------------------------------------- |
+| Calendar day          | `date()`            | `YYYY-MM-DD`                         | Display and edit the same day; never timezone-shift           |
+| Local wall-clock time | `clockTime()`       | `HH:mm`                              | Display and edit the same time; never attach a date or offset |
+| Absolute instant      | `timestamp()`       | canonical UTC ISO ending in `Z`      | Edit/display in the client timezone; send UTC                 |
+| Instant interval      | `dateRange()`       | `{ start?, end? }` canonical UTC ISO | Pick/display in the client timezone; store UTC bounds         |
 
 Use `date()` for birthdays, work dates, payroll days, and legal effective dates. Use
 `clockTime()` for recurring opening times, shift starts, and cut-off times whose meaning is local.
@@ -35,6 +35,10 @@ occurrence. Never use a fixed UTC offset as timezone identity; daylight-saving r
 - Treat `dateRange()` as an instant interval. Its date-only picker resolves the selected start and
   end to local start-of-day/end-of-day UTC instants. Use two `date()` columns when the domain means
   two calendar days rather than elapsed time.
+- Either `dateRange()` bound may be omitted for a genuinely open interval. Omit the absent key; do
+  not invent a sentinel date or send `null` inside the range object. Use `.array()` only when the
+  field stores multiple distinct ranges; mutation validation applies the element schema to each
+  array member.
 
 ## Client and renderer rules
 

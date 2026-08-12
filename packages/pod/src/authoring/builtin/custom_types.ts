@@ -19,8 +19,8 @@ export const utcInstantSchema = z.string().refine(isUtcIsoInstant, {
 });
 
 export const dateRangeZodSchema = z.object({
-	start: utcInstantSchema,
-	end: utcInstantSchema
+	start: utcInstantSchema.optional(),
+	end: utcInstantSchema.optional()
 });
 
 /** Local wall-clock time (`HH:mm`) with no date or timezone. */

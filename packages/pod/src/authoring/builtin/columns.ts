@@ -76,7 +76,7 @@ export function timestamp() {
 	return pgTimestamp({ withTimezone: true });
 }
 
-/** Calendar date range `{ start, end }` stored as UTC ISO JSONB. Use `.array()` for list columns. */
+/** UTC instant range with optional open bounds, stored as JSONB. Use `.array()` for list columns. */
 export function dateRange() {
 	return dateRangeJsonbColumn({ kind: 'date-range' });
 }

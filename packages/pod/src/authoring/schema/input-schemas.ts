@@ -52,30 +52,42 @@ export type PickableZodSchema<T extends Record<string, unknown>> = z.ZodType<T> 
 function zodSchemaForColumn(column: ColumnMetadataHost): z.ZodType | undefined {
 	const meta = readColumnCustomFromHost(column);
 	if (!meta) return undefined;
+	let schema: z.ZodType | undefined;
 	if ('definitionBacked' in meta) {
-		return meta.zodSchema ? classicSchema(meta.zodSchema) : undefined;
-	}
-
-	switch (meta.kind) {
-		case 'money':
-			return moneyZodSchema;
-		case 'date-range':
-			return dateRangeZodSchema;
-		case 'clock_time':
-			return clockTimeZodSchema;
-		case 'geolocation':
-			return geolocationZodSchema;
-		case 'file':
-			return fileZodSchema;
-		case 'enum':
-			return undefined;
-		case 'json': {
-			const jsonMeta = meta as Extract<ColumnCustomMeta, { readonly kind: 'json' }>;
-			return jsonMeta.zodSchema;
+		schema = meta.zodSchema ? classicSchema(meta.zodSchema) : undefined;
+	} else {
+		switch (meta.kind) {
+			case 'money':
+				schema = moneyZodSchema;
+				break;
+			case 'date-range':
+				schema = dateRangeZodSchema;
+				break;
+			case 'clock_time':
+				schema = clockTimeZodSchema;
+				break;
+			case 'geolocation':
+				schema = geolocationZodSchema;
+				break;
+			case 'file':
+				schema = fileZodSchema;
+				break;
+			case 'json': {
+				const jsonMeta = meta as Extract<ColumnCustomMeta, { readonly kind: 'json' }>;
+				schema = jsonMeta.zodSchema;
+				break;
+			}
+			case 'enum':
+			default:
+				schema = undefined;
 		}
-		default:
-			return undefined;
 	}
+	if (!schema) return undefined;
+	const dimensions = Number(Reflect.get(column, 'dimensions') ?? 0);
+	for (let dimension = 0; dimension < dimensions; dimension += 1) {
+		schema = z.array(schema);
+	}
+	return schema;
 }
 
 function classicSchema<T>(schema: CustomTypeSchema<T>): z.ZodType<T> {
