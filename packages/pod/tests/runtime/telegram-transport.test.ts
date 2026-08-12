@@ -76,6 +76,8 @@ describe('telegramInboundMessage', () => {
 		).toEqual({
 			channel: 'sales_desk',
 			conversationId: '-100987',
+			conversationKind: 'dm',
+			invocation: 'direct',
 			// The message id, never the update id: a redelivered update keeps the message id, and that
 			// is what the inbound ledger deduplicates on.
 			messageId: '42',

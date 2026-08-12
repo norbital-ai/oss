@@ -514,7 +514,9 @@ export default {
 export default {
 	transport: 'telegram',
 	policy: 'support_agent',
-	description: 'Customers reaching support over Telegram.'
+	description: 'Customers reaching support over Telegram.',
+	audience: 'authenticated',
+	groupMessages: 'disabled'
 } satisfies Channel;`
 		);
 		const result = await compilePodFilesystem({ root });
@@ -533,7 +535,9 @@ export default {
 export default {
 	transport: 'telegram',
 	policy: 'support_agentt',
-	description: 'Customers reaching support over Telegram.'
+	description: 'Customers reaching support over Telegram.',
+	audience: 'authenticated',
+	groupMessages: 'disabled'
 } satisfies Channel;`
 		);
 		await compilePodFilesystem({ root });

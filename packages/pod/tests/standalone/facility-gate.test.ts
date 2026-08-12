@@ -208,19 +208,25 @@ describe('pod dev facility gate', () => {
 							key: 'sales_desk',
 							transport: 'telegram',
 							policy: 'sales_rep',
-							description: 'Prospects reaching the sales desk over Telegram.'
+							description: 'Prospects reaching the sales desk over Telegram.',
+							audience: 'authenticated',
+							groupMessages: 'disabled'
 						},
 						support: {
 							key: 'support',
 							transport: 'whatsapp',
 							policy: 'sales_rep',
-							description: 'Existing customers asking for help over WhatsApp.'
+							description: 'Existing customers asking for help over WhatsApp.',
+							audience: 'authenticated',
+							groupMessages: 'disabled'
 						},
 						escalations: {
 							key: 'escalations',
 							transport: 'telegram',
 							policy: 'sales_rep',
-							description: 'Deals the sales desk hands upward for a decision.'
+							description: 'Deals the sales desk hands upward for a decision.',
+							audience: 'authenticated',
+							groupMessages: 'disabled'
 						}
 					}
 				})

@@ -469,7 +469,39 @@ belongs to whoever holds the wire open, which is never the tenant. `telegramBot(
 halves for Telegram over long polling; a host declaring a channel and supplying no listener is warned
 at startup, because a channel that can only speak looks exactly like a broken one.
 
-The channel's `policy` is what the agent answers under. `pod migrate` gives each declared channel a
-`kind='agent'` user in a team holding that policy, and delivery runs as that user — so the sender,
-who may have no user row at all, never borrows anyone's permissions, and the agent's reads are
-narrowed by the same guard a signed-in person's are.
+The declaration has three channel-specific choices: `audience`, the admission budget for a public
+profile, and whether groups are disabled, always active, or active only on mention/reply. DMs,
+administrator transcript access, account assignment for authenticated profiles, and the runtime
+concurrency ceiling are platform invariants rather than extra switches.
+
+```ts
+// Public customer support: no account, bounded before a model run.
+export default defineChannel({
+	transport: 'whatsapp',
+	policy: 'customer_support',
+	description: 'Public customer support over WhatsApp.',
+	audience: 'public',
+	rateLimits: { perSenderPerMinute: 8, totalPerMinute: 300 },
+	groupMessages: 'disabled'
+});
+
+// Internal/BCA-style profile: every sender is an assigned existing account.
+export default defineChannel({
+	transport: 'whatsapp',
+	policy: 'field_ops_contractor',
+	description: 'Assigned contractor field support.',
+	audience: 'authenticated',
+	groupMessages: 'mention_or_reply'
+});
+```
+
+An authenticated sender must be an active human in an active team holding the declared policy, with
+a verified identity for that transport in `user.channels`. A match keeps the human as the requestor
+for `${requestor...}` policy placeholders while retaining the channel profile's policy as the
+capability ceiling. An unknown sender gets the deterministic registration instruction and no model
+run. A public sender needs no user row and runs as the reconciled channel principal.
+
+Transcript visibility is fixed: administrators can read every transcript; a member can read their
+own web conversations and authenticated channel DMs, plus authenticated groups whose profile policy
+their active team holds. Public channel transcripts are administrator-only. Every channel transcript
+and every other person's transcript is read-only in the Agent UI.

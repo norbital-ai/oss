@@ -9,20 +9,26 @@ export type ChannelHostSandbox = {
 	readonly workspace: 'read-only' | 'read-write';
 };
 
-/**
- * A conversational entry point into the workspace agent, declared in
- * `src/channels/+<name>.channel.ts`.
- *
- * A channel is the agent reached over someone else's wire — Telegram, WhatsApp, email. What arrives is
- * a message from a person the workspace may not have a user row for, so the interesting question is
- * not "how do I speak this protocol" but "whose permissions does the agent act under when it answers".
- * That is `policy`, and it is why a channel is a declaration rather than host configuration: the
- * answer belongs in source, where it shows up in a diff.
- *
- * The transport itself stays host-supplied. Holding a socket open is not something a scale-to-zero
- * tenant can do, so the workspace names the transport and the host provides it.
- */
-export type ChannelDefinition = {
+/** Durable one-minute admission limits applied before an agent run is created. */
+export type ChannelRateLimits = {
+	readonly perSenderPerMinute: number;
+	readonly totalPerMinute: number;
+};
+
+type ChannelDefinitionBase = {
+	/**
+	 * A conversational entry point into the workspace agent, declared in
+	 * `src/channels/+<name>.channel.ts`.
+	 *
+	 * A channel is the agent reached over someone else's wire — Telegram, WhatsApp, email. What arrives is
+	 * a message from a person the workspace may not have a user row for, so the interesting question is
+	 * not "how do I speak this protocol" but "whose permissions does the agent act under when it answers".
+	 * That is `policy`, and it is why a channel is a declaration rather than host configuration: the
+	 * answer belongs in source, where it shows up in a diff.
+	 *
+	 * The transport itself stays host-supplied. Holding a socket open is not something a scale-to-zero
+	 * tenant can do, so the workspace names the transport and the host provides it.
+	 */
 	/**
 	 * The transport carrying this channel — `telegram`, `whatsapp`, and so on.
 	 *
@@ -64,6 +70,28 @@ export type ChannelDefinition = {
 	readonly hostSandbox?: ChannelHostSandbox;
 };
 
+/**
+ * Public profiles must declare their admission budget in the same diff that opens the audience.
+ * Authenticated profiles rely on assigned identity and the platform concurrency ceiling instead of
+ * adding another per-profile choice.
+ */
+export type ChannelDefinition = ChannelDefinitionBase &
+	(
+		| {
+				/** Anyone on the transport may message the profile without a Pod account. */
+				readonly audience: 'public';
+				readonly rateLimits: ChannelRateLimits;
+		  }
+		| {
+				/** Active assigned accounts with a verified transport identity only. */
+				readonly audience: 'authenticated';
+				readonly rateLimits?: never;
+		  }
+	) & {
+		/** DMs are always enabled; this is the only group-specific choice. */
+		readonly groupMessages: 'disabled' | 'all' | 'mention_or_reply';
+	};
+
 /** Identity function that exists for its inference; a channel file gets checked on write. */
 export function defineChannel<const TChannel extends ChannelDefinition>(
 	channel: TChannel
@@ -71,6 +99,9 @@ export function defineChannel<const TChannel extends ChannelDefinition>(
 	if (!channel.transport.trim()) throw new Error('Channel transport cannot be empty');
 	if (!String(channel.policy).trim()) throw new Error('Channel policy cannot be empty');
 	if (!channel.description.trim()) throw new Error('Channel description cannot be empty');
+	if (channel.audience === 'public' && !channel.rateLimits) {
+		throw new Error('Public channels must declare rate limits');
+	}
 	return channel;
 }
 

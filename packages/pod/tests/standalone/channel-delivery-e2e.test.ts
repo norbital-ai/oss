@@ -153,6 +153,17 @@ export default {
 } satisfies AgentAutomationSpec;
 `;
 
+const AUTHENTICATED_CHANNEL_SOURCE = `import { defineChannel } from '@norbital-ai/pod/authoring';
+
+export default defineChannel({
+	transport: 'telegram',
+	policy: 'sales_rep',
+	description: 'Assigned members only.',
+	audience: 'authenticated',
+	groupMessages: 'disabled'
+});
+`;
+
 /**
  * A host that holds one conversational wire, one model and one sandbox-shaped tool.
  *
@@ -337,6 +348,10 @@ async function writeWorkspace(root: string): Promise<void> {
 	await symlink(path.join(REPO_ROOT, 'node_modules', '@norbital-ai'), packageScope, 'dir');
 	await mkdir(path.join(root, 'src', 'tools'), { recursive: true });
 	await writeFile(path.join(root, 'src', 'tools', '+list_quotes.tool.ts'), WORKSPACE_TOOL_SOURCE);
+	await writeFile(
+		path.join(root, 'src', 'channels', '+member_desk.channel.ts'),
+		AUTHENTICATED_CHANNEL_SOURCE
+	);
 	await writeFile(path.join(root, 'src', '+agent.ts'), AGENT_SOURCE);
 	await writeFile(path.join(root, 'pod.host.ts'), HOST_SOURCE);
 }
@@ -594,6 +609,79 @@ describe('Pod standalone channel delivery — E2E', () => {
 		// user line, which is what replaying the session's history means.
 		const promptSize = /prompt_messages=(\d+)/.exec(sink.sent[1]?.text ?? '')?.[1];
 		expect(Number(promptSize)).toBeGreaterThan(2);
+	});
+
+	it('prompts an unknown sender to register without starting an authenticated agent run', async () => {
+		const beforeRuns = await queryTenant<{ count: string }>(
+			`SELECT count(*)::text AS count FROM automation_run`
+		);
+		const outcome = await deliver({
+			channel: 'member_desk',
+			conversationId: 'member-dm-1',
+			messageId: 'member-msg-1',
+			text: 'Can I see the account?'
+		});
+		expect(outcome.status).toBe('registration_required');
+		expect(outcome.delivered).toBe(true);
+		expect(outcome.text).toMatch(/registered members/i);
+		expect(sink.sent.at(-1)?.channel).toBe('member_desk');
+		const admissionTranscript = await queryTenant<{
+			messages: readonly { role: string; parts: readonly { content?: string }[] }[];
+		}>(
+			`SELECT s.messages
+			   FROM channel_conversation cc
+			   JOIN chat_session s ON s.norbital_id = cc.chat_id
+			  WHERE cc.channel_key = 'member_desk' AND cc.external_conversation_id = 'member-dm-1'`
+		);
+		expect(admissionTranscript[0]?.messages.map((message) => message.role)).toEqual([
+			'user',
+			'assistant'
+		]);
+		expect(admissionTranscript[0]?.messages[1]?.parts[0]?.content).toMatch(/registered members/i);
+
+		const afterRuns = await queryTenant<{ count: string }>(
+			`SELECT count(*)::text AS count FROM automation_run`
+		);
+		expect(afterRuns[0]?.count).toBe(beforeRuns[0]?.count);
+	});
+
+	it('answers the same DM after its verified identity is assigned to an active account', async () => {
+		const users = await queryTenant<{ norbital_id: string }>(
+			`INSERT INTO "user" (email, name, status, role, kind, channels)
+			 VALUES ('dana@channel.test', 'Dana Member', 'active', 'basic', 'human',
+			         '[{"type":"telegram","verified":true,"telegram_user_id":"tg-user-77"}]'::jsonb)
+			 RETURNING norbital_id`
+		);
+		await queryTenant(
+			`INSERT INTO team (name, description, is_active, kind, policy_id)
+			 SELECT 'Assigned sales members', 'Authenticated channel members', TRUE, 'human', norbital_id
+			   FROM policy WHERE key = 'sales_rep'`
+		);
+		await queryTenant(
+			`INSERT INTO team_members (user_id, team_id)
+			 SELECT $1::uuid, norbital_id FROM team WHERE name = 'Assigned sales members'`,
+			[users[0]?.norbital_id]
+		);
+
+		const outcome = await deliver({
+			channel: 'member_desk',
+			conversationId: 'member-dm-1',
+			messageId: 'member-msg-2',
+			text: 'Can I see the account now?'
+		});
+		expect(outcome.status).toBe('answered');
+		expect(sink.sent.at(-1)?.text).toContain('answering=Can I see the account now?');
+
+		const owners = await queryTenant<{ user_id: string; owner_user_id: string }>(
+			`SELECT s.user_id, cc.owner_user_id
+			   FROM channel_conversation cc
+			   JOIN chat_session s ON s.norbital_id = cc.chat_id
+			  WHERE cc.channel_key = 'member_desk' AND cc.external_conversation_id = 'member-dm-1'`
+		);
+		expect(owners[0]).toEqual({
+			user_id: users[0]?.norbital_id,
+			owner_user_id: users[0]?.norbital_id
+		});
 	});
 
 	it('refuses a message for a channel the workspace does not declare', async () => {

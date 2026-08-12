@@ -459,6 +459,8 @@ const _chat_session = systemTable(
 		platform: text(),
 		/** `personal`, `channel_dm`, or `channel_group`. */
 		visibility: text().notNull().default('personal'),
+		/** Declared profile key for a channel transcript; null for the workspace/web agent. */
+		channel_key: text(),
 		external_thread_id: text(),
 		agent_profile_id: uuid(),
 		channel_config_id: uuid(),
@@ -525,6 +527,14 @@ const _channel_conversation = systemTable(
 		transport: text().notNull(),
 		/** Transport-native address — a Telegram chat id, a phone number, a thread id. */
 		external_conversation_id: text().notNull(),
+		/** `dm` or `group`, preserved from the transport instead of guessed from its address. */
+		conversation_kind: text().notNull().default('dm'),
+		/** Public transcripts remain administrator-only; authenticated groups may be shared with members. */
+		audience: text().notNull().default('authenticated'),
+		/** Policy key copied from the declaration for dynamic member transcript access. */
+		policy_key: text().notNull().default(''),
+		/** Linked account owning an authenticated DM; null for public DMs and groups. */
+		owner_user_id: uuid().references(() => _user.norbital_id, { onDelete: 'set null' }),
 		binding_key: text().notNull().unique(),
 		chat_id: uuid()
 			.references(() => _chat_session.norbital_id, { onDelete: 'cascade' })
@@ -576,6 +586,28 @@ const _channel_inbound_message = systemTable(
 	{
 		description: 'Channel inbound messages',
 		record_label: 'external_message_id',
+		system: true
+	}
+);
+
+/**
+ * One durable fixed-window counter used by public-channel admission.
+ *
+ * The row is updated atomically with `INSERT … ON CONFLICT DO UPDATE`, so several Pod processes see
+ * one budget rather than each admitting a full in-memory allowance. `bucket_key` includes the
+ * channel and either `profile` or the transport sender id; the latter is never shown in the UI.
+ */
+const _channel_rate_limit = systemTable(
+	'channel_rate_limit',
+	{
+		bucket_key: text().notNull().unique(),
+		window_started_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+		request_count: integer().notNull().default(0)
+	},
+	{
+		description: 'Channel admission rate-limit counters',
+		record_label: 'bucket_key',
+		history: false,
 		system: true
 	}
 );
@@ -633,6 +665,7 @@ export const requestor = _requestor;
 export const chat_session = _chat_session;
 export const channel_conversation = _channel_conversation;
 export const channel_inbound_message = _channel_inbound_message;
+export const channel_rate_limit = _channel_rate_limit;
 export const invitation = _invitation;
 export const host_event_outbox = _host_event_outbox;
 export const automation_run = _automation_run;
@@ -686,7 +719,8 @@ export const systemTables = {
 	team_members: { table: team_members },
 	chat_session: { table: chat_session },
 	channel_conversation: { table: channel_conversation },
-	channel_inbound_message: { table: channel_inbound_message }
+	channel_inbound_message: { table: channel_inbound_message },
+	channel_rate_limit: { table: channel_rate_limit }
 } satisfies Record<SystemCollectionName, { table: PgTable }>;
 
 /**

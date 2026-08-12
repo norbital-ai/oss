@@ -118,6 +118,15 @@ export async function reconcileDeclaredChannels(
 			  )`,
 			[userId, teamId]
 		);
+		// These copied fields drive transcript visibility. Reconcile existing conversations as well as
+		// new ones so changing a profile from authenticated to public closes member access at deploy.
+		await client.query(
+			`UPDATE channel_conversation
+			    SET audience = $2, policy_key = $3, transport = $4,
+			        norbital_updated_at = CURRENT_TIMESTAMP
+			  WHERE channel_key = $1`,
+			[channel.key, channel.audience, channel.policy, channel.transport]
+		);
 	}
 	return { created, updated };
 }

@@ -35,6 +35,16 @@ agent runs and transcripts in the tenant database. A host may expose its own cre
 surface as a separate plugin, but Settings does not redirect into it and the host must not store or
 render a second conversation history.
 
+Conversation scope is owned by Pod, not the host plugin:
+
+- administrators can read all web and channel transcripts, but other users' conversations are
+  read-only;
+- members can read their own web conversations and authenticated channel DMs;
+- members can read authenticated group transcripts when an active team they belong to holds that
+  channel profile's policy;
+- public channel transcripts have no member owner and remain administrator-only;
+- all channel transcripts are read-only in the Agent UI because replies continue on the transport.
+
 ## Host surfaces
 
 Core-hosted plugins are mounted inside the tenant shell without entering the Pod bundle. Host

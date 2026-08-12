@@ -2,8 +2,8 @@
 	import Icon from '@iconify/svelte';
 	import { onMount, tick } from 'svelte';
 	import { Button } from '@norbital-ai/ui/button';
-	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
+	import { TreeCombobox } from '@norbital-ai/ui/tree-combobox';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
@@ -49,6 +49,7 @@
 	let failure = $state<string | null>(null);
 	let transcriptElement = $state<HTMLOListElement | null>(null);
 	let composingNew = $state(false);
+	let platformState: ReturnType<ReturnType<typeof getPlatformStateContext>> | null = null;
 
 	// ── "@" mentions ────────────────────────────────────────────────────────────────────────────
 	// The draft stays plain text; chips are tracked ranges beside it. The menu never takes focus —
@@ -71,6 +72,7 @@
 	try {
 		const getPlatformState = getPlatformStateContext();
 		if (typeof getPlatformState === 'function') {
+			platformState = getPlatformState();
 			mentionSources = createMentionSources(() => getPlatformState().manifestContext);
 		}
 	} catch {
@@ -200,8 +202,13 @@
 
 	type SessionRow = {
 		readonly norbital_id: string;
-		readonly automation_run_id: string;
+		readonly automation_run_id: string | null;
+		readonly user_id: string;
 		readonly title: string;
+		readonly visibility: string;
+		readonly platform: string | null;
+		readonly channel_key: string | null;
+		readonly external_thread_id: string | null;
 		readonly messages: readonly Readonly<Record<string, unknown>>[];
 		readonly turns: readonly Readonly<Record<string, unknown>>[];
 	};
@@ -217,13 +224,20 @@
 	});
 	const sessions = $derived(
 		(sessionQuery?.current ?? []).flatMap((row): SessionRow[] => {
-			if (typeof row.norbital_id !== 'string' || typeof row.automation_run_id !== 'string') {
+			if (typeof row.norbital_id !== 'string') {
 				return [];
 			}
 			return [
 				{
 					norbital_id: row.norbital_id,
-					automation_run_id: row.automation_run_id,
+					automation_run_id:
+						typeof row.automation_run_id === 'string' ? row.automation_run_id : null,
+					user_id: typeof row.user_id === 'string' ? row.user_id : 'unknown-user',
+					visibility: typeof row.visibility === 'string' ? row.visibility : 'personal',
+					platform: typeof row.platform === 'string' ? row.platform : null,
+					channel_key: typeof row.channel_key === 'string' ? row.channel_key : null,
+					external_thread_id:
+						typeof row.external_thread_id === 'string' ? row.external_thread_id : null,
 					messages: Array.isArray(row.messages)
 						? (row.messages as readonly Readonly<Record<string, unknown>>[])
 						: [],
@@ -238,9 +252,151 @@
 			];
 		})
 	);
-	const sessionOptions = $derived(
-		sessions.map((session) => ({ value: session.norbital_id, label: session.title }))
-	);
+	const isAdmin = $derived(platformState?.user?.role === 'admin');
+	const currentUserId = $derived(platformState?.user?.norbital_id ?? null);
+	const usersQuery = $derived.by(() => {
+		if (!isAdmin) return undefined;
+		try {
+			return getInitializedWorkspaceClient().db.user?.findMany({
+				orderBy: { name: 'asc' },
+				limit: 500
+			});
+		} catch {
+			return undefined;
+		}
+	});
+	const userLabels = $derived.by(() => {
+		const labels = new Map<string, string>();
+		for (const row of usersQuery?.current ?? []) {
+			if (typeof row.norbital_id !== 'string') continue;
+			const label =
+				typeof row.name === 'string' && row.name.trim()
+					? row.name
+					: typeof row.email === 'string'
+						? row.email
+						: t('pod.agent.unknownMember');
+			labels.set(row.norbital_id, label);
+		}
+		return labels;
+	});
+
+	type ConversationTreeItem = {
+		id: string;
+		title: string;
+		searchText?: string;
+		icon: string;
+		children?: ConversationTreeItem[];
+		metadata: { readonly kind: 'group' | 'conversation' };
+	};
+	const conversationTree = $derived.by(() => {
+		const disabledIds: string[] = [];
+		const personal = sessions.filter((session) => session.visibility === 'personal');
+		const workspaceChildren: ConversationTreeItem[] = [];
+		if (isAdmin) {
+			const byUser = new Map<string, SessionRow[]>();
+			for (const session of personal) {
+				const rows = byUser.get(session.user_id) ?? [];
+				rows.push(session);
+				byUser.set(session.user_id, rows);
+			}
+			for (const [userId, rows] of [...byUser].sort((a, b) =>
+				(userLabels.get(a[0]) ?? '').localeCompare(userLabels.get(b[0]) ?? '')
+			)) {
+				const id = `workspace-user:${userId}`;
+				disabledIds.push(id);
+				workspaceChildren.push({
+					id,
+					title: userLabels.get(userId) ?? t('pod.agent.unknownMember'),
+					icon: 'lucide:user-round',
+					metadata: { kind: 'group' },
+					children: rows.map((session) => ({
+						id: session.norbital_id,
+						title: session.title,
+						icon: 'lucide:message-square',
+						metadata: { kind: 'conversation' }
+					}))
+				});
+			}
+		} else {
+			workspaceChildren.push(
+				...personal.map((session) => ({
+					id: session.norbital_id,
+					title: session.title,
+					icon: 'lucide:message-square',
+					metadata: { kind: 'conversation' } as const
+				}))
+			);
+		}
+
+		const channelProfiles = new Map<string, SessionRow[]>();
+		for (const session of sessions) {
+			if (!session.visibility.startsWith('channel_')) continue;
+			const key = session.channel_key ?? t('pod.agent.channelAgent');
+			const rows = channelProfiles.get(key) ?? [];
+			rows.push(session);
+			channelProfiles.set(key, rows);
+		}
+		const channelChildren: ConversationTreeItem[] = [];
+		for (const [channelKey, rows] of [...channelProfiles].sort((a, b) =>
+			a[0].localeCompare(b[0])
+		)) {
+			const profileId = `channel:${channelKey}`;
+			disabledIds.push(profileId);
+			const profileChildren: ConversationTreeItem[] = [];
+			for (const [visibility, label, icon] of [
+				['channel_group', t('pod.agent.groups'), 'lucide:users-round'],
+				['channel_dm', t('pod.agent.directMessages'), 'lucide:message-circle']
+			] as const) {
+				const matches = rows.filter((session) => session.visibility === visibility);
+				if (matches.length === 0) continue;
+				const categoryId = `${profileId}:${visibility}`;
+				disabledIds.push(categoryId);
+				profileChildren.push({
+					id: categoryId,
+					title: label,
+					icon,
+					metadata: { kind: 'group' },
+					children: matches.map((session) => ({
+						id: session.norbital_id,
+						title: session.title,
+						searchText: `${channelKey} ${session.external_thread_id ?? ''}`,
+						icon: visibility === 'channel_group' ? 'lucide:hash' : 'lucide:user-round',
+						metadata: { kind: 'conversation' }
+					}))
+				});
+			}
+			channelChildren.push({
+				id: profileId,
+				title: channelKey,
+				icon: 'lucide:bot',
+				metadata: { kind: 'group' },
+				children: profileChildren
+			});
+		}
+
+		const roots: ConversationTreeItem[] = [];
+		if (workspaceChildren.length > 0) {
+			roots.push({
+				id: 'workspace-agent',
+				title: t('pod.shell.workspaceAgentTitle'),
+				icon: 'product:agent',
+				metadata: { kind: 'group' },
+				children: workspaceChildren
+			});
+			disabledIds.push('workspace-agent');
+		}
+		if (channelChildren.length > 0) {
+			roots.push({
+				id: 'channel-agents',
+				title: t('pod.agent.channelAgents'),
+				icon: 'lucide:messages-square',
+				metadata: { kind: 'group' },
+				children: channelChildren
+			});
+			disabledIds.push('channel-agents');
+		}
+		return { roots, disabledIds };
+	});
 
 	/**
 	 * The live conversation: the user's explicit pick, or the newest session once any exist.
@@ -258,12 +414,24 @@
 
 	/** One replicated tenant row is the complete live conversation aggregate. */
 	const activeSession = $derived(sessions.find((row) => row.norbital_id === activeChatId));
+	const activeSessionIsChannel = $derived(
+		activeSession?.visibility.startsWith('channel_') ?? false
+	);
+	const activeSessionIsOtherUsersPersonal = $derived(
+		isAdmin &&
+			activeSession?.visibility === 'personal' &&
+			currentUserId !== null &&
+			activeSession.user_id !== currentUserId
+	);
+	const activeSessionIsReadOnly = $derived(
+		activeSessionIsChannel || activeSessionIsOtherUsersPersonal
+	);
 	const stored = $derived(
 		toPanelMessages(activeSession?.messages ?? [], activeSession?.turns ?? [])
 	);
 	const messages = $derived(withPendingEcho(stored, echo));
 	const turnRows = $derived(activeSession?.turns ?? []);
-	const canSend = $derived(draft.trim().length > 0 && !pending);
+	const canSend = $derived(draft.trim().length > 0 && !pending && !activeSessionIsReadOnly);
 
 	/**
 	 * The window the running model actually has, straight from the catalog that named it.
@@ -394,7 +562,7 @@
 
 	async function send(): Promise<void> {
 		const { message, references } = serializeMentions(draft, mentions);
-		if (!message || pending) return;
+		if (!message || pending || activeSessionIsReadOnly) return;
 		pending = true;
 		failure = null;
 		echo = message;
@@ -433,7 +601,7 @@
 		const session = sessions.find((candidate) => candidate.norbital_id === value);
 		if (!session) return;
 		chatId = session.norbital_id;
-		runId = session.automation_run_id;
+		runId = session.automation_run_id ?? undefined;
 		composingNew = false;
 		echo = null;
 		failure = null;
@@ -515,14 +683,15 @@
 	aria-label={t('pod.shell.workspaceAgentTitle')}
 >
 	<Inline as="header" justify="between" gap="sm" class="shrink-0 border-b px-3 py-2.5 sm:px-4">
-		<Combobox
-			options={sessionOptions}
-			value={activeChatId ?? null}
-			onValueChange={selectConversation}
+		<TreeCombobox
+			rootItems={conversationTree.roots}
+			disabledIds={conversationTree.disabledIds}
+			value={activeChatId}
+			onValueChange={(value) => selectConversation(value ?? null)}
 			ariaLabel={t('pod.agent.conversationThread')}
 			searchPlaceholder={t('pod.agent.searchConversations')}
-			emptyPlaceholder={t('pod.agent.noConversations')}
-			class="min-w-0 flex-1"
+			placeholder={t('pod.agent.noConversations')}
+			allowCleared={false}
 			triggerClass="border-0 bg-transparent shadow-none"
 		/>
 		<Button
@@ -588,124 +757,138 @@
 			</div>
 		{/if}
 
-		<div class="relative">
-			{#if menuOpen}
-				<AgentMentionMenu
-					items={menuEntries}
-					{highlightIndex}
-					loading={menuLoading}
-					query={trigger?.query ?? ''}
-					scope={menuScope}
-					onselect={(index) => selectMenuItem(menuEntries[index])}
-					onhighlight={(index) => (highlightIndex = index)}
-					onclearscope={() => {
-						menuScope = null;
-						highlightIndex = 0;
-						scheduleMentionSearch();
-					}}
-				/>
-			{/if}
-			<form
-				class={AGENT_COMPOSER_SHELL_CLASS}
-				onsubmit={(event) => {
-					event.preventDefault();
-					void send();
-				}}
+		{#if activeSessionIsReadOnly}
+			<div
+				class="flex items-center gap-2 rounded-lg bg-muted px-3 py-2.5 text-xs leading-5 text-muted-foreground"
+				role="note"
 			>
-				<div class="px-3 pt-3 pb-1 sm:px-4 sm:pt-4" data-agent-composer>
-					<label class="sr-only" for="agent-chat-input">{t('pod.agent.messageAgent')}</label>
-					<Textarea
-						id="agent-chat-input"
-						bind:value={draft}
-						bind:ref={textareaElement}
-						onkeydown={onKeydown}
-						oninput={onComposerInput}
-						onkeyup={refreshTrigger}
-						onclick={refreshTrigger}
-						aria-autocomplete="list"
-						aria-expanded={menuOpen}
-						aria-controls="agent-mention-menu"
-						placeholder={t('pod.agent.composerPlaceholder')}
-						rows={1}
-						class={AGENT_COMPOSER_EDITOR_CLASS}
-						disabled={pending}
+				<Icon icon="lucide:lock-keyhole" class="size-3.5 shrink-0" />
+				<span>
+					{activeSessionIsChannel
+						? t('pod.agent.channelReadOnly')
+						: t('pod.agent.adminConversationReadOnly')}
+				</span>
+			</div>
+		{:else}
+			<div class="relative">
+				{#if menuOpen}
+					<AgentMentionMenu
+						items={menuEntries}
+						{highlightIndex}
+						loading={menuLoading}
+						query={trigger?.query ?? ''}
+						scope={menuScope}
+						onselect={(index) => selectMenuItem(menuEntries[index])}
+						onhighlight={(index) => (highlightIndex = index)}
+						onclearscope={() => {
+							menuScope = null;
+							highlightIndex = 0;
+							scheduleMentionSearch();
+						}}
 					/>
-				</div>
-
-				<!-- stupidity:allow UI6 -- Composer action bar keeps its wrapping left controls pinned beside the send cluster; Cluster would push send below the fold on narrow widths. -->
-				<div
-					class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1 gap-y-1 px-2.5 pt-1 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
+				{/if}
+				<form
+					class={AGENT_COMPOSER_SHELL_CLASS}
+					onsubmit={(event) => {
+						event.preventDefault();
+						void send();
+					}}
 				>
-					<!-- Plan mode is restored. Auto-send-after-step and attach remain deferred — turn stepping
+					<div class="px-3 pt-3 pb-1 sm:px-4 sm:pt-4" data-agent-composer>
+						<label class="sr-only" for="agent-chat-input">{t('pod.agent.messageAgent')}</label>
+						<Textarea
+							id="agent-chat-input"
+							bind:value={draft}
+							bind:ref={textareaElement}
+							onkeydown={onKeydown}
+							oninput={onComposerInput}
+							onkeyup={refreshTrigger}
+							onclick={refreshTrigger}
+							aria-autocomplete="list"
+							aria-expanded={menuOpen}
+							aria-controls="agent-mention-menu"
+							placeholder={t('pod.agent.composerPlaceholder')}
+							rows={1}
+							class={AGENT_COMPOSER_EDITOR_CLASS}
+							disabled={pending}
+						/>
+					</div>
+
+					<!-- stupidity:allow UI6 -- Composer action bar keeps its wrapping left controls pinned beside the send cluster; Cluster would push send below the fold on narrow widths. -->
+					<div
+						class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1 gap-y-1 px-2.5 pt-1 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
+					>
+						<!-- Plan mode is restored. Auto-send-after-step and attach remain deferred — turn stepping
 				     and a session file store are not in this package yet. Usage figures below are the
 				     provider's own; anything the provider did not report is absent rather than estimated. -->
-					<Inline
-						gap="sm"
-						class={`min-w-0 text-muted-foreground ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
-						data-testid="agent-usage"
-					>
-						<button
-							type="button"
-							aria-pressed={planMode}
-							disabled={pending}
-							onclick={() => (planMode = !planMode)}
-							class={`rounded-md px-1.5 py-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} ${
-								planMode
-									? 'bg-primary/10 text-primary'
-									: 'text-muted-foreground hover:bg-muted hover:text-foreground'
-							}`}
-							title={planMode ? t('pod.agent.planModeOn') : t('pod.agent.planModeOff')}
-							data-testid="agent-plan-mode"
+						<Inline
+							gap="sm"
+							class={`min-w-0 text-muted-foreground ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
+							data-testid="agent-usage"
 						>
-							{t('pod.agent.plan')}
-						</button>
-						{#if contextPercent !== null}
-							<Inline as="span" gap="xs" title={t('pod.agent.contextWindowUsed')}>
-								<span
-									class="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted"
-									aria-hidden="true"
-								>
+							<button
+								type="button"
+								aria-pressed={planMode}
+								disabled={pending}
+								onclick={() => (planMode = !planMode)}
+								class={`rounded-md px-1.5 py-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} ${
+									planMode
+										? 'bg-primary/10 text-primary'
+										: 'text-muted-foreground hover:bg-muted hover:text-foreground'
+								}`}
+								title={planMode ? t('pod.agent.planModeOn') : t('pod.agent.planModeOff')}
+								data-testid="agent-plan-mode"
+							>
+								{t('pod.agent.plan')}
+							</button>
+							{#if contextPercent !== null}
+								<Inline as="span" gap="xs" title={t('pod.agent.contextWindowUsed')}>
 									<span
-										class="block h-full rounded-full bg-foreground/40"
-										style={`width: ${contextPercent}%`}
-									></span>
-								</span>
-								{contextPercent}%
-							</Inline>
-						{/if}
-						{#if tokenLabel}
-							<span class="truncate">{tokenLabel}</span>
-						{/if}
-						{#if costLabel}
-							<span title={costHint}>{costLabel}</span>
-						{/if}
-					</Inline>
-					<Inline justify="end" align="center" gap="xs" class="min-w-0">
-						<div class="min-w-0" title={t('pod.agent.modelAndVariant')}>
-							<AgentModelPicker
-								bind:value={modelState.selectedModel}
-								options={modelState.catalog?.options ?? []}
-								status={modelState.status}
-								compact={true}
-								disabled={pending || modelState.status !== 'ready'}
-							/>
-						</div>
-						<Button
-							type="submit"
-							disabled={!canSend}
-							size="icon"
-							class="size-8 shrink-0 rounded-full"
-							data-testid="agent-send"
-							aria-label={pending ? t('pod.agent.agentIsWorking') : t('pod.agent.send')}
-						>
-							<Icon
-								icon={pending ? 'lucide:loader-circle' : 'lucide:arrow-up'}
-								class={pending ? 'size-4 animate-spin' : 'size-4'}
-							/>
-						</Button>
-					</Inline>
-				</div>
-			</form>
-		</div>
+										class="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted"
+										aria-hidden="true"
+									>
+										<span
+											class="block h-full rounded-full bg-foreground/40"
+											style={`width: ${contextPercent}%`}
+										></span>
+									</span>
+									{contextPercent}%
+								</Inline>
+							{/if}
+							{#if tokenLabel}
+								<span class="truncate">{tokenLabel}</span>
+							{/if}
+							{#if costLabel}
+								<span title={costHint}>{costLabel}</span>
+							{/if}
+						</Inline>
+						<Inline justify="end" align="center" gap="xs" class="min-w-0">
+							<div class="min-w-0" title={t('pod.agent.modelAndVariant')}>
+								<AgentModelPicker
+									bind:value={modelState.selectedModel}
+									options={modelState.catalog?.options ?? []}
+									status={modelState.status}
+									compact={true}
+									disabled={pending || modelState.status !== 'ready'}
+								/>
+							</div>
+							<Button
+								type="submit"
+								disabled={!canSend}
+								size="icon"
+								class="size-8 shrink-0 rounded-full"
+								data-testid="agent-send"
+								aria-label={pending ? t('pod.agent.agentIsWorking') : t('pod.agent.send')}
+							>
+								<Icon
+									icon={pending ? 'lucide:loader-circle' : 'lucide:arrow-up'}
+									class={pending ? 'size-4 animate-spin' : 'size-4'}
+								/>
+							</Button>
+						</Inline>
+					</div>
+				</form>
+			</div>
+		{/if}
 	</div>
 </Stack>

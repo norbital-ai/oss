@@ -342,6 +342,12 @@ function buildChannelEntries(
 			policy?: string;
 			description?: string;
 			task?: string;
+			audience?: 'public' | 'authenticated';
+			rateLimits?: {
+				readonly perSenderPerMinute: number;
+				readonly totalPerMinute: number;
+			};
+			groupMessages?: 'disabled' | 'all' | 'mention_or_reply';
 			hostTools?: readonly string[];
 			hostSandbox?: { readonly workspace: 'read-only' | 'read-write' };
 		};
@@ -351,6 +357,13 @@ function buildChannelEntries(
 			policy: String(channel.policy ?? ''),
 			description: channel.description ?? '',
 			...(channel.task == null ? {} : { task: channel.task }),
+			...(channel.audience ? { audience: channel.audience } : {}),
+			...(channel.rateLimits
+				? {
+						rateLimits: { ...channel.rateLimits }
+					}
+				: {}),
+			...(channel.groupMessages ? { groupMessages: channel.groupMessages } : {}),
 			...(channel.hostTools && channel.hostTools.length > 0
 				? { hostTools: [...channel.hostTools] }
 				: {}),

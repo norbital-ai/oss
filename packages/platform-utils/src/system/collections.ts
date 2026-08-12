@@ -97,6 +97,7 @@ interface PlatformSystemRows {
 		readonly title: string;
 		readonly platform: string | null;
 		readonly visibility: string;
+		readonly channel_key: string | null;
 		readonly external_thread_id: string | null;
 		readonly agent_profile_id: string | null;
 		readonly channel_config_id: string | null;
@@ -175,6 +176,10 @@ interface PlatformSystemRows {
 		readonly channel_key: string;
 		readonly transport: string;
 		readonly external_conversation_id: string;
+		readonly conversation_kind: string;
+		readonly audience: string;
+		readonly policy_key: string;
+		readonly owner_user_id: string | null;
 		readonly binding_key: string;
 		readonly chat_id: string;
 		readonly last_inbound_at: string | null;
@@ -192,6 +197,11 @@ interface PlatformSystemRows {
 		readonly error: string | null;
 		readonly session_message_id: string | null;
 		readonly answered_at: string | null;
+	};
+	readonly channel_rate_limit: SystemRecordFields & {
+		readonly bucket_key: string;
+		readonly window_started_at: string;
+		readonly request_count: number;
 	};
 	readonly integration_cursor: SystemRecordFields & {
 		readonly integration_name: string;
@@ -234,6 +244,7 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'chat_session',
 	'channel_conversation',
 	'channel_inbound_message',
+	'channel_rate_limit',
 	'user',
 	'team',
 	'policy',
@@ -310,6 +321,7 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'title', kind: 'text', nullable: false },
 			{ name: 'platform', kind: 'text', nullable: true },
 			{ name: 'visibility', kind: 'text', nullable: false },
+			{ name: 'channel_key', kind: 'text', nullable: true },
 			{ name: 'external_thread_id', kind: 'text', nullable: true },
 			{ name: 'agent_profile_id', kind: 'uuid', nullable: true },
 			{ name: 'channel_config_id', kind: 'uuid', nullable: true },
@@ -325,6 +337,10 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'channel_key', kind: 'text', nullable: false },
 			{ name: 'transport', kind: 'text', nullable: false },
 			{ name: 'external_conversation_id', kind: 'text', nullable: false },
+			{ name: 'conversation_kind', kind: 'text', nullable: false },
+			{ name: 'audience', kind: 'text', nullable: false },
+			{ name: 'policy_key', kind: 'text', nullable: false },
+			{ name: 'owner_user_id', kind: 'uuid', nullable: true },
 			{ name: 'binding_key', kind: 'text', nullable: false },
 			{ name: 'chat_id', kind: 'uuid', nullable: false },
 			{ name: 'last_inbound_at', kind: 'timestamptz', nullable: true },
@@ -346,6 +362,15 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'error', kind: 'text', nullable: true },
 			{ name: 'session_message_id', kind: 'uuid', nullable: true },
 			{ name: 'answered_at', kind: 'timestamptz', nullable: true }
+		]
+	},
+	channel_rate_limit: {
+		name: 'channel_rate_limit',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'bucket_key', kind: 'text', nullable: false },
+			{ name: 'window_started_at', kind: 'timestamptz', nullable: false },
+			{ name: 'request_count', kind: 'integer', nullable: false }
 		]
 	},
 	integration_cursor: {

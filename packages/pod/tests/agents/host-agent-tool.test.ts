@@ -191,6 +191,8 @@ describe('assertHostAgentTools', () => {
 					transport: 'whatsapp',
 					policy: 'field_ops_controller',
 					description: 'Field controllers reaching the workspace over WhatsApp.',
+					audience: 'authenticated',
+					groupMessages: 'disabled',
 					hostTools: ['sandbox_bash']
 				}
 			}

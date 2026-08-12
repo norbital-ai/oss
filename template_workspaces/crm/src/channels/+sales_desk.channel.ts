@@ -10,5 +10,11 @@ export default {
 	transport: 'telegram',
 	policy: 'sales_rep',
 	description: 'Customer-facing sales enquiries',
+	audience: 'public',
+	rateLimits: {
+		perSenderPerMinute: 8,
+		totalPerMinute: 300
+	},
+	groupMessages: 'disabled',
 	task: 'Answer questions about quotes and accounts for this customer.'
 } satisfies Channel;

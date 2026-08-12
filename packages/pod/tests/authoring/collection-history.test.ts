@@ -57,7 +57,11 @@ describe('per-collection temporal history', () => {
 	});
 
 	it('collects the opt-out from the system definitions and the tenant manifest alike', () => {
-		expect([...NON_TEMPORAL_SYSTEM_COLLECTIONS].sort()).toEqual(['audit_event', 'chat_session']);
+		expect([...NON_TEMPORAL_SYSTEM_COLLECTIONS].sort()).toEqual([
+			'audit_event',
+			'channel_rate_limit',
+			'chat_session'
+		]);
 
 		const names = nonTemporalCollections(
 			manifestWithHistory({ transcripts: false, orders: undefined })

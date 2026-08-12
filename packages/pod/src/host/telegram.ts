@@ -28,7 +28,12 @@ type TelegramUpdate = {
 	readonly message?: {
 		readonly message_id: number;
 		readonly text?: string;
-		readonly chat?: { readonly id: number | string };
+		readonly chat?: {
+			readonly id: number | string;
+			readonly type?: 'private' | 'group' | 'supergroup' | 'channel';
+		};
+		reply_to_message?: unknown;
+		entities?: readonly { readonly type?: string }[];
 		readonly from?: {
 			readonly id: number | string;
 			readonly first_name?: string;
@@ -61,6 +66,16 @@ export function telegramInboundMessage(
 	return {
 		channel,
 		conversationId: String(chatId),
+		conversationKind:
+			message.chat?.type === 'group' || message.chat?.type === 'supergroup' ? 'group' : 'dm',
+		invocation:
+			message.chat?.type !== 'group' && message.chat?.type !== 'supergroup'
+				? 'direct'
+				: message.reply_to_message
+					? 'reply'
+					: message.entities?.some((entity) => entity.type === 'mention')
+						? 'mention'
+						: 'ambient',
 		// Telegram's own id, not the update id: an update is redelivered until acknowledged, and the
 		// message id is what stays the same across those attempts. Deduplication depends on it.
 		messageId: String(message.message_id),

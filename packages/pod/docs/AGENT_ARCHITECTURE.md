@@ -64,13 +64,16 @@ them, and a refusal it meets is a refusal the person would have met. That is the
 is the half a `read_collection` or `write_collection` call obeys. Host tools carry the same person's
 id as a lookup key; the host re-resolves it before opening that person's worktree.
 
-**Channel usage** — Telegram, WhatsApp — runs under the channel's own agent profile instead. A
-channel may be a group chat, so there is no single person behind it to inherit permissions from:
-`pod migrate` reconciles one `kind='agent'` user per declared channel into a team holding that
-channel's declared `policy`, and `deliverChannelMessage` re-enters the workspace as that principal
-before the loop starts. This is what makes `policy` on a channel declaration load-bearing rather than
-decorative: the host command that carries an inbound message arrives as an administrator, and running
-the agent there would make every channel omnipotent.
+**Channel usage** — Telegram, WhatsApp — always starts from the channel's reconciled agent profile.
+For a public profile, that principal is the requestor. For an authenticated profile, delivery first
+matches the transport sender to an active assigned account with a verified transport identity, then
+keeps that human identity while substituting the profile principal's team memberships. Policy
+placeholders therefore resolve to the contractor, but permissions cannot widen beyond the profile's
+declared `policy`. An unmatched sender receives the registration instruction and no model run.
+
+`pod migrate` reconciles one `kind='agent'` user per declared channel into a team holding that policy.
+This is what makes `policy` load-bearing rather than decorative: the host command carrying an inbound
+message arrives as an administrator, and running the agent there would make every channel omnipotent.
 
 Channels default to no host tools. A channel that explicitly names a narrow host-tool allowlist
 carries its own reconciled agent principal, never the arbitrary external sender and never the
@@ -79,11 +82,12 @@ read-only unless the channel declaration deliberately opts into authoring.
 
 What each entry point _declares_ is a second axis, independent of whose permissions apply:
 
-| Entry point      | Acts as                                         | Spec comes from                                        | Reach when nothing is authored                        |
-| ---------------- | ----------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- |
-| Interactive chat | the signed-in user                              | `src/+agent.ts`, else `interactiveAgentSpec`           | write, every workspace tool, every host tool          |
-| Channel message  | the channel's agent principal, under its policy | `channelAgentSpec`, plus the channel declaration       | write, every workspace tool, declared host tools only |
-| Agent automation | the principal its host command carries          | the automation's declared `collections`/`access`/tools | whatever the file declares                            |
+| Entry point                   | Acts as                                                     | Spec comes from                                        | Reach when nothing is authored                        |
+| ----------------------------- | ----------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- |
+| Interactive chat              | the signed-in user                                          | `src/+agent.ts`, else `interactiveAgentSpec`           | write, every workspace tool, every host tool          |
+| Public channel message        | the channel's agent principal, under its policy             | `channelAgentSpec`, plus the channel declaration       | write, every workspace tool, declared host tools only |
+| Authenticated channel message | the linked member identity under the channel profile policy | `channelAgentSpec`, plus the channel declaration       | write, every workspace tool, declared host tools only |
+| Agent automation              | the principal its host command carries                      | the automation's declared `collections`/`access`/tools | whatever the file declares                            |
 
 A channel run is the one place an authored `src/+agent.ts` does not win outright. Its prompt, model
 and budgets are carried; its `collections`, `access`, `tools` and `hostTools` are not, because

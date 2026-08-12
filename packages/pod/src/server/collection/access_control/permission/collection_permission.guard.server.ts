@@ -109,7 +109,22 @@ async function workflowMetadataReadFallback(
 		return { reducedCondition: { owner_user_id: requestorId } };
 	}
 	if (collectionName === 'chat_session') {
-		return { reducedCondition: { user_id: requestorId } };
+		// Fixed visibility contract for non-admin members:
+		// - their own personal sessions and authenticated DMs (both carry their user_id), and
+		// - authenticated groups whose profile policy is held by one of their active teams.
+		// Public channel transcripts never enter this fallback, so they remain admin-only.
+		return {
+			reducedCondition: {
+				$sql:
+					'("user_id" = ${requestor.norbital_id} OR "norbital_id" IN (' +
+					'SELECT cc.chat_id FROM channel_conversation cc ' +
+					'JOIN policy p ON p.key = cc.policy_key AND p.is_active = true ' +
+					'JOIN team t ON t.policy_id = p.norbital_id AND t.is_active = true ' +
+					'JOIN team_members tm ON tm.team_id = t.norbital_id ' +
+					"WHERE cc.conversation_kind = 'group' AND cc.audience = 'authenticated' " +
+					'AND tm.user_id = ${requestor.norbital_id}))'
+			}
+		};
 	}
 
 	if (collectionName === 'automation_run') {

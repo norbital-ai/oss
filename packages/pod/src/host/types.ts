@@ -184,6 +184,10 @@ export type ChannelInboundMessage = {
 	readonly channel: string;
 	/** Transport-native conversation address: a chat id, a phone number, a thread id. */
 	readonly conversationId: string;
+	/** Whether the transport-native thread is private or shared by several participants. */
+	readonly conversationKind: 'dm' | 'group';
+	/** Why this group message addresses the agent. DMs are always `direct`. */
+	readonly invocation?: 'direct' | 'mention' | 'reply' | 'ambient';
 	/**
 	 * The transport's own message id.
 	 *
@@ -198,7 +202,7 @@ export type ChannelInboundMessage = {
 
 export type ChannelInboundResult = {
 	/** `duplicate` means the message was already handled and no agent ran. */
-	readonly status: 'answered' | 'duplicate' | 'silent';
+	readonly status: 'answered' | 'duplicate' | 'silent' | 'registration_required' | 'rate_limited';
 	readonly text?: string;
 	/** Whether the reply actually left over the transport. */
 	readonly delivered?: boolean;

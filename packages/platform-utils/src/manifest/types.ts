@@ -424,6 +424,15 @@ export const ManifestChannelSchema = z
 		policy: nonEmpty,
 		description: nonEmpty,
 		task: z.string().optional(),
+		audience: z.enum(['public', 'authenticated']).default('authenticated'),
+		rateLimits: z
+			.object({
+				perSenderPerMinute: z.number().int().positive(),
+				totalPerMinute: z.number().int().positive()
+			})
+			.strict()
+			.optional(),
+		groupMessages: z.enum(['disabled', 'all', 'mention_or_reply']).default('disabled'),
 		/** Host tool names this channel opts into; omitted / empty means none. */
 		hostTools: z.array(nonEmpty).optional(),
 		/**
@@ -437,7 +446,23 @@ export const ManifestChannelSchema = z
 			.strict()
 			.optional()
 	})
-	.strict();
+	.strict()
+	.superRefine((channel, ctx) => {
+		if (channel.audience === 'public' && !channel.rateLimits) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ['rateLimits'],
+				message: 'Public channels must declare rate limits'
+			});
+		}
+		if (channel.audience === 'authenticated' && channel.rateLimits) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ['rateLimits'],
+				message: 'Only public channels configure rate limits'
+			});
+		}
+	});
 
 /**
  * One skill, reduced to what it is for. `description` is not nullable here because a skill with

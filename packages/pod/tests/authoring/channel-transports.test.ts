@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { assertChannelTransportsAreSupported } from '../../src/authoring/channels/channels.js';
+import {
+	assertChannelTransportsAreSupported,
+	defineChannel
+} from '../../src/authoring/channels/channels.js';
 import { consoleMessaging, messagingProviders } from '../../src/host/facilities.js';
 
 /**
@@ -110,5 +113,31 @@ describe('channel transports', () => {
 		expect(() =>
 			assertChannelTransportsAreSupported({ sales_desk: channel('telegram') }, transports)
 		).not.toThrow();
+	});
+});
+
+describe('channel audience contract', () => {
+	it('requires a one-minute admission budget when a profile is public', () => {
+		expect(() =>
+			defineChannel({
+				transport: 'whatsapp',
+				policy: 'sales_rep',
+				description: 'Public sales support',
+				audience: 'public',
+				groupMessages: 'disabled'
+			} as never)
+		).toThrow(/must declare rate limits/i);
+	});
+
+	it('keeps authenticated profiles free of redundant account-link configuration', () => {
+		expect(
+			defineChannel({
+				transport: 'whatsapp',
+				policy: 'field_ops_contractor',
+				description: 'Assigned contractor support',
+				audience: 'authenticated',
+				groupMessages: 'mention_or_reply'
+			})
+		).toMatchObject({ audience: 'authenticated', groupMessages: 'mention_or_reply' });
 	});
 });
