@@ -52,7 +52,10 @@ import {
 	runIntegrationCursor
 } from '$lib/server/integrations/tenant-inbound.server.js';
 import { runNotificationOutbox } from '$lib/server/notification-outbox.server.js';
-import { pumpRegisteredAutomations } from './automation-dispatch.server.js';
+import {
+	enqueueRegisteredAutomations,
+	pumpRegisteredAutomations
+} from './automation-dispatch.server.js';
 import { runAgent } from '$lib/server/agent/agent-loop.server.js';
 import {
 	ChannelInboundSchema,
@@ -217,6 +220,7 @@ export const runtimeRunRequestSchema = z.union([
 	}),
 	z.object({
 		kind: z.literal('automation-events'),
+		action: z.enum(['enqueue', 'run']).optional(),
 		limit: z.number().int().min(1).max(1000).optional()
 	}),
 	z.object({
@@ -568,7 +572,9 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 		case 'notification':
 			return runNotificationOutbox(request);
 		case 'automation-events':
-			return pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
+			return request.action === 'enqueue'
+				? enqueueRegisteredAutomations(getWorkspace({ provision: true }), request.limit)
+				: pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
 		case 'agent-conversation-titles':
 			return runPendingConversationTitles(request.limit);
 		case 'channel':

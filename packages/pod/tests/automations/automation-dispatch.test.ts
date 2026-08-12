@@ -3,6 +3,7 @@ import {
 	matchChangeAutomations,
 	eventForAction
 } from '$lib/server/run/automation-dispatch.server.js';
+import { readFileSync } from 'node:fs';
 
 const automations = {
 	notify_on_new_order: { trigger: { trigger: { collection: 'orders', event: 'created' } } },
@@ -35,5 +36,19 @@ describe('automation-dispatch matcher', () => {
 		expect(matchChangeAutomations(automations, 'invoices', 'created')).toEqual([]);
 		expect(matchChangeAutomations({}, 'orders', 'created')).toEqual([]);
 		expect(matchChangeAutomations(undefined, 'orders', 'created')).toEqual([]);
+	});
+});
+
+describe('durable automation jobs', () => {
+	it('separates idempotent enqueue from leased, retried execution', () => {
+		const source = readFileSync(
+			new URL('../../src/server/run/automation-dispatch.server.ts', import.meta.url),
+			'utf8'
+		);
+		expect(source).toContain('ON CONFLICT (automation_name, event_xid, event_seq) DO NOTHING');
+		expect(source).toContain('FOR UPDATE SKIP LOCKED');
+		expect(source).toContain("status = 'processing' AND lease_until <= CURRENT_TIMESTAMP");
+		expect(source).toContain('AUTOMATION_JOB_MAX_ATTEMPTS = 5');
+		expect(source).toContain('AUTOMATION_JOB_CONCURRENCY = 1');
 	});
 });

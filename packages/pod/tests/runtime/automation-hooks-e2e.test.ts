@@ -224,6 +224,7 @@ export default defineAutomation(
 		description: 'Opens a tracking defect whenever a new RFI is created.',
 		handler: async (api, { scope }) => {
 			const rfi = scope.incoming_record;
+			if (rfi.title === 'retry-probe') throw new Error('retry probe failure');
 			await api.db.defects.create({
 				title: 'event-automation:' + rfi.title,
 				status: 'open',
@@ -490,11 +491,25 @@ describe('Pod automations and hooks — E2E', () => {
 		// An automation that fired inline would also fire on a transaction that later rolled back.
 		expect(await defectTitles('event-automation:event-probe')).toEqual([]);
 
+		await harness.hostCommand({ kind: 'automation-events', action: 'enqueue', limit: 200 });
+		await harness.hostCommand({ kind: 'automation-events', action: 'enqueue', limit: 200 });
+		const queued = await harness.pool.query<{ status: string; attempts: number }>(
+			`SELECT status, attempts FROM _norbital_automation_job
+			  WHERE automation_name = 'probe_rfi_created'
+			  ORDER BY created_at DESC LIMIT 1`
+		);
+		expect(queued.rows).toEqual([{ status: 'pending', attempts: 0 }]);
 		await runJob('pod:automation-events');
 		expect(await defectTitles('event-automation:event-probe')).toEqual([
 			'event-automation:event-probe'
 		]);
 		expect(await automationRuns('probe_rfi_created')).toHaveLength(1);
+		const settled = await harness.pool.query<{ status: string; attempts: number }>(
+			`SELECT status, attempts FROM _norbital_automation_job
+			  WHERE automation_name = 'probe_rfi_created'
+			  ORDER BY created_at DESC LIMIT 1`
+		);
+		expect(settled.rows).toEqual([{ status: 'succeeded', attempts: 1 }]);
 
 		// The negative half, twice over: a different collection, and the same collection under a
 		// different event. `rfis.updated` is the sharper of the two — a matcher that compared only the
@@ -535,6 +550,29 @@ describe('Pod automations and hooks — E2E', () => {
 		// Still exactly one run and one derived row: neither the update nor the defect matched.
 		expect(await automationRuns('probe_rfi_created')).toHaveLength(1);
 		expect(await defectTitles('event-automation:%')).toEqual(['event-automation:event-probe']);
+	});
+
+	it('retries a failed durable event job and dead-letters it after the bounded attempt budget', async () => {
+		await createRfi('retry-probe');
+		for (let attempt = 1; attempt <= 5; attempt += 1) {
+			await runJob('pod:automation-events');
+			if (attempt < 5) {
+				await harness.pool.query(
+					`UPDATE _norbital_automation_job
+					    SET next_attempt_at = CURRENT_TIMESTAMP
+					  WHERE automation_name = 'probe_rfi_created' AND status = 'pending'`
+				);
+			}
+		}
+		const job = await harness.pool.query<{ status: string; attempts: number; last_error: string }>(
+			`SELECT status, attempts, last_error FROM _norbital_automation_job
+			  WHERE automation_name = 'probe_rfi_created'
+			    AND last_error = 'retry probe failure'`
+		);
+		expect(job.rows).toEqual([{ status: 'dead', attempts: 5, last_error: 'retry probe failure' }]);
+		expect(
+			(await automationRuns('probe_rfi_created')).filter((run) => run.status === 'failed')
+		).toHaveLength(5);
 	});
 
 	it('stores what a before hook returned, not what the caller submitted', async () => {

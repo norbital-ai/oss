@@ -25,6 +25,21 @@ type RegisteredAutomation = {
 	readonly trigger?: unknown;
 };
 
+type AutomationJob = {
+	readonly norbital_id: string;
+	readonly automation_name: string;
+	readonly collection: string;
+	readonly record_id: string;
+	readonly action: ChangeAction;
+	readonly attempts: number;
+};
+
+// Provider calls are billed. Serial execution keeps the trial-cap check, provider call and usage
+// record ordered until billing owns an atomic spend reservation primitive.
+const AUTOMATION_JOB_CONCURRENCY = 1;
+const AUTOMATION_JOB_MAX_ATTEMPTS = 5;
+const AUTOMATION_JOB_LEASE_SECONDS = 120;
+
 /** Pure: the automations whose collection-event trigger matches this change. */
 export function matchChangeAutomations(
 	automations: Record<string, RegisteredAutomation> | undefined,
@@ -104,25 +119,148 @@ export async function pumpAutomations(
 	return batch.cursor;
 }
 
-/** Tenant-wide event pump. Its cursor is durable and unrelated to any browser subscription. */
+/**
+ * Materialize committed matching events as durable jobs, then advance the independent scan cursor.
+ * A repeated scan is harmless: the event identity is unique per automation.
+ */
+export async function enqueueRegisteredAutomations(
+	ctx: ProvisionedContext,
+	limit = 200
+): Promise<OutboxCursor> {
+	const enqueue = async (tenantDb: ProvisionedContext['tenantDb']): Promise<OutboxCursor> => {
+		const txCtx = { ...ctx, tenantDb };
+		const stored = await tenantDb.query<{ xid: string; seq: string }>(
+			`SELECT xid::text AS xid, seq::text AS seq
+			   FROM _norbital_automation_cursor
+			  WHERE singleton = TRUE
+			  FOR UPDATE`
+		);
+		const cursor = stored.rows[0] ?? OUTBOX_CURSOR_START;
+		const batch = await readSyncOutboxBatch(txCtx, cursor, limit);
+		const registered = getTenantWorkspace().registered.automations as
+			Record<string, RegisteredAutomation> | undefined;
+		const jobs = batch.rows.flatMap((row) =>
+			matchChangeAutomations(registered, row.collection, eventForAction(row.action)).map(
+				(automationName) => ({ row, automationName })
+			)
+		);
+		if (jobs.length > 0) {
+			const params: unknown[] = [];
+			const values = jobs.map(({ row, automationName }, index) => {
+				const base = index * 6;
+				params.push(automationName, row.xid, row.seq, row.collection, row.recordId, row.action);
+				return `($${base + 1}, $${base + 2}::xid8, $${base + 3}::bigint, $${base + 4}, $${base + 5}::uuid, $${base + 6})`;
+			});
+			await tenantDb.query(
+				`INSERT INTO _norbital_automation_job
+				   (automation_name, event_xid, event_seq, collection, record_id, action)
+				 VALUES ${values.join(', ')}
+				 ON CONFLICT (automation_name, event_xid, event_seq) DO NOTHING`,
+				params
+			);
+		}
+		if (batch.rows.length > 0) {
+			await tenantDb.query(
+				`UPDATE _norbital_automation_cursor
+				    SET xid = $1::xid8, seq = $2::bigint
+				  WHERE singleton = TRUE`,
+				[batch.cursor.xid, batch.cursor.seq]
+			);
+		}
+		return batch.cursor;
+	};
+
+	return ctx.tenantDb.transaction
+		? ctx.tenantDb.transaction(async (tx) => enqueue(tx))
+		: enqueue(ctx.tenantDb);
+}
+
+async function claimAutomationJobs(
+	ctx: ProvisionedContext,
+	limit: number
+): Promise<readonly AutomationJob[]> {
+	const result = await ctx.tenantDb.query<AutomationJob>(
+		`WITH claimable AS (
+		   SELECT norbital_id
+		     FROM _norbital_automation_job
+		    WHERE attempts < $1
+		      AND next_attempt_at <= CURRENT_TIMESTAMP
+		      AND (status = 'pending' OR (status = 'processing' AND lease_until <= CURRENT_TIMESTAMP))
+		    ORDER BY event_xid, event_seq, automation_name
+		    FOR UPDATE SKIP LOCKED
+		    LIMIT $2
+		 )
+		 UPDATE _norbital_automation_job AS job
+		    SET status = 'processing',
+		        attempts = attempts + 1,
+		        lease_until = CURRENT_TIMESTAMP + ($3 * INTERVAL '1 second'),
+		        updated_at = CURRENT_TIMESTAMP
+		   FROM claimable
+		  WHERE job.norbital_id = claimable.norbital_id
+		 RETURNING job.norbital_id::text, job.automation_name, job.collection,
+		           job.record_id::text, job.action, job.attempts`,
+		[AUTOMATION_JOB_MAX_ATTEMPTS, Math.min(Math.max(limit, 1), 200), AUTOMATION_JOB_LEASE_SECONDS]
+	);
+	return result.rows;
+}
+
+async function runAutomationJob(ctx: ProvisionedContext, job: AutomationJob): Promise<void> {
+	try {
+		const record =
+			job.action === 'delete'
+				? { norbital_id: job.record_id }
+				: await fetchRecord(ctx, job.collection, job.record_id);
+		if (record) {
+			await runAutomation({
+				automationName: job.automation_name,
+				scope: { incoming_record: record }
+			});
+		}
+		await ctx.tenantDb.query(
+			`UPDATE _norbital_automation_job
+			    SET status = 'succeeded', lease_until = NULL, last_error = NULL,
+			        updated_at = CURRENT_TIMESTAMP
+			  WHERE norbital_id = $1::uuid`,
+			[job.norbital_id]
+		);
+	} catch (cause) {
+		const message = cause instanceof Error ? cause.message : String(cause);
+		const dead = job.attempts >= AUTOMATION_JOB_MAX_ATTEMPTS;
+		const retrySeconds = Math.min(2 ** job.attempts, 3600);
+		await ctx.tenantDb.query(
+			`UPDATE _norbital_automation_job
+			    SET status = $2,
+			        next_attempt_at = CURRENT_TIMESTAMP + ($3 * INTERVAL '1 second'),
+			        lease_until = NULL,
+			        last_error = $4,
+			        updated_at = CURRENT_TIMESTAMP
+			  WHERE norbital_id = $1::uuid`,
+			[job.norbital_id, dead ? 'dead' : 'pending', retrySeconds, message]
+		);
+	}
+}
+
+async function runClaimedAutomationJobs(ctx: ProvisionedContext, limit: number): Promise<void> {
+	const jobs = await claimAutomationJobs(ctx, limit);
+	let next = 0;
+	await Promise.all(
+		Array.from({ length: Math.min(AUTOMATION_JOB_CONCURRENCY, jobs.length) }, async () => {
+			while (next < jobs.length) {
+				const job = jobs[next++];
+				if (job) await runAutomationJob(ctx, job);
+			}
+		})
+	);
+}
+
+/** Tenant-wide event pump. Scanning is durable and external effects run from leased jobs. */
 export async function pumpRegisteredAutomations(
 	ctx: ProvisionedContext,
 	limit = 200
 ): Promise<OutboxCursor> {
-	const stored = await ctx.tenantDb.query<{ xid: string; seq: string }>(
-		`SELECT xid::text AS xid, seq::text AS seq
-		   FROM _norbital_automation_cursor
-		  WHERE singleton = TRUE`
-	);
-	const cursor = stored.rows[0] ?? OUTBOX_CURSOR_START;
-	return pumpAutomations(ctx, cursor, limit, async (advanced) => {
-		await ctx.tenantDb.query(
-			`UPDATE _norbital_automation_cursor
-			    SET xid = $1::xid8, seq = $2::bigint
-			  WHERE singleton = TRUE`,
-			[advanced.xid, advanced.seq]
-		);
-	});
+	const cursor = await enqueueRegisteredAutomations(ctx, limit);
+	await runClaimedAutomationJobs(ctx, limit);
+	return cursor;
 }
 
 async function fetchRecord(

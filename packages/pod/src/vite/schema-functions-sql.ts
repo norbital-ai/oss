@@ -16,6 +16,7 @@ const INTERNAL_TABLES = [
 	'_norbital_internal_schema',
 	'_norbital_sync_epoch',
 	'_norbital_automation_cursor',
+	'_norbital_automation_job',
 	'__drizzle_migrations',
 	'sync_outbox'
 ] as const;
@@ -432,6 +433,30 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
     INSERT INTO _norbital_automation_cursor (singleton)
       VALUES (TRUE)
       ON CONFLICT (singleton) DO NOTHING;
+
+    -- Event effects are durable work, not part of the change-feed scan. The scanner records one
+    -- idempotent job per matching automation before moving its cursor; workers can then lease and
+    -- retry slow external effects without blocking later committed changes.
+    CREATE TABLE IF NOT EXISTS _norbital_automation_job (
+      norbital_id UUID PRIMARY KEY DEFAULT uuidv7(),
+      automation_name TEXT NOT NULL,
+      event_xid xid8 NOT NULL,
+      event_seq BIGINT NOT NULL,
+      collection TEXT NOT NULL,
+      record_id UUID NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'processing', 'succeeded', 'dead')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      lease_until TIMESTAMPTZ,
+      last_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (automation_name, event_xid, event_seq)
+    );
+    CREATE INDEX IF NOT EXISTS _norbital_automation_job_claim_idx
+      ON _norbital_automation_job (status, next_attempt_at, event_xid, event_seq);
 
     -- A durable identity for this physical tenant database. It survives ordinary migrations and
     -- deploys, but a restore/re-provision/reset creates a fresh value. Clients persist the last

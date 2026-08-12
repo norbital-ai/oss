@@ -76,6 +76,7 @@ const REPLICA_EXCLUDED_TABLES = [
 	'_norbital_sync_epoch',
 	'_norbital_sync_compaction',
 	'_norbital_automation_cursor',
+	'_norbital_automation_job',
 	'_approval_lock',
 	'_norbital_internal_schema',
 	'mutation_log',
