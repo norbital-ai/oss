@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
+import type { HostFileStorageBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { workspaceJobs } from '$lib/host/jobs.js';
 import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
+	TEST_PERMISSION_BYPASS_KEY,
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
@@ -28,6 +30,14 @@ const APPROVAL_CONFIG_IDS = {
 } as const;
 
 const approvalTeam = [{ id: APPROVAL_TEAM_ID, name: 'RFI reviewers' }] as const;
+const storedFiles = new Map<string, Uint8Array>();
+const fileStorage: HostFileStorageBinding = {
+	put: async (key, body) => {
+		storedFiles.set(key, new Uint8Array(body));
+	},
+	get: async (key) => storedFiles.get(key) ?? null,
+	delete: async (key) => void storedFiles.delete(key)
+};
 const approvalRequestor: Identity = {
 	userId: APPROVAL_REQUESTOR_ID,
 	userName: 'RFI Requestor',
@@ -56,9 +66,12 @@ export default {
 	create: {
 		before: {
 			description: 'Normalizes status, priority, and subject before an RFI is stored.',
-			handler: async ({ input }) => {
+			handler: async ({ input, api }) => {
 				if (input.title === 'refuse-before') {
 					throw new Error('probe before hook refused this RFI');
+				}
+				if (typeof input.title === 'string' && input.title.startsWith('asset:')) {
+					await api.readFileAsset(input.title.slice('asset:'.length));
 				}
 				// The mutation on the way in. \`status\` is deliberately overwritten rather than defaulted:
 				// the caller submits 'closed' below, so an unchanged stored row cannot be mistaken for a
@@ -256,7 +269,7 @@ describe('Pod automations and hooks — E2E', () => {
 	beforeAll(async () => {
 		harness = await bootPodRuntime(
 			'construction',
-			{},
+			{ fileStorage },
 			{
 				sources: {
 					'src/collections/rfis/+hooks.ts': RFI_HOOKS,
@@ -656,6 +669,88 @@ describe('Pod automations and hooks — E2E', () => {
 			`SELECT 1 FROM rfis WHERE title LIKE 'batch-create-refused:%' OR title = 'refuse-before'`
 		);
 		expect(rows.rowCount).toBe(0);
+	});
+
+	it('lets a valid host bypass seed every collection through createMany without skipping hooks', async () => {
+		const teamId = '88888888-8888-4888-8888-888888888888';
+		const seededAt = '2026-07-03T03:00:00.000Z';
+		const refused = await command('collections/createMany', {
+			collection: 'team',
+			bypass_secret: 'not-the-host-secret',
+			inputs: [{ norbital_id: teamId, name: 'Seeded through collection ops', is_active: true }]
+		});
+		expect(refused.status).toBe(403);
+
+		const systemCreated = await command('collections/createMany', {
+			collection: 'team',
+			bypass_secret: TEST_PERMISSION_BYPASS_KEY,
+			inputs: [
+				{
+					norbital_id: teamId,
+					norbital_created_at: seededAt,
+					norbital_updated_at: seededAt,
+					name: 'Seeded through collection ops',
+					is_active: true
+				}
+			]
+		});
+		expect(systemCreated.status, systemCreated.body).toBe(200);
+		expect(
+			await harness.pool.query(
+				`SELECT name, norbital_created_at::text FROM team WHERE norbital_id = $1::uuid`,
+				[teamId]
+			)
+		).toMatchObject({
+			rows: [
+				{
+					name: 'Seeded through collection ops',
+					norbital_created_at: '2026-07-03 03:00:00+00'
+				}
+			]
+		});
+
+		const assetId = '88888888-8888-4888-8888-888888888889';
+		const storageKey = 'seed/elevated-hook-asset.txt';
+		const bytes = new TextEncoder().encode('elevated hook asset');
+		storedFiles.set(storageKey, bytes);
+		const assetCreated = await command('collections/createMany', {
+			collection: 'document_asset',
+			bypass_secret: TEST_PERMISSION_BYPASS_KEY,
+			inputs: [
+				{
+					norbital_id: assetId,
+					owner_user_id: APPROVAL_REQUESTOR_ID,
+					file_name: 'elevated-hook-asset.txt',
+					mime_type: 'text/plain',
+					file_size: bytes.byteLength,
+					storage_key: storageKey
+				}
+			]
+		});
+		expect(assetCreated.status, assetCreated.body).toBe(200);
+		const ordinaryAssetRead = await command('collections/createMany', {
+			collection: 'rfis',
+			inputs: [{ title: `asset:${assetId}` }]
+		});
+		expect(ordinaryAssetRead.status).toBe(500);
+		expect(ordinaryAssetRead.body).toContain(
+			'The selected file asset is not accessible to this requestor.'
+		);
+
+		const hooked = await command('collections/createMany', {
+			collection: 'rfis',
+			bypass_secret: TEST_PERMISSION_BYPASS_KEY,
+			inputs: [
+				{
+					norbital_id: '99999999-9999-4999-8999-999999999999',
+					title: `asset:${assetId}`
+				}
+			]
+		});
+		expect(hooked.status, hooked.body).toBe(200);
+		expect((JSON.parse(hooked.body) as Array<{ norbital_id: string }>)[0]?.norbital_id).toBe(
+			'99999999-9999-4999-8999-999999999999'
+		);
 	});
 
 	it('runs authored update hooks for every batch item and rejects the whole batch before writing', async () => {

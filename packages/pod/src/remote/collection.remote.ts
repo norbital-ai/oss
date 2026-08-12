@@ -24,7 +24,10 @@ import {
 	updateMany as runUpdateMany,
 	updateRecord as runUpdateRecord
 } from '$lib/server/collection/collection_ops.server.js';
-import { runWithBypassSecretIfValidAsync } from '$lib/server/collection/access_control/permission/permission_bypass_key.server.js';
+import {
+	getCurrentPermissionBypassKey,
+	runWithBypassSecretIfValidAsync
+} from '$lib/server/collection/access_control/permission/permission_bypass_key.server.js';
 import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
 import {
@@ -120,9 +123,35 @@ export const create = authenticated.command(CreateWireSchema, async (params) => 
 export const createMany = authenticated.command(CreateManyWireSchema, async (params) => {
 	const ctx = getWorkspace({ provision: true });
 	requireCollection(params.collection);
-	return runWithBypassSecretIfValidAsync(params.bypass_secret, () =>
-		runCreateMany(ctx, params.collection, params.inputs)
-	);
+	return runWithBypassSecretIfValidAsync(params.bypass_secret, () => {
+		const isElevated = getCurrentPermissionBypassKey() != null;
+		const inputs = isElevated
+			? params.inputs.map(
+					({
+						[SYSTEM_COLUMN_NAMES.PKEY]: _recordId,
+						[SYSTEM_COLUMN_NAMES.CREATED_AT]: _createdAt,
+						[SYSTEM_COLUMN_NAMES.UPDATED_AT]: _updatedAt,
+						...input
+					}) => input
+				)
+			: params.inputs;
+		const recordIds = isElevated
+			? params.inputs.map((input) => String(input[SYSTEM_COLUMN_NAMES.PKEY] ?? ''))
+			: undefined;
+		return runCreateMany(ctx, params.collection, inputs, {
+			// A valid host bypass is the standard elevated collection-op path. It may create
+			// platform collections and hookless template collections, but create hooks still run
+			// whenever the workspace authored them. Invalid or absent secrets remain ordinary calls.
+			isElevated,
+			...(recordIds?.every(Boolean) ? { recordIds } : {}),
+			...(isElevated
+				? {
+						createdAts: params.inputs.map((input) => input[SYSTEM_COLUMN_NAMES.CREATED_AT]),
+						updatedAts: params.inputs.map((input) => input[SYSTEM_COLUMN_NAMES.UPDATED_AT])
+					}
+				: {})
+		});
+	});
 });
 
 export const update = authenticated.command(UpdateWireSchema, async (params) => {

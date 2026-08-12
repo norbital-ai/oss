@@ -384,7 +384,12 @@ export function createMany(
 	ctx: ProvisionedContext,
 	collection: string,
 	inputs: readonly Record<string, unknown>[],
-	options?: { isElevated?: boolean }
+	options?: {
+		isElevated?: boolean;
+		recordIds?: readonly string[];
+		createdAts?: readonly unknown[];
+		updatedAts?: readonly unknown[];
+	}
 ): Promise<Record<string, unknown>[]> {
 	return withConstraintErrors(collection, () =>
 		createManyUnguarded(ctx, collection, inputs, options)
@@ -395,9 +400,17 @@ async function createManyUnguarded(
 	ctx: ProvisionedContext,
 	collection: string,
 	inputs: readonly Record<string, unknown>[],
-	options?: { isElevated?: boolean }
+	options?: {
+		isElevated?: boolean;
+		recordIds?: readonly string[];
+		createdAts?: readonly unknown[];
+		updatedAts?: readonly unknown[];
+	}
 ): Promise<Record<string, unknown>[]> {
 	if (inputs.length === 0) return [];
+	if (options?.recordIds && options.recordIds.length !== inputs.length) {
+		throw error(400, `Expected one record id per input for "${collection}"`);
+	}
 	const behavior = getWorkspaceCollection(collection);
 	if (!options?.isElevated && !allowsMutation(behavior, 'create')) {
 		throw error(403, requestI18nOrDefault().t('pod.server.createNotAllowed', { collection }));
@@ -420,12 +433,18 @@ async function createManyUnguarded(
 		}> = [];
 
 		// stupidity:allow A6 -- hooks and permission checks run in caller order within one transaction.
-		for (const input of inputs) {
+		for (const [index, input] of inputs.entries()) {
 			let payload = flattenWithOntoPayload(parseMutationInput(collection, 'create', input));
 			if (beforeHook) {
 				const hookResult = await beforeHook({ input, api });
 				if (hookResult != null) payload = hookResult;
 			}
+			const recordId = options?.recordIds?.[index];
+			if (recordId) payload[SYSTEM_COLUMN_NAMES.PKEY] = recordId;
+			const createdAt = options?.createdAts?.[index];
+			if (createdAt != null) payload[SYSTEM_COLUMN_NAMES.CREATED_AT] = createdAt;
+			const updatedAt = options?.updatedAts?.[index];
+			if (updatedAt != null) payload[SYSTEM_COLUMN_NAMES.UPDATED_AT] = updatedAt;
 
 			const mutationContext = {
 				type: 'create' as const,

@@ -17,6 +17,7 @@ import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { qualifiedTableName } from '@norbital-ai/platform-utils/tenant_db/schema';
 import {
+	getCurrentPermissionBypassKey,
 	runWithBypassSecretIfValidAsync,
 	runWithPermissionBypassAsync
 } from './access_control/permission/permission_bypass_key.server.js';
@@ -134,7 +135,10 @@ async function readFileAsset(assetId: string) {
 	});
 	const asset = fileAssetSchema.safeParse(result.rows[0]);
 	if (!asset.success) throw new Error('The selected file asset does not exist.');
-	if (asset.data.owner_user_id !== workspace.baseScope.requestor.norbital_id) {
+	if (
+		getCurrentPermissionBypassKey() == null &&
+		asset.data.owner_user_id !== workspace.baseScope.requestor.norbital_id
+	) {
 		throw new Error('The selected file asset is not accessible to this requestor.');
 	}
 	const bytes = await requireRuntimeFacility('fileStorage').get(asset.data.storage_key);

@@ -104,6 +104,7 @@ type TestHostDbBinding = {
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const ORG_NAME = 'Sync IT Org';
 const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
+export const TEST_PERMISSION_BYPASS_KEY = 'pod-runtime-test-permission-bypass-key-0123456789abcdef';
 
 /**
  * The newest mtime under a directory, or 0 when it does not exist.
@@ -378,6 +379,7 @@ export async function bootPodRuntime(
 	facilities: PodRuntimeTestFacilities = {},
 	options: PodRuntimeBootOptions = {}
 ): Promise<PodRuntimeHarness> {
+	process.env.SECRET_PERMISSION_BYPASS_KEY = TEST_PERMISSION_BYPASS_KEY;
 	const sharedTemplateRoot = path.join(REPO_ROOT, 'template_workspaces', template);
 	const sources = options.sources ?? {};
 	// The checked-in template is source-only. Always build an isolated copy linked to the package
@@ -397,6 +399,7 @@ export async function bootPodRuntime(
 		POD_ADMIN_NAME: 'IT Admin',
 		POD_ADMIN_EMAIL: 'admin@it.local',
 		POD_TEMPLATE_KEY: template,
+		SECRET_PERMISSION_BYPASS_KEY: TEST_PERMISSION_BYPASS_KEY,
 		POD_TRUSTED_HOST_TOKEN: '0123456789abcdef0123456789abcdef-trusted-host-token'
 	});
 
