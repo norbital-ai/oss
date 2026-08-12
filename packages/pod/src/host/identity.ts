@@ -4,6 +4,7 @@ import { safeParse } from '@norbital-ai/std/json';
 import type { HostIdentity, HostIdentityProvider } from './types.js';
 
 export const TRUSTED_HOST_TOKEN_HEADER = 'x-norbital-host-token';
+export const TRUSTED_PERMISSION_BYPASS_HEADER = 'x-norbital-permission-bypass';
 
 /**
  * Compare a presented host token with the expected one in constant time.

@@ -17,7 +17,11 @@
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';
-import { hostTokenMatches, TRUSTED_HOST_TOKEN_HEADER } from '../host/identity.js';
+import {
+	hostTokenMatches,
+	TRUSTED_HOST_TOKEN_HEADER,
+	TRUSTED_PERMISSION_BYPASS_HEADER
+} from '../host/identity.js';
 import {
 	isVerifiedSubject,
 	type HostIdentity,
@@ -41,7 +45,8 @@ const IDENTITY_HEADERS = [
 	'x-norbital-org-id',
 	'x-norbital-org-name',
 	'x-norbital-base-scope-json',
-	'x-norbital-host-token'
+	'x-norbital-host-token',
+	TRUSTED_PERMISSION_BYPASS_HEADER
 ] as const;
 
 function appendIncomingHeaders(source: IncomingMessage, target: Headers): void {
@@ -111,7 +116,11 @@ async function toWebRequest(
  * accidentally pass identity through by forgetting to clear it, because the only identity that
  * survives this function is the one it was given.
  */
-async function withHostIdentity(request: Request, identity: HostIdentity): Promise<Request> {
+async function withHostIdentity(
+	request: Request,
+	identity: HostIdentity,
+	permissionBypass: boolean
+): Promise<Request> {
 	const headers = new Headers(request.headers);
 	for (const name of IDENTITY_HEADERS) headers.delete(name);
 	headers.set('x-norbital-user-id', identity.userId);
@@ -120,6 +129,7 @@ async function withHostIdentity(request: Request, identity: HostIdentity): Promi
 	if (identity.baseScope) {
 		headers.set('x-norbital-base-scope-json', JSON.stringify(identity.baseScope));
 	}
+	if (permissionBypass) headers.set(TRUSTED_PERMISSION_BYPASS_HEADER, '1');
 	const body =
 		request.method === 'GET' || request.method === 'HEAD'
 			? undefined
@@ -350,7 +360,9 @@ async function handleConnection(
 
 	// Strip whatever the client sent about identity and re-issue the request as the established
 	// one; only the identity that survived `authenticate`/`resolveSubject` is believed.
-	const authenticated = await withHostIdentity(await toWeb(), resolved);
+	const permissionBypass =
+		Boolean(options.token) && request.headers[TRUSTED_PERMISSION_BYPASS_HEADER] === '1';
+	const authenticated = await withHostIdentity(await toWeb(), resolved, permissionBypass);
 	const handle = options.handlePodRequest ?? handlePodRequest;
 	return writeWebResponse(await handle(authenticated, options.bindings), response);
 }

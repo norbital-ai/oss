@@ -13,6 +13,8 @@
  */
 
 import { SECRET_PERMISSION_BYPASS_KEY } from '$lib/server/env.js';
+import { getRequestEvent } from '$lib/server/request-context.js';
+import { TRUSTED_PERMISSION_BYPASS_HEADER } from '$lib/host/identity.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 const RAW_KEY = SECRET_PERMISSION_BYPASS_KEY;
@@ -25,6 +27,20 @@ function trimmed(value: string | undefined): string | undefined {
 
 export function getPermissionBypassKey(): string | undefined {
 	return trimmed(RAW_KEY);
+}
+
+/**
+ * A hosted runtime never receives Core's global permission secret. Its HTTP adapter adds this
+ * marker only after authenticating Core's ephemeral host token and strips any caller-supplied copy.
+ */
+function getTrustedHostBypassKey(): string | undefined {
+	try {
+		return getRequestEvent().request.headers.get(TRUSTED_PERMISSION_BYPASS_HEADER) === '1'
+			? 'trusted-host'
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 const bypassStorage = new AsyncLocalStorage<string | undefined>();
@@ -51,8 +67,9 @@ export async function runWithBypassSecretIfValidAsync<T>(
 	secret: string | undefined,
 	fn: () => Promise<T> | T
 ): Promise<T> {
-	if (secret === undefined) return fn();
 	const systemKey = getPermissionBypassKey();
-	const valid = typeof systemKey === 'string' && secret === systemKey;
-	return bypassStorage.run(valid ? systemKey : undefined, () => fn());
+	const validSecret =
+		typeof systemKey === 'string' && typeof secret === 'string' && secret === systemKey;
+	const activeKey = validSecret ? systemKey : getTrustedHostBypassKey();
+	return bypassStorage.run(activeKey, () => fn());
 }

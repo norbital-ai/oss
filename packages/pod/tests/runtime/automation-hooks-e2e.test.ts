@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import type { HostFileStorageBinding } from '@norbital-ai/platform-utils/runtime/binding';
+import { TRUSTED_PERMISSION_BYPASS_HEADER } from '$lib/host/identity.js';
 import { workspaceJobs } from '$lib/host/jobs.js';
 import { requireDocker } from '../support/pg-harness.js';
 import {
@@ -673,6 +674,7 @@ describe('Pod automations and hooks — E2E', () => {
 
 	it('lets a valid host bypass seed every collection through createMany without skipping hooks', async () => {
 		const teamId = '88888888-8888-4888-8888-888888888888';
+		const hostElevatedTeamId = '88888888-8888-4888-8888-888888888887';
 		const seededAt = '2026-07-03T03:00:00.000Z';
 		const refused = await command('collections/createMany', {
 			collection: 'team',
@@ -695,6 +697,28 @@ describe('Pod automations and hooks — E2E', () => {
 			]
 		});
 		expect(systemCreated.status, systemCreated.body).toBe(200);
+		const hostElevated = await harness.request(
+			{
+				method: 'POST',
+				path: 'collections/createMany',
+				headers: {
+					'content-type': 'application/json',
+					[TRUSTED_PERMISSION_BYPASS_HEADER]: '1'
+				},
+				body: JSON.stringify({
+					collection: 'team',
+					inputs: [
+						{
+							norbital_id: hostElevatedTeamId,
+							name: 'Seeded through ephemeral host capability',
+							is_active: true
+						}
+					]
+				})
+			},
+			admin
+		);
+		expect(hostElevated.status, await hostElevated.text()).toBe(200);
 		expect(
 			await harness.pool.query(
 				`SELECT name, norbital_created_at::text FROM team WHERE norbital_id = $1::uuid`,

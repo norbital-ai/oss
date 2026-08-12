@@ -135,7 +135,12 @@ export type { HostDbConnection, PostgresDbOptions } from './db.js';
 // Identity. `emailOtpIdentity` is the zero-configuration default: it stores no password, sends its
 // codes through the host's messaging facility, and ships the login, code-entry, and invitation-accept
 // pages, so a workspace author writes no auth code and no auth markup.
-export { devIdentity, trustedHeaderIdentity, TRUSTED_HOST_TOKEN_HEADER } from './identity.js';
+export {
+	devIdentity,
+	trustedHeaderIdentity,
+	TRUSTED_HOST_TOKEN_HEADER,
+	TRUSTED_PERMISSION_BYPASS_HEADER
+} from './identity.js';
 export { emailOtpIdentity } from './email-otp.js';
 export type { EmailOtpIdentityOptions, EmailOtpDeliver } from './email-otp.js';
 export { cookieSession, hashToken, mintToken, subjectHmac } from './session.js';
