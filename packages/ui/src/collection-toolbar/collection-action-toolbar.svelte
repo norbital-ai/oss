@@ -136,17 +136,21 @@
 					{/snippet}
 					{#snippet content()}
 						{#if about.description}<p>{about.description}</p>{/if}
-						{#if about.applied && about.applied.length > 0}
+						{#if about.appliedContent || (about.applied && about.applied.length > 0)}
 							<Stack gap="xs">
 								<p class="font-medium">{t('table.appliedByView')}</p>
-								<Stack as="ul" gap="xs">
-									{#each about.applied as applied (applied)}
-										<Inline as="li" align="start" gap="xs" class="text-xs">
-											<Icon icon="lucide:filter" class="mt-0.5 size-3 shrink-0 opacity-70" />
-											<span>{applied}</span>
-										</Inline>
-									{/each}
-								</Stack>
+								{#if about.appliedContent}
+									{@render about.appliedContent()}
+								{:else if about.applied}
+									<Stack as="ul" gap="xs">
+										{#each about.applied as applied (applied)}
+											<Inline as="li" align="start" gap="xs" class="text-xs">
+												<Icon icon="lucide:filter" class="mt-0.5 size-3 shrink-0 opacity-70" />
+												<span>{applied}</span>
+											</Inline>
+										{/each}
+									</Stack>
+								{/if}
 							</Stack>
 						{/if}
 					{/snippet}

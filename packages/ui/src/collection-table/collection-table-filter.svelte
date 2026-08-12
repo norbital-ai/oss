@@ -1,10 +1,17 @@
 <script lang="ts">
-	import type { CollectionFilter } from '@norbital-ai/platform-utils/collection';
+	import type {
+		CollectionFilter,
+		CollectionRecord,
+		CollectionRelationOptions
+	} from '@norbital-ai/platform-utils/collection';
+	import { resolveRecordLabel } from '@norbital-ai/platform-utils/manifest/context';
+	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { PersistedState } from 'runed';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import { DataRenderer } from '../data-renderer/index.js';
+	import RelationshipRenderer from '../data-renderer/relationship/relationship.renderer.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
 	import { Inline, Scroll, Stack } from '#lib/layout';
@@ -132,6 +139,21 @@
 
 	function selectedField(filter: Filter): CollectionFilterField | undefined {
 		return filterFields.find((field) => field.value === filter.field);
+	}
+
+	/** Record keys need the target collection's record-label contract, not a UUID text input. */
+	function lookupTarget(field: CollectionFilterField): string | undefined {
+		if (field.field.relation) return field.field.relation.target;
+		if (field.field.name === 'norbital_id') return field.relation?.target ?? definition.name;
+		return undefined;
+	}
+
+	function relationOptions(targetName: string): CollectionRelationOptions {
+		const target = collections[targetName];
+		return {
+			label: (record: CollectionRecord) =>
+				resolveRecordLabel(target?.recordLabel ?? null, record) ?? humanize(targetName)
+		};
 	}
 
 	function filterIsActive(filter: Filter): boolean {
@@ -309,14 +331,25 @@
 							>
 						{/if}
 						{#if field && filter.operator && collectionFilterOperatorNeedsValue(filter.operator)}
+							{@const target = lookupTarget(field)}
 							{#key `${field.value}:${filter.operator}`}
-								<DataRenderer
-									field={collectionFilterOperandField(field.field, filter.operator)}
-									value={filter.value}
-									mode="edit"
-									class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
-									onValueChange={(value) => setValue(filter.id, value)}
-								/>
+								{#if target}
+									<RelationshipRenderer
+										{target}
+										value={typeof filter.value === 'string' ? filter.value : null}
+										options={relationOptions(target)}
+										class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
+										onValueChange={(value) => setValue(filter.id, value)}
+									/>
+								{:else}
+									<DataRenderer
+										field={collectionFilterOperandField(field.field, filter.operator)}
+										value={filter.value}
+										mode="edit"
+										class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
+										onValueChange={(value) => setValue(filter.id, value)}
+									/>
+								{/if}
 							{/key}
 						{:else}
 							<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto">
