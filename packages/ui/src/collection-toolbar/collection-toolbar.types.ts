@@ -149,6 +149,8 @@ export interface CollectionToolbarAbout {
 	readonly description?: string;
 	/** Conditions the view pins that the operator cannot see in the filter builder. */
 	readonly applied?: readonly string[];
+	/** Schema-aware rendering for pinned conditions whose values are not plain text. */
+	readonly appliedContent?: Snippet;
 }
 
 export interface CollectionToolbarFeatures {

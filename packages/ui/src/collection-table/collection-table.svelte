@@ -55,6 +55,7 @@
 	import CollectionGrid from './internal/collection-grid.svelte';
 	import CollectionTableDetailRegistration from './internal/collection-table-detail-registration.svelte';
 	import CollectionTableList from './collection-table-list.svelte';
+	import CollectionTableAppliedFilters from './collection-table-applied-filters.svelte';
 	import CollectionRecordDetailTabs from './collection-record-detail-tabs.svelte';
 	import CollectionRecordDetailEmpty from './collection-record-detail-empty.svelte';
 	import {
@@ -298,7 +299,6 @@
 		);
 	});
 	const defaultOrderBy = $derived(query?.orderBy);
-	const prefilterDescriptions = $derived(describeFilters(query?.where));
 	const showAbout = $derived(Boolean(description || query?.where));
 
 	// Auto card-role hints from column annotations, filled by field structure where unset (RFC V.2d).
@@ -688,58 +688,6 @@
 		}
 	}
 
-	function formatFilterValue(value: unknown): string {
-		if (value instanceof Date) return value.toLocaleString();
-		if (Array.isArray(value)) return value.map(formatFilterValue).join(', ');
-		if (typeof value === 'string') return value.replace(/^%|%$/g, '');
-		if (typeof value === 'object' && value != null) return JSON.stringify(value);
-		return String(value ?? 'empty');
-	}
-
-	function describeFilters(where: unknown): string[] {
-		if (Array.isArray(where)) return where.flatMap(describeFilters);
-		if (typeof where !== 'object' || where == null) return [];
-		return Object.entries(where).flatMap(([fieldName, condition]) => {
-			if (fieldName === 'AND') return describeFilters(condition);
-			if (fieldName === 'OR') {
-				const alternatives = describeFilters(condition);
-				return alternatives.length > 0
-					? [t('table.filterAnyOf', { values: alternatives.join('; ') })]
-					: [];
-			}
-			if (fieldName === 'NOT')
-				return describeFilters(condition).map((label) => t('table.filterNot', { label }));
-			const field = definition.fields.find((candidate) => candidate.name === fieldName);
-			const label = field?.label ?? humanize(fieldName);
-			if (typeof condition !== 'object' || condition == null || Array.isArray(condition)) {
-				return [t('table.filterIs', { label, value: formatFilterValue(condition) })];
-			}
-			return Object.entries(condition).map(([operator, operand]) => {
-				switch (operator) {
-					case 'ilike':
-					case 'contains_date':
-						return t('table.filterContains', { label, value: formatFilterValue(operand) });
-					case 'ne':
-						return t('table.filterIsNot', { label, value: formatFilterValue(operand) });
-					case 'gt':
-						return t('table.filterGreaterThan', { label, value: formatFilterValue(operand) });
-					case 'gte':
-						return t('table.filterAtLeast', { label, value: formatFilterValue(operand) });
-					case 'lt':
-						return t('table.filterLessThan', { label, value: formatFilterValue(operand) });
-					case 'lte':
-						return t('table.filterAtMost', { label, value: formatFilterValue(operand) });
-					case 'isNull':
-						return t('table.filterIsEmpty', { label });
-					case 'isNotNull':
-						return t('table.filterIsNotEmpty', { label });
-					default:
-						return t('table.filterIs', { label, value: formatFilterValue(operand) });
-				}
-			});
-		});
-	}
-
 	async function processApproval(
 		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE',
 		comments?: string
@@ -943,12 +891,21 @@
 {/snippet}
 
 {#snippet toolbar()}
+	{#snippet appliedFilters()}
+		<CollectionTableAppliedFilters
+			where={query?.where}
+			{definition}
+			collections={workspaceClient.collections}
+		/>
+	{/snippet}
 	<CollectionActionToolbar
 		{client}
 		{collection}
 		query={queryState}
 		{title}
-		about={showAbout ? { description, applied: prefilterDescriptions } : undefined}
+		about={showAbout
+			? { description, ...(query?.where ? { appliedContent: appliedFilters } : {}) }
+			: undefined}
 		{disabled}
 		{searchPlaceholder}
 		features={{ search: searchEnabled, filter: filterEnabled }}

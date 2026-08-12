@@ -13,6 +13,7 @@ import type { Translate } from '../data-renderer/index.js';
 export interface FilterCollectionDefinition {
 	readonly name: string;
 	readonly fields: readonly CollectionField[];
+	readonly recordLabel?: string | null;
 	readonly relationships?: readonly CollectionRelationship[];
 }
 

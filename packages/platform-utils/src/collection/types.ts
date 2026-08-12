@@ -105,11 +105,7 @@ export const COLLECTION_SEARCH_MAX_LENGTH = 200;
  * without dictionaries or tokenizers. The index and the search must never assume a language.
  */
 export function isSearchableCollectionField(field: CollectionField): boolean {
-	return (
-		!field.array &&
-		['text', 'phone', 'enum'].includes(field.kind) &&
-		field.search === true
-	);
+	return !field.array && ['text', 'phone', 'enum'].includes(field.kind) && field.search === true;
 }
 
 export function collectionSearchTrigramIndexName(tableName: string, columnName: string): string {

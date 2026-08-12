@@ -97,10 +97,7 @@ export function createMentionSources(
 		try {
 			return getManifestContext()
 				.getCollections()
-				.filter(
-					(collection) =>
-						collection.system !== true && isSearchableCollection(collection)
-				)
+				.filter((collection) => collection.system !== true && isSearchableCollection(collection))
 				.map((collection) => collection.collection_name)
 				.sort()
 				.slice(0, maxSources);

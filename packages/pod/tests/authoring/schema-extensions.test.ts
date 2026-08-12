@@ -281,10 +281,7 @@ describe('searchable fields', () => {
 	}
 
 	const fields = Object.fromEntries(
-		tableConfig.columns.map((column) => [
-			column.name,
-			portableCollectionField(column.name, column)
-		])
+		tableConfig.columns.map((column) => [column.name, portableCollectionField(column.name, column)])
 	);
 
 	it('creates a trigram search index per opted-in field, none by default', () => {

@@ -128,10 +128,7 @@ export function file(options: FileColumnOptions = {}) {
 }
 
 /** Text column restricted to a fixed set of values. Use `.array()` for list columns. */
-export function enums(
-	values: readonly [string, ...string[]],
-	options: TextSearchableOptions = {}
-) {
+export function enums(values: readonly [string, ...string[]], options: TextSearchableOptions = {}) {
 	const column = textEnumColumn(z.enum(values), {
 		kind: 'enum',
 		values
