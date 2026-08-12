@@ -20,6 +20,7 @@ import type {
 	HostFileStorageBinding,
 	HostMapsBinding,
 	HostMessagingBinding,
+	HostRuntimeLifecycleBinding,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import { linkCurrentPodWorkspaceDependencies } from './current-package-node-modules.js';
@@ -359,6 +360,7 @@ export type PodRuntimeTestFacilities = {
 	readonly fileStorage?: HostFileStorageBinding;
 	readonly maps?: HostMapsBinding;
 	readonly messaging?: HostMessagingBinding;
+	readonly runtimeLifecycle?: HostRuntimeLifecycleBinding;
 };
 
 export type PodRuntimeBootOptions = {

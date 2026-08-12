@@ -162,14 +162,16 @@ describe('both binding assemblies offer every facility', () => {
 			ai: true,
 			messaging: true,
 			maps: true,
-			agentTools: true
+			agentTools: true,
+			runtimeLifecycle: true
 		};
 		expect(Object.keys(covered).sort()).toEqual([
 			'agentTools',
 			'ai',
 			'fileStorage',
 			'maps',
-			'messaging'
+			'messaging',
+			'runtimeLifecycle'
 		]);
 	});
 });

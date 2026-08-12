@@ -3,7 +3,7 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
 import { parseCompactDirective, runAgent } from '$lib/server/agent/agent-loop.server.js';
 import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
-import { requireRuntimeFacility } from '$lib/server/facilities.js';
+import { getRuntimeFacilities, requireRuntimeFacility } from '$lib/server/facilities.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
@@ -226,6 +226,11 @@ export const agentChatStart = authenticated.command(
 		// Resolved before the run is launched, not inside it: `allHostTools` reads a request-scoped
 		// facility, and the detached promise below outlives the request that would supply it.
 		const spec = await interactiveAgentSpec(input.message, model);
+		const lifecycle = getRuntimeFacilities().runtimeLifecycle;
+		// The acknowledgement below ends the HTTP request before inference starts. A hosted runtime's
+		// native idle timer cannot distinguish that detached work from an abandoned guest, so retain it
+		// first and release only after the durable terminal turn (success or failure) has been written.
+		const backgroundLease = await lifecycle?.retainBackgroundWork();
 		void runAgent({
 			automationName: null,
 			runId: conversation.runId,
@@ -235,7 +240,13 @@ export const agentChatStart = authenticated.command(
 			...(input.planMode ? { planMode: true } : {}),
 			...(input.mentions?.length ? { mentions: input.mentions } : {}),
 			...(compact ? { compact } : {})
-		}).catch(() => undefined);
+		})
+			.catch(() => undefined)
+			.finally(() =>
+				backgroundLease
+					? lifecycle?.releaseBackgroundWork(backgroundLease).catch(() => undefined)
+					: undefined
+			);
 		return { ...conversation, accepted: true };
 	}
 );

@@ -479,7 +479,15 @@ function facilityBindings(
 		...(config.maps ? { maps: config.maps } : {}),
 		...(config.agentTools && config.agentTools.length > 0
 			? { agentTools: hostAgentTools(config.agentTools) }
-			: {})
+			: {}),
+		// A standalone Pod has one process rather than per-request runtime reclamation. Keep the same
+		// lifecycle surface so interactive-agent code is deployment-independent; the lease is a no-op.
+		runtimeLifecycle: {
+			async retainBackgroundWork() {
+				return 'standalone-runtime';
+			},
+			async releaseBackgroundWork() {}
+		}
 	};
 }
 

@@ -34,6 +34,7 @@ import type {
 	HostFileStorageBinding,
 	HostMapsBinding,
 	HostMessagingBinding,
+	HostRuntimeLifecycleBinding,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
 import { safeParse } from '@norbital-ai/std/json';
@@ -273,7 +274,8 @@ export async function startPodHttpServer(): Promise<PodHttpServer> {
 		ai: facility<HostAiBinding>('ai'),
 		messaging: facility<HostMessagingBinding>('messaging'),
 		maps: facility<HostMapsBinding>('maps'),
-		agentTools: facility<HostAgentToolBinding>('agentTools')
+		agentTools: facility<HostAgentToolBinding>('agentTools'),
+		runtimeLifecycle: facility<HostRuntimeLifecycleBinding>('runtimeLifecycle')
 	};
 
 	// The host owns the LISTEN connection (one per tenant database, shared by every runtime on it) and

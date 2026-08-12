@@ -75,8 +75,10 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	const releaseProvider = deferred();
 	const releaseChild = deferred();
+	const releasedBackgroundWork = deferred();
 	const streams = new Map<string, FakeStream>();
 	let nextStream = 0;
+	let retainedBackgroundWork = 0;
 
 	const ai: HostAiBinding = {
 		async chat(input) {
@@ -155,7 +157,18 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 	};
 
 	beforeAll(async () => {
-		harness = await bootPodRuntime('construction', { ai });
+		harness = await bootPodRuntime('construction', {
+			ai,
+			runtimeLifecycle: {
+				async retainBackgroundWork() {
+					retainedBackgroundWork += 1;
+					return `agent-lease-${retainedBackgroundWork}`;
+				},
+				async releaseBackgroundWork() {
+					releasedBackgroundWork.resolve();
+				}
+			}
+		});
 		await harness.pool.query(
 			`INSERT INTO "user" (norbital_id, email, name, role, status)
 			 VALUES ($1::uuid, $2, $3, 'basic', 'active')
@@ -220,6 +233,9 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				accepted: true;
 			};
 			expect(accepted.accepted).toBe(true);
+			// The lease is acquired before the endpoint acknowledges. Core may now end the HTTP request
+			// without its five-second native idle timer reaping this detached model/tool continuation.
+			expect(retainedBackgroundWork).toBe(1);
 
 			const sessionArrived = await waitFor(async () => {
 				const rows = await client.queryLocal<LocalSession>(
@@ -369,6 +385,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				parent_turn_id: expect.any(String),
 				subagent_id: 'subagent:spawn-1'
 			});
+			await releasedBackgroundWork.promise;
 		} finally {
 			await client.close();
 			await harness.pool.query(`
