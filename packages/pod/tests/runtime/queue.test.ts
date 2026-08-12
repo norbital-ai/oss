@@ -54,14 +54,35 @@ describe('workspace jobs', () => {
 			organizationId: 'org-1',
 			messaging: messagingBinding({ send: async () => ({ sent: true }) })
 		});
-		expect(jobs.map((job) => job.name)).toEqual(['pod:automation:job', 'pod:notification-outbox']);
+		expect(jobs.map((job) => job.name)).toEqual([
+			'pod:agent-conversation-titles',
+			'pod:automation:job',
+			'pod:notification-outbox'
+		]);
 		// A host that supplies no delivery provider gets no drain job to run.
 		const bare = workspaceJobs({
 			manifest: manifest('* * * * *'),
 			dispatch: async () => undefined,
 			organizationId: 'org-1'
 		});
-		expect(bare.map((job) => job.name)).toEqual(['pod:automation:job']);
+		expect(bare.map((job) => job.name)).toEqual([
+			'pod:agent-conversation-titles',
+			'pod:automation:job'
+		]);
+	});
+
+	it('drives AI conversation titles from the durable queue', async () => {
+		const dispatched: unknown[] = [];
+		const job = workspaceJobs({
+			manifest: manifest('* * * * *'),
+			dispatch: async (request) => {
+				dispatched.push(request);
+			},
+			organizationId: 'org-1'
+		}).find((candidate) => candidate.name === 'pod:agent-conversation-titles');
+		expect(job).toBeDefined();
+		await job!.run();
+		expect(dispatched).toEqual([{ kind: 'agent-conversation-titles', limit: 10 }]);
 	});
 
 	it('does not let a slow automation block transactional notification delivery', async () => {

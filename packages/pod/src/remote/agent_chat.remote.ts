@@ -7,6 +7,7 @@ import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
+import { PENDING_CONVERSATION_TITLE } from '$lib/server/agent/conversation-title.server.js';
 import { z } from 'zod';
 
 /**
@@ -100,15 +101,7 @@ async function resolveModel(model: string | undefined): Promise<string | undefin
 	return model;
 }
 
-function conversationTitle(message: string): string {
-	const compact = message.trim().replace(/\s+/g, ' ');
-	return compact.length > 72 ? `${compact.slice(0, 69).trimEnd()}…` : compact || 'Workspace agent';
-}
-
-async function prepareConversation(
-	message: string,
-	runId?: string
-): Promise<{ runId: string; chatId: string }> {
+async function prepareConversation(runId?: string): Promise<{ runId: string; chatId: string }> {
 	const ctx = getWorkspace({ provision: true });
 	const ownerUserId = ctx.baseScope.requestor.norbital_id;
 	const createSession = async (
@@ -120,7 +113,7 @@ async function prepareConversation(
 			{
 				user_id: ownerUserId,
 				automation_run_id: automationRunId,
-				title: conversationTitle(message),
+				title: PENDING_CONVERSATION_TITLE,
 				visibility: 'personal'
 			},
 			{ isElevated: true }
@@ -226,7 +219,7 @@ export const agentChatStart = authenticated.command(
 		// Before the conversation exists: a rejected model must fail the request outright rather than
 		// leave a started run whose first visible event is an error.
 		const model = await resolveModel(input.model);
-		const conversation = await prepareConversation(input.message, input.runId);
+		const conversation = await prepareConversation(input.runId);
 		// A directive still becomes a stored user message and a turn — the reader typed it, and the
 		// transcript should show what they asked for beside what it did.
 		const compact = parseCompactDirective(input.message);

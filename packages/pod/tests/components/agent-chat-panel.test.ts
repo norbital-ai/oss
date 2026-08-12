@@ -244,6 +244,106 @@ describe('agent chat panel', () => {
 		destroy();
 	});
 
+	it('reacts to every update of a streamed row, tool result, title, and turn status', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Inspect the workspace');
+		submit(container);
+		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
+		await settle();
+
+		replica.arrive('chat_session', {
+			norbital_id: 'c1',
+			automation_run_id: 'r1',
+			title: 'Workspace agent',
+			norbital_updated_at: '2026-08-12T00:00:00.000Z'
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'm1',
+			chat_id: 'c1',
+			seq: 1,
+			parts: [{ role: 'user', content: 'Inspect the workspace' }]
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'm2',
+			chat_id: 'c1',
+			seq: 2,
+			status: 'streaming',
+			parts: [{ role: 'assistant', content: 'I found the first part.' }]
+		});
+		await settle();
+		expect(transcript(container).at(-1)?.content).toBe('I found the first part.');
+
+		// The writer updates one durable assistant row at part boundaries. The replica must replace
+		// that row and refire the live query; appending a duplicate would hide the bug this test owns.
+		replica.arrive('chat_message', {
+			norbital_id: 'm2',
+			chat_id: 'c1',
+			seq: 2,
+			status: 'complete',
+			parts: [{ role: 'assistant', content: 'I found the first part. And the second part.' }]
+		});
+		replica.arrive('chat_message', {
+			norbital_id: 'm3',
+			chat_id: 'c1',
+			seq: 3,
+			parts: [
+				{
+					role: 'assistant',
+					content: '',
+					toolCalls: [{ id: 'call-1', name: 'read_collection', input: { collection: 'sites' } }]
+				}
+			]
+		});
+		await settle();
+		expect(transcript(container).some((message) => message.content.includes('second part'))).toBe(
+			true
+		);
+		expect(container.querySelector('[data-tool="read_collection"]')).not.toBeNull();
+
+		replica.arrive('chat_message', {
+			norbital_id: 'm4',
+			chat_id: 'c1',
+			seq: 4,
+			parts: [{ role: 'tool', toolCallId: 'call-1', content: '{"rows":[{"name":"Depot"}]}' }]
+		});
+		replica.arrive('chat_session', {
+			norbital_id: 'c1',
+			automation_run_id: 'r1',
+			title: 'Workspace Site Inspection',
+			norbital_updated_at: '2026-08-12T00:00:01.000Z'
+		});
+		replica.arrive('chat_turn', {
+			norbital_id: 't1',
+			chat_id: 'c1',
+			parent_turn_id: null,
+			subagent_id: null,
+			status: 'running',
+			started_at: '2026-08-12T00:00:00.000Z'
+		});
+		await settle();
+		expect(container.querySelector('[data-tool="read_collection"]')?.textContent).toContain(
+			'Depot'
+		);
+		expect(container.querySelector('[aria-label="Conversation thread"]')?.textContent).toContain(
+			'Workspace Site Inspection'
+		);
+
+		replica.arrive('chat_turn', {
+			norbital_id: 't1',
+			chat_id: 'c1',
+			parent_turn_id: null,
+			subagent_id: null,
+			status: 'succeeded',
+			started_at: '2026-08-12T00:00:00.000Z'
+		});
+		await settle();
+		expect(container.querySelector('textarea')?.disabled).toBe(false);
+		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
+			'Send message'
+		);
+		destroy();
+	});
+
 	it('leaves another chat out of this panel', async () => {
 		const { container, destroy } = mountPanel();
 		type(container, 'What is on site?');

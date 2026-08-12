@@ -371,7 +371,15 @@ function integrationPullJobs(options: WorkspaceJobOptions): QueueJob[] {
  * differ only in what drives them.
  */
 export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[] {
-	const jobs: QueueJob[] = [];
+	const jobs: QueueJob[] = [
+		{
+			name: 'pod:agent-conversation-titles',
+			schedule: 'continuous',
+			run: async () => {
+				await options.dispatch({ kind: 'agent-conversation-titles', limit: 10 });
+			}
+		}
+	];
 
 	for (const [name, automation] of Object.entries(options.manifest.automations ?? {})) {
 		if (!('schedule' in automation.trigger)) continue;
