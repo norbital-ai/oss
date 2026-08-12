@@ -82,6 +82,11 @@ export type HostFileStorageBinding = {
 	put(key: string, body: Uint8Array, contentType?: string): Promise<void>;
 	get(key: string): Promise<Uint8Array | null>;
 	delete(key: string): Promise<void>;
+	/** Host-validated, content-derived facts; absent means the caller must inspect the bytes itself. */
+	getInspection?(
+		key: string,
+		profile: string
+	): Promise<{ readonly contentSha256: string; readonly facts: unknown } | null>;
 };
 
 export type AiTextMessagePart = {

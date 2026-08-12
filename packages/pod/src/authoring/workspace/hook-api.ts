@@ -29,6 +29,11 @@ export type ReadFileAssetResult = {
 	readonly bytes: Uint8Array;
 };
 
+export type ReadFileAssetInspectionResult = Omit<ReadFileAssetResult, 'bytes'> & {
+	readonly contentSha256: string;
+	readonly facts: unknown;
+};
+
 export type AiImageInput = {
 	/** A workspace `document_asset` ID. Pod resolves it under the current requestor's access scope. */
 	readonly assetId: string;
@@ -51,12 +56,16 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 		readonly images?: readonly AiImageInput[];
 	}) => Promise<TSchema extends z.ZodType ? z.infer<TSchema> : string>;
 	readonly readFileAsset: (assetId: string) => Promise<ReadFileAssetResult>;
+	readonly readFileAssetInspection: (
+		assetId: string,
+		profile: string
+	) => Promise<ReadFileAssetInspectionResult | null>;
 };
 
 /** Transactional hook capabilities; notification writes join the caller's database transaction. */
 export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
 	BeforeApi<S>,
-	'db' | 'readFileAsset' | 'sendNotification'
+	'db' | 'readFileAsset' | 'readFileAssetInspection' | 'sendNotification'
 >;
 
 /**
@@ -103,5 +112,5 @@ export type AfterApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<Before
 /** Post-write hooks may add derived writes and transactional notification outbox entries. */
 export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
 	AfterApi<S>,
-	'db' | 'readFileAsset' | 'sendNotification'
+	'db' | 'readFileAsset' | 'readFileAssetInspection' | 'sendNotification'
 >;

@@ -48,6 +48,10 @@ const fileAssetSchema = zod.object({
 });
 const MAX_AI_IMAGES = 8;
 const MAX_AI_IMAGE_BYTES = 20 * 1024 * 1024;
+const inspectionProfileSchema = zod
+	.string()
+	.regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/)
+	.max(128);
 
 function buildDirectTransport(): DirectDbTransport {
 	return {
@@ -126,7 +130,7 @@ function readWorkspaceSchema(workspace: ReturnType<typeof getTenantWorkspace>) {
 	return workspace.schema;
 }
 
-async function readFileAsset(assetId: string) {
+async function accessibleFileAsset(assetId: string) {
 	const parsedAssetId = zod.string().uuid().parse(assetId);
 	const workspace = getWorkspace({ provision: true });
 	const result = await workspace.tenantDb.query({
@@ -141,17 +145,41 @@ async function readFileAsset(assetId: string) {
 	) {
 		throw new Error('The selected file asset is not accessible to this requestor.');
 	}
-	const bytes = await requireRuntimeFacility('fileStorage').get(asset.data.storage_key);
+	return asset.data;
+}
+
+async function readFileAsset(assetId: string) {
+	const asset = await accessibleFileAsset(assetId);
+	const bytes = await requireRuntimeFacility('fileStorage').get(asset.storage_key);
 	if (bytes == null) throw new Error('The selected file asset is unavailable in storage.');
-	if (asset.data.file_size != null && bytes.byteLength !== asset.data.file_size) {
+	if (asset.file_size != null && bytes.byteLength !== asset.file_size) {
 		throw new Error('The selected file asset size does not match its stored record.');
 	}
 	return {
-		id: asset.data.norbital_id,
-		name: asset.data.file_name,
-		mimeType: asset.data.mime_type,
+		id: asset.norbital_id,
+		name: asset.file_name,
+		mimeType: asset.mime_type,
 		size: bytes.byteLength,
 		bytes
+	};
+}
+
+async function readFileAssetInspection(assetId: string, profile: string) {
+	const asset = await accessibleFileAsset(assetId);
+	const storage = requireRuntimeFacility('fileStorage');
+	if (storage.getInspection == null) return null;
+	const inspected = await storage.getInspection(
+		asset.storage_key,
+		inspectionProfileSchema.parse(profile)
+	);
+	if (inspected == null) return null;
+	return {
+		id: asset.norbital_id,
+		name: asset.file_name,
+		mimeType: asset.mime_type,
+		size: asset.file_size ?? 0,
+		contentSha256: inspected.contentSha256,
+		facts: inspected.facts
 	};
 }
 
@@ -265,7 +293,8 @@ function sharedBuiltinApi() {
 			}
 			return input.schema.parse(parsed);
 		},
-		readFileAsset
+		readFileAsset,
+		readFileAssetInspection
 	};
 }
 
@@ -299,6 +328,7 @@ export function restrictBeforeHookApi(api: BeforeApi): HookApi {
 	return {
 		db: api.db,
 		readFileAsset: api.readFileAsset,
+		readFileAssetInspection: api.readFileAssetInspection,
 		sendNotification: api.sendNotification
 	};
 }
@@ -307,6 +337,7 @@ export function restrictAfterHookApi(api: AfterApi): AfterHookApi {
 	return {
 		db: api.db,
 		readFileAsset: api.readFileAsset,
+		readFileAssetInspection: api.readFileAssetInspection,
 		sendNotification: api.sendNotification
 	};
 }

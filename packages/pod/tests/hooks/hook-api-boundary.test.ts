@@ -28,6 +28,7 @@ function capabilityRichApi() {
 	return {
 		db: { marker: 'db' },
 		readFileAsset: () => 'asset',
+		readFileAssetInspection: () => null,
 		sendNotification: () => Promise.resolve({ notificationId: 'notification_1' }),
 		// Everything below exists on the real builtin API or its elevated variant.
 		fetch: () => 'network',
@@ -42,14 +43,24 @@ describe('hook API boundary', () => {
 		const restricted = restrictBeforeHookApi(
 			capabilityRichApi() as unknown as Parameters<typeof restrictBeforeHookApi>[0]
 		);
-		expect(Object.keys(restricted).sort()).toEqual(['db', 'readFileAsset', 'sendNotification']);
+		expect(Object.keys(restricted).sort()).toEqual([
+			'db',
+			'readFileAsset',
+			'readFileAssetInspection',
+			'sendNotification'
+		]);
 	});
 
 	it('narrows the after-hook API to exactly the declared hook capabilities', () => {
 		const restricted = restrictAfterHookApi(
 			capabilityRichApi() as unknown as Parameters<typeof restrictAfterHookApi>[0]
 		);
-		expect(Object.keys(restricted).sort()).toEqual(['db', 'readFileAsset', 'sendNotification']);
+		expect(Object.keys(restricted).sort()).toEqual([
+			'db',
+			'readFileAsset',
+			'readFileAssetInspection',
+			'sendNotification'
+		]);
 	});
 
 	it('carries the real db through rather than a copy, so behaviours are not silently dropped', () => {

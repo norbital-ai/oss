@@ -37,7 +37,11 @@ const fileStorage: HostFileStorageBinding = {
 		storedFiles.set(key, new Uint8Array(body));
 	},
 	get: async (key) => storedFiles.get(key) ?? null,
-	delete: async (key) => void storedFiles.delete(key)
+	delete: async (key) => void storedFiles.delete(key),
+	getInspection: async (key, profile) =>
+		storedFiles.has(key) && profile === 'test.photo.v1'
+			? { contentSha256: 'a'.repeat(64), facts: { inspected: true } }
+			: null
 };
 const approvalRequestor: Identity = {
 	userId: APPROVAL_REQUESTOR_ID,
@@ -73,6 +77,10 @@ export default {
 				}
 				if (typeof input.title === 'string' && input.title.startsWith('asset:')) {
 					await api.readFileAsset(input.title.slice('asset:'.length));
+				}
+				if (typeof input.title === 'string' && input.title.startsWith('inspection:')) {
+					const inspected = await api.readFileAssetInspection(input.title.slice('inspection:'.length), 'test.photo.v1');
+					if (inspected?.contentSha256 !== 'a'.repeat(64)) throw new Error('inspection cache miss');
 				}
 				// The mutation on the way in. \`status\` is deliberately overwritten rather than defaulted:
 				// the caller submits 'closed' below, so an unchanged stored row cannot be mistaken for a
@@ -820,6 +828,14 @@ describe('Pod automations and hooks — E2E', () => {
 		expect(ordinaryAssetRead.body).toContain(
 			'The selected file asset is not accessible to this requestor.'
 		);
+		const ordinaryInspectionRead = await command('collections/createMany', {
+			collection: 'rfis',
+			inputs: [{ title: `inspection:${assetId}` }]
+		});
+		expect(ordinaryInspectionRead.status).toBe(500);
+		expect(ordinaryInspectionRead.body).toContain(
+			'The selected file asset is not accessible to this requestor.'
+		);
 
 		const hooked = await command('collections/createMany', {
 			collection: 'rfis',
@@ -835,6 +851,12 @@ describe('Pod automations and hooks — E2E', () => {
 		expect((JSON.parse(hooked.body) as Array<{ norbital_id: string }>)[0]?.norbital_id).toBe(
 			'99999999-9999-4999-8999-999999999999'
 		);
+		const inspected = await command('collections/createMany', {
+			collection: 'rfis',
+			bypass_secret: TEST_PERMISSION_BYPASS_KEY,
+			inputs: [{ title: `inspection:${assetId}` }]
+		});
+		expect(inspected.status, inspected.body).toBe(200);
 	});
 
 	it('runs authored update hooks for every batch item and rejects the whole batch before writing', async () => {
