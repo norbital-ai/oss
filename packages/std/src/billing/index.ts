@@ -17,6 +17,7 @@ export const AI_USAGE_DIMENSION_KEYS = {
 	inputTokens: 'input_tokens',
 	cachedInputTokens: 'cached_input_tokens',
 	outputTokens: 'output_tokens',
+	reasoningTokens: 'reasoning_tokens',
 	providerCostUsdMicros: 'provider_cost_usd_micros'
 } as const;
 
