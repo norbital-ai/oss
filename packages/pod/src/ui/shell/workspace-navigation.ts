@@ -16,6 +16,21 @@ export type NavigationLabelResolver = {
 };
 
 /**
+ * Start an application load for the current navigation attempt.
+ *
+ * Native dynamic imports already deduplicate fetched and evaluated modules. Keeping a second
+ * promise cache in the shell made a transient, never-settling request permanent: every later visit
+ * reused that stale promise until the document was refreshed. A navigation attempt therefore asks
+ * the loader for a fresh promise and leaves module reuse to the browser.
+ */
+export function loadWorkspaceApplication<T>(
+	loaders: Readonly<Record<string, () => Promise<T>>>,
+	name: string
+): Promise<T> | undefined {
+	return loaders[name]?.();
+}
+
+/**
  * The app-title localization chokepoint.
  *
  * App and group display labels resolve through the tenant catalog before any

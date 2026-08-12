@@ -53,6 +53,7 @@
 		resolveAppHeaderTitle,
 		resolveBillingSettingsHref,
 		hostPluginSurfaceHref,
+		loadWorkspaceApplication,
 		resolveHostPluginSurface,
 		resolveApplicationLandingAppId,
 		resolveWorkspaceOrganizationOptions,
@@ -158,20 +159,9 @@
 	});
 	const accessible = $derived(appName && appAccessAllowed(appName, data.accessibleAppNames));
 	const loadableAppName = $derived(accessible ? appName : undefined);
-	const loadedApps = new Map<
-		string,
-		{ loader: WorkspaceAppLoader; promise: ReturnType<WorkspaceAppLoader> }
-	>();
-	function loadWorkspaceApp(name: string): ReturnType<WorkspaceAppLoader> | undefined {
-		const loader = apps[name];
-		if (!loader) return undefined;
-		const cached = loadedApps.get(name);
-		if (cached?.loader === loader) return cached.promise;
-		const promise = loader();
-		loadedApps.set(name, { loader, promise });
-		return promise;
-	}
-	const activeApp = $derived(loadableAppName ? loadWorkspaceApp(loadableAppName) : undefined);
+	const activeApp = $derived(
+		loadableAppName ? loadWorkspaceApplication(apps, loadableAppName) : undefined
+	);
 	const prefetchedSurfaces = new Set<string>();
 	function prefetchWorkspaceSurface(href: string): void {
 		if (prefetchedSurfaces.has(href)) return;
@@ -184,7 +174,7 @@
 				apps: manifestContext.getAppsRecord(),
 				accessibleAppNames: data.accessibleAppNames
 			});
-			if (name) void loadWorkspaceApp(name)?.catch(() => undefined);
+			if (name) void loadWorkspaceApplication(apps, name)?.catch(() => undefined);
 			return;
 		}
 		const plugin = (data.hostPlugins ?? []).find(

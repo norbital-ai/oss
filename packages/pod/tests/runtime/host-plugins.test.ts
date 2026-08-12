@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { assertHostPlugins } from '../../src/host/types.js';
 import { visibleHostPlugins } from '../../src/server/host-plugins.js';
 import {
 	buildSystemNavigation,
-	buildUtilityNavigation
+	buildUtilityNavigation,
+	loadWorkspaceApplication
 } from '../../src/ui/shell/workspace-navigation.js';
 import type { HostAppPlugin } from '@norbital-ai/platform-utils/runtime/binding';
 
@@ -86,6 +87,28 @@ describe('visibleHostPlugins', () => {
 
 	it('does not project an admin-only surface to a member', () => {
 		expect(visibleHostPlugins([plugin({ adminOnly: true })], false)).toEqual([]);
+	});
+});
+
+describe('workspace application loading', () => {
+	it('starts a fresh navigation attempt instead of retaining a stale import promise', async () => {
+		let resolveFirst: ((value: string) => void) | undefined;
+		const stale = new Promise<string>((resolve) => {
+			resolveFirst = resolve;
+		});
+		const loader = vi
+			.fn<() => Promise<string>>()
+			.mockReturnValueOnce(stale)
+			.mockResolvedValueOnce('ready');
+
+		const firstAttempt = loadWorkspaceApplication({ payroll: loader }, 'payroll');
+		const secondAttempt = loadWorkspaceApplication({ payroll: loader }, 'payroll');
+
+		expect(firstAttempt).toBe(stale);
+		expect(secondAttempt).not.toBe(firstAttempt);
+		await expect(secondAttempt).resolves.toBe('ready');
+		expect(loader).toHaveBeenCalledTimes(2);
+		resolveFirst?.('eventually-ready');
 	});
 });
 
