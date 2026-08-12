@@ -84,7 +84,12 @@ export function collectionAppliedFilterConditions(
 				kind: 'unknown',
 				nullable: true
 			};
-			const label = [...path, linkedLabel(field)].join(' · ');
+			// A nested target's primary key describes the relationship itself ("Company"), not an
+			// implementation detail such as "Company · Norbital" or a UUID column name.
+			const label =
+				name === 'norbital_id' && path.length > 0
+					? path.join(' · ')
+					: [...path, linkedLabel(field)].join(' · ');
 			const lookupTarget =
 				field.relation?.target ?? (name === 'norbital_id' ? current.name : undefined);
 			const operators =

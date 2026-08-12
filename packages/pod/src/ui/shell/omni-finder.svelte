@@ -410,7 +410,8 @@
 									class="size-3.5 shrink-0 text-muted-foreground"
 								/>
 							{/if}
-							<span class="min-w-0 flex-1 truncate text-xs font-normal text-foreground sm:text-micro"
+							<span
+								class="min-w-0 flex-1 truncate text-xs font-normal text-foreground sm:text-micro"
 								>{row.label}</span
 							>
 							{#if row.description}

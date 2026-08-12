@@ -44,9 +44,7 @@ function parseTeamIds(raw: string | undefined | null): string[] {
 
 export function readImpersonationTeamIds(): string[] {
 	if (typeof document === 'undefined') return [];
-	const match = document.cookie.match(
-		new RegExp(`(?:^|; )${IMPERSONATE_COOKIE_NAME}=([^;]*)`)
-	);
+	const match = document.cookie.match(new RegExp(`(?:^|; )${IMPERSONATE_COOKIE_NAME}=([^;]*)`));
 	return parseTeamIds(match?.[1] ?? null);
 }
 

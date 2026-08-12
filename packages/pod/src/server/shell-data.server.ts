@@ -9,7 +9,10 @@ import type {
 import type { TPolicy, TTeam } from '@norbital-ai/platform-utils/system/types';
 import type { CollectionColumnMap } from '@norbital-ai/platform-utils/manifest/context';
 import type { PodRequestEvent } from './request-context.js';
-import { NORBITAL_BILLING_HEADER, NORBITAL_IMPERSONATION_HEADER } from '@norbital-ai/platform-utils/runtime/binding';
+import {
+	NORBITAL_BILLING_HEADER,
+	NORBITAL_IMPERSONATION_HEADER
+} from '@norbital-ai/platform-utils/runtime/binding';
 import { safeParse } from '@norbital-ai/std/json';
 import { z } from 'zod';
 

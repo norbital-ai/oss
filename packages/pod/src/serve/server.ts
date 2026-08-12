@@ -16,7 +16,8 @@
  * trusted authenticated host is expected in front of it.
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
-import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';import { hostTokenMatches, TRUSTED_HOST_TOKEN_HEADER } from '../host/identity.js';
+import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';
+import { hostTokenMatches, TRUSTED_HOST_TOKEN_HEADER } from '../host/identity.js';
 import {
 	isVerifiedSubject,
 	type HostIdentity,
