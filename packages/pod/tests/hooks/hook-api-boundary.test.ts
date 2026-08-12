@@ -29,6 +29,7 @@ function capabilityRichApi() {
 		db: { marker: 'db' },
 		readFileAsset: () => 'asset',
 		readFileAssetInspection: () => null,
+		readFileAssetInspections: () => [],
 		sendNotification: () => Promise.resolve({ notificationId: 'notification_1' }),
 		// Everything below exists on the real builtin API or its elevated variant.
 		fetch: () => 'network',
@@ -47,6 +48,7 @@ describe('hook API boundary', () => {
 			'db',
 			'readFileAsset',
 			'readFileAssetInspection',
+			'readFileAssetInspections',
 			'sendNotification'
 		]);
 	});
@@ -59,6 +61,7 @@ describe('hook API boundary', () => {
 			'db',
 			'readFileAsset',
 			'readFileAssetInspection',
+			'readFileAssetInspections',
 			'sendNotification'
 		]);
 	});

@@ -52,6 +52,7 @@ const inspectionProfileSchema = zod
 	.string()
 	.regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/)
 	.max(128);
+const inspectionAssetIdsSchema = zod.array(zod.string().uuid()).min(1).max(512);
 
 function buildDirectTransport(): DirectDbTransport {
 	return {
@@ -148,6 +149,32 @@ async function accessibleFileAsset(assetId: string) {
 	return asset.data;
 }
 
+async function accessibleFileAssets(assetIds: readonly string[]) {
+	const parsedAssetIds = inspectionAssetIdsSchema.parse(assetIds);
+	const workspace = getWorkspace({ provision: true });
+	const result = await workspace.tenantDb.query({
+		text: `SELECT norbital_id, owner_user_id, file_name, mime_type, file_size, storage_key FROM ${qualifiedTableName('document_asset')} WHERE norbital_id = ANY($1::uuid[])`,
+		values: [parsedAssetIds]
+	});
+	const byId = new Map(
+		result.rows.flatMap((row) => {
+			const asset = fileAssetSchema.safeParse(row);
+			return asset.success ? [[asset.data.norbital_id, asset.data] as const] : [];
+		})
+	);
+	return parsedAssetIds.map((assetId) => {
+		const asset = byId.get(assetId);
+		if (asset == null) throw new Error('The selected file asset does not exist.');
+		if (
+			getCurrentPermissionBypassKey() == null &&
+			asset.owner_user_id !== workspace.baseScope.requestor.norbital_id
+		) {
+			throw new Error('The selected file asset is not accessible to this requestor.');
+		}
+		return asset;
+	});
+}
+
 async function readFileAsset(assetId: string) {
 	const asset = await accessibleFileAsset(assetId);
 	const bytes = await requireRuntimeFacility('fileStorage').get(asset.storage_key);
@@ -181,6 +208,35 @@ async function readFileAssetInspection(assetId: string, profile: string) {
 		contentSha256: inspected.contentSha256,
 		facts: inspected.facts
 	};
+}
+
+async function readFileAssetInspections(assetIds: readonly string[], profile: string) {
+	const assets = await accessibleFileAssets(assetIds);
+	const storage = requireRuntimeFacility('fileStorage');
+	const parsedProfile = inspectionProfileSchema.parse(profile);
+	const inspected = storage.getInspections
+		? await storage.getInspections(
+				assets.map((asset) => ({ key: asset.storage_key, profile: parsedProfile }))
+			)
+		: await Promise.all(
+				assets.map((asset) => storage.getInspection?.(asset.storage_key, parsedProfile) ?? null)
+			);
+	if (inspected.length !== assets.length) {
+		throw new Error('File inspection facility returned an invalid result count.');
+	}
+	return assets.map((asset, index) => {
+		const entry = inspected[index];
+		return entry == null
+			? null
+			: {
+					id: asset.norbital_id,
+					name: asset.file_name,
+					mimeType: asset.mime_type,
+					size: asset.file_size ?? 0,
+					contentSha256: entry.contentSha256,
+					facts: entry.facts
+				};
+	});
 }
 
 function sharedBuiltinApi() {
@@ -294,7 +350,8 @@ function sharedBuiltinApi() {
 			return input.schema.parse(parsed);
 		},
 		readFileAsset,
-		readFileAssetInspection
+		readFileAssetInspection,
+		readFileAssetInspections
 	};
 }
 
@@ -329,6 +386,7 @@ export function restrictBeforeHookApi(api: BeforeApi): HookApi {
 		db: api.db,
 		readFileAsset: api.readFileAsset,
 		readFileAssetInspection: api.readFileAssetInspection,
+		readFileAssetInspections: api.readFileAssetInspections,
 		sendNotification: api.sendNotification
 	};
 }
@@ -338,6 +396,7 @@ export function restrictAfterHookApi(api: AfterApi): AfterHookApi {
 		db: api.db,
 		readFileAsset: api.readFileAsset,
 		readFileAssetInspection: api.readFileAssetInspection,
+		readFileAssetInspections: api.readFileAssetInspections,
 		sendNotification: api.sendNotification
 	};
 }

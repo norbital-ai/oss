@@ -87,6 +87,10 @@ export type HostFileStorageBinding = {
 		key: string,
 		profile: string
 	): Promise<{ readonly contentSha256: string; readonly facts: unknown } | null>;
+	/** Aligned bulk form used by authored batch hooks; every entry remains an independent cache hit/miss. */
+	getInspections?(
+		entries: readonly { readonly key: string; readonly profile: string }[]
+	): Promise<readonly ({ readonly contentSha256: string; readonly facts: unknown } | null)[]>;
 };
 
 export type AiTextMessagePart = {

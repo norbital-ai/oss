@@ -32,6 +32,7 @@ const APPROVAL_CONFIG_IDS = {
 
 const approvalTeam = [{ id: APPROVAL_TEAM_ID, name: 'RFI reviewers' }] as const;
 const storedFiles = new Map<string, Uint8Array>();
+let bulkInspectionCalls = 0;
 const fileStorage: HostFileStorageBinding = {
 	put: async (key, body) => {
 		storedFiles.set(key, new Uint8Array(body));
@@ -41,7 +42,15 @@ const fileStorage: HostFileStorageBinding = {
 	getInspection: async (key, profile) =>
 		storedFiles.has(key) && profile === 'test.photo.v1'
 			? { contentSha256: 'a'.repeat(64), facts: { inspected: true } }
-			: null
+			: null,
+	getInspections: async (entries) => {
+		bulkInspectionCalls += 1;
+		return entries.map(({ key, profile }) =>
+			storedFiles.has(key) && profile === 'test.photo.v1'
+				? { contentSha256: 'a'.repeat(64), facts: { inspected: true, key } }
+				: null
+		);
+	}
 };
 const approvalRequestor: Identity = {
 	userId: APPROVAL_REQUESTOR_ID,
@@ -81,6 +90,13 @@ export default {
 				if (typeof input.title === 'string' && input.title.startsWith('inspection:')) {
 					const inspected = await api.readFileAssetInspection(input.title.slice('inspection:'.length), 'test.photo.v1');
 					if (inspected?.contentSha256 !== 'a'.repeat(64)) throw new Error('inspection cache miss');
+				}
+				if (input.title === 'inspection-batch') {
+					const ids = String(input.question).split(',');
+					const inspected = await api.readFileAssetInspections(ids, 'test.photo.v1');
+					if (inspected.length !== ids.length || inspected.some((entry, index) => entry?.id !== ids[index])) {
+						throw new Error('inspection batch alignment mismatch');
+					}
 				}
 				// The mutation on the way in. \`status\` is deliberately overwritten rather than defaulted:
 				// the caller submits 'closed' below, so an unchanged stored row cannot be mistaken for a
@@ -857,6 +873,52 @@ describe('Pod automations and hooks — E2E', () => {
 			inputs: [{ title: `inspection:${assetId}` }]
 		});
 		expect(inspected.status, inspected.body).toBe(200);
+
+		const secondAssetId = '88888888-8888-4888-8888-888888888890';
+		const secondStorageKey = 'seed/elevated-hook-asset-2.txt';
+		storedFiles.set(secondStorageKey, bytes);
+		const secondAssetCreated = await command('collections/createMany', {
+			collection: 'document_asset',
+			bypass_secret: TEST_PERMISSION_BYPASS_KEY,
+			inputs: [
+				{
+					norbital_id: secondAssetId,
+					owner_user_id: APPROVAL_REQUESTOR_ID,
+					file_name: 'elevated-hook-asset-2.txt',
+					mime_type: 'text/plain',
+					file_size: bytes.byteLength,
+					storage_key: secondStorageKey
+				}
+			]
+		});
+		expect(secondAssetCreated.status, secondAssetCreated.body).toBe(200);
+		const callsBeforeBatch = bulkInspectionCalls;
+		const ordinaryBatchInspection = await command('collections/createMany', {
+			collection: 'rfis',
+			inputs: [
+				{
+					title: 'inspection-batch',
+					question: `${secondAssetId},${assetId}`
+				}
+			]
+		});
+		expect(ordinaryBatchInspection.status).toBe(500);
+		expect(ordinaryBatchInspection.body).toContain(
+			'The selected file asset is not accessible to this requestor.'
+		);
+		expect(bulkInspectionCalls).toBe(callsBeforeBatch);
+		const batchInspected = await command('collections/createMany', {
+			collection: 'rfis',
+			bypass_secret: TEST_PERMISSION_BYPASS_KEY,
+			inputs: [
+				{
+					title: 'inspection-batch',
+					question: `${secondAssetId},${assetId},${secondAssetId}`
+				}
+			]
+		});
+		expect(batchInspected.status, batchInspected.body).toBe(200);
+		expect(bulkInspectionCalls - callsBeforeBatch).toBe(1);
 	});
 
 	it('runs authored update hooks for every batch item and rejects the whole batch before writing', async () => {

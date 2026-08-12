@@ -60,12 +60,21 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 		assetId: string,
 		profile: string
 	) => Promise<ReadFileAssetInspectionResult | null>;
+	/** Input-aligned inspection results for authored batch hooks. Limited to 512 assets per call. */
+	readonly readFileAssetInspections: (
+		assetIds: readonly string[],
+		profile: string
+	) => Promise<readonly (ReadFileAssetInspectionResult | null)[]>;
 };
 
 /** Transactional hook capabilities; notification writes join the caller's database transaction. */
 export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
 	BeforeApi<S>,
-	'db' | 'readFileAsset' | 'readFileAssetInspection' | 'sendNotification'
+	| 'db'
+	| 'readFileAsset'
+	| 'readFileAssetInspection'
+	| 'readFileAssetInspections'
+	| 'sendNotification'
 >;
 
 /**
@@ -112,5 +121,9 @@ export type AfterApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<Before
 /** Post-write hooks may add derived writes and transactional notification outbox entries. */
 export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
 	AfterApi<S>,
-	'db' | 'readFileAsset' | 'readFileAssetInspection' | 'sendNotification'
+	| 'db'
+	| 'readFileAsset'
+	| 'readFileAssetInspection'
+	| 'readFileAssetInspections'
+	| 'sendNotification'
 >;
