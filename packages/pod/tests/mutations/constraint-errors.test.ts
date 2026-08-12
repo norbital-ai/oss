@@ -70,6 +70,24 @@ describe('constraint violations become answers a person can act on', () => {
 		expect(notNull.rejection.detail).toBe('start date is required.');
 	});
 
+	it('turns an exclusion violation into an actionable overlap conflict', () => {
+		const { rejection, thrown } = rejectionFor(
+			driverError({
+				code: '23P01',
+				constraint: 'employment_terms_no_overlap',
+				detail:
+					'Key (employment_id, norbital_daterange(effective_range))=(abc, [2026-01-01,2027-01-01)) conflicts with existing key.'
+			})
+		);
+		expect(rejection.reason).toBe('EXCLUSION_VIOLATION');
+		expect(rejection.detail).toBe(
+			'This record overlaps another record that is already in effect.'
+		);
+		expect(thrown).toBeInstanceOf(HttpError);
+		expect((thrown as HttpError).status).toBe(409);
+		expect((thrown as HttpError).body.constraint).toBe('employment_terms_no_overlap');
+	});
+
 	/**
 	 * The counterpart guarantee: only class-23 is translated. Anything else must keep collapsing to
 	 * INTERNAL_ERROR, because dressing an unexpected failure up as user error tells the user to fix

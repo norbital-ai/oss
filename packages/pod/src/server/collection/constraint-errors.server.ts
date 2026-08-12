@@ -20,6 +20,7 @@ const UNIQUE_VIOLATION = '23505';
 const FOREIGN_KEY_VIOLATION = '23503';
 const NOT_NULL_VIOLATION = '23502';
 const CHECK_VIOLATION = '23514';
+const EXCLUSION_VIOLATION = '23P01';
 
 type DriverError = {
 	code?: unknown;
@@ -120,6 +121,15 @@ export function rethrowConstraintViolation(caught: unknown, collection: string):
 		error(400, {
 			message: 'That value is not allowed for this record.',
 			code: 'CHECK_VIOLATION',
+			collection,
+			...(typeof driver.constraint === 'string' ? { constraint: driver.constraint } : {})
+		});
+	}
+
+	if (driver.code === EXCLUSION_VIOLATION) {
+		error(409, {
+			message: 'This record overlaps another record that is already in effect.',
+			code: 'EXCLUSION_VIOLATION',
 			collection,
 			...(typeof driver.constraint === 'string' ? { constraint: driver.constraint } : {})
 		});
