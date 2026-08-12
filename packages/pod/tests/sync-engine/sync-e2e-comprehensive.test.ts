@@ -574,7 +574,7 @@ describe('Pod Sync — comprehensive E2E', () => {
 	});
 
 	describe('local-first reads', () => {
-		it('registers the collection on first read and answers locally', async () => {
+		it('starts cold registration without holding the authoritative first read behind it', async () => {
 			const db = await createClientDb();
 			const client = new PodSyncClient({
 				replicaEpoch: 'test-epoch',
@@ -586,11 +586,13 @@ describe('Pod Sync — comprehensive E2E', () => {
 			disableClientSync();
 			const sync = enableClientSync(client);
 			try {
-				// No explicit registration: the read itself catches the collection up. This is the
-				// point of collection-level sync — a cold read costs one round-trip, not a null.
-				const result = await localFindMany(sync, collection, { limit: 10 });
-				expect(result).not.toBeNull();
-				expect(Array.isArray(result!.rows)).toBe(true);
+				// No explicit registration: the read starts the catch-up but declines immediately so
+				// the caller can issue its scoped server query as the first useful round trip.
+				expect(await localFindMany(sync, collection, { limit: 10 })).toBeNull();
+				await sync.registry.register(collection);
+				const warm = await localFindMany(sync, collection, { limit: 10 });
+				expect(warm).not.toBeNull();
+				expect(Array.isArray(warm!.rows)).toBe(true);
 				expect(sync.registry.has(collection)).toBe(true);
 			} finally {
 				await client.close();
@@ -615,6 +617,7 @@ describe('Pod Sync — comprehensive E2E', () => {
 			disableClientSync();
 			const sync = enableClientSync(client);
 			try {
+				await sync.registry.register(collection);
 				await localFindMany(sync, collection, { orderBy: { title: 'asc' }, limit: 10 });
 				const after = shapeRequests;
 				// Changing the sort used to mint a new shape and a new cold start. It must now be
@@ -643,6 +646,7 @@ describe('Pod Sync — comprehensive E2E', () => {
 			disableClientSync();
 			const sync = enableClientSync(client);
 			try {
+				await sync.registry.register(collection);
 				const count = await localCount(sync, collection, {});
 				expect(count).not.toBeNull();
 				expect(count).toBe(await client.count(collection));
@@ -672,7 +676,8 @@ describe('Pod Sync — comprehensive E2E', () => {
 			await client.bootstrap();
 			disableClientSync();
 			let sync = enableClientSync(client);
-			await localFindMany(sync, collection, { limit: 10 });
+			await sync.registry.register(collection);
+			expect(await localFindMany(sync, collection, { limit: 10 })).not.toBeNull();
 			const firstLoad = shapeRequests;
 			expect(firstLoad).toBeGreaterThan(0);
 			await client.stopStream();

@@ -10,12 +10,14 @@
 		label,
 		items,
 		open,
+		href,
 		onNavigate,
 		onPrefetch
 	}: {
 		label: string;
 		items: readonly WorkspaceNavigationItem[];
 		open: boolean;
+		href?: string;
 		onNavigate?: (href: string) => void;
 		onPrefetch?: (href: string) => void;
 	} = $props();
@@ -23,7 +25,23 @@
 
 {#if items.length > 0}
 	<Sidebar.Group>
-		<Sidebar.GroupLabel class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>{label}</Sidebar.GroupLabel>
+		<Sidebar.GroupLabel class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>
+			{#if href}
+				<a
+					{href}
+					class="rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+					onclick={(event) => {
+						if (!onNavigate) return;
+						event.preventDefault();
+						onNavigate(href);
+					}}
+					onpointerenter={() => onPrefetch?.(href)}
+					onfocus={() => onPrefetch?.(href)}>{label}</a
+				>
+			{:else}
+				{label}
+			{/if}
+		</Sidebar.GroupLabel>
 		<Sidebar.GroupContent>
 			<Sidebar.Menu>
 				{#each items as item (item.key)}

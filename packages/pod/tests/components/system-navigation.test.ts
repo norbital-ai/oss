@@ -210,4 +210,34 @@ describe('the system section of the sidebar', () => {
 		expect(container.querySelector('a')).toBeNull();
 		destroy();
 	});
+
+	it('can make an application section label a link to its directory', () => {
+		const { container, destroy } = render(
+			SidebarHarness as never,
+			{
+				component: WorkspaceSidebarNavigationSection,
+				props: {
+					label: 'Applications',
+					href: '/',
+					open: true,
+					items: [
+						{
+							key: 'hr',
+							label: 'HR',
+							icon: 'lucide:briefcase-business',
+							href: '/app/hr',
+							active: false
+						}
+					]
+				}
+			} as never
+		);
+
+		const sectionLink = [...container.querySelectorAll('a')].find(
+			(link) => link.textContent?.trim() === 'Applications'
+		);
+		expect(sectionLink?.getAttribute('href')).toBe('/');
+		expect(container.textContent).not.toContain('All applications');
+		destroy();
+	});
 });

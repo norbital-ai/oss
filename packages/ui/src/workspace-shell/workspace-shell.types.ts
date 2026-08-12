@@ -73,6 +73,8 @@ export interface WorkspaceNavigationModel {
 	readonly user: WorkspaceUserSummary;
 	readonly system: readonly WorkspaceNavigationItem[];
 	readonly applications: readonly WorkspaceNavigationItem[];
+	/** Optional destination for the Applications section label, such as an app directory. */
+	readonly applicationsHref?: string;
 	/** Compact account-adjacent tools, rendered above notifications in the sidebar footer. */
 	readonly utilities?: readonly WorkspaceNavigationItem[];
 }

@@ -75,8 +75,8 @@ optional — the shell draws a same-size icon fallback in the thumbnail slot. Th
 Template images ship under `assets/` and are referenced as `/api/template-seed-assets/<key>/<path>`
 (see [apps-and-server-roles.md](../../../skills/authoring-tenant-workspace/references/apps-and-server-roles.md)).
 The workspace directory renders each application group as one horizontal row: visible thumbnails are
-prioritized, later cards load lazily, and nested groups become their own rows. “All applications” in
-the workspace sidebar is the stable route back to that directory.
+prioritized, later cards load lazily, and nested groups become their own rows. The clickable
+“Applications” sidebar section label is the stable route back to that directory.
 The website gallery marketing image is separate: declare it once as `assets/thumbnail.svg` (see
 [template-repository.md](../../../skills/authoring-tenant-workspace/references/template-repository.md#marketing-thumbnail-declare-once)).
 

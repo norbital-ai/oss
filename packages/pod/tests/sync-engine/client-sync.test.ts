@@ -134,7 +134,11 @@ async function seededSync() {
 			customer_id: 'c1'
 		}
 	]);
-	return { sync: enableClientSync(client), client };
+	const sync = enableClientSync(client);
+	await Promise.all(
+		['customers', 'orders'].map((collection) => sync.registry.register(collection))
+	);
+	return { sync, client };
 }
 
 /**
@@ -142,7 +146,7 @@ async function seededSync() {
  * budget and both collections end up *windowed*. This is what a slice larger than the residency
  * cap looks like from the client's side, at any size.
  */
-async function windowedSync() {
+async function windowedSync(options: { warm?: boolean } = {}) {
 	installSchema();
 	const db = await createClientDb();
 	let page = 0;
@@ -181,7 +185,13 @@ async function windowedSync() {
 			customer_id: 'c1'
 		}
 	]);
-	return { sync: enableClientSync(client, { residencyBytes: 1 }), client };
+	const sync = enableClientSync(client, { residencyBytes: 1 });
+	if (options.warm !== false) {
+		await Promise.all(
+			['customers', 'orders'].map((collection) => sync.registry.register(collection))
+		);
+	}
+	return { sync, client };
 }
 
 afterEach(() => disableClientSync());
@@ -503,10 +513,12 @@ describe('client-sync local query executor', () => {
  */
 describe('windowed collections (slice larger than the residency budget)', () => {
 	it('is readable but never reports itself resident', async () => {
-		const { sync, client } = await windowedSync();
+		const { sync, client } = await windowedSync({ warm: false });
 		try {
-			// Registration is lazy — the first read catches the collection up.
-			await localFindMany(sync, 'orders', { where: { norbital_id: 'a' } });
+			// A cold local read declines immediately so its authoritative server query is not held
+			// behind a generic shape. The same read starts warming the collection in the background.
+			expect(await localFindMany(sync, 'orders', { where: { norbital_id: 'a' } })).toBeNull();
+			await sync.registry.register('orders');
 			expect(sync.registry.has('orders')).toBe(true);
 			expect(sync.registry.isResident('orders')).toBe(false);
 		} finally {
@@ -679,6 +691,7 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 		try {
 			// Empty and not yet synced: no answer, so the caller asks the server.
 			expect(await localFindMany(sync, 'customers', {})).toBeNull();
+			await sync.registry.register('customers');
 			expect(await localFindFirst(sync, 'customers', {})).toBeUndefined();
 			expect(await localCount(sync, 'customers', {})).toBeNull();
 			expect(sync.registry.has('customers')).toBe(true);
