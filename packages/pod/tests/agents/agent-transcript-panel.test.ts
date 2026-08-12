@@ -430,6 +430,19 @@ describe('agent panel transcript', () => {
 		expect(toPanelMessages([{ parts: [{ role: 'user', content: 'orphan' }] }])).toEqual([]);
 	});
 
+	it('keeps accounting-only provider completions out of the visual transcript', () => {
+		expect(
+			toPanelMessages([
+				{
+					norbital_id: 'usage-only',
+					kind: 'usage',
+					usage: { totalTokens: 13 },
+					parts: [{ role: 'assistant', content: '' }]
+				}
+			])
+		).toEqual([]);
+	});
+
 	it('keeps streaming state for assistant paint', () => {
 		expect(
 			toPanelMessages([

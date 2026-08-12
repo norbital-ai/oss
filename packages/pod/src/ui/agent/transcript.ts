@@ -1,5 +1,5 @@
 /**
- * How a stored `chat_message` row reads in the panel.
+ * How one message embedded in a synced `chat_session` reads in the panel.
  *
  * The loop stores one `AiMessage` verbatim per row, so this is a projection of the stored message
  * and not a second model of the conversation. Kept out of the component because it is the only part
@@ -152,6 +152,7 @@ export function toPanelMessages(
 	// which is what makes repeated compaction readable rather than a chain of recaps of recaps.
 	let output: PanelMessage[] = [];
 	for (const record of roots) {
+		if (record.kind === 'usage') continue;
 		if (record.kind === 'summary') {
 			const stored = storedMessage(record);
 			const id = record.norbital_id;
@@ -337,7 +338,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * What this conversation has cost so far, as the provider reported it.
  *
- * Every number here is read from `chat_message.usage`, which the loop writes verbatim from the
+ * Every number here is read from embedded message usage, which the loop writes verbatim from the
  * provider's own accounting. Nothing is derived: no token estimate, and above all no cost computed
  * from a price list, because a figure a reader takes for a bill has to be the bill.
  */

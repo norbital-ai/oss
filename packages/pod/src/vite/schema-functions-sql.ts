@@ -588,20 +588,6 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
     END
     $invitation_guard$;
 
-    -- One sequence per conversation. This is what makes restart and resume deterministic: a replayed
-    -- run must not be able to write a second message at a position that already exists.
-    --
-    -- Deliberately no insert-only trigger, unlike the agent_run_step table this replaces. An
-    -- interactive session edits and truncates queued messages, so the transcript is genuinely mutable.
-    DO $chat_transcript$
-    BEGIN
-      IF to_regclass('public.chat_message') IS NOT NULL THEN
-        CREATE UNIQUE INDEX IF NOT EXISTS chat_message_chat_seq_unique
-          ON chat_message (chat_id, seq);
-      END IF;
-    END
-    $chat_transcript$;
-
     -- audit_event is the append-only action log. Temporal history stores row states; audit_event
     -- stores who did what and must never be rewritten or repurposed as a rollback source.
     DO $audit_event_insert_only$

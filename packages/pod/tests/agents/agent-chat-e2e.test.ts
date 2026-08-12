@@ -86,7 +86,11 @@ describe('Pod agent chat — runtime E2E', () => {
 		expect(turns(1)).toEqual(['user:Hello there.', 'assistant:reply 1', 'user:And again.']);
 
 		const rows = await harness.pool.query<{ role: string; seq: number }>(
-			`SELECT role, seq FROM chat_message WHERE chat_id = $1::uuid ORDER BY seq`,
+			`SELECT message->>'role' AS role, (message->>'seq')::int AS seq
+			   FROM chat_session,
+			        jsonb_array_elements(messages) AS message
+			  WHERE norbital_id = $1::uuid
+			  ORDER BY (message->>'seq')::int`,
 			[opened.chatId]
 		);
 		expect(rows.rows.map((row) => row.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
@@ -101,15 +105,22 @@ describe('Pod agent chat — runtime E2E', () => {
 
 		// Cross the former row-count replay boundary without approaching any model context limit.
 		await harness.pool.query(
-			`INSERT INTO chat_message (chat_id, role, seq, parts)
-			 SELECT $1::uuid,
-			        CASE WHEN seq % 2 = 1 THEN 'user' ELSE 'assistant' END,
-			        seq,
-			        jsonb_build_array(jsonb_build_object(
+			`UPDATE chat_session
+			    SET messages = messages || (
+			      SELECT jsonb_agg(jsonb_build_object(
+			        'norbital_id', uuidv7(),
+			        'turn_id', NULL,
+			        'role', CASE WHEN seq % 2 = 1 THEN 'user' ELSE 'assistant' END,
+			        'seq', seq,
+			        'parts', jsonb_build_array(jsonb_build_object(
 			          'role', CASE WHEN seq % 2 = 1 THEN 'user' ELSE 'assistant' END,
 			          'content', 'filler ' || seq::text
-			        ))
-			   FROM generate_series(3, 44) AS seq`,
+			        )),
+			        'kind', 'normal'
+			      ) ORDER BY seq)
+			      FROM generate_series(3, 44) AS seq
+			    )
+			  WHERE norbital_id = $1::uuid`,
 			[opened.chatId]
 		);
 

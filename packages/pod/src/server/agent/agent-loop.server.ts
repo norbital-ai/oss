@@ -18,6 +18,15 @@ import { composeSystemPrompt } from '$lib/server/agent/system-prompt.js';
 import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
 import { shouldPersistStreamPart } from '$lib/server/agent/stream-parts.js';
 import {
+	appendChatMessage,
+	appendChatTurn,
+	mutateChatSession,
+	readChatSession,
+	updateChatMessage,
+	updateChatTurn
+} from '$lib/server/agent/chat-session.server.js';
+import { runPendingConversationTitle } from '$lib/server/agent/conversation-title.server.js';
+import {
 	composeMentionContext,
 	type AgentMentionInput
 } from '$lib/server/agent/agent-mentions.server.js';
@@ -66,12 +75,12 @@ type AgentRunOptions = {
 	 * appends to, and the run row stays what it always was — the record of one turn.
 	 */
 	readonly sessionId?: string;
-	/** Extra `chat_message` columns for the input message only — where it came from, and from whom. */
+	/** Extra fields for the embedded input message only — where it came from, and from whom. */
 	readonly inputMetadata?: Record<string, unknown>;
 	/**
 	 * Research-only turn: read tools stay, writes / host tools / subagents are withheld.
 	 *
-	 * Stored on the user `chat_message.plan_mode` column and injected into the system prompt so the
+	 * Stored on the embedded user message and injected into the system prompt so the
 	 * model sees the same restriction the tool list already enforces.
 	 */
 	readonly planMode?: boolean;
@@ -113,7 +122,7 @@ export function parseCompactDirective(message: string): { readonly instructions?
  *
  * A character estimate, deliberately: this decides whether to spend a summarisation call, and being
  * wrong costs one call. It is never shown to anyone — a number a reader sees comes from the
- * provider's own accounting on `chat_message.usage`, never from this.
+ * provider's own accounting embedded on the session message, never from this.
  */
 function estimateTokens(value: unknown): number {
 	return Math.ceil(JSON.stringify(value).length / 4);
@@ -500,68 +509,25 @@ async function ensureRunSession(runId: string, ownerUserId: string): Promise<str
  * Keyed by run for an automation and by session for a channel: the two differ only in which rows are
  * "this conversation so far", which is exactly what the `WHERE` decides.
  */
-async function loadMessages(
-	scope: { readonly runId: string } | { readonly sessionId: string }
-): Promise<{ messages: AiMessage[]; sequence: number }> {
-	const ctx = getWorkspace({ provision: true });
+async function loadMessages(sessionId: string): Promise<{ messages: AiMessage[] }> {
+	const session = await readChatSession(sessionId);
+	const subagentTurns = new Set(
+		session.turns.filter((turn) => turn.subagent_id !== null).map((turn) => turn.norbital_id)
+	);
 	// A compaction checkpoint is a durable, explicit floor for the window. Resolving it from a stored
-	// column means two runs over the same transcript build the same window. There is deliberately no
+	// message means two runs over the same transcript build the same window. There is deliberately no
 	// message-count limit: the model catalog's context length and the explicit checkpoint below own
 	// window reduction, so history never disappears merely because a conversation crossed 40 rows.
-	// Subagent rows are excluded here exactly as they are from every other window query.
-	const anchor =
-		'sessionId' in scope
-			? await ctx.tenantDb.query<{ seq: number | null }>({
-					text: `SELECT MAX(m.seq) AS seq
-					         FROM chat_message m
-					    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
-					        WHERE m.chat_id = $1::uuid
-					          AND m.kind = 'summary'
-					          AND (m.turn_id IS NULL OR t.subagent_id IS NULL)`,
-					values: [scope.sessionId]
-				})
-			: null;
-	const anchorSeq = anchor?.rows[0]?.seq ?? null;
-	// A window is only meaningful for a session — a run's transcript is bounded by the run itself.
-	const query =
-		'runId' in scope
-			? {
-					text: `SELECT m.seq, m.parts, m.kind
-					         FROM chat_message m
-					         JOIN chat_session s ON s.norbital_id = m.chat_id
-					    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
-					        WHERE s.automation_run_id = $1::uuid
-					          AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
-					        ORDER BY m.seq`,
-					values: [scope.runId]
-				}
-			: anchorSeq !== null
-				? {
-						// From the checkpoint forward, unbounded: the summary stands in for everything below
-						// it, and re-limiting on top would drop turns the checkpoint promised were kept.
-						text: `SELECT m.seq, m.parts, m.kind FROM chat_message m
-						    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
-						        WHERE m.chat_id = $1::uuid
-						          AND m.seq >= $2
-						          AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
-						        ORDER BY m.seq`,
-						values: [scope.sessionId, anchorSeq]
-					}
-				: {
-						text: `SELECT m.seq, m.parts, m.kind FROM chat_message m
-						    LEFT JOIN chat_turn t ON t.norbital_id = m.turn_id
-						        WHERE m.chat_id = $1::uuid
-						          AND (m.turn_id IS NULL OR t.subagent_id IS NULL)
-						        ORDER BY m.seq`,
-						values: [scope.sessionId]
-					};
-	const result = await ctx.tenantDb.query<{
-		seq: number;
-		parts: AiMessage[] | null;
-		kind: string | null;
-	}>(query);
+	// Subagent messages stay embedded and visible under their call, but never enter the parent's model
+	// prompt. The latest root summary is the only replay floor.
+	const roots = session.messages.filter(
+		(message) =>
+			message.kind !== 'usage' && (message.turn_id === null || !subagentTurns.has(message.turn_id))
+	);
+	const anchor = roots.findLastIndex((message) => message.kind === 'summary');
+	const replay = anchor < 0 ? roots : roots.slice(anchor);
 	const messages: AiMessage[] = [];
-	for (const row of result.rows) {
+	for (const row of replay) {
 		const message = row.parts?.[0];
 		if (!message) continue;
 		// A checkpoint re-enters the window as the user's own recap rather than as the system message it
@@ -576,16 +542,7 @@ async function loadMessages(
 				: message
 		);
 	}
-	// The next sequence number comes from the whole transcript, never from the window: numbering from
-	// the window would reuse sequence numbers and reorder the stored conversation.
-	const highest =
-		'runId' in scope
-			? { rows: [{ seq: result.rows.at(-1)?.seq ?? 0 }] }
-			: await ctx.tenantDb.query<{ seq: number }>({
-					text: `SELECT COALESCE(MAX(seq), 0) AS seq FROM chat_message WHERE chat_id = $1::uuid`,
-					values: [scope.sessionId]
-				});
-	return { messages, sequence: Number(highest.rows[0]?.seq ?? 0) };
+	return { messages };
 }
 
 export type AgentRunResult = {
@@ -598,33 +555,14 @@ export type AgentRunResult = {
 	readonly inputMessageId: string | null;
 };
 
-function createTranscriptWriter(input: {
-	readonly sessionId: string;
-	readonly startingSequence: number;
-}): TranscriptWriter {
-	const ctx = getWorkspace({ provision: true });
-	let sequence = input.startingSequence;
+function createTranscriptWriter(sessionId: string): TranscriptWriter {
 	return {
-		sessionId: input.sessionId,
+		sessionId,
 		async persist(message, turnId, extra): Promise<string | null> {
-			sequence += 1;
-			const record = await createRecord(
-				ctx,
-				'chat_message',
-				{
-					chat_id: input.sessionId,
-					turn_id: turnId,
-					role: message.role,
-					seq: sequence,
-					parts: [message],
-					...(extra ?? {})
-				},
-				{ isElevated: true }
-			);
-			return typeof record.norbital_id === 'string' ? record.norbital_id : null;
+			return appendChatMessage(sessionId, turnId, message, extra);
 		},
 		async update(messageId, values): Promise<void> {
-			await updateRecord(ctx, 'chat_message', messageId, values, { isElevated: true });
+			await updateChatMessage(sessionId, messageId, values);
 		}
 	};
 }
@@ -635,21 +573,11 @@ async function createTurn(input: {
 	readonly parentTurnId?: string;
 	readonly subagentId?: string;
 }): Promise<string> {
-	const ctx = getWorkspace({ provision: true });
-	const turn = await createRecord(
-		ctx,
-		'chat_turn',
-		{
-			chat_id: input.writer.sessionId,
-			status: 'running',
-			model: input.spec.model ?? 'host-default',
-			...(input.parentTurnId ? { parent_turn_id: input.parentTurnId } : {}),
-			...(input.subagentId ? { subagent_id: input.subagentId } : {})
-		},
-		{ isElevated: true }
-	);
-	if (typeof turn.norbital_id !== 'string') throw new Error('Agent turn has no id');
-	return turn.norbital_id;
+	return appendChatTurn(input.writer.sessionId, {
+		model: input.spec.model ?? 'host-default',
+		...(input.parentTurnId ? { parentTurnId: input.parentTurnId } : {}),
+		...(input.subagentId ? { subagentId: input.subagentId } : {})
+	});
 }
 
 /** What the provider said one message cost. `null` cost means unreported, never free. */
@@ -673,92 +601,72 @@ function messageSpend(usage: unknown): { tokens: number; cost: number | null } {
  * was paid for, so the total has to be accumulated rather than derived — a sum over surviving rows
  * would quietly fall every time someone tidied a transcript.
  *
- * One statement, so the claim and the increment cannot come apart: the `UPDATE ... WHERE
- * usage_settled_at IS NULL` is the idempotency gate, and a second attempt at the same turn updates
- * no row and therefore adds nothing. Compaction is invisible to this by construction — a checkpoint
+ * One locked aggregate transaction, so terminal state and its counters cannot come apart.
+ * `usage_settled_at` is the idempotency gate: a retry after an ordinary error or an uncertain commit
+ * returns without adding anything. Compaction is invisible to this by construction — a checkpoint
  * changes which messages the model is sent, not which ones were paid for, and the summariser's own
  * usage is persisted onto the checkpoint row so it is counted like any other call.
  */
-async function settleTurnUsage(turnId: string): Promise<void> {
-	const ctx = getWorkspace({ provision: true });
-	const rows = await ctx.tenantDb.query<{ usage: unknown }>({
-		text: `SELECT usage FROM chat_message WHERE turn_id = $1::uuid AND usage IS NOT NULL`,
-		values: [turnId]
-	});
-	let tokens = 0;
-	let cost = 0;
-	let reported = false;
-	let unreported = false;
-	for (const row of rows.rows) {
-		const spend = messageSpend(row.usage);
-		tokens += spend.tokens;
-		if (spend.cost === null) unreported = true;
-		else {
-			cost += spend.cost;
-			reported = true;
-		}
-	}
-	// A turn that produced no accounting at all still counts as unreported: the request happened.
-	if (!reported) unreported = true;
-	const totals = await ctx.tenantDb.query<{
-		norbital_id: string;
-		usage_cost_usd: number;
-		usage_total_tokens: number;
-		usage_turns_counted: number;
-		usage_turns_unreported: number;
-	}>({
-		text: `WITH claimed AS (
-		        UPDATE chat_turn
-		           SET usage_settled_at = now()
-		         WHERE norbital_id = $1::uuid
-		           AND usage_settled_at IS NULL
-		     RETURNING chat_id
-		      )
-		      UPDATE chat_session AS session
-		         SET usage_cost_usd = session.usage_cost_usd + $2,
-		             usage_total_tokens = session.usage_total_tokens + $3,
-		             usage_turns_counted = session.usage_turns_counted + 1,
-		             usage_turns_unreported = session.usage_turns_unreported + $4
-		        FROM claimed
-		       WHERE session.norbital_id = claimed.chat_id
-		   RETURNING session.norbital_id,
-		             session.usage_cost_usd,
-		             session.usage_total_tokens,
-		             session.usage_turns_counted,
-		             session.usage_turns_unreported`,
-		values: [turnId, cost, tokens, unreported ? 1 : 0]
-	});
-	const row = totals.rows[0];
-	if (!row) return;
-	// The increment above is authoritative and atomic; this republishes the same numbers through the
-	// ordinary write path so the sync outbox carries them to the reader, who otherwise would never
-	// see a counter that only ever moved by raw SQL.
-	await updateRecord(ctx, 'chat_session', row.norbital_id, { ...row }, { isElevated: true }).catch(
-		() => undefined
-	);
-}
-
 async function finishTurn(
+	sessionId: string,
 	turnId: string,
 	status: 'succeeded' | 'failed' | 'aborted',
 	error?: string
 ): Promise<void> {
-	const ctx = getWorkspace({ provision: true });
-	await updateRecord(
-		ctx,
-		'chat_turn',
-		turnId,
-		{
-			status,
-			heartbeat_at: new Date().toISOString(),
-			ended_at: new Date().toISOString(),
-			error: error ?? null
-		},
-		{ isElevated: true }
+	let lastCause: unknown;
+	for (let attempt = 1; attempt <= 3; attempt += 1) {
+		try {
+			await mutateChatSession(sessionId, (session) => {
+				const turnIndex = session.turns.findIndex((turn) => turn.norbital_id === turnId);
+				const turn = session.turns[turnIndex];
+				if (!turn) throw new Error('Chat turn does not exist');
+				// A retry after an uncertain commit must not change the original terminal result or add
+				// its spend twice. Terminal state and settlement are written by this one transaction.
+				if (turn.usage_settled_at !== null && turn.ended_at !== null) return;
+				let tokens = 0;
+				let cost = 0;
+				let reported = false;
+				let unreported = false;
+				for (const message of session.messages) {
+					if (message.turn_id !== turnId || message.usage === null) continue;
+					const spend = messageSpend(message.usage);
+					tokens += spend.tokens;
+					if (spend.cost === null) unreported = true;
+					else {
+						cost += spend.cost;
+						reported = true;
+					}
+				}
+				if (!reported) unreported = true;
+				const settledAt = new Date().toISOString();
+				session.turns[turnIndex] = {
+					...turn,
+					status,
+					heartbeat_at: settledAt,
+					ended_at: settledAt,
+					error: error ?? null,
+					usage_settled_at: settledAt
+				};
+				session.usage_cost_usd += cost;
+				session.usage_total_tokens += tokens;
+				session.usage_turns_counted += 1;
+				session.usage_turns_unreported += unreported ? 1 : 0;
+			});
+			return;
+		} catch (cause) {
+			lastCause = cause;
+		}
+	}
+	throw new Error('Agent turn settlement failed after 3 attempts', { cause: lastCause });
+}
+
+function combinedTurnFailure(cause: unknown, settlementCause: unknown): AggregateError {
+	return new AggregateError(
+		[cause, settlementCause],
+		`Agent run failed and its usage could not be settled: ${
+			settlementCause instanceof Error ? settlementCause.message : String(settlementCause)
+		}`
 	);
-	// Every terminal status settles, not only success: a failed turn still spent whatever it spent
-	// before it failed, and a total that ignored that would understate the conversation.
-	await settleTurnUsage(turnId).catch(() => undefined);
 }
 
 type ProviderTurnResult = {
@@ -783,7 +691,6 @@ async function streamProviderTurn(input: {
 	readonly turnId: string;
 	readonly planMode: boolean;
 }): Promise<ProviderTurnResult> {
-	const ctx = getWorkspace({ provision: true });
 	const ai = requireRuntimeFacility('ai');
 	const system = composeSystemPrompt(input.spec.systemPrompt, { planMode: input.planMode });
 	if (!ai.startStream || !ai.readStream || !ai.cancelStream) {
@@ -857,13 +764,9 @@ async function streamProviderTurn(input: {
 			}
 			if (Date.now() - lastHeartbeat >= 5_000) {
 				lastHeartbeat = Date.now();
-				await updateRecord(
-					ctx,
-					'chat_turn',
-					input.turnId,
-					{ heartbeat_at: new Date().toISOString() },
-					{ isElevated: true }
-				);
+				await updateChatTurn(input.writer.sessionId, input.turnId, {
+					heartbeat_at: new Date().toISOString()
+				});
 			}
 			done = batch.done;
 		}
@@ -902,7 +805,7 @@ async function streamProviderTurn(input: {
 /**
  * Replace a window with a summary of itself, and record that it happened.
  *
- * Nothing is deleted. The checkpoint is an ordinary `chat_message` with `kind = 'summary'`, and the
+ * Nothing is deleted. The checkpoint is an ordinary embedded message with `kind = 'summary'`, and the
  * window builder starts from it — so the conversation below stays readable in full while the model
  * carries the recap. That is the whole trust property: history that leaves the model's view leaves a
  * durable mark in the transcript rather than falling silently out of a recency limit.
@@ -957,7 +860,6 @@ async function runAgentLoop(input: {
 	readonly depth: number;
 	readonly planMode: boolean;
 }): Promise<LoopResult> {
-	const ctx = getWorkspace({ provision: true });
 	const resolved = await resolveTools(input.spec, {
 		canSpawnSubagent: input.depth === 0 && !input.planMode,
 		planMode: input.planMode
@@ -1007,6 +909,17 @@ async function runAgentLoop(input: {
 			input.messages.push({ role: 'assistant', content: result.text });
 		}
 		const calls = result.toolCalls;
+		// Empty and refused completions are still completed provider calls. Keep a hidden accounting
+		// part so tenant-side totals reconcile with the Core ledger even when there is no prose or tool
+		// call to carry the provider's usage object.
+		if (!result.text && calls.length === 0 && result.usage !== undefined) {
+			await input.writer.persist({ role: 'assistant', content: '' }, input.turnId, {
+				kind: 'usage',
+				status: 'complete',
+				model: input.spec.model ?? null,
+				usage: objectValue(result.usage)
+			});
+		}
 		if (calls.length > 0) {
 			const callMessage: AiMessage = { role: 'assistant', content: '', toolCalls: calls };
 			input.messages.push(callMessage);
@@ -1061,13 +974,9 @@ async function runAgentLoop(input: {
 			};
 			input.messages.push(toolMessage);
 			await input.writer.persist(toolMessage, input.turnId);
-			await updateRecord(
-				ctx,
-				'chat_turn',
-				input.turnId,
-				{ heartbeat_at: new Date().toISOString() },
-				{ isElevated: true }
-			);
+			await updateChatTurn(input.writer.sessionId, input.turnId, {
+				heartbeat_at: new Date().toISOString()
+			});
 		}
 	}
 }
@@ -1081,18 +990,13 @@ async function runSubagent(input: {
 	readonly depth: number;
 	readonly planMode: boolean;
 }): Promise<{ readonly text: string; readonly turnId: string }> {
-	const ctx = getWorkspace({ provision: true });
 	const turnId = await createTurn(input);
 	const prompt: AiMessage = { role: 'user', content: input.task };
 	const promptMessageId = await input.writer.persist(prompt, turnId);
 	if (promptMessageId) {
-		await updateRecord(
-			ctx,
-			'chat_turn',
-			turnId,
-			{ prompt_message_id: promptMessageId },
-			{ isElevated: true }
-		);
+		await updateChatTurn(input.writer.sessionId, turnId, {
+			prompt_message_id: promptMessageId
+		});
 	}
 	try {
 		const result = await runAgentLoop({
@@ -1103,11 +1007,15 @@ async function runSubagent(input: {
 			depth: input.depth,
 			planMode: input.planMode
 		});
-		await finishTurn(turnId, 'succeeded');
+		await finishTurn(input.writer.sessionId, turnId, 'succeeded');
 		return { text: result.text, turnId };
 	} catch (cause) {
 		const message = cause instanceof Error ? cause.message : String(cause);
-		await finishTurn(turnId, 'failed', message).catch(() => undefined);
+		try {
+			await finishTurn(input.writer.sessionId, turnId, 'failed', message);
+		} catch (settlementCause) {
+			throw combinedTurnFailure(cause, settlementCause);
+		}
 		throw cause;
 	}
 }
@@ -1157,15 +1065,10 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			{ isElevated: true }
 		);
 	}
-	const restored = await loadMessages(
-		options.sessionId ? { sessionId: options.sessionId } : { runId }
-	);
-	const messages: AiMessage[] = [...restored.messages];
 	const sessionId = options.sessionId ?? (await ensureRunSession(runId, ownerUserId));
-	const writer = createTranscriptWriter({
-		sessionId,
-		startingSequence: restored.sequence
-	});
+	const restored = await loadMessages(sessionId);
+	const messages: AiMessage[] = [...restored.messages];
+	const writer = createTranscriptWriter(sessionId);
 	const turnId = await createTurn({ writer, spec: options.spec });
 	const initial = options.input ?? (messages.length === 0 ? options.spec.task : undefined);
 	let inputMessageId: string | null = null;
@@ -1186,13 +1089,11 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			...(planMode ? { plan_mode: true } : {})
 		});
 		if (inputMessageId) {
-			await updateRecord(
-				ctx,
-				'chat_turn',
-				turnId,
-				{ prompt_message_id: inputMessageId },
-				{ isElevated: true }
-			);
+			await updateChatTurn(sessionId, turnId, { prompt_message_id: inputMessageId });
+			// Immediate background fast path. The pending marker is the durable job state, so a failure is
+			// harmless: the workspace queue will retry it. Starting here avoids making every first title
+			// wait for the minute-granularity repair sweep.
+			void runPendingConversationTitle(sessionId).catch(() => undefined);
 		}
 	}
 	if (messages.length === 0) throw new Error('Agent run requires an input message');
@@ -1217,7 +1118,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 		if (window.length < COMPACTION_FLOOR_MESSAGES) {
 			await writer.persist({ role: 'system', content: notice }, turnId);
 		}
-		await finishTurn(turnId, 'succeeded');
+		await finishTurn(sessionId, turnId, 'succeeded');
 		await updateRecord(
 			ctx,
 			'automation_run',
@@ -1242,7 +1143,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			depth: 0,
 			planMode
 		});
-		await finishTurn(turnId, 'succeeded');
+		await finishTurn(sessionId, turnId, 'succeeded');
 		await updateRecord(
 			ctx,
 			'automation_run',
@@ -1259,7 +1160,12 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 	} catch (cause) {
 		const message = cause instanceof Error ? cause.message : String(cause);
 		await writer.persist({ role: 'system', content: message }, turnId).catch(() => undefined);
-		await finishTurn(turnId, 'failed', message).catch(() => undefined);
+		let surfaced: unknown = cause;
+		try {
+			await finishTurn(sessionId, turnId, 'failed', message);
+		} catch (settlementCause) {
+			surfaced = combinedTurnFailure(cause, settlementCause);
+		}
 		await updateRecord(
 			ctx,
 			'automation_run',
@@ -1271,7 +1177,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			},
 			{ isElevated: true }
 		).catch(() => undefined);
-		throw cause;
+		throw surfaced;
 	}
 }
 

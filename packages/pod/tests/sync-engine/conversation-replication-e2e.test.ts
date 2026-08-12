@@ -32,13 +32,14 @@ const grace: Identity = {
 	role: 'basic'
 };
 
-/** Every collection a conversation is made of, plus the run that owns an automation's transcript. */
-const CONVERSATION_COLLECTIONS = [
-	'chat_session',
-	'chat_message',
-	'chat_turn',
-	'automation_run'
-] as const;
+/** The tenant aggregate plus the run that owns an automation's execution lifecycle. */
+const CONVERSATION_COLLECTIONS = ['chat_session', 'automation_run'] as const;
+
+function storedArray(value: unknown): readonly Record<string, unknown>[] {
+	if (Array.isArray(value)) return value as readonly Record<string, unknown>[];
+	if (typeof value === 'string') return JSON.parse(value) as readonly Record<string, unknown>[];
+	return [];
+}
 
 function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch {
 	return (path, init) =>
@@ -139,6 +140,8 @@ describe('Conversations and runs replicate to their owner', () => {
 		for (const collection of CONVERSATION_COLLECTIONS) {
 			expect(clientSchemaSql, collection).toContain(`CREATE TABLE IF NOT EXISTS "${collection}" (`);
 		}
+		expect(clientSchemaSql).not.toContain('CREATE TABLE IF NOT EXISTS "chat_message"');
+		expect(clientSchemaSql).not.toContain('CREATE TABLE IF NOT EXISTS "chat_turn"');
 	});
 
 	it('scopes a session and its messages to the member who holds it', async () => {
@@ -152,13 +155,9 @@ describe('Conversations and runs replicate to their owner', () => {
 		expect(sessions.rows.map((row) => row.norbital_id)).not.toContain(graceChat.chatId);
 		expect(sessions.rows.every((row) => row.user_id === ada.userId)).toBe(true);
 
-		const messages = await shape(harness, 'chat_message', ada);
-		expect(messages.status).toBe(200);
-		const chatIds = new Set(messages.rows.map((row) => row.chat_id));
-		expect(chatIds.has(adaChat.chatId)).toBe(true);
-		expect(chatIds.has(graceChat.chatId)).toBe(false);
-		// Not merely non-empty: the transcript has to actually be there, or "scoped" is vacuous.
-		expect(messages.rows.length).toBeGreaterThanOrEqual(2);
+		const adaSession = sessions.rows.find((row) => row.norbital_id === adaChat.chatId);
+		expect(storedArray(adaSession?.messages).length).toBeGreaterThanOrEqual(2);
+		expect(storedArray(adaSession?.turns).length).toBeGreaterThanOrEqual(1);
 	});
 
 	it('scopes a run to whoever requested it', async () => {
@@ -169,13 +168,15 @@ describe('Conversations and runs replicate to their owner', () => {
 		expect(runs.rows.every((row) => row.requested_by_user_id === ada.userId)).toBe(true);
 	});
 
-	it('replicates completed turns only to the conversation owner', async () => {
-		const turns = await shape(harness, 'chat_turn', ada);
-		expect(turns.status).toBe(200);
-		expect(turns.rows.length).toBeGreaterThanOrEqual(1);
-		expect(turns.rows.every((row) => row.chat_id === adaChat.chatId)).toBe(true);
-		expect(turns.rows.every((row) => row.status === 'succeeded')).toBe(true);
-		const anyTurn = await harness.pool.query(`SELECT count(*)::int AS n FROM chat_turn`);
+	it('embeds completed turns only in the conversation owner aggregate', async () => {
+		const sessions = await shape(harness, 'chat_session', ada);
+		const session = sessions.rows.find((row) => row.norbital_id === adaChat.chatId);
+		const turns = storedArray(session?.turns);
+		expect(turns.length).toBeGreaterThanOrEqual(1);
+		expect(turns.every((turn) => turn.status === 'succeeded')).toBe(true);
+		const anyTurn = await harness.pool.query(
+			`SELECT coalesce(sum(jsonb_array_length(turns)), 0)::int AS n FROM chat_session`
+		);
 		expect(anyTurn.rows[0]?.n).toBeGreaterThanOrEqual(2);
 	});
 
@@ -189,25 +190,34 @@ describe('Conversations and runs replicate to their owner', () => {
 		});
 		await client.bootstrap();
 		try {
-			await client.shapeSubscribe({ collection: 'chat_message', pageSize: 200 });
-			client.setSubscribedCollections(['chat_message']);
+			await client.shapeSubscribe({ collection: 'chat_session', pageSize: 200 });
+			client.setSubscribedCollections(['chat_session']);
 			client.startStream();
-			const before = await client.count('chat_message');
+			const beforeRows = await client.queryLocal<{ messages: unknown }>(
+				`SELECT messages FROM chat_session WHERE norbital_id = $1`,
+				[adaChat.chatId]
+			);
+			const before = storedArray(beforeRows[0]?.messages).length;
 
 			// A reply arriving from anywhere — another tab, a channel, this run continuing — is a row on
 			// the stream. The panel reads the replica, so it needs no notification of its own. Sent
 			// against the existing run, which is how the panel continues a conversation.
 			await chat(harness, ada, 'Anything else?', adaChat.runId);
 
-			const arrived = await waitFor(async () => (await client.count('chat_message')) > before);
+			const arrived = await waitFor(async () => {
+				const rows = await client.queryLocal<{ messages: unknown }>(
+					`SELECT messages FROM chat_session WHERE norbital_id = $1`,
+					[adaChat.chatId]
+				);
+				return storedArray(rows[0]?.messages).length > before;
+			});
 			expect(arrived, `lastError=${String(client.lastError)}`).toBe(true);
-			const rows = await client.queryLocal<{ chat_id: string }>(
-				`SELECT chat_id FROM chat_message`,
-				[]
+			const rows = await client.queryLocal<{ norbital_id: string }>(
+				`SELECT norbital_id FROM chat_session`
 			);
 			// The continuation landed in the open conversation, and Grace's is still not here.
-			expect(rows.some((row) => row.chat_id === adaChat.chatId)).toBe(true);
-			expect(rows.some((row) => row.chat_id === graceChat.chatId)).toBe(false);
+			expect(rows.some((row) => row.norbital_id === adaChat.chatId)).toBe(true);
+			expect(rows.some((row) => row.norbital_id === graceChat.chatId)).toBe(false);
 		} finally {
 			await client.close();
 		}

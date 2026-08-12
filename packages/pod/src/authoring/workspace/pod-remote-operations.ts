@@ -22,7 +22,7 @@ export type PodRemoteOperations = {
 	 * Send a message to the workspace agent.
 	 *
 	 * Returns the run so a follow-up can continue the same conversation, and the session so the caller
-	 * can read the transcript — which arrives as ordinary synced `chat_message` rows rather than through
+	 * can read the transcript — which arrives in the ordinary synced `chat_session` row rather than through
 	 * a stream of its own.
 	 */
 	readonly agentChat: (input: { readonly message: string; readonly runId?: string }) => Promise<{

@@ -6,6 +6,7 @@ import type {
 } from '@norbital-ai/platform-utils/runtime/binding';
 import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
 import type { SyncFetch } from '$lib/ui/sync/types.js';
+import type { ChatSessionMessage, ChatSessionTurn } from '$lib/shared/agent/chat-session.js';
 import { requireDocker } from '../support/pg-harness.js';
 import { createClientDb } from '../support/pglite-node.js';
 import {
@@ -46,6 +47,16 @@ type FakeStream = {
 	read: number;
 };
 
+type LocalSession = {
+	title: string;
+	messages: string | readonly ChatSessionMessage[];
+	turns: string | readonly ChatSessionTurn[];
+};
+
+function storedArray<T>(value: string | readonly T[]): readonly T[] {
+	return typeof value === 'string' ? (JSON.parse(value) as readonly T[]) : value;
+}
+
 function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch {
 	return (path, init) =>
 		harness.request(
@@ -68,8 +79,12 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 	let nextStream = 0;
 
 	const ai: HostAiBinding = {
-		async chat() {
-			throw new Error('This capability test requires the live stream contract');
+		async chat(input) {
+			expect(input.outputSchema).toBeTruthy();
+			return {
+				text: JSON.stringify({ title: 'Delegate sentinel check' }),
+				stopReason: 'end'
+			};
 		},
 		async startStream(input) {
 			await releaseProvider.promise;
@@ -184,101 +199,110 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			expect(accepted.accepted).toBe(true);
 
 			const sessionArrived = await waitFor(async () => {
-				const rows = await client.queryLocal<{ title: string }>(
-					`SELECT title FROM chat_session WHERE norbital_id = $1`,
+				const rows = await client.queryLocal<LocalSession>(
+					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
 					[accepted.chatId]
 				);
-				return rows[0] ?? null;
+				return rows[0] && storedArray(rows[0].messages).length === 1 ? rows[0] : null;
 			});
-			expect(sessionArrived.title).toBe('Workspace agent');
+			expect(storedArray(sessionArrived.messages)).toHaveLength(1);
 
-			// Transcript access is session-scoped. Subscribe only after the owned session exists, exactly
-			// as the panel does, but hold the provider until both collections are caught up and tailing.
-			for (const collection of ['chat_message', 'chat_turn']) {
-				await client.shapeSubscribe({ collection, pageSize: 200 });
-			}
-			client.setSubscribedCollections(['chat_session', 'chat_message', 'chat_turn']);
-			await client.stopStream();
-			client.startStream();
+			const generatedTitle = await waitFor(async () => {
+				const rows = await client.queryLocal<LocalSession>(
+					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
+					[accepted.chatId]
+				);
+				return rows[0]?.title === 'Delegate sentinel check' ? rows[0] : null;
+			});
+			expect(generatedTitle.title).toBe('Delegate sentinel check');
+
+			// One aggregate subscription was already tailing before the session existed. Every subsequent
+			// title, message-part, and turn mutation must arrive without adding a shape or restarting it.
 			releaseProvider.resolve();
 
 			const liveChild = await waitFor(async () => {
-				const result = await client.queryLocal<{
-					status: string;
-					parts: string | { content?: string }[];
-					turn_id: string;
-					parent_turn_id: string;
-					subagent_id: string;
-				}>(
-					`SELECT m.status, m.parts, m.turn_id, t.parent_turn_id, t.subagent_id
-				   FROM chat_message m
-				   JOIN chat_turn t ON t.norbital_id = m.turn_id
-				  WHERE m.chat_id = $1::uuid
-				    AND t.subagent_id IS NOT NULL
-				    AND m.role = 'assistant'
-				  LIMIT 1`,
+				const rows = await client.queryLocal<LocalSession>(
+					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
 					[accepted.chatId]
 				);
-				return result[0] ?? null;
+				const session = rows[0];
+				if (!session) return null;
+				const turns = storedArray(session.turns);
+				const childTurn = turns.find((turn) => turn.subagent_id === 'subagent:spawn-1');
+				const childMessage = storedArray(session.messages).find(
+					(message) =>
+						message.turn_id === childTurn?.norbital_id &&
+						message.role === 'assistant' &&
+						message.status === 'streaming'
+				);
+				return childTurn && childMessage ? { childTurn, childMessage } : null;
 			});
-			expect(liveChild.status).toBe('streaming');
-			const liveParts =
-				typeof liveChild.parts === 'string' ? JSON.parse(liveChild.parts) : liveChild.parts;
-			expect(liveParts[0]?.content).toBe('child-');
-			expect(liveChild.parent_turn_id).toBeTruthy();
-			expect(liveChild.subagent_id).toBe('subagent:spawn-1');
+			expect(liveChild.childMessage.parts[0]?.content).toBe('child-');
+			expect(liveChild.childTurn.parent_turn_id).toBeTruthy();
+			expect(liveChild.childTurn.subagent_id).toBe('subagent:spawn-1');
 
 			const parentCallArrived = await waitFor(async () => {
-				const rows = await client.queryLocal<{ parts: string | unknown[] }>(
-					`SELECT parts FROM chat_message
-				  WHERE chat_id = $1 AND role = 'assistant' AND parts::text LIKE '%spawn_subagent%'`,
+				const rows = await client.queryLocal<LocalSession>(
+					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
 					[accepted.chatId]
 				);
-				return rows[0] ?? null;
+				const session = rows[0];
+				return session && JSON.stringify(storedArray(session.messages)).includes('spawn_subagent')
+					? session
+					: null;
 			});
-			expect(JSON.stringify(parentCallArrived.parts)).toContain('spawn_subagent');
+			expect(JSON.stringify(parentCallArrived.messages)).toContain('spawn_subagent');
 
 			releaseChild.resolve();
 
 			const completed = await waitFor(async () => {
-				const rows = await client.queryLocal<{
-					status: string;
-					content: string;
-				}>(
-					`SELECT m.status, m.parts->0->>'content' AS content
-			   FROM chat_message m
-			  WHERE m.chat_id = $1::uuid AND m.role = 'assistant'
-			  ORDER BY m.seq`,
+				const rows = await client.queryLocal<LocalSession>(
+					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
 					[accepted.chatId]
 				);
-				return rows.some((row) => row.content === 'parent-complete' && row.status === 'complete')
-					? rows
+				const messages = storedArray(rows[0]?.messages ?? []);
+				return messages.some(
+					(message) =>
+						message.parts[0]?.content === 'parent-complete' && message.status === 'complete'
+				)
+					? messages
 					: null;
 			});
-			expect(completed).toContainEqual({ status: 'complete', content: 'child-streamed' });
-			expect(completed).toContainEqual({ status: 'complete', content: 'parent-complete' });
+			expect(completed).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						status: 'complete',
+						parts: [expect.objectContaining({ content: 'child-streamed' })]
+					}),
+					expect.objectContaining({
+						status: 'complete',
+						parts: [expect.objectContaining({ content: 'parent-complete' })]
+					})
+				])
+			);
 
 			const toolResultArrived = await waitFor(async () => {
-				const rows = await client.queryLocal<{ parts: string | unknown[] }>(
-					`SELECT parts FROM chat_message
-				  WHERE chat_id = $1 AND role = 'tool' AND parts::text LIKE '%child-streamed%'`,
+				const rows = await client.queryLocal<LocalSession>(
+					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
 					[accepted.chatId]
 				);
-				return rows[0] ?? null;
+				const message = storedArray(rows[0]?.messages ?? []).find(
+					(candidate) =>
+						candidate.role === 'tool' && JSON.stringify(candidate.parts).includes('child-streamed')
+				);
+				return message ?? null;
 			});
 			expect(JSON.stringify(toolResultArrived.parts)).toContain('child-streamed');
 
 			const turns = await waitFor(async () => {
-				const rows = await client.queryLocal<{
-					status: string;
-					parent_turn_id: string | null;
-					subagent_id: string | null;
-				}>(
-					`SELECT status, parent_turn_id, subagent_id
-			   FROM chat_turn WHERE chat_id = $1::uuid ORDER BY started_at`,
+				const rows = await client.queryLocal<LocalSession>(
+					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
 					[accepted.chatId]
 				);
-				return rows.length === 2 && rows.every((row) => row.status === 'succeeded') ? rows : null;
+				const turns = storedArray(rows[0]?.turns ?? []);
+				return turns.length === 2 && turns.every((turn) => turn.status === 'succeeded')
+					? turns
+					: null;
 			});
 			expect(turns).toHaveLength(2);
 			expect(turns[0]).toMatchObject({

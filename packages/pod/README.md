@@ -586,8 +586,9 @@ tools.
 
 Pod owns the agent loop, input validation, collection allowlists, read/write mode, persistence, and
 tool execution. The host's AI binding supplies one inference turn at a time. Ordered `AiMessage`
-values are stored in tenant-owned `chat_message` rows under `chat_session` and reach clients through
-ordinary sync. Agent transcripts are policy-scoped; Core and other hosts store no transcript.
+values and nested turn state live directly in the tenant-owned `chat_session` aggregate and reach
+clients through one ordinary sync subscription. Agent transcripts are policy-scoped; Core and other
+hosts store no transcript.
 
 The tenant-workspace agent is configured separately from scheduled automation in `src/+agent.ts`:
 
@@ -805,7 +806,8 @@ Audit and history are different data:
   with its before/after details and workspace checkpoint;
 - `<collection>_history` is queryable historical record data with the same native columns as that
   collection and a system-validity period;
-- `chat_session` and ordered `chat_message` rows are the tenant-owned agent transcript.
+- `chat_session` is the tenant-owned agent transcript aggregate: ordered messages, nested turns,
+  title, terminal state and metered usage travel together.
 
 Do not serialize historical records into a generic audit ledger. History remains typed and tracks
 schema changes alongside its live table.

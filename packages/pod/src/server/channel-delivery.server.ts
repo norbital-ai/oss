@@ -269,7 +269,7 @@ export async function deliverChannelMessage(
 				receiptId,
 				{
 					status: 'answered',
-					...(result.inputMessageId ? { chat_message_id: result.inputMessageId } : {}),
+					...(result.inputMessageId ? { session_message_id: result.inputMessageId } : {}),
 					answered_at: new Date().toISOString(),
 					...(delivered.sent ? {} : { error: delivered.reason ?? 'transport refused delivery' })
 				},

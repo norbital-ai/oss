@@ -1,128 +1,381 @@
-CREATE TABLE "cost_estimates" (
+CREATE TABLE "accounts" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
-	"estimate_name" text NOT NULL,
-	"project_id" uuid NOT NULL,
-	"reconstruction_id" uuid,
+	"external_code" text NOT NULL,
+	"name" text NOT NULL,
+	"industry" text,
+	"website" text,
+	"phone" text,
+	"currency" text,
+	"address" text,
+	"credit_limit" numeric,
+	"credit_used" numeric,
+	"credit_hold" boolean,
+	"active" boolean NOT NULL
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('accounts'::regclass, 'accounts_history');
+--> statement-breakpoint
+CREATE TABLE "activities" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"regarding_type" text NOT NULL,
+	"regarding_id" uuid NOT NULL,
+	"type" text,
+	"subject" text NOT NULL,
+	"description" text,
+	"due_date" date,
+	"completed_at" timestamp with time zone,
+	"owner_id" uuid NOT NULL
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('activities'::regclass, 'activities_history');
+--> statement-breakpoint
+CREATE TABLE "contacts" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"account_id" uuid NOT NULL,
+	"first_name" text NOT NULL,
+	"last_name" text NOT NULL,
+	"email" text,
+	"title" text,
+	"department" text,
+	"active" boolean NOT NULL
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('contacts'::regclass, 'contacts_history');
+--> statement-breakpoint
+CREATE TABLE "contract_signings" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"quote_id" uuid NOT NULL,
+	"variant" text,
+	"status" text,
+	"binding_hash" text NOT NULL,
+	"generated_file" uuid,
+	"counterparty_file" uuid,
+	"share_token_hash" text,
+	"share_expires_at" timestamp with time zone,
+	"share_revoked_at" timestamp with time zone,
+	"acknowledged_at" timestamp with time zone,
+	"void_reason" text,
+	"owner_id" uuid NOT NULL
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('contract_signings'::regclass, 'contract_signings_history');
+--> statement-breakpoint
+CREATE TABLE "goods_receipt_lines" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"goods_receipt_id" uuid NOT NULL,
+	"purchase_order_line_id" uuid NOT NULL,
+	"quantity_received" numeric NOT NULL
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('goods_receipt_lines'::regclass, 'goods_receipt_lines_history');
+--> statement-breakpoint
+CREATE TABLE "goods_receipts" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"doc_no" text NOT NULL,
+	"purchase_order_id" uuid NOT NULL,
+	"received_date" date,
+	"note" text,
+	"owner_id" uuid NOT NULL,
+	"received_at" timestamp with time zone
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('goods_receipts'::regclass, 'goods_receipts_history');
+--> statement-breakpoint
+CREATE TABLE "products" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"external_code" text NOT NULL,
+	"code" text NOT NULL,
+	"name" text NOT NULL,
+	"description" text,
+	"spec" text,
+	"unit" text,
+	"unit_price" numeric,
+	"tax_rate" numeric,
+	"qty_on_hand" numeric,
+	"main_supplier_id" uuid,
+	"active" boolean NOT NULL
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('products'::regclass, 'products_history');
+--> statement-breakpoint
+CREATE TABLE "purchase_invoice_lines" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"purchase_invoice_id" uuid NOT NULL,
+	"purchase_order_line_id" uuid NOT NULL,
+	"product_code" text NOT NULL,
+	"product_name" text NOT NULL,
+	"quantity" numeric NOT NULL,
+	"unit_cost" numeric NOT NULL,
+	"tax_rate" numeric,
+	"net" numeric,
+	"tax" numeric,
+	"line_total" numeric
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('purchase_invoice_lines'::regclass, 'purchase_invoice_lines_history');
+--> statement-breakpoint
+CREATE TABLE "purchase_invoices" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"doc_no" text NOT NULL,
+	"purchase_order_id" uuid NOT NULL,
+	"supplier_id" uuid NOT NULL,
+	"supplier_code" text NOT NULL,
+	"supplier_name" text NOT NULL,
+	"invoice_reference" text,
+	"invoice_date" date,
 	"status" text,
 	"currency" text,
-	"sand_loss_pct" numeric,
-	"dredged_fill_loss_pct" numeric,
-	"perimeter_margin_pct" numeric,
-	"pvd_area_fraction" numeric,
-	"pvd_spacing_m" numeric,
-	"contingency_pct" numeric,
-	"subtotal" jsonb,
-	"contingency" jsonb,
-	"total" jsonb,
-	"lines_json" text,
-	"priced_at" timestamp with time zone,
-	"notes" text
+	"tax_inclusive" boolean NOT NULL,
+	"net" numeric,
+	"tax" numeric,
+	"gross" numeric,
+	"owner_id" uuid NOT NULL,
+	"confirmed_at" timestamp with time zone,
+	"cancelled_at" timestamp with time zone,
+	"cancel_reason" text
 );
 --> statement-breakpoint
-SELECT _norbital_create_history_table('cost_estimates'::regclass, 'cost_estimates_history');
+SELECT _norbital_create_history_table('purchase_invoices'::regclass, 'purchase_invoices_history');
 --> statement-breakpoint
-CREATE TABLE "cost_rates" (
+CREATE TABLE "purchase_order_lines" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
-	"substrate" text NOT NULL,
-	"label" text NOT NULL,
-	"unit" text NOT NULL,
-	"rate" jsonb,
-	"rate_basis" text,
-	"source" text,
-	"validity_range" jsonb,
-	"notes" text
+	"purchase_order_id" uuid NOT NULL,
+	"product_id" uuid NOT NULL,
+	"product_code" text NOT NULL,
+	"product_name" text NOT NULL,
+	"product_unit" text,
+	"quantity" numeric NOT NULL,
+	"unit_cost" numeric NOT NULL,
+	"tax_rate" numeric,
+	"net" numeric,
+	"tax" numeric,
+	"line_total" numeric
 );
 --> statement-breakpoint
-SELECT _norbital_create_history_table('cost_rates'::regclass, 'cost_rates_history');
+SELECT _norbital_create_history_table('purchase_order_lines'::regclass, 'purchase_order_lines_history');
 --> statement-breakpoint
-CREATE TABLE "project_documents" (
+CREATE TABLE "purchase_orders" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
+	"doc_no" text NOT NULL,
+	"supplier_id" uuid NOT NULL,
+	"supplier_code" text NOT NULL,
+	"supplier_name" text NOT NULL,
+	"status" text,
+	"currency" text,
+	"tax_inclusive" boolean NOT NULL,
+	"expected_date" date,
+	"net" numeric,
+	"tax" numeric,
+	"gross" numeric,
+	"owner_id" uuid NOT NULL,
+	"confirmed_at" timestamp with time zone,
+	"cancelled_at" timestamp with time zone,
+	"cancel_reason" text
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('purchase_orders'::regclass, 'purchase_orders_history');
+--> statement-breakpoint
+CREATE TABLE "quote_lines" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"quote_id" uuid NOT NULL,
+	"product_id" uuid NOT NULL,
+	"product_code" text NOT NULL,
+	"product_name" text NOT NULL,
+	"product_unit" text,
+	"quantity" numeric NOT NULL,
+	"unit_price" numeric NOT NULL,
+	"discount_pct" numeric,
+	"tax_rate" numeric,
+	"net" numeric,
+	"tax" numeric,
+	"line_total" numeric
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('quote_lines'::regclass, 'quote_lines_history');
+--> statement-breakpoint
+CREATE TABLE "quotes" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"doc_no" text NOT NULL,
+	"account_id" uuid NOT NULL,
+	"contact_id" uuid,
 	"title" text NOT NULL,
-	"project_id" uuid NOT NULL,
-	"category" text NOT NULL,
-	"document_role" text,
-	"document_file" uuid NOT NULL,
-	"document_number" text,
-	"discipline" text,
-	"revision" text,
-	"issued_on" date,
-	"issued_by" text,
 	"status" text,
-	"tags" text[],
-	"notes" text
-);
---> statement-breakpoint
-SELECT _norbital_create_history_table('project_documents'::regclass, 'project_documents_history');
---> statement-breakpoint
-CREATE TABLE "reclamation_projects" (
-	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"norbital_created_at" timestamp with time zone DEFAULT now(),
-	"norbital_updated_at" timestamp with time zone DEFAULT now(),
-	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
-	"norbital_row_version" integer DEFAULT 1,
-	"norbital_approval_id" uuid,
-	"project_name" text NOT NULL,
-	"project_code" text,
-	"client" text,
-	"consultant" text,
-	"status" text,
-	"location" text,
-	"datum" text,
 	"currency" text,
-	"floor_plan_document" uuid,
-	"bathymetry_document" uuid,
-	"cross_section_document" uuid,
-	"interpolation" text,
-	"integration_cell_m" numeric,
-	"render_cell_m" numeric,
-	"stitch_overrides" text,
-	"notes" text
+	"tax_inclusive" boolean NOT NULL,
+	"valid_until" date,
+	"payment_terms" text,
+	"shipping_terms" text,
+	"place_of_loading" text,
+	"place_of_delivery" text,
+	"packaging" text,
+	"shipping_mark" text,
+	"time_of_shipment" text,
+	"other_terms" text,
+	"net" numeric,
+	"tax" numeric,
+	"gross" numeric,
+	"owner_id" uuid NOT NULL,
+	"description" text,
+	"revision_of" uuid,
+	"revision_number" numeric,
+	"confirmed_at" timestamp with time zone,
+	"credit_acknowledged" boolean,
+	"cancelled_at" timestamp with time zone,
+	"cancel_reason" text
 );
 --> statement-breakpoint
-SELECT _norbital_create_history_table('reclamation_projects'::regclass, 'reclamation_projects_history');
+SELECT _norbital_create_history_table('quotes'::regclass, 'quotes_history');
 --> statement-breakpoint
-CREATE TABLE "site_reconstructions" (
+CREATE TABLE "sales_invoice_lines" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"norbital_created_at" timestamp with time zone DEFAULT now(),
 	"norbital_updated_at" timestamp with time zone DEFAULT now(),
 	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
 	"norbital_row_version" integer DEFAULT 1,
 	"norbital_approval_id" uuid,
-	"project_id" uuid NOT NULL,
-	"revision" numeric NOT NULL,
-	"status" text NOT NULL,
-	"stitched_at" timestamp with time zone,
-	"engine_version" text,
-	"failure_reason" text,
-	"platform_area_m2" numeric,
-	"placed_volume_m3" numeric,
-	"mean_fill_depth_m" numeric,
-	"excavation_m3" numeric,
-	"integration_cell_m" numeric,
-	"assumption_count" numeric,
-	"warning_count" numeric,
-	"model_json" text,
-	"metrics_json" text,
-	"quantities_json" text,
-	"report_json" text
+	"sales_invoice_id" uuid NOT NULL,
+	"quote_line_id" uuid NOT NULL,
+	"product_code" text NOT NULL,
+	"product_name" text NOT NULL,
+	"product_unit" text,
+	"quantity" numeric NOT NULL,
+	"unit_price" numeric NOT NULL,
+	"tax_rate" numeric,
+	"net" numeric,
+	"tax" numeric,
+	"line_total" numeric
 );
 --> statement-breakpoint
-SELECT _norbital_create_history_table('site_reconstructions'::regclass, 'site_reconstructions_history');
+SELECT _norbital_create_history_table('sales_invoice_lines'::regclass, 'sales_invoice_lines_history');
+--> statement-breakpoint
+CREATE TABLE "sales_invoices" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"doc_no" text NOT NULL,
+	"quote_id" uuid NOT NULL,
+	"account_id" uuid NOT NULL,
+	"status" text,
+	"currency" text,
+	"tax_inclusive" boolean NOT NULL,
+	"net" numeric,
+	"tax" numeric,
+	"gross" numeric,
+	"owner_id" uuid NOT NULL,
+	"issued_at" timestamp with time zone,
+	"cancelled_at" timestamp with time zone,
+	"cancel_reason" text
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('sales_invoices'::regclass, 'sales_invoices_history');
+--> statement-breakpoint
+CREATE TABLE "settlements" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"regarding_type" text,
+	"regarding_id" uuid NOT NULL,
+	"amount" numeric NOT NULL,
+	"currency" text,
+	"settled_on" date,
+	"reference" text,
+	"owner_id" uuid NOT NULL
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('settlements'::regclass, 'settlements_history');
+--> statement-breakpoint
+CREATE TABLE "suppliers" (
+	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"norbital_created_at" timestamp with time zone DEFAULT now(),
+	"norbital_updated_at" timestamp with time zone DEFAULT now(),
+	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
+	"norbital_row_version" integer DEFAULT 1,
+	"norbital_approval_id" uuid,
+	"external_code" text NOT NULL,
+	"code" text NOT NULL,
+	"name" text NOT NULL,
+	"contact" text,
+	"category" text,
+	"currency" text,
+	"payment_terms_days" integer,
+	"phone" text,
+	"email" text,
+	"address" text,
+	"active" boolean NOT NULL
+);
+--> statement-breakpoint
+SELECT _norbital_create_history_table('suppliers'::regclass, 'suppliers_history');
 --> statement-breakpoint
 CREATE TABLE "approval_request" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -210,38 +463,11 @@ CREATE TABLE "channel_inbound_message" (
 	"sender_display_name" text,
 	"status" text DEFAULT 'received' NOT NULL,
 	"error" text,
-	"chat_message_id" uuid,
+	"session_message_id" uuid,
 	"answered_at" timestamp with time zone
 );
 --> statement-breakpoint
 SELECT _norbital_create_history_table('channel_inbound_message'::regclass, 'channel_inbound_message_history');
---> statement-breakpoint
-CREATE TABLE "chat_message" (
-	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"norbital_created_at" timestamp with time zone DEFAULT now(),
-	"norbital_updated_at" timestamp with time zone DEFAULT now(),
-	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
-	"norbital_row_version" integer DEFAULT 1,
-	"norbital_approval_id" uuid,
-	"chat_id" uuid NOT NULL,
-	"turn_id" uuid,
-	"role" text NOT NULL,
-	"seq" integer NOT NULL,
-	"parts" jsonb,
-	"model" text,
-	"usage" jsonb,
-	"plan_mode" boolean DEFAULT false NOT NULL,
-	"kind" text DEFAULT 'normal' NOT NULL,
-	"status" text DEFAULT 'complete' NOT NULL,
-	"queue_status" text DEFAULT 'live' NOT NULL,
-	"release_mode" text,
-	"author_user_id" uuid,
-	"author_display_name" text,
-	"source_provider" text,
-	"source_conversation_id" text,
-	"source_message_id" text,
-	"source_deleted_at" timestamp with time zone
-);
 --> statement-breakpoint
 CREATE TABLE "chat_session" (
 	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -259,30 +485,12 @@ CREATE TABLE "chat_session" (
 	"agent_profile_id" uuid,
 	"channel_config_id" uuid,
 	"assigned_channel_id" uuid,
+	"messages" jsonb DEFAULT '[]' NOT NULL,
+	"turns" jsonb DEFAULT '[]' NOT NULL,
 	"usage_cost_usd" double precision DEFAULT 0 NOT NULL,
 	"usage_total_tokens" integer DEFAULT 0 NOT NULL,
 	"usage_turns_counted" integer DEFAULT 0 NOT NULL,
 	"usage_turns_unreported" integer DEFAULT 0 NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE "chat_turn" (
-	"norbital_id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"norbital_created_at" timestamp with time zone DEFAULT now(),
-	"norbital_updated_at" timestamp with time zone DEFAULT now(),
-	"norbital_sys_period" tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)') NOT NULL,
-	"norbital_row_version" integer DEFAULT 1,
-	"norbital_approval_id" uuid,
-	"chat_id" uuid NOT NULL,
-	"prompt_message_id" uuid,
-	"status" text DEFAULT 'running' NOT NULL,
-	"model" text NOT NULL,
-	"parent_turn_id" uuid,
-	"subagent_id" text,
-	"error" text,
-	"started_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"heartbeat_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"ended_at" timestamp with time zone,
-	"usage_settled_at" timestamp with time zone
 );
 --> statement-breakpoint
 CREATE TABLE "document_asset" (
@@ -521,27 +729,131 @@ CREATE TABLE "user" (
 --> statement-breakpoint
 SELECT _norbital_create_history_table('user'::regclass, 'user_history');
 --> statement-breakpoint
-CREATE INDEX "cost_estimates_project_id_index" ON "cost_estimates" ("project_id");
+CREATE UNIQUE INDEX "accounts_external_code_index" ON "accounts" ("external_code");
 --> statement-breakpoint
-CREATE INDEX "cost_estimates_estimate_name_search_trgm_idx" ON "cost_estimates" USING gin ("estimate_name" gin_trgm_ops);
+CREATE INDEX "accounts_name_search_trgm_idx" ON "accounts" USING gin ("name" gin_trgm_ops);
 --> statement-breakpoint
-CREATE UNIQUE INDEX "cost_rates_substrate_index" ON "cost_rates" ("substrate");
+CREATE INDEX "activities_regarding_type_regarding_id_index" ON "activities" ("regarding_type","regarding_id");
 --> statement-breakpoint
-CREATE INDEX "cost_rates_label_search_trgm_idx" ON "cost_rates" USING gin ("label" gin_trgm_ops);
+CREATE INDEX "activities_owner_id_index" ON "activities" ("owner_id");
 --> statement-breakpoint
-CREATE INDEX "project_documents_project_id_index" ON "project_documents" ("project_id");
+CREATE INDEX "activities_due_date_index" ON "activities" ("due_date");
 --> statement-breakpoint
-CREATE INDEX "project_documents_category_index" ON "project_documents" ("category");
+CREATE INDEX "activities_subject_search_trgm_idx" ON "activities" USING gin ("subject" gin_trgm_ops);
 --> statement-breakpoint
-CREATE INDEX "project_documents_title_search_trgm_idx" ON "project_documents" USING gin ("title" gin_trgm_ops);
+CREATE INDEX "contacts_account_id_index" ON "contacts" ("account_id");
 --> statement-breakpoint
-CREATE UNIQUE INDEX "reclamation_projects_project_code_index" ON "reclamation_projects" ("project_code");
+CREATE INDEX "contacts_first_name_search_trgm_idx" ON "contacts" USING gin ("first_name" gin_trgm_ops);
 --> statement-breakpoint
-CREATE INDEX "reclamation_projects_project_name_search_trgm_idx" ON "reclamation_projects" USING gin ("project_name" gin_trgm_ops);
+CREATE INDEX "contacts_last_name_search_trgm_idx" ON "contacts" USING gin ("last_name" gin_trgm_ops);
 --> statement-breakpoint
-CREATE INDEX "site_reconstructions_project_id_index" ON "site_reconstructions" ("project_id");
+CREATE INDEX "contract_signings_quote_id_index" ON "contract_signings" ("quote_id");
 --> statement-breakpoint
-CREATE UNIQUE INDEX "site_reconstructions_project_id_revision_index" ON "site_reconstructions" ("project_id","revision");
+CREATE INDEX "contract_signings_status_index" ON "contract_signings" ("status");
+--> statement-breakpoint
+CREATE INDEX "contract_signings_binding_hash_search_trgm_idx" ON "contract_signings" USING gin ("binding_hash" gin_trgm_ops);
+--> statement-breakpoint
+CREATE INDEX "goods_receipt_lines_goods_receipt_id_index" ON "goods_receipt_lines" ("goods_receipt_id");
+--> statement-breakpoint
+CREATE INDEX "goods_receipt_lines_purchase_order_line_id_index" ON "goods_receipt_lines" ("purchase_order_line_id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "goods_receipts_doc_no_index" ON "goods_receipts" ("doc_no");
+--> statement-breakpoint
+CREATE INDEX "goods_receipts_purchase_order_id_index" ON "goods_receipts" ("purchase_order_id");
+--> statement-breakpoint
+CREATE INDEX "goods_receipts_owner_id_index" ON "goods_receipts" ("owner_id");
+--> statement-breakpoint
+CREATE INDEX "goods_receipts_doc_no_search_trgm_idx" ON "goods_receipts" USING gin ("doc_no" gin_trgm_ops);
+--> statement-breakpoint
+CREATE UNIQUE INDEX "products_external_code_index" ON "products" ("external_code");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "products_code_index" ON "products" ("code");
+--> statement-breakpoint
+CREATE INDEX "products_name_search_trgm_idx" ON "products" USING gin ("name" gin_trgm_ops);
+--> statement-breakpoint
+CREATE INDEX "purchase_invoice_lines_purchase_invoice_id_index" ON "purchase_invoice_lines" ("purchase_invoice_id");
+--> statement-breakpoint
+CREATE INDEX "purchase_invoice_lines_purchase_order_line_id_index" ON "purchase_invoice_lines" ("purchase_order_line_id");
+--> statement-breakpoint
+CREATE INDEX "purchase_invoice_lines_product_name_search_trgm_idx" ON "purchase_invoice_lines" USING gin ("product_name" gin_trgm_ops);
+--> statement-breakpoint
+CREATE UNIQUE INDEX "purchase_invoices_doc_no_index" ON "purchase_invoices" ("doc_no");
+--> statement-breakpoint
+CREATE INDEX "purchase_invoices_purchase_order_id_index" ON "purchase_invoices" ("purchase_order_id");
+--> statement-breakpoint
+CREATE INDEX "purchase_invoices_supplier_id_index" ON "purchase_invoices" ("supplier_id");
+--> statement-breakpoint
+CREATE INDEX "purchase_invoices_status_index" ON "purchase_invoices" ("status");
+--> statement-breakpoint
+CREATE INDEX "purchase_invoices_doc_no_search_trgm_idx" ON "purchase_invoices" USING gin ("doc_no" gin_trgm_ops);
+--> statement-breakpoint
+CREATE INDEX "purchase_order_lines_purchase_order_id_index" ON "purchase_order_lines" ("purchase_order_id");
+--> statement-breakpoint
+CREATE INDEX "purchase_order_lines_product_id_index" ON "purchase_order_lines" ("product_id");
+--> statement-breakpoint
+CREATE INDEX "purchase_order_lines_product_name_search_trgm_idx" ON "purchase_order_lines" USING gin ("product_name" gin_trgm_ops);
+--> statement-breakpoint
+CREATE UNIQUE INDEX "purchase_orders_doc_no_index" ON "purchase_orders" ("doc_no");
+--> statement-breakpoint
+CREATE INDEX "purchase_orders_supplier_id_index" ON "purchase_orders" ("supplier_id");
+--> statement-breakpoint
+CREATE INDEX "purchase_orders_status_index" ON "purchase_orders" ("status");
+--> statement-breakpoint
+CREATE INDEX "purchase_orders_owner_id_index" ON "purchase_orders" ("owner_id");
+--> statement-breakpoint
+CREATE INDEX "purchase_orders_expected_date_index" ON "purchase_orders" ("expected_date");
+--> statement-breakpoint
+CREATE INDEX "purchase_orders_doc_no_search_trgm_idx" ON "purchase_orders" USING gin ("doc_no" gin_trgm_ops);
+--> statement-breakpoint
+CREATE INDEX "quote_lines_quote_id_index" ON "quote_lines" ("quote_id");
+--> statement-breakpoint
+CREATE INDEX "quote_lines_product_id_index" ON "quote_lines" ("product_id");
+--> statement-breakpoint
+CREATE INDEX "quote_lines_product_name_search_trgm_idx" ON "quote_lines" USING gin ("product_name" gin_trgm_ops);
+--> statement-breakpoint
+CREATE UNIQUE INDEX "quotes_doc_no_index" ON "quotes" ("doc_no");
+--> statement-breakpoint
+CREATE INDEX "quotes_account_id_index" ON "quotes" ("account_id");
+--> statement-breakpoint
+CREATE INDEX "quotes_owner_id_index" ON "quotes" ("owner_id");
+--> statement-breakpoint
+CREATE INDEX "quotes_status_index" ON "quotes" ("status");
+--> statement-breakpoint
+CREATE INDEX "quotes_revision_of_index" ON "quotes" ("revision_of");
+--> statement-breakpoint
+CREATE INDEX "quotes_doc_no_search_trgm_idx" ON "quotes" USING gin ("doc_no" gin_trgm_ops);
+--> statement-breakpoint
+CREATE INDEX "sales_invoice_lines_sales_invoice_id_index" ON "sales_invoice_lines" ("sales_invoice_id");
+--> statement-breakpoint
+CREATE INDEX "sales_invoice_lines_quote_line_id_index" ON "sales_invoice_lines" ("quote_line_id");
+--> statement-breakpoint
+CREATE INDEX "sales_invoice_lines_product_name_search_trgm_idx" ON "sales_invoice_lines" USING gin ("product_name" gin_trgm_ops);
+--> statement-breakpoint
+CREATE UNIQUE INDEX "sales_invoices_doc_no_index" ON "sales_invoices" ("doc_no");
+--> statement-breakpoint
+CREATE INDEX "sales_invoices_quote_id_index" ON "sales_invoices" ("quote_id");
+--> statement-breakpoint
+CREATE INDEX "sales_invoices_account_id_index" ON "sales_invoices" ("account_id");
+--> statement-breakpoint
+CREATE INDEX "sales_invoices_status_index" ON "sales_invoices" ("status");
+--> statement-breakpoint
+CREATE INDEX "sales_invoices_doc_no_search_trgm_idx" ON "sales_invoices" USING gin ("doc_no" gin_trgm_ops);
+--> statement-breakpoint
+CREATE INDEX "settlements_regarding_id_index" ON "settlements" ("regarding_id");
+--> statement-breakpoint
+CREATE INDEX "settlements_regarding_type_index" ON "settlements" ("regarding_type");
+--> statement-breakpoint
+CREATE INDEX "settlements_reference_search_trgm_idx" ON "settlements" USING gin ("reference" gin_trgm_ops);
+--> statement-breakpoint
+CREATE UNIQUE INDEX "suppliers_external_code_index" ON "suppliers" ("external_code");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "suppliers_code_index" ON "suppliers" ("code");
+--> statement-breakpoint
+CREATE INDEX "suppliers_name_index" ON "suppliers" ("name");
+--> statement-breakpoint
+CREATE INDEX "suppliers_active_index" ON "suppliers" ("active");
+--> statement-breakpoint
+CREATE INDEX "suppliers_name_search_trgm_idx" ON "suppliers" USING gin ("name" gin_trgm_ops);
 --> statement-breakpoint
 CREATE INDEX "approval_request_label_search_trgm_idx" ON "approval_request" USING gin ("label" gin_trgm_ops);
 --> statement-breakpoint
@@ -583,26 +895,6 @@ CREATE INDEX "channel_inbound_message_status_search_trgm_idx" ON "channel_inboun
 --> statement-breakpoint
 CREATE INDEX "channel_inbound_message_error_search_trgm_idx" ON "channel_inbound_message" USING gin ("error" gin_trgm_ops);
 --> statement-breakpoint
-CREATE INDEX "chat_message_role_search_trgm_idx" ON "chat_message" USING gin ("role" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_model_search_trgm_idx" ON "chat_message" USING gin ("model" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_kind_search_trgm_idx" ON "chat_message" USING gin ("kind" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_status_search_trgm_idx" ON "chat_message" USING gin ("status" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_queue_status_search_trgm_idx" ON "chat_message" USING gin ("queue_status" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_release_mode_search_trgm_idx" ON "chat_message" USING gin ("release_mode" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_author_display_name_search_trgm_idx" ON "chat_message" USING gin ("author_display_name" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_source_provider_search_trgm_idx" ON "chat_message" USING gin ("source_provider" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_source_conversation_id_search_trgm_idx" ON "chat_message" USING gin ("source_conversation_id" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_message_source_message_id_search_trgm_idx" ON "chat_message" USING gin ("source_message_id" gin_trgm_ops);
---> statement-breakpoint
 CREATE INDEX "chat_session_title_search_trgm_idx" ON "chat_session" USING gin ("title" gin_trgm_ops);
 --> statement-breakpoint
 CREATE INDEX "chat_session_platform_search_trgm_idx" ON "chat_session" USING gin ("platform" gin_trgm_ops);
@@ -610,14 +902,6 @@ CREATE INDEX "chat_session_platform_search_trgm_idx" ON "chat_session" USING gin
 CREATE INDEX "chat_session_visibility_search_trgm_idx" ON "chat_session" USING gin ("visibility" gin_trgm_ops);
 --> statement-breakpoint
 CREATE INDEX "chat_session_external_thread_id_search_trgm_idx" ON "chat_session" USING gin ("external_thread_id" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_turn_status_search_trgm_idx" ON "chat_turn" USING gin ("status" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_turn_model_search_trgm_idx" ON "chat_turn" USING gin ("model" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_turn_subagent_id_search_trgm_idx" ON "chat_turn" USING gin ("subagent_id" gin_trgm_ops);
---> statement-breakpoint
-CREATE INDEX "chat_turn_error_search_trgm_idx" ON "chat_turn" USING gin ("error" gin_trgm_ops);
 --> statement-breakpoint
 CREATE INDEX "document_asset_file_name_search_trgm_idx" ON "document_asset" USING gin ("file_name" gin_trgm_ops);
 --> statement-breakpoint
@@ -725,13 +1009,63 @@ CREATE INDEX "user_role_search_trgm_idx" ON "user" USING gin ("role" gin_trgm_op
 --> statement-breakpoint
 CREATE INDEX "user_kind_search_trgm_idx" ON "user" USING gin ("kind" gin_trgm_ops);
 --> statement-breakpoint
-ALTER TABLE "cost_estimates" ADD CONSTRAINT "cost_estimates_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");
+ALTER TABLE "activities" ADD CONSTRAINT "activities_owner_id_user_fk" FOREIGN KEY ("owner_id") REFERENCES "user"("norbital_id");
 --> statement-breakpoint
-ALTER TABLE "cost_estimates" ADD CONSTRAINT "cost_estimates_reconstruction_id_site_reconstructions_fk" FOREIGN KEY ("reconstruction_id") REFERENCES "site_reconstructions"("norbital_id");
+ALTER TABLE "contacts" ADD CONSTRAINT "contacts_account_id_accounts_fk" FOREIGN KEY ("account_id") REFERENCES "accounts"("norbital_id");
 --> statement-breakpoint
-ALTER TABLE "project_documents" ADD CONSTRAINT "project_documents_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");
+ALTER TABLE "contract_signings" ADD CONSTRAINT "contract_signings_quote_id_quotes_fk" FOREIGN KEY ("quote_id") REFERENCES "quotes"("norbital_id");
 --> statement-breakpoint
-ALTER TABLE "site_reconstructions" ADD CONSTRAINT "site_reconstructions_project_id_reclamation_projects_fk" FOREIGN KEY ("project_id") REFERENCES "reclamation_projects"("norbital_id");
+ALTER TABLE "contract_signings" ADD CONSTRAINT "contract_signings_owner_id_user_fk" FOREIGN KEY ("owner_id") REFERENCES "user"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "goods_receipt_lines" ADD CONSTRAINT "goods_receipt_lines_goods_receipt_id_goods_receipts_fk" FOREIGN KEY ("goods_receipt_id") REFERENCES "goods_receipts"("norbital_id") ON DELETE CASCADE;
+--> statement-breakpoint
+ALTER TABLE "goods_receipt_lines" ADD CONSTRAINT "goods_receipt_lines_purchase_order_line_id_purchase_order_lines_fk" FOREIGN KEY ("purchase_order_line_id") REFERENCES "purchase_order_lines"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "goods_receipts" ADD CONSTRAINT "goods_receipts_purchase_order_id_purchase_orders_fk" FOREIGN KEY ("purchase_order_id") REFERENCES "purchase_orders"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "goods_receipts" ADD CONSTRAINT "goods_receipts_owner_id_user_fk" FOREIGN KEY ("owner_id") REFERENCES "user"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "products" ADD CONSTRAINT "products_main_supplier_id_suppliers_fk" FOREIGN KEY ("main_supplier_id") REFERENCES "suppliers"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "purchase_invoice_lines" ADD CONSTRAINT "purchase_invoice_lines_purchase_invoice_id_purchase_invoices_fk" FOREIGN KEY ("purchase_invoice_id") REFERENCES "purchase_invoices"("norbital_id") ON DELETE CASCADE;
+--> statement-breakpoint
+ALTER TABLE "purchase_invoice_lines" ADD CONSTRAINT "purchase_invoice_lines_purchase_order_line_id_purchase_order_lines_fk" FOREIGN KEY ("purchase_order_line_id") REFERENCES "purchase_order_lines"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "purchase_invoices" ADD CONSTRAINT "purchase_invoices_purchase_order_id_purchase_orders_fk" FOREIGN KEY ("purchase_order_id") REFERENCES "purchase_orders"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "purchase_invoices" ADD CONSTRAINT "purchase_invoices_supplier_id_suppliers_fk" FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "purchase_invoices" ADD CONSTRAINT "purchase_invoices_owner_id_user_fk" FOREIGN KEY ("owner_id") REFERENCES "user"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "purchase_order_lines" ADD CONSTRAINT "purchase_order_lines_purchase_order_id_purchase_orders_fk" FOREIGN KEY ("purchase_order_id") REFERENCES "purchase_orders"("norbital_id") ON DELETE CASCADE;
+--> statement-breakpoint
+ALTER TABLE "purchase_order_lines" ADD CONSTRAINT "purchase_order_lines_product_id_products_fk" FOREIGN KEY ("product_id") REFERENCES "products"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "purchase_orders" ADD CONSTRAINT "purchase_orders_supplier_id_suppliers_fk" FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "purchase_orders" ADD CONSTRAINT "purchase_orders_owner_id_user_fk" FOREIGN KEY ("owner_id") REFERENCES "user"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "quote_lines" ADD CONSTRAINT "quote_lines_quote_id_quotes_fk" FOREIGN KEY ("quote_id") REFERENCES "quotes"("norbital_id") ON DELETE CASCADE;
+--> statement-breakpoint
+ALTER TABLE "quote_lines" ADD CONSTRAINT "quote_lines_product_id_products_fk" FOREIGN KEY ("product_id") REFERENCES "products"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "quotes" ADD CONSTRAINT "quotes_account_id_accounts_fk" FOREIGN KEY ("account_id") REFERENCES "accounts"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "quotes" ADD CONSTRAINT "quotes_contact_id_contacts_fk" FOREIGN KEY ("contact_id") REFERENCES "contacts"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "quotes" ADD CONSTRAINT "quotes_owner_id_user_fk" FOREIGN KEY ("owner_id") REFERENCES "user"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "quotes" ADD CONSTRAINT "quotes_revision_of_quotes_fk" FOREIGN KEY ("revision_of") REFERENCES "quotes"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "sales_invoice_lines" ADD CONSTRAINT "sales_invoice_lines_sales_invoice_id_sales_invoices_fk" FOREIGN KEY ("sales_invoice_id") REFERENCES "sales_invoices"("norbital_id") ON DELETE CASCADE;
+--> statement-breakpoint
+ALTER TABLE "sales_invoice_lines" ADD CONSTRAINT "sales_invoice_lines_quote_line_id_quote_lines_fk" FOREIGN KEY ("quote_line_id") REFERENCES "quote_lines"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "sales_invoices" ADD CONSTRAINT "sales_invoices_quote_id_quotes_fk" FOREIGN KEY ("quote_id") REFERENCES "quotes"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "sales_invoices" ADD CONSTRAINT "sales_invoices_account_id_accounts_fk" FOREIGN KEY ("account_id") REFERENCES "accounts"("norbital_id");
+--> statement-breakpoint
+ALTER TABLE "sales_invoices" ADD CONSTRAINT "sales_invoices_owner_id_user_fk" FOREIGN KEY ("owner_id") REFERENCES "user"("norbital_id");
 --> statement-breakpoint
 ALTER TABLE "audit_event" ADD CONSTRAINT "audit_event_actor_id_user_norbital_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "user"("norbital_id");
 --> statement-breakpoint
@@ -741,19 +1075,9 @@ ALTER TABLE "channel_conversation" ADD CONSTRAINT "channel_conversation_chat_id_
 --> statement-breakpoint
 ALTER TABLE "channel_inbound_message" ADD CONSTRAINT "channel_inbound_message_X3p24605t0lh_fkey" FOREIGN KEY ("conversation_id") REFERENCES "channel_conversation"("norbital_id") ON DELETE CASCADE;
 --> statement-breakpoint
-ALTER TABLE "channel_inbound_message" ADD CONSTRAINT "channel_inbound_message_Oyde72058Ltn_fkey" FOREIGN KEY ("chat_message_id") REFERENCES "chat_message"("norbital_id") ON DELETE SET NULL;
---> statement-breakpoint
-ALTER TABLE "chat_message" ADD CONSTRAINT "chat_message_chat_id_chat_session_norbital_id_fkey" FOREIGN KEY ("chat_id") REFERENCES "chat_session"("norbital_id") ON DELETE CASCADE;
---> statement-breakpoint
-ALTER TABLE "chat_message" ADD CONSTRAINT "chat_message_turn_id_chat_turn_norbital_id_fkey" FOREIGN KEY ("turn_id") REFERENCES "chat_turn"("norbital_id") ON DELETE CASCADE;
---> statement-breakpoint
-ALTER TABLE "chat_message" ADD CONSTRAINT "chat_message_author_user_id_user_norbital_id_fkey" FOREIGN KEY ("author_user_id") REFERENCES "user"("norbital_id");
---> statement-breakpoint
 ALTER TABLE "chat_session" ADD CONSTRAINT "chat_session_user_id_user_norbital_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("norbital_id");
 --> statement-breakpoint
 ALTER TABLE "chat_session" ADD CONSTRAINT "chat_session_automation_run_id_automation_run_norbital_id_fkey" FOREIGN KEY ("automation_run_id") REFERENCES "automation_run"("norbital_id");
---> statement-breakpoint
-ALTER TABLE "chat_turn" ADD CONSTRAINT "chat_turn_chat_id_chat_session_norbital_id_fkey" FOREIGN KEY ("chat_id") REFERENCES "chat_session"("norbital_id") ON DELETE CASCADE;
 --> statement-breakpoint
 ALTER TABLE "document_asset" ADD CONSTRAINT "document_asset_owner_user_id_user_norbital_id_fkey" FOREIGN KEY ("owner_user_id") REFERENCES "user"("norbital_id");
 --> statement-breakpoint

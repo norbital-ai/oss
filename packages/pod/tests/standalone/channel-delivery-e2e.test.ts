@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
@@ -332,6 +332,9 @@ async function writeWorkspace(root: string): Promise<void> {
 		recursive: true,
 		filter: (source) => !source.includes(`${path.sep}.norbital${path.sep}build`)
 	});
+	const packageScope = path.join(root, 'node_modules', '@norbital-ai');
+	await rm(packageScope, { recursive: true, force: true });
+	await symlink(path.join(REPO_ROOT, 'node_modules', '@norbital-ai'), packageScope, 'dir');
 	await mkdir(path.join(root, 'src', 'tools'), { recursive: true });
 	await writeFile(path.join(root, 'src', 'tools', '+list_quotes.tool.ts'), WORKSPACE_TOOL_SOURCE);
 	await writeFile(path.join(root, 'src', '+agent.ts'), AGENT_SOURCE);
@@ -528,22 +531,24 @@ describe('Pod standalone channel delivery — E2E', () => {
 			status: string;
 			external_message_id: string;
 			sender_display_name: string | null;
-			chat_message_id: string | null;
-		}>(`SELECT status, external_message_id, sender_display_name, chat_message_id
+			session_message_id: string | null;
+		}>(`SELECT status, external_message_id, sender_display_name, session_message_id
 		      FROM channel_inbound_message`);
 		expect(receipts).toHaveLength(1);
 		expect(receipts[0]?.status).toBe('answered');
 		expect(receipts[0]?.sender_display_name).toBe('Dana Prospect');
-		expect(receipts[0]?.chat_message_id).not.toBeNull();
+		expect(receipts[0]?.session_message_id).not.toBeNull();
 
-		const messages = await queryTenant<{
-			role: string;
-			seq: number;
-			source_message_id: string | null;
-		}>(
-			`SELECT role, seq, source_message_id FROM chat_message WHERE chat_id = $1::uuid ORDER BY seq`,
-			[conversations[0]?.chat_id]
-		);
+		const sessions = await queryTenant<{
+			messages: readonly {
+				role: string;
+				seq: number;
+				source_message_id: string | null;
+			}[];
+		}>(`SELECT messages FROM chat_session WHERE norbital_id = $1::uuid`, [
+			conversations[0]?.chat_id
+		]);
+		const messages = sessions[0]?.messages ?? [];
 		// user → assistant tool call → three tool results → assistant answer.
 		expect(messages.map((message) => message.role)).toEqual([
 			'user',
@@ -578,7 +583,9 @@ describe('Pod standalone channel delivery — E2E', () => {
 		expect(conversations).toHaveLength(1);
 
 		const counted = await queryTenant<{ count: string }>(
-			`SELECT count(*)::text AS count FROM chat_message WHERE chat_id = $1::uuid`,
+			`SELECT jsonb_array_length(messages)::text AS count
+			   FROM chat_session
+			  WHERE norbital_id = $1::uuid`,
 			[conversations[0]?.chat_id]
 		);
 		expect(Number(counted[0]?.count)).toBeGreaterThan(5);

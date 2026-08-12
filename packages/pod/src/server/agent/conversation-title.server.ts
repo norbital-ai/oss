@@ -1,8 +1,8 @@
 import type { HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { z } from 'zod';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { updateRecord } from '$lib/server/collection/collection_ops.server.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
+import { mutateChatSession, readChatSession } from './chat-session.server.js';
 
 /** Visible only until the first-message title job succeeds. */
 export const PENDING_CONVERSATION_TITLE = 'Workspace agent';
@@ -14,9 +14,23 @@ const generatedTitleSchema = z.object({
 
 type PendingConversation = {
 	readonly norbital_id: string;
-	readonly norbital_row_version: number;
-	readonly first_message: string;
+	readonly messages: readonly unknown[];
 };
+
+function firstUserMessage(messages: readonly unknown[]): string | null {
+	for (const candidate of messages) {
+		if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+		const message = candidate as Record<string, unknown>;
+		if (message.role !== 'user' || message.kind === 'summary') continue;
+		const parts = message.parts;
+		if (!Array.isArray(parts)) continue;
+		const stored = parts[0];
+		if (!stored || typeof stored !== 'object' || Array.isArray(stored)) continue;
+		const content = (stored as Record<string, unknown>).content;
+		if (typeof content === 'string' && content.trim()) return content;
+	}
+	return null;
+}
 
 function compactTitle(value: string): string {
 	return value
@@ -62,52 +76,48 @@ export async function generateConversationTitle(
 		: compact;
 }
 
+/** Generate and install one title only while the session still carries the pending marker. */
+export async function runPendingConversationTitle(sessionId: string): Promise<boolean> {
+	const session = await readChatSession(sessionId);
+	if (session.title !== PENDING_CONVERSATION_TITLE) return false;
+	const firstMessage = firstUserMessage(session.messages);
+	if (!firstMessage) return false;
+	const title = await generateConversationTitle(requireRuntimeFacility('ai'), firstMessage);
+	return mutateChatSession(sessionId, (current) => {
+		if (current.title !== PENDING_CONVERSATION_TITLE) return false;
+		current.title = title;
+		return true;
+	});
+}
+
 /**
  * Drain first-message title work from durable tenant state.
  *
  * The placeholder is the pending marker, so no second queue table or status concept is needed. A
- * failed inference leaves it in place for the next pg-boss tick; a successful optimistic update
- * emits the ordinary sync-outbox mutation and every open client receives the new title. The row
- * version prevents this background write from overwriting a title changed by a person meanwhile.
+ * failed inference leaves it in place for the next pg-boss tick; a successful aggregate mutation
+ * emits the ordinary sync-outbox event and every open client receives the new title. The mutation
+ * rechecks the pending marker under the session row lock, so it cannot overwrite a newer title.
  */
 export async function runPendingConversationTitles(limit = 10): Promise<number> {
 	const ctx = getWorkspace({ provision: true });
 	const pending = await ctx.tenantDb.query<PendingConversation>({
 		text: `SELECT session.norbital_id,
-		              session.norbital_row_version,
-		              first_message.parts #>> '{0,content}' AS first_message
+		              session.messages
 		         FROM chat_session AS session
-		         JOIN LATERAL (
-		                SELECT message.parts
-		                  FROM chat_message AS message
-		                 WHERE message.chat_id = session.norbital_id
-		                   AND message.role = 'user'
-		                   AND message.kind IS DISTINCT FROM 'summary'
-		                 ORDER BY message.seq
-		                 LIMIT 1
-		              ) AS first_message ON TRUE
 		        WHERE session.title = $1
 		          AND session.platform IS NULL
 		          AND session.visibility = 'personal'
+		          AND jsonb_array_length(session.messages) > 0
 		        ORDER BY session.norbital_created_at
 		        LIMIT $2`,
 		values: [PENDING_CONVERSATION_TITLE, Math.min(Math.max(limit, 1), 50)]
 	});
 	if (pending.rows.length === 0) return 0;
 
-	const ai = requireRuntimeFacility('ai');
 	let titled = 0;
 	for (const conversation of pending.rows) {
 		try {
-			const title = await generateConversationTitle(ai, conversation.first_message);
-			await updateRecord(
-				ctx,
-				'chat_session',
-				conversation.norbital_id,
-				{ title },
-				{ isElevated: true, expectedVersion: conversation.norbital_row_version }
-			);
-			titled += 1;
+			if (await runPendingConversationTitle(conversation.norbital_id)) titled += 1;
 		} catch (error) {
 			console.error('[agent-conversation-title]', {
 				conversationId: conversation.norbital_id,

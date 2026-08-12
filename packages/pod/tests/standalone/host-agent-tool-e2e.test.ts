@@ -256,6 +256,10 @@ type TranscriptRow = {
 	}> | null;
 };
 
+type TranscriptAggregate = {
+	readonly messages: readonly TranscriptRow[];
+};
+
 describe('Pod standalone host agent tools — E2E', () => {
 	let pg: PgHarness;
 	let root: string;
@@ -319,16 +323,15 @@ describe('Pod standalone host agent tools — E2E', () => {
 		const deadline = Date.now() + 90_000;
 		let transcript: readonly TranscriptRow[] = [];
 		for (;;) {
-			transcript = await queryTenant<TranscriptRow>(
-				`SELECT m.seq, m.role, m.parts
-				   FROM chat_message m
-				   JOIN chat_session s ON s.norbital_id = m.chat_id
+			const sessions = await queryTenant<TranscriptAggregate>(
+				`SELECT s.messages
+				   FROM chat_session s
 				   JOIN automation_run r ON r.norbital_id = s.automation_run_id
 				  WHERE r.automation_name = $1
-				  ORDER BY m.seq
-				  LIMIT 5`,
+				  LIMIT 1`,
 				[AUTOMATION]
 			);
+			transcript = sessions[0]?.messages ?? [];
 			if (transcript.length >= 5) break;
 			if (Date.now() > deadline) {
 				throw new Error(

@@ -169,9 +169,9 @@ const authenticated = Guard.init().use(requireAuthMiddleware());
  * Talk to the workspace agent.
  *
  * The interactive counterpart to an agent automation, and the same machinery: an interactive
- * conversation is a run with no automation name. It writes the same `chat_session`/`chat_message`
- * transcript, so a conversation replicates to its owner through ordinary sync rather than needing a
- * streaming channel of its own.
+ * conversation is a run with no automation name. It writes the tenant-owned `chat_session`
+ * aggregate, so title, message parts, tool state, and turn completion replicate through one ordinary
+ * sync subscription rather than a streaming channel or sibling collections.
  *
  * What the conversation may reach when the workspace authored no profile is decided by
  * `interactiveAgentSpec`, including the part that is not conservative — read its doc comment before

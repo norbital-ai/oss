@@ -464,9 +464,20 @@ const _chat_session = systemTable(
 		channel_config_id: uuid(),
 		assigned_channel_id: uuid(),
 		/**
+		 * The complete ordered transcript. Each entry carries its stable id, owning turn, role, sequence,
+		 * TanStack AI message parts, delivery state, provider usage, and channel provenance.
+		 *
+		 * Keeping it on the session makes the conversation one sync aggregate: a subscriber cannot see a
+		 * title without its messages, a terminal message without its turn, or a tool result without the
+		 * call it answers because separate collection events arrived in another order.
+		 */
+		messages: jsonbColumn(JsonArraySchema).notNull().default([]),
+		/** Root and delegated turn lifecycle, embedded beside the messages it governs. */
+		turns: jsonbColumn(JsonArraySchema).notNull().default([]),
+		/**
 		 * What this conversation has spent, accumulated as each turn settles.
 		 *
-		 * A counter rather than a sum over `chat_message.usage`, because a derived total falls when a
+		 * A counter rather than a sum over embedded message usage, because a derived total falls when a
 		 * message is deleted and what was spent does not. Deleting a message removes the record of a
 		 * request, never the fact that it was paid for.
 		 *
@@ -486,85 +497,10 @@ const _chat_session = systemTable(
 		 */
 		usage_turns_unreported: integer().notNull().default(0)
 	},
-	// Transcripts are high-volume and already ordered by their own sequence; a history table per
-	// message would roughly double the write cost of every agent run for a revision trail nothing
-	// reads. Same reasoning for `chat_turn` and `chat_message` below.
+	// The aggregate preserves its raw pre-compaction messages itself. A temporal copy of the complete
+	// JSON document on every streamed part would double write volume for a revision trail nothing
+	// reads, so the session remains explicitly non-temporal.
 	{ description: 'Agent conversations', record_label: 'title', history: false, system: true }
-);
-
-/**
- * One request/response cycle within a session, possibly nested for a subagent.
- *
- * `parent_turn_id` is self-referential: a subagent turn hangs off the turn that spawned it, which is
- * what lets a transcript be reassembled without a separate subagent table.
- */
-const _chat_turn = systemTable(
-	'chat_turn',
-	{
-		chat_id: uuid()
-			.references(() => _chat_session.norbital_id, { onDelete: 'cascade' })
-			.notNull(),
-		prompt_message_id: uuid(),
-		/** `running`, `succeeded`, `aborted`, or `failed`. */
-		status: text().notNull().default('running'),
-		model: text().notNull(),
-		parent_turn_id: uuid(),
-		subagent_id: text(),
-		error: text(),
-		started_at: timestamp({ withTimezone: true }).defaultNow().notNull(),
-		/** Refreshed while a turn runs, so an abandoned turn can be told from a slow one. */
-		heartbeat_at: timestamp({ withTimezone: true }).defaultNow().notNull(),
-		ended_at: timestamp({ withTimezone: true }),
-		/**
-		 * When this turn's usage was added to its session's totals.
-		 *
-		 * The idempotency key for that accumulation: the increment claims the turn by moving this from
-		 * null in the same statement, so a retried or resumed run finds it already claimed and adds
-		 * nothing. Without it a resumed run would bill its session twice for one turn.
-		 */
-		usage_settled_at: timestamp({ withTimezone: true })
-	},
-	{ description: 'Agent turns', record_label: 'model', history: false, system: true }
-);
-
-/**
- * One message in a session.
- *
- * `parts` holds the `UIMessage['parts']` array from `@tanstack/ai` verbatim — the agent transcript
- * carries the library's own message types rather than a parallel set of ours, so nothing has to be
- * translated on the way to the client.
- */
-const _chat_message = systemTable(
-	'chat_message',
-	{
-		chat_id: uuid()
-			.references(() => _chat_session.norbital_id, { onDelete: 'cascade' })
-			.notNull(),
-		turn_id: uuid().references(() => _chat_turn.norbital_id, { onDelete: 'cascade' }),
-		/** `system`, `user`, or `assistant`. */
-		role: text().notNull(),
-		seq: integer().notNull(),
-		parts: jsonbColumn(JsonArraySchema),
-		model: text(),
-		/** Provider token accounting for the message that produced it, when the provider reported any. */
-		usage: jsonbColumn(JsonObjectSchema),
-		plan_mode: boolean().default(false).notNull(),
-		/** `normal` or `summary`. */
-		kind: text().notNull().default('normal'),
-		/** `streaming`, `complete`, or `aborted`. */
-		status: text().notNull().default('complete'),
-		/** `live`, `queued`, `released`, or `removed`. */
-		queue_status: text().notNull().default('live'),
-		/** `step` or `turn`. */
-		release_mode: text(),
-		author_user_id: uuid().references(() => _user.norbital_id),
-		author_display_name: text(),
-		source_provider: text(),
-		source_conversation_id: text(),
-		source_message_id: text(),
-		source_deleted_at: timestamp({ withTimezone: true })
-	},
-	{ description: 'Agent messages', record_label: 'role', history: false, system: true }
 );
 
 /**
@@ -633,7 +569,8 @@ const _channel_inbound_message = systemTable(
 		/** `received`, `answered`, or `failed`. */
 		status: text().notNull().default('received'),
 		error: text(),
-		chat_message_id: uuid().references(() => _chat_message.norbital_id, { onDelete: 'set null' }),
+		/** Stable id of the embedded chat_session message that records this inbound delivery. */
+		session_message_id: uuid(),
 		answered_at: timestamp({ withTimezone: true })
 	},
 	{
@@ -694,8 +631,6 @@ const _host_event_outbox = systemTable(
 export const approval_request = _approval_request;
 export const requestor = _requestor;
 export const chat_session = _chat_session;
-export const chat_turn = _chat_turn;
-export const chat_message = _chat_message;
 export const channel_conversation = _channel_conversation;
 export const channel_inbound_message = _channel_inbound_message;
 export const invitation = _invitation;
@@ -750,8 +685,6 @@ export const systemTables = {
 	document_asset: { table: document_asset },
 	team_members: { table: team_members },
 	chat_session: { table: chat_session },
-	chat_turn: { table: chat_turn },
-	chat_message: { table: chat_message },
 	channel_conversation: { table: channel_conversation },
 	channel_inbound_message: { table: channel_inbound_message }
 } satisfies Record<SystemCollectionName, { table: PgTable }>;

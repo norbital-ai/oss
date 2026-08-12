@@ -63,11 +63,7 @@ describe('temporal migration projection', () => {
 			`ALTER TABLE "orders" ADD COLUMN "usage_cost_usd" double precision DEFAULT 0 NOT NULL;`
 		].join(`\n${BREAK}\n`);
 
-		const result = mirrorTemporalHistoryDdl(
-			sql,
-			new Set(['orders']),
-			new Set(['chat_session', 'chat_turn', 'chat_message'])
-		);
+		const result = mirrorTemporalHistoryDdl(sql, new Set(['orders']), new Set(['chat_session']));
 		expect(result).not.toContain('chat_session_history');
 		expect(result).toContain(
 			`ALTER TABLE "orders_history" ADD COLUMN "usage_cost_usd" double precision DEFAULT 0 NOT NULL;`
@@ -125,18 +121,18 @@ describe('orphaned temporal history relations', () => {
 			'20260101000000_auto': [
 				'CREATE TABLE "chat_session" ("norbital_id" uuid PRIMARY KEY);',
 				`SELECT _norbital_create_history_table('chat_session'::regclass, 'chat_session_history');`,
-				'CREATE TABLE "chat_turn" ("norbital_id" uuid PRIMARY KEY);',
-				`SELECT _norbital_create_history_table('chat_turn'::regclass, 'chat_turn_history');`
+				'CREATE TABLE "retired_events" ("norbital_id" uuid PRIMARY KEY);',
+				`SELECT _norbital_create_history_table('retired_events'::regclass, 'retired_events_history');`
 			].join(`\n${BREAK}\n`),
 			'20260102000000_auto': 'DROP TABLE IF EXISTS "chat_session_history";'
 		});
 
 		const live = await liveHistoryRelations(root);
-		expect(live).toEqual(new Set(['chat_turn_history']));
+		expect(live).toEqual(new Set(['retired_events_history']));
 		// The remaining orphan is suppressed when the migration being written already drops it —
 		// a collection removed outright is dropped by the mirror, not twice.
-		expect(orphanedHistoryDrops(live, NONE, 'DROP TABLE IF EXISTS "chat_turn_history";')).toEqual(
-			[]
-		);
+		expect(
+			orphanedHistoryDrops(live, NONE, 'DROP TABLE IF EXISTS "retired_events_history";')
+		).toEqual([]);
 	});
 });

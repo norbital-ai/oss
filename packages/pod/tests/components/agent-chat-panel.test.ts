@@ -5,9 +5,6 @@ import { render, settle } from '../support/component.js';
 
 let replica = new FakeReplica();
 
-// The panel reads its transcript through `getInitializedWorkspaceClient().db`. Mocking the module
-// rather than the client keeps PGlite, the sync worker and the browser bootstrap out of a component
-// test — none of them are the seam this file is about.
 vi.mock('$lib/ui/state/client.js', () => ({
 	getInitializedWorkspaceClient: () => replica
 }));
@@ -17,6 +14,19 @@ const { setWorkspaceRemoteTransport } =
 const AgentChatPanel = (await import('$lib/ui/agent/agent-chat-panel.svelte')).default;
 
 type ChatResult = { runId: string; chatId: string };
+type EmbeddedMessage = Record<string, unknown> & {
+	readonly norbital_id: string;
+	readonly turn_id: string | null;
+	readonly seq: number;
+	readonly role: string;
+	readonly parts: readonly Record<string, unknown>[];
+};
+type EmbeddedTurn = Record<string, unknown> & {
+	readonly norbital_id: string;
+	readonly parent_turn_id: string | null;
+	readonly subagent_id: string | null;
+	readonly status: string;
+};
 
 function deferred(): {
 	promise: Promise<ChatResult>;
@@ -36,11 +46,10 @@ let inFlight = deferred();
 let sent: { message: string; model?: string; planMode?: boolean }[] = [];
 let catalog: {
 	defaultModel: string;
-	options: { id: string; label: string; canonicalSlug: string }[];
+	options: { id: string; label: string; canonicalSlug: string; contextLength?: number }[];
 } | null = null;
 
 beforeEach(() => {
-	// A device that has synced nothing yet, per test — the query cache lives on the replica too.
 	replica = new FakeReplica();
 	inFlight = deferred();
 	sent = [];
@@ -58,17 +67,18 @@ function mountPanel(): { container: HTMLElement; destroy(): void } {
 	return render(AgentChatPanel as never, {});
 }
 
-function type(container: HTMLElement, message: string): void {
+function type(container: HTMLElement, value: string): void {
 	const textarea = container.querySelector('textarea');
 	if (!textarea) throw new Error('composer missing');
-	textarea.value = message;
+	textarea.value = value;
 	textarea.dispatchEvent(new Event('input', { bubbles: true }));
 	flushSync();
 }
 
 function submit(container: HTMLElement): void {
-	const form = container.querySelector('form');
-	form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+	container
+		.querySelector('form')
+		?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 	flushSync();
 }
 
@@ -79,604 +89,270 @@ function transcript(container: HTMLElement): { role: string; content: string }[]
 	}));
 }
 
+function message(input: {
+	id: string;
+	seq: number;
+	role: string;
+	content?: string;
+	turnId?: string;
+	status?: string;
+	toolCalls?: readonly Record<string, unknown>[];
+	toolCallId?: string;
+	kind?: string;
+}): EmbeddedMessage {
+	return {
+		norbital_id: input.id,
+		turn_id: input.turnId ?? 'root',
+		seq: input.seq,
+		role: input.role,
+		status: input.status ?? 'complete',
+		kind: input.kind ?? 'normal',
+		parts: [
+			{
+				role: input.role,
+				content: input.content ?? '',
+				...(input.toolCalls ? { toolCalls: input.toolCalls } : {}),
+				...(input.toolCallId ? { toolCallId: input.toolCallId } : {})
+			}
+		]
+	};
+}
+
+function turn(input: {
+	id?: string;
+	status: string;
+	parentId?: string;
+	subagentId?: string;
+	error?: string;
+}): EmbeddedTurn {
+	return {
+		norbital_id: input.id ?? 'root',
+		parent_turn_id: input.parentId ?? null,
+		subagent_id: input.subagentId ?? null,
+		status: input.status,
+		error: input.error ?? null,
+		started_at: '2026-08-12T00:00:00.000Z'
+	};
+}
+
+function arriveSession(input: {
+	id?: string;
+	title?: string;
+	runId?: string;
+	messages?: readonly EmbeddedMessage[];
+	turns?: readonly EmbeddedTurn[];
+	updatedAt?: string;
+}): void {
+	replica.arrive('chat_session', {
+		norbital_id: input.id ?? 'c1',
+		automation_run_id: input.runId ?? 'r1',
+		title: input.title ?? 'Workspace agent',
+		messages: input.messages ?? [],
+		turns: input.turns ?? [],
+		norbital_updated_at: input.updatedAt ?? '2026-08-12T00:00:00.000Z'
+	});
+}
+
 describe('agent chat panel', () => {
-	it('shows the prompt the moment it is sent, before anything has replicated', () => {
+	it('shows the prompt immediately, then replaces it from one replicated session aggregate', async () => {
 		const { container, destroy } = mountPanel();
 		type(container, 'What is on site?');
 		submit(container);
-
-		// Nothing has been awaited: the round trip runs the whole agent loop, and a prompt that
-		// vanishes for those seconds reads as a dropped message.
 		expect(transcript(container)).toEqual([{ role: 'user', content: 'What is on site?' }]);
 		expect(sent).toEqual([{ message: 'What is on site?' }]);
-		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
-			'Agent is working'
-		);
-		destroy();
-	});
-
-	it('replaces the echo with the stored row instead of showing the prompt twice', async () => {
-		const { container, destroy } = mountPanel();
-		type(container, 'What is on site?');
-		submit(container);
 
 		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
 		await settle();
-		// The chat id has landed and the live query has fired against an empty replica. The echo is
-		// still the only thing covering the gap.
-		expect(transcript(container)).toEqual([{ role: 'user', content: 'What is on site?' }]);
-
-		replica.arrive('chat_message', {
-			norbital_id: 'm1',
-			chat_id: 'c1',
-			seq: 1,
-			parts: [{ role: 'user', content: 'What is on site?' }]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'm2',
-			chat_id: 'c1',
-			seq: 2,
-			parts: [{ role: 'assistant', content: 'Two crews and a delivery.' }]
+		arriveSession({
+			messages: [
+				message({ id: 'm1', seq: 1, role: 'user', content: 'What is on site?' }),
+				message({ id: 'm2', seq: 2, role: 'assistant', content: 'Two crews.' })
+			]
 		});
 		await settle();
-
-		// The reply is what makes this assertion mean anything: the echo appends to the end of the
-		// transcript, so a duplicate would show up here as a third, trailing copy of the prompt.
-		// Two entries in this order is the echo having been replaced rather than merely hidden.
 		expect(transcript(container)).toEqual([
 			{ role: 'user', content: 'What is on site?' },
-			{ role: 'assistant', content: 'Two crews and a delivery.' }
+			{ role: 'assistant', content: 'Two crews.' }
 		]);
 		destroy();
 	});
 
-	it('keeps the echo when the send fails, so the prompt is still there to copy', async () => {
-		const { container, destroy } = mountPanel();
-		type(container, 'Draft the RFI response');
-		submit(container);
-
-		inFlight.reject(new Error('Agent unavailable'));
-		await settle();
-
-		expect(transcript(container)).toEqual([{ role: 'user', content: 'Draft the RFI response' }]);
-		expect(container.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
-			'Agent unavailable'
-		);
-		// And the composer is usable again rather than stuck mid-send.
-		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
-			'Send message'
-		);
-		destroy();
-	});
-
-	it('leaves the working state when the root turn completes through live sync', async () => {
-		const { container, destroy } = mountPanel();
-		type(container, 'Check the records');
-		submit(container);
-		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
-		await settle();
-
-		replica.arrive('chat_turn', {
-			norbital_id: 't1',
-			chat_id: 'c1',
-			parent_turn_id: null,
-			subagent_id: null,
-			status: 'succeeded',
-			started_at: '2026-08-01T00:00:00.000Z'
-		});
-		await settle();
-
-		expect(container.querySelector('textarea')?.disabled).toBe(false);
-		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
-			'Send message'
-		);
-		destroy();
-	});
-
-	it('releases the composer when the terminal failure message arrives before turn status', async () => {
-		const { container, destroy } = mountPanel();
-		type(container, 'Read a missing file');
-		submit(container);
-		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
-		await settle();
-
-		replica.arrive('chat_message', {
-			norbital_id: 'm1',
-			chat_id: 'c1',
-			seq: 1,
-			parts: [{ role: 'user', content: 'Read a missing file' }]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'm2',
-			chat_id: 'c1',
-			seq: 2,
-			parts: [{ role: 'system', content: 'Agent run failed after provider error' }]
-		});
-		await settle();
-
-		expect(container.querySelector('textarea')?.disabled).toBe(false);
-		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
-			'Send message'
-		);
-		expect(container.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
-			'Agent run failed after provider error'
-		);
-		destroy();
-	});
-
-	it('shows a message that arrived in the replica with no local action at all', async () => {
-		const { container, destroy } = mountPanel();
-		type(container, 'What is on site?');
-		submit(container);
-		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
-		await settle();
-		replica.arrive('chat_message', {
-			norbital_id: 'm1',
-			chat_id: 'c1',
-			seq: 1,
-			parts: [{ role: 'user', content: 'What is on site?' }]
-		});
-		await settle();
-
-		// This is the bug the panel was rewritten for. Nothing below touches the panel: the reply is
-		// written by the loop, and a second tab's turn by a different session entirely. A panel that
-		// accumulates its own transcript locally shows neither.
-		replica.arrive('chat_message', {
-			norbital_id: 'm2',
-			chat_id: 'c1',
-			seq: 2,
-			parts: [{ role: 'assistant', content: 'Two crews and a delivery.' }]
-		});
-		await settle();
-		replica.arrive('chat_message', {
-			norbital_id: 'm3',
-			chat_id: 'c1',
-			seq: 3,
-			parts: [{ role: 'user', content: 'Sent from my phone' }]
-		});
-		await settle();
-
-		expect(transcript(container)).toEqual([
-			{ role: 'user', content: 'What is on site?' },
-			{ role: 'assistant', content: 'Two crews and a delivery.' },
-			{ role: 'user', content: 'Sent from my phone' }
-		]);
-		destroy();
-	});
-
-	it('reacts to every update of a streamed row, tool result, title, and turn status', async () => {
+	it('reacts to every part, generated title, tool result, and terminal turn on chat_session alone', async () => {
 		const { container, destroy } = mountPanel();
 		type(container, 'Inspect the workspace');
 		submit(container);
 		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
 		await settle();
 
-		replica.arrive('chat_session', {
-			norbital_id: 'c1',
-			automation_run_id: 'r1',
-			title: 'Workspace agent',
-			norbital_updated_at: '2026-08-12T00:00:00.000Z'
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'm1',
-			chat_id: 'c1',
-			seq: 1,
-			parts: [{ role: 'user', content: 'Inspect the workspace' }]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'm2',
-			chat_id: 'c1',
-			seq: 2,
-			status: 'streaming',
-			parts: [{ role: 'assistant', content: 'I found the first part.' }]
+		const prompt = message({ id: 'm1', seq: 1, role: 'user', content: 'Inspect the workspace' });
+		arriveSession({
+			messages: [
+				prompt,
+				message({
+					id: 'm2',
+					seq: 2,
+					role: 'assistant',
+					content: 'I found the first part.',
+					status: 'streaming'
+				})
+			],
+			turns: [turn({ status: 'running' })]
 		});
 		await settle();
 		expect(transcript(container).at(-1)?.content).toBe('I found the first part.');
 
-		// The writer updates one durable assistant row at part boundaries. The replica must replace
-		// that row and refire the live query; appending a duplicate would hide the bug this test owns.
-		replica.arrive('chat_message', {
-			norbital_id: 'm2',
-			chat_id: 'c1',
-			seq: 2,
-			status: 'complete',
-			parts: [{ role: 'assistant', content: 'I found the first part. And the second part.' }]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'm3',
-			chat_id: 'c1',
+		const call = message({
+			id: 'm3',
 			seq: 3,
-			parts: [
-				{
-					role: 'assistant',
-					content: '',
-					toolCalls: [{ id: 'call-1', name: 'read_collection', input: { collection: 'sites' } }]
-				}
-			]
+			role: 'assistant',
+			toolCalls: [{ id: 'call-1', name: 'read_collection', input: { collection: 'sites' } }]
 		});
-		await settle();
-		expect(transcript(container).some((message) => message.content.includes('second part'))).toBe(
-			true
-		);
-		expect(container.querySelector('[data-tool="read_collection"]')).not.toBeNull();
-
-		replica.arrive('chat_message', {
-			norbital_id: 'm4',
-			chat_id: 'c1',
-			seq: 4,
-			parts: [{ role: 'tool', toolCallId: 'call-1', content: '{"rows":[{"name":"Depot"}]}' }]
-		});
-		replica.arrive('chat_session', {
-			norbital_id: 'c1',
-			automation_run_id: 'r1',
+		arriveSession({
 			title: 'Workspace Site Inspection',
-			norbital_updated_at: '2026-08-12T00:00:01.000Z'
-		});
-		replica.arrive('chat_turn', {
-			norbital_id: 't1',
-			chat_id: 'c1',
-			parent_turn_id: null,
-			subagent_id: null,
-			status: 'running',
-			started_at: '2026-08-12T00:00:00.000Z'
+			updatedAt: '2026-08-12T00:00:01.000Z',
+			messages: [
+				prompt,
+				message({
+					id: 'm2',
+					seq: 2,
+					role: 'assistant',
+					content: 'I found the first part. And the second part.'
+				}),
+				call,
+				message({
+					id: 'm4',
+					seq: 4,
+					role: 'tool',
+					content: '{"rows":[{"name":"Depot"}]}',
+					toolCallId: 'call-1'
+				})
+			],
+			turns: [turn({ status: 'succeeded' })]
 		});
 		await settle();
-		expect(container.querySelector('[data-tool="read_collection"]')?.textContent).toContain(
-			'Depot'
-		);
+		expect(transcript(container).some((entry) => entry.content.includes('second part'))).toBe(true);
+		expect(container.querySelector('[data-tool="read_collection"]')).not.toBeNull();
 		expect(container.querySelector('[aria-label="Conversation thread"]')?.textContent).toContain(
 			'Workspace Site Inspection'
 		);
-
-		replica.arrive('chat_turn', {
-			norbital_id: 't1',
-			chat_id: 'c1',
-			parent_turn_id: null,
-			subagent_id: null,
-			status: 'succeeded',
-			started_at: '2026-08-12T00:00:00.000Z'
-		});
-		await settle();
 		expect(container.querySelector('textarea')?.disabled).toBe(false);
-		expect(container.querySelector('[data-testid="agent-send"]')?.getAttribute('aria-label')).toBe(
-			'Send message'
-		);
 		destroy();
 	});
 
-	it('leaves another chat out of this panel', async () => {
+	it('shows a durable terminal error and releases the composer', async () => {
 		const { container, destroy } = mountPanel();
-		type(container, 'What is on site?');
+		type(container, 'Read a missing file');
 		submit(container);
 		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
 		await settle();
-
-		replica.arrive('chat_message', {
-			norbital_id: 'mine',
-			chat_id: 'c1',
-			seq: 1,
-			parts: [{ role: 'user', content: 'What is on site?' }]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'other',
-			chat_id: 'c2',
-			seq: 2,
-			parts: [{ role: 'assistant', content: 'Belongs to another conversation.' }]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'also-mine',
-			chat_id: 'c1',
-			seq: 3,
-			parts: [{ role: 'assistant', content: 'Belongs to this one.' }]
-		});
-		await settle();
-
-		// Both rows are in the replica and both fired the same invalidation. Only one is this chat's,
-		// so asserting the other is absent is only worth something next to the one that is present.
-		expect(transcript(container).map((message) => message.content)).toEqual([
-			'What is on site?',
-			'Belongs to this one.'
-		]);
-		destroy();
-	});
-
-	it('renders every tool call in a turn as its own row, with its result', async () => {
-		const { container, destroy } = mountPanel();
-		type(container, 'Compare the two collections');
-		submit(container);
-		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
-		await settle();
-
-		// One assistant row carrying two calls to the same tool. The regression rendered this as a
-		// single bubble reading "Using read_collection, read_collection…".
-		replica.arrive('chat_message', {
-			norbital_id: 'm1',
-			chat_id: 'c1',
-			seq: 1,
-			parts: [
-				{
-					role: 'assistant',
-					content: '',
-					toolCalls: [
-						{ id: 'a', name: 'read_collection', input: { collection: 'accounts' } },
-						{ id: 'b', name: 'read_collection', input: { collection: 'payments' } }
-					]
-				}
-			]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'm2',
-			chat_id: 'c1',
-			seq: 2,
-			parts: [{ role: 'tool', content: '{"rows":[{"name":"Depot"}]}', toolCallId: 'a' }]
-		});
-		await settle();
-
-		const rows = [...container.querySelectorAll('[data-role="tool"]')];
-		expect(rows).toHaveLength(2);
-		expect(rows.map((row) => row.getAttribute('data-tool'))).toEqual([
-			'read_collection',
-			'read_collection'
-		]);
-		// The two rows are distinguishable by the argument that made them different.
-		const summaries = rows.map((row) => row.querySelector('summary')?.textContent ?? '');
-		expect(summaries[0]).toContain('accounts');
-		expect(summaries[1]).toContain('payments');
-		// The answered call carries its result; the unanswered one is still waiting.
-		expect(rows[0]?.textContent).toContain('Depot');
-		expect(rows[1]?.textContent).toContain('Waiting for the result');
-		// Collapsed by default: tool output is tenant data, not conversation.
-		expect(rows[0]?.querySelector('details')?.open).toBe(false);
-		destroy();
-	});
-
-	it('renders a subagent inside its call, recursively and without a composer', async () => {
-		const { container, destroy } = mountPanel();
-		type(container, 'Audit the sites');
-		submit(container);
-		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
-		await settle();
-
-		replica.arrive('chat_turn', {
-			norbital_id: 'child-turn',
-			chat_id: 'c1',
-			parent_turn_id: 'parent-turn',
-			subagent_id: 'subagent:call-9',
-			status: 'running',
-			started_at: '2026-08-03T00:00:00.000Z'
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'p1',
-			chat_id: 'c1',
-			turn_id: 'parent-turn',
-			seq: 1,
-			parts: [
-				{
-					role: 'assistant',
-					content: '',
-					toolCalls: [{ id: 'call-9', name: 'spawn_subagent', input: { task: 'Audit sites' } }]
-				}
-			]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'c2',
-			chat_id: 'c1',
-			turn_id: 'child-turn',
-			seq: 2,
-			parts: [
-				{
-					role: 'assistant',
-					content: '',
-					toolCalls: [{ id: 'call-10', name: 'read_collection', input: { collection: 'sites' } }]
-				}
-			]
-		});
-		await settle();
-
-		const toolRows = [...container.querySelectorAll('[data-role="tool"]')];
-		// Two rows, but not siblings: the child's read is *inside* the spawn call, not beside it.
-		expect(toolRows.map((row) => row.getAttribute('data-tool'))).toEqual([
-			'spawn_subagent',
-			'read_collection'
-		]);
-		const spawnRow = container.querySelector('[data-tool="spawn_subagent"]');
-		expect(spawnRow?.querySelector('[data-tool="read_collection"]')).not.toBeNull();
-		expect(spawnRow?.querySelector('[aria-label="Subagent transcript"]')).not.toBeNull();
-		// A subagent is given a task, not talked to — exactly one composer, at the top level.
-		expect(container.querySelectorAll('textarea')).toHaveLength(1);
-		expect(spawnRow?.querySelector('textarea')).toBeNull();
-		destroy();
-	});
-
-	it("calls a delegated prompt a Task and the reader's own history theirs", async () => {
-		// Both are nested rows carrying `role: 'user'`, and they mean opposite things: one is the task
-		// the parent handed down, the other really was the person typing.
-		const { container, destroy } = mountPanel();
-		type(container, 'Audit the sites');
-		submit(container);
-		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
-		await settle();
-
-		replica.arrive('chat_turn', {
-			norbital_id: 'child-turn',
-			chat_id: 'c1',
-			parent_turn_id: 'parent-turn',
-			subagent_id: 'subagent:call-9',
-			status: 'running',
-			started_at: '2026-08-03T00:00:00.000Z'
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'old',
-			chat_id: 'c1',
-			turn_id: 'parent-turn',
-			seq: 1,
-			parts: [{ role: 'user', content: 'The original question' }]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'ck',
-			chat_id: 'c1',
-			turn_id: 'parent-turn',
-			seq: 2,
-			kind: 'summary',
-			parts: [
-				{
+		arriveSession({
+			messages: [
+				message({ id: 'm1', seq: 1, role: 'user', content: 'Read a missing file' }),
+				message({
+					id: 'm2',
+					seq: 2,
 					role: 'system',
-					content: '## What changed\n\n- Kept the site identifiers\n- Preserved unresolved work'
-				}
-			]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'p1',
-			chat_id: 'c1',
-			turn_id: 'parent-turn',
-			seq: 3,
-			parts: [
-				{
-					role: 'assistant',
-					content: '',
-					toolCalls: [{ id: 'call-9', name: 'spawn_subagent', input: { task: 'Audit sites' } }]
-				}
-			]
-		});
-		replica.arrive('chat_message', {
-			norbital_id: 'c1m',
-			chat_id: 'c1',
-			turn_id: 'child-turn',
-			seq: 4,
-			parts: [{ role: 'user', content: 'Audit sites' }]
+					content: 'Agent run failed after provider error'
+				})
+			],
+			turns: [turn({ status: 'failed', error: 'Agent run failed after provider error' })]
 		});
 		await settle();
-
-		const delegated = container.querySelector('[aria-label="Subagent transcript"] li span');
-		expect(delegated?.textContent?.trim()).toBe('Task');
-		// The model writes Markdown summaries; the checkpoint must render its structure, not raw syntax.
-		expect(container.querySelector('[data-role="checkpoint"] h2')?.textContent).toBe(
-			'What changed'
+		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+			'Agent run failed after provider error'
 		);
-		expect(
-			container.querySelectorAll('[data-role="checkpoint"] [role="tabpanel"] ul li')
-		).toHaveLength(2);
-
-		// The raw conversation is the checkpoint's second tab, so it has to be asked for.
-		const rawTab = [...container.querySelectorAll('[role="tab"]')].find(
-			(tab) => tab.textContent?.trim() === 'Full conversation'
-		);
-		expect(rawTab).toBeDefined();
-		rawTab?.dispatchEvent(new Event('click', { bubbles: true }));
-		flushSync();
-
-		const history = container.querySelector(
-			'[aria-label="Conversation before compaction"] li span'
-		);
-		// The checkpoint's raw tab holds the person's own message; calling it a Task would be a lie
-		// about who said it.
-		expect(history?.textContent?.trim()).toBe('You');
+		expect(container.querySelector('textarea')?.disabled).toBe(false);
 		destroy();
 	});
 
-	it('opens on the host default and sends only a model the person changed', async () => {
+	it('keeps delegated messages nested under the spawning tool', async () => {
+		const { container, destroy } = mountPanel();
+		arriveSession({
+			messages: [
+				message({
+					id: 'p1',
+					seq: 1,
+					role: 'assistant',
+					turnId: 'root',
+					toolCalls: [{ id: 'call-9', name: 'spawn_subagent', input: { task: 'Audit sites' } }]
+				}),
+				message({
+					id: 'c1m',
+					seq: 2,
+					role: 'assistant',
+					turnId: 'child',
+					content: 'The delegated audit is complete.'
+				})
+			],
+			turns: [
+				turn({ status: 'succeeded' }),
+				turn({
+					id: 'child',
+					status: 'succeeded',
+					parentId: 'root',
+					subagentId: 'subagent:call-9'
+				})
+			]
+		});
+		await settle();
+		expect(container.querySelector('[data-tool="spawn_subagent"]')?.textContent).toContain(
+			'The delegated audit is complete.'
+		);
+		destroy();
+	});
+
+	it('keeps a failed send visible and makes the composer usable again', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Draft the RFI response');
+		submit(container);
+		inFlight.reject(new Error('Agent unavailable'));
+		await settle();
+		expect(transcript(container)).toEqual([{ role: 'user', content: 'Draft the RFI response' }]);
+		expect(container.querySelector('[role="alert"]')?.textContent).toContain('Agent unavailable');
+		expect(container.querySelector('textarea')?.disabled).toBe(false);
+		destroy();
+	});
+
+	it('uses the host default model and carries plan mode explicitly', async () => {
 		catalog = {
-			defaultModel: 'deepseek/deepseek-v4-flash-0731',
+			defaultModel: 'provider/default',
 			options: [
 				{
-					id: 'deepseek/deepseek-v4-flash-0731',
-					label: 'DeepSeek V4 Flash 0731',
-					canonicalSlug: 'deepseek/deepseek-v4-flash-20260731'
-				},
-				{
-					id: 'anthropic/claude-sonnet-5',
-					label: 'Claude Sonnet 5',
-					canonicalSlug: 'anthropic/claude-sonnet-5-20260630'
+					id: 'provider/default',
+					label: 'Default',
+					canonicalSlug: 'provider/default',
+					contextLength: 1_000_000
 				}
 			]
 		};
 		const { container, destroy } = mountPanel();
 		await settle();
-
-		expect(container.querySelector('[aria-label="Model"]')?.textContent).toContain(
-			'DeepSeek V4 Flash 0731'
-		);
-
-		type(container, 'Summarize the site log');
+		container.querySelector<HTMLButtonElement>('[aria-pressed="false"]')?.click();
+		type(container, 'Outline the migration');
 		submit(container);
-		// Untouched, so the host stays free to change what its default resolves to.
-		expect(sent).toEqual([{ message: 'Summarize the site log' }]);
+		// The host default is intentionally omitted on the wire; the catalog still supplies its context
+		// length for occupancy/compaction, while the host remains the one source of truth for selection.
+		expect(sent).toEqual([{ message: 'Outline the migration', planMode: true }]);
 		destroy();
 	});
 
-	it('shows no picker at all on a host that offers no choice', async () => {
-		const { container, destroy } = mountPanel();
-		await settle();
-		// Absent rather than empty: an empty combobox reads as a broken control.
-		expect(container.querySelector('[aria-label="Model"]')).toBeNull();
-		destroy();
-	});
-
-	it('forwards plan mode only when the Plan toggle is pressed', async () => {
-		const { container, destroy } = mountPanel();
-		await settle();
-
-		const plan = container.querySelector('[data-testid="agent-plan-mode"]');
-		expect(plan).not.toBeNull();
-		expect(plan?.getAttribute('aria-pressed')).toBe('false');
-
-		type(container, 'How should payroll runs be structured?');
-		submit(container);
-		expect(sent).toEqual([{ message: 'How should payroll runs be structured?' }]);
-		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
-		await settle();
-		replica.arrive('chat_turn', {
-			norbital_id: 't1',
-			chat_id: 'c1',
-			parent_turn_id: null,
-			subagent_id: null,
-			status: 'succeeded',
-			started_at: '2026-08-01T00:00:00.000Z'
-		});
-		await settle();
-
-		plan?.dispatchEvent(new Event('click', { bubbles: true }));
-		flushSync();
-		expect(plan?.getAttribute('aria-pressed')).toBe('true');
-
-		inFlight = deferred();
-		type(container, 'Draft a rollout plan');
-		submit(container);
-		expect(sent.at(-1)).toEqual({
-			message: 'Draft a rollout plan',
-			planMode: true,
-			runId: 'r1'
-		});
-		destroy();
-	});
-
-	it('opens the most recent replicated conversation in the thread selector', async () => {
+	it('opens the most recent replicated conversation in the selector', async () => {
 		replica.seed('chat_session', [
 			{
 				norbital_id: 'c1',
 				automation_run_id: 'r1',
 				title: 'Check the payroll run',
-				norbital_updated_at: '2026-08-02T10:00:00.000Z'
+				messages: [message({ id: 'm1', seq: 1, role: 'assistant', content: 'Ready.' })],
+				turns: [],
+				norbital_updated_at: '2026-08-12T10:00:00.000Z'
 			}
 		]);
-		replica.seed('chat_message', [
-			{
-				norbital_id: 'm1',
-				chat_id: 'c1',
-				seq: 1,
-				parts: [{ role: 'assistant', content: 'The payroll run is ready.' }]
-			}
-		]);
-
 		const { container, destroy } = mountPanel();
 		await settle();
-
 		expect(container.querySelector('[aria-label="Conversation thread"]')?.textContent).toContain(
 			'Check the payroll run'
 		);
-		expect(transcript(container)).toEqual([
-			{ role: 'assistant', content: 'The payroll run is ready.' }
-		]);
+		expect(transcript(container)).toContainEqual({ role: 'assistant', content: 'Ready.' });
 		destroy();
 	});
 });

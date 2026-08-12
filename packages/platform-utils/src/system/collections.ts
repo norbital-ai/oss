@@ -101,38 +101,8 @@ interface PlatformSystemRows {
 		readonly agent_profile_id: string | null;
 		readonly channel_config_id: string | null;
 		readonly assigned_channel_id: string | null;
-	};
-	readonly chat_turn: SystemRecordFields & {
-		readonly chat_id: string;
-		readonly prompt_message_id: string | null;
-		readonly status: string;
-		readonly model: string;
-		readonly parent_turn_id: string | null;
-		readonly subagent_id: string | null;
-		readonly error: string | null;
-		readonly started_at: string;
-		readonly heartbeat_at: string;
-		readonly ended_at: string | null;
-	};
-	readonly chat_message: SystemRecordFields & {
-		readonly chat_id: string;
-		readonly turn_id: string | null;
-		readonly role: string;
-		readonly seq: number;
-		readonly parts: readonly unknown[] | null;
-		readonly model: string | null;
-		readonly usage: JsonObject | null;
-		readonly plan_mode: boolean;
-		readonly kind: string;
-		readonly status: string;
-		readonly queue_status: string;
-		readonly release_mode: string | null;
-		readonly author_user_id: string | null;
-		readonly author_display_name: string | null;
-		readonly source_provider: string | null;
-		readonly source_conversation_id: string | null;
-		readonly source_message_id: string | null;
-		readonly source_deleted_at: string | null;
+		readonly messages: readonly unknown[];
+		readonly turns: readonly unknown[];
 	};
 	readonly invitation: SystemRecordFields & {
 		readonly email: string;
@@ -220,7 +190,7 @@ interface PlatformSystemRows {
 		readonly sender_display_name: string | null;
 		readonly status: string;
 		readonly error: string | null;
-		readonly chat_message_id: string | null;
+		readonly session_message_id: string | null;
 		readonly answered_at: string | null;
 	};
 	readonly integration_cursor: SystemRecordFields & {
@@ -262,8 +232,6 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'host_event_outbox',
 	'automation_run',
 	'chat_session',
-	'chat_turn',
-	'chat_message',
 	'channel_conversation',
 	'channel_inbound_message',
 	'user',
@@ -345,47 +313,9 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'external_thread_id', kind: 'text', nullable: true },
 			{ name: 'agent_profile_id', kind: 'uuid', nullable: true },
 			{ name: 'channel_config_id', kind: 'uuid', nullable: true },
-			{ name: 'assigned_channel_id', kind: 'uuid', nullable: true }
-		]
-	},
-	chat_turn: {
-		name: 'chat_turn',
-		fields: [
-			...SYSTEM_FIELDS,
-			{ name: 'chat_id', kind: 'uuid', nullable: false },
-			{ name: 'prompt_message_id', kind: 'uuid', nullable: true },
-			{ name: 'status', kind: 'text', nullable: false },
-			{ name: 'model', kind: 'text', nullable: false },
-			{ name: 'parent_turn_id', kind: 'uuid', nullable: true },
-			{ name: 'subagent_id', kind: 'text', nullable: true },
-			{ name: 'error', kind: 'text', nullable: true },
-			{ name: 'started_at', kind: 'timestamptz', nullable: false },
-			{ name: 'heartbeat_at', kind: 'timestamptz', nullable: false },
-			{ name: 'ended_at', kind: 'timestamptz', nullable: true }
-		]
-	},
-	chat_message: {
-		name: 'chat_message',
-		fields: [
-			...SYSTEM_FIELDS,
-			{ name: 'chat_id', kind: 'uuid', nullable: false },
-			{ name: 'turn_id', kind: 'uuid', nullable: true },
-			{ name: 'role', kind: 'text', nullable: false },
-			{ name: 'seq', kind: 'integer', nullable: false },
-			{ name: 'parts', kind: 'json', nullable: true },
-			{ name: 'model', kind: 'text', nullable: true },
-			{ name: 'usage', kind: 'json', nullable: true },
-			{ name: 'plan_mode', kind: 'boolean', nullable: false },
-			{ name: 'kind', kind: 'text', nullable: false },
-			{ name: 'status', kind: 'text', nullable: false },
-			{ name: 'queue_status', kind: 'text', nullable: false },
-			{ name: 'release_mode', kind: 'text', nullable: true },
-			{ name: 'author_user_id', kind: 'uuid', nullable: true },
-			{ name: 'author_display_name', kind: 'text', nullable: true },
-			{ name: 'source_provider', kind: 'text', nullable: true },
-			{ name: 'source_conversation_id', kind: 'text', nullable: true },
-			{ name: 'source_message_id', kind: 'text', nullable: true },
-			{ name: 'source_deleted_at', kind: 'timestamptz', nullable: true }
+			{ name: 'assigned_channel_id', kind: 'uuid', nullable: true },
+			{ name: 'messages', kind: 'json', nullable: false },
+			{ name: 'turns', kind: 'json', nullable: false }
 		]
 	},
 	channel_conversation: {
@@ -414,7 +344,7 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'sender_display_name', kind: 'text', nullable: true },
 			{ name: 'status', kind: 'text', nullable: false },
 			{ name: 'error', kind: 'text', nullable: true },
-			{ name: 'chat_message_id', kind: 'uuid', nullable: true },
+			{ name: 'session_message_id', kind: 'uuid', nullable: true },
 			{ name: 'answered_at', kind: 'timestamptz', nullable: true }
 		]
 	},

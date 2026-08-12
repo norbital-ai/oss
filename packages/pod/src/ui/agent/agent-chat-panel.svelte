@@ -204,6 +204,8 @@
 		readonly norbital_id: string;
 		readonly automation_run_id: string;
 		readonly title: string;
+		readonly messages: readonly Readonly<Record<string, unknown>>[];
+		readonly turns: readonly Readonly<Record<string, unknown>>[];
 	};
 	const sessionQuery = $derived.by(() => {
 		try {
@@ -224,6 +226,12 @@
 				{
 					norbital_id: row.norbital_id,
 					automation_run_id: row.automation_run_id,
+					messages: Array.isArray(row.messages)
+						? (row.messages as readonly Readonly<Record<string, unknown>>[])
+						: [],
+					turns: Array.isArray(row.turns)
+						? (row.turns as readonly Readonly<Record<string, unknown>>[])
+						: [],
 					title:
 						typeof row.title === 'string' && row.title.trim()
 							? row.title
@@ -250,34 +258,13 @@
 		return sessions.find((row) => row.norbital_id === activeChatId)?.automation_run_id ?? runId;
 	});
 
-	/** The tenant replica is the one live channel for both transcript text and turn state. */
-	const transcript = $derived.by(() => {
-		if (!activeChatId) return undefined;
-		try {
-			return getInitializedWorkspaceClient().db.chat_message?.findMany({
-				where: { chat_id: activeChatId },
-				orderBy: { seq: 'asc' },
-				limit: 500
-			});
-		} catch {
-			return undefined;
-		}
-	});
-	const turns = $derived.by(() => {
-		if (!activeChatId) return undefined;
-		try {
-			return getInitializedWorkspaceClient().db.chat_turn?.findMany({
-				where: { chat_id: activeChatId },
-				orderBy: { started_at: 'asc' },
-				limit: 100
-			});
-		} catch {
-			return undefined;
-		}
-	});
-	const stored = $derived(toPanelMessages(transcript?.current ?? [], turns?.current ?? []));
+	/** One replicated tenant row is the complete live conversation aggregate. */
+	const activeSession = $derived(sessions.find((row) => row.norbital_id === activeChatId));
+	const stored = $derived(
+		toPanelMessages(activeSession?.messages ?? [], activeSession?.turns ?? [])
+	);
 	const messages = $derived(withPendingEcho(stored, echo));
-	const turnRows = $derived(turns?.current ?? []);
+	const turnRows = $derived(activeSession?.turns ?? []);
 	const canSend = $derived(draft.trim().length > 0 && !pending);
 
 	/**
@@ -290,7 +277,7 @@
 		catalog?.options.find((option) => option.id === (selectedModel || catalog?.defaultModel))
 			?.contextLength ?? null
 	);
-	const usage = $derived(toPanelUsage(transcript?.current ?? [], contextLength));
+	const usage = $derived(toPanelUsage(activeSession?.messages ?? [], contextLength));
 	const contextPercent = $derived(
 		usage.contextTokens !== null && usage.contextLength
 			? Math.min(100, Math.round((usage.contextTokens / usage.contextLength) * 100))

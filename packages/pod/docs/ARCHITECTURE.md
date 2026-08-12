@@ -329,8 +329,8 @@ export default defineAutomation(
 ```
 
 Interactive chat, agent automations and declared channels use the same loop and transcript model.
-Messages are stored as ordered `AiMessage` values in `chat_message` under a `chat_session`, then
-reach the browser through ordinary policy-scoped sync rather than an agent-specific stream.
+Messages and nested turns are stored directly in one `chat_session` aggregate, then reach the
+browser through one ordinary policy-scoped sync subscription rather than an agent-specific stream.
 
 See [Agent architecture](./AGENT_ARCHITECTURE.md) for execution entry points, transcript ownership,
 host-tool authorization, channel continuation, UI behavior and conformance coverage.

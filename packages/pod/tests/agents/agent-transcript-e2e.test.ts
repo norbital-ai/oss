@@ -26,8 +26,35 @@ const member: Identity = {
 describe('Pod AI and automation transcript — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
 	let calls = 0;
+	let emptyCalls = 0;
+	let refusalCalls = 0;
+	let retryCalls = 0;
 	const ai = testAiBinding(async (input) => {
 		const firstUser = input.messages.find((message) => message.role === 'user')?.content;
+		if (firstUser === 'Finish with no content.') {
+			emptyCalls += 1;
+			return {
+				text: '',
+				stopReason: 'end',
+				usage: { totalTokens: 13, cost: 0.25 }
+			};
+		}
+		if (firstUser === 'Refuse this request.') {
+			refusalCalls += 1;
+			return {
+				text: '',
+				stopReason: 'refusal',
+				usage: { totalTokens: 23, cost: 0.7 }
+			};
+		}
+		if (firstUser === 'Retry settlement, not the provider.') {
+			retryCalls += 1;
+			return {
+				text: 'Settled once.',
+				stopReason: 'end',
+				usage: { totalTokens: 19, cost: 0.5 }
+			};
+		}
 		if (firstUser === 'Keep using tools past eight turns.') {
 			const completedCalls = input.messages.filter((message) => message.role === 'tool').length;
 			if (completedCalls < 9) {
@@ -85,6 +112,35 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 		await harness?.stop();
 	});
 
+	const sessionForPrompt = async (prompt: string) =>
+		(
+			await harness.pool.query<{
+				norbital_id: string;
+				messages: Array<{ kind: string; usage: { totalTokens?: number } | null }>;
+				turns: Array<{ status: string; usage_settled_at: string | null }>;
+				usage_total_tokens: number;
+				usage_cost_usd: number;
+				usage_turns_counted: number;
+			}>(
+				`SELECT norbital_id,
+				        messages,
+				        turns,
+				        usage_total_tokens,
+				        usage_cost_usd,
+				        usage_turns_counted
+				   FROM chat_session
+				  WHERE EXISTS (
+				        SELECT 1
+				          FROM jsonb_array_elements(messages) AS message
+				         WHERE message->>'role' = 'user'
+				           AND message->'parts'->0->>'content' = $1
+				  )
+				  ORDER BY norbital_created_at DESC
+				  LIMIT 1`,
+				[prompt]
+			)
+		).rows[0];
+
 	it('runs the Pod-owned loop and exposes completed turns through ordinary synced rows', async () => {
 		const response = await harness.request(
 			{
@@ -100,7 +156,7 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 		expect(result.text).toBe('The workspace is ready.');
 		expect(calls).toBe(2);
 
-		// The transcript is a sequence of AiMessages, one per row, replayable without reconstruction.
+		// The transcript is one tenant-owned aggregate, replayable without cross-collection joins.
 		const session = await harness.pool.query<{ norbital_id: string }>(
 			`SELECT norbital_id FROM chat_session WHERE automation_run_id = $1::uuid`,
 			[result.runId]
@@ -112,27 +168,30 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 				method: 'POST',
 				path: 'sync/shape',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ collection: 'chat_message', pageSize: 100 })
+				body: JSON.stringify({ collection: 'chat_session', pageSize: 100 })
 			},
 			admin
 		);
 		expect(shape.status).toBe(200);
 		const transcript = (await shape.json()) as {
 			rows: Array<{
-				chat_id: string;
-				seq: number;
-				role: string;
-				parts: Array<{
+				norbital_id: string;
+				messages: Array<{
+					seq: number;
 					role: string;
-					content: string;
-					toolCallId?: string;
-					toolCalls?: Array<{ name: string }>;
-				}> | null;
+					parts: Array<{
+						role: string;
+						content: string;
+						toolCallId?: string;
+						toolCalls?: Array<{ name: string }>;
+					}> | null;
+				}>;
 			}>;
 		};
-		const steps = transcript.rows
-			.filter((row) => row.chat_id === session.rows[0]?.norbital_id)
-			.sort((left, right) => left.seq - right.seq);
+		const steps = (
+			transcript.rows.find((row) => row.norbital_id === session.rows[0]?.norbital_id)?.messages ??
+			[]
+		).sort((left, right) => left.seq - right.seq);
 
 		// user prompt, the assistant turn carrying its tool call, the tool result, the final answer.
 		expect(steps.map((step) => step.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
@@ -156,8 +215,16 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 			[member.userId]
 		);
 		await harness.pool.query(
-			`INSERT INTO chat_message (chat_id, role, seq, parts)
-			 VALUES ($1::uuid, 'user', 1, '[{"role":"user","content":"mine"}]'::jsonb)`,
+			`UPDATE chat_session
+			    SET messages = jsonb_build_array(jsonb_build_object(
+			      'norbital_id', uuidv7(),
+			      'turn_id', NULL,
+			      'role', 'user',
+			      'seq', 1,
+			      'parts', '[{"role":"user","content":"mine"}]'::jsonb,
+			      'kind', 'normal'
+			    ))
+			  WHERE norbital_id = $1::uuid`,
 			[ownSession.rows[0]!.norbital_id]
 		);
 
@@ -166,21 +233,23 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 				method: 'POST',
 				path: 'sync/shape',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ collection: 'chat_message', pageSize: 100 })
+				body: JSON.stringify({ collection: 'chat_session', pageSize: 100 })
 			},
 			member
 		);
 		const otherRows =
 			otherShape.status === 200
-				? ((await otherShape.json()) as { rows: Array<{ chat_id: string }> }).rows
+				? ((await otherShape.json()) as { rows: Array<{ norbital_id: string }> }).rows
 				: [];
 		// Their own message is visible — so the guard is filtering, not just refusing.
 		expect(otherShape.status).toBe(200);
-		expect(otherRows.filter((row) => row.chat_id === ownSession.rows[0]?.norbital_id)).toHaveLength(
-			1
-		);
+		expect(
+			otherRows.filter((row) => row.norbital_id === ownSession.rows[0]?.norbital_id)
+		).toHaveLength(1);
 		// The automation's session belongs to the admin, and must not appear.
-		expect(otherRows.filter((row) => row.chat_id === session.rows[0]?.norbital_id)).toHaveLength(0);
+		expect(
+			otherRows.filter((row) => row.norbital_id === session.rows[0]?.norbital_id)
+		).toHaveLength(0);
 
 		const run = await harness.pool.query<{ status: string }>(
 			`SELECT status FROM automation_run WHERE norbital_id = $1::uuid`,
@@ -213,23 +282,26 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 
 		// Deleting the messages that produced it must not move the total — that is the whole reason it
 		// is a counter and not a sum.
-		await harness.pool.query(`DELETE FROM chat_message WHERE chat_id = $1::uuid`, [chatId]);
+		await harness.pool.query(
+			`UPDATE chat_session SET messages = '[]'::jsonb WHERE norbital_id = $1::uuid`,
+			[chatId]
+		);
 		const afterDeletion = await totals();
 		expect(afterDeletion?.usage_total_tokens).toBe(17);
 		expect(afterDeletion?.usage_turns_counted).toBe(1);
 
 		// And settling the same turn again adds nothing: the claim on `usage_settled_at` already
 		// happened, so a retried or resumed run cannot bill the conversation twice.
-		const turnId = await harness.pool.query<{ norbital_id: string }>(
-			`SELECT norbital_id FROM chat_turn WHERE chat_id = $1::uuid AND subagent_id IS NULL`,
+		const turnId = await harness.pool.query<{ norbital_id: string; usage_settled_at: string }>(
+			`SELECT turn->>'norbital_id' AS norbital_id,
+			        turn->>'usage_settled_at' AS usage_settled_at
+			   FROM chat_session,
+			        jsonb_array_elements(turns) AS turn
+			  WHERE norbital_id = $1::uuid
+			    AND turn->>'subagent_id' IS NULL`,
 			[chatId]
 		);
-		const reclaim = await harness.pool.query(
-			`UPDATE chat_turn SET usage_settled_at = now()
-			  WHERE norbital_id = $1::uuid AND usage_settled_at IS NULL RETURNING norbital_id`,
-			[turnId.rows[0]!.norbital_id]
-		);
-		expect(reclaim.rows).toHaveLength(0);
+		expect(turnId.rows[0]?.usage_settled_at).toBeTruthy();
 	});
 
 	it('continues past the former eight-iteration ceiling until the model finishes', async () => {
@@ -245,5 +317,99 @@ describe('Pod AI and automation transcript — runtime E2E', () => {
 		expect(response.status, await response.clone().text()).toBe(200);
 		const result = (await response.json()) as { text: string };
 		expect(result.text).toBe('Completed after nine tool calls.');
+	});
+
+	it('persists and settles usage from an empty provider completion', async () => {
+		const prompt = 'Finish with no content.';
+		const response = await harness.request(
+			{
+				method: 'POST',
+				path: 'agent/start',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ message: prompt })
+			},
+			admin
+		);
+		expect(response.status, await response.clone().text()).toBe(200);
+		expect(emptyCalls).toBe(1);
+		const session = await sessionForPrompt(prompt);
+		expect(session).toBeTruthy();
+		expect(session?.messages.filter((message) => message.kind === 'usage')).toHaveLength(1);
+		expect(session?.messages.find((message) => message.kind === 'usage')?.usage?.totalTokens).toBe(
+			13
+		);
+		expect(session?.usage_total_tokens).toBe(13);
+		expect(session?.usage_cost_usd).toBeCloseTo(0.25);
+		expect(session?.usage_turns_counted).toBe(1);
+		expect(session?.turns[0]).toMatchObject({ status: 'succeeded' });
+		expect(session?.turns[0]?.usage_settled_at).toBeTruthy();
+	});
+
+	it('settles a refused provider call instead of dropping its usage', async () => {
+		const prompt = 'Refuse this request.';
+		const response = await harness.request(
+			{
+				method: 'POST',
+				path: 'agent/start',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ message: prompt })
+			},
+			admin
+		);
+		expect(response.status).toBe(500);
+		expect(refusalCalls).toBe(1);
+		const session = await sessionForPrompt(prompt);
+		expect(session?.messages.filter((message) => message.kind === 'usage')).toHaveLength(1);
+		expect(session?.usage_total_tokens).toBe(23);
+		expect(session?.usage_cost_usd).toBeCloseTo(0.7);
+		expect(session?.usage_turns_counted).toBe(1);
+		expect(session?.turns[0]).toMatchObject({ status: 'failed' });
+		expect(session?.turns[0]?.usage_settled_at).toBeTruthy();
+	});
+
+	it('retries only settlement and accounts for the provider call exactly once', async () => {
+		await harness.pool.query(`
+			DROP TRIGGER IF EXISTS agent_settlement_fail_once ON chat_session;
+			DROP FUNCTION IF EXISTS agent_settlement_fail_once();
+			DROP SEQUENCE IF EXISTS agent_settlement_fail_once_seq;
+			CREATE SEQUENCE agent_settlement_fail_once_seq;
+			CREATE FUNCTION agent_settlement_fail_once() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN
+				IF NEW.usage_turns_counted > OLD.usage_turns_counted
+				   AND nextval('agent_settlement_fail_once_seq') = 1 THEN
+					RAISE EXCEPTION 'transient settlement failure';
+				END IF;
+				RETURN NEW;
+			END;
+			$$;
+			CREATE TRIGGER agent_settlement_fail_once
+				BEFORE UPDATE ON chat_session
+				FOR EACH ROW EXECUTE FUNCTION agent_settlement_fail_once();
+		`);
+		const prompt = 'Retry settlement, not the provider.';
+		try {
+			const response = await harness.request(
+				{
+					method: 'POST',
+					path: 'agent/start',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ message: prompt })
+				},
+				admin
+			);
+			expect(response.status, await response.clone().text()).toBe(200);
+			expect(retryCalls).toBe(1);
+			const session = await sessionForPrompt(prompt);
+			expect(session?.usage_total_tokens).toBe(19);
+			expect(session?.usage_cost_usd).toBeCloseTo(0.5);
+			expect(session?.usage_turns_counted).toBe(1);
+			expect(session?.turns[0]?.usage_settled_at).toBeTruthy();
+		} finally {
+			await harness.pool.query(`
+				DROP TRIGGER IF EXISTS agent_settlement_fail_once ON chat_session;
+				DROP FUNCTION IF EXISTS agent_settlement_fail_once();
+				DROP SEQUENCE IF EXISTS agent_settlement_fail_once_seq;
+			`);
+		}
 	});
 });
