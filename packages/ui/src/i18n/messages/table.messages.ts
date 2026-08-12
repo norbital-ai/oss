@@ -100,6 +100,7 @@ export const tableMessages = defineMessages({
 		'table.noCustomViewDesc':
 			'This collection has no dedicated UI representation. Use Raw to inspect its fields.',
 		'table.approvalRequest': 'Approval request',
+		'table.approvalRequestId': 'Request ID',
 		'table.noApprovalRequest': 'No approval request',
 		'table.noApprovalRequestDesc': 'This record has no approval workflow activity yet.',
 		'table.approve': 'Approve',
@@ -269,6 +270,7 @@ export const tableMessages = defineMessages({
 		'table.noCustomView': '没有自定义记录视图',
 		'table.noCustomViewDesc': '此集合没有专用的界面表示。使用原始视图检查其字段。',
 		'table.approvalRequest': '审批请求',
+		'table.approvalRequestId': '请求 ID',
 		'table.noApprovalRequest': '没有审批请求',
 		'table.noApprovalRequestDesc': '此记录尚无审批流程活动。',
 		'table.approve': '批准',

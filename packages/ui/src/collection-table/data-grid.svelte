@@ -33,6 +33,9 @@
 		readonly emptyPlaceholder?: Snippet;
 		readonly details?: Snippet<[TRow]>;
 		readonly hasDetails?: (row: TRow) => boolean;
+		/** Controlled disclosure state. Bind this above refreshable data to survive grid remounts. */
+		expandedRowIds?: string[];
+		readonly onExpandedRowIdsChange?: (rowIds: string[]) => void;
 	}
 </script>
 
@@ -62,10 +65,14 @@
 		bounded = false,
 		emptyPlaceholder,
 		details,
-		hasDetails
+		hasDetails,
+		expandedRowIds = $bindable<string[] | undefined>(),
+		onExpandedRowIdsChange
 	}: DataGridProps<TRow> = $props();
 
 	let sort = $state<readonly TableSortEntry[]>([]);
+	let internalExpandedRowIds = $state<string[]>([]);
+	const resolvedExpandedRowIds = $derived(expandedRowIds ?? internalExpandedRowIds);
 
 	function columnValue(column: DataGridColumn<TRow>, row: TRow): unknown {
 		return column.value?.(row) ?? Reflect.get(row, column.id);
@@ -112,7 +119,12 @@
 		conditionDefault: undefined,
 		parseCondition: () => undefined,
 		callbacks: {
-			onSortChange: (next) => (sort = next)
+			onSortChange: (next) => (sort = next),
+			onExpandedChange: (next) => {
+				if (expandedRowIds === undefined) internalExpandedRowIds = next;
+				else expandedRowIds = next;
+				onExpandedRowIdsChange?.(next);
+			}
 		}
 	});
 
@@ -137,6 +149,14 @@
 	$effect(() => {
 		table.data = sortedRows;
 		table.totalRows = sortedRows.length;
+	});
+
+	$effect(() => {
+		// The parent owns disclosure identity. Polling may replace every row object — or remount this
+		// grid through a refreshed tab snippet — without being allowed to collapse a row the person
+		// explicitly opened. Missing ids are intentionally retained so a transient empty result cannot
+		// erase the choice before the next snapshot arrives.
+		table.expanded.current = Object.fromEntries(resolvedExpandedRowIds.map((id) => [id, true]));
 	});
 </script>
 

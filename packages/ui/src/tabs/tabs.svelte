@@ -31,6 +31,7 @@
 	type ResolvedTabMeta = {
 		value: string;
 		label?: string;
+		labelSnippet?: Snippet;
 		icon?: string;
 		description?: string;
 		disabled?: boolean;
@@ -52,6 +53,7 @@
 		return {
 			value: nameIsSnippet ? `tab-${index}` : typeof name === 'string' ? name : `tab-${index}`,
 			label: nameIsSnippet || labelIsSnippet ? undefined : labelText,
+			labelSnippet: nameIsSnippet ? name : labelIsSnippet ? (tab.label as Snippet) : undefined,
 			icon: tab.icon,
 			description: tab.description,
 			disabled: tab.disabled,

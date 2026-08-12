@@ -142,6 +142,8 @@
 			CollectionType<Row, object, object>
 		> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
+	const rawRecordFields = $derived(definition.fields.filter((field) => !isSystemField(field.name)));
+	const rawSystemFields = $derived(definition.fields.filter((field) => isSystemField(field.name)));
 	const operations = $derived(
 		client.db[collection] as CollectionOperations<CollectionType<Row, object, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
 	);
@@ -990,72 +992,174 @@
 
 {#snippet approvalDetails()}
 	<Stack gap="md">
-		{#if queries.approval?.loading || approvalRequest}
-			<div class="rounded-lg border bg-muted/30 p-4">
-				<p class="text-sm font-medium">{t('table.approvalRequest')}</p>
-				<p class="mt-1 text-sm text-muted-foreground">{approvalStatusMessage}</p>
-			</div>
-		{/if}
-		{#if approvalRequest}
-			<Grid as="dl" minimum="card" gap="sm" class="rounded-lg border p-4">
-				{#each Object.entries(approvalRequest) as [key, value] (key)}
-					<div class="min-w-0">
-						<dt class="text-xs font-medium text-muted-foreground">{humanize(key)}</dt>
-						<dd class="mt-1 break-words text-sm">
-							{typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '—')}
-						</dd>
+		{#if queries.approval?.loading}
+			<Inline
+				gap="sm"
+				class="rounded-lg border bg-card p-4 text-sm text-muted-foreground"
+				role="status"
+			>
+				<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
+				{t('table.approvalLoading')}
+			</Inline>
+		{:else if approvalRequest}
+			<Stack gap="md" class="rounded-lg border bg-card p-4">
+				<Inline align="start" gap="md">
+					<div
+						class={cn(
+							'flex size-9 shrink-0 items-center justify-center rounded-full',
+							approvalRequest.status === 'APPROVED' && 'bg-success/10 text-success',
+							approvalRequest.status === 'REJECTED' && 'bg-destructive/10 text-destructive',
+							approvalRequest.status === 'REQUEST_FOR_CHANGE' &&
+								'bg-warning/15 text-warning-foreground',
+							approvalRequest.status === 'ONGOING' && 'bg-brand/10 text-brand',
+							!['APPROVED', 'REJECTED', 'REQUEST_FOR_CHANGE', 'ONGOING'].includes(
+								approvalRequest.status
+							) && 'bg-muted text-muted-foreground'
+						)}
+					>
+						<Icon
+							icon={approvalRequest.status === 'APPROVED'
+								? 'lucide:circle-check'
+								: approvalRequest.status === 'REJECTED'
+									? 'lucide:circle-x'
+									: approvalRequest.status === 'REQUEST_FOR_CHANGE'
+										? 'lucide:message-square-warning'
+										: approvalRequest.status === 'ONGOING'
+											? 'lucide:clock-3'
+											: 'lucide:shield-check'}
+							class="size-4"
+							aria-hidden="true"
+						/>
 					</div>
-				{/each}
-			</Grid>
-		{:else if !queries.approval?.loading}
+					<Stack gap="xs" grow>
+						<Inline gap="sm" justify="between">
+							<p class="text-sm font-medium">{t('table.approvalRequest')}</p>
+							<span
+								class={cn(
+									'rounded-full border px-2 py-0.5 text-xs font-medium',
+									approvalRequest.status === 'APPROVED' &&
+										'border-success/25 bg-success/10 text-success',
+									approvalRequest.status === 'REJECTED' &&
+										'border-destructive/25 bg-destructive/10 text-destructive',
+									approvalRequest.status === 'REQUEST_FOR_CHANGE' &&
+										'border-warning/30 bg-warning/15 text-warning-foreground',
+									approvalRequest.status === 'ONGOING' && 'border-brand/25 bg-brand/10 text-brand'
+								)}>{humanize(approvalRequest.status)}</span
+							>
+						</Inline>
+						<p class="text-sm leading-5 text-muted-foreground">{approvalStatusMessage}</p>
+						<p
+							class="truncate font-mono text-micro text-muted-foreground"
+							title={approvalRequest.norbital_id}
+						>
+							{t('table.approvalRequestId')}: {approvalRequest.norbital_id}
+						</p>
+					</Stack>
+				</Inline>
+				{#if approvalRequest.status === 'ONGOING'}
+					<Cluster gap="sm" class="border-t pt-4">
+						<Button
+							disabled={approvalActionPending}
+							onclick={() => void processApproval('APPROVED')}
+						>
+							<Icon icon="lucide:check" class="mr-1.5 size-3.5" aria-hidden="true" />
+							{t('table.approve')}
+						</Button>
+						<Button variant="outline" disabled={approvalActionPending} onclick={openChangeRequest}
+							>{t('table.requestChanges')}</Button
+						>
+						<Button
+							variant="outline"
+							class="text-destructive hover:text-destructive"
+							disabled={approvalActionPending}
+							onclick={() => void processApproval('REJECTED')}>{t('table.reject')}</Button
+						>
+						<Button variant="ghost" disabled={approvalActionPending} onclick={withdrawApproval}
+							>{t('table.withdrawRequest')}</Button
+						>
+					</Cluster>
+				{/if}
+			</Stack>
+		{:else}
 			<CollectionRecordDetailEmpty
 				icon="lucide:shield-check"
 				title={t('table.noApprovalRequest')}
 				description={t('table.noApprovalRequestDesc')}
 			/>
 		{/if}
-		{#if approvalRequest?.status === 'ONGOING'}
-			<Cluster gap="sm">
-				<Button disabled={approvalActionPending} onclick={() => void processApproval('APPROVED')}>
-					{t('table.approve')}
-				</Button>
-				<Button variant="outline" disabled={approvalActionPending} onclick={openChangeRequest}
-					>{t('table.requestChanges')}</Button
-				>
-				<Button
-					variant="outline"
-					disabled={approvalActionPending}
-					onclick={() => void processApproval('REJECTED')}>{t('table.reject')}</Button
-				>
-				<Button variant="ghost" disabled={approvalActionPending} onclick={withdrawApproval}
-					>{t('table.withdrawRequest')}</Button
-				>
-			</Cluster>
-		{/if}
 	</Stack>
+{/snippet}
+
+{#snippet rawFieldGrid({
+	record,
+	fields,
+	className
+}: {
+	record: Row;
+	fields: readonly CollectionField[];
+	className?: string;
+})}
+	<Grid as="dl" minimum="compact" gap="md" class={className}>
+		{#each fields as field (field.name)}
+			<div class="min-w-0">
+				<dt class="text-xs font-medium leading-4 text-muted-foreground">
+					{field.label ?? humanize(field.name)}
+				</dt>
+				<dd class="mt-0.5 min-w-0 break-words text-sm leading-5">
+					{#if field.kind === 'json'}
+						<pre
+							class="whitespace-pre-wrap break-words font-mono text-xs leading-5">{formatRawStructuredValue(
+								Reflect.get(record, field.name)
+							)}</pre>
+					{:else}
+						<DataRenderer {field} value={Reflect.get(record, field.name)} mode="display" />
+					{/if}
+				</dd>
+			</div>
+		{/each}
+	</Grid>
 {/snippet}
 
 {#snippet rawDetails()}
 	{#if activeRecord}
-		<Grid as="dl" minimum="card" gap="sm">
-			{#each definition.fields as field (field.name)}
-				<div class="min-w-0 rounded-lg border bg-card p-4">
-					<dt class="text-xs font-medium text-muted-foreground">
-						{field.label ?? humanize(field.name)}
-					</dt>
-					<dd class="mt-1 text-sm">
-						{#if field.kind === 'json'}
-							<pre
-								class="whitespace-pre-wrap break-words font-mono text-xs">{formatRawStructuredValue(
-									Reflect.get(activeRecord, field.name)
-								)}</pre>
-						{:else}
-							<DataRenderer {field} value={Reflect.get(activeRecord, field.name)} mode="display" />
-						{/if}
-					</dd>
-				</div>
-			{/each}
-		</Grid>
+		<Stack gap="md">
+			{#if rawRecordFields.length > 0}
+				{@render rawFieldGrid({
+					record: activeRecord,
+					fields: rawRecordFields,
+					className: 'rounded-lg border bg-card p-3'
+				})}
+			{/if}
+			{#if rawSystemFields.length > 0}
+				<details class="group rounded-lg border bg-muted/15">
+					<summary
+						class="cursor-pointer list-none rounded-lg px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+					>
+						<Inline gap="sm" justify="between">
+							<Inline gap="sm">
+								<Icon
+									icon="lucide:database"
+									class="size-3.5 text-muted-foreground"
+									aria-hidden="true"
+								/>
+								<span class="text-sm font-medium">{t('table.systemFields')}</span>
+								<span class="text-xs text-muted-foreground">{rawSystemFields.length}</span>
+							</Inline>
+							<Icon
+								icon="lucide:chevron-down"
+								class="size-4 text-muted-foreground transition-transform group-open:rotate-180"
+								aria-hidden="true"
+							/>
+						</Inline>
+					</summary>
+					{@render rawFieldGrid({
+						record: activeRecord,
+						fields: rawSystemFields,
+						className: 'border-t p-3'
+					})}
+				</details>
+			{/if}
+		</Stack>
 	{/if}
 {/snippet}
 
