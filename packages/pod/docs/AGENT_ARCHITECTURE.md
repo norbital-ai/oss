@@ -322,9 +322,10 @@ tenant-workspace action and from the full `/agent` route, including under standa
 uses the product agent icon, exposes the requestor's replicated conversation list as a thread
 selector, and keeps a compact composer at the bottom of the panel. It calls `agentChatStart`,
 subscribes to `chat_session`, and projects its embedded messages and turns from the local replica.
-Partial and completed messages, generated title, terminal state and usage therefore cross the same
-ordinary sync stream; refresh, reconnect, offline catch-up and multi-tab convergence do not require
-an agent-specific browser stream or a race-prone collection fan-out.
+Completed messages, generated title, terminal state and usage therefore cross the same ordinary
+sync stream; refresh, reconnect, offline catch-up and multi-tab convergence do not require an
+agent-specific browser stream or a race-prone collection fan-out. Token deltas are deliberately not
+replicated or persisted; the UI advances when a provider part completes.
 
 Provider text and reasoning deltas stay in the host's short-lived stream queue. Pod appends one
 durable `chat_session` message only when each provider text or reasoning part completes, so a token
