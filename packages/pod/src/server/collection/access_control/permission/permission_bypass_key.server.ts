@@ -50,6 +50,12 @@ export function getCurrentPermissionBypassKey(): string | undefined {
 	return bypassStorage.getStore();
 }
 
+/** True only when `key` is the bypass capability active in this exact async request context. */
+export function isCurrentPermissionBypassKey(key: string | undefined): boolean {
+	const activeKey = getCurrentPermissionBypassKey();
+	return typeof activeKey === 'string' && key === activeKey;
+}
+
 /**
  * Runs `fn` with the system permission-bypass key active. Policy resolution
  * skips row-level checks for the duration of the call.

@@ -1,7 +1,7 @@
 import type { TApprovalConfig, TPolicy } from '@norbital-ai/platform-utils/system/types';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { error } from '../../http_error.js';
-import { getPermissionBypassKey } from './permission_bypass_key.server.js';
+import { isCurrentPermissionBypassKey } from './permission_bypass_key.server.js';
 import { loadPoliciesForTeams } from '../policy_grant_loader.server.js';
 
 type PolicyGrant = TPolicy['grants'][number];
@@ -26,7 +26,7 @@ export async function resolvePolicyGrants<
 	const { approvalServiceBypassKey, collectionMetadata } = scope;
 
 	if (approvalServiceBypassKey) {
-		if (approvalServiceBypassKey !== getPermissionBypassKey()) {
+		if (!isCurrentPermissionBypassKey(approvalServiceBypassKey)) {
 			throw new Error('Invalid approval service bypass key');
 		}
 		return [];

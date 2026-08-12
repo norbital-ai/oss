@@ -719,6 +719,25 @@ describe('Pod automations and hooks — E2E', () => {
 			admin
 		);
 		expect(hostElevated.status, await hostElevated.text()).toBe(200);
+		const hostHooked = await harness.request(
+			{
+				method: 'POST',
+				path: 'collections/createMany',
+				headers: {
+					'content-type': 'application/json',
+					[TRUSTED_PERMISSION_BYPASS_HEADER]: '1'
+				},
+				body: JSON.stringify({
+					collection: 'rfis',
+					inputs: [{ title: 'derive:ephemeral-host-capability' }]
+				})
+			},
+			admin
+		);
+		expect(hostHooked.status, await hostHooked.text()).toBe(200);
+		expect(await defectTitles('derived-from:derive:ephemeral-host-capability')).toEqual([
+			'derived-from:derive:ephemeral-host-capability'
+		]);
 		expect(
 			await harness.pool.query(
 				`SELECT name, norbital_created_at::text FROM team WHERE norbital_id = $1::uuid`,
