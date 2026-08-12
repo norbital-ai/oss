@@ -74,8 +74,11 @@ interface NeonCreateBranchRequest {
 		name?: string;
 		expires_at?: string;
 	};
-	endpoints: Array<{ type: 'read_write' }>;
+	endpoints: Array<{ type: 'read_write'; suspend_timeout_seconds: number }>;
 }
+
+/** Every Norbital-managed compute scales to zero after five idle minutes. */
+const SUSPEND_TIMEOUT_SECONDS = 300;
 
 function normalizeNeonConnectionUri(uri: string): string {
 	const url = new URL(uri);
@@ -201,6 +204,9 @@ export class NeonTenantDbProvider implements TenantDbProvider {
 					pg_version: this.pgVersion,
 					provisioner: 'k8s-neonvm',
 					history_retention_seconds: this.historyRetentionSeconds,
+					default_endpoint_settings: {
+						suspend_timeout_seconds: SUSPEND_TIMEOUT_SECONDS
+					},
 					branch: { name: 'main' }
 				}
 			})
@@ -256,7 +262,7 @@ export class NeonTenantDbProvider implements TenantDbProvider {
 	): Promise<NeonBranchConfig> {
 		const body: NeonCreateBranchRequest = {
 			branch: { parent_id: parentBranchId },
-			endpoints: [{ type: 'read_write' }]
+			endpoints: [{ type: 'read_write', suspend_timeout_seconds: SUSPEND_TIMEOUT_SECONDS }]
 		};
 		if (options?.name) {
 			body.branch.name = options.name;

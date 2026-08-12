@@ -34,6 +34,13 @@ Use the narrowest documented subpath:
 The MinIO parser and SvelteKit guard remain host adapters; neither is used for template delivery or
 required by Pod's tenant workspace contract.
 
+## Neon provider policy
+
+`NeonTenantDbProvider` explicitly configures every project default and every endpoint it creates to
+scale to zero after 300 seconds of inactivity. The provider deliberately leaves Neon's autoscaling
+minimum and maximum unset, so this cost-control invariant does not replace the host's intended compute
+sizing or plan defaults.
+
 ## Development
 
 ```sh
