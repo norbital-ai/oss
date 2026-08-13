@@ -55,6 +55,7 @@ describe('workspace jobs', () => {
 			messaging: messagingBinding({ send: async () => ({ sent: true }) })
 		});
 		expect(jobs.map((job) => job.name)).toEqual([
+			'pod:integration-import',
 			'pod:agent-conversation-titles',
 			'pod:automation:job',
 			'pod:notification-outbox'
@@ -66,6 +67,7 @@ describe('workspace jobs', () => {
 			organizationId: 'org-1'
 		});
 		expect(bare.map((job) => job.name)).toEqual([
+			'pod:integration-import',
 			'pod:agent-conversation-titles',
 			'pod:automation:job'
 		]);

@@ -91,8 +91,17 @@ write authority. An empty authored action section permits the action without add
 
 Runtime endpoints MUST authenticate before registry dispatch. An export pipeline receives only rows
 visible to the caller and selected by the requested record IDs/filter. Its returned manifest MUST be
-JSON-serializable. An import pipeline MUST validate its input before ordinary collection operations
-commit the returned records; partial imported writes MUST roll back.
+JSON-serializable. An ordinary import pipeline MUST validate its input before ordinary collection
+operations commit the returned records; partial imported writes MUST roll back.
+
+An inbound integration delivery MUST stage one durable receipt keyed by the provider event id, then
+synchronously validate its declared input before acknowledging success. A worker invocation MUST claim at
+most one receipt and commit at most one bounded `createMany` chunk with that receipt's offset. Pipeline
+output MUST be materialized once before the first chunk; retries MUST use that materialization rather
+than rerunning author code. The row writes and offset advance MUST share one transaction, and an expired
+lease MUST resume from that offset. Retryable faults MUST use bounded backoff; schema refusal is terminal
+with zero rows. Each runtime read/write step is budgeted to complete within two seconds; longer waits and
+provider latency belong to the host orchestrator between durable steps.
 
 Automations MUST be declared in the compiled registry, run with the restricted before API, and
 record a success or failure in `automation_run`. Integration transforms MUST use their declared

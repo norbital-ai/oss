@@ -12,6 +12,7 @@ import type {
 } from './types.js';
 import { processEnvSecrets, resolveSecretHeaders } from './integration-http.js';
 import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
+import { createHash } from 'node:crypto';
 
 /** Calls the private runtime host-control entry point. */
 export type RuntimeDispatch = (body: unknown) => Promise<unknown>;
@@ -301,7 +302,10 @@ function integrationPullJob(
 					integrationName,
 					bindingName,
 					collectionName,
-					importData
+					importData,
+					// The cursor names the remote page. Hash it to keep arbitrary provider cursor values
+					// inside the command's bounded event-id contract while retaining replay identity.
+					eventId: `pull:${createHash('sha256').update(cursor ?? '').digest('hex')}`
 				})) as { readonly status?: string; readonly reason?: string };
 				// A body the binding's `input` schema turns down comes back as a result rather than a throw,
 				// because a webhook host needs to answer its sender. A pull has no sender to answer, so the
@@ -372,6 +376,13 @@ function integrationPullJobs(options: WorkspaceJobOptions): QueueJob[] {
  */
 export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[] {
 	const jobs: QueueJob[] = [
+		{
+			name: 'pod:integration-import',
+			schedule: 'continuous',
+			run: async () => {
+				await options.dispatch({ kind: 'integration-import', action: 'run' });
+			}
+		},
 		{
 			name: 'pod:agent-conversation-titles',
 			schedule: 'continuous',

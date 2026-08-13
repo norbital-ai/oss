@@ -193,6 +193,14 @@ the same complete audit snapshots there. This projection is limited to driver-eq
 JSON, enum, date, timestamp, and system-range columns; numeric, binary, vector, array, or
 workspace-defined custom driver types retain the ordinary full-row return-and-audit path.
 
+Inbound integration imports intentionally use a different boundary from an ordinary caller bulk. The
+host first stages a validated provider delivery in `integration_inbound_event`; the continuous worker
+then claims one receipt and writes one at-most-100-row `createMany` chunk. Pipeline output is persisted
+before writing, and the receipt offset advances in the same transaction as its chunk. Lease recovery
+therefore cannot repeat author code or commit a prefix twice. The provider page progresses without
+weakening ordinary `createMany` atomicity. Each tenant runtime invocation performs one durable step
+designed to finish below the two-second cap; scheduling and waiting happen outside it.
+
 ## Filesystem compiler
 
 The compiler treats the workspace filesystem as the source of truth. One source inventory is shared
@@ -376,7 +384,9 @@ outbox drains, and one automation cannot overlap itself.
 
 Collection-event dispatch is tenant-wide, not client-driven. A queue job tails the authoritative
 outbox and advances `_norbital_automation_cursor`; opening another browser cannot duplicate a run.
-Integration and notification outboxes drain independently with claim leases and bounded retry.
+Integration and notification outboxes drain independently with claim leases and bounded retry. Inbound
+integration receipts drain independently too: each tick performs one durable bounded chunk rather than
+holding a tenant runtime invocation open for the full provider page.
 
 ## File storage
 

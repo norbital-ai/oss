@@ -505,7 +505,7 @@ XLSX, JSON, text, or binary attachments.
 Collection `+integrations.ts` files define tenant-side integration behavior:
 
 - the `connection` — a base URL and a _reference_ to the credential that reaches it;
-- inbound pull or system-event triggers (`webhook` is declarable but not yet delivered);
+- inbound webhook, pull, or system-event triggers;
 - outbound mutation events;
 - the transformation from a record event to a delivery payload.
 
@@ -516,9 +516,13 @@ there must be referenced — both directions are build errors.
 Tenant integration code decides what is accepted and what is sent. It does not hold endpoint
 credentials or perform any network request. Outbound delivery is claimed from a durable outbox,
 retried with backoff, and handed to the host's `integrationDelivery` function together with the
-declared destination; `httpIntegrationDelivery()` is the built-in implementation of it. Inbound pulls
-are host-driven jobs on the binding's cron schedule, resuming from `integration_cursor`. A
-`systemEvent` destination never leaves the pod and reaches the `receive` bindings waiting on it.
+declared destination; `httpIntegrationDelivery()` is the built-in implementation of it. Inbound
+deliveries validate and stage a durable receipt, then a continuous worker materializes the pipeline
+once and commits one bounded atomic collection chunk per runtime invocation. Pulls are host-driven jobs
+on the binding's cron schedule and stage under a cursor-derived event id before their cursor advances;
+this makes a restart resume the same page rather than partially re-importing it. A `systemEvent`
+destination never leaves the pod and reaches the `receive` bindings waiting on it. Runtime reads and
+writes are bounded below two seconds; durable receipts carry progressive import work between steps.
 
 ## Automations, AI, and agent tools
 

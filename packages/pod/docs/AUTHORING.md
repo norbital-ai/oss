@@ -382,13 +382,19 @@ source is read, so a delivery cannot pick which of two the filter sees. A delive
 absent or undeclared is rejected before it reaches the pipeline. Declaring `events` without
 `eventType` is a build error rather than a narrowing that silently accepts everything.
 
-Every delivery is claimed in `integration_inbound_event` before its import runs, keyed on the declared
-event id and falling back to a digest of the raw body. A provider that redelivers is normal, so the
-second arrival loses one insert instead of importing the page again. `input` is parsed before the
-pipeline, which is what makes a malformed payload a refusal with nothing written rather than a
-half-import; the host answers the sender accordingly instead of inviting a retry. Receipts are swept
-after 30 days, keeping the newest thousand however old they are — long past any provider's retry
-horizon, because forgetting a receipt is the same as being willing to import it again.
+Every delivery is staged in `integration_inbound_event` under the declared event id (or a digest of the
+raw body), then synchronously checked against the binding's `input` before it is acknowledged. A provider
+redelivery therefore finds the same receipt instead of importing another page. An input refusal is marked
+terminal with no rows, and accepted deliveries are progressed by the continuous import worker.
+
+The worker claims one receipt at a time, runs its pipeline once, saves the resulting rows, and commits
+one bounded `createMany` chunk plus its offset in the same transaction. A lost lease resumes at that
+offset; it never reruns the pipeline or leaves a partially committed chunk. Transient failures wait with
+bounded backoff, while input refusal is terminal. Do not expect a large receive binding to finish during
+the webhook request: every Pod runtime read/write step is kept below two seconds, and progressive
+progress happens through durable worker invocations. Receipts are swept after 30 days, keeping the newest
+thousand however old they are — long past any provider retry horizon, because forgetting a receipt is
+the same as being willing to import it again.
 
 ## Secrets
 

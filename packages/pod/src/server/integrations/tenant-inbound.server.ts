@@ -2,9 +2,15 @@ import { eq, getColumns } from 'drizzle-orm';
 import { integration_cursor } from '@norbital-ai/platform-utils/system/workspace-schema';
 import { getWorkspace, type ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
-import { createRecord, updateRecord } from '$lib/server/collection/collection_ops.server.js';
+import { createMany, updateRecord } from '$lib/server/collection/collection_ops.server.js';
+import { withCollectionTransaction } from '$lib/server/collection/collection_transaction.server.js';
 import { createBeforeApi } from '$lib/server/collection/hook-api.server.js';
-import { runIntegrationReceivePipeline } from '$lib/server/run/collection_pipeline.js';
+import {
+	parseIntegrationReceiveInput,
+	runIntegrationReceivePipeline
+} from '$lib/server/run/collection_pipeline.js';
+import { randomUUID } from 'node:crypto';
+import { v5 as uuidv5 } from 'uuid';
 
 /** The manifest's own name for one binding, and the key its resume point is stored under. */
 export function integrationBindingKey(integrationName: string, bindingName: string): string {
@@ -74,8 +80,26 @@ export async function runIntegrationCursor(request: IntegrationCursorRequest) {
  */
 export type IntegrationImportOutcome = {
 	readonly imported: number;
-	readonly status: 'imported' | 'duplicate' | 'refused';
+	readonly status: 'queued' | 'duplicate' | 'refused';
+	readonly receiptId?: string;
 	readonly reason?: string;
+};
+
+/** Default keeps one runtime step well below the two-second budget; hosts may tune up to the cap. */
+const DEFAULT_INTEGRATION_IMPORT_CHUNK = 25;
+const MAX_INTEGRATION_IMPORT_CHUNK = 100;
+const MAX_INTEGRATION_IMPORT_ATTEMPTS = 8;
+const INTEGRATION_IMPORT_LEASE_MS = 60_000;
+
+type InboundReceipt = {
+	readonly norbital_id: string;
+	readonly integration_name: string;
+	readonly binding_name: string;
+	readonly collection_name: string;
+	readonly import_data: unknown;
+	readonly materialized_records: unknown[] | null;
+	readonly next_offset: number;
+	readonly attempts: number;
 };
 
 /**
@@ -89,22 +113,27 @@ export type IntegrationImportOutcome = {
 async function claimInboundEvent(params: {
 	readonly integrationName: string;
 	readonly bindingName: string;
+	readonly collectionName: string;
+	readonly importData: unknown;
 	readonly eventId: string;
 }): Promise<string | null> {
 	const ctx = getWorkspace({ provision: true });
 	const bindingKey = integrationBindingKey(params.integrationName, params.bindingName);
 	const claimed = await ctx.tenantDb.query<{ norbital_id: string }>({
 		text: `INSERT INTO integration_inbound_event
-		            (integration_name, binding_name, binding_key, event_id, receipt_key, status)
-		     VALUES ($1, $2, $3, $4, $5, 'received')
+		            (integration_name, binding_name, binding_key, collection_name, event_id, receipt_key,
+		             status, import_data, next_offset, attempts, available_at)
+		     VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7::jsonb, 0, 0, now())
 		 ON CONFLICT (receipt_key) DO NOTHING
 		  RETURNING norbital_id`,
 		values: [
 			params.integrationName,
 			params.bindingName,
 			bindingKey,
+			params.collectionName,
 			params.eventId,
-			`${bindingKey}:${params.eventId}`
+			`${bindingKey}:${params.eventId}`,
+			JSON.stringify(params.importData)
 		]
 	});
 	return claimed.rows[0]?.norbital_id ?? null;
@@ -200,72 +229,155 @@ export async function importIntegrationRecords(params: {
 	readonly importData: unknown;
 	readonly eventId?: string;
 }): Promise<IntegrationImportOutcome> {
-	const receiptId = params.eventId
-		? await claimInboundEvent({
-				integrationName: params.integrationName,
-				bindingName: params.bindingName,
-				eventId: params.eventId
-			})
-		: null;
-	if (params.eventId && !receiptId) return { imported: 0, status: 'duplicate' };
+	const receiptId = await claimInboundEvent({
+		integrationName: params.integrationName,
+		bindingName: params.bindingName,
+		collectionName: params.collectionName,
+		importData: params.importData,
+		eventId: params.eventId ?? randomUUID()
+	});
+	if (!receiptId) return { imported: 0, status: 'duplicate' };
+	try {
+		parseIntegrationReceiveInput(params);
+	} catch (cause) {
+		const reason = cause instanceof Error ? cause.message : String(cause);
+		await settleInboundEvent(receiptId, {
+			status: 'failed', error: reason, completed_at: new Date().toISOString()
+		});
+		return { imported: 0, status: 'refused', reason };
+	}
 	// Swept from the one path that writes the table, exactly as sync retention is swept from the one
 	// path that reads its feed. Detached and swallowed: a delivery already claimed must not fail
 	// because housekeeping did.
-	if (receiptId) {
-		void pruneInboundEvents(getWorkspace({ provision: true })).catch(() => undefined);
-	}
+	void pruneInboundEvents(getWorkspace({ provision: true })).catch(() => undefined);
+	return { imported: 0, status: 'queued', receiptId };
+}
 
-	let records: Awaited<ReturnType<typeof runIntegrationReceivePipeline>>;
+/** Claim one available receipt, recovering a worker that lost its lease without replaying a chunk. */
+async function claimNextInboundEvent(): Promise<InboundReceipt | null> {
+	const ctx = getWorkspace({ provision: true });
+	const claimed = await ctx.tenantDb.query<InboundReceipt>({
+		text: `WITH candidate AS (
+		         SELECT norbital_id
+		           FROM integration_inbound_event
+		          WHERE collection_name IS NOT NULL
+		            AND import_data IS NOT NULL
+		            AND (
+		              (status = 'queued' AND available_at <= now())
+		              OR (status = 'processing' AND claimed_at < now() - ($1::bigint * interval '1 millisecond'))
+		            )
+		          ORDER BY available_at ASC, norbital_created_at ASC, norbital_id ASC
+		          LIMIT 1
+		          FOR UPDATE SKIP LOCKED
+		       )
+		       UPDATE integration_inbound_event receipt
+		          SET status = 'processing', claimed_at = now(), attempts = receipt.attempts + 1
+		         FROM candidate
+		        WHERE receipt.norbital_id = candidate.norbital_id
+		    RETURNING receipt.norbital_id, receipt.integration_name, receipt.binding_name,
+		              receipt.collection_name, receipt.import_data, receipt.materialized_records,
+		              receipt.next_offset, receipt.attempts`,
+		values: [INTEGRATION_IMPORT_LEASE_MS]
+	});
+	return claimed.rows[0] ?? null;
+}
+
+function recordsFromPipeline(output: unknown): Record<string, unknown>[] {
+	if (!Array.isArray(output) || output.some((record) => record == null || typeof record !== 'object' || Array.isArray(record))) {
+		throw new Error('Integration import pipeline must return an array of records');
+	}
+	return output as Record<string, unknown>[];
+}
+
+function retryDelayMs(attempts: number): number {
+	return Math.min(2 ** Math.max(attempts, 1) * 1000, 60 * 60 * 1000);
+}
+
+async function retryInboundEvent(receipt: InboundReceipt, cause: unknown): Promise<void> {
+	const ctx = getWorkspace({ provision: true });
+	const reason = cause instanceof Error ? cause.message : String(cause);
+	const terminal = receipt.attempts >= MAX_INTEGRATION_IMPORT_ATTEMPTS;
+	await ctx.tenantDb.query({
+		text: `UPDATE integration_inbound_event
+		          SET status = $2, error = $3, claimed_at = NULL,
+		              available_at = CASE WHEN $4 THEN available_at ELSE now() + ($5::bigint * interval '1 millisecond') END,
+		              completed_at = CASE WHEN $4 THEN now() ELSE NULL END
+		        WHERE norbital_id = $1 AND status = 'processing'`,
+		values: [receipt.norbital_id, terminal ? 'failed' : 'queued', reason, terminal, retryDelayMs(receipt.attempts)]
+	});
+}
+
+/**
+ * Progress exactly one durable inbound import step.
+ *
+ * One invocation claims at most one receipt and writes at most one bounded `createMany` chunk. A
+ * pipeline result is retained before the first write; the chunk checkpoint is committed in that same
+ * transaction, so a crash retries either none of the rows or precisely the next rows, never a prefix.
+ */
+export async function runIntegrationImportWorker(params?: {
+	readonly maxChunkSize?: number;
+}): Promise<{ readonly status: 'idle' | 'processed' | 'failed'; readonly receiptId?: string }> {
+	const receipt = await claimNextInboundEvent();
+	if (!receipt) return { status: 'idle' };
+	const chunkSize = Math.min(
+		params?.maxChunkSize ?? DEFAULT_INTEGRATION_IMPORT_CHUNK,
+		MAX_INTEGRATION_IMPORT_CHUNK
+	);
+	if (!Number.isInteger(chunkSize) || chunkSize < 1) {
+		throw new Error('Integration import chunk size must be a positive integer');
+	}
 	try {
-		records = await runIntegrationReceivePipeline({
-			integrationName: params.integrationName,
-			bindingName: params.bindingName,
-			collectionName: params.collectionName,
-			importData: params.importData,
-			api: createBeforeApi()
-		});
-	} catch (cause) {
-		// Nothing has been written yet, and that is exactly why this is a *result* rather than a throw:
-		// the binding's `input` schema is parsed before the pipeline runs and the pipeline only computes,
-		// so a failure here is total. A caller holding the wire can answer the sender "this payload will
-		// never be accepted" instead of "retry", which is the difference between one rejection and a
-		// provider redelivering a malformed body until it gives up.
-		const reason = cause instanceof Error ? cause.message : String(cause);
-		if (receiptId) {
-			await settleInboundEvent(receiptId, {
-				status: 'failed',
-				error: reason,
-				completed_at: new Date().toISOString()
+		let records = receipt.materialized_records
+			? recordsFromPipeline(receipt.materialized_records)
+			: undefined;
+		if (!records) {
+			records = recordsFromPipeline(
+				await runIntegrationReceivePipeline({
+					integrationName: receipt.integration_name,
+					bindingName: receipt.binding_name,
+					collectionName: receipt.collection_name,
+					importData: receipt.import_data,
+					api: createBeforeApi()
+				})
+			);
+			const ctx = getWorkspace({ provision: true });
+			await ctx.tenantDb.query({
+				text: `UPDATE integration_inbound_event
+				          SET materialized_records = $2::jsonb, error = NULL
+				        WHERE norbital_id = $1 AND status = 'processing'`,
+				values: [receipt.norbital_id, JSON.stringify(records)]
 			});
 		}
-		return { imported: 0, status: 'refused', reason };
-	}
-
-	try {
+		const total = records.length;
+		const start = receipt.next_offset;
+		if (start >= total) {
+			await settleInboundEvent(receipt.norbital_id, {
+				status: 'imported', imported: total, completed_at: new Date().toISOString(), claimed_at: null
+			});
+			return { status: 'processed', receiptId: receipt.norbital_id };
+		}
+		const chunk = records.slice(start, start + chunkSize);
 		const ctx = getWorkspace({ provision: true });
-		for (const record of records) {
-			await createRecord(ctx, params.collectionName, record, { isElevated: true });
-		}
-		if (receiptId) {
-			await settleInboundEvent(receiptId, {
-				status: 'imported',
-				imported: records.length,
-				completed_at: new Date().toISOString()
+		await withCollectionTransaction(ctx, async () => {
+			await createMany(ctx, receipt.collection_name, chunk, {
+				isElevated: true,
+				recordIds: chunk.map((_, index) => uuidv5(String(start + index), receipt.norbital_id))
 			});
-		}
-		return { imported: records.length, status: 'imported' };
+			const nextOffset = start + chunk.length;
+			await ctx.tenantDb.query({
+				text: `UPDATE integration_inbound_event
+				          SET next_offset = $2::integer, imported = $2::integer, error = NULL, claimed_at = NULL,
+				              status = CASE WHEN $2::integer >= $3::integer THEN 'imported' ELSE 'queued' END,
+				              completed_at = CASE WHEN $2::integer >= $3::integer THEN now() ELSE NULL END,
+				              available_at = now()
+				        WHERE norbital_id = $1 AND status = 'processing'`,
+				values: [receipt.norbital_id, nextOffset, total]
+			});
+		});
+		return { status: 'processed', receiptId: receipt.norbital_id };
 	} catch (cause) {
-		// The claim stays, and this one does throw. Rows are written one at a time, so a failure part-way
-		// through has already had effects; replaying the same delivery would duplicate whatever landed
-		// before it threw. A `failed` row that says why is the honest outcome, and it is visible.
-		if (receiptId) {
-			await settleInboundEvent(receiptId, {
-				status: 'failed',
-				error: cause instanceof Error ? cause.message : String(cause),
-				completed_at: new Date().toISOString()
-			});
-		}
-		throw cause;
+		await retryInboundEvent(receipt, cause);
+		return { status: 'failed', receiptId: receipt.norbital_id };
 	}
 }
 
@@ -300,7 +412,8 @@ export async function dispatchSystemEvent(params: {
 		matching.map((binding) =>
 			importIntegrationRecords({
 				...binding,
-				importData: { event_id: params.eventId, event: params.event, payload: params.payload }
+				importData: { event_id: params.eventId, event: params.event, payload: params.payload },
+				eventId: params.eventId
 			})
 		)
 	);

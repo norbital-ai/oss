@@ -65,6 +65,10 @@ approvals, and versioning always apply. The sync engine applies the change to a 
 on the same frame so the UI responds instantly. The server confirms or rejects asynchronously;
 a rejection carries `currentRow` so the form layer can reconcile.
 
+Durable server work uses those same collection operations. For example, an inbound integration import
+commits one receipt checkpointed chunk at a time; each committed chunk emits its ordinary sync changes,
+so replicas observe progressive rows without a special import transport or a client-side polling loop.
+
 ### The invariant
 
 > **The read path never waits for data this device has already seen.**

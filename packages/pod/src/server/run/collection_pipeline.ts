@@ -14,6 +14,26 @@ function integrationBinding(integrationName: string, bindingName: string) {
 	return binding;
 }
 
+/**
+ * Validate an inbound body before accepting its durable receipt.
+ *
+ * This deliberately does not run the import pipeline: parsing is the small, final acknowledgement
+ * decision a webhook needs synchronously, whereas transforms and record writes are resumable work.
+ */
+export function parseIntegrationReceiveInput(params: {
+	readonly integrationName: string;
+	readonly bindingName: string;
+	readonly importData: unknown;
+}): unknown {
+	const binding = integrationBinding(params.integrationName, params.bindingName);
+	if (binding.direction !== 'receive') {
+		throw new Error(
+			`Integration binding is not inbound: ${params.integrationName}.${params.bindingName}`
+		);
+	}
+	return binding.input ? binding.input.parse(params.importData) : params.importData;
+}
+
 export async function runCollectionExportPipeline(params: {
 	readonly collectionName: string;
 	readonly context: CollectionExportPipeline['params'];
@@ -57,13 +77,7 @@ export async function runIntegrationReceivePipeline(params: {
 	readonly importData: unknown;
 	readonly api: BeforeApi;
 }): Promise<Awaited<CollectionImportPipeline['return']>> {
-	const binding = integrationBinding(params.integrationName, params.bindingName);
-	if (binding.direction !== 'receive') {
-		throw new Error(
-			`Integration binding is not inbound: ${params.integrationName}.${params.bindingName}`
-		);
-	}
-	const importData = binding.input ? binding.input.parse(params.importData) : params.importData;
+	const importData = parseIntegrationReceiveInput(params);
 	return runCollectionImportPipeline({
 		collectionName: params.collectionName,
 		context: {

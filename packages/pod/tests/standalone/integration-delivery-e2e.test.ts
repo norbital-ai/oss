@@ -72,11 +72,11 @@ type Sink = {
 	close(): Promise<void>;
 };
 
-/** Two rows the remote holds, which a pull is expected to bring across as `site_locations`. */
-const CATALOGUE = [
-	{ code: 'ZN-1', name: 'North Yard' },
-	{ code: 'ZN-2', name: 'South Gantry' }
-];
+/** More than one worker chunk: this real-PG path proves a receipt resumes rather than row-looping. */
+const CATALOGUE = Array.from({ length: 101 }, (_, index) => ({
+	code: `ZN-${index + 1}`,
+	name: index === 0 ? 'North Yard' : index === 1 ? 'South Gantry' : `Workfront ${index + 1}`
+}));
 const CATALOGUE_CURSOR = 'page-2';
 
 /**
@@ -631,6 +631,26 @@ describe('Pod standalone integrations — E2E, both directions', () => {
 				)
 				.then((result) => result.rows);
 			expect(cursor?.cursor).toBe(CATALOGUE_CURSOR);
+			const [receipt] = await db
+				.query<{
+					status: string;
+					next_offset: number;
+					imported: number | null;
+					materialized: number | null;
+				}>(
+					`SELECT status, next_offset, imported, jsonb_array_length(materialized_records) AS materialized
+					   FROM integration_inbound_event
+					  WHERE binding_key = $1
+					    AND jsonb_array_length(materialized_records) = $2`,
+					['registry:site_locations.receive.catalogue', CATALOGUE.length]
+				)
+				.then((result) => result.rows);
+			// 101 rows force multiple worker invocations. The same receipt carries the materialization and
+			// terminal offset, proving later chunks did not rerun the import.
+			expect(receipt).toMatchObject({
+				status: 'imported', next_offset: CATALOGUE.length, imported: CATALOGUE.length,
+				materialized: CATALOGUE.length
+			});
 		} finally {
 			await stop(running);
 		}

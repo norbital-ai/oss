@@ -71,9 +71,21 @@ describe('integration jobs', () => {
 			organizationId: 'org-1'
 		});
 		expect(jobs.map((job) => [job.name, job.schedule])).toEqual([
+			['pod:integration-import', 'continuous'],
 			['pod:agent-conversation-titles', 'continuous'],
 			['pod:integration-pull:registry:quotes.receive.catalogue', '*/5 * * * *']
 		]);
+	});
+
+	it('runs one bounded durable import step per continuous-worker invocation', async () => {
+		const { seen, dispatch } = recordingDispatch(() => undefined);
+		const jobs = workspaceJobs({
+			manifest: manifest({}),
+			dispatch,
+			organizationId: 'org-1'
+		});
+		await jobs.find((job) => job.name === 'pod:integration-import')!.run();
+		expect(seen).toEqual([{ kind: 'integration-import', action: 'run' }]);
 	});
 
 	/**
@@ -113,6 +125,9 @@ describe('integration jobs', () => {
 			['integration', 'receive'],
 			['integration-cursor', 'write']
 		]);
+		// A retry of this cursor names the same durable receipt; provider payload shape does not decide
+		// whether a pull page is new.
+		expect(seen[1]?.eventId).toMatch(/^pull:[0-9a-f]{64}$/);
 		// Advanced only after the rows landed, and to what the remote said comes next.
 		expect(seen[2]).toMatchObject({ cursor: 'page-2', error: null });
 	});

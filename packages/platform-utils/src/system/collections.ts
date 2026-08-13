@@ -137,7 +137,7 @@ interface PlatformSystemRows {
 	readonly integration_outbox: SystemRecordFields & {
 		readonly integration_name: string;
 		readonly binding_name: string;
-		readonly collection_name: string;
+		readonly collection_name: string | null;
 		readonly record_id: string;
 		readonly action: string;
 		readonly payload: JsonObject;
@@ -215,9 +215,16 @@ interface PlatformSystemRows {
 		readonly integration_name: string;
 		readonly binding_name: string;
 		readonly binding_key: string;
+		readonly collection_name: string;
 		readonly event_id: string;
 		readonly receipt_key: string;
 		readonly status: string;
+		readonly import_data: unknown | null;
+		readonly materialized_records: unknown[] | null;
+		readonly next_offset: number;
+		readonly attempts: number;
+		readonly available_at: string;
+		readonly claimed_at: string | null;
 		readonly imported: number | null;
 		readonly error: string | null;
 		readonly completed_at: string | null;
@@ -283,7 +290,7 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'organization_id', kind: 'uuid', nullable: false },
 			{ name: 'label', kind: 'text', nullable: false },
 			{ name: 'approval_config_id', kind: 'uuid', nullable: false },
-			{ name: 'collection_name', kind: 'text', nullable: false },
+			{ name: 'collection_name', kind: 'text', nullable: true },
 			{ name: 'status', kind: 'text', nullable: false },
 			{ name: 'approval_step_nodes', kind: 'json', nullable: false, array: true },
 			{ name: 'locked_record_refs', kind: 'json', nullable: false, array: true },
@@ -392,9 +399,16 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'integration_name', kind: 'text', nullable: false },
 			{ name: 'binding_name', kind: 'text', nullable: false },
 			{ name: 'binding_key', kind: 'text', nullable: false },
+			{ name: 'collection_name', kind: 'text', nullable: false },
 			{ name: 'event_id', kind: 'text', nullable: false },
 			{ name: 'receipt_key', kind: 'text', nullable: false },
 			{ name: 'status', kind: 'text', nullable: false },
+			{ name: 'import_data', kind: 'jsonb', nullable: true },
+			{ name: 'materialized_records', kind: 'jsonb', nullable: true },
+			{ name: 'next_offset', kind: 'integer', nullable: false },
+			{ name: 'attempts', kind: 'integer', nullable: false },
+			{ name: 'available_at', kind: 'timestamptz', nullable: false },
+			{ name: 'claimed_at', kind: 'timestamptz', nullable: true },
 			{ name: 'imported', kind: 'integer', nullable: true },
 			{ name: 'error', kind: 'text', nullable: true },
 			{ name: 'completed_at', kind: 'timestamptz', nullable: true }

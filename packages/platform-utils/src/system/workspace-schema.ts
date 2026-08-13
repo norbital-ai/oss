@@ -188,7 +188,9 @@ const _approval_request = systemTable(
 		organization_id: uuid().notNull(),
 		label: text().notNull(),
 		approval_config_id: uuid().notNull(),
-		collection_name: text().notNull(),
+		// Nullable only for receipts written by pre-durable versions. New staged receipts always set it;
+		// keeping the upgrade additive lets old terminal ledger rows survive a generated migration.
+		collection_name: text(),
 		status: text().notNull(),
 		approval_step_nodes: jsonbColumn(JsonArraySchema).notNull().default([]),
 		locked_record_refs: jsonbColumn(JsonArraySchema).notNull().default([]),
@@ -338,11 +340,20 @@ const _integration_inbound_event = systemTable(
 		integration_name: text().notNull(),
 		binding_name: text().notNull(),
 		binding_key: text().notNull(),
+		collection_name: text().notNull(),
 		/** The provider's own event id, or a digest of the body when it sends none. */
 		event_id: text().notNull(),
 		receipt_key: text().notNull().unique(),
-		/** `received`, `imported`, or `failed`. */
-		status: text().notNull().default('received'),
+		/** `queued`, `processing`, `imported`, `failed`, or `refused`. */
+		status: text().notNull().default('queued'),
+		/** Original accepted delivery. It survives process restart until the import is terminal. */
+		import_data: jsonbColumn(z.unknown()),
+		/** Pipeline output is persisted once, so chunk retries never rerun an author transformation. */
+		materialized_records: jsonbColumn(JsonArraySchema),
+		next_offset: integer().notNull().default(0),
+		attempts: integer().notNull().default(0),
+		available_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+		claimed_at: timestamp({ withTimezone: true }),
 		imported: integer(),
 		error: text(),
 		completed_at: timestamp({ withTimezone: true })

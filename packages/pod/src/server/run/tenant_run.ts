@@ -49,6 +49,7 @@ import { runTenantOutbox } from '$lib/server/integrations/tenant-outbox.server.j
 import {
 	dispatchSystemEvent,
 	importIntegrationRecords,
+	runIntegrationImportWorker,
 	runIntegrationCursor
 } from '$lib/server/integrations/tenant-inbound.server.js';
 import { runNotificationOutbox } from '$lib/server/notification-outbox.server.js';
@@ -128,6 +129,12 @@ export const runtimeRunRequestSchema = z.union([
 		// Present when the delivery can be repeated by whoever sent it — a webhook. The ledger row is
 		// claimed on it before the import runs, so a redelivery is refused rather than re-imported.
 		eventId: z.string().min(1).max(512).optional()
+	}),
+	// A durable import worker invocation: one claimed receipt and one bounded collection write chunk.
+	z.object({
+		kind: z.literal('integration-import'),
+		action: z.literal('run'),
+		maxChunkSize: z.number().int().min(1).max(100).optional()
 	}),
 	z.object({
 		kind: z.literal('integration'),
@@ -561,6 +568,8 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 		}
 		case 'integration-cursor':
 			return runIntegrationCursor(request);
+		case 'integration-import':
+			return runIntegrationImportWorker({ maxChunkSize: request.maxChunkSize });
 		case 'system-event':
 			return dispatchSystemEvent({
 				eventId: request.eventId,
