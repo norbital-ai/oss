@@ -2,7 +2,6 @@
 	import Icon from '@iconify/svelte';
 	import { onMount, tick } from 'svelte';
 	import { Button } from '@norbital-ai/ui/button';
-	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { TreeCombobox } from '@norbital-ai/ui/tree-combobox';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
@@ -14,6 +13,7 @@
 	import { getAgentModelState, loadAgentModelCatalog } from './agent-model-state.svelte.js';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
+	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
 	import {
 		findMentionTrigger,
 		insertMention,
@@ -702,10 +702,8 @@
 	{#if messages.length === 0 && !pending}
 		<div class="grid min-h-0 flex-1 place-items-center overflow-y-auto px-6 py-10">
 			<div class="max-w-sm text-center">
-				<div
-					class="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-card shadow-xs"
-				>
-					<IconWrapper name="product:agent" class="size-5 text-foreground" />
+				<div class="mx-auto mb-4 grid size-12 place-items-center rounded-xl bg-card shadow-xs">
+					<NorbitalThinkingOrb state="idle" size={34} class="text-foreground" />
 				</div>
 				<h2 class="text-base font-semibold tracking-[-0.015em] text-foreground">
 					{t('pod.agent.askAboutWorkspace')}
@@ -731,9 +729,9 @@
 						>{t('pod.agent.agent')}</span
 					>
 					<div
-						class="inline-flex w-fit items-center gap-2 rounded-xl bg-muted px-3.5 py-2.5 text-sm"
+						class="inline-flex w-fit items-center gap-2.5 rounded-xl bg-muted px-3.5 py-2.5 text-sm"
 					>
-						<Icon icon="lucide:loader-circle" class="size-4 animate-spin text-muted-foreground" />
+						<NorbitalThinkingOrb state="thinking" size={20} class="text-foreground" />
 						<span class="text-muted-foreground">{t('pod.agent.working')}</span>
 					</div>
 				</li>
@@ -875,10 +873,11 @@
 								data-testid="agent-send"
 								aria-label={pending ? t('pod.agent.agentIsWorking') : t('pod.agent.send')}
 							>
-								<Icon
-									icon={pending ? 'lucide:loader-circle' : 'lucide:arrow-up'}
-									class={pending ? 'size-4 animate-spin' : 'size-4'}
-								/>
+								{#if pending}
+									<NorbitalThinkingOrb state="thinking" size={18} />
+								{:else}
+									<Icon icon="lucide:arrow-up" class="size-4" />
+								{/if}
 							</Button>
 						</Inline>
 					</div>

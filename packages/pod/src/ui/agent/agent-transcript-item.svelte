@@ -13,6 +13,7 @@
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
+	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
 
@@ -42,6 +43,13 @@
 	/** A built-in tool's label is a catalog key; everything else is the humanized name. */
 	function toolLabel(message: Extract<PanelMessage, { kind: 'tool' }>): string {
 		return message.labelKey ? t(message.labelKey) : (message.label ?? message.name);
+	}
+
+	/** Keep activity truthful: unknown tools orbit generically instead of guessing at their work. */
+	function toolOrbState(name: string): 'searching' | 'authoring' | 'working' {
+		if (/(search|read|find|fetch|lookup|browse|describe|inspect)/i.test(name)) return 'searching';
+		if (/(write|edit|create|code|patch|file|author)/i.test(name)) return 'authoring';
+		return 'working';
 	}
 </script>
 
@@ -141,7 +149,11 @@
 					</span>
 				{/if}
 				{#if message.state === 'running'}
-					<Icon icon="lucide:loader-circle" class="size-3 shrink-0 animate-spin" />
+					<NorbitalThinkingOrb
+						state={toolOrbState(message.name)}
+						size={16}
+						class="shrink-0 text-foreground"
+					/>
 				{:else if message.state === 'failed'}
 					<Icon icon="lucide:circle-alert" class="size-3 shrink-0 text-destructive" />
 				{/if}
@@ -251,7 +263,7 @@
 			{/if}
 			{#if message.status === 'streaming'}
 				<span class="mt-1.5 inline-flex items-center gap-1.5 text-tiny text-muted-foreground">
-					<span class="size-1.5 animate-pulse rounded-full bg-current"></span>
+					<NorbitalThinkingOrb state="authoring" size={16} class="text-foreground" />
 					{t('pod.agent.streaming')}
 				</span>
 			{/if}

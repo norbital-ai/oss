@@ -71,6 +71,11 @@
 			"svelte": "./build/ui/agent/agent-chat-panel.svelte",
 			"default": "./build/ui/agent/agent-chat-panel.svelte"
 		},
+		"./client/agent-orb": {
+			"types": "./build/ui/agent/norbital-thinking-orb.svelte.d.ts",
+			"svelte": "./build/ui/agent/norbital-thinking-orb.svelte",
+			"default": "./build/ui/agent/norbital-thinking-orb.svelte"
+		},
 		"./client/app-header-actions": {
 			"types": "./build/ui/shell/app-header-actions.svelte.d.ts",
 			"svelte": "./build/ui/shell/app-header-actions.svelte",
