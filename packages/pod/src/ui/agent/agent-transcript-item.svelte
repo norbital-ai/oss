@@ -10,7 +10,7 @@
 	 */
 	import Icon from '@iconify/svelte';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
 	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
@@ -104,18 +104,24 @@
 				</Inline>
 				<div role="tabpanel" class="min-w-0">
 					{#if checkpointTab === 'summary'}
-						<div class="max-h-72 overflow-auto text-micro leading-relaxed text-foreground/90">
+						<Scroll
+							name={t('pod.agent.whatAgentKept')}
+							class="max-h-72 text-micro leading-relaxed text-foreground/90"
+						>
 							<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
-						</div>
+						</Scroll>
 					{:else}
-						<ol
-							class="m-0 flex max-h-72 list-none flex-col gap-1.5 overflow-auto p-0"
-							aria-label={t('pod.agent.conversationBeforeCompaction')}
+						<Scroll
+							as="ol"
+							name={t('pod.agent.conversationBeforeCompaction')}
+							layout="stack"
+							gap="xs"
+							class="m-0 max-h-72 list-none p-0"
 						>
 							{#each message.before as earlier (earlier.key)}
 								<Self message={earlier} nested="history" />
 							{/each}
-						</ol>
+						</Scroll>
 					{/if}
 				</div>
 			</Stack>
@@ -168,8 +174,13 @@
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('pod.agent.input')}
 						</span>
-						<pre
-							class="m-0 max-h-56 overflow-auto rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90">{message.input}</pre>
+						<Scroll
+							name={t('pod.agent.input')}
+							axis="both"
+							class="m-0 max-h-56 rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90"
+						>
+							<pre class="m-0 font-inherit text-inherit">{message.input}</pre>
+						</Scroll>
 					</Stack>
 				{/if}
 				{#if message.children.length > 0}
@@ -193,16 +204,25 @@
 						<span class="text-tiny font-medium tracking-wide text-destructive uppercase"
 							>{t('pod.agent.error')}</span
 						>
-						<pre
-							class="m-0 max-h-56 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive">{message.error}</pre>
+						<Scroll
+							name={t('pod.agent.error')}
+							class="m-0 max-h-56 rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive"
+						>
+							<pre class="m-0 font-inherit text-inherit whitespace-pre-wrap">{message.error}</pre>
+						</Scroll>
 					</Stack>
 				{:else if message.output}
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('pod.agent.result')}
 						</span>
-						<pre
-							class="m-0 max-h-56 overflow-auto rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90">{message.output}</pre>
+						<Scroll
+							name={t('pod.agent.result')}
+							axis="both"
+							class="m-0 max-h-56 rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90"
+						>
+							<pre class="m-0 font-inherit text-inherit">{message.output}</pre>
+						</Scroll>
 					</Stack>
 				{:else if message.state === 'running'}
 					<p class="m-0 text-micro text-muted-foreground">{t('pod.agent.waitingForResult')}</p>

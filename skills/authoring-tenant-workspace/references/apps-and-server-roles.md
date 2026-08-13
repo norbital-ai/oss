@@ -9,8 +9,7 @@ Every application is `src/apps/**/+<app>.svelte`; filename and group directory o
 ```svelte
 <script lang="ts">
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { Stack } from '@norbital-ai/ui/layout';
-	import { PageHeader } from '@norbital-ai/ui/page-header';
+	import { Bound, Cover } from '@norbital-ai/ui/layout';
 </script>
 
 <svelte:head>
@@ -21,17 +20,22 @@ Every application is `src/apps/**/+<app>.svelte`; filename and group directory o
 	<meta name="pod:banner" content="https://cdn.example.com/operations-banner.webp" />
 </svelte:head>
 
-<Stack gap="lg">
-	<PageHeader title="Operations" description="Manage daily operations." />
-	<CollectionTable collection="sites">
-		{#snippet columns({ Column })}
-			<Column name="name" />
-			<Column name="client_name" />
-			<Column name="house_type" />
-		{/snippet}
-	</CollectionTable>
-</Stack>
+<Cover as="main">
+	<Bound size="full" inset>
+		<CollectionTable collection="sites">
+			{#snippet columns({ Column })}
+				<Column name="name" />
+				<Column name="client_name" />
+				<Column name="house_type" />
+			{/snippet}
+		</CollectionTable>
+	</Bound>
+</Cover>
 ```
+
+`Cover` owns the available app height and clips it once. `Bound size="full" inset` supplies the one
+content inset; `CollectionTable` remains the only scroll owner. Do not wrap the table in `Scroll`, a
+second padded container, or an unbounded `Stack`.
 
 An optional group directory contains `+group.ts`:
 
