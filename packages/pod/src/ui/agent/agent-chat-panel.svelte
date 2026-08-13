@@ -14,6 +14,7 @@
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
+	import { agentOrbState } from './agent-orb-state.js';
 	import {
 		findMentionTrigger,
 		insertMention,
@@ -426,6 +427,13 @@
 	);
 	const messages = $derived(withPendingEcho(stored, echo));
 	const turnRows = $derived(activeSession?.turns ?? []);
+	const activityState = $derived(
+		agentOrbState({
+			pending,
+			messages: activeSession?.messages,
+			turns: activeSession?.turns
+		})
+	);
 	const canSend = $derived(draft.trim().length > 0 && !pending && !activeSessionIsReadOnly);
 
 	/**
@@ -731,7 +739,7 @@
 					<div
 						class="inline-flex w-fit items-center gap-2.5 rounded-xl bg-muted px-3.5 py-2.5 text-sm"
 					>
-						<NorbitalThinkingOrb state="thinking" size={20} class="text-foreground" />
+						<NorbitalThinkingOrb state={activityState} size={20} class="text-foreground" />
 						<span class="text-muted-foreground">{t('pod.agent.working')}</span>
 					</div>
 				</li>

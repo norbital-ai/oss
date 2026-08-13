@@ -69,6 +69,7 @@
 	import { workspaceSettingsApi } from './workspace-settings-api.js';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
 	import NorbitalThinkingOrb from '../agent/norbital-thinking-orb.svelte';
+	import { agentOrbState } from '../agent/agent-orb-state.js';
 	import { requestAgentComposerFocus } from '../agent/agent-composer-focus.js';
 	import OmniFinder from './omni-finder.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -204,6 +205,22 @@
 		topDetailFrame ? detailPreferences.isFullScreen(topDetailFrame.collection_name) : false
 	);
 	let agentSheetOpen = $state(false);
+	const latestPersonalAgentSession = $derived(
+		workspaceApi.db.chat_session?.findFirst({
+			where: { user_id: data.user.norbital_id, visibility: 'personal' },
+			orderBy: { norbital_updated_at: 'desc' }
+		})
+	);
+	const fabAgentState = $derived(
+		agentOrbState({
+			messages: Array.isArray(latestPersonalAgentSession?.current?.messages)
+				? latestPersonalAgentSession.current.messages
+				: [],
+			turns: Array.isArray(latestPersonalAgentSession?.current?.turns)
+				? latestPersonalAgentSession.current.turns
+				: []
+		})
+	);
 	let omniOpen = $state(false);
 	const failedThumbnails = new SvelteSet<string>();
 	const thumbnailAttempts = new SvelteMap<string, number>();
@@ -731,7 +748,11 @@
 		onclick={openAgent}
 		data-testid="workspace-agent-trigger"
 	>
-		<NorbitalThinkingOrb state="idle" size={20} label={t('pod.shell.openWorkspaceAgent')} />
+		<NorbitalThinkingOrb
+			state={fabAgentState}
+			size={20}
+			label={t('pod.shell.openWorkspaceAgent')}
+		/>
 		<span>{t('pod.shell.askAgent')}</span>
 	</Button>
 {/if}

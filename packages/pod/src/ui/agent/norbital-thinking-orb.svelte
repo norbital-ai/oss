@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import type { AgentOrbState } from './agent-orb-state.js';
 
-	type AgentOrbState = 'idle' | 'thinking' | 'searching' | 'authoring' | 'working';
 	type OrbPoint = {
 		x: number;
 		y: number;
