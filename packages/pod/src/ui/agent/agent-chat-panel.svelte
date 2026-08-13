@@ -279,6 +279,12 @@
 		}
 		return labels;
 	});
+	function webAgentLabel(userId: string): string {
+		if (currentUserId === userId) return t('pod.agent.webAgentMe');
+		return t('pod.agent.webAgentMember', {
+			name: userLabels.get(userId) ?? t('pod.agent.unknownMember')
+		});
+	}
 
 	type ConversationTreeItem = {
 		id: string;
@@ -292,40 +298,29 @@
 		const disabledIds: string[] = [];
 		const personal = sessions.filter((session) => session.visibility === 'personal');
 		const workspaceChildren: ConversationTreeItem[] = [];
-		if (isAdmin) {
-			const byUser = new Map<string, SessionRow[]>();
-			for (const session of personal) {
-				const rows = byUser.get(session.user_id) ?? [];
-				rows.push(session);
-				byUser.set(session.user_id, rows);
-			}
-			for (const [userId, rows] of [...byUser].sort((a, b) =>
-				(userLabels.get(a[0]) ?? '').localeCompare(userLabels.get(b[0]) ?? '')
-			)) {
-				const id = `workspace-user:${userId}`;
-				disabledIds.push(id);
-				workspaceChildren.push({
-					id,
-					title: userLabels.get(userId) ?? t('pod.agent.unknownMember'),
-					icon: 'lucide:user-round',
-					metadata: { kind: 'group' },
-					children: rows.map((session) => ({
-						id: session.norbital_id,
-						title: session.title,
-						icon: 'lucide:message-square',
-						metadata: { kind: 'conversation' }
-					}))
-				});
-			}
-		} else {
-			workspaceChildren.push(
-				...personal.map((session) => ({
+		const byUser = new Map<string, SessionRow[]>();
+		for (const session of personal) {
+			const rows = byUser.get(session.user_id) ?? [];
+			rows.push(session);
+			byUser.set(session.user_id, rows);
+		}
+		for (const [userId, rows] of [...byUser].sort((a, b) =>
+			webAgentLabel(a[0]).localeCompare(webAgentLabel(b[0]))
+		)) {
+			const id = `workspace-user:${userId}`;
+			disabledIds.push(id);
+			workspaceChildren.push({
+				id,
+				title: webAgentLabel(userId),
+				icon: 'lucide:monitor-user',
+				metadata: { kind: 'group' },
+				children: rows.map((session) => ({
 					id: session.norbital_id,
 					title: session.title,
 					icon: 'lucide:message-square',
-					metadata: { kind: 'conversation' } as const
+					metadata: { kind: 'conversation' }
 				}))
-			);
+			});
 		}
 
 		const channelProfiles = new Map<string, SessionRow[]>();

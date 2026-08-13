@@ -337,8 +337,7 @@ position. Re-shaping that slice inherits; moving to another slice does not.
 ```
 FIRST VISIT to a collection
    |
-   |-- 0ms ....... nothing local yet
-   |-- ~100ms .... loader appears (only while still empty)
+   |-- 0ms ....... nothing local yet              --> LOADER, immediately
    |-- ~1 RTT .... first page: 250 rows            --> LOADER GONE, table renders
    |
    `-- then ...... pages 2..N at 5,000, in the background.
@@ -354,6 +353,11 @@ REVISIT / REFRESH, or paging back to a page already held
    |
    `-- answered from PGlite                        --> NO LOADER
 ```
+
+There is deliberately no delayed-loader grace period. Before a query has produced its first
+authoritative local result, `undefined` is an unknown state and must render as loading rather than
+as an empty collection. Once a family has a warm placeholder, the placeholder remains visible and
+the loader stays off while the new query catches up.
 
 Two bugs this replaced, both of which reported the wrong thing to the user:
 

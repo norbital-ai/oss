@@ -103,8 +103,18 @@
 	function navigateToIndex(index: number, shouldScroll: boolean = true) {
 		const node = visibleNodesArray[index];
 		if (node) {
+			const shouldMoveTreeFocus = Boolean(
+				treeContainerElement?.contains(document.activeElement)
+			);
 			treeState.setActiveNode(node.id);
 			if (shouldScroll) scrollActiveNodeIntoView();
+			if (shouldMoveTreeFocus) {
+				queueMicrotask(() => {
+					treeContainerElement
+						?.querySelector<HTMLElement>(`[data-node-path="${node.id}"]`)
+						?.focus();
+				});
+			}
 		}
 	}
 
@@ -164,9 +174,9 @@
 		if (isParentNode(node) && node.isExpanded) {
 			treeState.toggleExpand(node.id);
 			scrollActiveNodeIntoView();
-		} else if (node.parentNode && node.parentNode.depth > 0) {
-			treeState.setActiveNode(node.parentNode.id);
-			scrollActiveNodeIntoView();
+		} else if (node.parentNode) {
+			const parentIndex = nodeIndexMap.get(node.parentNode.id);
+			if (parentIndex !== undefined) navigateToIndex(parentIndex);
 		}
 	}
 
@@ -185,11 +195,18 @@
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
-		if (disabled || !showSearch) return;
+		if (disabled) return;
 
 		const active = document.activeElement as HTMLElement | null;
 		const isInputActive = active === inputElement;
-		if (!isInputActive) return;
+		const isTreeActive = Boolean(active && treeContainerElement?.contains(active));
+		if (!isInputActive && !isTreeActive) return;
+		if (
+			isInputActive &&
+			(inputElement?.value.length ?? 0) > 0 &&
+			(event.key === 'ArrowLeft' || event.key === 'ArrowRight')
+		)
+			return;
 
 		const navigationKeys = [
 			'ArrowDown',
@@ -201,7 +218,8 @@
 			'Home',
 			'End'
 		];
-		const isLetterKey = event.key.length === 1 && /^[a-zA-Z]$/.test(event.key);
+		const isLetterKey =
+			!isInputActive && event.key.length === 1 && /^[a-zA-Z]$/.test(event.key);
 		const isNavigationKey = navigationKeys.includes(event.key);
 		if (!isNavigationKey && !isLetterKey) return;
 
@@ -274,6 +292,11 @@
 		isInputFocused = false;
 	}
 
+	function handleNodeFocus(nodeId: string) {
+		inputMode = 'keyboard';
+		treeState.setActiveNode(nodeId);
+	}
+
 	function handleRootTabChange(rootId: string) {
 		if (disabled) return;
 		const index = treeState.rootNodes.findIndex((node) => node.id === rootId);
@@ -313,34 +336,6 @@
 				{actualized}
 			{/if}
 		</div>
-	{/if}
-{/snippet}
-
-{#snippet renderCurrentLevelConnector(node: TreeNode, currentIsLast: boolean)}
-	{#if node.displayDepth > 0 && node.parentNode?.depth !== 0}
-		{#if currentIsLast}
-			<div
-				class="absolute"
-				style="left: {(node.displayDepth - 1) * INDENTATION_WIDTH}px; top: 0; height: 100%;"
-			>
-				<div
-					class="absolute w-px bg-secondary dark:bg-secondary"
-					style="left: 9px; top: 0; bottom: 50%;"
-				></div>
-				<div
-					class="absolute h-px w-2.5 bg-secondary dark:bg-secondary"
-					style="left: 9px; top: 50%;"
-				></div>
-			</div>
-		{:else}
-			<div
-				class="absolute"
-				style="left: {(node.displayDepth - 1) * INDENTATION_WIDTH}px; top: 0; height: 100%;"
-			>
-				<div class="absolute left-[9px] h-full w-px bg-secondary dark:bg-secondary"></div>
-				<div class="absolute top-1/2 left-[9px] h-px w-2.5 bg-secondary dark:bg-secondary"></div>
-			</div>
-		{/if}
 	{/if}
 {/snippet}
 
@@ -398,7 +393,7 @@
 	</Inline>
 {/snippet}
 
-{#snippet renderTreeNode(node: TreeNode, isLast: boolean)}
+{#snippet renderTreeNode(node: TreeNode)}
 	{@const isDirectChild = node.parentNode?.depth === 0}
 	{@const isActive = treeState.activeNodeId === node.id}
 	<li class="relative">
@@ -408,9 +403,6 @@
 			style="padding-left: {isDirectChild ? 0 : 8}px;"
 			onmouseenter={() => handleNodeMouseEnter(node.id)}
 		>
-			{#if node.depth > 0 && !isDirectChild}
-				{@render renderCurrentLevelConnector(node, isLast)}
-			{/if}
 			<div class="relative flex flex-1 items-center">
 				<Button
 					variant="ghost"
@@ -419,19 +411,21 @@
 					aria-expanded={isParentNode(node) ? node.isExpanded : undefined}
 					aria-selected={!isParentNode(node) ? node.isSelected : undefined}
 					id={`treeitem-${node.id}`}
-					tabindex={-1}
+					tabindex={isActive ? 0 : -1}
 					disabled={node.disabled}
 					data-node-path={node.id}
 					data-active={isActive ? 'true' : undefined}
 					data-selected={node.isSelected ? 'true' : undefined}
 					onclick={() => {
 						inputMode = 'mouse';
+						treeState.setActiveNode(node.id);
 						if (isParentNode(node)) {
 							treeState.toggleExpand(node.id);
 						} else {
 							handleSelection(node.id, true);
 						}
 					}}
+					onfocus={() => handleNodeFocus(node.id)}
 					class={cn(
 						'relative z-1 flex flex-1 justify-start rounded px-0.5 text-xs transition-colors duration-150 hover:bg-accent/50 focus:bg-accent/50 focus:outline-none focus-visible:ring-0 focus-visible:outline-none active:bg-accent/70',
 						{
@@ -478,8 +472,8 @@
 
 {#snippet renderNodeList(nodes: TreeNode[])}
 	<ul class="flex flex-col p-2" role="tree" aria-multiselectable={multiple}>
-		{#each nodes as node, index (node.id)}
-			{@render renderTreeNode(node, index === nodes.length - 1)}
+		{#each nodes as node (node.id)}
+			{@render renderTreeNode(node)}
 		{/each}
 	</ul>
 {/snippet}

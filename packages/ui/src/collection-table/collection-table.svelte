@@ -531,7 +531,13 @@
 	});
 	const activeRecordLoading = $derived(Boolean(queries.record?.loading));
 	const activeRecordError = $derived(queries.record?.error?.message);
-	const tableLoading = $derived(queries.rows?.loading ?? false);
+	// A missing query resource or an undefined first value is still "unknown", never an empty
+	// collection. Keep the loader visible until the first locally-synced or server-proven result
+	// arrives; only a resolved [] may render the empty state.
+	const tableLoading = $derived(
+		!disabled &&
+			(queries.rows == null || queries.rows.current === undefined || queries.rows.loading)
+	);
 	let approvalActionState = $state<ApprovalActionState>({ status: 'idle' });
 	let changeRequestOpen = $state(false);
 	const approvalActionPending = $derived(

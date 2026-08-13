@@ -92,6 +92,8 @@ export const podMessages = defineMessages({
 		'pod.agent.channelAgent': 'Channel agent',
 		'pod.agent.groups': 'Groups',
 		'pod.agent.directMessages': 'Direct messages',
+		'pod.agent.webAgentMe': 'Web agent — Me',
+		'pod.agent.webAgentMember': 'Web agent — {name}',
 		'pod.agent.unknownMember': 'Unknown member',
 		'pod.agent.channelReadOnly':
 			'Read-only in Agent UI. Continue this conversation in its linked messaging channel.',
@@ -448,6 +450,8 @@ export const podMessages = defineMessages({
 		'pod.agent.channelAgent': '渠道助手',
 		'pod.agent.groups': '群组',
 		'pod.agent.directMessages': '私信',
+		'pod.agent.webAgentMe': '网页助手 — 我',
+		'pod.agent.webAgentMember': '网页助手 — {name}',
 		'pod.agent.unknownMember': '未知成员',
 		'pod.agent.channelReadOnly': '助手界面中为只读。请在关联的消息渠道中继续此对话。',
 		'pod.agent.adminConversationReadOnly': '管理员只读视图。只有对话所有者可以回复。',

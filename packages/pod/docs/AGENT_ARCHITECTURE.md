@@ -331,6 +331,13 @@ sync stream; refresh, reconnect, offline catch-up and multi-tab convergence do n
 agent-specific browser stream or a race-prone collection fan-out. Token deltas are deliberately not
 replicated or persisted; the UI advances when a provider part completes.
 
+The selector presents durable identities rather than raw usernames: the current person's personal
+sessions are grouped under **Web agent — Me**, other personal sessions under **Web agent — Name**,
+and declared channel sessions under their channel profile. It is an ARIA tree with roving focus:
+Up/Down move between visible items, Right expands or enters a child, and Left collapses or returns
+to the parent. Visual hierarchy comes from consistent indentation and icons, not text-drawn branch
+characters.
+
 Provider text and reasoning deltas stay in the host's short-lived stream queue. Pod appends one
 durable `chat_session` message only when each provider text or reasoning part completes, so a token
 delta never causes a PostgreSQL write. Reasoning is retained as its own transcript kind rather than

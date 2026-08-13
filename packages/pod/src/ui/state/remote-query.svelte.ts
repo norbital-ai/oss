@@ -50,20 +50,13 @@ class RemoteQueryResource<T> {
 		const pending = Promise.resolve().then(() => this.load(controller.signal));
 		this.pending = pending;
 
-		// `loading` means "nothing to show", not "a request is in flight". A re-evaluation over
-		// warm local data resolves in well under a frame, and a query that already has data — its
-		// own or its family's — must never swap it for a spinner.
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		if (this.current === undefined) {
-			timer = setTimeout(() => {
-				timer = undefined;
-				if (this.current === undefined) this.loading = true;
-			}, 100);
-		}
+		// `loading` means "there is not yet a truthful value to render", not merely "a request is in
+		// flight". Set it synchronously: delaying this flag let collection surfaces render their empty
+		// state during the initial unknown frame. Warm data still stays visible while it refreshes.
+		this.loading = this.current === undefined;
 
 		void pending.then(
 			(value) => {
-				if (timer) clearTimeout(timer);
 				if (generation !== this.generation) return;
 				this.current = value;
 				this.onValue?.(value);
@@ -71,7 +64,6 @@ class RemoteQueryResource<T> {
 				this.controller = null;
 			},
 			(error) => {
-				if (timer) clearTimeout(timer);
 				if (generation !== this.generation) return;
 				this.controller = null;
 				if (error instanceof DOMException && error.name === 'AbortError') {
