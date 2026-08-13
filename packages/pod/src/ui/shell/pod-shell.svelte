@@ -68,6 +68,7 @@
 	} from './app-header-actions.svelte.js';
 	import { workspaceSettingsApi } from './workspace-settings-api.js';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
+	import NorbitalThinkingOrb from '../agent/norbital-thinking-orb.svelte';
 	import { requestAgentComposerFocus } from '../agent/agent-composer-focus.js';
 	import OmniFinder from './omni-finder.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -730,7 +731,7 @@
 		onclick={openAgent}
 		data-testid="workspace-agent-trigger"
 	>
-		<IconWrapper name="product:agent" class="size-4" />
+		<NorbitalThinkingOrb state="idle" size={20} label={t('pod.shell.openWorkspaceAgent')} />
 		<span>{t('pod.shell.askAgent')}</span>
 	</Button>
 {/if}

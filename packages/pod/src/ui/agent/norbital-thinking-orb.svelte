@@ -20,16 +20,6 @@
 		[0.53, 0.13],
 		[0.42, -0.24]
 	];
-	const constellationLinks = [
-		[0, 1],
-		[1, 2],
-		[2, 3],
-		[3, 4],
-		[4, 5],
-		[5, 6],
-		[6, 3]
-	] as const;
-
 	let {
 		state = 'idle',
 		size = 20,
@@ -119,47 +109,44 @@
 		return point;
 	}
 
-	function searchingSkyPoint(index: number, count: number, time: number, orb: OrbPoint): OrbPoint {
-		const constellationCount = Math.min(count, Math.max(22, Math.round(Math.sqrt(count) * 2.7)));
-		const dotRank = Math.round((index * (constellationCount - 1)) / Math.max(1, count - 1));
-		const activeIndex = Math.round((dotRank * (count - 1)) / Math.max(1, constellationCount - 1));
-		if (index !== activeIndex) {
-			const twinkle = 0.5 + Math.sin(index * 2.17 + time * 1.1) * 0.5;
-			return {
-				...orb,
-				x: orb.x * 1.025,
-				y: orb.y * 1.025,
-				z: orb.z * 1.015,
-				accent: 0.01 + twinkle * 0.035,
-				boost: twinkle * 0.018,
-				visibility: 0.72 + twinkle * 0.28
-			};
+	function searchingSkyPoint(
+		index: number,
+		layout: SphereSeed[],
+		time: number,
+		orb: OrbPoint
+	): OrbPoint {
+		const seed = layout[index];
+		const seedRadius = Math.sqrt(Math.max(0, 1 - seed.latitude * seed.latitude));
+		const seedX = seedRadius * Math.cos(seed.longitude);
+		const seedY = seed.latitude;
+		const seedZ = seedRadius * Math.sin(seed.longitude);
+		const guideIndex = (time * 0.82) % constellationAnchors.length;
+		let constellationGlow = 0;
+
+		for (let anchorIndex = 0; anchorIndex < constellationAnchors.length; anchorIndex += 1) {
+			const anchor = constellationAnchors[anchorIndex];
+			const targetX = anchor[0] * 0.88;
+			const targetY = anchor[1] * 1.08;
+			const targetZ = Math.sqrt(Math.max(0.08, 1 - targetX * targetX - targetY * targetY));
+			const separation = Math.acos(
+				clamp(seedX * targetX + seedY * targetY + seedZ * targetZ, -1, 1)
+			);
+			const proximity = Math.exp(-(separation * separation) / 0.014);
+			const orderDistance = Math.min(
+				Math.abs(anchorIndex - guideIndex),
+				constellationAnchors.length - Math.abs(anchorIndex - guideIndex)
+			);
+			const guide = Math.exp(-(orderDistance * orderDistance) / 0.32);
+			constellationGlow = Math.max(constellationGlow, proximity * (0.58 + guide * 0.42));
 		}
 
-		const progress = dotRank / Math.max(1, constellationCount - 1);
-		const pathProgress = progress * constellationLinks.length;
-		const linkIndex = Math.min(constellationLinks.length - 1, Math.floor(pathProgress));
-		const linkProgress = pathProgress - linkIndex;
-		const [fromIndex, toIndex] = constellationLinks[linkIndex];
-		const from = constellationAnchors[fromIndex];
-		const to = constellationAnchors[toIndex];
-		const starProximity = 1 - clamp(Math.min(linkProgress, 1 - linkProgress) / 0.18);
-		const guideDistance = Math.abs(angleDistance(progress * Math.PI * 2, time * 0.92));
-		const guide = Math.exp(-(guideDistance * guideDistance) / 0.11);
-		const twinkle = 0.5 + Math.sin(time * 3.1 + linkIndex * 1.7) * 0.5;
-		const drift = Math.sin(dotRank * 2.399963 + time * 0.55) * 0.018;
-		const surfaceX = from[0] + (to[0] - from[0]) * linkProgress;
-		const surfaceY = from[1] + (to[1] - from[1]) * linkProgress + drift;
-		const surfaceZ = Math.sqrt(Math.max(0.08, 1 - surfaceX * surfaceX - surfaceY * surfaceY));
-		return orientStateShape(
-			surfaceX,
-			surfaceY,
-			surfaceZ,
-			0.48 + guide * 0.46 + starProximity * twinkle * 0.06,
-			0.025 + starProximity * (0.16 + twinkle * 0.09) + guide * 0.045,
-			1,
-			time
-		);
+		const twinkle = 0.5 + Math.sin(index * 2.17 + time * 1.1) * 0.5;
+		return {
+			...orb,
+			accent: Math.max(orb.accent * 0.06, constellationGlow),
+			boost: orb.boost * 0.06 + constellationGlow * 0.24,
+			visibility: 0.76 + twinkle * 0.24
+		};
 	}
 
 	function stateShapePoint(
@@ -328,7 +315,7 @@
 		if (shapeMix === 0) return orb;
 		const shape =
 			mode === 'searching'
-				? searchingSkyPoint(index, layout.length, time, orb)
+				? searchingSkyPoint(index, layout, time, orb)
 				: stateShapePoint(mode, index, layout.length, time);
 		return interpolatePoint(orb, shape, shapeMix);
 	}
