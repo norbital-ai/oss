@@ -20,8 +20,8 @@ describe('compact directive', () => {
 });
 
 describe('automatic context compaction', () => {
-	it('uses 95% of the selected model context instead of a fixed prompt size', () => {
-		expect(COMPACTION_CONTEXT_RATIO).toBe(0.95);
+	it('uses 80% of the selected model context instead of a fixed prompt size', () => {
+		expect(COMPACTION_CONTEXT_RATIO).toBe(0.8);
 		expect(
 			shouldAutomaticallyCompact({
 				messages: [{ role: 'user', content: 'small prompt' }],

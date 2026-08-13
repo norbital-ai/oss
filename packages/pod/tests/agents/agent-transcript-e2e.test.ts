@@ -30,6 +30,9 @@ describe('Pod AI and automation transcript — leftover in-guest runAgent path E
 	let refusalCalls = 0;
 	let retryCalls = 0;
 	const ai = testAiBinding(async (input) => {
+		if (input.outputSchema) {
+			return { text: JSON.stringify({ title: 'Workspace' }), stopReason: 'end' };
+		}
 		const firstUser = input.messages.find((message) => message.role === 'user')?.content;
 		if (firstUser === 'Finish with no content.') {
 			emptyCalls += 1;
@@ -79,12 +82,17 @@ describe('Pod AI and automation transcript — leftover in-guest runAgent path E
 		}
 		calls += 1;
 		if (calls === 1) {
-			// `construction` authors no `src/+agent.ts`, so this is the fallback profile: the skill tools
-			// are unconditional, and `write_collection` is present because that profile grants write.
+			// `construction` authors no `src/+agent.ts`, so this is the fallback profile: skill and
+			// sandbox-coordination tools are unconditional, and `write_collection` is present because
+			// that profile grants write.
 			expect(input.tools?.map((tool) => tool.name)).toEqual([
+				'await_sandbox_agent',
 				'describe_workspace',
-				'read_collection',
+				'list_sandbox_agents',
 				'list_skills',
+				'message_sandbox_agent',
+				'read_collection',
+				'read_sandbox_agent',
 				'read_skill',
 				'spawn_subagent',
 				'write_collection'
@@ -179,6 +187,7 @@ describe('Pod AI and automation transcript — leftover in-guest runAgent path E
 				messages: Array<{
 					seq: number;
 					role: string;
+					kind?: string;
 					parts: Array<{
 						role: string;
 						content: string;
@@ -191,7 +200,9 @@ describe('Pod AI and automation transcript — leftover in-guest runAgent path E
 		const steps = (
 			transcript.rows.find((row) => row.norbital_id === session.rows[0]?.norbital_id)?.messages ??
 			[]
-		).sort((left, right) => left.seq - right.seq);
+		)
+			.filter((step) => step.kind !== 'usage' && step.kind !== 'reasoning')
+			.sort((left, right) => left.seq - right.seq);
 
 		// user prompt, the assistant turn carrying its tool call, the tool result, the final answer.
 		expect(steps.map((step) => step.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);

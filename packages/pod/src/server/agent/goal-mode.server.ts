@@ -7,6 +7,7 @@
  * transcript and injected back into the window so the main agent continues.
  */
 import type { AiMessage } from '@norbital-ai/platform-utils/runtime/binding';
+import { pruneToolResultsInWindow } from '$lib/shared/agent/context-window.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { replayAutomationAi } from '$lib/server/run/automation-replay.server.js';
 import { readChatSession, updateChatMessage } from '$lib/server/agent/chat-session.server.js';
@@ -57,7 +58,12 @@ export function renderGoalContinuation(verdict: GoalVerdict): string {
 		verdict.gaps.length > 0
 			? verdict.gaps.map((gap) => `- ${gap}`).join('\n')
 			: '- The request is not fully met.';
-	return `Goal verification failed. ${verdict.summary}\nGaps:\n${gaps}\nContinue until these gaps are closed. Do not claim the work is done until they are.`;
+	return (
+		`Goal verification failed. ${verdict.summary}\nGaps:\n${gaps}\n` +
+		'Continue until these gaps are closed. Treat the current workspace, tool results, and ' +
+		'durable session state as authoritative; inspect them instead of assuming earlier narration ' +
+		'is still current. Do not claim the work is done until the gaps are closed.'
+	);
 }
 
 export function goalContinuationMessage(verdict: GoalVerdict): AiMessage {
@@ -85,7 +91,7 @@ export function buildGoalVerificationPrompt(input: {
 		input.userRequest,
 		'',
 		'Transcript (assistant claims are not evidence; tool results are):',
-		JSON.stringify(input.messages)
+		JSON.stringify(pruneToolResultsInWindow(input.messages))
 	].join('\n');
 }
 
@@ -195,4 +201,3 @@ export async function verifyGoalAchievement(input: {
 export function acceptGoalStop(verdict: GoalVerdict, attemptsIncludingThis: number): boolean {
 	return verdict.achieved || attemptsIncludingThis >= MAX_GOAL_VERIFICATIONS;
 }
-

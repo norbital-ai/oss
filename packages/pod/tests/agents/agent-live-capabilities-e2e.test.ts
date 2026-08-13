@@ -65,7 +65,13 @@ function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch
 function lastUserContent(input: { readonly messages?: readonly { role: string; content?: unknown }[] }): string {
 	const lastUser = [...(input.messages ?? [])]
 		.reverse()
-		.find((message) => message.role === 'user')?.content;
+		.find((message) => {
+			if (message.role !== 'user' || typeof message.content !== 'string') return false;
+			return (
+				!message.content.startsWith('<intent-round>') &&
+				!message.content.startsWith('<goal-verification>')
+			);
+		})?.content;
 	return typeof lastUser === 'string' ? lastUser : '';
 }
 
@@ -179,6 +185,28 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			if (outcome.status !== 'waiting_effect' || !outcome.effectId || !outcome.request) {
 				throw new Error(`Unexpected agent step: ${JSON.stringify(outcome)}`);
 			}
+			if (outcome.request.kind === 'ai.prompt') {
+				yielded.push(`${step}:ai.prompt`);
+				await harness.hostCommand({
+					kind: 'automation-events',
+					action: 'settle',
+					receiptId,
+					effectId: outcome.effectId,
+					artifact: TEST_ARTIFACT,
+					outcome: {
+						status: 'succeeded',
+						result: {
+							text: JSON.stringify({
+								achieved: true,
+								summary: 'The sentinel was returned.',
+								gaps: []
+							}),
+							stopReason: 'end'
+						}
+					}
+				});
+				continue;
+			}
 			if (outcome.request.kind !== 'ai.turn') {
 				throw new Error(`Expected ai.turn, received ${outcome.request.kind}`);
 			}
@@ -259,9 +287,12 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
 					[accepted.chatId]
 				);
-				return rows[0] && storedArray(rows[0].messages).length === 1 ? rows[0] : null;
+				const messages = rows[0] ? storedArray(rows[0].messages) : [];
+				return rows[0] && messages.some((message) => message.role === 'user') ? rows[0] : null;
 			});
-			expect(storedArray(sessionArrived.messages)).toHaveLength(1);
+			const openedMessages = storedArray(sessionArrived.messages);
+			expect(openedMessages.some((message) => message.role === 'user')).toBe(true);
+			expect(openedMessages.some((message) => message.kind === 'goal')).toBe(true);
 
 			await harness.hostCommand({
 				kind: 'agent-conversation-titles',

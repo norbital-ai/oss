@@ -225,6 +225,18 @@ function isAbortError(error: unknown): boolean {
 	return error instanceof Error && error.name === 'AbortError';
 }
 
+/**
+ * Firefox reports a cancelled SSE `ReadableStream.read()` as `TypeError: Error in input stream`
+ * instead of `AbortError`. Chromium often uses `TypeError: network error`. Subscription rotation
+ * aborts only `connectionAbort`, so the outer loop's `signal.aborted` is still false — treat these
+ * as reconnects, not replica failures.
+ */
+function isStreamInterrupt(error: unknown): boolean {
+	if (isAbortError(error)) return true;
+	if (!(error instanceof TypeError)) return false;
+	return /input stream|network error/i.test(error.message);
+}
+
 /** One unsent outbox entry, as the planner needs to see it. */
 type PendingEntry = {
 	readonly clientId: string;
@@ -584,7 +596,7 @@ export class PodSyncClient {
 					);
 					for (const listener of this.resetListeners) listener();
 					this.lastError = undefined;
-				} else if (isAbortError(err)) {
+				} else if (isStreamInterrupt(err) || this.connectionAbort?.signal.aborted) {
 					// A newly subscribed collection rotates the connection so the server can stop
 					// resolving unrelated outbox rows. The outer loop reconnects with the new set.
 				} else {

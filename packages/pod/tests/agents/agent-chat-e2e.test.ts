@@ -90,12 +90,13 @@ describe('Pod agent chat — leftover in-guest runAgent path E2E', () => {
 			   FROM chat_session,
 			        jsonb_array_elements(messages) AS message
 			  WHERE norbital_id = $1::uuid
+			    AND COALESCE(message->>'kind', 'normal') NOT IN ('usage', 'reasoning')
 			  ORDER BY (message->>'seq')::int`,
 			[opened.chatId]
 		);
 		expect(rows.rows.map((row) => row.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
-		// One sequence per conversation, and it never restarts.
-		expect(rows.rows.map((row) => row.seq)).toEqual([1, 2, 3, 4]);
+		// One sequence per conversation, and it never restarts. Usage rows occupy 3 and 6.
+		expect(rows.rows.map((row) => row.seq)).toEqual([1, 2, 4, 5]);
 	});
 
 	it('keeps history beyond forty rows until model-aware compaction replaces it', async () => {

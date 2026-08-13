@@ -350,14 +350,43 @@ its prompt asks whether the plan is complete and executable, not whether the wor
 a record, or carries an explicit prompt. When the root loop would stop (`calls.length === 0`,
 depth 0), that check is a separate `ai.chat` / durable `ai.prompt` with no tools. The agent's last
 sentence is not evidence. A failed verdict is persisted as `kind: 'goal'` and injected back into the
-window so the main agent continues. After three checks the turn fail-closes and stops. Subagents
-never enter the gate.
+window as `<goal-verification>` so the main agent continues. That continuation tells the model to
+treat the current workspace, tool results, and durable session state as authoritative — not earlier
+narration. After three checks the turn fail-closes and stops. Subagents never enter the gate.
+
+Plan and verifier reminders are **not** part of the system prefix. They change with the turn, so they
+are appended as a trailing `<intent-round>` user message on decision turns — when the last window
+message is not a tool result or an unanswered tool-call. After a tool call the result stays last so
+the provider sees a complete exchange. The baseline and authored prompt stay prefix-stable.
 
 Verifier scoring lives in `server/agent/goal-mode.server.ts` and `shared/agent/goal-verdict.ts`, not
 inlined into the loop. The composer, the `@` menu, and the omni finder share one prefix language and
 record engine in `ui/agent/mention-sources.ts`. Composer chip ranges live in
 `ui/agent/composer-mentions.ts`; chrome tokens and the focus/seed channel live in
 `ui/agent/composer-chrome.ts`.
+
+## Context window
+
+The transcript is the log. The model window is a derived surface:
+
+1. **Tool-result prune** — results over 8,192 characters become a 4,096-character head, a marker, and
+   a 1,024-character tail. The full result stays on the transcript row. Replay and the live window
+   apply the same prune. The verifier reads the pruned window too.
+2. **Pressure** — compact at 80% of the selected model's `contextLength`. Estimation is still
+   `JSON.stringify(...).length / 4`; the number a person sees comes from provider usage.
+3. **Retention** — automatic compaction summarises the older prefix and keeps a recent tail (~16% of
+   the model window). Tool-call / tool-result pairs are not split. Plan folds still replace the whole
+   settled window — that is the point of a plan checkpoint.
+4. **Summarizer** — a structured checkpoint (request, records, errors, pending work, next step). Only
+   the returned text is stored. Reasoning never enters the recap.
+5. **Incomplete tool calls** — `finish_reason: length` / `max_tokens` drops every tool-call block.
+   Partial argument JSON is not executed.
+
+Host tools still apply their own acquisition caps (`sandbox_read` pagination, bash stream limits).
+There is no session spill-file layer: a clipped host result already tells the model how to page or
+grep for the rest.
+
+Manual `/compact` remains. A failed summarisation does not fail the turn.
 
 ## Host tools
 

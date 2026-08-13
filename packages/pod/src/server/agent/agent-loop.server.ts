@@ -1,7 +1,5 @@
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
-import {
-	PLATFORM_AGENT_READ_TOOL_NAMES
-} from '$lib/authoring/automations/platform-agent-tools.js';
+import { PLATFORM_AGENT_READ_TOOL_NAMES } from '$lib/authoring/automations/platform-agent-tools.js';
 import type { BeforeApi } from '$lib/authoring/workspace/hook-api.js';
 import { createBeforeApi } from '$lib/server/collection/hook-api.server.js';
 import {
@@ -16,7 +14,17 @@ import {
 } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
-import { composeSystemPrompt } from '$lib/server/agent/system-prompt.js';
+import { composeSystemPrompt, messagesForProvider } from '$lib/server/agent/system-prompt.js';
+import {
+	COMPACTION_CONTEXT_RATIO,
+	compactionSummarizerPrompt,
+	pruneToolResultContent,
+	pruneToolResultsInWindow,
+	pruneWindowMessage,
+	retainTokenBudget,
+	shouldAutomaticallyCompact,
+	splitRetainedTail
+} from '$lib/shared/agent/context-window.js';
 import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
 import {
 	appendChatMessage,
@@ -69,7 +77,11 @@ import {
 	sandboxWaitResumeMessage
 } from '$lib/server/agent/sandbox-agents.server.js';
 import { listSkillSummaries, readSkillContent } from '$lib/skills/registry.server.js';
-import type { AiChatResult, AiMessage, AiToolCall } from '@norbital-ai/platform-utils/runtime/binding';
+import type {
+	AiChatResult,
+	AiMessage,
+	AiToolCall
+} from '@norbital-ai/platform-utils/runtime/binding';
 import {
 	automationReplayStorage,
 	isAutomationEffectYield,
@@ -158,35 +170,10 @@ export function parseCompactDirective(message: string): { readonly instructions?
 	return instructions ? { instructions } : {};
 }
 
-/**
- * When the window is large enough to be worth replacing with a summary.
- *
- * A character estimate, deliberately: this decides whether to spend a summarisation call, and being
- * wrong costs one call. It is never shown to anyone — a number a reader sees comes from the
- * provider's own accounting embedded on the session message, never from this.
- */
-function estimateTokens(value: unknown): number {
-	return Math.ceil(JSON.stringify(value).length / 4);
-}
-
-/** Compact only when the selected model's prompt is genuinely near its advertised context limit. */
-export const COMPACTION_CONTEXT_RATIO = 0.95;
-
-export function shouldAutomaticallyCompact(input: {
-	readonly messages: readonly AiMessage[];
-	readonly tools: readonly AiToolSpec[];
-	readonly systemPrompt: string;
-	readonly contextLength: number | null;
-}): boolean {
-	if (!input.contextLength || !Number.isFinite(input.contextLength) || input.contextLength <= 0) {
-		return false;
-	}
-	const promptTokens = estimateTokens({
-		messages: [{ role: 'system', content: input.systemPrompt }, ...input.messages],
-		tools: input.tools
-	});
-	return promptTokens >= Math.floor(input.contextLength * COMPACTION_CONTEXT_RATIO);
-}
+export {
+	COMPACTION_CONTEXT_RATIO,
+	shouldAutomaticallyCompact
+} from '$lib/shared/agent/context-window.js';
 
 async function selectedModelContextLength(spec: AgentAutomationSpec): Promise<number | null> {
 	const models = requireRuntimeFacility('ai').models;
@@ -459,7 +446,7 @@ function windowMessageFromStoredRow(
 	if (kind === 'goal') {
 		return windowMessageFromGoalRow(typeof message.content === 'string' ? message.content : '');
 	}
-	return message;
+	return pruneWindowMessage(message);
 }
 
 export type AgentRunResult = {
@@ -609,13 +596,14 @@ async function streamProviderTurn(input: {
 	readonly goalMode: boolean;
 }): Promise<ProviderTurnResult> {
 	const ai = requireRuntimeFacility('ai');
-	const system = composeSystemPrompt(input.spec.systemPrompt, {
+	const system = composeSystemPrompt(input.spec.systemPrompt);
+	const window = messagesForProvider(input.messages, {
 		planMode: input.planMode,
 		goalMode: input.goalMode
 	});
 	if (!ai.startStream || !ai.readStream || !ai.cancelStream) {
 		const result = await ai.chat({
-			messages: [{ role: 'system' as const, content: system }, ...input.messages],
+			messages: [{ role: 'system' as const, content: system }, ...window],
 			tools: input.tools,
 			...(input.spec.model ? { model: input.spec.model } : {}),
 			...(input.spec.profile ? { profile: input.spec.profile } : {})
@@ -635,13 +623,13 @@ async function streamProviderTurn(input: {
 		return {
 			text: result.text,
 			reasoning: result.reasoning ?? '',
-			toolCalls: result.toolCalls ?? [],
+			toolCalls: executableToolCalls(result.stopReason, result.toolCalls),
 			stopReason: result.stopReason,
 			...(result.usage !== undefined ? { usage: result.usage } : {})
 		};
 	}
 	const streamId = await ai.startStream({
-		messages: [{ role: 'system' as const, content: system }, ...input.messages],
+		messages: [{ role: 'system' as const, content: system }, ...window],
 		tools: input.tools,
 		...(input.spec.model ? { model: input.spec.model } : {}),
 		...(input.spec.profile ? { profile: input.spec.profile } : {})
@@ -685,7 +673,13 @@ async function streamProviderTurn(input: {
 			}
 			done = batch.done;
 		}
-		return { text, reasoning, toolCalls, stopReason, ...(usage !== undefined ? { usage } : {}) };
+		return {
+			text,
+			reasoning,
+			toolCalls: executableToolCalls(stopReason, toolCalls),
+			stopReason,
+			...(usage !== undefined ? { usage } : {})
+		};
 	} catch (cause) {
 		await ai.cancelStream(streamId).catch(() => undefined);
 		throw cause;
@@ -707,19 +701,15 @@ async function compactWindow(input: {
 	readonly spec: AgentAutomationSpec;
 	readonly instructions?: string;
 	readonly fold?: 'plan';
+	readonly contextLength?: number | null;
 }): Promise<string> {
 	const ai = requireRuntimeFacility('ai');
-	const steer = input.instructions
-		? `\n\nThe person asked you to focus on: ${input.instructions}`
-		: '';
+	const { head, tail } = compactionSpans(input.messages, input.fold, input.contextLength);
 	const result = await ai.chat({
 		messages: [
 			{
 				role: 'user',
-				content:
-					'Summarize this agent conversation for faithful continuation. Preserve decisions, ' +
-					'constraints, identifiers, tool outcomes, unresolved work, and the intent behind the ' +
-					`request.${steer}\n\n${JSON.stringify(input.messages)}`
+				content: compactionSummarizerPrompt(head, input.instructions)
 			}
 		],
 		...(input.spec.model ? { model: input.spec.model } : {}),
@@ -734,13 +724,54 @@ async function compactWindow(input: {
 		kind: 'summary',
 		...(result.usage ? { usage: objectValue(result.usage) } : {})
 	});
-	// The turn continues against the recap alone; everything it replaced is still in the transcript.
-	// Storage and the in-memory window share one tag: `<plan-summary>` or `<conversation-summary>`.
-	input.messages.splice(0, input.messages.length, {
-		role: 'user',
-		content: windowContentFromStoredSummary(stored)
-	});
+	// The checkpoint replaces the older prefix. A recent tail stays verbatim so the last tool
+	// exchange is not lost inside the recap. The transcript still holds every original row.
+	input.messages.splice(
+		0,
+		input.messages.length,
+		{ role: 'user', content: windowContentFromStoredSummary(stored) },
+		...tail
+	);
 	return summary;
+}
+
+function executableToolCalls(
+	stopReason: AiChatResult['stopReason'],
+	toolCalls: readonly AiToolCall[] | undefined
+): readonly AiToolCall[] {
+	if (stopReason === 'max_tokens') return [];
+	return toolCalls ?? [];
+}
+
+function windowToolMessage(output: Record<string, unknown>, callId: string): AiMessage {
+	const content = JSON.stringify(output);
+	return {
+		role: 'tool',
+		content: pruneToolResultContent(content),
+		toolCallId: callId
+	};
+}
+
+function persistableToolMessage(output: Record<string, unknown>, callId: string): AiMessage {
+	return {
+		role: 'tool',
+		content: JSON.stringify(output),
+		toolCallId: callId
+	};
+}
+
+function compactionSpans(
+	messages: AiMessage[],
+	fold: 'plan' | undefined,
+	contextLength: number | null | undefined
+): { readonly head: AiMessage[]; readonly tail: AiMessage[] } {
+	const pruned = pruneToolResultsInWindow(messages);
+	if (fold === 'plan') return { head: pruned, tail: [] };
+	const { head, tail } = splitRetainedTail(
+		pruned,
+		retainTokenBudget({ contextLength: contextLength ?? null, messages: pruned })
+	);
+	return head.length > 0 ? { head, tail } : { head: pruned, tail: [] };
 }
 
 type LoopResult = { readonly text: string; readonly consumedTokens: number };
@@ -760,10 +791,7 @@ async function runAgentLoop(input: {
 		canSpawnSubagent: input.depth === 0 && !input.planMode,
 		planMode: input.planMode
 	});
-	const systemPrompt = composeSystemPrompt(input.spec.systemPrompt, {
-		planMode: input.planMode,
-		goalMode: input.goalMode
-	});
+	const systemPrompt = composeSystemPrompt(input.spec.systemPrompt);
 	const contextLength = input.depth === 0 ? await selectedModelContextLength(input.spec) : null;
 	let consumedTokens = 0;
 	let finalText = '';
@@ -771,6 +799,10 @@ async function runAgentLoop(input: {
 	// anchor. A failed root summarisation is attempted only once per run so an outage cannot hot-loop.
 	let compactionUnavailable = input.depth !== 0;
 	while (true) {
+		const pruned = pruneToolResultsInWindow(input.messages);
+		if (pruned.some((message, index) => message !== input.messages[index])) {
+			input.messages.splice(0, input.messages.length, ...pruned);
+		}
 		if (
 			!compactionUnavailable &&
 			input.messages.length >= COMPACTION_FLOOR_MESSAGES &&
@@ -788,7 +820,8 @@ async function runAgentLoop(input: {
 					messages: input.messages,
 					writer: input.writer,
 					turnId: input.turnId,
-					spec: input.spec
+					spec: input.spec,
+					contextLength
 				});
 			} catch {
 				compactionUnavailable = true;
@@ -885,26 +918,16 @@ async function runAgentLoop(input: {
 						input.writer.sessionId
 					);
 					if (isSandboxWaitResult(output)) {
-						const toolMessage: AiMessage = {
-							role: 'tool',
-							content: JSON.stringify(output),
-							toolCallId: call.id
-						};
-						input.messages.push(toolMessage);
-						await input.writer.persist(toolMessage, input.turnId);
+						input.messages.push(windowToolMessage(output, call.id));
+						await input.writer.persist(persistableToolMessage(output, call.id), input.turnId);
 						return { text: finalText, consumedTokens };
 					}
 				}
 			} catch (cause) {
 				output = { error: cause instanceof Error ? cause.message : String(cause) };
 			}
-			const toolMessage: AiMessage = {
-				role: 'tool',
-				content: JSON.stringify(output),
-				toolCallId: call.id
-			};
-			input.messages.push(toolMessage);
-			await input.writer.persist(toolMessage, input.turnId);
+			input.messages.push(windowToolMessage(output, call.id));
+			await input.writer.persist(persistableToolMessage(output, call.id), input.turnId);
 			await updateChatTurn(input.writer.sessionId, input.turnId, {
 				heartbeat_at: new Date().toISOString()
 			});
@@ -1232,18 +1255,13 @@ async function compactDurableWindow(input: {
 	readonly spec: AgentAutomationSpec;
 	readonly instructions?: string;
 	readonly fold?: 'plan';
+	readonly contextLength?: number | null;
 }): Promise<void> {
-	const steer = input.instructions
-		? `\n\nThe person asked you to focus on: ${input.instructions}`
-		: '';
-	const prompt =
-		'Summarize this agent conversation for faithful continuation. Preserve decisions, ' +
-		'constraints, identifiers, tool outcomes, unresolved work, and the intent behind the ' +
-		`request.${steer}\n\n${JSON.stringify(input.messages)}`;
+	const { head, tail } = compactionSpans(input.messages, input.fold, input.contextLength);
 	const summary = replayAutomationAi({
 		request: {
 			kind: 'ai.prompt',
-			prompt,
+			prompt: compactionSummarizerPrompt(head, input.instructions),
 			...(input.spec.model ? { model: input.spec.model } : {}),
 			...(input.spec.profile ? { profile: input.spec.profile } : {})
 		}
@@ -1259,10 +1277,12 @@ async function compactDurableWindow(input: {
 			durable_ordinal: ordinal
 		});
 	}
-	input.messages.splice(0, input.messages.length, {
-		role: 'user',
-		content: windowContentFromStoredSummary(stored)
-	});
+	input.messages.splice(
+		0,
+		input.messages.length,
+		{ role: 'user', content: windowContentFromStoredSummary(stored) },
+		...tail
+	);
 }
 
 /**
@@ -1312,14 +1332,14 @@ function replayProviderTurn(input: {
 	readonly planMode: boolean;
 	readonly goalMode: boolean;
 }): AiChatResult {
-	const system = composeSystemPrompt(input.spec.systemPrompt, {
-		planMode: input.planMode,
-		goalMode: input.goalMode
-	});
+	const system = composeSystemPrompt(input.spec.systemPrompt);
 	const result = replayAutomationAi({
 		request: {
 			kind: 'ai.turn',
-			messages: [...input.messages],
+			messages: messagesForProvider(input.messages, {
+				planMode: input.planMode,
+				goalMode: input.goalMode
+			}),
 			system,
 			tools: [...input.tools],
 			...(input.spec.model ? { model: input.spec.model } : {}),
@@ -1378,7 +1398,7 @@ async function applySettledProviderTurn(input: {
 				durable_ordinal: ordinal
 			});
 		}
-		const calls = input.result.toolCalls ?? [];
+		const calls = executableToolCalls(input.result.stopReason, input.result.toolCalls);
 		if (calls.length > 0) {
 			await input.writer.persist(
 				{ role: 'assistant', content: '', toolCalls: calls },
@@ -1400,7 +1420,7 @@ async function applySettledProviderTurn(input: {
 		finalText = input.result.text;
 		input.messages.push({ role: 'assistant', content: input.result.text });
 	}
-	const calls = input.result.toolCalls ?? [];
+	const calls = executableToolCalls(input.result.stopReason, input.result.toolCalls);
 	if (calls.length > 0) {
 		input.messages.push({ role: 'assistant', content: '', toolCalls: calls });
 	}
@@ -1434,7 +1454,7 @@ async function applySettledProviderTurn(input: {
 				});
 				output = { text: child.text, turnId: child.turnId };
 			} else if (existing) {
-				input.messages.push(existing);
+				input.messages.push(pruneWindowMessage(existing));
 				continue;
 			} else {
 				output = await executeTool(
@@ -1445,13 +1465,10 @@ async function applySettledProviderTurn(input: {
 					input.writer.sessionId
 				);
 				if (isSandboxWaitResult(output)) {
-					const toolMessage: AiMessage = {
-						role: 'tool',
-						content: JSON.stringify(output),
-						toolCallId: call.id
-					};
-					input.messages.push(toolMessage);
-					await input.writer.persist(toolMessage, input.turnId, { durable_ordinal: ordinal });
+					input.messages.push(windowToolMessage(output, call.id));
+					await input.writer.persist(persistableToolMessage(output, call.id), input.turnId, {
+						durable_ordinal: ordinal
+					});
 					return {
 						done: true,
 						waiting: true,
@@ -1467,17 +1484,14 @@ async function applySettledProviderTurn(input: {
 			output = { error: cause instanceof Error ? cause.message : String(cause) };
 		}
 		if (existing) {
-			input.messages.push(existing);
+			input.messages.push(pruneWindowMessage(existing));
 			continue;
 		}
 		if (!output) throw new Error(`Agent tool ${call.name} produced no result`);
-		const toolMessage: AiMessage = {
-			role: 'tool',
-			content: JSON.stringify(output),
-			toolCallId: call.id
-		};
-		input.messages.push(toolMessage);
-		await input.writer.persist(toolMessage, input.turnId, { durable_ordinal: ordinal });
+		input.messages.push(windowToolMessage(output, call.id));
+		await input.writer.persist(persistableToolMessage(output, call.id), input.turnId, {
+			durable_ordinal: ordinal
+		});
 		await updateChatTurn(input.writer.sessionId, input.turnId, {
 			heartbeat_at: new Date().toISOString()
 		});
@@ -1500,15 +1514,16 @@ async function runDurableAgentLoop(input: {
 		canSpawnSubagent: input.depth === 0 && !input.planMode,
 		planMode: input.planMode
 	});
-	const systemPrompt = composeSystemPrompt(input.spec.systemPrompt, {
-		planMode: input.planMode,
-		goalMode: input.goalMode
-	});
+	const systemPrompt = composeSystemPrompt(input.spec.systemPrompt);
 	const contextLength = input.depth === 0 ? await selectedModelContextLength(input.spec) : null;
 	let consumedTokens = 0;
 	let finalText = '';
 	let compactionUnavailable = input.depth !== 0;
 	while (true) {
+		const pruned = pruneToolResultsInWindow(input.messages);
+		if (pruned.some((message, index) => message !== input.messages[index])) {
+			input.messages.splice(0, input.messages.length, ...pruned);
+		}
 		if (
 			!compactionUnavailable &&
 			input.messages.length >= COMPACTION_FLOOR_MESSAGES &&
@@ -1524,7 +1539,8 @@ async function runDurableAgentLoop(input: {
 					messages: input.messages,
 					writer: input.writer,
 					turnId: input.turnId,
-					spec: input.spec
+					spec: input.spec,
+					contextLength
 				});
 			} catch (cause) {
 				if (automationReplayStorage.getStore()?.pending) throw cause;

@@ -1,3 +1,4 @@
+import type { AiMessage } from '@norbital-ai/platform-utils/runtime/binding';
 import { GOAL_MODE_REMINDER, PLAN_VERIFIER_REMINDER } from '$lib/server/agent/goal-mode.server.js';
 
 /**
@@ -67,21 +68,50 @@ function written(layers: readonly (string | undefined)[]): readonly string[] {
  * conflict in favour of what it read last. Replacing the authored prompt instead of composing with
  * it would silently drop every workspace's domain instructions the moment this baseline shipped.
  *
- * Plan mode is last of all: when active it must win against an authored prompt that asks for writes.
+ * Plan and verifier reminders are not part of this prefix. They change with the turn and would
+ * invalidate a reusable system+tools cache; they ride as a trailing `<intent-round>` user message.
  */
-export function composeSystemPrompt(
-	authored: string | undefined,
+export function composeSystemPrompt(authored: string | undefined): string {
+	return [AGENT_BASELINE_SYSTEM_PROMPT, ...written([authored])].join(LAYER_SEPARATOR);
+}
+
+/**
+ * Turn-local plan / verifier guidance, appended after history so the system prefix stays stable.
+ */
+const INTENT_ROUND_OPEN = '<intent-round>';
+
+export function isIntentRoundContent(content: unknown): boolean {
+	return typeof content === 'string' && content.startsWith(INTENT_ROUND_OPEN);
+}
+
+export function intentReminderMessage(options?: {
+	readonly planMode?: boolean;
+	readonly goalMode?: boolean;
+}): AiMessage | null {
+	const text = written([
+		options?.planMode ? PLAN_MODE_REMINDER : undefined,
+		options?.planMode && options?.goalMode ? PLAN_VERIFIER_REMINDER : undefined,
+		!options?.planMode && options?.goalMode ? GOAL_MODE_REMINDER : undefined
+	]).join('\n\n');
+	if (text.length === 0) return null;
+	return { role: 'user', content: `${INTENT_ROUND_OPEN}\n${text}\n</intent-round>` };
+}
+
+/**
+ * Append the turn-local reminder only on a decision turn. After a tool call the result must stay
+ * last so the provider sees a complete call/result pair. A reminder already at the tail is left
+ * alone — this helper does not persist, so repeating it would duplicate the same user frame.
+ */
+export function messagesForProvider(
+	messages: readonly AiMessage[],
 	options?: { readonly planMode?: boolean; readonly goalMode?: boolean }
-): string {
-	return [
-		AGENT_BASELINE_SYSTEM_PROMPT,
-		...written([
-			authored,
-			options?.planMode ? PLAN_MODE_REMINDER : undefined,
-			options?.planMode && options?.goalMode ? PLAN_VERIFIER_REMINDER : undefined,
-			!options?.planMode && options?.goalMode ? GOAL_MODE_REMINDER : undefined
-		])
-	].join(LAYER_SEPARATOR);
+): AiMessage[] {
+	const reminder = intentReminderMessage(options);
+	if (!reminder) return [...messages];
+	const last = messages.at(-1);
+	if (!last || last.role === 'tool' || isIntentRoundContent(last.content)) return [...messages];
+	if (last.role === 'assistant' && (last.toolCalls?.length ?? 0) > 0) return [...messages];
+	return [...messages, reminder];
 }
 
 /**

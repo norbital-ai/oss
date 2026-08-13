@@ -1363,4 +1363,29 @@ describe('PodSyncClient (client sync logic)', () => {
 			await client.close();
 		}
 	});
+
+	it('does not record a Firefox input-stream TypeError as lastError', async () => {
+		const fetch: SyncFetch = async (path) => {
+			if (!path.startsWith('sync/stream')) {
+				return new Response('not found', { status: 404 });
+			}
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					queueMicrotask(() => controller.error(new TypeError('Error in input stream')));
+				}
+			});
+			return new Response(body, {
+				status: 200,
+				headers: { 'content-type': 'text/event-stream' }
+			});
+		};
+		const client = await makeClient(fetch);
+		try {
+			client.startStream();
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(client.lastError).toBeUndefined();
+		} finally {
+			await client.close();
+		}
+	});
 });

@@ -15,7 +15,12 @@ import {
 	goalContinuationMessage,
 	windowMessageFromStoredGoal
 } from '$lib/server/agent/goal-mode.server.js';
-import { composeSystemPrompt, PLAN_MODE_REMINDER } from '$lib/server/agent/system-prompt.js';
+import {
+	composeSystemPrompt,
+	intentReminderMessage,
+	messagesForProvider,
+	PLAN_MODE_REMINDER
+} from '$lib/server/agent/system-prompt.js';
 
 describe('goal verdict parsing', () => {
 	it('accepts raw JSON', () => {
@@ -93,6 +98,9 @@ describe('goal continuation messages', () => {
 			role: 'user',
 			content: `<goal-verification>\n${renderGoalContinuation(verdict)}\n</goal-verification>`
 		});
+		expect(renderGoalContinuation(verdict)).toContain(
+			'Treat the current workspace, tool results, and durable session state as authoritative'
+		);
 	});
 
 	it('uses unreadable verdict for stored garbage without throwing', () => {
@@ -104,11 +112,44 @@ describe('goal continuation messages', () => {
 });
 
 describe('composeSystemPrompt goal and plan modes', () => {
-	it('adds the plan reminder and the plan verifier reminder when both are set', () => {
-		const prompt = composeSystemPrompt(undefined, { planMode: true, goalMode: true });
-		expect(prompt).toContain(PLAN_MODE_REMINDER);
-		expect(prompt).toContain(PLAN_VERIFIER_REMINDER);
+	it('keeps plan and verifier reminders out of the system prefix', () => {
+		const prompt = composeSystemPrompt(undefined);
+		expect(prompt).not.toContain(PLAN_MODE_REMINDER);
+		expect(prompt).not.toContain(PLAN_VERIFIER_REMINDER);
 		expect(prompt).not.toContain(GOAL_MODE_REMINDER);
+	});
+
+	it('appends plan and verifier reminders as a trailing intent-round user message', () => {
+		const reminder = intentReminderMessage({ planMode: true, goalMode: true });
+		expect(reminder?.role).toBe('user');
+		expect(reminder?.content).toContain('<intent-round>');
+		expect(reminder?.content).toContain(PLAN_MODE_REMINDER);
+		expect(reminder?.content).toContain(PLAN_VERIFIER_REMINDER);
+		expect(reminder?.content).not.toContain(GOAL_MODE_REMINDER);
+	});
+
+	it('keeps the tool result last so the provider sees a complete exchange', () => {
+		const window = [
+			{ role: 'user' as const, content: 'Create the site' },
+			{
+				role: 'assistant' as const,
+				content: '',
+				toolCalls: [{ id: 'c1', name: 'write_collection', input: {} }]
+			},
+			{ role: 'tool' as const, content: '{"ok":true}', toolCallId: 'c1' }
+		];
+		const afterTool = messagesForProvider(window, { goalMode: true });
+		expect(afterTool.at(-1)).toMatchObject({ role: 'tool', toolCallId: 'c1' });
+		expect(afterTool.some((message) => typeof message.content === 'string' && message.content.includes('<intent-round>'))).toBe(
+			false
+		);
+
+		const afterPrompt = messagesForProvider([{ role: 'user', content: 'Create the site' }], {
+			goalMode: true
+		});
+		expect(afterPrompt.at(-1)?.role).toBe('user');
+		expect(afterPrompt.at(-1)?.content).toContain('<intent-round>');
+		expect(messagesForProvider(afterPrompt, { goalMode: true })).toHaveLength(afterPrompt.length);
 	});
 });
 
