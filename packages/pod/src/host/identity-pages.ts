@@ -202,9 +202,9 @@ export function loginPage(input: {
 <h1>${escapeHtml(i18n.t('pod.identity.headingSignIn'))}</h1>
 <p class="sub">${escapeHtml(organizationName)}</p>
 ${input.error ? `<p class="error">${escapeHtml(input.error)}</p>` : ''}
-<form method="post" action="/login?lang=${i18n.locale}">
+<form method="post" action="/login?lang=${i18n.locale}" autocomplete="on">
   <label for="email">${escapeHtml(i18n.t('pod.identity.emailLabel'))}</label>
-  <input id="email" name="email" type="email" autocomplete="email" required autofocus />
+  <input id="email" name="email" type="email" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus />
   <button type="submit">${escapeHtml(i18n.t('pod.identity.sendCode'))}</button>
 </form>
 	<p class="muted">${escapeHtml(i18n.t('pod.identity.noPasswordHint'))}</p>`,

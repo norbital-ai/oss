@@ -98,6 +98,11 @@ describe('emailOtpIdentity', () => {
 		expect(body).toContain('Norbital');
 		expect(body).toContain('Secure access');
 		expect(body).toContain('background-size: 20px 20px');
+		expect(body).toContain('autocomplete="on"');
+		expect(body).toContain('inputmode="email"');
+		expect(body).toContain('autocomplete="username"');
+		expect(body).toContain('autocapitalize="none"');
+		expect(body).toContain('spellcheck="false"');
 	});
 
 	it('renders the verification step in the same shell with six accessible OTP cells', async () => {
