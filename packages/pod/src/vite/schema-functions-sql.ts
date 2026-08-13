@@ -464,55 +464,9 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	  UNIQUE (automation_name, trigger_key)
     );
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS trigger_key TEXT;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS artifact_id TEXT;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS checkpoint_id TEXT;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS tree_hash TEXT;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS runtime_version TEXT;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS source_pointer TEXT;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS continuation JSONB NOT NULL DEFAULT '{"effects":[]}'::jsonb;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS effect_id TEXT;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS effect_ordinal INTEGER;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS effect_request_hash TEXT;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS effect_request JSONB;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS orchestration_status TEXT NOT NULL DEFAULT 'admitted';
-	UPDATE _norbital_automation_job
-	   SET trigger_key = COALESCE(trigger_key, norbital_id::text),
-	       artifact_id = COALESCE(artifact_id, 'legacy-unbound'),
-	       checkpoint_id = COALESCE(checkpoint_id, 'legacy-unbound'),
-	       tree_hash = COALESCE(tree_hash, 'legacy-unbound'),
-	       runtime_version = COALESCE(runtime_version, 'legacy-unbound'),
-	       source_pointer = COALESCE(source_pointer, norbital_id::text)
-	 WHERE trigger_key IS NULL OR artifact_id IS NULL OR checkpoint_id IS NULL OR tree_hash IS NULL
-	    OR runtime_version IS NULL OR source_pointer IS NULL;
-	-- Pre-DBOS work was bound to whichever runtime happened to be current. It cannot be replayed
-	-- safely under the exact-artifact contract, so retain an explicit terminal audit row.
-	UPDATE _norbital_automation_job
-	   SET orchestration_status = 'failed',
-	       last_error = COALESCE(last_error, 'Legacy automation receipt was not bound to an immutable artifact')
-	 WHERE artifact_id = 'legacy-unbound';
-	-- DBOS owns leases, retry counters, and recovery. Remove the superseded tenant scheduler shape
-	-- so there is only one orchestration protocol to inspect and operate.
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS status;
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS attempts;
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS next_attempt_at;
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS lease_until;
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS event_xid;
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS event_seq;
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS collection;
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS record_id;
-	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS action;
-	ALTER TABLE _norbital_automation_job ALTER COLUMN trigger_key SET NOT NULL;
-	ALTER TABLE _norbital_automation_job ALTER COLUMN artifact_id SET NOT NULL;
-	ALTER TABLE _norbital_automation_job ALTER COLUMN checkpoint_id SET NOT NULL;
-	ALTER TABLE _norbital_automation_job ALTER COLUMN tree_hash SET NOT NULL;
-	ALTER TABLE _norbital_automation_job ALTER COLUMN runtime_version SET NOT NULL;
-	ALTER TABLE _norbital_automation_job ALTER COLUMN source_pointer SET NOT NULL;
 	CREATE UNIQUE INDEX IF NOT EXISTS _norbital_automation_job_trigger_idx
 	  ON _norbital_automation_job (automation_name, trigger_key);
-    CREATE INDEX IF NOT EXISTS _norbital_automation_job_claim_idx
+	CREATE INDEX IF NOT EXISTS _norbital_automation_job_claim_idx
 	  ON _norbital_automation_job (orchestration_status, created_at);
 
     -- A durable identity for this physical tenant database. It survives ordinary migrations and
