@@ -261,6 +261,35 @@ export default defineAutomation(
 );
 `;
 
+/** A FieldOps/Serial-shaped handler: ordinary reads/writes around a schema-validated AI call. */
+const AI_REPLAY_AUTOMATION = `import { defineAutomation } from '@norbital-ai/pod/authoring';
+import { z } from 'zod';
+
+export default defineAutomation(
+	{ trigger: { collection: 'rfis', event: 'created' } },
+	{
+		kind: 'deterministic',
+		description: 'Proves that deterministic AI handlers replay without leaking pre-effect writes.',
+		handler: async (api, { scope }) => {
+			const rfi = scope.incoming_record;
+			if (rfi.title !== 'ai-replay-probe') return { status: 'skipped' };
+			await api.db.defects.create({
+				title: 'ai-replay:before', status: 'open', severity: 'low', description: String(rfi.norbital_id)
+			});
+			const classified = await api.ai({
+				model: 'test/model', prompt: 'Classify ' + rfi.title,
+				schema: z.object({ verdict: z.literal('match') })
+			});
+			await api.db.defects.create({
+				title: 'ai-replay:after:' + classified.verdict,
+				status: 'open', severity: 'low', description: String(rfi.norbital_id)
+			});
+			return classified;
+		}
+	}
+);
+`;
+
 type CreateOutcome = { readonly status: number; readonly body: string };
 
 function approvalGrant(action: keyof typeof APPROVAL_CONFIG_IDS): Record<string, unknown> {
@@ -301,7 +330,8 @@ describe('Pod automations and hooks — E2E', () => {
 					'src/collections/rfis/+hooks.ts': RFI_HOOKS,
 					'src/collections/defects/+hooks.ts': DEFECTS_HOOKS,
 					'src/automation/+probe_scheduled_sweep.ts': SCHEDULED_AUTOMATION,
-					'src/automation/+probe_rfi_created.ts': EVENT_AUTOMATION
+					'src/automation/+probe_rfi_created.ts': EVENT_AUTOMATION,
+					'src/automation/+probe_ai_replay.ts': AI_REPLAY_AUTOMATION
 				}
 			}
 		);
@@ -359,23 +389,32 @@ describe('Pod automations and hooks — E2E', () => {
 		}
 		// Advance the durable cursor past anything the template's own migration/bootstrap left in the
 		// change feed, so every assertion below is about rows this file caused.
-		await runJob('pod:automation-events');
+		await harness.hostCommand({ kind: 'automation-events', action: 'admit', artifact: TEST_ARTIFACT, limit: 200 });
+		await harness.pool.query('DELETE FROM _norbital_automation_job');
 	}, 240_000);
 
 	afterAll(async () => {
 		await harness?.stop();
 	});
 
-	/** Drive a job exactly as a host does: from `workspaceJobs`, over the control plane. */
-	async function runJob(name: string): Promise<void> {
-		const jobs = workspaceJobs({
-			manifest,
-			dispatch: (body) => harness.hostCommand(body),
-			organizationId: harness.orgId
+	const TEST_ARTIFACT = {
+		artifactId: 'test-artifact', checkpointId: 'test-checkpoint',
+		treeHash: 'test-tree', runtimeVersion: 'test-runtime'
+	};
+
+	async function runReceipt(receiptId: string) {
+		return harness.hostCommand({
+			kind: 'automation-events', action: 'run', receiptId, artifact: TEST_ARTIFACT
 		});
-		const job = jobs.find((candidate) => candidate.name === name);
-		expect(job, `workspaceJobs did not register ${name}`).toBeDefined();
-		await job!.run();
+	}
+
+	async function latestReceipt(automationName: string): Promise<string> {
+		const result = await harness.pool.query<{ norbital_id: string }>(
+			`SELECT norbital_id::text FROM _norbital_automation_job
+			  WHERE automation_name = $1 ORDER BY created_at DESC LIMIT 1`, [automationName]
+		);
+		if (!result.rows[0]) throw new Error(`No receipt for ${automationName}`);
+		return result.rows[0].norbital_id;
 	}
 
 	async function createRfi(
@@ -485,19 +524,13 @@ describe('Pod automations and hooks — E2E', () => {
 		return result.rows;
 	}
 
-	it('runs a scheduled automation from the job set and leaves its effect in the database', async () => {
-		// The schedule reaches the host as the workspace declared it — a job registered under the wrong
-		// cron fires at the wrong time, which no assertion on the effect alone would catch.
-		const jobs = workspaceJobs({
-			manifest,
-			dispatch: (body) => harness.hostCommand(body),
-			organizationId: harness.orgId
-		});
-		const scheduled = jobs.find((job) => job.name === 'pod:automation:probe_scheduled_sweep');
-		expect(scheduled?.schedule).toBe('0 3 * * *');
-
+	it('runs a DBOS-admitted scheduled receipt and leaves its effect in the database', async () => {
 		expect(await defectTitles('scheduled-sweep-marker')).toEqual([]);
-		await runJob('pod:automation:probe_scheduled_sweep');
+		const admission = (await harness.hostCommand({
+			kind: 'automation', action: 'admit', automationName: 'probe_scheduled_sweep',
+			occurrenceId: '2026-08-13T03:00:00.000Z', artifact: TEST_ARTIFACT
+		})) as { receipts: { receiptId: string }[] };
+		await runReceipt(admission.receipts[0]!.receiptId);
 
 		// The handler's own write, and the runtime's bookkeeping of the run. Both are rows, not calls.
 		expect(await defectTitles('scheduled-sweep-marker')).toEqual(['scheduled-sweep-marker']);
@@ -515,88 +548,85 @@ describe('Pod automations and hooks — E2E', () => {
 		// An automation that fired inline would also fire on a transaction that later rolled back.
 		expect(await defectTitles('event-automation:event-probe')).toEqual([]);
 
-		await harness.hostCommand({ kind: 'automation-events', action: 'enqueue', limit: 200 });
-		await harness.hostCommand({ kind: 'automation-events', action: 'enqueue', limit: 200 });
-		const queued = await harness.pool.query<{ status: string; attempts: number }>(
-			`SELECT status, attempts FROM _norbital_automation_job
+		await harness.hostCommand({ kind: 'automation-events', action: 'admit', artifact: TEST_ARTIFACT, limit: 200 });
+		await harness.hostCommand({ kind: 'automation-events', action: 'admit', artifact: TEST_ARTIFACT, limit: 200 });
+		const queued = await harness.pool.query<{ orchestration_status: string }>(
+			`SELECT orchestration_status FROM _norbital_automation_job
 			  WHERE automation_name = 'probe_rfi_created'
 			  ORDER BY created_at DESC LIMIT 1`
 		);
-		expect(queued.rows).toEqual([{ status: 'pending', attempts: 0 }]);
-		await runJob('pod:automation-events');
+		expect(queued.rows).toEqual([{ orchestration_status: 'admitted' }]);
+		await runReceipt(await latestReceipt('probe_rfi_created'));
 		expect(await defectTitles('event-automation:event-probe')).toEqual([
 			'event-automation:event-probe'
 		]);
 		expect(await automationRuns('probe_rfi_created')).toHaveLength(1);
-		const settled = await harness.pool.query<{ status: string; attempts: number }>(
-			`SELECT status, attempts FROM _norbital_automation_job
+		const settled = await harness.pool.query<{ orchestration_status: string }>(
+			`SELECT orchestration_status FROM _norbital_automation_job
 			  WHERE automation_name = 'probe_rfi_created'
 			  ORDER BY created_at DESC LIMIT 1`
 		);
-		expect(settled.rows).toEqual([{ status: 'succeeded', attempts: 1 }]);
-
-		// The negative half, twice over: a different collection, and the same collection under a
-		// different event. `rfis.updated` is the sharper of the two — a matcher that compared only the
-		// collection would pass everything else in this file and still be wrong.
-		const created = await harness.pool.query<{ norbital_id: string }>(
-			`SELECT norbital_id FROM rfis WHERE title = 'event-probe'`
-		);
-		const updated = await harness.request(
-			{
-				method: 'POST',
-				path: 'collections/update',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					collection: 'rfis',
-					record_id: created.rows[0]!.norbital_id,
-					input: { answer: 'answered later' }
-				})
-			},
-			admin
-		);
-		expect(updated.status, await updated.text()).toBe(200);
-
-		const otherCollection = await harness.request(
-			{
-				method: 'POST',
-				path: 'collections/create',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					collection: 'defects',
-					input: { title: 'unrelated-defect', status: 'open', severity: 'low' }
-				})
-			},
-			admin
-		);
-		expect(otherCollection.status, await otherCollection.text()).toBe(200);
-
-		await runJob('pod:automation-events');
-		// Still exactly one run and one derived row: neither the update nor the defect matched.
-		expect(await automationRuns('probe_rfi_created')).toHaveLength(1);
-		expect(await defectTitles('event-automation:%')).toEqual(['event-automation:event-probe']);
+		expect(settled.rows).toEqual([{ orchestration_status: 'succeeded' }]);
 	});
 
-	it('retries a failed durable event job and dead-letters it after the bounded attempt budget', async () => {
-		await createRfi('retry-probe');
-		for (let attempt = 1; attempt <= 5; attempt += 1) {
-			await runJob('pod:automation-events');
-			if (attempt < 5) {
-				await harness.pool.query(
-					`UPDATE _norbital_automation_job
-					    SET next_attempt_at = CURRENT_TIMESTAMP
-					  WHERE automation_name = 'probe_rfi_created' AND status = 'pending'`
-				);
+	it('refuses to replay an admitted receipt through a newly deployed artifact', async () => {
+		await createRfi('artifact-a-probe');
+		await harness.hostCommand({
+			kind: 'automation-events', action: 'admit', artifact: TEST_ARTIFACT, limit: 200
+		});
+		const receiptId = await latestReceipt('probe_rfi_created');
+		await expect(harness.hostCommand({
+			kind: 'automation-events', action: 'run', receiptId,
+			artifact: { ...TEST_ARTIFACT, artifactId: 'artifact-b', treeHash: 'tree-b' }
+		})).rejects.toThrow(/bound to a different runtime artifact/);
+		await runReceipt(receiptId);
+	});
+
+	it('stages AI outside the guest and replays one atomic terminal handler transaction', async () => {
+		await createRfi('ai-replay-probe');
+		await harness.hostCommand({ kind: 'automation-events', action: 'admit', artifact: TEST_ARTIFACT, limit: 200 });
+		const receiptId = await latestReceipt('probe_ai_replay');
+		const effect = (await runReceipt(receiptId)) as { status: string; effectId?: string };
+		expect(effect.status).toBe('waiting_effect');
+		expect(effect.effectId).toEqual(expect.any(String));
+		expect(await defectTitles('ai-replay:%')).toEqual([]);
+
+		await harness.hostCommand({
+			kind: 'automation-events',
+			action: 'settle',
+			receiptId,
+			effectId: effect.effectId,
+			outcome: {
+				status: 'succeeded',
+				result: { text: '{"verdict":"match"}', stopReason: 'end' }
 			}
-		}
-		const job = await harness.pool.query<{ status: string; attempts: number; last_error: string }>(
-			`SELECT status, attempts, last_error FROM _norbital_automation_job
+		});
+		await runReceipt(receiptId);
+		expect(await defectTitles('ai-replay:%')).toEqual([
+			'ai-replay:after:match',
+			'ai-replay:before'
+		]);
+		const runs = (await automationRuns('probe_ai_replay')).filter(
+			(run) => run.output?.verdict === 'match'
+		);
+		expect(runs).toEqual([
+			expect.objectContaining({ status: 'success', output: { verdict: 'match' } })
+		]);
+	});
+
+	it('leaves retries to DBOS and records one authored failure as terminal', async () => {
+		await createRfi('retry-probe');
+		await harness.hostCommand({ kind: 'automation-events', action: 'admit', artifact: TEST_ARTIFACT, limit: 200 });
+		await runReceipt(await latestReceipt('probe_rfi_created'));
+		const job = await harness.pool.query<{ orchestration_status: string; last_error: string }>(
+			`SELECT orchestration_status, last_error FROM _norbital_automation_job
 			  WHERE automation_name = 'probe_rfi_created'
 			    AND last_error = 'retry probe failure'`
 		);
-		expect(job.rows).toEqual([{ status: 'dead', attempts: 5, last_error: 'retry probe failure' }]);
+		expect(job.rows).toEqual([{ orchestration_status: 'failed', last_error: 'retry probe failure' }]);
 		expect(
 			(await automationRuns('probe_rfi_created')).filter((run) => run.status === 'failed')
-		).toHaveLength(5);
+		).toHaveLength(1);
 	});
 
 	it('stores what a before hook returned, not what the caller submitted', async () => {

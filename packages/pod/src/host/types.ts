@@ -163,6 +163,37 @@ export type QueueJob = {
 	run(): Promise<void>;
 };
 
+/** Serializable provider work staged by a replayable automation handler. */
+export type DurableAutomationAiRequest = {
+	readonly prompt: string;
+	readonly outputSchema?: unknown;
+	readonly model?: string;
+	readonly profile?: string;
+	readonly images?: readonly {
+		readonly assetId: string;
+		readonly storageKey: string;
+		readonly mimeType: string;
+		readonly byteLength: number;
+		readonly contentSha256: string;
+		readonly detail?: 'auto' | 'low' | 'high';
+	}[];
+};
+
+export type DurableAutomationAiEffect = {
+	readonly jobId: string;
+	readonly effectId: string;
+	readonly ordinal: number;
+	readonly requestHash: string;
+	readonly request: DurableAutomationAiRequest;
+};
+
+export type DurableAutomationAiOutcome =
+	| {
+			readonly status: 'succeeded';
+			readonly result: import('@norbital-ai/platform-utils/runtime/binding').AiChatResult;
+	  }
+	| { readonly status: 'failed'; readonly error: string };
+
 /**
  * Durable execution for the loops the runtime cannot run for itself. Satisfies `queue`.
  *

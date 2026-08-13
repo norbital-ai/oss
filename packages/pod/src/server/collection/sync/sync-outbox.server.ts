@@ -6,18 +6,19 @@ import { rowsPerMutationStatement } from '../mutation-batching.js';
 export type SyncOutboxAction = 'create' | 'update' | 'delete';
 
 /** Rows per INSERT. Four bind parameters each, so this stays far inside Postgres' 65,535 limit. */
-const OUTBOX_CHUNK = rowsPerMutationStatement(4);
+const OUTBOX_CHUNK = rowsPerMutationStatement(6);
 
 function outboxValues(
 	collection: string,
 	action: SyncOutboxAction,
-	record: Record<string, unknown>
+	record: Record<string, unknown>,
+	originScope: Record<string, unknown>
 ) {
 	const recordId = record[SYSTEM_COLUMN_NAMES.PKEY];
 	if (typeof recordId !== 'string') return null;
 	const rawVersion = record[SYSTEM_COLUMN_NAMES.ROW_VERSION];
 	const rowVersion = typeof rawVersion === 'number' ? rawVersion : null;
-	return sql`(${collection}, ${recordId}::uuid, ${action}, ${rowVersion})`;
+	return sql`(${collection}, ${recordId}::uuid, ${action}, ${rowVersion}, ${JSON.stringify(originScope)}::jsonb, ${JSON.stringify(record)}::jsonb)`;
 }
 
 /**
@@ -33,9 +34,10 @@ export async function emitSyncOutbox(
 	db: NonNullable<ProvisionedContext['drizzleDb']>,
 	collection: string,
 	action: SyncOutboxAction,
-	record: Record<string, unknown>
+	record: Record<string, unknown>,
+	originScope: Record<string, unknown> = {}
 ): Promise<void> {
-	await emitSyncOutboxMany(db, collection, action, [record]);
+	await emitSyncOutboxMany(db, collection, action, [record], originScope);
 }
 
 /**
@@ -52,14 +54,15 @@ export async function emitSyncOutboxMany(
 	db: NonNullable<ProvisionedContext['drizzleDb']>,
 	collection: string,
 	action: SyncOutboxAction,
-	records: readonly Record<string, unknown>[]
+	records: readonly Record<string, unknown>[],
+	originScope: Record<string, unknown> = {}
 ): Promise<void> {
 	const values = records
-		.map((record) => outboxValues(collection, action, record))
+		.map((record) => outboxValues(collection, action, record, originScope))
 		.filter((row) => row != null);
 	for (let from = 0; from < values.length; from += OUTBOX_CHUNK) {
 		await db.execute(
-			sql`INSERT INTO sync_outbox (collection, record_id, action, row_version)
+			sql`INSERT INTO sync_outbox (collection, record_id, action, row_version, origin_scope, record_snapshot)
 			    VALUES ${sql.join(values.slice(from, from + OUTBOX_CHUNK), sql`, `)}`
 		);
 	}
@@ -80,11 +83,20 @@ export async function emitSyncOutboxRow(
 	collection: string,
 	action: SyncOutboxAction,
 	recordId: string,
-	rowVersion: number | null
+	rowVersion: number | null,
+	originScope: Record<string, unknown> = {},
+	recordSnapshot: Record<string, unknown> = { norbital_id: recordId }
 ): Promise<void> {
 	await tenantDb.query(
-		`INSERT INTO sync_outbox (collection, record_id, action, row_version)
-		 VALUES ($1, $2::uuid, $3, $4)`,
-		[collection, recordId, action, rowVersion]
+		`INSERT INTO sync_outbox (collection, record_id, action, row_version, origin_scope, record_snapshot)
+		 VALUES ($1, $2::uuid, $3, $4, $5::jsonb, $6::jsonb)`,
+		[
+			collection,
+			recordId,
+			action,
+			rowVersion,
+			JSON.stringify(originScope),
+			JSON.stringify(recordSnapshot)
+		]
 	);
 }

@@ -54,16 +54,18 @@ import {
 } from '$lib/server/integrations/tenant-inbound.server.js';
 import { runNotificationOutbox } from '$lib/server/notification-outbox.server.js';
 import {
-	enqueueRegisteredAutomations,
-	pumpRegisteredAutomations
+	admitEventAutomations,
+	admitScheduledAutomation,
+	runAutomationReceipt,
+	settleAutomationEffect
 } from './automation-dispatch.server.js';
-import { runAgent } from '$lib/server/agent/agent-loop.server.js';
 import {
 	ChannelInboundSchema,
 	deliverChannelMessage
 } from '$lib/server/channel-delivery.server.js';
-import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 import { runPendingConversationTitles } from '$lib/server/agent/conversation-title.server.js';
+import type { DurableAutomationAiOutcome } from '$lib/host/types.js';
+import { isAutomationEffectYield, pendingAutomationEffect } from './automation-replay.server.js';
 
 const recordSchema = z.record(z.string(), z.unknown());
 const collectionSchema = z.object({ id: z.string(), name: z.string() });
@@ -178,17 +180,13 @@ export const runtimeRunRequestSchema = z.union([
 	z
 		.object({
 			kind: z.literal('automation'),
-			automationName: z.string().min(1)
-		})
-		.strict(),
-	// The host's drain of collection-event automations. Cron automations name themselves; these are
-	// discovered from the change feed, so the host asks the runtime to advance rather than guessing
-	// which automation to run.
-	z
-		.object({
-			kind: z.literal('automation'),
-			action: z.literal('pump'),
-			limit: z.number().int().positive().max(1000).optional()
+			automationName: z.string().min(1),
+			action: z.literal('admit'),
+			occurrenceId: z.string().min(1).max(512),
+			artifact: z.object({
+				artifactId: z.string().min(1).max(512), checkpointId: z.string().min(1).max(512),
+				treeHash: z.string().min(1).max(512), runtimeVersion: z.string().min(1).max(128)
+			})
 		})
 		.strict(),
 	z.object({
@@ -227,7 +225,19 @@ export const runtimeRunRequestSchema = z.union([
 	}),
 	z.object({
 		kind: z.literal('automation-events'),
-		action: z.enum(['enqueue', 'run']).optional(),
+		action: z.enum(['admit', 'run', 'settle']),
+		artifact: z.object({
+			artifactId: z.string().min(1).max(512), checkpointId: z.string().min(1).max(512),
+			treeHash: z.string().min(1).max(512), runtimeVersion: z.string().min(1).max(128)
+		}).optional(),
+		receiptId: z.string().uuid().optional(),
+		effectId: z.string().min(1).max(1024).optional(),
+		outcome: z
+			.union([
+				z.object({ status: z.literal('succeeded'), result: z.unknown() }),
+				z.object({ status: z.literal('failed'), error: z.string() })
+			])
+			.optional(),
 		limit: z.number().int().min(1).max(1000).optional()
 	}),
 	z.object({
@@ -425,7 +435,7 @@ export async function runCollectionActionHook(
 	}
 }
 
-export async function runAutomation(params: {
+export async function executeAutomationHandler(params: {
 	readonly automationName: string;
 	/** Change-feed dispatch populates `scope.incoming_record` with the committed row. */
 	readonly scope?: Record<string, unknown>;
@@ -437,18 +447,12 @@ export async function runAutomation(params: {
 		workspaceAutomation !== null &&
 		'spec' in workspaceAutomation
 	) {
-		const spec = (
-			workspaceAutomation as {
-				spec: { kind: string; handler?: unknown } | AgentAutomationSpec;
-			}
-		).spec;
-		if (spec.kind === 'agent' && 'task' in spec && typeof spec.task === 'string') {
-			const result = await runAgent({
-				automationName: params.automationName,
-				spec,
-				input: spec.task
-			});
-			return { runId: result.runId, text: result.text };
+		const spec = (workspaceAutomation as { spec: { kind: string; handler?: unknown } }).spec;
+		if (spec.kind === 'agent') {
+			throw new Error(
+				`Automation '${params.automationName}' uses the legacy agent kind. ` +
+				'Agent loops require an explicit durable continuation protocol and cannot run inside one guest invocation.'
+			);
 		}
 		if (spec.kind !== 'deterministic' || typeof spec.handler !== 'function') {
 			throw new Error(`Automation '${params.automationName}' has an invalid runtime specification`);
@@ -468,6 +472,8 @@ export async function runAutomation(params: {
 				args: params.args ?? {},
 				scope: params.scope ?? {}
 			});
+			const pending = pendingAutomationEffect();
+			if (pending) throw pending;
 
 			// `automation_run` is a system collection: no workspace declares mutations on it, so an
 			// unelevated write is refused. Recording the run is the runtime's own bookkeeping, not a
@@ -490,6 +496,9 @@ export async function runAutomation(params: {
 
 			return result;
 		} catch (error) {
+			const pending = pendingAutomationEffect();
+			if (pending) throw pending;
+			if (isAutomationEffectYield(error)) throw error;
 			const message = error instanceof Error ? error.message : String(error);
 			// Best-effort: the automation's own failure is the one worth propagating, so a failure to
 			// record it must not mask the cause with a bookkeeping error.
@@ -538,11 +547,10 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 				context: request.context
 			});
 		case 'automation': {
-			if ('action' in request) {
-				return pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
-			}
-			return runAutomation({
-				automationName: request.automationName
+			return admitScheduledAutomation(getWorkspace({ provision: true }), {
+				automationName: request.automationName,
+				occurrenceId: request.occurrenceId,
+				artifact: request.artifact
 			});
 		}
 		case 'integration': {
@@ -581,9 +589,33 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 		case 'notification':
 			return runNotificationOutbox(request);
 		case 'automation-events':
-			return request.action === 'enqueue'
-				? enqueueRegisteredAutomations(getWorkspace({ provision: true }), request.limit)
-				: pumpRegisteredAutomations(getWorkspace({ provision: true }), request.limit);
+			if (request.action === 'admit') {
+				if (!request.artifact) throw new Error('Automation admission requires an artifact binding');
+				return admitEventAutomations(
+					getWorkspace({ provision: true }),
+					request.artifact,
+					request.limit
+				);
+			}
+			if (request.action === 'settle') {
+				if (!request.receiptId || !request.effectId || !request.outcome) {
+					throw new Error('Automation effect settlement requires receipt, effect id and outcome');
+				}
+				return settleAutomationEffect(
+					getWorkspace({ provision: true }),
+					request.receiptId,
+					request.effectId,
+					request.outcome as DurableAutomationAiOutcome
+				);
+			}
+			if (!request.receiptId || !request.artifact) {
+				throw new Error('Automation run requires receipt and artifact binding');
+			}
+			return runAutomationReceipt(
+				getWorkspace({ provision: true }),
+				request.receiptId,
+				request.artifact
+			);
 		case 'agent-conversation-titles':
 			return runPendingConversationTitles(request.limit);
 		case 'channel':

@@ -396,9 +396,13 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
       record_id UUID NOT NULL,
       action TEXT NOT NULL,
       row_version INTEGER,
+	  origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+	  record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
       occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       xid xid8 NOT NULL DEFAULT pg_current_xact_id()
     );
+	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb;
+	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS sync_outbox_xid_seq_idx ON sync_outbox (xid, seq);
     -- Retention prunes by age, so the sweep needs to find old rows without a full scan.
     CREATE INDEX IF NOT EXISTS sync_outbox_occurred_at_idx ON sync_outbox (occurred_at);
@@ -434,29 +438,82 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
       VALUES (TRUE)
       ON CONFLICT (singleton) DO NOTHING;
 
-    -- Event effects are durable work, not part of the change-feed scan. The scanner records one
-    -- idempotent job per matching automation before moving its cursor; workers can then lease and
-    -- retry slow external effects without blocking later committed changes.
+    -- Event effects are durable work, not part of the change-feed scan. Admission records one
+    -- immutable receipt per matching automation before moving its cursor. Core's DBOS workflow
+    -- owns retry/recovery; the tenant row is the transactional source of truth and final commit.
     CREATE TABLE IF NOT EXISTS _norbital_automation_job (
       norbital_id UUID PRIMARY KEY DEFAULT uuidv7(),
       automation_name TEXT NOT NULL,
-      event_xid xid8 NOT NULL,
-      event_seq BIGINT NOT NULL,
-      collection TEXT NOT NULL,
-      record_id UUID NOT NULL,
-      action TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'processing', 'succeeded', 'dead')),
-      attempts INTEGER NOT NULL DEFAULT 0,
-      next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      lease_until TIMESTAMPTZ,
+      trigger_key TEXT NOT NULL,
+	  artifact_id TEXT NOT NULL,
+	  checkpoint_id TEXT NOT NULL,
+	  tree_hash TEXT NOT NULL,
+	  runtime_version TEXT NOT NULL,
+	  origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+	  record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+	  source_pointer TEXT NOT NULL,
+	  continuation JSONB NOT NULL DEFAULT '{"effects":[]}'::jsonb,
+	  effect_id TEXT,
+	  effect_ordinal INTEGER,
+	  effect_request_hash TEXT,
+	  effect_request JSONB,
+	  orchestration_status TEXT NOT NULL DEFAULT 'admitted'
+	    CHECK (orchestration_status IN ('admitted', 'waiting_effect', 'succeeded', 'failed')),
       last_error TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (automation_name, event_xid, event_seq)
+	  UNIQUE (automation_name, trigger_key)
     );
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS trigger_key TEXT;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS artifact_id TEXT;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS checkpoint_id TEXT;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS tree_hash TEXT;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS runtime_version TEXT;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS source_pointer TEXT;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS continuation JSONB NOT NULL DEFAULT '{"effects":[]}'::jsonb;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS effect_id TEXT;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS effect_ordinal INTEGER;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS effect_request_hash TEXT;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS effect_request JSONB;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS orchestration_status TEXT NOT NULL DEFAULT 'admitted';
+	UPDATE _norbital_automation_job
+	   SET trigger_key = COALESCE(trigger_key, norbital_id::text),
+	       artifact_id = COALESCE(artifact_id, 'legacy-unbound'),
+	       checkpoint_id = COALESCE(checkpoint_id, 'legacy-unbound'),
+	       tree_hash = COALESCE(tree_hash, 'legacy-unbound'),
+	       runtime_version = COALESCE(runtime_version, 'legacy-unbound'),
+	       source_pointer = COALESCE(source_pointer, norbital_id::text)
+	 WHERE trigger_key IS NULL OR artifact_id IS NULL OR checkpoint_id IS NULL OR tree_hash IS NULL
+	    OR runtime_version IS NULL OR source_pointer IS NULL;
+	-- Pre-DBOS work was bound to whichever runtime happened to be current. It cannot be replayed
+	-- safely under the exact-artifact contract, so retain an explicit terminal audit row.
+	UPDATE _norbital_automation_job
+	   SET orchestration_status = 'failed',
+	       last_error = COALESCE(last_error, 'Legacy automation receipt was not bound to an immutable artifact')
+	 WHERE artifact_id = 'legacy-unbound';
+	-- DBOS owns leases, retry counters, and recovery. Remove the superseded tenant scheduler shape
+	-- so there is only one orchestration protocol to inspect and operate.
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS status;
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS attempts;
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS next_attempt_at;
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS lease_until;
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS event_xid;
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS event_seq;
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS collection;
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS record_id;
+	ALTER TABLE _norbital_automation_job DROP COLUMN IF EXISTS action;
+	ALTER TABLE _norbital_automation_job ALTER COLUMN trigger_key SET NOT NULL;
+	ALTER TABLE _norbital_automation_job ALTER COLUMN artifact_id SET NOT NULL;
+	ALTER TABLE _norbital_automation_job ALTER COLUMN checkpoint_id SET NOT NULL;
+	ALTER TABLE _norbital_automation_job ALTER COLUMN tree_hash SET NOT NULL;
+	ALTER TABLE _norbital_automation_job ALTER COLUMN runtime_version SET NOT NULL;
+	ALTER TABLE _norbital_automation_job ALTER COLUMN source_pointer SET NOT NULL;
+	CREATE UNIQUE INDEX IF NOT EXISTS _norbital_automation_job_trigger_idx
+	  ON _norbital_automation_job (automation_name, trigger_key);
     CREATE INDEX IF NOT EXISTS _norbital_automation_job_claim_idx
-      ON _norbital_automation_job (status, next_attempt_at, event_xid, event_seq);
+	  ON _norbital_automation_job (orchestration_status, created_at);
 
     -- A durable identity for this physical tenant database. It survives ordinary migrations and
     -- deploys, but a restore/re-provision/reset creates a fresh value. Clients persist the last
@@ -467,22 +524,6 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
       epoch UUID NOT NULL DEFAULT uuidv7()
     );
     INSERT INTO _norbital_sync_epoch (singleton)
-      VALUES (TRUE)
-      ON CONFLICT (singleton) DO NOTHING;
-
-    -- How far the automation dispatcher has consumed the change feed.
-    --
-    -- Collection-event automations are effects, so they must fire exactly once off committed
-    -- state, and a host restart must not re-run everything the feed still holds. The cursor is the
-    -- same (xid, seq) pair the sync stream uses and is advanced only after a batch has dispatched,
-    -- so a crash mid-batch repeats that batch rather than skipping it.
-    CREATE TABLE IF NOT EXISTS _norbital_automation_cursor (
-      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-      xid TEXT NOT NULL DEFAULT '0',
-      seq TEXT NOT NULL DEFAULT '0',
-      pumped_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    INSERT INTO _norbital_automation_cursor (singleton)
       VALUES (TRUE)
       ON CONFLICT (singleton) DO NOTHING;
 

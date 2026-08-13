@@ -305,7 +305,9 @@ function integrationPullJob(
 					importData,
 					// The cursor names the remote page. Hash it to keep arbitrary provider cursor values
 					// inside the command's bounded event-id contract while retaining replay identity.
-					eventId: `pull:${createHash('sha256').update(cursor ?? '').digest('hex')}`
+					eventId: `pull:${createHash('sha256')
+						.update(cursor ?? '')
+						.digest('hex')}`
 				})) as { readonly status?: string; readonly reason?: string };
 				// A body the binding's `input` schema turns down comes back as a result rather than a throw,
 				// because a webhook host needs to answer its sender. A pull has no sender to answer, so the
@@ -370,9 +372,9 @@ function integrationPullJobs(options: WorkspaceJobOptions): QueueJob[] {
 /**
  * Every recurring job this workspace needs, derived from its manifest.
  *
- * The set is host-agnostic on purpose: Core registers it with pgboss and `pod start` hands it to
- * whichever queue the operator configured, so both deployments run the same job definitions and
- * differ only in what drives them.
+ * This is deliberately the non-automation infrastructure set. Core registers it with pg-boss and
+ * `pod start` hands it to the operator's integration queue. DBOS discovers automation receipts and
+ * owns every authored automation schedule; neither host registers those through this function.
  */
 export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[] {
 	const jobs: QueueJob[] = [
@@ -392,19 +394,8 @@ export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[]
 		}
 	];
 
-	for (const [name, automation] of Object.entries(options.manifest.automations ?? {})) {
-		if (!('schedule' in automation.trigger)) continue;
-		jobs.push({
-			name: `pod:automation:${name}`,
-			schedule: assertSchedule(name, automation.trigger.schedule),
-			run: async () => {
-				await options.dispatch({
-					kind: 'automation',
-					automationName: name
-				});
-			}
-		});
-	}
+	// Automations are deliberately absent. DBOS owns their schedules, admission, recovery and
+	// execution; this host job set is only for non-automation infrastructure outboxes/imports.
 
 	if (options.integrationDelivery) jobs.push(integrationOutboxJob(options));
 	if (options.messaging) jobs.push(notificationOutboxJob(options));
@@ -413,18 +404,6 @@ export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[]
 	// binding depend on the outbound facility, which is the confusion that left it unreachable.
 	jobs.push(...integrationPullJobs(options));
 
-	const hasEventAutomations = Object.values(options.manifest.automations ?? {}).some(
-		(automation) => 'collection' in automation.trigger
-	);
-	if (hasEventAutomations) {
-		jobs.push({
-			name: 'pod:automation-events',
-			schedule: 'continuous',
-			run: async () => {
-				await options.dispatch({ kind: 'automation-events', limit: 200 });
-			}
-		});
-	}
 
 	return jobs;
 }

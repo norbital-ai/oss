@@ -18,9 +18,10 @@
  * });
  * ```
  *
- * `queue` is the one facility with no production adapter here. Cron automations and outbox draining
- * need durability, restart survival, and single-flight execution that a timer cannot give, so a
- * deployed workspace points it at pg-boss or an equivalent; `intervalQueue` is for development.
+ * `queue` is the one facility with no production adapter here. Integration and notification outbox
+ * drains need durability and single-flight execution, so a deployed workspace points it at a
+ * durable queue; Core automations are orchestrated separately by DBOS. `intervalQueue` is for
+ * development.
  */
 export {
 	assertHostPlugins,
@@ -242,4 +243,9 @@ export { workspaceJobs } from './jobs.js';
  */
 export { assertChannelTransportsAreSupported } from '../authoring/channels/channels.js';
 export type { WorkspaceJobOptions } from './jobs.js';
+export type {
+	DurableAutomationAiEffect,
+	DurableAutomationAiOutcome,
+	DurableAutomationAiRequest
+} from './types.js';
 export type { CronSchedule } from './cron.js';

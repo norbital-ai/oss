@@ -36,6 +36,11 @@ import {
 	updateRecord
 } from './collection_ops.server.js';
 import { withCollectionTransaction } from './collection_transaction.server.js';
+import {
+	automationReplayStorage,
+	replayAutomationAi
+} from '$lib/server/run/automation-replay.server.js';
+import { createHash } from 'node:crypto';
 
 const notificationChannelsSchema = zod.array(zod.string().min(1)).min(1).default(['system']);
 const fileAssetSchema = zod.object({
@@ -187,6 +192,7 @@ async function readFileAsset(assetId: string) {
 		name: asset.file_name,
 		mimeType: asset.mime_type,
 		size: bytes.byteLength,
+		storageKey: asset.storage_key,
 		bytes
 	};
 }
@@ -305,6 +311,36 @@ function sharedBuiltinApi() {
 			const imageInputs = input.images ?? [];
 			if (imageInputs.length > MAX_AI_IMAGES) {
 				throw new Error(`AI inference accepts at most ${MAX_AI_IMAGES} images per request.`);
+			}
+			if (automationReplayStorage.getStore()) {
+				const imageAssets = await Promise.all(
+					imageInputs.map(async (image) => ({ input: image, asset: await readFileAsset(image.assetId) }))
+				);
+				const totalImageBytes = imageAssets.reduce((sum, entry) => sum + entry.asset.size, 0);
+				if (totalImageBytes > MAX_AI_IMAGE_BYTES) {
+					throw new Error('AI image inputs exceed the 20 MiB request limit.');
+				}
+				return replayAutomationAi({
+					request: {
+						prompt: input.prompt,
+						...(input.schema ? { outputSchema: zod.toJSONSchema(input.schema) } : {}),
+						...(input.model ? { model: input.model } : {}),
+						...(input.profile ? { profile: input.profile } : {}),
+						...(imageAssets.length > 0
+							? {
+									images: imageAssets.map(({ input: image, asset }) => ({
+										assetId: asset.id,
+										storageKey: asset.storageKey,
+										mimeType: asset.mimeType ?? 'application/octet-stream',
+										byteLength: asset.size,
+										contentSha256: createHash('sha256').update(asset.bytes).digest('hex'),
+										...(image.detail ? { detail: image.detail } : {})
+									}))
+								}
+							: {})
+					},
+					schema: input.schema
+				});
 			}
 			const imageAssets = await Promise.all(
 				imageInputs.map(async (image) => ({

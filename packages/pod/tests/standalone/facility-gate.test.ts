@@ -91,7 +91,7 @@ describe('standalone facility gate', () => {
 		});
 
 		expect(() => assertStandaloneFacilities(agentWorkspace, new Set(['db']))).toThrow(
-			/unavailable runtime facilities: queue, ai/
+			/unavailable runtime facilities: ai/
 		);
 		expect(() =>
 			assertStandaloneFacilities(agentWorkspace, new Set(['db', 'queue', 'ai']))
@@ -138,7 +138,7 @@ describe('standalone facility gate', () => {
 		expect(satisfiedFacilities(hostConfig({ queue: intervalQueue() })).has('queue')).toBe(true);
 	});
 
-	it('refuses a workspace whose automations have no queue to run them', () => {
+	it('does not conflate the integration queue facility with automation orchestration', () => {
 		const scheduled = manifest({
 			automations: {
 				nightly: {
@@ -147,15 +147,7 @@ describe('standalone facility gate', () => {
 				}
 			}
 		});
-		expect(() => assertStandaloneFacilities(scheduled, satisfiedFacilities(hostConfig()))).toThrow(
-			/queue/
-		);
-		expect(() =>
-			assertStandaloneFacilities(
-				scheduled,
-				satisfiedFacilities(hostConfig({ queue: intervalQueue() }))
-			)
-		).not.toThrow();
+		expect(() => assertStandaloneFacilities(scheduled, satisfiedFacilities(hostConfig()))).not.toThrow();
 	});
 });
 

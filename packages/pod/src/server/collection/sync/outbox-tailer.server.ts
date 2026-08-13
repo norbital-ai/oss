@@ -28,6 +28,8 @@ export type SyncOutboxRow = {
 	readonly rowVersion: number | null;
 	readonly occurredAt: string;
 	readonly xid: string;
+	readonly originScope: Record<string, unknown>;
+	readonly recordSnapshot: Record<string, unknown>;
 };
 
 export type OutboxBatch = {
@@ -44,6 +46,8 @@ type RawOutboxRow = {
 	row_version: number | string | null;
 	occurred_at: string | Date;
 	xid: string;
+	origin_scope: Record<string, unknown> | null;
+	record_snapshot: Record<string, unknown> | null;
 };
 
 function toIso(value: string | Date): string {
@@ -65,7 +69,9 @@ function normalize(raw: RawOutboxRow): SyncOutboxRow {
 					? raw.row_version
 					: Number(raw.row_version),
 		occurredAt: toIso(raw.occurred_at),
-		xid: String(raw.xid)
+		xid: String(raw.xid),
+		originScope: raw.origin_scope ?? {},
+		recordSnapshot: raw.record_snapshot ?? { norbital_id: raw.record_id }
 	};
 }
 
@@ -96,7 +102,9 @@ export async function readSyncOutboxBatch(
 		        action,
 		        row_version,
 		        occurred_at,
-		        xid::text AS xid
+		        xid::text AS xid,
+		        origin_scope,
+		        record_snapshot
 		   FROM sync_outbox
 		  WHERE xid < pg_snapshot_xmin(pg_current_snapshot())
 		    AND (xid > $1::xid8 OR (xid = $1::xid8 AND seq > $2::bigint))

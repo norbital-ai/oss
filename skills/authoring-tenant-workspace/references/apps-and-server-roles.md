@@ -219,6 +219,18 @@ const result = await api.ai({
 AI and external delivery stay outside transactional hooks. Trigger a post-commit automation when the work
 depends on a committed record or file.
 
+Every tenant VM invocation—including reads—is capped at two seconds of admitted execution and is billable.
+An automation can take longer overall because the platform runs it as durable serverless steps. `api.ai`
+is a replay boundary: pre-inference writes roll back, the host executes and bills the provider call under a
+stable effect ID, and a later invocation replays the same handler with the stored result. The successful
+writes and terminal run receipt then commit together. Keep the authored handler straightforward; do not add
+home-grown queues, cursors, timers or retry tables.
+
+In Core, DBOS is the only automation orchestrator. It recovers immutable tenant receipts, binds every run
+to the exact checkpoint/tree/runtime artifact that admitted it, serializes work per tenant under a global
+cap, and fairly interleaves noisy and quiet tenants. pg-boss remains an infrastructure queue for integration
+and notification drains only; authors never choose between either mechanism.
+
 ## Remotes
 
 `src/remotes/+compute_forecast.ts`:

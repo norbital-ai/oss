@@ -554,24 +554,16 @@ export default defineAutomation(
 );
 ```
 
-Scheduled and event automations are driven by the host queue. Event cursors are durable and do
-not depend on an open browser. The same automation never overlaps itself.
+Scheduled and event automations are admitted as immutable tenant receipts and driven by the host's
+durable automation orchestrator. Event cursors do not depend on an open browser. Each guest runtime
+invocation is billable and capped at two seconds; a longer automation proceeds as replayable DBOS
+steps. `api.ai` is an effect boundary: pre-effect writes roll back, Core performs the spend-gated
+provider call under a stable effect ID, then the handler replays with the durable result and commits
+its terminal writes atomically. pg-boss is not an automation scheduler or worker.
 
-An agent automation declares its task and narrow capabilities:
-
-```ts
-export default defineAutomation(
-	{ trigger: { collection: 'tickets', event: 'created' } },
-	{
-		kind: 'agent',
-		task: 'Triage the new ticket and assign the correct queue.',
-		collections: ['tickets', 'queues'],
-		access: 'write',
-		tools: ['lookup_service_status'],
-		maxTokens: 4000
-	}
-);
-```
+Agent loops are interactive agent sessions, not automation handlers. An automation that needs model
+judgement uses the bounded `api.ai` effect shown below. The runtime refuses legacy `kind: 'agent'`
+automation declarations rather than hiding an unbounded loop inside one two-second invocation.
 
 An agent tool is a real compiler-discovered file:
 
@@ -592,7 +584,7 @@ export default defineAgentTool({
 ```
 
 Tool names are exact compiler-generated string unions and must be opted into by each agent
-automation. `describe_workspace`, `read_collection`, and `write_collection` are reserved built-in
+profile. `describe_workspace`, `read_collection`, and `write_collection` are reserved built-in
 tools.
 
 Pod owns the agent loop, input validation, collection allowlists, read/write mode, persistence, and
@@ -940,8 +932,7 @@ The same rule applies across facilities:
 | -------------------------------------- | ---------------------------------------------- |
 | Any running workspace                  | `db`                                           |
 | A `file()` field                       | `fileStorage`                                  |
-| Deterministic automation               | `queue`                                        |
-| Agent automation                       | `queue` and `ai`                               |
+| Deterministic automation               | host automation orchestration (Core: DBOS)     |
 | Outbound integration                   | `queue` and `integrationDelivery`              |
 | External notification call             | matching `messaging` channel at call time      |
 | A declared channel                     | `messaging` transport of that name, at startup |
@@ -1061,12 +1052,12 @@ That mints an invitation and **no account** — an invitation is a claim, not an
 migrated workspace admits nobody until the address is proven. The token is stored only as a digest;
 the plaintext exists once, in the link.
 
-### The queue facility
+### The infrastructure queue facility
 
-Cron automations, outbox draining, and event-automation tailing cannot be driven by the runtime: it
-has no timer and, in a hosted container, no network. Pod derives the whole job set from the manifest
-and hands it to `queue`; the host supplies timing, persistence across restarts, and the guarantee
-that one job name never overlaps itself.
+Integration pulls/imports and notification outbox drains need host timing because the runtime has no
+timer or network. Pod derives that non-automation job set from the manifest and hands it to `queue`;
+the host supplies timing and persistence across restarts. Automation timing and recovery use the
+separate durable protocol described above (Core: DBOS), never this facility.
 
 ```ts
 type HostQueue = (jobs: readonly QueueJob[]) => Promise<() => void>;
@@ -1081,8 +1072,10 @@ schedule is never caught up, and two processes against one database will both cl
 for `pod dev` and a single container, and wrong for anything that must not drop work — point `queue`
 at pg-boss or an equivalent there, which is what Core does.
 
-A workspace with automations refuses to start when no `queue` is configured, rather than starting
-with schedules that silently never fire.
+The `queue` facility is for integration imports, pulls, notifications and other infrastructure work.
+Automations neither require it nor register work in it. A production host must provide the separate
+durable automation protocol; Core does so with DBOS. `intervalQueue()` retains its local development
+behavior for non-automation infrastructure and must never be presented as durable automation recovery.
 
 `s3FileStorage` works with S3-compatible stores such as AWS S3, MinIO, Cloudflare R2, and DigitalOcean
 Spaces.

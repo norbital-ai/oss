@@ -109,7 +109,7 @@ startup compares them with `pod.host.ts` and refuses to listen if anything is mi
 | `db`                  | always                                    |
 | `fileStorage`         | a collection contains a file field        |
 | `ai`                  | an agent automation is compiled           |
-| `queue`               | any automation or integration is compiled |
+| `queue`               | an integration outbox or pull is compiled |
 | `integrationDelivery` | an integration is compiled                |
 | `messaging` transport | a channel declares it in `src/channels`   |
 
@@ -370,7 +370,7 @@ browser through one ordinary policy-scoped sync subscription rather than an agen
 See [Agent architecture](./AGENT_ARCHITECTURE.md) for execution entry points, transcript ownership,
 host-tool authorization, channel continuation, UI behavior and conformance coverage.
 
-## Automations and the queue
+## Durable automations
 
 An automation has one trigger:
 
@@ -379,11 +379,14 @@ An automation has one trigger:
 { trigger: { collection: 'permits', event: 'updated' } }
 ```
 
-Schedule expressions are validated before the process listens. Scheduled runs are detached from
-outbox drains, and one automation cannot overlap itself.
+Schedule expressions are validated at build/startup. Core registers authored occurrences with DBOS;
+pg-boss owns none of their schedules or workers. Each occurrence or matching collection event first
+becomes an immutable tenant receipt bound to its trigger snapshot and exact runtime artifact.
 
-Collection-event dispatch is tenant-wide, not client-driven. A queue job tails the authoritative
-outbox and advances `_norbital_automation_cursor`; opening another browser cannot duplicate a run.
+Collection-event admission is tenant-wide, not client-driven. DBOS reconciliation asks one bounded
+guest step to tail the authoritative outbox and atomically advance `_norbital_automation_cursor`;
+opening another browser cannot duplicate a run. Every guest step is billable and capped at two
+seconds. DBOS resumes longer work and durably yields/replays `api.ai` effects outside the guest.
 Integration and notification outboxes drain independently with claim leases and bounded retry. Inbound
 integration receipts drain independently too: each tick performs one durable bounded chunk rather than
 holding a tenant runtime invocation open for the full provider page.

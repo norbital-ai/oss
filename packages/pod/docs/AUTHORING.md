@@ -214,6 +214,17 @@ The surface is designed so that mistakes surface at their cause rather than down
 - **A malformed cron expression fails at startup**, naming the automation, rather than never firing.
 - **A workspace refuses to boot when a facility it needs is absent** — schedules that silently never
   fire are worse than a process that will not start.
+- **Every runtime invocation has a universal two-second execution budget.** Admission and cold boot
+  happen before that clock starts; reads, writes, hooks, remotes and each automation step all share
+  the same cap and every attempt is billable to the tenant. Do not hide unbounded work in a handler.
+- **An automation may outlive one invocation without outliving the serverless model.** The runtime
+  persists one trigger receipt, replays the handler deterministically, and yields at `api.ai`. The
+  host performs the spend-gated inference outside the guest, settles the result under a stable
+  effect identity, and a later capped invocation resumes the handler. Writes before a yield roll
+  back; the final writes, run telemetry and terminal receipt commit atomically. Authors still write
+  an ordinary async handler. Core uses DBOS as the sole automation orchestrator: the tenant receipt
+  is the source of truth, while workflow recovery, bounded concurrency, per-tenant serialization and
+  fair admission are host work. pg-boss is not an automation scheduler or worker.
 - **A seed payload key that is not a column aborts the seed.** A `+seed.ts` record is a plain record,
   so a typo or a column the model renamed cannot be caught by the compiler. It is caught before the
   first write instead: `pod seed` names the step, the key, how many rows carry it and the closest real
@@ -427,7 +438,8 @@ A workspace does not change when it moves between hosts. Same source, same manif
 | Authoring, policies, agent    | identical     | identical                                      |
 | Auth logic and prebuilt pages | identical     | identical                                      |
 | Facility _implementations_    | Core supplies | `pod.host.ts` supplies                         |
-| Queue                         | pg-boss       | operator's binding (`intervalQueue()` for dev) |
+| Integration queue             | pg-boss       | operator's binding (`intervalQueue()` for dev) |
+| Automation orchestration      | DBOS          | host-provided durable automation protocol      |
 | Organization selector         | Core          | n/a — one workspace                            |
 
 `pod.host.ts` is the only file that differs, and it is data rather than setup code — adapters and

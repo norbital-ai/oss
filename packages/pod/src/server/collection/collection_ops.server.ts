@@ -350,7 +350,7 @@ async function createRecordUnguarded(
 			);
 			if (inserted) {
 				await emitOutboundRows(db, ctx, collection, 'create', inserted);
-				await emitSyncOutbox(db, collection, 'create', inserted);
+				await emitSyncOutbox(db, collection, 'create', inserted, ctx.baseScope);
 			}
 			return inserted;
 		});
@@ -565,7 +565,7 @@ async function createManyUnguarded(
 				);
 			}
 			// Root and feed statements use independent parameter-aware chunks inside this transaction.
-			await emitSyncOutboxMany(db, collection, 'create', normalized);
+			await emitSyncOutboxMany(db, collection, 'create', normalized, ctx.baseScope);
 			return normalized;
 		});
 		if (created.length !== prepared.length) {
@@ -814,7 +814,7 @@ async function updateRecordUnguarded(
 			);
 			if (next) {
 				await emitOutboundRows(db, ctx, collection, 'update', next, originalRecord);
-				await emitSyncOutbox(db, collection, 'update', next);
+				await emitSyncOutbox(db, collection, 'update', next, ctx.baseScope);
 			}
 			return next;
 		});
@@ -1121,7 +1121,7 @@ export async function updateMany(
 				'update',
 				out.map((record, index) => ({ record, previous: prepared[index]?.originalRecord }))
 			);
-			await emitSyncOutboxMany(db, collection, 'update', out);
+			await emitSyncOutboxMany(db, collection, 'update', out, ctx.baseScope);
 			return out;
 		});
 
@@ -1344,7 +1344,8 @@ async function deleteManyUnguarded(
 				mutationDb,
 				collection,
 				'delete',
-				prepared.map((item) => item.originalRecord)
+				prepared.map((item) => item.originalRecord),
+				ctx.baseScope
 			);
 		});
 

@@ -416,8 +416,9 @@ export type RuntimeFacilityName =
  *
  * - a `file()` field has nowhere to put its bytes without `fileStorage`;
  * - an agent automation has no model to call without `ai`;
- * - a scheduled or event automation, and an outbound integration, have nothing to drive them
- *   without `queue` — and an integration has nowhere to deliver without `integrationDelivery`.
+ * - an outbound integration has nothing to drive or deliver it without `queue` and
+ *   `integrationDelivery`. Core automations use DBOS and standalone automations use the local
+ *   automation driver; neither is represented by the integration queue facility.
  *
  * `maps` is deliberately absent. A `geolocation()` value is self-contained
  * (`{ geometry, formatted_address, type, srid }`), so storing, querying, and displaying one needs no
@@ -439,7 +440,6 @@ export function requiredRuntimeFacilities(
 		required.add('queue');
 	}
 	const automations = Object.values(manifest.automations ?? {});
-	if (automations.length > 0) required.add('queue');
 	if (manifest.agent || automations.some((automation) => automation.spec?.kind === 'agent')) {
 		required.add('ai');
 	}
