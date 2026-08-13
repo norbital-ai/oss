@@ -12,11 +12,56 @@ describe('remote query families follow the slice, not the collection', () => {
 	const prefix = 'db:employees:';
 	const path = 'collections/findMany';
 
-	it('keeps re-shapes of the same slice together, so the table never blanks', () => {
-		const sorted = remoteQueryFamily(prefix, path, { orderBy: { name: 'asc' }, limit: 50 });
-		expect(remoteQueryFamily(prefix, path, { orderBy: { name: 'desc' }, limit: 50 })).toBe(sorted);
-		expect(remoteQueryFamily(prefix, path, { where: { status: 'open' }, limit: 50 })).toBe(sorted);
-		expect(remoteQueryFamily(prefix, path, { search: 'ali', limit: 50 })).toBe(sorted);
+	it('keeps sort and search changes of the same slice together, so the table never blanks', () => {
+		const scoped = { where: { company_id: { eq: 'company-1' } } };
+		const sorted = remoteQueryFamily(prefix, path, {
+			...scoped,
+			orderBy: { name: 'asc' },
+			limit: 50
+		});
+		expect(
+			remoteQueryFamily(prefix, path, {
+				...scoped,
+				orderBy: { name: 'desc' },
+				limit: 50
+			})
+		).toBe(sorted);
+		expect(remoteQueryFamily(prefix, path, { ...scoped, search: 'ali', limit: 50 })).toBe(sorted);
+	});
+
+	it('separates limit and filter scopes so incomplete or filtered rows never masquerade as complete', () => {
+		const base = remoteQueryFamily(prefix, path, { limit: 50 });
+		expect(remoteQueryFamily(prefix, path, { limit: 100 })).not.toBe(base);
+		expect(
+			remoteQueryFamily(prefix, path, { limit: 50, filters: [{ field: 'status', value: 'open' }] })
+		).not.toBe(base);
+	});
+
+	it('hashes bypass credentials instead of retaining raw secrets in family keys', () => {
+		const family = remoteQueryFamily(prefix, path, { bypass_secret: 'do-not-retain-me' });
+		expect(family).not.toContain('do-not-retain-me');
+		expect(family).toContain('opaque:');
+	});
+
+	it('separates structural scopes so a cold company view cannot inherit a false empty state', () => {
+		const firstCompany = remoteQueryFamily(prefix, path, {
+			where: { company_id: { eq: 'company-1' } },
+			with: { employment: true },
+			limit: 50
+		});
+		const secondCompany = remoteQueryFamily(prefix, path, {
+			where: { company_id: { eq: 'company-2' } },
+			with: { employment: true },
+			limit: 50
+		});
+		const differentShape = remoteQueryFamily(prefix, path, {
+			where: { company_id: { eq: 'company-1' } },
+			with: { leave_type: true },
+			limit: 50
+		});
+
+		expect(secondCompany).not.toBe(firstCompany);
+		expect(differentShape).not.toBe(firstCompany);
 	});
 
 	/**

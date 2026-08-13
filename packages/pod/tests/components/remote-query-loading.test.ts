@@ -15,4 +15,15 @@ describe('remote query loading truth', () => {
 		expect(state?.getAttribute('data-current')).toBe('[]');
 		destroy();
 	});
+
+	it('bounds family placeholders with their resources instead of retaining stale scopes forever', async () => {
+		const { container, destroy } = render(RemoteQueryLoadingHarness as never, {});
+		const churn = [...container.querySelectorAll('button')].find(
+			(button) => button.textContent === 'Churn cache'
+		);
+		churn?.click();
+		await settle();
+		expect(container.querySelector('output')?.textContent).toBe('bounded');
+		destroy();
+	});
 });

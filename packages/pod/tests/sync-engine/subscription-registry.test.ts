@@ -34,7 +34,7 @@ type Stub = {
 };
 
 function stubClient(options?: {
-	page?: (request: ShapeRequest, index: number) => ShapeResponse;
+	page?: (request: ShapeRequest, index: number) => ShapeResponse | Promise<ShapeResponse>;
 	persisted?: Map<string, CollectionSyncState>;
 }): Stub {
 	const calls: ShapeRequest[] = [];
@@ -90,6 +90,29 @@ describe('SubscriptionRegistry', () => {
 		expect(registry.size).toBe(1);
 	});
 
+	it('publishes live interest before a demanded collection waits behind another catch-up', async () => {
+		let releaseOrders = () => {};
+		const ordersBlocked = new Promise<void>((resolve) => {
+			releaseOrders = resolve;
+		});
+		const { client, events } = stubClient({
+			page: async (request) => {
+				if (request.collection === 'orders') await ordersBlocked;
+				return lastPage();
+			}
+		});
+		const registry = new SubscriptionRegistry(client);
+
+		const orders = registry.register('orders');
+		await Promise.resolve();
+		const sessions = registry.register('chat_session');
+		await Promise.resolve();
+
+		expect(events).toContain('subscribe:orders,chat_session');
+		releaseOrders();
+		await Promise.all([orders, sessions]);
+	});
+
 	it('is keyed by collection, so query variations cost nothing extra', async () => {
 		// The point of collection-level sync: filtering and sorting are local afterwards, so there
 		// is no second catch-up to pay for.
@@ -133,12 +156,14 @@ describe('SubscriptionRegistry', () => {
 		await settle();
 
 		expect(events).toEqual([
+			'subscribe:orders',
 			'stop',
 			'shape:orders',
 			'subscribe:orders',
 			'shape:orders',
 			'subscribe:orders',
-			'start'
+			'start',
+			'subscribe:orders'
 		]);
 	});
 

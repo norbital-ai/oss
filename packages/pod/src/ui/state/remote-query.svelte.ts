@@ -32,7 +32,8 @@ class RemoteQueryResource<T> {
 		readonly key: string,
 		readonly load: RemoteQueryLoader<T>,
 		placeholder?: T,
-		readonly onValue?: (value: T) => void
+		readonly onValue?: (value: T) => void,
+		readonly familyKey?: string
 	) {
 		// Seed with the previous result for this query family. Changing a filter, sort, page or
 		// search term mints a new key; without a seed the UI would render `undefined` for a frame
@@ -59,9 +60,9 @@ class RemoteQueryResource<T> {
 			(value) => {
 				if (generation !== this.generation) return;
 				this.current = value;
+				this.controller = null;
 				this.onValue?.(value);
 				this.loading = false;
-				this.controller = null;
 			},
 			(error) => {
 				if (generation !== this.generation) return;
@@ -126,16 +127,27 @@ const MAX_QUERY_RESOURCES = 500;
 export class RemoteQueryResourceManager<T> {
 	private readonly resources = new Map<string, RemoteQueryResource<T>>();
 	/** Most recent settled value per family prefix, used to seed a new key in the same family. */
-	private readonly families = new Map<string, T>();
+	private readonly families = new Map<string, { value: T; lastAccess: number }>();
 
 	query(key: string, load: RemoteQueryLoader<T>, familyKey?: string): ReactiveRemoteQuery<T> {
 		let resource = this.resources.get(key);
 		if (!resource) {
+			const family = familyKey ? this.families.get(familyKey) : undefined;
+			if (family) family.lastAccess = Date.now();
 			resource = new RemoteQueryResource(
 				key,
 				load,
-				familyKey ? this.families.get(familyKey) : undefined,
-				familyKey ? (value) => this.families.set(familyKey, value) : undefined
+				family?.value,
+				familyKey
+					? (value) => {
+							this.families.set(familyKey, { value, lastAccess: Date.now() });
+							// A burst can create more than the cap while every request is still pending. Pruning
+							// only at construction sees no settled resource it may evict, so try again as each
+							// resource settles and keep both maps genuinely bounded.
+							this.prune();
+						}
+					: undefined,
+				familyKey
 			);
 			this.resources.set(key, resource);
 			this.prune();
@@ -157,6 +169,27 @@ export class RemoteQueryResourceManager<T> {
 			.filter((resource) => resource.controller === null)
 			.sort((left, right) => left.lastAccess - right.lastAccess);
 		const excess = this.resources.size - MAX_QUERY_RESOURCES;
-		for (const resource of evictable.slice(0, excess)) this.resources.delete(resource.key);
+		for (const resource of evictable.slice(0, excess)) {
+			this.resources.delete(resource.key);
+			if (
+				resource.familyKey &&
+				![...this.resources.values()].some((other) => other.familyKey === resource.familyKey)
+			) {
+				this.families.delete(resource.familyKey);
+			}
+		}
+		if (this.families.size > MAX_QUERY_RESOURCES) {
+			const retained = new Set(
+				[...this.resources.values()]
+					.map((resource) => resource.familyKey)
+					.filter((family): family is string => family != null)
+			);
+			for (const [family] of [...this.families.entries()]
+				.filter(([family]) => !retained.has(family))
+				.sort(([, left], [, right]) => left.lastAccess - right.lastAccess)
+				.slice(0, this.families.size - MAX_QUERY_RESOURCES)) {
+				this.families.delete(family);
+			}
+		}
 	}
 }

@@ -59,6 +59,12 @@ function requestKeyHash(key: string): string {
 	return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+function opaqueQueryScope(value: unknown): string | null {
+	if (value == null) return null;
+	const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+	return `opaque:${requestKeyHash(serialized)}`;
+}
+
 export async function post<T>(
 	path: string,
 	body: unknown,
@@ -90,10 +96,10 @@ export async function post<T>(
 /**
  * The group of reads a new query may inherit its first rows from.
  *
- * A family is one SLICE of a collection: same collection, same operation, same position. Re-shaping
- * that slice — a filter, a sort, a search term — stays in the family, so the new key shows the
- * previous answer until its own lands instead of blanking the table. Those answers are reasonable
- * stand-ins for each other.
+ * A family is one truthful SLICE of a collection: same collection, operation, structural scope and
+ * position. Re-sorting or searching that slice may reuse its previous rows while the next answer
+ * lands. Changing `where`, selected relationships, or projected columns may not: an empty result
+ * from another company is not evidence that this company is empty, and must show a loader instead.
  *
  * A different page is not. Page 2's rows are not an approximation of page 3's, they are other
  * records, and inheriting them would show the old page under the new heading with no loader —
@@ -103,11 +109,19 @@ export async function post<T>(
  * Keyset cursors are opaque, so this only has to distinguish them, never interpret them.
  */
 export function remoteQueryFamily(keyPrefix: string, path: string, body: unknown): string {
-	const after =
-		body && typeof body === 'object' && typeof (body as { after?: unknown }).after === 'string'
-			? (body as { after: string }).after
-			: '';
-	return `${keyPrefix}${path}:${after}`;
+	const input =
+		body && typeof body === 'object' && !Array.isArray(body)
+			? (body as Record<string, unknown>)
+			: {};
+	return remoteQueryKey(keyPrefix, path, {
+		after: typeof input.after === 'string' ? input.after : '',
+		limit: typeof input.limit === 'number' ? input.limit : null,
+		where: input.where ?? null,
+		with: input.with ?? null,
+		columns: input.columns ?? null,
+		filters: input.filters ?? null,
+		bypass_scope: opaqueQueryScope(input.bypass_secret)
+	});
 }
 
 function query<T>(
@@ -224,6 +238,21 @@ async function settleApprovalSync(receipt: unknown): Promise<void> {
 		where: { norbital_id: { eq: id } }
 	});
 	await reconcileServerRow(sync, collection, id, row);
+}
+
+async function settleAgentStartSync(receipt: {
+	readonly chatId: string;
+	readonly session?: Record<string, unknown>;
+	readonly syncSequence?: string;
+}): Promise<void> {
+	const sync = getClientSync();
+	if (!sync) return;
+	if (receipt.session) {
+		await reconcileServerRow(sync, 'chat_session', receipt.chatId, receipt.session);
+	}
+	if (receipt.syncSequence) {
+		void sync.client.waitForSequence(receipt.syncSequence, { timeoutMs: 30_000 });
+	}
 }
 
 /**
@@ -390,8 +419,17 @@ const transport: WorkspaceRemoteTransport = {
 	importPipeline: (input) => post('collections/import', input),
 	agentChat: (input) =>
 		post<{ runId: string; chatId: string | null; text: string }>('remotes/agentChat', input),
-	agentChatStart: (input) =>
-		post<{ runId: string; chatId: string; accepted: true }>('remotes/agentChatStart', input),
+	agentChatStart: async (input) => {
+		const receipt = await post<{
+			runId: string;
+			chatId: string;
+			accepted: true;
+			session?: Record<string, unknown>;
+			syncSequence?: string;
+		}>('remotes/agentChatStart', input);
+		await settleAgentStartSync(receipt);
+		return receipt;
+	},
 	agentModels: () =>
 		post<Awaited<ReturnType<PodRemoteOperations['agentModels']>>>('remotes/agentModels', {}),
 	autocompleteGeolocation: (input) =>

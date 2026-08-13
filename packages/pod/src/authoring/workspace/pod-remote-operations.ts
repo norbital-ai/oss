@@ -50,6 +50,9 @@ export type PodRemoteOperations = {
 		readonly runId: string;
 		readonly chatId: string;
 		readonly accepted: true;
+		/** Authoritative command receipt for immediate read-your-command reconciliation. */
+		readonly session?: Record<string, unknown>;
+		readonly syncSequence?: string;
 	}>;
 	/**
 	 * What the host will run, and which model it picks when a turn names none.

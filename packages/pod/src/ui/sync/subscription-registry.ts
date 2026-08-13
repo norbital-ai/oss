@@ -108,6 +108,8 @@ function approximateBytes(rows: readonly Record<string, unknown>[]): number {
 export class SubscriptionRegistry {
 	private readonly meta = new Map<string, CollectionMeta>();
 	private readonly inFlight = new Map<string, Promise<void>>();
+	/** Collections demanded by a mounted read but not yet through their serialized snapshot. */
+	private readonly demanded = new Set<string>();
 	private catchUpQueue: Promise<void> = Promise.resolve();
 	private restoring: Promise<void> | null = null;
 	private readonly residencyBytes: number;
@@ -115,7 +117,10 @@ export class SubscriptionRegistry {
 
 	private publishSubscriptions(): void {
 		this.client.setSubscribedCollections(
-			[...this.meta].flatMap(([collection, meta]) => (meta.ready ? [collection] : []))
+			new Set([
+				...this.demanded,
+				...[...this.meta].flatMap(([collection, meta]) => (meta.ready ? [collection] : []))
+			])
 		);
 	}
 
@@ -130,6 +135,7 @@ export class SubscriptionRegistry {
 		// holding nothing.
 		this.client.onReset?.(() => {
 			this.meta.clear();
+			this.demanded.clear();
 			this.restoring = null;
 			this.publishSubscriptions();
 		});
@@ -205,6 +211,11 @@ export class SubscriptionRegistry {
 		if (this.meta.get(collection)?.ready) return;
 		const existing = this.inFlight.get(collection);
 		if (existing) return existing;
+		// Register live interest before this collection waits behind another snapshot. Otherwise an
+		// agent session created during that wait can land before its feed interest exists and remain
+		// invisible until a reload. The frozen-cursor catch-up below still supplies continuity.
+		this.demanded.add(collection);
+		this.publishSubscriptions();
 
 		let onFirstPage: () => void = () => {};
 		const firstPage = new Promise<void>((resolve) => {
@@ -215,6 +226,8 @@ export class SubscriptionRegistry {
 			.then(() => this.runCatchUp(collection, () => onFirstPage()))
 			.finally(() => {
 				this.inFlight.delete(collection);
+				this.demanded.delete(collection);
+				this.publishSubscriptions();
 				onFirstPage();
 			});
 		this.catchUpQueue = catchUp.catch(() => undefined);

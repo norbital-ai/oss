@@ -1,6 +1,7 @@
 import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
+import { currentOutboxWatermark } from '$lib/server/collection/sync/outbox-tailer.server.js';
 import { parseCompactDirective, runAgent } from '$lib/server/agent/agent-loop.server.js';
 import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
 import { getRuntimeFacilities, requireRuntimeFacility } from '$lib/server/facilities.js';
@@ -71,6 +72,8 @@ export type AgentChatStartResult = {
 	readonly runId: string;
 	readonly chatId: string;
 	readonly accepted: true;
+	readonly session: Record<string, unknown>;
+	readonly syncSequence: string;
 };
 
 /**
@@ -101,12 +104,16 @@ async function resolveModel(model: string | undefined): Promise<string | undefin
 	return model;
 }
 
-async function prepareConversation(runId?: string): Promise<{ runId: string; chatId: string }> {
+type PreparedConversation = {
+	readonly runId: string;
+	readonly chatId: string;
+	readonly session: Record<string, unknown>;
+};
+
+async function prepareConversation(runId?: string): Promise<PreparedConversation> {
 	const ctx = getWorkspace({ provision: true });
 	const ownerUserId = ctx.baseScope.requestor.norbital_id;
-	const createSession = async (
-		automationRunId: string
-	): Promise<{ runId: string; chatId: string }> => {
+	const createSession = async (automationRunId: string): Promise<PreparedConversation> => {
 		const session = await createRecord(
 			ctx,
 			'chat_session',
@@ -119,7 +126,7 @@ async function prepareConversation(runId?: string): Promise<{ runId: string; cha
 			{ isElevated: true }
 		);
 		if (typeof session.norbital_id !== 'string') throw new Error('Agent session has no id');
-		return { runId: automationRunId, chatId: session.norbital_id };
+		return { runId: automationRunId, chatId: session.norbital_id, session };
 	};
 	if (runId) {
 		const existing = await ctx.tenantDb.query<{
@@ -143,7 +150,18 @@ async function prepareConversation(runId?: string): Promise<{ runId: string; cha
 			throw error(403, requestI18n().t('pod.server.agentConversationPrivate'));
 		if (row.status === 'running')
 			throw error(409, requestI18n().t('pod.server.agentAlreadyResponding'));
-		if (row.chat_id) return { runId, chatId: row.chat_id };
+		if (row.chat_id) {
+			const selected = await ctx.tenantDb.query<Record<string, unknown>>(
+				`SELECT * FROM chat_session
+				  WHERE norbital_id = $1::uuid
+				    AND user_id = $2::uuid
+				  LIMIT 1`,
+				[row.chat_id, ownerUserId]
+			);
+			const session = selected.rows[0];
+			if (!session) throw error(404, requestI18n().t('pod.server.agentConversationNotFound'));
+			return { runId, chatId: row.chat_id, session };
+		}
 		return createSession(runId);
 	}
 
@@ -247,7 +265,11 @@ export const agentChatStart = authenticated.command(
 					? lifecycle?.releaseBackgroundWork(backgroundLease).catch(() => undefined)
 					: undefined
 			);
-		return { ...conversation, accepted: true };
+		return {
+			...conversation,
+			accepted: true,
+			syncSequence: await currentOutboxWatermark(getWorkspace({ provision: true }))
+		};
 	}
 );
 
