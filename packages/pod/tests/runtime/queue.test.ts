@@ -37,17 +37,16 @@ async function eventually(predicate: () => boolean): Promise<void> {
 }
 
 describe('workspace jobs', () => {
-	it('refuses an invalid schedule before starting a partial runtime', () => {
-		expect(() =>
-			workspaceJobs({
-				manifest: manifest('not a schedule'),
-				dispatch: async () => undefined,
-				organizationId: 'org-1'
-			})
-		).toThrow(/invalid schedule/);
+	it('does not project authored automation schedules into the infrastructure queue', () => {
+		const jobs = workspaceJobs({
+			manifest: manifest('not a schedule'),
+			dispatch: async () => undefined,
+			organizationId: 'org-1'
+		});
+		expect(jobs.some((job) => job.name.includes('automation'))).toBe(false);
 	});
 
-	it('derives one job per scheduled automation and one per configured outbox', () => {
+	it('derives only non-automation infrastructure jobs and configured outboxes', () => {
 		const jobs = workspaceJobs({
 			manifest: manifest('* * * * *'),
 			dispatch: async () => undefined,
@@ -57,7 +56,6 @@ describe('workspace jobs', () => {
 		expect(jobs.map((job) => job.name)).toEqual([
 			'pod:integration-import',
 			'pod:agent-conversation-titles',
-			'pod:automation:job',
 			'pod:notification-outbox'
 		]);
 		// A host that supplies no delivery provider gets no drain job to run.
@@ -67,9 +65,7 @@ describe('workspace jobs', () => {
 			organizationId: 'org-1'
 		});
 		expect(bare.map((job) => job.name)).toEqual([
-			'pod:integration-import',
-			'pod:agent-conversation-titles',
-			'pod:automation:job'
+			'pod:integration-import', 'pod:agent-conversation-titles'
 		]);
 	});
 
@@ -87,11 +83,7 @@ describe('workspace jobs', () => {
 		expect(dispatched).toEqual([{ kind: 'agent-conversation-titles', limit: 10 }]);
 	});
 
-	it('does not let a slow automation block transactional notification delivery', async () => {
-		let finishAutomation!: () => void;
-		const automation = new Promise<void>((resolve) => {
-			finishAutomation = resolve;
-		});
+	it('does not let another infrastructure drain block transactional notification delivery', async () => {
 		let claimed = false;
 		let delivered = false;
 		let sentOrganization = '';
@@ -106,7 +98,6 @@ describe('workspace jobs', () => {
 			}),
 			async dispatch(request) {
 				const input = request as { kind?: string; action?: string };
-				if (input.kind === 'automation') return automation;
 				if (input.kind === 'notification' && input.action === 'claim' && !claimed) {
 					claimed = true;
 					return [
@@ -133,7 +124,6 @@ describe('workspace jobs', () => {
 			await eventually(() => delivered);
 			expect(sentOrganization).toBe('org-1');
 		} finally {
-			finishAutomation();
 			stop();
 		}
 	});
@@ -179,7 +169,7 @@ describe('interval queue', () => {
 		let runs = 0;
 		const stop = await intervalQueue({ intervalMs: 10, log: () => {} })([
 			{
-				name: 'pod:automation:job',
+				name: 'pod:scheduled-infrastructure-probe',
 				schedule: '* * * * *',
 				run: async () => {
 					runs += 1;
