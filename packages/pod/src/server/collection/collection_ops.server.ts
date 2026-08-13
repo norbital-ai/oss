@@ -911,6 +911,14 @@ export async function updateMany(
 	const now = new Date().toISOString();
 
 	const result = await withCollectionTransaction(ctx, async () => {
+		// Read the untouched originals in bulk. Permission, approval and hook evaluation below still
+		// happens once per input and in caller order; this only removes an otherwise identical SELECT
+		// round trip for every record.
+		const originals = await loadRecordsById(
+			ctx,
+			collection,
+			updates.map((item) => item.recordId)
+		);
 		const prepared: Array<{
 			recordId: string;
 			originalRecord: Record<string, unknown>;
@@ -927,7 +935,10 @@ export async function updateMany(
 		// later denial cannot leave earlier after-hook side effects behind — all-or-nothing.
 		// stupidity:allow A6 -- hooks and permission checks run in caller order within one transaction.
 		for (const { recordId, input } of updates) {
-			const originalRecord = await directFindFirst(ctx, collection, recordId);
+			const originalRecord = originals.get(recordId);
+			if (!originalRecord) {
+				throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
+			}
 			const parsedInput = parseMutationInput(collection, 'update', input);
 			let payload = {
 				...flattenWithOntoPayload(parsedInput),
@@ -998,30 +1009,107 @@ export async function updateMany(
 			});
 		}
 		const updated = await withMutationDb(ctx, async (db) => {
-			const out: Record<string, unknown>[] = [];
-			// stupidity:allow A6 -- ordered updates preserve caller order and share the mutation connection.
-			for (const item of prepared) {
-				const activeApprovalRequestId = item.revision?.approvalRequestId ?? item.approvalRequestId;
-				// The _norbital_versioning trigger archives the prior row + bumps the version.
-				const record = firstRowAsRecord(
-					await db
-						.update(table)
-						.set({
-							...item.row,
-							[SYSTEM_COLUMN_NAMES.UPDATED_AT]: now,
-							...(activeApprovalRequestId
-								? { [SYSTEM_COLUMN_NAMES.APPROVAL_ID]: activeApprovalRequestId }
-								: {})
-						})
-						.where(eq(cols[SYSTEM_COLUMN_NAMES.PKEY], item.recordId))
-						.returning()
+			const rowColumnNames = Object.keys(prepared[0]?.row ?? {}).filter(
+				(columnName) => columnName !== SYSTEM_COLUMN_NAMES.PKEY
+			);
+			const batchable =
+				prepared.length > 1 &&
+				new Set(prepared.map((item) => item.recordId)).size === prepared.length &&
+				prepared.every(
+					(item) =>
+						item.revision == null &&
+						item.gatedConfig == null &&
+						item.approvalRequestId == null &&
+						Object.keys(item.links).length === 0 &&
+						Object.keys(item.nested).length === 0 &&
+						Object.keys(item.row).length === rowColumnNames.length + 1 &&
+						rowColumnNames.every(
+							(columnName) =>
+								columnName in item.row &&
+								item.row[columnName] !== undefined &&
+								cols[columnName] != null
+						)
 				);
-				if (!record)
+
+			let out: Record<string, unknown>[] | undefined;
+			if (batchable) {
+				const updatedById = new Map<string, Record<string, unknown>>();
+				// A CASE expression changes each row independently while keeping this as one UPDATE. The
+				// database triggers are FOR EACH ROW, so history/versioning and lock checks still execute
+				// once per record. Approval and relationship mutations deliberately keep the sequential path.
+				const rowsPerStatement = rowsPerMutationStatement(rowColumnNames.length * 2 + 1);
+				for (let from = 0; from < prepared.length; from += rowsPerStatement) {
+					const chunk = prepared.slice(from, from + rowsPerStatement);
+					const set = Object.fromEntries([
+						...rowColumnNames.map((columnName) => [
+							columnName,
+							sql`case ${cols[SYSTEM_COLUMN_NAMES.PKEY]} ${sql.join(
+								chunk.map(
+									(item) =>
+										sql`when ${sql.param(item.recordId, cols[SYSTEM_COLUMN_NAMES.PKEY])} then ${sql.param(item.row[columnName], cols[columnName])}`
+								),
+								sql` `
+							)} else ${cols[columnName]} end`
+						]),
+						[SYSTEM_COLUMN_NAMES.UPDATED_AT, now]
+					]);
+					const records = await db
+						.update(table)
+						.set(set)
+						.where(
+							inArray(
+								cols[SYSTEM_COLUMN_NAMES.PKEY],
+								chunk.map((item) => item.recordId)
+							)
+						)
+						.returning();
+					for (const record of records) {
+						if (typeGuard(NorbitalDBRecordSchema, record)) {
+							updatedById.set(record[SYSTEM_COLUMN_NAMES.PKEY], record);
+						}
+					}
+				}
+				const batchOut = prepared.map((item) => updatedById.get(item.recordId));
+				const missingIndex = batchOut.findIndex((record) => record == null);
+				if (missingIndex !== -1) {
 					throw error(
 						404,
-						requestI18nOrDefault().t('pod.server.recordNotFound', { id: item.recordId })
+						requestI18nOrDefault().t('pod.server.recordNotFound', {
+							id: prepared[missingIndex]?.recordId
+						})
 					);
-				out.push(record);
+				}
+				out = batchOut as Record<string, unknown>[];
+			}
+
+			if (!out) {
+				out = [];
+				// Duplicated ids, approvals and relationship mutations retain the record-at-a-time path:
+				// their ordered, intermediate state is observable and cannot be represented by one UPDATE.
+				for (const item of prepared) {
+					const activeApprovalRequestId =
+						item.revision?.approvalRequestId ?? item.approvalRequestId;
+					// The _norbital_versioning trigger archives the prior row + bumps the version.
+					const record = firstRowAsRecord(
+						await db
+							.update(table)
+							.set({
+								...item.row,
+								[SYSTEM_COLUMN_NAMES.UPDATED_AT]: now,
+								...(activeApprovalRequestId
+									? { [SYSTEM_COLUMN_NAMES.APPROVAL_ID]: activeApprovalRequestId }
+									: {})
+							})
+							.where(eq(cols[SYSTEM_COLUMN_NAMES.PKEY], item.recordId))
+							.returning()
+					);
+					if (!record)
+						throw error(
+							404,
+							requestI18nOrDefault().t('pod.server.recordNotFound', { id: item.recordId })
+						);
+					out.push(record);
+				}
 			}
 			// Each row needs its own UPDATE (different values), but the feeds do not: emitting them
 			// per row doubled the round trips of every bulk update against a remote database.

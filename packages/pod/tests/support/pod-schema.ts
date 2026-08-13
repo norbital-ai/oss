@@ -16,7 +16,8 @@ const ORDERS_TABLE_SQL = `
 		norbital_sys_period TSTZRANGE NOT NULL DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)'),
 		norbital_row_version INTEGER NOT NULL DEFAULT 1,
 		norbital_approval_id UUID,
-		status TEXT
+		status TEXT,
+		tags TEXT[]
 	);
 `;
 

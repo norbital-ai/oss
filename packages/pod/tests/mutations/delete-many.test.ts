@@ -33,7 +33,8 @@ const orders = pgTable('orders', {
 	norbital_sys_period: tstzrange('norbital_sys_period'),
 	norbital_row_version: integer('norbital_row_version'),
 	norbital_approval_id: uuid('norbital_approval_id'),
-	status: text('status')
+	status: text('status'),
+	tags: text('tags').array()
 });
 
 type HookCalls = { readonly before: string[]; readonly after: string[] };
@@ -41,22 +42,42 @@ type HookCalls = { readonly before: string[]; readonly after: string[] };
 /** Test-controlled collection behavior + hook bundle, swapped per test. */
 const state = vi.hoisted(() => ({
 	deleteAllowed: true,
+	updateAllowed: true,
 	beforeHook: undefined as undefined | ((event: { existing: Record<string, unknown> }) => unknown),
 	afterHook: undefined as undefined | ((event: { record: Record<string, unknown> }) => unknown),
+	updateBeforeHook: undefined as
+		| undefined
+		| ((event: { input: Record<string, unknown>; existing: Record<string, unknown> }) => unknown),
+	updateAfterHook: undefined as
+		undefined | ((event: { record: Record<string, unknown> }) => unknown),
 	auditFailure: false,
 	auditBatches: [] as { entityId: string }[][]
 }));
 
 vi.mock('$lib/server/collection/workspace-collections.js', () => ({
-	getWorkspaceCollection: () => ({ delete: {} }),
-	allowsMutation: () => state.deleteAllowed,
+	getWorkspaceCollection: () => ({ delete: {}, update: {} }),
+	allowsMutation: (_behavior: unknown, action: string) =>
+		action === 'delete' ? state.deleteAllowed : state.updateAllowed,
 	collectionHooks: (_behavior: unknown, action: string) =>
 		action === 'delete'
 			? {
 					...(state.beforeHook ? { before: state.beforeHook } : {}),
 					...(state.afterHook ? { after: state.afterHook } : {})
 				}
-			: undefined
+			: action === 'update'
+				? {
+						...(state.updateBeforeHook ? { before: state.updateBeforeHook } : {}),
+						...(state.updateAfterHook ? { after: state.updateAfterHook } : {})
+					}
+				: undefined
+}));
+
+vi.mock('$lib/server/bootstrap/tenant_workspace.server.js', () => ({
+	getTenantWorkspace: () => ({
+		collections: {},
+		relationships: {},
+		registered: { inputSchemas: {}, integrationBindings: {} }
+	})
 }));
 
 vi.mock('$lib/server/collection/hook-api-context.server.js', async () => {
@@ -80,7 +101,7 @@ vi.mock('$lib/server/audit_event.server.js', () => ({
 }));
 
 const { createWorkspaceContext } = await import('$lib/server/bootstrap/workspace_store.js');
-const { deleteMany, deleteRecord } =
+const { deleteMany, deleteRecord, updateMany } =
 	await import('$lib/server/collection/collection_ops.server.js');
 
 /** Every statement the connection saw, so a round-trip count is an assertion, not a guess. */
@@ -123,7 +144,8 @@ function contextOn(client: PoolClient): ProvisionedContext {
 		manifestCtx: {
 			nodeId: 'test-node',
 			manifest: { integrations: {} },
-			getCollection: () => ({})
+			getCollection: () => ({}),
+			getRelationshipsForCollection: () => []
 		} as unknown as Parameters<typeof createWorkspaceContext>[0]['manifestCtx'],
 		organization: { norbital_id: ORG_ID, name: 'Test Org' },
 		baseScope: {
@@ -159,8 +181,11 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 
 	beforeEach(async () => {
 		state.deleteAllowed = true;
+		state.updateAllowed = true;
 		state.beforeHook = undefined;
 		state.afterHook = undefined;
+		state.updateBeforeHook = undefined;
+		state.updateAfterHook = undefined;
 		state.auditFailure = false;
 		state.auditBatches = [];
 		// A failed assertion can leave the pinned connection mid-transaction; start clean.
@@ -411,5 +436,76 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		expect(matching(/^select .*from "orders"/is)).toHaveLength(2);
 		expect(matching(/^delete from "orders"/i)).toHaveLength(2);
 		expect(matching(/insert into sync_outbox/i)).toHaveLength(1);
+	});
+
+	it('updates independent records with hooks, history, feeds and result order in constant round trips', async () => {
+		const ids = await seed(50);
+		const selected = [ids[31], ids[4], ids[17], ids[2]];
+		const calls: HookCalls = { before: [], after: [] };
+		state.updateBeforeHook = ({ input, existing }) => {
+			calls.before.push(String(existing.status));
+			return { status: `normalized:${input.status}`, tags: [`tag:${input.status}`] };
+		};
+		state.updateAfterHook = ({ record }) => {
+			calls.after.push(String(record.status));
+		};
+
+		const updated = await updateMany(
+			ctx,
+			'orders',
+			selected.map((recordId, index) => ({ recordId, input: { status: `new-${index}` } })),
+			{ isElevated: true }
+		);
+
+		expect(updated.map((record) => record.norbital_id)).toEqual(selected);
+		expect(updated.map((record) => record.status)).toEqual(
+			selected.map((_, index) => `normalized:new-${index}`)
+		);
+		expect(updated.map((record) => record.tags)).toEqual(
+			selected.map((_, index) => [`tag:new-${index}`])
+		);
+		expect(calls.before).toEqual(['row-31', 'row-4', 'row-17', 'row-2']);
+		expect(calls.after).toEqual(selected.map((_, index) => `normalized:new-${index}`));
+		expect(matching(/^select .*from "orders"/is)).toHaveLength(1);
+		expect(matching(/^update "orders"/i)).toHaveLength(1);
+		expect(matching(/insert into sync_outbox/i)).toHaveLength(1);
+
+		const history = await pool.query<{ norbital_id: string; status: string }>(
+			`SELECT norbital_id, status FROM orders_history WHERE norbital_id = ANY($1::uuid[])`,
+			[selected]
+		);
+		expect(history.rows).toHaveLength(selected.length);
+		expect(history.rows.map((record) => record.status).sort()).toEqual(
+			['row-31', 'row-4', 'row-17', 'row-2'].sort()
+		);
+		expect(state.auditBatches).toEqual([selected.map((entityId) => ({ entityId }))]);
+	});
+
+	it('keeps duplicate update ids on the ordered record-at-a-time path', async () => {
+		const [id] = await seed(1);
+		const updated = await updateMany(
+			ctx,
+			'orders',
+			[
+				{ recordId: id, input: { status: 'first' } },
+				{ recordId: id, input: { status: 'second' } }
+			],
+			{ isElevated: true }
+		);
+
+		expect(updated.map((record) => record.status)).toEqual(['first', 'second']);
+		expect(matching(/^update "orders"/i)).toHaveLength(2);
+		expect(
+			(
+				await pool.query<{ status: string }>('SELECT status FROM orders WHERE norbital_id = $1', [
+					id
+				])
+			).rows[0]?.status
+		).toBe('second');
+		expect(
+			await pool.query('SELECT 1 FROM orders_history WHERE norbital_id = $1', [id])
+		).toMatchObject({
+			rowCount: 1
+		});
 	});
 });
