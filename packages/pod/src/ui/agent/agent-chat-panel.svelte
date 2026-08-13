@@ -364,7 +364,7 @@
 			channelChildren.push({
 				id: profileId,
 				title: channelKey,
-				icon: 'lucide:bot',
+				icon: 'product:agent',
 				metadata: { kind: 'group' },
 				children: profileChildren
 			});

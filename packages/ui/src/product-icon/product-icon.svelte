@@ -107,8 +107,16 @@
 		<rect x="3" y="14" width="7" height="7" rx="1" />
 		<rect x="14" y="14" width="7" height="7" rx="1" class="accent-stroke" />
 	{:else if name === 'agent'}
-		<circle cx="12" cy="12" r="8" />
-		<path d="M15.5 4.8A8 8 0 0 1 19.2 8" class="accent-stroke" />
+		<!-- Static, reduced-motion projection of the same dotted Agent orb used by live surfaces. -->
+		<circle cx="12" cy="4.25" r="0.8" />
+		<circle cx="17.5" cy="6.5" r="0.65" />
+		<circle cx="19.75" cy="12" r="0.85" class="accent-stroke" />
+		<circle cx="17.5" cy="17.5" r="0.65" />
+		<circle cx="12" cy="19.75" r="0.8" />
+		<circle cx="6.5" cy="17.5" r="0.65" />
+		<circle cx="4.25" cy="12" r="0.8" />
+		<circle cx="6.5" cy="6.5" r="0.65" />
+		<circle cx="12" cy="12" r="1.35" class="accent-stroke" />
 	{:else if name === 'studio'}
 		<path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
 		<path d="m8 17 8-8" class="accent-stroke" />
