@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/ui",
-	"version": "0.0.32",
+	"version": "0.0.33",
 	"description": "Svelte component library and design tokens for Norbital tenant applications.",
 	"type": "module",
 	"sideEffects": false,
