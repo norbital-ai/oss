@@ -56,10 +56,10 @@ One value for the whole system, exported from `@norbital-ai/ui/layout`:
 
 Never write these classes literally in an app file. Use `inset` on the primitive.
 
-### Padding follows scroll
+### Insets follow content regions
 
-**Whoever owns the scrollport at a level owns the inset at that level.** The scroll ladder in
-[layout-and-scrolling.md](layout-and-scrolling.md) and the padding ladder are the same ladder.
+**Every content level has one inset owner.** Usually it is also the scroll owner. Tabs are the deliberate
+exception: `TabsContent` owns alignment/inset while its one concrete body surface owns scrolling.
 
 The reason is mechanical, not stylistic. The inset must live _inside_ `overflow`:
 
@@ -81,7 +81,7 @@ owner, chosen by what is in it:
 | one component owning internal scroll (table, kanban, map) | the `Bound` region around it     | `<Bound size="full" inset>` |
 
 ```svelte
-<!-- Tabs: the panel is the scrollport and insets itself. The tab list aligns via INSET_MX_CLASS. -->
+<!-- Tabs: the panel insets itself; each snippet supplies one explicit body/scroll owner. -->
 <Cover as="main" top={pageHeading}>
 	<Tabs animate={false} config={[…]} />
 </Cover>
@@ -120,7 +120,7 @@ Cause: the `Cover` body child is neither a `Tabs` nor an `inset` region.
 
 **Double-pad** — content sits two gutters in, misaligned with its own sibling chrome. Causes: an
 `inset` wrapper placed _around_ a `Tabs` (the tab list gets `mx` + the wrapper's `px`), or an
-`inset` wrapper placed _inside_ a `TabsContent` (which already insets).
+`inset` wrapper placed _inside_ a `TabsContent` (which already owns that level's inset).
 
 **Check:** walk from `Cover` down to the content and count the elements applying the app inset.
 It must be exactly 1.
@@ -136,6 +136,13 @@ It must be exactly 1.
 <!-- WRONG: double pad. TabsContent already insets this snippet. -->
 {#snippet catalogue()}
 	<Bound size="full" inset>…</Bound>
+{/snippet}
+
+<!-- RIGHT: the tab owns inset; this custom body owns scrolling. -->
+{#snippet catalogue()}
+	<Bound size="full">
+		<Scroll name="Catalogue" class="h-full">…</Scroll>
+	</Bound>
 {/snippet}
 
 <!-- WRONG: zero pad. Nothing between the shell edge and the table. -->

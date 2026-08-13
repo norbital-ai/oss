@@ -13,6 +13,7 @@
 	import { cn } from '#lib/utils';
 	import { TimeRangeField } from 'bits-ui';
 	import { watch } from 'runed';
+	import { compareTimeValues } from './compare.js';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -88,23 +89,6 @@
 	// Internal state
 	let isAdjusting = $state(false);
 	let lastInvalidErrorKey = $state('');
-
-	// Helper function to compare two TimeValue objects
-	function compareTimeValues(a: T | undefined, b: T | undefined): number {
-		if (!a || !b) return 0;
-
-		// Convert both times to total seconds for comparison
-		const getSeconds = (time: TimeValue): number => {
-			return time.hour * 3600 + time.minute * 60 + (time.second || 0);
-		};
-
-		const aSeconds = getSeconds(a);
-		const bSeconds = getSeconds(b);
-
-		if (aSeconds < bSeconds) return -1;
-		if (aSeconds > bSeconds) return 1;
-		return 0;
-	}
 
 	// Handle validation errors
 	function handleInvalid(reason: 'min' | 'max' | 'custom', msg?: string | string[]) {

@@ -226,18 +226,20 @@ Parents choose the layout algorithm; children do not request growth. Prefer intr
 container-query tokens over viewport breakpoint recipes. `Grid` is intrinsic; use `Columns` only for exact
 counts or spans. `Split` accepts named ratios and shared collapse tokens, not arbitrary widths.
 
-Every app is `Cover top={pageHeading}` wrapping exactly one body region, and that region owns both scroll
-and the app inset. There are three legal bodies and nothing else:
+Every app is `Cover top={pageHeading}` wrapping exactly one body region. That region owns the app inset,
+while the concrete content surface owns scrolling. There are three legal bodies and nothing else:
 
-| Body                                                         | Owns scroll + inset          |
-| ------------------------------------------------------------ | ---------------------------- |
-| `<Tabs …/>`                                                  | `TabsContent`, automatically |
-| `<Scroll name="…" inset>` for flowing content                | the `Scroll`                 |
-| `<Bound size="full" inset>` for one self-scrolling component | the `Bound`                  |
+| Body                                                         | Inset owner                  | Scroll owner                         |
+| ------------------------------------------------------------ | ---------------------------- | ------------------------------------ |
+| `<Tabs …/>`                                                  | `TabsContent`, automatically | each tab's one concrete body surface |
+| `<Scroll name="…" inset>` for flowing content                | the `Scroll`                 | the `Scroll`                         |
+| `<Bound size="full" inset>` for one self-scrolling component | the `Bound`                  | that component                       |
 
 A bare `CollectionTable` in the `Cover` body has no scroll contract and no inset; it renders flush against
-the shell edge. An `inset` wrapper placed around a `Tabs`, or inside a tab snippet, double-pads. Each
-ancestor chain has one scroll owner per axis and one inset owner; sibling panes may own their own. `Scroll`
+the shell edge. An `inset` wrapper placed around a `Tabs`, or inside a tab snippet, double-pads. A tab
+snippet must render exactly one bounded body owner: a self-scrolling collection surface, a `Bound` around
+one self-scrolling component, or `Bound` + named `Scroll` for custom flowing content. Each ancestor chain
+has one scroll owner per axis and one inset owner; sibling panes may own their own. `Scroll`
 is keyboard focusable and owns overscroll containment and scrollbar behavior. Do not use generic `overflow`
 wrappers, flex/min-size chains, raw layout flex/grid wrappers, margins between siblings, or literal
 `px-4 sm:px-6` classes. Clipping is valid only for text truncation, `Frame` media, or an audited popup/sheet

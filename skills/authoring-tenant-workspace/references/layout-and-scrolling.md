@@ -10,7 +10,7 @@ sheets/dialogs over the current view. Think SPA with a single document scroll co
 ## App structure
 
 Every app is the same three-part shape. `Cover` splits chrome from body; the body holds exactly one
-region that owns scroll and the app inset.
+region that owns the app inset. The concrete content surface inside it owns scrolling.
 
 ```svelte
 <Cover as="main" top={pageHeading}>
@@ -23,11 +23,11 @@ region that owns scroll and the app inset.
 
 The three legal bodies:
 
-| Body                                                       | Scroll owner   | Inset owner   |
-| ---------------------------------------------------------- | -------------- | ------------- |
-| `<Tabs …/>`                                                | `TabsContent`  | `TabsContent` |
-| `<Scroll name="…" inset>` — flowing content                | the `Scroll`   | the `Scroll`  |
-| `<Bound size="full" inset>` — one self-scrolling component | that component | the `Bound`   |
+| Body                                                       | Scroll owner                         | Inset owner   |
+| ---------------------------------------------------------- | ------------------------------------ | ------------- |
+| `<Tabs …/>`                                                | each tab's one concrete body surface | `TabsContent` |
+| `<Scroll name="…" inset>` — flowing content                | the `Scroll`                         | the `Scroll`  |
+| `<Bound size="full" inset>` — one self-scrolling component | that component                       | the `Bound`   |
 
 Nothing else goes directly in the `Cover` body. A bare `CollectionTable` there has no scroll
 contract and no inset — that is the shape that renders flush against the shell edge.
@@ -39,9 +39,8 @@ Components own their scroll. The outer shell scrolls only as a last resort.
 ```
 Priority 1 (innate)  → Component-internal scroll (table rows, kanban lanes, form fields)
 Priority 2 (pane)    → Named Bound+Scroll pair for custom content regions
-Priority 3 (tab)     → Tab panel scroll (TabsContent overflow-y-auto)
-Priority 4 (sheet)   → Sheet.Content scroll
-Priority 5 (shell)   → App shell — only as absolute last resort
+Priority 3 (sheet)   → Sheet.Content scroll
+Priority 4 (shell)   → App shell — only as absolute last resort
 ```
 
 Components at Priority 1 always scroll first. Their parent containers let them grow until their
@@ -50,22 +49,22 @@ Priority 2-5 activate.
 
 ## Who owns scroll
 
-| Component                        | Owns scroll | Notes                                                        |
-| -------------------------------- | ----------- | ------------------------------------------------------------ |
-| `CollectionTable`                | Yes         | Vertical: header sticky, body `overflow-y-auto`              |
-| `CollectionKanban`               | Yes         | Horizontal: lane overflow-x-auto, snap                       |
-| `CollectionForm`                 | Yes         | Vertical: field area `Scroll`, footer pinned                 |
-| `Tabs.Root` / `TabsContent`      | Yes         | `grid min-h-0`, content `overflow-y-auto overscroll-contain` |
-| `MatrixRenderer` (bounded=true)  | Yes         | Default; set `bounded={false}` to yield scroll to parent     |
-| `CollectionGrid` (bounded=true)  | Yes         | Default; `bounded={false}` scrolls on the inline axis only   |
-| `Sheet.Content`                  | Yes         | `flex h-full overflow-hidden` + scrollable body              |
-| `Scroll` (explicit Bound+Scroll) | Yes         | For custom content that needs local scrolling                |
-| Charts / static tables / cards   | No          | Content flows to parent scrollport                           |
+| Component                        | Owns scroll | Notes                                                         |
+| -------------------------------- | ----------- | ------------------------------------------------------------- |
+| `CollectionTable`                | Yes         | Vertical: header sticky, body `overflow-y-auto`               |
+| `CollectionKanban`               | Yes         | Horizontal: lane overflow-x-auto, snap                        |
+| `CollectionForm`                 | Yes         | Vertical: field area `Scroll`, footer pinned                  |
+| `Tabs.Root` / `TabsContent`      | No          | Bounded/clipped layout and inset; the tab body owns scrolling |
+| `MatrixRenderer` (bounded=true)  | Yes         | Default; set `bounded={false}` to yield scroll to parent      |
+| `CollectionGrid` (bounded=true)  | Yes         | Default; `bounded={false}` scrolls on the inline axis only    |
+| `Sheet.Content`                  | Yes         | `flex h-full overflow-hidden` + scrollable body               |
+| `Scroll` (explicit Bound+Scroll) | Yes         | For custom content that needs local scrolling                 |
+| Charts / static tables / cards   | No          | Content flows to parent scrollport                            |
 
-**Tab panels scroll by default.** `TabsContent` renders
-`overflow-y-auto overscroll-contain [scrollbar-gutter:stable]`. Every app is `Cover top={pageHeading}`
-→ `Tabs`, so the tab content region IS the scrollport. Do NOT wrap tab snippet content in `<Scroll>`
-or `<Bound><Scroll>` — and do not add `inset` there either.
+**Tab panels never own scrolling.** `TabsContent` is bounded and clipped so wheel input cannot be trapped
+by a root tab panel. Every tab snippet renders exactly one body owner: a self-scrolling collection surface,
+`Bound` around one self-scrolling component, or `Bound` + named `Scroll` for custom flowing content. The
+tab already owns the app inset, so those inner owners do not add `inset`.
 
 ## The scroll contract
 
@@ -139,11 +138,15 @@ Each tab snippet is ONE of:
 {/snippet}
 ```
 
-**Custom content** — charts, approval tables, summary cards flow directly into the tab scrollport:
+**Custom content** — charts, approval tables, and summary cards use one explicit bounded scroll owner:
 
 ```svelte
 {#snippet overview()}
-	<Grid minimum="panel"><!-- charts, cards, tables --></Grid>
+	<Bound size="full">
+		<Scroll name="Overview" class="h-full">
+			<Grid minimum="panel"><!-- charts, cards, tables --></Grid>
+		</Scroll>
+	</Bound>
 {/snippet}
 ```
 
@@ -197,10 +200,10 @@ forcing a scrollport:
 - Charts: `min-h-[18rem]` via Display component
 - Cards: content-dependent, ~6rem minimum
 
-When multiple components stack vertically inside a tab panel:
+When multiple components stack vertically inside a custom tab body:
 
 1. Each component renders at its natural height
-2. If the sum exceeds the tab panel height, the tab panel scrolls
+2. If the sum exceeds the available height, the body’s named `Scroll` scrolls
 3. Individual components scroll internally only when their OWN content exceeds their min-height
 
 ## Form layout
@@ -246,7 +249,8 @@ When multiple components stack vertically inside a tab panel:
 
 Detail views use `Tabs variant="underline"` for sections. Each tab renders a `CollectionForm` (for
 editable fields) or `CollectionTable` (for related records). Neither needs wrapping in additional
-`Scroll` — the detail tab panel owns scroll.
+`Scroll` because each collection surface already owns its own scrolling. A custom detail tab instead
+uses one explicit `Bound` + named `Scroll` body.
 
 ## The primitive catalogue
 

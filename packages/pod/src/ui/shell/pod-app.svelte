@@ -14,7 +14,6 @@
 	import type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';
 	import PodShell from './pod-shell.svelte';
 	import { ModeWatcher } from 'mode-watcher';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
 
 	let {
 		apps,
@@ -38,11 +37,13 @@
 	const i18n = useI18n<PodUiKeys>();
 	const { t } = i18n;
 
-	// Cross-frame propagation: the host surfaces this workspace mounts live in same-origin frames,
-	// and a locale toggle inside one of them must reach the shell. `storage` fires in every
-	// same-origin window except the writer's, so listening here plus the host-side listener covers
-	// both directions, and open tabs of the same origin sync too.
-	$effect(() => {
+	onMount(() => {
+		document.body.dataset.hydrated = 'true';
+
+		// Cross-frame propagation: the host surfaces this workspace mounts live in same-origin frames,
+		// and a locale toggle inside one of them must reach the shell. `storage` fires in every
+		// same-origin window except the writer's, so listening here plus the host-side listener covers
+		// both directions, and open tabs of the same origin sync too.
 		const onStorage = (event: StorageEvent): void => {
 			if (event.key !== STORED_LOCALE_KEY) return;
 			const locale = parseLocale(event.newValue);
@@ -51,47 +52,18 @@
 		window.addEventListener('storage', onStorage);
 		return () => window.removeEventListener('storage', onStorage);
 	});
-
-	onMount(() => {
-		document.body.dataset.hydrated = 'true';
-	});
 </script>
 
 <ModeWatcher />
 <Toaster />
 
 {#await shellData}
-	<div class="grid h-dvh w-screen place-items-center bg-background text-foreground">
-		<Stack gap="lg" align="center" class="-translate-y-4" role="status" aria-live="polite">
-			<div class="relative h-24 w-32" aria-hidden="true">
-				<div
-					class="absolute inset-x-3 top-4 bottom-0 rounded-lg border border-border/50 bg-muted/25"
-				></div>
-				<div
-					class="absolute inset-x-1.5 top-2 bottom-2 rounded-lg border border-border/70 bg-muted/45"
-				></div>
-				<!-- stupidity:allow UI5 -- loading window is a decorative clip boundary -->
-				<div
-					class="workspace-loader-window absolute inset-x-0 top-0 bottom-4 overflow-hidden rounded-lg border border-border bg-card shadow-card"
-				>
-					<Inline gap="xs" class="h-6 border-b border-border/70 px-3">
-						<span class="size-1.5 rounded-full bg-muted-foreground/45"></span>
-						<span class="h-1.5 w-12 rounded-full bg-muted-foreground/30"></span>
-						<span class="ml-auto h-1.5 w-5 rounded-full bg-muted-foreground/25"></span>
-					</Inline>
-					<Stack gap="xs" class="px-3 py-2.5">
-						<span class="h-1 w-20 rounded-full bg-muted-foreground/35"></span>
-						<span class="h-1 w-14 rounded-full bg-muted-foreground/30"></span>
-						<span class="h-1 w-16 rounded-full bg-muted-foreground/30"></span>
-						<span class="h-1 w-10 rounded-full bg-muted-foreground/25"></span>
-						<span class="h-1 w-24 rounded-full bg-muted-foreground/35"></span>
-						<span class="h-1 w-12 rounded-full bg-muted-foreground/25"></span>
-					</Stack>
-				</div>
-			</div>
-			<p class="text-[15px] font-semibold tracking-[-0.01em]">{t('pod.shell.prepareWorkspace')}</p>
-		</Stack>
-	</div>
+	<div
+		class="h-dvh w-screen bg-background"
+		role="status"
+		aria-live="polite"
+		aria-label={t('pod.shell.prepareWorkspace')}
+	></div>
 {:then initialized}
 	<PodShell
 		{apps}
@@ -105,25 +77,3 @@
 		{error instanceof Error ? error.message : String(error)}
 	</div>
 {/await}
-
-<style>
-	.workspace-loader-window {
-		animation: workspace-loader-pulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite alternate;
-	}
-
-	@keyframes workspace-loader-pulse {
-		from {
-			opacity: 0.62;
-		}
-
-		to {
-			opacity: 1;
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.workspace-loader-window {
-			animation: none;
-		}
-	}
-</style>
