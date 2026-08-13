@@ -59,13 +59,13 @@ An interactive run has no automation name. A channel run carries the channel's s
 continues the session associated with the external conversation. These are entry-point differences,
 not separate agent implementations.
 
-Standalone `pod start` has no DBOS. It appends `standaloneAutomationJobs` after
-`workspaceJobs`: a continuous pump admits guest receipts (interactive chat, channel inbound,
-collection events) and drives each through in-process run/settle with the host's `HostAiBinding`;
-one cron job per authored schedule admits that occurrence, then the pump executes it. Core still
-uses DBOS for the same guest protocol. `workspaceJobs` remains infrastructure-only (outbox drains,
-conversation titles, integration import). Leftover `runAgent` is the programmatic/sync remote path,
-not `pod start` UI or channel delivery.
+Standalone `pod start` has no DBOS. `workspaceJobs` remains infrastructure-only (outbox drains,
+conversation titles, integration import). After those, `standaloneAutomationJobs` is a continuous
+pump that admits guest receipts (interactive chat, channel inbound, collection events) and drives
+each through in-process run/settle with the host's `HostAiBinding`; one cron job per authored
+schedule admits that occurrence, then the pump executes it. Core still uses DBOS for the same
+guest protocol. Leftover `runAgent` is the programmatic/sync remote path, not `pod start` UI or
+channel delivery.
 
 ## What bounds an agent
 
