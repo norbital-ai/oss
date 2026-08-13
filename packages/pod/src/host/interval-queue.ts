@@ -21,8 +21,9 @@ export type IntervalQueueOptions = {
  *
  * Scheduling is minute-granular and non-catch-up: each job records the minute it last ran in, and a
  * matching minute runs at most once. A host that was asleep does not retroactively fire the
- * schedules it missed — a cron job that fires forty times on resume is worse than one that skipped,
- * and the runtime records every run in `automation_run` either way.
+ * schedules it missed — a cron job that fires forty times on resume is worse than one that skipped.
+ * Authored automations do not use this queue or its `automation_run` history; production hosts
+ * orchestrate them through the separate durable automation protocol.
  */
 export function intervalQueue(options: IntervalQueueOptions = {}): HostQueue {
 	const log = options.log ?? ((message: string) => console.log(message));
