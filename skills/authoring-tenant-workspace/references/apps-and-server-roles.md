@@ -174,7 +174,6 @@ import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
 	{
-		kind: 'deterministic',
 		description:
 			'Counts every active site each morning so the ops desk opens on a fresh roll-call.',
 		handler: async (api) => {
@@ -193,36 +192,47 @@ repeat their filename as an ID. Use a schedule or collection event trigger:
 export default defineAutomation(
 	{ trigger: { collection: 'sites', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description: 'Recounts sites whenever one is added, so the desk total never drifts.',
 		handler: async (api, { scope }) => ({ count: await api.db.sites.count({}) })
 	}
 );
 ```
 
-`kind: 'agent'` is the same declaration with a task instead of a handler. `task` is the instruction
-handed to the model; `tools` is an optional allowlist of workspace agent tool names (not a feature
-map). Host capabilities, when a run may use them, are named in `hostTools`:
+`kind: 'agent'` is not a `defineAutomation` body — interactive chat and channels use
+`AgentAutomationSpec` on `src/+agent.ts` instead. When a handler or hook needs model judgement, call
+`api.infer({ prompt, schema?, tools?, collections?, images? })`. That is the same host chat the
+agent uses: optional Zod `schema`, optional `images`, optional named workspace tools. The funnel
+always offers the read builtins (`describe_workspace`, `read_collection`, `list_skills`,
+`read_skill`) plus those workspace tools. It never offers `write_collection`, `spawn_subagent`,
+host sandbox, authoring, or MCP, and it does not own a `chat_session` transcript.
 
 ```ts
+import { z } from 'zod';
+
 export default defineAutomation(
 	{ schedule: '0 3 * * 1' },
 	{
-		kind: 'agent',
 		description:
-			'Researches authoritative statutory sources and maintains effective-dated statutory profiles.',
-		task: 'Compare current law against the tenant’s effective statutory profile. Create a successor snapshot only when a material change is detected.',
-		access: 'write'
+			'Weekly statutory alignment check — rule-based drift detection, optional successor copies, AI-written report.',
+		handler: async (api) => {
+			const findings = detectDrift(/* bounded reads */);
+			const report = await api.infer({
+				schema: z.object({ summary: z.string(), highlights: z.array(z.string()) }),
+				collections: ['jurisdictions', 'employment_statutory_facts'],
+				prompt: `Summarize these findings in prose:\n${findings.map((f) => `- ${f}`).join('\n')}`
+			});
+			return { summary: report.summary, highlights: report.highlights };
+		}
 	}
 );
 ```
 
-Automations and server handlers may make one schema-validated inference over explicitly selected workspace
+Automations and hooks may make schema-validated inference over explicitly selected workspace
 images. Pass only `document_asset` IDs already associated with the record being processed; Pod re-checks
 asset access and rejects non-images, more than eight images, or more than 20 MiB total:
 
 ```ts
-const result = await api.ai({
+const result = await api.infer({
 	model: 'stepfun/step-3.7-flash',
 	prompt: 'Read the visibly printed site name and unit number. Use null when absent.',
 	images: [{ assetId: scope.incoming_record.document_asset_id, detail: 'high' }],
@@ -233,13 +243,14 @@ const result = await api.ai({
 });
 ```
 
-AI and external delivery stay outside transactional hooks. Trigger a post-commit automation when the work
-depends on a committed record or file.
+Heavy durable infer belongs in a post-commit automation. Hooks may call `api.infer` for judgement
+on the write path (for example a photo), but they still must not queue work or send email.
 
 Every tenant VM invocation—including reads—is capped at two seconds of admitted execution and is billable.
-An automation can take longer overall because the platform runs it as durable serverless steps. `api.ai`
+An automation can take longer overall because the platform runs it as durable serverless steps. `api.infer`
 is a replay boundary: pre-inference writes roll back, the host executes and bills the provider call under a
-stable effect ID, and a later invocation replays the same handler with the stored result. The successful
+stable effect ID, and a later invocation replays the same handler with the stored result. Each invocation
+accepts at most 64 outer `api.infer` calls and 100,000 prompt characters. The successful
 writes and terminal run receipt then commit together. Keep the authored handler straightforward; do not add
 home-grown queues, cursors, timers or retry tables.
 

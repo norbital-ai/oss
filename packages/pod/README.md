@@ -526,8 +526,8 @@ writes are bounded below two seconds; durable receipts carry progressive import 
 
 ## Automations, AI, and agent tools
 
-Automations are files under `src/automation/`. They have a cron schedule, a collection-event
-trigger, or `kind: 'agent'`.
+Automations are files under `src/automation/`. They have a cron schedule or a collection-event
+trigger and always declare a deterministic `handler`.
 
 ```ts
 import { defineAutomation } from '@norbital-ai/pod/authoring';
@@ -557,13 +557,18 @@ export default defineAutomation(
 Scheduled and event automations are admitted as immutable tenant receipts and driven by the host's
 durable automation orchestrator. Event cursors do not depend on an open browser. Each guest runtime
 invocation is billable and capped at two seconds; a longer automation proceeds as replayable DBOS
-steps. `api.ai` is an effect boundary: pre-effect writes roll back, Core performs the spend-gated
+steps. `api.infer` is an effect boundary: pre-effect writes roll back, Core performs the spend-gated
 provider call under a stable effect ID, then the handler replays with the durable result and commits
 its terminal writes atomically. pg-boss is not an automation scheduler or worker.
 
-Interactive chat, channel inbound, and `kind: 'agent'` automations are three doors into the same
-durable loop. Deterministic automations use a `handler` and, when they need model judgement, the
-bounded `api.ai` effect. Agent automations declare `kind: 'agent'` with `task` and optional `tools`, and run as DBOS reducer steps — one tool or effect per two-second invocation — rather than as one unbounded `runAgent`.
+Interactive chat and channel inbound are two doors into the same durable agent loop configured in
+`src/+agent.ts`. Automations are always deterministic handlers: when they need model judgement, call
+the bounded `api.infer({ prompt, schema?, tools?, collections?, images? })` effect (at most 64 calls
+and 100,000 prompt characters per invocation). That is the same host chat as the agent: optional
+schema, optional images, optional named workspace tools. Always a normal chat session. No
+`write_collection`, `spawn_subagent`, sandbox, authoring, or MCP; it does not own a `chat_session`
+transcript. Automations do not spawn agent sessions; agents that need sandboxes use the
+interactive or channel paths instead.
 
 An agent tool is a real compiler-discovered file:
 
@@ -604,19 +609,18 @@ export default {
 	kind: 'agent',
 	task: 'Assist with this workspace.',
 	collections: ['services'],
-	access: 'write',
-	hostTools: ['sandbox_read']
+	access: 'write'
 } satisfies AgentAutomationSpec;
 ```
 
 If the file is absent, interactive chat still runs — under a fallback profile with `access: 'write'`,
-every workspace agent tool, and every host tool the deployment offers. Tools are not the boundary
-here and are not meant to be read as one: the agent acts as the signed-in user with that user's
-permissions, so policy, hooks and approval gates decide what actually happens. An authored
-`src/+agent.ts` wins outright rather than being widened. Host tools are the exception to all of it,
-because they carry no requestor and act as a principal the host chooses; a channel run is offered
-none of them for that reason. The trade is written out in
-[Agent architecture](./docs/AGENT_ARCHITECTURE.md#host-tools).
+every workspace agent tool, and sandbox host tools whenever this session has a bound sandbox. Tools
+are not the boundary here and are not meant to be read as one: the agent acts as the signed-in user
+with that user's permissions, so policy, hooks and approval gates decide what actually happens. An
+authored `src/+agent.ts` wins outright rather than being widened. Sandbox host tools are supplied by
+the tool funnel when a sandbox is bound — including on channels — and are not listed in `hostTools`.
+`hostTools` remains the opt-in for other host tools. The funnel is written out in
+[Agent architecture](./docs/AGENT_ARCHITECTURE.md#tool-funnel).
 
 The Pod shell owns both its floating tenant-workspace entry point and full `/agent` surface.
 Assistant and subagent text is written as `streaming` tenant rows and arrives through the ordinary
@@ -932,17 +936,17 @@ Tenant code calls `api.sendNotification(...)`; it does not define a notification
 
 The same rule applies across facilities:
 
-| Workspace behavior                     | Required host facility                         |
-| -------------------------------------- | ---------------------------------------------- |
-| Any running workspace                  | `db`                                           |
-| A `file()` field                       | `fileStorage`                                  |
-| Deterministic automation               | host automation orchestration (Core: DBOS)     |
-| Agent automation or hosted agent turn  | host automation orchestration (Core: DBOS); `ai` |
-| Outbound integration                   | `queue` and `integrationDelivery`              |
-| External notification call             | matching `messaging` channel at call time      |
-| A declared channel                     | `messaging` transport of that name, at startup |
-| Geolocation autocomplete or static map | `maps` at call time                            |
-| Direct runtime AI call not in manifest | `ai` at call time                              |
+| Workspace behavior                     | Required host facility                           |
+| -------------------------------------- | ------------------------------------------------ |
+| Any running workspace                  | `db`                                             |
+| A `file()` field                       | `fileStorage`                                    |
+| Deterministic automation               | host automation orchestration (Core: DBOS)       |
+| Hosted agent turn                      | host automation orchestration (Core: DBOS); `ai` |
+| Outbound integration                   | `queue` and `integrationDelivery`                |
+| External notification call             | matching `messaging` channel at call time        |
+| A declared channel                     | `messaging` transport of that name, at startup   |
+| Geolocation autocomplete or static map | `maps` at call time                              |
+| Direct runtime AI call not in manifest | `ai` at call time                                |
 
 Static field and automation requirements are checked before the server listens. Dynamic notification
 channels and direct API calls are validated precisely when called.

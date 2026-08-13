@@ -715,7 +715,7 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 		}
 	});
 
-	it('declines every restored answer until the document live-head barrier is crossed', async () => {
+	it('serves restored resident rows before the live-head barrier without re-registering', async () => {
 		installSchema();
 		const db = await createClientDb();
 		const client = new PodSyncClient({
@@ -734,16 +734,53 @@ describe('windowed collections (slice larger than the residency budget)', () => 
 		const sync = enableClientSync(client);
 		try {
 			await sync.registry.restore();
-			expect(await localFindMany(sync, 'orders', {})).toBeNull();
-			expect(
-				await localFindFirst(sync, 'orders', { where: { norbital_id: { eq: 'stale' } } })
-			).toBeUndefined();
-			expect(await localCount(sync, 'orders', {})).toBeNull();
+			expect(sync.registry.isFresh('orders')).toBe(false);
+			expect(sync.registry.isHeldResident('orders')).toBe(true);
+			const register = sync.registry.register.bind(sync.registry);
+			let registerCalls = 0;
+			sync.registry.register = async (collection) => {
+				registerCalls += 1;
+				return register(collection);
+			};
 
-			sync.registry.markRestoredFresh();
+			const page = await localFindMany(sync, 'orders', {});
+			expect(page?.rows.map((row) => row.norbital_id)).toEqual(['stale']);
 			expect(
 				await localFindFirst(sync, 'orders', { where: { norbital_id: { eq: 'stale' } } })
 			).toMatchObject({ norbital_id: 'stale', status: 'old' });
+			expect(await localCount(sync, 'orders', {})).toBe(1);
+			expect(registerCalls).toBe(0);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('still declines unpinned reads from a restored windowed collection', async () => {
+		installSchema();
+		const db = await createClientDb();
+		const client = new PodSyncClient({
+			replicaEpoch: 'test-epoch',
+			db,
+			schemaSql: SCHEMA,
+			fetch: residentFetch
+		});
+		await client.bootstrap();
+		await client.upsertRow('orders', {
+			norbital_id: 'stale',
+			norbital_row_version: 1,
+			status: 'old'
+		});
+		await client.recordSyncState('orders', false, 1);
+		const sync = enableClientSync(client);
+		try {
+			await sync.registry.restore();
+			expect(sync.registry.isHeldResident('orders')).toBe(false);
+			expect(await localFindMany(sync, 'orders', {})).toBeNull();
+			expect(await localCount(sync, 'orders', {})).toBeNull();
+			const pinned = await localFindMany(sync, 'orders', {
+				where: { norbital_id: { eq: 'stale' } }
+			});
+			expect(pinned?.rows.map((row) => row.norbital_id)).toEqual(['stale']);
 		} finally {
 			await client.close();
 		}

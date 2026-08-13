@@ -7,7 +7,8 @@
  */
 import type { PodUiKeys } from '$lib/i18n/index.js';
 import { parsePublicMcpToolName } from '$lib/mcp/names.js';
-import { parseStoredGoalVerdict } from '$lib/shared/agent/goal-verdict.js';
+import { parseStoredGoalVerdict, parseStoredVerifierScheduled } from '$lib/shared/agent/goal-verdict.js';
+import { parseStoredSummary } from '$lib/shared/agent/intent.js';
 
 export type PanelText = {
 	readonly kind: 'text';
@@ -57,6 +58,8 @@ export type PanelToolCall = {
 		readonly mode?: 'form' | 'url';
 		readonly url?: string;
 	}[] | null;
+	/** Sandbox IPC and MCP are first-class families, not generic wrenches. */
+	readonly family: 'sandbox' | 'mcp' | null;
 	/**
 	 * The delegated agent's own transcript, projected the same way this one was.
 	 *
@@ -80,6 +83,8 @@ export type PanelCheckpoint = {
 	readonly key: string;
 	readonly summary: string;
 	readonly before: readonly PanelMessage[];
+	/** Why this checkpoint exists. Plan folds use the same disclosure as compaction. */
+	readonly fold: 'plan' | 'compact';
 };
 
 /** Independent verifier result for a goal-mode turn. Not the agent's own claim. */
@@ -91,12 +96,20 @@ export type PanelGoal = {
 	readonly gaps: readonly string[];
 };
 
+/** End-action scheduled for this turn. The person can edit the prompt before it runs. */
+export type PanelVerifier = {
+	readonly kind: 'verifier';
+	readonly key: string;
+	readonly prompt: string;
+};
+
 export type PanelMessage =
 	| PanelText
 	| PanelReasoning
 	| PanelToolCall
 	| PanelCheckpoint
-	| PanelGoal;
+	| PanelGoal
+	| PanelVerifier;
 
 /**
  * Tool payloads are held behind a disclosure and capped.
@@ -111,13 +124,28 @@ const PAYLOAD_LIMIT = 2_000;
 type ToolMetadata = { readonly labelKey: PodUiKeys | null; readonly icon: string };
 
 /** The tools this package resolves itself. Tenant and host tools are named by their registration. */
+export const SEARCH_TOOLS = new Set([
+	'describe_workspace',
+	'list_skills',
+	'read_skill',
+	'read_collection',
+	'list_sandbox_agents',
+	'read_sandbox_agent'
+]);
+
+export const AUTHORING_TOOLS = new Set(['write_collection']);
+
 const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
 	describe_workspace: { labelKey: 'pod.agent.tool.describeWorkspace', icon: 'lucide:book-open' },
 	read_collection: { labelKey: 'pod.agent.tool.readCollection', icon: 'lucide:table' },
 	write_collection: { labelKey: 'pod.agent.tool.writeCollection', icon: 'lucide:database' },
 	spawn_subagent: { labelKey: 'pod.agent.tool.delegateTask', icon: 'lucide:network' },
 	list_skills: { labelKey: 'pod.agent.tool.listSkills', icon: 'lucide:library' },
-	read_skill: { labelKey: 'pod.agent.tool.readSkill', icon: 'lucide:book-marked' }
+	read_skill: { labelKey: 'pod.agent.tool.readSkill', icon: 'lucide:book-marked' },
+	list_sandbox_agents: { labelKey: 'pod.agent.tool.listSandboxAgents', icon: 'lucide:users' },
+	read_sandbox_agent: { labelKey: 'pod.agent.tool.readSandboxAgent', icon: 'lucide:scan-search' },
+	message_sandbox_agent: { labelKey: 'pod.agent.tool.messageSandboxAgent', icon: 'lucide:send' },
+	await_sandbox_agent: { labelKey: 'pod.agent.tool.awaitSandboxAgent', icon: 'lucide:hourglass' }
 };
 
 /**
@@ -126,7 +154,23 @@ const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
  * A generic scan of the input would surface `limit` as readily as `collection`, and `collection` is
  * the one field that tells two reads apart.
  */
-const DETAIL_KEYS = ['collection', 'task', 'action', 'path', 'filePath', 'query', 'name'] as const;
+const DETAIL_KEYS = [
+	'sessionId',
+	'collection',
+	'task',
+	'action',
+	'path',
+	'filePath',
+	'query',
+	'name'
+] as const;
+
+const SANDBOX_AGENT_TOOLS = new Set([
+	'list_sandbox_agents',
+	'read_sandbox_agent',
+	'message_sandbox_agent',
+	'await_sandbox_agent'
+]);
 
 /**
  * The conversation as the panel shows it.
@@ -189,7 +233,16 @@ export function toPanelMessages(
 			const id = record.norbital_id;
 			const content = stored?.message.content;
 			if (typeof id === 'string' && typeof content === 'string') {
-				output = [{ kind: 'checkpoint', key: id, summary: content, before: output }];
+				const parsed = parseStoredSummary(content);
+				output = [
+					{
+						kind: 'checkpoint',
+						key: id,
+						summary: parsed.text,
+						before: output,
+						fold: parsed.fold
+					}
+				];
 				continue;
 			}
 		}
@@ -197,16 +250,23 @@ export function toPanelMessages(
 			const stored = storedMessage(record);
 			const id = record.norbital_id;
 			const content = stored?.message.content;
-			const verdict = typeof content === 'string' ? parseStoredGoalVerdict(content) : null;
-			if (typeof id === 'string' && verdict) {
-				output.push({
-					kind: 'goal',
-					key: id,
-					achieved: verdict.achieved,
-					summary: verdict.summary,
-					gaps: verdict.gaps
-				});
-				continue;
+			if (typeof id === 'string' && typeof content === 'string') {
+				const scheduled = parseStoredVerifierScheduled(content);
+				if (scheduled) {
+					output.push({ kind: 'verifier', key: id, prompt: scheduled });
+					continue;
+				}
+				const verdict = parseStoredGoalVerdict(content);
+				if (verdict) {
+					output.push({
+						kind: 'goal',
+						key: id,
+						achieved: verdict.achieved,
+						summary: verdict.summary,
+						gaps: verdict.gaps
+					});
+					continue;
+				}
 			}
 		}
 		output.push(...toPanelRow(record, context, 0));
@@ -315,7 +375,12 @@ function toToolCall(
 		: metadata
 			? null
 			: humanize(name);
-	const icon = mcpParsed ? 'lucide:plug' : (metadata?.icon ?? 'lucide:wrench');
+	const icon = mcpParsed
+		? 'lucide:plug'
+		: SANDBOX_AGENT_TOOLS.has(name)
+			? (metadata?.icon ?? 'lucide:users')
+			: (metadata?.icon ?? 'lucide:wrench');
+	const family = mcpParsed ? 'mcp' : SANDBOX_AGENT_TOOLS.has(name) ? 'sandbox' : null;
 	const requests =
 		answered && isRecord(output) && output.resultType === 'input_required' && Array.isArray(output.requests)
 			? output.requests
@@ -342,6 +407,7 @@ function toToolCall(
 		error: error === null ? null : clamp(error),
 		state,
 		elicitation,
+		family,
 		children
 	};
 }

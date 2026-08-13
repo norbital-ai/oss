@@ -123,60 +123,87 @@ export async function mutateChatSession<T>(
 	});
 }
 
+function pushChatMessage(
+	session: MutableChatSessionAggregate,
+	turnId: string,
+	message: AiMessage,
+	extra: Readonly<Record<string, unknown>> = {}
+): string {
+	const id = v7();
+	const lastSequence = session.messages.at(-1)?.seq ?? 0;
+	session.messages.push({
+		norbital_id: id,
+		turn_id: turnId,
+		role: message.role,
+		seq: lastSequence + 1,
+		parts: [message],
+		model: typeof extra.model === 'string' ? extra.model : null,
+		usage:
+			extra.usage && typeof extra.usage === 'object' && !Array.isArray(extra.usage)
+				? (extra.usage as Readonly<Record<string, unknown>>)
+				: null,
+		plan_mode: extra.plan_mode === true,
+		goal_mode: extra.goal_mode === true,
+		kind:
+			extra.kind === 'reasoning' ||
+			extra.kind === 'summary' ||
+			extra.kind === 'usage' ||
+			extra.kind === 'goal'
+				? extra.kind
+				: 'normal',
+		status: extra.status === 'streaming' || extra.status === 'aborted' ? extra.status : 'complete',
+		queue_status:
+			extra.queue_status === 'queued' ||
+			extra.queue_status === 'released' ||
+			extra.queue_status === 'removed'
+				? extra.queue_status
+				: 'live',
+		release_mode:
+			extra.release_mode === 'step' || extra.release_mode === 'turn' ? extra.release_mode : null,
+		author_user_id: typeof extra.author_user_id === 'string' ? extra.author_user_id : null,
+		author_display_name:
+			typeof extra.author_display_name === 'string' ? extra.author_display_name : null,
+		source_provider: typeof extra.source_provider === 'string' ? extra.source_provider : null,
+		source_conversation_id:
+			typeof extra.source_conversation_id === 'string' ? extra.source_conversation_id : null,
+		source_message_id: typeof extra.source_message_id === 'string' ? extra.source_message_id : null,
+		source_deleted_at: typeof extra.source_deleted_at === 'string' ? extra.source_deleted_at : null,
+		durable_ordinal: typeof extra.durable_ordinal === 'number' ? extra.durable_ordinal : null
+	});
+	return id;
+}
+
+function pushChatTurn(
+	session: MutableChatSessionAggregate,
+	input: { readonly model: string; readonly parentTurnId?: string; readonly subagentId?: string }
+): string {
+	const now = new Date().toISOString();
+	const id = v7();
+	session.turns.push({
+		norbital_id: id,
+		prompt_message_id: null,
+		status: 'running',
+		model: input.model,
+		parent_turn_id: input.parentTurnId ?? null,
+		subagent_id: input.subagentId ?? null,
+		error: null,
+		started_at: now,
+		heartbeat_at: now,
+		ended_at: null,
+		usage_settled_at: null
+	});
+	return id;
+}
+
 export async function appendChatMessage(
 	sessionId: string,
 	turnId: string,
 	message: AiMessage,
 	extra: Readonly<Record<string, unknown>> = {}
 ): Promise<string> {
-	return mutateChatSession(sessionId, (session) => {
-		const id = v7();
-		const lastSequence = session.messages.at(-1)?.seq ?? 0;
-		const stored: ChatSessionMessage = {
-			norbital_id: id,
-			turn_id: turnId,
-			role: message.role,
-			seq: lastSequence + 1,
-			parts: [message],
-			model: typeof extra.model === 'string' ? extra.model : null,
-			usage:
-				extra.usage && typeof extra.usage === 'object' && !Array.isArray(extra.usage)
-					? (extra.usage as Readonly<Record<string, unknown>>)
-					: null,
-			plan_mode: extra.plan_mode === true,
-			goal_mode: extra.goal_mode === true,
-			kind:
-				extra.kind === 'reasoning' ||
-				extra.kind === 'summary' ||
-				extra.kind === 'usage' ||
-				extra.kind === 'goal'
-					? extra.kind
-					: 'normal',
-			status:
-				extra.status === 'streaming' || extra.status === 'aborted' ? extra.status : 'complete',
-			queue_status:
-				extra.queue_status === 'queued' ||
-				extra.queue_status === 'released' ||
-				extra.queue_status === 'removed'
-					? extra.queue_status
-					: 'live',
-			release_mode:
-				extra.release_mode === 'step' || extra.release_mode === 'turn' ? extra.release_mode : null,
-			author_user_id: typeof extra.author_user_id === 'string' ? extra.author_user_id : null,
-			author_display_name:
-				typeof extra.author_display_name === 'string' ? extra.author_display_name : null,
-			source_provider: typeof extra.source_provider === 'string' ? extra.source_provider : null,
-			source_conversation_id:
-				typeof extra.source_conversation_id === 'string' ? extra.source_conversation_id : null,
-			source_message_id:
-				typeof extra.source_message_id === 'string' ? extra.source_message_id : null,
-			source_deleted_at:
-				typeof extra.source_deleted_at === 'string' ? extra.source_deleted_at : null,
-			durable_ordinal: typeof extra.durable_ordinal === 'number' ? extra.durable_ordinal : null
-		};
-		session.messages.push(stored);
-		return id;
-	});
+	return mutateChatSession(sessionId, (session) =>
+		pushChatMessage(session, turnId, message, extra)
+	);
 }
 
 export async function updateChatMessage(
@@ -195,23 +222,47 @@ export async function appendChatTurn(
 	sessionId: string,
 	input: { readonly model: string; readonly parentTurnId?: string; readonly subagentId?: string }
 ): Promise<string> {
-	return mutateChatSession(sessionId, (session) => {
-		const now = new Date().toISOString();
-		const id = v7();
-		session.turns.push({
-			norbital_id: id,
-			prompt_message_id: null,
-			status: 'running',
-			model: input.model,
-			parent_turn_id: input.parentTurnId ?? null,
-			subagent_id: input.subagentId ?? null,
-			error: null,
-			started_at: now,
-			heartbeat_at: now,
-			ended_at: null,
-			usage_settled_at: null
-		});
-		return id;
+	return mutateChatSession(sessionId, (session) => pushChatTurn(session, input));
+}
+
+/**
+ * Persist the root turn, user message, and any system notices in one aggregate write.
+ *
+ * The hosted start path has a two-second guest budget. Opening those rows as separate
+ * `mutateChatSession` transactions spent that budget on round-trips before admission.
+ */
+export async function openInteractiveAgentTurn(input: {
+	readonly sessionId: string;
+	readonly model: string;
+	readonly userMessage: string;
+	readonly userExtra?: Readonly<Record<string, unknown>>;
+	readonly systemMessages?: readonly {
+		readonly content: string;
+		readonly extra?: Readonly<Record<string, unknown>>;
+	}[];
+}): Promise<{ readonly turnId: string; readonly inputMessageId: string }> {
+	return mutateChatSession(input.sessionId, (session) => {
+		const turnId = pushChatTurn(session, { model: input.model });
+		const inputMessageId = pushChatMessage(
+			session,
+			turnId,
+			{ role: 'user', content: input.userMessage },
+			input.userExtra ?? {}
+		);
+		const turnIndex = session.turns.findIndex((candidate) => candidate.norbital_id === turnId);
+		const turn = session.turns[turnIndex];
+		if (turn) {
+			session.turns[turnIndex] = { ...turn, prompt_message_id: inputMessageId };
+		}
+		for (const notice of input.systemMessages ?? []) {
+			pushChatMessage(
+				session,
+				turnId,
+				{ role: 'system', content: notice.content },
+				notice.extra ?? {}
+			);
+		}
+		return { turnId, inputMessageId };
 	});
 }
 

@@ -1,5 +1,7 @@
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
-import type { AgentToolDefinition } from '$lib/authoring/automations/agent-tools.js';
+import {
+	PLATFORM_AGENT_READ_TOOL_NAMES
+} from '$lib/authoring/automations/platform-agent-tools.js';
 import type { BeforeApi } from '$lib/authoring/workspace/hook-api.js';
 import { createBeforeApi } from '$lib/server/collection/hook-api.server.js';
 import {
@@ -20,6 +22,7 @@ import {
 	appendChatMessage,
 	appendChatTurn,
 	mutateChatSession,
+	openInteractiveAgentTurn,
 	readChatSession,
 	updateChatTurn
 } from '$lib/server/agent/chat-session.server.js';
@@ -27,24 +30,46 @@ import {
 	composeMentionContext,
 	type AgentMentionInput
 } from '$lib/server/agent/agent-mentions.server.js';
-import { executeMcpTool, resolveMcpToolSpecs } from '$lib/server/agent/mcp-tools.server.js';
+import { executeMcpTool } from '$lib/server/agent/mcp-tools.server.js';
+import {
+	allowedCollections,
+	assembleToolSpecs,
+	collectionReadInput,
+	sessionHasBoundSandbox,
+	skillReadInput,
+	type ResolvedTools
+} from '$lib/server/agent/tool-funnel.server.js';
 import {
 	acceptGoalStop,
 	countGoalVerdicts,
 	goalContinuationMessage,
 	MAX_GOAL_VERIFICATIONS,
 	replayGoalVerification,
+	readScheduledVerifierPrompt,
 	serializeGoalVerdict,
 	verifyGoalAchievement,
 	windowMessageFromStoredGoal
 } from '$lib/server/agent/goal-mode.server.js';
+import {
+	parseStoredVerifierScheduled,
+	serializeVerifierScheduled
+} from '$lib/shared/agent/goal-verdict.js';
+import {
+	PLAN_FOLD_INSTRUCTIONS,
+	resolveAgentIntent,
+	windowContentFromStoredSummary,
+	wrapPlanSummary
+} from '$lib/shared/agent/intent.js';
+import {
+	executeSandboxAgentTool,
+	isSandboxWaitResult,
+	listDueSandboxWaiters,
+	loadSandboxSession,
+	markSandboxWaitResumed,
+	sandboxWaitResumeMessage
+} from '$lib/server/agent/sandbox-agents.server.js';
 import { listSkillSummaries, readSkillContent } from '$lib/skills/registry.server.js';
-import type {
-	AiChatResult,
-	AiMessage,
-	AiToolCall,
-	AiToolSpec
-} from '@norbital-ai/platform-utils/runtime/binding';
+import type { AiChatResult, AiMessage, AiToolCall } from '@norbital-ai/platform-utils/runtime/binding';
 import {
 	automationReplayStorage,
 	isAutomationEffectYield,
@@ -55,16 +80,6 @@ import { resolveRequestorBaseScope } from '$lib/server/bootstrap/resolve_workspa
 import { z } from 'zod';
 
 const recordSchema = z.record(z.string(), z.unknown());
-const readInput = z.object({
-	collection: z.string(),
-	where: recordSchema.optional(),
-	limit: z.number().int().min(1).max(250).optional()
-});
-const readSkillInput = z.object({
-	name: z.string(),
-	/** Omitted reads `SKILL.md`; a path reads one of the files that skill listed. */
-	file: z.string().optional()
-});
 const writeInput = z.discriminatedUnion('action', [
 	z.object({ collection: z.string(), action: z.literal('create'), record: recordSchema }),
 	z.object({
@@ -99,10 +114,15 @@ type AgentRunOptions = {
 	 * model sees the same restriction the tool list already enforces.
 	 */
 	readonly planMode?: boolean;
+	/** `do` (default) or `plan`. `planMode: true` is the same as `intent: 'plan'`. */
+	readonly intent?: 'do' | 'plan';
 	/**
-	 * Work toward the request, then an independent verifier decides whether this turn may stop.
-	 *
-	 * Ignored when `planMode` is on — plan turns produce a plan, they do not execute one.
+	 * Prompt the independent end-action verifier reads. Omitted uses the intent default.
+	 * The composer shows this same text.
+	 */
+	readonly verifierPrompt?: string;
+	/**
+	 * @deprecated Every root turn verifies. Kept so older callers still type-check.
 	 */
 	readonly goalMode?: boolean;
 	/**
@@ -218,175 +238,17 @@ function usageTokens(usage: unknown): number {
 	return input + output;
 }
 
-function tenantCollectionNames(): string[] {
-	return Object.values(getTenantManifest().collections)
-		.filter((collection) => collection.system !== true)
-		.map((collection) => collection.collection_name)
-		.sort();
-}
-
-/**
- * The collections this run may name, narrowed by its spec.
- *
- * Not the security boundary: `read_collection` goes through `findMany` without elevation, so the
- * requestor's policy decides what actually comes back. This narrows on top of that, so an agent
- * declared for `quotes` cannot wander into `accounts` even where its requestor could.
- */
-function allowedCollections(spec: AgentAutomationSpec): Set<string> {
-	const all = tenantCollectionNames();
-	const selected = spec.collections ? [...spec.collections] : all;
-	const unknown = selected.filter((collection) => !all.includes(collection));
-	if (unknown.length > 0) {
-		throw new Error(`Agent references unknown collections: ${unknown.join(', ')}`);
-	}
-	return new Set(selected);
-}
-
-function jsonSchema(definition: AgentToolDefinition): unknown {
-	return z.toJSONSchema(definition.input);
-}
-
-/**
- * What one run may call, resolved once.
- *
- * `hostTools` is a *set*, not a list to search: dispatch has to ask "is this name a host tool this
- * run was granted" and nothing else. Resolving it up front is also what makes the host's `list()` one
- * call per run rather than one per tool call.
- */
-type ResolvedTools = {
-	readonly specs: readonly AiToolSpec[];
-	readonly hostTools: ReadonlySet<string>;
-	readonly mcpTools: ReadonlySet<string>;
-};
-
-/**
- * The host tools this run may call, described for the model.
- *
- * Default deny, and the deny is structural: nothing is added unless `spec.hostTools` names it. A host
- * tool runs in the host process holding host credentials, so it is not something an agent should
- * inherit by being an agent — the workspace has to have said so, in source, per agent.
- *
- * The shadow check is repeated here rather than left to `assertHostAgentTools` at startup. That gate
- * is the one that produces a good message at a good time, but it belongs to the host, and Core is a
- * host this package does not run. A collision that slipped past it must still fail loudly before any
- * model call, not resolve to whichever branch of `executeTool` is reached first.
- */
-async function hostToolSpecs(
-	spec: AgentAutomationSpec,
-	taken: ReadonlySet<string>
-): Promise<readonly AiToolSpec[]> {
-	const named = spec.hostTools ?? [];
-	if (named.length === 0) return [];
-	const binding = requireRuntimeFacility('agentTools');
-	const available = new Map((await binding.list()).map((tool) => [tool.name, tool]));
-	return named.map((name) => {
-		const tool = available.get(name);
-		if (!tool) throw new Error(`Agent references unknown host tool: ${name}`);
-		if (taken.has(name)) {
-			throw new Error(
-				`Host tool ${name} collides with a workspace tool of the same name; the agent cannot tell them apart`
-			);
-		}
-		return { name: tool.name, description: tool.description, inputSchema: tool.inputSchema };
-	});
-}
-
 async function resolveTools(
 	spec: AgentAutomationSpec,
 	options: { readonly canSpawnSubagent: boolean; readonly planMode: boolean }
 ): Promise<ResolvedTools> {
-	const collections = allowedCollections(spec);
-	const tools: AiToolSpec[] = [
-		{
-			name: 'describe_workspace',
-			description: 'Describe the workspace schema and the collections relevant to this run.',
-			inputSchema: { type: 'object', properties: {}, additionalProperties: false }
-		},
-		{
-			name: 'read_collection',
-			description: 'Read policy-visible records from an allowed collection.',
-			inputSchema: z.toJSONSchema(readInput)
-		},
-		{
-			name: 'list_skills',
-			description:
-				'List the skills available here, with their descriptions and the files each one carries. Skills document how the Norbital platform behaves and how this workspace expects to be worked with.',
-			inputSchema: { type: 'object', properties: {}, additionalProperties: false }
-		},
-		{
-			// The description names the failure it exists to prevent. A model that has never seen this
-			// platform does not know that it has never seen this platform, so "documentation is
-			// available" reads as optional and goes uncalled; "your training data does not contain
-			// this" is the part that makes the call happen instead of a guess.
-			name: 'read_skill',
-			description:
-				'Read a skill, or one of its reference files. Your training data does not contain this platform, so call this before answering any question about how Norbital itself behaves — approvals, permissions, record history, schema changes, or your own capabilities.',
-			inputSchema: z.toJSONSchema(readSkillInput)
-		}
-	];
-	if (options.canSpawnSubagent && !options.planMode) {
-		tools.push({
-			name: 'spawn_subagent',
-			description:
-				'Spawn one focused subagent for a delegated task. The child uses the same approved data and workspace tools, streams its own transcript, and returns its final answer.',
-			inputSchema: {
-				type: 'object',
-				properties: {
-					task: { type: 'string', minLength: 1 }
-				},
-				required: ['task'],
-				additionalProperties: false
-			}
-		});
-	}
-	// Plan mode withholds every mutator and every host/workspace tool so the model cannot ask for a
-	// change that would only be refused at execution time.
-	if (!options.planMode && (spec.access ?? 'read') === 'write') {
-		tools.push({
-			name: 'write_collection',
-			description: 'Create, update, or delete records through Pod collection operations.',
-			// OpenAI-compatible providers require function parameters to have an object root.
-			// `z.discriminatedUnion()` emits a root `oneOf`, so advertise the shared envelope here
-			// and keep `writeInput.parse()` below as the stricter per-action execution boundary.
-			inputSchema: {
-				type: 'object',
-				properties: {
-					collection: { type: 'string' },
-					action: { type: 'string', enum: ['create', 'update', 'delete'] },
-					id: { type: 'string', format: 'uuid' },
-					record: { type: 'object', additionalProperties: true }
-				},
-				required: ['collection', 'action'],
-				additionalProperties: false
-			}
-		});
-	}
-	if (!options.planMode) {
-		const registered = getTenantWorkspace().registered.agentTools;
-		for (const name of spec.tools ?? []) {
-			const definition = registered[name];
-			if (!definition) throw new Error(`Agent references unknown tenant tool: ${name}`);
-			tools.push({
-				name,
-				description: definition.description,
-				inputSchema: jsonSchema(definition)
-			});
-		}
-	}
-	const taken = new Set(tools.map((tool) => tool.name));
-	const hostSpecs = options.planMode ? [] : await hostToolSpecs(spec, taken);
-	tools.push(...hostSpecs);
-	for (const tool of hostSpecs) taken.add(tool.name);
-	const mcp = options.planMode
-		? { specs: [], names: new Set<string>() }
-		: await resolveMcpToolSpecs(spec, taken);
-	tools.push(...mcp.specs);
-	void collections;
-	return {
-		specs: tools,
-		hostTools: new Set(hostSpecs.map((tool) => tool.name)),
-		mcpTools: mcp.names
-	};
+	return assembleToolSpecs({
+		surface: 'agent',
+		spec,
+		planMode: options.planMode,
+		canSpawnSubagent: options.canSpawnSubagent,
+		sandboxBound: sessionHasBoundSandbox('agent')
+	});
 }
 
 const MUTATION_METHODS = new Set(['create', 'update', 'delete']);
@@ -425,22 +287,25 @@ function agentToolApi(spec: AgentAutomationSpec): BeforeApi {
 	return { ...api, db } as unknown as BeforeApi;
 }
 
-const PLAN_MODE_READ_TOOLS = new Set([
-	'describe_workspace',
-	'list_skills',
-	'read_skill',
-	'read_collection'
-]);
+const PLAN_MODE_READ_TOOLS = new Set<string>(PLATFORM_AGENT_READ_TOOL_NAMES);
 
 async function executeTool(
 	spec: AgentAutomationSpec,
 	resolved: ResolvedTools,
 	call: AiToolCall,
-	planMode: boolean
+	planMode: boolean,
+	sessionId: string
 ): Promise<Record<string, unknown>> {
 	if (planMode && !PLAN_MODE_READ_TOOLS.has(call.name)) {
 		throw new Error('Permission denied: this turn is in plan mode.');
 	}
+	const sandbox = await executeSandboxAgentTool({
+		name: call.name,
+		args: call.input,
+		sessionId,
+		spec
+	});
+	if (sandbox) return sandbox;
 	const ctx = getWorkspace({ provision: true });
 	const collections = allowedCollections(spec);
 	if (call.name === 'describe_workspace') {
@@ -453,11 +318,11 @@ async function executeTool(
 		return { skills: await listSkillSummaries() };
 	}
 	if (call.name === 'read_skill') {
-		const input = readSkillInput.parse(call.input);
+		const input = skillReadInput.parse(call.input);
 		return { ...(await readSkillContent(input.name, input.file)) };
 	}
 	if (call.name === 'read_collection') {
-		const input = readInput.parse(call.input);
+		const input = collectionReadInput.parse(call.input);
 		if (!collections.has(input.collection)) {
 			throw new Error(`Agent cannot read collection ${input.collection}`);
 		}
@@ -498,7 +363,7 @@ async function executeTool(
 		return executeMcpTool(spec, call.name, call.input);
 	}
 	const definition = getTenantWorkspace().registered.agentTools[call.name];
-	if (!definition || !(spec.tools ?? []).includes(call.name)) {
+	if (!definition || !resolved.workspaceTools.has(call.name)) {
 		throw new Error(`Agent cannot execute tenant tool ${call.name}`);
 	}
 	return objectValue(await definition.run(agentToolApi(spec), definition.input.parse(call.input)));
@@ -568,20 +433,33 @@ async function loadMessages(sessionId: string): Promise<{ messages: AiMessage[] 
 		// A checkpoint re-enters the window as the user's own recap rather than as the system message it
 		// is stored as. It has to read as conversation the model may rely on, and a window opening on a
 		// `system` role beside the spec's own system prompt is two different things claiming one voice.
-		messages.push(
-			row.kind === 'summary'
-				? {
-						role: 'user',
-						content: `<conversation-summary>\n${message.content}\n</conversation-summary>`
-					}
-				: row.kind === 'goal'
-					? windowMessageFromStoredGoal(
-							typeof message.content === 'string' ? message.content : ''
-						)
-					: message
-		);
+		const next = windowMessageFromStoredRow(row.kind, message);
+		if (next) messages.push(next);
 	}
 	return { messages };
+}
+
+function windowMessageFromGoalRow(content: string): AiMessage | null {
+	if (parseStoredVerifierScheduled(content)) return null;
+	return windowMessageFromStoredGoal(content);
+}
+
+function windowMessageFromStoredRow(
+	kind: string | undefined,
+	message: AiMessage
+): AiMessage | null {
+	if (kind === 'summary') {
+		return {
+			role: 'user',
+			content: windowContentFromStoredSummary(
+				typeof message.content === 'string' ? message.content : ''
+			)
+		};
+	}
+	if (kind === 'goal') {
+		return windowMessageFromGoalRow(typeof message.content === 'string' ? message.content : '');
+	}
+	return message;
 }
 
 export type AgentRunResult = {
@@ -828,6 +706,7 @@ async function compactWindow(input: {
 	readonly turnId: string;
 	readonly spec: AgentAutomationSpec;
 	readonly instructions?: string;
+	readonly fold?: 'plan';
 }): Promise<string> {
 	const ai = requireRuntimeFacility('ai');
 	const steer = input.instructions
@@ -848,16 +727,18 @@ async function compactWindow(input: {
 	});
 	const summary = result.text.trim();
 	if (!summary) throw new Error('The summarizer returned nothing to checkpoint');
+	const stored = input.fold === 'plan' ? wrapPlanSummary(summary) : summary;
 	// The summariser's own usage rides on the checkpoint row, so compacting is counted like any other
 	// call rather than being spend that never appears in the total.
-	await input.writer.persist({ role: 'system', content: summary }, input.turnId, {
+	await input.writer.persist({ role: 'system', content: stored }, input.turnId, {
 		kind: 'summary',
 		...(result.usage ? { usage: objectValue(result.usage) } : {})
 	});
 	// The turn continues against the recap alone; everything it replaced is still in the transcript.
+	// Storage and the in-memory window share one tag: `<plan-summary>` or `<conversation-summary>`.
 	input.messages.splice(0, input.messages.length, {
 		role: 'user',
-		content: `<conversation-summary>\n${summary}\n</conversation-summary>`
+		content: windowContentFromStoredSummary(stored)
 	});
 	return summary;
 }
@@ -873,6 +754,7 @@ async function runAgentLoop(input: {
 	readonly planMode: boolean;
 	readonly goalMode: boolean;
 	readonly userRequest: string;
+	readonly verifierPrompt: string;
 }): Promise<LoopResult> {
 	const resolved = await resolveTools(input.spec, {
 		canSpawnSubagent: input.depth === 0 && !input.planMode,
@@ -961,11 +843,20 @@ async function runAgentLoop(input: {
 					spec: input.spec,
 					writer: input.writer,
 					turnId: input.turnId,
-					durable: false
+					durable: false,
+					verifierPrompt: input.verifierPrompt
 				})
 			) {
 				continue;
 			}
+			await foldSettledPlanWindow({
+				foldAsCheckpoint: input.planMode,
+				messages: input.messages,
+				writer: input.writer,
+				turnId: input.turnId,
+				spec: input.spec,
+				durable: false
+			});
 			return { text: finalText, consumedTokens };
 		}
 		for (const call of calls) {
@@ -986,7 +877,23 @@ async function runAgentLoop(input: {
 					});
 					output = { text: child.text, turnId: child.turnId };
 				} else {
-					output = await executeTool(input.spec, resolved, call, input.planMode);
+					output = await executeTool(
+						input.spec,
+						resolved,
+						call,
+						input.planMode,
+						input.writer.sessionId
+					);
+					if (isSandboxWaitResult(output)) {
+						const toolMessage: AiMessage = {
+							role: 'tool',
+							content: JSON.stringify(output),
+							toolCallId: call.id
+						};
+						input.messages.push(toolMessage);
+						await input.writer.persist(toolMessage, input.turnId);
+						return { text: finalText, consumedTokens };
+					}
 				}
 			} catch (cause) {
 				output = { error: cause instanceof Error ? cause.message : String(cause) };
@@ -1031,7 +938,8 @@ async function runSubagent(input: {
 			depth: input.depth,
 			planMode: input.planMode,
 			goalMode: false,
-			userRequest: input.task
+			userRequest: input.task,
+			verifierPrompt: ''
 		});
 		await finishTurn(input.writer.sessionId, turnId, 'succeeded');
 		return { text: result.text, turnId };
@@ -1053,9 +961,11 @@ function lastConsumedOrdinal(): number {
 }
 
 /**
- * When the main agent would stop in goal mode, an independent verifier decides whether it may.
+ * Turn-stopping end-action for every root intent, including plan: an independent verifier
+ * decides whether the main agent may stop.
  *
- * Returns true when the loop should continue. Subagents and plan mode never enter this gate.
+ * Returns true when the loop should continue. Subagents never enter this gate. After a stop,
+ * the caller folds a settled plan window — this function does not.
  */
 async function continueAfterGoalVerification(input: {
 	readonly goalMode: boolean;
@@ -1066,6 +976,7 @@ async function continueAfterGoalVerification(input: {
 	readonly writer: TranscriptWriter;
 	readonly turnId: string;
 	readonly durable: boolean;
+	readonly verifierPrompt: string;
 }): Promise<boolean> {
 	if (!input.goalMode || input.depth !== 0) return false;
 	const attempts = await countGoalVerdicts(
@@ -1074,10 +985,12 @@ async function continueAfterGoalVerification(input: {
 		input.durable ? { beforeOrdinal: lastConsumedOrdinal() + 1 } : undefined
 	);
 	if (attempts >= MAX_GOAL_VERIFICATIONS) return false;
+	const scheduled = await readScheduledVerifierPrompt(input.writer.sessionId, input.turnId);
 	const request = {
 		spec: input.spec,
 		userRequest: input.userRequest,
-		messages: input.messages
+		messages: input.messages,
+		verifierPrompt: scheduled ?? input.verifierPrompt
 	};
 	const verdict = input.durable
 		? replayGoalVerification(request)
@@ -1101,6 +1014,44 @@ async function continueAfterGoalVerification(input: {
 	if (acceptGoalStop(verdict, attempts + 1)) return false;
 	input.messages.push(goalContinuationMessage(verdict));
 	return true;
+}
+
+async function resumeSandboxWaiters(completedSessionId: string): Promise<void> {
+	const waiters = await listDueSandboxWaiters(completedSessionId);
+	if (waiters.length === 0) return;
+	// Circular: automation-dispatch owns admission and already imports this loop.
+	const { admitAgentTurn, channelAgentAutomationName, INTERACTIVE_AGENT_AUTOMATION_NAME } =
+		await import('$lib/server/run/automation-dispatch.server.js');
+	for (const waiter of waiters) {
+		try {
+			const spec = await interactiveAgentSpec(waiter.task);
+			const opened = await prepareInteractiveAgentTurn({
+				sessionId: waiter.waiterSessionId,
+				spec,
+				message: await sandboxWaitResumeMessage(waiter.targetSessionId)
+			});
+			const row = await loadSandboxSession(waiter.waiterSessionId);
+			await admitAgentTurn(getWorkspace({ provision: true }), {
+				automationName: row.channel_key
+					? channelAgentAutomationName(row.channel_key)
+					: INTERACTIVE_AGENT_AUTOMATION_NAME,
+				triggerKey: `turn:${waiter.waiterSessionId}:${opened.turnId}`,
+				originScope: getWorkspace({ provision: true }).baseScope,
+				snapshot: {
+					sessionId: waiter.waiterSessionId,
+					runId: waiter.runId,
+					turnId: opened.turnId,
+					promptContent: opened.promptContent,
+					spec,
+					input: opened.promptContent,
+					...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {})
+				}
+			});
+			await markSandboxWaitResumed(waiter);
+		} catch (error) {
+			console.error('[sandbox-wait]', { runId: waiter.runId, error });
+		}
+	}
 }
 
 function requestorIdFromScope(scope: Record<string, unknown> | undefined): string | null {
@@ -1148,6 +1099,8 @@ export type DurableAgentTurnSnapshot = {
 	readonly inputMessageId?: string | null;
 	readonly planMode?: boolean;
 	readonly goalMode?: boolean;
+	readonly intent?: 'do' | 'plan';
+	readonly verifierPrompt?: string;
 	readonly compact?: { readonly instructions?: string };
 	readonly mentions?: readonly AgentMentionInput[];
 	readonly inputMetadata?: Record<string, unknown>;
@@ -1171,7 +1124,11 @@ function snapshotFromRecord(value: unknown): DurableAgentTurnSnapshot | null {
 	const specValue = record.spec;
 	if (!specValue || typeof specValue !== 'object' || Array.isArray(specValue)) return null;
 	const spec = specValue as AgentAutomationSpec;
-	if (spec.kind !== 'agent' || typeof spec.task !== 'string' || typeof spec.description !== 'string') {
+	if (
+		spec.kind !== 'agent' ||
+		typeof spec.task !== 'string' ||
+		typeof spec.description !== 'string'
+	) {
 		return null;
 	}
 	return {
@@ -1184,22 +1141,22 @@ function snapshotFromRecord(value: unknown): DurableAgentTurnSnapshot | null {
 		...(typeof record.inputMessageId === 'string' ? { inputMessageId: record.inputMessageId } : {}),
 		...(record.planMode === true ? { planMode: true } : {}),
 		...(record.goalMode === true ? { goalMode: true } : {}),
+		...(record.intent === 'do' || record.intent === 'plan' ? { intent: record.intent } : {}),
+		...(typeof record.verifierPrompt === 'string' && record.verifierPrompt
+			? { verifierPrompt: record.verifierPrompt }
+			: {}),
 		...(record.compact && typeof record.compact === 'object' && !Array.isArray(record.compact)
 			? {
 					compact: {
 						...((record.compact as { instructions?: unknown }).instructions
 							? {
-									instructions: String(
-										(record.compact as { instructions?: unknown }).instructions
-									)
+									instructions: String((record.compact as { instructions?: unknown }).instructions)
 								}
 							: {})
 					}
 				}
 			: {}),
-		...(Array.isArray(record.mentions)
-			? { mentions: record.mentions as AgentMentionInput[] }
-			: {}),
+		...(Array.isArray(record.mentions) ? { mentions: record.mentions as AgentMentionInput[] } : {}),
 		...(record.inputMetadata &&
 		typeof record.inputMetadata === 'object' &&
 		!Array.isArray(record.inputMetadata)
@@ -1233,18 +1190,8 @@ async function loadDurableTurnWindow(
 	for (const row of replay) {
 		const message = row.parts?.[0];
 		if (!message) continue;
-		messages.push(
-			row.kind === 'summary'
-				? {
-						role: 'user',
-						content: `<conversation-summary>\n${message.content}\n</conversation-summary>`
-					}
-				: row.kind === 'goal'
-					? windowMessageFromStoredGoal(
-							typeof message.content === 'string' ? message.content : ''
-						)
-					: message
-		);
+		const next = windowMessageFromStoredRow(row.kind, message);
+		if (next) messages.push(next);
 	}
 	messages.push({ role: 'user', content: promptContent });
 	return messages;
@@ -1284,6 +1231,7 @@ async function compactDurableWindow(input: {
 	readonly turnId: string;
 	readonly spec: AgentAutomationSpec;
 	readonly instructions?: string;
+	readonly fold?: 'plan';
 }): Promise<void> {
 	const steer = input.instructions
 		? `\n\nThe person asked you to focus on: ${input.instructions}`
@@ -1303,17 +1251,58 @@ async function compactDurableWindow(input: {
 	if (typeof summary !== 'string' || !summary.trim()) {
 		throw new Error('The summarizer returned nothing to checkpoint');
 	}
+	const stored = input.fold === 'plan' ? wrapPlanSummary(summary.trim()) : summary.trim();
 	const ordinal = lastConsumedOrdinal();
 	if (!(await turnHasDurableOrdinal(input.writer.sessionId, input.turnId, ordinal))) {
-		await input.writer.persist({ role: 'system', content: summary.trim() }, input.turnId, {
+		await input.writer.persist({ role: 'system', content: stored }, input.turnId, {
 			kind: 'summary',
 			durable_ordinal: ordinal
 		});
 	}
 	input.messages.splice(0, input.messages.length, {
 		role: 'user',
-		content: `<conversation-summary>\n${summary.trim()}\n</conversation-summary>`
+		content: windowContentFromStoredSummary(stored)
 	});
+}
+
+/**
+ * Fold a settled plan turn into a `kind: 'summary'` checkpoint the next window will start from.
+ *
+ * A failed fold must not fail a finished turn. Durable replay still rethrows when the receipt is
+ * pending, so the fold can run again on the next attempt.
+ */
+async function foldSettledPlanWindow(input: {
+	readonly foldAsCheckpoint: boolean;
+	readonly messages: AiMessage[];
+	readonly writer: TranscriptWriter;
+	readonly turnId: string;
+	readonly spec: AgentAutomationSpec;
+	readonly durable: boolean;
+}): Promise<void> {
+	if (!input.foldAsCheckpoint || input.messages.length === 0) return;
+	try {
+		if (input.durable) {
+			await compactDurableWindow({
+				messages: input.messages,
+				writer: input.writer,
+				turnId: input.turnId,
+				spec: input.spec,
+				instructions: PLAN_FOLD_INSTRUCTIONS,
+				fold: 'plan'
+			});
+		} else {
+			await compactWindow({
+				messages: input.messages,
+				writer: input.writer,
+				turnId: input.turnId,
+				spec: input.spec,
+				instructions: PLAN_FOLD_INSTRUCTIONS,
+				fold: 'plan'
+			});
+		}
+	} catch (cause) {
+		if (input.durable && automationReplayStorage.getStore()?.pending) throw cause;
+	}
 }
 
 function replayProviderTurn(input: {
@@ -1357,7 +1346,12 @@ async function applySettledProviderTurn(input: {
 	readonly planMode: boolean;
 	readonly result: AiChatResult;
 	consumedTokens: number;
-}): Promise<{ readonly done: boolean; readonly text: string; readonly consumedTokens: number }> {
+}): Promise<{
+	readonly done: boolean;
+	readonly waiting?: boolean;
+	readonly text: string;
+	readonly consumedTokens: number;
+}> {
 	const ordinal = lastConsumedOrdinal();
 	const already = await turnHasDurableOrdinal(input.writer.sessionId, input.turnId, ordinal);
 	if (!already) {
@@ -1369,11 +1363,11 @@ async function applySettledProviderTurn(input: {
 			);
 		}
 		if (input.result.text) {
-			await input.writer.persist(
-				{ role: 'assistant', content: input.result.text },
-				input.turnId,
-				{ status: 'complete', model: input.spec.model ?? null, durable_ordinal: ordinal }
-			);
+			await input.writer.persist({ role: 'assistant', content: input.result.text }, input.turnId, {
+				status: 'complete',
+				model: input.spec.model ?? null,
+				durable_ordinal: ordinal
+			});
 		}
 		if (input.result.usage !== undefined) {
 			await input.writer.persist({ role: 'assistant', content: '' }, input.turnId, {
@@ -1443,7 +1437,28 @@ async function applySettledProviderTurn(input: {
 				input.messages.push(existing);
 				continue;
 			} else {
-				output = await executeTool(input.spec, input.resolved, call, input.planMode);
+				output = await executeTool(
+					input.spec,
+					input.resolved,
+					call,
+					input.planMode,
+					input.writer.sessionId
+				);
+				if (isSandboxWaitResult(output)) {
+					const toolMessage: AiMessage = {
+						role: 'tool',
+						content: JSON.stringify(output),
+						toolCallId: call.id
+					};
+					input.messages.push(toolMessage);
+					await input.writer.persist(toolMessage, input.turnId, { durable_ordinal: ordinal });
+					return {
+						done: true,
+						waiting: true,
+						text: finalText,
+						consumedTokens: input.consumedTokens
+					};
+				}
 			}
 		} catch (cause) {
 			if (isAutomationEffectYield(cause) || automationReplayStorage.getStore()?.pending) {
@@ -1479,6 +1494,7 @@ async function runDurableAgentLoop(input: {
 	readonly planMode: boolean;
 	readonly goalMode: boolean;
 	readonly userRequest: string;
+	readonly verifierPrompt: string;
 }): Promise<LoopResult> {
 	const resolved = await resolveTools(input.spec, {
 		canSpawnSubagent: input.depth === 0 && !input.planMode,
@@ -1536,6 +1552,9 @@ async function runDurableAgentLoop(input: {
 		consumedTokens = applied.consumedTokens;
 		if (applied.text) finalText = applied.text;
 		if (applied.done) {
+			if (applied.waiting) {
+				return { text: finalText, consumedTokens };
+			}
 			if (
 				await continueAfterGoalVerification({
 					goalMode: input.goalMode,
@@ -1545,11 +1564,20 @@ async function runDurableAgentLoop(input: {
 					spec: input.spec,
 					writer: input.writer,
 					turnId: input.turnId,
-					durable: true
+					durable: true,
+					verifierPrompt: input.verifierPrompt
 				})
 			) {
 				continue;
 			}
+			await foldSettledPlanWindow({
+				foldAsCheckpoint: input.planMode,
+				messages: input.messages,
+				writer: input.writer,
+				turnId: input.turnId,
+				spec: input.spec,
+				durable: true
+			});
 			return { text: finalText, consumedTokens };
 		}
 	}
@@ -1588,7 +1616,8 @@ async function runDurableSubagent(input: {
 			depth: input.depth,
 			planMode: input.planMode,
 			goalMode: false,
-			userRequest: input.task
+			userRequest: input.task,
+			verifierPrompt: ''
 		});
 		await finishTurn(input.writer.sessionId, turnId, 'succeeded');
 		return { text: result.text, turnId };
@@ -1658,6 +1687,7 @@ async function completeDurableRun(input: {
 			{ isElevated: true }
 		);
 	}
+	await resumeSandboxWaiters(input.sessionId);
 	return {
 		runId: input.runId,
 		status: 'success',
@@ -1677,7 +1707,9 @@ async function failDurableRun(input: {
 	readonly channel?: DurableAgentChannelDelivery;
 }): Promise<never> {
 	const message = input.cause instanceof Error ? input.cause.message : String(input.cause);
-	await input.writer.persist({ role: 'system', content: message }, input.turnId).catch(() => undefined);
+	await input.writer
+		.persist({ role: 'system', content: message }, input.turnId)
+		.catch(() => undefined);
 	let surfaced: unknown = input.cause;
 	try {
 		await finishTurn(input.sessionId, input.turnId, 'failed', message);
@@ -1704,6 +1736,7 @@ async function failDurableRun(input: {
 			{ isElevated: true }
 		).catch(() => undefined);
 	}
+	await resumeSandboxWaiters(input.sessionId).catch(() => undefined);
 	throw surfaced;
 }
 
@@ -1713,25 +1746,48 @@ export async function prepareInteractiveAgentTurn(input: {
 	readonly message: string;
 	readonly planMode?: boolean;
 	readonly goalMode?: boolean;
+	readonly intent?: 'do' | 'plan';
+	readonly verifierPrompt?: string;
 	readonly mentions?: readonly AgentMentionInput[];
 	readonly inputMetadata?: Record<string, unknown>;
-}): Promise<{ readonly turnId: string; readonly promptContent: string; readonly inputMessageId: string | null }> {
+}): Promise<{
+	readonly turnId: string;
+	readonly promptContent: string;
+	readonly inputMessageId: string | null;
+}> {
 	const ctx = getWorkspace({ provision: true });
-	const writer = createTranscriptWriter(input.sessionId);
-	const turnId = await createTurn({ writer, spec: input.spec });
 	const mentionContext = input.mentions?.length
 		? await composeMentionContext(ctx, input.mentions)
 		: null;
 	const promptContent = mentionContext ? `${input.message}\n\n${mentionContext}` : input.message;
-	const inputMessageId = await writer.persist({ role: 'user', content: input.message }, turnId, {
-		...(input.inputMetadata ?? {}),
-		...(input.planMode ? { plan_mode: true } : {}),
-		...(input.goalMode && !input.planMode ? { goal_mode: true } : {})
+	const resolved = resolveAgentIntent({
+		intent: input.intent,
+		planMode: input.planMode,
+		verifierPrompt: input.verifierPrompt,
+		message: input.message,
+		mentionCount: input.mentions?.length
 	});
-	if (inputMessageId) {
-		await updateChatTurn(input.sessionId, turnId, { prompt_message_id: inputMessageId });
-	}
-	return { turnId, promptContent, inputMessageId };
+	const opened = await openInteractiveAgentTurn({
+		sessionId: input.sessionId,
+		model: input.spec.model ?? 'host-default',
+		userMessage: input.message,
+		userExtra: {
+			...(input.inputMetadata ?? {}),
+			...(resolved.planMode ? { plan_mode: true } : {}),
+			...(resolved.verify ? { goal_mode: true } : {})
+		},
+		...(resolved.verify
+			? {
+					systemMessages: [
+						{
+							content: serializeVerifierScheduled(resolved.verifierPrompt),
+							extra: { kind: 'goal' }
+						}
+					]
+				}
+			: {})
+	});
+	return { turnId: opened.turnId, promptContent, inputMessageId: opened.inputMessageId };
 }
 
 export async function runDurableAgentAutomation(input: {
@@ -1801,14 +1857,24 @@ export async function runDurableAgentAutomation(input: {
 		}
 		const sessionId = snapshot?.sessionId ?? (await ensureRunSession(runId, ownerUserId));
 		const writer = createTranscriptWriter(sessionId);
-		const spec = snapshot?.spec ?? input.spec;
-		const planMode = snapshot?.planMode === true;
-		const goalMode = snapshot?.goalMode === true && !planMode;
+		const spec =
+			input.automationName === null
+				? await interactiveAgentSpec(
+						snapshot?.input ?? snapshot?.promptContent ?? input.spec.task,
+						snapshot?.spec.model ?? input.spec.model
+					)
+				: (snapshot?.spec ?? input.spec);
+		const resolved = resolveAgentIntent({
+			intent: snapshot?.intent,
+			planMode: snapshot?.planMode,
+			verifierPrompt: snapshot?.verifierPrompt,
+			message: snapshot?.input ?? snapshot?.promptContent
+		});
+		const planMode = resolved.planMode;
+		const goalMode = resolved.verify;
 		const incoming = asRecord(input.scope?.incoming_record);
 		const authoredRecord =
-			snapshotFromRecord(incoming) === null && Object.keys(incoming).length > 0
-				? incoming
-				: null;
+			snapshotFromRecord(incoming) === null && Object.keys(incoming).length > 0 ? incoming : null;
 		const promptContent =
 			snapshot?.promptContent ??
 			(authoredRecord ? `${spec.task}\n\n${JSON.stringify(authoredRecord)}` : spec.task);
@@ -1816,7 +1882,8 @@ export async function runDurableAgentAutomation(input: {
 		const openRootTurn = session.turns.find(
 			(turn) => turn.subagent_id === null && turn.ended_at === null
 		);
-		const turnId = snapshot?.turnId ?? openRootTurn?.norbital_id ?? (await createTurn({ writer, spec }));
+		const turnId =
+			snapshot?.turnId ?? openRootTurn?.norbital_id ?? (await createTurn({ writer, spec }));
 		const hasUserMessage = session.messages.some(
 			(message) => message.turn_id === turnId && message.role === 'user'
 		);
@@ -1827,11 +1894,18 @@ export async function runDurableAgentAutomation(input: {
 				{
 					...(snapshot?.inputMetadata ?? {}),
 					...(planMode ? { plan_mode: true } : {}),
-					...(goalMode ? { goal_mode: true } : {})
+					...(resolved.verify ? { goal_mode: true } : {})
 				}
 			);
 			if (inputMessageId) {
 				await updateChatTurn(sessionId, turnId, { prompt_message_id: inputMessageId });
+			}
+			if (resolved.verify) {
+				await writer.persist(
+					{ role: 'system', content: serializeVerifierScheduled(resolved.verifierPrompt) },
+					turnId,
+					{ kind: 'goal' }
+				);
 			}
 		}
 		const messages = await loadDurableTurnWindow(sessionId, turnId, promptContent);
@@ -1890,7 +1964,8 @@ export async function runDurableAgentAutomation(input: {
 				depth: 0,
 				planMode,
 				goalMode,
-				userRequest: promptContent
+				userRequest: promptContent,
+				verifierPrompt: resolved.verifierPrompt
 			});
 			const completed = await completeDurableRun({
 				ctx,
@@ -1975,8 +2050,15 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 	const turnId = await createTurn({ writer, spec: options.spec });
 	const initial = options.input ?? (messages.length === 0 ? options.spec.task : undefined);
 	let inputMessageId: string | null = null;
-	const planMode = options.planMode === true;
-	const goalMode = options.goalMode === true && !planMode;
+	const resolved = resolveAgentIntent({
+		intent: options.intent,
+		planMode: options.planMode,
+		verifierPrompt: options.verifierPrompt,
+		message: initial,
+		mentionCount: options.mentions?.length
+	});
+	const planMode = resolved.planMode;
+	const goalMode = resolved.verify;
 	if (initial) {
 		// The transcript stores what the person typed; the record snapshots ride along in the model
 		// window only. A later turn that still needs a record can read it through `read_collection` —
@@ -1991,8 +2073,15 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 		inputMessageId = await writer.persist({ role: 'user', content: initial }, turnId, {
 			...(options.inputMetadata ?? {}),
 			...(planMode ? { plan_mode: true } : {}),
-			...(goalMode ? { goal_mode: true } : {})
+			...(resolved.verify ? { goal_mode: true } : {})
 		});
+		if (resolved.verify) {
+			await writer.persist(
+				{ role: 'system', content: serializeVerifierScheduled(resolved.verifierPrompt) },
+				turnId,
+				{ kind: 'goal' }
+			);
+		}
 		if (inputMessageId) {
 			await updateChatTurn(sessionId, turnId, { prompt_message_id: inputMessageId });
 		}
@@ -2044,7 +2133,8 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			depth: 0,
 			planMode,
 			goalMode,
-			userRequest: initial ?? options.spec.task
+			userRequest: initial ?? options.spec.task,
+			verifierPrompt: resolved.verifierPrompt
 		});
 		await finishTurn(sessionId, turnId, 'succeeded');
 		await updateRecord(
@@ -2059,6 +2149,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			},
 			{ isElevated: true }
 		);
+		await resumeSandboxWaiters(sessionId);
 		return { runId, status: 'success', text: result.text, sessionId, inputMessageId };
 	} catch (cause) {
 		const message = cause instanceof Error ? cause.message : String(cause);

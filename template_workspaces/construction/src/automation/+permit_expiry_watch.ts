@@ -3,7 +3,6 @@ import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
 	{
-		kind: 'deterministic',
 		description:
 			'Sweeps the permits to work every morning at 6am and publishes the first 25 as a JSON extract so permits nearing the end of their validity range are caught before crews are stood down.',
 		handler: async (api) => {

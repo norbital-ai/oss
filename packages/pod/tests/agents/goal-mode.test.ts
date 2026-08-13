@@ -7,8 +7,10 @@ import {
 } from '$lib/shared/agent/goal-verdict.js';
 import {
 	acceptGoalStop,
+	buildGoalVerificationPrompt,
 	GOAL_MODE_REMINDER,
 	MAX_GOAL_VERIFICATIONS,
+	PLAN_VERIFIER_REMINDER,
 	renderGoalContinuation,
 	goalContinuationMessage,
 	windowMessageFromStoredGoal
@@ -25,9 +27,7 @@ describe('goal verdict parsing', () => {
 	});
 
 	it('accepts fenced json', () => {
-		expect(
-			parseGoalVerdict('```json\n{"achieved":true,"summary":"Done","gaps":[]}\n```')
-		).toEqual({
+		expect(parseGoalVerdict('```json\n{"achieved":true,"summary":"Done","gaps":[]}\n```')).toEqual({
 			achieved: true,
 			summary: 'Done',
 			gaps: []
@@ -104,15 +104,24 @@ describe('goal continuation messages', () => {
 });
 
 describe('composeSystemPrompt goal and plan modes', () => {
-	it('prefers plan mode when both are set', () => {
+	it('adds the plan reminder and the plan verifier reminder when both are set', () => {
 		const prompt = composeSystemPrompt(undefined, { planMode: true, goalMode: true });
 		expect(prompt).toContain(PLAN_MODE_REMINDER);
+		expect(prompt).toContain(PLAN_VERIFIER_REMINDER);
 		expect(prompt).not.toContain(GOAL_MODE_REMINDER);
 	});
+});
 
-	it('includes goal mode when plan mode is off', () => {
-		const prompt = composeSystemPrompt(undefined, { goalMode: true });
-		expect(prompt).toContain(GOAL_MODE_REMINDER);
-		expect(prompt).not.toContain(PLAN_MODE_REMINDER);
+describe('buildGoalVerificationPrompt', () => {
+	it('includes the verifierPrompt under Verifier instructions', () => {
+		const prompt = buildGoalVerificationPrompt({
+			userRequest: 'Create the site',
+			messages: [{ role: 'assistant', content: 'Created.' }],
+			verifierPrompt: 'Was the site actually written?'
+		});
+		expect(prompt).toContain('Verifier instructions:');
+		expect(prompt).toContain('Was the site actually written?');
+		expect(prompt).toContain("Person's request:");
+		expect(prompt).toContain('Create the site');
 	});
 });

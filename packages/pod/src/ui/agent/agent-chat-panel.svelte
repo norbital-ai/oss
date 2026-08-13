@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { onMount, tick } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { Button } from '@norbital-ai/ui/button';
 	import { TreeCombobox } from '@norbital-ai/ui/tree-combobox';
 	import { Textarea } from '@norbital-ai/ui/textarea';
@@ -14,31 +15,43 @@
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
-	import { agentOrbState } from './agent-orb-state.js';
+	import { agentOrbState, agentOrbStatusKey } from './agent-orb-state.js';
 	import {
+		consumeTrigger,
 		findMentionTrigger,
 		insertMention,
 		mentionDeletion,
 		reconcileAfterEdit,
+		rewriteTriggerQuery,
 		serializeMentions,
 		type ComposerMention,
 		type MentionTrigger
 	} from './composer-mentions.js';
 	import {
+		AGENT_COMPOSER_CONTROL_TEXT_CLASS,
+		AGENT_COMPOSER_EDITOR_CLASS,
+		AGENT_COMPOSER_FOCUS_EVENT,
+		AGENT_COMPOSER_SHELL_CLASS,
+		type AgentComposerSeed
+	} from './composer-chrome.js';
+	import {
+		buildMentionMenuEntries,
+		commandPrefixChar,
 		createMentionSources,
+		parseCommandQuery,
+		recordSearchIdentity,
+		shouldSearchRecords,
 		type MentionMenuItem,
 		type MentionSources
 	} from './mention-sources.js';
-	import {
-		AGENT_COMPOSER_CONTROL_TEXT_CLASS,
-		AGENT_COMPOSER_EDITOR_CLASS,
-		AGENT_COMPOSER_SHELL_CLASS
-	} from './composer-chrome.js';
-	import { AGENT_COMPOSER_FOCUS_EVENT } from './agent-composer-focus.js';
+	import { createDebouncedRecordSearch } from './debounced-record-search.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
+	import { resolveAgentIntent } from '$lib/shared/agent/intent.js';
 
 	const { t } = useI18n<PodUiKeys>();
+
+	let { headerOrb = true }: { headerOrb?: boolean } = $props();
 
 	let draft = $state('');
 	const modelState = getAgentModelState();
@@ -46,10 +59,9 @@
 	let chatId = $state<string | undefined>(undefined);
 	let pending = $state(false);
 	let planMode = $state(false);
-	let goalMode = $state(false);
+	let verifierOverride = $state<string | null>(null);
 	let echo = $state<string | null>(null);
-	let failure = $state<string | null>(null);
-	let transcriptElement = $state<HTMLOListElement | null>(null);
+	let sendFailure = $state<string | null>(null);
 	let composingNew = $state(false);
 	let platformState: ReturnType<ReturnType<typeof getPlatformStateContext>> | null = null;
 
@@ -62,11 +74,24 @@
 	let trigger = $state<MentionTrigger | null>(null);
 	/** An `@` the writer dismissed with esc; suppressed until that trigger position is gone. */
 	let suppressedTriggerStart = $state<number | null>(null);
-	let menuScope = $state<string | null>(null);
 	let menuItems = $state<readonly MentionMenuItem[]>([]);
 	let menuLoading = $state(false);
 	let highlightIndex = $state(0);
-	let searchVersion = 0;
+	let mentionHighlightIdentity = '';
+
+	const mentionSearch = createDebouncedRecordSearch({
+		search: (text, collection) => {
+			const sources = mentionSources;
+			if (!sources) return Promise.resolve([]);
+			return sources.search(text, collection);
+		},
+		onLoading: (loading) => {
+			menuLoading = loading;
+		},
+		onResults: (hits) => {
+			menuItems = hits.map((hit): MentionMenuItem => ({ kind: 'record', hit }));
+		}
+	});
 
 	// Mounted bare (a component test, a host surface without platform state) there is no manifest
 	// to search, and the feature is simply absent rather than half-alive.
@@ -83,60 +108,30 @@
 
 	const menuOpen = $derived(trigger !== null && mentionSources !== null);
 	const menuCollections = $derived(mentionSources?.collections() ?? []);
-	const menuEntries = $derived.by((): readonly MentionMenuItem[] => {
-		if (!menuOpen || !trigger) return [];
-		// A bare "@" shows the scopes a search can narrow to; typing turns the list into hits.
-		if (!trigger.query.trim()) {
-			if (menuScope) return [];
-			return menuCollections.map((collection): MentionMenuItem => ({ kind: 'scope', collection }));
-		}
-		return menuItems;
-	});
+	const menuApps = $derived(mentionSources?.apps() ?? []);
+	const parsedQuery = $derived(trigger ? parseCommandQuery(trigger.query, menuCollections) : null);
+	const menuEntries = $derived(
+		parsedQuery ? buildMentionMenuEntries(parsedQuery, menuCollections, menuItems, menuApps) : []
+	);
+	const highlight = $derived(
+		menuEntries.length === 0 ? 0 : Math.min(highlightIndex, menuEntries.length - 1)
+	);
 
-	// The search and its highlight are callback-driven, not effects: the trigger only ever moves
-	// through refreshTrigger, and the scope only through the menu's own callbacks, so those are
-	// the only places a search can start, restart, or die. Results depend on query + scope alone,
-	// so a trigger that moved to a new position with the same query is not a new search.
-	let mentionSearchTimer: ReturnType<typeof setTimeout> | undefined;
-	let lastSearchedQuery = '';
-	let lastSearchedScope: string | null = null;
-
+	// Search is callback-driven: refreshTrigger is the only writer. Identity is parsed
+	// collection+text, so a caret move that does not change the search does not restart it.
 	function scheduleMentionSearch(): void {
-		clearTimeout(mentionSearchTimer);
-		const active = trigger;
 		const sources = mentionSources;
-		const scope = menuScope;
-		if (!active || !sources || !active.query.trim()) {
-			searchVersion++;
-			lastSearchedQuery = '';
-			lastSearchedScope = null;
-			menuItems = [];
-			menuLoading = false;
+		const parsed = parsedQuery;
+		const identity = recordSearchIdentity(parsed);
+		if (identity !== mentionHighlightIdentity) {
+			mentionHighlightIdentity = identity;
 			highlightIndex = 0;
-			return;
 		}
-		if (active.query === lastSearchedQuery && scope === lastSearchedScope) return;
-		lastSearchedQuery = active.query;
-		lastSearchedScope = scope;
-		const version = ++searchVersion;
-		menuLoading = true;
-		// Debounced so a fast typer pays a handful of queries, not one per keystroke.
-		mentionSearchTimer = setTimeout(() => {
-			void sources
-				.search(active.query, scope)
-				.then((hits) => {
-					if (version !== searchVersion) return;
-					menuItems = hits.map((hit): MentionMenuItem => ({ kind: 'record', hit }));
-					menuLoading = false;
-					highlightIndex = 0;
-				})
-				.catch(() => {
-					if (version !== searchVersion) return;
-					menuItems = [];
-					menuLoading = false;
-					highlightIndex = 0;
-				});
-		}, 150);
+		mentionSearch.schedule(
+			identity,
+			parsed,
+			sources !== null && parsed !== null && shouldSearchRecords(parsed)
+		);
 	}
 
 	function refreshTrigger(): void {
@@ -157,8 +152,6 @@
 			return;
 		}
 		suppressedTriggerStart = null;
-		// A new trigger position is a new search; whatever scope the previous one had does not follow.
-		if (found?.start !== trigger?.start) menuScope = null;
 		trigger = found;
 		scheduleMentionSearch();
 	}
@@ -185,20 +178,76 @@
 		});
 	}
 
-	function selectMenuItem(item: MentionMenuItem | undefined): void {
-		if (!item) return;
-		if (item.kind === 'scope') {
-			menuScope = item.collection;
-			highlightIndex = 0;
-			scheduleMentionSearch();
-			return;
-		}
+	function rewriteQuery(nextQuery: string): void {
 		const element = textareaElement;
 		const active = trigger;
 		if (!element || !active) return;
-		const caret = element.selectionStart ?? element.value.length;
-		const inserted = insertMention(element.value, mentions, { ...active, caret }, item.hit);
-		applyDraft(inserted.draft, inserted.mentions, inserted.caret);
+		const next = rewriteTriggerQuery(element.value, mentions, active, nextQuery);
+		applyDraft(next.draft, next.mentions, next.caret);
+	}
+
+	function selectMenuItem(item: MentionMenuItem | undefined): void {
+		if (!item) return;
+		const element = textareaElement;
+		const active = trigger;
+		if (!element || !active) return;
+		switch (item.kind) {
+			case 'command': {
+				switch (item.command) {
+					case 'record':
+						rewriteQuery(commandPrefixChar('record'));
+						return;
+					case 'app':
+						rewriteQuery(commandPrefixChar('app'));
+						return;
+					case 'plan': {
+						planMode = true;
+						const next = consumeTrigger(element.value, mentions, active, parsedQuery?.text ?? '');
+						applyDraft(next.draft, next.mentions, next.caret);
+						return;
+					}
+					default: {
+						const _exhaustive: never = item.command;
+						return _exhaustive;
+					}
+				}
+			}
+			case 'scope': {
+				const next = rewriteTriggerQuery(
+					element.value,
+					mentions,
+					active,
+					`${commandPrefixChar('record')}${item.collection} `
+				);
+				applyDraft(next.draft, next.mentions, next.caret);
+				return;
+			}
+			case 'collection': {
+				const next = consumeTrigger(
+					element.value,
+					mentions,
+					active,
+					`collection:${item.collection}`
+				);
+				applyDraft(next.draft, next.mentions, next.caret);
+				return;
+			}
+			case 'app': {
+				const next = consumeTrigger(element.value, mentions, active, `app:${item.key}`);
+				applyDraft(next.draft, next.mentions, next.caret);
+				return;
+			}
+			case 'record': {
+				const caret = element.selectionStart ?? element.value.length;
+				const next = insertMention(element.value, mentions, { ...active, caret }, item.hit);
+				applyDraft(next.draft, next.mentions, next.caret);
+				return;
+			}
+			default: {
+				const _exhaustive: never = item;
+				return _exhaustive;
+			}
+		}
 	}
 	// ─────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -268,7 +317,7 @@
 		}
 	});
 	const userLabels = $derived.by(() => {
-		const labels = new Map<string, string>();
+		const labels = new SvelteMap<string, string>();
 		for (const row of usersQuery?.current ?? []) {
 			if (typeof row.norbital_id !== 'string') continue;
 			const label =
@@ -300,7 +349,7 @@
 		const disabledIds: string[] = [];
 		const personal = sessions.filter((session) => session.visibility === 'personal');
 		const workspaceChildren: ConversationTreeItem[] = [];
-		const byUser = new Map<string, SessionRow[]>();
+		const byUser = new SvelteMap<string, SessionRow[]>();
 		for (const session of personal) {
 			const rows = byUser.get(session.user_id) ?? [];
 			rows.push(session);
@@ -325,7 +374,7 @@
 			});
 		}
 
-		const channelProfiles = new Map<string, SessionRow[]>();
+		const channelProfiles = new SvelteMap<string, SessionRow[]>();
 		for (const session of sessions) {
 			if (!session.visibility.startsWith('channel_')) continue;
 			const key = session.channel_key ?? t('pod.agent.channelAgent');
@@ -428,14 +477,47 @@
 	);
 	const messages = $derived(withPendingEcho(stored, echo));
 	const turnRows = $derived(activeSession?.turns ?? []);
+	const rootTurn = $derived(
+		[...turnRows].filter((turn) => turn.subagent_id == null).at(-1) as
+			Record<string, unknown> | undefined
+	);
+	/** `agentChatStart` returns before inference; the replicated root turn owns in-flight after that. */
+	const composerLocked = $derived(
+		pending || rootTurn?.status === 'running' || rootTurn?.status === 'queued'
+	);
+	const terminalMessage = $derived(messages.at(-1));
+	const replicaFailure = $derived.by(() => {
+		const root = rootTurn;
+		if (root?.status === 'failed' || root?.status === 'aborted') {
+			return typeof root.error === 'string' && root.error.trim()
+				? root.error
+				: t('pod.agent.couldNotFinish');
+		}
+		const terminal = terminalMessage;
+		if (terminal?.kind === 'text' && terminal.role === 'system') {
+			return terminal.content.trim() || t('pod.agent.couldNotFinish');
+		}
+		return null;
+	});
+	const failure = $derived(sendFailure ?? replicaFailure);
 	const activityState = $derived(
 		agentOrbState({
-			pending,
+			pending: composerLocked,
 			messages: activeSession?.messages,
 			turns: activeSession?.turns
 		})
 	);
-	const canSend = $derived(draft.trim().length > 0 && !pending && !activeSessionIsReadOnly);
+	const canSend = $derived(draft.trim().length > 0 && !composerLocked && !activeSessionIsReadOnly);
+	const previewIntent = $derived(
+		resolveAgentIntent({
+			message: draft,
+			planMode,
+			verifierPrompt: verifierOverride,
+			mentionCount: mentions.length
+		})
+	);
+	const verifierPrompt = $derived(previewIntent.verifierPrompt);
+	const verifierPreview = $derived(verifierPrompt.split('\n')[0] ?? '');
 
 	/**
 	 * The window the running model actually has, straight from the catalog that named it.
@@ -487,15 +569,6 @@
 			: t('pod.agent.costReportedByProvider')
 	);
 
-	/**
-	 * The catalog and selected model are shared by every route/sheet panel.
-	 *
-	 * The picker itself never disappears: while this request is pending or unavailable it remains a
-	 * disabled, named control, and a second mounted panel reuses the last valid selection.
-	 */
-	onMount(() => {
-		void loadAgentModelCatalog(getWorkspaceRemoteTransport());
-	});
 	// A tool call is the agent doing something. Once one is on screen it carries its own progress, and
 	// a second "Working…" placeholder beside it says less than the call already does.
 	const agentHasSpoken = $derived(
@@ -505,57 +578,27 @@
 				message.kind === 'checkpoint' ||
 				message.kind === 'reasoning' ||
 				message.kind === 'goal' ||
+				message.kind === 'verifier' ||
 				(message.kind === 'text' && message.role === 'assistant')
 		)
 	);
 
-	// `agentChatStart` returns before inference. The replicated root turn is therefore the durable
-	// completion signal; subagent rows may finish while their parent is still working.
-	$effect(() => {
-		if (!pending) return;
-		const root = [...turnRows].filter((turn) => turn.subagent_id == null).at(-1) as
-			Record<string, unknown> | undefined;
-		const terminalMessage = messages.at(-1);
-		if (root?.status === 'succeeded') {
-			pending = false;
-			failure = null;
-		} else if (root?.status === 'failed' || root?.status === 'aborted') {
-			pending = false;
-			failure =
-				typeof root.error === 'string' && root.error.trim()
-					? root.error
-					: t('pod.agent.couldNotFinish');
-		} else if (terminalMessage?.kind === 'text' && terminalMessage.role === 'system') {
-			// The terminal transcript row is inserted before the turn-status update. Either can arrive
-			// first through live sync, so a failed run must release the composer as soon as its durable
-			// error message is visible instead of depending on a second replica event.
-			pending = false;
-			failure = terminalMessage.content.trim() || t('pod.agent.couldNotFinish');
-		} else if (
-			terminalMessage?.kind === 'text' &&
-			terminalMessage.role === 'assistant' &&
-			terminalMessage.status === 'complete'
-		) {
-			// The message and turn terminal writes can arrive through sync in either render frame.
-			pending = false;
-			failure = null;
-		}
-	});
-
-	$effect(() => {
-		void messages.length;
-		queueMicrotask(() => {
-			if (transcriptElement) transcriptElement.scrollTop = transcriptElement.scrollHeight;
-		});
-	});
-
 	/**
-	 * Cmd+K (and the FAB) ask for composer focus through a window event: the panel may live in the
-	 * sheet portal or on the full-page /agent surface, and the shell must not know which. The caret
-	 * goes to the end so an invocation lands ready to type, never in the middle of existing text.
+	 * The catalog and selected model are shared by every route/sheet panel. Cmd+K (and the FAB) ask
+	 * for composer focus through a window event: the panel may live in the sheet portal or on the
+	 * full-page /agent surface, and the shell must not know which.
 	 */
 	onMount(() => {
-		function onFocusRequest(): void {
+		void loadAgentModelCatalog(getWorkspaceRemoteTransport());
+
+		function onFocusRequest(event: Event): void {
+			const seed =
+				event instanceof CustomEvent ? (event.detail as AgentComposerSeed | undefined) : undefined;
+			if (seed?.planMode) planMode = true;
+			if (seed?.message) {
+				draft = seed.message;
+				lastDraft = seed.message;
+			}
 			const element = textareaElement;
 			if (!element) return;
 			element.focus();
@@ -567,24 +610,28 @@
 
 	async function send(): Promise<void> {
 		const { message, references } = serializeMentions(draft, mentions);
-		if (!message || pending || activeSessionIsReadOnly) return;
+		if (!message || composerLocked || activeSessionIsReadOnly) return;
+		const { verify, verifierPrompt: resolvedVerifierPrompt } = previewIntent;
 		pending = true;
-		failure = null;
+		sendFailure = null;
 		echo = message;
 		draft = '';
 		lastDraft = '';
 		mentions = [];
 		trigger = null;
 		suppressedTriggerStart = null;
-		menuScope = null;
+		mentionHighlightIdentity = '';
+		menuItems = [];
+		menuLoading = false;
+		mentionSearch.invalidate();
 		try {
 			const result = await getWorkspaceRemoteTransport().agentChatStart({
 				message,
 				// Only chips the picker created. An `@` that never matched is already in the text.
 				...(references.length > 0 ? { mentions: references } : {}),
 				...(activeRunId ? { runId: activeRunId } : {}),
-				...(planMode ? { planMode: true } : {}),
-				...(goalMode && !planMode ? { goalMode: true } : {}),
+				...(planMode ? { planMode: true, intent: 'plan' as const } : { intent: 'do' as const }),
+				...(verify ? { verifierPrompt: resolvedVerifierPrompt } : {}),
 				// Only when the host offered a choice. Sending back its own default would turn a display
 				// value into a caller assertion, and the host would stop being free to change it.
 				...(modelState.catalog &&
@@ -596,8 +643,14 @@
 			runId = result.runId;
 			chatId = result.chatId;
 			composingNew = false;
+			// `agentChatStart` returns before inference; the replicated root turn owns in-flight after this.
+			pending = false;
 		} catch (cause) {
-			failure = cause instanceof Error ? cause.message : String(cause);
+			const message = cause instanceof Error ? cause.message : String(cause);
+			sendFailure =
+				!message || message === 'INTERNAL_ERROR' || message === t('pod.server.internalError')
+					? t('pod.agent.couldNotStart')
+					: message;
 			pending = false;
 		}
 	}
@@ -610,7 +663,7 @@
 		runId = session.automation_run_id ?? undefined;
 		composingNew = false;
 		echo = null;
-		failure = null;
+		sendFailure = null;
 	}
 
 	function startConversation(): void {
@@ -618,7 +671,7 @@
 		runId = undefined;
 		composingNew = true;
 		echo = null;
-		failure = null;
+		sendFailure = null;
 	}
 
 	function onKeydown(event: KeyboardEvent): void {
@@ -632,9 +685,12 @@
 			}
 			if (event.key === 'Escape') {
 				event.preventDefault();
-				// Esc clears a scope first; only a second esc dismisses the menu, and the text stays.
-				if (menuScope) {
-					menuScope = null;
+				if (parsedQuery?.collection) {
+					rewriteQuery(commandPrefixChar('record'));
+					return;
+				}
+				if (parsedQuery?.scope) {
+					rewriteQuery('');
 					return;
 				}
 				suppressedTriggerStart = trigger?.start ?? null;
@@ -644,7 +700,7 @@
 			if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
 				if (menuEntries.length > 0) {
 					event.preventDefault();
-					selectMenuItem(menuEntries[highlightIndex]);
+					selectMenuItem(menuEntries[highlight]);
 					return;
 				}
 				// Nothing matched. Tab merely closes; Enter falls through and sends — the unmatched
@@ -689,17 +745,33 @@
 	aria-label={t('pod.shell.workspaceAgentTitle')}
 >
 	<Inline as="header" justify="between" gap="sm" class="shrink-0 border-b px-3 py-2.5 sm:px-4">
-		<TreeCombobox
-			rootItems={conversationTree.roots}
-			disabledIds={conversationTree.disabledIds}
-			value={activeChatId}
-			onValueChange={(value) => selectConversation(value ?? null)}
-			ariaLabel={t('pod.agent.conversationThread')}
-			searchPlaceholder={t('pod.agent.searchConversations')}
-			placeholder={t('pod.agent.noConversations')}
-			allowCleared={false}
-			triggerClass="border-0 bg-transparent shadow-none"
-		/>
+		{#if headerOrb}
+			<div
+				class="grid size-8 shrink-0 place-items-center text-foreground"
+				data-testid="agent-activity-orb"
+			>
+				<NorbitalThinkingOrb
+					state={activityState}
+					size={22}
+					label={activityState === 'idle'
+						? t('pod.shell.workspaceAgentTitle')
+						: t(agentOrbStatusKey(activityState))}
+				/>
+			</div>
+		{/if}
+		<div class="min-w-0 flex-1">
+			<TreeCombobox
+				rootItems={conversationTree.roots}
+				disabledIds={conversationTree.disabledIds}
+				value={activeChatId}
+				onValueChange={(value) => selectConversation(value ?? null)}
+				ariaLabel={t('pod.agent.conversationThread')}
+				searchPlaceholder={t('pod.agent.searchConversations')}
+				placeholder={t('pod.agent.noConversations')}
+				allowCleared={false}
+				triggerClass="border-0 bg-transparent shadow-none"
+			/>
+		</div>
 		<Button
 			variant="ghost"
 			size="icon"
@@ -710,7 +782,7 @@
 			<Icon icon="lucide:square-pen" class="size-4" />
 		</Button>
 	</Inline>
-	{#if messages.length === 0 && !pending}
+	{#if messages.length === 0 && !composerLocked}
 		<div class="grid min-h-0 flex-1 place-items-center overflow-y-auto px-6 py-10">
 			<div class="max-w-sm text-center">
 				<div class="mx-auto mb-4 grid size-12 place-items-center rounded-xl bg-card shadow-xs">
@@ -726,15 +798,28 @@
 		</div>
 	{:else}
 		<ol
-			bind:this={transcriptElement}
+			{@attach (node) => {
+				void messages.length;
+				queueMicrotask(() => {
+					node.scrollTop = node.scrollHeight;
+				});
+			}}
 			class="flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-4 py-5 sm:px-5"
 			aria-live="polite"
 			aria-label={t('pod.agent.conversationAria')}
 		>
 			{#each messages as message (message.key)}
-				<AgentTranscriptItem {message} />
+				<AgentTranscriptItem
+					{message}
+					onVerifierPrompt={async (prompt) => {
+						const id = activeRunId;
+						if (!id) return;
+						const update = getWorkspaceRemoteTransport().agentChatUpdateVerifier;
+						if (update) await update({ runId: id, prompt });
+					}}
+				/>
 			{/each}
-			{#if pending && !agentHasSpoken}
+			{#if composerLocked && !agentHasSpoken}
 				<li class="my-1.5 flex flex-col gap-1.5" aria-label={t('pod.agent.agentIsWorking')}>
 					<span class="px-1 text-tiny font-medium text-muted-foreground"
 						>{t('pod.agent.agent')}</span
@@ -778,17 +863,13 @@
 				{#if menuOpen}
 					<AgentMentionMenu
 						items={menuEntries}
-						{highlightIndex}
+						highlightIndex={highlight}
 						loading={menuLoading}
-						query={trigger?.query ?? ''}
-						scope={menuScope}
+						query={parsedQuery?.text ?? ''}
+						scope={parsedQuery?.collection ?? null}
 						onselect={(index) => selectMenuItem(menuEntries[index])}
 						onhighlight={(index) => (highlightIndex = index)}
-						onclearscope={() => {
-							menuScope = null;
-							highlightIndex = 0;
-							scheduleMentionSearch();
-						}}
+						onclearscope={() => rewriteQuery(commandPrefixChar('record'))}
 					/>
 				{/if}
 				<form
@@ -806,7 +887,19 @@
 							bind:ref={textareaElement}
 							onkeydown={onKeydown}
 							oninput={onComposerInput}
-							onkeyup={refreshTrigger}
+							onkeyup={(event) => {
+								if (
+									menuOpen &&
+									(event.key === 'ArrowDown' ||
+										event.key === 'ArrowUp' ||
+										event.key === 'Escape' ||
+										event.key === 'Tab' ||
+										(event.key === 'Enter' && !event.shiftKey))
+								) {
+									return;
+								}
+								refreshTrigger();
+							}}
 							onclick={refreshTrigger}
 							aria-autocomplete="list"
 							aria-expanded={menuOpen}
@@ -814,9 +907,47 @@
 							placeholder={t('pod.agent.composerPlaceholder')}
 							rows={1}
 							class={AGENT_COMPOSER_EDITOR_CLASS}
-							disabled={pending}
+							disabled={composerLocked}
 						/>
 					</div>
+
+					{#if previewIntent.verify}
+						<details class="group/verifier px-2.5 sm:px-3" data-testid="agent-verifier">
+							<!-- stupidity:allow UI6 -- verifier disclosure is a clickable control row. -->
+							<summary
+								class={`flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md px-1.5 py-1 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
+							>
+								<Icon icon="lucide:shield-check" class="size-3.5 shrink-0" />
+								<span class="shrink-0">{t('pod.agent.verifierWillCheck')}</span>
+								<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground/70"
+									>{verifierPreview}</span
+								>
+								<Icon
+									icon="lucide:chevron-right"
+									class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/verifier:rotate-90"
+								/>
+							</summary>
+							<Stack gap="xs" class="px-1.5 pb-1.5">
+								<p class="m-0 text-tiny text-muted-foreground">
+									{t('pod.agent.verifierPromptHint')}
+								</p>
+								<label class="sr-only" for="agent-verifier-prompt"
+									>{t('pod.agent.verifierPrompt')}</label
+								>
+								<Textarea
+									id="agent-verifier-prompt"
+									data-testid="agent-verifier-prompt"
+									value={verifierPrompt}
+									oninput={(event) => {
+										verifierOverride = event.currentTarget.value;
+									}}
+									rows={3}
+									disabled={composerLocked}
+									class="min-h-16 max-h-32 resize-none border-border/60 bg-muted/30 px-2.5 py-2 text-xs shadow-none focus-visible:ring-1"
+								/>
+							</Stack>
+						</details>
+					{/if}
 
 					<!-- stupidity:allow UI6 -- Composer action bar keeps its wrapping left controls pinned beside the send cluster; Cluster would push send below the fold on narrow widths. -->
 					<div
@@ -833,10 +964,10 @@
 							<button
 								type="button"
 								aria-pressed={planMode}
-								disabled={pending}
+								disabled={composerLocked}
 								onclick={() => {
 									planMode = !planMode;
-									if (planMode) goalMode = false;
+									verifierOverride = null;
 								}}
 								class={`rounded-md px-1.5 py-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} ${
 									planMode
@@ -847,24 +978,6 @@
 								data-testid="agent-plan-mode"
 							>
 								{t('pod.agent.plan')}
-							</button>
-							<button
-								type="button"
-								aria-pressed={goalMode}
-								disabled={pending}
-								onclick={() => {
-									goalMode = !goalMode;
-									if (goalMode) planMode = false;
-								}}
-								class={`rounded-md px-1.5 py-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} ${
-									goalMode
-										? 'bg-primary/10 text-primary'
-										: 'text-muted-foreground hover:bg-muted hover:text-foreground'
-								}`}
-								title={goalMode ? t('pod.agent.goalModeOn') : t('pod.agent.goalModeOff')}
-								data-testid="agent-goal-mode"
-							>
-								{t('pod.agent.goal')}
 							</button>
 							{#if contextPercent !== null}
 								<Inline as="span" gap="xs" title={t('pod.agent.contextWindowUsed')}>
@@ -894,7 +1007,7 @@
 									options={modelState.catalog?.options ?? []}
 									status={modelState.status}
 									compact={true}
-									disabled={pending || modelState.status !== 'ready'}
+									disabled={composerLocked || modelState.status !== 'ready'}
 								/>
 							</div>
 							<Button
@@ -903,10 +1016,10 @@
 								size="icon"
 								class="size-8 shrink-0 rounded-full"
 								data-testid="agent-send"
-								aria-label={pending ? t('pod.agent.agentIsWorking') : t('pod.agent.send')}
+								aria-label={composerLocked ? t('pod.agent.agentIsWorking') : t('pod.agent.send')}
 							>
-								{#if pending}
-									<NorbitalThinkingOrb state="thinking" size={18} />
+								{#if composerLocked}
+									<NorbitalThinkingOrb state={activityState} size={18} />
 								{:else}
 									<Icon icon="lucide:arrow-up" class="size-4" />
 								{/if}

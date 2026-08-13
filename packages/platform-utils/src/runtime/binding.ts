@@ -259,11 +259,16 @@ export type HostMessagingBinding = {
 /**
  * One host-supplied agent tool, described for the model.
  *
- * Plain data — name, description, JSON Schema — so it survives the structured clone that carries a
- * binding result into the isolate. It is deliberately the same shape as `AiToolSpec`: the agent loop
- * puts host tools and workspace tools into one list, because the model is offered one list.
+ * Plain data so it survives the structured clone into the isolate. `requiresSandbox` is a funnel
+ * flag the loop reads; it is stripped before the spec is offered to the model.
  */
-export type HostAgentToolSpec = AiToolSpec;
+export type HostAgentToolSpec = AiToolSpec & {
+	/**
+	 * When true, the funnel offers this tool only if the session has a bound sandbox.
+	 * When omitted, names in the `sandbox_` namespace are treated as requiring a sandbox.
+	 */
+	readonly requiresSandbox?: boolean;
+};
 
 /**
  * Tools the *host* implements, offered to a tenant's agent.
@@ -415,7 +420,7 @@ export type RuntimeFacilityName =
  * would be nice to have. The distinction is whether the stored data depends on the provider:
  *
  * - a `file()` field has nowhere to put its bytes without `fileStorage`;
- * - an agent automation has no model to call without `ai`;
+ * - an agent profile has no model to call without `ai`;
  * - an outbound integration has nothing to drive or deliver it without `queue` and
  *   `integrationDelivery`. Core automations use DBOS and standalone automations use the local
  *   automation driver; neither is represented by the integration queue facility.
@@ -439,17 +444,15 @@ export function requiredRuntimeFacilities(
 		required.add('integrationDelivery');
 		required.add('queue');
 	}
-	const automations = Object.values(manifest.automations ?? {});
-	if (manifest.agent || automations.some((automation) => automation.spec?.kind === 'agent')) {
-		required.add('ai');
-	}
-	// An agent that names a host tool has nothing to call without one. Same reasoning as `ai`: the
-	// workspace declared a dependency on something only the host can supply, so a host that supplies
-	// none must refuse the workspace rather than fail at the first run.
-	if (automations.some((automation) => (automation.spec?.hostTools ?? []).length > 0)) {
-		required.add('agentTools');
-	}
+	if (manifest.agent) required.add('ai');
+	// Non-sandbox host tools named in `hostTools` have nothing to call without the facility.
+	// Sandbox-gated tools are not listed there: the funnel offers them only when this host actually
+	// binds `agentTools` and the session has a requestor. Same reasoning as `ai` for the named case:
+	// a host that supplies none must refuse the workspace rather than fail at the first run.
 	if ((manifest.agent?.hostTools ?? []).length > 0) required.add('agentTools');
+	for (const channel of Object.values(manifest.channels ?? {})) {
+		if ((channel.hostTools ?? []).length > 0) required.add('agentTools');
+	}
 
 	return [...required];
 }

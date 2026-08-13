@@ -23,7 +23,13 @@ import {
 	type Scope
 } from './local-sql.js';
 
-export { setLocalSchema, type LocalCollectionSchema, type LocalRelationship };
+export {
+	setLocalSchema,
+	clearLocalSchema,
+	localCollection,
+	type LocalCollectionSchema,
+	type LocalRelationship
+};
 
 const PKEY = 'norbital_id';
 
@@ -150,7 +156,7 @@ export async function localFindMany(
 	if (!(await ensureCollections(sync, collection, query))) return null;
 	// Search over a windowed collection would silently miss matches outside the window; the
 	// server owns it (and has the trigram indexes for it).
-	if (hasSearch(query) && !sync.registry.isResident(collection)) return null;
+	if (hasSearch(query) && !replicaCanProveComplete(sync, collection)) return null;
 
 	const limit = typeof query.limit === 'number' ? query.limit : null;
 	// Over-fetch by one, exactly like the server's findManyPage. Without the probe row a page that
@@ -185,7 +191,7 @@ export async function localFindMany(
 	// full page looks like a complete page, but on a partially-synced collection a matching row
 	// that sorts earlier may simply not have arrived yet — and the user would be shown page 1 of a
 	// filter with rows silently absent from it. Search is refused earlier for the same reason.
-	if (sync.registry.isResident(collection)) {
+	if (replicaCanProveComplete(sync, collection)) {
 		if (hasMore) {
 			const cursor = encodeLocalCursor(rows[rows.length - 1]!, normalizeOrder(query.orderBy));
 			return { rows: hydrated, nextCursor: cursor };
@@ -227,7 +233,7 @@ export async function localFindFirst(
 ): Promise<Record<string, unknown> | null | undefined> {
 	if (query.after != null) return undefined;
 	if (!(await ensureCollections(sync, collection, query))) return undefined;
-	if (hasSearch(query) && !sync.registry.isResident(collection)) return undefined;
+	if (hasSearch(query) && !replicaCanProveComplete(sync, collection)) return undefined;
 
 	const built = buildSelect(collection, { ...query, limit: 1 });
 	if (!built) return undefined;
@@ -238,10 +244,7 @@ export async function localFindFirst(
 	// A miss is not proof of absence while the collection is windowed (the row may lie beyond the
 	// window) or still catching up (it may not have arrived). A hit is always trustworthy: the
 	// replica only ever holds real, policy-scoped rows.
-	if (
-		hydrated.length === 0 &&
-		(!sync.registry.isResident(collection) || !sync.registry.hasSynced(collection))
-	) {
+	if (hydrated.length === 0 && !replicaCanProveComplete(sync, collection)) {
 		return undefined;
 	}
 	return hydrated[0] ?? null;
@@ -255,7 +258,7 @@ export async function localCount(
 	// A count over a window is a wrong answer, not a stale one — and so is a count taken before the
 	// collection finished arriving.
 	if (!(await ensureCollections(sync, collection, query))) return null;
-	if (!sync.registry.isResident(collection) || !sync.registry.hasSynced(collection)) return null;
+	if (!replicaCanProveComplete(sync, collection)) return null;
 
 	const where = buildWhereClause(collection, query);
 	if (where === null) return null;
@@ -325,7 +328,9 @@ export async function reconcileServerRow(
  * A cold registration starts in the background and this call declines the local answer
  * immediately. The authoritative scoped query can therefore run as the first useful round trip;
  * its rows are absorbed into the replica while collection materialisation continues. Warm and
- * restored collections still answer locally with zero network work.
+ * restored collections still answer locally with zero network work — including restored
+ * resident collections whose live cursor is not fresh yet. Freshness is a stream concern,
+ * not a gate that re-queues catch-up or skips rows this device already holds.
  */
 async function ensureCollections(
 	sync: ClientSync,
@@ -352,14 +357,20 @@ async function ensureCollections(
 	}
 
 	await sync.registry.restore();
-	const missing = [...needed].filter(
-		(name) => !sync.registry.has(name) || !sync.registry.isFresh(name)
-	);
+	const missing = [...needed].filter((name) => !sync.registry.has(name));
 	if (missing.length > 0) {
 		for (const name of missing) void sync.registry.register(name);
 		return false;
 	}
-	return [...needed].every((name) => sync.registry.has(name) && sync.registry.isFresh(name));
+	return true;
+}
+
+/** Resident rows this device already holds, including a restored set waiting on live-head freshness. */
+function replicaCanProveComplete(sync: ClientSync, collection: string): boolean {
+	return (
+		sync.registry.isResident(collection) ||
+		(sync.registry.hasSynced(collection) && sync.registry.isHeldResident(collection))
+	);
 }
 
 // ── relation hydration ─────────────────────────────────────────────────────────
@@ -475,7 +486,7 @@ function relatedIsComplete(
 	related: readonly Record<string, unknown>[],
 	keyCount: number
 ): boolean {
-	if (sync.registry.isResident(relation.target)) return true;
+	if (replicaCanProveComplete(sync, relation.target)) return true;
 	if (relation.cardinality === 'many') return false;
 	const resolved = new Set(related.map((record) => String(record[relation.targetField])));
 	return resolved.size >= keyCount;

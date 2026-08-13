@@ -146,7 +146,7 @@ describe('SubscriptionRegistry', () => {
 		expect(notified).toContain('orders');
 	});
 
-	it('freezes the feed until catch-up completes, then subscribes before replaying it', async () => {
+	it('keeps the live stream up through the first page, then freezes it for remaining pages', async () => {
 		const { client, events } = stubClient({
 			page: (_request, index) => (index === 0 ? morePages(rowsOf(1)) : lastPage(rowsOf(1, 1)))
 		});
@@ -157,14 +157,47 @@ describe('SubscriptionRegistry', () => {
 
 		expect(events).toEqual([
 			'subscribe:orders',
+			'shape:orders',
+			'subscribe:orders',
 			'stop',
-			'shape:orders',
 			'subscribe:orders',
 			'shape:orders',
 			'subscribe:orders',
-			'start',
-			'subscribe:orders'
+			'start'
 		]);
+	});
+
+	it('starts a newly demanded first page while another collection is still catching up remaining pages', async () => {
+		let releaseOrdersRemainder = () => {};
+		const ordersRemainder = new Promise<void>((resolve) => {
+			releaseOrdersRemainder = resolve;
+		});
+		let customersShapeStarted = false;
+		const { client } = stubClient({
+			page: async (request, index) => {
+				if (request.collection === 'orders') {
+					if (index === 0) return morePages(rowsOf(1));
+					await ordersRemainder;
+					return lastPage(rowsOf(1, 1));
+				}
+				customersShapeStarted = true;
+				return lastPage();
+			}
+		});
+		const registry = new SubscriptionRegistry(client);
+
+		const orders = registry.register('orders');
+		await orders;
+		expect(registry.has('orders')).toBe(true);
+
+		const customers = registry.register('customers');
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(customersShapeStarted).toBe(true);
+
+		releaseOrdersRemainder();
+		await customers;
+		await settle();
 	});
 
 	it('holds restored state behind the live-cursor freshness barrier without re-fetching', async () => {
@@ -180,6 +213,7 @@ describe('SubscriptionRegistry', () => {
 		await registry.restore();
 		expect(registry.has('orders')).toBe(true);
 		expect(registry.isFresh('orders')).toBe(false);
+		expect(registry.isHeldResident('orders')).toBe(true);
 		expect(registry.isResident('orders')).toBe(false);
 
 		await registry.register('orders');

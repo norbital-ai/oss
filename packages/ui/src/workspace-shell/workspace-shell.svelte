@@ -23,6 +23,9 @@
 		impersonation,
 		onImpersonate,
 		onStopImpersonating,
+		onSearch,
+		searchLabel,
+		searchShortcut,
 		children
 	}: {
 		model: WorkspaceNavigationModel;
@@ -47,6 +50,10 @@
 		onImpersonate?: (teamId: string) => void | Promise<void>;
 		/** Return to the requestor's own team scope. */
 		onStopImpersonating?: () => void | Promise<void>;
+		/** Host supplies the search gesture; shell only renders the affordance. */
+		onSearch?: () => void;
+		searchLabel?: string;
+		searchShortcut?: string;
 		children: Snippet;
 	} = $props();
 
@@ -108,6 +115,9 @@
 				{impersonation}
 				{onImpersonate}
 				{onStopImpersonating}
+				{onSearch}
+				{searchLabel}
+				{searchShortcut}
 			/>
 		{/snippet}
 		{@render children()}

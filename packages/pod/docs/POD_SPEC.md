@@ -18,7 +18,7 @@ lives under `src/` and is discovered by filename:
 | `custom-types/<name>/+definition.ts`        | reusable validated data type       |
 | `custom-types/<name>/+renderer.svelte`      | display/edit renderer              |
 | `apps/**/+<name>.svelte`                    | navigable application surface      |
-| `automation/+<name>.ts`                     | scheduled, collection-event, or `kind: 'agent'` automation |
+| `automation/+<name>.ts`                     | scheduled or collection-event automation (deterministic handler) |
 | `policies/+<name>.policy.ts`                | named policy / role                |
 | `channels/+<name>.channel.ts`               | conversational channel entry point |
 | `tools/+<name>.tool.ts`                     | compiler-discovered workspace agent tool |

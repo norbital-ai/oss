@@ -69,13 +69,14 @@ describe('durable automation jobs', () => {
 });
 
 describe('durable agent automations', () => {
-	it('routes kind agent through receipts instead of refusing the handler', () => {
+	it('routes interactive and channel agent jobs through receipts instead of refusing the handler', () => {
 		const source = readFileSync(
 			new URL('../../src/server/run/tenant_run.ts', import.meta.url),
 			'utf8'
 		);
 		expect(source).not.toContain('cannot complete inside one guest invocation');
-		expect(source).toContain("spec.kind === 'agent'");
+		expect(source).not.toContain("spec.kind === 'agent'");
 		expect(source).toContain('runDurableAgentAutomation');
+		expect(source).toContain("agent:interactive");
 	});
 });

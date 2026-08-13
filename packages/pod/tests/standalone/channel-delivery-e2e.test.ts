@@ -16,11 +16,11 @@ const CHANNEL = 'sales_desk';
 const CONVERSATION = 'tg-chat-90210';
 
 /**
- * A value only the host process holds, returned by its one host tool.
+ * A value only the host process holds, returned by a non-sandbox host tool.
  *
- * Here it is a string that must never reach a channel transcript. The host registers `sandbox_probe`
- * and the runtime can dispatch it, so this is reachable from the process serving the channel; its
- * absence from every answer is what proves the withholding is real rather than declared.
+ * `sandbox_probe` is sandbox-gated and therefore offered to every agent session with a bound
+ * sandbox, including this channel. `host_secret` is not sandbox-gated and is named by nobody, so
+ * it must never reach a channel transcript.
  */
 const RECEIPT = 'channel-host-receipt-4b7e';
 /** Distinctive enough to locate inside the composed system prompt, and to prove which layer it is. */
@@ -278,6 +278,13 @@ export default definePodHost({
 			description: 'Return a value only the host process holds.',
 			input: z.object({}),
 			run: async () => ({ receipt: env('POD_TEST_HOST_RECEIPT') })
+		},
+		{
+			name: 'host_secret',
+			description: 'Read a host credential. Registered, and named by no channel.',
+			requiresSandbox: false,
+			input: z.object({}),
+			run: async () => ({ secret: 'must-never-reach-a-transcript' })
 		}
 	],
 	ai: {
@@ -291,7 +298,8 @@ export default definePodHost({
 					toolCalls: [
 						{ id: 'call_accounts', name: 'read_collection', input: { collection: 'accounts', limit: 1 } },
 						{ id: 'call_payments', name: 'read_collection', input: { collection: 'payment_records', limit: 1 } },
-						{ id: 'call_probe', name: 'sandbox_probe', input: {} }
+						{ id: 'call_probe', name: 'sandbox_probe', input: {} },
+						{ id: 'call_secret', name: 'host_secret', input: {} }
 					]
 				};
 			}
@@ -302,6 +310,7 @@ export default definePodHost({
 					\` accounts=\${verdict(results, 'call_accounts')}\` +
 					\` payments=\${verdict(results, 'call_payments')}\` +
 					\` probe=\${probeReceipt(results, 'call_probe')}\` +
+					\` secret=\${verdict(results, 'call_secret')}\` +
 					\` offered=\${(input.tools ?? []).map((tool) => tool.name).join('|')}\` +
 					\` \${layers(messages)}\` +
 					\` prompt_messages=\${messages.length}\`,
@@ -558,17 +567,15 @@ describe('Pod standalone channel delivery — E2E', () => {
 	});
 
 	/**
-	 * And the host tool this host does register is offered to nobody on this path.
-	 *
-	 * The model asks for it anyway, which is what makes this more than a list assertion: the call is
-	 * refused at dispatch, so the receipt the host closure would have returned is absent from the
-	 * answer entirely. A host tool acts as a principal no channel declaration chooses, so a group
-	 * conversation must not be able to reach one.
+	 * Sandbox host tools are offered to a channel when this session has a bound sandbox.
+	 * Non-sandbox host tools stay opt-in: `host_secret` is registered, named by nobody, and refused.
 	 */
-	it('withholds host tools from a channel run and refuses one called anyway', () => {
-		expect(offered(sink.sent[0]?.text ?? '')).not.toContain('sandbox_probe');
-		expect(sink.sent[0]?.text).toContain('probe=denied(');
-		expect(sink.sent[0]?.text).not.toContain(RECEIPT);
+	it('offers sandbox host tools to a channel run and withholds non-sandbox host tools', () => {
+		expect(offered(sink.sent[0]?.text ?? '')).toContain('sandbox_probe');
+		expect(offered(sink.sent[0]?.text ?? '')).not.toContain('host_secret');
+		expect(sink.sent[0]?.text).toContain(`probe=${RECEIPT}`);
+		expect(sink.sent[0]?.text).toContain('secret=denied');
+		expect(sink.sent[0]?.text).not.toContain('must-never-reach-a-transcript');
 	});
 
 	it('stores the transcript and the inbound receipt', async () => {

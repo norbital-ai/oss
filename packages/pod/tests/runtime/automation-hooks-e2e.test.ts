@@ -221,7 +221,6 @@ const SCHEDULED_AUTOMATION = `import { defineAutomation } from '@norbital-ai/pod
 export default defineAutomation(
 	{ schedule: '0 3 * * *' },
 	{
-		kind: 'deterministic',
 		description: 'Sweeps the open RFIs overnight and files a marker defect with the count.',
 		handler: async (api) => {
 			const rfis = await api.db.query.rfis.findMany({ limit: 500 });
@@ -243,7 +242,6 @@ const EVENT_AUTOMATION = `import { defineAutomation } from '@norbital-ai/pod/aut
 export default defineAutomation(
 	{ trigger: { collection: 'rfis', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description: 'Opens a tracking defect whenever a new RFI is created.',
 		handler: async (api, { scope }) => {
 			const rfi = scope.incoming_record;
@@ -267,7 +265,6 @@ import { z } from 'zod';
 export default defineAutomation(
 	{ trigger: { collection: 'rfis', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description: 'Proves that deterministic AI handlers replay without leaking pre-effect writes.',
 		handler: async (api, { scope }) => {
 			const rfi = scope.incoming_record;
@@ -275,7 +272,7 @@ export default defineAutomation(
 			await api.db.defects.create({
 				title: 'ai-replay:before', status: 'open', severity: 'low', description: String(rfi.norbital_id)
 			});
-			const classified = await api.ai({
+			const classified = await api.infer({
 				model: 'test/model', prompt: 'Classify ' + rfi.title,
 				schema: z.object({ verdict: z.literal('match') })
 			});

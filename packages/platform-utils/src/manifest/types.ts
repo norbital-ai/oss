@@ -131,12 +131,10 @@ export const ManifestAutomationAgentSpecSchema = z
 		collections: z.array(nonEmpty).optional(),
 		access: z.enum(['read', 'write']).optional(),
 		tools: z.array(nonEmpty).optional(),
+		denyTools: z.array(nonEmpty).optional(),
 		/**
-		 * Host tools this agent may call, named in the host's namespace rather than the workspace's.
-		 *
-		 * Carried in the manifest for the same reason `channels[].transport` is: the host never loads
-		 * the workspace bundle, so a name that lives only in source is invisible to it, and a host tool
-		 * that does not exist would otherwise surface as an agent that silently reaches nothing.
+		 * Non-sandbox host tools this agent may call. Sandbox host tools are not listed; the funnel
+		 * offers them when the session has a bound sandbox.
 		 */
 		hostTools: z.array(nonEmpty).optional(),
 		/**
@@ -161,8 +159,7 @@ export const ManifestAutomationSchema = z
 					event: z.enum(['created', 'updated', 'deleted'])
 				})
 				.strict()
-		]),
-		spec: ManifestAutomationAgentSpecSchema.optional()
+		])
 	})
 	.strict();
 
@@ -439,13 +436,15 @@ export const ManifestChannelSchema = z
 			.strict()
 			.optional(),
 		groupMessages: z.enum(['disabled', 'all', 'mention_or_reply']).default('disabled'),
-		/** Host tool names this channel opts into; omitted / empty means none. */
+		/** Non-sandbox host tool names this channel opts into; omitted / empty means none. */
 		hostTools: z.array(nonEmpty).optional(),
+		/** Workspace or platform tools to withhold. Cannot name sandbox host tools. */
+		denyTools: z.array(nonEmpty).optional(),
 		/** MCP servers this channel opts into; omitted / empty means none. */
 		mcpServers: z.array(nonEmpty).optional(),
 		/**
 		 * How host sandbox tools may touch the tenant worktree for this channel.
-		 * Default when omitted and hostTools is non-empty: read-only (enforced at run time).
+		 * Default when omitted: read-only (enforced at run time).
 		 */
 		hostSandbox: z
 			.object({

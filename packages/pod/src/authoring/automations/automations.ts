@@ -2,6 +2,7 @@ import type { AnySchema, DefaultWorkspaceSchema, SchemaRow, TableName } from '..
 import type { MergedWorkspaceSchema } from '../schema/system-workspace.js';
 import type { BeforeApi } from '../workspace/hook-api.js';
 import type { WorkspaceAuthoringTypes } from '../index.js';
+import type { PlatformAgentToolName } from './platform-agent-tools.js';
 
 type PlatformTriggerableTableName = 'user' | 'team' | 'team_members';
 
@@ -75,14 +76,27 @@ export type AgentAutomationSpec = {
 	readonly systemPrompt?: string;
 	readonly collections?: readonly WorkspaceCollectionName[];
 	readonly access?: 'read' | 'write';
+	/**
+	 * Workspace tools this agent may call. Omit for every `+*.tool.ts` in the workspace; pass an
+	 * allowlist to narrow. Sandbox host tools are not named here — the funnel adds them when this
+	 * session has a bound sandbox.
+	 */
 	readonly tools?: readonly WorkspaceAgentToolName[];
 	/**
-	 * Host tools this agent may call — the opt-in, and the whole of it.
+	 * Tools to withhold after the funnel runs. Typesafe over workspace tools and platform builtins.
+	 * Cannot name sandbox host tools; those stay attached whenever a sandbox is bound.
+	 */
+	readonly denyTools?: readonly (WorkspaceAgentToolName | PlatformAgentToolName)[];
+	/**
+	 * Non-sandbox host tools this agent may call — the opt-in, and the whole of it.
 	 *
-	 * A host tool runs in the host process with the host's credentials, so it is offered to nothing by
-	 * default: naming it here is the only way an agent ever sees one. That keeps a host capability at
-	 * least as constrained as a workspace one, which `tools` already narrows the same way, and it puts
-	 * the decision in workspace source where it appears in a diff.
+	 * Sandbox host tools (`sandbox_*`, or any host tool marked `requiresSandbox`) are not listed
+	 * here. The funnel offers them when the session has a bound sandbox, for every agent profile
+	 * including channels. Naming one here does not cause it to appear, and omitting one does not
+	 * hide it.
+	 *
+	 * A remaining host tool runs in the host process with the host's credentials, so it is offered
+	 * to nothing by default: naming it here is the only way an agent ever sees one.
 	 *
 	 * Plain `string` rather than a generated union, because these names belong to the *host*: which
 	 * tools exist depends on where the workspace is deployed, and the compiler cannot know. The
@@ -100,8 +114,8 @@ export type AgentAutomationSpec = {
 	/**
 	 * How host sandbox tools may touch the tenant worktree for this run.
 	 *
-	 * Interactive defaults to read-write (omitted). Channel runs that name `hostTools` default to
-	 * read-only unless the channel declaration sets `hostSandbox.workspace: 'read-write'`.
+	 * Interactive defaults to read-write (omitted). Channel runs default to read-only unless the
+	 * channel declaration sets `hostSandbox.workspace: 'read-write'`.
 	 */
 	readonly hostSandbox?: {
 		readonly workspace: 'read-only' | 'read-write';
@@ -111,18 +125,15 @@ export type AgentAutomationSpec = {
 };
 
 /**
- * The object form of a deterministic automation.
+ * One automation: a description the studio can show, and the handler that runs.
  *
- * Generic in the schema and the trigger for the same reason the bare-function form is: without it the
- * handler's `context` falls back to `AnySchema`, which collapses `scope.incoming_record` to
- * `Record<string, unknown>`. Two ways to declare the same automation should not disagree about how
- * well it is typed — the object form existed only to carry `kind`, and it was quietly the weaker one.
+ * Generic in the schema and the trigger so `scope.incoming_record` stays the trigger collection's
+ * row rather than collapsing to `Record<string, unknown>`.
  */
 export type DeterministicAutomationSpec<
 	S extends AnySchema = DefaultWorkspaceSchema,
 	TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
 > = {
-	readonly kind: 'deterministic';
 	/** What this automation does each time its trigger fires. Carried into the manifest. */
 	readonly description: string;
 	readonly handler: AutomationHandler<S, TTrigger>;
@@ -136,7 +147,7 @@ type AutomationHandler<S extends AnySchema, TTrigger extends AutomationTrigger<S
 export type AutomationSpec<
 	S extends AnySchema = DefaultWorkspaceSchema,
 	TTrigger extends AutomationTrigger<S> = AutomationTrigger<S>
-> = AgentAutomationSpec | DeterministicAutomationSpec<S, TTrigger>;
+> = DeterministicAutomationSpec<S, TTrigger>;
 
 export type AutomationDefinition = {
 	readonly trigger: AutomationTrigger;
@@ -157,14 +168,10 @@ export function defineAutomation<
 	if (!spec.description.trim()) throw new Error('Automation description cannot be empty');
 	// The object form carries the author's generics, so it needs the unwrapping the bare function used
 	// to get — otherwise the typed handler cannot be stored in the erased registry.
-	const erased: AutomationSpec =
-		spec.kind === 'deterministic'
-			? {
-					kind: 'deterministic',
-					description: spec.description,
-					handler: eraseAutomationHandler(spec.handler)
-				}
-			: spec;
+	const erased: AutomationSpec = {
+		description: spec.description,
+		handler: eraseAutomationHandler(spec.handler)
+	};
 	return { trigger: trigger as AutomationTrigger, spec: erased };
 }
 

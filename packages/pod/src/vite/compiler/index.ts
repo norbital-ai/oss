@@ -9,6 +9,7 @@ import { extractAppMetadata, extractStaticMetaValue } from './app-metadata.js';
 import { parseSkillDocument } from './skill-frontmatter.js';
 import { HOST_SKILLS } from '$lib/skills/skills.generated.js';
 import { isValidSkillName } from '$lib/skills/types.js';
+import { PLATFORM_AGENT_TOOL_NAMES } from '$lib/authoring/automations/platform-agent-tools.js';
 import type {
 	DiagnosticSnapshot,
 	DiscoveredAppNode,
@@ -32,14 +33,7 @@ const COLLECTION_ROLE_FILES = [
 ] as const;
 const PRIVATE_VIRTUAL_IMPORT_PATTERN =
 	/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["']virtual:pod\/[^"']+["']/g;
-const BUILTIN_AGENT_TOOL_NAMES = new Set([
-	'describe_workspace',
-	'list_skills',
-	'read_skill',
-	'read_collection',
-	'write_collection',
-	'spawn_subagent'
-]);
+const BUILTIN_AGENT_TOOL_NAMES = new Set<string>(PLATFORM_AGENT_TOOL_NAMES);
 /**
  * Derived from the shipped skills rather than listed, so the reserved set cannot fall behind what
  * `skills/` actually contains — a stale list would let a workspace compile a skill the runtime then

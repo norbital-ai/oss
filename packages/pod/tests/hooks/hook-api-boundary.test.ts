@@ -31,6 +31,7 @@ function capabilityRichApi() {
 		readFileAssetInspection: () => null,
 		readFileAssetInspections: () => [],
 		sendNotification: () => Promise.resolve({ notificationId: 'notification_1' }),
+		infer: () => 'infer',
 		// Everything below exists on the real builtin API or its elevated variant.
 		fetch: () => 'network',
 		requireRuntimeFacility: () => 'facility',
@@ -46,6 +47,7 @@ describe('hook API boundary', () => {
 		);
 		expect(Object.keys(restricted).sort()).toEqual([
 			'db',
+			'infer',
 			'readFileAsset',
 			'readFileAssetInspection',
 			'readFileAssetInspections',
@@ -59,6 +61,7 @@ describe('hook API boundary', () => {
 		);
 		expect(Object.keys(restricted).sort()).toEqual([
 			'db',
+			'infer',
 			'readFileAsset',
 			'readFileAssetInspection',
 			'readFileAssetInspections',

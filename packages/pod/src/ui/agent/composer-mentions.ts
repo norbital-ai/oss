@@ -139,6 +139,49 @@ export function insertMention(
 	return { draft: nextDraft, mentions: mentionsByStart(kept), caret: end + (needsSpace ? 1 : 0) };
 }
 
+function shiftMentionsAfter(
+	mentions: readonly ComposerMention[],
+	from: number,
+	delta: number
+): ComposerMention[] {
+	return mentions.map((mention) =>
+		mention.start >= from ? shiftMention(mention, delta) : mention
+	);
+}
+
+/** Keep the `@` and replace only the live query after it. Mentions past the query shift. */
+export function rewriteTriggerQuery(
+	draft: string,
+	mentions: readonly ComposerMention[],
+	trigger: MentionTrigger,
+	nextQuery: string
+): { draft: string; mentions: ComposerMention[]; caret: number } {
+	const queryStart = trigger.start + 1;
+	const queryEnd = queryStart + trigger.query.length;
+	const nextDraft = `${draft.slice(0, queryStart)}${nextQuery}${draft.slice(queryEnd)}`;
+	return {
+		draft: nextDraft,
+		mentions: shiftMentionsAfter(mentions, queryEnd, nextQuery.length - trigger.query.length),
+		caret: queryStart + nextQuery.length
+	};
+}
+
+/** Remove the live `@query` and leave `rest` in its place. */
+export function consumeTrigger(
+	draft: string,
+	mentions: readonly ComposerMention[],
+	trigger: MentionTrigger,
+	rest: string
+): { draft: string; mentions: ComposerMention[]; caret: number } {
+	const queryEnd = trigger.start + 1 + trigger.query.length;
+	const nextDraft = `${draft.slice(0, trigger.start)}${rest}${draft.slice(queryEnd)}`;
+	return {
+		draft: nextDraft,
+		mentions: shiftMentionsAfter(mentions, queryEnd, rest.length - (1 + trigger.query.length)),
+		caret: trigger.start + rest.length
+	};
+}
+
 /**
  * Reconcile tracked chips with an edit the textarea made on its own.
  *

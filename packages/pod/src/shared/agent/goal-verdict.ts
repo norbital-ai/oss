@@ -47,6 +47,20 @@ export function parseStoredGoalVerdict(content: string): GoalVerdict | null {
 	}
 }
 
+export function serializeVerifierScheduled(prompt: string): string {
+	return JSON.stringify({ resultType: 'verifier_scheduled', prompt });
+}
+
+export function parseStoredVerifierScheduled(content: string): string | null {
+	try {
+		const parsed: unknown = JSON.parse(content);
+		if (!isRecord(parsed) || parsed.resultType !== 'verifier_scheduled') return null;
+		return typeof parsed.prompt === 'string' && parsed.prompt.trim() ? parsed.prompt : null;
+	} catch {
+		return null;
+	}
+}
+
 export function serializeGoalVerdict(verdict: GoalVerdict): string {
 	return JSON.stringify({
 		resultType: 'goal_verdict',

@@ -3,7 +3,6 @@ import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
 	{
-		kind: 'deterministic',
 		description:
 			'Sweeps the RFI register every morning at 6am and publishes the first 25 as a JSON extract so queries still waiting on the design team can be chased.',
 		handler: async (api) => {

@@ -7,7 +7,10 @@ import {
 	prepareInteractiveAgentTurn,
 	runAgent
 } from '$lib/server/agent/agent-loop.server.js';
-import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
+import {
+	interactiveAgentSpec,
+	interactiveAgentStartSpec
+} from '$lib/server/agent/agent-spec.server.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/server/http.js';
@@ -17,7 +20,36 @@ import {
 	admitAgentTurn,
 	INTERACTIVE_AGENT_AUTOMATION_NAME
 } from '$lib/server/run/automation-dispatch.server.js';
+import { updateScheduledVerifierPrompt } from '$lib/server/agent/goal-mode.server.js';
+import { resolveAgentIntent } from '$lib/shared/agent/intent.js';
+import { rethrowConstraintViolation } from '$lib/server/collection/constraint-errors.server.js';
 import { z } from 'zod';
+
+function chatIntentFields(input: {
+	readonly message?: string;
+	readonly planMode?: boolean;
+	readonly intent?: 'do' | 'plan';
+	readonly verifierPrompt?: string;
+	readonly mentions?: readonly unknown[];
+}): {
+	readonly planMode?: true;
+	readonly intent: 'do' | 'plan';
+	readonly verifierPrompt?: string;
+	readonly goalMode?: true;
+} {
+	const resolved = resolveAgentIntent({
+		intent: input.intent,
+		planMode: input.planMode,
+		verifierPrompt: input.verifierPrompt,
+		message: input.message,
+		mentionCount: input.mentions?.length
+	});
+	return {
+		...(resolved.planMode ? { planMode: true as const } : {}),
+		intent: resolved.intent,
+		...(resolved.verify ? { verifierPrompt: resolved.verifierPrompt, goalMode: true as const } : {})
+	};
+}
 
 /**
  * The shape of a model identifier, which is all this package can judge on its own.
@@ -61,9 +93,15 @@ export const AgentChatInputSchema = z.object({
 	 * user message. Omitted / false is a normal turn.
 	 */
 	planMode: z.boolean().optional(),
+	/** `do` (default) or `plan`. `planMode: true` is the same as `intent: 'plan'`. */
+	intent: z.enum(['do', 'plan']).optional(),
 	/**
-	 * Work toward the request; an independent verifier decides whether the turn may stop.
-	 * Ignored when `planMode` is on.
+	 * Prompt the independent end-action verifier reads. Omitted uses the intent default.
+	 * The composer shows this same text.
+	 */
+	verifierPrompt: z.string().max(4000).optional(),
+	/**
+	 * @deprecated Every root turn verifies. Kept so older callers still parse.
 	 */
 	goalMode: z.boolean().optional(),
 	/**
@@ -74,6 +112,11 @@ export const AgentChatInputSchema = z.object({
 });
 
 export const AgentModelsInputSchema = z.object({});
+
+export const AgentChatUpdateVerifierInputSchema = z.object({
+	runId: z.uuid(),
+	prompt: z.string().min(1).max(4000)
+});
 
 export type AgentChatResult = {
 	readonly runId: string;
@@ -123,6 +166,43 @@ type PreparedConversation = {
 	readonly session: Record<string, unknown>;
 };
 
+function sessionHasOpenRootTurn(session: Record<string, unknown>): boolean {
+	const turns = session.turns;
+	if (!Array.isArray(turns)) return false;
+	return turns.some((turn) => {
+		if (!turn || typeof turn !== 'object' || Array.isArray(turn)) return false;
+		const row = turn as Record<string, unknown>;
+		return row.subagent_id == null && (row.status === 'running' || row.status === 'queued');
+	});
+}
+
+function admitDriverCode(caught: unknown): string | null {
+	if (!caught || typeof caught !== 'object') return null;
+	const code = Reflect.get(caught, 'code');
+	return typeof code === 'string' ? code : null;
+}
+
+async function admitInteractiveTurn(
+	conversation: PreparedConversation,
+	snapshot: Record<string, unknown>
+): Promise<void> {
+	try {
+		await admitAgentTurn(getWorkspace({ provision: true }), {
+			automationName: INTERACTIVE_AGENT_AUTOMATION_NAME,
+			triggerKey: `turn:${conversation.chatId}:${String(snapshot.turnId)}`,
+			originScope: getWorkspace({ provision: true }).baseScope,
+			snapshot
+		});
+	} catch (cause) {
+		rethrowConstraintViolation(cause, '_norbital_automation_job');
+		const code = admitDriverCode(cause);
+		if (code === '42P01' || code === '42501') {
+			throw error(500, requestI18n().t('pod.server.agentStartFailed'));
+		}
+		throw cause;
+	}
+}
+
 async function prepareConversation(runId?: string): Promise<PreparedConversation> {
 	const ctx = getWorkspace({ provision: true });
 	const ownerUserId = ctx.baseScope.requestor.norbital_id;
@@ -161,8 +241,6 @@ async function prepareConversation(runId?: string): Promise<PreparedConversation
 			throw error(404, requestI18n().t('pod.server.agentConversationNotFound'));
 		if (row.requested_by_user_id !== ownerUserId)
 			throw error(403, requestI18n().t('pod.server.agentConversationPrivate'));
-		if (row.status === 'running')
-			throw error(409, requestI18n().t('pod.server.agentAlreadyResponding'));
 		if (row.chat_id) {
 			const selected = await ctx.tenantDb.query<Record<string, unknown>>(
 				`SELECT * FROM chat_session
@@ -173,8 +251,12 @@ async function prepareConversation(runId?: string): Promise<PreparedConversation
 			);
 			const session = selected.rows[0];
 			if (!session) throw error(404, requestI18n().t('pod.server.agentConversationNotFound'));
+			if (row.status === 'running' || sessionHasOpenRootTurn(session))
+				throw error(409, requestI18n().t('pod.server.agentAlreadyResponding'));
 			return { runId, chatId: row.chat_id, session };
 		}
+		if (row.status === 'running')
+			throw error(409, requestI18n().t('pod.server.agentAlreadyResponding'));
 		return createSession(runId);
 	}
 
@@ -184,9 +266,8 @@ async function prepareConversation(runId?: string): Promise<PreparedConversation
 		{
 			requested_by_user_id: ownerUserId,
 			automation_name: null,
-			status: 'running',
-			input: { task: 'Interactive workspace conversation' },
-			started_at: new Date().toISOString()
+			status: 'pending',
+			input: { task: 'Interactive workspace conversation' }
 		},
 		{ isElevated: true }
 	);
@@ -221,8 +302,7 @@ export const agentChat = authenticated.command(
 			spec,
 			input: input.message,
 			...(input.runId ? { runId: input.runId } : {}),
-			...(input.planMode ? { planMode: true } : {}),
-			...(input.goalMode && !input.planMode ? { goalMode: true } : {}),
+			...chatIntentFields(input),
 			...(input.mentions?.length ? { mentions: input.mentions } : {})
 		});
 
@@ -253,35 +333,26 @@ export const agentChatStart = authenticated.command(
 		// leave a started run whose first visible event is an error.
 		const model = await resolveModel(input.model);
 		const conversation = await prepareConversation(input.runId);
-		// A directive still becomes a stored user message and a turn — the reader typed it, and the
-		// transcript should show what they asked for beside what it did.
 		const compact = parseCompactDirective(input.message);
-		const spec = await interactiveAgentSpec(input.message, model);
+		const spec = interactiveAgentStartSpec(input.message, model);
 		const opened = await prepareInteractiveAgentTurn({
 			sessionId: conversation.chatId,
 			spec,
 			message: input.message,
-			...(input.planMode ? { planMode: true } : {}),
-			...(input.goalMode && !input.planMode ? { goalMode: true } : {}),
+			...chatIntentFields(input),
 			...(input.mentions?.length ? { mentions: input.mentions } : {})
 		});
-		await admitAgentTurn(getWorkspace({ provision: true }), {
-			automationName: INTERACTIVE_AGENT_AUTOMATION_NAME,
-			triggerKey: `turn:${conversation.chatId}:${opened.turnId}`,
-			originScope: getWorkspace({ provision: true }).baseScope,
-			snapshot: {
-				sessionId: conversation.chatId,
-				runId: conversation.runId,
-				turnId: opened.turnId,
-				promptContent: opened.promptContent,
-				spec,
-				input: input.message,
-				...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
-				...(input.planMode ? { planMode: true } : {}),
-				...(input.goalMode && !input.planMode ? { goalMode: true } : {}),
-				...(input.mentions?.length ? { mentions: input.mentions } : {}),
-				...(compact ? { compact } : {})
-			}
+		await admitInteractiveTurn(conversation, {
+			sessionId: conversation.chatId,
+			runId: conversation.runId,
+			turnId: opened.turnId,
+			promptContent: opened.promptContent,
+			spec,
+			input: input.message,
+			...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
+			...chatIntentFields(input),
+			...(input.mentions?.length ? { mentions: input.mentions } : {}),
+			...(compact ? { compact } : {})
 		});
 		return {
 			...conversation,
@@ -301,4 +372,31 @@ export const agentChatStart = authenticated.command(
 export const agentModels = authenticated.query(
 	AgentModelsInputSchema,
 	async (): Promise<AiModelCatalog | null> => hostModelCatalog()
+);
+
+export const agentChatUpdateVerifier = authenticated.command(
+	AgentChatUpdateVerifierInputSchema,
+	async (input): Promise<{ readonly accepted: true }> => {
+		const ctx = getWorkspace({ provision: true });
+		const ownerUserId = ctx.baseScope.requestor.norbital_id;
+		const existing = await ctx.tenantDb.query<{
+			requested_by_user_id: string;
+			automation_name: string | null;
+			chat_id: string | null;
+		}>({
+			text: `SELECT r.requested_by_user_id, r.automation_name, s.norbital_id AS chat_id
+			         FROM automation_run r
+			    LEFT JOIN chat_session s ON s.automation_run_id = r.norbital_id
+			        WHERE r.norbital_id = $1::uuid
+			        LIMIT 1`,
+			values: [input.runId]
+		});
+		const row = existing.rows[0];
+		if (!row || row.automation_name !== null || !row.chat_id)
+			throw error(404, requestI18n().t('pod.server.agentConversationNotFound'));
+		if (row.requested_by_user_id !== ownerUserId)
+			throw error(403, requestI18n().t('pod.server.agentConversationPrivate'));
+		await updateScheduledVerifierPrompt(row.chat_id, input.prompt);
+		return { accepted: true };
+	}
 );

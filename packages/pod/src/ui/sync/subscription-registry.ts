@@ -1,5 +1,5 @@
 import type { PodSyncClient } from './pod-sync-client.js';
-import type { CollectionSyncState } from './types.js';
+import type { CollectionSyncState, ShapeResponse } from './types.js';
 
 /**
  * Rows per catch-up request, at the server's ceiling (`MAX_SHAPE_PAGE_SIZE`).
@@ -96,6 +96,46 @@ function approximateBytes(rows: readonly Record<string, unknown>[]): number {
 }
 
 /**
+ * A catch-up may stop for three reasons, and only two of them mean the local rows can be
+ * trusted as an answer. Reaching the end of the data, or the budget, is a real stopping
+ * point. A server that offers a cursor and then sends nothing is not — see below.
+ */
+function catchUpStop(
+	page: ShapeResponse,
+	rows: number,
+	bytes: number,
+	budget: number,
+	maxResidentRows: number
+): { readonly done: boolean; readonly resident: boolean; readonly trustworthy: boolean } {
+	if (page.nextCursor === null) {
+		return { done: true, resident: true, trustworthy: true };
+	}
+	// An empty page that still offers a cursor would spin forever, so stop — but do NOT
+	// call the collection complete. It used to, and that is how a table renders "no
+	// records" over data that exists: the server says "there is more" and sends none of
+	// it, the replica records itself as fully synced and empty, and from then on it
+	// answers every read locally with nothing. Leaving it untrusted sends reads to the
+	// server, which is the only party that can say whether the collection is really empty.
+	if (page.rows.length === 0) {
+		return { done: true, resident: false, trustworthy: false };
+	}
+	// Over the shared byte budget: this collection is windowed. Stop rather than keep
+	// pulling — the rows already here still serve reads that fall inside them, and the
+	// server owns everything past the edge.
+	if (bytes >= budget) {
+		return { done: true, resident: false, trustworthy: true };
+	}
+	// Past the row cap: windowed the same way. A wide table of narrow rows can be a few
+	// MB yet cost a round trip per page to download, so bytes alone never windows a
+	// table like a 20k-row roster. Reads that cannot be proven local go to the server,
+	// whose scoped `where` answers them in one trip.
+	if (rows >= maxResidentRows) {
+		return { done: true, resident: false, trustworthy: true };
+	}
+	return { done: false, resident: false, trustworthy: false };
+}
+
+/**
  * Tracks which collections this replica holds, and whether it holds all of them.
  *
  * The sync unit is the collection, not the query shape (README §3.1): one catch-up per collection
@@ -110,7 +150,14 @@ export class SubscriptionRegistry {
 	private readonly inFlight = new Map<string, Promise<void>>();
 	/** Collections demanded by a mounted read but not yet through their serialized snapshot. */
 	private readonly demanded = new Set<string>();
-	private catchUpQueue: Promise<void> = Promise.resolve();
+	/**
+	 * Remaining pages after a collection's first page is already readable.
+	 *
+	 * First-page work is not chained here: a newly demanded collection must not sit behind
+	 * another collection's leftover pages. Remainder snapshots still serialize so only one
+	 * catch-up freezes the live cursor at a time.
+	 */
+	private remainderQueue: Promise<void> = Promise.resolve();
 	private restoring: Promise<void> | null = null;
 	private readonly residencyBytes: number;
 	private readonly maxResidentRows: number;
@@ -185,6 +232,17 @@ export class SubscriptionRegistry {
 		return Boolean(entry?.fresh && entry.resident);
 	}
 
+	/**
+	 * Whether this replica stored the collection as fully local.
+	 *
+	 * Unlike `isResident`, this does not wait for the live cursor to cross the document head.
+	 * Restored resident collections may answer visible reads from the held rows while freshness
+	 * catches up on the stream.
+	 */
+	isHeldResident(collection: string): boolean {
+		return this.meta.get(collection)?.resident ?? false;
+	}
+
 	/** A restored row is not safe until the live cursor catches the head seen at document boot. */
 	isFresh(collection: string): boolean {
 		return this.meta.get(collection)?.fresh ?? false;
@@ -222,15 +280,12 @@ export class SubscriptionRegistry {
 			onFirstPage = resolve;
 		});
 
-		const catchUp = this.catchUpQueue
-			.then(() => this.runCatchUp(collection, () => onFirstPage()))
-			.finally(() => {
-				this.inFlight.delete(collection);
-				this.demanded.delete(collection);
-				this.publishSubscriptions();
-				onFirstPage();
-			});
-		this.catchUpQueue = catchUp.catch(() => undefined);
+		const catchUp = this.runCatchUp(collection, () => onFirstPage()).finally(() => {
+			this.inFlight.delete(collection);
+			this.demanded.delete(collection);
+			this.publishSubscriptions();
+			onFirstPage();
+		});
 		this.inFlight.set(collection, firstPage);
 		void catchUp.catch(() => undefined);
 		return firstPage;
@@ -245,89 +300,29 @@ export class SubscriptionRegistry {
 		return total;
 	}
 
-	private async runCatchUp(collection: string, onFirstPage: () => void): Promise<void> {
-		let cursor: string | null = null;
-		let rows = 0;
-		let bytes = 0;
-		let resident = false;
-		let firstPage = true;
-		// A catch-up may stop for three reasons, and only two of them mean the local rows can be
-		// trusted as an answer. Reaching the end of the data, or the budget, is a real stopping
-		// point. A server that offers a cursor and then sends nothing is not — see below.
-		let trustworthy = false;
-		const budget = Math.max(0, this.residencyBytes - this.bytesHeldExcluding(collection));
+	private markReady(collection: string, rows: number, bytes: number): void {
+		if (this.meta.get(collection)?.ready) return;
+		this.meta.set(collection, {
+			ready: true,
+			fresh: true,
+			synced: false,
+			resident: false,
+			rows,
+			bytes
+		});
+		this.publishSubscriptions();
+		// Tell the UI the replica just warmed up; otherwise the rows sit in PGlite unread
+		// until some unrelated change happens to invalidate the query.
+		this.client.notifyCollection(collection);
+	}
 
-		// Freeze the global cursor while materializing this collection. If another subscribed
-		// collection advanced the cursor during the snapshot, changes to this new collection could
-		// be skipped forever. Replaying from the frozen cursor after the catch-up is idempotent and
-		// also resolves delete-vs-later-page races without local tombstones.
-		await this.client.stopStream();
-		try {
-			for (;;) {
-				const page = await this.client.shapeSubscribe({
-					collection,
-					cursor,
-					pageSize: firstPage ? FIRST_PAGE_SIZE : PAGE_SIZE
-				});
-				rows += page.rows.length;
-				bytes += approximateBytes(page.rows);
-
-				if (firstPage) {
-					firstPage = false;
-					onFirstPage();
-				}
-				if (!this.meta.get(collection)?.ready) {
-					this.meta.set(collection, {
-						ready: true,
-						fresh: true,
-						synced: false,
-						resident: false,
-						rows,
-						bytes
-					});
-					this.publishSubscriptions();
-					// Tell the UI the replica just warmed up; otherwise the rows sit in PGlite unread
-					// until some unrelated change happens to invalidate the query.
-					this.client.notifyCollection(collection);
-				}
-
-				if (page.nextCursor === null) {
-					resident = true;
-					trustworthy = true;
-					break;
-				}
-				// An empty page that still offers a cursor would spin forever, so stop — but do NOT
-				// call the collection complete. It used to, and that is how a table renders "no
-				// records" over data that exists: the server says "there is more" and sends none of
-				// it, the replica records itself as fully synced and empty, and from then on it
-				// answers every read locally with nothing. Leaving it untrusted sends reads to the
-				// server, which is the only party that can say whether the collection is really empty.
-				if (page.rows.length === 0) break;
-				// Over the shared byte budget: this collection is windowed. Stop rather than keep
-				// pulling — the rows already here still serve reads that fall inside them, and the
-				// server owns everything past the edge.
-				if (bytes >= budget) {
-					trustworthy = true;
-					break;
-				}
-				// Past the row cap: windowed the same way. A wide table of narrow rows can be a few
-				// MB yet cost a round trip per page to download, so bytes alone never windows a
-				// table like a 20k-row roster. Reads that cannot be proven local go to the server,
-				// whose scoped `where` answers them in one trip.
-				if (rows >= this.maxResidentRows) {
-					trustworthy = true;
-					break;
-				}
-				cursor = page.nextCursor;
-			}
-		} catch {
-			// Leave the collection unregistered so the next read retries. Reads go to the server in
-			// the meantime, so a failed catch-up costs latency, never correctness.
-			if (!this.meta.get(collection)?.ready) this.meta.delete(collection);
-			this.client.startStream();
-			return;
-		}
-
+	private async finishCatchUp(
+		collection: string,
+		rows: number,
+		bytes: number,
+		resident: boolean,
+		trustworthy: boolean
+	): Promise<void> {
 		this.meta.set(collection, {
 			ready: true,
 			fresh: true,
@@ -343,7 +338,80 @@ export class SubscriptionRegistry {
 			await this.client.recordSyncState(collection, resident, rows, bytes).catch(() => undefined);
 		}
 		this.client.notifyCollection(collection);
-		this.client.startStream();
+	}
+
+	private async runCatchUp(collection: string, onFirstPage: () => void): Promise<void> {
+		const budget = Math.max(0, this.residencyBytes - this.bytesHeldExcluding(collection));
+		let rows = 0;
+		let bytes = 0;
+
+		try {
+			// Keep the live stream up through the first page so waitForSequence / queryLocal are
+			// not parked behind a multi-page snapshot. Remaining pages freeze the cursor below.
+			const page = await this.client.shapeSubscribe({
+				collection,
+				cursor: null,
+				pageSize: FIRST_PAGE_SIZE
+			});
+			rows += page.rows.length;
+			bytes += approximateBytes(page.rows);
+			this.markReady(collection, rows, bytes);
+			onFirstPage();
+
+			const stop = catchUpStop(page, rows, bytes, budget, this.maxResidentRows);
+			if (stop.done) {
+				await this.finishCatchUp(collection, rows, bytes, stop.resident, stop.trustworthy);
+				return;
+			}
+
+			const nextCursor = page.nextCursor;
+			if (nextCursor === null) return;
+			this.remainderQueue = this.remainderQueue
+				.then(() => this.runRemainder(collection, nextCursor, rows, bytes, budget))
+				.catch(() => undefined);
+		} catch {
+			// Leave the collection unregistered so the next read retries. Reads go to the server in
+			// the meantime, so a failed catch-up costs latency, never correctness.
+			if (!this.meta.get(collection)?.ready) this.meta.delete(collection);
+		}
+	}
+
+	private async runRemainder(
+		collection: string,
+		cursor: string,
+		rows: number,
+		bytes: number,
+		budget: number
+	): Promise<void> {
+		// Freeze the global cursor while materializing the rest of this collection. If another
+		// subscribed collection advanced the cursor during the snapshot, changes to this collection
+		// could be skipped forever. Replaying from the frozen cursor after the catch-up is
+		// idempotent and also resolves delete-vs-later-page races without local tombstones.
+		await this.client.stopStream();
+		try {
+			let next = cursor;
+			for (;;) {
+				const page = await this.client.shapeSubscribe({
+					collection,
+					cursor: next,
+					pageSize: PAGE_SIZE
+				});
+				rows += page.rows.length;
+				bytes += approximateBytes(page.rows);
+
+				const stop = catchUpStop(page, rows, bytes, budget, this.maxResidentRows);
+				if (stop.done) {
+					await this.finishCatchUp(collection, rows, bytes, stop.resident, stop.trustworthy);
+					return;
+				}
+				if (page.nextCursor === null) return;
+				next = page.nextCursor;
+			}
+		} catch {
+			if (!this.meta.get(collection)?.ready) this.meta.delete(collection);
+		} finally {
+			this.client.startStream();
+		}
 	}
 
 	get size(): number {

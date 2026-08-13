@@ -10,7 +10,19 @@
 	import type { WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
 	import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
-	import { createMentionSources, type MentionRecordHit } from '../agent/mention-sources.js';
+	import type { AgentComposerSeed } from '../agent/composer-chrome.js';
+	import {
+		COMMAND_PREFIX,
+		commandPrefixChar,
+		createMentionSources,
+		filterCollections,
+		parseCommandQuery,
+		recordSearchIdentity,
+		shouldSearchRecords,
+		type CommandScope,
+		type MentionRecordHit
+	} from '../agent/mention-sources.js';
+	import { createDebouncedRecordSearch } from '../agent/debounced-record-search.js';
 
 	const { t } = useI18n<PodUiKeys>();
 
@@ -22,9 +34,6 @@
 	 * pin, and a search that matches in the palette matches in the mention menu. Apps and commands
 	 * are indexed in memory; only records pay the search fan-out, debounced exactly like the
 	 * mention menu so one burst of typing stays a handful of queries.
-	 *
-	 * Record hits render as their sources resolve rather than waiting for the slowest collection
-	 * of the fan-out, so the palette fills instead of spinning.
 	 */
 	let {
 		open = $bindable(false),
@@ -41,63 +50,63 @@
 		agentAvailable: boolean;
 		onNavigate: (href: string) => void;
 		/** Ask the agent: opens the sheet (or focuses the composer) without closing the palette. */
-		onAskAgent: () => void;
+		onAskAgent: (seed?: AgentComposerSeed) => void;
 	} = $props();
 
 	const mentionSources = createMentionSources(() => manifestContext, { hitsPerSource: 8 });
+
+	const PREFIX_LABEL_KEYS: Record<
+		CommandScope,
+		| 'pod.shell.omniPrefixSearch'
+		| 'pod.shell.omniPrefixPlan'
+		| 'pod.shell.omniPrefixApps'
+		| 'pod.shell.omniPrefixCommands'
+	> = {
+		record: 'pod.shell.omniPrefixSearch',
+		plan: 'pod.shell.omniPrefixPlan',
+		app: 'pod.shell.omniPrefixApps',
+		command: 'pod.shell.omniPrefixCommands'
+	};
 
 	let query = $state('');
 	let inputElement = $state<HTMLInputElement | null>(null);
 	let recordHits = $state<readonly MentionRecordHit[]>([]);
 	let recordsLoading = $state(false);
-	/** The palette clears its state on close, so one instance holds one query's lifecycle. */
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
-	let searchVersion = 0;
+
+	const recordSearch = createDebouncedRecordSearch({
+		search: (text, collection) => mentionSources.search(text, collection),
+		onLoading: (loading) => {
+			recordsLoading = loading;
+		},
+		onResults: (hits) => {
+			recordHits = hits;
+		}
+	});
+
+	const parsed = $derived(parseCommandQuery(query, mentionSources.collections()));
 
 	// ── Record search: the mention menu's debounce, at the palette's limits. The input handler
-	// is the only writer — a callback pipeline, not an effect — and the version guard discards
-	// responses that raced a newer query. Hits stream in per source as they resolve (the engine's
-	// `onHits`), so the records group appears as soon as the fastest collection answers instead
-	// of after the slowest one does; the final merged list replaces the streamed one.
+	// is the only writer — a callback pipeline, not an effect — with one debounce, one version
+	// guard, and one write of recordHits when the merged list resolves.
+	function scheduleRecordSearch(): void {
+		recordSearch.schedule(recordSearchIdentity(parsed), parsed, shouldSearchRecords(parsed));
+	}
+
+	function commitQuery(next: string, focus = false): void {
+		query = next;
+		scheduleRecordSearch();
+		if (focus) queueMicrotask(() => inputElement?.focus());
+	}
+
 	function onQueryInput(event: Event): void {
-		query = (event.currentTarget as HTMLInputElement).value;
-		clearTimeout(searchTimer);
-		const active = query.trim();
-		if (!active) {
-			searchVersion++;
-			recordHits = [];
-			recordsLoading = false;
-			return;
-		}
-		const version = ++searchVersion;
-		recordsLoading = true;
-		searchTimer = setTimeout(() => {
-			void mentionSources
-				.search(active, null, {
-					onHits: (hits) => {
-						if (version !== searchVersion) return;
-						recordHits = [...recordHits, ...hits];
-					}
-				})
-				.then((hits) => {
-					if (version !== searchVersion) return;
-					recordHits = hits;
-					recordsLoading = false;
-				})
-				.catch(() => {
-					if (version !== searchVersion) return;
-					recordHits = [];
-					recordsLoading = false;
-				});
-		}, 150);
+		commitQuery((event.currentTarget as HTMLInputElement).value);
 	}
 
 	function onOpenChange(next: boolean): void {
 		if (next) return;
 		// Closing aborts in-flight searches too: the version guard needs the next open to be a
 		// fresh lifecycle, not a resume of the query that closed.
-		searchVersion++;
-		clearTimeout(searchTimer);
+		recordSearch.invalidate();
 		query = '';
 		recordHits = [];
 		recordsLoading = false;
@@ -137,13 +146,13 @@
 
 	function flattenedSystem(): { key: string; label: string; href: string }[] {
 		const out: { key: string; label: string; href: string }[] = [];
-		const walk = (items: WorkspaceNavigationModel['system'], depth: number): void => {
+		const walk = (items: WorkspaceNavigationModel['system']): void => {
 			for (const item of items) {
 				out.push({ key: item.key, label: item.label, href: item.href });
-				if (item.children?.length) walk(item.children, depth + 1);
+				if (item.children?.length) walk(item.children);
 			}
 		};
-		walk(navigationModel.system, 0);
+		walk(navigationModel.system);
 		return out;
 	}
 
@@ -174,13 +183,16 @@
 		icon?: string | null;
 		thumbnail?: string | null;
 		depth?: number;
+		keep?: boolean;
 		run?: () => void;
 	};
 
 	const rowValue = (kind: OmniRow['kind'], key: string): string => `${kind}:${key}`;
 
 	const appRows = $derived.by((): OmniRow[] => {
-		const needle = query.trim();
+		const scope = parsed.scope;
+		if (scope !== null && scope !== 'app') return [];
+		const needle = parsed.text.trim();
 		return flattenedApps()
 			.map((app): { row: OmniRow; score: number | null } => {
 				const score = needle
@@ -239,23 +251,84 @@
 		}))
 	);
 
+	const collectionScopeRows = $derived.by((): OmniRow[] => {
+		if (parsed.scope !== 'record' || parsed.collection) return [];
+		return filterCollections(parsed.text, mentionSources.collections()).map(
+			(collection): OmniRow => ({
+				value: rowValue('command', `collection-${collection}`),
+				kind: 'command',
+				label: t('pod.agent.searchCollection', { collection }),
+				description: commandPrefixChar('record'),
+				run: () => commitQuery(`#${collection} `, true)
+			})
+		);
+	});
+
 	const commandRows = $derived.by((): OmniRow[] => {
-		const needle = query.trim().toLowerCase();
+		const scope = parsed.scope;
+		if (scope === 'plan') {
+			return [
+				{
+					value: rowValue('command', 'plan'),
+					kind: 'command',
+					label: parsed.text
+						? t('pod.shell.omniPlanWithQuery', { query: parsed.text })
+						: t('pod.shell.omniPrefixPlan'),
+					icon: 'product:agent',
+					run: () => {
+						onAskAgent({ message: parsed.text || undefined, planMode: true });
+						open = false;
+					}
+				}
+			];
+		}
+		if (scope !== null && scope !== 'command') return [];
+
+		const needle = parsed.text.trim().toLowerCase();
 		const matches = (label: string, keywords: string[]): boolean =>
 			!needle ||
 			label.toLowerCase().includes(needle) ||
 			keywords.some((keyword) => keyword.toLowerCase().includes(needle));
 		const rows: OmniRow[] = [];
-		if (agentAvailable) {
-			rows.push({
-				value: rowValue('command', 'ask-agent'),
-				kind: 'command',
-				label: t('pod.shell.omniNewConversation'),
-				description: t('pod.shell.omniNewConversationHint'),
-				icon: 'product:agent',
-				run: onAskAgent
-			});
+
+		if (scope === null && !query.trim()) {
+			for (const prefixScope of Object.keys(COMMAND_PREFIX) as CommandScope[]) {
+				rows.push({
+					value: rowValue('command', `prefix-${prefixScope}`),
+					kind: 'command',
+					label: t(PREFIX_LABEL_KEYS[prefixScope]),
+					description: commandPrefixChar(prefixScope),
+					keep: true,
+					run: () => commitQuery(commandPrefixChar(prefixScope), true)
+				});
+			}
 		}
+
+		if (agentAvailable && scope === null) {
+			if (parsed.text.trim()) {
+				rows.push({
+					value: rowValue('command', 'ask-agent'),
+					kind: 'command',
+					label: t('pod.shell.omniAskWithQuery', { query: parsed.text }),
+					description: t('pod.shell.omniNewConversationHint'),
+					icon: 'product:agent',
+					run: () => {
+						onAskAgent({ message: parsed.text });
+						open = false;
+					}
+				});
+			} else {
+				rows.push({
+					value: rowValue('command', 'ask-agent'),
+					kind: 'command',
+					label: t('pod.shell.omniNewConversation'),
+					description: t('pod.shell.omniNewConversationHint'),
+					icon: 'product:agent',
+					run: onAskAgent
+				});
+			}
+		}
+
 		rows.push({
 			value: rowValue('command', 'overview'),
 			kind: 'command',
@@ -278,12 +351,13 @@
 				}
 			});
 		}
-		return rows.filter((row) => matches(row.label ?? '', []));
+		return rows.filter((row) => row.keep || matches(row.label ?? '', []));
 	});
 
 	const items = $derived.by((): Command.CommandItemData[] => {
 		const out: OmniRow[] = [];
-		const needle = query.trim();
+		const scope = parsed.scope;
+		const searchText = parsed.text.trim();
 		const group = (kind: 'apps' | 'records' | 'commands'): OmniRow => ({
 			value: rowValue('group', kind),
 			kind: 'group',
@@ -295,29 +369,76 @@
 						? t('pod.shell.omniRecords')
 						: t('pod.shell.omniCommands')
 		});
-		if (appRows.length > 0) {
-			out.push(group('apps'));
-			out.push(...appRows);
-		}
-		if (needle) {
-			if (recordsLoading && recordRows.length === 0) {
-				out.push(group('records'));
-				out.push({ value: rowValue('loading', 'records'), kind: 'loading', disabled: true });
-			} else if (recordRows.length > 0) {
-				out.push(group('records'));
-				out.push(...recordRows);
+
+		switch (scope) {
+			case 'record': {
+				const scopes = collectionScopeRows;
+				const showRecordsGroup =
+					searchText || scopes.length > 0 || recordRows.length > 0 || recordsLoading;
+				if (showRecordsGroup) {
+					out.push(group('records'));
+					out.push(...scopes);
+					if (recordsLoading && recordRows.length === 0 && searchText) {
+						out.push({ value: rowValue('loading', 'records'), kind: 'loading', disabled: true });
+					} else {
+						out.push(...recordRows);
+					}
+				}
+				break;
+			}
+			case 'app': {
+				if (appRows.length > 0) {
+					out.push(group('apps'));
+					out.push(...appRows);
+				}
+				break;
+			}
+			case 'command': {
+				if (commandRows.length > 0) {
+					out.push(group('commands'));
+					out.push(...commandRows);
+				}
+				break;
+			}
+			case 'plan': {
+				if (commandRows.length > 0) {
+					out.push(group('commands'));
+					out.push(...commandRows);
+				}
+				break;
+			}
+			case null: {
+				if (appRows.length > 0) {
+					out.push(group('apps'));
+					out.push(...appRows);
+				}
+				if (searchText) {
+					if (recordsLoading && recordRows.length === 0) {
+						out.push(group('records'));
+						out.push({ value: rowValue('loading', 'records'), kind: 'loading', disabled: true });
+					} else if (recordRows.length > 0) {
+						out.push(group('records'));
+						out.push(...recordRows);
+					}
+				}
+				if (commandRows.length > 0) {
+					out.push(group('commands'));
+					out.push(...commandRows);
+				}
+				break;
+			}
+			default: {
+				const _exhaustive: never = scope;
+				return _exhaustive;
 			}
 		}
-		if (commandRows.length > 0) {
-			out.push(group('commands'));
-			out.push(...commandRows);
-		}
-		if (needle && !recordsLoading && out.filter((row) => !row.disabled).length === 0) {
+
+		if (searchText && !recordsLoading && out.filter((row) => !row.disabled).length === 0) {
 			out.push({
 				value: rowValue('empty', 'none'),
 				kind: 'empty',
 				disabled: true,
-				label: t('pod.shell.omniNoResults', { query: needle })
+				label: t('pod.shell.omniNoResults', { query: searchText })
 			});
 		}
 		return out;
@@ -360,7 +481,13 @@
 				class="h-9 text-sm"
 			>
 				{#snippet prefix()}
-					<Icon icon="lucide:search" class="size-3.5 shrink-0 text-muted-foreground" />
+					{#if parsed.scope}
+						<span class="shrink-0 font-mono text-xs text-muted-foreground"
+							>{commandPrefixChar(parsed.scope)}</span
+						>
+					{:else}
+						<Icon icon="lucide:search" class="size-3.5 shrink-0 text-muted-foreground" />
+					{/if}
 				{/snippet}
 			</Command.Input>
 			<Command.List itemHeight={34} gap={0} class="max-h-[min(60vh,22rem)]">

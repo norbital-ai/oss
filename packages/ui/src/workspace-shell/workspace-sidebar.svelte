@@ -11,10 +11,11 @@
 	import { Spinner } from '#lib/spinner';
 	import { ThemeToggle } from '#lib/theme-toggle';
 	import { cn } from '#lib/utils';
-	import type {
-		WorkspaceImpersonation,
-		WorkspaceNavigationModel,
-		WorkspaceOrganizationOption
+	import {
+		WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS,
+		type WorkspaceImpersonation,
+		type WorkspaceNavigationModel,
+		type WorkspaceOrganizationOption
 	} from './workspace-shell.types.js';
 	import WorkspaceSidebarNavigationSection from './workspace-sidebar-navigation-section.svelte';
 
@@ -30,7 +31,10 @@
 		notifications,
 		impersonation,
 		onImpersonate,
-		onStopImpersonating
+		onStopImpersonating,
+		onSearch,
+		searchLabel,
+		searchShortcut
 	}: {
 		model: WorkspaceNavigationModel;
 		onNavigate?: (href: string) => void;
@@ -41,6 +45,9 @@
 		impersonation?: WorkspaceImpersonation | null;
 		onImpersonate?: (teamId: string) => void | Promise<void>;
 		onStopImpersonating?: () => void | Promise<void>;
+		onSearch?: () => void;
+		searchLabel?: string;
+		searchShortcut?: string;
 	} = $props();
 
 	let switchingOrganizationId = $state<string | null>(null);
@@ -206,6 +213,34 @@
 </Sidebar.Header>
 
 <Sidebar.Content class="text-xs">
+	{#if onSearch && searchLabel}
+		<Sidebar.Group class="pb-1">
+			<Sidebar.Menu>
+				<Sidebar.MenuItem>
+					<Sidebar.MenuButton
+						size="sm"
+						tooltipContent={searchShortcut ? `${searchLabel} ${searchShortcut}` : searchLabel}
+						aria-label={searchShortcut ? `${searchLabel} (${searchShortcut})` : searchLabel}
+						onclick={onSearch}
+						data-testid="workspace-omni-trigger"
+					>
+						<Icon icon="lucide:search" class="size-3.5 shrink-0" />
+						{#if displayExpanded}
+							<span class="min-w-0 flex-1 truncate {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
+								>{searchLabel}</span
+							>
+							{#if searchShortcut}
+								<kbd
+									class="pointer-events-none ml-auto hidden h-5 select-none items-center rounded-md border border-border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:inline-flex"
+									aria-hidden="true">{searchShortcut}</kbd
+								>
+							{/if}
+						{/if}
+					</Sidebar.MenuButton>
+				</Sidebar.MenuItem>
+			</Sidebar.Menu>
+		</Sidebar.Group>
+	{/if}
 	<WorkspaceSidebarNavigationSection
 		label={t('misc.platform')}
 		items={model.system}

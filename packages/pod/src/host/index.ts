@@ -69,9 +69,10 @@ export type {
  * Agent tools the host implements.
  *
  * The counterpart to a workspace's `defineAgentTool`: same idea, other side of the isolate. Put them
- * on `agentTools` in `definePodHost` and an agent that names one in its `hostTools` can call it —
- * an agent that does not name one cannot see that it exists. `assertHostAgentTools` is exported for
- * a host that assembles its own startup (Core does): `pod start` already runs it.
+ * on `agentTools` in `definePodHost`. Sandbox-gated tools are offered when the session has a bound
+ * sandbox; other host tools appear only when the running spec names them in `hostTools`.
+ * `assertHostAgentTools` is exported for a host that assembles its own startup (Core does):
+ * `pod start` already runs it.
  */
 /**
  * The outbound call a `request` destination describes, made for real.

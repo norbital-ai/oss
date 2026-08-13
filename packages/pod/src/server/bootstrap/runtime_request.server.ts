@@ -17,6 +17,7 @@ import {
 	adminUpdateSystemRecord,
 	agentChat,
 	agentChatStart,
+	agentChatUpdateVerifier,
 	agentModels,
 	autocompleteGeolocation,
 	count,
@@ -47,7 +48,11 @@ import {
 	revokeWorkspaceInvitation,
 	setWorkspaceMemberRole
 } from '$lib/server/identity/workspace_settings.server.js';
-import { AgentChatInputSchema, AgentModelsInputSchema } from '$lib/remote/agent_chat.remote.js';
+import {
+	AgentChatInputSchema,
+	AgentChatUpdateVerifierInputSchema,
+	AgentModelsInputSchema
+} from '$lib/remote/agent_chat.remote.js';
 import { AutocompleteGeolocationInputSchema } from '$lib/remote/geolocation.remote.js';
 import { StaticMapInputSchema } from '@norbital-ai/platform-utils/runtime/binding';
 import { renderStaticMap } from '$lib/remote/static_map.remote.js';
@@ -217,6 +222,10 @@ const RUNTIME_ENDPOINT_HANDLERS: Record<string, RuntimeEndpointHandler> = {
 	'collections/import': wireEndpoint(ImportRecordsWireSchema, importPipeline),
 	'remotes/agentChat': wireEndpoint(AgentChatInputSchema, agentChat),
 	'remotes/agentChatStart': wireEndpoint(AgentChatInputSchema, agentChatStart),
+	'remotes/agentChatUpdateVerifier': wireEndpoint(
+		AgentChatUpdateVerifierInputSchema,
+		agentChatUpdateVerifier
+	),
 	'remotes/agentModels': wireEndpoint(AgentModelsInputSchema, agentModels),
 	'remotes/autocompleteGeolocation': wireEndpoint(
 		AutocompleteGeolocationInputSchema,

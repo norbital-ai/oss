@@ -191,6 +191,8 @@ export type DurableHostEffectRequest =
 			readonly model?: string;
 			readonly profile?: string;
 			readonly tools?: readonly AiToolSpec[];
+			readonly outputSchema?: unknown;
+			readonly images?: readonly DurableHostEffectImage[];
 	  };
 
 export type DurableAutomationAiEffect = {
@@ -248,12 +250,7 @@ export type ChannelInboundMessage = {
 export type ChannelInboundResult = {
 	/** `duplicate` means the message was already handled and no agent ran. */
 	readonly status:
-		| 'answered'
-		| 'accepted'
-		| 'duplicate'
-		| 'silent'
-		| 'registration_required'
-		| 'rate_limited';
+		'answered' | 'accepted' | 'duplicate' | 'silent' | 'registration_required' | 'rate_limited';
 	readonly text?: string;
 	/** Whether the reply actually left over the transport. */
 	readonly delivered?: boolean;

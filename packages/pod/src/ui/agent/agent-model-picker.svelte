@@ -9,7 +9,7 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
-	import type { AgentModelOption } from './models.js';
+	import type { AgentModelOption } from './agent-model-state.svelte.js';
 	import type { AgentModelCatalogStatus } from './agent-model-state.svelte.js';
 	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';

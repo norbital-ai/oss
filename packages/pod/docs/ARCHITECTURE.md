@@ -108,13 +108,13 @@ startup compares them with `pod.host.ts` and refuses to listen if anything is mi
 | --------------------- | ----------------------------------------- |
 | `db`                  | always                                    |
 | `fileStorage`         | a collection contains a file field        |
-| `ai`                  | an agent automation or agent profile needs inference |
+| `ai`                  | an automation calls `api.infer` or an agent profile needs inference |
 | `queue`               | an integration outbox or pull is compiled |
 | `integrationDelivery` | an integration is compiled                |
 | `messaging` transport | a channel declares it in `src/channels`   |
 
 Direct calls that cannot be inferred without executing tenant code are checked at the call site.
-`api.ai(...)` requires an AI binding. An external `api.sendNotification(...)` requires a
+`api.infer(...)` requires an AI binding. An external `api.sendNotification(...)` requires a
 `messaging` binding that advertises that channel. Failure occurs before Pod writes an outbox row.
 A channel declared in `src/channels/` is the exception: its `transport` is knowable from source, so
 it is checked at startup against the host's `listTransports()` rather than at the first message.
@@ -244,11 +244,11 @@ export default defineAgentTool({
 });
 ```
 
-The filename supplies `check_registry`. An agent automation must list
+The filename supplies `check_registry`. An interactive agent profile in `src/+agent.ts` may list
 `tools: ['check_registry']`; discovery does not grant every agent every tool. The compiler rejects
 duplicate and built-in names, generates an exact tool-name union, and registers the module.
-Runtime exposes only tools selected by the automation, validates input through the tool's Zod
-schema, and restricts `api.db` to that automation's collection allowlist and read/write mode.
+Runtime exposes only tools selected by the profile, validates input through the tool's Zod
+schema, and restricts `api.db` to that profile's collection allowlist and read/write mode.
 
 `pod sync` emits:
 
@@ -350,29 +350,21 @@ trusted tools through a default-deny binding. The host does not own or persist a
 Core, the host orchestrates the durable workflow and executes fenced AI effects (`ai.turn` /
 `ai.prompt`) outside the guest.
 
-```ts
-export default defineAutomation(
-	{ schedule: '0 6 * * *' },
-	{
-		kind: 'agent',
-		description: 'Keeps permits from lapsing by drafting their renewals a fortnight ahead.',
-		task: 'Draft renewals for permits expiring within 14 days.',
-		collections: ['permits', 'permit_renewals'],
-		access: 'write',
-		tools: ['check_registry'],
-		maxTokens: 40_000
-	}
-);
-```
-
-Interactive chat, agent automations and declared channels use the same loop implementation and
-`chat_session` transcript. Hosted interactive (`agentChatStart`) and channel inbound persist the
-user turn then admit a durable `_norbital_automation_job` receipt; Core DBOS drives one provider
-or tool transition per guest step. They do not `void runAgent` or retain a background lease. The
-synchronous `agentChat` remote and HTTP `agent/start` may still call `runAgent` in-guest — leftover
+Interactive chat and declared channels use the same loop implementation and `chat_session`
+transcript. Hosted interactive (`agentChatStart`) and channel inbound persist the user turn then
+admit a durable `_norbital_automation_job` receipt; Core DBOS drives one provider or tool
+transition per guest step. They do not `void runAgent` or retain a background lease. The synchronous
+`agentChat` remote and HTTP `agent/start` may still call `runAgent` in-guest — leftover
 programmatic paths, not the hosted UI path. Messages and nested turns are stored directly in one
 `chat_session` aggregate, then reach the browser through one ordinary policy-scoped sync
 subscription rather than an agent-specific stream.
+
+Automations are not agent sessions. They are deterministic handlers; when one needs model
+judgement it calls `api.infer({ prompt, schema?, tools?, collections?, images? })` inside the handler.
+That is the same host `chat` as the agent: optional schema, optional images, optional named workspace
+tools. Always a normal chat session. No `write_collection`, `spawn_subagent`, sandbox, authoring, or
+MCP; it does not own a `chat_session` transcript. The handler is bounded to 64 `api.infer` calls and
+100,000 prompt characters per invocation.
 
 See [Agent architecture](./AGENT_ARCHITECTURE.md) for execution entry points, transcript ownership,
 host-tool authorization, channel continuation, UI behavior and conformance coverage.
@@ -386,21 +378,22 @@ An automation has one trigger:
 { trigger: { collection: 'permits', event: 'updated' } }
 ```
 
-`kind: 'agent'` is a first-class automation body, not a separate runtime. It uses the same receipt
-and DBOS path as cron and collection-event automations, with one reducer step per two-second
-invocation.
+Automations are deterministic handlers admitted as immutable tenant receipts and driven by the
+host's durable automation orchestrator. Each handler invocation is billable and capped at two
+seconds; a longer automation proceeds as replayable DBOS steps. `api.infer` is an effect boundary:
+pre-effect writes roll back, Core performs the spend-gated provider call under a stable effect ID,
+then the handler replays with the durable result and commits its terminal writes atomically.
 
 Schedule expressions are validated at build/startup. Core registers authored occurrences with DBOS;
-pg-boss owns none of their schedules or workers. Each occurrence, matching collection event, or
-admitted agent turn first becomes an immutable tenant receipt bound to its trigger snapshot and
-exact runtime artifact.
+pg-boss owns none of their schedules or workers. Each occurrence or matching collection event first
+becomes an immutable tenant receipt bound to its trigger snapshot and exact runtime artifact.
 
 Collection-event admission is tenant-wide, not client-driven. DBOS reconciliation asks one bounded
 guest step to tail the authoritative outbox and atomically advance `_norbital_automation_cursor`;
 opening another browser cannot duplicate a run. Interactive chat and channel inbound admit the same
 way: persist the user turn, then write `_norbital_automation_job`. Every guest step is billable and
 capped at two seconds. DBOS covers agent-turn workflows as well as cron and collection-event
-automations; it resumes longer work and durably yields/replays `api.ai` / `ai.turn` / `ai.prompt`
+automations; it resumes longer work and durably yields/replays `api.infer` / `ai.turn` / `ai.prompt`
 effects outside the guest. Integration and notification outboxes drain independently with claim
 leases and bounded retry. Inbound integration receipts drain independently too: each tick performs
 one durable bounded chunk rather than holding a tenant runtime invocation open for the full provider

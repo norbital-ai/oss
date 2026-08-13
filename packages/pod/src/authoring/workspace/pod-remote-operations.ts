@@ -36,6 +36,8 @@ export type PodRemoteOperations = {
 		readonly runId?: string;
 		readonly model?: string;
 		readonly planMode?: boolean;
+		readonly intent?: 'do' | 'plan';
+		readonly verifierPrompt?: string;
 		readonly goalMode?: boolean;
 		/**
 		 * Records the composer's "@" picker resolved. The loop fetches each one as the requestor and
@@ -61,6 +63,10 @@ export type PodRemoteOperations = {
 	 * `null` from a host that offers no choice — which is not the same as an empty catalog, and is why
 	 * a picker is absent rather than empty on such a host.
 	 */
+	readonly agentChatUpdateVerifier: (input: {
+		readonly runId: string;
+		readonly prompt: string;
+	}) => Promise<{ readonly accepted: true }>;
 	readonly agentModels: () => Promise<{
 		readonly defaultModel: string;
 		readonly options: readonly {

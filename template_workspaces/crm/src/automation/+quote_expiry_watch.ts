@@ -4,7 +4,6 @@ import { deskToday } from '../lib/calendar.js';
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
 	{
-		kind: 'deterministic',
 		description:
 			'Sweeps every morning for quotes still sitting at sent whose valid_until date has passed, and exports the lapsed ones for the desk to chase.',
 		handler: async (api) => {

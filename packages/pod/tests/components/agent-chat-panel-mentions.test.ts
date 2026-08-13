@@ -3,6 +3,7 @@ import { flushSync } from 'svelte';
 import { FakeReplica } from '../support/fake-replica.svelte.js';
 import { render, settle } from '../support/component.js';
 import AgentMentionHarness from '../support/agent-mention-harness.svelte';
+import { DEFAULT_VERIFIER_PROMPTS } from '$lib/shared/agent/intent.js';
 
 /**
  * The "@" flow through the panel: trigger, search, choose, chip, send.
@@ -49,6 +50,8 @@ type SentInput = {
 	runId?: string;
 	planMode?: boolean;
 	goalMode?: boolean;
+	intent?: 'do' | 'plan';
+	verifierPrompt?: string;
 };
 
 let sent: SentInput[] = [];
@@ -57,8 +60,13 @@ const manifestContext = {
 	getCollections: () => [
 		{ collection_name: 'companies', system: null, fields: textField('name') },
 		{ collection_name: 'contacts', system: null, fields: textField('name') },
+		{ collection_name: 'user', system: true, fields: textField('name') },
+		{ collection_name: 'team', system: true, fields: textField('name') },
 		// Platform plumbing must never surface as something a person can reference.
 		{ collection_name: 'chat_session', system: true, fields: textField('name') }
+	],
+	getApps: () => [
+		{ name: 'payroll', label: 'Payroll', description: 'Run payroll', icon: 'lucide:wallet' }
 	],
 	findCollection: (name: string) => ({
 		collection_name: name,
@@ -81,7 +89,9 @@ beforeEach(() => {
 			{ norbital_id: '0197f2a4-0000-7000-8000-000000000001', name: 'Acme Corp' },
 			{ norbital_id: '0197f2a4-0000-7000-8000-000000000002', name: 'Acme Logistics' }
 		],
-		contacts: [{ norbital_id: '0197f2a4-0000-7000-8000-000000000003', name: 'Acmed Rasheed' }]
+		contacts: [{ norbital_id: '0197f2a4-0000-7000-8000-000000000003', name: 'Acmed Rasheed' }],
+		user: [{ norbital_id: '0197f2a4-0000-7000-8000-000000000004', name: 'Ada Lovelace' }],
+		team: [{ norbital_id: '0197f2a4-0000-7000-8000-000000000005', name: 'Finance' }]
 	};
 	setWorkspaceRemoteTransport({
 		agentChatStart: (input: SentInput) => {
@@ -124,6 +134,9 @@ function key(textarea: HTMLTextAreaElement, name: string): void {
 	textarea.dispatchEvent(
 		new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true })
 	);
+	textarea.dispatchEvent(
+		new KeyboardEvent('keyup', { key: name, bubbles: true, cancelable: true })
+	);
 	flushSync();
 }
 
@@ -146,15 +159,47 @@ function menuOptions(container: HTMLElement): string[] {
 }
 
 describe('the "@" keyboard flow', () => {
-	it('opens on a bare "@" offering scopes, and never the platform plumbing', async () => {
+	it('opens on a bare "@" offering prefix commands, collection scopes, and never the platform plumbing', async () => {
 		const { container, destroy } = mountPanel();
 		setValue(container, '@', 1);
 
 		expect(container.querySelector('#agent-mention-menu')).not.toBeNull();
 		const options = menuOptions(container);
+		expect(options.some((option) => option.includes('Search records'))).toBe(true);
+		expect(options.some((option) => option.includes('Plan this turn'))).toBe(true);
+		expect(options.some((option) => option.includes('Mention an app'))).toBe(true);
+		expect(options.some((option) => option.startsWith('Search companies'))).toBe(true);
+		expect(options.some((option) => option.startsWith('Search user'))).toBe(true);
+		expect(options.some((option) => option.startsWith('Search team'))).toBe(true);
+		expect(options.some((option) => option.includes('chat_session'))).toBe(false);
+		destroy();
+	});
+
+	it('lists collection scopes after # and keeps the highlight across keyup', async () => {
+		const { container, destroy } = mountPanel();
+		const textarea = setValue(container, '@#c', 3);
+
+		const options = menuOptions(container);
 		expect(options.some((option) => option.startsWith('Search companies'))).toBe(true);
 		expect(options.some((option) => option.startsWith('Search contacts'))).toBe(true);
 		expect(options.some((option) => option.includes('chat_session'))).toBe(false);
+
+		key(textarea, 'ArrowDown');
+		key(textarea, 'Enter');
+		await settle();
+		expect(textarea.value).toBe('@#contacts ');
+		destroy();
+	});
+
+	it('turns @! into plan mode and leaves the rest of the request', async () => {
+		const { container, destroy } = mountPanel();
+		const textarea = setValue(container, '@!rewrite leave', 15);
+		key(textarea, 'Enter');
+		await settle();
+		expect(textarea.value).toBe('rewrite leave');
+		expect(container.querySelector('[data-testid="agent-plan-mode"]')?.className).toContain(
+			'bg-primary'
+		);
 		destroy();
 	});
 
@@ -183,7 +228,9 @@ describe('the "@" keyboard flow', () => {
 						recordId: '0197f2a4-0000-7000-8000-000000000001',
 						label: 'Acme Corp'
 					}
-				]
+				],
+				intent: 'do',
+				verifierPrompt: DEFAULT_VERIFIER_PROMPTS.do
 			}
 		]);
 		destroy();
@@ -213,7 +260,7 @@ describe('the "@" keyboard flow', () => {
 
 		key(textarea, 'Enter');
 		await settle();
-		expect(sent).toEqual([{ message: '@zzz' }]);
+		expect(sent).toEqual([{ message: '@zzz', intent: 'do' }]);
 		destroy();
 	});
 
@@ -251,6 +298,73 @@ describe('the "@" keyboard flow', () => {
 		// And the chip that vanished takes its reference with it.
 		submit(container);
 		expect(sent).toEqual([]);
+		destroy();
+	});
+
+	it('inserts collection:<name> when the writer picks a collection', async () => {
+		const { container, destroy } = mountPanel();
+		const textarea = setValue(container, '@compani');
+		await searchRound();
+
+		const options = menuOptions(container);
+		expect(options.some((option) => option.includes('companies'))).toBe(true);
+
+		key(textarea, 'Enter');
+		await settle();
+		expect(textarea.value).toBe('collection:companies');
+		destroy();
+	});
+
+	it('inserts app:<key> when the writer picks an app', async () => {
+		const { container, destroy } = mountPanel();
+		const textarea = setValue(container, '@pay');
+		await searchRound();
+
+		const options = menuOptions(container);
+		expect(options.some((option) => option.includes('Payroll'))).toBe(true);
+
+		key(textarea, 'Enter');
+		await settle();
+		expect(textarea.value).toBe('app:payroll');
+		expect(container.querySelector('#agent-mention-menu')).toBeNull();
+
+		submit(container);
+		expect(sent).toEqual([
+			{
+				message: 'app:payroll',
+				intent: 'do'
+			}
+		]);
+		destroy();
+	});
+
+	it('mentions a person from the user collection', async () => {
+		const { container, destroy } = mountPanel();
+		const textarea = setValue(container, '@Ada');
+		await searchRound();
+
+		const options = menuOptions(container);
+		expect(options.some((option) => option.includes('Ada Lovelace'))).toBe(true);
+
+		key(textarea, 'Enter');
+		await settle();
+		expect(textarea.value).toBe('@Ada Lovelace');
+
+		submit(container);
+		expect(sent).toEqual([
+			{
+				message: '@Ada Lovelace',
+				mentions: [
+					{
+						collection: 'user',
+						recordId: '0197f2a4-0000-7000-8000-000000000004',
+						label: 'Ada Lovelace'
+					}
+				],
+				intent: 'do',
+				verifierPrompt: DEFAULT_VERIFIER_PROMPTS.do
+			}
+		]);
 		destroy();
 	});
 });

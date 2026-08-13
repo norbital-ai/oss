@@ -9,11 +9,14 @@
 	 * There is deliberately no composer inside: a subagent is given a task, it is not talked to.
 	 */
 	import Icon from '@iconify/svelte';
+	import { onMount } from 'svelte';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Textarea } from '@norbital-ai/ui/textarea';
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
 	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
+	import { toolOrbActivity } from './agent-orb-state.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
 
@@ -28,8 +31,25 @@
 	 */
 	let {
 		message,
-		nested = null
-	}: { message: PanelMessage; nested?: 'subagent' | 'history' | null } = $props();
+		nested = null,
+		onVerifierPrompt = undefined
+	}: {
+		message: PanelMessage;
+		nested?: 'subagent' | 'history' | null;
+		onVerifierPrompt?: (prompt: string) => void;
+	} = $props();
+
+	let prompt = $state('');
+
+	onMount(() => {
+		if (message.kind === 'verifier') prompt = message.prompt;
+	});
+
+	function saveVerifierPrompt(): void {
+		if (message.kind !== 'verifier') return;
+		if (prompt === message.prompt) return;
+		onVerifierPrompt?.(prompt);
+	}
 
 	/** The recap is what the model carries, so it opens first; the raw conversation is one click away. */
 	let checkpointTab = $state<'summary' | 'raw'>('summary');
@@ -45,13 +65,6 @@
 		return message.labelKey ? t(message.labelKey) : (message.label ?? message.name);
 	}
 
-	/** Keep activity truthful: unknown tools orbit generically instead of guessing at their work. */
-	function toolOrbState(name: string): 'searching' | 'authoring' | 'working' {
-		if (/(search|read|find|fetch|lookup|browse|describe|inspect)/i.test(name)) return 'searching';
-		if (/(write|edit|create|code|patch|file|author)/i.test(name)) return 'authoring';
-		return 'working';
-	}
-
 	function showToolNeedsInput(message: Extract<PanelMessage, { kind: 'tool' }>): boolean {
 		return (
 			message.state === 'needs_input' ||
@@ -61,7 +74,7 @@
 </script>
 
 {#if message.kind === 'checkpoint'}
-	<li class="message my-1.5" data-role="checkpoint">
+	<li class="message my-1.5" data-role="checkpoint" data-fold={message.fold}>
 		<!-- Core rendered this as a bare `<details>` reading "Context automatically compacted". The two
 		     tabs are the addition: the summary alone tells a reader that history went somewhere without
 		     telling them where, and nothing was actually deleted to hide. -->
@@ -71,7 +84,9 @@
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0" />
-				<span class="shrink-0 whitespace-nowrap">{t('pod.agent.contextCompacted')}</span>
+				<span class="shrink-0 whitespace-nowrap">
+					{message.fold === 'plan' ? t('pod.agent.planFolded') : t('pod.agent.contextCompacted')}
+				</span>
 				<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground/70">
 					{t('pod.agent.messagesKept', { count: message.before.length })}
 				</span>
@@ -106,7 +121,9 @@
 								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
 						}`}
 					>
-						{t('pod.agent.fullConversation')}
+						{message.fold === 'plan'
+							? t('pod.agent.planningConversation')
+							: t('pod.agent.fullConversation')}
 					</button>
 				</Inline>
 				<div role="tabpanel" class="min-w-0">
@@ -120,7 +137,9 @@
 					{:else}
 						<Scroll
 							as="ol"
-							name={t('pod.agent.conversationBeforeCompaction')}
+							name={message.fold === 'plan'
+								? t('pod.agent.planningConversation')
+								: t('pod.agent.conversationBeforeCompaction')}
 							layout="stack"
 							gap="xs"
 							class="m-0 max-h-72 list-none p-0"
@@ -135,7 +154,12 @@
 		</details>
 	</li>
 {:else if message.kind === 'tool'}
-	<li class="message" data-role="tool" data-tool={message.name}>
+	<li
+		class="message"
+		data-role="tool"
+		data-tool={message.name}
+		data-family={message.family === 'sandbox' ? 'sandbox' : undefined}
+	>
 		<!-- One row per call, collapsed: the name and its identifying argument are the whole story most
 		     of the time, and the payload is tenant data that belongs behind a deliberate click rather
 		     than in the flow of the conversation. -->
@@ -150,9 +174,13 @@
 						message.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
 					}`}
 				/>
-				<span class="shrink-0 font-medium whitespace-nowrap text-foreground/80"
-					>{toolLabel(message)}</span
-				>
+				<span class="shrink-0 font-medium whitespace-nowrap text-foreground/80">
+					{#if message.family === 'sandbox'}
+						{t('pod.agent.sandboxAgent')} · {toolLabel(message)}
+					{:else}
+						{toolLabel(message)}
+					{/if}
+				</span>
 				{#if message.detail}
 					<span class="min-w-0 flex-1 truncate font-mono text-tiny">{message.detail}</span>
 				{/if}
@@ -163,7 +191,7 @@
 				{/if}
 				{#if message.state === 'running'}
 					<NorbitalThinkingOrb
-						state={toolOrbState(message.name)}
+						state={toolOrbActivity(message.name)}
 						size={16}
 						class="shrink-0 text-foreground"
 					/>
@@ -282,6 +310,36 @@
 			</div>
 		</details>
 	</li>
+{:else if message.kind === 'verifier'}
+	<li class="message my-1.5" data-role="verifier" data-testid="agent-verifier-scheduled">
+		<details class="group/verifier w-full" open>
+			<!-- stupidity:allow UI6 -- verifier disclosure is a clickable control row. -->
+			<summary
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+			>
+				<Icon icon="lucide:shield-check" class="size-3.5 shrink-0" />
+				<span class="font-medium text-foreground/80">{t('pod.agent.verifierTriggered')}</span>
+				<Icon
+					icon="lucide:chevron-right"
+					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/verifier:rotate-90"
+				/>
+			</summary>
+			<Stack gap="xs" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
+				<p class="m-0 text-tiny text-muted-foreground">{t('pod.agent.verifierPromptHint')}</p>
+				<label class="sr-only" for="agent-verifier-scheduled-{message.key}"
+					>{t('pod.agent.verifierPrompt')}</label
+				>
+				<Textarea
+					id="agent-verifier-scheduled-{message.key}"
+					data-testid="agent-verifier-prompt"
+					bind:value={prompt}
+					onblur={saveVerifierPrompt}
+					rows={3}
+					class="min-h-16 max-h-32 resize-none border-border/60 bg-muted/30 px-2.5 py-2 text-xs shadow-none focus-visible:ring-1"
+				/>
+			</Stack>
+		</details>
+	</li>
 {:else if message.kind === 'goal'}
 	<li class="message my-1.5" data-role="goal" data-achieved={message.achieved}>
 		<details class="group/goal w-full">
@@ -294,7 +352,7 @@
 					class={`size-3.5 shrink-0 ${message.achieved ? 'text-primary' : 'text-muted-foreground'}`}
 				/>
 				<span class="font-medium text-foreground/80">
-					{message.achieved ? t('pod.agent.goalAchieved') : t('pod.agent.goalNotAchieved')}
+					{message.achieved ? t('pod.agent.verified') : t('pod.agent.notVerified')}
 				</span>
 				<Icon
 					icon="lucide:chevron-right"

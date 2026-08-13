@@ -11,7 +11,6 @@ requireDocker();
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const POD_BIN = path.join(REPO_ROOT, 'packages/pod/build/bin/invocation/index.js');
 
-const AUTOMATION = 'sandbox_deploy_watch';
 const POD_ADMIN_ID = '66666666-6666-4666-8666-666666666666';
 /**
  * A value only the *host process* holds.
@@ -102,30 +101,25 @@ export default defineAgentTool({
 `;
 
 /**
- * An agent that opts in to one host tool and not the other.
+ * The interactive profile opts in to one host tool and not the other.
  *
- * `* * * * *` so the interval queue's first sweep fires it: the run is the subject of the test, and
- * waiting a minute for it would only test the cron parser.
+ * `sandbox_deploy` is the tool the agent named; `host_secret` is registered right beside it and
+ * named by nobody, which is what makes the deny path meaningful — it is present, reachable by the
+ * host, and still invisible to this agent because it is not sandbox-gated.
  */
-const AUTOMATION_SOURCE = `import { defineAutomation } from '@norbital-ai/pod/authoring';
+const AGENT_SOURCE = `import type { AgentAutomationSpec } from '@norbital-ai/pod/authoring';
 
-export default defineAutomation(
-	{ schedule: '* * * * *' },
-	{
-		kind: 'agent',
-		description: 'Deploys the workspace through the host sandbox and reports the outcome.',
-		task: 'Deploy this workspace through the host sandbox and report what it said.',
-		hostTools: ['sandbox_deploy']
-	}
-);
+export default {
+	kind: 'agent',
+	description: 'Deploys the workspace through the host sandbox and reports the outcome.',
+	task: 'Deploy this workspace through the host sandbox and report what it said.',
+	access: 'write',
+	hostTools: ['sandbox_deploy']
+} satisfies AgentAutomationSpec;
 `;
 
 /**
  * A host that holds a sandbox.
- *
- * `sandbox_deploy` is the tool the agent named; `sandbox_secret` is registered right beside it and
- * named by nobody, which is what makes the deny path meaningful — it is present, reachable by the
- * host, and still invisible to this agent.
  *
  * The two environment switches exist so the refusal cases can reuse this build rather than compile a
  * second workspace for each: renaming the tool makes the agent name something absent, and the shadow
@@ -185,8 +179,9 @@ export default definePodHost({
 			})
 		},
 		{
-			name: 'sandbox_secret',
+			name: 'host_secret',
 			description: 'Read a host credential. Registered, and named by no agent.',
+			requiresSandbox: false,
 			input: z.object({}),
 			run: async () => ({ secret: 'must-never-reach-a-transcript' })
 		},
@@ -212,7 +207,7 @@ export default definePodHost({
 					stopReason: 'tool_use',
 					toolCalls: [
 						{ id: 'call_deploy', name: 'sandbox_deploy', input: { target: 'staging' } },
-						{ id: 'call_secret', name: 'sandbox_secret', input: {} }
+						{ id: 'call_secret', name: 'host_secret', input: {} }
 					]
 				};
 			}
@@ -241,7 +236,7 @@ async function writeWorkspace(root: string): Promise<void> {
 	await linkCurrentPodWorkspaceDependencies(REPO_ROOT, root);
 	await mkdir(path.join(root, 'src', 'tools'), { recursive: true });
 	await writeFile(path.join(root, 'src', 'tools', '+list_quotes.tool.ts'), WORKSPACE_TOOL_SOURCE);
-	await writeFile(path.join(root, 'src', 'automation', `+${AUTOMATION}.ts`), AUTOMATION_SOURCE);
+	await writeFile(path.join(root, 'src', '+agent.ts'), AGENT_SOURCE);
 	await writeFile(path.join(root, 'pod.host.ts'), HOST_SOURCE);
 }
 
@@ -318,45 +313,77 @@ describe('Pod standalone host agent tools — E2E', () => {
 	});
 
 	it('runs a host tool and lands its result in the transcript', async () => {
-		// The standalone schedule job admits the occurrence and the continuous pump drives durable
-		// `ai.turn` steps; this poll waits for the loop to finish rather than for the trigger.
+		const startResponse = await fetch(
+			`http://127.0.0.1:${environment.POD_PORT}/_runtime/agent/start`,
+			{
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					message: 'Deploy this workspace through the host sandbox and report what it said.'
+				})
+			}
+		);
+		expect(startResponse.status, await startResponse.clone().text()).toBe(200);
+		const started = (await startResponse.json()) as { runId: string; text: string };
+		expect(started.runId).toBeTruthy();
+
 		const deadline = Date.now() + 90_000;
 		let transcript: readonly TranscriptRow[] = [];
 		for (;;) {
-			const sessions = await queryTenant<TranscriptAggregate>(
-				`SELECT s.messages
+			const sessions = await queryTenant<TranscriptAggregate & { status: string }>(
+				`SELECT s.messages, r.status
 				   FROM chat_session s
 				   JOIN automation_run r ON r.norbital_id = s.automation_run_id
-				  WHERE r.automation_name = $1
+				  WHERE r.norbital_id = $1::uuid
+				    AND r.automation_name IS NULL
 				  LIMIT 1`,
-				[AUTOMATION]
+				[started.runId]
 			);
 			transcript = sessions[0]?.messages ?? [];
-			if (transcript.length >= 5) break;
+			const answer = transcript
+				.filter((row) => row.role === 'assistant')
+				.map((row) => row.parts?.[0]?.content ?? '')
+				.find((content) => content.includes('offered='));
+			if (
+				sessions[0]?.status === 'success' &&
+				transcript.length >= 5 &&
+				(answer ?? started.text).includes('offered=')
+			) {
+				break;
+			}
 			if (Date.now() > deadline) {
 				throw new Error(
-					`Agent run never completed (${transcript.length} message(s)). Pod log:\n${log}`
+					`Interactive agent run never completed (${transcript.length} message(s)). Pod log:\n${log}`
 				);
 			}
 			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
 
-		// The prompt, the assistant turn carrying both tool calls, one result each, the answer.
-		expect(transcript.map((row) => row.role)).toEqual([
-			'user',
-			'assistant',
-			'tool',
-			'tool',
-			'assistant'
-		]);
-		expect(transcript[1]?.parts?.[0]?.toolCalls?.map((call) => call.name)).toEqual([
+		const toolTurn = transcript.find(
+			(row) =>
+				row.role === 'assistant' &&
+				row.parts?.[0]?.toolCalls?.map((call) => call.name).join(',') ===
+					'sandbox_deploy,host_secret'
+		);
+		expect(toolTurn?.parts?.[0]?.toolCalls?.map((call) => call.name)).toEqual([
 			'sandbox_deploy',
-			'sandbox_secret'
+			'host_secret'
 		]);
+
+		const toolResults = transcript.filter((row) => row.role === 'tool');
+		expect(toolResults.length).toBeGreaterThanOrEqual(2);
 
 		// The host tool's own return value, produced by a closure inside `pod.host.ts` and carried back
 		// over the facility binding. Nothing in the workspace bundle knows this string.
-		const deployResult = JSON.parse(transcript[2]?.parts?.[0]?.content ?? '{}') as {
+		const deployResult = JSON.parse(
+			toolResults.find((row) => {
+				try {
+					return JSON.parse(row.parts?.[0]?.content ?? '{}').receipt === RECEIPT;
+				} catch {
+					return false;
+				}
+			})?.parts?.[0]?.content ?? '{}'
+		) as {
 			ran?: string;
 			receipt?: string;
 			target?: string;
@@ -370,20 +397,30 @@ describe('Pod standalone host agent tools — E2E', () => {
 		});
 
 		// And the tool the agent did not name is refused, though the host registered it.
-		const secretResult = JSON.parse(transcript[3]?.parts?.[0]?.content ?? '{}') as {
+		const secretResult = JSON.parse(
+			toolResults.find((row) => {
+				try {
+					return JSON.parse(row.parts?.[0]?.content ?? '{}').error;
+				} catch {
+					return false;
+				}
+			})?.parts?.[0]?.content ?? '{}'
+		) as {
 			error?: string;
 			secret?: string;
 		};
 		expect(secretResult.secret).toBeUndefined();
-		expect(secretResult.error).toMatch(/Agent cannot execute tenant tool sandbox_secret/);
+		expect(secretResult.error).toMatch(/Agent cannot execute tenant tool host_secret/);
 
-		// What the model was offered: the named host tool alongside the built-ins, and nothing else.
-		// `sandbox_secret` never appears in the tool list at all — it is not merely refused on call.
-		const answer = transcript[4]?.parts?.[0]?.content ?? '';
+		const answer =
+			transcript
+				.filter((row) => row.role === 'assistant')
+				.map((row) => row.parts?.[0]?.content ?? '')
+				.find((content) => content.includes('offered=')) ?? started.text;
 		expect(answer).toContain(
-			'offered=describe_workspace|read_collection|list_skills|read_skill|spawn_subagent|sandbox_deploy'
+			'offered=await_sandbox_agent|describe_workspace|list_quotes|list_sandbox_agents|list_skills|message_sandbox_agent|read_collection|read_skill|read_sandbox_agent|sandbox_deploy|spawn_subagent|write_collection'
 		);
-		expect(answer).not.toContain('sandbox_secret|');
+		expect(answer).not.toContain('host_secret|');
 		expect(answer).toContain(`deploy=ok(${RECEIPT}:staging)`);
 	}, 120_000);
 

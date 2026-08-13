@@ -70,7 +70,6 @@ import {
 	durableAgentSnapshotFromScope,
 	runDurableAgentAutomation
 } from '$lib/server/agent/agent-loop.server.js';
-import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 
 const recordSchema = z.record(z.string(), z.unknown());
 const collectionSchema = z.object({ id: z.string(), name: z.string() });
@@ -474,22 +473,8 @@ export async function executeAutomationHandler(params: {
 		workspaceAutomation !== null &&
 		'spec' in workspaceAutomation
 	) {
-		const spec = (workspaceAutomation as { spec: { kind: string; handler?: unknown } }).spec;
-		if (spec.kind === 'agent') {
-			try {
-				return await runDurableAgentAutomation({
-					automationName: params.automationName,
-					spec: spec as AgentAutomationSpec,
-					scope: params.scope
-				});
-			} catch (error) {
-				const pending = pendingAutomationEffect();
-				if (pending) throw pending;
-				if (isAutomationEffectYield(error)) throw error;
-				throw error;
-			}
-		}
-		if (spec.kind !== 'deterministic' || typeof spec.handler !== 'function') {
+		const spec = (workspaceAutomation as { spec: { handler?: unknown } }).spec;
+		if (typeof spec.handler !== 'function') {
 			throw new Error(`Automation '${params.automationName}' has an invalid runtime specification`);
 		}
 		const handler = spec.handler as (

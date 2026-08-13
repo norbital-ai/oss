@@ -77,12 +77,8 @@ export default defineAgentTool({
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
 	{
-		kind: 'agent',
 		description: 'Reviews new things each morning and files the ones that need attention.',
-		task: 'Triage things',
-		collections: ['things'],
-		access: 'write',
-		tools: ['lookup']
+		handler: async () => ({ ok: true })
 	}
 );`
 	);
@@ -171,7 +167,6 @@ import type { Api } from './$types.js';
 export default defineAutomation(
 	{ schedule: '0 7 * * *' },
 	{
-		kind: 'deterministic',
 		description: 'Sends the daily digest notification to the standing recipient.',
 		handler: async (api: Api) => {
 			await api.sendNotification({
@@ -201,18 +196,15 @@ export default defineAutomation(
 
 		await write(
 			root,
-			'src/automation/+triage.ts',
-			`import { defineAutomation } from '@norbital-ai/pod/authoring';
-export default defineAutomation(
-	{ schedule: '0 6 * * *' },
-	{
-		kind: 'agent',
-		description: 'Names a collection and a tool the workspace does not have.',
-		task: 'Invalid',
-		collections: ['missing_collection'],
-		tools: ['missing_tool']
-	}
-);`
+			'src/+agent.ts',
+			`import type { AgentAutomationSpec } from '@norbital-ai/pod/authoring';
+export default {
+	kind: 'agent',
+	description: 'Names a collection and a tool the workspace does not have.',
+	task: 'Invalid',
+	collections: ['missing_collection'],
+	tools: ['missing_tool']
+} satisfies AgentAutomationSpec;`
 		);
 		let diagnostics = '';
 		try {
@@ -239,7 +231,6 @@ export default defineAutomation(
 export default defineAutomation(
 	{ trigger: { collection: 'things', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description: 'Counts the things sharing a name with the one just created.',
 		handler: async (api, { scope }) => {
 			const name: string = scope.incoming_record.name;
@@ -271,7 +262,6 @@ export default defineAutomation(
 export default defineAutomation(
 	{ trigger: { collection: 'thingz', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description: 'Names a collection the workspace does not have.',
 		handler: async () => ({})
 	}
@@ -421,9 +411,8 @@ export default defineQueryHandler({
 	});
 
 	/**
-	 * The object form carries `kind` and nothing else, yet it used to be the weaker of the two: its
-	 * handler fell back to `AnySchema`, collapsing `scope.incoming_record` to `Record<string, unknown>`.
-	 * Two ways of declaring the same automation must not disagree about how well it is typed.
+	 * The object spec must infer the workspace schema the same way a fully annotated handler would:
+	 * `scope.incoming_record` is the trigger collection's row, not `Record<string, unknown>`.
 	 */
 	it('infers the workspace schema in the object spec form too', async () => {
 		const root = await workspace();
@@ -434,7 +423,6 @@ export default defineQueryHandler({
 export default defineAutomation(
 	{ trigger: { collection: 'things', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description: 'Counts the things sharing a name with the one just created.',
 		handler: async (api, { scope }) => {
 			const name: string = scope.incoming_record.name;
@@ -466,7 +454,6 @@ export default defineAutomation(
 export default defineAutomation(
 	{ trigger: { collection: 'things', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description: 'Reads the name off the thing that was just created.',
 		handler: async (_api, { scope }) => {
 			const name: number = scope.incoming_record.name;

@@ -1,13 +1,18 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { agentOrbState } from '../../src/ui/agent/agent-orb-state.js';
+import {
+	agentOrbState,
+	agentOrbStatusKey,
+	toolOrbActivity
+} from '../../src/ui/agent/agent-orb-state.js';
 
 const podRoot = process.cwd();
 const orbSourcePath = resolve(podRoot, 'src/ui/agent/norbital-thinking-orb.svelte');
 const orbStatePath = resolve(podRoot, 'src/ui/agent/agent-orb-state.ts');
 const panelSourcePath = resolve(podRoot, 'src/ui/agent/agent-chat-panel.svelte');
 const transcriptSourcePath = resolve(podRoot, 'src/ui/agent/agent-transcript-item.svelte');
+const transcriptTsPath = resolve(podRoot, 'src/ui/agent/transcript.ts');
 const shellSourcePath = resolve(podRoot, 'src/ui/shell/pod-shell.svelte');
 const packagePath = resolve(podRoot, 'package.json');
 
@@ -53,6 +58,32 @@ describe('Norbital agent orb', () => {
 				]
 			})
 		).toBe('authoring');
+		expect(
+			agentOrbState({
+				turns: [{ norbital_id: 'turn-1', status: 'running', subagent_id: null }],
+				messages: [
+					{
+						norbital_id: 'message-1',
+						parts: [
+							{
+								role: 'assistant',
+								content: '',
+								toolCalls: [
+									{ id: 'call-1', name: 'read_skill', input: { skill: 'norbital-platform' } }
+								]
+							}
+						]
+					}
+				]
+			})
+		).toBe('searching');
+		expect(agentOrbStatusKey('idle')).toBe('pod.shell.workspaceAgentDescription');
+		expect(agentOrbStatusKey('searching')).toBe('pod.agent.searching');
+		expect(agentOrbStatusKey('authoring')).toBe('pod.agent.authoring');
+		expect(toolOrbActivity('read_collection')).toBe('searching');
+		expect(toolOrbActivity('write_collection')).toBe('authoring');
+		expect(toolOrbActivity('list_sandbox_agents')).toBe('searching');
+		expect(toolOrbActivity('unknown_tool')).toBe('working');
 	});
 
 	it('covers activity states, transitions, and reduced motion', async () => {
@@ -76,10 +107,11 @@ describe('Norbital agent orb', () => {
 	});
 
 	it('is exported and used for identity, tools, and streamed authoring', async () => {
-		const [packageSource, panel, transcript, shell, state] = await Promise.all([
+		const [packageSource, panel, transcript, transcriptTs, shell, state] = await Promise.all([
 			readFile(packagePath, 'utf8'),
 			readFile(panelSourcePath, 'utf8'),
 			readFile(transcriptSourcePath, 'utf8'),
+			readFile(transcriptTsPath, 'utf8'),
 			readFile(shellSourcePath, 'utf8'),
 			readFile(orbStatePath, 'utf8')
 		]);
@@ -91,12 +123,19 @@ describe('Norbital agent orb', () => {
 			default: './build/ui/agent/norbital-thinking-orb.svelte'
 		});
 		expect(panel).toMatch(/NorbitalThinkingOrb state="idle"/);
-		expect(panel).toMatch(/NorbitalThinkingOrb state="thinking"/);
-		expect(transcript).toMatch(/toolOrbState/);
+		expect(panel).toMatch(/NorbitalThinkingOrb state=\{activityState\}/);
+		expect(panel).toMatch(/data-testid="agent-activity-orb"/);
+		expect(transcript).toMatch(/toolOrbActivity/);
 		expect(transcript).toMatch(/state="authoring"/);
 		expect(shell).toMatch(/NorbitalThinkingOrb[\s\S]*state=\{fabAgentState\}[\s\S]*size=\{20\}/);
+		expect(shell).toMatch(/data-testid="workspace-agent-orb"/);
+		expect(shell).toMatch(/data-testid="workspace-agent-shortcut"/);
+		expect(shell).toMatch(/onSearch=\{toggleOmniFinder\}/);
+		expect(shell).toMatch(/<AgentChatPanel headerOrb=\{false\} \/>/);
 		expect(shell).toMatch(/workspaceApi\.db\.chat_session\?\.findFirst/);
 		expect(state).toMatch(/SEARCH_TOOLS/);
 		expect(state).toMatch(/AUTHORING_TOOLS/);
+		expect(state).toMatch(/from '\.\/transcript\.js'/);
+		expect(transcriptTs).toMatch(/read_skill/);
 	});
 });

@@ -137,20 +137,7 @@ function buildAutomationEntries(
 			trigger?:
 				| { schedule?: string }
 				| { trigger?: { collection?: string; event?: 'created' | 'updated' | 'deleted' } };
-			spec?: {
-				kind: string;
-				description?: string;
-				task?: string;
-				model?: string;
-				systemPrompt?: string;
-				collections?: string[];
-				access?: 'read' | 'write';
-				tools?: string[];
-				hostTools?: string[];
-				mcpServers?: string[];
-				profile?: string;
-				maxTokens?: number;
-			};
+			spec?: { description?: string };
 		};
 		const trigger = tpl.trigger;
 		const isSchedule = trigger && 'schedule' in trigger;
@@ -161,11 +148,9 @@ function buildAutomationEntries(
 						event: trigger.trigger.event
 					}
 				: undefined;
-		const agentSpec = buildAgentEntry(tpl.spec);
 		out[key] = {
 			description: tpl.spec?.description ?? '',
-			trigger: isSchedule ? { schedule: trigger.schedule! } : eventTrigger!,
-			...(agentSpec ? { spec: agentSpec } : {})
+			trigger: isSchedule ? { schedule: trigger.schedule! } : eventTrigger!
 		};
 	}
 	return out;
@@ -183,6 +168,7 @@ function buildAgentEntry(raw: unknown): ManifestAutomationAgentSpec | undefined 
 		...(spec.collections ? { collections: spec.collections } : {}),
 		...(spec.access ? { access: spec.access } : {}),
 		...(spec.tools ? { tools: spec.tools } : {}),
+		...(spec.denyTools ? { denyTools: spec.denyTools } : {}),
 		...(spec.hostTools ? { hostTools: spec.hostTools } : {}),
 		...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
 		...(spec.profile ? { profile: spec.profile } : {}),
@@ -367,6 +353,7 @@ function buildChannelEntries(
 			};
 			groupMessages?: 'disabled' | 'all' | 'mention_or_reply';
 			hostTools?: readonly string[];
+			denyTools?: readonly string[];
 			mcpServers?: readonly string[];
 			hostSandbox?: { readonly workspace: 'read-only' | 'read-write' };
 		};
@@ -385,6 +372,9 @@ function buildChannelEntries(
 			...(channel.groupMessages ? { groupMessages: channel.groupMessages } : {}),
 			...(channel.hostTools && channel.hostTools.length > 0
 				? { hostTools: [...channel.hostTools] }
+				: {}),
+			...(channel.denyTools && channel.denyTools.length > 0
+				? { denyTools: [...channel.denyTools] }
 				: {}),
 			...(channel.mcpServers && channel.mcpServers.length > 0
 				? { mcpServers: [...channel.mcpServers] }

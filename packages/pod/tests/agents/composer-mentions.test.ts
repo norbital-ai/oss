@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
 	MENTION_QUERY_LIMIT,
+	consumeTrigger,
 	findMentionTrigger,
 	insertMention,
 	mentionDeletion,
 	reconcileAfterEdit,
+	rewriteTriggerQuery,
 	serializeMentions,
 	type ComposerMention
 } from '$lib/ui/agent/composer-mentions.js';
@@ -87,6 +89,30 @@ describe('inserting a chip', () => {
 		const result = insertMention(draft, [first], { start: 17, query: 'acm', caret: 21 }, acme);
 		expect(result.draft).toBe('@Acme Corp meets @Acme Corp');
 		expect(result.mentions.map((mention) => mention.start)).toEqual([0, 17]);
+	});
+});
+
+describe('rewriting and consuming a live trigger', () => {
+	it('keeps the @ and replaces only the query', () => {
+		const result = rewriteTriggerQuery(
+			'ask @acm later',
+			[],
+			{ start: 4, query: 'acm' },
+			'#companies '
+		);
+		expect(result.draft).toBe('ask @#companies  later');
+		expect(result.caret).toBe('ask @#companies '.length);
+	});
+
+	it('removes the @query and leaves the rest of the request', () => {
+		const result = consumeTrigger(
+			'please @!rewrite leave',
+			[],
+			{ start: 7, query: '!rewrite leave' },
+			'rewrite leave'
+		);
+		expect(result.draft).toBe('please rewrite leave');
+		expect(result.caret).toBe('please rewrite leave'.length);
 	});
 });
 

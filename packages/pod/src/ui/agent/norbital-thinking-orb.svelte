@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import type { AgentOrbState } from './agent-orb-state.js';
 
 	type OrbPoint = {
@@ -31,10 +30,6 @@
 		label?: string;
 		class?: string;
 	} = $props();
-
-	let canvas: HTMLCanvasElement;
-	let accentSwatch: HTMLSpanElement;
-	let redrawStatic = () => {};
 
 	function clamp(value: number, min = 0, max = 1): number {
 		return Math.min(max, Math.max(min, value));
@@ -330,160 +325,6 @@
 			visibility: from.visibility + (to.visibility - from.visibility) * amount
 		};
 	}
-
-	$effect(() => {
-		state;
-		size;
-		redrawStatic();
-	});
-
-	onMount(() => {
-		const canvasContext = canvas.getContext('2d');
-		if (!canvasContext) return;
-		const context: CanvasRenderingContext2D = canvasContext;
-
-		const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-		let reducedMotion = motionQuery.matches;
-		let visible = true;
-		let frame = 0;
-		let targetState = state;
-		let previousState = state;
-		let transitionStarted = performance.now();
-		let inkColor = getComputedStyle(canvas).color;
-		let accentColor = getComputedStyle(accentSwatch).color;
-		let lastColorRead = 0;
-		let lastCanvasSize = 0;
-		let lastDpr = 0;
-		let sphereLayout: SphereSeed[] = [];
-
-		function syncCanvas(): number {
-			const dpr = Math.min(2, window.devicePixelRatio || 1);
-			if (lastCanvasSize !== size || lastDpr !== dpr) {
-				if (lastCanvasSize !== size) sphereLayout = buildSphereLayout(size);
-				canvas.width = Math.max(1, Math.round(size * dpr));
-				canvas.height = Math.max(1, Math.round(size * dpr));
-				context.setTransform(dpr, 0, 0, dpr, 0, 0);
-				lastCanvasSize = size;
-				lastDpr = dpr;
-			}
-			return dpr;
-		}
-
-		function draw(now: number, staticFrame = false): void {
-			syncCanvas();
-			if (now - lastColorRead > 800 || lastColorRead === 0) {
-				inkColor = getComputedStyle(canvas).color;
-				accentColor = getComputedStyle(accentSwatch).color;
-				lastColorRead = now;
-			}
-
-			if (state !== targetState) {
-				previousState = targetState;
-				targetState = state;
-				transitionStarted = now;
-			}
-
-			const compact = size <= 36;
-			const layout = sphereLayout;
-			const count = layout.length;
-			const transitionDuration = compact ? 145 : 190;
-			const transitionProgress = staticFrame
-				? 1
-				: clamp((now - transitionStarted) / transitionDuration);
-			const mix = 1 - (1 - transitionProgress) ** 4;
-			const elapsed = staticFrame ? 2.25 : now / 1000;
-			const stateElapsed = staticFrame ? 2.25 : Math.max(0, (now - transitionStarted) / 1000);
-			const radius = size * 0.405;
-			const dotScale = Math.pow(size / 64, 0.68) * (compact ? 1.06 : 1);
-			const points: Array<OrbPoint & { index: number }> = [];
-
-			for (let index = 0; index < count; index += 1) {
-				const from = pointForState(previousState, index, layout, elapsed, compact);
-				const to = pointForState(targetState, index, layout, elapsed, compact, stateElapsed);
-				points.push({ ...interpolatePoint(from, to, mix), index });
-			}
-			points.sort((a, b) => a.z - b.z || a.index - b.index);
-
-			context.clearRect(0, 0, size, size);
-			for (const point of points) {
-				const depth = clamp((point.z + 1.08) / 2.16);
-				const near = depth ** 1.45;
-				const dotRadius = (0.26 + near * 1.08 + point.boost) * dotScale;
-				const alpha = 0.16 + near * 0.82;
-				const x = size / 2 + point.x * radius;
-				const y = size / 2 - point.y * radius;
-
-				context.globalAlpha = alpha * point.visibility * (1 - point.accent * 0.36);
-				context.fillStyle = inkColor;
-				context.beginPath();
-				context.arc(x, y, dotRadius, 0, Math.PI * 2);
-				context.fill();
-
-				if (point.accent > 0.035) {
-					context.globalAlpha = alpha * point.visibility * point.accent * 0.9;
-					context.fillStyle = accentColor;
-					context.beginPath();
-					context.arc(x, y, dotRadius * (1 + point.accent * 0.08), 0, Math.PI * 2);
-					context.fill();
-				}
-			}
-			context.globalAlpha = 1;
-		}
-
-		function tick(now: number): void {
-			draw(now);
-			frame = requestAnimationFrame(tick);
-		}
-
-		function start(): void {
-			if (frame || reducedMotion || !visible || document.hidden) return;
-			frame = requestAnimationFrame(tick);
-		}
-
-		function stop(): void {
-			if (!frame) return;
-			cancelAnimationFrame(frame);
-			frame = 0;
-		}
-
-		function updateMotionPreference(): void {
-			reducedMotion = motionQuery.matches;
-			if (reducedMotion) {
-				stop();
-				draw(performance.now(), true);
-			} else {
-				start();
-			}
-		}
-
-		function updateVisibility(): void {
-			if (document.hidden || !visible) stop();
-			else if (reducedMotion) draw(performance.now(), true);
-			else start();
-		}
-
-		const observer = new IntersectionObserver(([entry]) => {
-			visible = entry?.isIntersecting ?? true;
-			updateVisibility();
-		});
-		observer.observe(canvas);
-		document.addEventListener('visibilitychange', updateVisibility);
-		motionQuery.addEventListener('change', updateMotionPreference);
-
-		redrawStatic = () => {
-			if (reducedMotion) draw(performance.now(), true);
-		};
-		if (reducedMotion) draw(performance.now(), true);
-		else start();
-
-		return () => {
-			stop();
-			observer.disconnect();
-			document.removeEventListener('visibilitychange', updateVisibility);
-			motionQuery.removeEventListener('change', updateMotionPreference);
-			redrawStatic = () => {};
-		};
-	});
 </script>
 
 <span
@@ -494,9 +335,171 @@
 	role={label ? 'img' : undefined}
 	aria-label={label}
 	aria-hidden={label ? undefined : 'true'}
+	{@attach (root) => {
+		const canvas = root.querySelector('canvas');
+		const accentSwatch = root.querySelector('.orb-accent-swatch');
+		if (!(canvas instanceof HTMLCanvasElement) || !(accentSwatch instanceof HTMLElement)) return;
+
+		const canvasContext = canvas.getContext('2d');
+		if (!canvasContext) return;
+		const context: CanvasRenderingContext2D = canvasContext;
+
+			const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+			let reducedMotion = motionQuery.matches;
+			let visible = true;
+			let frame = 0;
+			let targetState: AgentOrbState = 'idle';
+			let previousState: AgentOrbState = 'idle';
+			let transitionStarted = performance.now();
+			let initialized = false;
+			let inkColor = getComputedStyle(canvas).color;
+			let accentColor = getComputedStyle(accentSwatch).color;
+			let lastColorRead = 0;
+			let lastCanvasSize = 0;
+			let lastDpr = 0;
+			let sphereLayout: SphereSeed[] = [];
+			let lastDrawnState: AgentOrbState | null = null;
+			let lastDrawnSize = 0;
+
+			function syncCanvas(): number {
+				const dpr = Math.min(2, window.devicePixelRatio || 1);
+				if (lastCanvasSize !== size || lastDpr !== dpr) {
+					if (lastCanvasSize !== size) sphereLayout = buildSphereLayout(size);
+					canvas.width = Math.max(1, Math.round(size * dpr));
+					canvas.height = Math.max(1, Math.round(size * dpr));
+					context.setTransform(dpr, 0, 0, dpr, 0, 0);
+					lastCanvasSize = size;
+					lastDpr = dpr;
+				}
+				return dpr;
+			}
+
+			function draw(now: number, staticFrame = false): void {
+				syncCanvas();
+				if (now - lastColorRead > 800 || lastColorRead === 0) {
+					inkColor = getComputedStyle(canvas).color;
+					accentColor = getComputedStyle(accentSwatch).color;
+					lastColorRead = now;
+				}
+
+				if (state !== targetState) {
+					previousState = targetState;
+					targetState = state;
+					transitionStarted = now;
+				}
+
+				const compact = size <= 36;
+				const layout = sphereLayout;
+				const count = layout.length;
+				const transitionDuration = compact ? 145 : 190;
+				const transitionProgress = staticFrame
+					? 1
+					: clamp((now - transitionStarted) / transitionDuration);
+				const mix = 1 - (1 - transitionProgress) ** 4;
+				const elapsed = staticFrame ? 2.25 : now / 1000;
+				const stateElapsed = staticFrame ? 2.25 : Math.max(0, (now - transitionStarted) / 1000);
+				const radius = size * 0.405;
+				const dotScale = Math.pow(size / 64, 0.68) * (compact ? 1.06 : 1);
+				const points: Array<OrbPoint & { index: number }> = [];
+
+				for (let index = 0; index < count; index += 1) {
+					const from = pointForState(previousState, index, layout, elapsed, compact);
+					const to = pointForState(targetState, index, layout, elapsed, compact, stateElapsed);
+					points.push({ ...interpolatePoint(from, to, mix), index });
+				}
+				points.sort((a, b) => a.z - b.z || a.index - b.index);
+
+				context.clearRect(0, 0, size, size);
+				for (const point of points) {
+					const depth = clamp((point.z + 1.08) / 2.16);
+					const near = depth ** 1.45;
+					const dotRadius = (0.26 + near * 1.08 + point.boost) * dotScale;
+					const alpha = 0.16 + near * 0.82;
+					const x = size / 2 + point.x * radius;
+					const y = size / 2 - point.y * radius;
+
+					context.globalAlpha = alpha * point.visibility * (1 - point.accent * 0.36);
+					context.fillStyle = inkColor;
+					context.beginPath();
+					context.arc(x, y, dotRadius, 0, Math.PI * 2);
+					context.fill();
+
+					if (point.accent > 0.035) {
+						context.globalAlpha = alpha * point.visibility * point.accent * 0.9;
+						context.fillStyle = accentColor;
+						context.beginPath();
+						context.arc(x, y, dotRadius * (1 + point.accent * 0.08), 0, Math.PI * 2);
+						context.fill();
+					}
+				}
+				context.globalAlpha = 1;
+			}
+
+			function tick(now: number): void {
+				if (!initialized) {
+					targetState = state;
+					previousState = state;
+					transitionStarted = now;
+					initialized = true;
+				}
+				if (reducedMotion) {
+					if (state === lastDrawnState && size === lastDrawnSize) {
+						frame = requestAnimationFrame(tick);
+						return;
+					}
+					lastDrawnState = state;
+					lastDrawnSize = size;
+					draw(now, true);
+				} else {
+					draw(now);
+				}
+				frame = requestAnimationFrame(tick);
+			}
+
+			function start(): void {
+				if (frame || !visible || document.hidden) return;
+				frame = requestAnimationFrame(tick);
+			}
+
+			function stop(): void {
+				if (!frame) return;
+				cancelAnimationFrame(frame);
+				frame = 0;
+			}
+
+			function updateMotionPreference(): void {
+				reducedMotion = motionQuery.matches;
+				lastDrawnState = null;
+				lastDrawnSize = 0;
+				if (reducedMotion) draw(performance.now(), true);
+				updateVisibility();
+			}
+
+			function updateVisibility(): void {
+				if (document.hidden || !visible) stop();
+				else start();
+			}
+
+			const observer = new IntersectionObserver(([entry]) => {
+				visible = entry?.isIntersecting ?? true;
+				updateVisibility();
+			});
+			observer.observe(canvas);
+			document.addEventListener('visibilitychange', updateVisibility);
+			motionQuery.addEventListener('change', updateMotionPreference);
+
+			start();
+
+			return () => {
+				stop();
+				observer.disconnect();
+				document.removeEventListener('visibilitychange', updateVisibility);
+				motionQuery.removeEventListener('change', updateMotionPreference);
+			};
+		}}
 >
-	<canvas bind:this={canvas} aria-hidden="true"></canvas>
-	<span bind:this={accentSwatch} class="orb-accent-swatch" aria-hidden="true"></span>
+	<canvas aria-hidden="true"></canvas>
+	<span class="orb-accent-swatch" aria-hidden="true"></span>
 </span>
 
 <style>

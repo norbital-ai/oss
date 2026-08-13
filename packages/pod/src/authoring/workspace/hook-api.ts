@@ -1,10 +1,16 @@
 import type { z } from 'zod';
-import type { AnySchema } from '../schema/types.js';
+import type { AnySchema, DefaultWorkspaceSchema, TableName } from '../schema/types.js';
 import type { DbApi } from './db-api-types.js';
 import type { ReadonlyDbApi } from './db-api-types.js';
 import type { MergedWorkspaceSchema } from '$lib/authoring/schema/system-workspace.js';
-import type { DefaultWorkspaceSchema, TableName } from '../schema/types.js';
 import type { MutationInsertFor, MutationUpdateFor } from '../schema/mutation-types.js';
+import type { WorkspaceAuthoringTypes } from '../index.js';
+
+type WorkspaceAgentToolName = WorkspaceAuthoringTypes extends {
+	readonly agentToolName: infer TName extends string;
+}
+	? TName
+	: string;
 
 export type SendNotificationInput = {
 	readonly recipient_user_id: string;
@@ -47,12 +53,22 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 		? DbApi<S, 'direct'>
 		: DbApi<MergedWorkspaceSchema<S>, 'direct'>;
 	readonly sendNotification: (input: SendNotificationInput) => Promise<SendNotificationResult>;
-	readonly ai: <const TSchema extends z.ZodType | undefined = undefined>(input: {
+	/**
+	 * The same host chat the agent uses, without a transcript and without a sandbox.
+	 *
+	 * Always a normal chat turn: optional Zod `schema`, optional `images`, optional named workspace
+	 * tools. The funnel offers the read builtins (`describe_workspace`, `read_collection`,
+	 * `list_skills`, `read_skill`) plus those workspace tools. It never offers `write_collection`,
+	 * `spawn_subagent`, MCP, authoring, or sandbox host tools.
+	 */
+	readonly infer: <const TSchema extends z.ZodType | undefined = undefined>(input: {
 		readonly prompt: string;
 		readonly schema?: TSchema;
 		readonly model?: string;
 		readonly profile?: string;
-		/** Only these selected workspace image assets are sent to the model. */
+		readonly tools?: readonly WorkspaceAgentToolName[];
+		/** When set, `read_collection` may only target these collections. */
+		readonly collections?: readonly TableName<MergedWorkspaceSchema<S>>[];
 		readonly images?: readonly AiImageInput[];
 	}) => Promise<TSchema extends z.ZodType ? z.infer<TSchema> : string>;
 	readonly readFileAsset: (assetId: string) => Promise<ReadFileAssetResult>;
@@ -71,6 +87,7 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
 	BeforeApi<S>,
 	| 'db'
+	| 'infer'
 	| 'readFileAsset'
 	| 'readFileAssetInspection'
 	| 'readFileAssetInspections'
@@ -122,6 +139,7 @@ export type AfterApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<Before
 export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Pick<
 	AfterApi<S>,
 	| 'db'
+	| 'infer'
 	| 'readFileAsset'
 	| 'readFileAssetInspection'
 	| 'readFileAssetInspections'

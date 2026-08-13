@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { onDestroy, tick } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 	import { page, goto } from '$lib/ui/state/router.svelte.js';
@@ -30,7 +30,7 @@
 		setDataRendererRuntimeContext,
 		type CustomTypeRendererMap
 	} from '@norbital-ai/ui/data-renderer';
-	import { shortcut } from '@norbital-ai/ui/keybindings';
+	import { detectShortcutModifier, formatShortcut, shortcut } from '@norbital-ai/ui/keybindings';
 	import {
 		WorkspaceShell,
 		type WorkspaceNavigationItem,
@@ -69,8 +69,8 @@
 	import { workspaceSettingsApi } from './workspace-settings-api.js';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
 	import NorbitalThinkingOrb from '../agent/norbital-thinking-orb.svelte';
-	import { agentOrbState } from '../agent/agent-orb-state.js';
-	import { requestAgentComposerFocus } from '../agent/agent-composer-focus.js';
+	import { agentOrbState, agentOrbStatusKey } from '../agent/agent-orb-state.js';
+	import { requestAgentComposerFocus, type AgentComposerSeed } from '../agent/composer-chrome.js';
 	import OmniFinder from './omni-finder.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { cn } from '@norbital-ai/ui/utils';
@@ -145,7 +145,7 @@
 			accessibleAppNames: data.accessibleAppNames
 		}) ?? requestedAppName
 	);
-	const activeCollectionViews = new Set<string>();
+	const activeCollectionViews = new SvelteSet<string>();
 	setCollectionSurfaceRuntime({
 		appId: () => appName,
 		get surfaces() {
@@ -164,7 +164,7 @@
 	const activeApp = $derived(
 		loadableAppName ? loadWorkspaceApplication(apps, loadableAppName) : undefined
 	);
-	const prefetchedSurfaces = new Set<string>();
+	const prefetchedSurfaces = new SvelteSet<string>();
 	function prefetchWorkspaceSurface(href: string): void {
 		if (prefetchedSurfaces.has(href)) return;
 		prefetchedSurfaces.add(href);
@@ -279,19 +279,25 @@
 	 * inside a portal, so the focus request must land after the panel has mounted; `tick` is that
 	 * boundary. The panel itself owns caret placement; the shell only asks for focus.
 	 */
-	function openAgent(): void {
+	function openAgent(seed?: AgentComposerSeed): void {
 		if (agentSurfaceAllowed || agentSheetOpen) {
-			requestAgentComposerFocus();
+			requestAgentComposerFocus(seed);
 			return;
 		}
 		agentSheetOpen = true;
-		void tick().then(requestAgentComposerFocus);
+		void tick().then(() => requestAgentComposerFocus(seed));
 	}
 
 	/** Cmd+/ toggles the omni finder; the finder clears its query as it closes. */
 	function toggleOmniFinder(): void {
 		omniOpen = !omniOpen;
 	}
+	let shortcutModifier = $state(detectShortcutModifier());
+	onMount(() => {
+		shortcutModifier = detectShortcutModifier();
+	});
+	const agentShortcut = $derived(formatShortcut(shortcutModifier, 'K'));
+	const searchShortcut = $derived(formatShortcut(shortcutModifier, '/'));
 	const impersonation = $derived(
 		data.impersonation
 			? {
@@ -597,6 +603,9 @@
 	onNavigate={navigate}
 	onOrganizationChange={switchOrganization}
 	onPrefetch={prefetchWorkspaceSurface}
+	onSearch={toggleOmniFinder}
+	searchLabel={t('pod.shell.omniTitle')}
+	{searchShortcut}
 	{notifications}
 	{onSignOut}
 	{impersonation}
@@ -706,7 +715,7 @@
 		{
 			ctrl: true,
 			key: 'k',
-			callback: openAgent,
+			callback: () => openAgent(),
 			exactMatch: true
 		},
 		{
@@ -742,9 +751,9 @@
 {#if agentAvailable && !agentSurfaceAllowed && !agentSheetOpen}
 	<Button
 		type="button"
-		aria-label={t('pod.shell.openWorkspaceAgent')}
+		aria-label={t('pod.shell.openWorkspaceAgentWithShortcut', { shortcut: agentShortcut })}
 		aria-haspopup="dialog"
-		class="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 h-11 gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-6"
+		class="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 h-11 gap-2 rounded-full bg-[#26251e] px-4 text-[#f7f7f4] shadow-lg hover:bg-[#1c1b16] sm:right-6 sm:bottom-6 dark:bg-card dark:text-card-foreground dark:shadow-black/40 dark:ring-1 dark:ring-border dark:hover:bg-accent"
 		onclick={openAgent}
 		data-testid="workspace-agent-trigger"
 	>
@@ -754,6 +763,11 @@
 			label={t('pod.shell.openWorkspaceAgent')}
 		/>
 		<span>{t('pod.shell.askAgent')}</span>
+		<kbd
+			class="pointer-events-none hidden h-5 select-none items-center rounded-md border border-white/20 bg-white/10 px-1.5 font-mono text-[10px] font-medium text-white/75 sm:inline-flex dark:border-foreground/20 dark:bg-foreground/10 dark:text-foreground/75"
+			data-testid="workspace-agent-shortcut"
+			aria-hidden="true">{agentShortcut}</kbd
+		>
 	</Button>
 {/if}
 
@@ -775,15 +789,29 @@
 		>
 			<Stack gap="none" fill>
 				<Sheet.Header class="shrink-0 border-b px-4 py-3.5 pr-12 text-left sm:px-5">
-					<Sheet.Title class="text-sm font-semibold"
-						>{t('pod.shell.workspaceAgentTitle')}</Sheet.Title
-					>
-					<Sheet.Description class="text-xs leading-5 text-muted-foreground">
-						{t('pod.shell.workspaceAgentDescription')}
-					</Sheet.Description>
+					<Inline gap="sm" align="start" class="min-w-0">
+						<div
+							class="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground"
+							data-testid="workspace-agent-orb"
+						>
+							<NorbitalThinkingOrb
+								state={fabAgentState}
+								size={28}
+								label={t(agentOrbStatusKey(fabAgentState))}
+							/>
+						</div>
+						<Stack gap="none" class="min-w-0">
+							<Sheet.Title class="text-sm font-semibold"
+								>{t('pod.shell.workspaceAgentTitle')}</Sheet.Title
+							>
+							<Sheet.Description class="text-xs leading-5 text-muted-foreground">
+								{t(agentOrbStatusKey(fabAgentState))}
+							</Sheet.Description>
+						</Stack>
+					</Inline>
 				</Sheet.Header>
 				<Stack gap="none" grow>
-					<AgentChatPanel />
+					<AgentChatPanel headerOrb={false} />
 				</Stack>
 			</Stack>
 		</Sheet.Content>

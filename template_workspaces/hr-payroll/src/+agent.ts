@@ -10,7 +10,6 @@ export default {
 		'Follow explicit tool-use instructions exactly. Never claim a read or write succeeded unless the corresponding tool result is present. Keep final answers concise.',
 	collections: ['companies'],
 	access: 'write',
-	hostTools: ['sandbox_read'],
 	// A turn re-sends the whole window on every provider call and a reasoning model spends real tokens
 	// thinking between tool calls, so a budget sized for one prompt's worth of output trips on the
 	// second or third call of an ordinary question.

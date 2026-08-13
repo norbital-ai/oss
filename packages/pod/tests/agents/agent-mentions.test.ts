@@ -11,7 +11,9 @@ import { describe, expect, it, vi } from 'vitest';
 const manifest = {
 	collections: {
 		companies: { collection_name: 'companies', system: null },
-		chat_session: { collection_name: 'chat_session', system: true }
+		chat_session: { collection_name: 'chat_session', system: true },
+		user: { collection_name: 'user', system: true },
+		team: { collection_name: 'team', system: true }
 	}
 };
 
@@ -21,6 +23,19 @@ const rowsByCollection: Record<string, Record<string, unknown>[]> = {
 			norbital_id: '0197f2a4-0000-7000-8000-000000000001',
 			name: 'Acme Corp',
 			status: 'active'
+		}
+	],
+	user: [
+		{
+			norbital_id: '0197f2a4-0000-7000-8000-000000000010',
+			name: 'Ada Lovelace',
+			email: 'ada@example.com'
+		}
+	],
+	team: [
+		{
+			norbital_id: '0197f2a4-0000-7000-8000-000000000011',
+			name: 'Finance'
 		}
 	]
 };
@@ -87,6 +102,26 @@ describe('mention context for the model window', () => {
 		]);
 		expect(block).toContain('status="unavailable"');
 		expect(block).not.toContain('user_id');
+	});
+
+	it('injects allowlisted user and team mentions the requestor can read', async () => {
+		const block = await composeMentionContext(ctx, [
+			{
+				collection: 'user',
+				recordId: '0197f2a4-0000-7000-8000-000000000010',
+				label: 'Ada Lovelace'
+			},
+			{
+				collection: 'team',
+				recordId: '0197f2a4-0000-7000-8000-000000000011',
+				label: 'Finance'
+			}
+		]);
+		expect(block).toContain('collection="user"');
+		expect(block).toContain('"name":"Ada Lovelace"');
+		expect(block).toContain('collection="team"');
+		expect(block).toContain('"name":"Finance"');
+		expect(block).not.toContain('status="unavailable"');
 	});
 
 	it('declines a collection the manifest does not name', async () => {

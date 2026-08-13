@@ -1,20 +1,22 @@
 /**
- * Goal mode: the main agent works, then an independent verifier decides whether it may stop.
+ * Independent end-action for a turn: the main agent works, then a verifier decides whether it may stop.
  *
  * The verifier is a separate `ai.prompt` with no tools and a different system prompt. It does not
- * trust the agent's last sentence. A failed verdict is written into the transcript and injected
- * back into the window so the main agent continues. Plan mode wins if both are set — research
- * cannot be "achieved" by writes the tool list already withheld.
+ * trust the agent's last sentence. The check it runs is the intent's verifier prompt — the same
+ * text the composer showed — unless the person edited it. A failed verdict is written into the
+ * transcript and injected back into the window so the main agent continues.
  */
 import type { AiMessage } from '@norbital-ai/platform-utils/runtime/binding';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { replayAutomationAi } from '$lib/server/run/automation-replay.server.js';
-import { readChatSession } from '$lib/server/agent/chat-session.server.js';
+import { readChatSession, updateChatMessage } from '$lib/server/agent/chat-session.server.js';
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 import {
 	parseGoalVerdict,
 	parseStoredGoalVerdict,
+	parseStoredVerifierScheduled,
 	serializeGoalVerdict,
+	serializeVerifierScheduled,
 	UNREADABLE_VERDICT,
 	type GoalVerdict
 } from '$lib/shared/agent/goal-verdict.js';
@@ -31,9 +33,11 @@ export {
 /** Independent checks per root turn, including the last one that is allowed to fail-closed. */
 export const MAX_GOAL_VERIFICATIONS = 3;
 
-export const GOAL_MODE_REMINDER = `## Goal mode
+export const GOAL_MODE_REMINDER = `## Work turn
 
-Goal mode is active for this turn. Do the work the person asked for. When you would stop, an independent verifier — not you — checks whether the request was actually fulfilled, using the transcript as evidence. Claims without tool results do not count. If the verifier finds gaps, you will be sent back to close them. Do not announce completion until the work is done.`;
+This turn is a work turn. Do the work the person asked for. When you would stop, an independent verifier — not you — checks the transcript against the end-action prompt for this intent. Claims without tool results do not count. If the verifier finds gaps, you will be sent back to close them. You may list, read, message, or wait for other agents in this sandbox only — the same person on web, or the same channel profile. Never another user or another channel. spawn_subagent waits in this session. await_sandbox_agent parks this turn until a sibling session settles. Do not announce completion until the work is done.`;
+
+export const PLAN_VERIFIER_REMINDER = `When you would stop, an independent verifier — not you — checks whether this plan is complete and executable. You do not decide that.`;
 
 export const GOAL_VERIFIER_SYSTEM_PROMPT = `You are an independent verifier. You did not do this work and you must not finish it. Decide whether the agent actually fulfilled the person's request.
 
@@ -71,9 +75,13 @@ export function windowMessageFromStoredGoal(content: string): AiMessage {
 export function buildGoalVerificationPrompt(input: {
 	readonly userRequest: string;
 	readonly messages: readonly AiMessage[];
+	readonly verifierPrompt: string;
 }): string {
 	return [
-		'Person\'s request:',
+		'Verifier instructions:',
+		input.verifierPrompt,
+		'',
+		"Person's request:",
 		input.userRequest,
 		'',
 		'Transcript (assistant claims are not evidence; tool results are):',
@@ -95,11 +103,50 @@ export async function countGoalVerdicts(
 	const session = await readChatSession(sessionId);
 	return session.messages.filter((message) => {
 		if (message.turn_id !== turnId || message.kind !== 'goal') return false;
+		const content = message.parts[0]?.content;
+		if (typeof content !== 'string' || !parseStoredGoalVerdict(content)) return false;
 		if (options?.beforeOrdinal === undefined) return true;
 		return (
 			typeof message.durable_ordinal === 'number' && message.durable_ordinal < options.beforeOrdinal
 		);
 	}).length;
+}
+
+/** Latest scheduled end-action prompt on this turn, including a person-edited one. */
+export async function readScheduledVerifierPrompt(
+	sessionId: string,
+	turnId: string
+): Promise<string | null> {
+	const session = await readChatSession(sessionId);
+	for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+		const message = session.messages[index];
+		if (!message || message.turn_id !== turnId || message.kind !== 'goal') continue;
+		const content = message.parts[0]?.content;
+		if (typeof content !== 'string') continue;
+		const prompt = parseStoredVerifierScheduled(content);
+		if (prompt) return prompt;
+	}
+	return null;
+}
+
+export async function updateScheduledVerifierPrompt(
+	sessionId: string,
+	prompt: string
+): Promise<void> {
+	const trimmed = prompt.trim();
+	if (!trimmed) throw new Error('Verifier prompt is empty');
+	const session = await readChatSession(sessionId);
+	for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+		const message = session.messages[index];
+		if (!message || message.kind !== 'goal') continue;
+		const content = message.parts[0]?.content;
+		if (typeof content !== 'string' || !parseStoredVerifierScheduled(content)) continue;
+		await updateChatMessage(sessionId, message.norbital_id, {
+			parts: [{ role: 'system', content: serializeVerifierScheduled(trimmed) }]
+		});
+		return;
+	}
+	throw new Error('No verifier is scheduled on this conversation');
 }
 
 /**
@@ -109,6 +156,7 @@ export function replayGoalVerification(input: {
 	readonly spec: AgentAutomationSpec;
 	readonly userRequest: string;
 	readonly messages: readonly AiMessage[];
+	readonly verifierPrompt: string;
 }): GoalVerdict {
 	const text = replayAutomationAi({
 		request: {
@@ -125,6 +173,7 @@ export async function verifyGoalAchievement(input: {
 	readonly spec: AgentAutomationSpec;
 	readonly userRequest: string;
 	readonly messages: readonly AiMessage[];
+	readonly verifierPrompt: string;
 }): Promise<GoalVerdict> {
 	const ai = requireRuntimeFacility('ai');
 	const result = await ai.chat({

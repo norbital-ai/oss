@@ -51,9 +51,10 @@ export async function composeMentionContext(
 			`id="${escapeAttribute(mention.recordId)}" ` +
 			`label="${escapeAttribute(mention.label)}"`;
 		const metadata = manifestCollections[mention.collection];
-		// System collections are the platform's own plumbing; a mention into them is declined even
-		// where policy would allow the read.
-		if (!metadata || metadata.system === true) {
+		// System plumbing stays out of the model's window. People and teams are the allowlisted
+		// exception — `@` can pin a user or a team the requestor can already read.
+		const mentionableSystem = mention.collection === 'user' || mention.collection === 'team';
+		if (!metadata || (metadata.system === true && !mentionableSystem)) {
 			blocks.push(`<record ${attributes} status="unavailable" />`);
 			continue;
 		}

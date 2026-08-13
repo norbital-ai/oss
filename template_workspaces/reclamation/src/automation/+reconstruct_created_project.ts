@@ -16,7 +16,6 @@ import { reconstructProject } from '../lib/reclamation/stitch-driver.js';
 export default defineAutomation(
 	{ trigger: { collection: 'reclamation_projects', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description:
 			'Stitches the first site reconstruction for a project that is created with its floor plan, bathymetry and cross-sections already attached, as an import or an API caller would.',
 		handler: async (api, { scope }) => ({

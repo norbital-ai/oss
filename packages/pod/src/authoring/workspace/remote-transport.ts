@@ -13,8 +13,9 @@ export type WorkspaceRemoteTransport = {
 	readonly invokeQuery: (input: InvokeTransportInput) => RemoteQuery<unknown>;
 	readonly exportPipeline: PodRemoteOperations['exportPipeline'];
 	readonly importPipeline: PodRemoteOperations['importPipeline'];
-	readonly agentChat: PodRemoteOperations['agentChat'];
+	readonly agentChat?: PodRemoteOperations['agentChat'];
 	readonly agentChatStart: PodRemoteOperations['agentChatStart'];
+	readonly agentChatUpdateVerifier: PodRemoteOperations['agentChatUpdateVerifier'];
 	readonly agentModels: PodRemoteOperations['agentModels'];
 	readonly autocompleteGeolocation: PodRemoteOperations['autocompleteGeolocation'];
 	readonly renderStaticMap: PodRemoteOperations['renderStaticMap'];

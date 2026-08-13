@@ -77,16 +77,10 @@ describe('standalone facility gate', () => {
 
 	it('refuses a workspace instead of starting with an inert AI or queue capability', () => {
 		const agentWorkspace = manifest({
-			automations: {
-				triage: {
-					description: 'Sorts the overnight records into the queues that handle them.',
-					trigger: { schedule: '0 6 * * *' },
-					spec: {
-						kind: 'agent',
-						description: 'Sorts the overnight records into the queues that handle them.',
-						task: 'Triage records'
-					}
-				}
+			agent: {
+				kind: 'agent',
+				description: 'The workspace assistant people talk to directly.',
+				task: 'Triage records'
 			}
 		});
 
@@ -170,16 +164,10 @@ describe('pod dev facility gate', () => {
 	it('refuses to start a workspace whose facilities it cannot provide', async () => {
 		const available = await developmentFacilities();
 		const agentWorkspace = manifest({
-			automations: {
-				triage: {
-					description: 'Sorts the overnight records into the queues that handle them.',
-					trigger: { schedule: '0 6 * * *' },
-					spec: {
-						kind: 'agent',
-						description: 'Sorts the overnight records into the queues that handle them.',
-						task: 'Triage'
-					}
-				}
+			agent: {
+				kind: 'agent',
+				description: 'The workspace assistant people talk to directly.',
+				task: 'Triage'
 			}
 		});
 		// Starting anyway would fail at the first inference call, far from the cause.

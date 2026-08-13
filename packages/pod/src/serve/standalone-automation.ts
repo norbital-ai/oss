@@ -85,6 +85,7 @@ async function executeStandaloneHostEffect(
 						? [{ role: 'system', content: request.system }, ...request.messages]
 						: request.messages,
 					...(request.tools ? { tools: request.tools } : {}),
+					...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
 					...(request.model ? { model: request.model } : {}),
 					...(request.profile ? { profile: request.profile } : {})
 				});

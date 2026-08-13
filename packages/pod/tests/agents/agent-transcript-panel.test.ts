@@ -1,68 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { serializeGoalVerdict } from '$lib/shared/agent/goal-verdict.js';
+import { serializeGoalVerdict, serializeVerifierScheduled } from '$lib/shared/agent/goal-verdict.js';
+import { wrapPlanSummary } from '$lib/shared/agent/intent.js';
 import {
 	toPanelMessages,
 	toPanelUsage,
 	toSessionTotals,
 	withPendingEcho
 } from '$lib/ui/agent/transcript.js';
-import {
-	COMPACTION_CONTEXT_RATIO,
-	parseCompactDirective,
-	shouldAutomaticallyCompact
-} from '$lib/server/agent/agent-loop.server.js';
-describe('compact directive', () => {
-	it('matches the whole message, so a sentence starting with the word is still a sentence', () => {
-		expect(parseCompactDirective('/compact')).toEqual({});
-		expect(parseCompactDirective('  /compact  ')).toEqual({});
-		expect(parseCompactDirective('/compact keep the site identifiers')).toEqual({
-			instructions: 'keep the site identifiers'
-		});
-		// Not directives — the first is a word, the rest are prose the reader meant for the agent.
-		expect(parseCompactDirective('/compacting the schema')).toBeNull();
-		expect(parseCompactDirective('can you /compact this')).toBeNull();
-		expect(parseCompactDirective('compact the report')).toBeNull();
-	});
-});
-
-describe('automatic context compaction', () => {
-	it('uses 95% of the selected model context instead of a fixed prompt size', () => {
-		expect(COMPACTION_CONTEXT_RATIO).toBe(0.95);
-		expect(
-			shouldAutomaticallyCompact({
-				messages: [{ role: 'user', content: 'small prompt' }],
-				tools: [],
-				systemPrompt: '',
-				contextLength: 1_000_000
-			})
-		).toBe(false);
-		expect(
-			shouldAutomaticallyCompact({
-				messages: [{ role: 'user', content: 'x'.repeat(3_900_000) }],
-				tools: [],
-				systemPrompt: '',
-				contextLength: 1_000_000
-			})
-		).toBe(true);
-	});
-
-	it('counts system and tool definitions, and does not guess when model metadata is absent', () => {
-		const input = {
-			messages: [{ role: 'user' as const, content: 'hello' }],
-			tools: [
-				{
-					name: 'large_tool',
-					description: 'x'.repeat(4_000),
-					inputSchema: { type: 'object' }
-				}
-			],
-			systemPrompt: 'system',
-			contextLength: 1_000
-		};
-		expect(shouldAutomaticallyCompact(input)).toBe(true);
-		expect(shouldAutomaticallyCompact({ ...input, contextLength: null })).toBe(false);
-	});
-});
 
 describe('conversation usage', () => {
 	it('reports what the provider reported and nothing it did not', () => {
@@ -201,6 +145,19 @@ describe('agent panel transcript', () => {
 		});
 	});
 
+	it('projects scheduled verifier JSON as a verifier row, not a goal', () => {
+		const prompt = 'Was the site actually written?';
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'v',
+				kind: 'goal',
+				parts: [{ role: 'system', content: serializeVerifierScheduled(prompt) }]
+			}
+		]);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({ kind: 'verifier', prompt });
+	});
+
 	it('gives every call in a turn its own row instead of one joined name', () => {
 		// The regression this replaces read "Using read_collection, read_collection…" — one bubble in
 		// which neither call could be told from the other.
@@ -249,6 +206,26 @@ describe('agent panel transcript', () => {
 			icon: 'lucide:plug',
 			elicitation: null,
 			state: 'running'
+		});
+	});
+
+	it('marks a sandbox agent tool as the sandbox family', () => {
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'm-sandbox',
+				parts: [
+					{
+						role: 'assistant',
+						content: '',
+						toolCalls: [{ id: 't1', name: 'list_sandbox_agents', input: {} }]
+					}
+				]
+			}
+		]);
+		expect(rows[0]).toMatchObject({
+			kind: 'tool',
+			name: 'list_sandbox_agents',
+			family: 'sandbox'
 		});
 	});
 
@@ -514,8 +491,29 @@ describe('agent panel transcript', () => {
 		expect(rows.map((row) => row.kind)).toEqual(['checkpoint', 'text']);
 		const checkpoint = rows[0];
 		if (checkpoint?.kind !== 'checkpoint') throw new Error('expected a checkpoint');
+		expect(checkpoint.fold).toBe('compact');
 		expect(checkpoint.summary).toBe('They asked X.');
 		expect(checkpoint.before.map((row) => row.key)).toEqual(['a', 'b']);
+	});
+
+	it('projects a plan-folded summary as a plan checkpoint with the tags stripped', () => {
+		const recap = 'Migrate sites first, then payments.';
+		const rows = toPanelMessages([
+			{ norbital_id: 'a', parts: [{ role: 'user', content: 'How should we migrate?' }] },
+			{
+				norbital_id: 'c',
+				kind: 'summary',
+				parts: [{ role: 'system', content: wrapPlanSummary(recap) }]
+			}
+		]);
+
+		expect(rows).toHaveLength(1);
+		const checkpoint = rows[0];
+		if (checkpoint?.kind !== 'checkpoint') throw new Error('expected a checkpoint');
+		expect(checkpoint.fold).toBe('plan');
+		expect(checkpoint.summary).toBe(recap);
+		expect(checkpoint.summary).not.toContain('<plan-summary>');
+		expect(checkpoint.before.map((row) => row.key)).toEqual(['a']);
 	});
 
 	it('nests an earlier checkpoint inside a later one instead of chaining recaps', () => {
@@ -529,12 +527,14 @@ describe('agent panel transcript', () => {
 		expect(rows).toHaveLength(1);
 		const newest = rows[0];
 		if (newest?.kind !== 'checkpoint') throw new Error('expected the newest checkpoint');
+		expect(newest.fold).toBe('compact');
 		expect(newest.summary).toBe('Second recap');
 		// Its prefix holds the older checkpoint, which in turn still holds the original message — so the
 		// oldest turn is reachable rather than lost behind a summary of a summary.
 		const older = newest.before[0];
 		if (older?.kind !== 'checkpoint')
 			throw new Error('expected the older checkpoint nested inside');
+		expect(older.fold).toBe('compact');
 		expect(older.summary).toBe('First recap');
 		expect(older.before.map((row) => row.key)).toEqual(['a']);
 	});

@@ -21,7 +21,6 @@ function present(value: string | null): string | null {
 export default defineAutomation(
 	{ trigger: { collection: 'photo_evidence', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description:
 			'Reads a newly filed job-site photo with a vision model and, when a site name, location or unit number is plainly legible in the image, stamps it onto the linked job assignment and clears the unverified site-identity flag.',
 		handler: async (api, { scope }) => {
@@ -48,7 +47,7 @@ export default defineAutomation(
 
 			const checkedAt = new Date();
 			try {
-				const inferred = await api.ai({
+				const inferred = await api.infer({
 					model: FAST_VISION_MODEL,
 					schema: siteIdentitySchema,
 					images: [{ assetId: evidence.document_asset_id, detail: 'high' }],

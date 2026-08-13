@@ -63,5 +63,6 @@ describe('packaged app.css Tailwind scan scope', () => {
 		expect(shell).toContain('data-testid="workspace-agent-trigger"');
 		expect(shell).toContain('bottom-[calc(env(safe-area-inset-bottom)+1rem)]');
 		expect(shell).toContain('sm:bottom-6');
+		expect(shell).toContain('dark:bg-card');
 	});
 });

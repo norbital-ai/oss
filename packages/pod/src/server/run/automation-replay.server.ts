@@ -78,7 +78,7 @@ function decodeResult(result: AiChatResult, schema?: z.ZodType): unknown {
 }
 
 /**
- * Resolve one authored `api.ai()` call by deterministic replay.
+ * Resolve one authored `api.infer()` call by deterministic replay.
  *
  * The ordinal is the call's position in the handler, not a random id. Re-running the handler after
  * a crash therefore finds the same completed effect. A changed request at the same ordinal is

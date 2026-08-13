@@ -1,12 +1,13 @@
 /**
- * Where the composer's "@" menu gets its records.
+ * The workspace finder: one prefix language, one record fan-out, two surfaces (`@` and Cmd+/).
  *
- * One source per mentionable collection, fanned out flat: a query searches every source at once
- * and the results merge into one grouped list. The local replica answers first — a typeahead
- * query is a string match over rows the device already holds — and only a read the replica cannot
- * serve (a windowed collection, no replica yet) costs a round trip. Every source is capped and
- * failures stay per-source, so one broken collection degrades the menu by one group, never all of
- * it.
+ * `#` records, `!` plan, `/` apps, `>` commands. After `#`, the first token becomes a collection
+ * scope when it uniquely matches a mentionable collection. Record search fans out to those
+ * collections — replica first, server fallback — and failures stay per-source.
+ *
+ * `@` mentions workspace entities: records (including people and teams), collections, and apps.
+ * System plumbing collections stay out of the fan-out; `user` and `team` are the allowlisted
+ * exceptions.
  */
 import { post } from '$lib/ui/state/client.js';
 import { clientSyncReady } from '$lib/ui/sync/replica.js';
@@ -16,6 +17,103 @@ import { resolveRecordDisplayLabel } from '@norbital-ai/platform-utils/manifest/
 import type { ManifestCollectionEntry } from '@norbital-ai/platform-utils/manifest/types';
 import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 
+export const COMMAND_PREFIX = {
+	record: '#',
+	plan: '!',
+	app: '/',
+	command: '>'
+} as const;
+
+export type CommandScope = keyof typeof COMMAND_PREFIX;
+export type MentionCommand = Extract<CommandScope, 'record' | 'plan' | 'app'>;
+
+/** System collections a person can `@` — people and teams, not platform plumbing. */
+export const MENTIONABLE_SYSTEM_COLLECTIONS: ReadonlySet<string> = new Set(['user', 'team']);
+
+export type ParsedCommandQuery = {
+	readonly scope: CommandScope | null;
+	readonly collection: string | null;
+	readonly text: string;
+	readonly raw: string;
+};
+
+const PREFIX_BY_CHAR: Readonly<Record<string, CommandScope>> = {
+	[COMMAND_PREFIX.record]: 'record',
+	[COMMAND_PREFIX.plan]: 'plan',
+	[COMMAND_PREFIX.app]: 'app',
+	[COMMAND_PREFIX.command]: 'command'
+};
+
+export function commandPrefixChar(scope: CommandScope): string {
+	return COMMAND_PREFIX[scope];
+}
+
+export function parseCommandQuery(
+	raw: string,
+	collections: readonly string[] = []
+): ParsedCommandQuery {
+	const scope = PREFIX_BY_CHAR[raw[0] ?? ''];
+	if (!scope) return { scope: null, collection: null, text: raw, raw };
+	const rest = raw.slice(1);
+	if (scope === 'record') {
+		const matched = matchCollectionToken(rest, collections);
+		return { scope, collection: matched.collection, text: matched.text, raw };
+	}
+	return { scope, collection: null, text: rest.trimStart(), raw };
+}
+
+export function filterCollections(
+	token: string,
+	collections: readonly string[]
+): readonly string[] {
+	const needle = token.trim().toLowerCase();
+	if (!needle) return collections;
+	return collections.filter((collection) => collection.toLowerCase().includes(needle));
+}
+
+export type MentionAppHit = {
+	readonly key: string;
+	readonly label: string;
+};
+
+export function filterApps(
+	token: string,
+	apps: readonly MentionAppHit[]
+): readonly MentionAppHit[] {
+	const needle = token.trim().toLowerCase();
+	if (!needle) return apps;
+	return apps.filter(
+		(app) => app.key.toLowerCase().includes(needle) || app.label.toLowerCase().includes(needle)
+	);
+}
+
+export function shouldSearchRecords(parsed: ParsedCommandQuery): boolean {
+	return parsed.text.trim().length > 0 && (parsed.scope === 'record' || parsed.scope === null);
+}
+
+/** Stable key for “is this the same record search?” — never the raw trigger string. */
+export function recordSearchIdentity(parsed: ParsedCommandQuery | null): string {
+	if (!parsed || !shouldSearchRecords(parsed)) return '';
+	return `${parsed.collection ?? ''}\0${parsed.text.trim()}`;
+}
+
+function matchCollectionToken(
+	rest: string,
+	collections: readonly string[]
+): { collection: string | null; text: string } {
+	if (rest.length === 0) return { collection: null, text: '' };
+	if (rest[0] && /\s/.test(rest[0])) return { collection: null, text: rest.trimStart() };
+	const space = rest.search(/\s/);
+	const token = space === -1 ? rest : rest.slice(0, space);
+	const after = space === -1 ? '' : rest.slice(space).trimStart();
+	const lower = token.toLowerCase();
+	const exact = collections.find((collection) => collection.toLowerCase() === lower);
+	if (exact) return { collection: exact, text: after };
+	const prefixed = collections.filter((collection) => collection.toLowerCase().startsWith(lower));
+	if (prefixed.length === 1) return { collection: prefixed[0] ?? null, text: after };
+	return { collection: null, text: rest };
+}
+
 /** One record the menu can offer, already labelled for display. */
 export type MentionRecordHit = {
 	readonly collection: string;
@@ -23,10 +121,63 @@ export type MentionRecordHit = {
 	readonly label: string;
 };
 
-/** What the menu renders: a record to insert, or a collection to narrow the search to. */
+/** What the `@` menu renders: a prefix command, a collection, an app, or a record to insert. */
 export type MentionMenuItem =
 	| { readonly kind: 'record'; readonly hit: MentionRecordHit }
-	| { readonly kind: 'scope'; readonly collection: string };
+	| { readonly kind: 'scope'; readonly collection: string }
+	| { readonly kind: 'collection'; readonly collection: string }
+	| { readonly kind: 'app'; readonly key: string; readonly label: string }
+	| { readonly kind: 'command'; readonly command: MentionCommand };
+
+export function buildMentionMenuEntries(
+	parsed: ParsedCommandQuery,
+	collections: readonly string[],
+	records: readonly MentionMenuItem[],
+	apps: readonly MentionAppHit[] = []
+): readonly MentionMenuItem[] {
+	switch (parsed.scope) {
+		case 'plan':
+			return [{ kind: 'command', command: 'plan' }];
+		case 'record': {
+			if (parsed.collection) return records;
+			const scopes = filterCollections(parsed.text, collections).map(
+				(collection): MentionMenuItem => ({ kind: 'scope', collection })
+			);
+			return parsed.text.trim() ? [...scopes, ...records] : scopes;
+		}
+		case 'app':
+			return filterApps(parsed.text, apps).map((app): MentionMenuItem => ({
+				kind: 'app',
+				key: app.key,
+				label: app.label
+			}));
+		case 'command':
+			return [];
+		case null: {
+			if (!parsed.text.trim()) {
+				return [
+					{ kind: 'command', command: 'record' },
+					{ kind: 'command', command: 'plan' },
+					{ kind: 'command', command: 'app' },
+					...collections.map((collection): MentionMenuItem => ({ kind: 'scope', collection }))
+				];
+			}
+			const collectionMentions = filterCollections(parsed.text, collections).map(
+				(collection): MentionMenuItem => ({ kind: 'collection', collection })
+			);
+			const appMentions = filterApps(parsed.text, apps).map((app): MentionMenuItem => ({
+				kind: 'app',
+				key: app.key,
+				label: app.label
+			}));
+			return [...records, ...collectionMentions, ...appMentions];
+		}
+		default: {
+			const _exhaustive: never = parsed.scope;
+			return _exhaustive;
+		}
+	}
+}
 
 /**
  * How many collections one keystroke burst may search. Tenant schemas are small, but the cap keeps
@@ -36,11 +187,34 @@ export type MentionMenuItem =
  * Only collections with at least one searchable (indexed) field are candidates at all — a
  * collection of pure numbers, dates, JSON or relations has nothing a search can match, and
  * searching it returns either nothing or, server-side, rows the query never filtered.
+ *
+ * `user` and `team` are included even when their text fields were not opted into the trigram
+ * index: mentioning a person is the point of `@`, and those rows are matched with an `ilike`
+ * fallback rather than dropped from the menu.
  */
 const MAX_SOURCES = 12;
 
 /** Rows per source per query. The menu shows a short list, so the wire carries one. */
 const HITS_PER_SOURCE = 4;
+
+function isSearchableCollection(entry: ManifestCollectionEntry | null): boolean {
+	return (entry?.fields ?? []).some((field) => isSearchableCollectionField(field));
+}
+
+function hasTextFields(entry: ManifestCollectionEntry | null): boolean {
+	return (entry?.fields ?? []).some(
+		(field) =>
+			!field.array && (field.kind === 'text' || field.kind === 'phone' || field.kind === 'enum')
+	);
+}
+
+export function isMentionableCollection(entry: ManifestCollectionEntry | null): boolean {
+	if (!entry) return false;
+	if (MENTIONABLE_SYSTEM_COLLECTIONS.has(entry.collection_name)) {
+		return isSearchableCollection(entry) || hasTextFields(entry);
+	}
+	return entry.system !== true && isSearchableCollection(entry);
+}
 
 /** How the composer's "@" menu sizes its search, unless a caller opts into different limits. */
 export type MentionSourcesOptions = {
@@ -50,29 +224,17 @@ export type MentionSourcesOptions = {
 	readonly hitsPerSource?: number;
 };
 
-export type MentionSearchOptions = {
-	readonly signal?: AbortSignal;
-	/**
-	 * Called with each source's hits as that source resolves, before the merged answer. A palette
-	 * that renders progressively stops waiting on the slowest collection of the fan-out; the
-	 * mention menu ignores it and renders only the final merged list.
-	 */
-	readonly onHits?: (hits: readonly MentionRecordHit[]) => void;
-};
-
 export type MentionSources = {
 	/** The collections a bare `@` can narrow to, in menu order. */
 	collections(): readonly string[];
+	/** Apps from the workspace manifest, labelled for the menu. */
+	apps(): readonly MentionAppHit[];
 	/**
 	 * Search records. A scope names one collection; without one every mentionable collection is
 	 * searched. An empty query searches nothing — the bare-`@` state is the scope list, not a
 	 * full-table dump.
 	 */
-	search(
-		query: string,
-		scope: string | null,
-		options?: MentionSearchOptions
-	): Promise<readonly MentionRecordHit[]>;
+	search(query: string, scope: string | null): Promise<readonly MentionRecordHit[]>;
 };
 
 export function createMentionSources(
@@ -88,46 +250,88 @@ export function createMentionSources(
 	 * collection without one has nothing to match against, so it is not part of the fan-out at
 	 * all: the server would otherwise return its rows unfiltered (its search clause compiles to
 	 * nothing) and every local query would be a scan over a predicate that can never hold.
+	 *
+	 * Allowlisted system collections (`user`, `team`) are the exception: they are mentionable
+	 * even when the compiled field list has no `search: true`, and those queries use an `ilike`
+	 * fallback over their text fields.
 	 */
-	function isSearchableCollection(entry: ManifestCollectionEntry | null): boolean {
-		return (entry?.fields ?? []).some((field) => isSearchableCollectionField(field));
-	}
-
 	function mentionableCollections(): string[] {
 		try {
-			return getManifestContext()
-				.getCollections()
+			const entries = getManifestContext().getCollections();
+			const allowlisted = entries
+				.filter(
+					(collection) =>
+						MENTIONABLE_SYSTEM_COLLECTIONS.has(collection.collection_name) &&
+						isMentionableCollection(collection)
+				)
+				.map((collection) => collection.collection_name)
+				.sort();
+			const tenant = entries
 				.filter((collection) => collection.system !== true && isSearchableCollection(collection))
 				.map((collection) => collection.collection_name)
-				.sort()
-				.slice(0, maxSources);
+				.sort();
+			const remaining = Math.max(0, maxSources - allowlisted.length);
+			return [...allowlisted, ...tenant.slice(0, remaining)];
 		} catch {
 			return [];
 		}
 	}
 
-	async function rowsFor(
-		collection: string,
-		query: string,
-		signal: AbortSignal | undefined
-	): Promise<Record<string, unknown>[]> {
+	function mentionableApps(): MentionAppHit[] {
+		try {
+			return getManifestContext()
+				.getApps()
+				.map((app) => ({
+					key: app.name,
+					label: app.label?.trim() || app.name
+				}))
+				.sort((left, right) => left.label.localeCompare(right.label));
+		} catch {
+			return [];
+		}
+	}
+
+	function findManyQuery(collection: string, query: string): Record<string, unknown> {
+		let entry: ManifestCollectionEntry | null = null;
+		try {
+			entry = getManifestContext().findCollection(collection);
+		} catch {
+			entry = null;
+		}
+		if (entry && isSearchableCollection(entry)) {
+			return { search: query, limit: hitsPerSource };
+		}
+		const textFields = (entry?.fields ?? []).filter(
+			(field) =>
+				!field.array && (field.kind === 'text' || field.kind === 'phone' || field.kind === 'enum')
+		);
+		if (textFields.length === 0) {
+			return { search: query, limit: hitsPerSource };
+		}
+		const pattern = `%${query.replace(/([\\%_])/g, '\\$1')}%`;
+		return {
+			where: {
+				OR: textFields.map((field) => ({ [field.name]: { ilike: pattern } }))
+			},
+			limit: hitsPerSource
+		};
+	}
+
+	async function rowsFor(collection: string, query: string): Promise<Record<string, unknown>[]> {
+		const params = findManyQuery(collection, query);
 		try {
 			const sync = await clientSyncReady();
 			if (sync) {
-				const local = await localFindMany(sync, collection, {
-					search: query,
-					limit: hitsPerSource
-				});
+				const local = await localFindMany(sync, collection, params);
 				if (local) return local.rows;
 			}
 		} catch {
 			// The server path below is the fallback for any local failure, not an error of record.
 		}
-		const page = await post<{ rows: Record<string, unknown>[] }>(
-			'collections/findMany',
-			{ collection, search: query, limit: hitsPerSource },
-			signal
-		);
+		const page = await post<{ rows: Record<string, unknown>[] }>('collections/findMany', {
+			collection,
+			...params
+		});
 		return page.rows;
 	}
 
@@ -150,27 +354,27 @@ export function createMentionSources(
 
 	return {
 		collections: mentionableCollections,
-		async search(query, scope, searchOptions) {
+		apps: mentionableApps,
+		async search(query, scope) {
 			const trimmed = query.trim();
 			if (!trimmed) return [];
 			let names: string[];
 			try {
-				names = scope
-					? isSearchableCollection(getManifestContext().findCollection(scope))
-						? [scope]
-						: []
-					: mentionableCollections();
+				if (scope) {
+					const entry = getManifestContext().findCollection(scope);
+					names = isMentionableCollection(entry) ? [scope] : [];
+				} else {
+					names = mentionableCollections();
+				}
 			} catch {
 				return [];
 			}
 			const settled = await Promise.allSettled(
 				names.map(async (collection) => {
-					const rows = await rowsFor(collection, trimmed, searchOptions?.signal);
-					const hits = rows
+					const rows = await rowsFor(collection, trimmed);
+					return rows
 						.map((row) => toHit(collection, row))
 						.filter((hit): hit is MentionRecordHit => hit !== null);
-					searchOptions?.onHits?.(hits);
-					return hits;
 				})
 			);
 			return settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));

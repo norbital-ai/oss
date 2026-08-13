@@ -72,6 +72,12 @@ export {
 	type AutomationTrigger
 } from './automations/automations.js';
 export { defineAgentTool, type AgentToolDefinition } from './automations/agent-tools.js';
+export {
+	PLATFORM_AGENT_TOOL_NAMES,
+	SANDBOX_HOST_TOOL_PREFIX,
+	isSandboxHostToolName,
+	type PlatformAgentToolName
+} from './automations/platform-agent-tools.js';
 export { defineChannel } from './channels/channels.js';
 export type { ChannelDefinition } from './channels/channels.js';
 export { defineMcpServer } from './mcp/define-mcp-server.js';

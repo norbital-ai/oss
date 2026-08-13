@@ -11,7 +11,6 @@ import { reconstructForDocument } from '../lib/reclamation/stitch-driver.js';
 export default defineAutomation(
 	{ trigger: { collection: 'project_documents', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description:
 			'Re-stitches the site model when a reconstruction-category document is attached to a project, so extra section sheets and extra soundings become part of the solid.',
 		handler: async (api, { scope }) => ({

@@ -37,7 +37,12 @@ export default defineConfig({
 				test: {
 					name: 'node',
 					include: ['tests/**/*.test.ts'],
-					exclude: [...configDefaults.exclude, 'tests/components/**', ...runtimeHarnessSuites],
+					exclude: [
+						...configDefaults.exclude,
+						'tests/components/**',
+						'tests/sync-engine/visible-read-race.test.ts',
+						...runtimeHarnessSuites
+					],
 					environment: 'node',
 					testTimeout: 60_000,
 					hookTimeout: 120_000,
@@ -75,7 +80,10 @@ export default defineConfig({
 				ssr: { resolve: { conditions: ['browser'], externalConditions: ['browser'] } },
 				test: {
 					name: 'components',
-					include: ['tests/components/**/*.test.ts'],
+					include: [
+						'tests/components/**/*.test.ts',
+						'tests/sync-engine/visible-read-race.test.ts'
+					],
 					environment: 'happy-dom',
 					setupFiles: ['tests/components/setup.ts'],
 					maxWorkers: 6

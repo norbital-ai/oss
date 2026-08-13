@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import { FakeReplica } from '../support/fake-replica.svelte.js';
 import { render, settle } from '../support/component.js';
+import { DEFAULT_VERIFIER_PROMPTS } from '$lib/shared/agent/intent.js';
 
 let replica = new FakeReplica();
 
@@ -43,7 +44,14 @@ function deferred(): {
 }
 
 let inFlight = deferred();
-let sent: { message: string; model?: string; planMode?: boolean; goalMode?: boolean }[] = [];
+let sent: {
+	message: string;
+	model?: string;
+	planMode?: boolean;
+	goalMode?: boolean;
+	intent?: 'do' | 'plan';
+	verifierPrompt?: string;
+}[] = [];
 type ModelCatalog = {
 	defaultModel: string;
 	options: { id: string; label: string; canonicalSlug: string; contextLength?: number }[];
@@ -63,6 +71,8 @@ beforeEach(() => {
 			model?: string;
 			planMode?: boolean;
 			goalMode?: boolean;
+			intent?: 'do' | 'plan';
+			verifierPrompt?: string;
 		}) => {
 			sent.push(input);
 			return inFlight.promise;
@@ -167,7 +177,7 @@ describe('agent chat panel', () => {
 		type(container, 'What is on site?');
 		submit(container);
 		expect(transcript(container)).toEqual([{ role: 'user', content: 'What is on site?' }]);
-		expect(sent).toEqual([{ message: 'What is on site?' }]);
+		expect(sent).toEqual([{ message: 'What is on site?', intent: 'do' }]);
 
 		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
 		await settle();
@@ -352,6 +362,29 @@ describe('agent chat panel', () => {
 		destroy();
 	});
 
+	it('maps a generic internal start error and keeps an authored server message', async () => {
+		const generic = mountPanel();
+		type(generic.container, 'Start this');
+		submit(generic.container);
+		inFlight.reject(new Error('INTERNAL_ERROR'));
+		await settle();
+		expect(generic.container.querySelector('[role="alert"]')?.textContent).toContain(
+			'The conversation could not be started'
+		);
+		generic.destroy();
+
+		inFlight = deferred();
+		const authored = mountPanel();
+		type(authored.container, 'Start this');
+		submit(authored.container);
+		inFlight.reject(new Error('Another record already uses this title.'));
+		await settle();
+		expect(authored.container.querySelector('[role="alert"]')?.textContent).toContain(
+			'Another record already uses this title.'
+		);
+		authored.destroy();
+	});
+
 	it('uses the host default model and carries plan mode explicitly', async () => {
 		catalog = {
 			defaultModel: 'provider/default',
@@ -380,42 +413,61 @@ describe('agent chat panel', () => {
 		submit(container);
 		// The host default is intentionally omitted on the wire; the catalog still supplies its context
 		// length for occupancy/compaction, while the host remains the one source of truth for selection.
-		expect(sent).toEqual([{ message: 'Outline the migration', planMode: true }]);
+		expect(sent).toEqual([
+			{
+				message: 'Outline the migration',
+				planMode: true,
+				intent: 'plan',
+				verifierPrompt: DEFAULT_VERIFIER_PROMPTS.plan
+			}
+		]);
 		destroy();
 	});
 
-	it('carries goal mode explicitly when the toggle is on', async () => {
+	it('omits the verifier for chitchat', async () => {
 		const { container, destroy } = mountPanel();
-		await settle();
-		container.querySelector<HTMLButtonElement>('[data-testid="agent-goal-mode"]')?.click();
-		type(container, 'Ship the landing page');
+		type(container, "hello how's the weather today");
+		expect(container.querySelector('[data-testid="agent-verifier"]')).toBeNull();
 		submit(container);
-		expect(sent).toEqual([{ message: 'Ship the landing page', goalMode: true }]);
-		destroy();
-	});
-
-	it('turns plan and goal modes off each other, sending only the active one', async () => {
-		const { container, destroy } = mountPanel();
-		await settle();
-		container.querySelector<HTMLButtonElement>('[data-testid="agent-plan-mode"]')?.click();
-		container.querySelector<HTMLButtonElement>('[data-testid="agent-goal-mode"]')?.click();
-		type(container, 'Research then verify');
-		submit(container);
-		expect(sent).toEqual([{ message: 'Research then verify', goalMode: true }]);
-
-		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
-		await settle();
-		arriveSession({
-			messages: [message({ id: 'm1', seq: 1, role: 'user', content: 'Research then verify' })],
-			turns: [turn({ status: 'succeeded' })]
+		expect(sent.at(-1)).toEqual({
+			message: "hello how's the weather today",
+			intent: 'do'
 		});
-		await settle();
+		expect(sent.at(-1)).not.toHaveProperty('verifierPrompt');
+		destroy();
+	});
 
-		sent = [];
-		container.querySelector<HTMLButtonElement>('[data-testid="agent-plan-mode"]')?.click();
-		type(container, 'Plan only');
+	it('shows the verifier and sends verifierPrompt for a task', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Create the site');
+		expect(container.querySelector('[data-testid="agent-verifier"]')).not.toBeNull();
 		submit(container);
-		expect(sent).toEqual([{ message: 'Plan only', planMode: true, runId: 'r1' }]);
+		expect(sent.at(-1)).toEqual({
+			message: 'Create the site',
+			intent: 'do',
+			verifierPrompt: DEFAULT_VERIFIER_PROMPTS.do
+		});
+		destroy();
+	});
+
+	it('sends an edited verifier prompt as the override', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Create the site');
+		const verifier = container.querySelector<HTMLTextAreaElement>(
+			'[data-testid="agent-verifier-prompt"]'
+		);
+		if (!verifier) throw new Error('verifier prompt missing');
+		verifier.value = 'Was the site record actually written?';
+		verifier.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		submit(container);
+		expect(sent).toEqual([
+			{
+				message: 'Create the site',
+				intent: 'do',
+				verifierPrompt: 'Was the site record actually written?'
+			}
+		]);
 		destroy();
 	});
 
@@ -474,7 +526,10 @@ describe('agent chat panel', () => {
 		expect(second.container.querySelector('[aria-label="Model"]')?.textContent).toContain('Other');
 		type(second.container, 'Use the selected model');
 		submit(second.container);
-		expect(sent.at(-1)).toEqual({ message: 'Use the selected model', model: 'provider/other' });
+		expect(sent.at(-1)).toMatchObject({
+			message: 'Use the selected model',
+			model: 'provider/other'
+		});
 		first.destroy();
 		second.destroy();
 	});

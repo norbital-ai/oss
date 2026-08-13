@@ -3,7 +3,6 @@ import { defineAutomation } from '@norbital-ai/pod/authoring';
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
 	{
-		kind: 'deterministic',
 		description:
 			'Counts the defect register every morning at 6am and publishes the first 25 defects as a JSON extract for the closeout meeting.',
 		handler: async (api) => {

@@ -27,6 +27,11 @@ export type HostAgentTool<TInput extends z.ZodType = z.ZodType> = {
 	readonly name: string;
 	readonly description: string;
 	readonly input: TInput;
+	/**
+	 * When true, the funnel offers this tool only if the session has a bound sandbox.
+	 * When omitted, names in the `sandbox_` namespace are treated as requiring a sandbox.
+	 */
+	readonly requiresSandbox?: boolean;
 	run(input: z.infer<TInput>, context?: HostAgentToolRunContext): unknown | Promise<unknown>;
 };
 
@@ -47,7 +52,11 @@ const BUILT_IN_TOOL_NAMES = [
 	'write_collection',
 	// Added conditionally by the loop rather than unconditionally, which is exactly why it belongs
 	// here: a host tool of this name would dispatch on root turns and vanish inside subagents.
-	'spawn_subagent'
+	'spawn_subagent',
+	'list_sandbox_agents',
+	'read_sandbox_agent',
+	'message_sandbox_agent',
+	'await_sandbox_agent'
 ] as const;
 
 /**
@@ -71,7 +80,8 @@ export function hostAgentTools(tools: readonly HostAgentTool[]): HostAgentToolBi
 	const specs: readonly HostAgentToolSpec[] = [...byName.values()].map((tool) => ({
 		name: tool.name,
 		description: tool.description,
-		inputSchema: z.toJSONSchema(tool.input)
+		inputSchema: z.toJSONSchema(tool.input),
+		...(tool.requiresSandbox === undefined ? {} : { requiresSandbox: tool.requiresSandbox })
 	}));
 	return {
 		list() {
@@ -132,12 +142,6 @@ export function assertHostAgentTools(
 	for (const named of manifest.agent?.hostTools ?? []) {
 		if (seen.has(named)) continue;
 		missing.set(named, [...(missing.get(named) ?? []), 'workspace agent']);
-	}
-	for (const [name, automation] of Object.entries(manifest.automations ?? {})) {
-		for (const named of automation.spec?.hostTools ?? []) {
-			if (seen.has(named)) continue;
-			missing.set(named, [...(missing.get(named) ?? []), name]);
-		}
 	}
 	for (const [name, channel] of Object.entries(manifest.channels ?? {})) {
 		for (const named of channel.hostTools ?? []) {

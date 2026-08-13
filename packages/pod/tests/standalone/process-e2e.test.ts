@@ -126,16 +126,12 @@ export default definePodHost({
 
 		const manifestPath = path.join(root, '.norbital/build/manifest.json');
 		const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
-			automations: Record<string, unknown>;
+			agent?: Record<string, unknown>;
 		};
-		manifest.automations.missing_ai = {
-			description: 'Asks the model for a summary every morning.',
-			trigger: { schedule: '0 6 * * *' },
-			spec: {
-				kind: 'agent',
-				description: 'Asks the model for a summary every morning.',
-				task: 'Require inference'
-			}
+		manifest.agent = {
+			kind: 'agent',
+			description: 'The workspace assistant people talk to directly.',
+			task: 'Require inference'
 		};
 		await writeFile(manifestPath, JSON.stringify(manifest));
 

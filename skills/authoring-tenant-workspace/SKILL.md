@@ -310,11 +310,20 @@ field. They are not comments — they are compiled into the manifest, and the Wo
 else to show somebody who will never open the source. Write what the code does to this data in one
 sentence; "runs before create" restates the key and is worse than nothing.
 
-- Hooks validate and return the exact input/patch, then make only same-transaction database or asset reads.
-  Hooks never send network traffic, queue work, email, AI, or notifications.
-- Automations run after commit, are durable and idempotent, and receive stable event IDs. Use
-  `kind: 'deterministic'` for handler workflows and `kind: 'agent'` for recurring research/judgement
-  tasks. Both run as bounded DBOS steps (≤2s per guest invocation), not as one long process.
+- `src/+agent.ts` configures the interactive agent. Do not list sandbox host tools in `hostTools` —
+  the funnel supplies them when a sandbox is bound (including WhatsApp and other channels). Use
+  typesafe `denyTools` to withhold workspace or platform tools; it cannot hide a bound sandbox.
+  Non-sandbox host tools remain an explicit `hostTools` opt-in. The funnel is documented in the
+  platform skill (`agent-capabilities.md`) and `packages/pod/docs/AGENT_ARCHITECTURE.md`.
+- Hooks validate and return the exact input/patch, then make only same-transaction database or asset
+  reads. Hooks MAY call bounded `api.infer` for judgement (photos etc.); heavy/durable infer still
+  belongs in automations. They never queue work, send email, or spawn agent sessions.
+- Automations run after commit, are durable and idempotent, and receive stable event IDs. They are
+  always deterministic handlers; when one needs model judgement, call `api.infer` (at most 64 calls
+  and 100,000 prompt characters). That is the same host chat the agent uses, with an optional Zod
+  `schema`, optional `images`, and optional named workspace tools. It never offers authoring,
+  sandbox, `write_collection`, or `spawn_subagent`, and it does not own a chat transcript. Each run
+  is bounded DBOS steps (≤2s per guest invocation), not one long process or agent session.
 - Remotes are imperative request/response methods. Reactive reads belong to `client.db`.
 - Integrations use portable runtime delivery facilities; missing facilities fail at boot.
 - Put tenant-specific fixture behavior in `src/+seed.ts`. Sensitive statutory or system seed remains Core-owned.

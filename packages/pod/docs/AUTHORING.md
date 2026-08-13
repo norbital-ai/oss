@@ -119,7 +119,7 @@ Model-facing tool names are `mcp__<server>__<tool>`. Pod speaks MCP 2026-07-28 s
 headers `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` (see
 [Cloudflare's MCP v2 overview](https://blog.cloudflare.com/mcp-v2/)). Dispatch is default-deny like
 host tools: interactive chat with no authored `src/+agent.ts` grants every declared server; an
-authored `src/+agent.ts`, automations, and channels must name `mcpServers: ['stripe']`. Channels
+authored `src/+agent.ts` and channels must name `mcpServers: ['stripe']`. Channels
 default to no MCP servers. If a tool returns `resultType: input_required` (elicitation v1), the UI
 shows what the server asked; there is no client MRTR retry yet.
 
@@ -202,7 +202,6 @@ unannotated `api` is already exact:
 export default defineAutomation(
 	{ trigger: { collection: 'quotes', event: 'created' } },
 	{
-		kind: 'deterministic',
 		description: 'Recomputes the account pipeline total whenever a quote is raised against it.',
 		handler: async (api, { scope }) => {
 			// `scope.incoming_record` is a quotes row. `'quotez'` above would not compile.
@@ -231,7 +230,7 @@ The surface is designed so that mistakes surface at their cause rather than down
   happen before that clock starts; reads, writes, hooks, remotes and each automation step all share
   the same cap and every attempt is billable to the tenant. Do not hide unbounded work in a handler.
 - **An automation may outlive one invocation without outliving the serverless model.** The runtime
-  persists one trigger receipt, replays the handler deterministically, and yields at `api.ai`. The
+  persists one trigger receipt, replays the handler deterministically, and yields at `api.infer`. The
   host performs the spend-gated inference outside the guest, settles the result under a stable
   effect identity, and a later capped invocation resumes the handler. Writes before a yield roll
   back; the final writes, run telemetry and terminal receipt commit atomically. Authors still write
@@ -469,9 +468,10 @@ pod invite you@example.com   # mint a founding invitation (self-hosted)
 ```
 
 `pod dev` supplies `db`, `fileStorage`, `queue`, a console-only `messaging`, and a console-only
-`integrationDelivery`, and nothing else. A workspace with an agent automation refuses to start under
-it, because `ai` is a _static_ requirement — which is the intended answer, not an inconvenience: the
-alternative is a development run that fails at the first inference call, far from the cause.
+`integrationDelivery`, and nothing else. A workspace whose automations call `api.infer` or whose agent
+profile needs inference refuses to start under it, because `ai` is a _static_ requirement — which is
+the intended answer, not an inconvenience: the alternative is a development run that fails at the
+first inference call, far from the cause.
 
 The two console facilities are there for the same reason: `pod dev` holds no sockets and no endpoint
 credentials, and both a declared channel and a declared outbound integration are static startup

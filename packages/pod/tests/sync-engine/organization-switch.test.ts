@@ -41,6 +41,16 @@ describe('organization switch boundary', () => {
 		expect(workspaceSidebarSource).not.toContain('hideChevron={!displayExpanded}');
 	});
 
+	it('renders the host-supplied omni finder on the sidebar with its activation shortcut', () => {
+		expect(workspaceShellSource).toContain('{onSearch}');
+		expect(workspaceShellSource).toContain('{searchLabel}');
+		expect(workspaceShellSource).toContain('{searchShortcut}');
+		expect(workspaceSidebarSource).toContain('data-testid="workspace-omni-trigger"');
+		expect(workspaceSidebarSource).toContain('{searchShortcut}');
+		expect(podShellSource).toContain('onSearch={toggleOmniFinder}');
+		expect(podShellSource).toContain("searchLabel={t('pod.shell.omniTitle')}");
+	});
+
 	it('lets Core select and serve the complete new workspace document', async () => {
 		const replace = vi.fn();
 		const request = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));

@@ -68,7 +68,9 @@ class RemoteQueryResource<T> {
 				if (generation !== this.generation) return;
 				this.controller = null;
 				if (error instanceof DOMException && error.name === 'AbortError') {
-					this.loading = false;
+					// A newer generation owns the in-flight load. Keep the skeleton up when there is
+					// still nothing to render; only drop loading when a cached value can stay on screen.
+					this.loading = this.current === undefined;
 					return;
 				}
 				this.error = error instanceof Error ? error : new Error(String(error));

@@ -141,17 +141,11 @@ describe('assertHostAgentTools', () => {
 	/** The other direction: an agent naming a tool this host does not have, which is otherwise silent. */
 	it('refuses a workspace whose agent names a host tool this host lacks', () => {
 		const declared = manifest({
-			automations: {
-				nightly_deploy: {
-					description: 'Pushes the workspace out overnight through the host sandbox.',
-					trigger: { schedule: '0 3 * * *' },
-					spec: {
-						kind: 'agent',
-						description: 'Pushes the workspace out overnight through the host sandbox.',
-						task: 'Deploy.',
-						hostTools: ['deploy_workspace']
-					}
-				}
+			agent: {
+				kind: 'agent',
+				description: 'The workspace assistant people talk to directly.',
+				task: 'Deploy.',
+				hostTools: ['deploy_workspace']
 			}
 		});
 		expect(() => assertHostAgentTools([sandboxEcho], declared)).toThrow(
@@ -210,17 +204,11 @@ describe('assertHostAgentTools', () => {
 		expect(
 			requiredRuntimeFacilities(
 				manifest({
-					automations: {
-						nightly_deploy: {
-							description: 'Pushes the workspace out overnight through the host sandbox.',
-							trigger: { schedule: '0 3 * * *' },
-							spec: {
-								kind: 'agent',
-								description: 'Pushes the workspace out overnight through the host sandbox.',
-								task: 'Deploy.',
-								hostTools: ['deploy_workspace']
-							}
-						}
+					agent: {
+						kind: 'agent',
+						description: 'The workspace assistant people talk to directly.',
+						task: 'Deploy.',
+						hostTools: ['deploy_workspace']
 					}
 				})
 			)

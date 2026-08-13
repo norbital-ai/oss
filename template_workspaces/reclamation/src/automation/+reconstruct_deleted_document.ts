@@ -10,7 +10,6 @@ import { reconstructForDocument } from '../lib/reclamation/stitch-driver.js';
 export default defineAutomation(
 	{ trigger: { collection: 'project_documents', event: 'deleted' } },
 	{
-		kind: 'deterministic',
 		description:
 			'Rebuilds the site model from the documents that remain after a reconstruction document is removed, so no revision is left standing on a section sheet that is gone.',
 		handler: async (api, { scope }) => ({

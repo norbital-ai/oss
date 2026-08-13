@@ -17,11 +17,14 @@ describe('demand-driven browser synchronization', () => {
 	it('does not block an authoritative cold read behind replica startup or shape warm-up', () => {
 		const stateClient = source('ui/state/client.ts');
 		const clientSync = source('ui/sync/client-sync.ts');
-		expect(stateClient).toMatch(
-			/async \(signal\) => \{[\s\S]*?if \(local && getClientSync\(\)\)[\s\S]*?const value = await post/
-		);
+		expect(stateClient).toContain("import { raceLocalAndServer } from '$lib/ui/state/query-race.js'");
+		expect(stateClient).toContain('const server = post<T>(path, body, signal, key)');
+		expect(stateClient).toContain('return raceLocalAndServer(server, local, absorb)');
 		expect(clientSync).toContain('for (const name of missing) void sync.registry.register(name)');
 		expect(clientSync).toContain('if (missing.length > 0)');
+		expect(clientSync).toContain(
+			'const missing = [...needed].filter((name) => !sync.registry.has(name));'
+		);
 	});
 
 	it('closes the replica only when a page is discarded, not when it enters bfcache', () => {

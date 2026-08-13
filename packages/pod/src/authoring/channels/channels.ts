@@ -1,4 +1,12 @@
 import type { DefaultMcpServerName, DefaultPolicyName } from '../schema/types.js';
+import type { PlatformAgentToolName } from '../automations/platform-agent-tools.js';
+import type { WorkspaceAuthoringTypes } from '../index.js';
+
+type WorkspaceAgentToolName = WorkspaceAuthoringTypes extends {
+	readonly agentToolName: infer TName extends string;
+}
+	? TName
+	: string;
 
 /** How host sandbox tools may touch the tenant worktree for one channel. */
 export type ChannelHostSandbox = {
@@ -53,13 +61,17 @@ type ChannelDefinitionBase = {
 	/** Overrides the agent's default instruction for this channel. */
 	readonly task?: string;
 	/**
-	 * Host tools this channel's agent may call — empty / omitted means none.
+	 * Non-sandbox host tools this channel's agent may call — empty / omitted means none.
 	 *
-	 * Channel runs default to no host tools. Naming tools here is an explicit opt-in for that channel
-	 * (for example analysis-only `sandbox_bash` plus read tools), checked at startup against what the
-	 * host supplies. The host re-resolves the channel agent's principal before opening its worktree.
+	 * Sandbox host tools are not named here. The funnel offers them when this session has a bound
+	 * sandbox. Naming `sandbox_bash` here does not cause it to appear and omitting it does not hide it.
 	 */
 	readonly hostTools?: readonly string[];
+	/**
+	 * Tools to withhold after the funnel runs. Typesafe over workspace tools and platform builtins.
+	 * Cannot name sandbox host tools; those stay attached whenever a sandbox is bound.
+	 */
+	readonly denyTools?: readonly (WorkspaceAgentToolName | PlatformAgentToolName)[];
 	/**
 	 * MCP servers this channel's agent may call — empty / omitted means none.
 	 *
@@ -70,9 +82,8 @@ type ChannelDefinitionBase = {
 	/**
 	 * How those host tools may touch the tenant worktree.
 	 *
-	 * When `hostTools` is non-empty and this is omitted, the run defaults to `workspace: 'read-only'`
-	 * (RO worktree + writable scratch). Set `workspace: 'read-write'` only when the channel is meant
-	 * to author the repo.
+	 * When omitted, the run defaults to `workspace: 'read-only'` (RO worktree + writable scratch).
+	 * Set `workspace: 'read-write'` only when the channel is meant to author the repo.
 	 */
 	readonly hostSandbox?: ChannelHostSandbox;
 };

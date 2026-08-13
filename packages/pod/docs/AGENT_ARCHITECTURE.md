@@ -2,7 +2,7 @@
 
 Pod owns workspace agents: the loop implementation, tool dispatch, and tenant transcripts. The host
 supplies model inference and may expose explicitly selected host tools. The host does not persist
-agent transcripts. On Core, the host *does* orchestrate the durable workflow and execute fenced AI
+agent transcripts. On Core, the host _does_ orchestrate the durable workflow and execute fenced AI
 effects (`ai.turn` / `ai.prompt`) outside the guest.
 
 This ownership rule is the same for every deployment target:
@@ -10,15 +10,15 @@ This ownership rule is the same for every deployment target:
 ```text
 interactive chat (hosted) ─┐
 channel inbound (hosted) ──┼─► persist user turn ─► admitAgentTurn ─► _norbital_automation_job
-kind: 'agent' automation ──┘                                              │
-                                                                          ▼
-                                                            Core DBOS: one guest
-                                                            automation-events step
-                                                                          │
+                           │                                              │
+                                                                           ▼
+                                                             Core DBOS: one guest
+                                                             automation-events step
+                                                                           │
 agentChat / HTTP agent/start (leftover) ─► runAgent in-guest ─┐           │
                                                               ▼           ▼
                                                    Pod loop logic (agent-loop.server.ts)
-                                                                          │
+                                                                           │
                                           ┌───────────────────────────────┼───────────────┐
                                           ▼                               ▼               ▼
                                    workspace tools                 host AI effects   tenant transcript
@@ -27,33 +27,37 @@ agentChat / HTTP agent/start (leftover) ─► runAgent in-guest ─┐         
 
 ## Responsibilities
 
-| Pod owns                                                     | The host owns                                                                |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Pod owns                                                           | The host owns                                                                                                                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Agent loop logic, streaming, subagents, iteration and token limits | One model-inference turn through `HostAiBinding`; Core also orchestrates the durable workflow and executes fenced `ai.turn` / `ai.prompt` effects |
-| Tool selection and dispatch                                  | Provider credentials and provider-specific adapters                          |
-| Workspace tools and their scoped API                         | Optional trusted tool implementations exposed through `HostAgentToolBinding` |
-| Runs, sessions, messages and channel conversations           | Transport sockets and encrypted transport credentials                        |
-| Transcript authorization, persistence and replication        | Process lifecycle and isolation for the tenant runtime                       |
-| Interactive agent UI, floating entry and `/agent` route      | Proxying/mounting the Pod workspace application                              |
+| Tool selection and dispatch                                        | Provider credentials and provider-specific adapters                                                                                               |
+| Workspace tools and their scoped API                               | Optional trusted tool implementations exposed through `HostAgentToolBinding`                                                                      |
+| Runs, sessions, messages and channel conversations                 | Transport sockets and encrypted transport credentials                                                                                             |
+| Transcript authorization, persistence and replication              | Process lifecycle and isolation for the tenant runtime                                                                                            |
+| Interactive agent UI, floating entry and `/agent` route            | Proxying/mounting the Pod workspace application                                                                                                   |
 
 A host must not create a parallel session store, transcript API, or agent UI. Core orchestrates the
 durable workflow; it does not persist transcripts. A host tool returns plain data to Pod; Pod records
 the call and result as part of its own transcript.
 
-## One loop, three entry points
+## One loop, two entry points
 
-Loop *logic* still lives in `src/server/agent/agent-loop.server.ts`. The same `chat_session`
-transcript is used for every door. Hosted *entry* is receipt admission, not an in-guest continuous
+Loop _logic_ still lives in `src/server/agent/agent-loop.server.ts`. The same `chat_session`
+transcript is used for every door. Hosted _entry_ is receipt admission, not an in-guest continuous
 `runAgent`.
 
 - Hosted interactive (`agentChatStart`) and channel inbound persist the user turn, then
   `admitAgentTurn` into `_norbital_automation_job`. Core DBOS drives one provider or tool
   transition per guest `automation-events` step. They do not `void runAgent` or retain a
   background lease.
-- `kind: 'agent'` automations take the same receipt path: a declared `task`, collections, access
-  mode and tool allowlists, one reducer step per two-second invocation.
 - `agentChat` (the synchronous remote) and HTTP `agent/start` may still call `runAgent` in-guest.
   Those are leftover programmatic paths, not the hosted UI path.
+
+Automations are not agent sessions. They are deterministic handlers configured with
+`defineAutomation`; model judgement uses `api.infer` — the same host `chat` as the agent, with
+optional schema, optional images, and optional named workspace tools. Always a normal chat session.
+No `write_collection`, `spawn_subagent`, sandbox, authoring, or MCP; it does not own a
+`chat_session` transcript. Caps are 64 calls and 100,000 prompt characters per invocation.
 
 An interactive run has no automation name. A channel run carries the channel's standing task and
 continues the session associated with the external conversation. These are entry-point differences,
@@ -99,27 +103,53 @@ declared `policy`. An unmatched sender receives the registration instruction and
 This is what makes `policy` load-bearing rather than decorative: the host command carrying an inbound
 message arrives as an administrator, and running the agent there would make every channel omnipotent.
 
-Channels default to no host tools and no MCP servers. A channel that explicitly names a narrow
-host-tool or `mcpServers` allowlist
-carries its own reconciled agent principal, never the arbitrary external sender and never the
-organization's builder. The host validates that principal and defaults its worktree mount to
+Channels do not list sandbox host tools. The funnel offers every sandbox-gated host tool when this
+session has a bound sandbox, the same way interactive chat does. `hostTools` on the channel is only
+the opt-in for non-sandbox host tools; `denyTools` withholds workspace or platform builtins without
+touching sandbox. The host validates the channel principal and defaults its worktree mount to
 read-only unless the channel declaration deliberately opts into authoring.
 
 What each entry point _declares_ is a second axis, independent of whose permissions apply:
 
-| Entry point                   | Acts as                                                     | Spec comes from                                        | Reach when nothing is authored                        |
-| ----------------------------- | ----------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- |
-| Interactive chat              | the signed-in user                                          | `src/+agent.ts`, else `interactiveAgentSpec`           | write, every workspace tool, every host tool          |
-| Public channel message        | the channel's agent principal, under its policy             | `channelAgentSpec`, plus the channel declaration       | write, every workspace tool, declared host tools and MCP servers only |
-| Authenticated channel message | the linked member identity under the channel profile policy | `channelAgentSpec`, plus the channel declaration       | write, every workspace tool, declared host tools and MCP servers only |
-| Agent automation              | the principal its host command carries                      | the automation's declared `collections`/`access`/tools | whatever the file declares                            |
+| Entry point                   | Acts as                                                     | Spec comes from                                  | Reach when nothing is authored                                                        |
+| ----------------------------- | ----------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Interactive chat              | the signed-in user                                          | `src/+agent.ts`, else `interactiveAgentSpec`     | write, every workspace tool, sandbox host tools when bound                            |
+| Public channel message        | the channel's agent principal, under its policy             | `channelAgentSpec`, plus the channel declaration | write, every workspace tool, sandbox host tools when bound, declared MCP servers only |
+| Authenticated channel message | the linked member identity under the channel profile policy | `channelAgentSpec`, plus the channel declaration | write, every workspace tool, sandbox host tools when bound, declared MCP servers only |
 
 A channel run is the one place an authored `src/+agent.ts` does not win outright. Its prompt, model
-and budgets are carried; its `collections`, `access`, `tools`, `hostTools`, and `mcpServers` are not, because
+and budgets are carried; its `collections`, `access`, `tools`, `denyTools`, `hostTools`, and `mcpServers` are not, because
 permission for that run belongs to the channel's policy and a file that could widen or narrow it from
 the side would make the policy advisory. The channel's declared `task` is composed last, after the
 baseline prompt and after the authored one, so the most specific instruction is the one the model
 reads last.
+
+## Tool funnel
+
+Every model that can call tools goes through one assembly path (`assembleToolSpecs`). Two surfaces
+feed it:
+
+- **`agent`** — interactive chat, channels, subagents. Owns a `chat_session` transcript.
+- **`infer`** — `api.infer` in hooks, automations, remotes. Ephemeral messages only; never a transcript.
+
+Layers, in order, then sorted by name:
+
+1. **Platform read builtins** — always: `describe_workspace`, `read_collection`, `list_skills`, `read_skill`
+2. **Platform write** — `agent` only, `access === 'write'`, not plan mode: `write_collection`
+3. **Platform coordination** — `agent` only, not plan mode: sandbox coordination tools; `spawn_subagent` on the root turn
+4. **Workspace tools** (`+*.tool.ts`) — `agent` omit `spec.tools` → all, otherwise that allowlist; `infer` only names passed to `api.infer({ tools })`; then subtract `spec.denyTools` / `denyTools` on the channel
+5. **MCP** — `agent` only, `spec.mcpServers`
+6. **Sandbox host tools** — `agent` only, and only when this session has a bound sandbox. Taken from `agentTools.list()`, never from `spec.hostTools` / allow / deny. `denyTools` cannot name them.
+7. **Other host tools** — `agent` only, names in `spec.hostTools` that are not sandbox-gated
+
+Plan mode keeps layer 1 only. Infer is layers 1 and 4 only.
+
+A bound sandbox means the host exposes `agentTools` and this turn has a requestor the host can
+resolve as a sandbox principal. WhatsApp, web, and every other agent profile still receive those
+tools when that is true; they are not handwritten onto the profile.
+
+`denyTools` on `src/+agent.ts` or a channel declaration is typesafe over workspace tool names and
+the platform builtins. Naming a `sandbox_*` tool there is an error.
 
 ## Transcript model
 
@@ -140,9 +170,9 @@ a turn with `parent_turn_id` and `subagent_id` to that same aggregate. Root repl
 messages and keeps the parent's tool call/result exchange, so a nested transcript does not leak into
 the next root prompt.
 
-A `kind: 'goal'` row is an independent verifier verdict, not the agent's own claim. Goal-mode
-replay maps it back into the window as a `<goal-verification>` user message, the same way a
-summary re-enters as `<conversation-summary>`.
+A `kind: 'goal'` row is an independent verifier verdict, not the agent's own claim. When the
+resolved intent asked for a check, replay maps that row back into the window as a
+`<goal-verification>` user message, the same way a summary re-enters as `<conversation-summary>`.
 
 Every run and personal session is owned by its requestor. Collection permission guards scope session,
 message and run reads to that owner. Channel principals are resolved inside Pod before a channel
@@ -265,7 +295,7 @@ model as `mcp__<server>__<tool>`. The client speaks MCP 2026-07-28 statelessly v
 `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name`.
 
 Dispatch is default-deny, like host tools. Interactive chat with no authored `src/+agent.ts` grants
-every declared server; an authored profile, automations, and channels must name
+every declared server; an authored profile and channels must name
 `mcpServers: ['stripe']`. Channels default to no MCP servers.
 
 Elicitation v1: a server may return `resultType: input_required`. The UI shows what was asked; there
@@ -275,7 +305,7 @@ agent loop.
 
 ## System prompt
 
-Every turn — interactive chat, automation runs and channel delivery — composes a baseline system
+Every turn — interactive chat and channel delivery — composes a baseline system
 prompt ahead of any authored `systemPrompt`. The baseline carries what a turn cannot recover from on
 its own, because these are the things that shape the first sentence of a reply, before any tool call,
 and a skill the model was never prompted to fetch cannot repair them:
@@ -303,23 +333,31 @@ order is the point, because a model resolves ambiguity in favour of what it read
 authored prompt instead of composing with it would silently drop every workspace's domain
 instructions the moment the baseline shipped.
 
-## Plan mode and goal mode
+## Intent
 
-The composer exposes two mutually exclusive turn modes. Plan wins if both are sent.
+A turn is `do` (default) or `plan`. `resolveAgentIntent` in `shared/agent/intent.ts` is the one
+decision: tool posture, whether an independent verifier runs, and whether the settled window folds
+into a checkpoint. The composer Plan chip sends `intent: 'plan'`; everything else is `do`. There is
+no Goal chip — the verifier is inferred from the intent, an explicit prompt, a mention, or a task
+signal in the message.
 
-**Plan mode** withholds writes, host tools, MCP tools, and `spawn_subagent`. The model keeps
-`describe_workspace`, `list_skills`, `read_skill`, and `read_collection`, and the system prompt
-appends a reminder that the turn must return a plan rather than execute one.
+**Plan** withholds writes, host tools, MCP tools, and `spawn_subagent`. The model keeps
+`describe_workspace`, `list_skills`, `read_skill`, and `read_collection`. The settled window folds
+through the same `kind: 'summary'` checkpoint compaction already uses. The verifier always runs, and
+its prompt asks whether the plan is complete and executable, not whether the work already happened.
 
-**Goal mode** leaves the full tool list in place. When the root loop would stop (`calls.length === 0`,
-depth 0), an independent verifier — a separate `ai.chat` / durable `ai.prompt` with no tools and a
-different system prompt — decides whether the request was actually fulfilled. The agent's last
+**Do** leaves the full tool list in place. A verifier runs when the message looks like a task, names
+a record, or carries an explicit prompt. When the root loop would stop (`calls.length === 0`,
+depth 0), that check is a separate `ai.chat` / durable `ai.prompt` with no tools. The agent's last
 sentence is not evidence. A failed verdict is persisted as `kind: 'goal'` and injected back into the
-window so the main agent continues. After three checks the turn fail-closes and stops, so a stubborn
-gap cannot run forever. Subagents never enter the gate.
+window so the main agent continues. After three checks the turn fail-closes and stops. Subagents
+never enter the gate.
 
-Verifier logic lives in `server/agent/goal-mode.server.ts` and `shared/agent/goal-verdict.ts`, not
-inlined into the loop.
+Verifier scoring lives in `server/agent/goal-mode.server.ts` and `shared/agent/goal-verdict.ts`, not
+inlined into the loop. The composer, the `@` menu, and the omni finder share one prefix language and
+record engine in `ui/agent/mention-sources.ts`. Composer chip ranges live in
+`ui/agent/composer-mentions.ts`; chrome tokens and the focus/seed channel live in
+`ui/agent/composer-chrome.ts`.
 
 ## Host tools
 
@@ -333,32 +371,32 @@ export type HostAgentToolBinding = {
 };
 ```
 
-The dispatch path is default-deny — nothing reaches a host tool that the running spec did not name:
+Dispatch is still default-deny. What changes is _how_ a name enters the offered set — that is the
+[tool funnel](#tool-funnel), not a handwritten list on the profile:
 
-1. The host registers implementations.
-2. The agent spec explicitly names allowed tools in `hostTools`.
-3. `assertHostAgentTools` validates the workspace manifest against the host inventory at startup.
-4. The loop repeats namespace and selection checks before dispatch.
-5. The host validates the selected tool's input and returns structured-cloneable data.
-
-Read that as a property of dispatch rather than as the deployment's posture. What the _spec_ names is
-a separate decision, and for interactive chat with no authored `src/+agent.ts` the answer is all of
-them, as below. For a channel run it is none of them, for the reason in
-[What bounds an agent](#what-bounds-an-agent).
+1. The host registers implementations on `agentTools`.
+2. Sandbox-gated host tools (`requiresSandbox`, or a `sandbox_*` name) are offered only when this
+   session has a bound sandbox. They are not listed in `hostTools`, and `denyTools` cannot hide them.
+3. Other host tools appear only when the running spec names them in `hostTools`.
+4. `assertHostAgentTools` validates named `hostTools` against the host inventory at startup.
+5. The loop repeats namespace and selection checks before dispatch.
+6. The host validates the selected tool's input and returns structured-cloneable data.
 
 Workspace tools, Pod built-ins and host tools share one model-visible namespace. Collisions are a
 startup error.
 
 A workspace configures the Pod-owned interactive agent in `src/+agent.ts`. The authored profile
-carries the same `collections`, `access`, `tools`, `hostTools`, `mcpServers`, model, `systemPrompt` and budget
-fields as an agent automation, without inventing a schedule merely to configure the UI. An authored
-profile still wins outright: a workspace that wrote its own boundary meant it, and widening it from
-the fallback would make that file advisory.
+carries `collections`, `access`, `tools`, `denyTools`, `hostTools`, `mcpServers`, model,
+`systemPrompt` and budget. An authored profile still wins outright for interactive chat: a workspace
+that wrote its own boundary meant it, and widening it from the fallback would make that file
+advisory. `denyTools` withholds workspace tools and platform builtins; it cannot name sandbox host
+tools.
 
 When the workspace authored none, interactive chat runs under a fallback profile with `access:
-'write'`, every workspace agent tool, every host tool the deployment offers, and every declared MCP
-server. A channel run takes the same write access and workspace tools whether or not a profile was
-authored, plus only the host tools and MCP servers its channel declaration explicitly names.
+'write'`, every workspace agent tool, every declared MCP server, and sandbox host tools when a
+sandbox is bound. A channel run takes the same write access, workspace tools, and bound-sandbox
+tools whether or not a profile was authored. Non-sandbox host tools and MCP servers still require
+an explicit name on the channel declaration. Channel worktrees default to read-only.
 
 Data access is the safe half. `read_collection` and `write_collection` both run unelevated, so
 policy, hooks and approval gates apply exactly as they would to the same person clicking in the

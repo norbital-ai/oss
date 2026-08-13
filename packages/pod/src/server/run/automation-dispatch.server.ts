@@ -265,11 +265,7 @@ export async function admitAgentTurn(
 }
 
 function receiptUsesAgentReducer(receipt: AutomationReceipt): boolean {
-	if (isGuestAdmittedAgentJob(receipt.automation_name)) return true;
-	const registered = getTenantWorkspace().registered.automations?.[receipt.automation_name] as
-		| { spec?: { kind?: string } }
-		| undefined;
-	return registered?.spec?.kind === 'agent';
+	return isGuestAdmittedAgentJob(receipt.automation_name);
 }
 
 async function stageEffect(

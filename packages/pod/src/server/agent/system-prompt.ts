@@ -1,4 +1,4 @@
-import { GOAL_MODE_REMINDER } from '$lib/server/agent/goal-mode.server.js';
+import { GOAL_MODE_REMINDER, PLAN_VERIFIER_REMINDER } from '$lib/server/agent/goal-mode.server.js';
 
 /**
  * What an agent is told before it is asked anything.
@@ -78,6 +78,7 @@ export function composeSystemPrompt(
 		...written([
 			authored,
 			options?.planMode ? PLAN_MODE_REMINDER : undefined,
+			options?.planMode && options?.goalMode ? PLAN_VERIFIER_REMINDER : undefined,
 			!options?.planMode && options?.goalMode ? GOAL_MODE_REMINDER : undefined
 		])
 	].join(LAYER_SEPARATOR);

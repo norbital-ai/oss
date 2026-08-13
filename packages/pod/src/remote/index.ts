@@ -23,8 +23,10 @@ export {
 export {
 	agentChat,
 	agentChatStart,
+	agentChatUpdateVerifier,
 	agentModels,
 	AgentChatInputSchema,
+	AgentChatUpdateVerifierInputSchema,
 	AgentModelsInputSchema,
 	type AgentChatResult,
 	type AgentChatStartResult

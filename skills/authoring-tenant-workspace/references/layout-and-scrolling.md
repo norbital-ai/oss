@@ -178,6 +178,7 @@ All layout is container-query driven, not viewport breakpoints.
 | `Grid minimum="compact"`  | auto-fit 12rem | Cards collapse early for small widgets      |
 | `Grid minimum="card"`     | auto-fit 18rem | Medium widgets                              |
 | `Grid minimum="panel"`    | auto-fit 26rem | Form fields, standard cards                 |
+| `Grid tracks="…"`         | explicit       | Known uneven columns (log tables, key/value) |
 | Data renderers            | intrinsic      | Shrink to content; `min-width: 0` on parent |
 
 **Data renderers in narrow containers:** every data renderer is wrapped in `min-w-0` via the layout
@@ -267,7 +268,7 @@ something not in this table, you are almost certainly about to write a layout by
 | `Cover`            | Cover              | Chrome, body, chrome — body takes the remaining height |
 | `Bound`            | PadBox / Frame     | A named height contract                                |
 | `Frame`            | Frame              | Aspect-ratio media                                     |
-| `Grid`             | Grid               | `auto-fit` tracks with a minimum, no breakpoints       |
+| `Grid`             | Grid               | `auto-fit` tracks with a minimum, or `tracks` for known columns |
 | `Columns`/`Column` | Columns            | Explicit column spans                                  |
 | `Split`            | Sidebar / Switcher | Two panes that collapse on a container query           |
 | `Scroll`           | Reel               | A named scrollport                                     |

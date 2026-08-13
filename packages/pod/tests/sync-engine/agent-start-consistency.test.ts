@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { workspaceRuntimeOperations } from '$lib/ui/state/client.js';
 import {
+	clearLocalSchema,
 	disableClientSync,
 	enableClientSync,
 	setLocalSchema,
@@ -10,6 +11,7 @@ import type { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
 
 afterEach(() => {
 	disableClientSync();
+	clearLocalSchema();
 	vi.unstubAllGlobals();
 });
 
@@ -76,5 +78,51 @@ describe('agent start read-your-command consistency', () => {
 		expect(upserts).toEqual([[session]]);
 		expect(notified).toEqual(['chat_session']);
 		expect(waited).toEqual(['42']);
+	});
+
+	it('folds the session receipt even when the replica schema is not published yet', async () => {
+		const upserts: (readonly Record<string, unknown>[])[] = [];
+		const notified: string[] = [];
+		const client = {
+			onChange: () => {},
+			upsertRows: async (_collection: string, rows: readonly Record<string, unknown>[]) => {
+				upserts.push(rows);
+			},
+			notifyCollection: (collection: string) => notified.push(collection),
+			waitForSequence: async () => true,
+			setSubscribedCollections: () => {},
+			loadSyncState: async () => new Map()
+		} as unknown as PodSyncClient;
+		enableClientSync(client);
+		const session = {
+			norbital_id: 'chat-2',
+			norbital_row_version: 1,
+			title: 'Workspace agent',
+			messages: [],
+			turns: [],
+			visibility: 'personal'
+		};
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							runId: 'run-2',
+							chatId: 'chat-2',
+							accepted: true,
+							session,
+							syncSequence: '7'
+						}),
+						{ status: 200, headers: { 'content-type': 'application/json' } }
+					)
+			)
+		);
+
+		const receipt = await workspaceRuntimeOperations.agentChatStart({ message: 'Inspect this' });
+
+		expect(receipt.chatId).toBe('chat-2');
+		expect(upserts).toEqual([[session]]);
+		expect(notified).toEqual(['chat_session']);
 	});
 });

@@ -1,6 +1,5 @@
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
-import { getRuntimeFacilities } from '$lib/server/facilities.js';
 import { declaredMcpServerNames } from '$lib/server/agent/mcp-tools.server.js';
 import { layerAuthoredPrompts } from '$lib/server/agent/system-prompt.js';
 
@@ -16,43 +15,22 @@ function workspaceAgentTools(): readonly string[] {
 }
 
 /**
- * Every host tool this deployment offers, or none if it offers no tool facility at all.
- *
- * Read per turn rather than cached: the host's inventory is the host's, and a copy here would be a
- * second answer to "what can this agent call" that is free to go stale against the one dispatching.
- */
-async function allHostTools(): Promise<readonly string[]> {
-	const binding = getRuntimeFacilities().agentTools;
-	if (!binding) return [];
-	return (await binding.list()).map((tool) => tool.name);
-}
-
-/**
  * The profile every interactive conversation runs under when the workspace authored none.
  *
- * **This grants the full tool surface, host tools included, to every signed-in user.** That is a
- * deliberate operator decision and it is not the conservative one, so the consequence belongs in
- * writing next to the code that causes it.
+ * **This grants the full workspace tool surface to every signed-in user.** Sandbox host tools are
+ * not listed here: the funnel adds them when this session has a bound sandbox. That is the same
+ * rule every agent profile follows, including channels.
  *
  * Data access is the safe half. `read_collection` and `write_collection` both run unelevated, so
  * policy, hooks and approval gates apply exactly as they would to the same person clicking in the
  * app: the agent is a faster hand on the same controls, not a wider set of them. Leaving
  * `collections` unset is part of that — the ceiling comes from policy rather than from the spec.
  *
- * Host tools cross the isolate boundary, but not the principal boundary. The loop carries the
- * signed-in requestor's id and the host resolves it in the tenant directory before opening that
- * actor's worktree. Naming every available host tool is still intentionally broad functionality;
- * it no longer substitutes an organization-wide builder identity for the caller. Declared MCP
- * servers are granted the same way: each server already allowlists its tools, and naming every
- * declared server is the interactive default.
- *
  * An authored `src/+agent.ts` still wins outright. A workspace that wrote its own boundary meant it,
- * and widening it from here would make that file advisory.
+ * and widening it from here would make that file advisory. `denyTools` on that file can withhold
+ * workspace or platform tools; it cannot hide a bound sandbox.
  */
-export async function interactiveAgentSpec(
-	message: string,
-	model?: string
-): Promise<AgentAutomationSpec> {
+function interactiveAgentBaseSpec(message: string, model?: string): AgentAutomationSpec {
 	const authored = getTenantWorkspace().registered.agent;
 	const chosen = model === undefined ? {} : { model };
 	// An explicit choice overrides the authored profile's model, and only for this turn — the profile
@@ -67,10 +45,26 @@ export async function interactiveAgentSpec(
 		task: message,
 		access: 'write',
 		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],
-		hostTools: await allHostTools(),
 		mcpServers: declaredMcpServerNames(),
 		...chosen
 	};
+}
+
+/**
+ * Start-path spec: persist and admit without waiting on the host tool inventory.
+ *
+ * Sandbox tools are not named on the spec. The funnel adds them later, when this session has a
+ * bound sandbox, so the start path does not need a host round trip.
+ */
+export function interactiveAgentStartSpec(message: string, model?: string): AgentAutomationSpec {
+	return interactiveAgentBaseSpec(message, model);
+}
+
+export async function interactiveAgentSpec(
+	message: string,
+	model?: string
+): Promise<AgentAutomationSpec> {
+	return interactiveAgentBaseSpec(message, model);
 }
 
 /**
@@ -90,34 +84,32 @@ export async function interactiveAgentSpec(
  * grants can do nothing. Adding a tool-shaped second boundary here would be redundant where it
  * agreed with the policy and misleading where it did not.
  *
- * Host tools default to none. Channels that need a narrow analysis surface opt in by naming tools on
- * the channel declaration (`hostTools`); startup refuses a name the host does not supply. The loop
- * carries the channel's own agent principal on every host-tool call, and the host re-resolves it
- * before opening that actor's worktree.
+ * Sandbox host tools are not listed on the channel. The funnel adds them when this session has a
+ * bound sandbox, the same way it does for interactive chat. `hostTools` remains the opt-in for
+ * non-sandbox host tools; `denyTools` withholds workspace or platform tools without touching sandbox.
  *
  * An authored `src/+agent.ts` is supplementary here rather than authoritative, which is the one place
  * this deliberately differs from interactive chat. Its prompt and its model and budget choices are
  * carried, because those are the workspace speaking about how its agent should work; its
- * `collections`, `access`, `tools`, `hostTools` and `mcpServers` are not, because permission for
- * this run belongs to the channel's policy (and the channel's own hostTools / mcpServers
- * allowlists), and a file that could widen or narrow that from the side would make those
- * declarations advisory.
+ * `collections`, `access`, `tools`, `denyTools`, `hostTools` and `mcpServers` are not, because permission for
+ * this run belongs to the channel's policy (and the channel's own allow/deny lists), and a file that
+ * could widen or narrow that from the side would make those declarations advisory.
  */
 export async function channelAgentSpec(input: {
 	/** The declared `task` — what this channel's agent is for, in the workspace's own words. */
 	readonly standingInstruction: string;
 	/**
-	 * Host tools the channel declaration opted into. Omitted / empty keeps the default: none.
-	 * Only names the host actually supplies are useful; `assertHostAgentTools` refuses unknown ones.
+	 * Non-sandbox host tools the channel declaration opted into. Omitted / empty keeps the default:
+	 * none. Sandbox tools are not named here.
 	 */
 	readonly hostTools?: readonly string[];
+	readonly denyTools?: AgentAutomationSpec['denyTools'];
 	/**
 	 * MCP servers the channel declaration opted into. Omitted / empty keeps the default: none.
 	 */
 	readonly mcpServers?: readonly string[];
 	/**
-	 * How those host tools may touch the worktree. When hostTools is non-empty and this is omitted,
-	 * the run defaults to read-only (RO worktree + writable scratch).
+	 * How sandbox host tools may touch the worktree. Channels default to read-only.
 	 */
 	readonly hostSandbox?: AgentAutomationSpec['hostSandbox'];
 }): Promise<AgentAutomationSpec> {
@@ -125,17 +117,17 @@ export async function channelAgentSpec(input: {
 	const systemPrompt = layerAuthoredPrompts(authored?.systemPrompt, input.standingInstruction);
 	const hostTools = [...(input.hostTools ?? [])];
 	const mcpServers = [...(input.mcpServers ?? [])];
-	const hostSandbox =
-		input.hostSandbox ?? (hostTools.length > 0 ? ({ workspace: 'read-only' } as const) : undefined);
+	const hostSandbox = input.hostSandbox ?? ({ workspace: 'read-only' } as const);
 	return {
 		kind: 'agent',
 		description: 'Handles one inbound channel conversation under its standing instruction.',
 		task: input.standingInstruction,
 		access: 'write',
 		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],
+		...(input.denyTools && input.denyTools.length > 0 ? { denyTools: [...input.denyTools] } : {}),
 		hostTools,
 		mcpServers,
-		...(hostSandbox ? { hostSandbox } : {}),
+		hostSandbox,
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		...(authored?.model === undefined ? {} : { model: authored.model }),
 		...(authored?.profile === undefined ? {} : { profile: authored.profile }),

@@ -565,6 +565,9 @@ export async function deliverChannelMessage(
 				...(channel.hostTools && channel.hostTools.length > 0
 					? { hostTools: channel.hostTools }
 					: {}),
+				...(channel.denyTools && channel.denyTools.length > 0
+					? { denyTools: channel.denyTools }
+					: {}),
 				...(channel.mcpServers && channel.mcpServers.length > 0
 					? { mcpServers: channel.mcpServers }
 					: {}),
