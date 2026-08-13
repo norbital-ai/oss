@@ -10,6 +10,10 @@ const workspaceShellSource = readFileSync(
 	new URL('../../../ui/src/workspace-shell/workspace-shell.svelte', import.meta.url),
 	'utf8'
 );
+const workspaceSidebarSource = readFileSync(
+	new URL('../../../ui/src/workspace-shell/workspace-sidebar.svelte', import.meta.url),
+	'utf8'
+);
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -29,6 +33,12 @@ describe('organization switch boundary', () => {
 			/\{#if switchingOrganization\}[\s\S]*organization-switch-loader[\s\S]*\{:else\}[\s\S]*<WorkspaceShellFrame/
 		);
 		expect(workspaceShellSource).toContain('onOrganizationChange={changeOrganization}');
+	});
+
+	it('uses the neutral outlined organization trigger without a competing chevron', () => {
+		expect(workspaceSidebarSource).toContain('hideChevron={true}');
+		expect(workspaceSidebarSource).toContain("? 'h-8 px-2'");
+		expect(workspaceSidebarSource).not.toContain('hideChevron={!displayExpanded}');
 	});
 
 	it('lets Core select and serve the complete new workspace document', async () => {

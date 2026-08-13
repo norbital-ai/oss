@@ -146,6 +146,8 @@
 
 {#snippet organizationSwitcher()}
 	{#key sidebar.isMobile}
+		<!-- The whole outlined trigger is the organization switch affordance. A chevron adds a
+			second, falsely active control and competes with the adjacent shell controls. -->
 		<Combobox
 			value={model.activeOrganization.id}
 			options={organizationOptions}
@@ -155,10 +157,10 @@
 			preserveOptionOrder={true}
 			scrollToSelection={true}
 			disabled={switchingOrganizationId !== null || !onOrganizationChange}
-			hideChevron={!displayExpanded}
+			hideChevron={true}
 			class={displayExpanded ? 'w-full' : 'w-8'}
 			triggerClass={displayExpanded
-				? 'h-8 pl-2 pr-1'
+				? 'h-8 px-2'
 				: 'size-8 justify-center p-0 shadow-xs [&>div]:grow-0 [&>div]:py-0'}
 			minWidth={256}
 			align="start"
