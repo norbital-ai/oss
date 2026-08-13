@@ -321,6 +321,9 @@ describe('Batched collection create (real Postgres)', () => {
 		const ordinaryAudit = audits[0]!.changes_after;
 		const projectedAudit = audits[1]!.changes_after;
 		expect({ ...projectedAudit, norbital_id: normalId }).toEqual(ordinaryAudit);
+		// `tags` is a physical fixture column not declared on this test's Drizzle table. The
+		// projected audit must mirror ordinary RETURNING semantics and omit it.
+		expect(projectedAudit).not.toHaveProperty('tags');
 		expect(projectedAudit).toMatchObject({
 			norbital_created_at: writtenAt,
 			norbital_updated_at: writtenAt,

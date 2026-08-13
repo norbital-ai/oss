@@ -140,25 +140,28 @@ export function supportsServerCreatedAuditProjection(sourceTable: PgTable): bool
 }
 
 function serverAuditChangesAfter(sourceTable: PgTable): SQL {
-	const timestampColumns = Object.values(getTableColumns(sourceTable)).filter(
-		isTimestampWithTimeZone
-	);
-	return timestampColumns.reduce<SQL>(
-		(changesAfter, column) => {
-			const sourceColumn = sql`source_row.${sql.identifier(column.name)}`;
-			return sql`${changesAfter} || jsonb_build_object(
-			${column.name}::text,
-			CASE
+	const columnEntries = Object.values(getTableColumns(sourceTable)).map((column) => {
+		const sourceColumn = sql`source_row.${sql.identifier(column.name)}`;
+		const value = isTimestampWithTimeZone(column)
+			? sql`CASE
 				WHEN ${sourceColumn} IS NULL THEN 'null'::jsonb
 				ELSE to_jsonb(to_char(
 					${sourceColumn} AT TIME ZONE 'UTC',
 					'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
 				))
-			END
-		)`;
-		},
-		sql`to_jsonb(source_row)`
-	);
+			END`
+			: sql`to_jsonb(${sourceColumn})`;
+		return sql`(${column.name}::text, ${value})`;
+	});
+
+	// `RETURNING` only exposes the Drizzle table shape. Projected create-many audits must use
+	// that same declared shape rather than `to_jsonb(source_row)`, which leaks physical columns
+	// added outside the active manifest. Aggregate rows instead of jsonb_build_object so a wide
+	// collection cannot hit PostgreSQL's function-argument limit.
+	return sql`(
+		SELECT jsonb_object_agg(declared_column.name, declared_column.value)
+		FROM (VALUES ${sql.join(columnEntries, sql`, `)}) AS declared_column(name, value)
+	)`;
 }
 
 /**
