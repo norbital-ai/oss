@@ -183,6 +183,7 @@
 			name={t('misc.chartScrollable', { title: spec.title ?? t('misc.dataChart') })}
 			class="max-"
 		>
+			{@const cartesianData = Array.isArray(spec.data) ? spec.data : []}
 			<ChartContainer
 				config={chartConfig}
 				class="h-[clamp(14rem,45dvh,18rem)] min-w-full"
@@ -190,7 +191,8 @@
 			>
 				{#if spec.kind === 'bar'}
 					<BarChart
-						data={spec.data}
+						data={cartesianData}
+						flatData={cartesianData}
 						x={spec.xKey}
 						axis="x"
 						grid={showGrid}
@@ -213,7 +215,8 @@
 					/>
 				{:else if spec.kind === 'line'}
 					<LineChart
-						data={spec.data}
+						data={cartesianData}
+						flatData={cartesianData}
 						x={spec.xKey}
 						axis="x"
 						grid={showGrid}
@@ -234,7 +237,8 @@
 					/>
 				{:else}
 					<AreaChart
-						data={spec.data}
+						data={cartesianData}
+						flatData={cartesianData}
 						x={spec.xKey}
 						axis="x"
 						grid={showGrid}

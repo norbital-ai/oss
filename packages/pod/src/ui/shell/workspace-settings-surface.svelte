@@ -4,7 +4,7 @@
 		ErasedCollectionRegistry
 	} from '@norbital-ai/platform-utils/collection';
 	import { UserRoleSchema, type TUserRole } from '@norbital-ai/platform-utils/system/types';
-	import { Bound, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cover, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import WorkspaceAuditTable from '../settings/workspace-audit-table.svelte';
 	import WorkspaceInvitationsTable from '../settings/workspace-invitations-table.svelte';
@@ -143,6 +143,21 @@
 	<WorkspaceAuditTable client={workspaceApi} />
 {/snippet}
 
+{#snippet header()}
+	<Stack gap="xs" class="px-4 pt-4 sm:px-6 sm:pt-6">
+		<h1 class="text-lg font-semibold">{t('pod.settings.people')}</h1>
+		<p class="max-w-2xl text-xs text-muted-foreground">
+			{t('pod.settings.peopleDescription')}
+		</p>
+		{#if failure}<p
+				class="rounded-md border border-destructive/40 px-3 py-2 text-xs text-destructive"
+				role="alert"
+			>
+				{failure}
+			</p>{/if}
+	</Stack>
+{/snippet}
+
 {#if !isAdmin}
 	<Stack
 		grow
@@ -156,29 +171,14 @@
 	</Stack>
 {:else}
 	<Bound size="full" clip class="bg-background">
-		<Scroll name="People" class="h-full">
-			<Stack gap="lg" class="mx-auto min-h-full w-full max-w-7xl p-4 sm:p-6">
-				<Stack as="header" gap="xs">
-					<h1 class="text-lg font-semibold">{t('pod.settings.people')}</h1>
-					<p class="max-w-2xl text-xs text-muted-foreground">
-						{t('pod.settings.peopleDescription')}
-					</p>
-				</Stack>
-
-				{#if failure}<p
-						class="rounded-md border border-destructive/40 px-3 py-2 text-xs text-destructive"
-						role="alert"
-					>
-						{failure}
-					</p>{/if}
-
+		<Cover top={header} class="mx-auto h-full w-full max-w-7xl">
 				<Tabs
 					bind:value={activeTab}
 					onValueChange={onTabChange}
 					animate={false}
 					contentPadding={false}
 					listClass="mx-0 w-full"
-					class="min-h-[32rem]"
+					class="min-h-0"
 					config={[
 						{
 							name: 'members',
@@ -206,7 +206,6 @@
 						}
 					] satisfies TabConfig[]}
 				/>
-			</Stack>
-		</Scroll>
+		</Cover>
 	</Bound>
 {/if}
