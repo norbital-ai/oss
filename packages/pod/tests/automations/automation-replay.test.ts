@@ -5,13 +5,20 @@ import {
 	isAutomationEffectYield,
 	replayAutomationAi
 } from '../../src/server/run/automation-replay.server.js';
-import type { DurableAutomationAiRequest } from '../../src/host/types.js';
+import type { DurableHostEffectRequest } from '../../src/host/types.js';
 import { z } from 'zod';
 
-const request: DurableAutomationAiRequest = {
+const request: DurableHostEffectRequest = {
+	kind: 'ai.prompt',
 	prompt: 'Classify this record',
 	model: 'test/model',
 	outputSchema: { type: 'object' }
+};
+
+const turnRequest: DurableHostEffectRequest = {
+	kind: 'ai.turn',
+	messages: [{ role: 'user', content: 'Classify this record' }],
+	model: 'test/model'
 };
 
 describe('durable automation replay', () => {
@@ -19,10 +26,15 @@ describe('durable automation replay', () => {
 		expect(automationEffectRequestHash(request)).toBe(
 			automationEffectRequestHash({
 				outputSchema: { type: 'object' },
+				kind: 'ai.prompt',
 				model: 'test/model',
 				prompt: 'Classify this record'
 			})
 		);
+	});
+
+	it('hashes ai.prompt and ai.turn requests differently', () => {
+		expect(automationEffectRequestHash(request)).not.toBe(automationEffectRequestHash(turnRequest));
 	});
 
 	it('yields the first missing effect with a stable run and ordinal identity', async () => {

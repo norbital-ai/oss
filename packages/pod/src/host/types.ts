@@ -1,4 +1,6 @@
 import type {
+	AiMessage,
+	AiToolSpec,
 	HostAiBinding,
 	HostAppPlugin,
 	HostDbBinding,
@@ -163,28 +165,40 @@ export type QueueJob = {
 	run(): Promise<void>;
 };
 
-/** Serializable provider work staged by a replayable automation handler. */
-export type DurableAutomationAiRequest = {
-	readonly prompt: string;
-	readonly outputSchema?: unknown;
-	readonly model?: string;
-	readonly profile?: string;
-	readonly images?: readonly {
-		readonly assetId: string;
-		readonly storageKey: string;
-		readonly mimeType: string;
-		readonly byteLength: number;
-		readonly contentSha256: string;
-		readonly detail?: 'auto' | 'low' | 'high';
-	}[];
+export type DurableHostEffectImage = {
+	readonly assetId: string;
+	readonly storageKey: string;
+	readonly mimeType: string;
+	readonly byteLength: number;
+	readonly contentSha256: string;
+	readonly detail?: 'auto' | 'low' | 'high';
 };
+
+/** Serializable provider work staged by a replayable automation handler. */
+export type DurableHostEffectRequest =
+	| {
+			readonly kind: 'ai.prompt';
+			readonly prompt: string;
+			readonly outputSchema?: unknown;
+			readonly model?: string;
+			readonly profile?: string;
+			readonly images?: readonly DurableHostEffectImage[];
+	  }
+	| {
+			readonly kind: 'ai.turn';
+			readonly messages: readonly AiMessage[];
+			readonly system?: string;
+			readonly model?: string;
+			readonly profile?: string;
+			readonly tools?: readonly AiToolSpec[];
+	  };
 
 export type DurableAutomationAiEffect = {
 	readonly jobId: string;
 	readonly effectId: string;
 	readonly ordinal: number;
 	readonly requestHash: string;
-	readonly request: DurableAutomationAiRequest;
+	readonly request: DurableHostEffectRequest;
 };
 
 export type DurableAutomationAiOutcome =

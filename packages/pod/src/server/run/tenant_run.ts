@@ -450,8 +450,8 @@ export async function executeAutomationHandler(params: {
 		const spec = (workspaceAutomation as { spec: { kind: string; handler?: unknown } }).spec;
 		if (spec.kind === 'agent') {
 			throw new Error(
-				`Automation '${params.automationName}' uses the legacy agent kind. ` +
-				'Agent loops require an explicit durable continuation protocol and cannot run inside one guest invocation.'
+				`Automation '${params.automationName}' is an agent automation. ` +
+				'Agent automations run through the durable DBOS effect protocol and cannot complete inside one guest invocation.'
 			);
 		}
 		if (spec.kind !== 'deterministic' || typeof spec.handler !== 'function') {

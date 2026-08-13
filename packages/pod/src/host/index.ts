@@ -246,6 +246,7 @@ export type { WorkspaceJobOptions } from './jobs.js';
 export type {
 	DurableAutomationAiEffect,
 	DurableAutomationAiOutcome,
-	DurableAutomationAiRequest
+	DurableHostEffectImage,
+	DurableHostEffectRequest
 } from './types.js';
 export type { CronSchedule } from './cron.js';

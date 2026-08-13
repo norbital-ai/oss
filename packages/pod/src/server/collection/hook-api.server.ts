@@ -322,6 +322,7 @@ function sharedBuiltinApi() {
 				}
 				return replayAutomationAi({
 					request: {
+						kind: 'ai.prompt',
 						prompt: input.prompt,
 						...(input.schema ? { outputSchema: zod.toJSONSchema(input.schema) } : {}),
 						...(input.model ? { model: input.model } : {}),

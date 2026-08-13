@@ -1,5 +1,5 @@
 import type { AiChatResult } from '@norbital-ai/platform-utils/runtime/binding';
-import type { DurableAutomationAiRequest } from '$lib/host/types.js';
+import type { DurableHostEffectRequest } from '$lib/host/types.js';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
@@ -33,7 +33,7 @@ function canonicalJson(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-export function automationEffectRequestHash(request: DurableAutomationAiRequest): string {
+export function automationEffectRequestHash(request: DurableHostEffectRequest): string {
 	return createHash('sha256').update(canonicalJson(request)).digest('hex');
 }
 
@@ -41,13 +41,13 @@ export class AutomationEffectYield extends Error {
 	readonly effectId: string;
 	readonly ordinal: number;
 	readonly requestHash: string;
-	readonly request: DurableAutomationAiRequest;
+	readonly request: DurableHostEffectRequest;
 
 	constructor(input: {
 		jobId: string;
 		ordinal: number;
 		requestHash: string;
-		request: DurableAutomationAiRequest;
+		request: DurableHostEffectRequest;
 	}) {
 		super('Automation is waiting for a durable AI effect.');
 		this.name = 'AutomationEffectYield';
@@ -85,7 +85,7 @@ function decodeResult(result: AiChatResult, schema?: z.ZodType): unknown {
  * refused rather than returning a result produced for different input.
  */
 export function replayAutomationAi(input: {
-	readonly request: DurableAutomationAiRequest;
+	readonly request: DurableHostEffectRequest;
 	readonly schema?: z.ZodType;
 }): unknown {
 	const replay = automationReplayStorage.getStore();
