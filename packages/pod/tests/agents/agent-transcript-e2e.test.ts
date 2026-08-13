@@ -23,7 +23,7 @@ const member: Identity = {
 	role: 'basic'
 };
 
-describe('Pod AI and automation transcript — runtime E2E', () => {
+describe('Pod AI and automation transcript — leftover in-guest runAgent path E2E', () => {
 	let harness: PodRuntimeHarness;
 	let calls = 0;
 	let emptyCalls = 0;

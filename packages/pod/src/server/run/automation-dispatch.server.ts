@@ -11,6 +11,22 @@ import {
 } from './automation-replay.server.js';
 import { executeAutomationHandler } from './tenant_run.js';
 
+/** Interactive chat jobs. `automation_run.automation_name` stays null; this is only the job key. */
+export const INTERACTIVE_AGENT_AUTOMATION_NAME = 'agent:interactive';
+
+/** Stamped by guest admit; Core's next `admit` rewrites these to the live artifact. */
+export const GUEST_ADMIT_ARTIFACT_MARKER = 'guest-admit';
+
+export function channelAgentAutomationName(channelKey: string): string {
+	return `channel:${channelKey}`;
+}
+
+export function isGuestAdmittedAgentJob(automationName: string): boolean {
+	return (
+		automationName === INTERACTIVE_AGENT_AUTOMATION_NAME || automationName.startsWith('channel:')
+	);
+}
+
 export type ChangeAction = 'create' | 'update' | 'delete';
 export type AutomationEvent = 'created' | 'updated' | 'deleted';
 type RegisteredAutomation = { readonly trigger?: unknown };
@@ -142,6 +158,19 @@ export async function admitEventAutomations(
 				params
 			);
 		}
+		await ctx.tenantDb.query(
+			`UPDATE _norbital_automation_job
+			    SET artifact_id = $1, checkpoint_id = $2, tree_hash = $3, runtime_version = $4,
+			        updated_at = CURRENT_TIMESTAMP
+			  WHERE orchestration_status = 'admitted' AND artifact_id = $5`,
+			[
+				artifact.artifactId,
+				artifact.checkpointId,
+				artifact.treeHash,
+				artifact.runtimeVersion,
+				GUEST_ADMIT_ARTIFACT_MARKER
+			]
+		);
 		if (batch.rows.length > 0) {
 			await ctx.tenantDb.query(
 				`UPDATE _norbital_automation_cursor SET xid = $1::xid8, seq = $2::bigint
@@ -206,6 +235,43 @@ export async function admitScheduledAutomation(
 	};
 }
 
+export async function admitAgentTurn(
+	ctx: ProvisionedContext,
+	input: {
+		readonly automationName: string;
+		readonly triggerKey: string;
+		readonly originScope: Record<string, unknown>;
+		readonly snapshot: Record<string, unknown>;
+	}
+): Promise<void> {
+	await ctx.tenantDb.query(
+		`INSERT INTO _norbital_automation_job
+		   (automation_name, trigger_key, artifact_id, checkpoint_id, tree_hash, runtime_version,
+		    origin_scope, record_snapshot, source_pointer)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
+		 ON CONFLICT (automation_name, trigger_key) DO NOTHING`,
+		[
+			input.automationName,
+			input.triggerKey,
+			GUEST_ADMIT_ARTIFACT_MARKER,
+			GUEST_ADMIT_ARTIFACT_MARKER,
+			GUEST_ADMIT_ARTIFACT_MARKER,
+			GUEST_ADMIT_ARTIFACT_MARKER,
+			JSON.stringify(input.originScope),
+			JSON.stringify(input.snapshot),
+			input.triggerKey
+		]
+	);
+}
+
+function receiptUsesAgentReducer(receipt: AutomationReceipt): boolean {
+	if (isGuestAdmittedAgentJob(receipt.automation_name)) return true;
+	const registered = getTenantWorkspace().registered.automations?.[receipt.automation_name] as
+		| { spec?: { kind?: string } }
+		| undefined;
+	return registered?.spec?.kind === 'agent';
+}
+
 async function stageEffect(
 	ctx: ProvisionedContext,
 	receiptId: string,
@@ -247,34 +313,42 @@ export async function runAutomationReceipt(
 		nextOrdinal: 0
 	};
 	let authoredFailure: unknown;
-	try {
-		await withCollectionTransaction(ctx, async () => {
-			await automationReplayStorage.run(replay, async () => {
-				try {
-					await executeAutomationHandler({
-						automationName: receipt.automation_name,
-						scope: { ...(receipt.origin_scope ?? {}), incoming_record: receipt.record_snapshot ?? {} }
-					});
-				} catch (cause) {
-					if (replay.pending || isAutomationEffectYield(cause)) throw replay.pending ?? cause;
-					authoredFailure = cause;
-				}
-			});
-			if (authoredFailure) {
-				const error = authoredFailure instanceof Error ? authoredFailure.message : String(authoredFailure);
-				await ctx.tenantDb.query(
-					`UPDATE _norbital_automation_job SET orchestration_status = 'failed', last_error = $2,
-					 updated_at = CURRENT_TIMESTAMP WHERE norbital_id = $1::uuid`,
-					[receiptId, error]
-				);
-				return;
+	const runHandler = async (): Promise<void> => {
+		await automationReplayStorage.run(replay, async () => {
+			try {
+				await executeAutomationHandler({
+					automationName: receipt.automation_name,
+					scope: { ...(receipt.origin_scope ?? {}), incoming_record: receipt.record_snapshot ?? {} }
+				});
+			} catch (cause) {
+				if (replay.pending || isAutomationEffectYield(cause)) throw replay.pending ?? cause;
+				authoredFailure = cause;
 			}
-			await ctx.tenantDb.query(
-				`UPDATE _norbital_automation_job SET orchestration_status = 'succeeded', last_error = NULL,
-				 updated_at = CURRENT_TIMESTAMP WHERE norbital_id = $1::uuid`,
-				[receiptId]
-			);
 		});
+	};
+	try {
+		if (receiptUsesAgentReducer(receipt)) {
+			await runHandler();
+		} else {
+			await withCollectionTransaction(ctx, async () => {
+				await runHandler();
+				if (authoredFailure) {
+					const error =
+						authoredFailure instanceof Error ? authoredFailure.message : String(authoredFailure);
+					await ctx.tenantDb.query(
+						`UPDATE _norbital_automation_job SET orchestration_status = 'failed', last_error = $2,
+					 updated_at = CURRENT_TIMESTAMP WHERE norbital_id = $1::uuid`,
+						[receiptId, error]
+					);
+					return;
+				}
+				await ctx.tenantDb.query(
+					`UPDATE _norbital_automation_job SET orchestration_status = 'succeeded', last_error = NULL,
+				 updated_at = CURRENT_TIMESTAMP WHERE norbital_id = $1::uuid`,
+					[receiptId]
+				);
+			});
+		}
 	} catch (cause) {
 		const pending = replay.pending ?? (isAutomationEffectYield(cause) ? cause : undefined);
 		if (pending) {
@@ -287,6 +361,22 @@ export async function runAutomationReceipt(
 			});
 		}
 		throw cause;
+	}
+	if (receiptUsesAgentReducer(receipt)) {
+		if (authoredFailure) {
+			const error = authoredFailure instanceof Error ? authoredFailure.message : String(authoredFailure);
+			await ctx.tenantDb.query(
+				`UPDATE _norbital_automation_job SET orchestration_status = 'failed', last_error = $2,
+				 updated_at = CURRENT_TIMESTAMP WHERE norbital_id = $1::uuid`,
+				[receiptId, error]
+			);
+		} else {
+			await ctx.tenantDb.query(
+				`UPDATE _norbital_automation_job SET orchestration_status = 'succeeded', last_error = NULL,
+				 updated_at = CURRENT_TIMESTAMP WHERE norbital_id = $1::uuid`,
+				[receiptId]
+			);
+		}
 	}
 	if (authoredFailure) {
 		return {

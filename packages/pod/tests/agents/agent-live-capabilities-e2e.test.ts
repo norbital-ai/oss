@@ -1,9 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type {
-	AiChatInput,
-	AiChatStreamBatch,
-	HostAiBinding
-} from '@norbital-ai/platform-utils/runtime/binding';
+import type { AiChatInput, HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
 import type { SyncFetch } from '$lib/ui/sync/types.js';
 import type { ChatSessionMessage, ChatSessionTurn } from '$lib/shared/agent/chat-session.js';
@@ -14,6 +10,7 @@ import {
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
+import { INTERACTIVE_AGENT_AUTOMATION_NAME } from '../../src/server/run/automation-dispatch.server.js';
 
 requireDocker();
 
@@ -24,13 +21,12 @@ const member: Identity = {
 	role: 'basic'
 };
 
-function deferred(): { readonly promise: Promise<void>; resolve(): void } {
-	let resolve!: () => void;
-	const promise = new Promise<void>((done) => {
-		resolve = done;
-	});
-	return { promise, resolve };
-}
+const TEST_ARTIFACT = {
+	artifactId: 'test-artifact',
+	checkpointId: 'test-checkpoint',
+	treeHash: 'test-tree',
+	runtimeVersion: 'test-runtime'
+};
 
 async function waitFor<T>(read: () => Promise<T | null>, timeoutMs = 15_000): Promise<T> {
 	const deadline = Date.now() + timeoutMs;
@@ -41,11 +37,6 @@ async function waitFor<T>(read: () => Promise<T | null>, timeoutMs = 15_000): Pr
 	}
 	throw new Error('Timed out waiting for agent state');
 }
-
-type FakeStream = {
-	readonly input: AiChatInput;
-	read: number;
-};
 
 type LocalSession = {
 	title: string;
@@ -71,88 +62,60 @@ function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch
 		);
 }
 
+function lastUserContent(input: { readonly messages?: readonly { role: string; content?: unknown }[] }): string {
+	const lastUser = [...(input.messages ?? [])]
+		.reverse()
+		.find((message) => message.role === 'user')?.content;
+	return typeof lastUser === 'string' ? lastUser : '';
+}
+
+function scriptedTurn(input: AiChatInput) {
+	const lastUser = lastUserContent(input);
+	const hasToolResult = (input.messages ?? []).some((message) => message.role === 'tool');
+	if (lastUser === 'Delegate the sentinel check.' && !hasToolResult) {
+		return {
+			text: '',
+			toolCalls: [
+				{
+					id: 'spawn-1',
+					name: 'spawn_subagent',
+					input: { task: 'Return the exact child sentinel.' }
+				}
+			],
+			stopReason: 'tool_use' as const
+		};
+	}
+	if (lastUser === 'Return the exact child sentinel.') {
+		return {
+			text: 'child-streamed',
+			reasoning: 'I should return the exact sentinel.',
+			stopReason: 'end' as const,
+			usage: { totalTokens: 4 }
+		};
+	}
+	if (hasToolResult) {
+		return {
+			text: 'parent-complete',
+			stopReason: 'end' as const,
+			usage: { totalTokens: 5 }
+		};
+	}
+	throw new Error(`Unexpected fake provider transcript: ${lastUser || '<none>'}`);
+}
+
 describe('Pod live agent capabilities — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
-	const releaseProvider = deferred();
-	const releaseChild = deferred();
-	const releasedBackgroundWork = deferred();
-	const streams = new Map<string, FakeStream>();
-	let nextStream = 0;
 	let retainedBackgroundWork = 0;
 
 	const ai: HostAiBinding = {
 		async chat(input) {
-			expect(input.outputSchema).toBeTruthy();
-			return {
-				text: JSON.stringify({ title: 'Delegate sentinel check' }),
-				stopReason: 'end'
-			};
-		},
-		async startStream(input) {
-			await releaseProvider.promise;
-			const id = `live-${(nextStream += 1)}`;
-			streams.set(id, { input, read: 0 });
-			return id;
-		},
-		async readStream(streamId): Promise<AiChatStreamBatch> {
-			const stream = streams.get(streamId);
-			if (!stream) throw new Error('Unknown fake stream');
-			stream.read += 1;
-			const lastUser = [...stream.input.messages]
-				.reverse()
-				.find((message) => message.role === 'user')?.content;
-			const hasToolResult = stream.input.messages.some((message) => message.role === 'tool');
-			if (lastUser === 'Delegate the sentinel check.' && !hasToolResult) {
-				streams.delete(streamId);
+			if (input.outputSchema) {
 				return {
-					events: [
-						{
-							type: 'tool_call',
-							call: {
-								id: 'spawn-1',
-								name: 'spawn_subagent',
-								input: { task: 'Return the exact child sentinel.' }
-							}
-						},
-						{ type: 'finish', stopReason: 'tool_use' }
-					],
-					done: true
+					text: JSON.stringify({ title: 'Delegate sentinel check' }),
+					stopReason: 'end'
 				};
 			}
-			if (lastUser === 'Return the exact child sentinel.') {
-				if (stream.read === 1) {
-					return {
-						events: [
-							{ type: 'reasoning_part', text: 'I should return the exact sentinel.' },
-							{ type: 'text_part', text: 'child-' }
-						],
-						done: false
-					};
-				}
-				await releaseChild.promise;
-				streams.delete(streamId);
-				return {
-					events: [
-						{ type: 'text_part', text: 'streamed' },
-						{ type: 'finish', stopReason: 'end', usage: { totalTokens: 4 } }
-					],
-					done: true
-				};
-			}
-			if (hasToolResult) {
-				streams.delete(streamId);
-				return {
-					events: [
-						{ type: 'text_part', text: 'parent-complete' },
-						{ type: 'finish', stopReason: 'end', usage: { totalTokens: 5 } }
-					],
-					done: true
-				};
-			}
-			throw new Error(`Unexpected fake provider transcript: ${lastUser ?? '<none>'}`);
-		},
-		async cancelStream(streamId) {
-			streams.delete(streamId);
+			return scriptedTurn(input);
 		}
 	};
 
@@ -164,9 +127,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 					retainedBackgroundWork += 1;
 					return `agent-lease-${retainedBackgroundWork}`;
 				},
-				async releaseBackgroundWork() {
-					releasedBackgroundWork.resolve();
-				}
+				async releaseBackgroundWork() {}
 			}
 		});
 		await harness.pool.query(
@@ -181,27 +142,67 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 		await harness?.stop();
 	});
 
-	it('streams every committed text, tool, title, and terminal part into an already-open replica', async () => {
-		await harness.pool.query(`
-			CREATE TABLE agent_completed_part_audit (
-				kind text NOT NULL,
-				content text NOT NULL
+	async function latestInteractiveReceipt(): Promise<string> {
+		const result = await harness.pool.query<{ norbital_id: string }>(
+			`SELECT norbital_id::text FROM _norbital_automation_job
+			  WHERE automation_name = $1 ORDER BY created_at DESC LIMIT 1`,
+			[INTERACTIVE_AGENT_AUTOMATION_NAME]
+		);
+		if (!result.rows[0]) throw new Error('No interactive agent receipt');
+		return result.rows[0].norbital_id;
+	}
+
+	async function pumpReceipt(receiptId: string): Promise<void> {
+		const yielded: string[] = [];
+		for (let step = 0; step < 16; step += 1) {
+			const outcome = (await harness.hostCommand({
+				kind: 'automation-events',
+				action: 'run',
+				receiptId,
+				artifact: TEST_ARTIFACT
+			})) as {
+				status: 'completed' | 'failed' | 'waiting_effect';
+				error?: string;
+				effectId?: string;
+				request?: {
+					kind?: string;
+					messages?: AiChatInput['messages'];
+					tools?: readonly { name: string }[];
+				};
+			};
+			if (outcome.status === 'completed') return;
+			if (outcome.status === 'failed') {
+				throw new Error(
+					`${outcome.error ?? 'agent receipt failed'} (step ${step}; yielded ${yielded.join(' | ')})`
+				);
+			}
+			if (outcome.status !== 'waiting_effect' || !outcome.effectId || !outcome.request) {
+				throw new Error(`Unexpected agent step: ${JSON.stringify(outcome)}`);
+			}
+			if (outcome.request.kind !== 'ai.turn') {
+				throw new Error(`Expected ai.turn, received ${outcome.request.kind}`);
+			}
+			const lastUser = lastUserContent({ messages: outcome.request.messages });
+			yielded.push(
+				`${step}:${lastUser}->tools:${(outcome.request.tools ?? []).map((tool) => tool.name).join(',')}`
 			);
-			CREATE OR REPLACE FUNCTION audit_agent_completed_part() RETURNS trigger AS $$
-			DECLARE appended jsonb;
-			BEGIN
-				IF jsonb_array_length(NEW.messages) > jsonb_array_length(OLD.messages) THEN
-					appended := NEW.messages -> jsonb_array_length(OLD.messages);
-					INSERT INTO agent_completed_part_audit (kind, content)
-					VALUES (appended ->> 'kind', appended -> 'parts' -> 0 ->> 'content');
-				END IF;
-				RETURN NEW;
-			END;
-			$$ LANGUAGE plpgsql;
-			CREATE TRIGGER audit_agent_completed_part
-			AFTER UPDATE ON chat_session
-			FOR EACH ROW EXECUTE FUNCTION audit_agent_completed_part();
-		`);
+			const result = scriptedTurn({
+				messages: outcome.request.messages ?? [],
+				tools: []
+			});
+			await harness.hostCommand({
+				kind: 'automation-events',
+				action: 'settle',
+				receiptId,
+				effectId: outcome.effectId,
+				artifact: TEST_ARTIFACT,
+				outcome: { status: 'succeeded', result }
+			});
+		}
+		throw new Error(`Agent receipt exceeded 16 durable steps (${yielded.join(' | ')})`);
+	}
+
+	it('admits an interactive turn and yields provider work instead of detaching runAgent', async () => {
 		const schemaSql = await harness
 			.request({ method: 'GET', path: 'sync/schema' }, member)
 			.then((response) => response.text());
@@ -233,9 +234,25 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				accepted: true;
 			};
 			expect(accepted.accepted).toBe(true);
-			// The lease is acquired before the endpoint acknowledges. Core may now end the HTTP request
-			// without its five-second native idle timer reaping this detached model/tool continuation.
-			expect(retainedBackgroundWork).toBe(1);
+			expect(retainedBackgroundWork).toBe(0);
+
+			const jobs = await harness.pool.query<{
+				automation_name: string;
+				orchestration_status: string;
+				artifact_id: string;
+			}>(
+				`SELECT automation_name, orchestration_status, artifact_id
+				   FROM _norbital_automation_job
+				  WHERE automation_name = $1`,
+				[INTERACTIVE_AGENT_AUTOMATION_NAME]
+			);
+			expect(jobs.rows).toEqual([
+				{
+					automation_name: INTERACTIVE_AGENT_AUTOMATION_NAME,
+					orchestration_status: 'admitted',
+					artifact_id: 'guest-admit'
+				}
+			]);
 
 			const sessionArrived = await waitFor(async () => {
 				const rows = await client.queryLocal<LocalSession>(
@@ -246,6 +263,10 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			});
 			expect(storedArray(sessionArrived.messages)).toHaveLength(1);
 
+			await harness.hostCommand({
+				kind: 'agent-conversation-titles',
+				limit: 10
+			});
 			const generatedTitle = await waitFor(async () => {
 				const rows = await client.queryLocal<LocalSession>(
 					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
@@ -255,51 +276,13 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			});
 			expect(generatedTitle.title).toBe('Delegate sentinel check');
 
-			// One aggregate subscription was already tailing before the session existed. Every subsequent
-			// title, message-part, and turn mutation must arrive without adding a shape or restarting it.
-			releaseProvider.resolve();
-
-			const liveChild = await waitFor(async () => {
-				const rows = await client.queryLocal<LocalSession>(
-					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
-					[accepted.chatId]
-				);
-				const session = rows[0];
-				if (!session) return null;
-				const turns = storedArray(session.turns);
-				const childTurn = turns.find((turn) => turn.subagent_id === 'subagent:spawn-1');
-				const childMessage = storedArray(session.messages).find(
-					(message) =>
-						message.turn_id === childTurn?.norbital_id &&
-						message.role === 'assistant' &&
-						message.kind === 'normal' &&
-						message.parts[0]?.content === 'child-'
-				);
-				const reasoning = storedArray(session.messages).find(
-					(message) => message.turn_id === childTurn?.norbital_id && message.kind === 'reasoning'
-				);
-				return childTurn && childMessage && reasoning
-					? { childTurn, childMessage, reasoning }
-					: null;
+			await harness.hostCommand({
+				kind: 'automation-events',
+				action: 'admit',
+				artifact: TEST_ARTIFACT,
+				limit: 200
 			});
-			expect(liveChild.childMessage.parts[0]?.content).toBe('child-');
-			expect(liveChild.reasoning.parts[0]?.content).toBe('I should return the exact sentinel.');
-			expect(liveChild.childTurn.parent_turn_id).toBeTruthy();
-			expect(liveChild.childTurn.subagent_id).toBe('subagent:spawn-1');
-
-			const parentCallArrived = await waitFor(async () => {
-				const rows = await client.queryLocal<LocalSession>(
-					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
-					[accepted.chatId]
-				);
-				const session = rows[0];
-				return session && JSON.stringify(storedArray(session.messages)).includes('spawn_subagent')
-					? session
-					: null;
-			});
-			expect(JSON.stringify(parentCallArrived.messages)).toContain('spawn_subagent');
-
-			releaseChild.resolve();
+			await pumpReceipt(await latestInteractiveReceipt());
 
 			const completed = await waitFor(async () => {
 				const rows = await client.queryLocal<LocalSession>(
@@ -318,11 +301,11 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				expect.arrayContaining([
 					expect.objectContaining({
 						status: 'complete',
-						parts: [expect.objectContaining({ content: 'child-' })]
+						parts: [expect.objectContaining({ content: 'child-streamed' })]
 					}),
 					expect.objectContaining({
-						status: 'complete',
-						parts: [expect.objectContaining({ content: 'streamed' })]
+						kind: 'reasoning',
+						parts: [expect.objectContaining({ content: 'I should return the exact sentinel.' })]
 					}),
 					expect.objectContaining({
 						status: 'complete',
@@ -330,26 +313,6 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 					})
 				])
 			);
-			const partWrites = await harness.pool.query<{ kind: string; content: string }>(
-				`SELECT kind, content
-				   FROM agent_completed_part_audit
-				  WHERE content IN (
-				        'I should return the exact sentinel.',
-				        'child-',
-				        'streamed',
-				        'parent-complete'
-				  )
-				  ORDER BY content`
-			);
-			// One insert per completed provider part. The five text deltas that Core used to expose for
-			// the child answer cannot multiply these PostgreSQL writes, while `child-` already reached
-			// the open replica before `streamed` was released above.
-			expect(partWrites.rows).toEqual([
-				{ kind: 'normal', content: 'child-' },
-				{ kind: 'reasoning', content: 'I should return the exact sentinel.' },
-				{ kind: 'normal', content: 'parent-complete' },
-				{ kind: 'normal', content: 'streamed' }
-			]);
 
 			const toolResultArrived = await waitFor(async () => {
 				const rows = await client.queryLocal<LocalSession>(
@@ -385,14 +348,8 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				parent_turn_id: expect.any(String),
 				subagent_id: 'subagent:spawn-1'
 			});
-			await releasedBackgroundWork.promise;
 		} finally {
 			await client.close();
-			await harness.pool.query(`
-				DROP TRIGGER IF EXISTS audit_agent_completed_part ON chat_session;
-				DROP FUNCTION IF EXISTS audit_agent_completed_part();
-				DROP TABLE IF EXISTS agent_completed_part_audit;
-			`);
 		}
 	});
 });

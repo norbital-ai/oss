@@ -18,6 +18,7 @@ import type {
 	ManifestCollectionEntry,
 	ManifestHandlerEntry,
 	ManifestHookEntry,
+	ManifestMcpServer,
 	ManifestPipelineEntry,
 	ManifestPolicyApproval,
 	ManifestRelationship,
@@ -146,6 +147,7 @@ function buildAutomationEntries(
 				access?: 'read' | 'write';
 				tools?: string[];
 				hostTools?: string[];
+				mcpServers?: string[];
 				profile?: string;
 				maxTokens?: number;
 			};
@@ -182,6 +184,7 @@ function buildAgentEntry(raw: unknown): ManifestAutomationAgentSpec | undefined 
 		...(spec.access ? { access: spec.access } : {}),
 		...(spec.tools ? { tools: spec.tools } : {}),
 		...(spec.hostTools ? { hostTools: spec.hostTools } : {}),
+		...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
 		...(spec.profile ? { profile: spec.profile } : {}),
 		...(spec.maxTokens ? { maxTokens: spec.maxTokens } : {})
 	};
@@ -282,6 +285,21 @@ function buildSkillEntries(skills: readonly Skill[] | undefined): NorbitalManife
 	return out;
 }
 
+function buildMcpServerEntries(
+	servers: RegisteredWorkspaceState['mcpServers'] | undefined
+): NorbitalManifest['mcpServers'] {
+	if (!servers || Object.keys(servers).length === 0) return undefined;
+	const out: Record<string, ManifestMcpServer> = {};
+	for (const [name, definition] of Object.entries(servers)) {
+		out[name] = {
+			name,
+			description: definition.description,
+			tools: [...definition.tools]
+		};
+	}
+	return out;
+}
+
 /**
  * Policy definitions, flattened into the manifest so the runtime can reconcile `policy` rows from it.
  *
@@ -349,6 +367,7 @@ function buildChannelEntries(
 			};
 			groupMessages?: 'disabled' | 'all' | 'mention_or_reply';
 			hostTools?: readonly string[];
+			mcpServers?: readonly string[];
 			hostSandbox?: { readonly workspace: 'read-only' | 'read-write' };
 		};
 		out[key] = {
@@ -366,6 +385,9 @@ function buildChannelEntries(
 			...(channel.groupMessages ? { groupMessages: channel.groupMessages } : {}),
 			...(channel.hostTools && channel.hostTools.length > 0
 				? { hostTools: [...channel.hostTools] }
+				: {}),
+			...(channel.mcpServers && channel.mcpServers.length > 0
+				? { mcpServers: [...channel.mcpServers] }
 				: {}),
 			...(channel.hostSandbox ? { hostSandbox: { ...channel.hostSandbox } } : {})
 		};
@@ -415,6 +437,7 @@ export function buildNorbitalManifest(workspace: {
 		handlers: buildHandlerEntries(workspace.registered?.remotes),
 		agentTools: buildAgentToolEntries(workspace.registered?.agentTools),
 		skills: buildSkillEntries(workspace.registered?.skills),
+		mcpServers: buildMcpServerEntries(workspace.registered?.mcpServers),
 		agent: buildAgentEntry(workspace.registered?.agent),
 		automations: buildAutomationEntries(workspace.registered?.automations),
 		policies: buildPolicyEntries(workspace.registered?.policies),

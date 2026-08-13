@@ -144,8 +144,12 @@ export async function appendChatMessage(
 					? (extra.usage as Readonly<Record<string, unknown>>)
 					: null,
 			plan_mode: extra.plan_mode === true,
+			goal_mode: extra.goal_mode === true,
 			kind:
-				extra.kind === 'reasoning' || extra.kind === 'summary' || extra.kind === 'usage'
+				extra.kind === 'reasoning' ||
+				extra.kind === 'summary' ||
+				extra.kind === 'usage' ||
+				extra.kind === 'goal'
 					? extra.kind
 					: 'normal',
 			status:
@@ -167,7 +171,8 @@ export async function appendChatMessage(
 			source_message_id:
 				typeof extra.source_message_id === 'string' ? extra.source_message_id : null,
 			source_deleted_at:
-				typeof extra.source_deleted_at === 'string' ? extra.source_deleted_at : null
+				typeof extra.source_deleted_at === 'string' ? extra.source_deleted_at : null,
+			durable_ordinal: typeof extra.durable_ordinal === 'number' ? extra.durable_ordinal : null
 		};
 		session.messages.push(stored);
 		return id;

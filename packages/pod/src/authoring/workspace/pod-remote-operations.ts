@@ -36,6 +36,7 @@ export type PodRemoteOperations = {
 		readonly runId?: string;
 		readonly model?: string;
 		readonly planMode?: boolean;
+		readonly goalMode?: boolean;
 		/**
 		 * Records the composer's "@" picker resolved. The loop fetches each one as the requestor and
 		 * appends it to the turn's window; a reference that no longer resolves leaves its label in

@@ -51,6 +51,13 @@
 		if (/(write|edit|create|code|patch|file|author)/i.test(name)) return 'authoring';
 		return 'working';
 	}
+
+	function showToolNeedsInput(message: Extract<PanelMessage, { kind: 'tool' }>): boolean {
+		return (
+			message.state === 'needs_input' ||
+			(Array.isArray(message.elicitation) && message.elicitation.length > 0)
+		);
+	}
 </script>
 
 {#if message.kind === 'checkpoint'}
@@ -160,6 +167,11 @@
 						size={16}
 						class="shrink-0 text-foreground"
 					/>
+				{:else if message.state === 'needs_input'}
+					<Icon
+						icon="lucide:message-circle-question"
+						class="size-3 shrink-0 text-muted-foreground"
+					/>
 				{:else if message.state === 'failed'}
 					<Icon icon="lucide:circle-alert" class="size-3 shrink-0 text-destructive" />
 				{/if}
@@ -169,6 +181,25 @@
 				/>
 			</summary>
 			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
+				{#if showToolNeedsInput(message)}
+					<Stack gap="xs" class="min-w-0">
+						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+							{t('pod.agent.needsInput')}
+						</span>
+						{#if message.elicitation?.length}
+							{#each message.elicitation as request (request.id)}
+								<Stack gap="xs" class="min-w-0">
+									<p class="m-0 text-micro leading-relaxed text-foreground/90">{request.message}</p>
+									{#if typeof request.url === 'string'}
+										<p class="m-0 font-mono text-micro text-muted-foreground">{request.url}</p>
+									{/if}
+								</Stack>
+							{/each}
+						{:else}
+							<p class="m-0 text-micro text-muted-foreground">{t('pod.agent.elicitation')}</p>
+						{/if}
+					</Stack>
+				{/if}
 				{#if message.input}
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
@@ -251,7 +282,46 @@
 			</div>
 		</details>
 	</li>
-{:else}
+{:else if message.kind === 'goal'}
+	<li class="message my-1.5" data-role="goal" data-achieved={message.achieved}>
+		<details class="group/goal w-full">
+			<!-- stupidity:allow UI6 -- goal verification is supplementary detail behind a disclosure. -->
+			<summary
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+			>
+				<Icon
+					icon={message.achieved ? 'lucide:target' : 'lucide:circle-dashed'}
+					class={`size-3.5 shrink-0 ${message.achieved ? 'text-primary' : 'text-muted-foreground'}`}
+				/>
+				<span class="font-medium text-foreground/80">
+					{message.achieved ? t('pod.agent.goalAchieved') : t('pod.agent.goalNotAchieved')}
+				</span>
+				<Icon
+					icon="lucide:chevron-right"
+					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/goal:rotate-90"
+				/>
+			</summary>
+			<Stack
+				gap="xs"
+				class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3 text-micro leading-relaxed text-foreground/80"
+			>
+				<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
+				{#if message.gaps.length > 0}
+					<Stack gap="xs">
+						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+							{t('pod.agent.goalGaps')}
+						</span>
+						<ul class="m-0 list-disc pl-4 text-micro text-foreground/80">
+							{#each message.gaps as gap (gap)}
+								<li>{gap}</li>
+							{/each}
+						</ul>
+					</Stack>
+				{/if}
+			</Stack>
+		</details>
+	</li>
+{:else if message.kind === 'text'}
 	<!-- The list gap is tuned for consecutive tool rows; the margin restores the wider rhythm between
 	     spoken messages without re-spacing the trace. A nested transcript keeps the tighter rhythm. -->
 	<li

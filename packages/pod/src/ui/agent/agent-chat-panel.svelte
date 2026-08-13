@@ -46,6 +46,7 @@
 	let chatId = $state<string | undefined>(undefined);
 	let pending = $state(false);
 	let planMode = $state(false);
+	let goalMode = $state(false);
 	let echo = $state<string | null>(null);
 	let failure = $state<string | null>(null);
 	let transcriptElement = $state<HTMLOListElement | null>(null);
@@ -503,7 +504,8 @@
 				message.kind === 'tool' ||
 				message.kind === 'checkpoint' ||
 				message.kind === 'reasoning' ||
-				message.role === 'assistant'
+				message.kind === 'goal' ||
+				(message.kind === 'text' && message.role === 'assistant')
 		)
 	);
 
@@ -582,6 +584,7 @@
 				...(references.length > 0 ? { mentions: references } : {}),
 				...(activeRunId ? { runId: activeRunId } : {}),
 				...(planMode ? { planMode: true } : {}),
+				...(goalMode && !planMode ? { goalMode: true } : {}),
 				// Only when the host offered a choice. Sending back its own default would turn a display
 				// value into a caller assertion, and the host would stop being free to change it.
 				...(modelState.catalog &&
@@ -831,7 +834,10 @@
 								type="button"
 								aria-pressed={planMode}
 								disabled={pending}
-								onclick={() => (planMode = !planMode)}
+								onclick={() => {
+									planMode = !planMode;
+									if (planMode) goalMode = false;
+								}}
 								class={`rounded-md px-1.5 py-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} ${
 									planMode
 										? 'bg-primary/10 text-primary'
@@ -841,6 +847,24 @@
 								data-testid="agent-plan-mode"
 							>
 								{t('pod.agent.plan')}
+							</button>
+							<button
+								type="button"
+								aria-pressed={goalMode}
+								disabled={pending}
+								onclick={() => {
+									goalMode = !goalMode;
+									if (goalMode) planMode = false;
+								}}
+								class={`rounded-md px-1.5 py-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} ${
+									goalMode
+										? 'bg-primary/10 text-primary'
+										: 'text-muted-foreground hover:bg-muted hover:text-foreground'
+								}`}
+								title={goalMode ? t('pod.agent.goalModeOn') : t('pod.agent.goalModeOff')}
+								data-testid="agent-goal-mode"
+							>
+								{t('pod.agent.goal')}
 							</button>
 							{#if contextPercent !== null}
 								<Inline as="span" gap="xs" title={t('pod.agent.contextWindowUsed')}>

@@ -3,6 +3,7 @@ import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/type
 import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { workspaceJobs } from '../../src/host/jobs.js';
 import { intervalQueue } from '../../src/host/interval-queue.js';
+import { standaloneAutomationJobs } from '../../src/serve/standalone-automation.js';
 
 /** A `messaging` binding that only has to deliver on the `email` channel. */
 function messagingBinding(binding: Pick<HostMessagingBinding, 'send'>): HostMessagingBinding {
@@ -23,6 +24,24 @@ function manifest(schedule: string): NorbitalManifest {
 			job: {
 				description: 'Runs the scheduled sweep the host registers this job for.',
 				trigger: { schedule }
+			}
+		}
+	};
+}
+
+function automationManifest(): NorbitalManifest {
+	return {
+		version: 1,
+		collections: {},
+		relationships: {},
+		automations: {
+			nightly: {
+				description: 'Runs on a cron schedule.',
+				trigger: { schedule: '0 3 * * *' }
+			},
+			on_order: {
+				description: 'Runs when an order is created.',
+				trigger: { collection: 'orders', event: 'created' }
 			}
 		}
 	};
@@ -65,7 +84,8 @@ describe('workspace jobs', () => {
 			organizationId: 'org-1'
 		});
 		expect(bare.map((job) => job.name)).toEqual([
-			'pod:integration-import', 'pod:agent-conversation-titles'
+			'pod:integration-import',
+			'pod:agent-conversation-titles'
 		]);
 	});
 
@@ -126,6 +146,43 @@ describe('workspace jobs', () => {
 		} finally {
 			stop();
 		}
+	});
+});
+
+describe('standalone automation jobs', () => {
+	it('emits the continuous pump and one schedule job per authored cron automation', () => {
+		const jobs = standaloneAutomationJobs({
+			manifest: automationManifest(),
+			dispatch: async () => undefined
+		});
+		expect(jobs.map((job) => job.name)).toEqual([
+			'pod:standalone-automation-pump',
+			'pod:standalone-schedule:nightly'
+		]);
+		expect(jobs.find((job) => job.name === 'pod:standalone-automation-pump')?.schedule).toBe(
+			'continuous'
+		);
+		expect(jobs.find((job) => job.name === 'pod:standalone-schedule:nightly')?.schedule).toBe(
+			'0 3 * * *'
+		);
+	});
+
+	it('does not register schedule jobs for collection-event automations', () => {
+		const jobs = standaloneAutomationJobs({
+			manifest: automationManifest(),
+			dispatch: async () => undefined
+		});
+		expect(jobs.some((job) => job.name.includes('on_order'))).toBe(false);
+	});
+
+	it('leaves infrastructure workspaceJobs free of standalone automation names', () => {
+		const jobs = workspaceJobs({
+			manifest: automationManifest(),
+			dispatch: async () => undefined,
+			organizationId: 'org-1'
+		});
+		expect(jobs.some((job) => job.name.includes('standalone-schedule'))).toBe(false);
+		expect(jobs.some((job) => job.name.includes('standalone-automation-pump'))).toBe(false);
 	});
 });
 

@@ -14,10 +14,11 @@ metadata:
 
 # The Norbital platform
 
-A Norbital workspace is a business application defined by files in a git repository and compiled by
-Pod into a running app with a Postgres database behind it. Almost everything a user might call
-"settings" — fields, dropdown values, permissions, approval routing — is source code, not runtime
-configuration.
+A Norbital workspace is a business application defined by tenant source and compiled by
+Pod into a running app with a Postgres database behind it. On Core, that source is a branchless live
+pointer onto a detached worktree; Git objects sit underneath, but the tenant does not push to Git
+`main`. Almost everything a user might call "settings" — fields, dropdown values, permissions,
+approval routing — is source code, not runtime configuration.
 
 That single fact answers most questions people ask, and getting it wrong is the most common failure
 mode: an agent invents an admin console that does not exist, and the user goes looking for it.
@@ -33,7 +34,8 @@ mode: an agent invents an admin console that does not exist, and the user goes l
 | Screens                                                    | `src/apps/`                            |
 | Scheduled or event-triggered work                          | `src/automation/+<name>.ts`            |
 | Extra tools for the workspace agent                        | `src/tools/+<name>.tool.ts`            |
-| Extra skills for the workspace agent                       | `src/skills/<name>/SKILL.md`           |
+| Extra skills for the workspace agent                       | `.agents/skills/<name>/SKILL.md`       |
+| Remote MCP servers for the workspace agent                 | `src/mcp/+<name>.mcp.ts`               |
 | The workspace agent's own profile                          | `src/+agent.ts`                        |
 
 Compiled output lands in `.norbital/` and is never hand-edited.

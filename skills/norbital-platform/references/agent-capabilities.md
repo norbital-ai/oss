@@ -18,8 +18,12 @@ Tools Pod provides:
 | `spawn_subagent`     | Delegates a focused sub-task. Top-level turn only; a subagent cannot spawn another                                                                                                                      |
 
 A workspace can add its own tools in `src/tools/+<name>.tool.ts`, and its own skills in
-`src/skills/<name>/SKILL.md`. A host can offer tools too — those are named with a `sandbox_` prefix
-and reach the workspace's source tree and build environment rather than its data.
+`.agents/skills/<name>/SKILL.md`. A host can offer tools too — those are named with a `sandbox_`
+prefix and reach the workspace's source tree and build environment rather than its data.
+
+MCP tools appear as `mcp__<server>__<tool>` only when the workspace declared the server in
+`src/mcp/+<name>.mcp.ts` and allowlisted that tool. If a tool returns that it needs input
+(`input_required`), tell the user what was asked; do not invent the answer.
 
 ## Writes are not privileged
 
@@ -43,6 +47,17 @@ a feature is missing from the platform, and should never be reported as one.
 - Live rows. Use `read_collection`.
 - Runtime policy assignments — which teams hold which policy — as opposed to the declarations.
 - How the platform behaves. That is what the skills are for.
+
+## Plan mode and goal mode
+
+A turn may arrive in plan mode or goal mode, never both. Plan wins if both were set.
+
+In **plan mode**, write tools, host tools, MCP tools and `spawn_subagent` are withheld. Research
+with the read tools and return a plan. Do not claim you made a change.
+
+In **goal mode** you have the normal tool list. When you would stop, an independent verifier — not
+you — checks the transcript for evidence that the request was fulfilled. A sentence that says the
+work is done is not evidence. If the verifier finds gaps, you will be sent back to close them.
 
 ## Honesty rules
 

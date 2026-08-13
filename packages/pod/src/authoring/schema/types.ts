@@ -55,6 +55,18 @@ export type DefaultPolicyName = WorkspaceAuthoringTypes extends {
 	? TName
 	: string;
 
+/**
+ * The workspace's MCP server names, or `string` when no generated types are present.
+ *
+ * Same purpose as `DefaultPolicyName`: an agent or channel naming a server that does not exist
+ * should fail at type-check, not as a tool the model never sees.
+ */
+export type DefaultMcpServerName = WorkspaceAuthoringTypes extends {
+	readonly mcpServerName: infer TName extends string;
+}
+	? TName
+	: string;
+
 export type TableName<S extends AnySchema> = keyof S['tables'] & string;
 
 export type SchemaRow<S extends AnySchema, N extends TableName<S>> = S['tables'][N]['$inferSelect'];

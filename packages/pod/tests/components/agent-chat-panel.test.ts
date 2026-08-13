@@ -43,7 +43,7 @@ function deferred(): {
 }
 
 let inFlight = deferred();
-let sent: { message: string; model?: string; planMode?: boolean }[] = [];
+let sent: { message: string; model?: string; planMode?: boolean; goalMode?: boolean }[] = [];
 type ModelCatalog = {
 	defaultModel: string;
 	options: { id: string; label: string; canonicalSlug: string; contextLength?: number }[];
@@ -58,7 +58,12 @@ beforeEach(() => {
 	catalog = null;
 	modelsPromise = Promise.resolve(catalog);
 	setWorkspaceRemoteTransport({
-		agentChatStart: (input: { message: string; model?: string; planMode?: boolean }) => {
+		agentChatStart: (input: {
+			message: string;
+			model?: string;
+			planMode?: boolean;
+			goalMode?: boolean;
+		}) => {
 			sent.push(input);
 			return inFlight.promise;
 		},
@@ -370,12 +375,47 @@ describe('agent chat panel', () => {
 		await settle();
 		expect(container.querySelector('[aria-label="Model"]')?.textContent).toContain('Default');
 		expect(container.querySelector('[aria-label="Model variant"]')).not.toBeNull();
-		container.querySelector<HTMLButtonElement>('[aria-pressed="false"]')?.click();
+		container.querySelector<HTMLButtonElement>('[data-testid="agent-plan-mode"]')?.click();
 		type(container, 'Outline the migration');
 		submit(container);
 		// The host default is intentionally omitted on the wire; the catalog still supplies its context
 		// length for occupancy/compaction, while the host remains the one source of truth for selection.
 		expect(sent).toEqual([{ message: 'Outline the migration', planMode: true }]);
+		destroy();
+	});
+
+	it('carries goal mode explicitly when the toggle is on', async () => {
+		const { container, destroy } = mountPanel();
+		await settle();
+		container.querySelector<HTMLButtonElement>('[data-testid="agent-goal-mode"]')?.click();
+		type(container, 'Ship the landing page');
+		submit(container);
+		expect(sent).toEqual([{ message: 'Ship the landing page', goalMode: true }]);
+		destroy();
+	});
+
+	it('turns plan and goal modes off each other, sending only the active one', async () => {
+		const { container, destroy } = mountPanel();
+		await settle();
+		container.querySelector<HTMLButtonElement>('[data-testid="agent-plan-mode"]')?.click();
+		container.querySelector<HTMLButtonElement>('[data-testid="agent-goal-mode"]')?.click();
+		type(container, 'Research then verify');
+		submit(container);
+		expect(sent).toEqual([{ message: 'Research then verify', goalMode: true }]);
+
+		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
+		await settle();
+		arriveSession({
+			messages: [message({ id: 'm1', seq: 1, role: 'user', content: 'Research then verify' })],
+			turns: [turn({ status: 'succeeded' })]
+		});
+		await settle();
+
+		sent = [];
+		container.querySelector<HTMLButtonElement>('[data-testid="agent-plan-mode"]')?.click();
+		type(container, 'Plan only');
+		submit(container);
+		expect(sent).toEqual([{ message: 'Plan only', planMode: true, runId: 'r1' }]);
 		destroy();
 	});
 

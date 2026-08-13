@@ -1,3 +1,5 @@
+import { GOAL_MODE_REMINDER } from '$lib/server/agent/goal-mode.server.js';
+
 /**
  * What an agent is told before it is asked anything.
  *
@@ -25,7 +27,7 @@ Administering people, organisation settings and billing happens outside the work
 How a workspace is laid out, so you can point at the right place:
 - \`src/collections/<name>/\` — one directory per collection. \`+model.ts\` declares its fields and enum values, \`+hooks.ts\` its validation and side effects, \`+pipelines.ts\` its multi-step operations, \`+representation.svelte\` how a record renders. \`src/collections/+relationship.ts\` declares how collections relate.
 - \`src/apps/+<name>.svelte\` — the screens people use. \`src/policies/+<name>.policy.ts\` — who may do what, and what needs approval. \`src/remotes/+<name>.ts\` — server-side queries. \`src/automation/\` and \`src/channels/\` — scheduled and inbound-message work. \`src/custom-types/\` — reusable field types.
-- \`src/+agent.ts\` — this workspace's own instructions to you, if it has any. \`+<name>.tool.ts\` anywhere under \`src/\` — a tool this workspace adds to your own surface. \`src/skills/<name>/SKILL.md\` — a skill the whole tenant shares, which is where an instruction belongs when everyone should get it rather than only this conversation.
+- \`src/+agent.ts\` — this workspace's own instructions to you, if it has any. \`+<name>.tool.ts\` anywhere under \`src/\` — a tool this workspace adds to your own surface. \`.agents/skills/<name>/SKILL.md\` — a skill the whole tenant shares, which is where an instruction belongs when everyone should get it rather than only this conversation. \`src/mcp/+<name>.mcp.ts\` — a remote MCP server this workspace declares, with an explicit allowlist of tools you may call on it.
 - \`.norbital/\` is generated output. Nobody edits it by hand.
 
 Ground every answer in tool results.
@@ -69,11 +71,15 @@ function written(layers: readonly (string | undefined)[]): readonly string[] {
  */
 export function composeSystemPrompt(
 	authored: string | undefined,
-	options?: { readonly planMode?: boolean }
+	options?: { readonly planMode?: boolean; readonly goalMode?: boolean }
 ): string {
 	return [
 		AGENT_BASELINE_SYSTEM_PROMPT,
-		...written([authored, options?.planMode ? PLAN_MODE_REMINDER : undefined])
+		...written([
+			authored,
+			options?.planMode ? PLAN_MODE_REMINDER : undefined,
+			!options?.planMode && options?.goalMode ? GOAL_MODE_REMINDER : undefined
+		])
 	].join(LAYER_SEPARATOR);
 }
 

@@ -54,6 +54,12 @@ type WorkspaceAgentToolName = WorkspaceAuthoringTypes extends {
 	? TName
 	: string;
 
+type WorkspaceMcpServerName = WorkspaceAuthoringTypes extends {
+	readonly mcpServerName: infer TName extends string;
+}
+	? TName
+	: string;
+
 export type AgentAutomationSpec = {
 	readonly kind: 'agent';
 	/**
@@ -84,6 +90,13 @@ export type AgentAutomationSpec = {
 	 * names a tool its host does not supply, and refuses a host tool that shadows a workspace one.
 	 */
 	readonly hostTools?: readonly string[];
+	/**
+	 * MCP servers this agent may call, by the filename in `src/mcp/+<name>.mcp.ts`.
+	 *
+	 * Default deny, same as `hostTools`. Each server already allowlists its own tools, so naming a
+	 * server here is the second gate — the workspace said this agent may reach that server at all.
+	 */
+	readonly mcpServers?: readonly WorkspaceMcpServerName[];
 	/**
 	 * How host sandbox tools may touch the tenant worktree for this run.
 	 *

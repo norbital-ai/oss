@@ -71,7 +71,7 @@ export interface DiscoveredWorkspaceRole {
 }
 
 /**
- * A skill authored under `src/skills/<name>/`, carried whole rather than by reference.
+ * A skill authored under `.agents/skills/<name>/`, carried whole rather than by reference.
  *
  * Every other discovered role is a path the generated workspace imports. A skill is markdown, so
  * there is nothing to import — the text has to travel in the structure and be inlined at codegen,
@@ -79,7 +79,7 @@ export interface DiscoveredWorkspaceRole {
  */
 export interface DiscoveredSkill {
 	readonly name: string;
-	/** `src/skills/<name>/SKILL.md` — the file a diagnostic points at. */
+	/** `.agents/skills/<name>/SKILL.md` — the file a diagnostic points at. */
 	readonly source: string;
 	readonly description: string;
 	readonly license?: string;
@@ -125,6 +125,7 @@ export interface PodStructure {
 	readonly agentTools: readonly DiscoveredWorkspaceRole[];
 	readonly policies: readonly DiscoveredWorkspaceRole[];
 	readonly channels: readonly DiscoveredWorkspaceRole[];
+	readonly mcpServers: readonly DiscoveredWorkspaceRole[];
 	readonly skills: readonly DiscoveredSkill[];
 	/** Tenant translation overrides under `src/i18n/`, if any. */
 	readonly i18n: DiscoveredI18n;

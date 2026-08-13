@@ -66,6 +66,11 @@ import {
 import { runPendingConversationTitles } from '$lib/server/agent/conversation-title.server.js';
 import type { DurableAutomationAiOutcome } from '$lib/host/types.js';
 import { isAutomationEffectYield, pendingAutomationEffect } from './automation-replay.server.js';
+import {
+	durableAgentSnapshotFromScope,
+	runDurableAgentAutomation
+} from '$lib/server/agent/agent-loop.server.js';
+import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 
 const recordSchema = z.record(z.string(), z.unknown());
 const collectionSchema = z.object({ id: z.string(), name: z.string() });
@@ -441,6 +446,28 @@ export async function executeAutomationHandler(params: {
 	readonly scope?: Record<string, unknown>;
 	readonly args?: Record<string, unknown>;
 }): Promise<Record<string, unknown>> {
+	if (
+		params.automationName === 'agent:interactive' ||
+		params.automationName.startsWith('channel:')
+	) {
+		const snapshot = durableAgentSnapshotFromScope(params.scope);
+		if (!snapshot) throw new Error(`Agent turn receipt '${params.automationName}' is missing its snapshot`);
+		try {
+			return await runDurableAgentAutomation({
+				automationName:
+					params.automationName === 'agent:interactive' ? null : params.automationName,
+				spec: snapshot.spec,
+				scope: params.scope,
+				snapshot
+			});
+		} catch (error) {
+			const pending = pendingAutomationEffect();
+			if (pending) throw pending;
+			if (isAutomationEffectYield(error)) throw error;
+			throw error;
+		}
+	}
+
 	const workspaceAutomation = getTenantWorkspace().registered.automations?.[params.automationName];
 	if (
 		typeof workspaceAutomation === 'object' &&
@@ -449,10 +476,18 @@ export async function executeAutomationHandler(params: {
 	) {
 		const spec = (workspaceAutomation as { spec: { kind: string; handler?: unknown } }).spec;
 		if (spec.kind === 'agent') {
-			throw new Error(
-				`Automation '${params.automationName}' is an agent automation. ` +
-				'Agent automations run through the durable DBOS effect protocol and cannot complete inside one guest invocation.'
-			);
+			try {
+				return await runDurableAgentAutomation({
+					automationName: params.automationName,
+					spec: spec as AgentAutomationSpec,
+					scope: params.scope
+				});
+			} catch (error) {
+				const pending = pendingAutomationEffect();
+				if (pending) throw pending;
+				if (isAutomationEffectYield(error)) throw error;
+				throw error;
+			}
 		}
 		if (spec.kind !== 'deterministic' || typeof spec.handler !== 'function') {
 			throw new Error(`Automation '${params.automationName}' has an invalid runtime specification`);

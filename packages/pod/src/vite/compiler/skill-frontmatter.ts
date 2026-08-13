@@ -6,7 +6,7 @@ import { isValidSkillName } from '$lib/skills/types.js';
  *
  * Two parsers exist because the two inputs arrive at different times — host skills are read at
  * package build, workspace skills at workspace compile — but they must agree, or a skill that is
- * legal in `skills/` would be rejected in `src/skills/` and an author would have no way to tell
+ * legal in `skills/` would be rejected in `.agents/skills/` and an author would have no way to tell
  * which set of rules they were being held to. The accepted YAML is deliberately a subset: quoted and
  * plain scalars, `|`/`>` blocks, and a flat `metadata` map. Anything else is refused rather than
  * guessed at, because a frontmatter key that parsed into the wrong shape would surface as a skill

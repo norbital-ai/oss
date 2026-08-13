@@ -74,6 +74,8 @@ export {
 export { defineAgentTool, type AgentToolDefinition } from './automations/agent-tools.js';
 export { defineChannel } from './channels/channels.js';
 export type { ChannelDefinition } from './channels/channels.js';
+export { defineMcpServer } from './mcp/define-mcp-server.js';
+export type { McpServerDefinition } from './mcp/define-mcp-server.js';
 export { definePolicy } from './policies/policies.js';
 export type {
 	PolicyAction,

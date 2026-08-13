@@ -22,7 +22,7 @@ const member: Identity = {
  * transcript, and replicates through ordinary sync — the point of the port is that there is not a
  * second agent implementation for the chat case.
  */
-describe('Pod agent chat — runtime E2E', () => {
+describe('Pod agent chat — leftover in-guest runAgent path E2E', () => {
 	let harness: PodRuntimeHarness;
 	const seen: string[][] = [];
 	const ai = testAiBinding(async (input) => {

@@ -105,7 +105,7 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 15_000): P
 	return false;
 }
 
-describe('Conversations and runs replicate to their owner', () => {
+describe('Conversations and runs replicate to their owner — leftover in-guest runAgent path', () => {
 	let harness: PodRuntimeHarness;
 	let clientSchemaSql: string;
 	let adaChat: { runId: string; chatId: string | null };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { serializeGoalVerdict } from '$lib/shared/agent/goal-verdict.js';
 import {
 	toPanelMessages,
 	toPanelUsage,
@@ -169,6 +170,37 @@ describe('agent panel transcript', () => {
 		).toEqual([{ kind: 'text', key: 'm1', role: 'assistant', content: 'The workspace is ready.' }]);
 	});
 
+	it('projects a goal verdict row as PanelGoal, not system text', () => {
+		const rows = toPanelMessages([
+			{ norbital_id: 'u', parts: [{ role: 'user', content: 'Create the site' }] },
+			{ norbital_id: 'a', parts: [{ role: 'assistant', content: 'Created.' }] },
+			{
+				norbital_id: 'g',
+				kind: 'goal',
+				parts: [
+					{
+						role: 'system',
+						content: serializeGoalVerdict({
+							achieved: false,
+							summary: 'No site record exists.',
+							gaps: ['write_collection never ran']
+						})
+					}
+				]
+			}
+		]);
+		expect(rows.map((row) => row.kind)).toEqual(['text', 'text', 'goal']);
+		const verdict = rows[2];
+		if (verdict?.kind !== 'goal') throw new Error('expected a goal row');
+		expect(verdict).toMatchObject({
+			kind: 'goal',
+			key: 'g',
+			achieved: false,
+			summary: 'No site record exists.',
+			gaps: ['write_collection never ran']
+		});
+	});
+
 	it('gives every call in a turn its own row instead of one joined name', () => {
 		// The regression this replaces read "Using read_collection, read_collection…" — one bubble in
 		// which neither call could be told from the other.
@@ -195,6 +227,90 @@ describe('agent panel transcript', () => {
 		]);
 		// The empty assistant row that carried them adds nothing beside the calls it made.
 		expect(rows.every((row) => row.kind === 'tool')).toBe(true);
+	});
+
+	it('humanizes an MCP tool name and uses the plug icon', () => {
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'm-mcp',
+				parts: [
+					{
+						role: 'assistant',
+						content: '',
+						toolCalls: [{ id: 't1', name: 'mcp__stripe__list_customers', input: {} }]
+					}
+				]
+			}
+		]);
+		expect(rows[0]).toMatchObject({
+			kind: 'tool',
+			labelKey: null,
+			label: 'Stripe · List customers',
+			icon: 'lucide:plug',
+			elicitation: null,
+			state: 'running'
+		});
+	});
+
+	it('labels list_skills and read_skill from the catalog', () => {
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'm-skills',
+				parts: [
+					{
+						role: 'assistant',
+						content: '',
+						toolCalls: [
+							{ id: 't1', name: 'list_skills', input: {} },
+							{ id: 't2', name: 'read_skill', input: { name: 'authoring-tenant-workspace' } }
+						]
+					}
+				]
+			}
+		]);
+		expect(rows.map((row) => (row.kind === 'tool' ? row.labelKey : null))).toEqual([
+			'pod.agent.tool.listSkills',
+			'pod.agent.tool.readSkill'
+		]);
+		expect(rows.map((row) => (row.kind === 'tool' ? row.icon : null))).toEqual([
+			'lucide:library',
+			'lucide:book-marked'
+		]);
+	});
+
+	it('surfaces input_required tool results as needs_input with elicitation', () => {
+		const rows = toPanelMessages([
+			{
+				norbital_id: 'm-elicit',
+				parts: [
+					{
+						role: 'assistant',
+						content: '',
+						toolCalls: [{ id: 'call-elicit', name: 'mcp__stripe__create_invoice', input: {} }]
+					}
+				]
+			},
+			{
+				norbital_id: 'm-elicit-result',
+				parts: [
+					{
+						role: 'tool',
+						content: JSON.stringify({
+							resultType: 'input_required',
+							requests: [{ id: 'r1', message: 'Which customer?', mode: 'form' }]
+						}),
+						toolCallId: 'call-elicit'
+					}
+				]
+			}
+		]);
+		expect(rows[0]).toMatchObject({
+			kind: 'tool',
+			name: 'mcp__stripe__create_invoice',
+			state: 'needs_input',
+			elicitation: [{ id: 'r1', message: 'Which customer?', mode: 'form' }],
+			error: null
+		});
 	});
 
 	it('labels a built-in call and humanizes one it does not know', () => {

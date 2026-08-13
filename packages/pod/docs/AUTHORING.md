@@ -63,7 +63,8 @@ declaration to drift from the thing it declares.
 | `src/policies/+field_agent.policy.ts`                        | policy `field_agent`                       |
 | `src/channels/+sales_desk.channel.ts`                        | channel `sales_desk`                       |
 | `src/**/+find_supplier.tool.ts`                              | agent tool `find_supplier`                 |
-| `src/skills/<name>/SKILL.md`                                 | skill `<name>`                             |
+| `.agents/skills/<name>/SKILL.md`                             | skill `<name>`                             |
+| `src/mcp/+<name>.mcp.ts`                                     | remote MCP server `<name>`                 |
 | `src/custom-types/money/+definition.ts` + `+renderer.svelte` | custom type `money`                        |
 | `src/collections/work_orders/+integrations.ts`               | its inbound and outbound bindings          |
 | `src/+env.ts`                                                | the names this workspace needs from a host |
@@ -84,31 +85,43 @@ Adding a file adds the thing. Deleting it removes the thing. Renaming it renames
 file whose name Pod does not recognise is a compile error rather than a file that silently does
 nothing.
 
-**Skills extend what the agent knows.** A skill is a directory under `src/skills/<name>/` holding a
-`SKILL.md` with YAML frontmatter. The format follows the
-[Agent Skills specification](https://agentskills.io/specification): required `name` and
-`description`, optional `license`, `compatibility`, and a flat `metadata` map, plus reference files
-under the directory that the agent loads on demand through `read_skill`. Markdown is not importable,
-so the compiler inlines workspace skills into the generated bundle at compile time. Host skills
-shipped inside `@norbital-ai/pod` share the same namespace; a workspace skill whose name collides
-with a host skill is refused rather than merged. A third place exists that a workspace does not
-author: `.agents/skills/<name>/` on the filesystem a run executes on, committed nowhere. That one is
-personal only where the filesystem is — under a self-hosted `pod dev` or `pod start`, whose process
-serves one principal — and a host that runs a shared runtime per organization has nothing per-person
-to point it at, so it finds none. It loses a name collision to both of the others, so authoring a
-workspace skill is also how a tenant settles an answer for everyone in it.
+**Skills extend what the agent knows.** A skill is a directory under `.agents/skills/<name>/` at the
+workspace root (sibling of `src/`, not under it) holding a `SKILL.md` with YAML frontmatter. The
+format follows the [Agent Skills specification](https://agentskills.io/specification): required
+`name` and `description`, optional `license`, `compatibility`, and a flat `metadata` map, plus
+reference files under the directory that the agent loads on demand through `read_skill`. Markdown is
+not importable, so the compiler inlines workspace skills into the generated bundle at compile time.
+Host skills shipped inside `@norbital-ai/pod` share the same namespace; a workspace skill whose name
+collides with a host skill is refused rather than merged. The same `.agents/skills/` path also exists
+on the filesystem a run executes on: compiled workspace skills win on name collision, and any extra
+on-disk skills appear as personal. That personal tier is only where the filesystem is — under a
+self-hosted `pod dev` or `pod start`, whose process serves one principal — and a host that runs a
+shared runtime per organization has nothing per-person to point it at, so it finds none. Authoring a
+workspace skill under `.agents/skills/` is how a tenant settles an answer for everyone in it.
+`src/skills/` is refused with diagnostic `SKILL_LOCATION_MOVED`.
 
 Frontmatter is validated against the same rules the host-side generator applies:
 
 - **`name`** must match `^[a-z0-9]+(?:-[a-z0-9]+)*$`, be at most 64 characters, and equal the
-  directory name (`src/skills/<name>/`).
+  directory name (`.agents/skills/<name>/`).
 - **`description`** is required, non-empty, and at most 1024 characters.
 - **`compatibility`**, when present, is at most 500 characters.
 
 Diagnostic codes: `SKILL_NAME_INVALID` (bad name or name/directory mismatch),
 `SKILL_FRONTMATTER_INVALID` (missing or malformed frontmatter, unsupported keys, empty description,
 or length overrun), `SKILL_DUPLICATE` (two workspace skills share a name), `SKILL_NAME_RESERVED`
-(name is already shipped by Pod).
+(name is already shipped by Pod), `SKILL_LOCATION_MOVED` (`src/skills/` is no longer accepted).
+
+**MCP servers extend what the agent can call remotely.** Author `src/mcp/+<name>.mcp.ts` with
+`defineMcpServer({ description, url, tools })`. The filename is the server identity (`stripe` from
+`+stripe.mcp.ts`). `tools` is a required, non-empty allowlist — never dump a full remote catalog.
+Model-facing tool names are `mcp__<server>__<tool>`. Pod speaks MCP 2026-07-28 statelessly, using
+headers `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` (see
+[Cloudflare's MCP v2 overview](https://blog.cloudflare.com/mcp-v2/)). Dispatch is default-deny like
+host tools: interactive chat with no authored `src/+agent.ts` grants every declared server; an
+authored `src/+agent.ts`, automations, and channels must name `mcpServers: ['stripe']`. Channels
+default to no MCP servers. If a tool returns `resultType: input_required` (elicitation v1), the UI
+shows what the server asked; there is no client MRTR retry yet.
 
 **Policies are declarations; membership is not.** A permission set is a property of the workspace, so
 it lives in source and shows up in a diff. Who holds it changes at runtime, so `team`, `team_members`,
@@ -224,7 +237,8 @@ The surface is designed so that mistakes surface at their cause rather than down
   back; the final writes, run telemetry and terminal receipt commit atomically. Authors still write
   an ordinary async handler. Core uses DBOS as the sole automation orchestrator: the tenant receipt
   is the source of truth, while workflow recovery, bounded concurrency, per-tenant serialization and
-  fair admission are host work. pg-boss is not an automation scheduler or worker.
+  fair admission are host work. pg-boss is not an automation scheduler or worker. Hosted interactive
+  chat and channel inbound admit the same receipts rather than holding an in-guest loop.
 - **A seed payload key that is not a column aborts the seed.** A `+seed.ts` record is a plain record,
   so a typo or a column the model renamed cannot be caught by the compiler. It is caught before the
   first write instead: `pod seed` names the step, the key, how many rows carry it and the closest real

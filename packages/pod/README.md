@@ -526,8 +526,8 @@ writes are bounded below two seconds; durable receipts carry progressive import 
 
 ## Automations, AI, and agent tools
 
-Automations are files under `src/automation/`. They have either a cron schedule or a collection-event
-trigger.
+Automations are files under `src/automation/`. They have a cron schedule, a collection-event
+trigger, or `kind: 'agent'`.
 
 ```ts
 import { defineAutomation } from '@norbital-ai/pod/authoring';
@@ -561,9 +561,9 @@ steps. `api.ai` is an effect boundary: pre-effect writes roll back, Core perform
 provider call under a stable effect ID, then the handler replays with the durable result and commits
 its terminal writes atomically. pg-boss is not an automation scheduler or worker.
 
-Agent loops are interactive agent sessions, not automation handlers. An automation that needs model
-judgement uses the bounded `api.ai` effect shown below. The runtime refuses legacy `kind: 'agent'`
-automation declarations rather than hiding an unbounded loop inside one two-second invocation.
+Interactive chat, channel inbound, and `kind: 'agent'` automations are three doors into the same
+durable loop. Deterministic automations use a `handler` and, when they need model judgement, the
+bounded `api.ai` effect. Agent automations declare `kind: 'agent'` with `task` and optional `tools`, and run as DBOS reducer steps — one tool or effect per two-second invocation — rather than as one unbounded `runAgent`.
 
 An agent tool is a real compiler-discovered file:
 
@@ -588,7 +588,9 @@ profile. `describe_workspace`, `read_collection`, and `write_collection` are res
 tools.
 
 Pod owns the agent loop, input validation, collection allowlists, read/write mode, persistence, and
-tool execution. The host's AI binding supplies one inference turn at a time. Ordered `AiMessage`
+tool execution. Hosted interactive and channel entry admit durable receipts; Core DBOS drives one
+provider or tool transition per guest step. The host's AI binding supplies one inference turn at a
+time — on Core, as a fenced `ai.turn` / `ai.prompt` effect outside the guest. Ordered `AiMessage`
 values and nested turn state live directly in the tenant-owned `chat_session` aggregate and reach
 clients through one ordinary sync subscription. Agent transcripts are policy-scoped; Core and other
 hosts store no transcript.
@@ -625,13 +627,15 @@ A skill is a directory holding a `SKILL.md` with `name` and `description` frontm
 [Agent Skills format](https://agentskills.io/specification), plus reference files it loads only when
 it needs them. There are two kinds. The ones Pod ships are compiled into the package and present in
 every run — `norbital-platform` for how the platform behaves, `authoring-tenant-workspace` for how to
-author one. The rest are found by reading a filesystem: a workspace skill under `src/skills/<name>/`,
-committed and shared by the tenant, and a personal skill under `.agents/skills/<name>/` on the
-filesystem the run executes on, committed nowhere. Personal skills are a self-hosted feature — under
+author one. Workspace skills live under `.agents/skills/<name>/` at the workspace root, are compiled
+into the bundle, and are shared by the tenant. The same path on the run filesystem holds personal
+extras — compiled workspace skills win on name collision. Personal skills are a self-hosted feature — under
 `pod dev` and `pod start` that filesystem is one principal's own, while a host that runs one runtime
 per organization has no per-person directory to point discovery at, so it finds none. `list_skills`
 and `read_skill` are granted to every agent unconditionally and no spec can withhold them. Names
-share one namespace, and precedence runs host, then workspace, then personal.
+share one namespace, and precedence runs host, then workspace, then personal. Remote MCP servers are
+declared in `src/mcp/+<name>.mcp.ts` with an explicit tool allowlist; model-facing names are
+`mcp__<server>__<tool>`.
 
 ## Authoring channels
 
@@ -933,6 +937,7 @@ The same rule applies across facilities:
 | Any running workspace                  | `db`                                           |
 | A `file()` field                       | `fileStorage`                                  |
 | Deterministic automation               | host automation orchestration (Core: DBOS)     |
+| Agent automation or hosted agent turn  | host automation orchestration (Core: DBOS); `ai` |
 | Outbound integration                   | `queue` and `integrationDelivery`              |
 | External notification call             | matching `messaging` channel at call time      |
 | A declared channel                     | `messaging` transport of that name, at startup |

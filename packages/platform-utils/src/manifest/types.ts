@@ -139,6 +139,12 @@ export const ManifestAutomationAgentSpecSchema = z
 		 * that does not exist would otherwise surface as an agent that silently reaches nothing.
 		 */
 		hostTools: z.array(nonEmpty).optional(),
+		/**
+		 * MCP servers this agent may call, named by the `src/mcp/+<name>.mcp.ts` filename.
+		 *
+		 * Default deny, same as `hostTools`. Each server already allowlists its own tools.
+		 */
+		mcpServers: z.array(nonEmpty).optional(),
 		profile: nonEmpty.optional(),
 		maxTokens: z.number().int().positive().optional()
 	})
@@ -435,6 +441,8 @@ export const ManifestChannelSchema = z
 		groupMessages: z.enum(['disabled', 'all', 'mention_or_reply']).default('disabled'),
 		/** Host tool names this channel opts into; omitted / empty means none. */
 		hostTools: z.array(nonEmpty).optional(),
+		/** MCP servers this channel opts into; omitted / empty means none. */
+		mcpServers: z.array(nonEmpty).optional(),
 		/**
 		 * How host sandbox tools may touch the tenant worktree for this channel.
 		 * Default when omitted and hostTools is non-empty: read-only (enforced at run time).
@@ -476,6 +484,21 @@ export const ManifestSkillSchema = z
 	})
 	.strict();
 
+/**
+ * One workspace-declared MCP server, reduced to what a reader outside the tenant can act on.
+ *
+ * The URL and headers stay in the guest bundle: the host does not open the connection in this
+ * slice, and a client download must not carry request headers an author might have put next to
+ * the declaration.
+ */
+export const ManifestMcpServerSchema = z
+	.object({
+		name: nonEmpty,
+		description: nonEmpty,
+		tools: z.array(nonEmpty)
+	})
+	.strict();
+
 export const NorbitalManifestSchema = z
 	.object({
 		version: z.literal(1),
@@ -502,6 +525,13 @@ export const NorbitalManifestSchema = z
 		 * outside the tenant can act on: which skills exist and what each claims to cover.
 		 */
 		skills: z.record(z.string(), ManifestSkillSchema).optional(),
+		/**
+		 * Workspace-declared MCP servers, by filename — the catalogue only.
+		 *
+		 * Implementations and credentials stay in the guest. What travels is which servers exist,
+		 * what each is for, and which of its tools the workspace allowlisted.
+		 */
+		mcpServers: z.record(z.string(), ManifestMcpServerSchema).optional(),
 		/** Workspace-declared custom column types, by name. See {@link ManifestCustomTypeSchema}. */
 		customTypes: z.record(z.string(), ManifestCustomTypeSchema).optional(),
 		/** Pod-owned interactive agent permissions, authored by the workspace in `src/+agent.ts`. */
@@ -586,6 +616,7 @@ export type ManifestRelationship = DeepReadonly<z.infer<typeof ManifestRelations
 export type ManifestApp = DeepReadonly<z.infer<typeof ManifestAppSchema>>;
 export type ManifestHandlerEntry = DeepReadonly<z.infer<typeof ManifestHandlerEntrySchema>>;
 export type ManifestSkill = DeepReadonly<z.infer<typeof ManifestSkillSchema>>;
+export type ManifestMcpServer = DeepReadonly<z.infer<typeof ManifestMcpServerSchema>>;
 export type ManifestAutomationAgentSpec = DeepReadonly<
 	z.infer<typeof ManifestAutomationAgentSpecSchema>
 >;

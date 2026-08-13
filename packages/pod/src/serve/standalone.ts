@@ -57,6 +57,7 @@ import { serverI18n } from '$lib/i18n/index.js';
 import { assertChannelTransportsAreSupported } from '../authoring/channels/channels.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from '../host/config.js';
 import { workspaceJobs } from '../host/jobs.js';
+import { standaloneAutomationJobs } from './standalone-automation.js';
 import { declaredWebhookBindings, webhookInboundDeliverer } from '../host/webhook-inbound.js';
 import {
 	reconcileDeclaredPolicies,
@@ -773,14 +774,21 @@ export async function startStandalone(
 	// at startup naming the automation rather than at the first tick that never comes.
 	let stopQueue: () => void = () => {};
 	try {
-		const jobs = workspaceJobs({
-			manifest,
-			dispatch,
-			organizationId: environment.orgId,
-			...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
-			...(config.messaging ? { messaging: config.messaging } : {}),
-			...(config.secrets ? { secrets: config.secrets } : {})
-		});
+		const jobs = [
+			...workspaceJobs({
+				manifest,
+				dispatch,
+				organizationId: environment.orgId,
+				...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
+				...(config.messaging ? { messaging: config.messaging } : {}),
+				...(config.secrets ? { secrets: config.secrets } : {})
+			}),
+			...standaloneAutomationJobs({
+				manifest,
+				dispatch,
+				...(config.ai ? { ai: config.ai } : {})
+			})
+		];
 		if (config.queue && jobs.length > 0) stopQueue = await config.queue(jobs);
 	} catch (cause) {
 		await closeDatabaseNotifications();

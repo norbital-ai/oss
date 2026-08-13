@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import type { HostFileStorageBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { TRUSTED_PERMISSION_BYPASS_HEADER } from '$lib/host/identity.js';
-import { workspaceJobs } from '$lib/host/jobs.js';
 import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
@@ -216,7 +215,7 @@ export default {
 } satisfies Hooks;
 `;
 
-/** A scheduled automation: the job set derives \`pod:automation:probe_scheduled_sweep\` from this. */
+/** A scheduled automation exercised here via manual admit (standalone `pod start` registers `pod:standalone-schedule:probe_scheduled_sweep`). */
 const SCHEDULED_AUTOMATION = `import { defineAutomation } from '@norbital-ai/pod/authoring';
 
 export default defineAutomation(

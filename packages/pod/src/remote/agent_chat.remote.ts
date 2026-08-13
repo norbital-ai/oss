@@ -2,13 +2,21 @@ import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
 import { currentOutboxWatermark } from '$lib/server/collection/sync/outbox-tailer.server.js';
-import { parseCompactDirective, runAgent } from '$lib/server/agent/agent-loop.server.js';
+import {
+	parseCompactDirective,
+	prepareInteractiveAgentTurn,
+	runAgent
+} from '$lib/server/agent/agent-loop.server.js';
 import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
-import { getRuntimeFacilities, requireRuntimeFacility } from '$lib/server/facilities.js';
+import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
 import { PENDING_CONVERSATION_TITLE } from '$lib/server/agent/conversation-title.server.js';
+import {
+	admitAgentTurn,
+	INTERACTIVE_AGENT_AUTOMATION_NAME
+} from '$lib/server/run/automation-dispatch.server.js';
 import { z } from 'zod';
 
 /**
@@ -53,6 +61,11 @@ export const AgentChatInputSchema = z.object({
 	 * user message. Omitted / false is a normal turn.
 	 */
 	planMode: z.boolean().optional(),
+	/**
+	 * Work toward the request; an independent verifier decides whether the turn may stop.
+	 * Ignored when `planMode` is on.
+	 */
+	goalMode: z.boolean().optional(),
 	/**
 	 * Records the caller referenced with "@" in the composer. An `@` that never matched a record is
 	 * simply text in the message and never appears here.
@@ -209,6 +222,7 @@ export const agentChat = authenticated.command(
 			input: input.message,
 			...(input.runId ? { runId: input.runId } : {}),
 			...(input.planMode ? { planMode: true } : {}),
+			...(input.goalMode && !input.planMode ? { goalMode: true } : {}),
 			...(input.mentions?.length ? { mentions: input.mentions } : {})
 		});
 
@@ -228,8 +242,9 @@ export const agentChat = authenticated.command(
 /**
  * Start a live interactive turn and return its transcript identity before provider inference begins.
  *
- * The long-running loop remains inside Pod and writes the tenant transcript. Returning after the
- * run/session exist lets a client subscribe to ordinary sync before the first assistant delta lands.
+ * The billed invoke persists the run, session, user message and turn, then admits an
+ * `_norbital_automation_job` receipt. Core's existing DBOS workflow picks that receipt up and
+ * drives one provider transition per guest `automation-events` run.
  */
 export const agentChatStart = authenticated.command(
 	AgentChatInputSchema,
@@ -241,30 +256,33 @@ export const agentChatStart = authenticated.command(
 		// A directive still becomes a stored user message and a turn — the reader typed it, and the
 		// transcript should show what they asked for beside what it did.
 		const compact = parseCompactDirective(input.message);
-		// Resolved before the run is launched, not inside it: `allHostTools` reads a request-scoped
-		// facility, and the detached promise below outlives the request that would supply it.
 		const spec = await interactiveAgentSpec(input.message, model);
-		const lifecycle = getRuntimeFacilities().runtimeLifecycle;
-		// The acknowledgement below ends the HTTP request before inference starts. A hosted runtime's
-		// native idle timer cannot distinguish that detached work from an abandoned guest, so retain it
-		// first and release only after the durable terminal turn (success or failure) has been written.
-		const backgroundLease = await lifecycle?.retainBackgroundWork();
-		void runAgent({
-			automationName: null,
-			runId: conversation.runId,
+		const opened = await prepareInteractiveAgentTurn({
 			sessionId: conversation.chatId,
 			spec,
-			input: input.message,
+			message: input.message,
 			...(input.planMode ? { planMode: true } : {}),
-			...(input.mentions?.length ? { mentions: input.mentions } : {}),
-			...(compact ? { compact } : {})
-		})
-			.catch(() => undefined)
-			.finally(() =>
-				backgroundLease
-					? lifecycle?.releaseBackgroundWork(backgroundLease).catch(() => undefined)
-					: undefined
-			);
+			...(input.goalMode && !input.planMode ? { goalMode: true } : {}),
+			...(input.mentions?.length ? { mentions: input.mentions } : {})
+		});
+		await admitAgentTurn(getWorkspace({ provision: true }), {
+			automationName: INTERACTIVE_AGENT_AUTOMATION_NAME,
+			triggerKey: `turn:${conversation.chatId}:${opened.turnId}`,
+			originScope: getWorkspace({ provision: true }).baseScope,
+			snapshot: {
+				sessionId: conversation.chatId,
+				runId: conversation.runId,
+				turnId: opened.turnId,
+				promptContent: opened.promptContent,
+				spec,
+				input: input.message,
+				...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
+				...(input.planMode ? { planMode: true } : {}),
+				...(input.goalMode && !input.planMode ? { goalMode: true } : {}),
+				...(input.mentions?.length ? { mentions: input.mentions } : {}),
+				...(compact ? { compact } : {})
+			}
+		});
 		return {
 			...conversation,
 			accepted: true,

@@ -95,15 +95,28 @@ export function replayAutomationAi(input: {
 	const completed = replay.effects.find((effect) => effect.ordinal === ordinal);
 	if (completed) {
 		if (completed.requestHash !== requestHash) {
+			const detail =
+				input.request.kind === 'ai.turn'
+					? `kind=ai.turn messages=${input.request.messages.length} tools=${(input.request.tools ?? []).map((tool) => tool.name).join(',')}`
+					: `kind=${input.request.kind}`;
 			throw new Error(
-				`Automation AI request changed at durable step ${ordinal}; deploy a new run instead of replaying incompatible work.`
+				`Automation AI request changed at durable step ${ordinal}; deploy a new run instead of replaying incompatible work. (${detail})`
 			);
 		}
 		if (completed.status === 'failed') {
 			throw new Error(completed.error ?? 'AI provider failed without an error message');
 		}
 		if (!completed.result) throw new Error(`Automation AI step ${ordinal} has no stored result.`);
-		return decodeResult(completed.result, input.schema);
+		switch (input.request.kind) {
+			case 'ai.turn':
+				return completed.result;
+			case 'ai.prompt':
+				return decodeResult(completed.result, input.schema);
+			default: {
+				const _exhaustive: never = input.request;
+				throw new Error(`Unhandled durable AI effect kind: ${JSON.stringify(_exhaustive)}`);
+			}
+		}
 	}
 
 	const pending = new AutomationEffectYield({

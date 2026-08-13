@@ -1,6 +1,7 @@
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { getRuntimeFacilities } from '$lib/server/facilities.js';
+import { declaredMcpServerNames } from '$lib/server/agent/mcp-tools.server.js';
 import { layerAuthoredPrompts } from '$lib/server/agent/system-prompt.js';
 
 /**
@@ -41,7 +42,9 @@ async function allHostTools(): Promise<readonly string[]> {
  * Host tools cross the isolate boundary, but not the principal boundary. The loop carries the
  * signed-in requestor's id and the host resolves it in the tenant directory before opening that
  * actor's worktree. Naming every available host tool is still intentionally broad functionality;
- * it no longer substitutes an organization-wide builder identity for the caller.
+ * it no longer substitutes an organization-wide builder identity for the caller. Declared MCP
+ * servers are granted the same way: each server already allowlists its tools, and naming every
+ * declared server is the interactive default.
  *
  * An authored `src/+agent.ts` still wins outright. A workspace that wrote its own boundary meant it,
  * and widening it from here would make that file advisory.
@@ -65,6 +68,7 @@ export async function interactiveAgentSpec(
 		access: 'write',
 		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],
 		hostTools: await allHostTools(),
+		mcpServers: declaredMcpServerNames(),
 		...chosen
 	};
 }
@@ -94,9 +98,10 @@ export async function interactiveAgentSpec(
  * An authored `src/+agent.ts` is supplementary here rather than authoritative, which is the one place
  * this deliberately differs from interactive chat. Its prompt and its model and budget choices are
  * carried, because those are the workspace speaking about how its agent should work; its
- * `collections`, `access`, `tools` and `hostTools` are not, because permission for this run belongs
- * to the channel's policy (and the channel's own hostTools allowlist), and a file that could widen
- * or narrow that from the side would make those declarations advisory.
+ * `collections`, `access`, `tools`, `hostTools` and `mcpServers` are not, because permission for
+ * this run belongs to the channel's policy (and the channel's own hostTools / mcpServers
+ * allowlists), and a file that could widen or narrow that from the side would make those
+ * declarations advisory.
  */
 export async function channelAgentSpec(input: {
 	/** The declared `task` — what this channel's agent is for, in the workspace's own words. */
@@ -107,6 +112,10 @@ export async function channelAgentSpec(input: {
 	 */
 	readonly hostTools?: readonly string[];
 	/**
+	 * MCP servers the channel declaration opted into. Omitted / empty keeps the default: none.
+	 */
+	readonly mcpServers?: readonly string[];
+	/**
 	 * How those host tools may touch the worktree. When hostTools is non-empty and this is omitted,
 	 * the run defaults to read-only (RO worktree + writable scratch).
 	 */
@@ -115,6 +124,7 @@ export async function channelAgentSpec(input: {
 	const authored = getTenantWorkspace().registered.agent;
 	const systemPrompt = layerAuthoredPrompts(authored?.systemPrompt, input.standingInstruction);
 	const hostTools = [...(input.hostTools ?? [])];
+	const mcpServers = [...(input.mcpServers ?? [])];
 	const hostSandbox =
 		input.hostSandbox ?? (hostTools.length > 0 ? ({ workspace: 'read-only' } as const) : undefined);
 	return {
@@ -124,6 +134,7 @@ export async function channelAgentSpec(input: {
 		access: 'write',
 		tools: workspaceAgentTools() as AgentAutomationSpec['tools'],
 		hostTools,
+		mcpServers,
 		...(hostSandbox ? { hostSandbox } : {}),
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		...(authored?.model === undefined ? {} : { model: authored.model }),

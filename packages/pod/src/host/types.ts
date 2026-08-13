@@ -247,7 +247,13 @@ export type ChannelInboundMessage = {
 
 export type ChannelInboundResult = {
 	/** `duplicate` means the message was already handled and no agent ran. */
-	readonly status: 'answered' | 'duplicate' | 'silent' | 'registration_required' | 'rate_limited';
+	readonly status:
+		| 'answered'
+		| 'accepted'
+		| 'duplicate'
+		| 'silent'
+		| 'registration_required'
+		| 'rate_limited';
 	readonly text?: string;
 	/** Whether the reply actually left over the transport. */
 	readonly delivered?: boolean;

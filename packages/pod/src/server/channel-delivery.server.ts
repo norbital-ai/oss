@@ -6,8 +6,12 @@ import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime
 import { resolveRequestorBaseScope } from '$lib/server/bootstrap/resolve_workspace.js';
 import { channelPrincipalEmail } from '$lib/server/bootstrap/channel_reconcile.server.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
-import { runAgent } from '$lib/server/agent/agent-loop.server.js';
+import { prepareInteractiveAgentTurn } from '$lib/server/agent/agent-loop.server.js';
 import { channelAgentSpec } from '$lib/server/agent/agent-spec.server.js';
+import {
+	admitAgentTurn,
+	channelAgentAutomationName
+} from '$lib/server/run/automation-dispatch.server.js';
 import {
 	appendChatMessage,
 	appendChatTurn,
@@ -49,7 +53,13 @@ export const ChannelInboundSchema = z.object({
 export type ChannelInboundCommand = z.infer<typeof ChannelInboundSchema>;
 
 export type ChannelInboundOutcome = {
-	readonly status: 'answered' | 'duplicate' | 'silent' | 'registration_required' | 'rate_limited';
+	readonly status:
+		| 'answered'
+		| 'accepted'
+		| 'duplicate'
+		| 'silent'
+		| 'registration_required'
+		| 'rate_limited';
 	readonly channel: string;
 	readonly conversationId: string;
 	readonly chatId?: string;
@@ -550,11 +560,36 @@ export async function deliverChannelMessage(
 		}
 
 		try {
-			const run = async () =>
-				runAgent({
-					automationName: `channel:${command.channel}`,
+			const spec = await channelAgentSpec({
+				standingInstruction,
+				...(channel.hostTools && channel.hostTools.length > 0
+					? { hostTools: channel.hostTools }
+					: {}),
+				...(channel.mcpServers && channel.mcpServers.length > 0
+					? { mcpServers: channel.mcpServers }
+					: {}),
+				...(channel.hostSandbox ? { hostSandbox: channel.hostSandbox } : {})
+			});
+			const run = async () => {
+				const ctx = getWorkspace({ provision: true });
+				const ownerUserId = ctx.baseScope.requestor.norbital_id;
+				const started = await createRecord(
+					ctx,
+					'automation_run',
+					{
+						requested_by_user_id: ownerUserId,
+						automation_name: channelAgentAutomationName(command.channel),
+						status: 'running',
+						input: { task: standingInstruction },
+						started_at: new Date().toISOString()
+					},
+					{ isElevated: true }
+				);
+				if (typeof started.norbital_id !== 'string') throw new Error('Agent run has no id');
+				const opened = await prepareInteractiveAgentTurn({
 					sessionId: bound.chatId,
-					input: command.text,
+					spec,
+					message: command.text,
 					inputMetadata: {
 						source_provider: channel.transport,
 						source_conversation_id: command.conversationId,
@@ -564,63 +599,47 @@ export async function deliverChannelMessage(
 						...(command.sender?.displayName
 							? { author_display_name: command.sender.displayName }
 							: {})
-					},
-					// The declared `task` is the agent's standing instruction for this channel, so it reaches
-					// the model as the last layer of the system prompt; the message is the input. Collection
-					// reach is the channel principal's policy; host tools are only those the channel named.
-					spec: await channelAgentSpec({
-						standingInstruction,
-						...(channel.hostTools && channel.hostTools.length > 0
-							? { hostTools: channel.hostTools }
-							: {}),
-						...(channel.hostSandbox ? { hostSandbox: channel.hostSandbox } : {})
-					})
+					}
 				});
-			const result = linkedUserId
+				await admitAgentTurn(ctx, {
+					automationName: channelAgentAutomationName(command.channel),
+					triggerKey: `turn:${bound.chatId}:${opened.turnId}`,
+					originScope: ctx.baseScope,
+					snapshot: {
+						sessionId: bound.chatId,
+						runId: started.norbital_id,
+						turnId: opened.turnId,
+						promptContent: opened.promptContent,
+						spec,
+						input: command.text,
+						...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
+						inputMetadata: {
+							source_provider: channel.transport,
+							source_conversation_id: command.conversationId,
+							source_message_id: command.messageId
+						},
+						channel: {
+							channelKey: command.channel,
+							transport: channel.transport,
+							conversationId: command.conversationId,
+							inboundReceiptId: receiptId,
+							conversationRowId: bound.conversationRowId
+						}
+					}
+				});
+				return { runId: started.norbital_id };
+			};
+			const admitted = linkedUserId
 				? await withAuthenticatedChannelRequestor(principal, linkedUserId, run)
 				: await run();
 
-			const text = result.text.trim();
-			// An empty answer is not an error and must not be sent: transports reject an empty body, and
-			// a run that only called tools legitimately has nothing to say.
-			const delivered = text
-				? await messaging.sendVia(command.channel, channel.transport, {
-						conversationId: command.conversationId,
-						text
-					})
-				: { sent: false, reason: 'agent produced no text' };
-
-			await updateRecord(
-				ctx,
-				'channel_inbound_message',
-				receiptId,
-				{
-					status: 'answered',
-					...(result.inputMessageId ? { session_message_id: result.inputMessageId } : {}),
-					answered_at: new Date().toISOString(),
-					...(delivered.sent ? {} : { error: delivered.reason ?? 'transport refused delivery' })
-				},
-				{ isElevated: true }
-			);
-			await updateRecord(
-				ctx,
-				'channel_conversation',
-				bound.conversationRowId,
-				{
-					last_inbound_at: new Date().toISOString(),
-					...(delivered.sent ? { last_outbound_at: new Date().toISOString() } : {})
-				},
-				{ isElevated: true }
-			);
-
 			return {
-				status: text ? 'answered' : 'silent',
+				status: 'accepted',
 				channel: command.channel,
 				conversationId: command.conversationId,
 				chatId: bound.chatId,
-				runId: result.runId,
-				text,
-				delivered: delivered.sent
+				runId: admitted.runId,
+				delivered: false
 			};
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : String(cause);

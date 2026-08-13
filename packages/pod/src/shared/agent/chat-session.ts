@@ -10,7 +10,8 @@ export type ChatSessionMessage = {
 	readonly model: string | null;
 	readonly usage: Readonly<Record<string, unknown>> | null;
 	readonly plan_mode: boolean;
-	readonly kind: 'normal' | 'reasoning' | 'summary' | 'usage';
+	readonly goal_mode: boolean;
+	readonly kind: 'normal' | 'reasoning' | 'summary' | 'usage' | 'goal';
 	readonly status: 'streaming' | 'complete' | 'aborted';
 	readonly queue_status: 'live' | 'queued' | 'released' | 'removed';
 	readonly release_mode: 'step' | 'turn' | null;
@@ -20,6 +21,7 @@ export type ChatSessionMessage = {
 	readonly source_conversation_id: string | null;
 	readonly source_message_id: string | null;
 	readonly source_deleted_at: string | null;
+	readonly durable_ordinal?: number | null;
 };
 
 /** One root or delegated provider turn embedded beside the messages it owns. */

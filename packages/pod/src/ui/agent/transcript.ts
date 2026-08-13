@@ -6,6 +6,8 @@
  * with an answer worth checking, and this package has no browser runner to check it through one.
  */
 import type { PodUiKeys } from '$lib/i18n/index.js';
+import { parsePublicMcpToolName } from '$lib/mcp/names.js';
+import { parseStoredGoalVerdict } from '$lib/shared/agent/goal-verdict.js';
 
 export type PanelText = {
 	readonly kind: 'text';
@@ -48,7 +50,13 @@ export type PanelToolCall = {
 	readonly input: string | null;
 	readonly output: string | null;
 	readonly error: string | null;
-	readonly state: 'running' | 'complete' | 'failed';
+	readonly state: 'running' | 'complete' | 'failed' | 'needs_input';
+	readonly elicitation: readonly {
+		readonly id: string;
+		readonly message: string;
+		readonly mode?: 'form' | 'url';
+		readonly url?: string;
+	}[] | null;
 	/**
 	 * The delegated agent's own transcript, projected the same way this one was.
 	 *
@@ -74,7 +82,21 @@ export type PanelCheckpoint = {
 	readonly before: readonly PanelMessage[];
 };
 
-export type PanelMessage = PanelText | PanelReasoning | PanelToolCall | PanelCheckpoint;
+/** Independent verifier result for a goal-mode turn. Not the agent's own claim. */
+export type PanelGoal = {
+	readonly kind: 'goal';
+	readonly key: string;
+	readonly achieved: boolean;
+	readonly summary: string;
+	readonly gaps: readonly string[];
+};
+
+export type PanelMessage =
+	| PanelText
+	| PanelReasoning
+	| PanelToolCall
+	| PanelCheckpoint
+	| PanelGoal;
 
 /**
  * Tool payloads are held behind a disclosure and capped.
@@ -93,7 +115,9 @@ const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
 	describe_workspace: { labelKey: 'pod.agent.tool.describeWorkspace', icon: 'lucide:book-open' },
 	read_collection: { labelKey: 'pod.agent.tool.readCollection', icon: 'lucide:table' },
 	write_collection: { labelKey: 'pod.agent.tool.writeCollection', icon: 'lucide:database' },
-	spawn_subagent: { labelKey: 'pod.agent.tool.delegateTask', icon: 'lucide:network' }
+	spawn_subagent: { labelKey: 'pod.agent.tool.delegateTask', icon: 'lucide:network' },
+	list_skills: { labelKey: 'pod.agent.tool.listSkills', icon: 'lucide:library' },
+	read_skill: { labelKey: 'pod.agent.tool.readSkill', icon: 'lucide:book-marked' }
 };
 
 /**
@@ -166,6 +190,22 @@ export function toPanelMessages(
 			const content = stored?.message.content;
 			if (typeof id === 'string' && typeof content === 'string') {
 				output = [{ kind: 'checkpoint', key: id, summary: content, before: output }];
+				continue;
+			}
+		}
+		if (record.kind === 'goal') {
+			const stored = storedMessage(record);
+			const id = record.norbital_id;
+			const content = stored?.message.content;
+			const verdict = typeof content === 'string' ? parseStoredGoalVerdict(content) : null;
+			if (typeof id === 'string' && verdict) {
+				output.push({
+					kind: 'goal',
+					key: id,
+					achieved: verdict.achieved,
+					summary: verdict.summary,
+					gaps: verdict.gaps
+				});
 				continue;
 			}
 		}
@@ -256,6 +296,7 @@ function toToolCall(
 	const record = isRecord(call) ? call : {};
 	const name = typeof record.name === 'string' ? record.name : 'tool';
 	const metadata = TOOL_METADATA[name];
+	const mcpParsed = parsePublicMcpToolName(name);
 	const input = isRecord(record.input) ? record.input : undefined;
 	const id = typeof record.id === 'string' ? record.id : null;
 	const answered = id !== null && context.results.has(id);
@@ -268,20 +309,57 @@ function toToolCall(
 	// The loop turns a thrown tool into `{ error }` and feeds it back to the model rather than failing
 	// the turn, so a failed call is visible only here — the run around it still reports success.
 	const error = isRecord(output) && typeof output.error === 'string' ? output.error : null;
+	const labelKey = mcpParsed ? null : (metadata?.labelKey ?? null);
+	const label = mcpParsed
+		? `${humanize(mcpParsed.server)} · ${humanize(mcpParsed.tool)}`
+		: metadata
+			? null
+			: humanize(name);
+	const icon = mcpParsed ? 'lucide:plug' : (metadata?.icon ?? 'lucide:wrench');
+	const requests =
+		answered && isRecord(output) && output.resultType === 'input_required' && Array.isArray(output.requests)
+			? output.requests
+			: null;
+	const elicitation = requests ? parseElicitationRequests(requests) : null;
+	const inputRequired = requests !== null;
+	const state: PanelToolCall['state'] = inputRequired
+		? 'needs_input'
+		: answered
+			? error === null
+				? 'complete'
+				: 'failed'
+			: 'running';
 	return {
 		kind: 'tool',
 		key,
 		name,
-		labelKey: metadata?.labelKey ?? null,
-		label: metadata ? null : humanize(name),
-		icon: metadata?.icon ?? 'lucide:wrench',
+		labelKey,
+		label,
+		icon,
 		detail: toDetail(input),
 		input: input && Object.keys(input).length > 0 ? formatPayload(input) : null,
 		output: answered && error === null ? formatPayload(output) : null,
 		error: error === null ? null : clamp(error),
-		state: answered ? (error === null ? 'complete' : 'failed') : 'running',
+		state,
+		elicitation,
 		children
 	};
+}
+
+function parseElicitationRequests(
+	requests: readonly unknown[]
+): NonNullable<PanelToolCall['elicitation']> {
+	return requests.flatMap((request) => {
+		if (!isRecord(request) || typeof request.message !== 'string') return [];
+		return [
+			{
+				id: typeof request.id === 'string' ? request.id : `elicitation-${request.message}`,
+				message: request.message,
+				...(request.mode === 'form' || request.mode === 'url' ? { mode: request.mode } : {}),
+				...(typeof request.url === 'string' ? { url: request.url } : {})
+			}
+		];
+	});
 }
 
 function toDetail(input: Readonly<Record<string, unknown>> | undefined): string | null {

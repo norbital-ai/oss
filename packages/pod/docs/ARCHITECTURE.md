@@ -108,7 +108,7 @@ startup compares them with `pod.host.ts` and refuses to listen if anything is mi
 | --------------------- | ----------------------------------------- |
 | `db`                  | always                                    |
 | `fileStorage`         | a collection contains a file field        |
-| `ai`                  | an agent automation is compiled           |
+| `ai`                  | an agent automation or agent profile needs inference |
 | `queue`               | an integration outbox or pull is compiled |
 | `integrationDelivery` | an integration is compiled                |
 | `messaging` transport | a channel declares it in `src/channels`   |
@@ -346,7 +346,9 @@ a reduced condition, because the mutation path applies those to nothing.
 
 Pod owns the loop, tool dispatch, runs, conversations, messages, channel bindings, authorization,
 replication and UI. The host AI facility performs one model-inference turn at a time and may provide
-trusted tools through a default-deny binding. The host does not own or persist a transcript.
+trusted tools through a default-deny binding. The host does not own or persist a transcript. On
+Core, the host orchestrates the durable workflow and executes fenced AI effects (`ai.turn` /
+`ai.prompt`) outside the guest.
 
 ```ts
 export default defineAutomation(
@@ -363,9 +365,14 @@ export default defineAutomation(
 );
 ```
 
-Interactive chat, agent automations and declared channels use the same loop and transcript model.
-Messages and nested turns are stored directly in one `chat_session` aggregate, then reach the
-browser through one ordinary policy-scoped sync subscription rather than an agent-specific stream.
+Interactive chat, agent automations and declared channels use the same loop implementation and
+`chat_session` transcript. Hosted interactive (`agentChatStart`) and channel inbound persist the
+user turn then admit a durable `_norbital_automation_job` receipt; Core DBOS drives one provider
+or tool transition per guest step. They do not `void runAgent` or retain a background lease. The
+synchronous `agentChat` remote and HTTP `agent/start` may still call `runAgent` in-guest — leftover
+programmatic paths, not the hosted UI path. Messages and nested turns are stored directly in one
+`chat_session` aggregate, then reach the browser through one ordinary policy-scoped sync
+subscription rather than an agent-specific stream.
 
 See [Agent architecture](./AGENT_ARCHITECTURE.md) for execution entry points, transcript ownership,
 host-tool authorization, channel continuation, UI behavior and conformance coverage.
@@ -379,17 +386,26 @@ An automation has one trigger:
 { trigger: { collection: 'permits', event: 'updated' } }
 ```
 
+`kind: 'agent'` is a first-class automation body, not a separate runtime. It uses the same receipt
+and DBOS path as cron and collection-event automations, with one reducer step per two-second
+invocation.
+
 Schedule expressions are validated at build/startup. Core registers authored occurrences with DBOS;
-pg-boss owns none of their schedules or workers. Each occurrence or matching collection event first
-becomes an immutable tenant receipt bound to its trigger snapshot and exact runtime artifact.
+pg-boss owns none of their schedules or workers. Each occurrence, matching collection event, or
+admitted agent turn first becomes an immutable tenant receipt bound to its trigger snapshot and
+exact runtime artifact.
 
 Collection-event admission is tenant-wide, not client-driven. DBOS reconciliation asks one bounded
 guest step to tail the authoritative outbox and atomically advance `_norbital_automation_cursor`;
-opening another browser cannot duplicate a run. Every guest step is billable and capped at two
-seconds. DBOS resumes longer work and durably yields/replays `api.ai` effects outside the guest.
-Integration and notification outboxes drain independently with claim leases and bounded retry. Inbound
-integration receipts drain independently too: each tick performs one durable bounded chunk rather than
-holding a tenant runtime invocation open for the full provider page.
+opening another browser cannot duplicate a run. Interactive chat and channel inbound admit the same
+way: persist the user turn, then write `_norbital_automation_job`. Every guest step is billable and
+capped at two seconds. DBOS covers agent-turn workflows as well as cron and collection-event
+automations; it resumes longer work and durably yields/replays `api.ai` / `ai.turn` / `ai.prompt`
+effects outside the guest. Integration and notification outboxes drain independently with claim
+leases and bounded retry. Inbound integration receipts drain independently too: each tick performs
+one durable bounded chunk rather than holding a tenant runtime invocation open for the full provider
+page. Standalone `pod start` has no DBOS, so admitted receipts are not driven unless a host supplies
+the protocol. `intervalQueue` is not that orchestrator.
 
 ## File storage
 

@@ -48,6 +48,7 @@ type SentInput = {
 	mentions?: { collection: string; recordId: string; label: string }[];
 	runId?: string;
 	planMode?: boolean;
+	goalMode?: boolean;
 };
 
 let sent: SentInput[] = [];

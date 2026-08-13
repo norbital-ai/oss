@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { AiChatInput } from '@norbital-ai/platform-utils/runtime/binding';
 import { generateConversationTitle } from '../../src/server/agent/conversation-title.server.js';
 
@@ -23,5 +24,14 @@ describe('AI conversation titles', () => {
 		await expect(
 			generateConversationTitle({ chat }, 'Can you review who can approve CRM quotes?')
 		).resolves.toBe('Review CRM quote permissions');
+	});
+
+	it('does not generate titles from inside the agent loop', () => {
+		const source = readFileSync(
+			new URL('../../src/server/agent/agent-loop.server.ts', import.meta.url),
+			'utf8'
+		);
+		expect(source).not.toContain('runPendingConversationTitle');
+		expect(source).not.toContain('conversation-title.server');
 	});
 });

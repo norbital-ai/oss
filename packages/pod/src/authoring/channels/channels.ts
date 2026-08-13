@@ -1,4 +1,4 @@
-import type { DefaultPolicyName } from '../schema/types.js';
+import type { DefaultMcpServerName, DefaultPolicyName } from '../schema/types.js';
 
 /** How host sandbox tools may touch the tenant worktree for one channel. */
 export type ChannelHostSandbox = {
@@ -60,6 +60,13 @@ type ChannelDefinitionBase = {
 	 * host supplies. The host re-resolves the channel agent's principal before opening its worktree.
 	 */
 	readonly hostTools?: readonly string[];
+	/**
+	 * MCP servers this channel's agent may call — empty / omitted means none.
+	 *
+	 * Same default-deny as `hostTools`. A channel that needs a payment or issue tracker opts in by
+	 * naming the server declared in `src/mcp/+<name>.mcp.ts`.
+	 */
+	readonly mcpServers?: readonly DefaultMcpServerName[];
 	/**
 	 * How those host tools may touch the tenant worktree.
 	 *

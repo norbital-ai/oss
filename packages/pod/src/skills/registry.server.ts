@@ -9,8 +9,9 @@ import { isValidSkillName, summarize, type Skill, type SkillSummary } from './ty
  *
  * Two kinds, not three sources. Host skills are injected — compiled into the package and present in
  * every run. The other two are discovered by reading a filesystem, and differ only in which
- * filesystem: a workspace skill is committed under `src/skills/` and shared by everyone in the
- * tenant, a personal skill is a file in a sandbox and committed nowhere.
+ * filesystem: a workspace skill is committed under `.agents/skills/` and compiled into the bundle,
+ * shared by everyone in the tenant; a personal skill is an extra file under `.agents/skills/` on the
+ * run filesystem and committed nowhere.
  *
  * One flat namespace, because the agent addresses a skill by name and a name that meant two things
  * would make `read_skill` ambiguous. Precedence is host, then workspace, then personal. Host wins
@@ -42,7 +43,7 @@ async function allSkills(): Promise<readonly Skill[]> {
 }
 
 /**
- * Skills compiled out of `src/skills/`, defended against a bundle that predates them.
+ * Skills compiled out of `.agents/skills/`, defended against a bundle that predates them.
  *
  * A tenant runs an immutable checkpoint, and a checkpoint built before this field existed has no
  * `skills` on its registered state. Reading it optionally means an older workspace keeps working

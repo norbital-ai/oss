@@ -18,7 +18,11 @@ lives under `src/` and is discovered by filename:
 | `custom-types/<name>/+definition.ts`        | reusable validated data type       |
 | `custom-types/<name>/+renderer.svelte`      | display/edit renderer              |
 | `apps/**/+<name>.svelte`                    | navigable application surface      |
-| `automation/+<name>.ts`                     | scheduled automation               |
+| `automation/+<name>.ts`                     | scheduled, collection-event, or `kind: 'agent'` automation |
+| `policies/+<name>.policy.ts`                | named policy / role                |
+| `channels/+<name>.channel.ts`               | conversational channel entry point |
+| `tools/+<name>.tool.ts`                     | compiler-discovered workspace agent tool |
+| `+agent.ts`                                 | interactive agent profile          |
 | `remotes/+<name>.ts`                        | typed server query or command      |
 | `+seed.ts`                                  | optional standalone seed           |
 
@@ -101,7 +105,9 @@ output MUST be materialized once before the first chunk; retries MUST use that m
 than rerunning author code. The row writes and offset advance MUST share one transaction, and an expired
 lease MUST resume from that offset. Retryable faults MUST use bounded backoff; schema refusal is terminal
 with zero rows. Each runtime read/write step is budgeted to complete within two seconds; longer waits and
-provider latency belong to the host orchestrator between durable steps.
+provider latency belong to the host orchestrator between durable steps. The same 2,000 ms cap
+applies to every admitted guest invocation — remotes, hooks, collection operations, automation
+reducer steps, and agent-turn steps — not only integration chunks.
 
 Automations MUST be declared in the compiled registry, run with the restricted before API, and
 record a success or failure in `automation_run`. Integration transforms MUST use their declared

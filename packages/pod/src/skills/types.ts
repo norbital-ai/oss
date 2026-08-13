@@ -8,7 +8,7 @@
  * loop has no shell to run them in.
  *
  * `origin` exists because the three sources answer to different people. A host skill ships inside
- * `@norbital-ai/pod` and documents the platform; a workspace skill is authored under `src/skills/`
+ * `@norbital-ai/pod` and documents the platform; a workspace skill is authored under `.agents/skills/`
  * by whoever owns the tenant; a personal skill is a file in the sandbox this run executes in, put
  * there by the principal that sandbox belongs to. When all three are in one list a reader has to be
  * able to tell which is which — not least because a workspace skill naming something wrong is a bug

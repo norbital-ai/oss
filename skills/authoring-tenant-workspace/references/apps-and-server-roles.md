@@ -200,6 +200,23 @@ export default defineAutomation(
 );
 ```
 
+`kind: 'agent'` is the same declaration with a task instead of a handler. `task` is the instruction
+handed to the model; `tools` is an optional allowlist of workspace agent tool names (not a feature
+map). Host capabilities, when a run may use them, are named in `hostTools`:
+
+```ts
+export default defineAutomation(
+	{ schedule: '0 3 * * 1' },
+	{
+		kind: 'agent',
+		description:
+			'Researches authoritative statutory sources and maintains effective-dated statutory profiles.',
+		task: 'Compare current law against the tenant’s effective statutory profile. Create a successor snapshot only when a material change is detected.',
+		access: 'write'
+	}
+);
+```
+
 Automations and server handlers may make one schema-validated inference over explicitly selected workspace
 images. Pass only `document_asset` IDs already associated with the record being processed; Pod re-checks
 asset access and rejects non-images, more than eight images, or more than 20 MiB total:
@@ -228,8 +245,10 @@ home-grown queues, cursors, timers or retry tables.
 
 In Core, DBOS is the only automation orchestrator. It recovers immutable tenant receipts, binds every run
 to the exact checkpoint/tree/runtime artifact that admitted it, serializes work per tenant under a global
-cap, and fairly interleaves noisy and quiet tenants. pg-boss remains an infrastructure queue for integration
-and notification drains only; authors never choose between either mechanism.
+cap, and fairly interleaves noisy and quiet tenants. pg-boss remains an infrastructure queue for
+infrastructure such as integration and notification drains, conversation titles, builds, and billing;
+authors never choose the mechanism. Hosted interactive chat and channel inbound admit the same durable
+receipts; they are not a second runtime.
 
 ## Remotes
 

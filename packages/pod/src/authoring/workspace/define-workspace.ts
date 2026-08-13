@@ -20,6 +20,7 @@ import type { AgentAutomationSpec, AutomationDeclaration } from '../automations/
 import type { AgentToolDefinition } from '../automations/agent-tools.js';
 import type { PolicyDeclaration } from '../policies/policies.js';
 import type { ChannelDefinition } from '../channels/channels.js';
+import type { McpServerDefinition } from '../mcp/define-mcp-server.js';
 import type { HandlerDefinition } from '../automations/handlers.js';
 import type { InvokeMap } from './invoke-api-types.js';
 import type { WorkspaceClient } from '$lib/ui/state/workspace-client.js';
@@ -75,8 +76,10 @@ export type DefineWorkspaceInput<
 	/** `src/+agent.ts` — the permissions and prompt for the Pod-owned interactive agent. */
 	readonly agent?: AgentAutomationSpec;
 	readonly agentTools?: Readonly<Record<string, AgentToolDefinition>>;
-	/** `src/skills` compiled to data — markdown the agent loads on demand, not code it calls. */
+	/** `.agents/skills` compiled to data — markdown the agent loads on demand, not code it calls. */
 	readonly skills?: readonly Skill[];
+	/** `src/mcp/+<name>.mcp.ts` — remote MCP 2026-07-28 servers this workspace may reach. */
+	readonly mcpServers?: Readonly<Record<string, McpServerDefinition>>;
 	/** Policy definitions declared in `src/policies`, keyed by filename. */
 	readonly policies?: Readonly<Record<string, PolicyDeclaration>>;
 	/** Channel declarations from `src/channels`, keyed by filename. */
@@ -108,6 +111,7 @@ export type RegisteredWorkspaceState = {
 	readonly agent: AgentAutomationSpec | null;
 	readonly agentTools: Record<string, AgentToolDefinition>;
 	readonly skills: readonly Skill[];
+	readonly mcpServers: Record<string, McpServerDefinition>;
 	readonly policies: Record<string, PolicyDeclaration>;
 	readonly channels: Record<string, ChannelDefinition>;
 	readonly apps: Record<string, WorkspaceAppDef>;
@@ -581,6 +585,7 @@ export function defineWorkspace<
 		agent: input.agent ?? null,
 		agentTools: { ...(input.agentTools ?? {}) },
 		skills: [...(input.skills ?? [])],
+		mcpServers: { ...(input.mcpServers ?? {}) },
 		policies: { ...(input.policies ?? {}) },
 		channels: { ...(input.channels ?? {}) },
 		apps: { ...(input.apps ?? {}) },

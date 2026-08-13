@@ -1050,7 +1050,8 @@ const KNOWN_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set([
 	'lib',
 	'policies',
 	'remotes',
-	'skills'
+	'skills',
+	'mcp'
 ]);
 
 /**
@@ -1245,10 +1246,76 @@ async function discoverChannels(
 }
 
 /**
+ * `src/mcp/+<name>.mcp.ts` — one remote MCP 2026-07-28 server per file.
+ *
+ * Same shape as channel discovery: the filename is the identity and the namespace on every
+ * model-facing tool (`mcp__<name>__<tool>`).
+ */
+async function discoverMcpServers(
+	root: string,
+	diagnostics: StructuralDiagnostic[],
+	inventory: SourceInventory
+): Promise<DiscoveredWorkspaceRole[]> {
+	const directory = path.join(root, 'src', 'mcp');
+	if (!inventory.hasDirectory(directory)) return [];
+	const servers: DiscoveredWorkspaceRole[] = [];
+	const seen = new Map<string, string>();
+	for (const entry of inventory.entries(directory)) {
+		const source = relativePath(root, path.join(directory, entry.name));
+		if (entry.isDirectory()) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'MCP_UNEXPECTED_DIRECTORY',
+					'src/mcp contains only +<name>.mcp.ts files'
+				)
+			);
+			continue;
+		}
+		const match = entry.name.match(/^\+([a-z][a-z0-9]*(?:_[a-z0-9]+)*)\.mcp\.ts$/);
+		if (!match) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'MCP_NAME_INVALID',
+					`${entry.name} must be named +<lower_snake_case>.mcp.ts`
+				)
+			);
+			continue;
+		}
+		const id = match[1]!;
+		if (id.length > 32) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'MCP_NAME_INVALID',
+					`MCP server ${id} must be at most 32 characters`
+				)
+			);
+			continue;
+		}
+		const previous = seen.get(id);
+		if (previous) {
+			diagnostics.push(
+				topologyDiagnostic(
+					source,
+					'MCP_DUPLICATE',
+					`MCP server ${id} is already declared by ${previous}`
+				)
+			);
+			continue;
+		}
+		seen.set(id, source);
+		servers.push({ id, path: source.slice(0, -3), source });
+	}
+	return servers.sort((left, right) => compareText(left.id, right.id));
+}
+
+/**
  * The directory each file belongs to, once nested skills are possible.
  *
- * `src/skills/a/b/SKILL.md` makes `b` a skill in its own right, so `b`'s contents must not also be
- * loaded as reference material for `a`: an agent reading `a` would otherwise see a second skill's
+ * `.agents/skills/a/b/SKILL.md` makes `b` a skill in its own right, so `b`'s contents must not also
+ * be loaded as reference material for `a`: an agent reading `a` would otherwise see a second skill's
  * instructions presented as part of the first.
  */
 function nearestSkillRoot(file: string, roots: readonly string[]): string | undefined {
@@ -1258,7 +1325,11 @@ function nearestSkillRoot(file: string, roots: readonly string[]): string | unde
 }
 
 /**
- * Skills authored under `src/skills/`, discovered by their `SKILL.md` at any depth.
+ * Skills follow the Agent Skills standard at `.agents/skills/<name>/SKILL.md`.
+ *
+ * That is the only workspace configuration path. Cursor, Claude Code, OpenCode and Pod all read it,
+ * so a tenant workspace is one skill tree rather than a Norbital-only `src/skills/` plus a second
+ * `.agents/` copy. `src/skills/` is refused so the two cannot drift.
  *
  * Depth is unrestricted for the same reason agent tools are: a `SKILL.md` the compiler skipped
  * because it sat one directory too deep would be a skill its author believes they shipped and the
@@ -1268,9 +1339,20 @@ function nearestSkillRoot(file: string, roots: readonly string[]): string | unde
 async function discoverSkills(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
-	inventory: SourceInventory
+	srcInventory: SourceInventory
 ): Promise<DiscoveredSkill[]> {
-	const skillsRoot = path.join(root, 'src', 'skills');
+	const legacyRoot = path.join(root, 'src', 'skills');
+	if (srcInventory.hasDirectory(legacyRoot)) {
+		diagnostics.push(
+			topologyDiagnostic(
+				'src/skills',
+				'SKILL_LOCATION_MOVED',
+				'Skills follow the Agent Skills standard at .agents/skills/<name>/SKILL.md so other agents on this workspace find the same files. Move this directory there.'
+			)
+		);
+	}
+	const skillsRoot = path.join(root, '.agents', 'skills');
+	const inventory = await SourceInventory.load(skillsRoot);
 	if (!inventory.hasDirectory(skillsRoot)) return [];
 	const manifests = inventory
 		.filesBelow(skillsRoot)
@@ -1595,14 +1677,24 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		diagnostics,
 		inventory
 	);
-	const [apps, automations, remotes, agentTools, policies, channels, skills, rootDeclarations] =
-		await Promise.all([
+	const [
+		apps,
+		automations,
+		remotes,
+		agentTools,
+		policies,
+		channels,
+		mcpServers,
+		skills,
+		rootDeclarations
+	] = await Promise.all([
 			discoverApps(absoluteRoot, diagnostics, inventory),
 			discoverWorkspaceRoles(absoluteRoot, 'automation', diagnostics, inventory),
 			discoverWorkspaceRoles(absoluteRoot, 'remotes', diagnostics, inventory),
 			discoverAgentTools(absoluteRoot, diagnostics, inventory),
 			discoverPolicies(absoluteRoot, diagnostics, inventory),
 			discoverChannels(absoluteRoot, diagnostics, inventory),
+			discoverMcpServers(absoluteRoot, diagnostics, inventory),
 			discoverSkills(absoluteRoot, diagnostics, inventory),
 			discoverSeed(absoluteRoot, diagnostics, inventory),
 			validateAuthoredSource(absoluteRoot, diagnostics, inventory)
@@ -1627,6 +1719,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		agentTools,
 		policies,
 		channels,
+		mcpServers,
 		skills,
 		i18n,
 		agent: rootDeclarations.agent,
@@ -1835,6 +1928,9 @@ function renderWorkspace(
 	for (const [index, channel] of structure.channels.entries()) {
 		imports.push(`import channel${index} from ${JSON.stringify(generatedImport(channel.source))};`);
 	}
+	for (const [index, server] of structure.mcpServers.entries()) {
+		imports.push(`import mcpServer${index} from ${JSON.stringify(generatedImport(server.source))};`);
+	}
 	if (structure.seed) {
 		imports.push(`import seed from ${JSON.stringify(generatedImport(structure.seed))};`);
 	}
@@ -1862,9 +1958,12 @@ function renderWorkspace(
 	const channels = structure.channels
 		.map((channel, index) => `\t\t${JSON.stringify(channel.id)}: channel${index}`)
 		.join(',\n');
+	const mcpServers = structure.mcpServers
+		.map((server, index) => `\t\t${JSON.stringify(server.id)}: mcpServer${index}`)
+		.join(',\n');
 	const skills = structure.skills.map((skill) => renderSkill(skill)).join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tcustomTypes,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.skills.length ? `,\n\tskills: [\n${skills}\n\t]` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tcustomTypes,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.mcpServers.length ? `,\n\tmcpServers: {\n${mcpServers}\n\t}` : ''}${structure.skills.length ? `,\n\tskills: [\n${skills}\n\t]` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
 }
 
 function renderClient(
@@ -1962,17 +2061,23 @@ function generatedAuthoringTypes(structure: PodStructure): string {
 		`export type PolicyName = ${union(structure.policies)};`,
 		`export type AppName = ${union(structure.apps.filter((node) => node.kind === 'app'))};`,
 		`export type ChannelName = ${union(structure.channels)};`,
+		`export type McpServerName = ${union(structure.mcpServers)};`,
 		''
 	].join('\n');
 }
 
 function workspaceAuthoringTypes(): string {
-	return `import type { AgentToolName, AppName, CollectionName, PolicyName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface WorkspaceAuthoringTypes {\n\t\treadonly schema: WorkspaceSchema;\n\t\treadonly collectionName: CollectionName;\n\t\treadonly agentToolName: AgentToolName;\n\t\treadonly policyName: PolicyName;\n\t\treadonly appName: AppName;\n\t}\n}\nexport {};\n`;
+	return `import type { AgentToolName, AppName, CollectionName, McpServerName, PolicyName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\n\ndeclare module '@norbital-ai/pod/authoring' {\n\tinterface WorkspaceAuthoringTypes {\n\t\treadonly schema: WorkspaceSchema;\n\t\treadonly collectionName: CollectionName;\n\t\treadonly agentToolName: AgentToolName;\n\t\treadonly policyName: PolicyName;\n\t\treadonly appName: AppName;\n\t\treadonly mcpServerName: McpServerName;\n\t}\n}\nexport {};\n`;
 }
 
 /** `$types` for `src/channels`, carrying a `Channel` whose `policy` is checked against this workspace. */
 function channelTypes(): string {
 	return `import type { ChannelDefinition } from '@norbital-ai/pod/authoring';\n\nexport type { ChannelName, PolicyName } from '../../generated/authoring-types.js';\n\n/** Declare with \`satisfies Channel\` so the policy name is checked against this workspace. */\nexport type Channel = ChannelDefinition;\n`;
+}
+
+/** `$types` for `src/mcp`, so `mcpServers: ['stripe']` is checked against this workspace. */
+function mcpTypes(): string {
+	return `import type { McpServerDefinition } from '@norbital-ai/pod/authoring';\n\nexport type { McpServerName } from '../../generated/authoring-types.js';\n\n/** Declare with \`satisfies McpServer\` so the allowlist is the authored contract. */\nexport type McpServer = McpServerDefinition;\n`;
 }
 
 /** `$types` for `src/policies`, carrying a `Policy` bound to this workspace's collections. */
@@ -2107,6 +2212,7 @@ export async function compilePodFilesystem(
 			remotes: [],
 			policies: [],
 			channels: [],
+			mcpServers: [],
 			agentTools: [],
 			skills: [],
 			i18n: { present: false, catalogs: {}, primary: DEFAULT_LOCALE, en: null, zh: null },
@@ -2172,6 +2278,7 @@ export async function compilePodFilesystem(
 			['.norbital/types/collections/$types.d.ts', relationshipTypes()],
 			['.norbital/types/policies/$types.d.ts', policyTypes()],
 			['.norbital/types/channels/$types.d.ts', channelTypes()],
+			['.norbital/types/mcp/$types.d.ts', mcpTypes()],
 			['.norbital/types/automation/$types.d.ts', workspaceRoleTypes(2)],
 			['.norbital/types/remotes/$types.d.ts', workspaceRoleTypes(2)],
 			['.norbital/types/workspace-authoring.d.ts', workspaceAuthoringTypes()],

@@ -318,8 +318,8 @@ describe('Pod standalone host agent tools — E2E', () => {
 	});
 
 	it('runs a host tool and lands its result in the transcript', async () => {
-		// The queue sweeps on start and the schedule matches every minute, so the run is under way
-		// before this poll begins; it waits for the loop to finish rather than for the trigger.
+		// The standalone schedule job admits the occurrence and the continuous pump drives durable
+		// `ai.turn` steps; this poll waits for the loop to finish rather than for the trigger.
 		const deadline = Date.now() + 90_000;
 		let transcript: readonly TranscriptRow[] = [];
 		for (;;) {

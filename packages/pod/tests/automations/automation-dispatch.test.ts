@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
 	matchChangeAutomations,
-	eventForAction
+	eventForAction,
+	INTERACTIVE_AGENT_AUTOMATION_NAME,
+	GUEST_ADMIT_ARTIFACT_MARKER
 } from '$lib/server/run/automation-dispatch.server.js';
 import { readFileSync } from 'node:fs';
 
@@ -40,6 +42,12 @@ describe('automation-dispatch matcher', () => {
 });
 
 describe('durable automation jobs', () => {
+	// Behavioral coverage for admitAgentTurn and the guest reducer lives in
+	// agent-live-capabilities-e2e.test.ts and ../standalone/channel-delivery-e2e.test.ts.
+	it('exports the interactive job sentinel used by guest admit', () => {
+		expect(INTERACTIVE_AGENT_AUTOMATION_NAME).toBe('agent:interactive');
+		expect(GUEST_ADMIT_ARTIFACT_MARKER).toBe('guest-admit');
+	});
 	it('keeps tenant receipts narrow while DBOS owns leases and retries', () => {
 		const source = readFileSync(
 			new URL('../../src/server/run/automation-dispatch.server.ts', import.meta.url),
@@ -54,5 +62,20 @@ describe('durable automation jobs', () => {
 		expect(source).toContain('record_snapshot');
 		expect(source).toContain('checkpoint_id');
 		expect(source).toContain('runtime_version');
+		expect(source).toContain('GUEST_ADMIT_ARTIFACT_MARKER');
+		expect(source).toContain('admitAgentTurn');
+		expect(source).toContain('receiptUsesAgentReducer');
+	});
+});
+
+describe('durable agent automations', () => {
+	it('routes kind agent through receipts instead of refusing the handler', () => {
+		const source = readFileSync(
+			new URL('../../src/server/run/tenant_run.ts', import.meta.url),
+			'utf8'
+		);
+		expect(source).not.toContain('cannot complete inside one guest invocation');
+		expect(source).toContain("spec.kind === 'agent'");
+		expect(source).toContain('runDurableAgentAutomation');
 	});
 });

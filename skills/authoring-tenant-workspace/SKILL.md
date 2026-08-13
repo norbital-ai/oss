@@ -9,7 +9,8 @@ description: >-
 
 # Authoring Pod Tenant Workspaces
 
-Pod 1.0 tenant workspaces are plain Vite projects. Authors write only `src/`; the Pod filesystem compiler
+Pod 1.0 tenant workspaces are plain Vite projects. Authors write `src/` plus `.agents/skills/` for Agent
+Skills; the Pod filesystem compiler
 derives the registry, workspace, client, loaders, and local types under `.norbital/`. Never hand-author
 assembly or generated output. The sealed contract is in the OSS Pod package:
 [Form system documentation](https://github.com/norbital-ai/oss/blob/main/packages/pod/docs/FORM_SYSTEM.md).
@@ -50,8 +51,9 @@ Studio → Template updates using the explicit Template/Tenant choices.
 | Mandatory bilingual copy, catalogs, the raw-text rule                   | [internationalization.md](references/internationalization.md)         |
 | Template manifest, README, marketing thumbnail (`assets/thumbnail.svg`) | [template-repository.md](references/template-repository.md)           |
 
-Read only the relevant reference. Use `TENANT_WORKSPACE.md` for runtime internals,
-`ACCESS_CONTROL.md` for policy behavior, and the code-quality skill after edits.
+Read only the relevant reference. Use
+[ARCHITECTURE.md](../../packages/pod/docs/ARCHITECTURE.md) for runtime internals,
+the `norbital-platform` skill for policy behavior, and the code-quality skill after edits.
 
 **Template authoring defaults:** inline duplicated UI to keep the file count small; DRY only for
 substantially big components; describe UI with `$derived` (queries are already reactive — no
@@ -61,7 +63,13 @@ or gratuitous parallel fetches; never show system UUIDs, including on relationsh
 ## Authored filesystem
 
 ```text
+.agents/skills/
+└── <name>/
+    └── SKILL.md                   # optional — workspace Agent Skill (repo root, sibling of src/)
+
 src/
+├── mcp/
+│   └── +<name>.mcp.ts             # optional — remote MCP server declaration
 ├── collections/
 │   ├── +relationship.ts
 │   └── <collection>/
@@ -304,8 +312,9 @@ sentence; "runs before create" restates the key and is worse than nothing.
 
 - Hooks validate and return the exact input/patch, then make only same-transaction database or asset reads.
   Hooks never send network traffic, queue work, email, AI, or notifications.
-- Automations run after commit, are durable and idempotent, and receive stable event IDs. Agent-decided
-  automation is not a v1 feature.
+- Automations run after commit, are durable and idempotent, and receive stable event IDs. Use
+  `kind: 'deterministic'` for handler workflows and `kind: 'agent'` for recurring research/judgement
+  tasks. Both run as bounded DBOS steps (≤2s per guest invocation), not as one long process.
 - Remotes are imperative request/response methods. Reactive reads belong to `client.db`.
 - Integrations use portable runtime delivery facilities; missing facilities fail at boot.
 - Put tenant-specific fixture behavior in `src/+seed.ts`. Sensitive statutory or system seed remains Core-owned.

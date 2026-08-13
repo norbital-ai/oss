@@ -34,7 +34,7 @@ The tenant owns authored source and committed migration history. Pod owns every 
 | `src/custom-types/<name>/+definition.ts`      | Reusable validated data type.                            |
 | `src/custom-types/<name>/+renderer.svelte`    | Display and edit renderer for that type.                 |
 | `src/apps/**/+<lower_snake_case>.svelte`      | Browser application surfaces discovered by filename.     |
-| `src/automation/+<lower_snake_case>.ts`       | Scheduled or collection-event server automations.        |
+| `src/automation/+<lower_snake_case>.ts`       | Scheduled, collection-event, or `kind: 'agent'` automations. |
 | `src/remotes/+<lower_snake_case>.ts`          | Typed server query and command handlers.                 |
 | `src/**/+<lower_snake_case>.tool.ts`          | Opt-in, compiler-discovered workspace agent tool.        |
 | `src/+seed.ts`                                | Optional standalone development seed.                    |
@@ -96,10 +96,12 @@ scope, then evaluates ordinary policy before executing server code. The standalo
 only on a loopback address; a production self-hosted `pod.host.ts` must provide its identity provider.
 
 Hosts implement facilities structurally required by the built workspace. A DB-only host can run a
-workspace that needs only database access; file fields require file storage, and automations and
-integrations require queue and delivery facilities as applicable. Non-inferable direct calls such as
-AI, external notifications, and map lookups require the corresponding active host binding when
-invoked — a stored geolocation needs no provider to read or render, so it does not gate startup.
+workspace that needs only database access; file fields require file storage. Integrations and
+notifications require queue and delivery facilities as applicable. Automations do not require
+`queue`: they are receipts plus the host's durable automation protocol (Core: DBOS). `ai` is
+required when an agent automation or an agent profile needs inference. Other non-inferable direct
+calls such as external notifications and map lookups require the corresponding active host binding
+when invoked — a stored geolocation needs no provider to read or render, so it does not gate startup.
 
 ## Data and sync model
 

@@ -31,6 +31,28 @@ function offered(text: string): readonly string[] {
 	return (/offered=(\S+)/.exec(text)?.[1] ?? '').split('|');
 }
 
+async function pollUntil<T>(
+	read: () => Promise<T> | T,
+	predicate: (value: T) => boolean,
+	timeoutMs = 30_000
+): Promise<T> {
+	const deadline = Date.now() + timeoutMs;
+	let last!: T;
+	while (Date.now() < deadline) {
+		last = await read();
+		if (predicate(last)) return last;
+		await new Promise((resolve) => setTimeout(resolve, 250));
+	}
+	throw new Error(`Timed out waiting for condition (last=${JSON.stringify(last)})`);
+}
+
+async function waitForSinkCount(sink: Sink, count: number): Promise<void> {
+	await pollUntil(
+		() => sink.sent.length,
+		(length) => length >= count
+	);
+}
+
 async function freePort(): Promise<number> {
 	const server = createServer();
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -459,12 +481,30 @@ describe('Pod standalone channel delivery — E2E', () => {
 		expect(rows[0]?.policy_key).toBe('sales_rep');
 	});
 
-	it('answers an inbound message back over the transport it arrived on', async () => {
+	it('admits an inbound message as an automation receipt instead of awaiting the agent', async () => {
 		const outcome = await deliver({ messageId: 'tg-msg-1', text: 'Do you have a quote for us?' });
 		expect(outcome.error, `inbound failed. Pod log:\n${log}`).toBeUndefined();
-		expect(outcome.status).toBe('answered');
-		expect(outcome.delivered).toBe(true);
+		expect(outcome.status).toBe('accepted');
+		expect(outcome.delivered).toBe(false);
 
+		const jobs = await queryTenant<{
+			automation_name: string;
+			orchestration_status: string;
+			trigger_key: string;
+		}>(
+			`SELECT automation_name, orchestration_status, trigger_key
+			   FROM _norbital_automation_job
+			  WHERE automation_name = $1`,
+			[`channel:${CHANNEL}`]
+		);
+		expect(jobs).toHaveLength(1);
+		expect(jobs[0]?.orchestration_status).toBe('admitted');
+		expect(jobs[0]?.trigger_key?.startsWith('turn:')).toBe(true);
+
+		await waitForSinkCount(sink, 1);
+	});
+
+	it('answers an inbound message back over the transport it arrived on', () => {
 		expect(sink.sent).toHaveLength(1);
 		expect(sink.sent[0]?.channel).toBe(CHANNEL);
 		expect(sink.sent[0]?.conversationId).toBe(CONVERSATION);
@@ -472,7 +512,7 @@ describe('Pod standalone channel delivery — E2E', () => {
 		expect(sink.sent[0]?.text).toContain('answering=Do you have a quote for us?');
 	});
 
-	it('runs the agent under the channel policy, not the host identity', async () => {
+	it('runs the agent under the channel policy, not the host identity', () => {
 		// `sales_rep` grants read on `accounts` and nothing at all on `payment_records`. The host command
 		// arrives as the administrator, who could read both — so a denial here is proof the run switched
 		// to the channel principal and that the declared policy is the thing being enforced.
@@ -587,8 +627,8 @@ describe('Pod standalone channel delivery — E2E', () => {
 
 	it('continues the same transcript for the next message in the conversation', async () => {
 		const outcome = await deliver({ messageId: 'tg-msg-2', text: 'And the lead time?' });
-		expect(outcome.status).toBe('answered');
-		expect(sink.sent).toHaveLength(2);
+		expect(outcome.status).toBe('accepted');
+		await waitForSinkCount(sink, 2);
 		expect(sink.sent[1]?.text).toContain('answering=And the lead time?');
 
 		const conversations = await queryTenant<{ chat_id: string }>(
@@ -663,13 +703,15 @@ describe('Pod standalone channel delivery — E2E', () => {
 			[users[0]?.norbital_id]
 		);
 
+		const before = sink.sent.length;
 		const outcome = await deliver({
 			channel: 'member_desk',
 			conversationId: 'member-dm-1',
 			messageId: 'member-msg-2',
 			text: 'Can I see the account now?'
 		});
-		expect(outcome.status).toBe('answered');
+		expect(outcome.status).toBe('accepted');
+		await waitForSinkCount(sink, before + 1);
 		expect(sink.sent.at(-1)?.text).toContain('answering=Can I see the account now?');
 
 		const owners = await queryTenant<{ user_id: string; owner_user_id: string }>(
@@ -718,8 +760,10 @@ describe('Pod standalone channel delivery — E2E', () => {
 			[`channel.${CHANNEL}@channels.invalid`]
 		);
 		expect(remaining).toHaveLength(0);
+		const before = sink.sent.length;
 		const outcome = await deliver({ messageId: 'tg-msg-4', text: 'Anything for us now?' });
-		expect(outcome.status).toBe('answered');
+		expect(outcome.status).toBe('accepted');
+		await waitForSinkCount(sink, before + 1);
 		const answer = sink.sent.at(-1)?.text ?? '';
 		expect(answer).toContain('accounts=denied');
 		expect(answer).toContain('payments=denied');

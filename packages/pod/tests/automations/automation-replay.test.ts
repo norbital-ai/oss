@@ -37,6 +37,32 @@ describe('durable automation replay', () => {
 		expect(automationEffectRequestHash(request)).not.toBe(automationEffectRequestHash(turnRequest));
 	});
 
+	it('replays a settled ai.turn as the full provider result, not only text', async () => {
+		const result = {
+			text: 'classified',
+			stopReason: 'end' as const,
+			toolCalls: [{ id: 'call-1', name: 'read_collection', input: { collection: 'rfis' } }],
+			usage: { totalTokens: 4 }
+		};
+		await automationReplayStorage.run(
+			{
+				jobId: 'job-turn',
+				nextOrdinal: 0,
+				effects: [
+					{
+						ordinal: 0,
+						requestHash: automationEffectRequestHash(turnRequest),
+						status: 'succeeded',
+						result
+					}
+				]
+			},
+			async () => {
+				expect(replayAutomationAi({ request: turnRequest })).toEqual(result);
+			}
+		);
+	});
+
 	it('yields the first missing effect with a stable run and ordinal identity', async () => {
 		await automationReplayStorage.run({ jobId: 'job-1', effects: [], nextOrdinal: 0 }, async () => {
 			try {

@@ -23,11 +23,21 @@ import {
 	readChatSession,
 	updateChatTurn
 } from '$lib/server/agent/chat-session.server.js';
-import { runPendingConversationTitle } from '$lib/server/agent/conversation-title.server.js';
 import {
 	composeMentionContext,
 	type AgentMentionInput
 } from '$lib/server/agent/agent-mentions.server.js';
+import { executeMcpTool, resolveMcpToolSpecs } from '$lib/server/agent/mcp-tools.server.js';
+import {
+	acceptGoalStop,
+	countGoalVerdicts,
+	goalContinuationMessage,
+	MAX_GOAL_VERIFICATIONS,
+	replayGoalVerification,
+	serializeGoalVerdict,
+	verifyGoalAchievement,
+	windowMessageFromStoredGoal
+} from '$lib/server/agent/goal-mode.server.js';
 import { listSkillSummaries, readSkillContent } from '$lib/skills/registry.server.js';
 import type {
 	AiChatResult,
@@ -35,6 +45,13 @@ import type {
 	AiToolCall,
 	AiToolSpec
 } from '@norbital-ai/platform-utils/runtime/binding';
+import {
+	automationReplayStorage,
+	isAutomationEffectYield,
+	replayAutomationAi
+} from '$lib/server/run/automation-replay.server.js';
+import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';
+import { resolveRequestorBaseScope } from '$lib/server/bootstrap/resolve_workspace.js';
 import { z } from 'zod';
 
 const recordSchema = z.record(z.string(), z.unknown());
@@ -82,6 +99,12 @@ type AgentRunOptions = {
 	 * model sees the same restriction the tool list already enforces.
 	 */
 	readonly planMode?: boolean;
+	/**
+	 * Work toward the request, then an independent verifier decides whether this turn may stop.
+	 *
+	 * Ignored when `planMode` is on — plan turns produce a plan, they do not execute one.
+	 */
+	readonly goalMode?: boolean;
 	/**
 	 * Compact the window before this turn reasons, whatever its size.
 	 *
@@ -233,6 +256,7 @@ function jsonSchema(definition: AgentToolDefinition): unknown {
 type ResolvedTools = {
 	readonly specs: readonly AiToolSpec[];
 	readonly hostTools: ReadonlySet<string>;
+	readonly mcpTools: ReadonlySet<string>;
 };
 
 /**
@@ -352,8 +376,17 @@ async function resolveTools(
 	const taken = new Set(tools.map((tool) => tool.name));
 	const hostSpecs = options.planMode ? [] : await hostToolSpecs(spec, taken);
 	tools.push(...hostSpecs);
+	for (const tool of hostSpecs) taken.add(tool.name);
+	const mcp = options.planMode
+		? { specs: [], names: new Set<string>() }
+		: await resolveMcpToolSpecs(spec, taken);
+	tools.push(...mcp.specs);
 	void collections;
-	return { specs: tools, hostTools: new Set(hostSpecs.map((tool) => tool.name)) };
+	return {
+		specs: tools,
+		hostTools: new Set(hostSpecs.map((tool) => tool.name)),
+		mcpTools: mcp.names
+	};
 }
 
 const MUTATION_METHODS = new Set(['create', 'update', 'delete']);
@@ -461,6 +494,9 @@ async function executeTool(
 			})
 		);
 	}
+	if (resolved.mcpTools.has(call.name)) {
+		return executeMcpTool(spec, call.name, call.input);
+	}
 	const definition = getTenantWorkspace().registered.agentTools[call.name];
 	if (!definition || !(spec.tools ?? []).includes(call.name)) {
 		throw new Error(`Agent cannot execute tenant tool ${call.name}`);
@@ -538,7 +574,11 @@ async function loadMessages(sessionId: string): Promise<{ messages: AiMessage[] 
 						role: 'user',
 						content: `<conversation-summary>\n${message.content}\n</conversation-summary>`
 					}
-				: message
+				: row.kind === 'goal'
+					? windowMessageFromStoredGoal(
+							typeof message.content === 'string' ? message.content : ''
+						)
+					: message
 		);
 	}
 	return { messages };
@@ -688,9 +728,13 @@ async function streamProviderTurn(input: {
 	readonly writer: TranscriptWriter;
 	readonly turnId: string;
 	readonly planMode: boolean;
+	readonly goalMode: boolean;
 }): Promise<ProviderTurnResult> {
 	const ai = requireRuntimeFacility('ai');
-	const system = composeSystemPrompt(input.spec.systemPrompt, { planMode: input.planMode });
+	const system = composeSystemPrompt(input.spec.systemPrompt, {
+		planMode: input.planMode,
+		goalMode: input.goalMode
+	});
 	if (!ai.startStream || !ai.readStream || !ai.cancelStream) {
 		const result = await ai.chat({
 			messages: [{ role: 'system' as const, content: system }, ...input.messages],
@@ -827,12 +871,17 @@ async function runAgentLoop(input: {
 	readonly turnId: string;
 	readonly depth: number;
 	readonly planMode: boolean;
+	readonly goalMode: boolean;
+	readonly userRequest: string;
 }): Promise<LoopResult> {
 	const resolved = await resolveTools(input.spec, {
 		canSpawnSubagent: input.depth === 0 && !input.planMode,
 		planMode: input.planMode
 	});
-	const systemPrompt = composeSystemPrompt(input.spec.systemPrompt, { planMode: input.planMode });
+	const systemPrompt = composeSystemPrompt(input.spec.systemPrompt, {
+		planMode: input.planMode,
+		goalMode: input.goalMode
+	});
 	const contextLength = input.depth === 0 ? await selectedModelContextLength(input.spec) : null;
 	let consumedTokens = 0;
 	let finalText = '';
@@ -869,7 +918,8 @@ async function runAgentLoop(input: {
 			spec: input.spec,
 			writer: input.writer,
 			turnId: input.turnId,
-			planMode: input.planMode
+			planMode: input.planMode,
+			goalMode: input.goalMode
 		});
 		consumedTokens += usageTokens(result.usage);
 		if (result.text) {
@@ -902,6 +952,20 @@ async function runAgentLoop(input: {
 		}
 		if (calls.length === 0) {
 			if (result.stopReason === 'refusal') throw new Error('AI provider refused the run');
+			if (
+				await continueAfterGoalVerification({
+					goalMode: input.goalMode,
+					depth: input.depth,
+					userRequest: input.userRequest,
+					messages: input.messages,
+					spec: input.spec,
+					writer: input.writer,
+					turnId: input.turnId,
+					durable: false
+				})
+			) {
+				continue;
+			}
 			return { text: finalText, consumedTokens };
 		}
 		for (const call of calls) {
@@ -965,7 +1029,9 @@ async function runSubagent(input: {
 			writer: input.writer,
 			turnId,
 			depth: input.depth,
-			planMode: input.planMode
+			planMode: input.planMode,
+			goalMode: false,
+			userRequest: input.task
 		});
 		await finishTurn(input.writer.sessionId, turnId, 'succeeded');
 		return { text: result.text, turnId };
@@ -978,6 +1044,883 @@ async function runSubagent(input: {
 		}
 		throw cause;
 	}
+}
+
+function lastConsumedOrdinal(): number {
+	const replay = automationReplayStorage.getStore();
+	if (!replay) throw new Error('Durable agent turns require an automation receipt replay context');
+	return replay.nextOrdinal - 1;
+}
+
+/**
+ * When the main agent would stop in goal mode, an independent verifier decides whether it may.
+ *
+ * Returns true when the loop should continue. Subagents and plan mode never enter this gate.
+ */
+async function continueAfterGoalVerification(input: {
+	readonly goalMode: boolean;
+	readonly depth: number;
+	readonly userRequest: string;
+	readonly messages: AiMessage[];
+	readonly spec: AgentAutomationSpec;
+	readonly writer: TranscriptWriter;
+	readonly turnId: string;
+	readonly durable: boolean;
+}): Promise<boolean> {
+	if (!input.goalMode || input.depth !== 0) return false;
+	const attempts = await countGoalVerdicts(
+		input.writer.sessionId,
+		input.turnId,
+		input.durable ? { beforeOrdinal: lastConsumedOrdinal() + 1 } : undefined
+	);
+	if (attempts >= MAX_GOAL_VERIFICATIONS) return false;
+	const request = {
+		spec: input.spec,
+		userRequest: input.userRequest,
+		messages: input.messages
+	};
+	const verdict = input.durable
+		? replayGoalVerification(request)
+		: await verifyGoalAchievement(request);
+	const extra: Record<string, unknown> = { kind: 'goal' };
+	if (input.durable) extra.durable_ordinal = lastConsumedOrdinal();
+	if (
+		!input.durable ||
+		!(await turnHasDurableOrdinal(
+			input.writer.sessionId,
+			input.turnId,
+			extra.durable_ordinal as number
+		))
+	) {
+		await input.writer.persist(
+			{ role: 'system', content: serializeGoalVerdict(verdict) },
+			input.turnId,
+			extra
+		);
+	}
+	if (acceptGoalStop(verdict, attempts + 1)) return false;
+	input.messages.push(goalContinuationMessage(verdict));
+	return true;
+}
+
+function requestorIdFromScope(scope: Record<string, unknown> | undefined): string | null {
+	const requestor = scope?.requestor;
+	if (!requestor || typeof requestor !== 'object' || Array.isArray(requestor)) return null;
+	const id = (requestor as { norbital_id?: unknown }).norbital_id;
+	return typeof id === 'string' ? id : null;
+}
+
+async function withOriginRequestor<T>(
+	scope: Record<string, unknown> | undefined,
+	run: () => Promise<T>
+): Promise<T> {
+	const requestorId = requestorIdFromScope(scope);
+	if (!requestorId) return run();
+	const ctx = getWorkspace({ provision: true });
+	if (ctx.baseScope.requestor.norbital_id === requestorId) return run();
+	const resolved = await resolveRequestorBaseScope({
+		tenantDb: ctx.tenantDb,
+		organization: ctx.organization,
+		userId: requestorId
+	});
+	if (!resolved) return run();
+	return runWithWorkspaceContext(
+		{ ...ctx, baseScope: resolved.baseScope, userOrganizations: [] },
+		run
+	);
+}
+
+export type DurableAgentChannelDelivery = {
+	readonly channelKey: string;
+	readonly transport: string;
+	readonly conversationId: string;
+	readonly inboundReceiptId: string;
+	readonly conversationRowId: string;
+};
+
+export type DurableAgentTurnSnapshot = {
+	readonly sessionId: string;
+	readonly runId: string;
+	readonly turnId: string;
+	readonly promptContent: string;
+	readonly spec: AgentAutomationSpec;
+	readonly input?: string;
+	readonly inputMessageId?: string | null;
+	readonly planMode?: boolean;
+	readonly goalMode?: boolean;
+	readonly compact?: { readonly instructions?: string };
+	readonly mentions?: readonly AgentMentionInput[];
+	readonly inputMetadata?: Record<string, unknown>;
+	readonly channel?: DurableAgentChannelDelivery;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return recordSchema.safeParse(value).success ? (value as Record<string, unknown>) : {};
+}
+
+function snapshotFromRecord(value: unknown): DurableAgentTurnSnapshot | null {
+	const record = asRecord(value);
+	if (
+		typeof record.sessionId !== 'string' ||
+		typeof record.runId !== 'string' ||
+		typeof record.turnId !== 'string' ||
+		typeof record.promptContent !== 'string'
+	) {
+		return null;
+	}
+	const specValue = record.spec;
+	if (!specValue || typeof specValue !== 'object' || Array.isArray(specValue)) return null;
+	const spec = specValue as AgentAutomationSpec;
+	if (spec.kind !== 'agent' || typeof spec.task !== 'string' || typeof spec.description !== 'string') {
+		return null;
+	}
+	return {
+		sessionId: record.sessionId,
+		runId: record.runId,
+		turnId: record.turnId,
+		promptContent: record.promptContent,
+		spec,
+		...(typeof record.input === 'string' ? { input: record.input } : {}),
+		...(typeof record.inputMessageId === 'string' ? { inputMessageId: record.inputMessageId } : {}),
+		...(record.planMode === true ? { planMode: true } : {}),
+		...(record.goalMode === true ? { goalMode: true } : {}),
+		...(record.compact && typeof record.compact === 'object' && !Array.isArray(record.compact)
+			? {
+					compact: {
+						...((record.compact as { instructions?: unknown }).instructions
+							? {
+									instructions: String(
+										(record.compact as { instructions?: unknown }).instructions
+									)
+								}
+							: {})
+					}
+				}
+			: {}),
+		...(Array.isArray(record.mentions)
+			? { mentions: record.mentions as AgentMentionInput[] }
+			: {}),
+		...(record.inputMetadata &&
+		typeof record.inputMetadata === 'object' &&
+		!Array.isArray(record.inputMetadata)
+			? { inputMetadata: record.inputMetadata as Record<string, unknown> }
+			: {}),
+		...(record.channel && typeof record.channel === 'object' && !Array.isArray(record.channel)
+			? { channel: record.channel as DurableAgentChannelDelivery }
+			: {})
+	};
+}
+
+async function loadDurableTurnWindow(
+	sessionId: string,
+	turnId: string,
+	promptContent: string
+): Promise<AiMessage[]> {
+	const session = await readChatSession(sessionId);
+	const subagentTurns = new Set(
+		session.turns.filter((turn) => turn.subagent_id !== null).map((turn) => turn.norbital_id)
+	);
+	const prior = session.messages.filter(
+		(message) =>
+			message.kind !== 'usage' &&
+			message.kind !== 'reasoning' &&
+			(message.turn_id === null || !subagentTurns.has(message.turn_id)) &&
+			message.turn_id !== turnId
+	);
+	const anchor = prior.findLastIndex((message) => message.kind === 'summary');
+	const replay = anchor < 0 ? prior : prior.slice(anchor);
+	const messages: AiMessage[] = [];
+	for (const row of replay) {
+		const message = row.parts?.[0];
+		if (!message) continue;
+		messages.push(
+			row.kind === 'summary'
+				? {
+						role: 'user',
+						content: `<conversation-summary>\n${message.content}\n</conversation-summary>`
+					}
+				: row.kind === 'goal'
+					? windowMessageFromStoredGoal(
+							typeof message.content === 'string' ? message.content : ''
+						)
+					: message
+		);
+	}
+	messages.push({ role: 'user', content: promptContent });
+	return messages;
+}
+
+function toolResultFromSession(
+	sessionId: string,
+	turnId: string,
+	callId: string
+): Promise<AiMessage | null> {
+	return readChatSession(sessionId).then((session) => {
+		const row = session.messages.find(
+			(message) =>
+				message.turn_id === turnId &&
+				message.role === 'tool' &&
+				message.parts[0]?.role === 'tool' &&
+				message.parts[0].toolCallId === callId
+		);
+		return row?.parts[0] ?? null;
+	});
+}
+
+async function turnHasDurableOrdinal(
+	sessionId: string,
+	turnId: string,
+	ordinal: number
+): Promise<boolean> {
+	const session = await readChatSession(sessionId);
+	return session.messages.some(
+		(message) => message.turn_id === turnId && message.durable_ordinal === ordinal
+	);
+}
+
+async function compactDurableWindow(input: {
+	readonly messages: AiMessage[];
+	readonly writer: TranscriptWriter;
+	readonly turnId: string;
+	readonly spec: AgentAutomationSpec;
+	readonly instructions?: string;
+}): Promise<void> {
+	const steer = input.instructions
+		? `\n\nThe person asked you to focus on: ${input.instructions}`
+		: '';
+	const prompt =
+		'Summarize this agent conversation for faithful continuation. Preserve decisions, ' +
+		'constraints, identifiers, tool outcomes, unresolved work, and the intent behind the ' +
+		`request.${steer}\n\n${JSON.stringify(input.messages)}`;
+	const summary = replayAutomationAi({
+		request: {
+			kind: 'ai.prompt',
+			prompt,
+			...(input.spec.model ? { model: input.spec.model } : {}),
+			...(input.spec.profile ? { profile: input.spec.profile } : {})
+		}
+	});
+	if (typeof summary !== 'string' || !summary.trim()) {
+		throw new Error('The summarizer returned nothing to checkpoint');
+	}
+	const ordinal = lastConsumedOrdinal();
+	if (!(await turnHasDurableOrdinal(input.writer.sessionId, input.turnId, ordinal))) {
+		await input.writer.persist({ role: 'system', content: summary.trim() }, input.turnId, {
+			kind: 'summary',
+			durable_ordinal: ordinal
+		});
+	}
+	input.messages.splice(0, input.messages.length, {
+		role: 'user',
+		content: `<conversation-summary>\n${summary.trim()}\n</conversation-summary>`
+	});
+}
+
+function replayProviderTurn(input: {
+	readonly messages: readonly AiMessage[];
+	readonly tools: readonly AiToolSpec[];
+	readonly spec: AgentAutomationSpec;
+	readonly planMode: boolean;
+	readonly goalMode: boolean;
+}): AiChatResult {
+	const system = composeSystemPrompt(input.spec.systemPrompt, {
+		planMode: input.planMode,
+		goalMode: input.goalMode
+	});
+	const result = replayAutomationAi({
+		request: {
+			kind: 'ai.turn',
+			messages: [...input.messages],
+			system,
+			tools: [...input.tools],
+			...(input.spec.model ? { model: input.spec.model } : {}),
+			...(input.spec.profile ? { profile: input.spec.profile } : {})
+		}
+	});
+	if (!result || typeof result !== 'object' || Array.isArray(result)) {
+		throw new Error('Durable agent turn expected a provider result');
+	}
+	const parsed = result as AiChatResult;
+	if (typeof parsed.text !== 'string' || typeof parsed.stopReason !== 'string') {
+		throw new Error('Durable agent turn returned an invalid provider result');
+	}
+	return parsed;
+}
+
+async function applySettledProviderTurn(input: {
+	readonly spec: AgentAutomationSpec;
+	readonly resolved: ResolvedTools;
+	readonly messages: AiMessage[];
+	readonly writer: TranscriptWriter;
+	readonly turnId: string;
+	readonly depth: number;
+	readonly planMode: boolean;
+	readonly result: AiChatResult;
+	consumedTokens: number;
+}): Promise<{ readonly done: boolean; readonly text: string; readonly consumedTokens: number }> {
+	const ordinal = lastConsumedOrdinal();
+	const already = await turnHasDurableOrdinal(input.writer.sessionId, input.turnId, ordinal);
+	if (!already) {
+		if (input.result.reasoning) {
+			await input.writer.persist(
+				{ role: 'assistant', content: input.result.reasoning },
+				input.turnId,
+				{ kind: 'reasoning', model: input.spec.model ?? null, durable_ordinal: ordinal }
+			);
+		}
+		if (input.result.text) {
+			await input.writer.persist(
+				{ role: 'assistant', content: input.result.text },
+				input.turnId,
+				{ status: 'complete', model: input.spec.model ?? null, durable_ordinal: ordinal }
+			);
+		}
+		if (input.result.usage !== undefined) {
+			await input.writer.persist({ role: 'assistant', content: '' }, input.turnId, {
+				kind: 'usage',
+				status: 'complete',
+				model: input.spec.model ?? null,
+				usage: objectValue(input.result.usage),
+				durable_ordinal: ordinal
+			});
+		}
+		const calls = input.result.toolCalls ?? [];
+		if (calls.length > 0) {
+			await input.writer.persist(
+				{ role: 'assistant', content: '', toolCalls: calls },
+				input.turnId,
+				{ durable_ordinal: ordinal }
+			);
+		} else if (!input.result.reasoning && !input.result.text && input.result.usage === undefined) {
+			await input.writer.persist({ role: 'assistant', content: '' }, input.turnId, {
+				kind: 'usage',
+				status: 'complete',
+				model: input.spec.model ?? null,
+				durable_ordinal: ordinal
+			});
+		}
+	}
+
+	let finalText = '';
+	if (input.result.text) {
+		finalText = input.result.text;
+		input.messages.push({ role: 'assistant', content: input.result.text });
+	}
+	const calls = input.result.toolCalls ?? [];
+	if (calls.length > 0) {
+		input.messages.push({ role: 'assistant', content: '', toolCalls: calls });
+	}
+	input.consumedTokens += usageTokens(input.result.usage);
+	if (input.spec.maxTokens && input.consumedTokens > input.spec.maxTokens) {
+		throw new Error(
+			`Agent token budget exceeded (${input.consumedTokens} of ${input.spec.maxTokens} tokens)`
+		);
+	}
+	if (calls.length === 0) {
+		if (input.result.stopReason === 'refusal') throw new Error('AI provider refused the run');
+		return { done: true, text: finalText, consumedTokens: input.consumedTokens };
+	}
+
+	for (const call of calls) {
+		const existing = await toolResultFromSession(input.writer.sessionId, input.turnId, call.id);
+		let output: Record<string, unknown> | undefined;
+		try {
+			if (call.name === 'spawn_subagent') {
+				if (input.planMode) throw new Error('Permission denied: this turn is in plan mode.');
+				if (input.depth !== 0) throw new Error('Subagents cannot spawn another subagent');
+				const task = z.object({ task: z.string().min(1) }).parse(call.input).task;
+				const child = await runDurableSubagent({
+					spec: input.spec,
+					task,
+					writer: input.writer,
+					parentTurnId: input.turnId,
+					subagentId: `subagent:${call.id}`,
+					depth: input.depth + 1,
+					planMode: input.planMode
+				});
+				output = { text: child.text, turnId: child.turnId };
+			} else if (existing) {
+				input.messages.push(existing);
+				continue;
+			} else {
+				output = await executeTool(input.spec, input.resolved, call, input.planMode);
+			}
+		} catch (cause) {
+			if (isAutomationEffectYield(cause) || automationReplayStorage.getStore()?.pending) {
+				throw cause;
+			}
+			output = { error: cause instanceof Error ? cause.message : String(cause) };
+		}
+		if (existing) {
+			input.messages.push(existing);
+			continue;
+		}
+		if (!output) throw new Error(`Agent tool ${call.name} produced no result`);
+		const toolMessage: AiMessage = {
+			role: 'tool',
+			content: JSON.stringify(output),
+			toolCallId: call.id
+		};
+		input.messages.push(toolMessage);
+		await input.writer.persist(toolMessage, input.turnId, { durable_ordinal: ordinal });
+		await updateChatTurn(input.writer.sessionId, input.turnId, {
+			heartbeat_at: new Date().toISOString()
+		});
+	}
+	return { done: false, text: finalText, consumedTokens: input.consumedTokens };
+}
+
+async function runDurableAgentLoop(input: {
+	readonly spec: AgentAutomationSpec;
+	readonly messages: AiMessage[];
+	readonly writer: TranscriptWriter;
+	readonly turnId: string;
+	readonly depth: number;
+	readonly planMode: boolean;
+	readonly goalMode: boolean;
+	readonly userRequest: string;
+}): Promise<LoopResult> {
+	const resolved = await resolveTools(input.spec, {
+		canSpawnSubagent: input.depth === 0 && !input.planMode,
+		planMode: input.planMode
+	});
+	const systemPrompt = composeSystemPrompt(input.spec.systemPrompt, {
+		planMode: input.planMode,
+		goalMode: input.goalMode
+	});
+	const contextLength = input.depth === 0 ? await selectedModelContextLength(input.spec) : null;
+	let consumedTokens = 0;
+	let finalText = '';
+	let compactionUnavailable = input.depth !== 0;
+	while (true) {
+		if (
+			!compactionUnavailable &&
+			input.messages.length >= COMPACTION_FLOOR_MESSAGES &&
+			shouldAutomaticallyCompact({
+				messages: input.messages,
+				tools: resolved.specs,
+				systemPrompt,
+				contextLength
+			})
+		) {
+			try {
+				await compactDurableWindow({
+					messages: input.messages,
+					writer: input.writer,
+					turnId: input.turnId,
+					spec: input.spec
+				});
+			} catch (cause) {
+				if (automationReplayStorage.getStore()?.pending) throw cause;
+				compactionUnavailable = true;
+			}
+		}
+		const result = replayProviderTurn({
+			messages: input.messages,
+			tools: resolved.specs,
+			spec: input.spec,
+			planMode: input.planMode,
+			goalMode: input.goalMode
+		});
+		const applied = await applySettledProviderTurn({
+			spec: input.spec,
+			resolved,
+			messages: input.messages,
+			writer: input.writer,
+			turnId: input.turnId,
+			depth: input.depth,
+			planMode: input.planMode,
+			result,
+			consumedTokens
+		});
+		consumedTokens = applied.consumedTokens;
+		if (applied.text) finalText = applied.text;
+		if (applied.done) {
+			if (
+				await continueAfterGoalVerification({
+					goalMode: input.goalMode,
+					depth: input.depth,
+					userRequest: input.userRequest,
+					messages: input.messages,
+					spec: input.spec,
+					writer: input.writer,
+					turnId: input.turnId,
+					durable: true
+				})
+			) {
+				continue;
+			}
+			return { text: finalText, consumedTokens };
+		}
+	}
+}
+
+async function runDurableSubagent(input: {
+	readonly spec: AgentAutomationSpec;
+	readonly task: string;
+	readonly writer: TranscriptWriter;
+	readonly parentTurnId: string;
+	readonly subagentId: string;
+	readonly depth: number;
+	readonly planMode: boolean;
+}): Promise<{ readonly text: string; readonly turnId: string }> {
+	const session = await readChatSession(input.writer.sessionId);
+	const existing = session.turns.find((turn) => turn.subagent_id === input.subagentId);
+	const turnId = existing?.norbital_id ?? (await createTurn(input));
+	const hasPrompt = session.messages.some(
+		(message) => message.turn_id === turnId && message.role === 'user'
+	);
+	if (!hasPrompt) {
+		const prompt: AiMessage = { role: 'user', content: input.task };
+		const promptMessageId = await input.writer.persist(prompt, turnId);
+		if (promptMessageId) {
+			await updateChatTurn(input.writer.sessionId, turnId, {
+				prompt_message_id: promptMessageId
+			});
+		}
+	}
+	try {
+		const result = await runDurableAgentLoop({
+			spec: input.spec,
+			messages: [{ role: 'user', content: input.task }],
+			writer: input.writer,
+			turnId,
+			depth: input.depth,
+			planMode: input.planMode,
+			goalMode: false,
+			userRequest: input.task
+		});
+		await finishTurn(input.writer.sessionId, turnId, 'succeeded');
+		return { text: result.text, turnId };
+	} catch (cause) {
+		if (automationReplayStorage.getStore()?.pending) throw cause;
+		const message = cause instanceof Error ? cause.message : String(cause);
+		try {
+			await finishTurn(input.writer.sessionId, turnId, 'failed', message);
+		} catch (settlementCause) {
+			throw combinedTurnFailure(cause, settlementCause);
+		}
+		throw cause;
+	}
+}
+
+async function completeDurableRun(input: {
+	readonly ctx: ReturnType<typeof getWorkspace>;
+	readonly runId: string;
+	readonly sessionId: string;
+	readonly turnId: string;
+	readonly text: string;
+	readonly inputMessageId?: string | null;
+	readonly channel?: DurableAgentChannelDelivery;
+}): Promise<AgentRunResult> {
+	await finishTurn(input.sessionId, input.turnId, 'succeeded');
+	await updateRecord(
+		input.ctx,
+		'automation_run',
+		input.runId,
+		{
+			status: 'success',
+			output: { text: input.text },
+			error: null,
+			completed_at: new Date().toISOString()
+		},
+		{ isElevated: true }
+	);
+	if (input.channel) {
+		const text = input.text.trim();
+		const messaging = requireRuntimeFacility('messaging');
+		const delivered = text
+			? await messaging.sendVia(input.channel.channelKey, input.channel.transport, {
+					conversationId: input.channel.conversationId,
+					text
+				})
+			: { sent: false, reason: 'agent produced no text' };
+		await updateRecord(
+			input.ctx,
+			'channel_inbound_message',
+			input.channel.inboundReceiptId,
+			{
+				status: 'answered',
+				answered_at: new Date().toISOString(),
+				...(input.inputMessageId ? { session_message_id: input.inputMessageId } : {}),
+				...(delivered.sent ? {} : { error: delivered.reason ?? 'transport refused delivery' })
+			},
+			{ isElevated: true }
+		);
+		await updateRecord(
+			input.ctx,
+			'channel_conversation',
+			input.channel.conversationRowId,
+			{
+				last_inbound_at: new Date().toISOString(),
+				...(delivered.sent ? { last_outbound_at: new Date().toISOString() } : {})
+			},
+			{ isElevated: true }
+		);
+	}
+	return {
+		runId: input.runId,
+		status: 'success',
+		text: input.text,
+		sessionId: input.sessionId,
+		inputMessageId: null
+	};
+}
+
+async function failDurableRun(input: {
+	readonly ctx: ReturnType<typeof getWorkspace>;
+	readonly writer: TranscriptWriter;
+	readonly runId: string;
+	readonly sessionId: string;
+	readonly turnId: string;
+	readonly cause: unknown;
+	readonly channel?: DurableAgentChannelDelivery;
+}): Promise<never> {
+	const message = input.cause instanceof Error ? input.cause.message : String(input.cause);
+	await input.writer.persist({ role: 'system', content: message }, input.turnId).catch(() => undefined);
+	let surfaced: unknown = input.cause;
+	try {
+		await finishTurn(input.sessionId, input.turnId, 'failed', message);
+	} catch (settlementCause) {
+		surfaced = combinedTurnFailure(input.cause, settlementCause);
+	}
+	await updateRecord(
+		input.ctx,
+		'automation_run',
+		input.runId,
+		{
+			status: 'failed',
+			error: message,
+			completed_at: new Date().toISOString()
+		},
+		{ isElevated: true }
+	).catch(() => undefined);
+	if (input.channel) {
+		await updateRecord(
+			input.ctx,
+			'channel_inbound_message',
+			input.channel.inboundReceiptId,
+			{ status: 'failed', error: message },
+			{ isElevated: true }
+		).catch(() => undefined);
+	}
+	throw surfaced;
+}
+
+export async function prepareInteractiveAgentTurn(input: {
+	readonly sessionId: string;
+	readonly spec: AgentAutomationSpec;
+	readonly message: string;
+	readonly planMode?: boolean;
+	readonly goalMode?: boolean;
+	readonly mentions?: readonly AgentMentionInput[];
+	readonly inputMetadata?: Record<string, unknown>;
+}): Promise<{ readonly turnId: string; readonly promptContent: string; readonly inputMessageId: string | null }> {
+	const ctx = getWorkspace({ provision: true });
+	const writer = createTranscriptWriter(input.sessionId);
+	const turnId = await createTurn({ writer, spec: input.spec });
+	const mentionContext = input.mentions?.length
+		? await composeMentionContext(ctx, input.mentions)
+		: null;
+	const promptContent = mentionContext ? `${input.message}\n\n${mentionContext}` : input.message;
+	const inputMessageId = await writer.persist({ role: 'user', content: input.message }, turnId, {
+		...(input.inputMetadata ?? {}),
+		...(input.planMode ? { plan_mode: true } : {}),
+		...(input.goalMode && !input.planMode ? { goal_mode: true } : {})
+	});
+	if (inputMessageId) {
+		await updateChatTurn(input.sessionId, turnId, { prompt_message_id: inputMessageId });
+	}
+	return { turnId, promptContent, inputMessageId };
+}
+
+export async function runDurableAgentAutomation(input: {
+	readonly automationName: string | null;
+	readonly spec: AgentAutomationSpec;
+	readonly scope?: Record<string, unknown>;
+	readonly snapshot?: DurableAgentTurnSnapshot | null;
+}): Promise<Record<string, unknown>> {
+	if (!automationReplayStorage.getStore()) {
+		throw new Error('Durable agent turns require an automation receipt replay context');
+	}
+	return withOriginRequestor(input.scope, async () => {
+		const ctx = getWorkspace({ provision: true });
+		const ownerUserId = ctx.baseScope.requestor.norbital_id;
+		const snapshot = input.snapshot;
+		const jobId = automationReplayStorage.getStore()?.jobId;
+		const runId =
+			snapshot?.runId ??
+			jobId ??
+			(
+				await createRecord(
+					ctx,
+					'automation_run',
+					{
+						requested_by_user_id: ownerUserId,
+						automation_name: input.automationName,
+						status: 'running',
+						input: { task: input.spec.task },
+						started_at: new Date().toISOString()
+					},
+					{ isElevated: true, ...(jobId ? { recordId: jobId } : {}) }
+				)
+			).norbital_id;
+		if (typeof runId !== 'string') throw new Error('Agent run has no id');
+		if (snapshot?.runId || jobId) {
+			const existing = await ctx.tenantDb.query<{
+				automation_name: string | null;
+				requested_by_user_id: string;
+			}>(
+				`SELECT automation_name, requested_by_user_id
+				   FROM automation_run
+				  WHERE norbital_id = $1::uuid`,
+				[runId]
+			);
+			if (existing.rows[0]) {
+				await updateRecord(
+					ctx,
+					'automation_run',
+					runId,
+					{ status: 'running', error: null, completed_at: null },
+					{ isElevated: true }
+				);
+			} else {
+				await createRecord(
+					ctx,
+					'automation_run',
+					{
+						requested_by_user_id: ownerUserId,
+						automation_name: input.automationName,
+						status: 'running',
+						input: { task: input.spec.task },
+						started_at: new Date().toISOString()
+					},
+					{ isElevated: true, recordId: runId }
+				);
+			}
+		}
+		const sessionId = snapshot?.sessionId ?? (await ensureRunSession(runId, ownerUserId));
+		const writer = createTranscriptWriter(sessionId);
+		const spec = snapshot?.spec ?? input.spec;
+		const planMode = snapshot?.planMode === true;
+		const goalMode = snapshot?.goalMode === true && !planMode;
+		const incoming = asRecord(input.scope?.incoming_record);
+		const authoredRecord =
+			snapshotFromRecord(incoming) === null && Object.keys(incoming).length > 0
+				? incoming
+				: null;
+		const promptContent =
+			snapshot?.promptContent ??
+			(authoredRecord ? `${spec.task}\n\n${JSON.stringify(authoredRecord)}` : spec.task);
+		const session = await readChatSession(sessionId);
+		const openRootTurn = session.turns.find(
+			(turn) => turn.subagent_id === null && turn.ended_at === null
+		);
+		const turnId = snapshot?.turnId ?? openRootTurn?.norbital_id ?? (await createTurn({ writer, spec }));
+		const hasUserMessage = session.messages.some(
+			(message) => message.turn_id === turnId && message.role === 'user'
+		);
+		if (!hasUserMessage) {
+			const inputMessageId = await writer.persist(
+				{ role: 'user', content: snapshot?.input ?? spec.task },
+				turnId,
+				{
+					...(snapshot?.inputMetadata ?? {}),
+					...(planMode ? { plan_mode: true } : {}),
+					...(goalMode ? { goal_mode: true } : {})
+				}
+			);
+			if (inputMessageId) {
+				await updateChatTurn(sessionId, turnId, { prompt_message_id: inputMessageId });
+			}
+		}
+		const messages = await loadDurableTurnWindow(sessionId, turnId, promptContent);
+		if (messages.length === 0) throw new Error('Agent run requires an input message');
+
+		if (snapshot?.compact) {
+			const window = messages.slice(0, -1);
+			try {
+				const notice =
+					window.length < COMPACTION_FLOOR_MESSAGES
+						? 'There is not enough conversation to compact yet.'
+						: await compactDurableWindow({
+								messages: window,
+								writer,
+								turnId,
+								spec,
+								...(snapshot.compact.instructions
+									? { instructions: snapshot.compact.instructions }
+									: {})
+							}).then(
+								() => 'Context compacted. The conversation above is kept and still readable.'
+							);
+				if (window.length < COMPACTION_FLOOR_MESSAGES) {
+					await writer.persist({ role: 'system', content: notice }, turnId);
+				}
+				const completed = await completeDurableRun({
+					ctx,
+					runId,
+					sessionId,
+					turnId,
+					text: notice,
+					...(snapshot.inputMessageId ? { inputMessageId: snapshot.inputMessageId } : {}),
+					...(snapshot.channel ? { channel: snapshot.channel } : {})
+				});
+				return { text: completed.text, runId: completed.runId, sessionId: completed.sessionId };
+			} catch (cause) {
+				if (automationReplayStorage.getStore()?.pending) throw cause;
+				return failDurableRun({
+					ctx,
+					writer,
+					runId,
+					sessionId,
+					turnId,
+					cause,
+					...(snapshot.channel ? { channel: snapshot.channel } : {})
+				});
+			}
+		}
+
+		try {
+			const result = await runDurableAgentLoop({
+				spec,
+				messages,
+				writer,
+				turnId,
+				depth: 0,
+				planMode,
+				goalMode,
+				userRequest: promptContent
+			});
+			const completed = await completeDurableRun({
+				ctx,
+				runId,
+				sessionId,
+				turnId,
+				text: result.text,
+				...(snapshot?.inputMessageId ? { inputMessageId: snapshot.inputMessageId } : {}),
+				...(snapshot?.channel ? { channel: snapshot.channel } : {})
+			});
+			return { text: completed.text, runId: completed.runId, sessionId: completed.sessionId };
+		} catch (cause) {
+			if (automationReplayStorage.getStore()?.pending) throw cause;
+			return failDurableRun({
+				ctx,
+				writer,
+				runId,
+				sessionId,
+				turnId,
+				cause,
+				...(snapshot?.channel ? { channel: snapshot.channel } : {})
+			});
+		}
+	});
+}
+
+export function durableAgentSnapshotFromScope(
+	scope: Record<string, unknown> | undefined
+): DurableAgentTurnSnapshot | null {
+	return snapshotFromRecord(scope?.incoming_record);
 }
 
 export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult> {
@@ -1033,6 +1976,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 	const initial = options.input ?? (messages.length === 0 ? options.spec.task : undefined);
 	let inputMessageId: string | null = null;
 	const planMode = options.planMode === true;
+	const goalMode = options.goalMode === true && !planMode;
 	if (initial) {
 		// The transcript stores what the person typed; the record snapshots ride along in the model
 		// window only. A later turn that still needs a record can read it through `read_collection` —
@@ -1046,14 +1990,11 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 		});
 		inputMessageId = await writer.persist({ role: 'user', content: initial }, turnId, {
 			...(options.inputMetadata ?? {}),
-			...(planMode ? { plan_mode: true } : {})
+			...(planMode ? { plan_mode: true } : {}),
+			...(goalMode ? { goal_mode: true } : {})
 		});
 		if (inputMessageId) {
 			await updateChatTurn(sessionId, turnId, { prompt_message_id: inputMessageId });
-			// Immediate background fast path. The pending marker is the durable job state, so a failure is
-			// harmless: the workspace queue will retry it. Starting here avoids making every first title
-			// wait for the minute-granularity repair sweep.
-			void runPendingConversationTitle(sessionId).catch(() => undefined);
 		}
 	}
 	if (messages.length === 0) throw new Error('Agent run requires an input message');
@@ -1101,7 +2042,9 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 			writer,
 			turnId,
 			depth: 0,
-			planMode
+			planMode,
+			goalMode,
+			userRequest: initial ?? options.spec.task
 		});
 		await finishTurn(sessionId, turnId, 'succeeded');
 		await updateRecord(
