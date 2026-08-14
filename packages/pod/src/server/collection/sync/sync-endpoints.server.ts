@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import type { PodRequestEvent } from '$lib/server/request-context.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';

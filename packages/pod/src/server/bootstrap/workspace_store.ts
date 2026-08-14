@@ -4,8 +4,7 @@ import { defineRelations } from 'drizzle-orm';
 import type { TBaseScope } from '$lib/shared/scope.js';
 import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
 import { error } from '$lib/server/http.js';
-import type { NeonDatabase } from 'drizzle-orm/neon-serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
+import { drizzle, type PgRemoteDatabase } from 'drizzle-orm/pg-proxy';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentPodCallOrNull, withPodCallField } from '$lib/server/pod-call.js';
@@ -53,7 +52,7 @@ export type ProvisionedContext = {
 	tenantDb: TenantDbClient;
 	chatId?: string;
 	/** Drizzle ORM database instance (lazy-init from tenantDb). */
-	drizzleDb?: NeonDatabase;
+	drizzleDb?: PgRemoteDatabase;
 	/** Drizzle table objects keyed by collection name. */
 	tableRegistry?: Record<string, PgTable>;
 };
@@ -99,7 +98,7 @@ export type CreateProvisionedParams = {
 	zone?: WorkspaceZone;
 	chatId?: string;
 	tenantDb: TenantDbClient;
-	drizzleDb?: NeonDatabase;
+	drizzleDb?: PgRemoteDatabase;
 	tableRegistry?: Record<string, PgTable>;
 	relationsRegistry?: Record<string, unknown>;
 };
@@ -107,9 +106,30 @@ export type CreateProvisionedParams = {
 function buildProvisionedDrizzleDb(
 	client: TenantDbClient,
 	relations: Record<string, unknown>
-): NeonDatabase {
-	// Safe: tenant SQL client and assembled relations satisfy Drizzle neon-serverless config at runtime.
-	return drizzle({ client, relations } as never);
+): PgRemoteDatabase {
+	return drizzle(async (sqlText, params, method) => {
+		const result = await client.query(
+			method === 'all'
+				? { text: sqlText, values: params, rowMode: 'array' }
+				: { text: sqlText, values: params }
+		);
+		return { rows: [...result.rows] };
+	}, { relations } as never);
+}
+
+/** Run `operation` on the facility-pinned connection. pg-proxy has no drizzle.transaction. */
+export async function withTenantSqlTransaction<T>(
+	ctx: ProvisionedContext,
+	operation: (db: PgRemoteDatabase) => Promise<T>
+): Promise<T> {
+	const db = ctx.drizzleDb;
+	if (!db) {
+		throw error(500, 'Tenant database is not provisioned');
+	}
+	if (!ctx.tenantDb.transaction) {
+		throw error(500, 'Tenant database does not support atomic collection transactions.');
+	}
+	return ctx.tenantDb.transaction(() => operation(db));
 }
 
 export function createWorkspaceContext(params: CreateProvisionedParams): ProvisionedContext {

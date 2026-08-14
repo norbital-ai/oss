@@ -32,18 +32,6 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 // after registering the workspace) and re-exports it as `workspaceManifest`. Any consumer that wants
 // the manifest without the bundle imports it from `tenant_workspace.server.js` directly.
 export { getTenantManifest } from '$lib/server/bootstrap/tenant_workspace.server.js';
-export {
-	ADMIT_DEADLINE_HEADER,
-	ADMIT_TIMEOUT_HEADER,
-	admitHeaders,
-	currentAdmit,
-	parseAdmitHeaderRecord,
-	parseAdmitHeaders,
-	remainingMs,
-	runWithAdmit,
-	startAdmit,
-	type PodAdmit
-} from './admit.js';
 
 /** Register the compiled workspace so every later request and host command sees the same registry. */
 export function registerPodWorkspace(workspace: RuntimeWorkspaceSource): void {

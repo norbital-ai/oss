@@ -3,11 +3,12 @@ import { Pool } from 'pg';
 import { defineRelations, operators } from 'drizzle-orm';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
+import { createHostTenantDb } from '../support/host-tenant-db.js';
 import { dateRange } from '$lib/authoring/builtin/columns.js';
 import { buildSelect, setLocalSchema, type LocalCollectionSchema } from '$lib/ui/sync/local-sql.js';
 import { DRIZZLE_FIELD_OPERATORS } from '$lib/server/collection/collection_operators.server.js';
 import { createWorkspaceContext } from '$lib/server/bootstrap/workspace_store.js';
-import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { directFindMany } from '$lib/server/collection/collection_direct.js';
 import type { CollectionQuery } from '$lib/authoring/workspace/db-api.js';
 
@@ -136,6 +137,7 @@ function installLocalSchema(): void {
 describe('Collection `where` operators on dateRange columns (real Postgres)', () => {
 	let pg: PgHarness;
 	let pool: Pool;
+	let host: ReturnType<typeof createHostTenantDb>;
 	let ctx: ProvisionedContext;
 
 	/** The rows the server returns, by `code`, in a stable order. */
@@ -194,10 +196,7 @@ describe('Collection `where` operators on dateRange columns (real Postgres)', ()
 			]
 		);
 
-		const tenantDb = {
-			query: (input: unknown, params?: unknown[]) =>
-				pool.query(input as string, params as unknown[])
-		} as unknown as TenantDbClient;
+		host = createHostTenantDb(pg.connectionString, { pool });
 
 		ctx = createWorkspaceContext({
 			provision: 'provisioned',
@@ -207,7 +206,7 @@ describe('Collection `where` operators on dateRange columns (real Postgres)', ()
 				requestor: { norbital_id: USER_ID, role: 'admin' },
 				organization: { norbital_id: ORG_ID, name: 'Test Org' }
 			} as unknown as Parameters<typeof createWorkspaceContext>[0]['baseScope'],
-			tenantDb,
+			tenantDb: host.tenantDb,
 			tableRegistry: { companies, terms },
 			relationsRegistry: defineRelations({ companies, terms }, (r) => ({
 				terms: {
@@ -223,6 +222,7 @@ describe('Collection `where` operators on dateRange columns (real Postgres)', ()
 	}, 180_000);
 
 	afterAll(async () => {
+		await host?.close();
 		await pool?.end().catch(() => undefined);
 		pg?.stop();
 	});

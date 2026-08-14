@@ -92,8 +92,13 @@ source, `pod.host.ts`, and `.norbital/migrations/`; ignore the other generated e
 
 The browser never talks to tenant hooks or server handlers directly. Pod’s server runtime receives a
 request from a host identity provider, resolves or validates its user, organisation, role, and base
-scope, then evaluates ordinary policy before executing server code. The standalone runtime listens
-only on a loopback address; a production self-hosted `pod.host.ts` must provide its identity provider.
+scope, then evaluates ordinary policy before executing server code.
+
+Both hosts run the same `output/server/index.js`. Core compiles it in isolate-vm and calls a
+function export; leftover `node:crypto` / `node:async_hooks` are linker modules, and `node:fs` is
+denied. `pod start` `import()`s the same file in Node, so those specifiers resolve natively. The
+standalone process listens only on a loopback address; a production self-hosted `pod.host.ts` must
+provide its identity provider.
 
 Hosts implement facilities structurally required by the built workspace. A DB-only host can run a
 workspace that needs only database access; file fields require file storage. Integrations and

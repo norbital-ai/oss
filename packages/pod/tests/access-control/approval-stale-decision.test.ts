@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
+import { createHostTenantDb } from '../support/host-tenant-db.js';
 import { applyPodSchema } from '../support/pod-schema.js';
-import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import type { TScopeRequestor } from '$lib/shared/scope.js';
 
 /**
@@ -39,23 +40,7 @@ const { processAction, loadApprovalRequestRow } =
 const requestor = { norbital_id: USER_ID } as unknown as TScopeRequestor;
 const anyConfig = { supercede_teams: [] } as unknown as Parameters<typeof processAction>[2];
 
-function contextOn(client: PoolClient): ProvisionedContext {
-	const query = (input: unknown, params?: unknown[]) =>
-		client.query(input as string, params as unknown[]);
-	const tenantDb = {
-		query,
-		transaction: async <T>(fn: (tx: { query: typeof query }) => Promise<T>): Promise<T> => {
-			await query('BEGIN');
-			try {
-				const result = await fn({ query });
-				await query('COMMIT');
-				return result;
-			} catch (cause) {
-				await query('ROLLBACK').catch(() => undefined);
-				throw cause;
-			}
-		}
-	} as unknown as TenantDbClient;
+function workspaceOn(tenantDb: ProvisionedContext['tenantDb']): ProvisionedContext {
 	return {
 		tenantDb,
 		manifestCtx: { getRelationshipsForCollection: () => [] },
@@ -87,13 +72,15 @@ describe('Approval decisions are computed from the locked row', () => {
 	let pg: PgHarness;
 	let pool: Pool;
 	let client: PoolClient;
+	let host: ReturnType<typeof createHostTenantDb>;
 
 	beforeAll(async () => {
 		pg = await startPostgres();
 		pool = new Pool({ connectionString: pg.connectionString, max: 4 });
 		await applyPodSchema(pool);
 		client = await pool.connect();
-		state.workspace = contextOn(client);
+		host = createHostTenantDb(pg.connectionString, { pool });
+		state.workspace = workspaceOn(host.tenantDb);
 		await pool.query(
 			`INSERT INTO "user" (norbital_id, email, name)
 			 VALUES ($1::uuid, 'requestor@test', 'Requestor'), ($2::uuid, 'other@test', 'Other')
@@ -103,6 +90,7 @@ describe('Approval decisions are computed from the locked row', () => {
 	}, 180_000);
 
 	afterAll(async () => {
+		await host?.close();
 		client?.release();
 		await pool?.end().catch(() => undefined);
 		pg?.stop();

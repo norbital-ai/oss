@@ -69,6 +69,26 @@ function podBuildFile(relativePath: string): string {
 	return abs.split(path.sep).join('/');
 }
 
+/**
+ * Leftover `node:` specifiers stay external. Self-host is Node and resolves them natively.
+ * Core's isolate linker supplies crypto, async_hooks, posix path, and a JS Buffer, and denies fs.
+ * The compiler does not inline a Node-compat layer.
+ */
+const HOST_IO_NODE_BUILTINS = new Set([
+	'node:fs',
+	'node:fs/promises',
+	'fs',
+	'fs/promises',
+	'node:crypto',
+	'crypto',
+	'node:async_hooks',
+	'async_hooks',
+	'node:path',
+	'path',
+	'node:buffer',
+	'buffer'
+]);
+
 /** Read a tenant message JSON file, returning null when absent or unparsable. */
 async function readMessageFile(file: string): Promise<Readonly<Record<string, string>> | null> {
 	try {
@@ -432,7 +452,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 							ssr: true,
 							rolldownOptions: {
 								input: SERVER_ENTRY,
-								external: (id: string) => id.startsWith('node:'),
+								external: (id: string) => HOST_IO_NODE_BUILTINS.has(id),
 								output: {
 									format: 'esm',
 									codeSplitting: false,
@@ -522,6 +542,8 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 				return podBuildFile('ui/state/client.js');
 			}
 			if (source === '$pod/client') return generatedClient;
+			if (this.environment.name !== 'server') return;
+			if (HOST_IO_NODE_BUILTINS.has(source)) return { id: source, external: true };
 		},
 		async load(id) {
 			if (id === `\0${APP_ENV_PRIVATE}` || id === `\0${APP_ENV_PUBLIC}`) {

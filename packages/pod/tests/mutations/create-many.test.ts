@@ -14,8 +14,9 @@ import {
 	uuid
 } from 'drizzle-orm/pg-core';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
+import { createHostTenantDb } from '../support/host-tenant-db.js';
 import { applyPodSchema } from '../support/pod-schema.js';
-import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { namedJsonbColumn } from '$lib/authoring/schema/table.js';
 import { attachColumnCustom } from '$lib/authoring/schema/columns.js';
 
@@ -119,34 +120,24 @@ const { withCollectionTransaction } =
 const { supportsServerCreatedAuditProjection } = await import('$lib/server/audit_event.server.js');
 const { runWithAdmit } = await import('$lib/server/admit.js');
 
-let statements: string[] = [];
+const statements: string[] = [];
 
-function statementText(input: unknown): string {
-	if (typeof input === 'string') return input;
-	const text = (input as { text?: string }).text;
-	return typeof text === 'string' ? text : '';
+async function inViaOps(pool: Pool, run: (client: PoolClient) => Promise<void>): Promise<void> {
+	const client = await pool.connect();
+	try {
+		await client.query('BEGIN');
+		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
+		await run(client);
+		await client.query('COMMIT');
+	} catch (cause) {
+		await client.query('ROLLBACK').catch(() => undefined);
+		throw cause;
+	} finally {
+		client.release();
+	}
 }
 
-function contextOn(client: PoolClient): ProvisionedContext {
-	const query = (input: unknown, params?: unknown[]) => {
-		statements.push(statementText(input));
-		return client.query(input as string, params as unknown[]);
-	};
-	const tenantDb = {
-		query,
-		transaction: async <T>(fn: (tx: { query: typeof query }) => Promise<T>): Promise<T> => {
-			await query('BEGIN');
-			try {
-				const result = await fn({ query });
-				await query('COMMIT');
-				return result;
-			} catch (cause) {
-				await query('ROLLBACK').catch(() => undefined);
-				throw cause;
-			}
-		}
-	} as unknown as TenantDbClient;
-
+function workspaceContext(tenantDb: ProvisionedContext['tenantDb']): ProvisionedContext {
 	return createWorkspaceContext({
 		provision: 'provisioned',
 		manifestCtx: {
@@ -186,7 +177,7 @@ function matching(pattern: RegExp): string[] {
 describe('Batched collection create (real Postgres)', () => {
 	let pg: PgHarness;
 	let pool: Pool;
-	let client: PoolClient;
+	let host: ReturnType<typeof createHostTenantDb>;
 	let ctx: ProvisionedContext;
 
 	beforeAll(async () => {
@@ -204,12 +195,12 @@ describe('Batched collection create (real Postgres)', () => {
 				ADD COLUMN metadata JSONB,
 				ADD COLUMN state test_order_state
 		`);
-		client = await pool.connect();
-		ctx = contextOn(client);
+		host = createHostTenantDb(pg.connectionString, { pool, statements });
+		ctx = workspaceContext(host.tenantDb);
 	}, 180_000);
 
 	afterAll(async () => {
-		client?.release();
+		await host?.close();
 		await pool?.end().catch(() => undefined);
 		pg?.stop();
 	});
@@ -219,16 +210,14 @@ describe('Batched collection create (real Postgres)', () => {
 		state.afterHook = undefined;
 		state.beforeBatchHook = undefined;
 		state.afterBatchHook = undefined;
-		await client.query('ROLLBACK').catch(() => undefined);
-		await client.query('BEGIN');
-		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
-		await client.query('DELETE FROM orders');
-		await client.query('DELETE FROM orders_history');
-		await client.query('DELETE FROM sync_outbox');
-		// The shipped append-only trigger rejects DELETE; fixture teardown may still truncate.
-		await client.query('TRUNCATE audit_event');
-		await client.query('COMMIT');
-		statements = [];
+		await inViaOps(pool, async (client) => {
+			await client.query('DELETE FROM orders');
+			await client.query('DELETE FROM orders_history');
+			await client.query('DELETE FROM sync_outbox');
+			// The shipped append-only trigger rejects DELETE; fixture teardown may still truncate.
+			await client.query('TRUNCATE audit_event');
+		});
+		statements.length = 0;
 	});
 
 	it('crosses the 5,000-row root boundary with exact rows, order, and bounded statements', async () => {
@@ -474,14 +463,14 @@ describe('Batched collection create (real Postgres)', () => {
 	});
 
 	it('rolls back root rows and sync when the audit insert fails', async () => {
-		await client.query(`
+		await pool.query(`
 			CREATE FUNCTION test_reject_create_audit() RETURNS trigger AS $$
 			BEGIN
 				RAISE EXCEPTION 'injected audit failure';
 			END;
 			$$ LANGUAGE plpgsql
 		`);
-		await client.query(`
+		await pool.query(`
 			CREATE TRIGGER test_reject_create_audit
 			BEFORE INSERT ON audit_event
 			FOR EACH STATEMENT EXECUTE FUNCTION test_reject_create_audit()
@@ -499,8 +488,8 @@ describe('Batched collection create (real Postgres)', () => {
 				'injected audit failure'
 			);
 		} finally {
-			await client.query('DROP TRIGGER IF EXISTS test_reject_create_audit ON audit_event');
-			await client.query('DROP FUNCTION IF EXISTS test_reject_create_audit()');
+			await pool.query('DROP TRIGGER IF EXISTS test_reject_create_audit ON audit_event');
+			await pool.query('DROP FUNCTION IF EXISTS test_reject_create_audit()');
 		}
 
 		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 0 });
@@ -509,14 +498,14 @@ describe('Batched collection create (real Postgres)', () => {
 	});
 
 	it('rolls back an id-projected create when its server-side audit insert fails', async () => {
-		await client.query(`
+		await pool.query(`
 			CREATE FUNCTION test_reject_projected_create_audit() RETURNS trigger AS $$
 			BEGIN
 				RAISE EXCEPTION 'injected projected audit failure';
 			END;
 			$$ LANGUAGE plpgsql
 		`);
-		await client.query(`
+		await pool.query(`
 			CREATE TRIGGER test_reject_projected_create_audit
 			BEFORE INSERT ON audit_event
 			FOR EACH STATEMENT EXECUTE FUNCTION test_reject_projected_create_audit()
@@ -538,10 +527,10 @@ describe('Batched collection create (real Postgres)', () => {
 				'injected projected audit failure'
 			);
 		} finally {
-			await client.query(
+			await pool.query(
 				'DROP TRIGGER IF EXISTS test_reject_projected_create_audit ON audit_event'
 			);
-			await client.query('DROP FUNCTION IF EXISTS test_reject_projected_create_audit()');
+			await pool.query('DROP FUNCTION IF EXISTS test_reject_projected_create_audit()');
 		}
 
 		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 0 });
@@ -550,7 +539,7 @@ describe('Batched collection create (real Postgres)', () => {
 	});
 
 	it('rolls back the first root chunk when a constraint rejects the second', async () => {
-		await client.query(
+		await pool.query(
 			'ALTER TABLE orders ADD CONSTRAINT test_orders_status_unique UNIQUE (status)'
 		);
 		const { ids, inputs } = batch(ROOT_CHUNK_BOUNDARY + 1);
@@ -563,7 +552,7 @@ describe('Batched collection create (real Postgres)', () => {
 				)
 			).rejects.toThrow(/status/i);
 		} finally {
-			await client.query('ALTER TABLE orders DROP CONSTRAINT IF EXISTS test_orders_status_unique');
+			await pool.query('ALTER TABLE orders DROP CONSTRAINT IF EXISTS test_orders_status_unique');
 		}
 
 		expect(matching(/^insert into "orders"/i)).toHaveLength(2);

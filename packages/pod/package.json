@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/pod",
-	"version": "0.0.41",
+	"version": "0.0.42",
 	"description": "Tenant workspace authoring SDK, runtime, and Vite plugin for Norbital.",
 	"type": "module",
 	"license": "AGPL-3.0-only",
@@ -59,10 +59,6 @@
 			"types": "./build/host/index.d.ts",
 			"default": "./build/host/index.js"
 		},
-		"./guest": {
-			"types": "./build/server/entry.d.ts",
-			"default": "./build/server/entry.js"
-		},
 		"./i18n": {
 			"types": "./build/i18n/index.d.ts",
 			"default": "./build/i18n/index.js"
@@ -108,16 +104,16 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
-		"@fallow-cli/fallow-node": "^3.7.1",
 		"@electric-sql/pglite": "^0.3.16",
+		"@fallow-cli/fallow-node": "^3.7.1",
 		"@internationalized/date": "^3.12.2",
 		"@norbital-ai/platform-utils": "workspace:*",
 		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
 		"@standard-schema/spec": "^1.1.0",
-		"@xyflow/svelte": "^1.6.2",
 		"@sveltejs/vite-plugin-svelte": "^7.2.0",
 		"@tailwindcss/vite": "^4.3.3",
+		"@xyflow/svelte": "^1.6.2",
 		"dedent": "^1.7.2",
 		"drizzle-kit": "catalog:",
 		"drizzle-orm": "catalog:",

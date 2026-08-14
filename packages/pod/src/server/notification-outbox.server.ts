@@ -29,7 +29,8 @@ export type NotificationOutboxRequest =
 	  };
 
 export async function runNotificationOutbox(request: NotificationOutboxRequest) {
-	const db = getWorkspace({ provision: true }).drizzleDb;
+	const ctx = getWorkspace({ provision: true });
+	const db = ctx.drizzleDb;
 	if (!db) throw new Error('Tenant database is not provisioned');
 	const columns = getColumns(notification_outbox);
 	if (request.action === 'claim') {
@@ -43,8 +44,11 @@ export async function runNotificationOutbox(request: NotificationOutboxRequest) 
 		// when one side of the comparison is all it takes to be rid of it.
 		const dbNow = sql`now()`;
 		const leaseExpired = sql`now() - make_interval(secs => ${CLAIM_LEASE_MS / 1000})`;
-		return db.transaction(async (tx) => {
-			const rows = await tx
+		if (!ctx.tenantDb.transaction) {
+			throw new Error('Tenant database does not support atomic collection transactions.');
+		}
+		return ctx.tenantDb.transaction(async () => {
+			const rows = await db
 				.select()
 				.from(notification_outbox)
 				.where(
@@ -58,7 +62,7 @@ export async function runNotificationOutbox(request: NotificationOutboxRequest) 
 				.for('update', { skipLocked: true });
 			if (rows.length === 0) return [];
 			const ids = rows.map((row) => row.norbital_id);
-			await tx
+			await db
 				.update(notification_outbox)
 				.set({
 					status: 'processing',

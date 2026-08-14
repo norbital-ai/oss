@@ -60,7 +60,8 @@ describe('omni finder record open', () => {
 		expect(omniFinder).toContain('onOpenRecord({ collectionName: entity.collection, recordId: entity.recordId })');
 		expect(omniFinder).toContain('FinderPalette');
 		expect(omniFinder).not.toContain('getCollectionTableNavigationContext');
-		expect(podShell).toContain('onOpenRecord={openOmniRecord}');
+		expect(podShell).toContain('onOpenRecord={(target) => {');
+		expect(podShell).toContain('recordNavigation.open({');
 		expect(podShell).toContain('routeKey: target.collectionName');
 		expect(podShell).toContain('unresolvedFallback={platformDetailFallback}');
 		expect(fallback).toContain('CollectionForm');

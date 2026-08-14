@@ -3,7 +3,6 @@ import { describe, it } from 'node:test';
 import {
 	CHECKPOINT_BUILD_REQUIRED_PATHS,
 	CHECKPOINT_MANIFEST_FILENAME,
-	SERVE_ENTRY_FILENAME,
 	staticAssetContentType
 } from '../src/tenant_workspace/build-output.ts';
 
@@ -11,7 +10,7 @@ describe('the bundle contract', () => {
 	it('requires the entry point and manifest a runtime cannot boot without', () => {
 		// The bundle is the only cross-version contract between a Core replica and a tenant
 		// runtime now that there are no images, so its required shape is asserted, not assumed.
-		assert.ok(!CHECKPOINT_BUILD_REQUIRED_PATHS.includes(SERVE_ENTRY_FILENAME));
+		assert.ok(!CHECKPOINT_BUILD_REQUIRED_PATHS.includes('serve.mjs'));
 		assert.ok(CHECKPOINT_BUILD_REQUIRED_PATHS.includes(CHECKPOINT_MANIFEST_FILENAME));
 		assert.deepEqual(
 			[...CHECKPOINT_BUILD_REQUIRED_PATHS],

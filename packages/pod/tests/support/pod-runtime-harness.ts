@@ -14,7 +14,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Client, Pool, type PoolClient } from 'pg';
+import { Client, Pool } from 'pg';
+import { PostgresHostDbBinding } from '../../src/host/db.js';
 import { isHostSyncStreamPath, serveHostSyncStream } from '../../src/host/sync-stream.js';
 import type {
 	HostAiBinding,
@@ -257,20 +258,6 @@ type HostSyncWake = {
 	subscribe(wake: () => void): () => void;
 };
 
-type TestHostDbBinding = {
-	query(
-		sql: unknown,
-		params?: readonly unknown[]
-	): Promise<{ rows: readonly unknown[]; rowCount: number }>;
-	begin(): Promise<string>;
-	txQuery(
-		txId: string,
-		sql: unknown,
-		params?: readonly unknown[]
-	): Promise<{ rows: readonly unknown[]; rowCount: number }>;
-	commit(txId: string): Promise<void>;
-	rollback(txId: string): Promise<void>;
-};
 
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const ORG_NAME = 'Sync IT Org';
@@ -340,81 +327,6 @@ async function withTemplateBuildLock<T>(templateRoot: string, run: () => Promise
 	} finally {
 		await rmdir(lockDirectory).catch(() => undefined);
 	}
-}
-
-/** Pinned-connection binding (mirrors PostgresHostDbBinding): txQuery/commit share one connection. */
-function createPgBinding(pool: Pool): TestHostDbBinding {
-	const txns = new Map<string, PoolClient>();
-	let counter = 0;
-	const normalize = (sql: unknown): { text: string; values: unknown[]; rowMode?: 'array' } => {
-		if (typeof sql === 'string') return { text: sql, values: [] };
-		const record = sql as {
-			text?: string;
-			values?: unknown[];
-			params?: unknown[];
-			rowMode?: 'array';
-		};
-		return {
-			text: record.text ?? '',
-			values: record.values ?? record.params ?? [],
-			...(record.rowMode ? { rowMode: record.rowMode } : {})
-		};
-	};
-	// Honor rowMode: drizzle RQB requests array-mode (positional) rows and maps them to columns
-	// via its schema — returning objects here would scramble the mapping. The real host bindings
-	// (PostgresHostDbBinding / neon adapter) pass rowMode through to pg, so honoring it here makes
-	// the harness faithful and lets the sync path use RQB (findMany/findFirst) directly.
-	const run = (
-		q: { text: string; values: unknown[]; rowMode?: 'array' },
-		params?: readonly unknown[],
-		client?: PoolClient
-	) => {
-		const runner = client ?? pool;
-		const values = (params as unknown[]) ?? q.values;
-		return q.rowMode === 'array'
-			? runner.query({ text: q.text, values, rowMode: 'array' })
-			: runner.query(q.text, values);
-	};
-	return {
-		async query(sql, params) {
-			const q = normalize(sql);
-			const result = await run(q, params);
-			return { rows: result.rows, rowCount: result.rowCount ?? 0 };
-		},
-		async begin() {
-			const client = await pool.connect();
-			await client.query('BEGIN');
-			const txId = `tx_${++counter}`;
-			txns.set(txId, client);
-			return txId;
-		},
-		async txQuery(txId, sql, params) {
-			const client = txns.get(txId);
-			if (!client) throw new Error(`Unknown transaction ${txId}`);
-			const result = await run(normalize(sql), params, client);
-			return { rows: result.rows, rowCount: result.rowCount ?? 0 };
-		},
-		async commit(txId) {
-			const client = txns.get(txId);
-			if (!client) return;
-			try {
-				await client.query('COMMIT');
-			} finally {
-				client.release();
-				txns.delete(txId);
-			}
-		},
-		async rollback(txId) {
-			const client = txns.get(txId);
-			if (!client) return;
-			try {
-				await client.query('ROLLBACK');
-			} finally {
-				client.release();
-				txns.delete(txId);
-			}
-		}
-	};
 }
 
 function baseScope(identity: Identity): string {
@@ -602,7 +514,7 @@ export async function bootPodRuntime(
 	let handleTenantRequest: HandleTenantRequest;
 	let handleHostCommand: HandleHostCommand;
 	let pool: Pool;
-	let binding: ReturnType<typeof createPgBinding>;
+	let binding: PostgresHostDbBinding;
 	let schemaSql: string;
 	let notifyClient: Client | undefined;
 	let hostSyncWake: HostSyncWake = { subscribe: () => () => {} };
@@ -617,7 +529,7 @@ export async function bootPodRuntime(
 		handleTenantRequest = runtimeModule.handlePodRequest;
 		handleHostCommand = runtimeModule.handlePodHostCommand;
 		pool = new Pool({ connectionString: pg.connectionString, max: 12 });
-		binding = createPgBinding(pool);
+		binding = new PostgresHostDbBinding(pg.connectionString, { pool });
 		schemaSql = await loadSchemaSql(templateRoot);
 
 		// Host LISTEN. Guest handlePodRequest never sees the stream socket.
@@ -691,6 +603,7 @@ export async function bootPodRuntime(
 		},
 		async stop() {
 			await notifyClient?.end().catch(() => undefined);
+			await binding.close();
 			await pool.end().catch(() => undefined);
 			pg.stop();
 			if (usesOverlay)

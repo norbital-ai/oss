@@ -4,11 +4,12 @@ import { text, uuid, type PgTable } from 'drizzle-orm/pg-core';
 import { text as authoringText } from '$lib/authoring/builtin/columns.js';
 import { norbitalTableInternal } from '$lib/authoring/schema/table.js';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
+import { createHostTenantDb } from '../support/host-tenant-db.js';
 import { collectionSearchWhere } from '$lib/server/collection/collection_search.server.js';
 import { directFindMany } from '$lib/server/collection/collection_direct.js';
 import { createWorkspaceContext } from '$lib/server/bootstrap/workspace_store.js';
 import { buildSelect, setLocalSchema, type LocalCollectionSchema } from '$lib/ui/sync/local-sql.js';
-import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 
 /**
  * Search must serve whatever language a tenant stores.
@@ -99,6 +100,7 @@ function installLocalSchema(): void {
 describe('collection search across languages (real Postgres)', () => {
 	let pg: PgHarness;
 	let pool: Pool;
+	let host: ReturnType<typeof createHostTenantDb>;
 	let ctx: ProvisionedContext;
 
 	/** The rows the server's search clause returns, by title. */
@@ -141,10 +143,7 @@ describe('collection search across languages (real Postgres)', () => {
 			`CREATE INDEX catalog_items_title_search_trgm_idx ON catalog_items USING gin (title gin_trgm_ops)`
 		);
 
-		const tenantDb = {
-			query: (input: unknown, params?: unknown[]) =>
-				pool.query(input as string, params as unknown[])
-		} as unknown as TenantDbClient;
+		host = createHostTenantDb(pg.connectionString, { pool });
 
 		ctx = createWorkspaceContext({
 			provision: 'provisioned',
@@ -154,7 +153,7 @@ describe('collection search across languages (real Postgres)', () => {
 				requestor: { norbital_id: USER_ID, role: 'admin' },
 				organization: { norbital_id: ORG_ID, name: 'Test Org' }
 			} as unknown as Parameters<typeof createWorkspaceContext>[0]['baseScope'],
-			tenantDb,
+			tenantDb: host.tenantDb,
 			tableRegistry: { catalog_items: catalogItems }
 		});
 
@@ -162,6 +161,7 @@ describe('collection search across languages (real Postgres)', () => {
 	}, 180_000);
 
 	afterAll(async () => {
+		await host?.close();
 		await pool?.end().catch(() => undefined);
 		pg?.stop();
 	});

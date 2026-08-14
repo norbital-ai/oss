@@ -31,14 +31,6 @@ export function setPodCallWorkspace(workspace: ProvisionedContext): void {
 	currentPodCall().workspace = workspace;
 }
 
-export function setPodCallBeforeApi(beforeApi: BeforeApi): void {
-	currentPodCall().beforeApi = beforeApi;
-}
-
-export function setPodCallAdmit(admit: PodAdmit | null): void {
-	currentPodCall().admit = admit;
-}
-
 /** Temporarily replace one PodCall field when already inside a call. */
 export function withPodCallField<K extends 'admit' | 'workspace' | 'beforeApi'>(
 	field: K,

@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
-import { currentPodCallOrNull, withPodCallField } from '$lib/server/pod-call.js';
+import { currentPodCallOrNull } from '$lib/server/pod-call.js';
 import type {
 	AfterApi,
 	AfterHookApi,
@@ -607,17 +606,9 @@ export function createElevatedAfterApi(): AfterApi {
 }
 
 /** Request-local server API used by nested hooks and tenant handlers. */
-const legacyBeforeApiStorage = new AsyncLocalStorage<BeforeApi>();
-
 export const beforeApiStorage = {
-	run<T>(api: BeforeApi, fn: () => T): T {
-		if (currentPodCallOrNull()) {
-			return withPodCallField('beforeApi', api, fn) as T;
-		}
-		return legacyBeforeApiStorage.run(api, fn);
-	},
 	getStore(): BeforeApi | undefined {
-		return currentPodCallOrNull()?.beforeApi ?? legacyBeforeApiStorage.getStore();
+		return currentPodCallOrNull()?.beforeApi;
 	}
 };
 

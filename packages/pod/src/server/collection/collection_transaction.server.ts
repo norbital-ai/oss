@@ -1,4 +1,8 @@
-import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import {
+	type ProvisionedContext,
+	type TenantDbClient,
+	withTenantSqlTransaction
+} from '$lib/server/bootstrap/workspace_store.js';
 import { error } from '$lib/server/http.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
@@ -42,7 +46,5 @@ export async function withMutationDb<T>(
 	const db = ctx.drizzleDb;
 	if (!db) throw error(500, 'Tenant database is not provisioned');
 	if (activeCollectionTransaction.getStore() === ctx.tenantDb) return operation(db);
-	return db.transaction(
-		(tx) => operation(tx as DrizzleDb) // stupidity: boundary-cast — Drizzle transaction exposes the mutation database surface but omits the root database brand.
-	);
+	return withTenantSqlTransaction(ctx, operation);
 }

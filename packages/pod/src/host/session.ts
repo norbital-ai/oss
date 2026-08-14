@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /**

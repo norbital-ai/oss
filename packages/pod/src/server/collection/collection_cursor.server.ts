@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 import { type AnyColumn, type AnyRelationsFilter, type Operators, type SQL } from 'drizzle-orm';
 import { z } from 'zod';

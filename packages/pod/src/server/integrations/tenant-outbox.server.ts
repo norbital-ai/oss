@@ -115,10 +115,13 @@ export async function runTenantOutbox(request: TenantOutboxRequest) {
 	const columns = getColumns(integration_outbox);
 	if (request.action === 'claim') {
 		const limit = Math.min(Math.max(request.limit ?? 50, 1), 200);
-		return db.transaction(async (tx) => {
+		if (!ctx.tenantDb.transaction) {
+			throw new Error('Tenant database does not support atomic collection transactions.');
+		}
+		return ctx.tenantDb.transaction(async () => {
 			const now = new Date();
 			const leaseExpiredAt = new Date(now.getTime() - OUTBOX_CLAIM_LEASE_MS);
-			const rows = await tx
+			const rows = await db
 				.select()
 				.from(integration_outbox)
 				.where(
@@ -132,7 +135,7 @@ export async function runTenantOutbox(request: TenantOutboxRequest) {
 				.for('update', { skipLocked: true });
 			if (rows.length === 0) return [];
 			const ids = rows.map((row) => row.norbital_id);
-			await tx
+			await db
 				.update(integration_outbox)
 				.set({
 					status: 'processing',

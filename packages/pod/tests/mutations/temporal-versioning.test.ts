@@ -1,19 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
+import { createHostTenantDb } from '../support/host-tenant-db.js';
 import { applyPodSchema, POD_SCHEMA_POST_DDL_SQL } from '../support/pod-schema.js';
 import { loadRecordHistorySnapshots } from '$lib/server/collection/record_history.server.js';
-import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
 
 requireDocker();
-
-/** A minimal ProvisionedContext whose tenantDb routes every query to one pg runner. */
-function ctxOn(runner: Pool | PoolClient): ProvisionedContext {
-	const tenantDb = {
-		query: (sql: string, params?: readonly unknown[]) => runner.query(sql, params as unknown[])
-	} as unknown as TenantDbClient;
-	return { tenantDb } as unknown as ProvisionedContext;
-}
 
 /** Run a set of statements on one connection inside a via_ops transaction (as collection_ops does). */
 async function inViaOps(pool: Pool, run: (client: PoolClient) => Promise<void>): Promise<void> {
@@ -44,14 +36,17 @@ async function insertOrder(pool: Pool, status: string): Promise<string> {
 describe('Pod temporal versioning (trigger, real Postgres)', () => {
 	let pg: PgHarness;
 	let pool: Pool;
+	let host: ReturnType<typeof createHostTenantDb>;
 
 	beforeAll(async () => {
 		pg = await startPostgres();
 		pool = new Pool({ connectionString: pg.connectionString, max: 8 });
 		await applyPodSchema(pool);
+		host = createHostTenantDb(pg.connectionString, { pool });
 	}, 120_000);
 
 	afterAll(async () => {
+		await host?.close();
 		await pool?.end().catch(() => undefined);
 		pg?.stop();
 	});
@@ -194,7 +189,7 @@ describe('Pod temporal versioning (trigger, real Postgres)', () => {
 			client.query(`UPDATE orders SET status = 'shipped' WHERE norbital_id = $1::uuid`, [id]).then()
 		);
 
-		const snapshots = await loadRecordHistorySnapshots(ctxOn(pool).tenantDb, {
+		const snapshots = await loadRecordHistorySnapshots(host.tenantDb, {
 			collection: 'orders',
 			record_id: id,
 			limit: 10

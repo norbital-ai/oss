@@ -43,6 +43,10 @@ Pod owns tenant behavior and tenant data semantics. The host owns the external w
 credentials, database connectivity, object storage, AI providers, maps, outbound delivery, timers,
 and process I/O.
 
+Authors write ordinary TypeScript. They do not target isolate-vm or install Node polyfills. Vite
+emits one server file; Core loads it in a fresh isolate, and `pod start` imports it in-process.
+See [Architecture — How the same artifact runs](./docs/ARCHITECTURE.md#how-the-same-artifact-runs).
+
 ## Requirements
 
 - Node.js and pnpm versions supported by this repository;

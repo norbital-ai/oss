@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import { Pool, type PoolClient } from 'pg';
 import { customType, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
+import { createHostTenantDb } from '../support/host-tenant-db.js';
 import { applyPodSchema, seedApprovalRequest } from '../support/pod-schema.js';
-import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 
 /**
  * The batched delete, against the real DDL it has to keep satisfying.
@@ -101,40 +102,25 @@ const { createWorkspaceContext } = await import('$lib/server/bootstrap/workspace
 const { deleteMany, deleteRecord, updateMany } =
 	await import('$lib/server/collection/collection_ops.server.js');
 
-/** Every statement the connection saw, so a round-trip count is an assertion, not a guess. */
-let statements: string[] = [];
+/** Every statement the host adapter saw, so a round-trip count is an assertion, not a guess. */
+const statements: string[] = [];
 
-function statementText(input: unknown): string {
-	if (typeof input === 'string') return input;
-	const text = (input as { text?: string }).text;
-	return typeof text === 'string' ? text : '';
+async function inViaOps(pool: Pool, run: (client: PoolClient) => Promise<void>): Promise<void> {
+	const client = await pool.connect();
+	try {
+		await client.query('BEGIN');
+		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
+		await run(client);
+		await client.query('COMMIT');
+	} catch (cause) {
+		await client.query('ROLLBACK').catch(() => undefined);
+		throw cause;
+	} finally {
+		client.release();
+	}
 }
 
-/**
- * A ProvisionedContext pinned to one connection — the shape collection_ops relies on, where the
- * drizzle mutation db and the transaction GUC share a single session.
- */
-function contextOn(client: PoolClient): ProvisionedContext {
-	const query = (input: unknown, params?: unknown[]) => {
-		statements.push(statementText(input));
-		// pg accepts both a bare SQL string and drizzle's query-config object.
-		return client.query(input as string, params as unknown[]);
-	};
-	const tenantDb = {
-		query,
-		transaction: async <T>(fn: (tx: { query: typeof query }) => Promise<T>): Promise<T> => {
-			await query('BEGIN');
-			try {
-				const result = await fn({ query });
-				await query('COMMIT');
-				return result;
-			} catch (cause) {
-				await query('ROLLBACK').catch(() => undefined);
-				throw cause;
-			}
-		}
-	} as unknown as TenantDbClient;
-
+function workspaceContext(tenantDb: ProvisionedContext['tenantDb']): ProvisionedContext {
 	return createWorkspaceContext({
 		provision: 'provisioned',
 		// Only getCollection (metadata) and manifest.integrations are reached by the delete path.
@@ -157,7 +143,7 @@ function contextOn(client: PoolClient): ProvisionedContext {
 describe('Batched collection delete (real Postgres triggers)', () => {
 	let pg: PgHarness;
 	let pool: Pool;
-	let client: PoolClient;
+	let host: ReturnType<typeof createHostTenantDb>;
 	let ctx: ProvisionedContext;
 
 	beforeAll(async () => {
@@ -166,12 +152,12 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		await applyPodSchema(pool);
 		// The suite fabricates locks under this request id; the lock's foreign key needs it to exist.
 		await seedApprovalRequest(pool, '99999999-9999-4999-8999-999999999999');
-		client = await pool.connect();
-		ctx = contextOn(client);
+		host = createHostTenantDb(pg.connectionString, { pool, statements });
+		ctx = workspaceContext(host.tenantDb);
 	}, 180_000);
 
 	afterAll(async () => {
-		client?.release();
+		await host?.close();
 		await pool?.end().catch(() => undefined);
 		pg?.stop();
 	});
@@ -185,34 +171,30 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		state.updateAfterHook = undefined;
 		state.auditFailure = false;
 		state.auditBatches = [];
-		// A failed assertion can leave the pinned connection mid-transaction; start clean.
-		await client.query('ROLLBACK').catch(() => undefined);
-		await client.query('BEGIN');
-		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
 		// Locks first: while one stands, _approval_lock_gate rejects the delete it guards.
 		// History last: clearing `orders` archives whatever is left into it.
-		await client.query('DELETE FROM _approval_lock');
-		await client.query('DELETE FROM orders');
-		await client.query('DELETE FROM orders_history');
-		await client.query('DELETE FROM sync_outbox');
-		await client.query('COMMIT');
-		statements = [];
+		await inViaOps(pool, async (client) => {
+			await client.query('DELETE FROM _approval_lock');
+			await client.query('DELETE FROM orders');
+			await client.query('DELETE FROM orders_history');
+			await client.query('DELETE FROM sync_outbox');
+		});
+		statements.length = 0;
 	});
 
 	/** Seed rows through the authoritative path (via_ops), returning ids in insertion order. */
 	async function seed(count: number): Promise<string[]> {
-		await client.query('BEGIN');
-		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
 		const ids: string[] = [];
-		for (let index = 0; index < count; index++) {
-			const { rows } = await client.query<{ norbital_id: string }>(
-				`INSERT INTO orders (status) VALUES ($1) RETURNING norbital_id`,
-				[`row-${index}`]
-			);
-			ids.push(rows[0].norbital_id);
-		}
-		await client.query('COMMIT');
-		statements = [];
+		await inViaOps(pool, async (client) => {
+			for (let index = 0; index < count; index++) {
+				const { rows } = await client.query<{ norbital_id: string }>(
+					`INSERT INTO orders (status) VALUES ($1) RETURNING norbital_id`,
+					[`row-${index}`]
+				);
+				ids.push(rows[0].norbital_id);
+			}
+		});
+		statements.length = 0;
 		return ids;
 	}
 
@@ -339,14 +321,13 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 	it('is still stopped by the per-row approval lock gate, and takes nothing with it', async () => {
 		const ids = await seed(4);
 		// A lock the batch cannot see in its own SELECT — only the FOR EACH ROW trigger can.
-		await client.query('BEGIN');
-		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
-		await client.query(
-			`INSERT INTO _approval_lock (approval_request_id, lock_type, collection_name, record_id)
+		await inViaOps(pool, (client) =>
+			client.query(
+				`INSERT INTO _approval_lock (approval_request_id, lock_type, collection_name, record_id)
 			 VALUES ($1::uuid, 'record_delete', 'orders', $2::uuid)`,
-			['99999999-9999-4999-8999-999999999999', ids[2]]
+				['99999999-9999-4999-8999-999999999999', ids[2]]
+			).then()
 		);
-		await client.query('COMMIT');
 
 		const failure = await deleteMany(ctx, 'orders', ids, { isElevated: true }).then(
 			() => null,
@@ -365,13 +346,12 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 
 	it('refuses a record already stamped with a pending approval', async () => {
 		const ids = await seed(2);
-		await client.query('BEGIN');
-		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
-		await client.query(
-			`UPDATE orders SET norbital_approval_id = $1::uuid WHERE norbital_id = $2::uuid`,
-			['99999999-9999-4999-8999-999999999999', ids[1]]
+		await inViaOps(pool, (client) =>
+			client.query(
+				`UPDATE orders SET norbital_approval_id = $1::uuid WHERE norbital_id = $2::uuid`,
+				['99999999-9999-4999-8999-999999999999', ids[1]]
+			).then()
 		);
-		await client.query('COMMIT');
 
 		await expect(deleteMany(ctx, 'orders', ids, { isElevated: true })).rejects.toThrow(
 			/pending approval request is active/
@@ -409,14 +389,14 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 	it('splits a batch past the statement ceiling into chunks, not into round trips per record', async () => {
 		// Past DELETE_CHUNK (1,000). The outbox has its own 60k-parameter budget and can retain one
 		// statement for this batch while the record lookup/delete statements split.
-		await client.query('BEGIN');
-		await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
-		const seeded = await client.query<{ norbital_id: string }>(
-			`INSERT INTO orders (status) SELECT 'row-' || g FROM generate_series(1, 1100) g
+		let seeded: { rows: { norbital_id: string }[] } = { rows: [] };
+		await inViaOps(pool, async (client) => {
+			seeded = await client.query<{ norbital_id: string }>(
+				`INSERT INTO orders (status) SELECT 'row-' || g FROM generate_series(1, 1100) g
 			 RETURNING norbital_id`
-		);
-		await client.query('COMMIT');
-		statements = [];
+			);
+		});
+		statements.length = 0;
 		const ids = seeded.rows.map((row) => row.norbital_id);
 
 		await deleteMany(ctx, 'orders', ids, { isElevated: true });

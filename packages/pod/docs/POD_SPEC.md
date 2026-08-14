@@ -49,7 +49,12 @@ directory does not mutate an already-provisioned tenant. A runtime process serve
 manifest revision; schema-changing deployment replaces that process.
 
 Hosted and standalone modes MUST execute the same Pod server bundle. Hosted mode MUST NOT load
-`pod.host.ts`. Standalone mode MAY load it to supply local bindings and identity.
+`pod.host.ts`. Standalone mode MAY load it to supply local bindings and identity. The compiler MUST
+NOT inline a Node-compat layer. Hosted isolate execution MUST supply `node:crypto`,
+`node:async_hooks`, posix `node:path`, and a JavaScript `node:buffer`, and MUST deny leftover
+filesystem builtins. Those path and Buffer implementations MUST be isolate-local values, not host
+objects. Standalone Node MAY resolve those specifiers natively. Workspace source MUST NOT install a
+Node-compat layer or branch on host kind.
 
 ## 4. Identity and organization
 

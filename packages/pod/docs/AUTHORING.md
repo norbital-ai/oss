@@ -1,6 +1,6 @@
 # Authoring a tenant workspace
 
-The mental model, and the four principles the authoring surface is designed around. The
+The mental model, and the five principles the authoring surface is designed around. The
 [README](../README.md) is the reference for each role; this document is the _why_, and the rule for
 deciding where something new belongs.
 
@@ -45,7 +45,7 @@ apps, custom types, remotes, policies, channels, automations, agent tools, and i
 templates in [template_workspaces](../../../template_workspaces/) are the executable version of the
 same thing, and are conformance fixtures as well as examples.
 
-## Four principles
+## Five principles
 
 ### 1. Declarative — the filesystem is the registry
 
@@ -214,7 +214,23 @@ The generated unions — `CollectionName`, `PolicyName`, `AgentToolName`, `AppNa
 cross-reference checkable. An agent that names a collection it cannot reach, or a policy naming a
 collection that does not exist, fails at compile time.
 
-### 3. No footguns — the wrong thing does not compile, and the ambiguous thing does not exist
+### 3. Write ordinary TypeScript — the isolate is a host detail
+
+A hook, remote, or automation is a normal `async` function. Import `@norbital-ai/pod/authoring`,
+`$app/env/*`, and `$pod/client`. Do not import `node:*`, do not install polyfills, and do not
+branch on “am I in Core or self-host.”
+
+The compiler and the host own that split:
+
+- **Core** admits the compiled functions in isolate-vm. Facilities arrive as injected refs.
+- **Self-host** (`pod start`) admits the same functions in-process. Facilities come from
+  `pod.host.ts`.
+
+`await api.infer(...)` looks like a normal await. Compute is still one finished step: the isolate
+is disposed, the host runs the model, and a new admit continues the handler. That is why authoring
+stays a single line and why you do not write resume tokens.
+
+### 4. No footguns — the wrong thing does not compile, and the ambiguous thing does not exist
 
 The surface is designed so that mistakes surface at their cause rather than downstream:
 
@@ -261,7 +277,7 @@ directly is an error. The mistake is caught at runtime with a 400 naming the fie
 valid field and relation for the collection, so it fails loudly — just one layer later than the rest of
 the surface.
 
-### 4. Simplicity — the smallest surface that is still honest
+### 5. Simplicity — the smallest surface that is still honest
 
 Pod ships the parts every workspace would otherwise write badly, and a workspace author never sees
 them:

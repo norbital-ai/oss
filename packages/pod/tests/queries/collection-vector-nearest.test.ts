@@ -2,9 +2,10 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from 'pg';
 import { pgTable, text, uuid, vector } from 'drizzle-orm/pg-core';
 import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import { createHostTenantDb } from '../support/host-tenant-db.js';
 import { SCHEMA_FUNCTIONS_SQL } from '$lib/vite/schema-functions-sql.js';
 import { createWorkspaceContext } from '$lib/server/bootstrap/workspace_store.js';
-import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
+import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { directFindNearest } from '$lib/server/collection/collection_vector.server.js';
 
 requireDocker();
@@ -28,6 +29,7 @@ const embeddings = pgTable('embeddings', {
 describe('pgvector findNearest', () => {
 	let pg: PgHarness;
 	let client: Client;
+	let host: ReturnType<typeof createHostTenantDb>;
 	let ctx: ProvisionedContext;
 
 	beforeAll(async () => {
@@ -63,17 +65,7 @@ describe('pgvector findNearest', () => {
 				('ffffffff-ffff-4fff-8fff-ffffffffffff', 'c', '[0,1,0]');
 		`);
 
-		const tenantDb: TenantDbClient = {
-			query: async (textOrConfig, params) => {
-				const text = typeof textOrConfig === 'string' ? textOrConfig : (textOrConfig.text ?? '');
-				const values =
-					typeof textOrConfig === 'string'
-						? params
-						: (textOrConfig.values ?? textOrConfig.params ?? params);
-				const result = await client.query(text, values as unknown[]);
-				return { rows: result.rows, rowCount: result.rowCount ?? undefined };
-			}
-		};
+		host = createHostTenantDb(pg.connectionString);
 
 		ctx = createWorkspaceContext({
 			provision: 'provisioned',
@@ -87,7 +79,7 @@ describe('pgvector findNearest', () => {
 				requestor: { norbital_id: USER_ID, role: 'admin' },
 				organization: { norbital_id: ORG_ID, name: 'Test' }
 			} as unknown as Parameters<typeof createWorkspaceContext>[0]['baseScope'],
-			tenantDb,
+			tenantDb: host.tenantDb,
 			tableRegistry: {
 				photo_hashes: photoHashes,
 				embeddings
@@ -96,6 +88,7 @@ describe('pgvector findNearest', () => {
 	}, 180_000);
 
 	afterAll(async () => {
+		await host?.close();
 		await client?.end().catch(() => {});
 		pg?.stop();
 	});

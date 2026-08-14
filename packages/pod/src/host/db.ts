@@ -1,4 +1,4 @@
-import { Pool, type PoolClient, type QueryResult } from 'pg';
+import { Pool, type CustomTypesConfig, type PoolClient, type QueryResult, types } from 'pg';
 import type {
 	DbQueryConfig,
 	DbQueryInput,
@@ -28,6 +28,19 @@ export type HostDbAdapter = {
 	connect(): HostDbConnection;
 };
 
+/**
+ * A `date` column is a calendar day. The stock `pg` parser builds `new Date(y, m-1, d)` at
+ * **local** midnight, which is a different civil day after JSON or a timezone shift. Drizzle's
+ * `PgDateString` already wants `YYYY-MM-DD`. This override is scoped to this adapter's queries,
+ * not the process-wide `pg` type registry.
+ */
+const DATE_AS_DAY: CustomTypesConfig = {
+	getTypeParser: (oid, format) =>
+		oid === types.builtins.DATE && format !== 'binary'
+			? (day: string) => day
+			: types.getTypeParser(oid, format)
+};
+
 function queryResult(result: QueryResult): DbQueryResult {
 	return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
 }
@@ -38,12 +51,19 @@ async function runQuery(
 	params?: readonly unknown[]
 ): Promise<DbQueryResult> {
 	if (typeof input === 'string') {
-		return queryResult(await client.query(input, params ? [...params] : undefined));
+		return queryResult(
+			await client.query({
+				text: input,
+				types: DATE_AS_DAY,
+				...(params ? { values: [...params] } : {})
+			})
+		);
 	}
 	const config: DbQueryConfig = input;
 	return queryResult(
 		await client.query({
 			text: config.text,
+			types: DATE_AS_DAY,
 			...(config.values ? { values: [...config.values] } : {}),
 			...(config.rowMode ? { rowMode: config.rowMode } : {})
 		})
@@ -60,15 +80,22 @@ async function runQuery(
  */
 export class PostgresHostDbBinding implements HostDbConnection {
 	readonly #pool: Pool;
+	readonly #ownsPool: boolean;
 	readonly #transactions = new Map<string, PoolClient>();
 	readonly connectionString: string;
 
-	constructor(connectionString: string, options: { readonly maxConnections?: number } = {}) {
+	constructor(
+		connectionString: string,
+		options: { readonly maxConnections?: number; readonly pool?: Pool } = {}
+	) {
 		this.connectionString = connectionString;
-		this.#pool = new Pool({
-			connectionString,
-			...(options.maxConnections ? { max: options.maxConnections } : {})
-		});
+		this.#ownsPool = options.pool == null;
+		this.#pool =
+			options.pool ??
+			new Pool({
+				connectionString,
+				...(options.maxConnections ? { max: options.maxConnections } : {})
+			});
 	}
 
 	async validate(): Promise<void> {
@@ -138,7 +165,7 @@ export class PostgresHostDbBinding implements HostDbConnection {
 			}
 		}
 		this.#transactions.clear();
-		await this.#pool.end();
+		if (this.#ownsPool) await this.#pool.end();
 	}
 
 	#transaction(transactionId: string): PoolClient {

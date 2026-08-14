@@ -181,6 +181,48 @@ The built guest is lightweight invokable functions (`handlePodRequest`, `handleP
 `register*`). It must not be “a server.” HTTP, listen, static assets, SSE, and timeout belong to
 the host. `pod start` is the reference host.
 
+### How the same artifact runs
+
+Authors never target an isolate. They write ordinary TypeScript and Svelte under `src/`. Vite /
+Rolldown (not esbuild) emits one server file, `output/server/index.js`. That file is the deployment
+unit for both hosts.
+
+```text
+src/**  +  Pod compiler
+        │
+        ▼
+Vite / Rolldown
+  leftover node:* stay external — no compiler shim
+        │
+        ▼
+output/server/index.js
+        │
+   ┌────┴────────────────────┐
+   ▼                         ▼
+Core host                 Self-host (`pod start`)
+isolate-vm                Node import()
+linker:                   native node:crypto / async_hooks /
+  node:crypto  → host       path / buffer
+  node:async_hooks → ALS
+  node:path    → posix JS
+  node:buffer  → JS Buffer
+  node:fs*     → ENOENT
+facility RPC              same function exports
+dispose after the step    same admit / timeout policy
+```
+
+The compiler does not call `unenv`'s `env(nodeless)` and does not inline Node. A nodeless alias
+map would rewrite `async_hooks` to a shim that drops the store on the first `await`.
+
+Core never `import()`s the bundle into the host process. It compiles the file in a fresh isolate
+and the linker answers leftover `node:` specifiers. Path and Buffer are isolate-local JavaScript
+— not the host's `node:path` / `node:buffer` objects — so they cannot read the host disk or share
+host memory. Crypto still goes through host entropy. `fs` is denied. Self-host is a machine the
+operator provides: `pod start` loads the same file in-process and Node resolves those specifiers
+itself.
+
+MicroSandbox is not this path. It stays for untrusted shell and `pod check`.
+
 ## What happens if you write a tight loop
 
 A `while (true) hash()` or a hook that chews 700 rows in one `batchHandler` never yields. The host

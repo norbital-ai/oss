@@ -11,13 +11,6 @@
 /** Bundle-root file holding the precomputed NorbitalManifest projection. */
 export const CHECKPOINT_MANIFEST_FILENAME = 'manifest.json';
 
-/**
- * Legacy guest HTTP boot file. Core no longer executes it; the runtime entry is
- * `output/server/index.js` (`handlePodRequest` / `handlePodHostCommand`). Kept as a name so
- * older artifacts and smoke scripts can still mention it.
- */
-export const SERVE_ENTRY_FILENAME = 'serve.mjs';
-
 export const CHECKPOINT_BUILD_REQUIRED_PATHS = [
 	CHECKPOINT_MANIFEST_FILENAME,
 	'dist/index.html',

@@ -301,13 +301,19 @@ function rethrowKitError(err: unknown): never {
 	throw err;
 }
 
+function timingMark(name: string, startedAt: number, desc?: string): string {
+	const duration = `dur=${(performance.now() - startedAt).toFixed(1)}`;
+	return desc ? `${name};${duration};desc="${desc}"` : `${name};${duration}`;
+}
+
 /** Dispatch one `/_runtime/*` request to the matching workspace handler. */
 export async function handleNorbitalRuntimeRequest(event: PodRequestEvent): Promise<Response> {
 	const startedAt = performance.now();
+	const marks: string[] = [];
 	const responseHeaders = (): HeadersInit => {
 		const requestId = event.request.headers.get('x-norbital-request-id');
 		return {
-			'server-timing': `runtime_execution;dur=${(performance.now() - startedAt).toFixed(1)}`,
+			'server-timing': [...marks, timingMark('runtime_execution', startedAt)].join(', '),
 			...(requestId ? { 'x-norbital-request-id': requestId } : {})
 		};
 	};
@@ -317,27 +323,43 @@ export async function handleNorbitalRuntimeRequest(event: PodRequestEvent): Prom
 	// and `mutate` reads its own body. The host owns SSE (`sync/stream`). These handlers
 	// return their own Response instead of the json(...) wrapper below.
 	if (routePath.startsWith('sync/')) {
+		const ctxStartedAt = performance.now();
 		const ctx = await buildCtx(event);
+		marks.push(timingMark('guest_runtime_ctx', ctxStartedAt));
 		if (!ctx) {
 			throw error(401, 'Unauthorized');
 		}
-		return withRequestWorkspaceCtx(ctx, () =>
+		const handlerStartedAt = performance.now();
+		const response = await withRequestWorkspaceCtx(ctx, () =>
 			handleSyncRequest(routePath.slice('sync/'.length), event, ctx, responseHeaders())
 		);
+		marks.push(timingMark('guest_handler', handlerStartedAt, routePath));
+		const headers = new Headers(response.headers);
+		headers.set('server-timing', [...marks, timingMark('runtime_execution', startedAt)].join(', '));
+		return new Response(response.body, { status: response.status, headers });
 	}
 
+	const bodyStartedAt = performance.now();
 	const body = await readJsonBody(event);
+	marks.push(timingMark('guest_body', bodyStartedAt));
+
+	const ctxStartedAt = performance.now();
 	const ctx = await buildCtx(event);
+	marks.push(timingMark('guest_runtime_ctx', ctxStartedAt));
 	if (!ctx) {
 		throw error(401, 'Unauthorized');
 	}
 
 	if (routePath === 'files/upload') {
+		const handlerStartedAt = performance.now();
 		const result = await withRequestWorkspaceCtx(ctx, () => uploadWorkspaceFile(event, body));
+		marks.push(timingMark('guest_handler', handlerStartedAt, routePath));
 		return json(result, { headers: responseHeaders() });
 	}
 	if (routePath === 'files/delete') {
+		const handlerStartedAt = performance.now();
 		const result = await withRequestWorkspaceCtx(ctx, () => deleteWorkspaceFile(event, body));
+		marks.push(timingMark('guest_handler', handlerStartedAt, routePath));
 		return json(result, { headers: responseHeaders() });
 	}
 
@@ -347,7 +369,9 @@ export async function handleNorbitalRuntimeRequest(event: PodRequestEvent): Prom
 	}
 
 	try {
+		const handlerStartedAt = performance.now();
 		const result = await withRequestWorkspaceCtx(ctx, () => handler(body));
+		marks.push(timingMark('guest_handler', handlerStartedAt, routePath));
 		return json(result ?? null, { headers: responseHeaders() });
 	} catch (err) {
 		rethrowKitError(err);
