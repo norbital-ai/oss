@@ -31,10 +31,18 @@ export function env(name: string, fallback?: string): string {
 /**
  * The host contract for a Pod workspace.
  *
- * A built workspace declares the facilities it needs; a host declares the facilities it supplies.
- * Core is one host. `pod start` is another. Anything that implements this file is a third — which
- * is the whole point: the workspace bundle is identical in every case, and only the identity
- * source and the credential-holding implementations differ.
+ * A workspace is functions. A host is a server that admits those functions and gives each
+ * one a timeout. The payload finishes in that timeout or the function fails. Core is one
+ * host. `pod start` is the reference host — not a second runtime, and not “Pod is the
+ * server.” The compiled bundle is identical in every case; only adapters differ.
+ *
+ * ```
+ * admit(fn, payload) → run | wait
+ * timeoutMs                  // Core: 2000. Self-host: this file.
+ * maxInFlight                // one per live guest is enough to start
+ * kill()                     // timeout
+ * infer / search / send      // network, outside the function
+ * ```
  */
 
 /**
@@ -479,6 +487,19 @@ export type SelfHostedPodHostConfig = {
 	 * arrive unusable, so a missing value fails at startup rather than at the first invite.
 	 */
 	readonly publicUrl: string;
+	/**
+	 * Wall-clock budget for one admitted function, in milliseconds.
+	 *
+	 * This is the only timeout knob. The payload finishes in `timeoutMs` or the function fails.
+	 * The reference host defaults to 2_000 when omitted — that number is this host's policy, not
+	 * a Pod contract.
+	 */
+	readonly timeoutMs?: number;
+	/**
+	 * How many guest functions may run at once. One is enough: a page load and a single `create`
+	 * take the fast path when a slot is free; everything else waits, then runs.
+	 */
+	readonly maxInFlight?: number;
 	readonly fileStorage?: HostFileStorageBinding;
 	readonly ai?: HostAiBinding;
 	readonly messaging?: HostMessagingBinding;

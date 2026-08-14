@@ -437,7 +437,7 @@ export function buildNorbitalManifest(workspace: {
 			? Object.fromEntries(
 					Object.entries(workspace.secrets).map(([name, requirement]) => [
 						name,
-						{ description: requirement.description, required: requirement.required !== false }
+						{ description: requirement.description, required: false }
 					])
 				)
 			: undefined,

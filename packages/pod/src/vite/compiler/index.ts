@@ -23,6 +23,11 @@ import type {
 	PodStructure,
 	StructuralDiagnostic
 } from './types.js';
+import {
+	parseEnvSchemaSource,
+	renderEnvModuleTypes,
+	type ParsedEnvSchema
+} from './env-schema.js';
 
 const COLLECTION_ROLE_FILES = [
 	'+model.ts',
@@ -33,6 +38,8 @@ const COLLECTION_ROLE_FILES = [
 ] as const;
 const PRIVATE_VIRTUAL_IMPORT_PATTERN =
 	/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["']virtual:pod\/[^"']+["']/g;
+const PRIVATE_ENV_IMPORT_PATTERN =
+	/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["']\$app\/env\/private["']/g;
 const BUILTIN_AGENT_TOOL_NAMES = new Set<string>(PLATFORM_AGENT_TOOL_NAMES);
 /**
  * Derived from the shipped skills rather than listed, so the reserved set cannot fall behind what
@@ -122,6 +129,29 @@ function isSafeIdentifier(value: string): boolean {
 
 function relativePath(root: string, filePath: string): string {
 	return posixPath(path.relative(root, filePath));
+}
+
+/** Private env is server-only. Apps, representations, renderers, and shared lib never see it. */
+function allowsPrivateEnvImport(authoredPath: string): boolean {
+	const base = authoredPath.split('/').pop() ?? '';
+	if (
+		authoredPath === 'src/+env.ts' ||
+		authoredPath === 'src/+seed.ts' ||
+		authoredPath === 'src/+agent.ts'
+	) {
+		return true;
+	}
+	if (
+		authoredPath.startsWith('src/remotes/') ||
+		authoredPath.startsWith('src/automation/') ||
+		authoredPath.startsWith('src/mcp/')
+	) {
+		return true;
+	}
+	if (base === '+hooks.ts' || base === '+pipelines.ts' || base === '+integrations.ts') {
+		return true;
+	}
+	return base.startsWith('+') && base.endsWith('.tool.ts');
 }
 
 function topologyDiagnostic(file: string, code: string, message: string): StructuralDiagnostic {
@@ -588,6 +618,19 @@ async function validateAuthoredSource(
 						'virtual:pod/* modules are compiler-private; tenant source must use $pod/client'
 					)
 				);
+			}
+			if (!allowsPrivateEnvImport(authoredPath)) {
+				for (const match of source.matchAll(PRIVATE_ENV_IMPORT_PATTERN)) {
+					diagnostics.push(
+						sourceDiagnostic(
+							source,
+							authoredPath,
+							match.index ?? 0,
+							'PRIVATE_ENV_CLIENT',
+							'$app/env/private is server-only. Import it from a remote, automation, hook, pipeline, integration, or agent tool — never from an app, representation, renderer, or shared client module.'
+						)
+					);
+				}
 			}
 			if (file.endsWith('.svelte')) {
 				diagnostics.push(
@@ -1412,8 +1455,8 @@ async function discoverSkills(
 /** Flat `src/+<name>.ts` declarations the compiler reads. Anything else there is a mistake. */
 const WORKSPACE_ROOT_DECLARATIONS: ReadonlySet<string> = new Set([
 	'+agent.ts',
-	'+seed.ts',
-	'+env.ts'
+	'+env.ts',
+	'+seed.ts'
 ]);
 
 /**
@@ -1571,6 +1614,19 @@ async function discoverI18n(
 	};
 }
 
+async function discoverEnvSchema(
+	root: string,
+	inventory: SourceInventory
+): Promise<{ readonly env: string | null; readonly envVars: ParsedEnvSchema | null }> {
+	const envSchemaPath = path.join(root, 'src', '+env.ts');
+	if (!inventory.hasFile(envSchemaPath)) {
+		return { env: null, envVars: null };
+	}
+	const source = await inventory.source(envSchemaPath);
+	const envVars = parseEnvSchemaSource(source);
+	return { env: 'src/+env.ts', envVars };
+}
+
 async function discoverSeed(
 	root: string,
 	diagnostics: StructuralDiagnostic[],
@@ -1578,10 +1634,9 @@ async function discoverSeed(
 ): Promise<{
 	readonly agent: string | null;
 	readonly seed: string | null;
-	readonly env: string | null;
 }> {
 	const sourceDirectory = path.join(root, 'src');
-	if (!inventory.hasDirectory(sourceDirectory)) return { agent: null, seed: null, env: null };
+	if (!inventory.hasDirectory(sourceDirectory)) return { agent: null, seed: null };
 	for (const entry of inventory.entries(sourceDirectory)) {
 		if (
 			entry.isFile() &&
@@ -1606,8 +1661,7 @@ async function discoverSeed(
 	}
 	return {
 		agent: inventory.hasFile(path.join(sourceDirectory, '+agent.ts')) ? 'src/+agent.ts' : null,
-		seed: inventory.hasFile(path.join(sourceDirectory, '+seed.ts')) ? 'src/+seed.ts' : null,
-		env: inventory.hasFile(path.join(sourceDirectory, '+env.ts')) ? 'src/+env.ts' : null
+		seed: inventory.hasFile(path.join(sourceDirectory, '+seed.ts')) ? 'src/+seed.ts' : null
 	};
 }
 
@@ -1694,6 +1748,7 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 			validateAuthoredSource(absoluteRoot, diagnostics, inventory)
 		]);
 	const i18n = await discoverI18n(absoluteRoot, diagnostics, inventory);
+	const envDeclaration = await discoverEnvSchema(absoluteRoot, inventory);
 	validateRoleDirectories(absoluteRoot, diagnostics, inventory);
 	diagnostics.sort(
 		(left, right) =>
@@ -1718,7 +1773,8 @@ export async function discoverPodFilesystem(root: string): Promise<PodStructure>
 		i18n,
 		agent: rootDeclarations.agent,
 		seed: rootDeclarations.seed,
-		env: rootDeclarations.env,
+		env: envDeclaration.env,
+		envVars: envDeclaration.envVars,
 		diagnostics
 	};
 }
@@ -1929,7 +1985,12 @@ function renderWorkspace(
 		imports.push(`import seed from ${JSON.stringify(generatedImport(structure.seed))};`);
 	}
 	if (structure.env) {
-		imports.push(`import env from ${JSON.stringify(generatedImport(structure.env))};`);
+		imports.push(
+			`import { variables as env } from ${JSON.stringify(generatedImport(structure.env))};`
+		);
+		imports.push(
+			"import { validateDeclaredEnvVars } from '@norbital-ai/pod/authoring/internals';"
+		);
 	}
 	if (structure.agent) {
 		imports.push(`import agent from ${JSON.stringify(generatedImport(structure.agent))};`);
@@ -1957,7 +2018,8 @@ function renderWorkspace(
 		.join(',\n');
 	const skills = structure.skills.map((skill) => renderSkill(skill)).join(',\n');
 	const workspaceMeta = `name: ${JSON.stringify(metadata.name)}${metadata.description ? `, description: ${JSON.stringify(metadata.description)}` : ''}`;
-	return `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tcustomTypes,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.mcpServers.length ? `,\n\tmcpServers: {\n${mcpServers}\n\t}` : ''}${structure.skills.length ? `,\n\tskills: [\n${skills}\n\t]` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\nexport type Workspace = typeof workspace;\nexport default workspace;\n`;
+	const workspaceBody = `${imports.join('\n')}\n\nexport const workspace = defineRuntimeWorkspace(registry, {\n\tcollections: [\n${entries.join(',\n')}\n\t],\n\tapps,\n\tcustomTypes,\n\tmeta: { ${workspaceMeta} }${structure.agent ? ',\n\tagent' : ''}${structure.automations.length ? `,\n\tautomations: [${automations}]` : ''}${structure.remotes.length ? `,\n\tinvoke: {\n${remotes}\n\t}` : ''}${structure.agentTools.length ? `,\n\tagentTools: {\n${agentTools}\n\t}` : ''}${structure.policies.length ? `,\n\tpolicies: {\n${policies}\n\t}` : ''}${structure.channels.length ? `,\n\tchannels: {\n${channels}\n\t}` : ''}${structure.mcpServers.length ? `,\n\tmcpServers: {\n${mcpServers}\n\t}` : ''}${structure.skills.length ? `,\n\tskills: [\n${skills}\n\t]` : ''}${structure.seed ? ',\n\tseed' : ''}${structure.env ? ',\n\tenv' : ''}\n});\n\n${structure.env ? 'validateDeclaredEnvVars(env);\n\n' : ''}export type Workspace = typeof workspace;\nexport default workspace;\n`;
+	return workspaceBody;
 }
 
 function renderClient(
@@ -2212,6 +2274,7 @@ export async function compilePodFilesystem(
 			i18n: { present: false, catalogs: {}, primary: DEFAULT_LOCALE, en: null, zh: null },
 			seed: null,
 			env: null,
+			envVars: null,
 			diagnostics: [diagnostic]
 		};
 		return {
@@ -2278,6 +2341,9 @@ export async function compilePodFilesystem(
 			['.norbital/types/workspace-authoring.d.ts', workspaceAuthoringTypes()],
 			['.norbital/types/client-runtime.d.ts', clientRuntimeTypes()],
 			['.norbital/types/custom-type-values.d.ts', renderCustomTypeValueMap(structure.customTypes)],
+			...(structure.envVars
+				? [['.norbital/types/env.d.ts', renderEnvModuleTypes(structure.envVars)] as const]
+				: []),
 			['.norbital/tsconfig.json', renderTsconfig()]
 		]);
 		// Tool directories first: a collection directory holding a tool keeps its richer collection

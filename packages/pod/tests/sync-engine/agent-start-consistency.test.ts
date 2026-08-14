@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { workspaceRuntimeOperations } from '$lib/ui/state/client.js';
+import { startInteractiveAgent } from '$lib/ui/state/client.js';
 import {
 	clearLocalSchema,
 	disableClientSync,
@@ -72,7 +72,7 @@ describe('agent start read-your-command consistency', () => {
 			)
 		);
 
-		const receipt = await workspaceRuntimeOperations.agentChatStart({ message: 'Inspect this' });
+		const receipt = await startInteractiveAgent({ message: 'Inspect this' });
 
 		expect(receipt.chatId).toBe('chat-1');
 		expect(upserts).toEqual([[session]]);
@@ -119,7 +119,7 @@ describe('agent start read-your-command consistency', () => {
 			)
 		);
 
-		const receipt = await workspaceRuntimeOperations.agentChatStart({ message: 'Inspect this' });
+		const receipt = await startInteractiveAgent({ message: 'Inspect this' });
 
 		expect(receipt.chatId).toBe('chat-2');
 		expect(upserts).toEqual([[session]]);

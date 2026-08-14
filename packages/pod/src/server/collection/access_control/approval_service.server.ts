@@ -21,7 +21,7 @@ import {
 } from '@norbital-ai/platform-utils/system/types';
 import { v7 } from 'uuid';
 import { z } from 'zod';
-import { error } from '../http_error.js';
+import { error } from '$lib/server/http.js';
 import { requestI18nOrDefault } from '$lib/server/i18n.js';
 import { approvalRequestFromRow, parseApprovalStepStacks } from '$lib/shared/approval.js';
 import { withCollectionTransaction } from '../collection_transaction.server.js';

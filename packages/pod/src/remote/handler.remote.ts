@@ -1,5 +1,5 @@
 import type { HandlerDefinition } from '$lib/authoring/automations/handlers.js';
-import { beforeApiStorage } from '$lib/server/collection/hook-api-context.server.js';
+import { beforeApiStorage } from '$lib/server/collection/hook-api.server.js';
 import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
 import type { StandardSchemaV1 } from '@standard-schema/spec';

@@ -7,7 +7,7 @@ import type { CheckerDiagnostic } from '../../vite/checker.js';
 import type { compilePodFilesystem as CompilePodFilesystem } from '../../vite/compiler/index.js';
 
 const usage =
-	'Usage: pod sync [--watch | --hints <json>] | pod check | pod build | pod migration create <name> [--custom] | pod migrate | pod seed | pod invite <email> | pod start | pod dev [--seed] | pod platform build <out-dir> <package-key>';
+	'Usage: pod sync [--watch | --hints <json>] | pod check | pod build | pod migration create <name> [--custom] | pod migrate | pod seed | pod invite <email> | pod start | pod dev [--seed] | pod platform build <out-dir> <package-key> | pod quality [options]';
 
 type CompilationResult = Awaited<ReturnType<typeof CompilePodFilesystem>>;
 
@@ -241,6 +241,10 @@ export async function runPodCli(
 	if (args[0] === 'start' && args.length === 1) return start(root);
 	if (args[0] === 'dev' && (args.length === 1 || (args.length === 2 && args[1] === '--seed'))) {
 		return develop(root, args[1] === '--seed');
+	}
+	if (args[0] === 'quality') {
+		const { runQualityCli } = await import('../../quality/cli.js');
+		return runQualityCli(args.slice(1));
 	}
 	const syncWithHints = args[0] === 'sync' && args[1] === '--hints' && args.length === 3;
 	if (

@@ -12,15 +12,15 @@
 export const CHECKPOINT_MANIFEST_FILENAME = 'manifest.json';
 
 /**
- * Bundle-root entry point the tenant container executes. `.mjs` so it needs no `package.json`
- * of its own at the bundle root.
+ * Legacy guest HTTP boot file. Core no longer executes it; the runtime entry is
+ * `output/server/index.js` (`handlePodRequest` / `handlePodHostCommand`). Kept as a name so
+ * older artifacts and smoke scripts can still mention it.
  */
 export const SERVE_ENTRY_FILENAME = 'serve.mjs';
 
 export const CHECKPOINT_BUILD_REQUIRED_PATHS = [
 	CHECKPOINT_MANIFEST_FILENAME,
 	'dist/index.html',
-	SERVE_ENTRY_FILENAME,
 	'output/server/index.js',
 	'schema-functions.sql',
 	'schema-post-ddl.sql'

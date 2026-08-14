@@ -155,7 +155,8 @@ describe('Pod Sync — comprehensive E2E', () => {
 		const tables = await harness.pool.query<{ name: string }>(
 			`SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
 			  WHERE n.nspname='public' AND c.relkind='r'
-			    AND c.relname NOT IN ('audit_event','_approval_lock','_norbital_internal_schema',
+			    AND c.relname NOT LIKE '\\_norbital\\_%'
+			    AND c.relname NOT IN ('audit_event','_approval_lock',
 			      '__drizzle_migrations','sync_outbox','approval_request','requestor','automation_run','user',
 			      'agent_run_step','team','policy','integration_outbox','notification_outbox','notification',
 			      'document_asset','team_members')

@@ -12,7 +12,7 @@ import type { z } from 'zod';
 import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js';
 import type { ProvisionedContext, TenantDbClient } from '../bootstrap/workspace_store.js';
 import { findFirst } from './collection_ops.server.js';
-import { error } from './http_error.js';
+import { error } from '$lib/server/http.js';
 import { requestI18nOrDefault } from '$lib/server/i18n.js';
 
 type RecordHistoryInput = z.infer<typeof FindHistoryWireSchema>;

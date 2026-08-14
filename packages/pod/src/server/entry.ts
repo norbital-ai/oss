@@ -1,7 +1,6 @@
-import { beforeApiStorage } from '$lib/server/collection/hook-api-context.server.js';
 import { createBeforeApi } from '$lib/server/collection/hook-api.server.js';
 import { buildCtx } from '$lib/server/bootstrap/context.js';
-import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';
+import { setPodCallWorkspace } from '$lib/server/pod-call.js';
 import { handleNorbitalRuntimeRequest } from '$lib/server/bootstrap/runtime_request.server.js';
 import type {
 	HostAppPlugin,
@@ -10,29 +9,45 @@ import type {
 import { setHostPlugins } from '$lib/server/host-plugins.js';
 import { NORBITAL_BASE_SCOPE_HEADER } from '$lib/server/bootstrap/host_base_scope.js';
 import { error, isPodHttpError, json } from './http.js';
-import { runWithRequestEvent, type PodRequestEvent } from './request-context.js';
+import type { PodRequestEvent } from './request-context.js';
 import { loadTenantWorkspaceShellData } from './shell-data.server.js';
-import { toRuntimeWorkspace } from '$lib/authoring/workspace/workspace-runtime.js';
+import {
+	toRuntimeWorkspace,
+	type RuntimeWorkspaceSource
+} from '$lib/authoring/workspace/workspace-runtime.js';
 import { registerTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { dispatchRuntimeRun, parseRuntimeRunRequest } from '$lib/server/run/tenant_run.js';
+import {
+	admitHeaders,
+	parseAdmitHeaderRecord,
+	parseAdmitHeaders,
+	type PodAdmit
+} from './admit.js';
+import { createCallRequest, readFetchRequest } from './call-request.js';
+import { runWithPodCall } from './pod-call.js';
+import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 
 // This one re-export is the bundle contract, not a barrel: the generated server entry that
 // `vite/index.ts` writes imports `getTenantManifest` from `server/entry.js` (it needs the manifest
 // after registering the workspace) and re-exports it as `workspaceManifest`. Any consumer that wants
 // the manifest without the bundle imports it from `tenant_workspace.server.js` directly.
 export { getTenantManifest } from '$lib/server/bootstrap/tenant_workspace.server.js';
-import type { RuntimeWorkspaceSource } from '$lib/authoring/workspace/workspace-runtime.js';
-import {
-	setDatabaseNotifications,
-	type DatabaseNotifications
-} from '$lib/server/collection/sync/db-notifications.server.js';
+export {
+	ADMIT_DEADLINE_HEADER,
+	ADMIT_TIMEOUT_HEADER,
+	admitHeaders,
+	currentAdmit,
+	parseAdmitHeaderRecord,
+	parseAdmitHeaders,
+	remainingMs,
+	runWithAdmit,
+	startAdmit,
+	type PodAdmit
+} from './admit.js';
 
+/** Register the compiled workspace so every later request and host command sees the same registry. */
 export function registerPodWorkspace(workspace: RuntimeWorkspaceSource): void {
 	registerTenantWorkspace(toRuntimeWorkspace(workspace));
-}
-
-export function registerPodDatabaseNotifications(source: DatabaseNotifications | null): void {
-	setDatabaseNotifications(source);
 }
 
 /**
@@ -43,7 +58,8 @@ export function registerPodHostPlugins(plugins: readonly HostAppPlugin[]): void 
 	setHostPlugins(plugins);
 }
 
-function cookieValue(request: Request, name: string): string | undefined {
+/** Read one cookie from the inbound request. Used only to populate `event.cookies`. */
+function cookieValue(request: PodRequestEvent['request'], name: string): string | undefined {
 	const cookie = request.headers.get('cookie');
 	if (!cookie) return undefined;
 	for (const part of cookie.split(';')) {
@@ -53,7 +69,11 @@ function cookieValue(request: Request, name: string): string | undefined {
 	return undefined;
 }
 
-function createEvent(request: Request, bindings: RuntimeFacilityBindings): PodRequestEvent {
+/** Build the request event the guest runtime already understands from host-written headers. */
+function createEvent(
+	request: PodRequestEvent['request'],
+	bindings: RuntimeFacilityBindings
+): PodRequestEvent {
 	const url = new URL(request.url);
 	const runtimePath = url.pathname.startsWith('/_runtime/')
 		? url.pathname.slice('/_runtime/'.length)
@@ -96,6 +116,7 @@ async function phase<T>(marks: string[], name: string, run: () => Promise<T>): P
 	}
 }
 
+/** Attach accumulated `Server-Timing` marks without dropping any the inner handler already set. */
 function withTimings(response: Response, marks: readonly string[]): Response {
 	if (marks.length === 0) return response;
 	const headers = new Headers(response.headers);
@@ -108,51 +129,104 @@ function withTimings(response: Response, marks: readonly string[]): Response {
 	});
 }
 
-async function runRequest(event: PodRequestEvent): Promise<Response> {
-	const marks: string[] = [];
-	const context = await phase(marks, 'guest_context', () => buildCtx(event));
-	if (!context) {
-		const hasHostIdentity =
-			Boolean(event.locals.identity) ||
-			Boolean(event.request.headers.get(NORBITAL_BASE_SCOPE_HEADER)?.trim());
-		if (hasHostIdentity) error(401, 'Workspace context could not be established');
-		error(401, 'Unauthorized');
+/** Route one already-authenticated guest request to bootstrap or `/_runtime/*`. */
+async function runRequest(event: PodRequestEvent, marks: string[]): Promise<Response> {
+	getWorkspace();
+	const pathname = new URL(event.request.url).pathname;
+	if (pathname === '/_pod/bootstrap') {
+		const shell = await phase(marks, 'guest_shell', () => loadTenantWorkspaceShellData(event));
+		return withTimings(json(shell), marks);
 	}
+	if (pathname.startsWith('/_runtime/')) {
+		return withTimings(await handleNorbitalRuntimeRequest(event), marks);
+	}
+	error(404, `Unknown Pod route: ${pathname}`);
+}
 
-	return beforeApiStorage.run(createBeforeApi(), () =>
-		runWithWorkspaceContext(context, async () => {
-			const pathname = new URL(event.request.url).pathname;
-			if (pathname === '/_pod/bootstrap') {
-				const shell = await phase(marks, 'guest_shell', () => loadTenantWorkspaceShellData(event));
-				return withTimings(json(shell), marks);
+async function dispatchResultFromResponse(response: Response): Promise<PodDispatchResult> {
+	return {
+		status: response.status,
+		headers: Object.fromEntries(response.headers.entries()),
+		bodyText: await response.text()
+	};
+}
+
+export type PodDispatchInput = {
+	readonly method: string;
+	readonly url: string;
+	readonly headers: Record<string, string>;
+	readonly bodyText: string | null;
+};
+
+export type PodDispatchResult = {
+	readonly status: number;
+	readonly headers: Record<string, string>;
+	readonly bodyText: string;
+};
+
+/**
+ * Guest dispatch entry for isolate and other non-Fetch callers. Parses the host's admit headers and
+ * runs the request under one PodCall so `remainingMs()` is visible to every function the request
+ * reaches.
+ */
+export async function handlePodDispatch(
+	input: PodDispatchInput,
+	bindings: RuntimeFacilityBindings,
+	admit?: PodAdmit | null
+): Promise<PodDispatchResult> {
+	const resolvedAdmit = admit !== undefined ? admit : parseAdmitHeaderRecord(input.headers);
+	const event = createEvent(createCallRequest(input), bindings);
+
+	return runWithPodCall(
+		{ admit: resolvedAdmit, event, workspace: null, beforeApi: createBeforeApi() },
+		async () => {
+			try {
+				const marks: string[] = [];
+				const context = await phase(marks, 'guest_context', () => buildCtx(event));
+				if (!context) {
+					const hasHostIdentity =
+						Boolean(event.locals.identity) ||
+						Boolean(event.request.headers.get(NORBITAL_BASE_SCOPE_HEADER)?.trim());
+					if (hasHostIdentity) error(401, 'Workspace context could not be established');
+					error(401, 'Unauthorized');
+				}
+				setPodCallWorkspace(context);
+				return await dispatchResultFromResponse(await runRequest(event, marks));
+			} catch (caught) {
+				if (isPodHttpError(caught)) {
+					return {
+						status: caught.status,
+						headers: { 'content-type': 'application/json' },
+						bodyText: JSON.stringify(caught.body)
+					};
+				}
+				console.error('[pod-runtime]', caught);
+				return {
+					status: 500,
+					headers: { 'content-type': 'application/json' },
+					bodyText: JSON.stringify({
+						message: caught instanceof Error ? caught.message : String(caught)
+					})
+				};
 			}
-			if (pathname.startsWith('/_runtime/')) {
-				return withTimings(await handleNorbitalRuntimeRequest(event), marks);
-			}
-			error(404, `Unknown Pod route: ${pathname}`);
-		})
+		}
 	);
 }
 
+/**
+ * Self-host HTTP adapter. Parses the host's admit headers and runs the request through
+ * `handlePodDispatch`, then re-wraps the plain result as a web Response.
+ */
 export async function handlePodRequest(
 	request: Request,
 	bindings: RuntimeFacilityBindings
 ): Promise<Response> {
-	const event = createEvent(request, bindings);
-	try {
-		return await runWithRequestEvent(event, () => runRequest(event));
-	} catch (caught) {
-		if (isPodHttpError(caught)) {
-			return json(caught.body, { status: caught.status });
-		}
-		console.error('[pod-runtime]', caught);
-		return json(
-			{ message: caught instanceof Error ? caught.message : String(caught) },
-			{ status: 500 }
-		);
-	}
+	const input = await readFetchRequest(request);
+	const result = await handlePodDispatch(input, bindings, parseAdmitHeaders(request.headers));
+	return new Response(result.bodyText, { status: result.status, headers: result.headers });
 }
 
+/** The trusted host's identity for a private control-plane command. */
 export type PodHostIdentity = {
 	readonly userId: string;
 	readonly organizationId: string;
@@ -163,29 +237,48 @@ export type PodHostIdentity = {
 /**
  * Private control plane used by the trusted host. It is deliberately not reachable through
  * `handlePodRequest`, so a tenant identity can never claim jobs or inject system events.
+ *
+ * `admit` is the host's budget for this command. When omitted, admit headers on the synthetic
+ * request are parsed — a host that already has a `PodAdmit` should pass it.
  */
 export async function handlePodHostCommand(
 	command: unknown,
 	bindings: RuntimeFacilityBindings,
-	identity: PodHostIdentity
+	identity: PodHostIdentity,
+	admit?: PodAdmit | null
 ): Promise<unknown> {
-	const headers = new Headers({
+	const headers: Record<string, string> = {
 		'x-norbital-user-id': identity.userId,
 		'x-norbital-org-id': identity.organizationId,
 		'x-norbital-org-name': identity.organizationName
-	});
+	};
 	if (identity.baseScope) {
-		headers.set(NORBITAL_BASE_SCOPE_HEADER, JSON.stringify(identity.baseScope));
+		headers[NORBITAL_BASE_SCOPE_HEADER] = JSON.stringify(identity.baseScope);
 	}
+	if (admit) {
+		for (const [name, value] of Object.entries(admitHeaders(admit))) {
+			headers[name] = value;
+		}
+	}
+	const resolvedAdmit =
+		admit !== undefined ? admit : parseAdmitHeaderRecord(headers);
 	const event = createEvent(
-		new Request('http://tenant.local/_host-command', { headers }),
+		createCallRequest({
+			method: 'POST',
+			url: 'http://tenant.local/_host-command',
+			headers,
+			bodyText: null
+		}),
 		bindings
 	);
-	return runWithRequestEvent(event, async () => {
-		const context = await buildCtx(event);
-		if (!context) error(401, 'Host command workspace context could not be established');
-		return beforeApiStorage.run(createBeforeApi(), () =>
-			runWithWorkspaceContext(context, () => dispatchRuntimeRun(parseRuntimeRunRequest(command)))
-		);
-	});
+
+	return runWithPodCall(
+		{ admit: resolvedAdmit, event, workspace: null, beforeApi: createBeforeApi() },
+		async () => {
+			const context = await buildCtx(event);
+			if (!context) error(401, 'Host command workspace context could not be established');
+			setPodCallWorkspace(context);
+			return dispatchRuntimeRun(parseRuntimeRunRequest(command));
+		}
+	);
 }

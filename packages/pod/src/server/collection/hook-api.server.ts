@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { currentPodCallOrNull, withPodCallField } from '$lib/server/pod-call.js';
 import type {
 	AfterApi,
 	AfterHookApi,
@@ -44,6 +46,7 @@ import {
 	updateMany,
 	updateRecord
 } from './collection_ops.server.js';
+import { error } from '$lib/server/http.js';
 import { withCollectionTransaction } from './collection_transaction.server.js';
 import {
 	automationReplayStorage,
@@ -110,17 +113,19 @@ function buildDirectTransport(): DirectDbTransport {
 			const ctx = getWorkspace({ provision: true });
 			return createRecord(ctx, collection, input);
 		},
-		createMany: (collection, inputs) => {
+		createMany: async (collection, inputs) => {
 			const ctx = getWorkspace({ provision: true });
-			return createMany(ctx, collection, inputs);
+			const result = await createMany(ctx, collection, inputs);
+			return result.records;
 		},
 		update: (collection, recordId, input) => {
 			const ctx = getWorkspace({ provision: true });
 			return updateRecord(ctx, collection, recordId, input);
 		},
-		updateMany: (collection, updates) => {
+		updateMany: async (collection, updates) => {
 			const ctx = getWorkspace({ provision: true });
-			return updateMany(ctx, collection, updates);
+			const result = await updateMany(ctx, collection, updates);
+			return result.records;
 		},
 		delete: (collection, recordId) => {
 			const ctx = getWorkspace({ provision: true });
@@ -336,6 +341,11 @@ function sharedBuiltinApi(apiHolder: { current?: BeforeApi }) {
 					`AI inference accepts at most ${MAX_AI_CALLS_PER_INVOCATION} calls per invocation.`
 				);
 			}
+			if (!automationReplayStorage.getStore()) {
+				throw new Error(
+					'AI inference requires a durable step (automation/agent receipt). Collection functions cannot block the admit clock on the model.'
+				);
+			}
 			const imageInputs = input.images ?? [];
 			if (imageInputs.length > MAX_AI_IMAGES) {
 				throw new Error(`AI inference accepts at most ${MAX_AI_IMAGES} images per request.`);
@@ -381,23 +391,10 @@ function sharedBuiltinApi(apiHolder: { current?: BeforeApi }) {
 			if (totalImageBytes > MAX_AI_IMAGE_BYTES) {
 				throw new Error('AI image inputs exceed the 20 MiB request limit.');
 			}
-			const durable = Boolean(automationReplayStorage.getStore());
-			const userContent =
-				imageAssets.length === 0 || durable
-					? input.prompt
-					: [
-							{ type: 'text' as const, text: input.prompt },
-							...imageAssets.map(({ input: image, asset }) => ({
-								type: 'image' as const,
-								bytes: asset.bytes,
-								mimeType: asset.mimeType as string,
-								...(image.detail ? { detail: image.detail } : {})
-							}))
-						];
-			const messages: AiMessage[] = [{ role: 'user', content: userContent }];
+			const messages: AiMessage[] = [{ role: 'user', content: input.prompt }];
 			const outputSchema = input.schema ? zod.toJSONSchema(input.schema) : undefined;
 			const durableImages =
-				durable && imageAssets.length > 0
+				imageAssets.length > 0
 					? imageAssets.map(({ input: image, asset }) => ({
 							assetId: asset.id,
 							storageKey: asset.storageKey,
@@ -419,15 +416,7 @@ function sharedBuiltinApi(apiHolder: { current?: BeforeApi }) {
 					...(input.profile ? { profile: input.profile } : {}),
 					...(durableImages ? { images: durableImages } : {})
 				};
-				const result: AiChatResult = durable
-					? (replayAutomationAi({ request }) as AiChatResult) // stupidity: boundary-cast — durable replay stores the provider chat result.
-					: await requireRuntimeFacility('ai').chat({
-							messages,
-							tools: resolved.specs,
-							...(outputSchema ? { outputSchema } : {}),
-							...(input.model ? { model: input.model } : {}),
-							...(input.profile ? { profile: input.profile } : {})
-						});
+				const result = replayAutomationAi({ request }) as AiChatResult; // stupidity: boundary-cast — durable replay stores the provider chat result.
 				if (result.stopReason === 'refusal') throw new Error('AI provider refused the run');
 				const calls = result.toolCalls ?? [];
 				if (calls.length === 0) {
@@ -573,13 +562,19 @@ export function createElevatedAfterApi(): AfterApi {
 						return typeof recordId === 'string' && recordId.length > 0 ? [{ recordId, input }] : [];
 					});
 					if (updates.length === 0) {
-						return createMany(ctx, collectionName, payloads, { isElevated: true });
+						const created = await createMany(ctx, collectionName, payloads, {
+							isElevated: true
+						});
+						return created.records;
 					}
 					// A batch that names every record is an update batch: updateMany applies the same
 					// per-record semantics in caller order, atomically, without a transaction, a read
 					// and an audit write per record.
 					if (updates.length === payloads.length) {
-						return updateMany(ctx, collectionName, updates, { isElevated: true });
+						const updated = await updateMany(ctx, collectionName, updates, {
+							isElevated: true
+						});
+						return updated.records;
 					}
 
 					const rows: Record<string, unknown>[] = [];
@@ -609,4 +604,37 @@ export function createElevatedAfterApi(): AfterApi {
 	});
 	apiHolder.current = api as unknown as BeforeApi; // stupidity: boundary-cast — elevated after API is a BeforeApi with a privileged db.
 	return api;
+}
+
+/** Request-local server API used by nested hooks and tenant handlers. */
+const legacyBeforeApiStorage = new AsyncLocalStorage<BeforeApi>();
+
+export const beforeApiStorage = {
+	run<T>(api: BeforeApi, fn: () => T): T {
+		if (currentPodCallOrNull()) {
+			return withPodCallField('beforeApi', api, fn) as T;
+		}
+		return legacyBeforeApiStorage.run(api, fn);
+	},
+	getStore(): BeforeApi | undefined {
+		return currentPodCallOrNull()?.beforeApi ?? legacyBeforeApiStorage.getStore();
+	}
+};
+
+export async function getBeforeApi(): Promise<BeforeApi> {
+	const stored = beforeApiStorage.getStore();
+	if (stored) return stored;
+	return createBeforeApi();
+}
+
+export async function getHookApi(): Promise<HookApi> {
+	return restrictBeforeHookApi(await getBeforeApi());
+}
+
+export async function getElevatedAfterApi(): Promise<AfterApi> {
+	return createElevatedAfterApi();
+}
+
+export async function getElevatedAfterHookApi(): Promise<AfterHookApi> {
+	return restrictAfterHookApi(await getElevatedAfterApi());
 }

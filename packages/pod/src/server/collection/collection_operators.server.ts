@@ -1,7 +1,7 @@
 import { type AnyRelationsFilter, type Operators, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { isUtcIsoInstant } from '@norbital-ai/std/date';
-import { error } from './http_error.js';
+import { error } from '$lib/server/http.js';
 import { vectorDistanceOperatorKeys } from './collection_vector.server.js';
 
 /**

@@ -203,7 +203,7 @@ export function toPanelMessages(
 		}
 	}
 
-	// `runSubagent` tags the child's turn `subagent:<spawn call id>`, so the call that started a
+	// `runDurableSubagent` tags the child's turn `subagent:<spawn call id>`, so the call that started a
 	// delegated agent names the turn that carries its transcript. That is the whole join.
 	const turnByCallId = new Map<string, string>();
 	const turnStatus = new Map<string, string>();

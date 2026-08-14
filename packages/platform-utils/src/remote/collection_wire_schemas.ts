@@ -99,13 +99,24 @@ export const CreateWireSchema = z.object({
 	input: z.record(z.string(), z.unknown())
 });
 
-export const CreateManyWireSchema = z.object({
-	collection: z.string(),
-	bypass_secret: z.string().optional(),
-	/** Elevated bulk callers may avoid serializing complete rows they already own. */
-	returning: z.enum(['records', 'ids']).optional(),
-	inputs: z.array(z.record(z.string(), z.unknown()))
-});
+export const CreateManyWireSchema = z
+	.object({
+		collection: z.string(),
+		bypass_secret: z.string().optional(),
+		/** Elevated bulk callers may avoid serializing complete rows they already own. */
+		returning: z.enum(['records', 'ids']).optional(),
+		inputs: z.array(z.record(z.string(), z.unknown()))
+	})
+	.strict();
+
+export const CreateManyResultSchema = z
+	.object({
+		records: z.array(z.record(z.string(), z.unknown()))
+	})
+	.strict();
+
+export const UpdateManyResultSchema = CreateManyResultSchema;
+export const ImportRecordsResultSchema = CreateManyResultSchema;
 
 export const UpdateWireSchema = z.object({
 	collection: z.string(),
@@ -114,18 +125,20 @@ export const UpdateWireSchema = z.object({
 	input: z.record(z.string(), z.unknown())
 });
 
-export const UpdateManyWireSchema = z.object({
-	collection: z.string(),
-	bypass_secret: z.string().optional(),
-	updates: z
-		.array(
-			z.object({
-				record_id: z.string(),
-				input: z.record(z.string(), z.unknown())
-			})
-		)
-		.min(1)
-});
+export const UpdateManyWireSchema = z
+	.object({
+		collection: z.string(),
+		bypass_secret: z.string().optional(),
+		updates: z
+			.array(
+				z.object({
+					record_id: z.string(),
+					input: z.record(z.string(), z.unknown())
+				})
+			)
+			.min(1)
+	})
+	.strict();
 
 export const DeleteWireSchema = z.object({
 	collection: z.string(),
@@ -133,18 +146,28 @@ export const DeleteWireSchema = z.object({
 	record_id: z.string()
 });
 
-export const ExportRecordsWireSchema = z.object({
-	collection_name: z.string(),
-	record_ids: z.array(z.string()).optional(),
-	with: ExpandSpecSchema.optional(),
-	where: z.record(z.string(), z.unknown()).optional(),
-	limit: z.number().int().positive().max(10_000).optional(),
-	bypass_secret: z.string().optional()
-});
+export const ExportRecordsWireSchema = z
+	.object({
+		collection_name: z.string(),
+		record_ids: z.array(z.string()).optional(),
+		with: ExpandSpecSchema.optional(),
+		where: z.record(z.string(), z.unknown()).optional(),
+		limit: z.number().int().positive().max(10_000).optional(),
+		bypass_secret: z.string().optional()
+	})
+	.strict();
 
-export const ImportRecordsWireSchema = z.object({
-	collection_name: z.string(),
-	import_data: z.unknown(),
-	with: ExpandSpecSchema.optional(),
-	bypass_secret: z.string().optional()
-});
+export const ExportRecordsResultSchema = z
+	.object({
+		output: z.unknown()
+	})
+	.strict();
+
+export const ImportRecordsWireSchema = z
+	.object({
+		collection_name: z.string(),
+		import_data: z.unknown(),
+		with: ExpandSpecSchema.optional(),
+		bypass_secret: z.string().optional()
+	})
+	.strict();

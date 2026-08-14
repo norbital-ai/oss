@@ -287,6 +287,35 @@ describe('webhookInboundDeliverer', () => {
 		]);
 	});
 
+	it('fails the delivery when receive cannot finish the import in one shot', async () => {
+		const dispatched: Record<string, unknown>[] = [];
+		const deliver = webhookInboundDeliverer({
+			manifest: SIGNED,
+			dispatch: async (command) => {
+				const request = command as Record<string, unknown>;
+				dispatched.push(request);
+				if (request.kind === 'integration') {
+					return { status: 'queued', imported: 1 };
+				}
+				return { status: 'imported', imported: 1 };
+			},
+			secrets: () => SECRET,
+			log: () => undefined
+		});
+		const result = await deliver({
+			integrationName: 'field_reports',
+			bindingName: 'rfis.receive.rfi',
+			body,
+			headers: { 'x-reports-signature': sign(body), 'x-reports-event-id': 'evt_1' }
+		});
+		expect(result).toEqual({
+			status: 'rejected',
+			imported: 0,
+			reason: 'import could not finish in one shot'
+		});
+		expect(dispatched.filter((request) => request.kind === 'integration-import')).toEqual([]);
+	});
+
 	it('dispatches nothing at all when the signature is wrong', async () => {
 		const dispatched: unknown[] = [];
 		const result = await deliverer(

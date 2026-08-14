@@ -246,20 +246,16 @@ const result = await api.infer({
 Heavy durable infer belongs in a post-commit automation. Hooks may call `api.infer` for judgement
 on the write path (for example a photo), but they still must not queue work or send email.
 
-Every tenant VM invocation—including reads—is capped at two seconds of admitted execution and is billable.
-An automation can take longer overall because the platform runs it as durable serverless steps. `api.infer`
-is a replay boundary: pre-inference writes roll back, the host executes and bills the provider call under a
-stable effect ID, and a later invocation replays the same handler with the stored result. Each invocation
-accepts at most 64 outer `api.infer` calls and 100,000 prompt characters. The successful
-writes and terminal run receipt then commit together. Keep the authored handler straightforward; do not add
-home-grown queues, cursors, timers or retry tables.
+Timeout is host policy. The host admits each function — including reads — and kills the guest when
+the timeout fires. Core’s policy is 2_000 ms. An automation can take longer overall because if the
+work is not finished, the host calls the same function again. `api.infer` yields: pre-inference
+writes roll back, the host runs the model, and a later admit resumes the handler with the stored
+result. Each invocation accepts at most 64 outer `api.infer` calls and 100,000 prompt characters.
+The successful writes commit when the function returns. Keep the authored handler straightforward;
+do not add home-grown queues, timers or retry tables.
 
-In Core, DBOS is the only automation orchestrator. It recovers immutable tenant receipts, binds every run
-to the exact checkpoint/tree/runtime artifact that admitted it, serializes work per tenant under a global
-cap, and fairly interleaves noisy and quiet tenants. pg-boss remains an infrastructure queue for
-infrastructure such as integration and notification drains, conversation titles, builds, and billing;
-authors never choose the mechanism. Hosted interactive chat and channel inbound admit the same durable
-receipts; they are not a second runtime.
+Interactive chat and channel inbound start the same way: persist the user turn, then admit the loop
+function. Authors never choose a queue.
 
 ## Remotes
 

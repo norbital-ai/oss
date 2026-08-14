@@ -13,7 +13,7 @@
  * the constraint name, because constraint names are generated and change with the schema while the
  * detail line is a stable part of the wire protocol. The constraint name is the fallback.
  */
-import { error } from './http_error.js';
+import { error } from '$lib/server/http.js';
 
 /** Postgres class 23 — integrity constraint violation. */
 const UNIQUE_VIOLATION = '23505';

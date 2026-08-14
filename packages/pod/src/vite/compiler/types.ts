@@ -1,4 +1,7 @@
 import type { SkillFile } from '$lib/skills/types.js';
+import type { ParsedEnvSchema } from './env-schema.js';
+
+export type { ParsedEnvSchema } from './env-schema.js';
 
 export interface SourcePosition {
 	readonly line: number;
@@ -130,8 +133,9 @@ export interface PodStructure {
 	/** Tenant translation overrides under `src/i18n/`, if any. */
 	readonly i18n: DiscoveredI18n;
 	readonly seed: string | null;
-	/** `src/+env.ts`, if declared — the public and private names this workspace asks its host for. */
+	/** `src/+env.ts`, if declared — env vars this workspace reads from `process.env`. */
 	readonly env: string | null;
+	readonly envVars: ParsedEnvSchema | null;
 	readonly diagnostics: readonly StructuralDiagnostic[];
 }
 

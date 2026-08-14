@@ -1,0 +1,39 @@
+{
+	"version": 1,
+	"name": "norbital-tenant-policy",
+	"description": "Filesystem-first Pod workspace boundaries and sanctioned client UI APIs.",
+	"rules": [
+		{
+			"id": "no-legacy-workspace-imports",
+			"kind": "banned-import",
+			"specifiers": ["$app/*", "$lib/*", "$tenant/*", "@sveltejs/kit", "@sveltejs/kit/*"],
+			"files": ["src/**/*.{ts,tsx,svelte}"],
+			"message": "Tenant workspaces use generated ./$types.js server types and $pod/client in apps.",
+			"severity": "error"
+		},
+		{
+			"id": "no-svelte-store",
+			"kind": "banned-import",
+			"specifiers": ["svelte/store"],
+			"files": ["src/**/*.svelte"],
+			"message": "Use Svelte 5 runes for tenant app state.",
+			"severity": "error"
+		},
+		{
+			"id": "no-legacy-authoring-calls",
+			"kind": "banned-call",
+			"callees": ["defineSchema", "defineTable"],
+			"files": ["src/**/*.{ts,tsx,svelte}"],
+			"message": "Author +model.ts with defineModel; the filesystem compiler owns schema assembly.",
+			"severity": "error"
+		},
+		{
+			"id": "no-browser-dialogs",
+			"kind": "banned-call",
+			"callees": ["alert", "confirm", "prompt", "window.alert", "window.confirm", "window.prompt"],
+			"files": ["src/**/*.svelte"],
+			"message": "Use the shared dialog, alert-dialog, sheet, or toast surface.",
+			"severity": "error"
+		}
+	]
+}

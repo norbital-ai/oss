@@ -1,7 +1,7 @@
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 import { type AnyColumn, type AnyRelationsFilter, type Operators, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { error } from './http_error.js';
+import { error } from '$lib/server/http.js';
 
 export type CursorOrder = Readonly<Record<string, 'asc' | 'desc'>>;
 

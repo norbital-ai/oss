@@ -229,7 +229,7 @@ export type TransportSendResult = { readonly sent: boolean; readonly reason?: st
 
 /**
  * Every member of every binding here is a *method*, and a facility binding may never carry a data
- * field. Bindings reach a tenant runtime through the facility proxy in `serve/hosted.ts`, which
+ * field. Bindings reach a tenant runtime through host-injected facility refs (isolate-vm on Core, in-process on `pod start`), which
  * traps every property get and returns a call forwarder — so a data field arrives inside the
  * isolate as a function, and a record of functions does not survive the structured clone at all.
  * The type checks out on both sides and the standalone runner, which holds the real object, works;
@@ -369,20 +369,6 @@ export type HostMapsBinding = {
 };
 
 /**
- * A host lease for work that deliberately outlives the HTTP request which started it.
- *
- * Hosted runtimes normally become idle as soon as their last request ends. An interactive agent
- * returns its acknowledgement before inference, so its model/tool loop must retain the guest until
- * the durable terminal turn has been written. The opaque id prevents one run from releasing a
- * concurrent run's lease; standalone hosts may omit this facility because their process has no
- * per-request idle reaper.
- */
-export type HostRuntimeLifecycleBinding = {
-	retainBackgroundWork(): Promise<string>;
-	releaseBackgroundWork(leaseId: string): Promise<void>;
-};
-
-/**
  * Capabilities supplied by whichever platform hosts a tenant runtime. The runtime owns this
  * contract; hosts own the implementations and credentials. Bindings are optional in the transport
  * shape because workspaces require different facilities, but a host must satisfy the compiled
@@ -399,7 +385,6 @@ export type RuntimeFacilityBindings = {
 	readonly messaging?: HostMessagingBinding;
 	readonly maps?: HostMapsBinding;
 	readonly agentTools?: HostAgentToolBinding;
-	readonly runtimeLifecycle?: HostRuntimeLifecycleBinding;
 };
 
 export type RuntimeFacilityName =
@@ -410,8 +395,7 @@ export type RuntimeFacilityName =
 	| 'ai'
 	| 'maps'
 	| 'messaging'
-	| 'agentTools'
-	| 'runtimeLifecycle';
+	| 'agentTools';
 
 /**
  * Facilities implied by the portable workspace manifest, independent of a particular host.

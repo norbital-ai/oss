@@ -13,9 +13,6 @@ export type WorkspaceRemoteTransport = {
 	readonly invokeQuery: (input: InvokeTransportInput) => RemoteQuery<unknown>;
 	readonly exportPipeline: PodRemoteOperations['exportPipeline'];
 	readonly importPipeline: PodRemoteOperations['importPipeline'];
-	readonly agentChat?: PodRemoteOperations['agentChat'];
-	readonly agentChatStart: PodRemoteOperations['agentChatStart'];
-	readonly agentChatUpdateVerifier: PodRemoteOperations['agentChatUpdateVerifier'];
 	readonly agentModels: PodRemoteOperations['agentModels'];
 	readonly autocompleteGeolocation: PodRemoteOperations['autocompleteGeolocation'];
 	readonly renderStaticMap: PodRemoteOperations['renderStaticMap'];
@@ -27,10 +24,12 @@ export type WorkspaceRemoteTransport = {
 
 let workspaceRemoteTransport: WorkspaceRemoteTransport | undefined;
 
+/** Register the workspace remote transport for this runtime. */
 export function setWorkspaceRemoteTransport(transport: WorkspaceRemoteTransport): void {
 	workspaceRemoteTransport = transport;
 }
 
+/** Return the registered workspace remote transport, or throw if none is set. */
 export function getWorkspaceRemoteTransport(): WorkspaceRemoteTransport {
 	if (!workspaceRemoteTransport) {
 		throw new Error('Workspace remote transport not registered');

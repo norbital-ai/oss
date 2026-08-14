@@ -14,7 +14,7 @@ import { portableCollectionField } from '$lib/authoring/schema/table.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { requireTable } from './collection_direct.js';
 import { dateRangeFilter, isDateRangeOperator } from './collection_operators.server.js';
-import { error } from './http_error.js';
+import { error } from '$lib/server/http.js';
 
 interface FilterTarget {
 	readonly relation?: string;

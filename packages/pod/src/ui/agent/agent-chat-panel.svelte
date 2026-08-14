@@ -10,7 +10,11 @@
 	import { Bound, Center, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
-	import { getInitializedWorkspaceClient } from '$lib/ui/state/client.js';
+	import {
+		getInitializedWorkspaceClient,
+		startInteractiveAgent,
+		updateAgentVerifier
+	} from '$lib/ui/state/client.js';
 	import { getPlatformStateContext } from '$lib/ui/state/platform_state.svelte.js';
 	import { toPanelMessages, toPanelUsage, toSessionTotals, withPendingEcho } from './transcript.js';
 	import AgentModelPicker from './agent-model-picker.svelte';
@@ -19,9 +23,11 @@
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
 	import {
+		WEB_CHANNEL_ID,
 		buildConversationSelector,
-		conversationTriggerLabel,
+		listAccessibleChannels,
 		scopeConversationSessions,
+		sessionChannelId,
 		sessionVisibleInScope,
 		type ConversationSelectorLabels,
 		type ConversationSession
@@ -401,6 +407,7 @@
 	const isAdmin = $derived(platformState?.user?.role === 'admin');
 	const currentUserId = $derived(platformState?.user?.norbital_id ?? null);
 	let scopeUserId = $state<string | null>(null);
+	let selectedChannel = $state<string | null>(null);
 	const resolvedScopeUserId = $derived(scopeUserId ?? currentUserId);
 	const usersQuery = $derived.by(() => {
 		if (!isAdmin) return undefined;
@@ -454,9 +461,48 @@
 	const scopedSelectorSessions = $derived(
 		scopeConversationSessions(selectorSessions, conversationScope)
 	);
+	const manifestChannels = $derived.by(() => {
+		const declared = platformState?.manifestContext?.manifest?.channels ?? {};
+		const mapped: Record<string, { audience: string; transport: string }> = {};
+		for (const [key, channel] of Object.entries(declared)) {
+			mapped[key] = { audience: channel.audience, transport: channel.transport };
+		}
+		return mapped;
+	});
+	const accessibleChannels = $derived(
+		listAccessibleChannels({
+			sessions: scopedSelectorSessions,
+			labels: selectorLabels,
+			manifestChannels,
+			scope: conversationScope
+		})
+	);
+	const resolvedChannel = $derived.by(() => {
+		if (selectedChannel && accessibleChannels.some((channel) => channel.id === selectedChannel)) {
+			return selectedChannel;
+		}
+		const open = session.chatId
+			? selectorSessions.find((row) => row.id === session.chatId)
+			: undefined;
+		if (open) return sessionChannelId(open, selectorLabels);
+		return accessibleChannels[0]?.id ?? WEB_CHANNEL_ID;
+	});
+	const channelSelectorSessions = $derived(
+		scopedSelectorSessions.filter(
+			(row) => sessionChannelId(row, selectorLabels) === resolvedChannel
+		)
+	);
+	const showChannelPicker = $derived(accessibleChannels.length > 1);
+	const channelOptions = $derived(
+		accessibleChannels.map((channel) => ({
+			id: channel.id,
+			label: channel.label,
+			icon: channel.icon
+		}))
+	);
 	const conversationSelector = $derived(
 		buildConversationSelector({
-			sessions: scopedSelectorSessions,
+			sessions: channelSelectorSessions,
 			labels: selectorLabels
 		})
 	);
@@ -471,7 +517,7 @@
 		}
 		return options;
 	});
-	const showScopePicker = $derived(isAdmin && scopeOptions.length > 1);
+	const showScopePicker = $derived(isAdmin && currentUserId != null);
 
 	/**
 	 * The live conversation: the user's explicit pick, or the newest session once any exist.
@@ -481,9 +527,9 @@
 	 */
 	const activeChatId = $derived(
 		session.chatId ??
-			(session.composingNew || scopedSelectorSessions.length === 0
+			(session.composingNew || channelSelectorSessions.length === 0
 				? undefined
-				: scopedSelectorSessions[0].id)
+				: channelSelectorSessions[0].id)
 	);
 	const activeRunId = $derived.by(() => {
 		if (!activeChatId) return session.runId;
@@ -494,13 +540,6 @@
 
 	/** One replicated tenant row is the complete live conversation aggregate. */
 	const activeSession = $derived(sessions.find((row) => row.norbital_id === activeChatId));
-	const conversationDisplayLabel = $derived(
-		conversationTriggerLabel({
-			session: activeSession ? toSelectorSession(activeSession) : undefined,
-			model: conversationSelector,
-			labels: selectorLabels
-		})
-	);
 	const activeSessionIsChannel = $derived(
 		activeSession?.visibility.startsWith('channel_') ?? false
 	);
@@ -522,7 +561,7 @@
 		[...turnRows].filter((turn) => turn.subagent_id == null).at(-1) as
 			Record<string, unknown> | undefined
 	);
-	/** `agentChatStart` returns before inference; the replicated root turn owns in-flight after that. */
+	/** Interactive start returns before inference; the replicated root turn owns in-flight after that. */
 	const composerLocked = $derived(
 		!session.sendFailure &&
 			!session.waitedTooLong &&
@@ -688,7 +727,7 @@
 		mentionSearch.invalidate();
 		syncAgentSurface();
 		try {
-			const result = await getWorkspaceRemoteTransport().agentChatStart({
+			const result = await startInteractiveAgent({
 				message,
 				// Only chips the picker created. An `@` that never matched is already in the text.
 				...(references.length > 0 ? { mentions: references } : {}),
@@ -706,7 +745,7 @@
 			session.runId = result.runId;
 			session.chatId = result.chatId;
 			session.composingNew = false;
-			// `agentChatStart` returns before inference; the replicated root turn owns in-flight after this.
+			// Interactive start returns before inference; the replicated root turn owns in-flight after this.
 			session.pending = false;
 			syncAgentSurface();
 		} catch (cause) {
@@ -731,6 +770,7 @@
 		session.echo = null;
 		session.sendFailure = null;
 		session.waitedTooLong = false;
+		selectedChannel = sessionChannelId(toSelectorSession(row), selectorLabels);
 		syncAgentSurface();
 	}
 
@@ -751,6 +791,27 @@
 				session.chatId = undefined;
 				session.runId = undefined;
 				session.composingNew = false;
+				selectedChannel = null;
+			}
+		}
+		syncAgentSurface();
+	}
+
+	/** Switches the header channel and clears a thread outside that channel. */
+	function selectChannel(channelId: string): void {
+		selectedChannel = channelId;
+		if (session.chatId) {
+			const current = sessions.find((row) => row.norbital_id === session.chatId);
+			if (
+				current &&
+				sessionChannelId(toSelectorSession(current), selectorLabels) !== channelId
+			) {
+				session.chatId = undefined;
+				session.runId = undefined;
+				session.composingNew = false;
+				session.echo = null;
+				session.sendFailure = null;
+				session.waitedTooLong = false;
 			}
 		}
 		syncAgentSurface();
@@ -759,6 +820,7 @@
 	/** Clears the active thread so the next send creates a new conversation. */
 	function startConversation(): void { // stupidity:allow Q3 -- event handler
 		scopeUserId = currentUserId;
+		selectedChannel = WEB_CHANNEL_ID;
 		session.chatId = undefined;
 		session.runId = undefined;
 		session.composingNew = true;
@@ -868,13 +930,23 @@
 				searchPlaceholder={t('pod.agent.searchMembers')}
 				ariaLabel={t('pod.agent.conversationScope')}
 				onValueChange={selectScope}
+				class="w-28"
+			/>
+		{/if}
+		{#if showChannelPicker}
+			<ConversationScopePicker
+				value={resolvedChannel}
+				options={channelOptions}
+				searchPlaceholder={t('pod.agent.searchChannels')}
+				ariaLabel={t('pod.agent.conversationChannel')}
+				onValueChange={selectChannel}
+				class="w-32"
 			/>
 		{/if}
 		<div class="min-w-0 flex-1">
 			<ConversationSelector
 				model={conversationSelector}
 				value={activeChatId}
-				displayLabel={conversationDisplayLabel}
 				placeholder={t('pod.agent.noConversations')}
 				searchPlaceholder={t('pod.agent.searchConversations')}
 				ariaLabel={t('pod.agent.conversationThread')}
@@ -935,8 +1007,7 @@
 						onVerifierPrompt={async (prompt) => {
 							const id = activeRunId;
 							if (!id) return;
-							const update = getWorkspaceRemoteTransport().agentChatUpdateVerifier;
-							if (update) await update({ runId: id, prompt });
+							await updateAgentVerifier({ runId: id, prompt });
 						}}
 					/>
 				{/each}

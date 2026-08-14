@@ -3,6 +3,7 @@ import { requireDocker } from '../support/pg-harness.js';
 import { testAiBinding } from '../support/ai-binding.js';
 import {
 	bootPodRuntime,
+	completeInteractiveAgentTurn,
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
@@ -23,7 +24,7 @@ const member: Identity = {
 	role: 'basic'
 };
 
-describe('Pod AI and automation transcript — leftover in-guest runAgent path E2E', () => {
+describe('Pod AI and automation transcript — agentChatStart durable path E2E', () => {
 	let harness: PodRuntimeHarness;
 	let calls = 0;
 	let emptyCalls = 0;
@@ -150,18 +151,13 @@ describe('Pod AI and automation transcript — leftover in-guest runAgent path E
 		).rows[0];
 
 	it('runs the Pod-owned loop and exposes completed turns through ordinary synced rows', async () => {
-		const response = await harness.request(
-			{
-				method: 'POST',
-				path: 'agent/start',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ message: 'Describe this workspace.' })
-			},
-			admin
+		const result = await completeInteractiveAgentTurn(
+			harness,
+			admin,
+			{ message: 'Describe this workspace.' },
+			ai
 		);
-		expect(response.status).toBe(200);
-		const result = (await response.json()) as { runId: string; text: string };
-		expect(result.text).toBe('The workspace is ready.');
+		expect(result.outcome).toBe('completed');
 		expect(calls).toBe(2);
 
 		// The transcript is one tenant-owned aggregate, replayable without cross-collection joins.
@@ -316,32 +312,24 @@ describe('Pod AI and automation transcript — leftover in-guest runAgent path E
 	});
 
 	it('continues past the former eight-iteration ceiling until the model finishes', async () => {
-		const response = await harness.request(
-			{
-				method: 'POST',
-				path: 'agent/start',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ message: 'Keep using tools past eight turns.' })
-			},
-			admin
+		const result = await completeInteractiveAgentTurn(
+			harness,
+			admin,
+			{ message: 'Keep using tools past eight turns.' },
+			ai
 		);
-		expect(response.status, await response.clone().text()).toBe(200);
-		const result = (await response.json()) as { text: string };
-		expect(result.text).toBe('Completed after nine tool calls.');
+		expect(result.outcome).toBe('completed');
+		const run = await harness.pool.query<{ output: { text?: string } }>(
+			`SELECT output FROM automation_run WHERE norbital_id = $1::uuid`,
+			[result.runId]
+		);
+		expect(run.rows[0]?.output?.text).toBe('Completed after nine tool calls.');
 	});
 
 	it('persists and settles usage from an empty provider completion', async () => {
 		const prompt = 'Finish with no content.';
-		const response = await harness.request(
-			{
-				method: 'POST',
-				path: 'agent/start',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ message: prompt })
-			},
-			admin
-		);
-		expect(response.status, await response.clone().text()).toBe(200);
+		const result = await completeInteractiveAgentTurn(harness, admin, { message: prompt }, ai);
+		expect(result.outcome).toBe('completed');
 		expect(emptyCalls).toBe(1);
 		const session = await sessionForPrompt(prompt);
 		expect(session).toBeTruthy();
@@ -358,16 +346,8 @@ describe('Pod AI and automation transcript — leftover in-guest runAgent path E
 
 	it('settles a refused provider call instead of dropping its usage', async () => {
 		const prompt = 'Refuse this request.';
-		const response = await harness.request(
-			{
-				method: 'POST',
-				path: 'agent/start',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ message: prompt })
-			},
-			admin
-		);
-		expect(response.status).toBe(500);
+		const result = await completeInteractiveAgentTurn(harness, admin, { message: prompt }, ai);
+		expect(result.outcome).toBe('failed');
 		expect(refusalCalls).toBe(1);
 		const session = await sessionForPrompt(prompt);
 		expect(session?.messages.filter((message) => message.kind === 'usage')).toHaveLength(1);
@@ -399,16 +379,8 @@ describe('Pod AI and automation transcript — leftover in-guest runAgent path E
 		`);
 		const prompt = 'Retry settlement, not the provider.';
 		try {
-			const response = await harness.request(
-				{
-					method: 'POST',
-					path: 'agent/start',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ message: prompt })
-				},
-				admin
-			);
-			expect(response.status, await response.clone().text()).toBe(200);
+			const result = await completeInteractiveAgentTurn(harness, admin, { message: prompt }, ai);
+			expect(result.outcome).toBe('completed');
 			expect(retryCalls).toBe(1);
 			const session = await sessionForPrompt(prompt);
 			expect(session?.usage_total_tokens).toBe(19);

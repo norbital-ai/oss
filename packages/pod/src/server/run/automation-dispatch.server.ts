@@ -2,7 +2,7 @@ import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.j
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { readSyncOutboxBatch, OUTBOX_CURSOR_START, type OutboxCursor } from '$lib/server/collection/sync/outbox-tailer.server.js';
 import { withCollectionTransaction } from '$lib/server/collection/collection_transaction.server.js';
-import type { DurableAutomationAiEffect, DurableAutomationAiOutcome } from '$lib/host/types.js';
+import type { DurableAutomationAiEffect } from '$lib/host/types.js';
 import {
 	automationReplayStorage,
 	isAutomationEffectYield,
@@ -183,7 +183,12 @@ export async function admitEventAutomations(
 		}>(
 			`SELECT norbital_id::text, artifact_id, checkpoint_id, tree_hash, runtime_version
 			   FROM _norbital_automation_job
-			  WHERE orchestration_status = 'admitted' ORDER BY created_at, norbital_id LIMIT $1`,
+			  WHERE orchestration_status = 'admitted'
+			  ORDER BY CASE
+			    WHEN automation_name = 'agent:interactive' OR automation_name LIKE 'channel:%' THEN 0
+			    ELSE 1
+			  END, created_at, norbital_id
+			  LIMIT $1`,
 			[limit]
 		);
 		return {
@@ -382,45 +387,4 @@ export async function runAutomationReceipt(
 		};
 	}
 	return { status: 'completed', receiptId };
-}
-
-export async function settleAutomationEffect(
-	ctx: ProvisionedContext,
-	receiptId: string,
-	effectId: string,
-	outcome: DurableAutomationAiOutcome
-): Promise<void> {
-	await withCollectionTransaction(ctx, async () => {
-		const selected = await ctx.tenantDb.query<{
-			effect_id: string | null;
-			effect_ordinal: number | null;
-			effect_request_hash: string | null;
-			continuation: { effects?: DurableAutomationEffect[] } | null;
-		}>(
-			`SELECT effect_id, effect_ordinal, effect_request_hash, continuation
-			   FROM _norbital_automation_job WHERE norbital_id = $1::uuid FOR UPDATE`,
-			[receiptId]
-		);
-		const row = selected.rows[0];
-		if (!row) throw new Error(`Unknown automation receipt ${receiptId}`);
-		if (row.effect_id !== effectId || row.effect_ordinal == null || !row.effect_request_hash) {
-			throw new Error(`Automation effect ${effectId} does not match receipt ${receiptId}`);
-		}
-		const effects = [...(row.continuation?.effects ?? [])];
-		if (!effects.some((entry) => entry.ordinal === row.effect_ordinal)) {
-			effects.push({
-				ordinal: row.effect_ordinal,
-				requestHash: row.effect_request_hash,
-				status: outcome.status,
-				...(outcome.status === 'succeeded' ? { result: outcome.result } : { error: outcome.error })
-			});
-		}
-		await ctx.tenantDb.query(
-			`UPDATE _norbital_automation_job SET orchestration_status = 'admitted',
-			 continuation = $2::jsonb, effect_id = NULL, effect_ordinal = NULL,
-			 effect_request_hash = NULL, effect_request = NULL, updated_at = CURRENT_TIMESTAMP
-			 WHERE norbital_id = $1::uuid`,
-			[receiptId, JSON.stringify({ effects })]
-		);
-	});
 }

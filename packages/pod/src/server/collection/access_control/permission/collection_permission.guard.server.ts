@@ -1,6 +1,6 @@
 import type { ManifestCollectionEntry } from '$lib/manifest/index.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { error } from '../../http_error.js';
+import { error } from '$lib/server/http.js';
 import type {
 	PermissionEvaluationResult,
 	TCollectionActionContext,

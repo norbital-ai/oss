@@ -32,6 +32,10 @@ import type { WorkspaceClient } from '$lib/ui/state/workspace-client.js';
 import type { CollectionColumnMap } from '@norbital-ai/platform-utils/manifest/context';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import { implicitQuerySystemColumnSpecs } from '@norbital-ai/platform-utils/system/column_names';
+import {
+	CreateManyResultSchema,
+	ExportRecordsResultSchema
+} from '@norbital-ai/platform-utils/remote/collection_wire_schemas';
 import type {
 	CollectionApprovalRequest,
 	CollectionClient,
@@ -93,6 +97,15 @@ export async function post<T>(
 		throw new Error(message);
 	}
 	return payload as T;
+}
+
+/** One admit. The payload finishes or this throws. */
+async function postBulkWriteOnce(
+	path: string,
+	input: Readonly<Record<string, unknown>>
+): Promise<Record<string, unknown>[]> {
+	const result = CreateManyResultSchema.parse(await post(path, input));
+	return result.records;
 }
 
 /**
@@ -412,9 +425,9 @@ const transport: WorkspaceRemoteTransport = {
 			return result;
 		},
 		createMany: async (input) => {
-			const result = await post<Record<string, unknown>[]>('collections/createMany', input);
+			const records = await postBulkWriteOnce('collections/createMany', input);
 			invalidateCollectionQueries(input.collection);
-			return result;
+			return records;
 		},
 		update: async (input) => {
 			const sync = await clientSyncReady();
@@ -432,9 +445,9 @@ const transport: WorkspaceRemoteTransport = {
 			return result;
 		},
 		updateMany: async (input) => {
-			const result = await post<Record<string, unknown>[]>('collections/updateMany', input);
+			const records = await postBulkWriteOnce('collections/updateMany', input);
 			invalidateCollectionQueries(input.collection);
-			return result;
+			return records;
 		},
 		delete: async (input) => {
 			const sync = await clientSyncReady();
@@ -448,21 +461,11 @@ const transport: WorkspaceRemoteTransport = {
 	},
 	invokeCommand: (input) => post('invoke/command', input),
 	invokeQuery: (input) => query(invokeQueries, 'invoke:', 'invoke/query', input),
-	exportPipeline: (input) => post('collections/export', input),
-	importPipeline: (input) => post('collections/import', input),
-	agentChatStart: async (input) => {
-		const receipt = await post<{
-			runId: string;
-			chatId: string;
-			accepted: true;
-			session?: Record<string, unknown>;
-			syncSequence?: string;
-		}>('remotes/agentChatStart', input);
-		await settleAgentStartSync(receipt);
-		return receipt;
+	exportPipeline: async (input) => {
+		const result = ExportRecordsResultSchema.parse(await post('collections/export', input));
+		return result.output;
 	},
-	agentChatUpdateVerifier: (input) =>
-		post<{ accepted: true }>('remotes/agentChatUpdateVerifier', input),
+	importPipeline: (input) => postBulkWriteOnce('collections/import', input),
 	agentModels: () =>
 		post<Awaited<ReturnType<PodRemoteOperations['agentModels']>>>('remotes/agentModels', {}),
 	autocompleteGeolocation: (input) =>
@@ -473,6 +476,48 @@ const transport: WorkspaceRemoteTransport = {
 };
 
 export const workspaceRuntimeOperations = transport;
+
+export type InteractiveAgentStartInput = {
+	readonly message: string;
+	readonly runId?: string;
+	readonly model?: string;
+	readonly planMode?: boolean;
+	readonly intent?: 'do' | 'plan';
+	readonly verifierPrompt?: string;
+	readonly goalMode?: boolean;
+	readonly mentions?: readonly {
+		readonly collection: string;
+		readonly recordId: string;
+		readonly label: string;
+	}[];
+};
+
+export type InteractiveAgentStartResult = {
+	readonly runId: string;
+	readonly chatId: string;
+	readonly accepted: true;
+	readonly session?: Record<string, unknown>;
+	readonly syncSequence?: string;
+};
+
+/**
+ * Shell-owned interactive start. Posts to `/_runtime/agent/start`, not the API-client remote table.
+ */
+export async function startInteractiveAgent(
+	input: InteractiveAgentStartInput
+): Promise<InteractiveAgentStartResult> {
+	const receipt = await post<InteractiveAgentStartResult>('agent/start', input);
+	await settleAgentStartSync(receipt);
+	return receipt;
+}
+
+/** Replace the scheduled verifier prompt on an open conversation the requestor owns. */
+export function updateAgentVerifier(input: {
+	readonly runId: string;
+	readonly prompt: string;
+}): Promise<{ readonly accepted: true }> {
+	return post<{ accepted: true }>('agent/updateVerifier', input);
+}
 
 function collectionApi(collection: string) {
 	return {

@@ -62,8 +62,7 @@ vi.mock('$lib/server/agent/agent-spec.server.js', () => ({
 
 vi.mock('$lib/server/agent/agent-loop.server.js', () => ({
 	parseCompactDirective: () => null,
-	prepareInteractiveAgentTurn: () => state.prepareTurn(),
-	runAgent: async () => ({ runId: 'run-1', text: '' })
+	prepareInteractiveAgentTurn: () => state.prepareTurn()
 }));
 
 vi.mock('$lib/server/run/automation-dispatch.server.js', () => ({
@@ -171,5 +170,21 @@ describe('hosted start path budget', () => {
 		);
 		expect(startFn).toContain('failOpenInteractiveTurn');
 		expect(startFn).toContain('readChatSession');
+	});
+
+	it('registers start on the host-owned agent door, not the API-client remote table', () => {
+		const runtime = readFileSync(
+			new URL('../../src/server/bootstrap/runtime_request.server.ts', import.meta.url),
+			'utf8'
+		);
+		const client = readFileSync(new URL('../../src/ui/state/client.ts', import.meta.url), 'utf8');
+		expect(runtime).toContain("'agent/start'");
+		expect(runtime).toContain("'agent/updateVerifier'");
+		expect(runtime).not.toContain("'remotes/agentChatStart'");
+		expect(runtime).not.toContain("'remotes/agentChatUpdateVerifier'");
+		expect(client).toContain("post<InteractiveAgentStartResult>('agent/start', input)");
+		expect(client).toContain("post<{ accepted: true }>('agent/updateVerifier', input)");
+		expect(client).not.toContain("'remotes/agentChatStart'");
+		expect(client).not.toContain("'remotes/agentChatUpdateVerifier'");
 	});
 });

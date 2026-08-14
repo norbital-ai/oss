@@ -96,7 +96,7 @@ src/
 │   └── messages.zh.json           # required — Chinese copy, exact same keys
 ├── lib/**                         # optional, free-form helper code — no role, no `+` prefix
 ├── +agent.ts                      # optional
-├── +env.ts                        # optional
+├── +env.ts                        # optional — declare env vars; private keys are server-only
 └── +seed.ts                       # optional
 ```
 
@@ -323,7 +323,7 @@ sentence; "runs before create" restates the key and is worse than nothing.
   and 100,000 prompt characters). That is the same host chat the agent uses, with an optional Zod
   `schema`, optional `images`, and optional named workspace tools. It never offers authoring,
   sandbox, `write_collection`, or `spawn_subagent`, and it does not own a chat transcript. Each run
-  is bounded DBOS steps (≤2s per guest invocation), not one long process or agent session.
+  is one admitted function. If the work is not finished, the host calls the same function again.
 - Remotes are imperative request/response methods. Reactive reads belong to `client.db`.
 - Integrations use portable runtime delivery facilities; missing facilities fail at boot.
 - Put tenant-specific fixture behavior in `src/+seed.ts`. Sensitive statutory or system seed remains Core-owned.

@@ -3,7 +3,7 @@ import { integration_outbox } from '@norbital-ai/platform-utils/system/workspace
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { z } from 'zod';
-import { rowsPerMutationStatement } from '$lib/server/collection/mutation-batching.js';
+import { rowsPerMutationStatement } from '$lib/server/collection/collection_transaction.server.js';
 
 type MutationAction = 'create' | 'update' | 'delete';
 export const OUTBOX_CLAIM_LEASE_MS = 5 * 60 * 1000;

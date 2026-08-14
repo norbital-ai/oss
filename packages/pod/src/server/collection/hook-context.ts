@@ -1,6 +1,6 @@
 import type { AnyCollectionBehavior } from '$lib/authoring/schema/collection-behavior.js';
 import type { CollectionHookParams } from '$lib/authoring/automations/hooks.js';
-import { collectionHooks } from './workspace-collections.js';
+import { collectionHooks } from '$lib/server/bootstrap/tenant_workspace.server.js';
 
 /** Hook payload fields produced by `adaptHookContextForAction` (api is supplied by dispatch). */
 export type ErasedHookActionContext =

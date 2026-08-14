@@ -1,5 +1,5 @@
 /**
- * The one HTTP server core shared by both Pod transports.
+ * The HTTP server core for the reference standalone host.
  *
  * `handlePodRequest` takes a web `Request` and answers with a web `Response`, and `node:http`
  * speaks neither. The translation is small but every part of it has a failure mode that is
@@ -8,47 +8,43 @@
  * sits between the socket and the runtime is a security contract: which request is refused before
  * its body is read, and which identity a request may act under, is decided here and only here.
  *
- * The two adapters differ only in which of the optional surfaces they supply. The hosted adapter
- * (`serve/hosted.ts`) fronts the runtime with a shared host token and the host's private
- * `/_host/*` control routes, and trusts identity headers the token proves. The standalone adapter
- * (`serve/standalone.ts`) authenticates every request itself, serves the workspace's static
- * assets and single-page document, and has no token at all — the socket is loopback and the
- * trusted authenticated host is expected in front of it.
+ * The reference host (`serve/standalone.ts`) authenticates every request itself, serves the
+ * workspace's static assets and single-page document, and hands tenant traffic to
+ * `handlePodRequest` in-process.
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';
-import {
-	hostTokenMatches,
-	TRUSTED_HOST_TOKEN_HEADER,
-	TRUSTED_PERMISSION_BYPASS_HEADER
-} from '../host/identity.js';
 import {
 	isVerifiedSubject,
 	type HostIdentity,
 	type HostIdentityProvider,
 	type HostVerifiedSubject
 } from '../host/types.js';
+import {
+	ADMIT_DEADLINE_HEADER,
+	ADMIT_TIMEOUT_HEADER,
+	admitHeaders,
+	parseAdmitHeaders,
+	startAdmit,
+	type PodAdmit
+} from '../server/admit.js';
 import { handlePodRequest } from '../server/entry.js';
 
-/** The host's private control plane, gated by the shared token rather than by identity. */
-const HOST_ROUTE_PREFIX = '/_host/';
-
 /**
- * Headers the runtime reads from its trusted host and never from the client.
- *
- * Identity, plus the token that proves the caller is the host. The runtime believes `x-norbital-*`
- * absolutely, so anything a client sent under these names is removed before the request reaches
- * workspace code — see {@link withHostIdentity}.
+ * Identity and admit budget. The runtime reads these from its trusted host and never from the
+ * client. The runtime believes `x-norbital-*` absolutely, so anything a client sent under these
+ * names is removed before the request reaches workspace code — see {@link withHostIdentity}.
  */
 const IDENTITY_HEADERS = [
 	'x-norbital-user-id',
 	'x-norbital-org-id',
 	'x-norbital-org-name',
 	'x-norbital-base-scope-json',
-	'x-norbital-host-token',
-	TRUSTED_PERMISSION_BYPASS_HEADER
+	ADMIT_TIMEOUT_HEADER,
+	ADMIT_DEADLINE_HEADER
 ] as const;
 
+/** Copy every inbound Node header onto a web `Headers`, preserving repeated values. */
 function appendIncomingHeaders(source: IncomingMessage, target: Headers): void {
 	for (const [name, rawValue] of Object.entries(source.headers)) {
 		if (Array.isArray(rawValue)) {
@@ -75,7 +71,9 @@ async function readRequestBody(request: IncomingMessage): Promise<Uint8Array | u
 	return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
 }
 
-/** A `Uint8Array` is a valid `BodyInit`; TypeScript only narrows the generic form. */
+/**
+ * A `Uint8Array` is a valid `BodyInit`; TypeScript only narrows the generic form.
+ */
 function bodyInit(bytes: Uint8Array): BodyInit {
 	// stupidity: boundary-cast -- non-data Fetch boundary; the bytes remain unchanged.
 	return bytes as unknown as BodyInit;
@@ -108,18 +106,19 @@ async function toWebRequest(
 }
 
 /**
- * Re-issue a request carrying the identity the host established, and nothing the client sent about
- * identity.
+ * Re-issue a request carrying the identity and admit the host established, and nothing the client
+ * sent about either.
  *
  * Stripping first is what makes any caller safe to trust. The runtime treats `x-norbital-*` as
  * proven, so a client that set those headers itself would otherwise be believed; a provider cannot
- * accidentally pass identity through by forgetting to clear it, because the only identity that
- * survives this function is the one it was given.
+ * accidentally pass identity or a longer budget through by forgetting to clear it, because the only
+ * values that survive this function are the ones it was given. `admit` is written after the strip
+ * so a hosted Core fetch keeps the budget it already started.
  */
 async function withHostIdentity(
 	request: Request,
 	identity: HostIdentity,
-	permissionBypass: boolean
+	admit?: PodAdmit | null
 ): Promise<Request> {
 	const headers = new Headers(request.headers);
 	for (const name of IDENTITY_HEADERS) headers.delete(name);
@@ -129,7 +128,11 @@ async function withHostIdentity(
 	if (identity.baseScope) {
 		headers.set('x-norbital-base-scope-json', JSON.stringify(identity.baseScope));
 	}
-	if (permissionBypass) headers.set(TRUSTED_PERMISSION_BYPASS_HEADER, '1');
+	if (admit) {
+		for (const [name, value] of Object.entries(admitHeaders(admit))) {
+			headers.set(name, value);
+		}
+	}
 	const body =
 		request.method === 'GET' || request.method === 'HEAD'
 			? undefined
@@ -142,6 +145,7 @@ async function withHostIdentity(
 	});
 }
 
+/** Copy a web `Response` onto a Node `ServerResponse`, streaming the body when present. */
 async function writeWebResponse(response: Response, target: ServerResponse): Promise<void> {
 	target.statusCode = response.status;
 	// `set-cookie` is the one header that legitimately repeats, and iterating the headers reports it as
@@ -210,46 +214,27 @@ type PodHttpServerOptions = {
 	readonly identity: HostIdentityProvider;
 	/** The facilities `handlePodRequest` runs tenant traffic against. */
 	readonly bindings: RuntimeFacilityBindings;
-	/**
-	 * The shared host token. When set, every request must carry `TRUSTED_HOST_TOKEN_HEADER`
-	 * matching it and is refused 401 before any body is read. The hosted adapter is the only caller.
-	 */
-	readonly token?: string;
-	/**
-	 * The host's private control plane, consulted before authentication on every `/_host/*` path.
-	 * Returns `true` when it answered. The hosted adapter is the only caller.
-	 */
-	readonly hostRoutes?: (
-		pathname: string,
-		request: IncomingMessage,
-		response: ServerResponse
-	) => Promise<boolean>;
-	/**
-	 * Pre-auth real-file serving. The standalone adapter is the only caller: the hosted adapter serves no
-	 * static assets because the host holds the same build output on disk.
-	 */
+	/** Pre-auth real-file serving for the workspace build output on disk. */
 	readonly staticAssets?: (
 		request: IncomingMessage
 	) => Promise<{ body: Buffer; contentType: string } | null>;
 	/**
 	 * The single-page document, served to a request that authenticated and matched no real file.
 	 * A deep link has to resolve to the shell rather than a 404, but it is a *document*, so it
-	 * belongs behind the session rather than beside the JavaScript. Standalone only.
+	 * belongs behind the session rather than beside the JavaScript. Reference host only.
 	 */
 	readonly appDocument?: (
 		request: IncomingMessage
 	) => Promise<{ body: Buffer; contentType: string } | null>;
 	/**
 	 * Turns an authenticated-but-unnamed subject into a workspace identity, or `null` when the
-	 * address has no user and no pending invitation. Without it a verified subject is refused
-	 * outright, which is the hosted adapter's behaviour — its provider asserts a full identity or nothing.
+	 * address has no user and no pending invitation.
 	 */
 	readonly resolveSubject?: (verified: HostVerifiedSubject) => Promise<HostIdentity | null>;
 	/**
-	 * The runtime entry point. Defaults to this package's own `server/entry.js`. The standalone
-	 * runner passes the *bundled* copy it also loads its workspace into, so workspace registration,
-	 * host plugins, and database notifications live in the same module instance every tenant
-	 * request runs in; under the hosted adapter the default and the bundle are the same code anyway.
+	 * The runtime entry point. Defaults to this package's own `server/entry.js`. The reference host
+	 * passes the bundled copy it also loads its workspace into, so workspace registration and host
+	 * plugins live in the same module instance every tenant request runs in.
 	 */
 	readonly handlePodRequest?: (
 		request: Request,
@@ -257,22 +242,24 @@ type PodHttpServerOptions = {
 	) => Promise<Response>;
 	/** Prefix for the unhandled-rejection log line. Defaults to `[pod]`. */
 	readonly label?: string;
+	/**
+	 * Host wall-clock budget for one admitted function, in milliseconds.
+	 *
+	 * When set, the clock starts after authentication as the request is re-issued (`startAdmit`).
+	 * The reference host passes `config.timeoutMs ?? 2_000`.
+	 */
+	readonly timeoutMs?: number;
 };
 
 /**
  * One request through the whole pipeline, in the order that is the security contract.
  *
  *   a. The identity provider owns its routes (a login page must be reachable unauthenticated).
- *   b. The shared host token is compared before any body is read, when one is configured.
- *   c. The host's `/_host/*` control plane answers before authentication, when one is configured.
- *   d. Pre-auth static assets serve before authentication, when the adapter serves any.
- *   e. The provider authenticates. `null` is a bare 401; a `Response` is a redirect or challenge.
- *   f. A verified subject is resolved to a workspace identity, or refused (401 hosted, 403 standalone).
- *   g. The single-page document is served to the authenticated request that matched no real file.
- *   h. The request is re-issued with the established identity and handed to the runtime.
- *
- * The hosted and standalone adapters supply disjoint subsets of the optional surfaces, so each
- * step is a no-op for whichever adapter does not own it — but the order never changes.
+ *   b. Pre-auth static assets serve before authentication, when configured.
+ *   c. The provider authenticates. `null` is a bare 401; a `Response` is a redirect or challenge.
+ *   d. A verified subject is resolved to a workspace identity, or refused 403.
+ *   e. The single-page document is served to the authenticated request that matched no real file.
+ *   f. The request is re-issued with the established identity and handed to the runtime.
  */
 async function handleConnection(
 	options: PodHttpServerOptions,
@@ -286,8 +273,8 @@ async function handleConnection(
 	response.on('close', () => {
 		if (!response.writableFinished) hangUp.abort();
 	});
-	// The web request is created on first use, not eagerly: the hosted adapter must compare the host token
-	// — and answer its host routes — before a byte of any request body is read.
+	// The web request is created on first use, not eagerly: provider routes may answer before the body
+	// is read.
 	let webRequest: Request | null = null;
 	const toWeb = async (): Promise<Request> => {
 		webRequest ??= await toWebRequest(request, options.origin, hangUp.signal);
@@ -299,24 +286,6 @@ async function handleConnection(
 	if (options.identity.handleRoute) {
 		const routed = await options.identity.handleRoute(await toWeb());
 		if (routed) return writeWebResponse(routed, response);
-	}
-
-	// The token is what separates the host from everyone else, and every route behind it — tenant
-	// traffic included — assumes it held. Compared in constant time, before a byte of any body was
-	// read, and only when the adapter configured one.
-	if (options.token) {
-		const provided = request.headers[TRUSTED_HOST_TOKEN_HEADER];
-		if (!hostTokenMatches(typeof provided === 'string' ? provided.trim() : '', options.token)) {
-			return refuse(response, 401, 'Unauthorized');
-		}
-	}
-
-	// The host's private control plane reaches past every tenant-facing check: a command runs jobs
-	// and writes system events, and a notification wakes the change feed. The token is therefore
-	// the whole of its authorization — and it has already been compared above.
-	const pathname = new URL(request.url ?? '/', options.origin).pathname;
-	if (options.hostRoutes && pathname.startsWith(HOST_ROUTE_PREFIX)) {
-		if (await options.hostRoutes(pathname, request, response)) return;
 	}
 
 	// A real file is served before authentication so the shell, scripts, and styles load; the
@@ -358,11 +327,14 @@ async function handleConnection(
 		if (document) return writeStaticAsset(document, request, response);
 	}
 
-	// Strip whatever the client sent about identity and re-issue the request as the established
-	// one; only the identity that survived `authenticate`/`resolveSubject` is believed.
-	const permissionBypass =
-		Boolean(options.token) && request.headers[TRUSTED_PERMISSION_BYPASS_HEADER] === '1';
-	const authenticated = await withHostIdentity(await toWeb(), resolved, permissionBypass);
+	// Strip whatever the client sent about identity and admit, then re-issue the request as the
+	// established one. The clock starts here after authentication.
+	const incoming = await toWeb();
+	const admit =
+		options.timeoutMs != null
+			? startAdmit(options.timeoutMs)
+			: parseAdmitHeaders(incoming.headers);
+	const authenticated = await withHostIdentity(incoming, resolved, admit);
 	const handle = options.handlePodRequest ?? handlePodRequest;
 	return writeWebResponse(await handle(authenticated, options.bindings), response);
 }

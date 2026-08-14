@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createRecord, updateRecord } from '$lib/server/collection/collection_ops.server.js';
 import { getTenantManifest } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';
+import { withRequestWorkspaceCtx } from '$lib/server/bootstrap/workspace_store.js';
 import { resolveRequestorBaseScope } from '$lib/server/bootstrap/resolve_workspace.js';
 import { channelPrincipalEmail } from '$lib/server/bootstrap/channel_reconcile.server.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
@@ -129,7 +129,7 @@ async function withChannelPrincipal<T>(
 	// Everything but the requestor is unchanged — same database, same manifest, same organisation — so
 	// this replaces the scope rather than rebuilding a context, which would also rebuild the Drizzle
 	// client and the table registry for no reason.
-	return runWithWorkspaceContext(
+	return withRequestWorkspaceCtx(
 		{ ...ctx, baseScope: resolved.baseScope, userOrganizations: [] },
 		() => run(resolved)
 	);
@@ -154,7 +154,7 @@ async function withAuthenticatedChannelRequestor<T>(
 		userId
 	});
 	if (!linked) throw new Error(`Linked channel member ${userId} could not be scoped`);
-	return runWithWorkspaceContext(
+	return withRequestWorkspaceCtx(
 		{
 			...ctx,
 			baseScope: {

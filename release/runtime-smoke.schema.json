@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://github.com/norbital-ai/oss/blob/main/release/runtime-smoke.schema.json",
 	"title": "Norbital published runtime smoke evidence",
-	"description": "Evidence that a build against a materialized depset produces a bundle that boots and frames. The bundle format is the only cross-version contract now that there are no images.",
+	"description": "Evidence that a build against a materialized depset produces a function-guest bundle (handlePodRequest / handlePodHostCommand). The bundle format is the only cross-version contract now that there are no images.",
 	"type": "object",
 	"additionalProperties": false,
 	"required": [
@@ -16,7 +16,6 @@
 		"migrationSqlCount",
 		"runtimeEntry",
 		"serveEntrySha256",
-		"readyFrame",
 		"passed"
 	],
 	"properties": {
@@ -30,25 +29,16 @@
 			"const": [
 				"manifest.json",
 				"dist/index.html",
-				"serve.mjs",
 				"output/server/index.js",
 				"schema-functions.sql",
 				"schema-post-ddl.sql"
 			]
 		},
 		"migrationSqlCount": { "type": "integer", "minimum": 1 },
-		"runtimeEntry": { "const": "serve.mjs" },
+		"runtimeEntry": { "const": "output/server/index.js" },
 		"serveEntrySha256": {
 			"type": "string",
 			"pattern": "^[0-9a-f]{64}$"
-		},
-		"readyFrame": {
-			"type": "object",
-			"additionalProperties": false,
-			"required": ["t"],
-			"properties": {
-				"t": { "const": "ready" }
-			}
 		},
 		"passed": { "const": true }
 	}

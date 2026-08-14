@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { HttpError } from '$lib/server/collection/http_error.js';
+import { HttpError } from '$lib/server/http.js';
 import {
 	isUnexpectedMutationError,
 	mutationRejection
-} from '$lib/server/collection/sync/mutation-rejection.server.js';
+} from '$lib/server/collection/sync/sync-endpoints.server.js';
 import { mutationRejectionMessage } from '$lib/ui/sync/mutation-rejection.js';
 import type { MutationResult } from '$lib/ui/sync/types.js';
 

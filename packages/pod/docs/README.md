@@ -10,6 +10,7 @@ workspace layout, generated client, compiler, runtime internals, history, sync, 
 | Deep dive                                     | Covers                                                                           |
 | --------------------------------------------- | -------------------------------------------------------------------------------- |
 | [Authoring](./AUTHORING.md)                   | What a workspace declares, what the host supplies, and the authoring principles. |
+| [Environment](./ENVIRONMENT.md)               | `+env.ts`, facility-DB store, Settings, `$app/env` on Core and self-host.        |
 | [Overview](./OVERVIEW.md)                     | Short lifecycle, generated-state, runtime and trust-boundary reference.          |
 | [Architecture](./ARCHITECTURE.md)             | Runtime invariants, deployment targets, facilities, notifications and files.     |
 | [Agent architecture](./AGENT_ARCHITECTURE.md) | Loop, tools, transcripts, channels, UI and the host boundary.                    |
@@ -18,8 +19,8 @@ workspace layout, generated client, compiler, runtime internals, history, sync, 
 | [Form system](./FORM_SYSTEM.md)               | Schema-derived forms and collection representation overrides.                    |
 | [Navigation state](./NAVIGATION_STATE.md)     | Application navigation and state conventions.                                    |
 
-Core's compute, DBOS, and metering contract lives in Core `apps/core/docs/COMPUTE.md`. That is the
-host book, not a second Pod book.
+Core's admit, timeout, yield, kill, and metering contract lives in Core `apps/core/docs/COMPUTE.md`.
+That is the host book, not a second Pod book.
 
 Historical migration and cross-repository refactor checklists are intentionally not part of this
 documentation set. Current contracts belong in the architecture guides; work tracking belongs in

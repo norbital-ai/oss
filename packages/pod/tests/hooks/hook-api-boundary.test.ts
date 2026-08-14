@@ -79,6 +79,21 @@ describe('hook API boundary', () => {
 		expect(restricted.db).toBe(api.db);
 	});
 
+	it('refuses a hook bulk write that cannot finish inside one admit', async () => {
+		const source = await readFile(hookApiSource, 'utf8');
+		expect(source).toMatch(/return result\.records/);
+		expect(source).not.toMatch(/nextOffset/);
+		expect(source).not.toMatch(/composeBulkWrite|while \(remaining/);
+	});
+
+	it('always yields infer through durable replay and never blocks on a guest provider chat', async () => {
+		const source = await readFile(hookApiSource, 'utf8');
+		expect(source).toContain('replayAutomationAi');
+		expect(source).toContain('AI inference requires a durable step');
+		expect(source).not.toContain("requireRuntimeFacility('ai')");
+		expect(source).not.toContain('durable ? replayAutomationAi');
+	});
+
 	it('builds the restricted API by naming fields, never by spreading the source', async () => {
 		const source = await readFile(hookApiSource, 'utf8');
 		for (const fn of ['restrictBeforeHookApi', 'restrictAfterHookApi']) {

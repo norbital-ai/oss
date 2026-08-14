@@ -21,14 +21,12 @@ export {
 	updateMany
 } from './collection.remote.js';
 export {
-	agentChat,
 	agentChatStart,
 	agentChatUpdateVerifier,
 	agentModels,
 	AgentChatInputSchema,
 	AgentChatUpdateVerifierInputSchema,
 	AgentModelsInputSchema,
-	type AgentChatResult,
 	type AgentChatStartResult
 } from './agent_chat.remote.js';
 export { autocompleteGeolocation } from './geolocation.remote.js';

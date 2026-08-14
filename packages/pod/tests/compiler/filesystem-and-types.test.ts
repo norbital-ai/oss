@@ -549,18 +549,18 @@ export default {
 	});
 
 	/**
-	 * `src/` is a whitelist of two flat declarations, and everything else there is a mistake. Before
-	 * `+env.ts` was one of them, a workspace declaring its private environment names was told it had
-	 * an unknown workspace role — while a connection referencing one of those names was refused for
-	 * being undeclared. Both ends of that had to move together.
+	 * `src/+env.ts` is a workspace-root role: it declares env vars the workspace reads from
+	 * `process.env`, and the compiler lifts private keys into the generated workspace manifest.
 	 */
 	it('discovers src/+env.ts and compiles it into the workspace', async () => {
 		const root = await workspace();
 		await write(
 			root,
 			'src/+env.ts',
-			`import { defineEnv } from '@norbital-ai/pod/authoring';
-export default defineEnv({ private: { REGISTRY_KEY: { description: 'Registry API key' } } });`
+			`import { defineEnvVars } from '@norbital-ai/pod/authoring';
+export const variables = defineEnvVars({
+	REGISTRY_KEY: { description: 'Registry API key' }
+});`
 		);
 		const structure = await discoverPodFilesystem(root);
 		expect(structure.diagnostics).toEqual([]);
@@ -568,8 +568,47 @@ export default defineEnv({ private: { REGISTRY_KEY: { description: 'Registry API
 
 		await compilePodFilesystem({ root });
 		const generated = await readFile(path.join(root, '.norbital/generated/workspace.ts'), 'utf8');
-		expect(generated).toContain('import env from "../../src/+env.js";');
+		expect(generated).toContain('import { variables as env } from "../../src/+env.js";');
+		expect(generated).toContain('validateDeclaredEnvVars(env);');
 		expect(generated).toContain('\tenv\n});');
+		const envTypes = await readFile(path.join(root, '.norbital/types/env.d.ts'), 'utf8');
+		expect(envTypes).toContain('export const REGISTRY_KEY: string | undefined;');
+	});
+
+	it('refuses $app/env/private imports from client and shared modules', async () => {
+		const root = await workspace();
+		await write(
+			root,
+			'src/apps/+home.svelte',
+			`<script>
+	import { REGISTRY_KEY } from '$app/env/private';
+</script>
+<svelte:head>
+	<title>Home</title>
+	<meta name="description" content="Home" />
+	<meta name="pod:icon" content="lucide:home" />
+</svelte:head>
+<p>{t('home.greeting')}</p>`
+		);
+		await write(root, 'src/lib/read-secret.ts', `import { REGISTRY_KEY } from '$app/env/private';
+export const key = REGISTRY_KEY;`);
+		await write(
+			root,
+			'src/collections/things/+hooks.ts',
+			`import { REGISTRY_KEY } from '$app/env/private';
+export default {
+	beforeCreate: async () => {
+		if (!REGISTRY_KEY) throw new Error('missing');
+	}
+};`
+		);
+		const structure = await discoverPodFilesystem(root);
+		const privateEnv = structure.diagnostics.filter((d) => d.code === 'PRIVATE_ENV_CLIENT');
+		expect(privateEnv.map((d) => d.file).sort()).toEqual([
+			'src/apps/+home.svelte',
+			'src/lib/read-secret.ts'
+		]);
+		expect(privateEnv.every((d) => d.file !== 'src/collections/things/+hooks.ts')).toBe(true);
 	});
 
 	it('discovers src/+agent.ts as the interactive profile instead of a scheduled automation', async () => {

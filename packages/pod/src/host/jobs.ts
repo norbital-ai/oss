@@ -370,21 +370,14 @@ function integrationPullJobs(options: WorkspaceJobOptions): QueueJob[] {
 }
 
 /**
- * Every recurring job this workspace needs, derived from its manifest.
+ * Infrastructure crons derived from the workspace manifest.
  *
- * This is deliberately the non-automation infrastructure set. Core registers it with pg-boss and
- * `pod start` hands it to the operator's integration queue. DBOS discovers automation receipts and
- * owns every authored automation schedule; neither host registers those through this function.
+ * Pull crons, notification drain, conversation titles. Not automations, not agents, not
+ * collection operations, not inbound import — those are admitted functions. The host supplies
+ * timing; this set is what `queue` receives.
  */
 export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[] {
 	const jobs: QueueJob[] = [
-		{
-			name: 'pod:integration-import',
-			schedule: 'continuous',
-			run: async () => {
-				await options.dispatch({ kind: 'integration-import', action: 'run' });
-			}
-		},
 		{
 			name: 'pod:agent-conversation-titles',
 			schedule: 'continuous',
@@ -394,8 +387,7 @@ export function workspaceJobs(options: WorkspaceJobOptions): readonly QueueJob[]
 		}
 	];
 
-	// Automations are deliberately absent. DBOS owns their schedules, admission, recovery and
-	// execution; this host job set is only for non-automation infrastructure outboxes/imports.
+	// Automations are absent. They are admitted functions, not infrastructure crons.
 
 	if (options.integrationDelivery) jobs.push(integrationOutboxJob(options));
 	if (options.messaging) jobs.push(notificationOutboxJob(options));

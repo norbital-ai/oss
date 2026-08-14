@@ -69,7 +69,7 @@ Tailwind plugin, another base stylesheet, manual registries, or hand-written sch
 | `pod migration create <name>` | Create a named schema migration; add `--custom` for a data migration.     |
 | `pod migrate`                 | Apply migrations in a standalone runtime.                                 |
 | `pod seed`                    | Run the optional authored seed in a standalone runtime.                   |
-| `pod start`                   | Serve an existing standalone build.                                       |
+| `pod start`                   | Run the reference host against an existing standalone build.              |
 | `pod dev [--seed]`            | Build, migrate, optionally seed, then serve.                              |
 
 `pod sync` and builds write the following root:
@@ -97,11 +97,13 @@ only on a loopback address; a production self-hosted `pod.host.ts` must provide 
 
 Hosts implement facilities structurally required by the built workspace. A DB-only host can run a
 workspace that needs only database access; file fields require file storage. Integrations and
-notifications require queue and delivery facilities as applicable. Automations do not require
-`queue`: they are receipts plus the host's durable automation protocol (Core: DBOS). `ai` is
-required when an automation calls `api.infer` or an agent profile needs inference. Other non-inferable direct
-calls such as external notifications and map lookups require the corresponding active host binding
-when invoked — a stored geolocation needs no provider to read or render, so it does not gate startup.
+notifications require queue and delivery facilities as applicable. `queue` is infrastructure crons
+only — it is not how functions run. Automations, agents, pages, and collection operations are
+admitted functions: the host gives each one a timeout and, if the work is not finished, calls the
+same function again. `ai` is required when an automation calls `api.infer` or an agent profile needs
+inference. Other non-inferable direct calls such as external notifications and map lookups require
+the corresponding active host binding when invoked — a stored geolocation needs no provider to read
+or render, so it does not gate startup.
 
 ## Data and sync model
 

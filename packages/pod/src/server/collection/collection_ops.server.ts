@@ -1,18 +1,17 @@
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 import { typeGuard } from '@norbital-ai/std/schema';
-import { NorbitalDBRecordSchema, type TNorbitalDBRecord } from './norbital_db_record.js';
+import { z } from 'zod';
 import type { CollectionFilter } from '@norbital-ai/platform-utils/collection';
 import type {
 	CollectionFindFirstQuery,
 	CollectionGroupedQuery,
 	CollectionQuery
 } from '$lib/authoring/workspace/db-api.js';
-import { getElevatedAfterHookApi, getHookApi } from './hook-api-context.server.js';
 import {
 	getWorkspaceCollection,
 	collectionHooks,
 	allowsMutation
-} from './workspace-collections.js';
+} from '$lib/server/bootstrap/tenant_workspace.server.js';
 import {
 	sendAuditEvent,
 	sendAuditEvents,
@@ -41,7 +40,7 @@ import {
 	selfServiceWriteAllowed,
 	SELF_SERVICE_WRITE_COLLECTIONS
 } from './access_control/permission/collection_permission.guard.server.js';
-import { error } from './http_error.js';
+import { error } from '$lib/server/http.js';
 import { requestI18nOrDefault } from '$lib/server/i18n.js';
 import { withConstraintErrors } from './constraint-errors.server.js';
 import { getCurrentPermissionBypassKey } from './access_control/permission/permission_bypass_key.server.js';
@@ -53,9 +52,6 @@ import {
 	directFindFirst,
 	directCount,
 	directFindGrouped,
-	directInsert,
-	directUpdate,
-	directDelete,
 	flattenWithOntoPayload,
 	parseMutationInput,
 	mergeWhere,
@@ -75,8 +71,7 @@ import {
 	emitOutboundRowsMany
 } from '$lib/server/integrations/tenant-outbox.server.js';
 import { emitSyncOutbox, emitSyncOutboxMany } from './sync/sync-outbox.server.js';
-import { withCollectionTransaction, withMutationDb } from './collection_transaction.server.js';
-import { rowsPerMutationStatement } from './mutation-batching.js';
+import { withCollectionTransaction, withMutationDb, rowsPerMutationStatement } from './collection_transaction.server.js';
 import { collectionFiltersWhere } from './collection_filters.server.js';
 import { collectionSearchWhere } from './collection_search.server.js';
 import {
@@ -85,45 +80,45 @@ import {
 	normalizeCursorOrder,
 	type CursorOrder
 } from './collection_cursor.server.js';
+import { remainingMs } from '../admit.js';
+
+export const NorbitalDBRecordSchema = z
+	.object({
+		norbital_id: z.string()
+	})
+	.passthrough();
+
+export type TNorbitalDBRecord = z.infer<typeof NorbitalDBRecordSchema>;
+
+async function resolveHookApi() {
+	const { getHookApi } = await import('./hook-api.server.js');
+	return getHookApi();
+}
+
+async function resolveElevatedAfterHookApi() {
+	const { getElevatedAfterHookApi } = await import('./hook-api.server.js');
+	return getElevatedAfterHookApi();
+}
 
 export interface CollectionPageResult {
 	readonly rows: Record<string, unknown>[];
 	readonly nextCursor: string | null;
 }
 
-function cursorQueryColumns(
-	columns: Readonly<Record<string, boolean | undefined>> | undefined,
-	orderBy: CursorOrder
-): { readonly columns: Record<string, boolean> | undefined; readonly injected: readonly string[] } {
-	if (!columns) return { columns: undefined, injected: [] };
-	const inclusionMode = Object.values(columns).some(Boolean);
-	const result = Object.fromEntries(
-		Object.entries(columns).filter((entry): entry is [string, boolean] => entry[1] !== undefined)
-	);
-	const injected: string[] = [];
-	for (const field of Object.keys(orderBy)) {
-		if (result[field] === true) continue;
-		if (inclusionMode) {
-			result[field] = true;
-			injected.push(field);
-		} else if (result[field] === false) {
-			delete result[field];
-			injected.push(field);
-		}
-	}
-	return { columns: result, injected };
-}
+/**
+ * What one admitted `createMany` / `updateMany` wrote.
+ */
+export type BulkWriteResult = {
+	readonly records: Record<string, unknown>[];
+};
 
-function removeInjectedCursorColumns(
-	rows: readonly Record<string, unknown>[],
-	injected: readonly string[]
-): Record<string, unknown>[] {
-	if (injected.length === 0) return [...rows];
-	return rows.map((row) => {
-		const projected = { ...row };
-		for (const field of injected) delete projected[field];
-		return projected;
-	});
+function requireFinishableAdmit(itemCount: number): void {
+	if (itemCount === 0) return;
+	const remaining = remainingMs();
+	if (remaining === null) return;
+	if (remaining <= 0) {
+		throw error(500, 'This function could not finish the bulk write');
+	}
 }
 
 async function resolvePolicyWhere(
@@ -198,7 +193,26 @@ export async function findManyPage(
 	const where = mergeWhere(baseQuery.where, collectionCursorWhere(after, orderBy));
 	const requestedLimit = typeof baseQuery.limit === 'number' ? baseQuery.limit : 100;
 	const limit = Math.min(5000, Math.max(1, requestedLimit));
-	const cursorColumns = cursorQueryColumns(baseQuery.columns, orderBy);
+	let cursorColumns: Record<string, boolean> | undefined;
+	const injectedCursorColumns: string[] = [];
+	if (baseQuery.columns) {
+		const inclusionMode = Object.values(baseQuery.columns).some(Boolean);
+		cursorColumns = Object.fromEntries(
+			Object.entries(baseQuery.columns).filter(
+				(entry): entry is [string, boolean] => entry[1] !== undefined
+			)
+		);
+		for (const field of Object.keys(orderBy)) {
+			if (cursorColumns[field] === true) continue;
+			if (inclusionMode) {
+				cursorColumns[field] = true;
+				injectedCursorColumns.push(field);
+			} else if (cursorColumns[field] === false) {
+				delete cursorColumns[field];
+				injectedCursorColumns.push(field);
+			}
+		}
+	}
 	const rows = await findMany(
 		ctx,
 		collection,
@@ -206,15 +220,23 @@ export async function findManyPage(
 			...baseQuery,
 			where,
 			orderBy,
-			columns: cursorColumns.columns,
+			columns: cursorColumns,
 			limit: limit + 1
 		},
 		filters
 	);
 	const hasNextPage = rows.length > limit;
 	const cursorRows = hasNextPage ? rows.slice(0, limit) : rows;
+	const projectedRows =
+		injectedCursorColumns.length === 0
+			? [...cursorRows]
+			: cursorRows.map((row) => {
+					const projected = { ...row };
+					for (const field of injectedCursorColumns) delete projected[field];
+					return projected;
+				});
 	return {
-		rows: removeInjectedCursorColumns(cursorRows, cursorColumns.injected),
+		rows: projectedRows,
 		nextCursor:
 			hasNextPage && cursorRows.length > 0
 				? encodeCollectionCursor(cursorRows[cursorRows.length - 1]!, orderBy)
@@ -299,7 +321,7 @@ async function createRecordUnguarded(
 		throw error(403, requestI18nOrDefault().t('pod.server.createNotAllowed', { collection }));
 	}
 
-	const api = await getHookApi();
+	const api = await resolveHookApi();
 	let payload = flattenWithOntoPayload(parseMutationInput(collection, 'create', input));
 	const beforeHook = collectionHooks(behavior, 'create')?.before;
 	if (beforeHook) {
@@ -369,7 +391,7 @@ async function createRecordUnguarded(
 				requestId: approvalRequestId
 			});
 		}
-		if (afterHook) await afterHook({ record, api: await getElevatedAfterHookApi() });
+		if (afterHook) await afterHook({ record, api: await resolveElevatedAfterHookApi() });
 		await sendAuditEvent(
 			collection,
 			{
@@ -386,6 +408,11 @@ async function createRecordUnguarded(
 	return created;
 }
 
+/**
+ * Create many records. The whole payload is written in this function or the function
+ * throws. When `remainingMs()` is null (unit tests / no admit), the array is written.
+ * When remaining time is already gone, the write fails instead of cutting a window.
+ */
 export function createMany(
 	ctx: ProvisionedContext,
 	collection: string,
@@ -397,12 +424,23 @@ export function createMany(
 		createdAts?: readonly unknown[];
 		updatedAts?: readonly unknown[];
 	}
-): Promise<Record<string, unknown>[]> {
-	return withConstraintErrors(collection, () =>
-		createManyUnguarded(ctx, collection, inputs, options)
-	);
+): Promise<BulkWriteResult> {
+	return withConstraintErrors(collection, async () => {
+		requireFinishableAdmit(inputs.length);
+		const records = await createManyUnguarded(ctx, collection, inputs, {
+			isElevated: options?.isElevated,
+			returnIdsOnly: options?.returnIdsOnly,
+			recordIds: options?.recordIds,
+			createdAts: options?.createdAts,
+			updatedAts: options?.updatedAts
+		});
+		return { records };
+	});
 }
 
+/**
+ * Write every given input. `beforeBatch` sees the full payload this function will insert.
+ */
 async function createManyUnguarded(
 	ctx: ProvisionedContext,
 	collection: string,
@@ -424,7 +462,7 @@ async function createManyUnguarded(
 		throw error(403, requestI18nOrDefault().t('pod.server.createNotAllowed', { collection }));
 	}
 
-	const api = await getHookApi();
+	const api = await resolveHookApi();
 	const createHooks = collectionHooks(behavior, 'create');
 	const beforeHook = createHooks?.before;
 	const beforeBatchHook = createHooks?.beforeBatch;
@@ -572,7 +610,7 @@ async function createManyUnguarded(
 			throw error(500, `Failed to create all records in "${collection}"`);
 		}
 
-		const afterApi = afterHook || afterBatchHook ? await getElevatedAfterHookApi() : undefined;
+		const afterApi = afterHook || afterBatchHook ? await resolveElevatedAfterHookApi() : undefined;
 		if (hasPerRecordEffects) {
 			// stupidity:allow A6 -- relationship, approval, and after-hook side effects preserve input order.
 			for (const [index, record] of created.entries()) {
@@ -712,7 +750,7 @@ async function updateRecordUnguarded(
 		throw error(403, requestI18nOrDefault().t('pod.server.updateNotAllowed', { collection }));
 	}
 
-	const api = await getHookApi();
+	const api = await resolveHookApi();
 	const originalRecord = await directFindFirst(ctx, collection, recordId);
 	const parsedInput = parseMutationInput(collection, 'update', input);
 	let payload = {
@@ -858,7 +896,7 @@ async function updateRecordUnguarded(
 			});
 		}
 		if (updateAfterHook) {
-			await updateAfterHook({ record, api: await getElevatedAfterHookApi() });
+			await updateAfterHook({ record, api: await resolveElevatedAfterHookApi() });
 		}
 		await sendAuditEvent(
 			collection,
@@ -884,6 +922,10 @@ async function updateRecordUnguarded(
  * approval gating (write-then-lock), row versioning, outbox emission, and audit —
  * so a bulk call can never become a privilege bypass.
  *
+ * The whole payload is written in this function or the function throws. When
+ * `remainingMs()` is null (unit tests / no admit), the array is written. When
+ * remaining time is already gone, the write fails instead of cutting a window.
+ *
  * Failure semantics are all-or-nothing: if any record is denied (403), already
  * locked by a pending approval (409), missing (404), or rejected by a hook, the
  * whole transaction rolls back and no record is changed. This mirrors
@@ -894,15 +936,20 @@ export async function updateMany(
 	ctx: ProvisionedContext,
 	collection: string,
 	updates: readonly { recordId: string; input: Record<string, unknown> }[],
-	options?: { isElevated?: boolean }
-): Promise<Record<string, unknown>[]> {
-	if (updates.length === 0) return [];
+	options?: {
+		isElevated?: boolean;
+	}
+): Promise<BulkWriteResult> {
+	requireFinishableAdmit(updates.length);
+	if (updates.length === 0) {
+		return { records: [] };
+	}
 	const behavior = getWorkspaceCollection(collection);
 	if (!options?.isElevated && !allowsMutation(behavior, 'update')) {
 		throw error(403, requestI18nOrDefault().t('pod.server.updateNotAllowed', { collection }));
 	}
 
-	const api = await getHookApi();
+	const api = await resolveHookApi();
 	const beforeHook = collectionHooks(behavior, 'update')?.before;
 	const afterHook = collectionHooks(behavior, 'update')?.after;
 	const metadata = collectionMetadata(ctx, collection);
@@ -1126,7 +1173,7 @@ export async function updateMany(
 		});
 
 		// Phase 3: relationship, approval, and after-hook side effects preserve input order.
-		const afterApi = afterHook ? await getElevatedAfterHookApi() : undefined;
+		const afterApi = afterHook ? await resolveElevatedAfterHookApi() : undefined;
 		// stupidity:allow A6 -- side effects run only after every write succeeded.
 		for (const [index, record] of updated.entries()) {
 			const item = prepared[index];
@@ -1169,7 +1216,7 @@ export async function updateMany(
 		await sendAuditEvents(audits);
 		return updated;
 	});
-	return result;
+	return { records: result };
 }
 
 export async function deleteRecord(
@@ -1243,7 +1290,7 @@ async function deleteManyUnguarded(
 		throw error(403, requestI18nOrDefault().t('pod.server.deleteNotAllowed', { collection }));
 	}
 
-	const api = await getHookApi();
+	const api = await resolveHookApi();
 	const metadata = collectionMetadata(ctx, collection);
 	const beforeHook = collectionHooks(behavior, 'delete')?.before;
 	const deleteAfterHook = collectionHooks(behavior, 'delete')?.after;
@@ -1350,7 +1397,7 @@ async function deleteManyUnguarded(
 		});
 
 		// Phase 3: approval requests and after hooks, in caller order, once every row is gone.
-		const afterApi = deleteAfterHook ? await getElevatedAfterHookApi() : undefined;
+		const afterApi = deleteAfterHook ? await resolveElevatedAfterHookApi() : undefined;
 		// stupidity:allow A6 -- approval requests and after hooks must observe caller order.
 		for (const item of prepared) {
 			if (item.gatedConfig && item.approvalRequestId) {

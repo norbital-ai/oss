@@ -13,6 +13,10 @@ host; a managed host must not replace it with a parallel system-database adminis
 | Teams       | tenant `team` and `team_members` rows | SvelteFlow hierarchy; create action, tappable nodes, member and declared-policy assignment |
 | Audit log   | tenant `audit_event` rows             | Policy-scoped `CollectionTable`; no host audit mirror                                      |
 
+Workspace env values are not a Settings tab. The tenant declares names in `src/+env.ts`; an
+operator pastes values in **Settings → Integrations**, the same tab as channel credentials. See
+[Environment](./ENVIRONMENT.md).
+
 Policies and channels are not runtime settings. They are compile-time workspace declarations in
 `src/policies` and `src/channels`, exposed read-only through a host authoring surface's compiled
 Manifest. Settings may assign a declared policy to a tenant-owned team, but it never edits the

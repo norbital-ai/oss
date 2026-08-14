@@ -3,20 +3,23 @@ import { spawn } from 'node:child_process';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import {
-	CHECKPOINT_MANIFEST_FILENAME,
-	SERVE_ENTRY_FILENAME
-} from '@norbital-ai/platform-utils/tenant_workspace/build-output';
+import { CHECKPOINT_MANIFEST_FILENAME } from '@norbital-ai/platform-utils/tenant_workspace/build-output';
 import {
 	POD_CLIENT_PLATFORM_MANIFEST,
 	type PodClientPlatformManifest
 } from './platform-contract.js';
-import { STDIO_FRAME_GUARD_SOURCE } from '../serve/stdio.js';
 import type {
 	PodFilesystemCompilation,
 	PodFilesystemCompilerOptions,
 	PodStructure
 } from './compiler/types.js';
+import {
+	renderEnvVirtualModule,
+	type ParsedEnvSchema
+} from './compiler/env-schema.js';
+
+const APP_ENV_PRIVATE = '$app/env/private';
+const APP_ENV_PUBLIC = '$app/env/public';
 
 export async function compilePodFilesystem(
 	options: PodFilesystemCompilerOptions
@@ -203,6 +206,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 	let clientStylesheets: string[] = [];
 	let clientPlatform: { manifest: PodClientPlatformManifest; publicBase: string } | undefined;
 	let buildArtifactsPrepared = false;
+	let workspaceEnvVars: ParsedEnvSchema | null = null;
 
 	async function prepareBuild(options: {
 		readonly clearArtifacts: boolean;
@@ -212,9 +216,13 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		buildArtifactsPrepared = true;
 		if (process.env.NORBITAL_POD_SYNCED !== '1') {
 			const compilation = await compilePodFilesystem({ root, mode: 'build' });
+			workspaceEnvVars = compilation.structure.envVars;
 			if (!compilation.valid) {
 				throw new Error(`Pod filesystem has ${compilation.diagnostics.length} structural error(s)`);
 			}
+		} else {
+			const structure = await discoverPodFilesystem(root);
+			workspaceEnvVars = structure.envVars;
 		}
 		if (process.env.NORBITAL_POD_CHECKED !== '1') {
 			const { runSvelteCheck } = await import('./checker.js');
@@ -250,19 +258,9 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			path.join(clientDistRoot, 'index.html'),
 			`<!doctype html><html><head><meta charset="utf-8"><script>(function(){var stored=localStorage.getItem('mode-watcher-mode');var prefersDark=window.matchMedia('(prefers-color-scheme: dark)').matches;if(stored==='dark'||(stored==='system'&&prefersDark)||(!stored&&prefersDark)){document.documentElement.classList.add('dark');document.documentElement.style.colorScheme='dark';}})();</script><meta name="viewport" content="width=device-width,initial-scale=1">${stylesheets.map((file) => `<link rel="stylesheet" href="${file}">`).join('')}</head><body><script type="module" src="/${clientEntryFile}"></script></body></html>\n`
 		);
-		// The runtime entry point. The boot is a separate statement so the server bundle stays
-		// importable at build time (below) without binding a socket, and it is awaited at the top
-		// level, so a runtime that cannot reach its host exits non-zero with the reason rather than
-		// listening on a port that answers nothing.
-		//
-		// The bundle is imported dynamically rather than declared, because the stdout guard ahead of
-		// it has to run first: stdout carries RPC frames only, and a workspace module is free to log
-		// as it evaluates. A static import would evaluate the workspace before any statement here
-		// could protect the stream.
-		await writeFile(
-			path.join(artifactRoot, SERVE_ENTRY_FILENAME),
-			`${STDIO_FRAME_GUARD_SOURCE}const { startPodHttpServer } = await import('./output/server/index.js');\nawait startPodHttpServer();\n`
-		);
+		// Core loads `output/server/index.js` in isolate-vm and calls `handlePodDispatch` /
+		// `handlePodHostCommand`. Self-host (`pod start`) uses `handlePodRequest` at the HTTP edge.
+		// There is no guest HTTP listener and no `serve.mjs` boot.
 		await writeFile(path.join(clientDistRoot, 'package.json'), '{"type":"module"}\n');
 		await mkdir(path.join(artifactRoot, 'output/server'), { recursive: true });
 		await copyPodServerAssets(path.join(artifactRoot, 'output/server'), options.serverAssets ?? []);
@@ -352,6 +350,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			const mode = environment.command === 'build' ? 'build' : 'authoring';
 			if (environment.command !== 'build' && process.env.NORBITAL_POD_SYNCED !== '1') {
 				const compilation = await compilePodFilesystem({ root, mode });
+				workspaceEnvVars = compilation.structure.envVars;
 				if (!compilation.valid) {
 					throw new Error(
 						`Pod filesystem has ${compilation.diagnostics.length} structural error(s)`
@@ -363,6 +362,9 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 					clearArtifacts: configuredBuildTarget === 'server',
 					generateMigrations: configuredBuildTarget === 'server' && isolatedBuild
 				});
+			} else if (process.env.NORBITAL_POD_SYNCED === '1') {
+				const structure = await discoverPodFilesystem(root);
+				workspaceEnvVars = structure.envVars;
 			}
 			return {
 				appType: 'custom',
@@ -433,9 +435,8 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 								external: (id: string) => id.startsWith('node:'),
 								output: {
 									format: 'esm',
-									codeSplitting: true,
-									entryFileNames: 'index.js',
-									chunkFileNames: 'chunks/[name]-[hash].js'
+									codeSplitting: false,
+									entryFileNames: 'index.js'
 								}
 							}
 						}
@@ -480,6 +481,19 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			};
 		},
 		resolveId(source) {
+			if (source === APP_ENV_PRIVATE || source === APP_ENV_PUBLIC) {
+				if (source === APP_ENV_PRIVATE && this.environment.name === 'client') {
+					throw new Error(
+						'Cannot import $app/env/private into client-side code. Use $app/env/public for public variables.'
+					);
+				}
+				if (!workspaceEnvVars) {
+					throw new Error(
+						`${source} is unavailable because this workspace has no src/+env.ts`
+					);
+				}
+				return `\0${source}`;
+			}
 			const platformFile =
 				this.environment.name === 'client' ? clientPlatform?.manifest.imports[source] : undefined;
 			if (platformFile && clientPlatform) {
@@ -510,6 +524,13 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			if (source === '$pod/client') return generatedClient;
 		},
 		async load(id) {
+			if (id === `\0${APP_ENV_PRIVATE}` || id === `\0${APP_ENV_PUBLIC}`) {
+				if (!workspaceEnvVars) {
+					throw new Error('Workspace env schema is not loaded');
+				}
+				const kind = id === `\0${APP_ENV_PUBLIC}` ? 'public' : 'private';
+				return renderEnvVirtualModule(kind, workspaceEnvVars[kind]);
+			}
 			if (id === `\0${I18N_MODULE}`) {
 				const [{ podMessages }, { uiMessages }] = await Promise.all([
 					import('../i18n/messages.js'),
@@ -539,12 +560,11 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			}
 			if (id === `\0${SERVER_ENTRY}`) {
 				return `import workspace from ${JSON.stringify(generatedWorkspace.split(path.sep).join('/'))};
-	import { handlePodHostCommand, handlePodRequest, registerPodWorkspace, registerPodDatabaseNotifications, registerPodHostPlugins, getTenantManifest } from ${JSON.stringify(podBuildFile('server/entry.js'))};
-export { startPodHttpServer } from ${JSON.stringify(podBuildFile('serve/hosted.js'))};
+	import { handlePodDispatch, handlePodHostCommand, handlePodRequest, registerPodWorkspace, registerPodHostPlugins, getTenantManifest } from ${JSON.stringify(podBuildFile('server/entry.js'))};
 registerPodWorkspace(workspace);
 export const workspaceSeedManifest = workspace.seed?.manifest ?? null;
 export const workspaceManifest = getTenantManifest();
-	export { handlePodHostCommand, handlePodRequest, registerPodDatabaseNotifications, registerPodHostPlugins };`;
+	export { handlePodDispatch, handlePodHostCommand, handlePodRequest, registerPodHostPlugins };`;
 			}
 			if (id !== `\0${CLIENT_ENTRY}`) return;
 			return `${clientPlatform ? '' : `import ${JSON.stringify(podBuildFile('app.css'))};\n`}import { mountPodWorkspace } from '@norbital-ai/pod/client/platform';

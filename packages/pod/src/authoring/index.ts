@@ -104,6 +104,6 @@ export type {
 	PullTrigger,
 	WebhookTrigger
 } from './integrations/integrations.js';
-export { defineEnv } from './env.js';
-export type { WorkspaceEnvDeclaration } from './env.js';
+export { defineEnvVars } from './env.js';
+export type { EnvVarConfig, EnvVarsDeclaration, StandardSchemaV1 } from './env.js';
 export type { AfterApi, AfterHookApi, BeforeApi, HookApi } from './workspace/hook-api.js';

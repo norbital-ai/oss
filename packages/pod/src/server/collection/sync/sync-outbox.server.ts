@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
-import { rowsPerMutationStatement } from '../mutation-batching.js';
+import { rowsPerMutationStatement } from '../collection_transaction.server.js';
 
 export type SyncOutboxAction = 'create' | 'update' | 'delete';
 

@@ -1,6 +1,6 @@
 import type { TApprovalConfig, TPolicy } from '@norbital-ai/platform-utils/system/types';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { error } from '../../http_error.js';
+import { error } from '$lib/server/http.js';
 import { isCurrentPermissionBypassKey } from './permission_bypass_key.server.js';
 import { loadPoliciesForTeams } from '../policy_grant_loader.server.js';
 

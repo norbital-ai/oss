@@ -58,13 +58,17 @@ describe('durable automation jobs', () => {
 		expect(source).not.toContain('lease_until');
 		expect(source).not.toContain('AUTOMATION_JOB_MAX_ATTEMPTS');
 		expect(source).toContain("status = 'waiting_effect'");
-		expect(source).toContain('continuation = $2::jsonb');
+		expect(source).not.toContain('settleAutomationEffect');
+		expect(source).not.toContain("action: 'settle'");
 		expect(source).toContain('record_snapshot');
 		expect(source).toContain('checkpoint_id');
 		expect(source).toContain('runtime_version');
 		expect(source).toContain('GUEST_ADMIT_ARTIFACT_MARKER');
 		expect(source).toContain('admitAgentTurn');
 		expect(source).toContain('receiptUsesAgentReducer');
+		expect(source).toContain(
+			"WHEN automation_name = 'agent:interactive' OR automation_name LIKE 'channel:%' THEN 0"
+		);
 	});
 });
 

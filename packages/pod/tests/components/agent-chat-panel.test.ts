@@ -6,8 +6,30 @@ import { DEFAULT_VERIFIER_PROMPTS } from '$lib/shared/agent/intent.js';
 
 let replica = new FakeReplica();
 
+const startState = vi.hoisted(() => ({
+	sent: [] as {
+		message: string;
+		model?: string;
+		planMode?: boolean;
+		goalMode?: boolean;
+		intent?: 'do' | 'plan';
+		verifierPrompt?: string;
+	}[],
+	inFlight: null as null | {
+		promise: Promise<{ runId: string; chatId: string }>;
+		resolve: (value: { runId: string; chatId: string }) => void;
+		reject: (error: Error) => void;
+	}
+}));
+
 vi.mock('$lib/ui/state/client.js', () => ({
-	getInitializedWorkspaceClient: () => replica
+	getInitializedWorkspaceClient: () => replica,
+	startInteractiveAgent: (input: (typeof startState.sent)[number]) => {
+		startState.sent.push(input);
+		if (!startState.inFlight) throw new Error('start not armed');
+		return startState.inFlight.promise;
+	},
+	updateAgentVerifier: async () => ({ accepted: true as const })
 }));
 
 const { setWorkspaceRemoteTransport } =
@@ -44,14 +66,7 @@ function deferred(): {
 }
 
 let inFlight = deferred();
-let sent: {
-	message: string;
-	model?: string;
-	planMode?: boolean;
-	goalMode?: boolean;
-	intent?: 'do' | 'plan';
-	verifierPrompt?: string;
-}[] = [];
+let sent: (typeof startState.sent)[number][] = [];
 type ModelCatalog = {
 	defaultModel: string;
 	options: { id: string; label: string; canonicalSlug: string; contextLength?: number }[];
@@ -62,21 +77,12 @@ let modelsPromise: Promise<ModelCatalog | null> = Promise.resolve(null);
 beforeEach(() => {
 	replica = new FakeReplica();
 	inFlight = deferred();
-	sent = [];
+	startState.sent = [];
+	sent = startState.sent;
+	startState.inFlight = inFlight;
 	catalog = null;
 	modelsPromise = Promise.resolve(catalog);
 	setWorkspaceRemoteTransport({
-		agentChatStart: (input: {
-			message: string;
-			model?: string;
-			planMode?: boolean;
-			goalMode?: boolean;
-			intent?: 'do' | 'plan';
-			verifierPrompt?: string;
-		}) => {
-			sent.push(input);
-			return inFlight.promise;
-		},
 		agentModels: () => modelsPromise
 	} as never);
 });
@@ -391,6 +397,7 @@ describe('agent chat panel', () => {
 		generic.destroy();
 
 		inFlight = deferred();
+		startState.inFlight = inFlight;
 		const authored = mountPanel();
 		type(authored.container, 'Start this');
 		submit(authored.container);
@@ -506,7 +513,6 @@ describe('agent chat panel', () => {
 		// A new transport represents the next workspace and lets the shared state make a fresh request.
 		modelsPromise = Promise.reject(new Error('catalog unavailable'));
 		setWorkspaceRemoteTransport({
-			agentChatStart: () => inFlight.promise,
 			agentModels: () => modelsPromise
 		} as never);
 		const unavailable = mountPanel();

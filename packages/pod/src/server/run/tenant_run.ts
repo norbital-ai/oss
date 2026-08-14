@@ -7,8 +7,11 @@ import {
 	adaptHookContextForAction,
 	hookKeyToActionPhase
 } from '$lib/server/collection/hook-context.js';
-import { createBeforeApi, restrictBeforeHookApi } from '$lib/server/collection/hook-api.server.js';
-import { getElevatedAfterHookApi } from '$lib/server/collection/hook-api-context.server.js';
+import {
+	createBeforeApi,
+	getElevatedAfterHookApi,
+	restrictBeforeHookApi
+} from '$lib/server/collection/hook-api.server.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
 import {
 	resolveSubjectToUser,
@@ -33,14 +36,12 @@ import {
 	runIntegrationSendPipeline
 } from '$lib/server/run/collection_pipeline.js';
 import {
+	allowsMutation,
 	getTenantManifest,
-	getTenantWorkspace
+	getTenantWorkspace,
+	getWorkspaceCollection
 } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import type { AfterHookApi, BeforeApi, HookApi } from '$lib/authoring/workspace/hook-api.js';
-import {
-	getWorkspaceCollection,
-	allowsMutation
-} from '$lib/server/collection/workspace-collections.js';
 import type { ErasedHookActionContext } from '$lib/server/collection/hook-context.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { z } from 'zod';
@@ -49,22 +50,25 @@ import { runTenantOutbox } from '$lib/server/integrations/tenant-outbox.server.j
 import {
 	dispatchSystemEvent,
 	importIntegrationRecords,
-	runIntegrationImportWorker,
 	runIntegrationCursor
 } from '$lib/server/integrations/tenant-inbound.server.js';
 import { runNotificationOutbox } from '$lib/server/notification-outbox.server.js';
 import {
 	admitEventAutomations,
 	admitScheduledAutomation,
-	runAutomationReceipt,
-	settleAutomationEffect
+	runAutomationReceipt
 } from './automation-dispatch.server.js';
 import {
 	ChannelInboundSchema,
 	deliverChannelMessage
 } from '$lib/server/channel-delivery.server.js';
+import {
+	AgentChatInputSchema,
+	AgentChatUpdateVerifierInputSchema,
+	agentChatStart,
+	agentChatUpdateVerifier
+} from '$lib/remote/agent_chat.remote.js';
 import { runPendingConversationTitles } from '$lib/server/agent/conversation-title.server.js';
-import type { DurableAutomationAiOutcome } from '$lib/host/types.js';
 import { isAutomationEffectYield, pendingAutomationEffect } from './automation-replay.server.js';
 import {
 	durableAgentSnapshotFromScope,
@@ -72,59 +76,8 @@ import {
 } from '$lib/server/agent/agent-loop.server.js';
 
 const recordSchema = z.record(z.string(), z.unknown());
-const collectionSchema = z.object({ id: z.string(), name: z.string() });
-const actorScopeSchema = z.object({
-	requestor: recordSchema,
-	organization: z.object({ norbital_id: z.string(), name: z.string() }),
-	requestor_subordinates: z.array(recordSchema)
-});
-
-const collectionHookParamsSchema = z.discriminatedUnion('type', [
-	z.object({
-		type: z.literal('create'),
-		payload: recordSchema,
-		scope: actorScopeSchema.extend({ incoming_record: recordSchema }),
-		collection: collectionSchema
-	}),
-	z.object({
-		type: z.literal('update'),
-		payload: recordSchema,
-		scope: actorScopeSchema.extend({
-			incoming_record: recordSchema,
-			original_record: recordSchema
-		}),
-		collection: collectionSchema
-	}),
-	z.object({
-		type: z.literal('delete'),
-		scope: actorScopeSchema.extend({ original_record: recordSchema }),
-		collection: collectionSchema
-	}),
-	z.object({
-		type: z.literal('view'),
-		scope: actorScopeSchema.extend({ record: recordSchema }),
-		collection: collectionSchema,
-		approval_request: recordSchema.optional(),
-		event: z.unknown().optional()
-	})
-]);
 
 export const runtimeRunRequestSchema = z.union([
-	z.object({
-		kind: z.literal('hook'),
-		collectionName: z.string().min(1),
-		hookKey: z.string().min(1),
-		context: collectionHookParamsSchema
-	}),
-	z.object({
-		kind: z.literal('pipeline'),
-		collectionName: z.string().min(1),
-		pipelineKey: z.literal('export'),
-		context: z.object({
-			scope: z.object({ records: z.array(recordSchema) }),
-			collection: z.object({ name: z.string() })
-		})
-	}),
 	z.object({
 		kind: z.literal('integration'),
 		direction: z.literal('receive'),
@@ -135,12 +88,6 @@ export const runtimeRunRequestSchema = z.union([
 		// Present when the delivery can be repeated by whoever sent it — a webhook. The ledger row is
 		// claimed on it before the import runs, so a redelivery is refused rather than re-imported.
 		eventId: z.string().min(1).max(512).optional()
-	}),
-	// A durable import worker invocation: one claimed receipt and one bounded collection write chunk.
-	z.object({
-		kind: z.literal('integration-import'),
-		action: z.literal('run'),
-		maxChunkSize: z.number().int().min(1).max(100).optional()
 	}),
 	z.object({
 		kind: z.literal('integration'),
@@ -171,15 +118,6 @@ export const runtimeRunRequestSchema = z.union([
 		bindingName: z.string().min(1),
 		cursor: z.string().nullable().optional(),
 		error: z.string().nullable().optional()
-	}),
-	z.object({
-		kind: z.literal('pipeline'),
-		collectionName: z.string().min(1),
-		pipelineKey: z.literal('import'),
-		context: z.object({
-			scope: z.object({ import_data: z.unknown() }),
-			collection: z.object({ name: z.string() })
-		})
 	}),
 	z
 		.object({
@@ -229,24 +167,27 @@ export const runtimeRunRequestSchema = z.union([
 	}),
 	z.object({
 		kind: z.literal('automation-events'),
-		action: z.enum(['admit', 'run', 'settle']),
+		action: z.enum(['admit', 'run']),
 		artifact: z.object({
 			artifactId: z.string().min(1).max(512), checkpointId: z.string().min(1).max(512),
 			treeHash: z.string().min(1).max(512), runtimeVersion: z.string().min(1).max(128)
 		}).optional(),
 		receiptId: z.string().uuid().optional(),
-		effectId: z.string().min(1).max(1024).optional(),
-		outcome: z
-			.union([
-				z.object({ status: z.literal('succeeded'), result: z.unknown() }),
-				z.object({ status: z.literal('failed'), error: z.string() })
-			])
-			.optional(),
 		limit: z.number().int().min(1).max(1000).optional()
 	}),
 	z.object({
 		kind: z.literal('agent-conversation-titles'),
 		limit: z.number().int().min(1).max(50).optional()
+	}),
+	// Host-owned interactive door. Not an API-client remote — only the trusted host and the
+	// dedicated `/_runtime/agent/*` shell routes may start a turn.
+	AgentChatInputSchema.extend({
+		kind: z.literal('agent'),
+		action: z.literal('start')
+	}),
+	AgentChatUpdateVerifierInputSchema.extend({
+		kind: z.literal('agent'),
+		action: z.literal('updateVerifier')
 	}),
 	// A channel message the host already authenticated on its own wire. Deliberately reachable only
 	// here: Pod holds no transport credential, so it cannot verify a webhook signature, and a public
@@ -549,23 +490,6 @@ export async function executeAutomationHandler(params: {
 
 export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<unknown> {
 	switch (request.kind) {
-		case 'hook':
-			return runCollectionHook({
-				collectionName: request.collectionName,
-				hookKey: request.hookKey,
-				context: request.context
-			});
-		case 'pipeline':
-			if (request.pipelineKey === 'export') {
-				return runCollectionExportPipeline({
-					collectionName: request.collectionName,
-					context: request.context
-				});
-			}
-			return runCollectionImportPipeline({
-				collectionName: request.collectionName,
-				context: request.context
-			});
 		case 'automation': {
 			return admitScheduledAutomation(getWorkspace({ provision: true }), {
 				automationName: request.automationName,
@@ -596,8 +520,6 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 		}
 		case 'integration-cursor':
 			return runIntegrationCursor(request);
-		case 'integration-import':
-			return runIntegrationImportWorker({ maxChunkSize: request.maxChunkSize });
 		case 'system-event':
 			return dispatchSystemEvent({
 				eventId: request.eventId,
@@ -617,27 +539,34 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 					request.limit
 				);
 			}
-			if (request.action === 'settle') {
-				if (!request.receiptId || !request.effectId || !request.outcome) {
-					throw new Error('Automation effect settlement requires receipt, effect id and outcome');
+			if (request.action === 'run') {
+				if (!request.receiptId || !request.artifact) {
+					throw new Error('Automation run requires receipt and artifact binding');
 				}
-				return settleAutomationEffect(
+				return runAutomationReceipt(
 					getWorkspace({ provision: true }),
 					request.receiptId,
-					request.effectId,
-					request.outcome as DurableAutomationAiOutcome
+					request.artifact
 				);
 			}
-			if (!request.receiptId || !request.artifact) {
-				throw new Error('Automation run requires receipt and artifact binding');
-			}
-			return runAutomationReceipt(
-				getWorkspace({ provision: true }),
-				request.receiptId,
-				request.artifact
-			);
+			request.action satisfies never;
+			throw new Error('Unknown automation-events host-command action');
 		case 'agent-conversation-titles':
 			return runPendingConversationTitles(request.limit);
+		case 'agent':
+			switch (request.action) {
+				case 'start': {
+					const { kind: _kind, action: _action, ...input } = request;
+					return agentChatStart(input);
+				}
+				case 'updateVerifier': {
+					const { kind: _kind, action: _action, ...input } = request;
+					return agentChatUpdateVerifier(input);
+				}
+				default:
+					request satisfies never;
+					throw new Error('Unknown agent host-command action');
+			}
 		case 'channel':
 			return deliverChannelMessage(request);
 		case 'getManifest':

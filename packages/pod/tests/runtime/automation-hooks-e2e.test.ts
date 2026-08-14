@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import type { HostFileStorageBinding } from '@norbital-ai/platform-utils/runtime/binding';
+import { CreateManyResultSchema } from '@norbital-ai/platform-utils/remote/collection_wire_schemas';
 import { TRUSTED_PERMISSION_BYPASS_HEADER } from '$lib/host/identity.js';
+import { admitHeaders } from '$lib/server/admit.js';
 import { requireDocker } from '../support/pg-harness.js';
 import {
 	bootPodRuntime,
+	settleHarnessReceiptEffect,
 	TEST_PERMISSION_BYPASS_KEY,
 	type Identity,
 	type PodRuntimeHarness
@@ -432,18 +435,23 @@ describe('Pod automations and hooks — E2E', () => {
 	async function command(
 		path: string,
 		body: Record<string, unknown>,
-		identity: Identity = admin
+		identity: Identity = admin,
+		headers: Record<string, string> = {}
 	): Promise<CreateOutcome> {
 		const response = await harness.request(
 			{
 				method: 'POST',
 				path,
-				headers: { 'content-type': 'application/json' },
+				headers: { 'content-type': 'application/json', ...headers },
 				body: JSON.stringify(body)
 			},
 			identity
 		);
 		return { status: response.status, body: await response.text() };
+	}
+
+	function parseBulkWrite(body: string) {
+		return CreateManyResultSchema.parse(JSON.parse(body));
 	}
 
 	async function rfi(title: string): Promise<{
@@ -582,21 +590,34 @@ describe('Pod automations and hooks — E2E', () => {
 		await createRfi('ai-replay-probe');
 		await harness.hostCommand({ kind: 'automation-events', action: 'admit', artifact: TEST_ARTIFACT, limit: 200 });
 		const receiptId = await latestReceipt('probe_ai_replay');
-		const effect = (await runReceipt(receiptId)) as { status: string; effectId?: string };
+		const effect = (await runReceipt(receiptId)) as {
+			status: string;
+			effectId?: string;
+			ordinal?: number;
+			requestHash?: string;
+		};
 		expect(effect.status).toBe('waiting_effect');
 		expect(effect.effectId).toEqual(expect.any(String));
+		expect(effect.ordinal).toEqual(expect.any(Number));
+		expect(effect.requestHash).toEqual(expect.any(String));
 		expect(await defectTitles('ai-replay:%')).toEqual([]);
 
-		await harness.hostCommand({
-			kind: 'automation-events',
-			action: 'settle',
-			receiptId,
-			effectId: effect.effectId,
-			outcome: {
+		if (!effect.effectId || effect.ordinal == null || !effect.requestHash) {
+			throw new Error(`waiting_effect is missing settle identity: ${JSON.stringify(effect)}`);
+		}
+		await settleHarnessReceiptEffect(
+			harness,
+			{
+				receiptId,
+				effectId: effect.effectId,
+				ordinal: effect.ordinal,
+				requestHash: effect.requestHash
+			},
+			{
 				status: 'succeeded',
 				result: { text: '{"verdict":"match"}', stopReason: 'end' }
 			}
-		});
+		);
 		await runReceipt(receiptId);
 		expect(await defectTitles('ai-replay:%')).toEqual([
 			'ai-replay:after:match',
@@ -787,7 +808,8 @@ describe('Pod automations and hooks — E2E', () => {
 			]
 		});
 		expect(systemCreated.status, systemCreated.body).toBe(200);
-		expect(JSON.parse(systemCreated.body)).toEqual([{ norbital_id: teamId }]);
+		const seeded = parseBulkWrite(systemCreated.body);
+		expect(seeded.records).toEqual([{ norbital_id: teamId }]);
 		const hostElevated = await harness.request(
 			{
 				method: 'POST',
@@ -890,7 +912,7 @@ describe('Pod automations and hooks — E2E', () => {
 			]
 		});
 		expect(hooked.status, hooked.body).toBe(200);
-		expect((JSON.parse(hooked.body) as Array<{ norbital_id: string }>)[0]?.norbital_id).toBe(
+		expect(parseBulkWrite(hooked.body).records[0]?.norbital_id).toBe(
 			'99999999-9999-4999-8999-999999999999'
 		);
 		const inspected = await command('collections/createMany', {
@@ -945,6 +967,31 @@ describe('Pod automations and hooks — E2E', () => {
 		});
 		expect(batchInspected.status, batchInspected.body).toBe(200);
 		expect(bulkInspectionCalls - callsBeforeBatch).toBe(1);
+	});
+
+	it('fails createMany when the remaining admit cannot finish the payload', async () => {
+		const ids = Array.from(
+			{ length: 8 },
+			(_, index) => `88888888-8888-4888-8888-8888888888${String(index).padStart(2, '0')}`
+		);
+		const inputs = ids.map((norbital_id, index) => ({
+			norbital_id,
+			name: `Admit slice ${index}`,
+			is_active: true
+		}));
+		const first = await command(
+			'collections/createMany',
+			{
+				collection: 'team',
+				bypass_secret: TEST_PERMISSION_BYPASS_KEY,
+				returning: 'ids',
+				inputs
+			},
+			admin,
+			admitHeaders({ timeoutMs: 1, deadlineAt: Date.now() - 1 })
+		);
+		expect(first.status, first.body).not.toBe(200);
+		expect(first.body).toMatch(/could not finish the bulk write/);
 	});
 
 	it('runs authored update hooks for every batch item and rejects the whole batch before writing', async () => {

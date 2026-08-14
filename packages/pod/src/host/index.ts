@@ -3,8 +3,9 @@
  *
  * A workspace author never imports this. A *host* author does: pick an adapter per facility,
  * export a `definePodHost({ ... })` default from `pod.host.ts` at the workspace root, and
- * `pod start` will use it. Adapters are values, so a configuration file stays data — readable,
- * diffable, and checkable — instead of setup code.
+ * `pod start` (the reference host) will use it. Adapters are values, so a configuration file
+ * stays data — readable, diffable, and checkable — instead of setup code. You are running a
+ * host, not “opening Pod.”
  *
  * ```ts
  * import { definePodHost, env, postgresDb, localFileStorage, devIdentity } from '@norbital-ai/pod/host';
@@ -18,10 +19,8 @@
  * });
  * ```
  *
- * `queue` is the one facility with no production adapter here. Integration and notification outbox
- * drains need durability and single-flight execution, so a deployed workspace points it at a
- * durable queue; Core automations are orchestrated separately by DBOS. `intervalQueue` is for
- * development.
+ * `queue` is infrastructure crons only — integration outbox, pulls, notification drain. It is not
+ * how functions run. `intervalQueue` is a development timer: it loses work on process death.
  */
 export {
 	assertHostPlugins,
@@ -180,8 +179,8 @@ export {
 export { telegramBot, telegramInboundMessage } from './telegram.js';
 export type { TelegramBotOptions } from './telegram.js';
 
-// Queue. Pod ships no durable implementation: a real queue is the host's to choose, and the
-// `intervalQueue` below is explicitly the development one.
+// Queue. Infrastructure crons only. `intervalQueue` is the development timer; it is not how
+// functions run.
 export { intervalQueue } from './interval-queue.js';
 export type { IntervalQueueOptions } from './interval-queue.js';
 export { cronMatches, parseCron } from './cron.js';
@@ -234,6 +233,14 @@ export {
 export type { ChannelReconcileResult } from '../server/bootstrap/channel_reconcile.server.js';
 
 export { workspaceJobs } from './jobs.js';
+export { settleHostReceiptEffect, SETTLE_RECEIPT_EFFECT_SQL } from './settle-receipt-effect.js';
+export { isHostSyncStreamPath, serveHostSyncStream } from './sync-stream.js';
+export type { HostSyncStreamInput, HostSyncStreamResponse } from './sync-stream.js';
+export type {
+	HostSettleEffect,
+	HostSettleOutcome,
+	HostSettleQuery
+} from './settle-receipt-effect.js';
 
 /**
  * Refuse a workspace whose channels name a transport this host cannot carry.

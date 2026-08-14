@@ -8,6 +8,7 @@ import type { NeonDatabase } from 'drizzle-orm/neon-serverless';
 import { drizzle } from 'drizzle-orm/neon-serverless';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { currentPodCallOrNull, withPodCallField } from '$lib/server/pod-call.js';
 
 export type WorkspaceZone = 'live' | 'preview';
 export type TenantDbQueryResult<T = Record<string, unknown>> = {
@@ -64,10 +65,13 @@ function getStorage(): AsyncLocalStorage<ProvisionedContext> {
 }
 
 function currentWorkspaceContext(): ProvisionedContext | undefined {
-	return getStorage().getStore();
+	return currentPodCallOrNull()?.workspace ?? getStorage().getStore();
 }
 
 export function withRequestWorkspaceCtx<R>(ctx: ProvisionedContext, fn: () => R): R {
+	if (currentPodCallOrNull()) {
+		return withPodCallField('workspace', ctx, fn) as R;
+	}
 	return getStorage().run(ctx, fn);
 }
 
@@ -77,7 +81,7 @@ export function getWorkspace(options?: { provision?: true }): ProvisionedContext
 	const ctx = currentWorkspaceContext();
 	if (!ctx) {
 		throw new Error(
-			'No workspace context — use runWithWorkspaceContext or withRequestWorkspaceCtx'
+			'No workspace context — use withRequestWorkspaceCtx'
 		);
 	}
 	if (options?.provision && ctx.provision !== 'provisioned') {

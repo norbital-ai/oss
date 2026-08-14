@@ -11,14 +11,13 @@ describe('the bundle contract', () => {
 	it('requires the entry point and manifest a runtime cannot boot without', () => {
 		// The bundle is the only cross-version contract between a Core replica and a tenant
 		// runtime now that there are no images, so its required shape is asserted, not assumed.
-		assert.ok(CHECKPOINT_BUILD_REQUIRED_PATHS.includes(SERVE_ENTRY_FILENAME));
+		assert.ok(!CHECKPOINT_BUILD_REQUIRED_PATHS.includes(SERVE_ENTRY_FILENAME));
 		assert.ok(CHECKPOINT_BUILD_REQUIRED_PATHS.includes(CHECKPOINT_MANIFEST_FILENAME));
 		assert.deepEqual(
 			[...CHECKPOINT_BUILD_REQUIRED_PATHS],
 			[
 				'manifest.json',
 				'dist/index.html',
-				'serve.mjs',
 				'output/server/index.js',
 				'schema-functions.sql',
 				'schema-post-ddl.sql'

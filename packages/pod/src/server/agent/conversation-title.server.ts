@@ -1,8 +1,12 @@
-import type { HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
+import type { AiChatResult } from '@norbital-ai/platform-utils/runtime/binding';
 import { z } from 'zod';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { mutateChatSession, readChatSession } from './chat-session.server.js';
+import {
+	automationReplayStorage,
+	isAutomationEffectYield,
+	replayAutomationAi
+} from '$lib/server/run/automation-replay.server.js';
 
 /** Visible only until the first-message title job succeeds. */
 export const PENDING_CONVERSATION_TITLE = 'Workspace agent';
@@ -44,30 +48,15 @@ function compactTitle(value: string): string {
 }
 
 /**
- * Ask the host model for one short label. Structured output is preferred, while the plain-text
- * fallback prevents a model that ignored the schema from being billed again every minute forever.
+ * Turn one provider response into the stored title. Structured output is preferred; plain text
+ * is accepted so a model that ignored the schema is not billed again.
  */
-export async function generateConversationTitle(
-	ai: Pick<HostAiBinding, 'chat'>,
-	firstMessage: string
-): Promise<string> {
-	const result = await ai.chat({
-		messages: [
-			{
-				role: 'system',
-				content:
-					'Name this conversation from the first user message. Return a specific, neutral title of 3 to 8 words. Do not answer the message, add quotation marks, or end with punctuation.'
-			},
-			{ role: 'user', content: firstMessage }
-		],
-		outputSchema: z.toJSONSchema(generatedTitleSchema)
-	});
-
+export function conversationTitleFromProviderText(text: string): string {
 	let candidate = '';
 	try {
-		candidate = generatedTitleSchema.parse(JSON.parse(result.text)).title;
+		candidate = generatedTitleSchema.parse(JSON.parse(text)).title;
 	} catch {
-		candidate = result.text;
+		candidate = text;
 	}
 	const compact = compactTitle(candidate);
 	if (!compact) throw new Error('The conversation title model returned an empty title');
@@ -76,13 +65,41 @@ export async function generateConversationTitle(
 		: compact;
 }
 
+/**
+ * Ask the host model for one short label via durable replay. The guest never holds the admit
+ * on OpenRouter — without a receipt replay store this throws instead of calling the model.
+ */
+export function generateConversationTitle(firstMessage: string): string {
+	if (!automationReplayStorage.getStore()) {
+		throw new Error(
+			'Conversation title generation requires a durable step (automation/agent receipt).'
+		);
+	}
+	const result = replayAutomationAi({
+		request: {
+			kind: 'ai.turn',
+			messages: [
+				{
+					role: 'system',
+					content:
+						'Name this conversation from the first user message. Return a specific, neutral title of 3 to 8 words. Do not answer the message, add quotation marks, or end with punctuation.'
+				},
+				{ role: 'user', content: firstMessage }
+			],
+			outputSchema: z.toJSONSchema(generatedTitleSchema)
+		}
+	}) as AiChatResult; // stupidity: boundary-cast — durable replay stores the provider chat result.
+	return conversationTitleFromProviderText(result.text);
+}
+
 /** Generate and install one title only while the session still carries the pending marker. */
 export async function runPendingConversationTitle(sessionId: string): Promise<boolean> {
+	if (!automationReplayStorage.getStore()) return false;
 	const session = await readChatSession(sessionId);
 	if (session.title !== PENDING_CONVERSATION_TITLE) return false;
 	const firstMessage = firstUserMessage(session.messages);
 	if (!firstMessage) return false;
-	const title = await generateConversationTitle(requireRuntimeFacility('ai'), firstMessage);
+	const title = generateConversationTitle(firstMessage);
 	return mutateChatSession(sessionId, (current) => {
 		if (current.title !== PENDING_CONVERSATION_TITLE) return false;
 		current.title = title;
@@ -93,10 +110,9 @@ export async function runPendingConversationTitle(sessionId: string): Promise<bo
 /**
  * Drain first-message title work from durable tenant state.
  *
- * The placeholder is the pending marker, so no second queue table or status concept is needed. A
- * failed inference leaves it in place for the next pg-boss tick; a successful aggregate mutation
- * emits the ordinary sync-outbox event and every open client receives the new title. The mutation
- * rechecks the pending marker under the session row lock, so it cannot overwrite a newer title.
+ * Titles are a host-effect. Without a receipt replay store the guest skips rather than blocking
+ * the admit on the model. A failed inference leaves the placeholder for the next durable step;
+ * a successful aggregate mutation emits the ordinary sync-outbox event.
  */
 export async function runPendingConversationTitles(limit = 10): Promise<number> {
 	const ctx = getWorkspace({ provision: true });
@@ -119,6 +135,9 @@ export async function runPendingConversationTitles(limit = 10): Promise<number> 
 		try {
 			if (await runPendingConversationTitle(conversation.norbital_id)) titled += 1;
 		} catch (error) {
+			if (isAutomationEffectYield(error) || automationReplayStorage.getStore()?.pending) {
+				throw error;
+			}
 			console.error('[agent-conversation-title]', {
 				conversationId: conversation.norbital_id,
 				error

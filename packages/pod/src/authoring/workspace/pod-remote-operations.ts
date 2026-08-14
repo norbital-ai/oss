@@ -19,54 +19,11 @@ export type PodRemoteOperations = {
 	}) => Promise<unknown>;
 	readonly autocompleteGeolocation: (input: string) => Promise<TGeolocation[]>;
 	/**
-	 * Send a message to the workspace agent.
-	 *
-	 * Returns the run so a follow-up can continue the same conversation, and the session so the caller
-	 * can read the transcript — which arrives in the ordinary synced `chat_session` row rather than through
-	 * a stream of its own.
-	 */
-	readonly agentChat: (input: { readonly message: string; readonly runId?: string }) => Promise<{
-		readonly runId: string;
-		readonly chatId: string | null;
-		readonly text: string;
-	}>;
-	/** Begin a live turn and return before provider tokens are produced. */
-	readonly agentChatStart: (input: {
-		readonly message: string;
-		readonly runId?: string;
-		readonly model?: string;
-		readonly planMode?: boolean;
-		readonly intent?: 'do' | 'plan';
-		readonly verifierPrompt?: string;
-		readonly goalMode?: boolean;
-		/**
-		 * Records the composer's "@" picker resolved. The loop fetches each one as the requestor and
-		 * appends it to the turn's window; a reference that no longer resolves leaves its label in
-		 * the message text and injects nothing.
-		 */
-		readonly mentions?: readonly {
-			readonly collection: string;
-			readonly recordId: string;
-			readonly label: string;
-		}[];
-	}) => Promise<{
-		readonly runId: string;
-		readonly chatId: string;
-		readonly accepted: true;
-		/** Authoritative command receipt for immediate read-your-command reconciliation. */
-		readonly session?: Record<string, unknown>;
-		readonly syncSequence?: string;
-	}>;
-	/**
 	 * What the host will run, and which model it picks when a turn names none.
 	 *
 	 * `null` from a host that offers no choice — which is not the same as an empty catalog, and is why
 	 * a picker is absent rather than empty on such a host.
 	 */
-	readonly agentChatUpdateVerifier: (input: {
-		readonly runId: string;
-		readonly prompt: string;
-	}) => Promise<{ readonly accepted: true }>;
 	readonly agentModels: () => Promise<{
 		readonly defaultModel: string;
 		readonly options: readonly {

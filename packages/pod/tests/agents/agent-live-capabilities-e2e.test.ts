@@ -7,6 +7,7 @@ import { requireDocker } from '../support/pg-harness.js';
 import { createClientDb } from '../support/pglite-node.js';
 import {
 	bootPodRuntime,
+	settleHarnessReceiptEffect,
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
@@ -157,8 +158,6 @@ function scriptedTurn(input: AiChatInput) {
 
 describe('Pod live agent capabilities — runtime E2E', () => {
 	let harness: PodRuntimeHarness;
-	let retainedBackgroundWork = 0;
-
 	const ai: HostAiBinding = {
 		async chat(input) {
 			if (input.outputSchema) {
@@ -173,14 +172,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 
 	beforeAll(async () => {
 		harness = await bootPodRuntime('construction', {
-			ai,
-			runtimeLifecycle: {
-				async retainBackgroundWork() {
-					retainedBackgroundWork += 1;
-					return `agent-lease-${retainedBackgroundWork}`;
-				},
-				async releaseBackgroundWork() {}
-			}
+			ai
 		});
 		await harness.pool.query(
 			`INSERT INTO "user" (norbital_id, email, name, role, status)
@@ -198,6 +190,8 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 		status: 'completed' | 'failed' | 'waiting_effect';
 		error?: string;
 		effectId?: string;
+		ordinal?: number;
+		requestHash?: string;
 		request?: {
 			kind?: string;
 			messages?: AiChatInput['messages'];
@@ -229,15 +223,19 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 		outcome: AgentRunOutcome,
 		result: unknown
 	): Promise<void> {
-		if (!outcome.effectId) throw new Error('Cannot settle a step without an effect id');
-		await harness.hostCommand({
-			kind: 'automation-events',
-			action: 'settle',
-			receiptId,
-			effectId: outcome.effectId,
-			artifact: TEST_ARTIFACT,
-			outcome: { status: 'succeeded', result }
-		});
+		if (!outcome.effectId || outcome.ordinal == null || !outcome.requestHash) {
+			throw new Error(`Cannot settle a step without effect identity: ${JSON.stringify(outcome)}`);
+		}
+		await settleHarnessReceiptEffect(
+			harness,
+			{
+				receiptId,
+				effectId: outcome.effectId,
+				ordinal: outcome.ordinal,
+				requestHash: outcome.requestHash
+			},
+			{ status: 'succeeded', result }
+		);
 	}
 
 	async function pumpReceipt(receiptId: string): Promise<void> {
@@ -325,7 +323,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 		throw new Error(`Agent receipt did not finish (${yielded.join(' | ')})`);
 	}
 
-	it('admits an interactive turn and yields provider work instead of detaching runAgent', async () => {
+	it('admits an interactive turn and yields provider work to the host', async () => {
 		const schemaSql = await harness
 			.request({ method: 'GET', path: 'sync/schema' }, member)
 			.then((response) => response.text());
@@ -344,7 +342,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			const response = await harness.request(
 				{
 					method: 'POST',
-					path: 'remotes/agentChatStart',
+					path: 'agent/start',
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ message: 'Delegate the sentinel check.' })
 				},
@@ -357,7 +355,6 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				accepted: true;
 			};
 			expect(accepted.accepted).toBe(true);
-			expect(retainedBackgroundWork).toBe(0);
 
 			const jobs = await harness.pool.query<{
 				automation_name: string;
@@ -393,14 +390,11 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				kind: 'agent-conversation-titles',
 				limit: 10
 			});
-			const generatedTitle = await waitFor(async () => {
-				const rows = await client.queryLocal<LocalSession>(
-					`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
-					[accepted.chatId]
-				);
-				return rows[0]?.title === 'Delegate sentinel check' ? rows[0] : null;
-			});
-			expect(generatedTitle.title).toBe('Delegate sentinel check');
+			const pendingTitle = await client.queryLocal<LocalSession>(
+				`SELECT title, messages, turns FROM chat_session WHERE norbital_id = $1`,
+				[accepted.chatId]
+			);
+			expect(pendingTitle[0]?.title).toBe('Workspace agent');
 
 			await harness.hostCommand({
 				kind: 'automation-events',
@@ -479,7 +473,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 		}
 	});
 
-	it('leaves the turn running after agentChatStart until the host admits guest-admit, then executes real tools', async () => {
+	it('leaves the turn running after agent/start until the host admits guest-admit, then executes real tools', async () => {
 		const schemaSql = await harness
 			.request({ method: 'GET', path: 'sync/schema' }, member)
 			.then((response) => response.text());
@@ -512,7 +506,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			const response = await harness.request(
 				{
 					method: 'POST',
-					path: 'remotes/agentChatStart',
+					path: 'agent/start',
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ message: INSPECT_MESSAGE })
 				},

@@ -198,6 +198,22 @@ export default definePodHost({
 	],
 	ai: {
 		chat: async (input) => {
+			if (input.outputSchema) {
+				return {
+					text: JSON.stringify({ title: 'Host sandbox deploy' }),
+					stopReason: 'end'
+				};
+			}
+			if ((input.tools ?? []).length === 0) {
+				return {
+					text: JSON.stringify({
+						achieved: true,
+						summary: 'Host sandbox deploy completed.',
+						gaps: []
+					}),
+					stopReason: 'end'
+				};
+			}
 			const offered = (input.tools ?? []).map((tool) => tool.name).join('|');
 			const messages = input.messages ?? [];
 			const results = messages.filter((message) => message.role === 'tool');
@@ -324,7 +340,12 @@ describe('Pod standalone host agent tools — E2E', () => {
 			}
 		);
 		expect(startResponse.status, await startResponse.clone().text()).toBe(200);
-		const started = (await startResponse.json()) as { runId: string; text: string };
+		const started = (await startResponse.json()) as {
+			runId: string;
+			chatId: string;
+			accepted: true;
+		};
+		expect(started.accepted).toBe(true);
 		expect(started.runId).toBeTruthy();
 
 		const deadline = Date.now() + 90_000;
@@ -347,7 +368,7 @@ describe('Pod standalone host agent tools — E2E', () => {
 			if (
 				sessions[0]?.status === 'success' &&
 				transcript.length >= 5 &&
-				(answer ?? started.text).includes('offered=')
+				(answer ?? '').includes('offered=')
 			) {
 				break;
 			}
@@ -416,7 +437,7 @@ describe('Pod standalone host agent tools — E2E', () => {
 			transcript
 				.filter((row) => row.role === 'assistant')
 				.map((row) => row.parts?.[0]?.content ?? '')
-				.find((content) => content.includes('offered=')) ?? started.text;
+				.find((content) => content.includes('offered=')) ?? '';
 		expect(answer).toContain(
 			'offered=await_sandbox_agent|describe_workspace|list_quotes|list_sandbox_agents|list_skills|message_sandbox_agent|read_collection|read_skill|read_sandbox_agent|sandbox_deploy|spawn_subagent|write_collection'
 		);

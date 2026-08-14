@@ -71,21 +71,18 @@ describe('integration jobs', () => {
 			organizationId: 'org-1'
 		});
 		expect(jobs.map((job) => [job.name, job.schedule])).toEqual([
-			['pod:integration-import', 'continuous'],
 			['pod:agent-conversation-titles', 'continuous'],
 			['pod:integration-pull:registry:quotes.receive.catalogue', '*/5 * * * *']
 		]);
 	});
 
-	it('runs one bounded durable import step per continuous-worker invocation', async () => {
-		const { seen, dispatch } = recordingDispatch(() => undefined);
+	it('does not poll inbound import and has no leftover wake job', () => {
 		const jobs = workspaceJobs({
 			manifest: manifest({}),
-			dispatch,
+			dispatch: async () => undefined,
 			organizationId: 'org-1'
 		});
-		await jobs.find((job) => job.name === 'pod:integration-import')!.run();
-		expect(seen).toEqual([{ kind: 'integration-import', action: 'run' }]);
+		expect(jobs.some((job) => job.name === 'pod:integration-import')).toBe(false);
 	});
 
 	/**

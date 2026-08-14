@@ -8,7 +8,7 @@ import {
 import { toRelationsFilter } from '$lib/authoring/workspace/relations-filter.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { directFindMany } from '../collection_direct.js';
-import { error } from '../http_error.js';
+import { error } from '$lib/server/http.js';
 import { runWithPermissionBypassAsync } from './permission/permission_bypass_key.server.js';
 
 function teamFromRow(row: Record<string, unknown>): TTeam {

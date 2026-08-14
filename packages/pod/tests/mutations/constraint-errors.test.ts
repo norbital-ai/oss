@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { HttpError } from '$lib/server/collection/http_error.js';
+import { HttpError } from '$lib/server/http.js';
 import { rethrowConstraintViolation } from '$lib/server/collection/constraint-errors.server.js';
-import { mutationRejection } from '$lib/server/collection/sync/mutation-rejection.server.js';
+import { mutationRejection } from '$lib/server/collection/sync/sync-endpoints.server.js';
 
 /** What node-postgres hands us for a class-23 failure. */
 function driverError(fields: Record<string, unknown>): unknown {

@@ -4,7 +4,6 @@ import { decodeWireValue, encodeWireValue } from '@norbital-ai/platform-utils/ru
 import type { HostAgentToolBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { requiredRuntimeFacilities } from '@norbital-ai/platform-utils/runtime/binding';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
-import { facilityProxy } from '../../src/serve/hosted.js';
 import { assertHostAgentTools, hostAgentTools } from '../../src/host/agent-tools.js';
 
 /**
@@ -16,6 +15,17 @@ import { assertHostAgentTools, hostAgentTools } from '../../src/host/agent-tools
  * through exactly the wire `db` and `fileStorage` are reached through; if it needed a different one,
  * it would not be a facility.
  */
+function facilityProxy<T>(
+	name: string,
+	call: (facility: string, method: string, args: readonly unknown[]) => Promise<unknown>
+): T {
+	return new Proxy({} as Record<string, unknown>, {
+		get(_target, method: string) {
+			return (...args: unknown[]) => call(name, method, args).then(decodeWireValue);
+		}
+	}) as T;
+}
+
 function hostDispatcher(bindings: Record<string, unknown>) {
 	return async (facility: string, method: string, args: readonly unknown[]): Promise<unknown> => {
 		const target = bindings[facility] as Record<string, unknown> | undefined;
@@ -56,7 +66,7 @@ describe('host agent tools across the isolate boundary', () => {
 	 * `list()` whose *result* is data and a `run()` that names one tool, and that is enough: the tool
 	 * set becomes something discovered at runtime rather than declared in the binding's type.
 	 */
-	it('discovers and invokes a host tool through the real hosted.ts proxy', async () => {
+	it('discovers and invokes a host tool through a method-only facility proxy', async () => {
 		const call = hostDispatcher({ agentTools: hostAgentTools([sandboxEcho]) });
 		const binding = facilityProxy<HostAgentToolBinding>('agentTools', call);
 

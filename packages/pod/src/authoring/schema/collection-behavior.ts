@@ -94,9 +94,10 @@ export type DescribedHook<THandler> = {
 
 type DescribedBatchHook<THandler, TBatchHandler> = DescribedHook<THandler> & {
 	/**
-	 * Optional createMany fast path. It receives the whole caller batch once, inside the same
-	 * authoritative transaction as the inserts, outbox, derived writes and audit events. Results
-	 * must have exactly the same length and order as `inputs`. Ordinary create still calls `handler`.
+	 * Optional createMany fast path. It receives the slice this function will write, inside the
+	 * same authoritative transaction as the inserts, outbox, derived writes and audit events.
+	 * Results must have exactly the same length and order as `inputs`. Ordinary create still
+	 * calls `handler`.
 	 */
 	readonly batchHandler?: TBatchHandler;
 };

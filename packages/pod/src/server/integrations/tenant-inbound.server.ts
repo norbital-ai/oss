@@ -80,15 +80,11 @@ export async function runIntegrationCursor(request: IntegrationCursorRequest) {
  */
 export type IntegrationImportOutcome = {
 	readonly imported: number;
-	readonly status: 'queued' | 'duplicate' | 'refused';
+	readonly status: 'imported' | 'duplicate' | 'refused';
 	readonly receiptId?: string;
 	readonly reason?: string;
 };
 
-/** Default keeps one runtime step well below the two-second budget; hosts may tune up to the cap. */
-const DEFAULT_INTEGRATION_IMPORT_CHUNK = 25;
-const MAX_INTEGRATION_IMPORT_CHUNK = 100;
-const MAX_INTEGRATION_IMPORT_ATTEMPTS = 8;
 const INTEGRATION_IMPORT_LEASE_MS = 60_000;
 
 type InboundReceipt = {
@@ -98,7 +94,6 @@ type InboundReceipt = {
 	readonly collection_name: string;
 	readonly import_data: unknown;
 	readonly materialized_records: unknown[] | null;
-	readonly next_offset: number;
 	readonly attempts: number;
 };
 
@@ -250,7 +245,15 @@ export async function importIntegrationRecords(params: {
 	// path that reads its feed. Detached and swallowed: a delivery already claimed must not fail
 	// because housekeeping did.
 	void pruneInboundEvents(getWorkspace({ provision: true })).catch(() => undefined);
-	return { imported: 0, status: 'queued', receiptId };
+	const first = await runIntegrationImportWorker();
+	if (first.status !== 'processed') {
+		throw new Error('Integration import could not finish in one shot');
+	}
+	return {
+		imported: first.imported ?? 0,
+		status: 'imported',
+		receiptId
+	};
 }
 
 /** Claim one available receipt, recovering a worker that lost its lease without replaying a chunk. */
@@ -276,7 +279,7 @@ async function claimNextInboundEvent(): Promise<InboundReceipt | null> {
 		        WHERE receipt.norbital_id = candidate.norbital_id
 		    RETURNING receipt.norbital_id, receipt.integration_name, receipt.binding_name,
 		              receipt.collection_name, receipt.import_data, receipt.materialized_records,
-		              receipt.next_offset, receipt.attempts`,
+		              receipt.attempts`,
 		values: [INTEGRATION_IMPORT_LEASE_MS]
 	});
 	return claimed.rows[0] ?? null;
@@ -289,43 +292,28 @@ function recordsFromPipeline(output: unknown): Record<string, unknown>[] {
 	return output as Record<string, unknown>[];
 }
 
-function retryDelayMs(attempts: number): number {
-	return Math.min(2 ** Math.max(attempts, 1) * 1000, 60 * 60 * 1000);
-}
-
-async function retryInboundEvent(receipt: InboundReceipt, cause: unknown): Promise<void> {
+async function failInboundEvent(receipt: InboundReceipt, cause: unknown): Promise<void> {
 	const ctx = getWorkspace({ provision: true });
 	const reason = cause instanceof Error ? cause.message : String(cause);
-	const terminal = receipt.attempts >= MAX_INTEGRATION_IMPORT_ATTEMPTS;
 	await ctx.tenantDb.query({
 		text: `UPDATE integration_inbound_event
-		          SET status = $2, error = $3, claimed_at = NULL,
-		              available_at = CASE WHEN $4 THEN available_at ELSE now() + ($5::bigint * interval '1 millisecond') END,
-		              completed_at = CASE WHEN $4 THEN now() ELSE NULL END
+		          SET status = 'failed', error = $2, claimed_at = NULL, completed_at = now()
 		        WHERE norbital_id = $1 AND status = 'processing'`,
-		values: [receipt.norbital_id, terminal ? 'failed' : 'queued', reason, terminal, retryDelayMs(receipt.attempts)]
+		values: [receipt.norbital_id, reason]
 	});
 }
 
 /**
- * Progress exactly one durable inbound import step.
- *
- * One invocation claims at most one receipt and writes at most one bounded `createMany` chunk. A
- * pipeline result is retained before the first write; the chunk checkpoint is committed in that same
- * transaction, so a crash retries either none of the rows or precisely the next rows, never a prefix.
+ * Import one claimed receipt in a single `createMany`. The whole materialized payload is
+ * written or the delivery fails — there is no leftover offset and no queued drain.
  */
-export async function runIntegrationImportWorker(params?: {
-	readonly maxChunkSize?: number;
-}): Promise<{ readonly status: 'idle' | 'processed' | 'failed'; readonly receiptId?: string }> {
+export async function runIntegrationImportWorker(): Promise<{
+	readonly status: 'idle' | 'processed' | 'failed';
+	readonly receiptId?: string;
+	readonly imported?: number;
+}> {
 	const receipt = await claimNextInboundEvent();
 	if (!receipt) return { status: 'idle' };
-	const chunkSize = Math.min(
-		params?.maxChunkSize ?? DEFAULT_INTEGRATION_IMPORT_CHUNK,
-		MAX_INTEGRATION_IMPORT_CHUNK
-	);
-	if (!Number.isInteger(chunkSize) || chunkSize < 1) {
-		throw new Error('Integration import chunk size must be a positive integer');
-	}
 	try {
 		let records = receipt.materialized_records
 			? recordsFromPipeline(receipt.materialized_records)
@@ -349,34 +337,26 @@ export async function runIntegrationImportWorker(params?: {
 			});
 		}
 		const total = records.length;
-		const start = receipt.next_offset;
-		if (start >= total) {
-			await settleInboundEvent(receipt.norbital_id, {
-				status: 'imported', imported: total, completed_at: new Date().toISOString(), claimed_at: null
-			});
-			return { status: 'processed', receiptId: receipt.norbital_id };
-		}
-		const chunk = records.slice(start, start + chunkSize);
 		const ctx = getWorkspace({ provision: true });
 		await withCollectionTransaction(ctx, async () => {
-			await createMany(ctx, receipt.collection_name, chunk, {
+			const result = await createMany(ctx, receipt.collection_name, records, {
 				isElevated: true,
-				recordIds: chunk.map((_, index) => uuidv5(String(start + index), receipt.norbital_id))
+				recordIds: records.map((_, index) => uuidv5(String(index), receipt.norbital_id))
 			});
-			const nextOffset = start + chunk.length;
+			if (result.records.length !== total) {
+				throw new Error('This function could not finish the bulk write');
+			}
 			await ctx.tenantDb.query({
 				text: `UPDATE integration_inbound_event
-				          SET next_offset = $2::integer, imported = $2::integer, error = NULL, claimed_at = NULL,
-				              status = CASE WHEN $2::integer >= $3::integer THEN 'imported' ELSE 'queued' END,
-				              completed_at = CASE WHEN $2::integer >= $3::integer THEN now() ELSE NULL END,
-				              available_at = now()
+				          SET imported = $2::integer, error = NULL, claimed_at = NULL,
+				              status = 'imported', completed_at = now(), available_at = now()
 				        WHERE norbital_id = $1 AND status = 'processing'`,
-				values: [receipt.norbital_id, nextOffset, total]
+				values: [receipt.norbital_id, total]
 			});
 		});
-		return { status: 'processed', receiptId: receipt.norbital_id };
+		return { status: 'processed', receiptId: receipt.norbital_id, imported: total };
 	} catch (cause) {
-		await retryInboundEvent(receipt, cause);
+		await failInboundEvent(receipt, cause);
 		return { status: 'failed', receiptId: receipt.norbital_id };
 	}
 }

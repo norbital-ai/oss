@@ -1,7 +1,7 @@
 import { ApprovalRequestResolvedSchema } from '$lib/shared/approval.js';
 import type { TApprovalRequest } from '@norbital-ai/platform-utils/system/types';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { error } from '../http_error.js';
+import { error } from '$lib/server/http.js';
 import { requestI18nOrDefault } from '$lib/server/i18n.js';
 import { hydrateCollectionRecord } from '../scope_hydration.server.js';
 import {

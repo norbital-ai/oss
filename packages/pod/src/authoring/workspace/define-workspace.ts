@@ -27,7 +27,7 @@ import type { WorkspaceClient } from '$lib/ui/state/workspace-client.js';
 import type { Skill } from '$lib/skills/types.js';
 import type { CollectionType } from '@norbital-ai/platform-utils/collection';
 import type { BeforeApi } from './hook-api.js';
-import type { WorkspaceEnvDeclaration } from '../env.js';
+import type { EnvVarsDeclaration } from '../env.js';
 import {
 	buildCollectionsRecord,
 	buildTypedWorkspaceClient,
@@ -96,8 +96,8 @@ export type DefineWorkspaceInput<
 	readonly invoke?: InvokeMapInput;
 	readonly meta?: WorkspaceMeta;
 	readonly seed?: import('@norbital-ai/platform-utils/seed/plan').WorkspaceSeedDefinition;
-	/** `src/+env.ts` — the names this workspace needs from its host, never the values. */
-	readonly env?: WorkspaceEnvDeclaration;
+	/** `src/+env.ts` — declared env vars (`defineEnvVars`), never their values. */
+	readonly env?: EnvVarsDeclaration;
 };
 
 type CollectionsRecord<S extends AnySchema, T extends readonly WorkspaceCollectionEntry<S>[]> = {
@@ -221,11 +221,22 @@ function registerConnectionSecret(
 		const declared = Object.keys(requirements).sort();
 		throw new Error(
 			`Integration references undeclared private environment key "${reference.env}". ` +
-				`Add it to the \`private\` block of src/+env.ts.` +
-				(declared.length > 0 ? ` Declared: ${declared.join(', ')}.` : '')
+				`Add it to src/+env.ts as a private variable.` +
+				(declared.length > 0 ? ` Declared private keys: ${declared.join(', ')}.` : '')
 		);
 	}
 	return { type: 'secret' as const, name: reference.env };
+}
+
+function privateEnvRequirements(
+	env: EnvVarsDeclaration | undefined
+): Readonly<Record<string, { readonly description: string }>> | undefined {
+	if (!env) return undefined;
+	const privateEntries = Object.entries(env).filter(([, config]) => config.public !== true);
+	if (privateEntries.length === 0) return undefined;
+	return Object.fromEntries(
+		privateEntries.map(([name, config]) => [name, { description: config.description ?? '' }])
+	);
 }
 
 /**
@@ -460,52 +471,11 @@ function registerIntegrations(
 	const integrations = [...definitions].map(([name, definition]) => ({ name, definition }));
 	for (const integration of integrations)
 		validateJsonValue(integration.definition, `Integration "${integration.name}"`, new Set());
-	assertDeclaredSecretsAreReferenced(requirements, integrations);
 	return {
 		integrations,
 		secrets: Object.keys(requirements).length > 0 ? requirements : undefined,
 		integrationBindings
 	};
-}
-
-/** Every `{ type: 'secret', name }` reference reachable in a compiled integration definition. */
-function referencedSecretNames(value: unknown, found: Set<string>): Set<string> {
-	if (value == null || typeof value !== 'object') return found;
-	if (Array.isArray(value)) {
-		for (const entry of value) referencedSecretNames(entry, found);
-		return found;
-	}
-	const record = value as Record<string, unknown>;
-	if (record.type === 'secret' && typeof record.name === 'string') found.add(record.name);
-	for (const entry of Object.values(record)) referencedSecretNames(entry, found);
-	return found;
-}
-
-/**
- * Refuse a private-env key nothing references.
- *
- * `manifest.secrets` is what a host provisions against, so an unreferenced key asks an operator for a
- * credential no code path will ever read — and, worse, hides the real mistake, which is almost always
- * a reference spelled differently from the declaration. The opposite direction already fails in
- * `registerConnectionSecret`; this closes the loop so the two sets have to match exactly.
- */
-export function assertDeclaredSecretsAreReferenced(
-	requirements: Readonly<Record<string, unknown>>,
-	integrations: readonly RegisteredIntegration[]
-): void {
-	const declared = Object.keys(requirements);
-	if (declared.length === 0) return;
-	const referenced = referencedSecretNames(
-		integrations.map((integration) => integration.definition),
-		new Set<string>()
-	);
-	const unused = declared.filter((name) => !referenced.has(name)).sort();
-	if (unused.length === 0) return;
-	throw new Error(
-		`src/+env.ts declares private environment key(s) nothing references: ${unused.join(', ')}. ` +
-			'Reference them from an integration connection or webhook signature, or remove them — a ' +
-			'declared secret becomes something the host is asked to provision.'
-	);
 }
 
 /**
@@ -569,7 +539,7 @@ export function defineWorkspace<
 		}
 	}
 
-	const registration = registerIntegrations(behaviorList, input.env?.private);
+	const registration = registerIntegrations(behaviorList, privateEnvRequirements(input.env));
 
 	const relationships = deriveManifestRelationships(schema.relations);
 
@@ -607,10 +577,9 @@ export function defineWorkspace<
 		env: input.env
 			? {
 					public: Object.fromEntries(
-						Object.entries(input.env.public ?? {}).map(([name, requirement]) => [
-							name,
-							requirement.default ?? ''
-						])
+						Object.entries(input.env)
+							.filter(([, config]) => config.public === true)
+							.map(([name]) => [name, ''])
 					)
 				}
 			: undefined,

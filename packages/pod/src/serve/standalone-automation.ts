@@ -1,14 +1,18 @@
 /**
- * In-process automation orchestration for `pod start`.
+ * In-process admit/resume for `pod start`, the reference host.
  *
- * Core drives the same guest protocol with DBOS. Standalone has no DBOS, and must not put authored
- * automations on `workspaceJobs()` — Core registers that set with pg-boss, which is infrastructure
- * only. This module is wired only from the standalone adapter.
+ * Authored automations, collection events, interactive chat, and channel inbound are admitted
+ * functions. They are not `workspaceJobs()` — that set is infrastructure crons only. This module
+ * is wired only from the standalone adapter.
  */
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import type { HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import type { DurableHostEffectRequest, QueueJob } from '../host/types.js';
 import type { RuntimeDispatch } from '../host/jobs.js';
+import {
+	settleHostReceiptEffect,
+	type HostSettleQuery
+} from '../host/settle-receipt-effect.js';
 
 export const STANDALONE_AUTOMATION_ARTIFACT = {
 	artifactId: 'standalone',
@@ -39,6 +43,8 @@ type AutomationStepOutcome =
 			readonly status: 'waiting_effect';
 			readonly receiptId: string;
 			readonly effectId: string;
+			readonly ordinal: number;
+			readonly requestHash: string;
 			readonly request: DurableHostEffectRequest;
 	  };
 
@@ -46,6 +52,7 @@ export type StandaloneAutomationJobOptions = {
 	readonly dispatch: RuntimeDispatch;
 	readonly manifest: NorbitalManifest;
 	readonly ai?: HostAiBinding;
+	readonly query?: HostSettleQuery;
 };
 
 function scheduledOccurrenceId(now: Date): string {
@@ -123,14 +130,19 @@ async function pumpReceipt(
 			throw new Error(`Unexpected standalone automation step: ${JSON.stringify(outcome)}`);
 		}
 		const effectOutcome = await executeStandaloneHostEffect(options.ai, outcome.request);
-		await options.dispatch({
-			kind: 'automation-events',
-			action: 'settle',
-			receiptId,
-			effectId: outcome.effectId,
-			artifact: STANDALONE_AUTOMATION_ARTIFACT,
-			outcome: effectOutcome
-		});
+		if (!options.query) {
+			throw new Error('Standalone automation settle requires a host database query');
+		}
+		await settleHostReceiptEffect(
+			options.query,
+			{
+				receiptId,
+				effectId: outcome.effectId,
+				ordinal: outcome.ordinal,
+				requestHash: outcome.requestHash
+			},
+			effectOutcome
+		);
 	}
 	throw new Error(`Standalone automation receipt ${receiptId} exceeded 64 durable steps`);
 }
@@ -150,9 +162,8 @@ async function pumpAdmittedReceipts(options: StandaloneAutomationJobOptions): Pr
 /**
  * Jobs the standalone adapter appends after `workspaceJobs()`.
  *
- * Continuous pump admits guest receipts (interactive chat, channel inbound, collection events) and
- * drives each through run/settle. One cron job per authored schedule admits that occurrence; the
- * pump then executes it.
+ * A wake fires because a cursor is waiting or a cron fired. The host then admits the same
+ * functions: interactive chat, channel inbound, collection events, and authored schedules.
  */
 export function standaloneAutomationJobs(
 	options: StandaloneAutomationJobOptions

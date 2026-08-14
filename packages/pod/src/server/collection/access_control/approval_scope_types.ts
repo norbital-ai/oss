@@ -1,7 +1,7 @@
 import type { TApprovalConfig } from '@norbital-ai/platform-utils/system/types';
 import type { ManifestCollectionEntry } from '$lib/manifest/index.js';
 import type { TBaseScope } from '$lib/shared/scope.js';
-import type { TNorbitalDBRecord } from '$lib/server/collection/norbital_db_record.js';
+import type { TNorbitalDBRecord } from '$lib/server/collection/collection_ops.server.js';
 import type { ResolvedPolicyGrant } from './permission/permission_record_resolution.server.js';
 
 export type TCollectionMutationPayload = Record<string, unknown>;

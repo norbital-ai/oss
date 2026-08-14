@@ -2,7 +2,7 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { requireTable } from '$lib/server/collection/collection_direct.js';
 import { runWithPermissionBypassAsync } from '$lib/server/collection/access_control/permission/permission_bypass_key.server.js';
 import { validate as uuidValidate, v7 as uuidv7 } from 'uuid';
-import { rowsPerMutationStatement } from '$lib/server/collection/mutation-batching.js';
+import { rowsPerMutationStatement } from '$lib/server/collection/collection_transaction.server.js';
 import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import { readColumnCustom } from '$lib/authoring/schema/columns.js';

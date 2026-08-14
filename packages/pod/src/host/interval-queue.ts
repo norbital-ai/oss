@@ -8,22 +8,17 @@ export type IntervalQueueOptions = {
 };
 
 /**
- * An in-process queue backed by a timer. Development and single-process deployments only.
+ * An in-process timer for infrastructure crons. Development and single-process deployments only.
  *
- * It satisfies the `queue` facility but provides none of the guarantees a real queue does: nothing
- * survives a restart, a missed schedule is never caught up, and two processes running this against
- * one database will both claim. Those are acceptable for `pod dev` and a single-container
- * deployment, and unacceptable for anything that must not drop work — point `queue` at pg-boss or
- * an equivalent there.
- *
- * Naming it, rather than defaulting to it, is the point: a deployment that is running on a timer
- * says so in its own `pod.host.ts`.
+ * It satisfies the `queue` facility and provides none of the guarantees a durable timer does:
+ * nothing survives a restart, a missed schedule is never caught up, and two processes running this
+ * against one database will both claim. It is not how functions run. Naming it, rather than
+ * defaulting to it, is the point: a deployment that is running on a timer says so in its own
+ * `pod.host.ts`.
  *
  * Scheduling is minute-granular and non-catch-up: each job records the minute it last ran in, and a
  * matching minute runs at most once. A host that was asleep does not retroactively fire the
  * schedules it missed — a cron job that fires forty times on resume is worse than one that skipped.
- * Authored automations do not use this queue or its `automation_run` history; production hosts
- * orchestrate them through the separate durable automation protocol.
  */
 export function intervalQueue(options: IntervalQueueOptions = {}): HostQueue {
 	const log = options.log ?? ((message: string) => console.log(message));

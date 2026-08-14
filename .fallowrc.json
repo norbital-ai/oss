@@ -50,7 +50,7 @@
 		"packages/pod/src/ui/public.ts",
 		"packages/pod/src/ui/state/client.ts",
 		"packages/pod/src/ui/shell/mount-client.ts",
-		"packages/pod/src/serve/hosted.ts",
+		"packages/pod/src/serve/standalone.ts",
 		"packages/pod/src/server/entry.ts",
 		"packages/pod/src/vite/index.ts",
 		"packages/std/src/async/index.ts",

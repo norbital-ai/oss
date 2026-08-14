@@ -19,7 +19,6 @@ import {
 	deleteRecord as runDeleteRecord,
 	findGrouped as runFindGrouped,
 	findFirst as runFindFirst,
-	findMany as runFindMany,
 	findManyPage as runFindManyPage,
 	updateMany as runUpdateMany,
 	updateRecord as runUpdateRecord
@@ -45,6 +44,7 @@ import {
 	UpdateWireSchema
 } from '@norbital-ai/platform-utils/remote/collection_wire_schemas';
 import { noInputSchema } from '@norbital-ai/platform-utils/remote';
+import { remainingMs } from '$lib/server/admit.js';
 import { z } from 'zod';
 
 const authenticated = Guard.init().use(requireAuthMiddleware());
@@ -120,6 +120,7 @@ export const create = authenticated.command(CreateWireSchema, async (params) => 
 	);
 });
 
+/** Admit `createMany` and write the whole payload or fail. */
 export const createMany = authenticated.command(CreateManyWireSchema, async (params) => {
 	const ctx = getWorkspace({ provision: true });
 	requireCollection(params.collection);
@@ -138,7 +139,7 @@ export const createMany = authenticated.command(CreateManyWireSchema, async (par
 		const recordIds = isElevated
 			? params.inputs.map((input) => String(input[SYSTEM_COLUMN_NAMES.PKEY] ?? ''))
 			: undefined;
-		const created = await runCreateMany(ctx, params.collection, inputs, {
+		const result = await runCreateMany(ctx, params.collection, inputs, {
 			// A valid host bypass is the standard elevated collection-op path. It may create
 			// platform collections and hookless template collections, but create hooks still run
 			// whenever the workspace authored them. Invalid or absent secrets remain ordinary calls.
@@ -152,12 +153,12 @@ export const createMany = authenticated.command(CreateManyWireSchema, async (par
 					}
 				: {})
 		});
-		if (isElevated && params.returning === 'ids') {
-			return created.map((record) => ({
+		if (!(isElevated && params.returning === 'ids')) return result;
+		return {
+			records: result.records.map((record) => ({
 				[SYSTEM_COLUMN_NAMES.PKEY]: record[SYSTEM_COLUMN_NAMES.PKEY]
-			}));
-		}
-		return created;
+			}))
+		};
 	});
 });
 
@@ -169,6 +170,7 @@ export const update = authenticated.command(UpdateWireSchema, async (params) => 
 	);
 });
 
+/** Admit `updateMany` and write the whole payload or fail. */
 export const updateMany = authenticated.command(UpdateManyWireSchema, async (params) => {
 	const ctx = getWorkspace({ provision: true });
 	requireCollection(params.collection);
@@ -229,6 +231,7 @@ export const adminDeleteSystemRecord = authenticated.command(
 	}
 );
 
+/** Export the requested payload in one admit, then run the collection's export pipeline. */
 export const exportPipeline = authenticated.command(ExportRecordsWireSchema, async (input) => {
 	const ctx = getWorkspace({ provision: true });
 	const collectionName = input.collection_name;
@@ -242,29 +245,41 @@ export const exportPipeline = authenticated.command(ExportRecordsWireSchema, asy
 	}
 
 	return runWithBypassSecretIfValidAsync(input.bypass_secret, async () => {
+		const remaining = remainingMs();
+		if (remaining !== null && remaining <= 0) {
+			throw error(500, 'This function could not finish the export');
+		}
 		const recordIds = input.record_ids?.filter((id) => id.length > 0) ?? [];
-		const records =
+		const requestedLimit = recordIds.length > 0 ? recordIds.length : (input.limit ?? 10_000);
+		const page = await runFindManyPage(
+			ctx,
+			collectionName,
 			recordIds.length > 0
-				? await runFindMany(ctx, collectionName, {
+				? {
 						with: toRelationsWith(input.with),
 						where: toRelationsFilter({
 							[SYSTEM_COLUMN_NAMES.PKEY]: { in: recordIds }
 						}),
-						limit: recordIds.length
-					})
-				: await runFindMany(ctx, collectionName, {
+						limit: requestedLimit
+					}
+				: {
 						with: toRelationsWith(input.with),
 						where: input.where ? toRelationsFilter(input.where) : undefined,
-						limit: input.limit ?? 10_000
-					});
-
-		return runCollectionExportPipeline({
+						limit: requestedLimit
+					}
+		);
+		if (page.nextCursor != null) {
+			throw error(500, 'This function could not finish the export');
+		}
+		const output = await runCollectionExportPipeline({
 			collectionName,
-			context: { scope: { records }, collection: { name: collectionName } }
+			context: { scope: { records: page.rows }, collection: { name: collectionName } }
 		});
+		return { output };
 	});
 });
 
+/** Materialize import payloads, then admit one `createMany` of every row. */
 export const importPipeline = authenticated.command(ImportRecordsWireSchema, async (input) => {
 	const ctx = getWorkspace({ provision: true });
 	const collectionName = input.collection_name;

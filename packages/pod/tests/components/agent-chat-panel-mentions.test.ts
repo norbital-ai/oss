@@ -20,8 +20,25 @@ const searchState = vi.hoisted(() => ({
 
 let replica = new FakeReplica();
 
+const startState = vi.hoisted(() => ({
+	sent: [] as {
+		message: string;
+		mentions?: { collection: string; recordId: string; label: string }[];
+		runId?: string;
+		planMode?: boolean;
+		goalMode?: boolean;
+		intent?: 'do' | 'plan';
+		verifierPrompt?: string;
+	}[]
+}));
+
 vi.mock('$lib/ui/state/client.js', () => ({
 	getInitializedWorkspaceClient: () => replica,
+	startInteractiveAgent: (input: (typeof startState.sent)[number]) => {
+		startState.sent.push(input);
+		return Promise.resolve({ runId: 'r1', chatId: 'c1', accepted: true as const });
+	},
+	updateAgentVerifier: async () => ({ accepted: true as const }),
 	post: (path: string, body: { collection?: string; search?: string; limit?: number }) => {
 		if (path !== 'collections/findMany') return Promise.reject(new Error(`unexpected ${path}`));
 		const search = (body.search ?? '').toLowerCase();
@@ -54,7 +71,7 @@ type SentInput = {
 	verifierPrompt?: string;
 };
 
-let sent: SentInput[] = [];
+let sent: SentInput[] = startState.sent;
 
 const manifestContext = {
 	getCollections: () => [
@@ -83,7 +100,8 @@ function textField(name: string) {
 
 beforeEach(() => {
 	replica = new FakeReplica();
-	sent = [];
+	startState.sent = [];
+	sent = startState.sent;
 	searchState.rows = {
 		companies: [
 			{ norbital_id: '0197f2a4-0000-7000-8000-000000000001', name: 'Acme Corp' },
@@ -94,10 +112,6 @@ beforeEach(() => {
 		team: [{ norbital_id: '0197f2a4-0000-7000-8000-000000000005', name: 'Finance' }]
 	};
 	setWorkspaceRemoteTransport({
-		agentChatStart: (input: SentInput) => {
-			sent.push(input);
-			return Promise.resolve({ runId: 'r1', chatId: 'c1', accepted: true });
-		},
 		agentModels: () => Promise.resolve(null)
 	} as never);
 });

@@ -14,15 +14,19 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Client, Pool, type Notification, type PoolClient } from 'pg';
+import { Client, Pool, type PoolClient } from 'pg';
+import { isHostSyncStreamPath, serveHostSyncStream } from '../../src/host/sync-stream.js';
 import type {
 	HostAiBinding,
 	HostFileStorageBinding,
 	HostMapsBinding,
 	HostMessagingBinding,
-	HostRuntimeLifecycleBinding,
 	RuntimeFacilityBindings
 } from '@norbital-ai/platform-utils/runtime/binding';
+import type { DurableHostEffectRequest } from '../../src/host/types.js';
+import { settleHostReceiptEffect } from '../../src/host/settle-receipt-effect.js';
+import { INTERACTIVE_AGENT_AUTOMATION_NAME } from '../../src/server/run/automation-dispatch.server.js';
+
 import { linkCurrentPodWorkspaceDependencies } from './current-package-node-modules.js';
 import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
 import { startPostgresFromTemplate, type PgHarness } from './pg-harness.js';
@@ -70,6 +74,174 @@ export type PodRuntimeHarness = {
 	stop(): Promise<void>;
 };
 
+const HARNESS_AUTOMATION_ARTIFACT = {
+	artifactId: 'test-artifact',
+	checkpointId: 'test-checkpoint',
+	treeHash: 'test-tree',
+	runtimeVersion: 'test-runtime'
+} as const;
+
+type DurableReceiptOutcome =
+	| { readonly status: 'completed' }
+	| { readonly status: 'failed'; readonly error?: string }
+	| {
+			readonly status: 'waiting_effect';
+			readonly effectId?: string;
+			readonly ordinal?: number;
+			readonly requestHash?: string;
+			readonly request?: DurableHostEffectRequest;
+	  };
+
+export type InteractiveAgentTurnResult = {
+	readonly runId: string;
+	readonly chatId: string;
+	readonly outcome: 'completed' | 'failed';
+	readonly error?: string;
+};
+
+/**
+ * Start an interactive turn through `/_runtime/agent/start`, then drive the durable admit/run/settle
+ * path until the receipt completes or fails.
+ */
+export async function completeInteractiveAgentTurn(
+	harness: PodRuntimeHarness,
+	identity: Identity,
+	input: { readonly message: string; readonly runId?: string },
+	ai: HostAiBinding
+): Promise<InteractiveAgentTurnResult> {
+	const response = await harness.request(
+		{
+			method: 'POST',
+			path: 'agent/start',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(input)
+		},
+		identity
+	);
+	if (response.status !== 200) {
+		throw new Error(
+			`agent/start failed (${response.status}): ${await response.clone().text()}`
+		);
+	}
+	const started = (await response.json()) as { runId: string; chatId: string; accepted: true };
+	await harness.hostCommand({
+		kind: 'automation-events',
+		action: 'admit',
+		artifact: HARNESS_AUTOMATION_ARTIFACT,
+		limit: 200
+	});
+	const receipt = await harness.pool.query<{ norbital_id: string }>(
+		`SELECT norbital_id::text FROM _norbital_automation_job
+		  WHERE automation_name = $1
+		  ORDER BY created_at DESC LIMIT 1`,
+		[INTERACTIVE_AGENT_AUTOMATION_NAME]
+	);
+	const receiptId = receipt.rows[0]?.norbital_id;
+	if (!receiptId) throw new Error('No interactive agent receipt after agent/start');
+	for (let step = 0; step < 64; step += 1) {
+		const outcome = (await harness.hostCommand({
+			kind: 'automation-events',
+			action: 'run',
+			receiptId,
+			artifact: HARNESS_AUTOMATION_ARTIFACT
+		})) as DurableReceiptOutcome;
+		if (outcome.status === 'completed') {
+			return { runId: started.runId, chatId: started.chatId, outcome: 'completed' };
+		}
+		if (outcome.status === 'failed') {
+			return {
+				runId: started.runId,
+				chatId: started.chatId,
+				outcome: 'failed',
+				...(outcome.error ? { error: outcome.error } : {})
+			};
+		}
+		if (
+			outcome.status !== 'waiting_effect' ||
+			!outcome.effectId ||
+			!outcome.request ||
+			outcome.ordinal == null ||
+			!outcome.requestHash
+		) {
+			throw new Error(`Unexpected agent step: ${JSON.stringify(outcome)}`);
+		}
+		const settled = await settleHarnessHostEffect(ai, outcome.request);
+		await settleHarnessReceiptEffect(
+			harness,
+			{
+				receiptId,
+				effectId: outcome.effectId,
+				ordinal: outcome.ordinal,
+				requestHash: outcome.requestHash
+			},
+			settled
+		);
+	}
+	throw new Error(`Interactive agent receipt ${receiptId} exceeded 64 durable steps`);
+}
+
+/**
+ * Persist one host-effect outcome on the receipt. Same write standalone `pod start` uses.
+ */
+export async function settleHarnessReceiptEffect(
+	harness: Pick<PodRuntimeHarness, 'pool'>,
+	effect: {
+		readonly receiptId: string;
+		readonly effectId: string;
+		readonly ordinal: number;
+		readonly requestHash: string;
+	},
+	outcome: { readonly status: 'succeeded' | 'failed'; readonly result?: unknown; readonly error?: string }
+): Promise<void> {
+	await settleHostReceiptEffect(
+		(sql, values) => harness.pool.query(sql, [...values]),
+		effect,
+		outcome
+	);
+}
+
+/**
+ * Execute one fenced host AI effect the same way standalone `pod start` does.
+ */
+async function settleHarnessHostEffect(
+	ai: HostAiBinding,
+	request: DurableHostEffectRequest
+): Promise<{ readonly status: 'succeeded'; readonly result: unknown } | { readonly status: 'failed'; readonly error: string }> {
+	try {
+		switch (request.kind) {
+			case 'ai.prompt': {
+				const result = await ai.chat({
+					messages: [{ role: 'user', content: request.prompt }],
+					...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
+					...(request.model ? { model: request.model } : {}),
+					...(request.profile ? { profile: request.profile } : {})
+				});
+				return { status: 'succeeded', result };
+			}
+			case 'ai.turn': {
+				const result = await ai.chat({
+					messages: request.system
+						? [{ role: 'system', content: request.system }, ...request.messages]
+						: request.messages,
+					...(request.tools ? { tools: request.tools } : {}),
+					...(request.model ? { model: request.model } : {}),
+					...(request.profile ? { profile: request.profile } : {})
+				});
+				return { status: 'succeeded', result };
+			}
+			default: {
+				const _exhaustive: never = request;
+				return {
+					status: 'failed',
+					error: `Unhandled harness automation effect kind: ${JSON.stringify(_exhaustive)}`
+				};
+			}
+		}
+	} catch (cause) {
+		return { status: 'failed', error: cause instanceof Error ? cause.message : String(cause) };
+	}
+}
+
 type HandleTenantRequest = (
 	request: Request,
 	bindings: RuntimeFacilityBindings
@@ -81,11 +253,9 @@ type HandleHostCommand = (
 	identity: { userId: string; organizationId: string; organizationName: string }
 ) => Promise<unknown>;
 
-type NotificationSource = {
-	subscribe(listener: (channel: string, payload: string) => void): () => void;
-} | null;
-
-type RegisterDatabaseNotifications = (source: NotificationSource) => void;
+type HostSyncWake = {
+	subscribe(wake: () => void): () => void;
+};
 
 type TestHostDbBinding = {
 	query(
@@ -360,7 +530,6 @@ export type PodRuntimeTestFacilities = {
 	readonly fileStorage?: HostFileStorageBinding;
 	readonly maps?: HostMapsBinding;
 	readonly messaging?: HostMessagingBinding;
-	readonly runtimeLifecycle?: HostRuntimeLifecycleBinding;
 };
 
 export type PodRuntimeBootOptions = {
@@ -436,12 +605,11 @@ export async function bootPodRuntime(
 	let binding: ReturnType<typeof createPgBinding>;
 	let schemaSql: string;
 	let notifyClient: Client | undefined;
-	let registerNotifications: RegisterDatabaseNotifications | undefined;
+	let hostSyncWake: HostSyncWake = { subscribe: () => () => {} };
 	try {
 		const runtimeModule = (await import(pathToFileURL(runtimePath).href)) as {
 			handlePodRequest?: HandleTenantRequest;
 			handlePodHostCommand?: HandleHostCommand;
-			registerPodDatabaseNotifications?: RegisterDatabaseNotifications;
 		};
 		if (!runtimeModule.handlePodRequest || !runtimeModule.handlePodHostCommand) {
 			throw new Error('built pod runtime is missing its request/host-command entry points');
@@ -452,26 +620,20 @@ export async function bootPodRuntime(
 		binding = createPgBinding(pool);
 		schemaSql = await loadSchemaSql(templateRoot);
 
-		// The change feed wakes an idle stream only through a real commit notification (see
-		// db-notifications.server.ts) — there is no timer fallback. Without this, every runtime
-		// harness suite would boot into the no-source branch and a still-connected stream would
-		// never learn about a later write. Mirrors installDatabaseNotifications in serve/standalone.ts.
-		registerNotifications = runtimeModule.registerPodDatabaseNotifications;
-		if (registerNotifications) {
-			notifyClient = new Client({ connectionString: pg.connectionString });
-			const listeners = new Set<(channel: string, payload: string) => void>();
-			await notifyClient.connect();
-			notifyClient.on('notification', (message: Notification) => {
-				for (const listener of listeners) listener(message.channel, message.payload ?? '');
-			});
-			await notifyClient.query('LISTEN norbital_sync');
-			registerNotifications({
-				subscribe(listener) {
-					listeners.add(listener);
-					return () => listeners.delete(listener);
-				}
-			});
-		}
+		// Host LISTEN. Guest handlePodRequest never sees the stream socket.
+		notifyClient = new Client({ connectionString: pg.connectionString });
+		const listeners = new Set<() => void>();
+		await notifyClient.connect();
+		notifyClient.on('notification', () => {
+			for (const listener of listeners) listener();
+		});
+		await notifyClient.query('LISTEN norbital_sync');
+		hostSyncWake = {
+			subscribe(wake) {
+				listeners.add(wake);
+				return () => listeners.delete(wake);
+			}
+		};
 	} catch (err) {
 		await notifyClient?.end().catch(() => undefined);
 		pg.stop();
@@ -501,7 +663,7 @@ export async function bootPodRuntime(
 				signal: init.signal,
 				...(init.body ? { body: init.body } : {})
 			});
-			return handleTenantRequest(request, { db: binding, ...facilities });
+			return dispatchTenantRequest(request, handleTenantRequest, { db: binding, ...facilities }, hostSyncWake);
 		},
 		hostCommand(command) {
 			return handleHostCommand(
@@ -515,7 +677,7 @@ export async function bootPodRuntime(
 				void handleNodeRequest(req, res, identity, handleTenantRequest, {
 					db: binding,
 					...facilities
-				}).catch((cause: unknown) => {
+				}, hostSyncWake).catch((cause: unknown) => {
 					if (!res.headersSent) res.statusCode = 500;
 					res.end(String(cause));
 				});
@@ -528,7 +690,6 @@ export async function bootPodRuntime(
 			};
 		},
 		async stop() {
-			registerNotifications?.(null);
 			await notifyClient?.end().catch(() => undefined);
 			await pool.end().catch(() => undefined);
 			pg.stop();
@@ -538,13 +699,42 @@ export async function bootPodRuntime(
 	};
 }
 
+function dispatchTenantRequest(
+	request: Request,
+	handle: HandleTenantRequest,
+	bindings: RuntimeFacilityBindings,
+	hostSyncWake: HostSyncWake
+): Promise<Response> {
+	if (!isHostSyncStreamPath(new URL(request.url).pathname)) {
+		return handle(request, bindings);
+	}
+	const served = serveHostSyncStream({
+		path: `${new URL(request.url).pathname}${new URL(request.url).search}`,
+		signal: request.signal,
+		pullDiff: async (diffPath) => {
+			const response = await handle(
+				new Request(new URL(diffPath, request.url), {
+					method: 'GET',
+					headers: request.headers,
+					signal: request.signal
+				}),
+				bindings
+			);
+			return { status: response.status, bodyText: await response.text() };
+		},
+		subscribe: (wake) => hostSyncWake.subscribe(wake)
+	});
+	return Promise.resolve(new Response(served.body, { status: served.status, headers: served.headers }));
+}
+
 /** Convert a Node request → web Request (forging auth), run the runtime, stream the Response back. */
 async function handleNodeRequest(
 	req: IncomingMessage,
 	res: ServerResponse,
 	identity: Identity,
 	handle: HandleTenantRequest,
-	bindings: RuntimeFacilityBindings
+	bindings: RuntimeFacilityBindings,
+	hostSyncWake: HostSyncWake
 ): Promise<void> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -563,7 +753,7 @@ async function handleNodeRequest(
 			? {}
 			: { body: Buffer.concat(chunks) })
 	});
-	const response = await handle(request, bindings);
+	const response = await dispatchTenantRequest(request, handle, bindings, hostSyncWake);
 	res.statusCode = response.status;
 	response.headers.forEach((value, name) => res.setHeader(name, value));
 	if (!response.body) {

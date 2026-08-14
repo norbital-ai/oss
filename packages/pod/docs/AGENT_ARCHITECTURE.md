@@ -1,57 +1,54 @@
 # Agent architecture
 
-Pod owns workspace agents: the loop implementation, tool dispatch, and tenant transcripts. The host
-supplies model inference and may expose explicitly selected host tools. The host does not persist
-agent transcripts. On Core, the host _does_ orchestrate the durable workflow and execute fenced AI
-effects (`ai.turn` / `ai.prompt`) outside the guest.
+The agent **loop lives in Pod** (`agent-loop.server.ts`). Each iteration is one admitted step.
+`await infer` yields; the isolate is disposed; the host runs the model; DBOS admits a new isolate
+for the next turn. Interactive start is the workspace shell (`agent/start`). Channel start is host
+delivery after inbound persist. Agent is not an API-client remote. There is no in-guest loop that
+holds one HTTP request for the whole conversation — that is the 2s lock. The loop is still Pod’s.
+
+Pod owns tool dispatch and tenant transcripts. The host supplies model inference and may expose
+explicitly selected host tools. The host does not persist agent transcripts.
 
 This ownership rule is the same for every deployment target:
 
 ```text
-interactive chat (hosted) ─┐
-channel inbound (hosted) ──┼─► persist user turn ─► admitAgentTurn ─► _norbital_automation_job
-                           │                                              │
-                                                                           ▼
-                                                             Core DBOS: one guest
-                                                             automation-events step
-                                                                           │
-agentChat / HTTP agent/start (leftover) ─► runAgent in-guest ─┐           │
-                                                              ▼           ▼
-                                                   Pod loop logic (agent-loop.server.ts)
-                                                                           │
-                                          ┌───────────────────────────────┼───────────────┐
-                                          ▼                               ▼               ▼
-                                   workspace tools                 host AI effects   tenant transcript
-                                                                   ai.turn/prompt    + ordinary sync
+workspace shell (`agent/start`) ─┐
+channel inbound ─────────────────┼─► persist user turn ─► HOST ADMIT (2s step)
+                                 │                              │
+                                                                ▼
+                                          POD FUNCTION (agent-loop.server.ts)
+                                                                │
+                                          ┌─────────────────────┼─────────────────────┐
+                                          ▼                     ▼                     ▼
+                                       return              await infer             timeout
+                                          │                     │                     │
+                                          ▼                     ▼                     ▼
+                                        reply              isolate disposed        dispose,
+                                                           host-effect,            roll back,
+                                                           new admit               fail
 ```
 
 ## Responsibilities
 
-| Pod owns                                                           | The host owns                                                                                                                                     |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent loop logic, streaming, subagents, iteration and token limits | One model-inference turn through `HostAiBinding`; Core also orchestrates the durable workflow and executes fenced `ai.turn` / `ai.prompt` effects |
-| Tool selection and dispatch                                        | Provider credentials and provider-specific adapters                                                                                               |
-| Workspace tools and their scoped API                               | Optional trusted tool implementations exposed through `HostAgentToolBinding`                                                                      |
-| Runs, sessions, messages and channel conversations                 | Transport sockets and encrypted transport credentials                                                                                             |
-| Transcript authorization, persistence and replication              | Process lifecycle and isolation for the tenant runtime                                                                                            |
-| Interactive agent UI, floating entry and `/agent` route            | Proxying/mounting the Pod workspace application                                                                                                   |
+| Pod owns                                                           | The host owns                                                                                          |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Agent loop logic, streaming, subagents, iteration and token limits | Admit, timeout, yield, kill; one model-inference turn through `HostAiBinding` between steps |
+| Tool selection and dispatch                                        | Provider credentials and provider-specific adapters                                                    |
+| Workspace tools and their scoped API                               | Optional trusted tool implementations exposed through `HostAgentToolBinding`                           |
+| Runs, sessions, messages and channel conversations                 | Transport sockets and encrypted transport credentials                                                  |
+| Transcript authorization, persistence and replication              | Process lifecycle and isolation for the tenant runtime                                                 |
+| Interactive agent UI, floating entry and `/agent` route            | Proxying/mounting the Pod workspace application                                                        |
 
-A host must not create a parallel session store, transcript API, or agent UI. Core orchestrates the
-durable workflow; it does not persist transcripts. A host tool returns plain data to Pod; Pod records
-the call and result as part of its own transcript.
+A host must not create a parallel session store, transcript API, or agent UI. A host tool returns
+plain data to Pod; Pod records the call and result as part of its own transcript.
 
 ## One loop, two entry points
 
-Loop _logic_ still lives in `src/server/agent/agent-loop.server.ts`. The same `chat_session`
-transcript is used for every door. Hosted _entry_ is receipt admission, not an in-guest continuous
-`runAgent`.
-
-- Hosted interactive (`agentChatStart`) and channel inbound persist the user turn, then
-  `admitAgentTurn` into `_norbital_automation_job`. Core DBOS drives one provider or tool
-  transition per guest `automation-events` step. They do not `void runAgent` or retain a
-  background lease.
-- `agentChat` (the synchronous remote) and HTTP `agent/start` may still call `runAgent` in-guest.
-  Those are leftover programmatic paths, not the hosted UI path.
+Loop logic lives in `src/server/agent/agent-loop.server.ts`. The same `chat_session` transcript is
+used for every door. Interactive entry is the workspace shell (`agent/start`): persist the user
+turn, then the host admits the loop step. Channel inbound uses the same admit path after host
+delivery. Each iteration is one admitted step. `await infer` yields; the isolate is disposed; the
+host runs the model; DBOS admits a new isolate for the next turn.
 
 Automations are not agent sessions. They are deterministic handlers configured with
 `defineAutomation`; model judgement uses `api.infer` — the same host `chat` as the agent, with
@@ -63,13 +60,10 @@ An interactive run has no automation name. A channel run carries the channel's s
 continues the session associated with the external conversation. These are entry-point differences,
 not separate agent implementations.
 
-Standalone `pod start` has no DBOS. `workspaceJobs` remains infrastructure-only (outbox drains,
-conversation titles, integration import). After those, `standaloneAutomationJobs` is a continuous
-pump that admits guest receipts (interactive chat, channel inbound, collection events) and drives
-each through in-process run/settle with the host's `HostAiBinding`; one cron job per authored
-schedule admits that occurrence, then the pump executes it. Core still uses DBOS for the same
-guest protocol. Leftover `runAgent` is the programmatic/sync remote path, not `pod start` UI or
-channel delivery.
+`pod start` is the reference host: it loads the same bundle in-process and admits the same
+functions. `workspaceJobs` remains infrastructure-only (outbox drains, conversation titles,
+integration import). Authored schedules, collection events, interactive chat, and channel inbound
+are admitted functions, not jobs on that queue.
 
 ## What bounds an agent
 
@@ -182,13 +176,11 @@ transcript authorization decision to make.
 ## Model-inference boundary
 
 `HostAiBinding` accepts the current messages, tool specifications and optional model/profile
-selection. Streaming hosts implement `startStream`, `readStream` and `cancelStream`; the opaque id
-names only a transient host queue. Pod pulls normalized text/tool/finish events, coalesces text into
-durable parts, and writes lifecycle transitions. `chat` is the final-result compatibility path for hosts without live
-streaming. Either shape is exactly one inference turn: Pod decides whether to execute tools, append
-results, continue, stop, or mark the run failed. On the hosted receipt path, Core executes that turn
-as a fenced `ai.turn` / `ai.prompt` effect outside the guest; leftover `runAgent` paths still pull
-through the binding in-guest.
+selection. The step yields at `await infer`; the isolate is disposed; the host performs that one
+inference turn; DBOS admits a new isolate with the stored result. Pod then decides whether to
+execute tools, append results, continue, stop, or mark the run failed. `chat` is the final-result
+path; streaming hosts may implement `startStream`, `readStream` and `cancelStream` for their own
+transport. Token streaming, if added, is host ↔ browser while the isolate is 0.
 
 The binding deliberately carries no transcript identifier. The host needs messages to perform
 inference, but it does not need or receive ownership of the conversation lifecycle.
@@ -348,7 +340,7 @@ its prompt asks whether the plan is complete and executable, not whether the wor
 
 **Do** leaves the full tool list in place. A verifier runs when the message looks like a task, names
 a record, or carries an explicit prompt. When the root loop would stop (`calls.length === 0`,
-depth 0), that check is a separate `ai.chat` / durable `ai.prompt` with no tools. The agent's last
+depth 0), that check is a separate `ai.chat` with no tools. The agent's last
 sentence is not evidence. A failed verdict is persisted as `kind: 'goal'` and injected back into the
 window as `<goal-verification>` so the main agent continues. That continuation tells the model to
 treat the current workspace, tool results, and durable session state as authoritative — not earlier
@@ -449,8 +441,8 @@ This supports both workspace actors without conflating them:
 - a declared channel uses its independent `kind='agent'` principal, policy and worktree, regardless
   of which external person or group sent the message.
 
-The runtime microVM remains one traffic-serving process for the tenant revision. It never doubles as
-an authoring shell. Host tools acquire a separate actor workbench for one call and destroy its guest
+The runtime isolate serves one admitted step, then 0. It never doubles as an authoring shell.
+Host tools acquire a separate actor workbench (MicroSandbox) for one call and destroy its guest
 afterward; the Git worktree and shared content-addressed dependencies remain on the host. Channels
 still default to no host tools and no MCP servers, and an explicit channel allowlist defaults its workspace mount to
 read-only. That is a product permission boundary, not a transport limitation.
@@ -459,11 +451,11 @@ read-only. That is a product permission boundary, not a transport limitation.
 
 The Pod shell renders `AgentChatPanel` for every workspace; it does not wait for an authored
 `src/+agent.ts` or a host plugin. The same panel is available from a floating
-tenant-workspace action and from the full `/agent` route, including under standalone `pod start`.
-Hosted `agentChatStart` admits a durable receipt rather than detaching `runAgent`; standalone has
-no DBOS, so those receipts sit until a host drives them. It uses the product agent icon, exposes
+tenant-workspace action and from the full `/agent` route, including under `pod start`.
+The workspace shell persists the user turn on `agent/start` and the host admits the loop step. It
+uses the product agent icon, exposes
 the requestor's replicated conversation list as a thread
-selector, and keeps a compact composer at the bottom of the panel. It calls `agentChatStart`,
+selector, and keeps a compact composer at the bottom of the panel. It posts `agent/start`,
 subscribes to `chat_session`, and projects its embedded messages and turns from the local replica.
 Completed messages, generated title, terminal state and usage therefore cross the same ordinary
 sync stream; refresh, reconnect, offline catch-up and multi-tab convergence do not require an
@@ -497,12 +489,11 @@ Pod declarations choose the channel key, transport, policy and standing agent ta
 wire: credentials, webhook or long-poll listener, inbound authentication and outbound provider call.
 
 Inbound delivery crosses the private host-command plane with the declared channel key. Pod owns
-deduplication, principal resolution, conversation binding, transcript writes and receipt admission;
-the principal it resolves to is the channel's own, for the reasons in
-[What bounds an agent](#what-bounds-an-agent). Hosted inbound does not `void runAgent` or retain a
-background lease for the model loop.
-Outbound delivery calls `messaging.sendVia(channel, transport, message)` so the host selects the exact
-credential even when multiple declared channels share one transport.
+deduplication, principal resolution, conversation binding, and transcript writes; the principal it
+resolves to is the channel's own, for the reasons in
+[What bounds an agent](#what-bounds-an-agent). Inbound persists the user turn, then the host admits
+the loop function. Outbound delivery calls `messaging.sendVia(channel, transport, message)` so the
+host selects the exact credential even when multiple declared channels share one transport.
 
 ## Conformance
 

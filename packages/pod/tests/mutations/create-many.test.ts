@@ -81,7 +81,12 @@ const state = vi.hoisted(() => ({
 		undefined | ((event: { records: readonly Record<string, unknown>[] }) => unknown)
 }));
 
-vi.mock('$lib/server/collection/workspace-collections.js', () => ({
+vi.mock('$lib/server/bootstrap/tenant_workspace.server.js', () => ({
+	getTenantWorkspace: () => ({
+		collections: {},
+		relationships: {},
+		registered: { inputSchemas: {}, integrationBindings: {} }
+	}),
 	getWorkspaceCollection: () => ({ create: {} }),
 	allowsMutation: () => true,
 	collectionHooks: (_behavior: unknown, action: string) =>
@@ -95,15 +100,7 @@ vi.mock('$lib/server/collection/workspace-collections.js', () => ({
 			: undefined
 }));
 
-vi.mock('$lib/server/bootstrap/tenant_workspace.server.js', () => ({
-	getTenantWorkspace: () => ({
-		collections: {},
-		relationships: {},
-		registered: { inputSchemas: {}, integrationBindings: {} }
-	})
-}));
-
-vi.mock('$lib/server/collection/hook-api-context.server.js', async () => {
+vi.mock('$lib/server/collection/hook-api.server.js', async () => {
 	const { AsyncLocalStorage } = await import('node:async_hooks');
 	return {
 		beforeApiStorage: new AsyncLocalStorage(),
@@ -120,6 +117,7 @@ const { createMany } = await import('$lib/server/collection/collection_ops.serve
 const { withCollectionTransaction } =
 	await import('$lib/server/collection/collection_transaction.server.js');
 const { supportsServerCreatedAuditProjection } = await import('$lib/server/audit_event.server.js');
+const { runWithAdmit } = await import('$lib/server/admit.js');
 
 let statements: string[] = [];
 
@@ -244,7 +242,7 @@ describe('Batched collection create (real Postgres)', () => {
 			after.push(String(record?.status));
 		};
 
-		const created = await withRequestWorkspaceCtx(ctx, () =>
+		const { records: created } = await withRequestWorkspaceCtx(ctx, () =>
 			createMany(ctx, 'orders', inputs, { isElevated: true, recordIds: ids })
 		);
 
@@ -303,7 +301,7 @@ describe('Batched collection create (real Postgres)', () => {
 					createdAts: [writtenAt],
 					updatedAts: [writtenAt]
 				});
-				return [ordinary, idsOnly] as const;
+				return [ordinary.records, idsOnly.records] as const;
 			})
 		);
 
@@ -356,7 +354,7 @@ describe('Batched collection create (real Postgres)', () => {
 
 	it('bounds id-projected root and audit statements above 5,000 rows', async () => {
 		const { ids, inputs } = batch(ROOT_CHUNK_BOUNDARY + 1);
-		const created = await withRequestWorkspaceCtx(ctx, () =>
+		const { records: created } = await withRequestWorkspaceCtx(ctx, () =>
 			createMany(ctx, 'orders', inputs, {
 				isElevated: true,
 				returnIdsOnly: true,
@@ -419,7 +417,7 @@ describe('Batched collection create (real Postgres)', () => {
 			events.push(`after:${records.map((record) => record.status).join(',')}`);
 		};
 
-		const created = await withRequestWorkspaceCtx(ctx, () =>
+		const { records: created } = await withRequestWorkspaceCtx(ctx, () =>
 			createMany(ctx, 'orders', inputs, { isElevated: true, recordIds: ids })
 		);
 
@@ -575,4 +573,35 @@ describe('Batched collection create (real Postgres)', () => {
 		expect(await pool.query('SELECT 1 FROM sync_outbox')).toMatchObject({ rowCount: 0 });
 		expect(await pool.query('SELECT 1 FROM audit_event')).toMatchObject({ rowCount: 0 });
 	}, 180_000);
+
+	it('writes the whole remaining batch when no host admitted the call', async () => {
+		const { ids, inputs } = batch(8);
+
+		const result = await withRequestWorkspaceCtx(ctx, () =>
+			createMany(ctx, 'orders', inputs, { isElevated: true, recordIds: ids })
+		);
+
+		expect(result.records).toHaveLength(8);
+		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 8 });
+	});
+
+	it('fails a tight admit instead of yielding a leftover nextOffset', async () => {
+		const { ids, inputs } = batch(8);
+		let beforeBatchLength = -1;
+		state.beforeBatchHook = ({ inputs: batchInputs }) => {
+			beforeBatchLength = batchInputs.length;
+			return [...batchInputs];
+		};
+
+		await expect(
+			withRequestWorkspaceCtx(ctx, () =>
+				runWithAdmit({ timeoutMs: 1, deadlineAt: Date.now() - 1 }, () =>
+					createMany(ctx, 'orders', inputs, { isElevated: true, recordIds: ids })
+				)
+			)
+		).rejects.toThrow(/could not finish the bulk write/);
+
+		expect(beforeBatchLength).toBe(-1);
+		expect(await pool.query('SELECT 1 FROM orders')).toMatchObject({ rowCount: 0 });
+	});
 });

@@ -4,8 +4,9 @@
 		ErasedCollectionRegistry
 	} from '@norbital-ai/platform-utils/collection';
 	import { UserRoleSchema, type TUserRole } from '@norbital-ai/platform-utils/system/types';
-	import { Bound, Center, Cover, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
+	import type { Snippet } from 'svelte';
 	import WorkspaceAuditTable from '../settings/workspace-audit-table.svelte';
 	import WorkspaceInvitationsTable from '../settings/workspace-invitations-table.svelte';
 	import WorkspaceMembersTable from '../settings/workspace-members-table.svelte';
@@ -149,18 +150,21 @@
 	<WorkspaceAuditTable client={workspaceApi} />
 {/snippet}
 
-{#snippet header()}
-	<Stack gap="xs" class="px-4 pt-4 sm:px-6 sm:pt-6">
-		<h1 class="text-lg font-semibold">{t('pod.settings.people')}</h1>
-		<p class="max-w-2xl text-xs text-muted-foreground">
-			{t('pod.settings.peopleDescription')}
-		</p>
-		{#if failure}<p
-				class="rounded-md border border-destructive/40 px-3 py-2 text-xs text-destructive"
-				role="alert"
-			>
-				{failure}
-			</p>{/if}
+{#snippet peopleHeader({ list }: { list: Snippet })}
+	<Stack gap="lg" shrink={false} class="px-4 pt-4 sm:px-6 sm:pt-6">
+		<Stack as="header" gap="xs">
+			<h1 class="text-lg font-semibold">{t('pod.settings.people')}</h1>
+			<p class="max-w-2xl text-xs text-muted-foreground">
+				{t('pod.settings.peopleDescription')}
+			</p>
+			{#if failure}<p
+					class="rounded-md border border-destructive/40 px-3 py-2 text-xs text-destructive"
+					role="alert"
+				>
+					{failure}
+				</p>{/if}
+		</Stack>
+		{@render list()}
 	</Stack>
 {/snippet}
 
@@ -177,43 +181,40 @@
 	</Stack>
 {:else}
 	<Bound size="full" clip class="bg-background">
-		<Center measure="wide" class="h-full">
-			<Cover top={header}>
-				<Tabs
-					bind:value={activeTab}
-					onValueChange={onTabChange}
-					animate={false}
-					contentPadding={false}
-					listClass="mx-0 w-full"
-					class="min-h-0"
-					config={[
-						{
-							name: 'members',
-							label: t('pod.settings.members'),
-							icon: 'lucide:users',
-							content: membersContent
-						},
-						{
-							name: 'invitations',
-							label: t('pod.settings.invitations'),
-							icon: 'lucide:mail-plus',
-							content: invitationsContent
-						},
-						{
-							name: 'teams',
-							label: t('pod.settings.teams'),
-							icon: 'lucide:network',
-							content: teamsContent
-						},
-						{
-							name: 'audit',
-							label: t('pod.settings.auditLog'),
-							icon: 'lucide:scroll-text',
-							content: auditContent
-						}
-					] satisfies TabConfig[]}
-				/>
-			</Cover>
-		</Center>
+		<Tabs
+			bind:value={activeTab}
+			onValueChange={onTabChange}
+			animate={false}
+			contentPadding={true}
+			listClass="mx-0 w-full"
+			class="h-full min-h-0"
+			header={peopleHeader}
+			config={[
+				{
+					name: 'members',
+					label: t('pod.settings.members'),
+					icon: 'lucide:users',
+					content: membersContent
+				},
+				{
+					name: 'invitations',
+					label: t('pod.settings.invitations'),
+					icon: 'lucide:mail-plus',
+					content: invitationsContent
+				},
+				{
+					name: 'teams',
+					label: t('pod.settings.teams'),
+					icon: 'lucide:network',
+					content: teamsContent
+				},
+				{
+					name: 'audit',
+					label: t('pod.settings.auditLog'),
+					icon: 'lucide:scroll-text',
+					content: auditContent
+				}
+			] satisfies TabConfig[]}
+		/>
 	</Bound>
 {/if}

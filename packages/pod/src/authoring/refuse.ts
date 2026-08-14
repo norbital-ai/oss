@@ -1,4 +1,4 @@
-import { HttpError } from '../server/collection/http_error.js';
+import { HttpError } from '../server/http.js';
 
 /**
  * Refuse a mutation with a message the person who attempted it will read.

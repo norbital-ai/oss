@@ -31,9 +31,9 @@ import { isTemporalOperand, temporalKindForFieldKind } from '@norbital-ai/std/da
 import { z } from 'zod';
 import { v7 } from 'uuid';
 import { portableCollectionField } from '$lib/authoring/schema/table.js';
-import { error } from './http_error.js';
+import { error } from '$lib/server/http.js';
 import { requestI18nOrDefault } from '$lib/server/i18n.js';
-import type { TNorbitalDBRecord } from './norbital_db_record.js';
+import type { TNorbitalDBRecord } from './collection_ops.server.js';
 import type { ManifestCollectionEntry } from '$lib/manifest/index.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
@@ -787,91 +787,4 @@ export async function directFindGrouped(
 	);
 
 	return Object.fromEntries(groupedEntries);
-}
-
-// ── Direct record API (no policy, no hooks, no audit) ─────────────
-
-export async function directInsert(
-	ctx: ProvisionedContext,
-	collection: string,
-	input: Record<string, unknown>
-): Promise<Record<string, unknown>> {
-	const { row, links, nested } = splitMutationPayload(ctx, collection, input);
-	const now = new Date().toISOString();
-	const table = requireTable(ctx, collection);
-	const db = ctx.drizzleDb;
-	if (!db) {
-		throw error(500, 'Tenant database is not provisioned');
-	}
-
-	const created = firstRowAsRecord(
-		await db
-			.insert(table)
-			.values({
-				...row,
-				[SYSTEM_COLUMN_NAMES.CREATED_AT]: row[SYSTEM_COLUMN_NAMES.CREATED_AT] ?? now,
-				[SYSTEM_COLUMN_NAMES.UPDATED_AT]: row[SYSTEM_COLUMN_NAMES.UPDATED_AT] ?? now
-			})
-			.returning()
-	);
-
-	if (!created) {
-		throw error(500, `Failed to create record in "${collection}"`);
-	}
-
-	const sourceId = String(created[SYSTEM_COLUMN_NAMES.PKEY] ?? '');
-	await persistMutationRelationships(ctx, collection, sourceId, links, nested);
-
-	return created;
-}
-
-export async function directUpdate(
-	ctx: ProvisionedContext,
-	collection: string,
-	recordId: string,
-	input: Record<string, unknown>
-): Promise<Record<string, unknown>> {
-	const { row, links, nested } = splitMutationPayload(ctx, collection, input);
-	const table = requireTable(ctx, collection);
-	const cols = getColumns(table);
-	const db = ctx.drizzleDb;
-	if (!db) {
-		throw error(500, 'Tenant database is not provisioned');
-	}
-	const { eq } = await import('drizzle-orm');
-
-	const updated = firstRowAsRecord(
-		await db
-			.update(table)
-			.set({
-				...row,
-				[SYSTEM_COLUMN_NAMES.UPDATED_AT]: new Date().toISOString()
-			})
-			.where(eq(cols[SYSTEM_COLUMN_NAMES.PKEY], recordId))
-			.returning()
-	);
-
-	if (!updated) {
-		throw error(404, requestI18nOrDefault().t('pod.server.recordNotFound', { id: recordId }));
-	}
-
-	await persistMutationRelationships(ctx, collection, recordId, links, nested);
-
-	return updated;
-}
-
-export async function directDelete(
-	ctx: ProvisionedContext,
-	collection: string,
-	recordId: string
-): Promise<void> {
-	const table = requireTable(ctx, collection);
-	const cols = getColumns(table);
-	const db = ctx.drizzleDb;
-	if (!db) {
-		throw error(500, 'Tenant database is not provisioned');
-	}
-	const { eq } = await import('drizzle-orm');
-
-	await db.delete(table).where(eq(cols[SYSTEM_COLUMN_NAMES.PKEY], recordId));
 }

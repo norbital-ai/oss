@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/pod",
-	"version": "0.0.37",
+	"version": "0.0.41",
 	"description": "Tenant workspace authoring SDK, runtime, and Vite plugin for Norbital.",
 	"type": "module",
 	"license": "AGPL-3.0-only",
@@ -22,7 +22,8 @@
 		"package.json"
 	],
 	"bin": {
-		"pod": "./build/bin/invocation/index.js"
+		"pod": "./build/bin/invocation/index.js",
+		"quality": "./build/quality/cli.js"
 	},
 	"sideEffects": false,
 	"exports": {
@@ -58,6 +59,10 @@
 			"types": "./build/host/index.d.ts",
 			"default": "./build/host/index.js"
 		},
+		"./guest": {
+			"types": "./build/server/entry.d.ts",
+			"default": "./build/server/entry.js"
+		},
 		"./i18n": {
 			"types": "./build/i18n/index.d.ts",
 			"default": "./build/i18n/index.js"
@@ -80,6 +85,10 @@
 			"types": "./build/ui/shell/app-header-actions.svelte.d.ts",
 			"svelte": "./build/ui/shell/app-header-actions.svelte",
 			"default": "./build/ui/shell/app-header-actions.svelte"
+		},
+		"./quality": {
+			"types": "./build/quality/index.d.ts",
+			"default": "./build/quality/index.js"
 		}
 	},
 	"imports": {
@@ -89,7 +98,7 @@
 		}
 	},
 	"scripts": {
-		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {} --tsconfig tsconfig.json",
+		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {} --tsconfig tsconfig.json && node ./scripts/copy-quality-assets.mjs",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/pod",
 		"lint": "svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
 		"test": "vitest run",
@@ -99,6 +108,7 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
+		"@fallow-cli/fallow-node": "^3.7.1",
 		"@electric-sql/pglite": "^0.3.16",
 		"@internationalized/date": "^3.12.2",
 		"@norbital-ai/platform-utils": "workspace:*",

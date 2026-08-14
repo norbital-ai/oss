@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WorkspaceSidebarNavigationSection } from '@norbital-ai/ui/workspace-shell';
 import {
@@ -50,6 +52,12 @@ function links(container: HTMLElement): { label: string; href: string; current: 
 }
 
 describe('the system section of the sidebar', () => {
+	it('warms host-plugin documents on mount and does not race the iframe on click', async () => {
+		const shell = await readFile(resolve(process.cwd(), 'src/ui/shell/pod-shell.svelte'), 'utf8');
+		expect(shell).toMatch(/prefetchWorkspaceSurface\(hostPluginSurfaceHref\(plugin\.key\)\)/);
+		expect(shell).toMatch(/if \(!resolveHostPluginSurface\(path, data\.hostPlugins/);
+	});
+
 	it('keeps host entries outside Pod SPA navigation', () => {
 		expect(isHostPluginEntry('/studio', PLUGINS)).toBe(true);
 		expect(isHostPluginEntry('/help', PLUGINS)).toBe(true);

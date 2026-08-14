@@ -408,13 +408,11 @@ export default {
 `;
 
 /** The one file naming what the host must provide. Names only — a value here would be the bug. */
-const ENV_SOURCE = `import { defineEnv } from '@norbital-ai/pod/authoring';
+const ENV_SOURCE = `import { defineEnvVars } from '@norbital-ai/pod/authoring';
 
-export default defineEnv({
-	private: {
-		REGISTRY_API_KEY: { description: 'Bearer token for the certification registry API' },
-		REPORTS_WEBHOOK_SECRET: { description: 'HMAC secret the field-reports webhook is signed with' }
-	}
+export const variables = defineEnvVars({
+	REGISTRY_API_KEY: { description: 'Bearer token for the certification registry API' },
+	REPORTS_WEBHOOK_SECRET: { description: 'HMAC secret the field-reports webhook is signed with' }
 });
 `;
 
@@ -634,21 +632,19 @@ describe('Pod standalone integrations — E2E, both directions', () => {
 			const [receipt] = await db
 				.query<{
 					status: string;
-					next_offset: number;
 					imported: number | null;
 					materialized: number | null;
 				}>(
-					`SELECT status, next_offset, imported, jsonb_array_length(materialized_records) AS materialized
+					`SELECT status, imported, jsonb_array_length(materialized_records) AS materialized
 					   FROM integration_inbound_event
 					  WHERE binding_key = $1
 					    AND jsonb_array_length(materialized_records) = $2`,
 					['registry:site_locations.receive.catalogue', CATALOGUE.length]
 				)
 				.then((result) => result.rows);
-			// 101 rows force multiple worker invocations. The same receipt carries the materialization and
-			// terminal offset, proving later chunks did not rerun the import.
 			expect(receipt).toMatchObject({
-				status: 'imported', next_offset: CATALOGUE.length, imported: CATALOGUE.length,
+				status: 'imported',
+				imported: CATALOGUE.length,
 				materialized: CATALOGUE.length
 			});
 		} finally {

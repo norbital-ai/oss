@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	MUTATION_PARAMETER_BUDGET,
 	rowsPerMutationStatement
-} from '$lib/server/collection/mutation-batching.js';
+} from '$lib/server/collection/collection_transaction.server.js';
 
 describe('collection mutation statement batching', () => {
 	it('keeps every statement below the PostgreSQL parameter ceiling', () => {

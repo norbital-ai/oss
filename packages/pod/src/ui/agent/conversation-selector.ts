@@ -54,6 +54,11 @@ export type ConversationScopeInput = {
 	readonly publicChannelKeys: ReadonlySet<string>;
 };
 
+export type ManifestChannelRef = {
+	readonly audience: string;
+	readonly transport: string;
+};
+
 /** Channel tab id for a session: personal stays on web, otherwise the transport key. */
 export function sessionChannelId(
 	session: ConversationSession,
@@ -87,6 +92,50 @@ export function scopeConversationSessions(
 	scope: ConversationScopeInput
 ): ConversationSession[] {
 	return sessions.filter((session) => sessionVisibleInScope(session, scope));
+}
+
+/** Channels the current scope may inspect: Web, allowed manifest entries, plus any scoped thread. */
+export function listAccessibleChannels(input: {
+	readonly sessions: readonly ConversationSession[];
+	readonly labels: ConversationSelectorLabels;
+	readonly manifestChannels: Readonly<Record<string, ManifestChannelRef>>;
+	readonly scope: ConversationScopeInput;
+}): ConversationChannel[] {
+	const channels = new Map<string, ConversationChannel>();
+	channels.set(WEB_CHANNEL_ID, {
+		id: WEB_CHANNEL_ID,
+		label: input.labels.web,
+		icon: channelIcon(WEB_CHANNEL_ID, null)
+	});
+
+	for (const [id, channel] of Object.entries(input.manifestChannels)) {
+		const publicOnlyOnOwnAdminInbox =
+			channel.audience === 'public' &&
+			!(input.scope.isAdmin && input.scope.scopeUserId === input.scope.currentUserId);
+		if (id === WEB_CHANNEL_ID || publicOnlyOnOwnAdminInbox) continue;
+		channels.set(id, {
+			id,
+			label: id,
+			icon: channelIcon(id, channel.transport)
+		});
+	}
+
+	for (const session of input.sessions) {
+		if (!isKnownVisibility(session.visibility)) continue;
+		const id = sessionChannelId(session, input.labels);
+		if (channels.has(id)) continue;
+		channels.set(id, {
+			id,
+			label: id === WEB_CHANNEL_ID ? input.labels.web : id,
+			icon: channelIcon(id, session.platform)
+		});
+	}
+
+	return [...channels.values()].sort((left, right) => {
+		if (left.id === WEB_CHANNEL_ID) return -1;
+		if (right.id === WEB_CHANNEL_ID) return 1;
+		return left.label.localeCompare(right.label);
+	});
 }
 
 /** Groups scoped sessions into channel tabs and per-tab conversation rows. */
@@ -139,61 +188,38 @@ export function buildConversationSelector(input: {
 	};
 }
 
-/** Keeps heading ancestry for conversation rows whose title or search text matches. */
-export function filterConversationRows(
-	rows: readonly ConversationSelectorRow[],
-	query: string
-): ConversationSelectorRow[] {
-	const needle = query.trim().toLowerCase();
-	if (needle.length === 0) return [...rows];
+export type ConversationComboboxOption = {
+	readonly value: string;
+	readonly label: string;
+	readonly icon: string;
+	readonly search_term: string;
+	readonly type?: string;
+};
 
-	const kept: ConversationSelectorRow[] = [];
-	const pending: ConversationHeadingRow[] = [];
-	for (const row of rows) {
-		if (row.kind === 'heading') {
-			while (pending.length > 0 && (pending.at(-1)?.level ?? 0) >= row.level) {
-				pending.pop();
-			}
-			pending.push(row);
-			continue;
-		}
-		if (row.title.toLowerCase().includes(needle) || row.searchText.toLowerCase().includes(needle)) {
-			kept.push(...pending);
-			pending.length = 0;
-			kept.push(row);
-		}
-	}
-	return kept;
-}
-
-/** Channel tab that currently contains the open conversation, or the first tab. */
-export function channelIdForConversation(
-	conversationId: string | undefined,
+/** Flattens selector rows into Combobox options, grouping users/groups only when both exist. */
+export function conversationComboboxOptions(
 	model: ConversationSelectorModel
-): string | null {
-	if (conversationId) {
-		for (const channel of model.channels) {
-			const rows = model.rowsByChannel[channel.id] ?? [];
-			if (rows.some((row) => row.kind === 'conversation' && row.id === conversationId)) {
-				return channel.id;
-			}
-		}
+): ConversationComboboxOption[] {
+	const rows = model.channels.flatMap((channel) => model.rowsByChannel[channel.id] ?? []);
+	const groupLabel = new Map<string, string>();
+	for (const row of rows) {
+		if (row.kind !== 'heading') continue;
+		if (row.id.endsWith(':users')) groupLabel.set('user', row.label);
+		else if (row.id.endsWith(':groups')) groupLabel.set('group', row.label);
 	}
-	return model.channels[0]?.id ?? null;
-}
-
-/** Combobox trigger copy: channel · title when tabs are showing a non-web thread. */
-export function conversationTriggerLabel(input: {
-	readonly session: ConversationSession | undefined;
-	readonly model: ConversationSelectorModel;
-	readonly labels: ConversationSelectorLabels;
-}): string | null {
-	const session = input.session;
-	if (!session) return null;
-	if (input.model.showTabs && session.visibility !== 'personal') {
-		return `${session.channelKey ?? input.labels.channelFallback} · ${session.title}`;
+	const options: ConversationComboboxOption[] = [];
+	for (const row of rows) {
+		if (row.kind !== 'conversation') continue;
+		const type = groupLabel.get(row.audience);
+		options.push({
+			value: row.id,
+			label: row.title,
+			icon: row.icon,
+			search_term: row.searchText,
+			...(type ? { type } : {})
+		});
 	}
-	return session.title;
+	return options;
 }
 
 /** Splits one channel's sessions into optional user/group headings and conversation rows. */
@@ -270,6 +296,6 @@ function channelIcon(channelId: string, platform: string | null): string { // st
 }
 
 /** True when visibility is one of the three conversation audiences this selector understands. */
-function isKnownVisibility(visibility: string): boolean { // stupidity:allow Q4 -- named helper
+function isKnownVisibility(visibility: string): boolean {
 	return visibility === 'personal' || visibility === 'channel_dm' || visibility === 'channel_group';
 }

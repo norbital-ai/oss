@@ -5,7 +5,7 @@
  * stable wire protocol between the host and the in-isolate Pod runtime.
  */
 import { buildCtx } from '$lib/server/bootstrap/context.js';
-import { runWithWorkspaceContext } from '$lib/server/bootstrap/workspace_runtime.js';
+import { withRequestWorkspaceCtx } from '$lib/server/bootstrap/workspace_store.js';
 import { handleSyncRequest } from '$lib/server/collection/sync/sync-endpoints.server.js';
 import {
 	ProcessApprovalRequestActionInputSchema,
@@ -15,7 +15,6 @@ import {
 	adminCreateSystemRecord,
 	adminDeleteSystemRecord,
 	adminUpdateSystemRecord,
-	agentChat,
 	agentChatStart,
 	agentChatUpdateVerifier,
 	agentModels,
@@ -86,7 +85,6 @@ import {
 	deleteRecord as deleteCollectionRecord
 } from '$lib/server/collection/collection_ops.server.js';
 import { z } from 'zod';
-import { startInteractiveAgent } from '$lib/server/agent/agent-loop.server.js';
 
 const MAX_WORKSPACE_FILE_SIZE = 10 * 1024 * 1024;
 const fileUploadSchema = z.object({
@@ -96,16 +94,13 @@ const fileUploadSchema = z.object({
 	data_base64: z.string().min(1)
 });
 const fileDeleteSchema = z.object({ record_id: z.string().uuid() });
-const agentStartSchema = z.object({
-	message: z.string().trim().min(1),
-	runId: z.string().uuid().optional()
-});
 const documentAssetSchema = z.object({
 	norbital_id: z.string().uuid(),
 	storage_key: z.string(),
 	owner_user_id: z.string().uuid()
 });
 
+/** Decode a base64 file body and refuse a size mismatch. */
 function decodeBase64File(encoded: string, expectedSize: number): Uint8Array {
 	let binary: string;
 	try {
@@ -118,10 +113,12 @@ function decodeBase64File(encoded: string, expectedSize: number): Uint8Array {
 	return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
+/** Keep a short, safe file extension for the stored object key. */
 function storageExtension(fileName: string): string {
 	return fileName.match(/\.[a-zA-Z0-9]{1,10}$/)?.[0].toLowerCase() ?? '';
 }
 
+/** Store an uploaded file and create its document_asset row. */
 async function uploadWorkspaceFile(event: PodRequestEvent, body: unknown) {
 	const input = parseWireBody(fileUploadSchema, body);
 	const fileStorage = event.platform.bindings.fileStorage;
@@ -161,6 +158,7 @@ async function uploadWorkspaceFile(event: PodRequestEvent, body: unknown) {
 	}
 }
 
+/** Delete a document_asset the requestor uploaded, and its stored bytes. */
 async function deleteWorkspaceFile(event: PodRequestEvent, body: unknown) {
 	const input = parseWireBody(fileDeleteSchema, body);
 	const fileStorage = event.platform.bindings.fileStorage;
@@ -185,6 +183,7 @@ async function deleteWorkspaceFile(event: PodRequestEvent, body: unknown) {
 
 type RuntimeEndpointHandler = (body: unknown) => Promise<unknown>;
 
+/** Parse a runtime JSON body against a Zod schema. */
 function parseWireBody<S extends z.ZodType>(schema: S, body: unknown): z.infer<S> {
 	try {
 		return schema.parse(body);
@@ -196,6 +195,7 @@ function parseWireBody<S extends z.ZodType>(schema: S, body: unknown): z.infer<S
 	}
 }
 
+/** Bind a Zod schema to a runtime handler. */
 function wireEndpoint<S extends z.ZodType>(
 	schema: S,
 	handler: (input: z.infer<S>) => Promise<unknown>
@@ -220,12 +220,10 @@ const RUNTIME_ENDPOINT_HANDLERS: Record<string, RuntimeEndpointHandler> = {
 	'collections/deleteRecord': wireEndpoint(DeleteWireSchema, deleteRecord),
 	'collections/export': wireEndpoint(ExportRecordsWireSchema, exportPipeline),
 	'collections/import': wireEndpoint(ImportRecordsWireSchema, importPipeline),
-	'remotes/agentChat': wireEndpoint(AgentChatInputSchema, agentChat),
-	'remotes/agentChatStart': wireEndpoint(AgentChatInputSchema, agentChatStart),
-	'remotes/agentChatUpdateVerifier': wireEndpoint(
-		AgentChatUpdateVerifierInputSchema,
-		agentChatUpdateVerifier
-	),
+	// Host-owned interactive door. Not a remotes/* API-client path and not reachable via
+	// `/_runtime/remotes/{customName}` — only the workspace shell posts here.
+	'agent/start': wireEndpoint(AgentChatInputSchema, agentChatStart),
+	'agent/updateVerifier': wireEndpoint(AgentChatUpdateVerifierInputSchema, agentChatUpdateVerifier),
 	'remotes/agentModels': wireEndpoint(AgentModelsInputSchema, agentModels),
 	'remotes/autocompleteGeolocation': wireEndpoint(
 		AutocompleteGeolocationInputSchema,
@@ -255,6 +253,7 @@ const RUNTIME_ENDPOINT_HANDLERS: Record<string, RuntimeEndpointHandler> = {
 
 const jsonBodySchema = z.unknown();
 
+/** Read the JSON body, falling back to the invoke header when the stream is empty. */
 async function readJsonBody(event: PodRequestEvent): Promise<unknown> {
 	try {
 		return jsonBodySchema.parse(await event.request.json());
@@ -276,6 +275,7 @@ const kitErrorSchema = z.object({
 	body: z.unknown().optional()
 });
 
+/** Re-throw a SvelteKit-shaped error as a Pod HTTP error. */
 function rethrowKitError(err: unknown): never {
 	const parsed = kitErrorSchema.safeParse(err);
 	if (parsed.success) {
@@ -301,6 +301,7 @@ function rethrowKitError(err: unknown): never {
 	throw err;
 }
 
+/** Dispatch one `/_runtime/*` request to the matching workspace handler. */
 export async function handleNorbitalRuntimeRequest(event: PodRequestEvent): Promise<Response> {
 	const startedAt = performance.now();
 	const responseHeaders = (): HeadersInit => {
@@ -312,15 +313,15 @@ export async function handleNorbitalRuntimeRequest(event: PodRequestEvent): Prom
 	};
 	const routePath = event.params.path?.replace(/^\//, '') ?? '';
 
-	// Sync-engine routes branch BEFORE the JSON body is consumed: `stream` holds the request
-	// open for SSE (GET, no body) and `subscribe`/`mutate` read their own body. They also
-	// return their own Response (streaming or JSON) instead of the json(...) wrapper below.
+	// Sync-engine routes branch BEFORE the JSON body is consumed: `diff` is a one-shot GET
+	// and `mutate` reads its own body. The host owns SSE (`sync/stream`). These handlers
+	// return their own Response instead of the json(...) wrapper below.
 	if (routePath.startsWith('sync/')) {
 		const ctx = await buildCtx(event);
 		if (!ctx) {
 			throw error(401, 'Unauthorized');
 		}
-		return runWithWorkspaceContext(ctx, () =>
+		return withRequestWorkspaceCtx(ctx, () =>
 			handleSyncRequest(routePath.slice('sync/'.length), event, ctx, responseHeaders())
 		);
 	}
@@ -332,16 +333,11 @@ export async function handleNorbitalRuntimeRequest(event: PodRequestEvent): Prom
 	}
 
 	if (routePath === 'files/upload') {
-		const result = await runWithWorkspaceContext(ctx, () => uploadWorkspaceFile(event, body));
+		const result = await withRequestWorkspaceCtx(ctx, () => uploadWorkspaceFile(event, body));
 		return json(result, { headers: responseHeaders() });
 	}
 	if (routePath === 'files/delete') {
-		const result = await runWithWorkspaceContext(ctx, () => deleteWorkspaceFile(event, body));
-		return json(result, { headers: responseHeaders() });
-	}
-	if (routePath === 'agent/start') {
-		const input = parseWireBody(agentStartSchema, body);
-		const result = await runWithWorkspaceContext(ctx, () => startInteractiveAgent(input));
+		const result = await withRequestWorkspaceCtx(ctx, () => deleteWorkspaceFile(event, body));
 		return json(result, { headers: responseHeaders() });
 	}
 
@@ -351,7 +347,7 @@ export async function handleNorbitalRuntimeRequest(event: PodRequestEvent): Prom
 	}
 
 	try {
-		const result = await runWithWorkspaceContext(ctx, () => handler(body));
+		const result = await withRequestWorkspaceCtx(ctx, () => handler(body));
 		return json(result ?? null, { headers: responseHeaders() });
 	} catch (err) {
 		rethrowKitError(err);

@@ -4,14 +4,10 @@ import { createRecord } from '$lib/server/collection/collection_ops.server.js';
 import { currentOutboxWatermark } from '$lib/server/collection/sync/outbox-tailer.server.js';
 import {
 	parseCompactDirective,
-	prepareInteractiveAgentTurn,
-	runAgent
+	prepareInteractiveAgentTurn
 } from '$lib/server/agent/agent-loop.server.js';
-import {
-	interactiveAgentSpec,
-	interactiveAgentStartSpec
-} from '$lib/server/agent/agent-spec.server.js';
-import { requireRuntimeFacility } from '$lib/server/facilities.js';
+import { interactiveAgentStartSpec } from '$lib/server/agent/agent-spec.server.js';
+import { getRuntimeFacilities } from '$lib/server/facilities.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
@@ -29,6 +25,7 @@ import { resolveAgentIntent } from '$lib/shared/agent/intent.js';
 import { rethrowConstraintViolation } from '$lib/server/collection/constraint-errors.server.js';
 import { z } from 'zod';
 
+/** Resolve composer intent fields onto the snapshot the durable turn will replay. */
 function chatIntentFields(input: {
 	readonly message?: string;
 	readonly planMode?: boolean;
@@ -86,8 +83,8 @@ export const AgentChatInputSchema = z.object({
 	 * Continue an existing conversation. Omitted starts a new one.
 	 *
 	 * The run id rather than the chat id, because that is what the loop resumes from — and because
-	 * `runAgent` already refuses a run belonging to another requestor, so continuation inherits that
-	 * check instead of repeating it here.
+	 * `prepareConversation` already refuses a run belonging to another requestor, so continuation
+	 * inherits that check instead of repeating it here.
 	 */
 	runId: z.uuid().optional(),
 	/** Run this turn on a specific model. Omitted leaves the choice to the host. */
@@ -122,12 +119,6 @@ export const AgentChatUpdateVerifierInputSchema = z.object({
 	prompt: z.string().min(1).max(4000)
 });
 
-export type AgentChatResult = {
-	readonly runId: string;
-	readonly chatId: string | null;
-	readonly text: string;
-};
-
 export type AgentChatStartResult = {
 	readonly runId: string;
 	readonly chatId: string;
@@ -143,8 +134,8 @@ export type AgentChatStartResult = {
  * choice at all, and returning an empty catalog would misreport that as "no models".
  */
 async function hostModelCatalog(): Promise<AiModelCatalog | null> {
-	const ai = requireRuntimeFacility('ai');
-	return ai.models ? await ai.models() : null;
+	const ai = getRuntimeFacilities().ai;
+	return ai?.models ? await ai.models() : null;
 }
 
 /**
@@ -170,6 +161,7 @@ type PreparedConversation = {
 	readonly session: Record<string, unknown>;
 };
 
+/** True when the session already has a root turn the host has not finished. */
 function sessionHasOpenRootTurn(session: Record<string, unknown>): boolean {
 	const turns = session.turns;
 	if (!Array.isArray(turns)) return false;
@@ -180,12 +172,7 @@ function sessionHasOpenRootTurn(session: Record<string, unknown>): boolean {
 	});
 }
 
-function admitDriverCode(caught: unknown): string | null {
-	if (!caught || typeof caught !== 'object') return null;
-	const code = Reflect.get(caught, 'code');
-	return typeof code === 'string' ? code : null;
-}
-
+/** Admit the opened turn as a guest receipt the host will drive. */
 async function admitInteractiveTurn(
 	conversation: PreparedConversation,
 	snapshot: Record<string, unknown>
@@ -199,7 +186,8 @@ async function admitInteractiveTurn(
 		});
 	} catch (cause) {
 		rethrowConstraintViolation(cause, '_norbital_automation_job');
-		const code = admitDriverCode(cause);
+		const code =
+			cause && typeof cause === 'object' ? Reflect.get(cause, 'code') : undefined;
 		if (code === '42P01' || code === '42501') {
 			throw error(500, requestI18n().t('pod.server.agentStartFailed'));
 		}
@@ -207,6 +195,7 @@ async function admitInteractiveTurn(
 	}
 }
 
+/** Create or resume the requestor's interactive run and chat session. */
 async function prepareConversation(runId?: string): Promise<PreparedConversation> {
 	const ctx = getWorkspace({ provision: true });
 	const ownerUserId = ctx.baseScope.requestor.norbital_id;
@@ -282,53 +271,12 @@ async function prepareConversation(runId?: string): Promise<PreparedConversation
 const authenticated = Guard.init().use(requireAuthMiddleware());
 
 /**
- * Talk to the workspace agent.
- *
- * The interactive counterpart to an agent automation, and the same machinery: an interactive
- * conversation is a run with no automation name. It writes the tenant-owned `chat_session`
- * aggregate, so title, message parts, tool state, and turn completion replicate through one ordinary
- * sync subscription rather than a streaming channel or sibling collections.
- *
- * What the conversation may reach when the workspace authored no profile is decided by
- * `interactiveAgentSpec`, including the part that is not conservative — read its doc comment before
- * changing anything here.
- *
- * `src/+agent.ts` narrows that. It is also the answer for the case policy cannot cover: a channel
- * with no authenticated requestor to scope against, such as a public WhatsApp or Telegram surface,
- * where the profile has to supply the boundary by hand.
- */
-export const agentChat = authenticated.command(
-	AgentChatInputSchema,
-	async (input): Promise<AgentChatResult> => {
-		const spec = await interactiveAgentSpec('Assist with questions about this workspace.');
-		const result = await runAgent({
-			automationName: null,
-			spec,
-			input: input.message,
-			...(input.runId ? { runId: input.runId } : {}),
-			...chatIntentFields(input),
-			...(input.mentions?.length ? { mentions: input.mentions } : {})
-		});
-
-		const ctx = getWorkspace({ provision: true });
-		const session = await ctx.tenantDb.query<{ norbital_id: string }>({
-			text: `SELECT norbital_id FROM chat_session WHERE automation_run_id = $1::uuid LIMIT 1`,
-			values: [result.runId]
-		});
-		return {
-			runId: result.runId,
-			chatId: session.rows[0]?.norbital_id ?? null,
-			text: result.text
-		};
-	}
-);
-
-/**
  * Start a live interactive turn and return its transcript identity before provider inference begins.
  *
- * The billed invoke persists the run, session, user message and turn, then admits an
- * `_norbital_automation_job` receipt. Core's existing DBOS workflow picks that receipt up and
- * drives one provider transition per guest `automation-events` run.
+ * An interactive conversation is a run with no automation name. The billed invoke persists the run,
+ * session, user message and turn, then admits an `_norbital_automation_job` receipt. The host
+ * drives one provider transition per guest `automation-events` run. Title, message parts, tool
+ * state, and turn completion replicate through the tenant-owned `chat_session` aggregate.
  */
 export const agentChatStart = authenticated.command(
 	AgentChatInputSchema,
@@ -392,6 +340,9 @@ export const agentModels = authenticated.query(
 	async (): Promise<AiModelCatalog | null> => hostModelCatalog()
 );
 
+/**
+ * Replace the scheduled verifier prompt on an open conversation the requestor owns.
+ */
 export const agentChatUpdateVerifier = authenticated.command(
 	AgentChatUpdateVerifierInputSchema,
 	async (input): Promise<{ readonly accepted: true }> => {

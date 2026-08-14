@@ -98,16 +98,16 @@ visible to the caller and selected by the requested record IDs/filter. Its retur
 JSON-serializable. An ordinary import pipeline MUST validate its input before ordinary collection
 operations commit the returned records; partial imported writes MUST roll back.
 
-An inbound integration delivery MUST stage one durable receipt keyed by the provider event id, then
-synchronously validate its declared input before acknowledging success. A worker invocation MUST claim at
-most one receipt and commit at most one bounded `createMany` chunk with that receipt's offset. Pipeline
-output MUST be materialized once before the first chunk; retries MUST use that materialization rather
-than rerunning author code. The row writes and offset advance MUST share one transaction, and an expired
-lease MUST resume from that offset. Retryable faults MUST use bounded backoff; schema refusal is terminal
-with zero rows. Each runtime read/write step is budgeted to complete within two seconds; longer waits and
-provider latency belong to the host orchestrator between durable steps. The same 2,000 ms cap
-applies to every admitted guest invocation — remotes, hooks, collection operations, automation
-reducer steps, and agent-turn steps — not only integration chunks.
+An inbound integration delivery MUST stage one durable event keyed by the provider event id, then
+synchronously validate its declared input before acknowledging success. Each admitted function MUST
+claim at most one staged event and commit at most one bounded `createMany` chunk with that event's
+cursor. Pipeline output MUST be materialized once before the first chunk; later calls MUST use that
+materialization rather than rerunning author code. The row writes and cursor advance MUST share one
+transaction. If more rows remain, the host MUST call the same function again. Retryable faults MUST
+use bounded backoff; schema refusal is terminal with zero rows. Timeout is host policy on admit —
+not a Pod constant. Waits and provider latency belong to the host between function calls. The same
+admit applies to remotes, hooks, collection operations, automation handlers, and agent-loop
+iterations — not only integration chunks.
 
 Automations MUST be declared in the compiled registry, run with the restricted before API, and
 record a success or failure in `automation_run`. Integration transforms MUST use their declared

@@ -41,7 +41,6 @@ async function openSelector(sessions: ConversationSession[]): Promise<{
 	const mounted = render(ConversationSelector as never, {
 		model,
 		value: sessions[0]?.id,
-		displayLabel: sessions[0]?.title ?? null,
 		placeholder: 'No conversations yet',
 		searchPlaceholder: 'Search conversations…',
 		ariaLabel: 'Conversation thread',
@@ -54,16 +53,15 @@ async function openSelector(sessions: ConversationSession[]): Promise<{
 }
 
 describe('conversation selector', () => {
-	it('hides channel tabs when only the web inbox exists', async () => {
+	it('lists conversations without channel tabs', async () => {
 		const { destroy } = await openSelector([session({ id: 'c1', title: 'Workspace agent' })]);
 		expect(document.body.querySelector('[role="tablist"]')).toBeNull();
 		expect(document.body.textContent).toContain('Workspace agent');
 		destroy();
 	});
 
-	it('shows channel tabs when a messaging channel exists beside web', async () => {
+	it('lists a channel thread without embedding channel tabs', async () => {
 		const { destroy } = await openSelector([
-			session({ id: 'web-1', title: 'Workspace agent' }),
 			session({
 				id: 'tg-1',
 				title: 'Invoice question',
@@ -72,10 +70,8 @@ describe('conversation selector', () => {
 				channelKey: 'sales_desk'
 			})
 		]);
-		const tabs = [...document.body.querySelectorAll('[role="tab"]')].map((tab) =>
-			tab.textContent?.replace(/\s+/g, ' ').trim()
-		);
-		expect(tabs).toEqual(['Web', 'sales_desk']);
+		expect(document.body.querySelector('[role="tablist"]')).toBeNull();
+		expect(document.body.textContent).toContain('Invoice question');
 		destroy();
 	});
 

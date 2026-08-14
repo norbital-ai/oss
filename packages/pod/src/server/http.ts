@@ -18,6 +18,9 @@ export class PodHttpError extends Error {
 	}
 }
 
+/** Collection failures share the runtime HTTP base so expected 4xx responses are not logged as 500s. */
+export class HttpError extends PodHttpError {}
+
 /**
  * Runtime bundles can contain an authoring copy and a server copy of Pod. `instanceof` compares
  * constructor identity and therefore misclassifies an intentional refusal thrown by the authoring
@@ -35,7 +38,7 @@ export function isPodHttpError(value: unknown): value is PodHttpError {
 }
 
 export function error(status: number, body: string | Readonly<Record<string, unknown>>): never {
-	throw new PodHttpError(status, body);
+	throw new HttpError(status, body);
 }
 
 export function json(data: unknown, init?: ResponseInit): Response {

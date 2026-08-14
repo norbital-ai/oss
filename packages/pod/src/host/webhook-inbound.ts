@@ -176,6 +176,20 @@ export function webhookInboundDeliverer(
 				...(outcome.reason ? { reason: outcome.reason } : {})
 			};
 		}
+		if (outcome?.status === 'queued') {
+			return {
+				status: 'rejected',
+				imported: 0,
+				reason: 'import could not finish in one shot'
+			};
+		}
+		if (outcome?.status !== 'imported') {
+			return {
+				status: 'rejected',
+				imported: 0,
+				...(outcome?.reason ? { reason: outcome.reason } : {})
+			};
+		}
 		return { status: 'imported', imported: outcome?.imported ?? 0 };
 	};
 }

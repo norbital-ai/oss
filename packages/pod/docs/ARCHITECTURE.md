@@ -1,15 +1,47 @@
 # Pod architecture
 
-Pod is a complete, self-contained tenant workspace runtime. A host supplies facilities; it does not
-own tenant behavior.
+One architecture. Core and self-host are two hosts. Pod is never the server.
+
+A workspace is **functions**. The compute unit is one durable **step** = one 2s admit. Yield ends
+the isolate. The host does not compose leftover rows.
+
+```text
+                         BROWSER / CHANNEL
+                                 │
+         ┌───────────────────────┼───────────────────────┐
+         │                       │                       │
+         ▼                       ▼                       ▼
+   HOST SERVICE             HOST HTTP                HOST SERVICE
+   sync SSE                 pages, static,           channel WS
+   (LISTEN/NOTIFY)          function POST            (Baileys / Telegram)
+         │                       │                       │
+         │                  HOST ADMIT                   │
+         │                  timeout = host policy        │
+         │                  1 in-flight step / tenant    │
+         │                       │                       │
+         │                       ▼                       │
+         │         ONE FUNCTION = ONE DURABLE STEP       │
+         │         isolate-vm (Core) / in-process (self) │
+         │                       │                       │
+         │              ┌────────┴────────┐              │
+         │              ▼                 ▼              │
+         │           return            yield effect      │
+         │           (done)         (this step finished) │
+         │                              │                │
+         │                     DBOS next step            │
+         │                                               │
+         └───────────────────────┬───────────────────────┘
+                                 │
+                       TENANT ISOLATE = 0
+                       when no step is running
+```
 
 The boundary is strict:
 
 > Anything that reads or writes tenant records runs in Pod. Anything that touches the outside
 > world runs in the host.
 
-Core is one possible host. A self-hosted process is another. The same compiled workspace runs in
-both, with no source changes and no host-specific tenant APIs.
+Core is one host. A self-hosted process is another. The same compiled workspace runs in both.
 
 ## Runtime boundary
 
@@ -18,18 +50,21 @@ both, with no source changes and no host-specific tenant APIs.
 │ authoring   collections · hooks · apps · remotes · automations │
 │ data        collection operations · policy · approval · audit  │
 │ sync        local replica · change feed · live queries         │
-│ agents      loop · tools · transcript · resume                 │
+│ agents      loop · tools · transcript                          │
 │ notify      transactional system notifications and outbox      │
 │                                                               │
+│ one step, then 0 · no listen · no SSE · no WS                 │
 │ no credentials · no outbound network · no host knowledge      │
 └──────────────────────────┬─────────────────────────────────────┘
-                           │ facility bindings
+                           │ facility refs (during an admitted step)
 ┌──────────────────────────┴─────────────────────────────────────┐
 │ HOST                                                          │
 │ db · fileStorage · maps · messaging · ai                     │
 │ queue · integrationDelivery                                   │
 │                                                               │
-│ owns credentials, outbound sockets, timers, and process I/O   │
+│ owns HTTP, static, SSE, channel sockets, LISTEN/NOTIFY        │
+│ owns credentials, OpenRouter, admit/kill, the cap             │
+│ DBOS owns which durable step runs next                        │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -37,12 +72,136 @@ Pod owns the tenant-record half because it has the workspace registry, requestor
 hooks, operation guard, approval gates, temporal versioning, and audit trail. A host writing tenant
 rows directly would bypass those invariants.
 
-The host owns the outside-world half because a hosted tenant runtime can execute without network
-access or credentials. Hosted bindings cross the runtime wire; standalone bindings run in process.
+The host owns the outside-world half because a hosted tenant step can execute without network
+access or credentials. Core injects facility refs into isolate-vm. Self-host calls the same
+bindings in process.
 
 Pod deliberately targets PostgreSQL. The sync ordering contract depends on transaction IDs and
 snapshot horizons, and workspace constraints depend on PostgreSQL extensions. `HostDbBinding`
 chooses where PostgreSQL lives, not which database engine Pod uses.
+
+Timeout is host policy on admit. The guest reads `remainingMs()` from the admit the host attached;
+it never invents a budget. Core’s host policy is 2_000 ms. The reference host (`pod start`) reads
+`timeoutMs` from `pod.host.ts` and defaults to the same number as its own policy.
+
+## How yielding works
+
+Authoring looks like a normal `await`. Compute is a finished step plus a later step. The isolate
+never waits on a model.
+
+`api.infer` is on `BeforeApi`. There is no second authoring API for “yield.”
+
+```text
+  STEP N (tenant, 2s)
+       handler runs from the top
+       completed effects return from the log
+       api.infer has no result
+       throw AutomationEffectYield
+       │
+       ▼
+  isolate disposed          ← this step is OVER
+       │
+       ▼
+  STEP N+1 (host facility, not tenant isolate)
+       OpenRouter / settle receipt effect
+       │
+       ▼
+  STEP N+2 (tenant, 2s)
+       NEW isolate, same handler from the top
+       stored result returns
+       handler continues until the next infer or return
+```
+
+Rules:
+
+- Yield **ends** the tenant step. It is not a pause inside the isolate.
+- The next tenant step is a **new** admit, scheduled by DBOS.
+- Replay is how `await api.infer()` stays a single authoring line. The prefix before that infer
+  runs again; it must still fit in 2s or the step fails.
+- Writes in the current transaction **roll back on yield**. Terminal writes happen on the step
+  that returns.
+- `ai.prompt` (authored `api.infer`) and `ai.turn` (agent loop) are the same yield kind.
+- If the step never yields and does not return in 2s, kill and fail. No leftover cursor.
+
+## Authoring
+
+File: `src/automation/+<name>.ts`. Compiler registers `export default`.
+
+```ts
+import { defineAutomation } from '@norbital-ai/pod/authoring';
+
+export default defineAutomation(
+	{ schedule: '0 6 * * *' },
+	{
+		description: '…',
+		handler: async (api, context) => {
+			const rows = await api.db.query.quotes.findMany({ … });
+			const note = await api.infer({ prompt: '…' }); // yield = this step ends
+			await api.db.update({ collection: 'quotes', id, data: { … } });
+			return { summary: { … } };
+		}
+	}
+);
+```
+
+What an author does **not** write: `runStep` names, resume tokens, `nextOffset`, sockets, SSE, or
+credentials. `DBOS.runStep` is host-only. There is no automation-to-automation invoke; authors
+compose via shared `src/lib` and by writing rows that fire other event triggers.
+
+| File | API | Role |
+| ---- | --- | ---- |
+| `src/automation/+<name>.ts` | `defineAutomation` | scheduled / change-triggered handler |
+| `src/channels/+<name>.channel.ts` | `defineChannel` | inbound agent over host transport |
+| `src/remotes/+<name>.ts` | `defineQueryHandler` / `defineCommandHandler` | one-shot invoke |
+| `src/collections/<c>/+hooks.ts` | `before` / `after` | inside the collection function’s 2s |
+| `src/collections/<c>/+pipelines.ts` | import / export transforms | inside import/export’s 2s |
+| `+<name>.tool.ts` | `defineAgentTool` | agent/infer tool; inside that step |
+| `src/mcp/+<name>.mcp.ts` | MCP server allowlist | host facility, not a guest listen |
+
+Agent authoring is `src/+agent.ts` plus `src/channels/+<name>.channel.ts`, not a public remote.
+`defineAutomation` does not take `kind: 'agent'`. Interactive start is the workspace shell
+(`agent/start`); channel start is host delivery after inbound persist.
+
+One-shot work **fails** if it cannot finish in 2s. No `nextOffset`. Hooks and pipelines are not
+their own admits.
+
+## Same Pod everywhere
+
+The compiled bundle is the same functions. Core loads them in **isolate-vm** and calls a function
+export. Self-host is a machine the user provides; a host process (`pod start` or their own) loads
+the same bundle **in-process** and admits the same functions. Authors write one workspace. There
+is no self-host runtime fork.
+
+MicroSandbox is not the function guest. It stays for untrusted shell and build (`pod check`,
+host-tool `sandbox_*`).
+
+## Bundle
+
+The built guest is lightweight invokable functions (`handlePodRequest`, `handlePodHostCommand`,
+`register*`). It must not be “a server.” HTTP, listen, static assets, SSE, and timeout belong to
+the host. `pod start` is the reference host.
+
+## What happens if you write a tight loop
+
+A `while (true) hash()` or a hook that chews 700 rows in one `batchHandler` never yields. The host
+**kills** the isolate when the timeout fires. An uncommitted transaction rolls back. The function
+fails. Do not raise the timeout. An unbounded loop *inside one record’s hook* still fails.
+
+`createMany` / `updateMany` / import / export / inbound fail if they cannot finish in one admit.
+A smaller payload is a **new** call, not an offset into the original array.
+
+## Queueing physically prevents a 2s lock
+
+- One in-flight **step** per tenant.
+- Fast path: slot free → run now (page load, single create).
+- If the slot is taken, the next admit **waits**, then runs. There is no second product.
+- Timeout **disposes** the isolate. The slot frees. The next step runs.
+- Infer, search, and email are **not** tenant steps — the host does them between admits, so a
+  model wait cannot hold the slot.
+- No continuous poll jobs. A wake fires because DBOS scheduled the next step or a cron fired.
+
+The isolate fleet equals in-flight steps, not open tabs. Host SSE and channel sockets are host
+services; they do not pin a guest.
 
 ## Deployment targets
 
@@ -52,8 +211,9 @@ not bundle it.
 |                         | Core                                                                       | Self-hosted                                      |
 | ----------------------- | -------------------------------------------------------------------------- | ------------------------------------------------ |
 | `pod.host.ts` mode      | `core`                                                                     | `self-hosted`                                    |
-| Runtime transport       | Host proxies browser HTTP into the guest; facilities over host-owned stdio | HTTP on a loopback socket; facilities in process |
+| Runtime transport       | Host calls a function export in isolate-vm; facilities are injected refs   | Direct in-process call; facilities in process    |
 | HTTP and static assets  | Core                                                                       | `pod start`                                      |
+| Sync SSE / channel WS   | Host services, tenant-bound                                                | Host services on `pod start`                     |
 | Facilities and identity | Core runtime bindings                                                      | `pod.host.ts` providers                          |
 | Local development       | `pod dev` emulates Core                                                    | uses the declared providers                      |
 | Production `pod start`  | refused                                                                    | allowed after the facility gate                  |
@@ -113,6 +273,9 @@ startup compares them with `pod.host.ts` and refuses to listen if anything is mi
 | `integrationDelivery` | an integration is compiled                |
 | `messaging` transport | a channel declares it in `src/channels`   |
 
+`queue` is infrastructure crons only — integration outbox, pulls, notification drain. It is not
+how functions run. Automations, agents, pages, and collection operations are admitted functions.
+
 Direct calls that cannot be inferred without executing tenant code are checked at the call site.
 `api.infer(...)` requires an AI binding. An external `api.sendNotification(...)` requires a
 `messaging` binding that advertises that channel. Failure occurs before Pod writes an outbox row.
@@ -134,6 +297,7 @@ or derived writes into the host; a cache miss still falls back to authoritative 
 
 ```text
 browser request
+  → host admit (timeout = host policy)
   → identity provider
   → buildCtx() resolves requestor and organization scope
   → runWithWorkspaceContext()
@@ -193,13 +357,13 @@ the same complete audit snapshots there. This projection is limited to driver-eq
 JSON, enum, date, timestamp, and system-range columns; numeric, binary, vector, array, or
 workspace-defined custom driver types retain the ordinary full-row return-and-audit path.
 
-Inbound integration imports intentionally use a different boundary from an ordinary caller bulk. The
-host first stages a validated provider delivery in `integration_inbound_event`; the continuous worker
-then claims one receipt and writes one at-most-100-row `createMany` chunk. Pipeline output is persisted
-before writing, and the receipt offset advances in the same transaction as its chunk. Lease recovery
-therefore cannot repeat author code or commit a prefix twice. The provider page progresses without
-weakening ordinary `createMany` atomicity. Each tenant runtime invocation performs one durable step
-designed to finish below the two-second cap; scheduling and waiting happen outside it.
+The payload must finish in one 2s admit. There is no leftover composer and no `nextOffset`. A
+smaller payload is a new call.
+
+Inbound integration imports use the same one-shot rule. The host stages a validated provider
+delivery in `integration_inbound_event`. The admitted function runs the pipeline and persists in
+2s, or it fails. Pipeline output is persisted before the first write so a retry cannot rerun
+author code or commit a prefix twice.
 
 ## Filesystem compiler
 
@@ -270,9 +434,15 @@ The authoritative transaction writes `sync_outbox` beside the record and audit e
 - `xid` prevents a later-committing transaction from being skipped;
 - rows emit only below `pg_snapshot_xmin(pg_current_snapshot())`.
 
-The browser keeps a PGlite replica. Shape requests fetch policy-visible collection pages; the SSE
-stream carries committed diffs. A physical database epoch invalidates replicas after restore or
+The browser keeps a PGlite replica. Shape requests fetch policy-visible collection pages; the host
+SSE stream carries committed diffs. A physical database epoch invalidates replicas after restore or
 re-provision.
+
+`sync/shape`, `sync/head`, `sync/schema`, `sync/mutate`, and `sync/diff` are one-shot functions.
+`shape` paging stays as **separate** one-shot calls (`nextCursor` is a new function, not a resume).
+`sync/stream` is a **host service**, not a guest function. The host listens on Neon and writes SSE
+events. When a frame needs a policy-scoped read, the host admits `sync/diff` (2s, isolate → 0)
+and then writes the event. The guest never holds the socket.
 
 Each stream sends its materialized collection set. The server advances across the whole outbox but
 performs policy-scoped diff reads only for subscribed collections. This keeps cursor continuity
@@ -282,8 +452,9 @@ When a client materializes a new collection, it freezes its global cursor until 
 then adds the collection and replays from that cursor. This closes both the subscription race and
 the stale-page-after-delete race without a second cursor system or client tombstones.
 
-Standalone installs a dedicated PostgreSQL `LISTEN norbital_sync` connection into the same runtime
-notification seam used in hosted mode. Idle streams issue no polling queries.
+The host installs a dedicated PostgreSQL `LISTEN norbital_sync` connection. Isolation is binding,
+not a VM per tab: authenticate the session first, bind the stream to `claims.organizationId`, and
+subscribe that connection to that org’s LISTEN only.
 
 ## Notifications
 
@@ -344,20 +515,20 @@ a reduced condition, because the mutation path applies those to nothing.
 
 ## Agents
 
-Pod owns the loop, tool dispatch, runs, conversations, messages, channel bindings, authorization,
-replication and UI. The host AI facility performs one model-inference turn at a time and may provide
-trusted tools through a default-deny binding. The host does not own or persist a transcript. On
-Core, the host orchestrates the durable workflow and executes fenced AI effects (`ai.turn` /
-`ai.prompt`) outside the guest.
+The agent **loop lives in Pod** (`agent-loop.server.ts`). Each iteration is one admitted step.
+`await infer` yields; the isolate is disposed; the host runs the model; DBOS admits a new isolate
+for the next turn. Interactive start is the workspace shell (`agent/start`). Channel start is host
+delivery after inbound persist. Agent is not an API-client remote. There is no in-guest loop that
+holds one HTTP request for the whole conversation — that is the 2s lock. The loop is still Pod’s.
+
+The host AI facility performs one model-inference turn at a time and may provide trusted tools
+through a default-deny binding. The host does not own or persist a transcript.
 
 Interactive chat and declared channels use the same loop implementation and `chat_session`
-transcript. Hosted interactive (`agentChatStart`) and channel inbound persist the user turn then
-admit a durable `_norbital_automation_job` receipt; Core DBOS drives one provider or tool
-transition per guest step. They do not `void runAgent` or retain a background lease. The synchronous
-`agentChat` remote and HTTP `agent/start` may still call `runAgent` in-guest — leftover
-programmatic paths, not the hosted UI path. Messages and nested turns are stored directly in one
-`chat_session` aggregate, then reach the browser through one ordinary policy-scoped sync
-subscription rather than an agent-specific stream.
+transcript. Messages and nested turns are stored directly in one `chat_session` aggregate, then
+reach the browser through one ordinary policy-scoped sync subscription rather than an
+agent-specific stream. There is no agent-chat SSE. Token streaming, if added, is host ↔ browser
+while the isolate is 0.
 
 Automations are not agent sessions. They are deterministic handlers; when one needs model
 judgement it calls `api.infer({ prompt, schema?, tools?, collections?, images? })` inside the handler.
@@ -369,7 +540,7 @@ MCP; it does not own a `chat_session` transcript. The handler is bounded to 64 `
 See [Agent architecture](./AGENT_ARCHITECTURE.md) for execution entry points, transcript ownership,
 host-tool authorization, channel continuation, UI behavior and conformance coverage.
 
-## Durable automations
+## Automations
 
 An automation has one trigger:
 
@@ -378,27 +549,19 @@ An automation has one trigger:
 { trigger: { collection: 'permits', event: 'updated' } }
 ```
 
-Automations are deterministic handlers admitted as immutable tenant receipts and driven by the
-host's durable automation orchestrator. Each handler invocation is billable and capped at two
-seconds; a longer automation proceeds as replayable DBOS steps. `api.infer` is an effect boundary:
-pre-effect writes roll back, Core performs the spend-gated provider call under a stable effect ID,
-then the handler replays with the durable result and commits its terminal writes atomically.
+The handler is a function. The host admits it with a timeout. If the handler awaits `api.infer`,
+the step yields, the isolate is disposed, the host runs the model, and DBOS admits a new isolate
+for the next tenant step. Writes before a yield roll back; the terminal writes commit when the
+function returns.
 
-Schedule expressions are validated at build/startup. Core registers authored occurrences with DBOS;
-pg-boss owns none of their schedules or workers. Each occurrence or matching collection event first
-becomes an immutable tenant receipt bound to its trigger snapshot and exact runtime artifact.
+Schedule expressions are validated at build/startup. Collection-event admission is tenant-wide, not
+client-driven: one bounded function tails the authoritative outbox and advances
+`_norbital_automation_cursor`. Opening another browser cannot duplicate a run. Interactive chat and
+channel inbound start the same way: persist the user turn, then admit the step.
 
-Collection-event admission is tenant-wide, not client-driven. DBOS reconciliation asks one bounded
-guest step to tail the authoritative outbox and atomically advance `_norbital_automation_cursor`;
-opening another browser cannot duplicate a run. Interactive chat and channel inbound admit the same
-way: persist the user turn, then write `_norbital_automation_job`. Every guest step is billable and
-capped at two seconds. DBOS covers agent-turn workflows as well as cron and collection-event
-automations; it resumes longer work and durably yields/replays `api.infer` / `ai.turn` / `ai.prompt`
-effects outside the guest. Integration and notification outboxes drain independently with claim
-leases and bounded retry. Inbound integration receipts drain independently too: each tick performs
-one durable bounded chunk rather than holding a tenant runtime invocation open for the full provider
-page. Standalone `pod start` has no DBOS, so admitted receipts are not driven unless a host supplies
-the protocol. `intervalQueue` is not that orchestrator.
+Integration and notification outboxes drain as infrastructure crons on the `queue` facility, with
+claim leases and bounded retry. Inbound integration is one 2s function or fail. `intervalQueue` is
+a development timer for those crons. It loses work on process death. It is not how functions run.
 
 ## File storage
 

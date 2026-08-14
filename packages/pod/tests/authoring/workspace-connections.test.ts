@@ -40,7 +40,7 @@ const PIPELINES = {
 function workspace(options: {
 	readonly quotes?: Record<string, unknown>;
 	readonly invoices?: Record<string, unknown>;
-	readonly env?: { readonly private?: Record<string, { readonly description: string }> };
+	readonly env?: Record<string, { readonly description: string }>;
 }) {
 	const models = defineModels({
 		quotes: defineModel({ title: text() }, { recordLabel: 'title' }),
@@ -79,7 +79,7 @@ describe('a connection declared in +integrations.ts', () => {
 	it('builds an HTTP destination with the credential as a reference', () => {
 		const ws = workspace({
 			quotes: sendBinding(connection(), '/quotes'),
-			env: { private: PRIVATE_ENV }
+			env: PRIVATE_ENV
 		});
 		const definition = ws.integrations[0]?.definition as {
 			connection: { authentication: { token: unknown } };
@@ -107,7 +107,7 @@ describe('a connection declared in +integrations.ts', () => {
 	it('produces a manifest the strict schema accepts', () => {
 		const ws = workspace({
 			quotes: sendBinding(connection(), '/quotes'),
-			env: { private: PRIVATE_ENV }
+			env: PRIVATE_ENV
 		});
 		const built = buildNorbitalManifest({
 			collections: {},
@@ -123,7 +123,7 @@ describe('a connection declared in +integrations.ts', () => {
 			workspace({
 				quotes: sendBinding(connection(), '/quotes'),
 				invoices: sendBinding(connection(), '/invoices'),
-				env: { private: PRIVATE_ENV }
+				env: PRIVATE_ENV
 			})
 		).not.toThrow();
 	});
@@ -133,7 +133,7 @@ describe('a connection declared in +integrations.ts', () => {
 			workspace({
 				quotes: sendBinding(connection(), '/quotes'),
 				invoices: sendBinding(defineConnection({ baseUrl: 'https://elsewhere.test' }), '/invoices'),
-				env: { private: PRIVATE_ENV }
+				env: PRIVATE_ENV
 			})
 		).toThrow(/same connection across collections/);
 	});
@@ -164,7 +164,7 @@ describe('a webhook receive binding', () => {
 						signatureHeader: 'x-signature'
 					}
 				}),
-				env: { private: WEBHOOK_ENV }
+				env: WEBHOOK_ENV
 			})
 		).toThrow(/narrows `events` but declares no `eventType`/);
 	});
@@ -181,7 +181,7 @@ describe('a webhook receive binding', () => {
 					timestamp: { toleranceSeconds: 120 }
 				}
 			}),
-			env: { private: WEBHOOK_ENV }
+			env: WEBHOOK_ENV
 		});
 		const definition = ws.integrations[0]?.definition as {
 			inbound: Record<string, { origin: Record<string, unknown> }>;
@@ -212,14 +212,14 @@ describe('a webhook receive binding', () => {
 describe('private environment declarations', () => {
 	it('keeps private declarations in manifest.secrets across the runtime projection', () => {
 		const runtime = toRuntimeWorkspace(
-			workspace({ quotes: sendBinding(connection(), '/quotes'), env: { private: PRIVATE_ENV } })
+			workspace({ quotes: sendBinding(connection(), '/quotes'), env: PRIVATE_ENV })
 		);
 		const built = buildNorbitalManifest(runtime);
 
 		expect(built.env).toEqual({ public: {} });
 		expect(built.env).not.toHaveProperty('secret');
 		expect(built.secrets).toEqual({
-			REGISTRY_KEY: { description: 'Registry API key', required: true }
+			REGISTRY_KEY: { description: 'Registry API key', required: false }
 		});
 	});
 
@@ -229,12 +229,12 @@ describe('private environment declarations', () => {
 		);
 	});
 
-	it('refuses a declared name nothing references', () => {
+	it('allows a declared private key that is not referenced by an integration', () => {
 		expect(() =>
 			workspace({
 				quotes: sendBinding(connection(), '/quotes'),
-				env: { private: { ...PRIVATE_ENV, UNUSED_KEY: { description: 'nothing reads this' } } }
+				env: { ...PRIVATE_ENV, UNUSED_KEY: { description: 'read via $app/env/private' } }
 			})
-		).toThrow(/nothing references: UNUSED_KEY/);
+		).not.toThrow();
 	});
 });

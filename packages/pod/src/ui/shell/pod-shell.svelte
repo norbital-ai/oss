@@ -294,6 +294,9 @@
 	let shortcutModifier = $state(detectShortcutModifier());
 	onMount(() => {
 		shortcutModifier = detectShortcutModifier();
+		for (const plugin of data.hostPlugins ?? []) {
+			prefetchWorkspaceSurface(hostPluginSurfaceHref(plugin.key));
+		}
 	});
 	const agentShortcut = $derived(formatShortcut(shortcutModifier, 'K'));
 	const searchShortcut = $derived(formatShortcut(shortcutModifier, '/'));
@@ -383,7 +386,10 @@
 
 	/** Prefetch the destination, then client-navigate without a full reload. */
 	function navigate(href: string): void { // stupidity:allow Q4 -- template handler
-		prefetchWorkspaceSurface(href);
+		const path = href.split(/[?#]/, 1)[0] ?? href;
+		if (!resolveHostPluginSurface(path, data.hostPlugins ?? [])) {
+			prefetchWorkspaceSurface(href);
+		}
 		void goto(href);
 	}
 

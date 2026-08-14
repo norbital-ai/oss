@@ -8,7 +8,6 @@
  */
 import type { AiMessage } from '@norbital-ai/platform-utils/runtime/binding';
 import { pruneToolResultsInWindow } from '$lib/shared/agent/context-window.js';
-import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { replayAutomationAi } from '$lib/server/run/automation-replay.server.js';
 import { readChatSession, updateChatMessage } from '$lib/server/agent/chat-session.server.js';
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
@@ -50,6 +49,7 @@ Reply with JSON only, no markdown:
 - summary: one or two sentences a person can read.
 - gaps: what is still missing. Empty only when achieved is true.`;
 
+/** Prompt text that sends the main agent back to close verifier gaps. */
 export function renderGoalContinuation(verdict: GoalVerdict): string {
 	if (verdict.achieved) {
 		return `Goal verification passed. ${verdict.summary}`;
@@ -66,6 +66,7 @@ export function renderGoalContinuation(verdict: GoalVerdict): string {
 	);
 }
 
+/** Window message carrying a failed verifier verdict back to the main agent. */
 export function goalContinuationMessage(verdict: GoalVerdict): AiMessage {
 	return {
 		role: 'user',
@@ -73,11 +74,13 @@ export function goalContinuationMessage(verdict: GoalVerdict): AiMessage {
 	};
 }
 
+/** Rebuild a verifier verdict row as a user message for the next window. */
 export function windowMessageFromStoredGoal(content: string): AiMessage {
 	const verdict = parseStoredGoalVerdict(content);
 	return goalContinuationMessage(verdict ?? UNREADABLE_VERDICT);
 }
 
+/** Compose the independent verifier prompt from the turn's request and transcript. */
 export function buildGoalVerificationPrompt(input: {
 	readonly userRequest: string;
 	readonly messages: readonly AiMessage[];
@@ -135,6 +138,7 @@ export async function readScheduledVerifierPrompt(
 	return null;
 }
 
+/** Replace the scheduled verifier prompt on this conversation's open root turn. */
 export async function updateScheduledVerifierPrompt(
 	sessionId: string,
 	prompt: string
@@ -173,24 +177,6 @@ export function replayGoalVerification(input: {
 		}
 	});
 	return typeof text === 'string' ? parseGoalVerdict(text) : UNREADABLE_VERDICT;
-}
-
-export async function verifyGoalAchievement(input: {
-	readonly spec: AgentAutomationSpec;
-	readonly userRequest: string;
-	readonly messages: readonly AiMessage[];
-	readonly verifierPrompt: string;
-}): Promise<GoalVerdict> {
-	const ai = requireRuntimeFacility('ai');
-	const result = await ai.chat({
-		messages: [
-			{ role: 'system', content: GOAL_VERIFIER_SYSTEM_PROMPT },
-			{ role: 'user', content: buildGoalVerificationPrompt(input) }
-		],
-		...(input.spec.model ? { model: input.spec.model } : {}),
-		...(input.spec.profile ? { profile: input.spec.profile } : {})
-	});
-	return parseGoalVerdict(result.text);
 }
 
 /**

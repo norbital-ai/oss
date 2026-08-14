@@ -6,6 +6,7 @@ import { createClientDb } from '../support/pglite-node.js';
 import { testAiBinding } from '../support/ai-binding.js';
 import {
 	bootPodRuntime,
+	completeInteractiveAgentTurn,
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
@@ -79,20 +80,18 @@ async function shape(
 async function chat(
 	harness: PodRuntimeHarness,
 	identity: Identity,
+	ai: ReturnType<typeof testAiBinding>,
 	message: string,
 	runId?: string
 ) {
-	const response = await harness.request(
-		{
-			method: 'POST',
-			path: 'remotes/agentChat',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ message, ...(runId ? { runId } : {}) })
-		},
-		identity
+	const result = await completeInteractiveAgentTurn(
+		harness,
+		identity,
+		{ message, ...(runId ? { runId } : {}) },
+		ai
 	);
-	expect(response.status, await response.clone().text()).toBe(200);
-	return (await response.json()) as { runId: string; chatId: string | null; text: string };
+	expect(result.outcome).toBe('completed');
+	return result;
 }
 
 async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 15_000): Promise<boolean> {
@@ -105,11 +104,11 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 15_000): P
 	return false;
 }
 
-describe('Conversations and runs replicate to their owner — leftover in-guest runAgent path', () => {
+describe('Conversations and runs replicate to their owner — agentChatStart durable path', () => {
 	let harness: PodRuntimeHarness;
 	let clientSchemaSql: string;
-	let adaChat: { runId: string; chatId: string | null };
-	let graceChat: { runId: string; chatId: string | null };
+	let adaChat: { runId: string; chatId: string };
+	let graceChat: { runId: string; chatId: string };
 
 	const ai = testAiBinding(async () => {
 		return { text: 'Noted.', stopReason: 'end', usage: { totalTokens: 3 } };
@@ -128,8 +127,8 @@ describe('Conversations and runs replicate to their owner — leftover in-guest 
 		clientSchemaSql = await harness
 			.request({ method: 'GET', path: 'sync/schema' }, ada)
 			.then((response) => response.text());
-		adaChat = await chat(harness, ada, 'What is on site today?');
-		graceChat = await chat(harness, grace, 'And for me?');
+		adaChat = await chat(harness, ada, ai, 'What is on site today?');
+		graceChat = await chat(harness, grace, ai, 'And for me?');
 	}, 240_000);
 
 	afterAll(async () => {
@@ -202,7 +201,7 @@ describe('Conversations and runs replicate to their owner — leftover in-guest 
 			// A reply arriving from anywhere — another tab, a channel, this run continuing — is a row on
 			// the stream. The panel reads the replica, so it needs no notification of its own. Sent
 			// against the existing run, which is how the panel continues a conversation.
-			await chat(harness, ada, 'Anything else?', adaChat.runId);
+			await chat(harness, ada, ai, 'Anything else?', adaChat.runId);
 
 			const arrived = await waitFor(async () => {
 				const rows = await client.queryLocal<{ messages: unknown }>(

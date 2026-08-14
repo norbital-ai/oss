@@ -3,6 +3,7 @@ import { requireDocker } from '../support/pg-harness.js';
 import { testAiBinding } from '../support/ai-binding.js';
 import {
 	bootPodRuntime,
+	completeInteractiveAgentTurn,
 	type Identity,
 	type PodRuntimeHarness
 } from '../support/pod-runtime-harness.js';
@@ -22,7 +23,7 @@ const member: Identity = {
  * transcript, and replicates through ordinary sync — the point of the port is that there is not a
  * second agent implementation for the chat case.
  */
-describe('Pod agent chat — leftover in-guest runAgent path E2E', () => {
+describe('Pod agent chat — agent/start durable path E2E', () => {
 	let harness: PodRuntimeHarness;
 	const seen: string[][] = [];
 	const ai = testAiBinding(async (input) => {
@@ -48,30 +49,19 @@ describe('Pod agent chat — leftover in-guest runAgent path E2E', () => {
 		await harness?.stop();
 	});
 
-	async function chat(body: Record<string, unknown>): Promise<Response> {
-		return harness.request(
-			{
-				method: 'POST',
-				path: 'remotes/agentChat',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(body)
-			},
-			member
-		);
+	async function chat(body: { readonly message: string; readonly runId?: string }) {
+		const result = await completeInteractiveAgentTurn(harness, member, body, ai);
+		expect(result.outcome).toBe('completed');
+		return result;
 	}
 
 	it('answers, records the exchange, and carries it into the next turn', async () => {
-		const first = await chat({ message: 'Hello there.' });
-		expect(first.status).toBe(200);
-		const opened = (await first.json()) as { runId: string; chatId: string; text: string };
-		expect(opened.text).toBe('reply 1');
+		const opened = await chat({ message: 'Hello there.' });
 		expect(opened.chatId).toBeTruthy();
 
 		// Continuing by run id must replay the stored transcript rather than start over — that is the
 		// whole reason the loop persists AiMessages instead of a decomposition.
-		const second = await chat({ message: 'And again.', runId: opened.runId });
-		expect(second.status).toBe(200);
-		const continued = (await second.json()) as { runId: string; chatId: string; text: string };
+		const continued = await chat({ message: 'And again.', runId: opened.runId });
 		expect(continued.runId).toBe(opened.runId);
 		expect(continued.chatId).toBe(opened.chatId);
 
@@ -100,9 +90,7 @@ describe('Pod agent chat — leftover in-guest runAgent path E2E', () => {
 	});
 
 	it('keeps history beyond forty rows until model-aware compaction replaces it', async () => {
-		const first = await chat({ message: 'Sentinel from the beginning.' });
-		expect(first.status).toBe(200);
-		const opened = (await first.json()) as { runId: string; chatId: string };
+		const opened = await chat({ message: 'Sentinel from the beginning.' });
 
 		// Cross the former row-count replay boundary without approaching any model context limit.
 		await harness.pool.query(
@@ -125,14 +113,13 @@ describe('Pod agent chat — leftover in-guest runAgent path E2E', () => {
 			[opened.chatId]
 		);
 
-		const continued = await chat({ message: 'What was the sentinel?', runId: opened.runId });
-		expect(continued.status, await continued.clone().text()).toBe(200);
+		await chat({ message: 'What was the sentinel?', runId: opened.runId });
 		expect(seen.at(-1)).toContain('user:Sentinel from the beginning.');
 	});
 
 	it('refuses to continue a conversation belonging to someone else', async () => {
 		const mine = await chat({ message: 'Mine.' });
-		const { runId } = (await mine.json()) as { runId: string };
+		const { runId } = mine;
 
 		const intruder: Identity = {
 			userId: '55555555-5555-4555-8555-555555555555',
@@ -149,12 +136,47 @@ describe('Pod agent chat — leftover in-guest runAgent path E2E', () => {
 		const stolen = await harness.request(
 			{
 				method: 'POST',
-				path: 'remotes/agentChat',
+				path: 'agent/start',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ message: 'Yours now.', runId })
 			},
 			intruder
 		);
 		expect(stolen.status).toBeGreaterThanOrEqual(400);
+	});
+
+	it('refuses API-client remotes and custom invoke names as an agent start door', async () => {
+		const legacy = await harness.request(
+			{
+				method: 'POST',
+				path: 'remotes/agentChatStart',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ message: 'Should not start.' })
+			},
+			member
+		);
+		expect(legacy.status).toBe(404);
+
+		const custom = await harness.request(
+			{
+				method: 'POST',
+				path: 'remotes/agentChatStart',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ name: 'agentChatStart', payload: { message: 'Should not start.' } })
+			},
+			member
+		);
+		expect(custom.status).toBe(404);
+
+		const invoke = await harness.request(
+			{
+				method: 'POST',
+				path: 'invoke/command',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ name: 'agentChatStart', payload: { message: 'Should not start.' } })
+			},
+			member
+		);
+		expect(invoke.status).toBeGreaterThanOrEqual(400);
 	});
 });

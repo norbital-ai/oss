@@ -32,7 +32,7 @@ the set of facilities is closed, so there is no authoring surface for a ninth.
   apps/         +<n>.svelte       │                          │
   custom-types/ +definition.ts    │  ── you never write ──   │  declared in pod.host.ts,
   **/+<n>.tool.ts                 │     any of this          │  never in the workspace
-  +env.ts       (names, not values)
+  +env.ts        (names, not values; read via $app/env/*)
  ──────────────────────────────── │ ──────────────────────── │ ────────────────────────
    compiles into the manifest          runs on every host        differs per deployment
 ```
@@ -67,7 +67,7 @@ declaration to drift from the thing it declares.
 | `src/mcp/+<name>.mcp.ts`                                     | remote MCP server `<name>`                 |
 | `src/custom-types/money/+definition.ts` + `+renderer.svelte` | custom type `money`                        |
 | `src/collections/work_orders/+integrations.ts`               | its inbound and outbound bindings          |
-| `src/+env.ts`                                                | the names this workspace needs from a host |
+| `src/+env.ts`                                                | env vars this workspace reads from `process.env` |
 
 **App and representation media.** App identity is a static `<svelte:head>`: literal `title`,
 `description`, `pod:icon`, and optional static `pod:thumbnail` / `pod:banner` URLs. Media is
@@ -226,29 +226,28 @@ The surface is designed so that mistakes surface at their cause rather than down
 - **A malformed cron expression fails at startup**, naming the automation, rather than never firing.
 - **A workspace refuses to boot when a facility it needs is absent** — schedules that silently never
   fire are worse than a process that will not start.
-- **Every runtime invocation has a universal two-second execution budget.** Admission and cold boot
-  happen before that clock starts; reads, writes, hooks, remotes and each automation step all share
-  the same cap and every attempt is billable to the tenant. Do not hide unbounded work in a handler.
-- **An automation may outlive one invocation without outliving the serverless model.** The runtime
-  persists one trigger receipt, replays the handler deterministically, and yields at `api.infer`. The
-  host performs the spend-gated inference outside the guest, settles the result under a stable
-  effect identity, and a later capped invocation resumes the handler. Writes before a yield roll
-  back; the final writes, run telemetry and terminal receipt commit atomically. Authors still write
-  an ordinary async handler. Core uses DBOS as the sole automation orchestrator: the tenant receipt
-  is the source of truth, while workflow recovery, bounded concurrency, per-tenant serialization and
-  fair admission are host work. pg-boss is not an automation scheduler or worker. Hosted interactive
-  chat and channel inbound admit the same receipts rather than holding an in-guest loop.
+- **Timeout is host policy.** The host admits each function with a timeout; Core’s policy is
+  2_000 ms. Admission and cold boot happen before that clock starts. Reads, writes, hooks, remotes
+  and each automation or agent step share the same admit. Do not hide unbounded work in a handler —
+  the host kills the guest when the timeout fires.
+- **Yield ends the isolate.** Authors write an ordinary async handler. `await api.infer` yields;
+  the isolate is disposed; the host runs the model; DBOS admits a new isolate for the next tenant
+  step. One-shot work (`createMany`, `updateMany`, import, export, inbound) fails if it cannot
+  finish in 2s. There is no leftover cursor. Writes before a yield roll back; the terminal writes
+  commit when the function returns. Interactive chat starts from the workspace shell; channel
+  inbound is host delivery after persist.
 - **A seed payload key that is not a column aborts the seed.** A `+seed.ts` record is a plain record,
   so a typo or a column the model renamed cannot be caught by the compiler. It is caught before the
   first write instead: `pod seed` names the step, the key, how many rows carry it and the closest real
-  column, then writes nothing — not even the `clearBefore` deletes. This used to be a silent drop, and
-  a seed that wrote `user_name` instead of `name` produced a tenant full of users with a NULL name that
-  nobody could sign in as, reporting success the whole way.
+  column, then writes nothing — not even the `clearBefore` deletes. A seed that writes `user_name`
+  instead of `name` would otherwise produce a tenant full of users with a NULL name that nobody could
+  sign in as, reporting success the whole way.
 - **There is one way to do each thing.** No parallel mechanism to choose between, and no
   configuration that only matters in one deployment.
 
-Where a foot-gun cannot be removed, it is named. `intervalQueue()` is a timer with no durability, so it
-is an explicit opt-in rather than a default — a deployment running on one says so in its own config.
+Where a foot-gun cannot be removed, it is named. `intervalQueue()` is a development timer for
+infrastructure crons. It loses work on process death. It is not how functions run — a deployment
+running on one says so in its own config.
 The seed check has one exemption for the same reason: a **sidecar** key is one the caller consumes
 itself before the plan is executed (Core reads `document_asset.metadata.seed_asset` to upload the file
 first), and it must be declared as `collection.key` exactly, with a written reason, which the executor
@@ -348,7 +347,7 @@ rows land, so a restart resumes and a crash re-pulls a page rather than skipping
 **`systemEvent` is a workspace talking to itself.** A `send` with a `systemEvent` destination never
 leaves the pod; it reaches every `receive` binding waiting on that exact event name. A receive waiting
 on an event nothing emits is refused at startup, naming the binding — the two halves are matched by
-string, and a typo used to produce silence rather than an error.
+string, and a typo produces a startup error rather than silence.
 
 **`webhook` is the push half, and it is not a Pod route.** A binding declares where the signature and
 the event id are found, and the _name_ of the signing secret:
@@ -408,51 +407,54 @@ absent or undeclared is rejected before it reaches the pipeline. Declaring `even
 
 Every delivery is staged in `integration_inbound_event` under the declared event id (or a digest of the
 raw body), then synchronously checked against the binding's `input` before it is acknowledged. A provider
-redelivery therefore finds the same receipt instead of importing another page. An input refusal is marked
-terminal with no rows, and accepted deliveries are progressed by the continuous import worker.
+redelivery therefore finds the same staged event instead of importing another page. An input refusal is
+marked terminal with no rows.
 
-The worker claims one receipt at a time, runs its pipeline once, saves the resulting rows, and commits
-one bounded `createMany` chunk plus its offset in the same transaction. A lost lease resumes at that
-offset; it never reruns the pipeline or leaves a partially committed chunk. Transient failures wait with
-bounded backoff, while input refusal is terminal. Do not expect a large receive binding to finish during
-the webhook request: every Pod runtime read/write step is kept below two seconds, and progressive
-progress happens through durable worker invocations. Receipts are swept after 30 days, keeping the newest
-thousand however old they are — long past any provider retry horizon, because forgetting a receipt is
-the same as being willing to import it again.
+Each admitted function claims one staged event, runs its pipeline once, and persists in one 2s
+admit — or it fails. There is no leftover drain and no `nextOffset`. A later retry never reruns
+the pipeline or leaves a partially committed chunk. Transient failures wait with bounded backoff,
+while input refusal is terminal. Do not expect a large receive binding to finish during the
+webhook request. Staged events are swept after 30 days, keeping the newest thousand however old
+they are — long past any provider retry horizon, because forgetting a staged event is the same as
+being willing to import it again.
 
 ## Secrets
 
-A workspace never holds a secret value, only a reference — and it declares the names it will
-reference in `src/+env.ts`:
+A workspace never holds a secret value in source. It declares names in `src/+env.ts`. Values live
+in the facility database and are set in Settings → Integrations — the same tab as channel
+credentials, on Core and on `pod start`. At boot the host loads them into `process.env` so tenant
+code reads `$app/env/private` / `$app/env/public`. Private keys are server-only (remotes, hooks,
+automations, pipelines, integrations, agent tools). They never import into an app or other client
+module. Every key is optional (`string | undefined`); callers handle a missing value.
+
+The full contract is [Environment](./ENVIRONMENT.md).
 
 ```ts
-import { defineEnv } from '@norbital-ai/pod/authoring';
+import { defineEnvVars } from '@norbital-ai/pod/authoring';
+import { z } from 'zod';
 
-export default defineEnv({
-	private: { STRIPE_KEY: { description: 'Stripe restricted API key' } }
+export const variables = defineEnvVars({
+	STRIPE_KEY: {
+		description: 'Stripe restricted API key',
+		schema: z.string().trim().min(1)
+	}
 });
 ```
 
-The declaration is checked in both directions: referencing a name that is not here fails the build,
-and declaring a name nothing references fails too — `manifest.secrets` is what an operator provisions
-against, so an unreferenced entry asks for a credential no code path reads. Between them, a reference
-spelled differently from the declaration cannot reach production as a 401.
-
-The reference compiles into the manifest; the host resolves it at call time (`process.env` under
-`pod start`, its own secret store elsewhere). Tenant code runs in an isolate with no network under
-Core, so it could not make the authenticated call even if it held the key.
+Integration `{ env: 'NAME' }` references must name a declared private key. Those names are the
+same rows Settings edits.
 
 ## The two deployments are the same workspace
 
 A workspace does not change when it moves between hosts. Same source, same manifest, same auth path:
 
-|                               | Core          | Standalone (`pod start`)                       |
+|                               | Core          | Self-host (`pod start`)                        |
 | ----------------------------- | ------------- | ---------------------------------------------- |
 | Authoring, policies, agent    | identical     | identical                                      |
 | Auth logic and prebuilt pages | identical     | identical                                      |
+| Compiled functions            | identical     | identical                                      |
 | Facility _implementations_    | Core supplies | `pod.host.ts` supplies                         |
-| Integration queue             | pg-boss       | operator's binding (`intervalQueue()` for dev) |
-| Automation orchestration      | DBOS          | host-provided durable automation protocol      |
+| Admit / timeout / resume      | Core host     | `pod start` (the reference host)               |
 | Organization selector         | Core          | n/a — one workspace                            |
 
 `pod.host.ts` is the only file that differs, and it is data rather than setup code — adapters and

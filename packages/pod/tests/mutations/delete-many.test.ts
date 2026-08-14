@@ -54,7 +54,12 @@ const state = vi.hoisted(() => ({
 	auditBatches: [] as { entityId: string }[][]
 }));
 
-vi.mock('$lib/server/collection/workspace-collections.js', () => ({
+vi.mock('$lib/server/bootstrap/tenant_workspace.server.js', () => ({
+	getTenantWorkspace: () => ({
+		collections: {},
+		relationships: {},
+		registered: { inputSchemas: {}, integrationBindings: {} }
+	}),
 	getWorkspaceCollection: () => ({ delete: {}, update: {} }),
 	allowsMutation: (_behavior: unknown, action: string) =>
 		action === 'delete' ? state.deleteAllowed : state.updateAllowed,
@@ -72,15 +77,7 @@ vi.mock('$lib/server/collection/workspace-collections.js', () => ({
 				: undefined
 }));
 
-vi.mock('$lib/server/bootstrap/tenant_workspace.server.js', () => ({
-	getTenantWorkspace: () => ({
-		collections: {},
-		relationships: {},
-		registered: { inputSchemas: {}, integrationBindings: {} }
-	})
-}));
-
-vi.mock('$lib/server/collection/hook-api-context.server.js', async () => {
+vi.mock('$lib/server/collection/hook-api.server.js', async () => {
 	const { AsyncLocalStorage } = await import('node:async_hooks');
 	return {
 		beforeApiStorage: new AsyncLocalStorage(),
@@ -450,7 +447,7 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 			calls.after.push(String(record.status));
 		};
 
-		const updated = await updateMany(
+		const { records: updated } = await updateMany(
 			ctx,
 			'orders',
 			selected.map((recordId, index) => ({ recordId, input: { status: `new-${index}` } })),
@@ -483,7 +480,7 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 
 	it('keeps duplicate update ids on the ordered record-at-a-time path', async () => {
 		const [id] = await seed(1);
-		const updated = await updateMany(
+		const { records: updated } = await updateMany(
 			ctx,
 			'orders',
 			[

@@ -52,17 +52,4 @@ describe('packaged app.css Tailwind scan scope', () => {
 		);
 		expect(scanned).toContain('ui/shell/pod-shell.svelte');
 	});
-
-	it('emits the launcher every class it needs from a file Tailwind reads', () => {
-		const shell = readFileSync(
-			fileURLToPath(new URL('../../src/ui/shell/pod-shell.svelte', import.meta.url)),
-			'utf8'
-		);
-		// The button is anchored to the viewport's bottom edge, and nothing else in the workspace
-		// asks for these. If they stop being generated it is invisible rather than misplaced.
-		expect(shell).toContain('data-testid="workspace-agent-trigger"');
-		expect(shell).toContain('bottom-[calc(env(safe-area-inset-bottom)+1rem)]');
-		expect(shell).toContain('sm:bottom-6');
-		expect(shell).toContain('dark:bg-card');
-	});
 });

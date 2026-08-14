@@ -3,7 +3,7 @@ import { type AnyPgColumn, type PgTable } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
-import { error } from './http_error.js';
+import { error } from '$lib/server/http.js';
 import { quoteSqlIdentifier } from './sql-identifier.server.js';
 
 /** Distance metrics for `vector(n)` columns (pgvector). */

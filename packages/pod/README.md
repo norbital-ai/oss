@@ -8,9 +8,9 @@ relationships, hooks, applications, automations, remotes, and tools into:
 - a policy-scoped local replica and generated client;
 - PostgreSQL schema and migration history;
 - temporal record history, mutation audit, approvals, and notifications;
-- a deployable bundle that can run inside Core or with an explicit self-hosted adapter.
+- a deployable bundle of invokable functions that a host admits.
 
-Core is a host for Pod output. Pod does not depend on Core, and a workspace does not change its
+Core is one host. Self-host is another. Pod is never the server. A workspace does not change its
 tenant code when it moves between hosts.
 
 ## The mental model
@@ -29,11 +29,11 @@ authored workspace
              │
        ┌─────┴──────────┐
        ▼                ▼
-   Core host       self-hosted Pod
+   Core host       self-host (`pod start`)
        │                │
        └──────┬─────────┘
               ▼
- identity + PostgreSQL + optional host facilities
+ host admit (timeout) → Pod function → return | await infer | not done
               │
               ▼
  policy-scoped sync client in the browser
@@ -88,7 +88,7 @@ workspace/
 │   │   └── +<lower_snake_case>.ts
 │   ├── **/+<lower_snake_case>.tool.ts          agent tool, anywhere under src
 │   ├── +seed.ts                                optional
-│   └── +env.ts                                 optional
+│   └── +env.ts                                 optional — declare env vars for $app/env/*
 ├── .norbital/
 │   └── migrations/                             committed
 ├── package.json
@@ -510,19 +510,17 @@ Collection `+integrations.ts` files define tenant-side integration behavior:
 - the transformation from a record event to a delivery payload.
 
 Two collections may name the same integration; they must declare the same connection, compared by
-value. Every `{ env: 'NAME' }` reference must be declared in `src/+env.ts`, and every name declared
-there must be referenced — both directions are build errors.
+value. Every `{ env: 'NAME' }` reference must be a private key in `src/+env.ts`.
 
 Tenant integration code decides what is accepted and what is sent. It does not hold endpoint
 credentials or perform any network request. Outbound delivery is claimed from a durable outbox,
 retried with backoff, and handed to the host's `integrationDelivery` function together with the
 declared destination; `httpIntegrationDelivery()` is the built-in implementation of it. Inbound
-deliveries validate and stage a durable receipt, then a continuous worker materializes the pipeline
-once and commits one bounded atomic collection chunk per runtime invocation. Pulls are host-driven jobs
-on the binding's cron schedule and stage under a cursor-derived event id before their cursor advances;
-this makes a restart resume the same page rather than partially re-importing it. A `systemEvent`
-destination never leaves the pod and reaches the `receive` bindings waiting on it. Runtime reads and
-writes are bounded below two seconds; durable receipts carry progressive import work between steps.
+deliveries validate and stage a durable event, then each admitted function materializes the pipeline
+once and persists in one 2s admit — or it fails. There is no leftover drain. Pulls are host-driven
+infrastructure crons on the binding's schedule and stage under a cursor-derived event id before their
+cursor advances; a later call is a new one-shot function, not a resume of leftover rows. A `systemEvent` destination never leaves the pod and reaches
+the `receive` bindings waiting on it. Timeout is host policy; Core’s policy is 2_000 ms.
 
 ## Automations, AI, and agent tools
 
@@ -554,18 +552,18 @@ export default defineAutomation(
 );
 ```
 
-Scheduled and event automations are admitted as immutable tenant receipts and driven by the host's
-durable automation orchestrator. Event cursors do not depend on an open browser. Each guest runtime
-invocation is billable and capped at two seconds; a longer automation proceeds as replayable DBOS
-steps. `api.infer` is an effect boundary: pre-effect writes roll back, Core performs the spend-gated
-provider call under a stable effect ID, then the handler replays with the durable result and commits
-its terminal writes atomically. pg-boss is not an automation scheduler or worker.
+Scheduled and event automations are functions. The host admits each one with a timeout. Event
+cursors do not depend on an open browser. `await api.infer` yields; the isolate is disposed; the
+host runs the model; DBOS admits a new isolate for the next tenant step. One-shot work fails if it
+cannot finish in 2s. Writes before a yield roll back; the terminal writes commit when the function
+returns.
 
-Interactive chat and channel inbound are two doors into the same durable agent loop configured in
-`src/+agent.ts`. Automations are always deterministic handlers: when they need model judgement, call
-the bounded `api.infer({ prompt, schema?, tools?, collections?, images? })` effect (at most 64 calls
-and 100,000 prompt characters per invocation). That is the same host chat as the agent: optional
-schema, optional images, optional named workspace tools. Always a normal chat session. No
+Interactive chat and channel inbound are two doors into the same agent loop configured in
+`src/+agent.ts`. The loop lives in Pod. Each iteration is one admitted function. Automations are
+always deterministic handlers: when they need model judgement, call the bounded
+`api.infer({ prompt, schema?, tools?, collections?, images? })` (at most 64 calls and 100,000
+prompt characters per invocation). That is the same host chat as the agent: optional schema,
+optional images, optional named workspace tools. Always a normal chat session. No
 `write_collection`, `spawn_subagent`, sandbox, authoring, or MCP; it does not own a `chat_session`
 transcript. Automations do not spawn agent sessions; agents that need sandboxes use the
 interactive or channel paths instead.
@@ -593,12 +591,12 @@ profile. `describe_workspace`, `read_collection`, and `write_collection` are res
 tools.
 
 Pod owns the agent loop, input validation, collection allowlists, read/write mode, persistence, and
-tool execution. Hosted interactive and channel entry admit durable receipts; Core DBOS drives one
-provider or tool transition per guest step. The host's AI binding supplies one inference turn at a
-time — on Core, as a fenced `ai.turn` / `ai.prompt` effect outside the guest. Ordered `AiMessage`
-values and nested turn state live directly in the tenant-owned `chat_session` aggregate and reach
-clients through one ordinary sync subscription. Agent transcripts are policy-scoped; Core and other
-hosts store no transcript.
+tool execution. Interactive start is the workspace shell (`agent/start`). Channel start is host
+delivery after inbound persist. Agent is not an API-client remote. Each loop iteration is one
+admitted step. The host's AI binding supplies one inference turn at a time, between steps. Ordered
+`AiMessage` values and nested turn state live directly in the tenant-owned `chat_session` aggregate
+and reach clients through one ordinary sync subscription. Agent transcripts are policy-scoped; Core
+and other hosts store no transcript.
 
 The tenant-workspace agent is configured separately from scheduled automation in `src/+agent.ts`:
 
@@ -940,8 +938,8 @@ The same rule applies across facilities:
 | -------------------------------------- | ------------------------------------------------ |
 | Any running workspace                  | `db`                                             |
 | A `file()` field                       | `fileStorage`                                    |
-| Deterministic automation               | host automation orchestration (Core: DBOS)       |
-| Hosted agent turn                      | host automation orchestration (Core: DBOS); `ai` |
+| Deterministic automation               | host admit / timeout / resume                    |
+| Agent loop iteration                   | host admit / timeout / resume; `ai`              |
 | Outbound integration                   | `queue` and `integrationDelivery`                |
 | External notification call             | matching `messaging` channel at call time        |
 | A declared channel                     | `messaging` transport of that name, at startup   |
@@ -1064,9 +1062,9 @@ the plaintext exists once, in the link.
 ### The infrastructure queue facility
 
 Integration pulls/imports and notification outbox drains need host timing because the runtime has no
-timer or network. Pod derives that non-automation job set from the manifest and hands it to `queue`;
-the host supplies timing and persistence across restarts. Automation timing and recovery use the
-separate durable protocol described above (Core: DBOS), never this facility.
+timer or network. Pod derives that infrastructure job set from the manifest and hands it to `queue`;
+the host supplies timing. Automations, agents, pages, and collection operations are admitted
+functions. They never register work in this facility.
 
 ```ts
 type HostQueue = (jobs: readonly QueueJob[]) => Promise<() => void>;
@@ -1075,16 +1073,12 @@ type QueueJob = { name: string; schedule: string; run(): Promise<void> };
 
 `schedule` is a five-field cron expression or `'continuous'` for a drain loop the host paces.
 
-Pod ships **no durable queue**. `intervalQueue()` is a timer, and it is named rather than defaulted
-so a deployment running on one says so in its own config: nothing survives a restart, a missed
-schedule is never caught up, and two processes against one database will both claim. That is fine
-for `pod dev` and a single container, and wrong for anything that must not drop work — point `queue`
-at pg-boss or an equivalent there, which is what Core does.
+`intervalQueue()` is a development timer, and it is named rather than defaulted so a deployment
+running on one says so in its own config: nothing survives a restart, a missed schedule is never
+caught up, and two processes against one database will both claim. It is not how functions run.
 
-The `queue` facility is for integration imports, pulls, notifications and other infrastructure work.
-Automations neither require it nor register work in it. A production host must provide the separate
-durable automation protocol; Core does so with DBOS. `intervalQueue()` retains its local development
-behavior for non-automation infrastructure and must never be presented as durable automation recovery.
+The `queue` facility is for integration imports, pulls, notifications and other infrastructure
+crons. Automations neither require it nor register work in it.
 
 `s3FileStorage` works with S3-compatible stores such as AWS S3, MinIO, Cloudflare R2, and DigitalOcean
 Spaces.
@@ -1165,7 +1159,7 @@ notifications, approvals, history, and agent steps resume from durable database 
 | `pod migration create <name> --custom` | create an authored data-migration file                                      |
 | `pod migrate`                          | apply committed migrations                                                  |
 | `pod seed`                             | execute compiled `src/+seed.ts`                                             |
-| `pod start`                            | serve a self-hosted artifact                                                |
+| `pod start`                            | run the reference host against a self-hosted artifact                       |
 | `pod dev` / `pod dev --seed`           | build, migrate, optionally seed, and serve locally                          |
 
 `pod platform build` is an internal distribution command, not a tenant workflow.

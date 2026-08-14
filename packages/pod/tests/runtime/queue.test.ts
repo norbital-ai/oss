@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { workspaceJobs } from '../../src/host/jobs.js';
@@ -73,7 +74,6 @@ describe('workspace jobs', () => {
 			messaging: messagingBinding({ send: async () => ({ sent: true }) })
 		});
 		expect(jobs.map((job) => job.name)).toEqual([
-			'pod:integration-import',
 			'pod:agent-conversation-titles',
 			'pod:notification-outbox'
 		]);
@@ -83,10 +83,7 @@ describe('workspace jobs', () => {
 			dispatch: async () => undefined,
 			organizationId: 'org-1'
 		});
-		expect(bare.map((job) => job.name)).toEqual([
-			'pod:integration-import',
-			'pod:agent-conversation-titles'
-		]);
+		expect(bare.map((job) => job.name)).toEqual(['pod:agent-conversation-titles']);
 	});
 
 	it('drives AI conversation titles from the durable queue', async () => {
@@ -165,6 +162,15 @@ describe('standalone automation jobs', () => {
 		expect(jobs.find((job) => job.name === 'pod:standalone-schedule:nightly')?.schedule).toBe(
 			'0 3 * * *'
 		);
+	});
+
+	it('settles host effects in-process instead of a guest settle hop', () => {
+		const source = readFileSync(
+			new URL('../../src/serve/standalone-automation.ts', import.meta.url),
+			'utf8'
+		);
+		expect(source).toContain('settleHostReceiptEffect');
+		expect(source).not.toContain("action: 'settle'");
 	});
 
 	it('does not register schedule jobs for collection-event automations', () => {

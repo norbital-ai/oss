@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
 	WEB_CHANNEL_ID,
 	buildConversationSelector,
-	channelIdForConversation,
-	conversationTriggerLabel,
-	filterConversationRows,
+	conversationComboboxOptions,
+	listAccessibleChannels,
 	scopeConversationSessions,
 	type ConversationSelectorLabels,
+	type ConversationScopeInput,
 	type ConversationSession
 } from '../../src/ui/agent/conversation-selector.js';
 
@@ -229,8 +229,23 @@ describe('buildConversationSelector', () => {
 	});
 });
 
-describe('filterConversationRows', () => {
-	it('keeps ancestor headings for matching conversations', () => {
+describe('conversationComboboxOptions', () => {
+	it('keeps a personal inbox flat without group headers', () => {
+		const model = buildConversationSelector({
+			sessions: [
+				session({ id: 'c1', title: 'Workspace agent' }),
+				session({ id: 'c2', title: 'Skills discussion' })
+			],
+			labels
+		});
+		expect(conversationComboboxOptions(model)).toEqual([
+			expect.objectContaining({ value: 'c1', label: 'Workspace agent' }),
+			expect.objectContaining({ value: 'c2', label: 'Skills discussion' })
+		]);
+		expect(conversationComboboxOptions(model).every((option) => option.type == null)).toBe(true);
+	});
+
+	it('groups users and groups when both exist on a channel', () => {
 		const model = buildConversationSelector({
 			sessions: [
 				session({
@@ -249,69 +264,86 @@ describe('filterConversationRows', () => {
 			],
 			labels
 		});
-
-		expect(
-			filterConversationRows(model.rowsByChannel.desk ?? [], 'night').map((row) =>
-				row.kind === 'heading' ? row.label : row.title
-			)
-		).toEqual(['Groups', 'Night shift']);
+		expect(conversationComboboxOptions(model)).toEqual([
+			expect.objectContaining({ value: 'dm', label: 'Ada', type: 'Users' }),
+			expect.objectContaining({ value: 'group', label: 'Night shift', type: 'Groups' })
+		]);
 	});
 });
 
-describe('conversationTriggerLabel', () => {
-	it('uses the title alone for a web chat', () => {
-		const sessionRow = session({ id: 'c1', title: 'Workspace agent' });
-		const model = buildConversationSelector({
-			sessions: [sessionRow],
-			labels
-		});
+describe('listAccessibleChannels', () => {
+	const memberScope: ConversationScopeInput = {
+		scopeUserId: 'me',
+		currentUserId: 'me',
+		isAdmin: false,
+		publicChannelKeys: new Set(['support_bot'])
+	};
+	const adminOwnScope: ConversationScopeInput = {
+		...memberScope,
+		isAdmin: true
+	};
+	const adminImpersonating: ConversationScopeInput = {
+		scopeUserId: 'alice',
+		currentUserId: 'me',
+		isAdmin: true,
+		publicChannelKeys: new Set(['support_bot'])
+	};
+
+	it('always includes web and authenticated manifest channels for a member', () => {
 		expect(
-			conversationTriggerLabel({
-				session: sessionRow,
-				model,
-				labels
-			})
-		).toBe('Workspace agent');
+			listAccessibleChannels({
+				sessions: [session({ id: 'web-1' })],
+				labels,
+				manifestChannels: {
+					sales_desk: { audience: 'authenticated', transport: 'telegram' },
+					support_bot: { audience: 'public', transport: 'whatsapp' }
+				},
+				scope: memberScope
+			}).map((channel) => channel.id)
+		).toEqual([WEB_CHANNEL_ID, 'sales_desk']);
 	});
 
-	it('prefixes the channel when tabs are showing', () => {
-		const sessionRow = session({
-			id: 'tg-1',
-			title: 'Invoice question',
-			visibility: 'channel_dm',
-			channelKey: 'sales_desk',
-			platform: 'telegram',
-			userId: 'alice'
-		});
-		const model = buildConversationSelector({
-			sessions: [session({ id: 'web-1' }), sessionRow],
-			labels
-		});
+	it('lets an admin personal scope include public channels', () => {
 		expect(
-			conversationTriggerLabel({
-				session: sessionRow,
-				model,
-				labels
-			})
-		).toBe('sales_desk · Invoice question');
+			listAccessibleChannels({
+				sessions: [],
+				labels,
+				manifestChannels: {
+					support_bot: { audience: 'public', transport: 'whatsapp' }
+				},
+				scope: adminOwnScope
+			}).map((channel) => channel.id)
+		).toEqual([WEB_CHANNEL_ID, 'support_bot']);
 	});
-});
 
-describe('channelIdForConversation', () => {
-	it('resolves the tab that owns the active conversation', () => {
-		const model = buildConversationSelector({
-			sessions: [
-				session({ id: 'web-1' }),
-				session({
-					id: 'tg-1',
-					visibility: 'channel_dm',
-					channelKey: 'sales_desk',
-					platform: 'telegram'
-				})
-			],
-			labels
-		});
-		expect(channelIdForConversation('tg-1', model)).toBe('sales_desk');
-		expect(channelIdForConversation(undefined, model)).toBe(WEB_CHANNEL_ID);
+	it('hides public channels while impersonating another member', () => {
+		expect(
+			listAccessibleChannels({
+				sessions: [session({ id: 'alice', userId: 'alice' })],
+				labels,
+				manifestChannels: {
+					support_bot: { audience: 'public', transport: 'whatsapp' }
+				},
+				scope: adminImpersonating
+			}).map((channel) => channel.id)
+		).toEqual([WEB_CHANNEL_ID]);
+	});
+
+	it('keeps a scoped thread whose channel left the manifest', () => {
+		expect(
+			listAccessibleChannels({
+				sessions: [
+					session({
+						id: 'legacy',
+						visibility: 'channel_dm',
+						channelKey: 'retired_desk',
+						platform: 'discord'
+					})
+				],
+				labels,
+				manifestChannels: {},
+				scope: memberScope
+			}).map((channel) => channel.id)
+		).toEqual([WEB_CHANNEL_ID, 'retired_desk']);
 	});
 });

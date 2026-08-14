@@ -19,6 +19,7 @@ import {
 } from './workspace/define-workspace.js';
 import { platformIdentityTables, type PlatformSchema } from './schema/system-workspace.js';
 import type { InvokeClientApi, InvokeMap } from './workspace/invoke-api-types.js';
+import { validateDeclaredEnvVars } from '../serve/validate-workspace-env.js';
 
 export {
 	defineModels,
@@ -27,7 +28,8 @@ export {
 	defineRuntimeRegistry,
 	defineRuntimeWorkspace,
 	defineWorkspace,
-	platformIdentityTables
+	platformIdentityTables,
+	validateDeclaredEnvVars
 };
 export type {
 	CollectionRegistryFor,
