@@ -277,3 +277,24 @@ export async function updateChatTurn(
 		session.turns[index] = { ...session.turns[index]!, ...values } as ChatSessionTurn;
 	});
 }
+
+/** Mark a turn that never reached inference so a failed start cannot leave the composer locked. */
+export async function failOpenInteractiveTurn(
+	sessionId: string,
+	turnId: string,
+	error: string
+): Promise<void> {
+	await mutateChatSession(sessionId, (session) => {
+		const index = session.turns.findIndex((turn) => turn.norbital_id === turnId);
+		const turn = session.turns[index];
+		if (!turn || turn.ended_at !== null) return;
+		const settledAt = new Date().toISOString();
+		session.turns[index] = {
+			...turn,
+			status: 'failed',
+			heartbeat_at: settledAt,
+			ended_at: settledAt,
+			error
+		};
+	});
+}

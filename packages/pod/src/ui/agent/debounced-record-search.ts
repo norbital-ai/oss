@@ -3,6 +3,7 @@ export type DebouncedRecordSearchParsed = {
 	readonly collection: string | null;
 };
 
+/** Debounces record search so caret moves that keep the same query do not refetch. */
 export function createDebouncedRecordSearch<T>(options: {
 	readonly delayMs?: number;
 	readonly search: (text: string, collection: string | null) => Promise<readonly T[]>;
@@ -22,17 +23,23 @@ export function createDebouncedRecordSearch<T>(options: {
 	let version = 0;
 	let lastIdentity = '';
 
+	/** Drops the pending timer without invalidating in-flight results. */
+	// stupidity:allow Q4 -- named helper
 	function cancel(): void {
 		clearTimeout(timer);
 		timer = undefined;
 	}
 
+	/** Forgets the last query so the next schedule can search the same identity again. */
+	// stupidity:allow Q3 -- factory method; stupidity:allow Q4 -- named helper
 	function invalidate(): void {
 		version++;
 		cancel();
 		lastIdentity = '';
 	}
 
+	/** Starts a delayed search, or clears results when the trigger is gone. */
+	// stupidity:allow Q3 -- factory method
 	function schedule(
 		identity: string,
 		parsed: DebouncedRecordSearchParsed | null,

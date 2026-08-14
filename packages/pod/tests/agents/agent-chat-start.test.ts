@@ -8,7 +8,9 @@ const state = vi.hoisted(() => ({
 		promptContent: string;
 		inputMessageId: string;
 	}> => ({ turnId: 'turn-1', promptContent: 'Inspect this', inputMessageId: 'msg-1' }),
-	admit: async (): Promise<void> => undefined
+	admit: async (): Promise<void> => undefined,
+	failedTurns: [] as { sessionId: string; turnId: string; error: string }[],
+	session: { norbital_id: 'chat-1', turns: [] as Record<string, unknown>[] }
 }));
 
 vi.mock('$lib/server/bootstrap/workspace_store.js', () => {
@@ -69,6 +71,13 @@ vi.mock('$lib/server/run/automation-dispatch.server.js', () => ({
 	admitAgentTurn: () => state.admit()
 }));
 
+vi.mock('$lib/server/agent/chat-session.server.js', () => ({
+	failOpenInteractiveTurn: async (sessionId: string, turnId: string, error: string) => {
+		state.failedTurns.push({ sessionId, turnId, error });
+	},
+	readChatSession: async () => state.session
+}));
+
 vi.mock('$lib/server/collection/sync/outbox-tailer.server.js', () => ({
 	currentOutboxWatermark: async () => '1'
 }));
@@ -89,6 +98,8 @@ const { agentChatStart } = await import('../../src/remote/agent_chat.remote.js')
 
 afterEach(() => {
 	state.created = [];
+	state.failedTurns = [];
+	state.session = { norbital_id: 'chat-1', turns: [] };
 	state.prepareTurn = async () => ({
 		turnId: 'turn-1',
 		promptContent: 'Inspect this',
@@ -118,6 +129,18 @@ describe('agentChatStart persistence', () => {
 			title: 'Workspace agent',
 			visibility: 'personal'
 		});
+		expect(state.failedTurns).toEqual([
+			{ sessionId: 'chat-1', turnId: 'turn-1', error: 'admit failed' }
+		]);
+	});
+
+	it('returns the session after the turn is opened, not the pre-turn create receipt', async () => {
+		state.session = {
+			norbital_id: 'chat-1',
+			turns: [{ norbital_id: 'turn-1', status: 'running' }]
+		};
+		const result = await agentChatStart({ message: 'Inspect this' });
+		expect(result.session).toEqual(state.session);
 	});
 
 	it('persists chat_session even when turn prep fails after create', async () => {
@@ -146,5 +169,7 @@ describe('hosted start path budget', () => {
 		expect(startFn.indexOf('prepareConversation')).toBeLessThan(
 			startFn.indexOf('interactiveAgentStartSpec')
 		);
+		expect(startFn).toContain('failOpenInteractiveTurn');
+		expect(startFn).toContain('readChatSession');
 	});
 });

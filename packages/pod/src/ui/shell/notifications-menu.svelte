@@ -61,6 +61,7 @@
 	let busy = $state(false);
 	let failure = $state<string | null>(null);
 
+	/** Marks the given notifications read through the ordinary per-row write path. */
 	async function markRead(ids: readonly string[]): Promise<void> {
 		const update = workspaceApi.db.notification?.update;
 		if (!update || ids.length === 0 || busy) return;
@@ -72,7 +73,7 @@
 			// and confirmed by the server. `updateMany` is deliberately not used: it does not route
 			// through the sync mutate endpoint, so it would neither apply locally nor be authorized by
 			// the self-service rule that lets a recipient dismiss their own notification.
-			for (const id of ids) await update(id, { read_at: readAt });
+			await Promise.all(ids.map((id) => update(id, { read_at: readAt })));
 		} catch (cause) {
 			failure = cause instanceof Error ? cause.message : String(cause);
 		} finally {
@@ -80,14 +81,16 @@
 		}
 	}
 
-	function openNotification(row: NotificationRow): void {
+	/** Dismisses a notification and navigates to its CTA when one is present. */
+	function openNotification(row: NotificationRow): void { // stupidity:allow Q3 -- template event handler
 		void markRead([row.norbital_id]);
 		if (!row.cta_url) return;
 		open = false;
 		onNavigate?.(row.cta_url);
 	}
 
-	function whenReceived(row: NotificationRow): string {
+	/** Formats the notification timestamp for the list, or blank when unparseable. */
+	function whenReceived(row: NotificationRow): string { // stupidity:allow Q3 -- list timestamp formatter
 		const at = new Date(row.norbital_created_at);
 		if (Number.isNaN(at.getTime())) return '';
 		return at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });

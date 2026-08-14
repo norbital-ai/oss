@@ -2,20 +2,21 @@
  * The workspace finder: one prefix language, one record fan-out, two surfaces (`@` and Cmd+/).
  *
  * `#` records, `!` plan, `/` apps, `>` commands. After `#`, the first token becomes a collection
- * scope when it uniquely matches a mentionable collection. Record search fans out to those
- * collections — replica first, server fallback — and failures stay per-source.
+ * scope when it uniquely matches a mentionable collection. Record search is opt-in: it runs only
+ * after a collection is chosen, against that one collection — replica first, server fallback.
  *
  * `@` mentions workspace entities: records (including people and teams), collections, and apps.
  * System plumbing collections stay out of the fan-out; `user` and `team` are the allowlisted
  * exceptions.
  */
-import { post } from '$lib/ui/state/client.js';
-import { clientSyncReady } from '$lib/ui/sync/replica.js';
-import { localFindMany } from '$lib/ui/sync/client-sync.js';
 import { isSearchableCollectionField } from '@norbital-ai/platform-utils/collection';
 import { resolveRecordDisplayLabel } from '@norbital-ai/platform-utils/manifest/context';
 import type { ManifestCollectionEntry } from '@norbital-ai/platform-utils/manifest/types';
 import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/context';
+import type { MentionRecordHit } from '$lib/shared/agent/mention.js';
+import { post } from '$lib/ui/state/client.js';
+import { localFindMany } from '$lib/ui/sync/client-sync.js';
+import { clientSyncReady } from '$lib/ui/sync/replica.js';
 
 export const COMMAND_PREFIX = {
 	record: '#',
@@ -44,10 +45,13 @@ const PREFIX_BY_CHAR: Readonly<Record<string, CommandScope>> = {
 	[COMMAND_PREFIX.command]: 'command'
 };
 
+/** Returns the trigger character for a command scope. */
+// stupidity:allow Q4 -- named helper
 export function commandPrefixChar(scope: CommandScope): string {
 	return COMMAND_PREFIX[scope];
 }
 
+/** Splits a typed command into scope, optional collection, and remaining text. */
 export function parseCommandQuery(
 	raw: string,
 	collections: readonly string[] = []
@@ -62,6 +66,7 @@ export function parseCommandQuery(
 	return { scope, collection: null, text: rest.trimStart(), raw };
 }
 
+/** Narrows mentionable collection names by a typed token. */
 export function filterCollections(
 	token: string,
 	collections: readonly string[]
@@ -74,8 +79,11 @@ export function filterCollections(
 export type MentionAppHit = {
 	readonly key: string;
 	readonly label: string;
+	readonly href?: string;
+	readonly description?: string | null;
 };
 
+/** Narrows workspace apps by key or label. */
 export function filterApps(
 	token: string,
 	apps: readonly MentionAppHit[]
@@ -87,16 +95,23 @@ export function filterApps(
 	);
 }
 
+/** True only when a record search has both a collection and a query. */
+// stupidity:allow Q4 -- named helper
 export function shouldSearchRecords(parsed: ParsedCommandQuery): boolean {
-	return parsed.text.trim().length > 0 && (parsed.scope === 'record' || parsed.scope === null);
+	return (
+		parsed.scope === 'record' && parsed.collection !== null && parsed.text.trim().length > 0
+	);
 }
 
 /** Stable key for “is this the same record search?” — never the raw trigger string. */
+// stupidity:allow Q4 -- named helper
 export function recordSearchIdentity(parsed: ParsedCommandQuery | null): string {
 	if (!parsed || !shouldSearchRecords(parsed)) return '';
 	return `${parsed.collection ?? ''}\0${parsed.text.trim()}`;
 }
 
+/** Pulls a unique collection token off a `#` query when one matches. */
+// stupidity:allow Q3 -- named helper
 function matchCollectionToken(
 	rest: string,
 	collections: readonly string[]
@@ -115,20 +130,23 @@ function matchCollectionToken(
 }
 
 /** One record the menu can offer, already labelled for display. */
-export type MentionRecordHit = {
-	readonly collection: string;
-	readonly recordId: string;
-	readonly label: string;
-};
+export type { MentionRecordHit };
 
 /** What the `@` menu renders: a prefix command, a collection, an app, or a record to insert. */
 export type MentionMenuItem =
 	| { readonly kind: 'record'; readonly hit: MentionRecordHit }
 	| { readonly kind: 'scope'; readonly collection: string }
 	| { readonly kind: 'collection'; readonly collection: string }
-	| { readonly kind: 'app'; readonly key: string; readonly label: string }
+	| {
+			readonly kind: 'app';
+			readonly key: string;
+			readonly label: string;
+			readonly href?: string;
+			readonly description?: string | null;
+	  }
 	| { readonly kind: 'command'; readonly command: MentionCommand };
 
+/** Assembles the @ menu from the current prefix, collections, records, and apps. */
 export function buildMentionMenuEntries(
 	parsed: ParsedCommandQuery,
 	collections: readonly string[],
@@ -140,16 +158,17 @@ export function buildMentionMenuEntries(
 			return [{ kind: 'command', command: 'plan' }];
 		case 'record': {
 			if (parsed.collection) return records;
-			const scopes = filterCollections(parsed.text, collections).map(
+			return filterCollections(parsed.text, collections).map(
 				(collection): MentionMenuItem => ({ kind: 'scope', collection })
 			);
-			return parsed.text.trim() ? [...scopes, ...records] : scopes;
 		}
 		case 'app':
 			return filterApps(parsed.text, apps).map((app): MentionMenuItem => ({
 				kind: 'app',
 				key: app.key,
-				label: app.label
+				label: app.label,
+				...(app.href ? { href: app.href } : {}),
+				...(app.description != null ? { description: app.description } : {})
 			}));
 		case 'command':
 			return [];
@@ -162,15 +181,17 @@ export function buildMentionMenuEntries(
 					...collections.map((collection): MentionMenuItem => ({ kind: 'scope', collection }))
 				];
 			}
-			const collectionMentions = filterCollections(parsed.text, collections).map(
-				(collection): MentionMenuItem => ({ kind: 'collection', collection })
+			const scopes = filterCollections(parsed.text, collections).map(
+				(collection): MentionMenuItem => ({ kind: 'scope', collection })
 			);
 			const appMentions = filterApps(parsed.text, apps).map((app): MentionMenuItem => ({
 				kind: 'app',
 				key: app.key,
-				label: app.label
+				label: app.label,
+				...(app.href ? { href: app.href } : {}),
+				...(app.description != null ? { description: app.description } : {})
 			}));
-			return [...records, ...collectionMentions, ...appMentions];
+			return [...scopes, ...appMentions];
 		}
 		default: {
 			const _exhaustive: never = parsed.scope;
@@ -197,23 +218,22 @@ const MAX_SOURCES = 12;
 /** Rows per source per query. The menu shows a short list, so the wire carries one. */
 const HITS_PER_SOURCE = 4;
 
-function isSearchableCollection(entry: ManifestCollectionEntry | null): boolean {
-	return (entry?.fields ?? []).some((field) => isSearchableCollectionField(field));
-}
-
-function hasTextFields(entry: ManifestCollectionEntry | null): boolean {
-	return (entry?.fields ?? []).some(
-		(field) =>
-			!field.array && (field.kind === 'text' || field.kind === 'phone' || field.kind === 'enum')
-	);
-}
-
+/** True when a collection is allowed in the @ / # fan-out. */
 export function isMentionableCollection(entry: ManifestCollectionEntry | null): boolean {
 	if (!entry) return false;
 	if (MENTIONABLE_SYSTEM_COLLECTIONS.has(entry.collection_name)) {
-		return isSearchableCollection(entry) || hasTextFields(entry);
+		return (
+			(entry.fields ?? []).some((field) => isSearchableCollectionField(field)) ||
+			(entry.fields ?? []).some(
+				(field) =>
+					!field.array && (field.kind === 'text' || field.kind === 'phone' || field.kind === 'enum')
+			)
+		);
 	}
-	return entry.system !== true && isSearchableCollection(entry);
+	return (
+		entry.system !== true &&
+		(entry.fields ?? []).some((field) => isSearchableCollectionField(field))
+	);
 }
 
 /** How the composer's "@" menu sizes its search, unless a caller opts into different limits. */
@@ -230,13 +250,13 @@ export type MentionSources = {
 	/** Apps from the workspace manifest, labelled for the menu. */
 	apps(): readonly MentionAppHit[];
 	/**
-	 * Search records. A scope names one collection; without one every mentionable collection is
-	 * searched. An empty query searches nothing — the bare-`@` state is the scope list, not a
-	 * full-table dump.
+	 * Search records in one collection. A missing scope or empty query searches nothing — the
+	 * writer must pick a collection first. The bare-`@` / `#` state is the scope list.
 	 */
 	search(query: string, scope: string | null): Promise<readonly MentionRecordHit[]>;
 };
 
+/** Builds the collection, app, and record search surface for the mention menu. */
 export function createMentionSources(
 	getManifestContext: () => ManifestContext,
 	options: MentionSourcesOptions = {}
@@ -255,6 +275,7 @@ export function createMentionSources(
 	 * even when the compiled field list has no `search: true`, and those queries use an `ilike`
 	 * fallback over their text fields.
 	 */
+	// stupidity:allow Q3 -- named helper
 	function mentionableCollections(): string[] {
 		try {
 			const entries = getManifestContext().getCollections();
@@ -267,7 +288,11 @@ export function createMentionSources(
 				.map((collection) => collection.collection_name)
 				.sort();
 			const tenant = entries
-				.filter((collection) => collection.system !== true && isSearchableCollection(collection))
+				.filter(
+					(collection) =>
+						collection.system !== true &&
+						(collection.fields ?? []).some((field) => isSearchableCollectionField(field))
+				)
 				.map((collection) => collection.collection_name)
 				.sort();
 			const remaining = Math.max(0, maxSources - allowlisted.length);
@@ -277,13 +302,17 @@ export function createMentionSources(
 		}
 	}
 
+	/** Lists workspace apps labelled for the mention menu. */
+	// stupidity:allow Q3 -- named helper
 	function mentionableApps(): MentionAppHit[] {
 		try {
 			return getManifestContext()
 				.getApps()
 				.map((app) => ({
 					key: app.name,
-					label: app.label?.trim() || app.name
+					label: app.label?.trim() || app.name,
+					href: `/app/${app.name}`,
+					description: app.description ?? null
 				}))
 				.sort((left, right) => left.label.localeCompare(right.label));
 		} catch {
@@ -291,6 +320,8 @@ export function createMentionSources(
 		}
 	}
 
+	/** Builds the replica/server query for one collection search. */
+	// stupidity:allow Q3 -- named helper
 	function findManyQuery(collection: string, query: string): Record<string, unknown> {
 		let entry: ManifestCollectionEntry | null = null;
 		try {
@@ -298,7 +329,7 @@ export function createMentionSources(
 		} catch {
 			entry = null;
 		}
-		if (entry && isSearchableCollection(entry)) {
+		if (entry && (entry.fields ?? []).some((field) => isSearchableCollectionField(field))) {
 			return { search: query, limit: hitsPerSource };
 		}
 		const textFields = (entry?.fields ?? []).filter(
@@ -317,6 +348,8 @@ export function createMentionSources(
 		};
 	}
 
+	/** Loads matching rows from the replica first, then the server. */
+	// stupidity:allow Q3 -- named helper
 	async function rowsFor(collection: string, query: string): Promise<Record<string, unknown>[]> {
 		const params = findManyQuery(collection, query);
 		try {
@@ -325,7 +358,7 @@ export function createMentionSources(
 				const local = await localFindMany(sync, collection, params);
 				if (local) return local.rows;
 			}
-		} catch {
+		} catch { // stupidity:ignore -- replica miss falls through to the server
 			// The server path below is the fallback for any local failure, not an error of record.
 		}
 		const page = await post<{ rows: Record<string, unknown>[] }>('collections/findMany', {
@@ -335,6 +368,8 @@ export function createMentionSources(
 		return page.rows;
 	}
 
+	/** Labels one found row for the mention menu, or drops it without an id. */
+	// stupidity:allow Q3 -- named helper
 	function toHit(collection: string, row: Record<string, unknown>): MentionRecordHit | null {
 		const recordId = row.norbital_id;
 		if (typeof recordId !== 'string') return null;
@@ -346,7 +381,7 @@ export function createMentionSources(
 				row,
 				manifestContext.columnsFor(collection)
 			).text;
-		} catch {
+		} catch { // stupidity:ignore -- label miss keeps the id fallback
 			// A label failure costs the pretty name, never the hit.
 		}
 		return { collection, recordId, label };
@@ -355,17 +390,14 @@ export function createMentionSources(
 	return {
 		collections: mentionableCollections,
 		apps: mentionableApps,
+		/** Searches one chosen collection and returns labelled record hits. */
 		async search(query, scope) {
 			const trimmed = query.trim();
-			if (!trimmed) return [];
+			if (!trimmed || !scope) return [];
 			let names: string[];
 			try {
-				if (scope) {
-					const entry = getManifestContext().findCollection(scope);
-					names = isMentionableCollection(entry) ? [scope] : [];
-				} else {
-					names = mentionableCollections();
-				}
+				const entry = getManifestContext().findCollection(scope);
+				names = isMentionableCollection(entry) ? [scope] : [];
 			} catch {
 				return [];
 			}

@@ -350,6 +350,23 @@ describe('agent chat panel', () => {
 		destroy();
 	});
 
+	it('does not lock the composer on an orphaned running session after a failed start', async () => {
+		const { container, destroy } = mountPanel();
+		type(container, 'Draft the RFI response');
+		submit(container);
+		inFlight.reject(new Error('Agent unavailable'));
+		await settle();
+		arriveSession({
+			messages: [message({ id: 'm1', seq: 1, role: 'user', content: 'Draft the RFI response' })],
+			turns: [turn({ status: 'running' })]
+		});
+		await settle();
+		expect(container.querySelector('[role="alert"]')?.textContent).toContain('Agent unavailable');
+		expect(container.querySelector('textarea')?.disabled).toBe(false);
+		expect(container.querySelector('[aria-label="Agent is working"]')).toBeNull();
+		destroy();
+	});
+
 	it('keeps a failed send visible and makes the composer usable again', async () => {
 		const { container, destroy } = mountPanel();
 		type(container, 'Draft the RFI response');

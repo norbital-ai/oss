@@ -69,6 +69,7 @@
 	import { workspaceSettingsApi } from './workspace-settings-api.js';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
 	import NorbitalThinkingOrb from '../agent/norbital-thinking-orb.svelte';
+	import { getAgentSurface } from '../agent/agent-activity-state.svelte.js';
 	import { agentOrbState, agentOrbStatusKey } from '../agent/agent-orb-state.js';
 	import { requestAgentComposerFocus, type AgentComposerSeed } from '../agent/composer-chrome.js';
 	import OmniFinder from './omni-finder.svelte';
@@ -102,19 +103,21 @@
 		getPolicyGrants: () => data.policyGrants
 	});
 	setPageSurfaceStateContext(() => platformState);
-	setCollectionTableNavigationContext(
-		createPodCollectionTableNavigation({
-			getCurrentUrl: () => page.url,
-			getCurrentStack: () => platformState.state.navStack,
-			navigation: platformState.navigation
-		})
-	);
+	const recordNavigation = createPodCollectionTableNavigation({
+		getCurrentUrl: () => page.url,
+		getCurrentStack: () => platformState.state.navStack,
+		navigation: platformState.navigation
+	});
+	setCollectionTableNavigationContext(recordNavigation);
+
 	setCollectionClientContext(() => workspaceApi);
 	setDataRendererRuntimeContext({
 		autocompleteGeolocation: workspaceRuntimeOperations.autocompleteGeolocation,
-		createFileUploadClient: () => new WorkspaceFileUploadClient({ t }),
+		/** Create a workspace-scoped file upload client for the data renderer. */
+		createFileUploadClient: () => new WorkspaceFileUploadClient({ t }), // stupidity:allow Q4 -- named helper
 		renderStaticMap: workspaceRuntimeOperations.renderStaticMap,
-		get customTypeRenderers() {
+		/** Live custom-type renderer map for the data-renderer runtime. */
+		get customTypeRenderers() { // stupidity:allow Q4 -- named helper
 			return customTypeRenderers;
 		}
 	});
@@ -147,10 +150,13 @@
 	);
 	const activeCollectionViews = new SvelteSet<string>();
 	setCollectionSurfaceRuntime({
-		appId: () => appName,
-		get surfaces() {
+		/** Current app id that owns mounted collection views. */
+		appId: () => appName, // stupidity:allow Q4 -- named helper
+		/** Live collection-surface registry for the table runtime. */
+		get surfaces() { // stupidity:allow Q4 -- named helper
 			return collectionSurfaces;
 		},
+		/** Register a collection view key so two tables cannot claim the same view. */
 		claimView(view) {
 			if (activeCollectionViews.has(view)) {
 				throw new Error(`Duplicate collection view "${view}"; provide a unique view prop.`);
@@ -165,6 +171,7 @@
 		loadableAppName ? loadWorkspaceApplication(apps, loadableAppName) : undefined
 	);
 	const prefetchedSurfaces = new SvelteSet<string>();
+	/** Prefetch an app module or host-plugin document so the next navigation is warm. */
 	function prefetchWorkspaceSurface(href: string): void {
 		if (prefetchedSurfaces.has(href)) return;
 		prefetchedSurfaces.add(href);
@@ -211,41 +218,33 @@
 			orderBy: { norbital_updated_at: 'desc' }
 		})
 	);
-	const fabAgentState = $derived(
-		agentOrbState({
-			messages: Array.isArray(latestPersonalAgentSession?.current?.messages)
-				? latestPersonalAgentSession.current.messages
-				: [],
-			turns: Array.isArray(latestPersonalAgentSession?.current?.turns)
-				? latestPersonalAgentSession.current.turns
-				: []
-		})
+	const agentSurface = getAgentSurface();
+	const selectedAgentSession = $derived(
+		agentSurface.chatId
+			? workspaceApi.db.chat_session?.findFirst({
+					where: { norbital_id: agentSurface.chatId }
+				})
+			: undefined
 	);
+	const fabAgentState = $derived.by(() => {
+		if (agentSurface.failed) return agentOrbState({ failed: true });
+		if (agentSurface.composingNew) {
+			return agentOrbState({ pending: agentSurface.pending });
+		}
+		const row = agentSurface.chatId
+			? selectedAgentSession?.current
+			: latestPersonalAgentSession?.current;
+		return agentOrbState({
+			pending: agentSurface.pending,
+			messages: Array.isArray(row?.messages) ? row.messages : [],
+			turns: Array.isArray(row?.turns) ? row.turns : []
+		});
+	});
 	let omniOpen = $state(false);
 	const failedThumbnails = new SvelteSet<string>();
 	const thumbnailAttempts = new SvelteMap<string, number>();
+	const thumbnailRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>();
 
-	function thumbnailSrc(app: OverviewApplication): string | null {
-		if (!app.thumbnail) return null;
-		const attempt = thumbnailAttempts.get(app.key) ?? 0;
-		if (attempt === 0) return app.thumbnail;
-		const url = new URL(app.thumbnail, page.url);
-		url.searchParams.set('pod-media-retry', String(attempt));
-		return `${url.pathname}${url.search}${url.hash}`;
-	}
-
-	function retryThumbnail(app: OverviewApplication): void {
-		const attempt = thumbnailAttempts.get(app.key) ?? 0;
-		if (attempt >= 4) {
-			failedThumbnails.add(app.key);
-			return;
-		}
-		setTimeout(() => thumbnailAttempts.set(app.key, attempt + 1), 250 * 2 ** attempt);
-	}
-
-	function settleThumbnail(app: OverviewApplication): void {
-		failedThumbnails.delete(app.key);
-	}
 	const activeAppHeaderTitle = $derived(
 		appName && activeAppManifest
 			? resolveAppHeaderTitle(
@@ -289,7 +288,7 @@
 	}
 
 	/** Cmd+/ toggles the omni finder; the finder clears its query as it closes. */
-	function toggleOmniFinder(): void {
+	function toggleOmniFinder(): void { // stupidity:allow Q4 -- template handler
 		omniOpen = !omniOpen;
 	}
 	let shortcutModifier = $state(detectShortcutModifier());
@@ -371,16 +370,19 @@
 	const activeHostPlugin = $derived(resolveHostPluginSurface(currentPath, data.hostPlugins ?? []));
 	const billingSettingsHref = $derived(resolveBillingSettingsHref(data.hostPlugins ?? []));
 
-	function closeDetailSheet(): void {
+	/** Pop the sidesheet detail stack when the sheet is dismissed. */
+	function closeDetailSheet(): void { // stupidity:allow Q4 -- template handler
 		if (detailSheetOpen) platformState.navigation.pop(page.url);
 	}
 
-	function toggleDetailSheetFullscreen(): void {
+	/** Toggle the collection-detail sidesheet between docked and fullscreen. */
+	function toggleDetailSheetFullscreen(): void { // stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
 		if (!topDetailFrame) return;
 		detailPreferences.toggleFullScreen(topDetailFrame.collection_name);
 	}
 
-	function navigate(href: string): void {
+	/** Prefetch the destination, then client-navigate without a full reload. */
+	function navigate(href: string): void { // stupidity:allow Q4 -- template handler
 		prefetchWorkspaceSurface(href);
 		void goto(href);
 	}
@@ -395,9 +397,10 @@
 	 * POST, because `/logout` refuses anything else: a cross-site `<img src="/logout">` would otherwise
 	 * end a session on sight. The endpoint clears the cookie and answers with a redirect, but this is
 	 * `fetch`, so nothing follows it on the caller's behalf — the assignment below is what actually
-	 * leaves the page, and it is a full document load so the replica is torn down with the session.
-	 */
-	async function onSignOut(): Promise<void> {
+   	 * leaves the page, and it is a full document load so the replica is torn down with the session.
+   	 */
+	/** End the workspace session through Pod's POST /logout. */
+	async function onSignOut(): Promise<void> { // stupidity:allow Q3 -- template handler
 		const response = await fetch('/logout', { method: 'POST', credentials: 'include' });
 		if (!response.ok && !response.redirected) throw new Error('Unable to sign out');
 		window.location.assign('/login');
@@ -408,17 +411,21 @@
 	 * teams from the cookie on the next request, so there is no intermediate state to keep the shell
 	 * in — the reloaded shell data carries the new scope and the account menu reflects it.
 	 */
-	function impersonate(teamId: string): void {
+	function impersonate(teamId: string): void { // stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
 		writeImpersonationTeamIds([teamId]);
 		window.location.reload();
 	}
 
-	function stopImpersonating(): void {
+	/** Clear the impersonation cookie and reload so Core drops the simulated teams. */
+	function stopImpersonating(): void { // stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
 		writeImpersonationTeamIds([]);
 		window.location.reload();
 	}
 
-	onDestroy(() => platformState.destroy());
+	onDestroy(() => {
+		for (const timer of thumbnailRetryTimers.values()) clearTimeout(timer);
+		platformState.destroy();
+	});
 </script>
 
 {#snippet detailSheetToolbar()}
@@ -472,7 +479,14 @@
 	app: OverviewApplication;
 	priority?: boolean;
 })}
-	{@const resolvedThumbnail = thumbnailSrc(app)}
+	{@const resolvedThumbnail = (() => {
+		if (!app.thumbnail) return null;
+		const attempt = thumbnailAttempts.get(app.key) ?? 0;
+		if (attempt === 0) return app.thumbnail;
+		const url = new URL(app.thumbnail, page.url);
+		url.searchParams.set('pod-media-retry', String(attempt));
+		return `${url.pathname}${url.search}${url.hash}`;
+	})()}
 	<a
 		href={app.href}
 		class="group w-[17rem] shrink-0 snap-start overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
@@ -501,8 +515,23 @@
 						width="544"
 						height="272"
 						class="size-full object-cover"
-						onload={() => settleThumbnail(app)}
-						onerror={() => retryThumbnail(app)}
+						onload={() => failedThumbnails.delete(app.key)}
+						onerror={() => {
+							const attempt = thumbnailAttempts.get(app.key) ?? 0;
+							if (attempt >= 4) {
+								failedThumbnails.add(app.key);
+								return;
+							}
+							const existing = thumbnailRetryTimers.get(app.key);
+							if (existing !== undefined) clearTimeout(existing);
+							thumbnailRetryTimers.set(
+								app.key,
+								setTimeout(() => {
+									thumbnailRetryTimers.delete(app.key);
+									thumbnailAttempts.set(app.key, attempt + 1);
+								}, 250 * 2 ** attempt)
+							);
+						}}
 					/>
 				</Frame>
 			{:else}
@@ -543,14 +572,17 @@
 	apps: readonly OverviewApplication[];
 	priority?: boolean;
 })}
-	<div
-		class="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain px-1 pb-2"
-		aria-label={t('pod.shell.applications')}
+	<Scroll
+		axis="x"
+		name="overview-apps"
+		layout="inline"
+		gap="sm"
+		class="-mx-1 snap-x snap-mandatory px-1 pb-2"
 	>
 		{#each apps as app, index (app.key)}
 			{@render applicationCard({ app, priority: priority && index < 4 })}
 		{/each}
-	</div>
+	</Scroll>
 {/snippet}
 
 {#snippet applicationHierarchy({
@@ -614,6 +646,7 @@
 >
 	<Bound size="full" clip grow>
 		{#if currentPath === '/'}
+			<!-- stupidity:allow UI16 -- nested Scroll is the axis=x overview-apps reel -->
 			<Scroll name="Workspace overview" inset>
 				<Center measure="wide">
 					<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
@@ -684,17 +717,19 @@
 							(activeAppManifest?.banner || appHeaderActions.current) && 'pt-2 sm:pt-3'
 						)}
 					>
-						{#await activeApp}
-							<Stack fill justify="center" align="center" class="text-sm text-muted-foreground">
-								{t('pod.shell.loadingApplication')}
-							</Stack>
-						{:then ActiveApp}
-							<ActiveApp />
-						{:catch error}
-							<Stack fill justify="center" align="center" class="p-6 text-sm text-destructive">
-								{error instanceof Error ? error.message : String(error)}
-							</Stack>
-						{/await}
+						{#key loadableAppName}
+							{#await activeApp}
+								<Stack fill justify="center" align="center" class="text-sm text-muted-foreground">
+									{t('pod.shell.loadingApplication')}
+								</Stack>
+							{:then ActiveApp}
+								<ActiveApp />
+							{:catch error}
+								<Stack fill justify="center" align="center" class="p-6 text-sm text-destructive">
+									{error instanceof Error ? error.message : String(error)}
+								</Stack>
+							{/await}
+						{/key}
 					</div>
 				</Cover>
 			</Bound>
@@ -734,6 +769,13 @@
 	{agentAvailable}
 	onNavigate={navigate}
 	onAskAgent={openAgent}
+	onOpenRecord={(target) => {
+		recordNavigation.open({
+			collectionName: target.collectionName,
+			recordId: target.recordId,
+			routeKey: target.collectionName
+		});
+	}}
 />
 
 <!--

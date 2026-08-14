@@ -535,7 +535,9 @@
 	// collection. Keep the loader visible until the first locally-synced or server-proven result
 	// arrives; only a resolved [] may render the empty state.
 	const tableLoading = $derived(
-		!disabled && (queries.rows == null || queries.rows.current === undefined)
+		!disabled &&
+			(queries.rows == null ||
+				(queries.rows.current === undefined && queries.rows.error == null))
 	);
 	let approvalActionState = $state<ApprovalActionState>({ status: 'idle' });
 	let changeRequestOpen = $state(false);
@@ -796,7 +798,7 @@
 	}
 
 	async function refreshData(): Promise<void> {
-		if (tableLoading || disabled) return;
+		if (disabled) return;
 		try {
 			await refresh();
 		} catch (error) {

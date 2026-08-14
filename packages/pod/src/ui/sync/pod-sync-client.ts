@@ -1008,7 +1008,11 @@ export class PodSyncClient {
 		let response: MutateResponse;
 		try {
 			response = await this.postJson<MutateResponse>('mutate', { mutations: prepared });
-		} catch {
+		} catch (err) {
+			// `postJson` marks the client unreachable only for transport failures (503, dropped
+			// connection, timeout). A 500 or 4xx is the server answering — queueing that as
+			// OFFLINE_QUEUED hides a real application error behind a silent outbox retry.
+			if (this.isOnline()) return this.rejectBatch(prepared, undo, err);
 			return queue();
 		}
 
@@ -1123,6 +1127,26 @@ export class PodSyncClient {
 		} finally {
 			this.draining = false;
 		}
+	}
+
+	/** Roll back the optimistic apply and surface the server's error, without touching the outbox. */
+	private async rejectBatch(
+		mutations: readonly WireMutation[],
+		undo: ReadonlyMap<string, PendingUndo>,
+		err: unknown
+	): Promise<MutationResult[]> {
+		const reason = err instanceof Error ? err.message : String(err);
+		for (const mutation of mutations) {
+			await this.rollback(mutation, undo.get(mutation.clientId) ?? null);
+		}
+		for (const collection of new Set(mutations.map((mutation) => mutation.collection))) {
+			this.notifyCollection(collection);
+		}
+		return mutations.map((mutation) => ({
+			clientId: mutation.clientId,
+			status: 'rejected' as const,
+			reason
+		}));
 	}
 
 	/** Append a batch to the outbox and report it as queued. */
@@ -1418,7 +1442,14 @@ export class PodSyncClient {
 		}
 		if (isTransportFailureStatus(response.status)) this.markUnreachable();
 		else this.markReachable();
-		if (!response.ok) throw new Error(`sync/${action} failed (${response.status})`);
+		if (!response.ok) {
+			const detail = (await response.text().catch(() => '')).trim();
+			throw new Error(
+				detail
+					? `sync/${action} failed (${response.status}): ${detail.slice(0, 500)}`
+					: `sync/${action} failed (${response.status})`
+			);
+		}
 		return (await response.json()) as T;
 	}
 

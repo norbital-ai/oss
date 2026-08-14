@@ -13,12 +13,9 @@
 import { getTenantManifest } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { findMany } from '$lib/server/collection/collection_ops.server.js';
+import type { MentionRecordHit } from '$lib/shared/agent/mention.js';
 
-export type AgentMentionInput = {
-	readonly collection: string;
-	readonly recordId: string;
-	readonly label: string;
-};
+export type AgentMentionInput = MentionRecordHit;
 
 /** One record snapshot is capped so a wide row cannot eat the window by itself. */
 const SNAPSHOT_LIMIT = 8_000;

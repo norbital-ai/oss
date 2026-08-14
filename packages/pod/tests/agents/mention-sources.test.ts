@@ -91,6 +91,8 @@ describe('record search identity', () => {
 		expect(recordSearchIdentity(parseCommandQuery('!', collections))).toBe('');
 		expect(recordSearchIdentity(null)).toBe('');
 		expect(shouldSearchRecords(parseCommandQuery('#companies', collections))).toBe(false);
+		expect(shouldSearchRecords(parseCommandQuery('acme', collections))).toBe(false);
+		expect(shouldSearchRecords(parseCommandQuery('# acme', collections))).toBe(false);
 	});
 
 	it('keys on collection plus trimmed text, never the raw trigger', () => {
@@ -119,13 +121,12 @@ describe('mention menu entries', () => {
 		]);
 	});
 
-	it('lists collection scopes under # until one is chosen', () => {
+	it('lists collection scopes under # until one is chosen, without searching yet', () => {
 		expect(
 			buildMentionMenuEntries(parseCommandQuery('#comp', collections), collections, [acme])
 		).toEqual([
 			{ kind: 'scope', collection: 'companies' },
-			{ kind: 'scope', collection: 'company_holidays' },
-			acme
+			{ kind: 'scope', collection: 'company_holidays' }
 		]);
 		expect(
 			buildMentionMenuEntries(parseCommandQuery('#companies acme', collections), collections, [
@@ -156,14 +157,13 @@ describe('mention menu entries', () => {
 		]);
 	});
 
-	it('matches records, collections, and apps when typing after @', () => {
+	it('offers collection scopes and apps when typing after @, not an unscoped record dump', () => {
 		const apps = [{ key: 'payroll', label: 'Payroll' }];
 		expect(
 			buildMentionMenuEntries(parseCommandQuery('comp', collections), collections, [acme], apps)
 		).toEqual([
-			acme,
-			{ kind: 'collection', collection: 'companies' },
-			{ kind: 'collection', collection: 'company_holidays' }
+			{ kind: 'scope', collection: 'companies' },
+			{ kind: 'scope', collection: 'company_holidays' }
 		]);
 		expect(
 			buildMentionMenuEntries(parseCommandQuery('pay', collections), collections, [], apps)

@@ -360,6 +360,41 @@ describe('PodSyncClient (client sync logic)', () => {
 		}
 	});
 
+	it('rejects an HTTP 500 mutate without queuing or going offline', async () => {
+		const fetch: SyncFetch = async (path) => {
+			if (!path.startsWith('sync/mutate')) return new Response('not found', { status: 404 });
+			return new Response(JSON.stringify({ error: 'Internal Error' }), {
+				status: 500,
+				headers: { 'content-type': 'application/json' }
+			});
+		};
+		const client = await makeClient(fetch);
+		try {
+			await client.upsertRow('orders', {
+				norbital_id: 'x',
+				norbital_row_version: 1,
+				status: 'open'
+			});
+			const results = await client.mutate([
+				{
+					clientId: 'c1',
+					collection: 'orders',
+					action: 'update',
+					row: { norbital_id: 'x', status: 'closed' },
+					version: 1
+				}
+			]);
+			expect(results[0]?.status).toBe('rejected');
+			expect((results[0] as { reason: string }).reason).not.toBe('OFFLINE_QUEUED');
+			expect((results[0] as { reason: string }).reason).toMatch(/500/);
+			expect(client.isOnline()).toBe(true);
+			expect((await client.queryLocal(`SELECT client_id FROM _pod_pending`)).length).toBe(0);
+			expect((await client.localRow('orders', 'x'))?.status).toBe('open');
+		} finally {
+			await client.close();
+		}
+	});
+
 	/**
 	 * Deleting a record whose create is still queued used to send the delete straight to the server,
 	 * which had never seen the id and answered `404 Record with ID … not found`. It self-resolved

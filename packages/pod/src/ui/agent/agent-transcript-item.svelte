@@ -12,11 +12,10 @@
 	import { onMount } from 'svelte';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
-	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
-	import { toolOrbActivity } from './agent-orb-state.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
 
@@ -45,7 +44,8 @@
 		if (message.kind === 'verifier') prompt = message.prompt;
 	});
 
-	function saveVerifierPrompt(): void {
+	/** Writes the edited verifier prompt back when the field blurs. */
+	function saveVerifierPrompt(): void { // stupidity:allow Q3 -- event handler
 		if (message.kind !== 'verifier') return;
 		if (prompt === message.prompt) return;
 		onVerifierPrompt?.(prompt);
@@ -54,22 +54,9 @@
 	/** The recap is what the model carries, so it opens first; the raw conversation is one click away. */
 	let checkpointTab = $state<'summary' | 'raw'>('summary');
 
-	function roleLabel(role: string): string {
-		if (role === 'user') return t('pod.agent.you');
-		if (role === 'assistant') return t('pod.agent.agent');
-		return t('pod.agent.system');
-	}
-
 	/** A built-in tool's label is a catalog key; everything else is the humanized name. */
-	function toolLabel(message: Extract<PanelMessage, { kind: 'tool' }>): string {
+	function toolLabel(message: Extract<PanelMessage, { kind: 'tool' }>): string { // stupidity:allow Q4 -- named helper
 		return message.labelKey ? t(message.labelKey) : (message.label ?? message.name);
-	}
-
-	function showToolNeedsInput(message: Extract<PanelMessage, { kind: 'tool' }>): boolean {
-		return (
-			message.state === 'needs_input' ||
-			(Array.isArray(message.elicitation) && message.elicitation.length > 0)
-		);
 	}
 </script>
 
@@ -190,11 +177,7 @@
 					</span>
 				{/if}
 				{#if message.state === 'running'}
-					<NorbitalThinkingOrb
-						state={toolOrbActivity(message.name)}
-						size={16}
-						class="shrink-0 text-foreground"
-					/>
+					<Spinner class="size-3 shrink-0 text-foreground" label={t('pod.agent.working')} />
 				{:else if message.state === 'needs_input'}
 					<Icon
 						icon="lucide:message-circle-question"
@@ -209,7 +192,8 @@
 				/>
 			</summary>
 			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
-				{#if showToolNeedsInput(message)}
+				{#if message.state === 'needs_input' ||
+					(Array.isArray(message.elicitation) && message.elicitation.length > 0)}
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('pod.agent.needsInput')}
@@ -248,14 +232,16 @@
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('pod.agent.delegatedTranscript')}
 						</span>
-						<ol
-							class="m-0 flex list-none flex-col gap-1.5 p-0"
+						<Stack
+							as="ol"
+							gap="sm"
+							class="m-0 list-none p-0"
 							aria-label={t('pod.agent.subagentTranscriptAria')}
 						>
 							{#each message.children as child (child.key)}
 								<Self message={child} nested="subagent" />
 							{/each}
-						</ol>
+						</Stack>
 					</Stack>
 				{/if}
 				{#if message.error}
@@ -303,11 +289,11 @@
 					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/reasoning:rotate-90"
 				/>
 			</summary>
-			<div
-				class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3 text-micro leading-relaxed text-foreground/80"
+			<Stack
+				class="border-l border-border/60 py-1 pl-3 text-micro leading-relaxed text-foreground/80"
 			>
 				<ReadonlyMarkdown scale="reading" content={message.content} class="content" />
-			</div>
+			</Stack>
 		</details>
 	</li>
 {:else if message.kind === 'verifier'}
@@ -382,16 +368,21 @@
 {:else if message.kind === 'text'}
 	<!-- The list gap is tuned for consecutive tool rows; the margin restores the wider rhythm between
 	     spoken messages without re-spacing the trace. A nested transcript keeps the tighter rhythm. -->
-	<li
-		class="message flex flex-col gap-1.5"
-		class:my-1.5={!nested}
-		class:items-end={message.role === 'user' && !nested}
+	<Stack
+		as="li"
+		gap="sm"
+		align={message.role === 'user' && !nested ? 'end' : 'stretch'}
+		class={['message', !nested && 'my-1.5']}
 		data-role={message.role}
 	>
 		<span class="px-1 text-tiny font-medium text-muted-foreground">
 			{nested === 'subagent' && message.role === 'user'
 				? t('pod.agent.task')
-				: roleLabel(message.role)}
+				: message.role === 'user'
+					? t('pod.agent.you')
+					: message.role === 'assistant'
+						? t('pod.agent.agent')
+						: t('pod.agent.system')}
 		</span>
 		<div
 			class={nested
@@ -409,12 +400,12 @@
 			{:else}
 				<p class="content m-0 break-words whitespace-pre-wrap">{message.content}</p>
 			{/if}
-			{#if message.status === 'streaming'}
-				<span class="mt-1.5 inline-flex items-center gap-1.5 text-tiny text-muted-foreground">
-					<NorbitalThinkingOrb state="authoring" size={16} class="text-foreground" />
-					{t('pod.agent.streaming')}
-				</span>
-			{/if}
 		</div>
-	</li>
+		{#if message.status === 'streaming'}
+			<Inline as="span" gap="sm" class="text-tiny text-muted-foreground">
+				<Spinner class="size-3.5 text-foreground" label={t('pod.agent.streaming')} />
+				{t('pod.agent.streaming')}
+			</Inline>
+		{/if}
+	</Stack>
 {/if}

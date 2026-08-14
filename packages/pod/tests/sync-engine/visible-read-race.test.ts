@@ -189,15 +189,79 @@ describe('remote query abort and cached current', () => {
 		expect(query.loading).toBe(true);
 	});
 
-	it('keeps loading true when the same generation aborts before any value exists', async () => {
+	it('retries a same-generation abort once and then surfaces an error', async () => {
 		const manager = new RemoteQueryResourceManager<string>();
+		let loads = 0;
 		const query = manager.query('abort-empty', async () => {
+			loads += 1;
 			throw new DOMException('Aborted', 'AbortError');
 		});
 		expect(query.loading).toBe(true);
 		await flush();
+		expect(loads).toBe(2);
 		expect(query.current).toBeUndefined();
-		expect(query.loading).toBe(true);
+		expect(query.loading).toBe(false);
+		expect(query.error?.message).toMatch(/cancelled/i);
+	});
+
+	it('recovers a same-generation abort on the automatic retry', async () => {
+		const manager = new RemoteQueryResourceManager<string>();
+		let loads = 0;
+		const query = manager.query('stuck-abort', () => {
+			loads += 1;
+			if (loads === 1) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+			return Promise.resolve('recovered');
+		});
+		await query;
+		expect(loads).toBe(2);
+		expect(query.current).toBe('recovered');
+		expect(query.loading).toBe(false);
+		expect(query.error).toBeUndefined();
+	});
+
+	it('does not abort an in-flight load when query() is called again', async () => {
+		const manager = new RemoteQueryResourceManager<string>();
+		let loads = 0;
+		let resolveLoad: (value: string) => void = () => {};
+		const load = (): Promise<string> => {
+			loads += 1;
+			return new Promise<string>((resolve) => {
+				resolveLoad = resolve;
+			});
+		};
+
+		const first = manager.query('in-flight', load);
+		await flush();
+		manager.query('in-flight', load);
+		manager.query('in-flight', load);
+		expect(loads).toBe(1);
+
+		resolveLoad('ok');
+		await first;
+		expect(first.current).toBe('ok');
+	});
+
+	it('restarts a failed resource on the next query() call', async () => {
+		const manager = new RemoteQueryResourceManager<string>();
+		let loads = 0;
+		const load = (): Promise<string> => {
+			loads += 1;
+			if (loads === 1) return Promise.reject(new Error('server exploded'));
+			return Promise.resolve('recovered');
+		};
+
+		const first = manager.query('stuck-error', load);
+		await flush();
+		expect(loads).toBe(1);
+		expect(first.current).toBeUndefined();
+		expect(first.loading).toBe(false);
+		expect(first.error?.message).toBe('server exploded');
+
+		const second = manager.query('stuck-error', load);
+		await second;
+		expect(loads).toBe(2);
+		expect(second.current).toBe('recovered');
+		expect(second.loading).toBe(false);
 	});
 
 	it('shows cached current while a refresh is in flight', async () => {

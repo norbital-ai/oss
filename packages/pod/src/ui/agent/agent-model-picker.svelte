@@ -42,14 +42,9 @@
 		onValueChange?: (value: string) => void;
 	} = $props();
 
-	function baseModelId(modelId: string): string {
+	/** Strips the OpenRouter-style variant suffix so catalog entries group by model family. */
+	function baseModelId(modelId: string): string { // stupidity:allow Q4 -- named helper
 		return modelId.split(':', 1)[0] ?? modelId;
-	}
-
-	function variantLabel(modelId: string, defaultModelId: string): string {
-		if (modelId === defaultModelId) return t('pod.agent.default');
-		const variant = modelId.slice(baseModelId(modelId).length + 1);
-		return variant.replaceAll(/[-_]/g, ' ').replace(/^\w/, (character) => character.toUpperCase());
 	}
 
 	// A selection the catalog does not list still has to be selectable, or the trigger renders blank
@@ -89,16 +84,27 @@
 		}))
 	);
 	const variantOptions = $derived(
-		(selectedFamily?.options ?? []).map((option) => ({
-			value: option.id,
-			label: variantLabel(option.id, selectedFamily?.defaultOption.id ?? option.id),
-			search_term: `${option.label} ${option.id}`
-		}))
+		(selectedFamily?.options ?? []).map((option) => {
+			const defaultModelId = selectedFamily?.defaultOption.id ?? option.id;
+			const label =
+				option.id === defaultModelId
+					? t('pod.agent.default')
+					: option.id
+							.slice(baseModelId(option.id).length + 1)
+							.replaceAll(/[-_]/g, ' ')
+							.replace(/^\w/, (character) => character.toUpperCase());
+			return {
+				value: option.id,
+				label,
+				search_term: `${option.label} ${option.id}`
+			};
+		})
 	);
 	const unavailableLabel = $derived(
 		status === 'loading' || status === 'idle' ? t('common.loading') : t('common.notAvailable')
 	);
 
+	/** Writes the picked model id back to the bound value and optional change callback. */
 	function selectModel(modelId: string | null): void {
 		if (!modelId) return;
 		value = modelId;

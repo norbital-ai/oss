@@ -23,7 +23,7 @@
 
 	let dismissed = $state(false);
 	let resolvedBilling = $state<WorkspaceBillingSummary>();
-	let reappearTimer: ReturnType<typeof setTimeout> | undefined;
+	let reappearTimer = $state<ReturnType<typeof setTimeout> | undefined>(undefined);
 
 	const notice = $derived.by(() => {
 		if (!resolvedBilling) return null;

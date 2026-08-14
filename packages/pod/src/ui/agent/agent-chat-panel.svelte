@@ -1,11 +1,14 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { onMount, tick } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { Button } from '@norbital-ai/ui/button';
-	import { TreeCombobox } from '@norbital-ai/ui/tree-combobox';
+	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
+	import ConversationSelector from './conversation-selector.svelte';
+	import ConversationScopePicker from './conversation-scope-picker.svelte';
 	import { Textarea } from '@norbital-ai/ui/textarea';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Center, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { getWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 	import { getInitializedWorkspaceClient } from '$lib/ui/state/client.js';
 	import { getPlatformStateContext } from '$lib/ui/state/platform_state.svelte.js';
@@ -15,7 +18,21 @@
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
-	import { agentOrbState, agentOrbStatusKey } from './agent-orb-state.js';
+	import {
+		buildConversationSelector,
+		conversationTriggerLabel,
+		scopeConversationSessions,
+		sessionVisibleInScope,
+		type ConversationSelectorLabels,
+		type ConversationSession
+	} from './conversation-selector.js';
+	import { writeAgentSurface } from './agent-activity-state.svelte.js';
+	import {
+		AGENT_TURN_STALE_MS,
+		agentOrbBusyStatusKey,
+		agentOrbState,
+		agentOrbStatusKey
+	} from './agent-orb-state.js';
 	import {
 		consumeTrigger,
 		findMentionTrigger,
@@ -45,6 +62,7 @@
 		type MentionSources
 	} from './mention-sources.js';
 	import { createDebouncedRecordSearch } from './debounced-record-search.js';
+	import { formatFinderEntityForPrompt } from '../finder/finder-entity.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import type { PodUiKeys } from '$lib/i18n/index.js';
 	import { resolveAgentIntent } from '$lib/shared/agent/intent.js';
@@ -55,77 +73,105 @@
 
 	let draft = $state('');
 	const modelState = getAgentModelState();
-	let runId = $state<string | undefined>(undefined);
-	let chatId = $state<string | undefined>(undefined);
-	let pending = $state(false);
+	let session = $state<{
+		runId: string | undefined;
+		chatId: string | undefined;
+		pending: boolean;
+		echo: string | null;
+		sendFailure: string | null;
+		waitedTooLong: boolean;
+		composingNew: boolean;
+	}>({
+		runId: undefined,
+		chatId: undefined,
+		pending: false,
+		echo: null,
+		sendFailure: null,
+		waitedTooLong: false,
+		composingNew: false
+	});
 	let planMode = $state(false);
 	let verifierOverride = $state<string | null>(null);
-	let echo = $state<string | null>(null);
-	let sendFailure = $state<string | null>(null);
-	let composingNew = $state(false);
-	let platformState: ReturnType<ReturnType<typeof getPlatformStateContext>> | null = null;
+	let platformState = $state<ReturnType<ReturnType<typeof getPlatformStateContext>> | null>(null);
 
 	// ── "@" mentions ────────────────────────────────────────────────────────────────────────────
 	// The draft stays plain text; chips are tracked ranges beside it. The menu never takes focus —
 	// every key is decided in the textarea's own keydown, which is what keeps the flow keyboard-only.
-	let textareaElement = $state<HTMLTextAreaElement | null>(null);
-	let mentions = $state<readonly ComposerMention[]>([]);
-	let lastDraft = '';
-	let trigger = $state<MentionTrigger | null>(null);
-	/** An `@` the writer dismissed with esc; suppressed until that trigger position is gone. */
-	let suppressedTriggerStart = $state<number | null>(null);
-	let menuItems = $state<readonly MentionMenuItem[]>([]);
-	let menuLoading = $state(false);
-	let highlightIndex = $state(0);
-	let mentionHighlightIdentity = '';
+	let mention = $state<{
+		textarea: HTMLTextAreaElement | null;
+		mentions: readonly ComposerMention[];
+		lastDraft: string;
+		trigger: MentionTrigger | null;
+		suppressedTriggerStart: number | null;
+		menuItems: readonly MentionMenuItem[];
+		menuLoading: boolean;
+		highlightIndex: number;
+		highlightIdentity: string;
+		sources: MentionSources | null;
+	}>({
+		textarea: null,
+		mentions: [],
+		lastDraft: '',
+		trigger: null,
+		suppressedTriggerStart: null,
+		menuItems: [],
+		menuLoading: false,
+		highlightIndex: 0,
+		highlightIdentity: '',
+		sources: null
+	});
 
 	const mentionSearch = createDebouncedRecordSearch({
 		search: (text, collection) => {
-			const sources = mentionSources;
+			const sources = mention.sources;
 			if (!sources) return Promise.resolve([]);
 			return sources.search(text, collection);
 		},
 		onLoading: (loading) => {
-			menuLoading = loading;
+			mention.menuLoading = loading;
 		},
 		onResults: (hits) => {
-			menuItems = hits.map((hit): MentionMenuItem => ({ kind: 'record', hit }));
+			mention.menuItems = hits.map((hit): MentionMenuItem => ({ kind: 'record', hit }));
 		}
 	});
 
 	// Mounted bare (a component test, a host surface without platform state) there is no manifest
 	// to search, and the feature is simply absent rather than half-alive.
-	let mentionSources: MentionSources | null = null;
 	try {
 		const getPlatformState = getPlatformStateContext();
 		if (typeof getPlatformState === 'function') {
 			platformState = getPlatformState();
-			mentionSources = createMentionSources(() => getPlatformState().manifestContext);
+			mention.sources = createMentionSources(() => getPlatformState().manifestContext);
 		}
 	} catch {
-		mentionSources = null;
+		mention.sources = null;
 	}
 
-	const menuOpen = $derived(trigger !== null && mentionSources !== null);
-	const menuCollections = $derived(mentionSources?.collections() ?? []);
-	const menuApps = $derived(mentionSources?.apps() ?? []);
-	const parsedQuery = $derived(trigger ? parseCommandQuery(trigger.query, menuCollections) : null);
+	const menuOpen = $derived(mention.trigger !== null && mention.sources !== null);
+	const menuCollections = $derived(mention.sources?.collections() ?? []);
+	const menuApps = $derived(mention.sources?.apps() ?? []);
+	const parsedQuery = $derived(
+		mention.trigger ? parseCommandQuery(mention.trigger.query, menuCollections) : null
+	);
 	const menuEntries = $derived(
-		parsedQuery ? buildMentionMenuEntries(parsedQuery, menuCollections, menuItems, menuApps) : []
+		parsedQuery
+			? buildMentionMenuEntries(parsedQuery, menuCollections, mention.menuItems, menuApps)
+			: []
 	);
 	const highlight = $derived(
-		menuEntries.length === 0 ? 0 : Math.min(highlightIndex, menuEntries.length - 1)
+		menuEntries.length === 0 ? 0 : Math.min(mention.highlightIndex, menuEntries.length - 1)
 	);
 
 	// Search is callback-driven: refreshTrigger is the only writer. Identity is parsed
 	// collection+text, so a caret move that does not change the search does not restart it.
+	/** Schedules debounced record search when the parsed mention query identity changes. */
 	function scheduleMentionSearch(): void {
-		const sources = mentionSources;
+		const sources = mention.sources;
 		const parsed = parsedQuery;
 		const identity = recordSearchIdentity(parsed);
-		if (identity !== mentionHighlightIdentity) {
-			mentionHighlightIdentity = identity;
-			highlightIndex = 0;
+		if (identity !== mention.highlightIdentity) {
+			mention.highlightIdentity = identity;
+			mention.highlightIndex = 0;
 		}
 		mentionSearch.schedule(
 			identity,
@@ -134,42 +180,45 @@
 		);
 	}
 
+	/** Recomputes the active @-mention trigger from caret position and draft text. */
 	function refreshTrigger(): void {
-		const element = textareaElement;
+		const element = mention.textarea;
 		if (!element) {
-			trigger = null;
+			mention.trigger = null;
 			scheduleMentionSearch();
 			return;
 		}
 		const found = findMentionTrigger(
 			element.value,
 			element.selectionStart ?? element.value.length,
-			mentions
+			mention.mentions
 		);
-		if (found && found.start === suppressedTriggerStart) {
-			trigger = null;
+		if (found && found.start === mention.suppressedTriggerStart) {
+			mention.trigger = null;
 			scheduleMentionSearch();
 			return;
 		}
-		suppressedTriggerStart = null;
-		trigger = found;
+		mention.suppressedTriggerStart = null;
+		mention.trigger = found;
 		scheduleMentionSearch();
 	}
 
-	function onComposerInput(): void {
-		const element = textareaElement;
+	/** Reconciles mention chip ranges after the writer edits the composer draft. */
+	function onComposerInput(): void { // stupidity:allow Q3 -- event handler
+		const element = mention.textarea;
 		if (!element) return;
-		mentions = reconcileAfterEdit(mentions, lastDraft, element.value);
-		lastDraft = element.value;
+		mention.mentions = reconcileAfterEdit(mention.mentions, mention.lastDraft, element.value);
+		mention.lastDraft = element.value;
 		refreshTrigger();
 	}
 
+	/** Updates draft, mentions, and caret together after a mention-menu action. */
 	function applyDraft(next: string, nextMentions: readonly ComposerMention[], caret: number): void {
 		draft = next;
-		lastDraft = next;
-		mentions = nextMentions;
+		mention.lastDraft = next;
+		mention.mentions = nextMentions;
 		void tick().then(() => {
-			const element = textareaElement;
+			const element = mention.textarea;
 			if (element) {
 				element.focus();
 				element.setSelectionRange(caret, caret);
@@ -178,18 +227,20 @@
 		});
 	}
 
+	/** Replaces the active mention trigger query without closing the menu. */
 	function rewriteQuery(nextQuery: string): void {
-		const element = textareaElement;
-		const active = trigger;
+		const element = mention.textarea;
+		const active = mention.trigger;
 		if (!element || !active) return;
-		const next = rewriteTriggerQuery(element.value, mentions, active, nextQuery);
+		const next = rewriteTriggerQuery(element.value, mention.mentions, active, nextQuery);
 		applyDraft(next.draft, next.mentions, next.caret);
 	}
 
+	/** Applies a mention-menu choice to the composer draft. */
 	function selectMenuItem(item: MentionMenuItem | undefined): void {
 		if (!item) return;
-		const element = textareaElement;
-		const active = trigger;
+		const element = mention.textarea;
+		const active = mention.trigger;
 		if (!element || !active) return;
 		switch (item.kind) {
 			case 'command': {
@@ -202,7 +253,12 @@
 						return;
 					case 'plan': {
 						planMode = true;
-						const next = consumeTrigger(element.value, mentions, active, parsedQuery?.text ?? '');
+						const next = consumeTrigger(
+							element.value,
+							mention.mentions,
+							active,
+							parsedQuery?.text ?? ''
+						);
 						applyDraft(next.draft, next.mentions, next.caret);
 						return;
 					}
@@ -215,7 +271,7 @@
 			case 'scope': {
 				const next = rewriteTriggerQuery(
 					element.value,
-					mentions,
+					mention.mentions,
 					active,
 					`${commandPrefixChar('record')}${item.collection} `
 				);
@@ -223,23 +279,50 @@
 				return;
 			}
 			case 'collection': {
+				const insert = formatFinderEntityForPrompt({
+					kind: 'collection',
+					collection: item.collection
+				});
 				const next = consumeTrigger(
 					element.value,
-					mentions,
+					mention.mentions,
 					active,
-					`collection:${item.collection}`
+					insert?.text ?? `collection:${item.collection}`
 				);
 				applyDraft(next.draft, next.mentions, next.caret);
 				return;
 			}
 			case 'app': {
-				const next = consumeTrigger(element.value, mentions, active, `app:${item.key}`);
+				const insert = formatFinderEntityForPrompt({
+					kind: 'app',
+					key: item.key,
+					label: item.label,
+					href: item.href ?? `/app/${item.key}`,
+					description: item.description ?? null
+				});
+				const next = consumeTrigger(
+					element.value,
+					mention.mentions,
+					active,
+					insert?.text ?? `${item.label}`
+				);
 				applyDraft(next.draft, next.mentions, next.caret);
 				return;
 			}
 			case 'record': {
+				const insert = formatFinderEntityForPrompt({
+					kind: 'record',
+					collection: item.hit.collection,
+					recordId: item.hit.recordId,
+					label: item.hit.label
+				});
 				const caret = element.selectionStart ?? element.value.length;
-				const next = insertMention(element.value, mentions, { ...active, caret }, item.hit);
+				const next = insertMention(
+					element.value,
+					mention.mentions,
+					{ ...active, caret },
+					insert?.mention ?? item.hit
+				);
 				applyDraft(next.draft, next.mentions, next.caret);
 				return;
 			}
@@ -263,6 +346,18 @@
 		readonly messages: readonly Readonly<Record<string, unknown>>[];
 		readonly turns: readonly Readonly<Record<string, unknown>>[];
 	};
+	/** Maps a replicated chat_session row into the conversation-selector session shape. */
+	function toSelectorSession(session: SessionRow): ConversationSession {
+		return {
+			id: session.norbital_id,
+			title: session.title,
+			userId: session.user_id,
+			visibility: session.visibility,
+			platform: session.platform,
+			channelKey: session.channel_key,
+			externalThreadId: session.external_thread_id
+		};
+	}
 	const sessionQuery = $derived.by(() => {
 		try {
 			return getInitializedWorkspaceClient().db.chat_session?.findMany({
@@ -305,10 +400,13 @@
 	);
 	const isAdmin = $derived(platformState?.user?.role === 'admin');
 	const currentUserId = $derived(platformState?.user?.norbital_id ?? null);
+	let scopeUserId = $state<string | null>(null);
+	const resolvedScopeUserId = $derived(scopeUserId ?? currentUserId);
 	const usersQuery = $derived.by(() => {
 		if (!isAdmin) return undefined;
 		try {
 			return getInitializedWorkspaceClient().db.user?.findMany({
+				where: { kind: 'human' },
 				orderBy: { name: 'asc' },
 				limit: 500
 			});
@@ -330,119 +428,50 @@
 		}
 		return labels;
 	});
-	function webAgentLabel(userId: string): string {
-		if (currentUserId === userId) return t('pod.agent.webAgentMe');
-		return t('pod.agent.webAgentMember', {
-			name: userLabels.get(userId) ?? t('pod.agent.unknownMember')
-		});
-	}
-
-	type ConversationTreeItem = {
-		id: string;
-		title: string;
-		searchText?: string;
-		icon: string;
-		children?: ConversationTreeItem[];
-		metadata: { readonly kind: 'group' | 'conversation' };
-	};
-	const conversationTree = $derived.by(() => {
-		const disabledIds: string[] = [];
-		const personal = sessions.filter((session) => session.visibility === 'personal');
-		const workspaceChildren: ConversationTreeItem[] = [];
-		const byUser = new SvelteMap<string, SessionRow[]>();
-		for (const session of personal) {
-			const rows = byUser.get(session.user_id) ?? [];
-			rows.push(session);
-			byUser.set(session.user_id, rows);
+	const selectorLabels = $derived.by(
+		(): ConversationSelectorLabels => ({
+			web: t('pod.agent.webChannel'),
+			users: t('pod.agent.users'),
+			groups: t('pod.agent.groups'),
+			channelFallback: t('pod.agent.channelAgent')
+		})
+	);
+	const selectorSessions = $derived(sessions.map(toSelectorSession));
+	const publicChannelKeys = $derived.by(() => {
+		const keys = new SvelteSet<string>();
+		const channels = platformState?.manifestContext?.manifest?.channels ?? {};
+		for (const [key, channel] of Object.entries(channels)) {
+			if (channel.audience === 'public') keys.add(key);
 		}
-		for (const [userId, rows] of [...byUser].sort((a, b) =>
-			webAgentLabel(a[0]).localeCompare(webAgentLabel(b[0]))
-		)) {
-			const id = `workspace-user:${userId}`;
-			disabledIds.push(id);
-			workspaceChildren.push({
-				id,
-				title: webAgentLabel(userId),
-				icon: 'lucide:monitor-user',
-				metadata: { kind: 'group' },
-				children: rows.map((session) => ({
-					id: session.norbital_id,
-					title: session.title,
-					icon: 'lucide:message-square',
-					metadata: { kind: 'conversation' }
-				}))
-			});
-		}
-
-		const channelProfiles = new SvelteMap<string, SessionRow[]>();
-		for (const session of sessions) {
-			if (!session.visibility.startsWith('channel_')) continue;
-			const key = session.channel_key ?? t('pod.agent.channelAgent');
-			const rows = channelProfiles.get(key) ?? [];
-			rows.push(session);
-			channelProfiles.set(key, rows);
-		}
-		const channelChildren: ConversationTreeItem[] = [];
-		for (const [channelKey, rows] of [...channelProfiles].sort((a, b) =>
-			a[0].localeCompare(b[0])
-		)) {
-			const profileId = `channel:${channelKey}`;
-			disabledIds.push(profileId);
-			const profileChildren: ConversationTreeItem[] = [];
-			for (const [visibility, label, icon] of [
-				['channel_group', t('pod.agent.groups'), 'lucide:users-round'],
-				['channel_dm', t('pod.agent.directMessages'), 'lucide:message-circle']
-			] as const) {
-				const matches = rows.filter((session) => session.visibility === visibility);
-				if (matches.length === 0) continue;
-				const categoryId = `${profileId}:${visibility}`;
-				disabledIds.push(categoryId);
-				profileChildren.push({
-					id: categoryId,
-					title: label,
-					icon,
-					metadata: { kind: 'group' },
-					children: matches.map((session) => ({
-						id: session.norbital_id,
-						title: session.title,
-						searchText: `${channelKey} ${session.external_thread_id ?? ''}`,
-						icon: visibility === 'channel_group' ? 'lucide:hash' : 'lucide:user-round',
-						metadata: { kind: 'conversation' }
-					}))
-				});
-			}
-			channelChildren.push({
-				id: profileId,
-				title: channelKey,
-				icon: 'product:agent',
-				metadata: { kind: 'group' },
-				children: profileChildren
-			});
-		}
-
-		const roots: ConversationTreeItem[] = [];
-		if (workspaceChildren.length > 0) {
-			roots.push({
-				id: 'workspace-agent',
-				title: t('pod.shell.workspaceAgentTitle'),
-				icon: 'product:agent',
-				metadata: { kind: 'group' },
-				children: workspaceChildren
-			});
-			disabledIds.push('workspace-agent');
-		}
-		if (channelChildren.length > 0) {
-			roots.push({
-				id: 'channel-agents',
-				title: t('pod.agent.channelAgents'),
-				icon: 'lucide:messages-square',
-				metadata: { kind: 'group' },
-				children: channelChildren
-			});
-			disabledIds.push('channel-agents');
-		}
-		return { roots, disabledIds };
+		return keys;
 	});
+	const conversationScope = $derived({
+		scopeUserId: resolvedScopeUserId,
+		currentUserId,
+		isAdmin,
+		publicChannelKeys
+	});
+	const scopedSelectorSessions = $derived(
+		scopeConversationSessions(selectorSessions, conversationScope)
+	);
+	const conversationSelector = $derived(
+		buildConversationSelector({
+			sessions: scopedSelectorSessions,
+			labels: selectorLabels
+		})
+	);
+	const scopeOptions = $derived.by(() => {
+		if (!isAdmin || currentUserId == null) return [];
+		const options: { id: string; label: string }[] = [
+			{ id: currentUserId, label: t('pod.agent.me') }
+		];
+		for (const [id, label] of userLabels) {
+			if (id === currentUserId) continue;
+			options.push({ id, label });
+		}
+		return options;
+	});
+	const showScopePicker = $derived(isAdmin && scopeOptions.length > 1);
 
 	/**
 	 * The live conversation: the user's explicit pick, or the newest session once any exist.
@@ -451,15 +480,27 @@
 	 * without anyone having to watch for it.
 	 */
 	const activeChatId = $derived(
-		chatId ?? (composingNew || sessions.length === 0 ? undefined : sessions[0].norbital_id)
+		session.chatId ??
+			(session.composingNew || scopedSelectorSessions.length === 0
+				? undefined
+				: scopedSelectorSessions[0].id)
 	);
 	const activeRunId = $derived.by(() => {
-		if (!activeChatId) return runId;
-		return sessions.find((row) => row.norbital_id === activeChatId)?.automation_run_id ?? runId;
+		if (!activeChatId) return session.runId;
+		return (
+			sessions.find((row) => row.norbital_id === activeChatId)?.automation_run_id ?? session.runId
+		);
 	});
 
 	/** One replicated tenant row is the complete live conversation aggregate. */
 	const activeSession = $derived(sessions.find((row) => row.norbital_id === activeChatId));
+	const conversationDisplayLabel = $derived(
+		conversationTriggerLabel({
+			session: activeSession ? toSelectorSession(activeSession) : undefined,
+			model: conversationSelector,
+			labels: selectorLabels
+		})
+	);
 	const activeSessionIsChannel = $derived(
 		activeSession?.visibility.startsWith('channel_') ?? false
 	);
@@ -475,7 +516,7 @@
 	const stored = $derived(
 		toPanelMessages(activeSession?.messages ?? [], activeSession?.turns ?? [])
 	);
-	const messages = $derived(withPendingEcho(stored, echo));
+	const messages = $derived(withPendingEcho(stored, session.echo));
 	const turnRows = $derived(activeSession?.turns ?? []);
 	const rootTurn = $derived(
 		[...turnRows].filter((turn) => turn.subagent_id == null).at(-1) as
@@ -483,7 +524,9 @@
 	);
 	/** `agentChatStart` returns before inference; the replicated root turn owns in-flight after that. */
 	const composerLocked = $derived(
-		pending || rootTurn?.status === 'running' || rootTurn?.status === 'queued'
+		!session.sendFailure &&
+			!session.waitedTooLong &&
+			(session.pending || rootTurn?.status === 'running' || rootTurn?.status === 'queued')
 	);
 	const terminalMessage = $derived(messages.at(-1));
 	const replicaFailure = $derived.by(() => {
@@ -499,10 +542,15 @@
 		}
 		return null;
 	});
-	const failure = $derived(sendFailure ?? replicaFailure);
+	const failure = $derived(
+		session.sendFailure ??
+			replicaFailure ??
+			(session.waitedTooLong ? t('pod.agent.couldNotFinish') : null)
+	);
 	const activityState = $derived(
 		agentOrbState({
 			pending: composerLocked,
+			failed: failure != null,
 			messages: activeSession?.messages,
 			turns: activeSession?.turns
 		})
@@ -513,7 +561,7 @@
 			message: draft,
 			planMode,
 			verifierPrompt: verifierOverride,
-			mentionCount: mentions.length
+			mentionCount: mention.mentions.length
 		})
 	);
 	const verifierPrompt = $derived(previewIntent.verifierPrompt);
@@ -583,6 +631,16 @@
 		)
 	);
 
+	/** Pushes composer identity into the shared shell and FAB activity store. */
+	function syncAgentSurface(): void {
+		writeAgentSurface({
+			chatId: session.chatId,
+			composingNew: session.composingNew,
+			pending: session.pending,
+			failed: session.sendFailure != null || session.waitedTooLong
+		});
+	}
+
 	/**
 	 * The catalog and selected model are shared by every route/sheet panel. Cmd+K (and the FAB) ask
 	 * for composer focus through a window event: the panel may live in the sheet portal or on the
@@ -591,15 +649,16 @@
 	onMount(() => {
 		void loadAgentModelCatalog(getWorkspaceRemoteTransport());
 
+		/** Seeds and focuses the composer when the shell broadcasts a focus request. */
 		function onFocusRequest(event: Event): void {
 			const seed =
 				event instanceof CustomEvent ? (event.detail as AgentComposerSeed | undefined) : undefined;
 			if (seed?.planMode) planMode = true;
 			if (seed?.message) {
 				draft = seed.message;
-				lastDraft = seed.message;
+				mention.lastDraft = seed.message;
 			}
-			const element = textareaElement;
+			const element = mention.textarea;
 			if (!element) return;
 			element.focus();
 			element.setSelectionRange(element.value.length, element.value.length);
@@ -608,22 +667,26 @@
 		return () => window.removeEventListener(AGENT_COMPOSER_FOCUS_EVENT, onFocusRequest);
 	});
 
+	/** Starts an agent turn with the current draft, mentions, and model selection. */
 	async function send(): Promise<void> {
-		const { message, references } = serializeMentions(draft, mentions);
+		const { message, references } = serializeMentions(draft, mention.mentions);
 		if (!message || composerLocked || activeSessionIsReadOnly) return;
 		const { verify, verifierPrompt: resolvedVerifierPrompt } = previewIntent;
-		pending = true;
-		sendFailure = null;
-		echo = message;
+		if (!activeChatId) session.composingNew = true;
+		session.pending = true;
+		session.sendFailure = null;
+		session.waitedTooLong = false;
+		session.echo = message;
 		draft = '';
-		lastDraft = '';
-		mentions = [];
-		trigger = null;
-		suppressedTriggerStart = null;
-		mentionHighlightIdentity = '';
-		menuItems = [];
-		menuLoading = false;
+		mention.lastDraft = '';
+		mention.mentions = [];
+		mention.trigger = null;
+		mention.suppressedTriggerStart = null;
+		mention.highlightIdentity = '';
+		mention.menuItems = [];
+		mention.menuLoading = false;
 		mentionSearch.invalidate();
+		syncAgentSurface();
 		try {
 			const result = await getWorkspaceRemoteTransport().agentChatStart({
 				message,
@@ -640,47 +703,80 @@
 					? { model: modelState.selectedModel }
 					: {})
 			});
-			runId = result.runId;
-			chatId = result.chatId;
-			composingNew = false;
+			session.runId = result.runId;
+			session.chatId = result.chatId;
+			session.composingNew = false;
 			// `agentChatStart` returns before inference; the replicated root turn owns in-flight after this.
-			pending = false;
+			session.pending = false;
+			syncAgentSurface();
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : String(cause);
-			sendFailure =
+			session.sendFailure =
 				!message || message === 'INTERNAL_ERROR' || message === t('pod.server.internalError')
 					? t('pod.agent.couldNotStart')
 					: message;
-			pending = false;
+			session.pending = false;
+			syncAgentSurface();
 		}
 	}
 
-	function selectConversation(value: string | null): void {
+	/** Switches the panel to an existing replicated session. */
+	function selectConversation(value: string | null): void { // stupidity:allow Q3 -- event handler
 		if (!value) return;
-		const session = sessions.find((candidate) => candidate.norbital_id === value);
-		if (!session) return;
-		chatId = session.norbital_id;
-		runId = session.automation_run_id ?? undefined;
-		composingNew = false;
-		echo = null;
-		sendFailure = null;
+		const row = sessions.find((candidate) => candidate.norbital_id === value);
+		if (!row) return;
+		session.chatId = row.norbital_id;
+		session.runId = row.automation_run_id ?? undefined;
+		session.composingNew = false;
+		session.echo = null;
+		session.sendFailure = null;
+		session.waitedTooLong = false;
+		syncAgentSurface();
 	}
 
-	function startConversation(): void {
-		chatId = undefined;
-		runId = undefined;
-		composingNew = true;
-		echo = null;
-		sendFailure = null;
+	/** Filters the conversation list to one member and drops a thread outside that scope. */
+	function selectScope(userId: string): void { // stupidity:allow Q3 -- event handler
+		scopeUserId = userId;
+		if (session.chatId && sessions.some((row) => row.norbital_id === session.chatId)) {
+			const current = sessions.find((row) => row.norbital_id === session.chatId);
+			if (
+				current &&
+				!sessionVisibleInScope(toSelectorSession(current), {
+					scopeUserId: userId,
+					currentUserId,
+					isAdmin,
+					publicChannelKeys
+				})
+			) {
+				session.chatId = undefined;
+				session.runId = undefined;
+				session.composingNew = false;
+			}
+		}
+		syncAgentSurface();
 	}
 
-	function onKeydown(event: KeyboardEvent): void {
+	/** Clears the active thread so the next send creates a new conversation. */
+	function startConversation(): void { // stupidity:allow Q3 -- event handler
+		scopeUserId = currentUserId;
+		session.chatId = undefined;
+		session.runId = undefined;
+		session.composingNew = true;
+		session.echo = null;
+		session.sendFailure = null;
+		session.waitedTooLong = false;
+		syncAgentSurface();
+	}
+
+	/** Routes keyboard input between the mention menu and the send action. */
+	function onKeydown(event: KeyboardEvent): void { // stupidity:allow Q3 -- event handler
 		if (menuOpen) {
 			if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
 				event.preventDefault();
 				if (menuEntries.length === 0) return;
 				const step = event.key === 'ArrowDown' ? 1 : -1;
-				highlightIndex = (highlightIndex + step + menuEntries.length) % menuEntries.length;
+				mention.highlightIndex =
+					(mention.highlightIndex + step + menuEntries.length) % menuEntries.length;
 				return;
 			}
 			if (event.key === 'Escape') {
@@ -693,8 +789,8 @@
 					rewriteQuery('');
 					return;
 				}
-				suppressedTriggerStart = trigger?.start ?? null;
-				trigger = null;
+				mention.suppressedTriggerStart = mention.trigger?.start ?? null;
+				mention.trigger = null;
 				return;
 			}
 			if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
@@ -707,18 +803,18 @@
 				// `@` text goes as the literal prose it is.
 				if (event.key === 'Tab') {
 					event.preventDefault();
-					suppressedTriggerStart = trigger?.start ?? null;
-					trigger = null;
+					mention.suppressedTriggerStart = mention.trigger?.start ?? null;
+					mention.trigger = null;
 					return;
 				}
 			}
 		}
 		if (event.key === 'Backspace' || event.key === 'Delete') {
-			const element = textareaElement;
+			const element = mention.textarea;
 			if (element) {
 				const deletion = mentionDeletion(
 					element.value,
-					mentions,
+					mention.mentions,
 					element.selectionStart ?? 0,
 					element.selectionEnd ?? element.selectionStart ?? 0,
 					event.key === 'Delete' ? 'forward' : 'backward'
@@ -744,7 +840,13 @@
 	class="bg-background"
 	aria-label={t('pod.shell.workspaceAgentTitle')}
 >
-	<Inline as="header" justify="between" gap="sm" class="shrink-0 border-b px-3 py-2.5 sm:px-4">
+	<Inline
+		as="header"
+		justify="between"
+		gap="sm"
+		shrink={false}
+		class="border-b px-3 py-2.5 sm:px-4"
+	>
 		{#if headerOrb}
 			<div
 				class="grid size-8 shrink-0 place-items-center text-foreground"
@@ -759,17 +861,25 @@
 				/>
 			</div>
 		{/if}
+		{#if showScopePicker && resolvedScopeUserId}
+			<ConversationScopePicker
+				value={resolvedScopeUserId}
+				options={scopeOptions}
+				searchPlaceholder={t('pod.agent.searchMembers')}
+				ariaLabel={t('pod.agent.conversationScope')}
+				onValueChange={selectScope}
+			/>
+		{/if}
 		<div class="min-w-0 flex-1">
-			<TreeCombobox
-				rootItems={conversationTree.roots}
-				disabledIds={conversationTree.disabledIds}
+			<ConversationSelector
+				model={conversationSelector}
 				value={activeChatId}
-				onValueChange={(value) => selectConversation(value ?? null)}
-				ariaLabel={t('pod.agent.conversationThread')}
-				searchPlaceholder={t('pod.agent.searchConversations')}
+				displayLabel={conversationDisplayLabel}
 				placeholder={t('pod.agent.noConversations')}
-				allowCleared={false}
-				triggerClass="border-0 bg-transparent shadow-none"
+				searchPlaceholder={t('pod.agent.searchConversations')}
+				ariaLabel={t('pod.agent.conversationThread')}
+				emptyLabel={t('pod.agent.noConversations')}
+				onValueChange={(id) => selectConversation(id)}
 			/>
 		</div>
 		<Button
@@ -783,72 +893,118 @@
 		</Button>
 	</Inline>
 	{#if messages.length === 0 && !composerLocked}
-		<div class="grid min-h-0 flex-1 place-items-center overflow-y-auto px-6 py-10">
-			<div class="max-w-sm text-center">
-				<div class="mx-auto mb-4 grid size-12 place-items-center rounded-xl bg-card shadow-xs">
-					<NorbitalThinkingOrb state="idle" size={34} class="text-foreground" />
-				</div>
-				<h2 class="text-base font-semibold tracking-[-0.015em] text-foreground">
-					{t('pod.agent.askAboutWorkspace')}
-				</h2>
-				<p class="mx-auto mt-2 max-w-[36ch] text-sm leading-6 text-muted-foreground">
-					{t('pod.agent.askDescription')}
-				</p>
-			</div>
-		</div>
+		<Bound size="full" grow>
+			<Scroll name={t('pod.agent.askAboutWorkspace')} axis="y" class="px-6 py-10">
+				<Center measure="narrow" layout="stack" gap="md" align="center" class="text-center">
+					<Inline
+						justify="center"
+						align="center"
+						class="size-12 rounded-xl bg-card shadow-xs"
+					>
+						<IconWrapper name="product:pod" class="size-7 text-foreground" />
+					</Inline>
+					<h2 class="text-base font-semibold tracking-[-0.015em] text-foreground">
+						{t('pod.agent.askAboutWorkspace')}
+					</h2>
+					<p class="text-sm leading-6 text-muted-foreground">
+						{t('pod.agent.askDescription')}
+					</p>
+				</Center>
+			</Scroll>
+		</Bound>
 	{:else}
-		<ol
-			{@attach (node) => {
-				void messages.length;
-				queueMicrotask(() => {
-					node.scrollTop = node.scrollHeight;
-				});
-			}}
-			class="flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-4 py-5 sm:px-5"
-			aria-live="polite"
-			aria-label={t('pod.agent.conversationAria')}
-		>
-			{#each messages as message (message.key)}
-				<AgentTranscriptItem
-					{message}
-					onVerifierPrompt={async (prompt) => {
-						const id = activeRunId;
-						if (!id) return;
-						const update = getWorkspaceRemoteTransport().agentChatUpdateVerifier;
-						if (update) await update({ runId: id, prompt });
-					}}
-				/>
-			{/each}
-			{#if composerLocked && !agentHasSpoken}
-				<li class="my-1.5 flex flex-col gap-1.5" aria-label={t('pod.agent.agentIsWorking')}>
-					<span class="px-1 text-tiny font-medium text-muted-foreground"
-						>{t('pod.agent.agent')}</span
+		<Bound size="full" grow>
+			<Scroll
+				as="ol"
+				axis="y"
+				name="agent-transcript"
+				layout="stack"
+				gap="sm"
+				class="list-none px-4 py-5 sm:px-5"
+				aria-live="polite"
+				{@attach (node) => {
+					void messages.length;
+					queueMicrotask(() => {
+						node.scrollTop = node.scrollHeight;
+					});
+				}}
+			>
+				{#each messages as message (message.key)}
+					<AgentTranscriptItem
+						{message}
+						onVerifierPrompt={async (prompt) => {
+							const id = activeRunId;
+							if (!id) return;
+							const update = getWorkspaceRemoteTransport().agentChatUpdateVerifier;
+							if (update) await update({ runId: id, prompt });
+						}}
+					/>
+				{/each}
+				{#if (composerLocked || session.waitedTooLong) && !agentHasSpoken}
+					<Stack
+						as="li"
+						gap="sm"
+						aria-label={session.waitedTooLong
+							? t('pod.agent.failed')
+							: t('pod.agent.agentIsWorking')}
+						{@attach () => {
+							if (!composerLocked || agentHasSpoken) return;
+							const timer = window.setTimeout(() => {
+								session.waitedTooLong = true;
+								writeAgentSurface({
+									chatId: session.chatId,
+									composingNew: session.composingNew,
+									pending: false,
+									failed: true
+								});
+							}, AGENT_TURN_STALE_MS);
+							return () => window.clearTimeout(timer);
+						}}
 					>
-					<div
-						class="inline-flex w-fit items-center gap-2.5 rounded-xl bg-muted px-3.5 py-2.5 text-sm"
-					>
-						<NorbitalThinkingOrb state={activityState} size={20} class="text-foreground" />
-						<span class="text-muted-foreground">{t('pod.agent.working')}</span>
-					</div>
-				</li>
-			{/if}
-		</ol>
+						<span class="px-1 text-tiny font-medium text-muted-foreground"
+							>{t('pod.agent.agent')}</span
+						>
+						<Inline class="w-fit rounded-xl bg-muted px-3.5 py-2.5 text-sm">
+							{#if session.waitedTooLong}
+								<NorbitalThinkingOrb
+									state="failed"
+									size={20}
+									label={t('pod.agent.failed')}
+									class="text-destructive"
+								/>
+								<span class="text-destructive">{t('pod.agent.failed')}</span>
+							{:else}
+								<Spinner
+									class="size-4 text-foreground"
+									label={t(agentOrbBusyStatusKey(activityState))}
+								/>
+								<span class="text-muted-foreground">{t(agentOrbBusyStatusKey(activityState))}</span>
+							{/if}
+						</Inline>
+					</Stack>
+				{/if}
+			</Scroll>
+		</Bound>
 	{/if}
 
-	<div class="shrink-0 bg-background px-3 pb-3 sm:px-4 sm:pb-4">
+	<Stack shrink={false} gap="sm" class="bg-background px-3 pb-3 sm:px-4 sm:pb-4">
 		{#if failure}
-			<div
-				class="mb-3 flex items-start gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive"
+			<Inline
+				align="start"
+				gap="sm"
+				class="rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive"
 				role="alert"
 			>
 				<Icon icon="lucide:circle-alert" class="mt-0.5 size-3.5 shrink-0" />
 				<span>{failure}</span>
-			</div>
+			</Inline>
 		{/if}
 
 		{#if activeSessionIsReadOnly}
-			<div
-				class="flex items-center gap-2 rounded-lg bg-muted px-3 py-2.5 text-xs leading-5 text-muted-foreground"
+			<Inline
+				align="center"
+				gap="sm"
+				class="rounded-lg bg-muted px-3 py-2.5 text-xs leading-5 text-muted-foreground"
 				role="note"
 			>
 				<Icon icon="lucide:lock-keyhole" class="size-3.5 shrink-0" />
@@ -857,18 +1013,18 @@
 						? t('pod.agent.channelReadOnly')
 						: t('pod.agent.adminConversationReadOnly')}
 				</span>
-			</div>
+			</Inline>
 		{:else}
 			<div class="relative">
 				{#if menuOpen}
 					<AgentMentionMenu
 						items={menuEntries}
 						highlightIndex={highlight}
-						loading={menuLoading}
+						loading={mention.menuLoading}
 						query={parsedQuery?.text ?? ''}
 						scope={parsedQuery?.collection ?? null}
 						onselect={(index) => selectMenuItem(menuEntries[index])}
-						onhighlight={(index) => (highlightIndex = index)}
+						onhighlight={(index) => (mention.highlightIndex = index)}
 						onclearscope={() => rewriteQuery(commandPrefixChar('record'))}
 					/>
 				{/if}
@@ -884,7 +1040,7 @@
 						<Textarea
 							id="agent-chat-input"
 							bind:value={draft}
-							bind:ref={textareaElement}
+							bind:ref={mention.textarea}
 							onkeydown={onKeydown}
 							oninput={onComposerInput}
 							onkeyup={(event) => {
@@ -1019,7 +1175,7 @@
 								aria-label={composerLocked ? t('pod.agent.agentIsWorking') : t('pod.agent.send')}
 							>
 								{#if composerLocked}
-									<NorbitalThinkingOrb state={activityState} size={18} />
+									<Spinner class="size-4" label={t(agentOrbBusyStatusKey(activityState))} />
 								{:else}
 									<Icon icon="lucide:arrow-up" class="size-4" />
 								{/if}
@@ -1029,5 +1185,5 @@
 				</form>
 			</div>
 		{/if}
-	</div>
+	</Stack>
 </Stack>

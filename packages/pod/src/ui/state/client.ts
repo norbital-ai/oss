@@ -115,6 +115,12 @@ export function remoteQueryFamily(keyPrefix: string, path: string, body: unknown
 		body && typeof body === 'object' && !Array.isArray(body)
 			? (body as Record<string, unknown>)
 			: {};
+	if (typeof input.name === 'string') {
+		return remoteQueryKey(keyPrefix, path, {
+			name: input.name,
+			payload: input.payload ?? null
+		});
+	}
 	return remoteQueryKey(keyPrefix, path, {
 		after: typeof input.after === 'string' ? input.after : '',
 		limit: typeof input.limit === 'number' ? input.limit : null,

@@ -27,6 +27,8 @@ export function toNotificationRow(record: Readonly<Record<string, unknown>>): No
 	const id = record.norbital_id;
 	const subject = record.subject;
 	if (typeof id !== 'string' || typeof subject !== 'string') return [];
+	/** Reads an optional string column, or null when the replica omitted it. */
+	// stupidity:allow Q4 -- named helper
 	const optional = (field: string): string | null => {
 		const value = record[field];
 		return typeof value === 'string' ? value : null;
@@ -52,6 +54,7 @@ export function toNotificationRow(record: Readonly<Record<string, unknown>>): No
  * surface can see. `9+` is true whether there are ten or a thousand, which an exact number taken
  * from a page would not be.
  */
+// stupidity:allow Q4 -- named helper
 export function unreadBadge(unread: number): string {
 	if (unread <= 0) return '';
 	return unread > 9 ? '9+' : String(unread);

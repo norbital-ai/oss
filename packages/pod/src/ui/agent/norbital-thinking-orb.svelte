@@ -31,14 +31,34 @@
 		class?: string;
 	} = $props();
 
-	function clamp(value: number, min = 0, max = 1): number {
+	const ORB_STATES: readonly AgentOrbState[] = [
+		'idle',
+		'thinking',
+		'searching',
+		'authoring',
+		'working',
+		'failed'
+	];
+
+	/** Read the live attribute Svelte keeps in sync — the attach closure must not snapshot `state`. */
+	function liveOrbState(root: Element): AgentOrbState { // stupidity:allow Q4 -- named helper
+		const value = root.getAttribute('data-state');
+		return value !== null && ORB_STATES.includes(value as AgentOrbState)
+			? (value as AgentOrbState)
+			: 'idle';
+	}
+
+	/** Clamps a numeric value to the inclusive range between min and max. */
+	function clamp(value: number, min = 0, max = 1): number { // stupidity:allow Q4 -- named helper
 		return Math.min(max, Math.max(min, value));
 	}
 
-	function angleDistance(a: number, b: number): number {
+	/** Returns the shortest signed angular distance between two radians. */
+	function angleDistance(a: number, b: number): number { // stupidity:allow Q4 -- named helper
 		return Math.atan2(Math.sin(a - b), Math.cos(a - b));
 	}
 
+	/** Applies yaw and tilt rotations to a 3D point for sphere rendering. */
 	function rotatePoint(x: number, y: number, z: number, yaw: number, tilt: number): OrbPoint {
 		const sy = Math.sin(yaw);
 		const cy = Math.cos(yaw);
@@ -56,7 +76,8 @@
 		};
 	}
 
-	function buildSphereLayout(renderSize: number): SphereSeed[] {
+	/** Builds sphere seed coordinates scaled to the render size. */
+	function buildSphereLayout(renderSize: number): SphereSeed[] { // stupidity:allow Q3 -- named helper
 		const sizeRatio = renderSize / 64;
 		const ringScale = clamp(Math.pow(sizeRatio, 0.35), 0.68, 1);
 		const columnScale = clamp(Math.pow(sizeRatio, 0.45), 0.56, 1);
@@ -82,7 +103,8 @@
 		return layout;
 	}
 
-	function orientStateShape(
+	/** Rotates a state-shape point and attaches accent, boost, and visibility. */
+	function orientStateShape( // stupidity:allow Q3 -- named helper
 		x: number,
 		y: number,
 		z: number,
@@ -104,7 +126,8 @@
 		return point;
 	}
 
-	function searchingSkyPoint(
+	/** Adds constellation glow and twinkle accents for searching-mode particles. */
+	function searchingSkyPoint( // stupidity:allow Q3 -- named helper
 		index: number,
 		layout: SphereSeed[],
 		time: number,
@@ -144,7 +167,8 @@
 		};
 	}
 
-	function stateShapePoint(
+	/** Computes the 2D state glyph layout point for a sphere particle index. */
+	function stateShapePoint( // stupidity:allow Q3 -- named helper
 		mode: AgentOrbState,
 		index: number,
 		count: number,
@@ -209,8 +233,9 @@
 		);
 	}
 
-	function stateShapeMix(mode: AgentOrbState, time: number): number {
-		if (mode === 'idle' || mode === 'thinking') return 0;
+	/** Returns the 0–1 blend factor between sphere and state-shape modes over time. */
+	function stateShapeMix(mode: AgentOrbState, time: number): number { // stupidity:allow Q3 -- named helper
+		if (mode === 'idle' || mode === 'thinking' || mode === 'failed') return 0;
 		const cycle = time % 5.2;
 		if (cycle < 0.8 || cycle > 4.8) return 0;
 		if (cycle < 1.25) {
@@ -222,7 +247,8 @@
 		return (1 - progress) ** 3;
 	}
 
-	function spherePoint(
+	/** Positions and styles a sphere particle for the given agent orb state. */
+	function spherePoint( // stupidity:allow Q3 -- named helper
 		mode: AgentOrbState,
 		index: number,
 		layout: SphereSeed[],
@@ -289,6 +315,19 @@
 			);
 			point.accent = current * clamp(point.z * 1.55);
 			point.boost = point.accent * 0.16;
+		} else if (mode === 'failed') {
+			const melt = clamp((-latitude + 0.22) / 1.12);
+			const sag = melt ** 1.35;
+			const wobble = Math.sin(longitude * 2.1 + time * 0.62) * sag * 0.14;
+			const dripCycle = (time * 0.48 + index * 0.19) % 1;
+			const dripping = sag > 0.42 && dripCycle > 0.68;
+			const drip = dripping ? ((dripCycle - 0.68) / 0.32) ** 1.6 : 0;
+			point.x = point.x * (1 - sag * 0.28) + wobble;
+			point.y = point.y - sag * 0.48 - drip * sag * 0.7;
+			point.z = point.z * (1 - sag * 0.2);
+			point.accent = 0.62 + sag * 0.38;
+			point.boost = 0.05 + sag * 0.16;
+			point.visibility = dripping ? 0.28 + (1 - drip) * 0.45 : 0.5 + (1 - sag) * 0.5;
 		} else {
 			const emberDistance = angleDistance(longitude, time * 0.52 + latitude * 2);
 			point.accent = Math.exp(-(emberDistance * emberDistance) / 0.08) * clamp(point.z) * 0.16;
@@ -297,6 +336,7 @@
 		return point;
 	}
 
+	/** Blends sphere and state-shape positions for one particle at the current phase. */
 	function pointForState(
 		mode: AgentOrbState,
 		index: number,
@@ -315,6 +355,7 @@
 		return interpolatePoint(orb, shape, shapeMix);
 	}
 
+	/** Linearly interpolates every field between two orb particle snapshots. */
 	function interpolatePoint(from: OrbPoint, to: OrbPoint, amount: number): OrbPoint {
 		return {
 			x: from.x + (to.x - from.x) * amount,
@@ -361,7 +402,8 @@
 			let lastDrawnState: AgentOrbState | null = null;
 			let lastDrawnSize = 0;
 
-			function syncCanvas(): number {
+			/** Resizes the canvas and rebuilds sphere layout when size or DPR changes. */
+			function syncCanvas(): number { // stupidity:allow Q3 -- named helper
 				const dpr = Math.min(2, window.devicePixelRatio || 1);
 				if (lastCanvasSize !== size || lastDpr !== dpr) {
 					if (lastCanvasSize !== size) sphereLayout = buildSphereLayout(size);
@@ -374,6 +416,7 @@
 				return dpr;
 			}
 
+			/** Renders one orb frame with state transition blending and accent highlights. */
 			function draw(now: number, staticFrame = false): void {
 				syncCanvas();
 				if (now - lastColorRead > 800 || lastColorRead === 0) {
@@ -382,9 +425,10 @@
 					lastColorRead = now;
 				}
 
-				if (state !== targetState) {
+				const currentState = liveOrbState(root);
+				if (currentState !== targetState) {
 					previousState = targetState;
-					targetState = state;
+					targetState = currentState;
 					transitionStarted = now;
 				}
 
@@ -435,19 +479,21 @@
 				context.globalAlpha = 1;
 			}
 
+			/** Advances the animation loop, honoring reduced-motion and visibility pauses. */
 			function tick(now: number): void {
 				if (!initialized) {
-					targetState = state;
-					previousState = state;
+					targetState = liveOrbState(root);
+					previousState = targetState;
 					transitionStarted = now;
 					initialized = true;
 				}
 				if (reducedMotion) {
-					if (state === lastDrawnState && size === lastDrawnSize) {
+					const currentState = liveOrbState(root);
+					if (currentState === lastDrawnState && size === lastDrawnSize) {
 						frame = requestAnimationFrame(tick);
 						return;
 					}
-					lastDrawnState = state;
+					lastDrawnState = currentState;
 					lastDrawnSize = size;
 					draw(now, true);
 				} else {
@@ -456,17 +502,20 @@
 				frame = requestAnimationFrame(tick);
 			}
 
-			function start(): void {
+			/** Starts the requestAnimationFrame loop when the orb is visible. */
+			function start(): void { // stupidity:allow Q4 -- named helper
 				if (frame || !visible || document.hidden) return;
 				frame = requestAnimationFrame(tick);
 			}
 
+			/** Cancels the active animation frame, if any. */
 			function stop(): void {
 				if (!frame) return;
 				cancelAnimationFrame(frame);
 				frame = 0;
 			}
 
+			/** Reacts to prefers-reduced-motion changes and redraws a static frame. */
 			function updateMotionPreference(): void {
 				reducedMotion = motionQuery.matches;
 				lastDrawnState = null;
@@ -475,7 +524,8 @@
 				updateVisibility();
 			}
 
-			function updateVisibility(): void {
+			/** Starts or stops animation based on document and intersection visibility. */
+			function updateVisibility(): void { // stupidity:allow Q4 -- named helper
 				if (document.hidden || !visible) stop();
 				else start();
 			}
@@ -513,6 +563,11 @@
 		place-items: center;
 		color: currentColor;
 		contain: strict;
+	}
+
+	.norbital-thinking-orb[data-state='failed'] {
+		color: var(--color-destructive);
+		--orb-accent: var(--color-destructive);
 	}
 
 	canvas {

@@ -5,6 +5,8 @@
  * and not a second model of the conversation. Kept out of the component because it is the only part
  * with an answer worth checking, and this package has no browser runner to check it through one.
  */
+import { humanize } from '@norbital-ai/std';
+import { z } from 'zod';
 import type { PodUiKeys } from '$lib/i18n/index.js';
 import { parsePublicMcpToolName } from '$lib/mcp/names.js';
 import { parseStoredGoalVerdict, parseStoredVerifierScheduled } from '$lib/shared/agent/goal-verdict.js';
@@ -187,7 +189,18 @@ export function toPanelMessages(
 		const stored = storedMessage(record);
 		if (!stored || stored.role !== 'tool') continue;
 		const callId = stored.message.toolCallId;
-		if (typeof callId === 'string') results.set(callId, parsedContent(stored.message.content));
+		if (typeof callId === 'string') {
+			const content = stored.message.content;
+			let parsed: unknown = content;
+			if (typeof content === 'string') {
+				try {
+					parsed = z.unknown().parse(JSON.parse(content));
+				} catch {
+					parsed = content;
+				}
+			}
+			results.set(callId, parsed);
+		}
 	}
 
 	// `runSubagent` tags the child's turn `subagent:<spawn call id>`, so the call that started a
@@ -347,6 +360,8 @@ function toPanelRow(
 	];
 }
 
+/** Projects one stored tool call into the collapsed row the panel renders. */
+// stupidity:allow Q3 -- large projector
 function toToolCall(
 	call: unknown,
 	key: string,
@@ -394,6 +409,16 @@ function toToolCall(
 				? 'complete'
 				: 'failed'
 			: 'running';
+	let detail: string | null = null;
+	if (input) {
+		for (const field of DETAIL_KEYS) {
+			const value = input[field];
+			if (typeof value === 'string' && value.trim().length > 0) {
+				detail = clamp(value.trim(), 64);
+				break;
+			}
+		}
+	}
 	return {
 		kind: 'tool',
 		key,
@@ -401,7 +426,7 @@ function toToolCall(
 		labelKey,
 		label,
 		icon,
-		detail: toDetail(input),
+		detail,
 		input: input && Object.keys(input).length > 0 ? formatPayload(input) : null,
 		output: answered && error === null ? formatPayload(output) : null,
 		error: error === null ? null : clamp(error),
@@ -412,6 +437,8 @@ function toToolCall(
 	};
 }
 
+/** Narrows a tool's `input_required` payload to the fields the disclosure can render. */
+// stupidity:allow Q3 -- request projector
 function parseElicitationRequests(
 	requests: readonly unknown[]
 ): NonNullable<PanelToolCall['elicitation']> {
@@ -428,15 +455,7 @@ function parseElicitationRequests(
 	});
 }
 
-function toDetail(input: Readonly<Record<string, unknown>> | undefined): string | null {
-	if (!input) return null;
-	for (const key of DETAIL_KEYS) {
-		const value = input[key];
-		if (typeof value === 'string' && value.trim().length > 0) return clamp(value.trim(), 64);
-	}
-	return null;
-}
-
+/** Caps a tool payload so an expanded call stays readable in the panel scroller. */
 function formatPayload(value: unknown): string {
 	try {
 		return clamp(JSON.stringify(value, null, 2) ?? String(value));
@@ -445,16 +464,10 @@ function formatPayload(value: unknown): string {
 	}
 }
 
+/** Truncates a payload or detail string at the panel's display cap. */
+// stupidity:allow Q4 -- named helper
 function clamp(text: string, limit: number = PAYLOAD_LIMIT): string {
 	return text.length <= limit ? text : `${text.slice(0, limit)}…`;
-}
-
-/** How an unknown tool reads: capitalized words, the same shape as the built-in labels. */
-function humanize(name: string): string {
-	const words = name.split(/[_-]+/).filter(Boolean);
-	const first = words[0];
-	if (first === undefined) return name;
-	return [first.charAt(0).toUpperCase() + first.slice(1), ...words.slice(1)].join(' ');
 }
 
 /** A `parts[0]` entry that at least names its role — every other field stays unknown until read. */
@@ -463,6 +476,7 @@ type StoredMessage = {
 	readonly message: Readonly<Record<string, unknown>>;
 };
 
+/** Reads the single `parts[0]` message a replica row is allowed to carry. */
 function storedMessage(record: Readonly<Record<string, unknown>>): StoredMessage | null {
 	const parts = record.parts;
 	if (!Array.isArray(parts)) return null;
@@ -472,27 +486,12 @@ function storedMessage(record: Readonly<Record<string, unknown>>): StoredMessage
 	return typeof role === 'string' ? { role, message } : null;
 }
 
-function parsedContent(content: unknown): unknown {
-	if (typeof content !== 'string') return content;
-	try {
-		return JSON.parse(content) as unknown;
-	} catch {
-		return content;
-	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
+/** A plain object, as opposed to an array or a primitive the projectors cannot index. */
+// stupidity:allow Q4 -- named helper
+function isRecord(value: unknown): value is Record<string, unknown> { // stupidity:allow R5b -- projector boundary
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/**
- * The conversation as the panel shows it, including a prompt that has not landed yet.
- *
- * A round trip runs the whole agent loop, and the loop writes the user's message before it starts
- * thinking — so the echo exists only to cover the gap before the replica has it, and disappears the
- * moment the real row arrives rather than being cleared on a timer or by the response returning.
- * Sending the same text twice suppresses the echo one message early, which is invisible.
- */
 /**
  * What this conversation has cost so far, as the provider reported it.
  *
@@ -510,6 +509,7 @@ export type PanelUsage = {
 	readonly costUsd: number | null;
 };
 
+/** First finite number among the provider's spelling variants for one usage field. */
 function readNumber(
 	source: Readonly<Record<string, unknown>>,
 	keys: readonly string[]
@@ -521,6 +521,7 @@ function readNumber(
 	return null;
 }
 
+/** Sums embedded message usage into the occupancy and spend the panel can show. */
 export function toPanelUsage(
 	records: readonly Readonly<Record<string, unknown>>[],
 	contextLength: number | null = null
@@ -571,10 +572,13 @@ export type SessionTotals = {
 	readonly turnsUnreported: number;
 };
 
+/** Reads the session row's durable usage counters, or null when nothing has settled. */
 export function toSessionTotals(
 	record: Readonly<Record<string, unknown>> | undefined
 ): SessionTotals | null {
 	if (!record) return null;
+	/** Treats a missing or non-finite counter as zero rather than dropping the totals. */
+	// stupidity:allow Q4 -- named helper
 	const count = (key: string): number => {
 		const value = record[key];
 		return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -589,6 +593,7 @@ export function toSessionTotals(
 	return totals.turnsCounted === 0 ? null : totals;
 }
 
+/** Walks checkpoint history to see whether the pending echo has already landed. */
 function containsPrompt(messages: readonly PanelMessage[], pending: string): boolean {
 	return messages.some(
 		(message) =>
@@ -597,6 +602,14 @@ function containsPrompt(messages: readonly PanelMessage[], pending: string): boo
 	);
 }
 
+/**
+ * The conversation as the panel shows it, including a prompt that has not landed yet.
+ *
+ * A round trip runs the whole agent loop, and the loop writes the user's message before it starts
+ * thinking — so the echo exists only to cover the gap before the replica has it, and disappears the
+ * moment the real row arrives rather than being cleared on a timer or by the response returning.
+ * Sending the same text twice suppresses the echo one message early, which is invisible.
+ */
 export function withPendingEcho(
 	messages: readonly PanelMessage[],
 	pending: string | null

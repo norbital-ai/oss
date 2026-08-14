@@ -1,36 +1,19 @@
 <script lang="ts">
-	import Icon from '@iconify/svelte';
-	import { Inline } from '@norbital-ai/ui/layout';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import { Stack } from '@norbital-ai/ui/layout';
+	import type { PodUiKeys } from '$lib/i18n/index.js';
 	import {
 		commandPrefixChar,
 		type MentionCommand,
 		type MentionMenuItem
 	} from './mention-sources.js';
-	import { useI18n } from '@norbital-ai/ui/i18n';
-	import type { PodUiKeys } from '$lib/i18n/index.js';
+	import type { FinderEntity, FinderRow } from '../finder/finder-entity.js';
+	import FinderPalette from '../finder/finder-palette.svelte';
 
 	const { t } = useI18n<PodUiKeys>();
 
-	function itemKey(item: MentionMenuItem): string {
-		switch (item.kind) {
-			case 'record':
-				return `record:${item.hit.collection}:${item.hit.recordId}`;
-			case 'scope':
-				return `scope:${item.collection}`;
-			case 'collection':
-				return `collection:${item.collection}`;
-			case 'app':
-				return `app:${item.key}`;
-			case 'command':
-				return `command:${item.command}`;
-			default: {
-				const _exhaustive: never = item;
-				return _exhaustive;
-			}
-		}
-	}
-
-	function commandIcon(command: MentionCommand): string {
+	/** Icon for a prefix command in the mention menu. */
+	function commandIcon(command: MentionCommand): string { // stupidity:allow Q3 -- named helper
 		switch (command) {
 			case 'record':
 				return 'lucide:search';
@@ -45,7 +28,8 @@
 		}
 	}
 
-	function commandLabelKey(
+	/** i18n key for a prefix command's menu label. */
+	function commandLabelKey( // stupidity:allow Q3 -- named helper
 		command: MentionCommand
 	): 'pod.agent.prefixSearch' | 'pod.agent.prefixPlan' | 'pod.agent.prefixApps' {
 		switch (command) {
@@ -62,18 +46,63 @@
 		}
 	}
 
-	function itemIcon(item: MentionMenuItem): string {
+	/** Maps a mention menu item onto a finder row. */
+	function toRow(item: MentionMenuItem): FinderRow { // stupidity:allow Q3 -- named helper
 		switch (item.kind) {
 			case 'record':
-				return 'lucide:file-text';
+				return {
+					value: `record:${item.hit.collection}:${item.hit.recordId}`,
+					kind: 'record',
+					label: item.hit.label,
+					description: item.hit.collection,
+					entity: {
+						kind: 'record',
+						collection: item.hit.collection,
+						recordId: item.hit.recordId,
+						label: item.hit.label
+					}
+				};
 			case 'scope':
-				return 'lucide:search';
+				return {
+					value: `scope:${item.collection}`,
+					kind: 'scope',
+					label: t('pod.agent.searchCollection', { collection: item.collection }),
+					description: commandPrefixChar('record'),
+					entity: { kind: 'scope', collection: item.collection }
+				};
 			case 'collection':
-				return 'lucide:table';
+				return {
+					value: `collection:${item.collection}`,
+					kind: 'command',
+					label: item.collection,
+					description: t('pod.agent.collection'),
+					icon: 'lucide:table',
+					entity: { kind: 'collection', collection: item.collection }
+				};
 			case 'app':
-				return 'lucide:layout-grid';
+				return {
+					value: `app:${item.key}`,
+					kind: 'app',
+					label: item.label,
+					description: t('pod.agent.app'),
+					icon: 'lucide:layout-grid',
+					entity: {
+						kind: 'app',
+						key: item.key,
+						label: item.label,
+						href: item.href ?? `/app/${item.key}`,
+						description: item.description ?? null
+					}
+				};
 			case 'command':
-				return commandIcon(item.command);
+				return {
+					value: `command:${item.command}`,
+					kind: 'command',
+					label: t(commandLabelKey(item.command)),
+					description: commandPrefixChar(item.command),
+					icon: commandIcon(item.command),
+					entity: { kind: 'prefix', scope: item.command }
+				};
 			default: {
 				const _exhaustive: never = item;
 				return _exhaustive;
@@ -81,50 +110,6 @@
 		}
 	}
 
-	function itemLabel(item: MentionMenuItem): string {
-		switch (item.kind) {
-			case 'record':
-				return item.hit.label;
-			case 'scope':
-				return t('pod.agent.searchCollection', { collection: item.collection });
-			case 'collection':
-				return item.collection;
-			case 'app':
-				return item.label;
-			case 'command':
-				return t(commandLabelKey(item.command));
-			default: {
-				const _exhaustive: never = item;
-				return _exhaustive;
-			}
-		}
-	}
-
-	function itemSecondary(item: MentionMenuItem): string {
-		switch (item.kind) {
-			case 'record':
-				return item.hit.collection;
-			case 'scope':
-				return t('pod.agent.scope');
-			case 'collection':
-				return t('pod.agent.collection');
-			case 'app':
-				return t('pod.agent.app');
-			case 'command':
-				return commandPrefixChar(item.command);
-			default: {
-				const _exhaustive: never = item;
-				return _exhaustive;
-			}
-		}
-	}
-
-	/**
-	 * The "@" menu. Deliberately dumb: the composer owns the keyboard — the textarea keeps focus
-	 * and decides what keys mean — so this surface only renders the current items, reports clicks
-	 * and mouse hovers, and stays out of the way. `mousedown` is swallowed on the whole popover so
-	 * choosing an entry never steals focus from the input.
-	 */
 	let {
 		items,
 		highlightIndex,
@@ -144,84 +129,85 @@
 		onhighlight: (index: number) => void;
 		onclearscope: () => void;
 	} = $props();
+
+	const rows = $derived.by((): FinderRow[] => {
+		const mapped = items.map(toRow);
+		if (loading && mapped.length === 0) {
+			return [{ value: 'loading:records', kind: 'loading', disabled: true }];
+		}
+		if (mapped.length === 0) {
+			return [
+				{
+					value: 'empty:none',
+					kind: 'empty',
+					disabled: true,
+					label:
+						scope && !query.trim()
+							? t('pod.agent.typeToSearchScope', { scope })
+							: t('pod.agent.noRecordsMatch', { query: query.trim() })
+				}
+			];
+		}
+		return mapped;
+	});
+
+	/** Forwards a palette pick to the parent highlight/select callbacks. */
+	function handlePick(entity: FinderEntity): void { // stupidity:allow Q3 -- template handler
+		const index = rows.findIndex((row) => row.entity === entity || sameEntity(row.entity, entity));
+		if (index >= 0) {
+			onhighlight(index);
+			onselect(index);
+		}
+	}
+
+	/** True when two finder entities name the same workspace object. */
+	function sameEntity(left: FinderEntity | undefined, right: FinderEntity): boolean { // stupidity:allow Q3 -- named helper
+		if (!left || left.kind !== right.kind) return false;
+		switch (left.kind) {
+			case 'record':
+				return (
+					right.kind === 'record' &&
+					left.collection === right.collection &&
+					left.recordId === right.recordId
+				);
+			case 'scope':
+				return right.kind === 'scope' && left.collection === right.collection;
+			case 'collection':
+				return right.kind === 'collection' && left.collection === right.collection;
+			case 'app':
+				return right.kind === 'app' && left.key === right.key;
+			case 'prefix':
+				return right.kind === 'prefix' && left.scope === right.scope;
+			case 'plan':
+			case 'ask-agent':
+			case 'navigate':
+				return false;
+			default: {
+				const _exhaustive: never = left;
+				return _exhaustive;
+			}
+		}
+	}
+
+	const activeValue = $derived(rows[highlightIndex]?.value);
 </script>
 
-<div
+<Stack
+	gap="sm"
 	id="agent-mention-menu"
-	role="listbox"
-	tabindex="-1"
-	aria-label={t('pod.agent.recordReferencesAria')}
+	role="presentation"
 	data-testid="agent-mention-menu"
-	class="absolute inset-x-0 bottom-full z-30 mb-2 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
+	class="absolute inset-x-0 bottom-full z-30"
 	onmousedown={(event) => event.preventDefault()}
 >
-	{#if scope}
-		<Inline
-			justify="between"
-			gap="sm"
-			class="border-b border-border/60 px-3 py-1.5 text-xs text-muted-foreground"
-		>
-			<Inline gap="sm" class="min-w-0">
-				<Icon icon="lucide:filter" class="size-3 shrink-0" />
-				<span class="truncate">{t('pod.agent.searchingScope', { scope })}</span>
-			</Inline>
-			<button
-				type="button"
-				class="shrink-0 rounded px-1 transition-colors hover:text-foreground"
-				onclick={onclearscope}
-			>
-				{t('pod.agent.clearScope')}
-			</button>
-		</Inline>
-	{/if}
-	<div
-		{@attach (node) => {
-			void highlightIndex;
-			const selected = node.querySelector('[aria-selected="true"]');
-			if (selected && typeof selected.scrollIntoView === 'function') {
-				selected.scrollIntoView({ block: 'nearest' });
-			}
-		}}
-		class="max-h-64 overflow-y-auto p-1"
-	>
-		{#if loading && items.length === 0}
-			<div class="px-3 py-2 text-xs text-muted-foreground">{t('pod.agent.searchingRecords')}</div>
-		{:else if items.length === 0}
-			<div class="px-3 py-2 text-xs text-muted-foreground" data-testid="agent-mention-empty">
-				{#if scope && !query.trim()}
-					{t('pod.agent.typeToSearchScope', { scope })}
-				{:else}
-					{t('pod.agent.noRecordsMatch', { query: query.trim() })}
-				{/if}
-			</div>
-		{:else}
-			{#each items as item, index (itemKey(item))}
-				<button
-					type="button"
-					role="option"
-					aria-selected={index === highlightIndex}
-					data-highlighted={index === highlightIndex ? true : undefined}
-					class={`w-full rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
-						index === highlightIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
-					}`}
-					onclick={() => onselect(index)}
-					onmouseenter={() => onhighlight(index)}
-				>
-					<Inline gap="sm">
-						<Icon icon={itemIcon(item)} class="size-3.5 shrink-0 text-muted-foreground" />
-						<span class="min-w-0 grow truncate">{itemLabel(item)}</span>
-						<span
-							class={`shrink-0 text-xs text-muted-foreground ${item.kind === 'command' ? 'font-mono' : ''}`}
-							>{itemSecondary(item)}</span
-						>
-					</Inline>
-				</button>
-			{/each}
-		{/if}
-	</div>
-	<Inline gap="md" class="border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground">
-		<span>{t('pod.agent.navigateHint')}</span>
-		<span>{t('pod.agent.selectHint')}</span>
-		<span>{t('pod.agent.dismissHint')}</span>
-	</Inline>
-</div>
+	<FinderPalette
+		{query}
+		items={rows}
+		showInput={false}
+		disableNavigation
+		{activeValue}
+		{scope}
+		onPick={handlePick}
+		onClearScope={onclearscope}
+	/>
+</Stack>

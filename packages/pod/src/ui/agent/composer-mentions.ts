@@ -10,6 +10,7 @@
  * selection turned it into a tracked range. An `@anything` that never matched, or that the writer
  * edited through, is plain text — it goes to the agent verbatim and nowhere else.
  */
+import type { MentionRecordHit } from './mention-sources.js';
 
 /** One chip in the draft: the `@label` span plus the record it stands for. */
 export type ComposerMention = {
@@ -30,12 +31,8 @@ export type MentionTrigger = {
 	readonly query: string;
 };
 
-/** What a chip resolves to on the wire. */
-export type MentionReference = {
-	readonly collection: string;
-	readonly recordId: string;
-	readonly label: string;
-};
+/** What a chip resolves to on the wire. Same shape as a mention-menu hit. */
+export type MentionReference = MentionRecordHit;
 
 /**
  * Longest query still read as a search. Past this the `@` is prose that happens to contain one —
@@ -53,6 +50,7 @@ const WORD_CHAR = /[\p{L}\p{N}]/u;
  * sentence; `@Acme Corporation` — a label the writer kept typing — is prose again, and must stop
  * resolving to the record.
  */
+// stupidity:allow Q4 -- named helper
 function chipDelimited(draft: string, mention: ComposerMention): boolean {
 	const next = draft.slice(mention.end, mention.end + 1);
 	return next === '' || !WORD_CHAR.test(next);
@@ -95,10 +93,14 @@ export function findMentionTrigger(
 	return { start: atIndex, query };
 }
 
+/** Shifts one chip's range after an edit that grew or shrank text before it. */
+// stupidity:allow Q4 -- named helper
 function shiftMention(mention: ComposerMention, delta: number): ComposerMention {
 	return { ...mention, start: mention.start + delta, end: mention.end + delta };
 }
 
+/** Orders chips left-to-right so later edits can walk them without crossing. */
+// stupidity:allow Q4 -- named helper
 function mentionsByStart(mentions: readonly ComposerMention[]): ComposerMention[] {
 	return [...mentions].sort((left, right) => left.start - right.start);
 }
@@ -139,6 +141,7 @@ export function insertMention(
 	return { draft: nextDraft, mentions: mentionsByStart(kept), caret: end + (needsSpace ? 1 : 0) };
 }
 
+/** Shifts every chip that starts at or past `from` by `delta` characters. */
 function shiftMentionsAfter(
 	mentions: readonly ComposerMention[],
 	from: number,

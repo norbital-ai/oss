@@ -202,7 +202,7 @@ describe('agent panel transcript', () => {
 		expect(rows[0]).toMatchObject({
 			kind: 'tool',
 			labelKey: null,
-			label: 'Stripe · List customers',
+			label: 'Stripe · List Customers',
 			icon: 'lucide:plug',
 			elicitation: null,
 			state: 'running'
@@ -313,7 +313,7 @@ describe('agent panel transcript', () => {
 		]);
 		expect(rows.map((row) => (row.kind === 'tool' ? row.label : null))).toEqual([
 			null,
-			'Sandbox deploy'
+			'Sandbox Deploy'
 		]);
 		// No arguments to show, and no result yet, so the call reads as still running.
 		expect(rows.map((row) => (row.kind === 'tool' ? row.input : null))).toEqual([null, null]);

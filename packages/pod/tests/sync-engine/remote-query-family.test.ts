@@ -96,4 +96,21 @@ describe('remote query families follow the slice, not the collection', () => {
 		expect(remoteQueryFamily(prefix, path, { limit: 50, after: null })).toBe(base);
 		expect(remoteQueryFamily(prefix, path, { limit: 50, after: undefined })).toBe(base);
 	});
+
+	it('keeps invoke queries in their own family so leave cannot inherit payroll analytics', () => {
+		const leave = remoteQueryFamily('invoke:', 'invoke', {
+			name: 'approval_analytics',
+			payload: { subject: 'LEAVE', company_id: 'company-1' }
+		});
+		const payroll = remoteQueryFamily('invoke:', 'invoke', {
+			name: 'approval_analytics',
+			payload: { subject: 'PAYROLL' }
+		});
+		const otherCompany = remoteQueryFamily('invoke:', 'invoke', {
+			name: 'approval_analytics',
+			payload: { subject: 'LEAVE', company_id: 'company-2' }
+		});
+		expect(payroll).not.toBe(leave);
+		expect(otherCompany).not.toBe(leave);
+	});
 });

@@ -24,6 +24,19 @@ class RemoteQueryResource<T> {
 	pending: Promise<T>;
 	controller: AbortController | null = null;
 	generation = 0;
+	/**
+	 * Same-generation aborts with nothing to render. Click-nav can cancel the in-flight load
+	 * without minting a replacement; one automatic retry recovers that, then the handle errors
+	 * so a surface can stop spinning.
+	 */
+	abortRetries = 0;
+	/**
+	 * Cache-machine flags. Not `$state` — `query()` is called from `$derived`, and reading
+	 * `current` / `loading` / `error` there resubscribes the derived to every load. A failed
+	 * invoke then restart-loops: derived runs → restart → `$state` write → derived runs.
+	 */
+	alive = false;
+	needsRestart = false;
 	/** Bumped on every read of `current`. A rendered query re-reads it each render pass, so
 	 *  anything on screen is by construction among the most recently accessed. */
 	lastAccess = Date.now();
@@ -38,7 +51,10 @@ class RemoteQueryResource<T> {
 		// Seed with the previous result for this query family. Changing a filter, sort, page or
 		// search term mints a new key; without a seed the UI would render `undefined` for a frame
 		// and the table would blank out and refill. See sync/README.md §3.2.
-		if (placeholder !== undefined) this.current = placeholder;
+		if (placeholder !== undefined) {
+			this.current = placeholder;
+			this.alive = true;
+		}
 		this.pending = this.start();
 	}
 
@@ -47,6 +63,7 @@ class RemoteQueryResource<T> {
 		this.controller?.abort();
 		const controller = new AbortController();
 		this.controller = controller;
+		this.needsRestart = false;
 		this.error = undefined;
 		const pending = Promise.resolve().then(() => this.load(controller.signal));
 		this.pending = pending;
@@ -61,6 +78,9 @@ class RemoteQueryResource<T> {
 				if (generation !== this.generation) return;
 				this.current = value;
 				this.controller = null;
+				this.abortRetries = 0;
+				this.alive = true;
+				this.needsRestart = false;
 				this.onValue?.(value);
 				this.loading = false;
 			},
@@ -68,16 +88,33 @@ class RemoteQueryResource<T> {
 				if (generation !== this.generation) return;
 				this.controller = null;
 				if (error instanceof DOMException && error.name === 'AbortError') {
-					// A newer generation owns the in-flight load. Keep the skeleton up when there is
-					// still nothing to render; only drop loading when a cached value can stay on screen.
+					// A newer `start()` already owns the next load. Leave the skeleton up only while
+					// that replacement is in flight; a same-generation abort has no successor.
 					this.loading = this.current === undefined;
+					if (this.current === undefined && this.abortRetries < 1) {
+						this.abortRetries += 1;
+						this.start();
+						return;
+					}
+					if (this.current === undefined) {
+						this.error = new Error('The request was cancelled before it finished.');
+						this.loading = false;
+						this.needsRestart = true;
+					}
 					return;
 				}
 				this.error = error instanceof Error ? error : new Error(String(error));
 				this.loading = false;
+				this.needsRestart = this.current === undefined;
 			}
 		);
 		return pending;
+	}
+
+	/** Caller-driven restart: a fresh abort budget, then the same load path as first mount. */
+	restart(): Promise<T> {
+		this.abortRetries = 0;
+		return this.start();
 	}
 }
 
@@ -103,7 +140,7 @@ export class ReactiveRemoteQuery<T> implements RemoteQuery<T>, PromiseLike<T> {
 	}
 
 	async refresh(): Promise<void> {
-		this.resource.start();
+		this.resource.restart();
 		await this.resource.pending.catch(() => undefined);
 	}
 
@@ -111,7 +148,14 @@ export class ReactiveRemoteQuery<T> implements RemoteQuery<T>, PromiseLike<T> {
 		onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
 		onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
 	): PromiseLike<TResult1 | TResult2> {
-		return this.resource.pending.then(onfulfilled, onrejected);
+		const follow = (promise: Promise<T>): PromiseLike<TResult1 | TResult2> =>
+			promise.then(onfulfilled, (reason) => {
+				if (this.resource.pending !== promise) {
+					return follow(this.resource.pending);
+				}
+				return onrejected ? onrejected(reason) : Promise.reject(reason);
+			});
+		return follow(this.resource.pending);
 	}
 }
 
@@ -155,13 +199,23 @@ export class RemoteQueryResourceManager<T> {
 			this.prune();
 		} else {
 			resource.lastAccess = Date.now();
+			// An aborted or failed load leaves the handle in the cache with nothing to render and no
+			// in-flight request. Returning it as-is is an infinite spinner: the page is back, the
+			// resource is dead. Restart only that stuck case — never a live request, never a settled
+			// value that the UI can keep showing.
+			//
+			// Do not read `$state` here. Apps call `query()` from `$derived`; a `$state` read
+			// resubscribes that derived to every load, and a restart then becomes a write loop.
+			if (resource.controller === null && resource.needsRestart) {
+				resource.restart();
+			}
 		}
 		return new ReactiveRemoteQuery(resource);
 	}
 
 	invalidate(keyPrefix: string): void {
 		for (const [key, resource] of this.resources) {
-			if (key.startsWith(keyPrefix)) resource.start();
+			if (key.startsWith(keyPrefix)) resource.restart();
 		}
 	}
 

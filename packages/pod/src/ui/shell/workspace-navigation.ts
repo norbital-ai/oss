@@ -81,6 +81,7 @@ export function resolveAppHeaderDescription(
 	return trimmed ? trimmed : null;
 }
 
+/** Deduplicates organizations by id, filling a missing logo from a later listing. */
 export function resolveWorkspaceOrganizationOptions(input: {
 	activeOrganization: WorkspaceOrganizationOption;
 	organizations: readonly {
@@ -117,6 +118,8 @@ export function resolveWorkspaceOrganizationOptions(input: {
 export const WORKSPACE_SETTINGS_PATH = '/settings';
 export const HOST_PLUGIN_SURFACE_PREFIX = '/__host';
 
+/** Builds the in-pod href for a host plugin surface from its key. */
+// stupidity:allow Q4 -- named helper
 export function hostPluginSurfaceHref(pluginKey: string): string {
 	return `${HOST_PLUGIN_SURFACE_PREFIX}/${encodeURIComponent(pluginKey)}`;
 }
@@ -155,6 +158,7 @@ export function isHostPluginEntry(
 	return plugins.some((plugin) => plugin.entry === href);
 }
 
+/** Returns the host plugin whose surface matches the current path, or null. */
 export function resolveHostPluginSurface(
 	currentPath: string,
 	plugins: readonly { readonly key: string; readonly entry: string }[]
@@ -166,17 +170,37 @@ export function resolveHostPluginSurface(
  * Every workspace has the safe interactive agent fallback implemented by Pod. An authored agent
  * profile can add approved tools and instructions, but it is not required for the surface itself.
  */
+// stupidity:allow Q4 -- named helper
 export function workspaceProvidesAgentSurface(): boolean {
 	return true;
 }
 
 /** The optional full-page route is Pod-owned for every workspace. */
+// stupidity:allow Q4 -- named helper
 export function workspaceAuthorizesAgentSurface(currentPath: string): boolean {
 	return currentPath === '/agent';
 }
 
+/** True when the current path is the entry or a nested path under it. */
+// stupidity:allow Q4 -- named helper
 function isUnder(currentPath: string, entry: string): boolean {
 	return currentPath === entry || currentPath.startsWith(`${entry}/`);
+}
+
+/**
+ * The host-plugin label localization chokepoint.
+ *
+ * Host plugin labels are host-owned English by default; a pod/tenant catalog can override them
+ * under `pod.shell.hostPlugin.<key>` (or `app.<key>.title`) without touching the shell.
+ */
+export function resolveHostPluginLabel(
+	i18n: NavigationLabelResolver | undefined,
+	pluginKey: string,
+	fallback: string
+): string {
+	if (!i18n) return fallback;
+	const key = `pod.shell.hostPlugin.${pluginKey}`;
+	return i18n.has(key) ? i18n.t(key) : fallback;
 }
 
 /**
@@ -194,22 +218,6 @@ function isUnder(currentPath: string, entry: string): boolean {
  * only — every route behind these entries, Pod's included, authorizes its own requests, since the
  * URL is visible in the markup whether or not a link to it is.
  */
-/**
- * The host-plugin label localization chokepoint.
- *
- * Host plugin labels are host-owned English by default; a pod/tenant catalog can override them
- * under `pod.shell.hostPlugin.<key>` (or `app.<key>.title`) without touching the shell.
- */
-export function resolveHostPluginLabel(
-	i18n: NavigationLabelResolver | undefined,
-	pluginKey: string,
-	fallback: string
-): string {
-	if (!i18n) return fallback;
-	const key = `pod.shell.hostPlugin.${pluginKey}`;
-	return i18n.has(key) ? i18n.t(key) : fallback;
-}
-
 export function buildSystemNavigation(input: {
 	plugins: readonly {
 		readonly key: string;
@@ -228,6 +236,7 @@ export function buildSystemNavigation(input: {
 	const visiblePlugins = input.plugins.filter(
 		(inputPlugin) => inputPlugin.placement !== 'footer' && (input.isAdmin || !inputPlugin.adminOnly)
 	);
+	/** Maps a visible host plugin to a sidebar item with an in-pod surface href. */
 	const pluginItem = (plugin: (typeof visiblePlugins)[number]): WorkspaceNavigationItem => {
 		const href = hostPluginSurfaceHref(plugin.key);
 		return {
@@ -303,6 +312,7 @@ export function buildUtilityNavigation(input: {
 		});
 }
 
+/** Grants access when the list is unrestricted or names this app or an ancestor. */
 export function appAccessAllowed(
 	appId: string,
 	accessibleAppNames: readonly string[] | null
@@ -314,6 +324,7 @@ export function appAccessAllowed(
 	});
 }
 
+/** Walks defaultChild until a granted, available app id is found. */
 export function resolveApplicationLandingAppId(input: {
 	requestedAppId: string;
 	appIds: readonly string[];
@@ -346,6 +357,7 @@ export function resolveApplicationLandingAppId(input: {
 		: (fallbackAppId ?? null);
 }
 
+/** Builds the sidebar tree of granted apps from parent/child manifest links. */
 export function buildApplicationNavigation(input: {
 	appIds: readonly string[];
 	apps: Readonly<Record<string, ManifestApp>>;
@@ -377,6 +389,7 @@ export function buildApplicationNavigation(input: {
 		}
 	}
 
+	/** Builds one navigation node and its granted children from a manifest app id. */
 	const buildItem = (id: string): WorkspaceNavigationItem => {
 		const app = input.apps[id];
 		const children = (childrenByParent.get(id) ?? []).sort().map(buildItem);

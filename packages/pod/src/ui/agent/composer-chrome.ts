@@ -24,6 +24,8 @@ export type AgentComposerSeed = {
 	readonly planMode?: boolean;
 };
 
+/** Asks the mounted panel to focus the composer after a shell-driven open. */
+// stupidity:allow Q4 -- named helper
 export function requestAgentComposerFocus(seed?: AgentComposerSeed): void {
 	if (typeof window === 'undefined') return;
 	window.dispatchEvent(new CustomEvent(AGENT_COMPOSER_FOCUS_EVENT, { detail: seed }));

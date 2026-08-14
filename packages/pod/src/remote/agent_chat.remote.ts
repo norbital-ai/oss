@@ -17,6 +17,10 @@ import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
 import { PENDING_CONVERSATION_TITLE } from '$lib/server/agent/conversation-title.server.js';
 import {
+	failOpenInteractiveTurn,
+	readChatSession
+} from '$lib/server/agent/chat-session.server.js';
+import {
 	admitAgentTurn,
 	INTERACTIVE_AGENT_AUTOMATION_NAME
 } from '$lib/server/run/automation-dispatch.server.js';
@@ -335,30 +339,44 @@ export const agentChatStart = authenticated.command(
 		const conversation = await prepareConversation(input.runId);
 		const compact = parseCompactDirective(input.message);
 		const spec = interactiveAgentStartSpec(input.message, model);
-		const opened = await prepareInteractiveAgentTurn({
-			sessionId: conversation.chatId,
-			spec,
-			message: input.message,
-			...chatIntentFields(input),
-			...(input.mentions?.length ? { mentions: input.mentions } : {})
-		});
-		await admitInteractiveTurn(conversation, {
-			sessionId: conversation.chatId,
-			runId: conversation.runId,
-			turnId: opened.turnId,
-			promptContent: opened.promptContent,
-			spec,
-			input: input.message,
-			...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
-			...chatIntentFields(input),
-			...(input.mentions?.length ? { mentions: input.mentions } : {}),
-			...(compact ? { compact } : {})
-		});
-		return {
-			...conversation,
-			accepted: true,
-			syncSequence: await currentOutboxWatermark(getWorkspace({ provision: true }))
-		};
+		let openedTurnId: string | undefined;
+		try {
+			const opened = await prepareInteractiveAgentTurn({
+				sessionId: conversation.chatId,
+				spec,
+				message: input.message,
+				...chatIntentFields(input),
+				...(input.mentions?.length ? { mentions: input.mentions } : {})
+			});
+			openedTurnId = opened.turnId;
+			await admitInteractiveTurn(conversation, {
+				sessionId: conversation.chatId,
+				runId: conversation.runId,
+				turnId: opened.turnId,
+				promptContent: opened.promptContent,
+				spec,
+				input: input.message,
+				...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
+				...chatIntentFields(input),
+				...(input.mentions?.length ? { mentions: input.mentions } : {}),
+				...(compact ? { compact } : {})
+			});
+			const session = await readChatSession(conversation.chatId);
+			return {
+				...conversation,
+				session,
+				accepted: true,
+				syncSequence: await currentOutboxWatermark(getWorkspace({ provision: true }))
+			};
+		} catch (cause) {
+			if (openedTurnId) {
+				const message = cause instanceof Error ? cause.message : String(cause);
+				await failOpenInteractiveTurn(conversation.chatId, openedTurnId, message).catch(
+					() => undefined
+				);
+			}
+			throw cause;
+		}
 	}
 );
 

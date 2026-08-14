@@ -80,7 +80,8 @@ import { listSkillSummaries, readSkillContent } from '$lib/skills/registry.serve
 import type {
 	AiChatResult,
 	AiMessage,
-	AiToolCall
+	AiToolCall,
+	AiToolSpec
 } from '@norbital-ai/platform-utils/runtime/binding';
 import {
 	automationReplayStorage,
@@ -1924,8 +1925,22 @@ export async function runDurableAgentAutomation(input: {
 				);
 			}
 		}
-		const messages = await loadDurableTurnWindow(sessionId, turnId, promptContent);
-		if (messages.length === 0) throw new Error('Agent run requires an input message');
+		let messages: Awaited<ReturnType<typeof loadDurableTurnWindow>>;
+		try {
+			messages = await loadDurableTurnWindow(sessionId, turnId, promptContent);
+			if (messages.length === 0) throw new Error('Agent run requires an input message');
+		} catch (cause) {
+			if (automationReplayStorage.getStore()?.pending) throw cause;
+			return failDurableRun({
+				ctx,
+				writer,
+				runId,
+				sessionId,
+				turnId,
+				cause,
+				...(snapshot?.channel ? { channel: snapshot.channel } : {})
+			});
+		}
 
 		if (snapshot?.compact) {
 			const window = messages.slice(0, -1);

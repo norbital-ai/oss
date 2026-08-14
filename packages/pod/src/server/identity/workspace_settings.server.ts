@@ -22,6 +22,7 @@ import { ensureOrganizationAdmin, getWorkspace } from '$lib/server/bootstrap/wor
 import { deleteRecord, updateRecord } from '$lib/server/collection/collection_ops.server.js';
 import { mintInvitation } from './invitation.server.js';
 import { requestI18n } from '$lib/server/i18n.js';
+import type { WorkspaceInvitation } from '$lib/shared/workspace-invitation.js';
 import { z } from 'zod';
 
 export const InviteMemberSchema = z.object({
@@ -35,14 +36,7 @@ export const SetMemberRoleSchema = z.object({
 });
 
 /** An invitation as an administrator may see it. Deliberately not the row. */
-export type WorkspaceInvitationSummary = {
-	readonly norbital_id: string;
-	readonly email: string;
-	readonly role: string;
-	readonly status: 'pending' | 'accepted' | 'expired';
-	readonly created_at: string;
-	readonly expires_at: string;
-};
+export type WorkspaceInvitationSummary = WorkspaceInvitation;
 
 function invitationStatus(row: {
 	consumed_at: string | null;

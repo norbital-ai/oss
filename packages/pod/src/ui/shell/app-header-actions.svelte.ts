@@ -16,6 +16,8 @@ export type AppHeaderActionsSlot = { current: Snippet | null };
 
 const APP_HEADER_ACTIONS_KEY = Symbol.for('norbital.pod.app-header-actions');
 
+/** Registers the running app's trailing header controls with the shell chrome. */
+// stupidity:allow Q4 -- named helper
 export function setAppHeaderActionsSlot(slot: AppHeaderActionsSlot): AppHeaderActionsSlot {
 	return setContext(APP_HEADER_ACTIONS_KEY, slot);
 }
@@ -24,6 +26,7 @@ export function setAppHeaderActionsSlot(slot: AppHeaderActionsSlot): AppHeaderAc
  * `null` when no shell is above this component — an app rendered standalone in a test or a story.
  * Callers render their controls inline in that case rather than dropping them on the floor.
  */
+// stupidity:allow Q4 -- named helper
 export function getAppHeaderActionsSlot(): AppHeaderActionsSlot | null {
 	return getContext<AppHeaderActionsSlot | undefined>(APP_HEADER_ACTIONS_KEY) ?? null;
 }

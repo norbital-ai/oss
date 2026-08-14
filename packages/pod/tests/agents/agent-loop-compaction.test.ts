@@ -57,3 +57,19 @@ describe('automatic context compaction', () => {
 		expect(shouldAutomaticallyCompact({ ...input, contextLength: null })).toBe(false);
 	});
 });
+
+describe('durable turn settlement', () => {
+	it('fails the open turn when the provider window cannot be loaded', async () => {
+		const { readFile } = await import('node:fs/promises');
+		const source = await readFile(
+			new URL('../../src/server/agent/agent-loop.server.ts', import.meta.url),
+			'utf8'
+		);
+		const windowAt = source.indexOf('messages = await loadDurableTurnWindow');
+		const emptyAt = source.indexOf("throw new Error('Agent run requires an input message')");
+		const failAt = source.indexOf('return failDurableRun({', emptyAt);
+		expect(emptyAt).toBeGreaterThan(windowAt);
+		expect(failAt).toBeGreaterThan(emptyAt);
+		expect(failAt - emptyAt).toBeLessThan(400);
+	});
+});

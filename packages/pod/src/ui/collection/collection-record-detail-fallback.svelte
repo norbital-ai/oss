@@ -3,6 +3,8 @@
 	import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
 	import { humanize } from '@norbital-ai/std/string';
 	import type { Snippet } from 'svelte';
+	import { Button } from '@norbital-ai/ui/button';
+	import { CollectionForm } from '@norbital-ai/ui/collection-form';
 	import {
 		CollectionRecordDetailEmpty,
 		CollectionRecordDetailTabs,
@@ -39,7 +41,7 @@
 		collectionName ? manifestContext.findCollection(collectionName) : null
 	);
 	const collectionSurface = $derived(resolveCollectionSurface(collectionSurfaces, collectionName));
-	const workspaceClient = $derived(getCollectionClientContext());
+	const workspaceClient = getCollectionClientContext();
 	const recordQuery = $derived.by(() => {
 		if (!collectionName || !recordId) return null;
 		const collectionQuery = workspaceClient.db[collectionName];
@@ -65,6 +67,13 @@
 			: null
 	);
 	const errorMessage = $derived(recordQuery?.error?.message);
+	const canRetryRecord = $derived(
+		Boolean(recordQuery && ((recordQuery.loading && record === null) || recordQuery.error))
+	);
+
+	function retryRecord(): void {
+		void recordQuery?.refresh();
+	}
 </script>
 
 {#snippet schemaDetails()}
@@ -86,6 +95,13 @@
 	{#if record && collectionSurface?.representation}
 		{@const Representation = collectionSurface.representation}
 		<Representation {record} {close} />
+	{:else if record && collectionName && recordId}
+		<CollectionForm
+			client={workspaceClient}
+			collection={collectionName}
+			{recordId}
+			defaultValues={record}
+		/>
 	{:else}
 		{@render schemaDetails()}
 	{/if}
@@ -99,6 +115,17 @@
 	/>
 {/snippet}
 
+{#snippet detailActions()}
+	{#if canRetryRecord}
+		<Button type="button" variant="outline" size="sm" onclick={retryRecord}>
+			{t('pod.agent.retry')}
+		</Button>
+	{/if}
+	{#if actions}
+		{@render actions()}
+	{/if}
+{/snippet}
+
 <CollectionRecordDetailTabs
 	title={recordLabel ?? humanize(collectionName)}
 	description={t('pod.collection.recordDetails', { collection: humanize(collectionName) })}
@@ -108,7 +135,7 @@
 			? t('pod.collection.notFoundInManifest', { collection: collectionName })
 			: undefined)}
 	found={Boolean(record)}
-	{actions}
+	actions={detailActions}
 	banner={collectionSurface?.banner ?? null}
 	ui={uiDetails}
 	approval={approvalDetails}

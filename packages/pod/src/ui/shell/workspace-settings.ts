@@ -6,15 +6,9 @@
  * PGlite) and this module is what a component test mounts the surface against.
  */
 import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
+import type { WorkspaceInvitation } from '$lib/shared/workspace-invitation.js';
 
-export type WorkspaceInvitation = {
-	readonly norbital_id: string;
-	readonly email: string;
-	readonly role: string;
-	readonly status: 'pending' | 'accepted' | 'expired';
-	readonly created_at: string;
-	readonly expires_at: string;
-};
+export type { WorkspaceInvitation };
 
 /**
  * The writes and the one read the settings surface cannot take from the replica.
@@ -86,11 +80,14 @@ export type PolicyRow = {
 	readonly grants: readonly unknown[];
 };
 
+/** Reads a string field from a replica row, or null when the column is missing. */
+// stupidity:allow Q4 -- named helper
 function text(record: Readonly<Record<string, unknown>>, field: string): string | null {
 	const value = record[field];
 	return typeof value === 'string' ? value : null;
 }
 
+/** Drops a user row that lacks an id or email rather than rendering undefined. */
 export function toMemberRow(record: Readonly<Record<string, unknown>>): MemberRow[] {
 	const id = text(record, 'norbital_id');
 	const email = text(record, 'email');
@@ -106,6 +103,7 @@ export function toMemberRow(record: Readonly<Record<string, unknown>>): MemberRo
 	];
 }
 
+/** Drops a team row that lacks an id or name rather than rendering undefined. */
 export function toTeamRow(record: Readonly<Record<string, unknown>>): TeamRow[] {
 	const id = text(record, 'norbital_id');
 	const name = text(record, 'name');
@@ -121,6 +119,7 @@ export function toTeamRow(record: Readonly<Record<string, unknown>>): TeamRow[] 
 	];
 }
 
+/** Drops a policy row that lacks an id or name rather than rendering undefined. */
 export function toPolicyRow(record: Readonly<Record<string, unknown>>): PolicyRow[] {
 	const id = text(record, 'norbital_id');
 	const name = text(record, 'name');
@@ -148,6 +147,7 @@ export type TeamMembershipRow = {
 	readonly user_id: string;
 };
 
+/** Drops a membership row that lacks id, team, or user rather than rendering undefined. */
 export function toTeamMembershipRow(
 	record: Readonly<Record<string, unknown>>
 ): TeamMembershipRow[] {

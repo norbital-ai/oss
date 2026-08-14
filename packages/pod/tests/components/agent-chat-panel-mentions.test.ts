@@ -203,30 +203,29 @@ describe('the "@" keyboard flow', () => {
 		destroy();
 	});
 
-	it('searches as the writer types, and Enter turns the hit into a chip the send carries', async () => {
+	it('searches only after a collection is chosen, and Enter turns the hit into a chip', async () => {
 		const { container, destroy } = mountPanel();
-		const textarea = setValue(container, '@acm');
+		const textarea = setValue(container, '@#companies acm');
 		await searchRound();
 
 		const options = menuOptions(container);
 		expect(options.some((option) => option.includes('Acme Corp'))).toBe(true);
-		expect(options.some((option) => option.includes('Acmed Rasheed'))).toBe(true);
+		expect(options.some((option) => option.includes('Acmed Rasheed'))).toBe(false);
 
 		key(textarea, 'Enter');
 		await settle();
-		// The query was the search, not the message: the chip replaced it.
-		expect(textarea.value).toBe('@Acme Corp');
+		expect(textarea.value).toBe('@companies › Acme Corp');
 		expect(container.querySelector('#agent-mention-menu')).toBeNull();
 
 		submit(container);
 		expect(sent).toEqual([
 			{
-				message: '@Acme Corp',
+				message: '@companies › Acme Corp',
 				mentions: [
 					{
 						collection: 'companies',
 						recordId: '0197f2a4-0000-7000-8000-000000000001',
-						label: 'Acme Corp'
+						label: 'companies › Acme Corp'
 					}
 				],
 				intent: 'do',
@@ -236,16 +235,15 @@ describe('the "@" keyboard flow', () => {
 		destroy();
 	});
 
-	it('navigates with the arrows and picks the highlighted row', async () => {
+	it('navigates with the arrows and picks the highlighted row in one collection', async () => {
 		const { container, destroy } = mountPanel();
-		const textarea = setValue(container, '@acm');
+		const textarea = setValue(container, '@#companies acm');
 		await searchRound();
 
 		key(textarea, 'ArrowDown');
 		key(textarea, 'Enter');
 		await settle();
-		// The second hit across all sources — arrow navigation crossed the group boundary.
-		expect(textarea.value).toBe('@Acme Logistics');
+		expect(textarea.value).toBe('@companies › Acme Logistics');
 		destroy();
 	});
 
@@ -264,31 +262,34 @@ describe('the "@" keyboard flow', () => {
 		destroy();
 	});
 
-	it('esc dismisses the menu and leaves the text for the writer to keep', async () => {
+	it('esc steps out of a collection scope, then dismisses and leaves the text', async () => {
 		const { container, destroy } = mountPanel();
-		const textarea = setValue(container, '@acm');
+		const textarea = setValue(container, '@#companies acm');
 		await searchRound();
 		expect(container.querySelector('#agent-mention-menu')).not.toBeNull();
 
 		key(textarea, 'Escape');
-		expect(container.querySelector('#agent-mention-menu')).toBeNull();
-		expect(textarea.value).toBe('@acm');
+		await settle();
+		expect(textarea.value).toBe('@#');
+		expect(container.querySelector('#agent-mention-menu')).not.toBeNull();
 
-		// Typing on does not reopen a dismissed trigger; a fresh "@" elsewhere does.
-		key(textarea, 'ArrowLeft');
-		setValue(container, '@acme', 5);
-		await searchRound();
+		key(textarea, 'Escape');
+		await settle();
+		expect(textarea.value).toBe('@');
+
+		key(textarea, 'Escape');
 		expect(container.querySelector('#agent-mention-menu')).toBeNull();
+		expect(textarea.value).toBe('@');
 		destroy();
 	});
 
 	it('backspace at a chip removes it whole', async () => {
 		const { container, destroy } = mountPanel();
-		const textarea = setValue(container, '@acm');
+		const textarea = setValue(container, '@#companies acm');
 		await searchRound();
 		key(textarea, 'Enter');
 		await settle();
-		expect(textarea.value).toBe('@Acme Corp');
+		expect(textarea.value).toBe('@companies › Acme Corp');
 
 		textarea.setSelectionRange(textarea.value.length, textarea.value.length);
 		key(textarea, 'Backspace');
@@ -301,21 +302,21 @@ describe('the "@" keyboard flow', () => {
 		destroy();
 	});
 
-	it('inserts collection:<name> when the writer picks a collection', async () => {
+	it('scopes into a collection instead of dumping every record for a partial name', async () => {
 		const { container, destroy } = mountPanel();
 		const textarea = setValue(container, '@compani');
 		await searchRound();
 
 		const options = menuOptions(container);
-		expect(options.some((option) => option.includes('companies'))).toBe(true);
+		expect(options.some((option) => option.includes('Search companies'))).toBe(true);
 
 		key(textarea, 'Enter');
 		await settle();
-		expect(textarea.value).toBe('collection:companies');
+		expect(textarea.value).toBe('@#companies ');
 		destroy();
 	});
 
-	it('inserts app:<key> when the writer picks an app', async () => {
+	it('inserts path and description when the writer picks an app', async () => {
 		const { container, destroy } = mountPanel();
 		const textarea = setValue(container, '@pay');
 		await searchRound();
@@ -325,22 +326,22 @@ describe('the "@" keyboard flow', () => {
 
 		key(textarea, 'Enter');
 		await settle();
-		expect(textarea.value).toBe('app:payroll');
+		expect(textarea.value).toBe('/app/payroll — Payroll: Run payroll');
 		expect(container.querySelector('#agent-mention-menu')).toBeNull();
 
 		submit(container);
 		expect(sent).toEqual([
 			{
-				message: 'app:payroll',
+				message: '/app/payroll — Payroll: Run payroll',
 				intent: 'do'
 			}
 		]);
 		destroy();
 	});
 
-	it('mentions a person from the user collection', async () => {
+	it('mentions a person after the user collection is chosen', async () => {
 		const { container, destroy } = mountPanel();
-		const textarea = setValue(container, '@Ada');
+		const textarea = setValue(container, '@#user Ada');
 		await searchRound();
 
 		const options = menuOptions(container);
@@ -348,17 +349,17 @@ describe('the "@" keyboard flow', () => {
 
 		key(textarea, 'Enter');
 		await settle();
-		expect(textarea.value).toBe('@Ada Lovelace');
+		expect(textarea.value).toBe('@user › Ada Lovelace');
 
 		submit(container);
 		expect(sent).toEqual([
 			{
-				message: '@Ada Lovelace',
+				message: '@user › Ada Lovelace',
 				mentions: [
 					{
 						collection: 'user',
 						recordId: '0197f2a4-0000-7000-8000-000000000004',
-						label: 'Ada Lovelace'
+						label: 'user › Ada Lovelace'
 					}
 				],
 				intent: 'do',

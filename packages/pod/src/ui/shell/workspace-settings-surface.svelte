@@ -4,7 +4,7 @@
 		ErasedCollectionRegistry
 	} from '@norbital-ai/platform-utils/collection';
 	import { UserRoleSchema, type TUserRole } from '@norbital-ai/platform-utils/system/types';
-	import { Bound, Cover, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Center, Cover, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import WorkspaceAuditTable from '../settings/workspace-audit-table.svelte';
 	import WorkspaceInvitationsTable from '../settings/workspace-invitations-table.svelte';
@@ -69,6 +69,7 @@
 	let failure = $state<string | null>(null);
 	let mintedLink = $state<{ email: string; acceptUrl: string } | null>(null);
 
+	/** Runs one settings write at a time and surfaces the failure on the page. */
 	async function run(work: () => Promise<void>): Promise<void> {
 		if (busy) return;
 		busy = true;
@@ -82,12 +83,14 @@
 		}
 	}
 
-	async function loadInvitations(): Promise<void> {
+	/** Reloads invitations from the host API after the first visit or a write. */
+	async function loadInvitations(): Promise<void> { // stupidity:allow Q4 -- named helper
 		invitations = await api.listInvitations();
 		invitationsLoaded = true;
 	}
 
-	function onTabChange(tab: string): void {
+	/** Switches tabs and loads invitations the first time that tab is opened. */
+	function onTabChange(tab: string): void { // stupidity:allow Q3 -- template event handler
 		activeTab = tab as SettingsTab;
 		// Invitations come from the host API, not the replica; load them once, on first visit.
 		if (tab === 'invitations' && isAdmin && !invitationsLoaded) {
@@ -95,7 +98,8 @@
 		}
 	}
 
-	function changeRole(userId: string, role: string): void {
+	/** Persists a member role change after the schema accepts the value. */
+	function changeRole(userId: string, role: string): void { // stupidity:allow Q3 -- template event handler
 		const parsed = UserRoleSchema.safeParse(role);
 		if (!parsed.success) return;
 		void run(async () => {
@@ -103,6 +107,7 @@
 		});
 	}
 
+	/** Mints an invitation link and refreshes the pending list. */
 	function invite(email: string, role: TUserRole): void {
 		void run(async () => {
 			const minted = await api.invite({ email, role });
@@ -111,7 +116,8 @@
 		});
 	}
 
-	function revoke(invitationId: string): void {
+	/** Revokes a pending invitation and refreshes the list. */
+	function revoke(invitationId: string): void { // stupidity:allow Q3 -- template event handler
 		void run(async () => {
 			await api.revokeInvitation(invitationId);
 			await loadInvitations();
@@ -171,7 +177,8 @@
 	</Stack>
 {:else}
 	<Bound size="full" clip class="bg-background">
-		<Cover top={header} class="mx-auto h-full w-full max-w-7xl">
+		<Center measure="wide" class="h-full">
+			<Cover top={header}>
 				<Tabs
 					bind:value={activeTab}
 					onValueChange={onTabChange}
@@ -206,6 +213,7 @@
 						}
 					] satisfies TabConfig[]}
 				/>
-		</Cover>
+			</Cover>
+		</Center>
 	</Bound>
 {/if}

@@ -361,7 +361,10 @@ the provider sees a complete exchange. The baseline and authored prompt stay pre
 
 Verifier scoring lives in `server/agent/goal-mode.server.ts` and `shared/agent/goal-verdict.ts`, not
 inlined into the loop. The composer, the `@` menu, and the omni finder share one prefix language and
-record engine in `ui/agent/mention-sources.ts`. Composer chip ranges live in
+record engine in `ui/agent/mention-sources.ts`. Record search is opt-in: a collection
+must be chosen before any replica/server fan-out runs. The shared palette lives in
+`ui/finder/`; hosts declare what a pick means (navigate, open a record, or insert
+prompt text). Composer chip ranges live in
 `ui/agent/composer-mentions.ts`; chrome tokens and the focus/seed channel live in
 `ui/agent/composer-chrome.ts`.
 
@@ -467,12 +470,13 @@ sync stream; refresh, reconnect, offline catch-up and multi-tab convergence do n
 agent-specific browser stream or a race-prone collection fan-out. Token deltas are deliberately not
 replicated or persisted; the UI advances when a provider part completes.
 
-The selector presents durable identities rather than raw usernames: the current person's personal
-sessions are grouped under **Web agent — Me**, other personal sessions under **Web agent — Name**,
-and declared channel sessions under their channel profile. It is an ARIA tree with roving focus:
-Up/Down move between visible items, Right expands or enters a child, and Left collapses or returns
-to the parent. Visual hierarchy comes from consistent indentation and icons, not text-drawn branch
-characters.
+The selector is a flat, personal conversation list. It always shows the scoped person's web
+threads and authenticated DMs. Channel tabs appear only when a declared messaging channel has
+sessions alongside that inbox. Members also see authenticated groups their policy already
+replicates. Administrators stay in their own inbox by default and additionally see **public**
+channel transcripts (no login). A separate admin-only scope control switches the list to another
+member's personal threads; public channels stay on the administrator's own scope. Search and
+arrow keys stay on the same inset as the rows.
 
 Provider text and reasoning deltas stay in the host's short-lived stream queue. Pod appends one
 durable `chat_session` message only when each provider text or reasoning part completes, so a token
