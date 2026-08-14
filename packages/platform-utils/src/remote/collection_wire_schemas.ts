@@ -105,6 +105,8 @@ export const CreateManyWireSchema = z
 		bypass_secret: z.string().optional(),
 		/** Elevated bulk callers may avoid serializing complete rows they already own. */
 		returning: z.enum(['records', 'ids']).optional(),
+		/** Elevated factory seed may skip audit_event inserts while keeping sync_outbox rows. */
+		skipAudit: z.boolean().optional(),
 		inputs: z.array(z.record(z.string(), z.unknown()))
 	})
 	.strict();
@@ -129,6 +131,8 @@ export const UpdateManyWireSchema = z
 	.object({
 		collection: z.string(),
 		bypass_secret: z.string().optional(),
+		/** Elevated factory seed may skip audit_event inserts while keeping sync_outbox rows. */
+		skipAudit: z.boolean().optional(),
 		updates: z
 			.array(
 				z.object({

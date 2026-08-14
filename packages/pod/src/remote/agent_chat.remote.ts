@@ -1,7 +1,8 @@
 import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
-import { currentOutboxWatermark } from '$lib/server/collection/sync/outbox-tailer.server.js';
+import { withCollectionTransaction } from '$lib/server/collection/collection_transaction.server.js';
+import { latestOutboxSeqInTransaction } from '$lib/server/collection/sync/outbox-tailer.server.js';
 import {
 	parseCompactDirective,
 	prepareInteractiveAgentTurn
@@ -13,8 +14,7 @@ import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
 import { PENDING_CONVERSATION_TITLE } from '$lib/server/agent/conversation-title.server.js';
 import {
-	failOpenInteractiveTurn,
-	readChatSession
+	failOpenInteractiveTurn
 } from '$lib/server/agent/chat-session.server.js';
 import {
 	admitAgentTurn,
@@ -284,47 +284,63 @@ export const agentChatStart = authenticated.command(
 		// Before the conversation exists: a rejected model must fail the request outright rather than
 		// leave a started run whose first visible event is an error.
 		const model = await resolveModel(input.model);
-		const conversation = await prepareConversation(input.runId);
-		const compact = parseCompactDirective(input.message);
-		const spec = interactiveAgentStartSpec(input.message, model);
-		let openedTurnId: string | undefined;
-		try {
-			const opened = await prepareInteractiveAgentTurn({
-				sessionId: conversation.chatId,
-				spec,
-				message: input.message,
-				...chatIntentFields(input),
-				...(input.mentions?.length ? { mentions: input.mentions } : {})
-			});
-			openedTurnId = opened.turnId;
-			await admitInteractiveTurn(conversation, {
-				sessionId: conversation.chatId,
-				runId: conversation.runId,
-				turnId: opened.turnId,
-				promptContent: opened.promptContent,
-				spec,
-				input: input.message,
-				...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
-				...chatIntentFields(input),
-				...(input.mentions?.length ? { mentions: input.mentions } : {}),
-				...(compact ? { compact } : {})
-			});
-			const session = await readChatSession(conversation.chatId);
-			return {
-				...conversation,
-				session,
-				accepted: true,
-				syncSequence: await currentOutboxWatermark(getWorkspace({ provision: true }))
-			};
-		} catch (cause) {
-			if (openedTurnId) {
-				const message = cause instanceof Error ? cause.message : String(cause);
-				await failOpenInteractiveTurn(conversation.chatId, openedTurnId, message).catch(
-					() => undefined
-				);
+		const ctx = getWorkspace({ provision: true });
+		let admitError: unknown;
+		const started = await withCollectionTransaction(ctx, async () => {
+			const conversation = await prepareConversation(input.runId);
+			const compact = parseCompactDirective(input.message);
+			const spec = interactiveAgentStartSpec(input.message, model);
+			await ctx.tenantDb.query('SAVEPOINT agent_start_after_create');
+			let openedTurnId: string | undefined;
+			try {
+				const opened = await prepareInteractiveAgentTurn({
+					sessionId: conversation.chatId,
+					spec,
+					message: input.message,
+					...chatIntentFields(input),
+					...(input.mentions?.length ? { mentions: input.mentions } : {})
+				});
+				openedTurnId = opened.turnId;
+				const snapshot = {
+					sessionId: conversation.chatId,
+					runId: conversation.runId,
+					turnId: opened.turnId,
+					promptContent: opened.promptContent,
+					spec,
+					input: input.message,
+					...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
+					...chatIntentFields(input),
+					...(input.mentions?.length ? { mentions: input.mentions } : {}),
+					...(compact ? { compact } : {})
+				};
+				await ctx.tenantDb.query('SAVEPOINT agent_start_before_admit');
+				try {
+					await admitInteractiveTurn(conversation, snapshot);
+				} catch (cause) {
+					await ctx.tenantDb.query('ROLLBACK TO SAVEPOINT agent_start_before_admit');
+					const message = cause instanceof Error ? cause.message : String(cause);
+					await failOpenInteractiveTurn(conversation.chatId, opened.turnId, message);
+					admitError = cause;
+				}
+				return {
+					conversation,
+					session: opened.session,
+					syncSequence: await latestOutboxSeqInTransaction(ctx)
+				};
+			} catch (cause) {
+				if (openedTurnId === undefined) {
+					await ctx.tenantDb.query('ROLLBACK TO SAVEPOINT agent_start_after_create');
+				}
+				throw cause;
 			}
-			throw cause;
-		}
+		});
+		if (admitError) throw admitError;
+		return {
+			...started.conversation,
+			session: started.session,
+			accepted: true,
+			syncSequence: started.syncSequence
+		};
 	}
 );
 

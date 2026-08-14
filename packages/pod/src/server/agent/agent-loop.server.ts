@@ -32,7 +32,8 @@ import {
 	mutateChatSession,
 	openInteractiveAgentTurn,
 	readChatSession,
-	updateChatTurn
+	updateChatTurn,
+	type MutableChatSessionAggregate
 } from '$lib/server/agent/chat-session.server.js';
 import {
 	composeMentionContext,
@@ -1319,6 +1320,7 @@ export async function prepareInteractiveAgentTurn(input: {
 	readonly turnId: string;
 	readonly promptContent: string;
 	readonly inputMessageId: string | null;
+	readonly session: MutableChatSessionAggregate;
 }> {
 	const ctx = getWorkspace({ provision: true });
 	const mentionContext = input.mentions?.length
@@ -1352,7 +1354,12 @@ export async function prepareInteractiveAgentTurn(input: {
 				}
 			: {})
 	});
-	return { turnId: opened.turnId, promptContent, inputMessageId: opened.inputMessageId };
+	return {
+		turnId: opened.turnId,
+		promptContent,
+		inputMessageId: opened.inputMessageId,
+		session: opened.session
+	};
 }
 
 /**

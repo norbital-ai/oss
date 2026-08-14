@@ -423,6 +423,7 @@ export function createMany(
 		recordIds?: readonly string[];
 		createdAts?: readonly unknown[];
 		updatedAts?: readonly unknown[];
+		skipAudit?: boolean;
 	}
 ): Promise<BulkWriteResult> {
 	return withConstraintErrors(collection, async () => {
@@ -432,7 +433,8 @@ export function createMany(
 			returnIdsOnly: options?.returnIdsOnly,
 			recordIds: options?.recordIds,
 			createdAts: options?.createdAts,
-			updatedAts: options?.updatedAts
+			updatedAts: options?.updatedAts,
+			skipAudit: options?.skipAudit
 		});
 		return { records };
 	});
@@ -451,6 +453,7 @@ async function createManyUnguarded(
 		recordIds?: readonly string[];
 		createdAts?: readonly unknown[];
 		updatedAts?: readonly unknown[];
+		skipAudit?: boolean;
 	}
 ): Promise<Record<string, unknown>[]> {
 	if (inputs.length === 0) return [];
@@ -637,21 +640,25 @@ async function createManyUnguarded(
 
 		if (canProjectCreatedIds) {
 			const ids = created.map((record) => String(record[SYSTEM_COLUMN_NAMES.PKEY] ?? ''));
-			await sendCreatedAuditEventsFromTable(collection, table, ids);
+			if (!options?.skipAudit) {
+				await sendCreatedAuditEventsFromTable(collection, table, ids);
+			}
 			return ids.map((id) => ({ [SYSTEM_COLUMN_NAMES.PKEY]: id }));
 		}
-		await sendAuditEvents(
-			created.map((record) => ({
-				collectionName: collection,
-				params: {
-					action: 'record.create',
-					entityType: collection,
-					entityId: String(record[SYSTEM_COLUMN_NAMES.PKEY] ?? collection),
-					changesAfter: record
-				},
-				eventLabel: 'create'
-			}))
-		);
+		if (!options?.skipAudit) {
+			await sendAuditEvents(
+				created.map((record) => ({
+					collectionName: collection,
+					params: {
+						action: 'record.create',
+						entityType: collection,
+						entityId: String(record[SYSTEM_COLUMN_NAMES.PKEY] ?? collection),
+						changesAfter: record
+					},
+					eventLabel: 'create'
+				}))
+			);
+		}
 		return created;
 	});
 	return records;
@@ -938,6 +945,7 @@ export async function updateMany(
 	updates: readonly { recordId: string; input: Record<string, unknown> }[],
 	options?: {
 		isElevated?: boolean;
+		skipAudit?: boolean;
 	}
 ): Promise<BulkWriteResult> {
 	requireFinishableAdmit(updates.length);
@@ -1213,7 +1221,9 @@ export async function updateMany(
 			},
 			eventLabel: 'update'
 		}));
-		await sendAuditEvents(audits);
+		if (!options?.skipAudit) {
+			await sendAuditEvents(audits);
+		}
 		return updated;
 	});
 	return { records: result };

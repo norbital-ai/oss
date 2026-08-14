@@ -240,7 +240,11 @@ export async function openInteractiveAgentTurn(input: {
 		readonly content: string;
 		readonly extra?: Readonly<Record<string, unknown>>;
 	}[];
-}): Promise<{ readonly turnId: string; readonly inputMessageId: string }> {
+}): Promise<{
+	readonly turnId: string;
+	readonly inputMessageId: string;
+	readonly session: MutableChatSessionAggregate;
+}> {
 	return mutateChatSession(input.sessionId, (session) => {
 		const turnId = pushChatTurn(session, { model: input.model });
 		const inputMessageId = pushChatMessage(
@@ -262,7 +266,7 @@ export async function openInteractiveAgentTurn(input: {
 				notice.extra ?? {}
 			);
 		}
-		return { turnId, inputMessageId };
+		return { turnId, inputMessageId, session };
 	});
 }
 

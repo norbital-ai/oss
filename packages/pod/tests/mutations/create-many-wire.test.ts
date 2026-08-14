@@ -12,6 +12,7 @@ describe('createMany wire projection', () => {
 		const input = { collection: 'records', inputs: [{ title: 'one' }] };
 		expect(CreateManyWireSchema.parse(input)).toEqual(input);
 		expect(CreateManyWireSchema.parse({ ...input, returning: 'ids' }).returning).toBe('ids');
+		expect(CreateManyWireSchema.parse({ ...input, skipAudit: true }).skipAudit).toBe(true);
 		expect(() => CreateManyWireSchema.parse({ ...input, returning: 'nothing' })).toThrow();
 	});
 

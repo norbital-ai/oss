@@ -215,9 +215,8 @@ describe('Batched collection delete (real Postgres triggers)', () => {
 		expect(matching(/^select .*from "orders"/is)).toHaveLength(1);
 		expect(matching(/^delete from "orders"/i)).toHaveLength(1);
 		expect(matching(/insert into sync_outbox/i)).toHaveLength(1);
-		// BEGIN + set_config + the three above + COMMIT, plus the audit INSERT (stubbed here).
-		// The record-at-a-time loop paid all six of those per record, not per batch.
-		expect(statements).toHaveLength(6);
+		// BEGIN (via_ops is set inside begin) + the three above + COMMIT. Audit is stubbed.
+		expect(statements).toHaveLength(5);
 	});
 
 	it('archives every deleted row to history, and only those rows', async () => {

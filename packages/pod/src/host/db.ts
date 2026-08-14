@@ -117,6 +117,7 @@ export class PostgresHostDbBinding implements HostDbConnection {
 		const client = await this.#pool.connect();
 		try {
 			await client.query('BEGIN');
+			await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
 			this.#transactions.set(transactionId, client);
 			return transactionId;
 		} catch (cause) {

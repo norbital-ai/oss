@@ -29,12 +29,8 @@ export async function withCollectionTransaction<T>(
 		throw error(500, 'Tenant database does not support atomic collection transactions.');
 	}
 	return ctx.tenantDb.transaction(async () => {
-		// Mark this transaction as the authoritative collection-ops path. The tenant
-		// client pins one connection behind the transaction, so this transaction-local
-		// GUC is visible to every subsequent write (including drizzle mutations, which
-		// route through the same client) and satisfies the _ops_guard trigger. It resets
-		// automatically on COMMIT/ROLLBACK.
-		await ctx.tenantDb.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
+		// `begin` already sets `norbital.via_ops` on the pinned connection. Do not
+		// spend another isolate→host RPC on the same GUC.
 		return activeCollectionTransaction.run(ctx.tenantDb, operation);
 	});
 }

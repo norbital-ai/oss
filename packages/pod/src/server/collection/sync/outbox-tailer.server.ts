@@ -240,3 +240,15 @@ export async function currentOutboxWatermark(ctx: ProvisionedContext): Promise<s
 	);
 	return result.rows[0]?.seq ?? '0';
 }
+
+/**
+ * Largest `sync_outbox.seq` visible in the caller's transaction, including rows not yet below
+ * the tailer's commit horizon. Use at the end of an authoritative collection transaction so the
+ * client can resume from the rows that just co-committed.
+ */
+export async function latestOutboxSeqInTransaction(ctx: ProvisionedContext): Promise<string> {
+	const result = await ctx.tenantDb.query<{ seq: string | null }>(
+		`SELECT max(seq)::text AS seq FROM sync_outbox`
+	);
+	return result.rows[0]?.seq ?? '0';
+}

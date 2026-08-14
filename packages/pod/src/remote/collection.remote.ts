@@ -145,6 +145,7 @@ export const createMany = authenticated.command(CreateManyWireSchema, async (par
 			// whenever the workspace authored them. Invalid or absent secrets remain ordinary calls.
 			isElevated,
 			returnIdsOnly: isElevated && params.returning === 'ids',
+			skipAudit: isElevated && params.skipAudit === true,
 			...(recordIds?.every(Boolean) ? { recordIds } : {}),
 			...(isElevated
 				? {
@@ -174,13 +175,18 @@ export const update = authenticated.command(UpdateWireSchema, async (params) => 
 export const updateMany = authenticated.command(UpdateManyWireSchema, async (params) => {
 	const ctx = getWorkspace({ provision: true });
 	requireCollection(params.collection);
-	return runWithBypassSecretIfValidAsync(params.bypass_secret, () =>
-		runUpdateMany(
+	return runWithBypassSecretIfValidAsync(params.bypass_secret, () => {
+		const isElevated = getCurrentPermissionBypassKey() != null;
+		return runUpdateMany(
 			ctx,
 			params.collection,
-			params.updates.map((entry) => ({ recordId: entry.record_id, input: entry.input }))
-		)
-	);
+			params.updates.map((entry) => ({ recordId: entry.record_id, input: entry.input })),
+			{
+				isElevated,
+				skipAudit: isElevated && params.skipAudit === true
+			}
+		);
+	});
 });
 
 export const deleteRecord = authenticated.command(DeleteWireSchema, async (params) => {

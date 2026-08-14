@@ -7,10 +7,16 @@ const state = vi.hoisted(() => ({
 		turnId: string;
 		promptContent: string;
 		inputMessageId: string;
-	}> => ({ turnId: 'turn-1', promptContent: 'Inspect this', inputMessageId: 'msg-1' }),
+		session: Record<string, unknown>;
+	}> => ({
+		turnId: 'turn-1',
+		promptContent: 'Inspect this',
+		inputMessageId: 'msg-1',
+		session: { norbital_id: 'chat-1', turns: [{ norbital_id: 'turn-1', status: 'running' }] }
+	}),
 	admit: async (): Promise<void> => undefined,
 	failedTurns: [] as { sessionId: string; turnId: string; error: string }[],
-	session: { norbital_id: 'chat-1', turns: [] as Record<string, unknown>[] }
+	inTransaction: false
 }));
 
 vi.mock('$lib/server/bootstrap/workspace_store.js', () => {
@@ -73,12 +79,22 @@ vi.mock('$lib/server/run/automation-dispatch.server.js', () => ({
 vi.mock('$lib/server/agent/chat-session.server.js', () => ({
 	failOpenInteractiveTurn: async (sessionId: string, turnId: string, error: string) => {
 		state.failedTurns.push({ sessionId, turnId, error });
-	},
-	readChatSession: async () => state.session
+	}
+}));
+
+vi.mock('$lib/server/collection/collection_transaction.server.js', () => ({
+	withCollectionTransaction: async (_ctx: unknown, operation: () => Promise<unknown>) => {
+		state.inTransaction = true;
+		try {
+			return await operation();
+		} finally {
+			state.inTransaction = false;
+		}
+	}
 }));
 
 vi.mock('$lib/server/collection/sync/outbox-tailer.server.js', () => ({
-	currentOutboxWatermark: async () => '1'
+	latestOutboxSeqInTransaction: async () => '42'
 }));
 
 vi.mock('$lib/server/facilities.js', () => ({
@@ -98,11 +114,12 @@ const { agentChatStart } = await import('../../src/remote/agent_chat.remote.js')
 afterEach(() => {
 	state.created = [];
 	state.failedTurns = [];
-	state.session = { norbital_id: 'chat-1', turns: [] };
+	state.inTransaction = false;
 	state.prepareTurn = async () => ({
 		turnId: 'turn-1',
 		promptContent: 'Inspect this',
-		inputMessageId: 'msg-1'
+		inputMessageId: 'msg-1',
+		session: { norbital_id: 'chat-1', turns: [{ norbital_id: 'turn-1', status: 'running' }] }
 	});
 	state.admit = async () => undefined;
 });
@@ -133,13 +150,21 @@ describe('agentChatStart persistence', () => {
 		]);
 	});
 
-	it('returns the session after the turn is opened, not the pre-turn create receipt', async () => {
-		state.session = {
+	it('returns the opened session without a terminal re-read', async () => {
+		const openedSession = {
 			norbital_id: 'chat-1',
 			turns: [{ norbital_id: 'turn-1', status: 'running' }]
 		};
+		state.prepareTurn = async () => ({
+			turnId: 'turn-1',
+			promptContent: 'Inspect this',
+			inputMessageId: 'msg-1',
+			session: openedSession
+		});
 		const result = await agentChatStart({ message: 'Inspect this' });
-		expect(result.session).toEqual(state.session);
+		expect(result.session).toEqual(openedSession);
+		expect(result.syncSequence).toBe('42');
+		expect(state.inTransaction).toBe(false);
 	});
 
 	it('persists chat_session even when turn prep fails after create', async () => {
@@ -168,8 +193,10 @@ describe('hosted start path budget', () => {
 		expect(startFn.indexOf('prepareConversation')).toBeLessThan(
 			startFn.indexOf('interactiveAgentStartSpec')
 		);
+		expect(startFn).toContain('withCollectionTransaction');
+		expect(startFn).toContain('latestOutboxSeqInTransaction');
 		expect(startFn).toContain('failOpenInteractiveTurn');
-		expect(startFn).toContain('readChatSession');
+		expect(startFn).not.toContain('readChatSession');
 	});
 
 	it('registers start on the host-owned agent door, not the API-client remote table', () => {

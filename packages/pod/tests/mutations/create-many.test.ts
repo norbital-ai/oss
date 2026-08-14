@@ -258,8 +258,8 @@ describe('Batched collection create (real Postgres)', () => {
 		expect(matching(/^insert into "orders"/i)).toHaveLength(2);
 		expect(matching(/insert into sync_outbox/i)).toHaveLength(1);
 		expect(matching(/^insert into "audit_event"/i)).toHaveLength(2);
-		// BEGIN + set_config + two roots + sync + two audits + COMMIT.
-		expect(statements).toHaveLength(8);
+		// BEGIN (via_ops is set inside begin) + two roots + sync + two audits + COMMIT.
+		expect(statements).toHaveLength(7);
 	}, 180_000);
 
 	it('returns only ids with audit JSON exactly equivalent to the ordinary returned-row path', async () => {
@@ -339,6 +339,37 @@ describe('Batched collection create (real Postgres)', () => {
 		expect(supportsServerCreatedAuditProjection(orders)).toBe(true);
 		expect(supportsServerCreatedAuditProjection(unsupportedNumericOrders)).toBe(false);
 		expect(supportsServerCreatedAuditProjection(unsupportedCustomOrders)).toBe(false);
+	});
+
+	it('keeps sync_outbox but skips audit_event when skipAudit is set', async () => {
+		const id = '40000000-0000-4000-8000-000000000099';
+		const input = {
+			status: 'seed-row',
+			work_date: '2026-08-12',
+			occurred_at: new Date('2026-08-12T08:09:10.123Z'),
+			optional_at: null,
+			metadata: { seeded: true },
+			state: 'OPEN'
+		};
+
+		const { records } = await withRequestWorkspaceCtx(ctx, () =>
+			createMany(ctx, 'orders', [input], {
+				isElevated: true,
+				returnIdsOnly: true,
+				recordIds: [id],
+				skipAudit: true
+			})
+		);
+
+		expect(records).toEqual([{ norbital_id: id }]);
+		expect(
+			(
+				await pool.query<{ record_id: string; action: string }>(
+					'SELECT record_id, action FROM sync_outbox ORDER BY seq'
+				)
+			).rows
+		).toEqual([{ record_id: id, action: 'create' }]);
+		expect(await pool.query('SELECT 1 FROM audit_event')).toMatchObject({ rowCount: 0 });
 	});
 
 	it('bounds id-projected root and audit statements above 5,000 rows', async () => {
