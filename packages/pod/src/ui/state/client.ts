@@ -160,7 +160,7 @@ function query<T>(
 	const family = remoteQueryFamily(keyPrefix, path, body);
 	return manager.query(
 		key,
-		async (signal) => {
+		async (signal, publish) => {
 			// Start the authoritative fetch immediately. A local replica read may win if it
 			// settles first with a real value, but it must never delay the request — another
 			// collection's catch-up can occupy the replica while this page is already viewable
@@ -171,7 +171,7 @@ function query<T>(
 				absorb?.(value);
 				return value;
 			}
-			return raceLocalAndServer(server, local, absorb);
+			return raceLocalAndServer(server, local, absorb, publish);
 		},
 		family
 	);

@@ -62,12 +62,18 @@ export function serveHostSyncStream(input: HostSyncStreamInput): HostSyncStreamR
 	else input.signal?.addEventListener('abort', () => abort.abort(), { once: true });
 
 	let wake: (() => void) | null = null;
+	let pendingWake = false;
 	const unsubscribe = input.subscribe(() => {
-		wake?.();
+		if (wake) wake();
+		else pendingWake = true;
 	});
 
-	const waitForNotify = (): Promise<void> =>
-		new Promise((resolve) => {
+	const waitForNotify = (): Promise<void> => {
+		if (pendingWake) {
+			pendingWake = false;
+			return Promise.resolve();
+		}
+		return new Promise((resolve) => {
 			if (abort.signal.aborted) {
 				resolve();
 				return;
@@ -80,6 +86,7 @@ export function serveHostSyncStream(input: HostSyncStreamInput): HostSyncStreamR
 			wake = finish;
 			abort.signal.addEventListener('abort', finish, { once: true });
 		});
+	};
 
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {

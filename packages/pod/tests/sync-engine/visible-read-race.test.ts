@@ -94,8 +94,8 @@ describe('visible reads race the server past background catch-up', () => {
 		let ordersPages = 0;
 		const syncFetch: SyncFetch = async (path, init) => {
 			if (path.startsWith('sync/shape')) {
-				const payload = JSON.parse(String(init.body ?? '{}')) as { collection?: string };
-				if (payload.collection === 'orders') {
+				const payload: unknown = JSON.parse(String(init.body ?? '{}'));
+				if (payload && typeof payload === 'object' && Reflect.get(payload, 'collection') === 'orders') {
 					ordersPages += 1;
 					if (ordersPages > 1) await ordersRemainderBlocked;
 					return new Response(
@@ -166,6 +166,21 @@ describe('visible reads race the server past background catch-up', () => {
 });
 
 describe('remote query abort and cached current', () => {
+	it('publishes a later authoritative value into the mounted resource', async () => {
+		const manager = new RemoteQueryResourceManager<string>();
+		let reconcile = (_value: string): void => {};
+		const query = manager.query('authoritative-reconcile', async (_signal, publish) => {
+			reconcile = publish;
+			return 'stale local';
+		});
+
+		await query;
+		expect(query.current).toBe('stale local');
+		reconcile('fresh server');
+		await flush();
+		expect(query.current).toBe('fresh server');
+	});
+
 	it('does not clear loading when generation N aborts and current is still undefined', async () => {
 		const manager = new RemoteQueryResourceManager<string>();
 		let loads = 0;

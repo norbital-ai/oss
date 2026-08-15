@@ -14,7 +14,8 @@ type ServerRace<T> =
 export async function raceLocalAndServer<T>(
 	server: Promise<T>,
 	local: () => Promise<T | null | undefined>,
-	absorb?: (value: T) => void
+	absorb?: (value: T) => void,
+	publish?: (value: T) => void
 ): Promise<T> {
 	const localAttempt: Promise<LocalRace<T>> = Promise.resolve()
 		.then(() => local())
@@ -37,7 +38,9 @@ export async function raceLocalAndServer<T>(
 
 	if (first.source === 'local' && first.result.status === 'value') {
 		void serverAttempt.then((result) => {
-			if (result.status === 'value') absorb?.(result.value);
+			if (result.status !== 'value') return;
+			absorb?.(result.value);
+			publish?.(result.value);
 		});
 		return first.result.value;
 	}

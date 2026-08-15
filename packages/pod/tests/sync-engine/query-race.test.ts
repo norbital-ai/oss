@@ -97,16 +97,19 @@ describe('raceLocalAndServer', () => {
 			releaseServer = resolve;
 		});
 		const absorbed: unknown[] = [];
+		const published: unknown[] = [];
 		const server = serverBlocked.then(() => ({ rows: [{ norbital_id: 'server' }] }));
 		const result = await raceLocalAndServer(
 			server,
 			async () => ({ rows: [{ norbital_id: 'local' }] }),
-			(value) => absorbed.push(value)
+			(value) => absorbed.push(value),
+			(value) => published.push(value)
 		);
 		expect(result).toEqual({ rows: [{ norbital_id: 'local' }] });
 		releaseServer();
 		await flush();
 		expect(absorbed).toEqual([{ rows: [{ norbital_id: 'server' }] }]);
+		expect(published).toEqual([{ rows: [{ norbital_id: 'server' }] }]);
 	});
 });
 
@@ -139,8 +142,8 @@ describe('findMany local path vs another collection catch-up', () => {
 		let ordersPages = 0;
 		const syncFetch: SyncFetch = async (path, init) => {
 			if (path.startsWith('sync/shape')) {
-				const payload = JSON.parse(String(init.body ?? '{}')) as { collection?: string };
-				if (payload.collection === 'orders') {
+				const payload: unknown = JSON.parse(String(init.body ?? '{}'));
+				if (payload && typeof payload === 'object' && Reflect.get(payload, 'collection') === 'orders') {
 					ordersPages += 1;
 					if (ordersPages > 1) await ordersRemainderBlocked;
 					return new Response(

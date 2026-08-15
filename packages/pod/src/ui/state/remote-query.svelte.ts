@@ -5,7 +5,10 @@ export interface RemoteQuery<T> {
 	refresh(): Promise<void>;
 }
 
-type RemoteQueryLoader<T> = (signal: AbortSignal | undefined) => Promise<T>;
+type RemoteQueryLoader<T> = (
+	signal: AbortSignal | undefined,
+	publish: (value: T) => void
+) => Promise<T>;
 
 export function remoteQueryKey(keyPrefix: string, path: string, body: unknown): string {
 	const canonicalBody = JSON.stringify(body, (_key, entry: unknown) => {
@@ -65,7 +68,24 @@ class RemoteQueryResource<T> {
 		this.controller = controller;
 		this.needsRestart = false;
 		this.error = undefined;
-		const pending = Promise.resolve().then(() => this.load(controller.signal));
+		let pending!: Promise<T>;
+		const publish = (value: T): void => {
+			// A local replica may answer first while the already-started server read keeps running.
+			// Publish that later authoritative value into this same mounted resource instead of merely
+			// writing it to the replica: otherwise the screen remains stale until another invalidation.
+			// Waiting for the primary value to settle also prevents a fast server reconciliation from
+			// being overwritten by the local value that won the race.
+			void pending.then(
+				() => {
+					if (generation !== this.generation) return;
+					this.current = value;
+					this.alive = true;
+					this.onValue?.(value);
+				},
+				() => undefined
+			);
+		};
+		pending = Promise.resolve().then(() => this.load(controller.signal, publish));
 		this.pending = pending;
 
 		// `loading` means "there is not yet a truthful value to render", not merely "a request is in

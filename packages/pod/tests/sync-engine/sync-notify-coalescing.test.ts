@@ -157,4 +157,62 @@ describe('host sync wake bus', () => {
 			await reader.cancel().catch(() => undefined);
 		}
 	});
+
+	it('does not drop a wake delivered while a durable pull is in flight', async () => {
+		let notify = () => {};
+		let pulls = 0;
+		const served = serveHostSyncStream({
+			path: '/_runtime/sync/stream?collection=chat_session',
+			pullDiff: async () => {
+				pulls += 1;
+				if (pulls === 1) notify();
+				return pulls <= 21
+					? {
+							status: 200,
+							bodyText: JSON.stringify({ type: 'idle', cursor: { xid: '1', seq: '1' } })
+						}
+					: {
+							status: 200,
+							bodyText: JSON.stringify({
+								type: 'diffs',
+								diffs: [
+									{
+										seq: '2',
+										xid: '2',
+										collection: 'chat_session',
+										action: 'update',
+										id: 'chat-after-wake',
+										version: 2,
+										row: { norbital_id: 'chat-after-wake' }
+									}
+								],
+								cursor: { xid: '2', seq: '2' }
+							})
+						};
+			},
+			subscribe: (onWake) => {
+				notify = onWake;
+				return () => {};
+			}
+		});
+		const reader = served.body.getReader();
+		const decoder = new TextDecoder();
+		let frames = '';
+		try {
+			while (!frames.includes('chat-after-wake')) {
+				const chunk = await Promise.race([
+					reader.read(),
+					new Promise<never>((_, reject) =>
+						setTimeout(() => reject(new Error('wake was dropped before the stream slept')), 1_500)
+					)
+				]);
+				if (chunk.done) break;
+				frames += decoder.decode(chunk.value, { stream: true });
+			}
+			expect(frames).toContain('chat-after-wake');
+		} finally {
+			served.cancel();
+			await reader.cancel().catch(() => undefined);
+		}
+	});
 });

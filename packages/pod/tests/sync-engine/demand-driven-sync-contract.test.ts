@@ -19,7 +19,7 @@ describe('demand-driven browser synchronization', () => {
 		const clientSync = source('ui/sync/client-sync.ts');
 		expect(stateClient).toContain("import { raceLocalAndServer } from '$lib/ui/state/query-race.js'");
 		expect(stateClient).toContain('const server = post<T>(path, body, signal, key)');
-		expect(stateClient).toContain('return raceLocalAndServer(server, local, absorb)');
+		expect(stateClient).toContain('return raceLocalAndServer(server, local, absorb, publish)');
 		expect(clientSync).toContain('for (const name of missing) void sync.registry.register(name)');
 		expect(clientSync).toContain('if (missing.length > 0)');
 		expect(clientSync).toContain(
