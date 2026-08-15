@@ -527,9 +527,7 @@
 		isAdmin &&
 			activeSession?.visibility === 'personal' &&
 			currentUserId !== null &&
-			typeof activeSession.user_id === 'string' &&
-			activeSession.user_id.length > 0 &&
-			activeSession.user_id !== currentUserId
+			resolvedScopeUserId !== currentUserId
 	);
 	const activeSessionIsReadOnly = $derived(
 		activeSessionIsChannel || activeSessionIsOtherUsersPersonal
