@@ -146,6 +146,11 @@ function arriveSession(
 		norbital_id: input.norbital_id ?? 'c1',
 		automation_run_id: input.automation_run_id ?? 'r1',
 		title: input.title ?? 'Workspace agent',
+		user_id: 'u1',
+		visibility: 'personal',
+		platform: null,
+		channel_key: null,
+		external_thread_id: null,
 		messages: input.messages ?? [],
 		turns: input.turns ?? [],
 		norbital_updated_at: '2026-08-12T00:00:00.000Z'
@@ -549,6 +554,11 @@ describe('agent chat panel', () => {
 				norbital_id: 'c1',
 				automation_run_id: 'r1',
 				title: 'Check the payroll run',
+				user_id: 'u1',
+				visibility: 'personal',
+				platform: null,
+				channel_key: null,
+				external_thread_id: null,
 				messages: [message({ norbital_id: 'm1', seq: 1, role: 'assistant', content: 'Ready.' })],
 				turns: [],
 				norbital_updated_at: '2026-08-12T10:00:00.000Z'

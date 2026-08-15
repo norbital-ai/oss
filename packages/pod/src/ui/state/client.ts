@@ -53,6 +53,7 @@ import {
 	createCollectionClient
 } from '@norbital-ai/platform-utils/collection/client';
 import type { Component } from 'svelte';
+import type { ChatSessionClient } from './types.js';
 
 export type WorkspaceAppLoader = () => Promise<Component>;
 
@@ -270,6 +271,10 @@ async function settleAgentStartSync(
 	// update to this new conversation while `chat_session` is absent from the subscription set.
 	// `register()` publishes that interest synchronously before its first catch-up await.
 	const registration = sync.registry.register('chat_session');
+	// A stream that was already open still carries its previous collection set until its coalesced
+	// rotation. Rotate it now, before it can advance the one shared cursor past agent updates that
+	// only the newly registered chat_session subscription would have retained.
+	sync.client.rotateActiveStreamForSubscriptions();
 	if (receipt.session) {
 		const columns = localCollection('chat_session')?.columns ?? [];
 		if (columns.length > 0) {
@@ -563,7 +568,11 @@ export type WorkspaceCollectionClient<TCollections extends CollectionRegistry> =
 
 let initializedWorkspaceClient: CollectionClient<ErasedCollectionRegistry> | undefined;
 
-export function getInitializedWorkspaceClient(): CollectionClient<ErasedCollectionRegistry> {
+export function getInitializedWorkspaceClient(collection: 'chat_session'): ChatSessionClient;
+export function getInitializedWorkspaceClient(): CollectionClient<ErasedCollectionRegistry>;
+export function getInitializedWorkspaceClient(
+	_collection?: 'chat_session'
+): CollectionClient<ErasedCollectionRegistry> | ChatSessionClient {
 	if (!initializedWorkspaceClient) {
 		throw new Error('Pod client used before workspace initialization');
 	}

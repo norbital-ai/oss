@@ -23,6 +23,7 @@ describe('agent start read-your-command consistency', () => {
 		const events: string[] = [];
 		const client = {
 			onChange: () => {},
+			rotateActiveStreamForSubscriptions: () => events.push('stream:rotate'),
 			upsertRows: async (_collection: string, rows: readonly Record<string, unknown>[]) => {
 				upserts.push(rows);
 			},
@@ -83,6 +84,7 @@ describe('agent start read-your-command consistency', () => {
 		expect(notified).toEqual(['chat_session']);
 		expect(waited).toEqual(['42']);
 		expect(events.indexOf('subscribed:chat_session')).toBeLessThan(events.indexOf('wait:42'));
+		expect(events.indexOf('stream:rotate')).toBeLessThan(events.indexOf('wait:42'));
 	});
 
 	it('lets a cold collection snapshot seed the cursor before starting the receipt barrier', async () => {
@@ -93,6 +95,7 @@ describe('agent start read-your-command consistency', () => {
 		});
 		const client = {
 			onChange: () => {},
+			rotateActiveStreamForSubscriptions: () => events.push('stream:rotate'),
 			upsertRows: async () => {},
 			notifyCollection: () => {},
 			setSubscribedCollections: (collections: ReadonlySet<string>) => {
@@ -140,6 +143,7 @@ describe('agent start read-your-command consistency', () => {
 		await started;
 
 		expect(events.indexOf('shape:ready')).toBeLessThan(events.indexOf('wait'));
+		expect(events.indexOf('stream:rotate')).toBeLessThan(events.indexOf('shape:ready'));
 	});
 
 	it('folds the session receipt even when the replica schema is not published yet', async () => {
@@ -147,6 +151,7 @@ describe('agent start read-your-command consistency', () => {
 		const notified: string[] = [];
 		const client = {
 			onChange: () => {},
+			rotateActiveStreamForSubscriptions: () => {},
 			upsertRows: async (_collection: string, rows: readonly Record<string, unknown>[]) => {
 				upserts.push(rows);
 			},

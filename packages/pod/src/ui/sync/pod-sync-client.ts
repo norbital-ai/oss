@@ -649,6 +649,21 @@ export class PodSyncClient {
 		}, SUBSCRIPTION_ROTATE_DELAY_MS);
 	}
 
+	/**
+	 * Reopen an active feed immediately with the collections registered so far.
+	 *
+	 * Ordinary background registration is coalesced above. A command receipt is different: its
+	 * newly demanded collection must join the feed before the old connection can advance the shared
+	 * cursor past later writes to that collection. A cold client is deliberately left alone so its
+	 * first shape can still seed the cursor before `waitForSequence()` starts the feed.
+	 */
+	rotateActiveStreamForSubscriptions(): void {
+		if (!this.connectionAbort) return;
+		if (this.rotateTimer) clearTimeout(this.rotateTimer);
+		this.rotateTimer = null;
+		this.connectionAbort.abort();
+	}
+
 	private async consumeSse(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
 		const reader = body.getReader();
 		const decoder = new TextDecoder();

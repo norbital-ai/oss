@@ -27,14 +27,8 @@
 		buildConversationSelector,
 		listAccessibleChannels,
 		sessionChannelId,
-		sessionVisibleInScope,
-		type ConversationSession
+		sessionVisibleInScope
 	} from './conversation-selector.js';
-	import type { ChatSessionAggregate } from '$lib/shared/agent/context-window.js';
-	import {
-		ChatSessionMessagesSchema,
-		ChatSessionTurnsSchema
-	} from '@norbital-ai/platform-utils/system/workspace-schema';
 	import { writeAgentSurface } from './agent-activity-state.svelte.js';
 	import {
 		AGENT_TURN_STALE_MS,
@@ -344,11 +338,9 @@
 	}
 	// ─────────────────────────────────────────────────────────────────────────────────────────────
 
-	type SessionRow = ConversationSession &
-		Pick<ChatSessionAggregate, 'automation_run_id' | 'messages' | 'turns'>;
 	const sessionQuery = $derived.by(() => {
 		try {
-			return getInitializedWorkspaceClient().db.chat_session?.findMany({
+			return getInitializedWorkspaceClient('chat_session').db.chat_session.findMany({
 				orderBy: { norbital_updated_at: 'desc' },
 				limit: 100
 			});
@@ -356,34 +348,8 @@
 			return undefined;
 		}
 	});
-	const sessions = $derived(
-		(sessionQuery?.current ?? []).flatMap((row): SessionRow[] => {
-			if (typeof row.norbital_id !== 'string') {
-				return [];
-			}
-			const messages = ChatSessionMessagesSchema.safeParse(row.messages);
-			const turns = ChatSessionTurnsSchema.safeParse(row.turns);
-			return [
-				{
-					norbital_id: row.norbital_id,
-					automation_run_id:
-						typeof row.automation_run_id === 'string' ? row.automation_run_id : null,
-					user_id: typeof row.user_id === 'string' ? row.user_id : '',
-					visibility: typeof row.visibility === 'string' ? row.visibility : 'personal',
-					platform: typeof row.platform === 'string' ? row.platform : null,
-					channel_key: typeof row.channel_key === 'string' ? row.channel_key : null,
-					external_thread_id:
-						typeof row.external_thread_id === 'string' ? row.external_thread_id : null,
-					messages: messages.success ? messages.data : [],
-					turns: turns.success ? turns.data : [],
-					title:
-						typeof row.title === 'string' && row.title.trim()
-							? row.title
-							: t('pod.shell.workspaceAgentTitle')
-				}
-			];
-		})
-	);
+	/** The live query row is the conversation. Do not copy or rekey it into a second client model. */
+	const sessions = $derived(sessionQuery?.current ?? []);
 	const isAdmin = $derived(platformState?.user?.role === 'admin');
 	const currentUserId = $derived(platformState?.user?.norbital_id ?? null);
 	let scopeUserId = $state<string | null>(null);
@@ -520,6 +486,8 @@
 
 	/** One replicated tenant row is the complete live conversation aggregate. */
 	const activeSession = $derived(sessions.find((row) => row.norbital_id === activeChatId));
+	const activeMessages = $derived(activeSession?.messages ?? []);
+	const activeTurns = $derived(activeSession?.turns ?? []);
 	const activeSessionIsChannel = $derived(
 		activeSession?.visibility.startsWith('channel_') ?? false
 	);
@@ -532,20 +500,14 @@
 	const activeSessionIsReadOnly = $derived(
 		activeSessionIsChannel || activeSessionIsOtherUsersPersonal
 	);
-	const stored = $derived(
-		toPanelMessages(activeSession?.messages ?? [], activeSession?.turns ?? [])
-	);
+	const stored = $derived(toPanelMessages(activeMessages, activeTurns));
 	const messages = $derived(withPendingEcho(stored, session.echo));
-	const turnRows = $derived(activeSession?.turns ?? []);
-	const rootTurn = $derived(
-		[...turnRows].filter((turn) => turn.subagent_id == null).at(-1) as
-			Record<string, unknown> | undefined
-	);
+	const rootTurn = $derived([...activeTurns].filter((turn) => turn.subagent_id == null).at(-1));
 	/** Interactive start returns before inference; the replicated root turn owns in-flight after that. */
 	const composerLocked = $derived(
 		!session.sendFailure &&
 			!session.waitedTooLong &&
-			(session.pending || rootTurn?.status === 'running' || rootTurn?.status === 'queued')
+			(session.pending || rootTurn?.status === 'running')
 	);
 	const terminalMessage = $derived(messages.at(-1));
 	const replicaFailure = $derived.by(() => {
@@ -570,8 +532,8 @@
 		agentOrbState({
 			pending: composerLocked,
 			failed: failure != null,
-			messages: activeSession?.messages,
-			turns: activeSession?.turns
+			messages: activeMessages,
+			turns: activeTurns
 		})
 	);
 	const canSend = $derived(draft.trim().length > 0 && !composerLocked && !activeSessionIsReadOnly);
@@ -597,7 +559,7 @@
 			(option) => option.id === (modelState.selectedModel || modelState.catalog?.defaultModel)
 		)?.contextLength ?? null
 	);
-	const usage = $derived(toPanelUsage(activeSession?.messages ?? [], contextLength));
+	const usage = $derived(toPanelUsage(activeMessages, contextLength));
 	const contextPercent = $derived(
 		usage.contextTokens !== null && usage.contextLength
 			? Math.min(100, Math.round((usage.contextTokens / usage.contextLength) * 100))

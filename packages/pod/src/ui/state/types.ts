@@ -4,10 +4,15 @@ import type {
 	TApprovalConfigStepNode,
 	TApprovalRequest,
 	TApprovalRequestStepNode,
-	TChatSession,
 	TMutationActionKey,
 	TPolicy
 } from '@norbital-ai/platform-utils/system/types';
+import type {
+	CollectionClient,
+	CollectionRecord,
+	CollectionType
+} from '@norbital-ai/platform-utils/collection';
+import type { chat_session } from '@norbital-ai/platform-utils/system/workspace-schema';
 import {
 	BreadcrumbItemSchema,
 	ContextNavStackItemSchema,
@@ -24,7 +29,6 @@ export type {
 	TApprovalConfigStepNode,
 	TApprovalRequest,
 	TApprovalRequestStepNode,
-	TChatSession,
 	TMutationActionKey
 };
 export type { TBaseScope, TNorbitalDBRecord, TScopeOrganization, TScopeRequestor, TUserInfo };
@@ -77,6 +81,14 @@ export type { TBreadcrumbItem, ContextNavStackItem } from '$lib/shared/scope.js'
 export type ViewMode = z.infer<typeof ViewModeSchema>;
 export type NavStackItem = z.infer<typeof NavStackItemSchema>;
 export type NavState = z.infer<typeof NavStateSchema>;
+export type ChatSessionClient = CollectionClient<
+	Readonly<
+		Record<
+			'chat_session',
+			CollectionType<typeof chat_session.$inferSelect, CollectionRecord, CollectionRecord>
+		>
+	>
+>;
 export type TDynamicApplicationContextResolvedState = z.infer<
 	typeof DynamicApplicationContextResolvedSchema
 >;
