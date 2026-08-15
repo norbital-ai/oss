@@ -24,6 +24,21 @@ function numberOrZero(value: unknown): number {
 	return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+/** Empty transcript used to open a turn before the row exists. */
+export function emptyChatSessionAggregate(): MutableChatSessionAggregate {
+	return {
+		norbital_id: '',
+		norbital_row_version: 0,
+		title: '',
+		messages: [],
+		turns: [],
+		usage_cost_usd: 0,
+		usage_total_tokens: 0,
+		usage_turns_counted: 0,
+		usage_turns_unreported: 0
+	};
+}
+
 function aggregate(row: Readonly<Record<string, unknown>>): MutableChatSessionAggregate {
 	if (typeof row.norbital_id !== 'string') throw new Error('Chat session has no id');
 	return {
@@ -231,6 +246,37 @@ export async function appendChatTurn(
  * The hosted start path has a two-second guest budget. Opening those rows as separate
  * `mutateChatSession` transactions spent that budget on round-trips before admission.
  */
+/** Append the root turn and user message onto an in-memory session. */
+export function applyOpenedInteractiveTurn(
+	session: MutableChatSessionAggregate,
+	input: {
+		readonly model: string;
+		readonly userMessage: string;
+		readonly userExtra?: Readonly<Record<string, unknown>>;
+		readonly systemMessages?: readonly {
+			readonly content: string;
+			readonly extra?: Readonly<Record<string, unknown>>;
+		}[];
+	}
+): { readonly turnId: string; readonly inputMessageId: string } {
+	const turnId = pushChatTurn(session, { model: input.model });
+	const inputMessageId = pushChatMessage(
+		session,
+		turnId,
+		{ role: 'user', content: input.userMessage },
+		input.userExtra ?? {}
+	);
+	const turnIndex = session.turns.findIndex((candidate) => candidate.norbital_id === turnId);
+	const turn = session.turns[turnIndex];
+	if (turn) {
+		session.turns[turnIndex] = { ...turn, prompt_message_id: inputMessageId };
+	}
+	for (const notice of input.systemMessages ?? []) {
+		pushChatMessage(session, turnId, { role: 'system', content: notice.content }, notice.extra ?? {});
+	}
+	return { turnId, inputMessageId };
+}
+
 export async function openInteractiveAgentTurn(input: {
 	readonly sessionId: string;
 	readonly model: string;
@@ -246,27 +292,8 @@ export async function openInteractiveAgentTurn(input: {
 	readonly session: MutableChatSessionAggregate;
 }> {
 	return mutateChatSession(input.sessionId, (session) => {
-		const turnId = pushChatTurn(session, { model: input.model });
-		const inputMessageId = pushChatMessage(
-			session,
-			turnId,
-			{ role: 'user', content: input.userMessage },
-			input.userExtra ?? {}
-		);
-		const turnIndex = session.turns.findIndex((candidate) => candidate.norbital_id === turnId);
-		const turn = session.turns[turnIndex];
-		if (turn) {
-			session.turns[turnIndex] = { ...turn, prompt_message_id: inputMessageId };
-		}
-		for (const notice of input.systemMessages ?? []) {
-			pushChatMessage(
-				session,
-				turnId,
-				{ role: 'system', content: notice.content },
-				notice.extra ?? {}
-			);
-		}
-		return { turnId, inputMessageId, session };
+		const opened = applyOpenedInteractiveTurn(session, input);
+		return { ...opened, session };
 	});
 }
 

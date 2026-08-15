@@ -32,6 +32,14 @@ function recordBinding(inner: HostDbBinding, statements: string[]): HostDbBindin
 		rollback(transactionId) {
 			statements.push('ROLLBACK');
 			return inner.rollback(transactionId);
+		},
+		batch(batchStatements) {
+			for (const statement of batchStatements) statements.push(statementText(statement));
+			return inner.batch(batchStatements);
+		},
+		txBatch(transactionId, batchStatements) {
+			for (const statement of batchStatements) statements.push(statementText(statement));
+			return inner.txBatch(transactionId, batchStatements);
 		}
 	};
 }

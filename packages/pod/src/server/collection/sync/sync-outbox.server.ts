@@ -57,6 +57,9 @@ export async function emitSyncOutboxMany(
 	records: readonly Record<string, unknown>[],
 	originScope: Record<string, unknown> = {}
 ): Promise<void> {
+	if (collection === 'sync_outbox' || collection === '_norbital_automation_job') {
+		return;
+	}
 	const values = records
 		.map((record) => outboxValues(collection, action, record, originScope))
 		.filter((row) => row != null);
@@ -87,6 +90,9 @@ export async function emitSyncOutboxRow(
 	originScope: Record<string, unknown> = {},
 	recordSnapshot: Record<string, unknown> = { norbital_id: recordId }
 ): Promise<void> {
+	if (collection === 'sync_outbox' || collection === '_norbital_automation_job') {
+		return;
+	}
 	await tenantDb.query(
 		`INSERT INTO sync_outbox (collection, record_id, action, row_version, origin_scope, record_snapshot)
 		 VALUES ($1, $2::uuid, $3, $4, $5::jsonb, $6::jsonb)`,

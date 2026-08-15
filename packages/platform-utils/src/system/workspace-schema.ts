@@ -1,5 +1,6 @@
 import { defineRelations, sql } from 'drizzle-orm';
 import {
+	bigint,
 	boolean,
 	customType,
 	doublePrecision,
@@ -106,6 +107,10 @@ const systemColumns = {
 	norbital_row_version: integer().default(1),
 	norbital_approval_id: uuid()
 };
+
+const xid8Column = customType<{ data: string; driverData: string }>({
+	dataType: () => 'xid8'
+});
 
 function jsonbColumn<T>(schema: z.ZodType<T>) {
 	return customType<{ data: T | null; driverData: string | null }>({
@@ -649,6 +654,57 @@ const _invitation = systemTable(
  * digest of the email rather than the address, and `seats` carries the resulting census rather than a
  * delta — at-least-once delivery plus delta counting would double-bill.
  */
+const _sync_outbox = systemTable(
+	'sync_outbox',
+	{
+		seq: bigint({ mode: 'bigint' }).generatedByDefaultAsIdentity().notNull(),
+		collection: text().notNull(),
+		record_id: uuid().notNull(),
+		action: text().notNull(),
+		row_version: integer(),
+		origin_scope: jsonbColumn(JsonObjectSchema).notNull().default({}),
+		record_snapshot: jsonbColumn(JsonObjectSchema).notNull().default({}),
+		occurred_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+		xid: xid8Column().notNull().default(sql`pg_current_xact_id()`)
+	},
+	{
+		description: 'Tenant change-feed',
+		record_label: 'collection',
+		history: false,
+		system: true
+	}
+);
+
+const _norbital_automation_job = systemTable(
+	'_norbital_automation_job',
+	{
+		automation_name: text().notNull(),
+		trigger_key: text().notNull(),
+		artifact_id: text().notNull(),
+		checkpoint_id: text().notNull(),
+		tree_hash: text().notNull(),
+		runtime_version: text().notNull(),
+		origin_scope: jsonbColumn(JsonObjectSchema).notNull().default({}),
+		record_snapshot: jsonbColumn(JsonObjectSchema).notNull().default({}),
+		source_pointer: text().notNull(),
+		continuation: jsonbColumn(JsonObjectSchema).notNull().default({ effects: [] }),
+		effect_id: text(),
+		effect_ordinal: integer(),
+		effect_request_hash: text(),
+		effect_request: jsonbColumn(JsonObjectSchema),
+		orchestration_status: text().notNull().default('admitted'),
+		last_error: text(),
+		created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+		updated_at: timestamp({ withTimezone: true }).notNull().defaultNow()
+	},
+	{
+		description: 'Durable automation receipts',
+		record_label: 'automation_name',
+		history: false,
+		system: true
+	}
+);
+
 const _host_event_outbox = systemTable(
 	'host_event_outbox',
 	{
@@ -679,6 +735,8 @@ export const channel_inbound_message = _channel_inbound_message;
 export const channel_rate_limit = _channel_rate_limit;
 export const invitation = _invitation;
 export const host_event_outbox = _host_event_outbox;
+export const sync_outbox = _sync_outbox;
+export const norbital_automation_job = _norbital_automation_job;
 export const automation_run = _automation_run;
 export const user = _user;
 export const team = _team;
@@ -731,7 +789,9 @@ export const systemTables = {
 	chat_session: { table: chat_session },
 	channel_conversation: { table: channel_conversation },
 	channel_inbound_message: { table: channel_inbound_message },
-	channel_rate_limit: { table: channel_rate_limit }
+	channel_rate_limit: { table: channel_rate_limit },
+	sync_outbox: { table: sync_outbox },
+	_norbital_automation_job: { table: norbital_automation_job }
 } satisfies Record<SystemCollectionName, { table: PgTable }>;
 
 /**

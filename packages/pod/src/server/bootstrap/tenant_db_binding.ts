@@ -8,6 +8,25 @@ import type {
 import { AsyncLocalStorage } from 'node:async_hooks';
 export type { HostDbBinding } from '@norbital-ai/platform-utils/runtime/binding';
 
+export type CompilableSql = {
+	readonly toSQL: () => { readonly sql: string; readonly params: unknown[] };
+};
+
+export function compileDrizzleStatement(query: CompilableSql): TenantDbQueryInput {
+	const compiled = query.toSQL();
+	return { text: compiled.sql, values: [...compiled.params] };
+}
+
+export async function executeTenantBatch(
+	client: TenantDbClient,
+	statements: readonly CompilableSql[]
+): Promise<readonly TenantDbQueryResult[]> {
+	if (!client.batch) {
+		throw new Error('Tenant database does not support batched statements');
+	}
+	return client.batch(statements.map(compileDrizzleStatement));
+}
+
 type DrizzleLikeQuery = {
 	readonly text?: string;
 	readonly rowMode?: 'array';
@@ -55,6 +74,14 @@ export function createTenantDbFromBinding(binding: HostDbBinding): TenantDbClien
 
 	return {
 		query: routedQuery,
+		async batch(statements) {
+			const configs = statements.map((statement) => normalizeBindingQuery(statement));
+			const txId = transactionStorage.getStore();
+			const results = txId
+				? await binding.txBatch(txId, configs)
+				: await binding.batch(configs);
+			return results.map((result) => mapTenantDbQueryResult(result));
+		},
 		async transaction<T>(fn: (tx: { query: TenantDbQueryFn }) => Promise<T>): Promise<T> {
 			const txId = await binding.begin();
 			try {

@@ -21,6 +21,13 @@ export type HostDbBinding = {
 	txQuery(txId: string, sql: DbQueryInput, params?: readonly unknown[]): Promise<DbQueryResult>;
 	commit(txId: string): Promise<void>;
 	rollback(txId: string): Promise<void>;
+	/**
+	 * Run statements on one connection inside a single transaction. One isolate RPC, N Postgres
+	 * statements — the hosted start path cannot afford a hop per insert.
+	 */
+	batch(statements: readonly DbQueryConfig[]): Promise<readonly DbQueryResult[]>;
+	/** Same as {@link batch} on an already-open transaction. */
+	txBatch(txId: string, statements: readonly DbQueryConfig[]): Promise<readonly DbQueryResult[]>;
 };
 
 export const NORBITAL_BILLING_HEADER = 'x-norbital-billing-json';

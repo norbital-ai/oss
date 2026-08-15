@@ -240,6 +240,37 @@ interface PlatformSystemRows {
 		readonly user_id: string;
 		readonly team_id: string;
 	};
+	readonly sync_outbox: SystemRecordFields & {
+		readonly seq: string;
+		readonly collection: string;
+		readonly record_id: string;
+		readonly action: string;
+		readonly row_version: number | null;
+		readonly origin_scope: JsonObject;
+		readonly record_snapshot: JsonObject;
+		readonly occurred_at: string;
+		readonly xid: string;
+	};
+	readonly _norbital_automation_job: SystemRecordFields & {
+		readonly automation_name: string;
+		readonly trigger_key: string;
+		readonly artifact_id: string;
+		readonly checkpoint_id: string;
+		readonly tree_hash: string;
+		readonly runtime_version: string;
+		readonly origin_scope: JsonObject;
+		readonly record_snapshot: JsonObject;
+		readonly source_pointer: string;
+		readonly continuation: JsonObject;
+		readonly effect_id: string | null;
+		readonly effect_ordinal: number | null;
+		readonly effect_request_hash: string | null;
+		readonly effect_request: JsonObject | null;
+		readonly orchestration_status: string;
+		readonly last_error: string | null;
+		readonly created_at: string;
+		readonly updated_at: string;
+	};
 }
 
 export const SYSTEM_COLLECTION_NAMES = [
@@ -262,7 +293,9 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'notification_outbox',
 	'notification',
 	'document_asset',
-	'team_members'
+	'team_members',
+	'sync_outbox',
+	'_norbital_automation_job'
 ] as const;
 
 export type SystemCollectionName = (typeof SYSTEM_COLLECTION_NAMES)[number];
@@ -599,6 +632,45 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			...SYSTEM_FIELDS,
 			{ name: 'user_id', kind: 'uuid', nullable: false },
 			{ name: 'team_id', kind: 'uuid', nullable: false }
+		]
+	},
+	sync_outbox: {
+		name: 'sync_outbox',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'seq', kind: 'integer', nullable: false },
+			{ name: 'collection', kind: 'text', nullable: false },
+			{ name: 'record_id', kind: 'uuid', nullable: false },
+			{ name: 'action', kind: 'text', nullable: false },
+			{ name: 'row_version', kind: 'integer', nullable: true },
+			{ name: 'origin_scope', kind: 'json', nullable: false },
+			{ name: 'record_snapshot', kind: 'json', nullable: false },
+			{ name: 'occurred_at', kind: 'timestamptz', nullable: false },
+			{ name: 'xid', kind: 'text', nullable: false }
+		]
+	},
+	_norbital_automation_job: {
+		name: '_norbital_automation_job',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'automation_name', kind: 'text', nullable: false },
+			{ name: 'trigger_key', kind: 'text', nullable: false },
+			{ name: 'artifact_id', kind: 'text', nullable: false },
+			{ name: 'checkpoint_id', kind: 'text', nullable: false },
+			{ name: 'tree_hash', kind: 'text', nullable: false },
+			{ name: 'runtime_version', kind: 'text', nullable: false },
+			{ name: 'origin_scope', kind: 'json', nullable: false },
+			{ name: 'record_snapshot', kind: 'json', nullable: false },
+			{ name: 'source_pointer', kind: 'text', nullable: false },
+			{ name: 'continuation', kind: 'json', nullable: false },
+			{ name: 'effect_id', kind: 'text', nullable: true },
+			{ name: 'effect_ordinal', kind: 'integer', nullable: true },
+			{ name: 'effect_request_hash', kind: 'text', nullable: true },
+			{ name: 'effect_request', kind: 'json', nullable: true },
+			{ name: 'orchestration_status', kind: 'text', nullable: false },
+			{ name: 'last_error', kind: 'text', nullable: true },
+			{ name: 'created_at', kind: 'timestamptz', nullable: false },
+			{ name: 'updated_at', kind: 'timestamptz', nullable: false }
 		]
 	}
 } satisfies {

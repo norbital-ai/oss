@@ -204,7 +204,9 @@ export function selfServiceWriteAllowed(
  */
 export const CLIENT_OPAQUE_COLLECTIONS: ReadonlySet<string> = new Set([
 	'invitation',
-	'host_event_outbox'
+	'host_event_outbox',
+	'sync_outbox',
+	'_norbital_automation_job'
 ]);
 
 function assertClientReachable(collectionName: string): void {

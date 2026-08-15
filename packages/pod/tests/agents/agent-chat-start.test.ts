@@ -2,21 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 const state = vi.hoisted(() => ({
-	created: [] as { collection: string; input: Record<string, unknown> }[],
-	prepareTurn: async (): Promise<{
-		turnId: string;
-		promptContent: string;
-		inputMessageId: string;
-		session: Record<string, unknown>;
-	}> => ({
-		turnId: 'turn-1',
-		promptContent: 'Inspect this',
-		inputMessageId: 'msg-1',
-		session: { norbital_id: 'chat-1', turns: [{ norbital_id: 'turn-1', status: 'running' }] }
-	}),
-	admit: async (): Promise<void> => undefined,
-	failedTurns: [] as { sessionId: string; turnId: string; error: string }[],
-	inTransaction: false
+	persisted: [] as Record<string, unknown>[],
+	persist: async (input: Record<string, unknown>) => {
+		state.persisted.push(input);
+		return {
+			runId: 'run-1',
+			chatId: 'chat-1',
+			turnId: 'turn-1',
+			promptContent: input.promptContent,
+			inputMessageId: 'msg-1',
+			session: { norbital_id: 'chat-1', turns: [{ norbital_id: 'turn-1', status: 'running' }] },
+			syncSequence: '42'
+		};
+	}
 }));
 
 vi.mock('$lib/server/bootstrap/workspace_store.js', () => {
@@ -35,18 +33,8 @@ vi.mock('$lib/server/bootstrap/workspace_store.js', () => {
 	};
 });
 
-vi.mock('$lib/server/collection/collection_ops.server.js', () => ({
-	createRecord: async (
-		_ctx: unknown,
-		collection: string,
-		input: Record<string, unknown>
-	): Promise<Record<string, unknown>> => {
-		state.created.push({ collection, input });
-		return {
-			norbital_id: collection === 'automation_run' ? 'run-1' : 'chat-1',
-			...input
-		};
-	}
+vi.mock('$lib/server/agent/agent-start.server.js', () => ({
+	persistInteractiveAgentStart: (input: Record<string, unknown>) => state.persist(input)
 }));
 
 vi.mock('$lib/server/agent/agent-spec.server.js', () => ({
@@ -67,136 +55,113 @@ vi.mock('$lib/server/agent/agent-spec.server.js', () => ({
 }));
 
 vi.mock('$lib/server/agent/agent-loop.server.js', () => ({
-	parseCompactDirective: () => null,
-	prepareInteractiveAgentTurn: () => state.prepareTurn()
+	parseCompactDirective: () => null
 }));
 
-vi.mock('$lib/server/run/automation-dispatch.server.js', () => ({
-	INTERACTIVE_AGENT_AUTOMATION_NAME: 'agent:interactive',
-	admitAgentTurn: () => state.admit()
-}));
-
-vi.mock('$lib/server/agent/chat-session.server.js', () => ({
-	failOpenInteractiveTurn: async (sessionId: string, turnId: string, error: string) => {
-		state.failedTurns.push({ sessionId, turnId, error });
-	}
-}));
-
-vi.mock('$lib/server/collection/collection_transaction.server.js', () => ({
-	withCollectionTransaction: async (_ctx: unknown, operation: () => Promise<unknown>) => {
-		state.inTransaction = true;
-		try {
-			return await operation();
-		} finally {
-			state.inTransaction = false;
-		}
-	}
-}));
-
-vi.mock('$lib/server/collection/sync/outbox-tailer.server.js', () => ({
-	latestOutboxSeqInTransaction: async () => '42'
+vi.mock('$lib/server/agent/agent-mentions.server.js', () => ({
+	composeMentionContext: async () => null
 }));
 
 vi.mock('$lib/server/facilities.js', () => ({
-	requireRuntimeFacility: () => ({})
+	requireRuntimeFacility: () => ({}),
+	getRuntimeFacilities: () => ({})
 }));
 
 vi.mock('$lib/server/i18n.js', () => ({
 	requestI18n: () => ({ t: (key: string) => key })
 }));
 
-vi.mock('$lib/server/agent/conversation-title.server.js', () => ({
-	PENDING_CONVERSATION_TITLE: 'Workspace agent'
-}));
-
 const { agentChatStart } = await import('../../src/remote/agent_chat.remote.js');
 
 afterEach(() => {
-	state.created = [];
-	state.failedTurns = [];
-	state.inTransaction = false;
-	state.prepareTurn = async () => ({
-		turnId: 'turn-1',
-		promptContent: 'Inspect this',
-		inputMessageId: 'msg-1',
-		session: { norbital_id: 'chat-1', turns: [{ norbital_id: 'turn-1', status: 'running' }] }
-	});
-	state.admit = async () => undefined;
+	state.persisted = [];
+	state.persist = async (input) => {
+		state.persisted.push(input);
+		return {
+			runId: 'run-1',
+			chatId: 'chat-1',
+			turnId: 'turn-1',
+			promptContent: input.promptContent,
+			inputMessageId: 'msg-1',
+			session: { norbital_id: 'chat-1', turns: [{ norbital_id: 'turn-1', status: 'running' }] },
+			syncSequence: '42'
+		};
+	};
 });
 
 describe('agentChatStart persistence', () => {
-	it('creates the run as pending so a later send is not refused as already responding', async () => {
-		await agentChatStart({ message: 'Inspect this' });
-		expect(state.created[0]).toMatchObject({
-			collection: 'automation_run',
-			input: { status: 'pending', automation_name: null }
+	it('persists a pending interactive start in one batch', async () => {
+		const result = await agentChatStart({ message: 'Inspect this' });
+		expect(state.persisted[0]).toMatchObject({
+			message: 'Inspect this',
+			promptContent: 'Inspect this',
+			spec: { task: 'Inspect this' }
+		});
+		expect(result).toMatchObject({
+			runId: 'run-1',
+			chatId: 'chat-1',
+			accepted: true,
+			syncSequence: '42'
 		});
 	});
 
-	it('persists chat_session even when admit fails after create', async () => {
-		state.admit = async () => {
-			throw new Error('admit failed');
-		};
-		await expect(agentChatStart({ message: 'Inspect this' })).rejects.toThrow('admit failed');
-		expect(state.created.map((row) => row.collection)).toEqual(['automation_run', 'chat_session']);
-		expect(state.created[1]?.input).toMatchObject({
-			user_id: 'user-1',
-			automation_run_id: 'run-1',
-			title: 'Workspace agent',
-			visibility: 'personal'
-		});
-		expect(state.failedTurns).toEqual([
-			{ sessionId: 'chat-1', turnId: 'turn-1', error: 'admit failed' }
-		]);
-	});
-
-	it('returns the opened session without a terminal re-read', async () => {
+	it('returns the opened session from persist without a terminal re-read', async () => {
 		const openedSession = {
 			norbital_id: 'chat-1',
 			turns: [{ norbital_id: 'turn-1', status: 'running' }]
 		};
-		state.prepareTurn = async () => ({
-			turnId: 'turn-1',
-			promptContent: 'Inspect this',
-			inputMessageId: 'msg-1',
-			session: openedSession
-		});
+		state.persist = async (input) => {
+			state.persisted.push(input);
+			return {
+				runId: 'run-1',
+				chatId: 'chat-1',
+				turnId: 'turn-1',
+				promptContent: input.promptContent,
+				inputMessageId: 'msg-1',
+				session: openedSession,
+				syncSequence: '42'
+			};
+		};
 		const result = await agentChatStart({ message: 'Inspect this' });
 		expect(result.session).toEqual(openedSession);
-		expect(result.syncSequence).toBe('42');
-		expect(state.inTransaction).toBe(false);
 	});
 
-	it('persists chat_session even when turn prep fails after create', async () => {
-		state.prepareTurn = async () => {
-			throw new Error('spec boom');
+	it('surfaces a persist failure without a leftover conversation', async () => {
+		state.persist = async () => {
+			throw new Error('persist failed');
 		};
-		await expect(agentChatStart({ message: 'Inspect this' })).rejects.toThrow('spec boom');
-		expect(state.created.map((row) => row.collection)).toEqual(['automation_run', 'chat_session']);
+		await expect(agentChatStart({ message: 'Inspect this' })).rejects.toThrow('persist failed');
+		expect(state.persisted).toEqual([]);
 	});
 });
 
 describe('hosted start path budget', () => {
-	it('creates the conversation before spec/admit and does not list host tools on start', () => {
+	it('persists through drizzle batch and does not list host tools on start', () => {
 		const source = readFileSync(
 			new URL('../../src/remote/agent_chat.remote.ts', import.meta.url),
 			'utf8'
 		);
-		expect(source).toContain("status: 'pending'");
+		const persist = readFileSync(
+			new URL('../../src/server/agent/agent-start.server.ts', import.meta.url),
+			'utf8'
+		);
+		expect(source).toContain('persistInteractiveAgentStart');
 		expect(source).toContain('interactiveAgentStartSpec');
 		const startAt = source.indexOf('export const agentChatStart');
 		const startFn = source.slice(startAt, source.indexOf('export const agentModels'));
-		expect(startFn).toContain('prepareConversation(input.runId)');
 		expect(startFn).toContain('interactiveAgentStartSpec');
 		expect(startFn).not.toContain('interactiveAgentSpec(');
 		expect(startFn).not.toContain("status: 'running'");
-		expect(startFn.indexOf('prepareConversation')).toBeLessThan(
-			startFn.indexOf('interactiveAgentStartSpec')
-		);
-		expect(startFn).toContain('withCollectionTransaction');
-		expect(startFn).toContain('latestOutboxSeqInTransaction');
-		expect(startFn).toContain('failOpenInteractiveTurn');
+		expect(startFn).not.toContain('createRecord');
+		expect(startFn).not.toContain('withCollectionTransaction');
+		expect(startFn).not.toContain('admitAgentTurn');
+		expect(startFn).not.toContain('prepareInteractiveAgentTurn');
 		expect(startFn).not.toContain('readChatSession');
+		expect(persist).toContain('executeTenantBatch');
+		expect(persist).toContain('db.insert(automation_run)');
+		expect(persist).toContain('db.insert(chat_session)');
+		expect(persist).not.toContain('WITH new_run AS');
+		expect(persist).not.toContain('CREATE TABLE');
 	});
 
 	it('registers start on the host-owned agent door, not the API-client remote table', () => {

@@ -16,9 +16,7 @@ const INTERNAL_TABLES = [
 	'_norbital_internal_schema',
 	'_norbital_sync_epoch',
 	'_norbital_automation_cursor',
-	'_norbital_automation_job',
-	'__drizzle_migrations',
-	'sync_outbox'
+	'__drizzle_migrations'
 ] as const;
 
 const sqlLiteralList = (names: Iterable<string>): string =>
@@ -403,6 +401,12 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
     );
 	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb;
 	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_id UUID DEFAULT uuidv7();
+	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_sys_period tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)');
+	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_row_version INTEGER DEFAULT 1;
+	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_approval_id UUID;
     CREATE INDEX IF NOT EXISTS sync_outbox_xid_seq_idx ON sync_outbox (xid, seq);
     -- Retention prunes by age, so the sweep needs to find old rows without a full scan.
     CREATE INDEX IF NOT EXISTS sync_outbox_occurred_at_idx ON sync_outbox (occurred_at);
@@ -464,6 +468,11 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	  UNIQUE (automation_name, trigger_key)
     );
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_sys_period tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)');
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_row_version INTEGER DEFAULT 1;
+	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_approval_id UUID;
 	CREATE UNIQUE INDEX IF NOT EXISTS _norbital_automation_job_trigger_idx
 	  ON _norbital_automation_job (automation_name, trigger_key);
 	CREATE INDEX IF NOT EXISTS _norbital_automation_job_claim_idx

@@ -134,6 +134,41 @@ export class PostgresHostDbBinding implements HostDbConnection {
 		return runQuery(this.#transaction(transactionId), sql, params);
 	}
 
+	async batch(statements: readonly DbQueryConfig[]): Promise<readonly DbQueryResult[]> {
+		const client = await this.#pool.connect();
+		try {
+			await client.query('BEGIN');
+			await client.query(`SELECT set_config('norbital.via_ops', 'on', true)`);
+			const results: DbQueryResult[] = [];
+			for (const statement of statements) {
+				results.push(await runQuery(client, statement));
+			}
+			await client.query('COMMIT');
+			return results;
+		} catch (cause) {
+			try {
+				await client.query('ROLLBACK');
+			} catch {
+				// connection may already be dead
+			}
+			throw cause;
+		} finally {
+			client.release();
+		}
+	}
+
+	async txBatch(
+		transactionId: string,
+		statements: readonly DbQueryConfig[]
+	): Promise<readonly DbQueryResult[]> {
+		const client = this.#transaction(transactionId);
+		const results: DbQueryResult[] = [];
+		for (const statement of statements) {
+			results.push(await runQuery(client, statement));
+		}
+		return results;
+	}
+
 	async commit(transactionId: string): Promise<void> {
 		const client = this.#transaction(transactionId);
 		try {

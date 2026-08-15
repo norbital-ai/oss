@@ -31,6 +31,10 @@ export type TenantDbClient = {
 	query: TenantDbQueryFn;
 	end?: () => Promise<void>;
 	transaction?: <T>(fn: (tx: { query: TenantDbQueryFn }) => Promise<T>) => Promise<T>;
+	/** One host RPC for many compiled drizzle statements. */
+	batch?: (
+		statements: readonly TenantDbQueryInput[]
+	) => Promise<readonly TenantDbQueryResult[]>;
 };
 
 export type UserOrganizationInfo = {

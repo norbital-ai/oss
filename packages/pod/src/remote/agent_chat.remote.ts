@@ -1,28 +1,15 @@
 import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
-import { createRecord } from '$lib/server/collection/collection_ops.server.js';
-import { withCollectionTransaction } from '$lib/server/collection/collection_transaction.server.js';
-import { latestOutboxSeqInTransaction } from '$lib/server/collection/sync/outbox-tailer.server.js';
-import {
-	parseCompactDirective,
-	prepareInteractiveAgentTurn
-} from '$lib/server/agent/agent-loop.server.js';
+import { parseCompactDirective } from '$lib/server/agent/agent-loop.server.js';
+import { composeMentionContext } from '$lib/server/agent/agent-mentions.server.js';
+import { persistInteractiveAgentStart } from '$lib/server/agent/agent-start.server.js';
 import { interactiveAgentStartSpec } from '$lib/server/agent/agent-spec.server.js';
 import { getRuntimeFacilities } from '$lib/server/facilities.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
-import { PENDING_CONVERSATION_TITLE } from '$lib/server/agent/conversation-title.server.js';
-import {
-	failOpenInteractiveTurn
-} from '$lib/server/agent/chat-session.server.js';
-import {
-	admitAgentTurn,
-	INTERACTIVE_AGENT_AUTOMATION_NAME
-} from '$lib/server/run/automation-dispatch.server.js';
 import { updateScheduledVerifierPrompt } from '$lib/server/agent/goal-mode.server.js';
 import { resolveAgentIntent } from '$lib/shared/agent/intent.js';
-import { rethrowConstraintViolation } from '$lib/server/collection/constraint-errors.server.js';
 import { z } from 'zod';
 
 /** Resolve composer intent fields onto the snapshot the durable turn will replay. */
@@ -83,8 +70,8 @@ export const AgentChatInputSchema = z.object({
 	 * Continue an existing conversation. Omitted starts a new one.
 	 *
 	 * The run id rather than the chat id, because that is what the loop resumes from — and because
-	 * `prepareConversation` already refuses a run belonging to another requestor, so continuation
-	 * inherits that check instead of repeating it here.
+	 * persist already refuses a run belonging to another requestor, so continuation inherits that
+	 * check instead of repeating it here.
 	 */
 	runId: z.uuid().optional(),
 	/** Run this turn on a specific model. Omitted leaves the choice to the host. */
@@ -155,128 +142,15 @@ async function resolveModel(model: string | undefined): Promise<string | undefin
 	return model;
 }
 
-type PreparedConversation = {
-	readonly runId: string;
-	readonly chatId: string;
-	readonly session: Record<string, unknown>;
-};
-
-/** True when the session already has a root turn the host has not finished. */
-function sessionHasOpenRootTurn(session: Record<string, unknown>): boolean {
-	const turns = session.turns;
-	if (!Array.isArray(turns)) return false;
-	return turns.some((turn) => {
-		if (!turn || typeof turn !== 'object' || Array.isArray(turn)) return false;
-		const row = turn as Record<string, unknown>;
-		return row.subagent_id == null && (row.status === 'running' || row.status === 'queued');
-	});
-}
-
-/** Admit the opened turn as a guest receipt the host will drive. */
-async function admitInteractiveTurn(
-	conversation: PreparedConversation,
-	snapshot: Record<string, unknown>
-): Promise<void> {
-	try {
-		await admitAgentTurn(getWorkspace({ provision: true }), {
-			automationName: INTERACTIVE_AGENT_AUTOMATION_NAME,
-			triggerKey: `turn:${conversation.chatId}:${String(snapshot.turnId)}`,
-			originScope: getWorkspace({ provision: true }).baseScope,
-			snapshot
-		});
-	} catch (cause) {
-		rethrowConstraintViolation(cause, '_norbital_automation_job');
-		const code =
-			cause && typeof cause === 'object' ? Reflect.get(cause, 'code') : undefined;
-		if (code === '42P01' || code === '42501') {
-			throw error(500, requestI18n().t('pod.server.agentStartFailed'));
-		}
-		throw cause;
-	}
-}
-
-/** Create or resume the requestor's interactive run and chat session. */
-async function prepareConversation(runId?: string): Promise<PreparedConversation> {
-	const ctx = getWorkspace({ provision: true });
-	const ownerUserId = ctx.baseScope.requestor.norbital_id;
-	const createSession = async (automationRunId: string): Promise<PreparedConversation> => {
-		const session = await createRecord(
-			ctx,
-			'chat_session',
-			{
-				user_id: ownerUserId,
-				automation_run_id: automationRunId,
-				title: PENDING_CONVERSATION_TITLE,
-				visibility: 'personal'
-			},
-			{ isElevated: true }
-		);
-		if (typeof session.norbital_id !== 'string') throw new Error('Agent session has no id');
-		return { runId: automationRunId, chatId: session.norbital_id, session };
-	};
-	if (runId) {
-		const existing = await ctx.tenantDb.query<{
-			requested_by_user_id: string;
-			automation_name: string | null;
-			status: string;
-			chat_id: string | null;
-		}>({
-			text: `SELECT r.requested_by_user_id, r.automation_name, r.status,
-			              s.norbital_id AS chat_id
-			         FROM automation_run r
-			    LEFT JOIN chat_session s ON s.automation_run_id = r.norbital_id
-			        WHERE r.norbital_id = $1::uuid
-			        LIMIT 1`,
-			values: [runId]
-		});
-		const row = existing.rows[0];
-		if (!row || row.automation_name !== null)
-			throw error(404, requestI18n().t('pod.server.agentConversationNotFound'));
-		if (row.requested_by_user_id !== ownerUserId)
-			throw error(403, requestI18n().t('pod.server.agentConversationPrivate'));
-		if (row.chat_id) {
-			const selected = await ctx.tenantDb.query<Record<string, unknown>>(
-				`SELECT * FROM chat_session
-				  WHERE norbital_id = $1::uuid
-				    AND user_id = $2::uuid
-				  LIMIT 1`,
-				[row.chat_id, ownerUserId]
-			);
-			const session = selected.rows[0];
-			if (!session) throw error(404, requestI18n().t('pod.server.agentConversationNotFound'));
-			if (row.status === 'running' || sessionHasOpenRootTurn(session))
-				throw error(409, requestI18n().t('pod.server.agentAlreadyResponding'));
-			return { runId, chatId: row.chat_id, session };
-		}
-		if (row.status === 'running')
-			throw error(409, requestI18n().t('pod.server.agentAlreadyResponding'));
-		return createSession(runId);
-	}
-
-	const run = await createRecord(
-		ctx,
-		'automation_run',
-		{
-			requested_by_user_id: ownerUserId,
-			automation_name: null,
-			status: 'pending',
-			input: { task: 'Interactive workspace conversation' }
-		},
-		{ isElevated: true }
-	);
-	if (typeof run.norbital_id !== 'string') throw new Error('Agent run has no id');
-	return createSession(run.norbital_id);
-}
-
 const authenticated = Guard.init().use(requireAuthMiddleware());
 
 /**
  * Start a live interactive turn and return its transcript identity before provider inference begins.
  *
- * An interactive conversation is a run with no automation name. The billed invoke persists the run,
- * session, user message and turn, then admits an `_norbital_automation_job` receipt. The host
- * drives one provider transition per guest `automation-events` run. Title, message parts, tool
- * state, and turn completion replicate through the tenant-owned `chat_session` aggregate.
+ * An interactive conversation is a run with no automation name. One drizzle batch persists the run,
+ * session, user message, turn, and `_norbital_automation_job` receipt. The host drives one provider
+ * transition per guest `automation-events` run. Title, message parts, tool state, and turn
+ * completion replicate through the tenant-owned `chat_session` aggregate.
  */
 export const agentChatStart = authenticated.command(
 	AgentChatInputSchema,
@@ -285,61 +159,33 @@ export const agentChatStart = authenticated.command(
 		// leave a started run whose first visible event is an error.
 		const model = await resolveModel(input.model);
 		const ctx = getWorkspace({ provision: true });
-		let admitError: unknown;
-		const started = await withCollectionTransaction(ctx, async () => {
-			const conversation = await prepareConversation(input.runId);
-			const compact = parseCompactDirective(input.message);
-			const spec = interactiveAgentStartSpec(input.message, model);
-			await ctx.tenantDb.query('SAVEPOINT agent_start_after_create');
-			let openedTurnId: string | undefined;
-			try {
-				const opened = await prepareInteractiveAgentTurn({
-					sessionId: conversation.chatId,
-					spec,
-					message: input.message,
-					...chatIntentFields(input),
-					...(input.mentions?.length ? { mentions: input.mentions } : {})
-				});
-				openedTurnId = opened.turnId;
-				const snapshot = {
-					sessionId: conversation.chatId,
-					runId: conversation.runId,
-					turnId: opened.turnId,
-					promptContent: opened.promptContent,
-					spec,
-					input: input.message,
-					...(opened.inputMessageId ? { inputMessageId: opened.inputMessageId } : {}),
-					...chatIntentFields(input),
-					...(input.mentions?.length ? { mentions: input.mentions } : {}),
-					...(compact ? { compact } : {})
-				};
-				await ctx.tenantDb.query('SAVEPOINT agent_start_before_admit');
-				try {
-					await admitInteractiveTurn(conversation, snapshot);
-				} catch (cause) {
-					await ctx.tenantDb.query('ROLLBACK TO SAVEPOINT agent_start_before_admit');
-					const message = cause instanceof Error ? cause.message : String(cause);
-					await failOpenInteractiveTurn(conversation.chatId, opened.turnId, message);
-					admitError = cause;
-				}
-				return {
-					conversation,
-					session: opened.session,
-					syncSequence: await latestOutboxSeqInTransaction(ctx)
-				};
-			} catch (cause) {
-				if (openedTurnId === undefined) {
-					await ctx.tenantDb.query('ROLLBACK TO SAVEPOINT agent_start_after_create');
-				}
-				throw cause;
-			}
+		const compact = parseCompactDirective(input.message);
+		const spec = interactiveAgentStartSpec(input.message, model);
+		const mentionContext = input.mentions?.length
+			? await composeMentionContext(ctx, input.mentions)
+			: null;
+		const promptContent = mentionContext ? `${input.message}\n\n${mentionContext}` : input.message;
+		const intent = chatIntentFields(input);
+		const persisted = await persistInteractiveAgentStart({
+			runId: input.runId,
+			message: input.message,
+			promptContent,
+			spec,
+			extras: {
+				...intent,
+				...(input.mentions?.length ? { mentions: input.mentions } : {}),
+				...(compact ? { compact } : {})
+			},
+			planMode: intent.planMode,
+			verify: intent.goalMode,
+			verifierPrompt: intent.verifierPrompt
 		});
-		if (admitError) throw admitError;
 		return {
-			...started.conversation,
-			session: started.session,
+			runId: persisted.runId,
+			chatId: persisted.chatId,
 			accepted: true,
-			syncSequence: started.syncSequence
+			session: persisted.session,
+			syncSequence: persisted.syncSequence
 		};
 	}
 );
