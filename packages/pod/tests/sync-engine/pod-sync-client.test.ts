@@ -801,6 +801,25 @@ describe('PodSyncClient (client sync logic)', () => {
 		}
 	});
 
+	it('starts the live feed when a cold snapshot already satisfies the command barrier', async () => {
+		const { fetch, calls } = mockTransport({
+			shape: () =>
+				shapePage([], {
+					watermark: '12',
+					cursor: { xid: '44', seq: '12' }
+				})
+		});
+		const client = await makeClient(fetch);
+		try {
+			await client.shapeSubscribe({ collection: 'orders' });
+			expect(await client.waitForSequence('12')).toBe(true);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(calls.some((path) => path.startsWith('sync/stream'))).toBe(true);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it('collapses repeated row versions within one streamed batch', async () => {
 		const client = await makeClient(mockTransport({}).fetch);
 		try {

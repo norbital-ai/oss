@@ -714,8 +714,11 @@ export class PodSyncClient {
 		} catch {
 			return Promise.resolve(false);
 		}
-		if (BigInt(this.cursor.seq) >= target) return Promise.resolve(true);
+		// A satisfied barrier still establishes the live feed. On a cold replica the first shape
+		// may seed the cursor exactly to a command receipt; returning before startStream() leaves
+		// every later version of that record invisible until reload.
 		this.startStream();
+		if (BigInt(this.cursor.seq) >= target) return Promise.resolve(true);
 		const timeoutMs = options?.timeoutMs ?? 5_000;
 		return new Promise<boolean>((resolve) => {
 			let settled = false;

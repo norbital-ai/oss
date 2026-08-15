@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/platform-utils",
-	"version": "0.0.49",
+	"version": "0.0.50",
 	"description": "Shared manifests, wire contracts, migrations, and tenant database utilities for Norbital.",
 	"type": "module",
 	"sideEffects": false,
