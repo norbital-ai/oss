@@ -18,7 +18,11 @@ import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 import { PostgresHostDbBinding } from '../../src/host/db.js';
 import { isHostSyncStreamPath, serveHostSyncStream } from '../../src/host/sync-stream.js';
-import { attachSyncWakeToDb, createInProcessSyncWakeBus, type SyncWakeBus } from '../../src/host/sync-wake.js';
+import {
+	attachSyncWakeToDb,
+	createInProcessSyncWakeBus,
+	type SyncWakeBus
+} from '../../src/host/sync-wake.js';
 import type {
 	HostAiBinding,
 	HostFileStorageBinding,
@@ -137,9 +141,7 @@ export async function completeInteractiveAgentTurn(
 		identity
 	);
 	if (response.status !== 200) {
-		throw new Error(
-			`agent/start failed (${response.status}): ${await response.clone().text()}`
-		);
+		throw new Error(`agent/start failed (${response.status}): ${await response.clone().text()}`);
 	}
 	const started = (await response.json()) as { runId: string; chatId: string; accepted: true };
 	await harness.hostCommand({
@@ -209,7 +211,11 @@ export async function settleHarnessReceiptEffect(
 		readonly ordinal: number;
 		readonly requestHash: string;
 	},
-	outcome: { readonly status: 'succeeded' | 'failed'; readonly result?: unknown; readonly error?: string }
+	outcome: {
+		readonly status: 'succeeded' | 'failed';
+		readonly result?: unknown;
+		readonly error?: string;
+	}
 ): Promise<void> {
 	await settleHostReceiptEffect(
 		(sql, values) => harness.pool.query(sql, [...values]),
@@ -224,7 +230,10 @@ export async function settleHarnessReceiptEffect(
 async function settleHarnessHostEffect(
 	ai: HostAiBinding,
 	request: DurableHostEffectRequest
-): Promise<{ readonly status: 'succeeded'; readonly result: unknown } | { readonly status: 'failed'; readonly error: string }> {
+): Promise<
+	| { readonly status: 'succeeded'; readonly result: unknown }
+	| { readonly status: 'failed'; readonly error: string }
+> {
 	try {
 		switch (request.kind) {
 			case 'ai.prompt': {
@@ -292,8 +301,7 @@ async function dispatchHttpRequest(
 	bindings: RuntimeFacilityBindings
 ): Promise<Response> {
 	const url = new URL(request.url);
-	const body =
-		request.method === 'GET' || request.method === 'HEAD' ? null : await request.text();
+	const body = request.method === 'GET' || request.method === 'HEAD' ? null : await request.text();
 	const result = (await dispatch(
 		runtimeNameFromPath(url.pathname),
 		{
@@ -304,12 +312,15 @@ async function dispatchHttpRequest(
 		},
 		bindings,
 		parseAdmitHeaders(request.headers) ?? startAdmit(2_000)
-	)) as { readonly status: number; readonly headers: Record<string, string>; readonly bodyText: string };
+	)) as {
+		readonly status: number;
+		readonly headers: Record<string, string>;
+		readonly bodyText: string;
+	};
 	return new Response(result.bodyText, { status: result.status, headers: result.headers });
 }
 
-type HostSyncWake = Pick<SyncWakeBus, 'subscribeSyncWake' | 'lastSyncSeq'>;
-
+type HostSyncWake = Pick<SyncWakeBus, 'subscribeSyncWake'>;
 
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const ORG_NAME = 'Sync IT Org';
@@ -628,14 +639,15 @@ export async function bootPodRuntime(
 				signal: init.signal,
 				...(init.body ? { body: init.body } : {})
 			});
-			return dispatchTenantRequest(request, guestDispatch, { db: binding, ...facilities }, hostSyncWake);
+			return dispatchTenantRequest(
+				request,
+				guestDispatch,
+				{ db: binding, ...facilities },
+				hostSyncWake
+			);
 		},
 		async notifySyncWake() {
-			const result = await pool.query<{ seq: string | null }>(
-				`SELECT MAX(seq)::text AS seq FROM sync_outbox`
-			);
-			const seq = result.rows[0]?.seq;
-			if (typeof seq === 'string' && seq.length > 0) hostSyncWake.wakeSync(ORG_ID, seq);
+			hostSyncWake.wakeSync(ORG_ID);
 		},
 		hostCommand(command) {
 			return dispatchHostOrGuest({
@@ -651,7 +663,9 @@ export async function bootPodRuntime(
 					return guestDispatch(
 						kind,
 						{
-							...(injected != null && typeof injected === 'object' ? injected : { command: injected }),
+							...(injected != null && typeof injected === 'object'
+								? injected
+								: { command: injected }),
 							identity: { userId: ADMIN_ID, organizationId: ORG_ID, organizationName: ORG_NAME }
 						},
 						{ db: binding, ...facilities },
@@ -662,10 +676,17 @@ export async function bootPodRuntime(
 		},
 		async serveHttp(identity) {
 			const server = createServer((req, res) => {
-				void handleNodeRequest(req, res, identity, guestDispatch, {
-					db: binding,
-					...facilities
-				}, hostSyncWake).catch((cause: unknown) => {
+				void handleNodeRequest(
+					req,
+					res,
+					identity,
+					guestDispatch,
+					{
+						db: binding,
+						...facilities
+					},
+					hostSyncWake
+				).catch((cause: unknown) => {
 					if (!res.headersSent) res.statusCode = 500;
 					res.end(String(cause));
 				});
@@ -714,10 +735,11 @@ function dispatchTenantRequest(
 			)) as { readonly status: number; readonly bodyText: string };
 			return { status: pulled.status, bodyText: pulled.bodyText };
 		},
-		subscribe: (wake) => hostSyncWake.subscribeSyncWake(ORG_ID, () => wake()),
-		lastSeq: () => hostSyncWake.lastSyncSeq(ORG_ID)
+		subscribe: (wake) => hostSyncWake.subscribeSyncWake(ORG_ID, wake)
 	});
-	return Promise.resolve(new Response(served.body, { status: served.status, headers: served.headers }));
+	return Promise.resolve(
+		new Response(served.body, { status: served.status, headers: served.headers })
+	);
 }
 
 /** Convert a Node request → web Request (forging auth), run the runtime, stream the Response back. */

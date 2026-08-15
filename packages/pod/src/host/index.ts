@@ -257,19 +257,13 @@ export type {
 	HostNotificationCommand,
 	HostOutboxCommand
 } from './mail.js';
-export {
-	inviteeEmailForTokenOnDb,
-	seatCensusOnDb,
-	workspaceMembershipOnDb
-} from './directory.js';
+export { inviteeEmailForTokenOnDb, seatCensusOnDb, workspaceMembershipOnDb } from './directory.js';
 export { settleHostReceiptEffect, SETTLE_RECEIPT_EFFECT_SQL } from './settle-receipt-effect.js';
 export { isHostSyncStreamPath, serveHostSyncStream } from './sync-stream.js';
 export type { HostSyncStreamInput, HostSyncStreamResponse } from './sync-stream.js';
 export {
 	attachSyncWakeToDb,
 	createInProcessSyncWakeBus,
-	cursorMatchesLastSeq,
-	decodeCursorSeq,
 	sqlWritesSyncOutbox
 } from './sync-wake.js';
 export type { SyncWakeBus } from './sync-wake.js';

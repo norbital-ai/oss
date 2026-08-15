@@ -67,11 +67,12 @@ import {
 	serializeAdmitArtifact,
 	withAdmitArtifact
 } from '../host/admit-artifact.js';
-import { standaloneAutomationJobs, STANDALONE_AUTOMATION_ARTIFACT } from './standalone-automation.js';
-import { declaredWebhookBindings, webhookInboundDeliverer } from '../host/webhook-inbound.js';
 import {
-	reconcileDeclaredPolicies
-} from '../server/bootstrap/policy_reconcile.server.js';
+	standaloneAutomationJobs,
+	STANDALONE_AUTOMATION_ARTIFACT
+} from './standalone-automation.js';
+import { declaredWebhookBindings, webhookInboundDeliverer } from '../host/webhook-inbound.js';
+import { reconcileDeclaredPolicies } from '../server/bootstrap/policy_reconcile.server.js';
 import { reconcileDeclaredChannels } from '../server/bootstrap/channel_reconcile.server.js';
 
 const STANDALONE_BUILD_DIRECTORY = path.join('.norbital', 'build');
@@ -138,8 +139,7 @@ async function dispatchHttpRequest(
 	admit: PodAdmit | null
 ): Promise<Response> {
 	const url = new URL(request.url);
-	const body =
-		request.method === 'GET' || request.method === 'HEAD' ? null : await request.text();
+	const body = request.method === 'GET' || request.method === 'HEAD' ? null : await request.text();
 	const headers = requestIdentityHeaders(request);
 	headers[ADMIT_ARTIFACT_HEADER] = serializeAdmitArtifact(STANDALONE_AUTOMATION_ARTIFACT);
 	const result = (await dispatchGuest(
@@ -153,7 +153,11 @@ async function dispatchHttpRequest(
 		},
 		bindings,
 		admit
-	)) as { readonly status: number; readonly headers: Record<string, string>; readonly bodyText: string };
+	)) as {
+		readonly status: number;
+		readonly headers: Record<string, string>;
+		readonly bodyText: string;
+	};
 	return new Response(result.bodyText, { status: result.status, headers: result.headers });
 }
 
@@ -196,7 +200,9 @@ function dispatchHostCommand(
 		runtime,
 		kind,
 		{
-			...(guestCommand != null && typeof guestCommand === 'object' ? guestCommand : { command: guestCommand }),
+			...(guestCommand != null && typeof guestCommand === 'object'
+				? guestCommand
+				: { command: guestCommand }),
 			identity
 		},
 		bindings,
@@ -378,10 +384,7 @@ export async function migrateStandalone(
 		// adds a collection and a policy that reads it must become visible together, or a deploy has a
 		// window where the collection exists and nothing may touch it.
 		const manifest = await loadStandaloneManifest(root);
-		const reconciled = await reconcileDeclaredPolicies(
-			client,
-			manifest
-		);
+		const reconciled = await reconcileDeclaredPolicies(client, manifest);
 		if (reconciled.created + reconciled.updated > 0) {
 			console.log(
 				`[pod] policies reconciled (${reconciled.created} created, ${reconciled.updated} updated).`
@@ -389,10 +392,7 @@ export async function migrateStandalone(
 		}
 		// After the policies, because a channel principal's team points at one: a channel declaring a
 		// policy this deploy also introduces must find it already there.
-		const channels = await reconcileDeclaredChannels(
-			client,
-			manifest
-		);
+		const channels = await reconcileDeclaredChannels(client, manifest);
 		if (channels.created + channels.updated > 0) {
 			console.log(
 				`[pod] channel principals reconciled (${channels.created} created, ${channels.updated} updated).`
@@ -479,10 +479,7 @@ export async function seedStandalone(
 		// resolve against — the gates land stored but without approvers. This is the first moment the
 		// teams exist, so binding them here is what closes that window rather than leaving it to the
 		// operator to remember a second migrate.
-		const reconciled = await reconcileDeclaredPolicies(
-			client,
-			await loadStandaloneManifest(root)
-		);
+		const reconciled = await reconcileDeclaredPolicies(client, await loadStandaloneManifest(root));
 		if (reconciled.created + reconciled.updated > 0) {
 			console.log(
 				`[pod] policies re-reconciled against seeded teams (${reconciled.updated} updated).`
@@ -939,9 +936,7 @@ export async function startStandalone(
 							};
 							return { status: pulled.status, bodyText: pulled.bodyText };
 						},
-						subscribe: (wake) =>
-							syncWake.subscribeSyncWake(environment.orgId, () => wake()),
-						lastSeq: () => syncWake.lastSyncSeq(environment.orgId)
+						subscribe: (wake) => syncWake.subscribeSyncWake(environment.orgId, wake)
 					});
 					return new Response(served.body, { status: served.status, headers: served.headers });
 				}

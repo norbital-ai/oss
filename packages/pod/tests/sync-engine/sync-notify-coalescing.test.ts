@@ -5,12 +5,8 @@ import type {
 	DbQueryResult,
 	HostDbBinding
 } from '@norbital-ai/platform-utils/runtime/binding';
-import {
-	attachSyncWakeToDb,
-	createInProcessSyncWakeBus,
-	cursorMatchesLastSeq,
-	decodeCursorSeq
-} from '../../src/host/sync-wake.js';
+import { attachSyncWakeToDb, createInProcessSyncWakeBus } from '../../src/host/sync-wake.js';
+import { serveHostSyncStream } from '../../src/host/sync-stream.js';
 
 function encodeCursor(cursor: { xid: string; seq: string }): string {
 	return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
@@ -49,60 +45,116 @@ function memoryDb(): HostDbBinding & { readonly statements: string[] } {
 }
 
 describe('host sync wake bus', () => {
-	it('publishes the highest seq after a committed outbox insert', async () => {
+	it('publishes one edge-only wake after a committed outbox insert', async () => {
 		const bus = createInProcessSyncWakeBus();
-		const woken: string[] = [];
-		bus.subscribeSyncWake('org-a', (seq) => woken.push(seq));
+		let wakes = 0;
+		bus.subscribeSyncWake('org-a', () => (wakes += 1));
 		const db = attachSyncWakeToDb(memoryDb(), bus, 'org-a');
 
 		await db.query('INSERT INTO sync_outbox (collection, record_id, action) VALUES ($1, $2, $3)');
 
-		expect(woken).toEqual(['1']);
-		expect(bus.lastSyncSeq('org-a')).toBe('1');
+		expect(wakes).toBe(1);
+		expect(db.statements.some((statement) => /max\(seq\)/i.test(statement))).toBe(false);
 	});
 
 	it('wakes on commit, not on the transactional insert', async () => {
 		const bus = createInProcessSyncWakeBus();
-		const woken: string[] = [];
-		bus.subscribeSyncWake('org-a', (seq) => woken.push(seq));
+		let wakes = 0;
+		bus.subscribeSyncWake('org-a', () => (wakes += 1));
 		const db = attachSyncWakeToDb(memoryDb(), bus, 'org-a');
 
 		const tx = await db.begin();
-		await db.txQuery(tx, 'INSERT INTO sync_outbox (collection, record_id, action) VALUES ($1, $2, $3)');
-		expect(woken).toEqual([]);
+		await db.txQuery(
+			tx,
+			'INSERT INTO sync_outbox (collection, record_id, action) VALUES ($1, $2, $3)'
+		);
+		expect(wakes).toBe(0);
 		await db.commit(tx);
-		expect(woken).toEqual(['1']);
+		expect(wakes).toBe(1);
 	});
 
 	it('does not wake a rolled-back outbox insert', async () => {
 		const bus = createInProcessSyncWakeBus();
-		const woken: string[] = [];
-		bus.subscribeSyncWake('org-a', (seq) => woken.push(seq));
+		let wakes = 0;
+		bus.subscribeSyncWake('org-a', () => (wakes += 1));
 		const db = attachSyncWakeToDb(memoryDb(), bus, 'org-a');
 
 		const tx = await db.begin();
-		await db.txQuery(tx, 'INSERT INTO sync_outbox (collection, record_id, action) VALUES ($1, $2, $3)');
+		await db.txQuery(
+			tx,
+			'INSERT INTO sync_outbox (collection, record_id, action) VALUES ($1, $2, $3)'
+		);
 		await db.rollback(tx);
-		expect(woken).toEqual([]);
-		expect(bus.lastSyncSeq('org-a')).toBeNull();
+		expect(wakes).toBe(0);
 	});
 
 	it('does not cross orgs', () => {
 		const bus = createInProcessSyncWakeBus();
-		const a: string[] = [];
-		const b: string[] = [];
-		bus.subscribeSyncWake('org-a', (seq) => a.push(seq));
-		bus.subscribeSyncWake('org-b', (seq) => b.push(seq));
-		bus.wakeSync('org-a', '9');
-		expect(a).toEqual(['9']);
-		expect(b).toEqual([]);
+		let a = 0;
+		let b = 0;
+		bus.subscribeSyncWake('org-a', () => (a += 1));
+		bus.subscribeSyncWake('org-b', () => (b += 1));
+		bus.wakeSync('org-a');
+		expect(a).toBe(1);
+		expect(b).toBe(0);
 	});
 
-	it('skips a tenant-DB pull when the cursor is already at the cached seq', () => {
+	it('pulls the durable feed when a newer xid has a lower seq', async () => {
 		const cursor = encodeCursor({ xid: '1', seq: '40' });
-		expect(decodeCursorSeq(cursor)).toBe('40');
-		expect(cursorMatchesLastSeq(cursor, '40')).toBe(true);
-		expect(cursorMatchesLastSeq(cursor, '41')).toBe(false);
-		expect(cursorMatchesLastSeq(null, '40')).toBe(false);
+		let pulls = 0;
+		const input = {
+			path: `/_runtime/sync/stream?cursor=${cursor}&collection=chat_session`,
+			// The retired shortcut consumed this scalar and slept forever. Keeping it on the test
+			// object proves an old implementation fails while structural extra fields stay harmless.
+			lastSeq: () => '50',
+			pullDiff: async () => {
+				pulls += 1;
+				return pulls === 1
+					? {
+							status: 200,
+							bodyText: JSON.stringify({
+								type: 'diffs',
+								diffs: [
+									{
+										seq: '30',
+										xid: '2',
+										collection: 'chat_session',
+										action: 'update',
+										id: 'chat-1',
+										version: 2,
+										row: { norbital_id: 'chat-1' }
+									}
+								],
+								cursor: { xid: '2', seq: '30' }
+							})
+						}
+					: {
+							status: 200,
+							bodyText: JSON.stringify({ type: 'idle', cursor: { xid: '2', seq: '30' } })
+						};
+			},
+			subscribe: () => () => {}
+		};
+		const served = serveHostSyncStream(input);
+		const reader = served.body.getReader();
+		const decoder = new TextDecoder();
+		let frames = '';
+		try {
+			while (!frames.includes('"id":"chat-1"')) {
+				const chunk = await Promise.race([
+					reader.read(),
+					new Promise<never>((_, reject) =>
+						setTimeout(() => reject(new Error('stream did not pull the durable cursor')), 1_000)
+					)
+				]);
+				if (chunk.done) break;
+				frames += decoder.decode(chunk.value, { stream: true });
+			}
+			expect(pulls).toBeGreaterThan(0);
+			expect(frames).toContain('"id":"chat-1"');
+		} finally {
+			served.cancel();
+			await reader.cancel().catch(() => undefined);
+		}
 	});
 });
