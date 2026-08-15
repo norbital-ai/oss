@@ -65,7 +65,7 @@ anything. A check nobody runs is a check that does not exist.
 things: fields the engine read that a fixture never supplied, and fixture keys that exist nowhere in
 `src/`. It exists because a fixture once described a response shape the API does not have — `nature`
 on an invented `componentType` — which made a passing assertion prove nothing. Deleted collections
-survive in stale build artefacts (`graphify-out/cache/stat-index.json`, `.norbital/dist/`), so a
+survive in stale build artefacts (`.norbital/dist/`), so a
 fixture written against one of those looks right and is not; check `src/collections/<name>/+model.ts`
 instead. Read that script's header before trusting a green run: it is honest about what it cannot
 see, and a green run means nothing until the mutation check described there has been done.

@@ -1,6 +1,5 @@
 .norbital
 .tmp
-graphify-out
 node_modules
 pnpm-lock.yaml
 pnpm-workspace.yaml

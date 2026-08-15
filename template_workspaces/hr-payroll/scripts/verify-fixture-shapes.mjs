@@ -23,7 +23,7 @@
  *
  * `component_types` and `payslip_line_sources` were once real collections. They are gone from
  * `src/collections/`, but they survive in build artefacts that are not regenerated on delete —
- * `graphify-out/cache/stat-index.json` and `.norbital/dist/`. A fixture written by reading a stale
+ * `.norbital/dist/`. A fixture written by reading a stale
  * artefact describes an API that no longer exists, and nothing in a normal build says so. Expect
  * this failure mode to recur; check the live model under `src/collections/<name>/+model.ts`, not a
  * generated index.

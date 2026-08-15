@@ -39,7 +39,7 @@ node scripts/verify-fixture-shapes.mjs       # 针对真实 API 形状审计该�
 
 算术运行过去是按需执行、独立于 `pnpm test` 之外的。现在它已纳入 `pnpm test`，因为正是不在其中的状态让一个夹具在无人察觉中腐坏，直到它上面的断言不再有意义。没人运行的检查就是不存在的检查。
 
-`verify-fixture-shapes.mjs` 会在插桩下重跑算术脚本，并报告两件事：引擎读取过但夹具从未提供的字段，以及 `src/` 中任何地方都不存在的夹具键。它存在是因为一个夹具曾描述过 API 并不具备的响应形状——在臆造的 `componentType` 上加了 `nature`——使一个通过的断言证明不了任何事。已删除的集合会残留在陈旧构建产物（`graphify-out/cache/stat-index.json`、`.norbital/dist/`）中，因此针对其中之一编写的夹具看似正确实则不然；请改查 `src/collections/<name>/+model.ts`。在信任一次绿色运行前先读该脚本的头部注释：它对自己看不到的东西是诚实的，而且除非完成其中描述的变更检查，否则绿色运行说明不了任何事。
+`verify-fixture-shapes.mjs` 会在插桩下重跑算术脚本，并报告两件事：引擎读取过但夹具从未提供的字段，以及 `src/` 中任何地方都不存在的夹具键。它存在是因为一个夹具曾描述过 API 并不具备的响应形状——在臆造的 `componentType` 上加了 `nature`——使一个通过的断言证明不了任何事。已删除的集合会残留在陈旧构建产物（`.norbital/dist/`）中，因此针对其中之一编写的夹具看似正确实则不然；请改查 `src/collections/<name>/+model.ts`。在信任一次绿色运行前先读该脚本的头部注释：它对自己看不到的东西是诚实的，而且除非完成其中描述的变更检查，否则绿色运行说明不了任何事。
 
 机密来源对账在 Core 中为可选启用；参见
 [`docs/data/reconciliation.md`](docs/data/reconciliation.md)。
