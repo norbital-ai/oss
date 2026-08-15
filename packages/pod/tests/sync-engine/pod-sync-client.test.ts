@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createClientDb } from '../support/pglite-node.js';
 import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
 import type { SyncFetch, MutateResponse, ShapeResponse, SyncDiff } from '$lib/ui/sync/types.js';
@@ -815,6 +815,28 @@ describe('PodSyncClient (client sync logic)', () => {
 			expect(await client.waitForSequence('12')).toBe(true);
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(calls.some((path) => path.startsWith('sync/stream'))).toBe(true);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it('can rotate an active feed before its old subscription set advances the cursor', async () => {
+		let firstStreamSignal: AbortSignal | undefined;
+		const fetch: SyncFetch = async (path, init) => {
+			if (!path.startsWith('sync/stream')) return jsonResponse({ rows: [], nextCursor: null });
+			firstStreamSignal ??= init.signal;
+			return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+				status: 200,
+				headers: { 'content-type': 'text/event-stream' }
+			});
+		};
+		const client = await makeClient(fetch);
+		try {
+			client.startStream();
+			await vi.waitFor(() => expect(firstStreamSignal).toBeDefined());
+			client.subscribeCollection('chat_session');
+			client.rotateActiveStreamForSubscriptions();
+			expect(firstStreamSignal?.aborted).toBe(true);
 		} finally {
 			await client.close();
 		}

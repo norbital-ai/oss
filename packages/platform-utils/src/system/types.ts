@@ -340,12 +340,3 @@ export const ChatMessageSchema = z.object({
 	parts: z.array(ChatMessagePartSchema)
 });
 export type TChatMessage = z.infer<typeof ChatMessageSchema>;
-
-export const ChatSessionSchema = SystemRecordFieldsSchema.extend({
-	title: z.string(),
-	user_id: z.string(),
-	platform: z.string().nullable(),
-	external_thread_id: z.string().nullable(),
-	messages: z.array(ChatMessageSchema)
-});
-export type TChatSession = z.infer<typeof ChatSessionSchema>;
