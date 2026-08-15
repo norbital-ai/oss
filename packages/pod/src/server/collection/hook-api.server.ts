@@ -608,7 +608,7 @@ export function createElevatedAfterApi(): AfterApi {
 /** Request-local server API used by nested hooks and tenant handlers. */
 export const beforeApiStorage = {
 	getStore(): BeforeApi | undefined {
-		return currentPodCallOrNull()?.beforeApi;
+		return currentPodCallOrNull()?.beforeApi ?? undefined;
 	}
 };
 

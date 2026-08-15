@@ -4,13 +4,10 @@ import { createMcpClient } from '$lib/mcp/client.js';
 import { parsePublicMcpToolName, publicMcpToolName } from '$lib/mcp/names.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import type { AiToolSpec } from '@norbital-ai/platform-utils/runtime/binding';
+import { z } from 'zod';
 
 const client = createMcpClient();
-
-export type ResolvedMcpTools = {
-	readonly specs: readonly AiToolSpec[];
-	readonly names: ReadonlySet<string>;
-};
+const recordSchema = z.record(z.string(), z.unknown());
 
 /**
  * MCP tools this run may call, described for the model.
@@ -21,11 +18,11 @@ export type ResolvedMcpTools = {
  * list, not a failed conversation.
  */
 export async function resolveMcpToolSpecs(
-	spec: AgentAutomationSpec,
+	spec: Pick<AgentAutomationSpec, 'mcpServers'>,
 	taken: ReadonlySet<string>
-): Promise<ResolvedMcpTools> {
+) {
 	const named = spec.mcpServers ?? [];
-	if (named.length === 0) return { specs: [], names: new Set() };
+	if (named.length === 0) return { specs: [] as AiToolSpec[], names: new Set<string>() };
 	const declared = getTenantWorkspace().registered.mcpServers ?? {};
 	const specs: AiToolSpec[] = [];
 	const names = new Set<string>();
@@ -61,6 +58,8 @@ export async function resolveMcpToolSpecs(
 	return { specs, names };
 }
 
+export type ResolvedMcpTools = Awaited<ReturnType<typeof resolveMcpToolSpecs>>;
+
 export async function executeMcpTool(
 	spec: AgentAutomationSpec,
 	callName: string,
@@ -76,7 +75,8 @@ export async function executeMcpTool(
 	if (!definition.tools.includes(parsed.tool)) {
 		throw new Error(`MCP server ${parsed.server} does not allow tool ${parsed.tool}`);
 	}
-	const args = isRecord(input) ? input : {};
+	const parsedInput = recordSchema.safeParse(input);
+	const args = parsedInput.success ? parsedInput.data : {};
 	const result = await client.callTool(definition, parsed.tool, args);
 	if (result.resultType === 'input_required') {
 		return { resultType: 'input_required', requests: result.requests };
@@ -87,7 +87,9 @@ export async function executeMcpTool(
 	return {
 		resultType: 'success',
 		text: textFromContent(result.content),
-		...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent })
+		...(result.structuredContent === undefined
+			? {}
+			: { structuredContent: result.structuredContent })
 	};
 }
 
@@ -103,13 +105,11 @@ export function mcpServerDefinition(name: string): McpServerDefinition | undefin
 	return (getTenantWorkspace().registered.mcpServers ?? {})[name];
 }
 
-function textFromContent(content: readonly { readonly type: string; readonly text?: string }[]): string {
+function textFromContent(
+	content: readonly { readonly type: string; readonly text?: string }[]
+): string {
 	return content
 		.filter((block) => block.type === 'text' && typeof block.text === 'string')
 		.map((block) => block.text)
 		.join('\n');
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

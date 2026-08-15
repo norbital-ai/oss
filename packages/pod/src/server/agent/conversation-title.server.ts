@@ -1,12 +1,15 @@
-import type { AiChatResult } from '@norbital-ai/platform-utils/runtime/binding';
+import { AiChatResultSchema } from '@norbital-ai/platform-utils/runtime/binding';
 import { z } from 'zod';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { mutateChatSession, readChatSession } from './chat-session.server.js';
+import type { ChatSessionMessage } from '$lib/shared/agent/context-window.js';
 import {
 	automationReplayStorage,
 	isAutomationEffectYield,
 	replayAutomationAi
 } from '$lib/server/run/automation-replay.server.js';
+import { chat_session } from '@norbital-ai/platform-utils/system/workspace-schema';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 
 /** Visible only until the first-message title job succeeds. */
 export const PENDING_CONVERSATION_TITLE = 'Workspace agent';
@@ -16,21 +19,12 @@ const generatedTitleSchema = z.object({
 	title: z.string().trim().min(1).max(MAX_TITLE_LENGTH)
 });
 
-type PendingConversation = {
-	readonly norbital_id: string;
-	readonly messages: readonly unknown[];
-};
+type PendingConversation = Pick<typeof chat_session.$inferSelect, 'norbital_id'>;
 
-function firstUserMessage(messages: readonly unknown[]): string | null {
-	for (const candidate of messages) {
-		if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
-		const message = candidate as Record<string, unknown>;
+function firstUserMessage(messages: readonly ChatSessionMessage[]): string | null {
+	for (const message of messages) {
 		if (message.role !== 'user' || message.kind === 'summary') continue;
-		const parts = message.parts;
-		if (!Array.isArray(parts)) continue;
-		const stored = parts[0];
-		if (!stored || typeof stored !== 'object' || Array.isArray(stored)) continue;
-		const content = (stored as Record<string, unknown>).content;
+		const content = message.parts[0]?.content;
 		if (typeof content === 'string' && content.trim()) return content;
 	}
 	return null;
@@ -75,20 +69,22 @@ export function generateConversationTitle(firstMessage: string): string {
 			'Conversation title generation requires a durable step (automation/agent receipt).'
 		);
 	}
-	const result = replayAutomationAi({
-		request: {
-			kind: 'ai.turn',
-			messages: [
-				{
-					role: 'system',
-					content:
-						'Name this conversation from the first user message. Return a specific, neutral title of 3 to 8 words. Do not answer the message, add quotation marks, or end with punctuation.'
-				},
-				{ role: 'user', content: firstMessage }
-			],
-			outputSchema: z.toJSONSchema(generatedTitleSchema)
-		}
-	}) as AiChatResult; // stupidity: boundary-cast — durable replay stores the provider chat result.
+	const result = AiChatResultSchema.parse(
+		replayAutomationAi({
+			request: {
+				kind: 'ai.turn',
+				messages: [
+					{
+						role: 'system',
+						content:
+							'Name this conversation from the first user message. Return a specific, neutral title of 3 to 8 words. Do not answer the message, add quotation marks, or end with punctuation.'
+					},
+					{ role: 'user', content: firstMessage }
+				],
+				outputSchema: z.toJSONSchema(generatedTitleSchema)
+			}
+		})
+	);
 	return conversationTitleFromProviderText(result.text);
 }
 
@@ -116,22 +112,25 @@ export async function runPendingConversationTitle(sessionId: string): Promise<bo
  */
 export async function runPendingConversationTitles(limit = 10): Promise<number> {
 	const ctx = getWorkspace({ provision: true });
-	const pending = await ctx.tenantDb.query<PendingConversation>({
-		text: `SELECT session.norbital_id,
-		              session.messages
-		         FROM chat_session AS session
-		        WHERE session.title = $1
-		          AND session.platform IS NULL
-		          AND session.visibility = 'personal'
-		          AND jsonb_array_length(session.messages) > 0
-		        ORDER BY session.norbital_created_at
-		        LIMIT $2`,
-		values: [PENDING_CONVERSATION_TITLE, Math.min(Math.max(limit, 1), 50)]
-	});
-	if (pending.rows.length === 0) return 0;
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const pending: readonly PendingConversation[] = await db
+		.select({ norbital_id: chat_session.norbital_id })
+		.from(chat_session)
+		.where(
+			and(
+				eq(chat_session.title, PENDING_CONVERSATION_TITLE),
+				isNull(chat_session.platform),
+				eq(chat_session.visibility, 'personal'),
+				sql`jsonb_array_length(${chat_session.messages}) > 0`
+			)
+		)
+		.orderBy(asc(chat_session.norbital_created_at))
+		.limit(Math.min(Math.max(limit, 1), 50));
+	if (pending.length === 0) return 0;
 
 	let titled = 0;
-	for (const conversation of pending.rows) {
+	for (const conversation of pending) {
 		try {
 			if (await runPendingConversationTitle(conversation.norbital_id)) titled += 1;
 		} catch (error) {

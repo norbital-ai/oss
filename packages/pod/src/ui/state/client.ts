@@ -1,6 +1,8 @@
 import { setWorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 import type { WorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 import type { PodRemoteOperations } from '$lib/authoring/workspace/pod-remote-operations.js';
+import type { AgentChatStartResult } from '$lib/remote/agent_chat.remote.js';
+export type { AgentChatStartResult as InteractiveAgentStartResult } from '$lib/remote/agent_chat.remote.js';
 import { raceLocalAndServer } from '$lib/ui/state/query-race.js';
 import {
 	ReactiveRemoteQuery,
@@ -257,27 +259,9 @@ async function settleApprovalSync(receipt: unknown): Promise<void> {
 	await reconcileServerRow(sync, collection, id, row);
 }
 
-const CHAT_SESSION_RECEIPT_COLUMNS = new Set([
-	'norbital_id',
-	'norbital_row_version',
-	'norbital_created_at',
-	'norbital_updated_at',
-	'user_id',
-	'automation_run_id',
-	'title',
-	'visibility',
-	'messages',
-	'turns',
-	'platform',
-	'channel_key',
-	'external_thread_id'
-]);
-
-async function settleAgentStartSync(receipt: {
-	readonly chatId: string;
-	readonly session?: Record<string, unknown>;
-	readonly syncSequence?: string;
-}): Promise<void> {
+async function settleAgentStartSync(
+	receipt: Pick<AgentChatStartResult, 'chatId' | 'session' | 'syncSequence'>
+): Promise<void> {
 	const sync = getClientSync();
 	if (!sync) return;
 	if (receipt.session) {
@@ -285,15 +269,10 @@ async function settleAgentStartSync(receipt: {
 		if (columns.length > 0) {
 			await reconcileServerRow(sync, 'chat_session', receipt.chatId, receipt.session);
 		} else {
-			// Schema/catch-up is not published yet. The command receipt is still the row the picker
-			// must show, so fold a known-safe subset rather than waiting for the replica to go fresh.
-			const fallback = Object.fromEntries(
-				Object.entries(receipt.session).filter(([key]) => CHAT_SESSION_RECEIPT_COLUMNS.has(key))
-			);
-			if (typeof fallback.norbital_id === 'string') {
-				await sync.client.upsertRows('chat_session', [fallback]).catch(() => undefined);
-				sync.client.notifyCollection('chat_session');
-			}
+			// The receipt is the schema-derived chat_session aggregate, so it is safe to install
+			// directly while the replica schema/catch-up is still being published.
+			await sync.client.upsertRows('chat_session', [{ ...receipt.session }]).catch(() => undefined);
+			sync.client.notifyCollection('chat_session');
 		}
 	}
 	if (receipt.syncSequence) {
@@ -492,21 +471,13 @@ export type InteractiveAgentStartInput = {
 	}[];
 };
 
-export type InteractiveAgentStartResult = {
-	readonly runId: string;
-	readonly chatId: string;
-	readonly accepted: true;
-	readonly session?: Record<string, unknown>;
-	readonly syncSequence?: string;
-};
-
 /**
  * Shell-owned interactive start. Posts to `/_runtime/agent/start`, not the API-client remote table.
  */
 export async function startInteractiveAgent(
 	input: InteractiveAgentStartInput
-): Promise<InteractiveAgentStartResult> {
-	const receipt = await post<InteractiveAgentStartResult>('agent/start', input);
+): Promise<AgentChatStartResult> {
+	const receipt = await post<AgentChatStartResult>('agent/start', input);
 	await settleAgentStartSync(receipt);
 	return receipt;
 }

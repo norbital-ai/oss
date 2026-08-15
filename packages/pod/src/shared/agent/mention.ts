@@ -4,8 +4,11 @@
  * Shared so the picker, the wire form, and the server attach-block all answer "which record?"
  * with one shape — `collection`, `recordId`, `label` — instead of restating it.
  */
-export type MentionRecordHit = {
-	readonly collection: string;
-	readonly recordId: string;
-	readonly label: string;
-};
+import { z } from 'zod';
+
+export const MentionRecordHitSchema = z.object({
+	collection: z.string(),
+	recordId: z.string(),
+	label: z.string()
+});
+export type MentionRecordHit = z.infer<typeof MentionRecordHitSchema>;

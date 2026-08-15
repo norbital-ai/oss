@@ -7,6 +7,7 @@
  */
 import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
 import type { WorkspaceInvitation } from '$lib/shared/workspace-invitation.js';
+import type { user } from '@norbital-ai/platform-utils/system/workspace-schema';
 
 export type { WorkspaceInvitation };
 
@@ -54,13 +55,10 @@ export type WorkspaceSettingsApi = {
  * read rather than one to assert, and a row missing what a line needs is dropped instead of rendered
  * as a row of `undefined`.
  */
-export type MemberRow = {
-	readonly norbital_id: string;
-	readonly email: string;
-	readonly name: string;
-	readonly role: string;
-	readonly status: string;
-};
+export type MemberRow = Pick<
+	typeof user.$inferSelect,
+	'norbital_id' | 'email' | 'name' | 'role' | 'status'
+>;
 
 export type TeamRow = {
 	readonly norbital_id: string;

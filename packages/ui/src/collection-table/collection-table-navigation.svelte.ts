@@ -33,19 +33,13 @@ export interface CollectionTableNavigation {
 	pop(): void;
 }
 
-interface UrlNavigationStackItem {
-	collection_name: string;
-	record_id: string;
-	node_id: string;
-	viewMode: 'page' | 'sidesheet';
-}
-
-const urlNavigationStackItemSchema: z.ZodType<UrlNavigationStackItem> = z.object({
+const urlNavigationStackItemSchema = z.object({
 	collection_name: z.string(),
 	record_id: z.string(),
 	node_id: z.string(),
 	viewMode: z.enum(['page', 'sidesheet'])
 });
+type UrlNavigationStackItem = z.infer<typeof urlNavigationStackItemSchema>;
 
 const urlNavigationStackSchema = z.object({
 	stack: z.array(urlNavigationStackItemSchema)

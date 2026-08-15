@@ -53,14 +53,8 @@ export const skillReadInput = z.object({
 	file: z.string().optional()
 });
 
-export type ToolFunnelSurface = 'agent' | 'infer';
-
-export type ResolvedTools = {
-	readonly specs: readonly AiToolSpec[];
-	readonly hostTools: ReadonlySet<string>;
-	readonly mcpTools: ReadonlySet<string>;
-	readonly workspaceTools: ReadonlySet<string>;
-};
+export const TOOL_FUNNEL_SURFACES = ['agent', 'infer'] as const;
+export type ToolFunnelSurface = (typeof TOOL_FUNNEL_SURFACES)[number];
 
 export type ToolFunnelInput = {
 	readonly surface: ToolFunnelSurface;
@@ -74,23 +68,10 @@ export type ToolFunnelInput = {
 	readonly sandboxBound: boolean;
 };
 
-function toModelToolSpec(
-	tool: Pick<AiToolSpec, 'name' | 'description' | 'inputSchema'>
-): AiToolSpec {
-	return { name: tool.name, description: tool.description, inputSchema: tool.inputSchema };
-}
-
 function hostToolRequiresSandbox(tool: HostAgentToolSpec): boolean {
 	if (tool.requiresSandbox === true) return true;
 	if (tool.requiresSandbox === false) return false;
 	return isSandboxHostToolName(tool.name);
-}
-
-export function tenantCollectionNames(): string[] {
-	return Object.values(getTenantManifest().collections)
-		.filter((collection) => collection.system !== true)
-		.map((collection) => collection.collection_name)
-		.sort();
 }
 
 /**
@@ -103,7 +84,10 @@ export function tenantCollectionNames(): string[] {
 export function allowedCollections(spec: {
 	readonly collections?: readonly string[];
 }): Set<string> {
-	const all = tenantCollectionNames();
+	const all = Object.values(getTenantManifest().collections)
+		.filter((collection) => collection.system !== true)
+		.map((collection) => collection.collection_name)
+		.sort();
 	const selected = spec.collections ? [...spec.collections] : all;
 	const unknown = selected.filter((collection) => !all.includes(collection));
 	if (unknown.length > 0) {
@@ -173,16 +157,16 @@ export function sessionHasBoundSandbox(surface: ToolFunnelSurface): boolean {
 	return Boolean(getWorkspace({ provision: true }).baseScope.requestor.norbital_id);
 }
 
-export async function assembleToolSpecs(input: ToolFunnelInput): Promise<ResolvedTools> {
+export async function assembleToolSpecs(input: ToolFunnelInput) {
 	const deny = deniedNames(input.spec);
 	if (input.planMode) {
 		const specs = applyDeny(platformReadTools(), deny);
 		specs.sort((left, right) => left.name.localeCompare(right.name));
 		return {
 			specs,
-			hostTools: new Set(),
-			mcpTools: new Set(),
-			workspaceTools: new Set()
+			hostTools: new Set<string>(),
+			mcpTools: new Set<string>(),
+			workspaceTools: new Set<string>()
 		};
 	}
 
@@ -263,7 +247,8 @@ export async function assembleToolSpecs(input: ToolFunnelInput): Promise<Resolve
 			}
 			taken.add(tool.name);
 			hostTools.add(tool.name);
-			tools.push(toModelToolSpec(tool));
+			const { requiresSandbox: _requiresSandbox, ...modelTool } = tool;
+			tools.push(modelTool);
 		};
 		if (input.sandboxBound) {
 			for (const tool of available) {
@@ -281,7 +266,7 @@ export async function assembleToolSpecs(input: ToolFunnelInput): Promise<Resolve
 
 	const mcp =
 		input.surface === 'agent' && input.spec
-			? await resolveMcpToolSpecs(input.spec as AgentAutomationSpec, taken)
+			? await resolveMcpToolSpecs(input.spec, taken)
 			: { specs: [], names: new Set<string>() };
 	tools.push(...mcp.specs);
 
@@ -293,3 +278,5 @@ export async function assembleToolSpecs(input: ToolFunnelInput): Promise<Resolve
 		workspaceTools
 	};
 }
+
+export type ResolvedTools = Awaited<ReturnType<typeof assembleToolSpecs>>;

@@ -46,11 +46,12 @@ export function defineSeed(
 	};
 }
 
+const SeedRecordRefSchema = z.object({
+	__seedRef: z.string(),
+	recordId: z.string().optional()
+});
 /** Opaque ref resolved at compile time to a seeded record id. */
-export type SeedRecordRef = {
-	readonly __seedRef: SeedStepId;
-	readonly recordId?: string;
-};
+export type SeedRecordRef = z.infer<typeof SeedRecordRefSchema>;
 
 export function seedStep<const T extends SeedMutationStep>(step: T): T {
 	return step;
@@ -60,11 +61,6 @@ export function seedStep<const T extends SeedMutationStep>(step: T): T {
 export function seedRef(stepId: SeedStepId, recordId?: string): SeedRecordRef {
 	return recordId ? { __seedRef: stepId, recordId } : { __seedRef: stepId };
 }
-
-const SeedRecordRefSchema = z.object({
-	__seedRef: z.string(),
-	recordId: z.string().optional()
-});
 
 // stupidity:allow R5b -- canonical Zod-backed guard for recursive seed payload traversal
 function isSeedRecordRef(value: unknown): value is SeedRecordRef {

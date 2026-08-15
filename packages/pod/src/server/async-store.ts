@@ -18,7 +18,7 @@ class SlotStore<T> implements AsyncStore<T> {
 		this.#store = store;
 		try {
 			const result = fn();
-			if (result && typeof (result as Promise<unknown>).then === 'function') {
+			if (result && typeof Reflect.get(Object(result), 'then') === 'function') {
 				return (Promise.resolve(result) as Promise<R>).finally(() => {
 					this.#store = previous;
 				}) as R;

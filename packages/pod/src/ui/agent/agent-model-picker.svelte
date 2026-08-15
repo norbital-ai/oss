@@ -9,7 +9,7 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
-	import type { AgentModelOption } from './agent-model-state.svelte.js';
+	import type { AiModelOption } from '@norbital-ai/platform-utils/runtime/binding';
 	import type { AgentModelCatalogStatus } from './agent-model-state.svelte.js';
 	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -20,8 +20,8 @@
 	interface ModelFamily {
 		id: string;
 		label: string;
-		defaultOption: AgentModelOption;
-		options: AgentModelOption[];
+		defaultOption: AiModelOption;
+		options: AiModelOption[];
 	}
 
 	let {
@@ -34,7 +34,7 @@
 		onValueChange
 	}: {
 		value: string;
-		options: readonly AgentModelOption[];
+		options: readonly AiModelOption[];
 		disabled?: boolean;
 		status?: AgentModelCatalogStatus;
 		compact?: boolean;
@@ -43,7 +43,8 @@
 	} = $props();
 
 	/** Strips the OpenRouter-style variant suffix so catalog entries group by model family. */
-	function baseModelId(modelId: string): string { // stupidity:allow Q4 -- named helper
+	function baseModelId(modelId: string): string {
+		// stupidity:allow Q4 -- named helper
 		return modelId.split(':', 1)[0] ?? modelId;
 	}
 
@@ -55,7 +56,7 @@
 		return [...options, { id: value, label: value, canonicalSlug: baseModelId(value) }];
 	});
 	const families = $derived.by((): ModelFamily[] => {
-		const grouped = new Map<string, AgentModelOption[]>();
+		const grouped = new Map<string, AiModelOption[]>();
 		for (const option of availableOptions) {
 			const family = grouped.get(option.canonicalSlug) ?? [];
 			family.push(option);

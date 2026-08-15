@@ -21,6 +21,7 @@ import {
 import { z } from 'zod';
 import { type SystemCollectionName } from './collections.js';
 import { collectionSearchTrigramIndexName } from '../collection/types.js';
+import { AiMessageSchema } from '../runtime/binding.js';
 
 export interface SystemTableMeta {
 	readonly description?: string;
@@ -79,6 +80,43 @@ const INTERNAL_SYSTEM_FLAGS = {
 const JsonObjectSchema = z.record(z.string(), z.unknown());
 const JsonArraySchema = z.array(z.unknown());
 const StringArraySchema = z.array(z.string());
+
+export const ChatSessionMessageSchema = z.object({
+	norbital_id: z.string(),
+	turn_id: z.string().nullable().default(null),
+	role: z.string(),
+	seq: z.number(),
+	parts: z.array(AiMessageSchema),
+	model: z.string().nullable().default(null),
+	usage: JsonObjectSchema.nullable().default(null),
+	plan_mode: z.boolean().default(false),
+	goal_mode: z.boolean().default(false),
+	kind: z.enum(['normal', 'reasoning', 'summary', 'usage', 'goal']).default('normal'),
+	status: z.enum(['streaming', 'complete', 'aborted']).default('complete'),
+	queue_status: z.enum(['live', 'queued', 'released', 'removed']).default('live'),
+	release_mode: z.enum(['step', 'turn']).nullable().default(null),
+	author_display_name: z.string().nullable().default(null),
+	source_provider: z.string().nullable().default(null),
+	source_conversation_id: z.string().nullable().default(null),
+	source_message_id: z.string().nullable().default(null),
+	durable_ordinal: z.number().nullable().optional()
+});
+
+export const ChatSessionTurnSchema = z.object({
+	norbital_id: z.string(),
+	prompt_message_id: z.string().nullable().default(null),
+	status: z.enum(['running', 'succeeded', 'aborted', 'failed']),
+	model: z.string().default('host-default'),
+	parent_turn_id: z.string().nullable().default(null),
+	subagent_id: z.string().nullable().default(null),
+	error: z.string().nullable().default(null),
+	started_at: z.string(),
+	heartbeat_at: z.string().default(''),
+	ended_at: z.string().nullable().default(null),
+	usage_settled_at: z.string().nullable().default(null)
+});
+export const ChatSessionMessagesSchema = z.array(ChatSessionMessageSchema);
+export const ChatSessionTurnsSchema = z.array(ChatSessionTurnSchema);
 
 const EmailChannel = z.object({
 	type: z.literal('email'),
@@ -153,15 +191,14 @@ const xid8Column = customType<{ data: string; driverData: string }>({
 });
 
 function jsonbColumn<T>(schema: z.ZodType<T>) {
-	return customType<{ data: T | null; driverData: string | null }>({
+	return customType<{ data: T; driverData: string }>({
 		dataType() {
 			return 'jsonb';
 		},
-		toDriver(value: T | null): string | null {
-			return value == null ? null : JSON.stringify(schema.parse(value));
+		toDriver(value: T): string {
+			return JSON.stringify(schema.parse(value));
 		},
-		fromDriver(value: string | null): T | null {
-			if (value == null) return null;
+		fromDriver(value: string): T {
 			return typeof value === 'string' ? schema.parse(JSON.parse(value)) : schema.parse(value);
 		}
 	})();
@@ -548,9 +585,9 @@ const _chat_session = systemTable(
 		 * title without its messages, a terminal message without its turn, or a tool result without the
 		 * call it answers because separate collection events arrived in another order.
 		 */
-		messages: jsonbColumn(JsonArraySchema).notNull().default([]),
+		messages: jsonbColumn(ChatSessionMessagesSchema).notNull().default([]),
 		/** Root and delegated turn lifecycle, embedded beside the messages it governs. */
-		turns: jsonbColumn(JsonArraySchema).notNull().default([]),
+		turns: jsonbColumn(ChatSessionTurnsSchema).notNull().default([]),
 		/**
 		 * What this conversation has spent, accumulated as each turn settles.
 		 *
@@ -704,7 +741,11 @@ const _invitation = systemTable(
 		replica: false,
 		system: true
 	},
-	(t) => [uniqueIndex('invitation_live_email_unique').on(t.email).where(sql`consumed_at IS NULL`)]
+	(t) => [
+		uniqueIndex('invitation_live_email_unique')
+			.on(t.email)
+			.where(sql`consumed_at IS NULL`)
+	]
 );
 
 /**
@@ -726,7 +767,9 @@ const _sync_outbox = systemTable(
 		origin_scope: jsonbColumn(JsonObjectSchema).notNull().default({}),
 		record_snapshot: jsonbColumn(JsonObjectSchema).notNull().default({}),
 		occurred_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
-		xid: xid8Column().notNull().default(sql`pg_current_xact_id()`)
+		xid: xid8Column()
+			.notNull()
+			.default(sql`pg_current_xact_id()`)
 	},
 	{
 		description: 'Tenant change-feed',
@@ -807,7 +850,9 @@ const _norbital_sync_compaction = systemTable(
 	'_norbital_sync_compaction',
 	{
 		singleton: boolean().notNull().default(true),
-		pruned_through_seq: bigint({ mode: 'bigint' }).notNull().default(sql`0`),
+		pruned_through_seq: bigint({ mode: 'bigint' })
+			.notNull()
+			.default(sql`0`),
 		pruned_at: timestamp({ withTimezone: true }).notNull().defaultNow()
 	},
 	{
@@ -825,8 +870,12 @@ const _norbital_automation_cursor = systemTable(
 	'_norbital_automation_cursor',
 	{
 		singleton: boolean().notNull().default(true),
-		xid: xid8Column().notNull().default(sql`'0'::xid8`),
-		seq: bigint({ mode: 'bigint' }).notNull().default(sql`0`)
+		xid: xid8Column()
+			.notNull()
+			.default(sql`'0'::xid8`),
+		seq: bigint({ mode: 'bigint' })
+			.notNull()
+			.default(sql`0`)
 	},
 	{
 		...INTERNAL_SYSTEM_FLAGS,
@@ -843,7 +892,9 @@ const _norbital_sync_epoch = systemTable(
 	'_norbital_sync_epoch',
 	{
 		singleton: boolean().notNull().default(true),
-		epoch: uuid().notNull().default(sql`uuidv7()`)
+		epoch: uuid()
+			.notNull()
+			.default(sql`uuidv7()`)
 	},
 	{
 		...INTERNAL_SYSTEM_FLAGS,
@@ -1009,7 +1060,10 @@ export const SYSTEM_COLLECTIONS_INSERT_ONLY: ReadonlySet<SystemCollectionName> =
  * Relations that are not collections. Collection extras are opted on the collection itself;
  * these names are the only leftovers that still have to be listed.
  */
-export const NON_COLLECTION_INTERNALS = ['_norbital_internal_schema', '__drizzle_migrations'] as const;
+export const NON_COLLECTION_INTERNALS = [
+	'_norbital_internal_schema',
+	'__drizzle_migrations'
+] as const;
 
 /** Leftover names the replica introspector must skip that are not collections. */
 export const REPLICA_INTERNAL_EXCLUSIONS = [...NON_COLLECTION_INTERNALS, 'mutation_log'] as const;

@@ -1,21 +1,14 @@
-import type { AiModelOption } from '@norbital-ai/platform-utils/runtime/binding';
+import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
 import type { WorkspaceRemoteTransport } from '$lib/authoring/workspace/remote-transport.js';
 
 /**
  * One model the host offers for a turn. The host catalog is the only answer to "what is about to
  * run"; Pod renders the picker and does not keep a second list of ids.
  */
-export type AgentModelOption = AiModelOption;
-
-export type AgentModelCatalog = {
-	readonly defaultModel: string;
-	readonly options: readonly AgentModelOption[];
-};
-
 export type AgentModelCatalogStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 const state = $state({
-	catalog: null as AgentModelCatalog | null,
+	catalog: null as AiModelCatalog | null,
 	selectedModel: '',
 	status: 'idle' as AgentModelCatalogStatus
 });

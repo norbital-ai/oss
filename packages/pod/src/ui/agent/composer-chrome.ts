@@ -4,6 +4,7 @@
  * Kept as constants rather than inlined so the shell, the editor and the control row stay one
  * decision — which is what let Core's composer read as a single card instead of three stacked ones.
  */
+import type { AgentChatInput } from '$lib/remote/agent_chat.remote.js';
 
 export const AGENT_COMPOSER_SHELL_CLASS =
 	'flex min-w-0 flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-popover text-popover-foreground shadow-deep';
@@ -19,10 +20,7 @@ export const AGENT_COMPOSER_CONTROL_TEXT_CLASS = 'text-xs font-normal';
  */
 export const AGENT_COMPOSER_FOCUS_EVENT = 'pod:focus-agent-composer';
 
-export type AgentComposerSeed = {
-	readonly message?: string;
-	readonly planMode?: boolean;
-};
+export type AgentComposerSeed = Partial<Pick<AgentChatInput, 'message' | 'planMode'>>;
 
 /** Asks the mounted panel to focus the composer after a shell-driven open. */
 // stupidity:allow Q4 -- named helper

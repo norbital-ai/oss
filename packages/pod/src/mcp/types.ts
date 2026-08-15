@@ -24,18 +24,15 @@ export type McpServerDefinition = {
 	readonly timeoutMs?: number;
 };
 
-export type McpToolDefinition = {
-	readonly name: string;
-	readonly description: string;
-	readonly inputSchema: unknown;
-};
+export type { AiToolSpec as McpToolDefinition } from '@norbital-ai/platform-utils/runtime/binding';
 
 export type McpTextContent = {
 	readonly type: 'text';
 	readonly text: string;
 };
 
-export type McpContentBlock = McpTextContent | { readonly type: string; readonly [key: string]: unknown };
+export type McpContentBlock =
+	McpTextContent | { readonly type: string; readonly [key: string]: unknown };
 
 export type McpToolSuccess = {
 	readonly resultType: 'success';

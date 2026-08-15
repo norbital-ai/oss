@@ -18,8 +18,10 @@ import {
 	serializeGoalVerdict,
 	serializeVerifierScheduled,
 	UNREADABLE_VERDICT,
+	GoalVerdictSchema,
 	type GoalVerdict
 } from '$lib/shared/agent/goal-verdict.js';
+import { z } from 'zod';
 
 export {
 	GoalVerdictSchema,
@@ -172,6 +174,7 @@ export function replayGoalVerification(input: {
 		request: {
 			kind: 'ai.prompt',
 			prompt: `${GOAL_VERIFIER_SYSTEM_PROMPT}\n\n${buildGoalVerificationPrompt(input)}`,
+			outputSchema: z.toJSONSchema(GoalVerdictSchema),
 			...(input.spec.model ? { model: input.spec.model } : {}),
 			...(input.spec.profile ? { profile: input.spec.profile } : {})
 		}

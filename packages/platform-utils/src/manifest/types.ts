@@ -151,6 +151,10 @@ export const ManifestAutomationAgentSpecSchema = z
 		 * Default deny, same as `hostTools`. Each server already allowlists its own tools.
 		 */
 		mcpServers: z.array(nonEmpty).optional(),
+		hostSandbox: z
+			.object({ workspace: z.enum(['read-only', 'read-write']) })
+			.strict()
+			.optional(),
 		profile: nonEmpty.optional(),
 		maxTokens: z.number().int().positive().optional()
 	})

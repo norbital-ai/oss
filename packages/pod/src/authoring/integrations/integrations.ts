@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { CollectionMutationAction } from '@norbital-ai/platform-utils/collection';
 
 export interface PrivateEnvReference {
 	readonly env: string;
@@ -75,7 +76,7 @@ export interface IntegrationRequest {
 	readonly headers?: Readonly<Record<string, string>>;
 }
 
-export type CollectionMutationEvent = 'create' | 'update' | 'delete';
+export type CollectionMutationEvent = CollectionMutationAction;
 
 export interface CollectionReceiveBinding {
 	readonly webhook?: WebhookTrigger;

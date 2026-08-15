@@ -58,11 +58,13 @@ describe('Pod pipelines — compiled runtime contract', () => {
 			admin
 		);
 		expect(response.status).toBe(200);
-		const manifests = (await response.json()) as Array<{
-			label: string;
-			attachments: Array<{ name: string; contentType: string; content: unknown }>;
-			metadata: { site_id: string; schema: string };
-		}>;
+		const { output: manifests } = (await response.json()) as {
+			output: Array<{
+				label: string;
+				attachments: Array<{ name: string; contentType: string; content: unknown }>;
+				metadata: { site_id: string; schema: string };
+			}>;
+		};
 
 		expect(manifests).toHaveLength(1);
 		expect(manifests[0]).toMatchObject({

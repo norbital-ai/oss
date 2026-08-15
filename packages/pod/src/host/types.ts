@@ -1,14 +1,16 @@
-import type {
-	AiMessage,
-	AiToolSpec,
-	HostAiBinding,
-	HostAppPlugin,
-	HostDbBinding,
-	HostFileStorageBinding,
-	HostMapsBinding,
-	HostMessagingBinding,
-	RuntimeFacilityName
+import {
+	AiChatResultSchema,
+	AiMessageSchema,
+	AiToolSpecSchema,
+	type HostAiBinding,
+	type HostAppPlugin,
+	type HostDbBinding,
+	type HostFileStorageBinding,
+	type HostMapsBinding,
+	type HostMessagingBinding,
+	type RuntimeFacilityName
 } from '@norbital-ai/platform-utils/runtime/binding';
+import { z } from 'zod';
 import type { ManifestIntegrationDestination } from '@norbital-ai/platform-utils/manifest/types';
 import type { TBaseScope } from '@norbital-ai/platform-utils/scope/types';
 import type { HostAgentTool } from './agent-tools.js';
@@ -173,50 +175,57 @@ export type QueueJob = {
 	run(): Promise<void>;
 };
 
-export type DurableHostEffectImage = {
-	readonly assetId: string;
-	readonly storageKey: string;
-	readonly mimeType: string;
-	readonly byteLength: number;
-	readonly contentSha256: string;
-	readonly detail?: 'auto' | 'low' | 'high';
-};
+export const DurableHostEffectImageSchema = z.object({
+	assetId: z.string().uuid(),
+	storageKey: z.string().min(1),
+	mimeType: z.string().regex(/^image\//i),
+	byteLength: z
+		.number()
+		.int()
+		.positive()
+		.max(20 * 1024 * 1024),
+	contentSha256: z.string().regex(/^[0-9a-f]{64}$/),
+	detail: z.enum(['auto', 'low', 'high']).optional()
+});
+export type DurableHostEffectImage = z.infer<typeof DurableHostEffectImageSchema>;
 
 /** Serializable provider work staged by a replayable automation handler. */
-export type DurableHostEffectRequest =
-	| {
-			readonly kind: 'ai.prompt';
-			readonly prompt: string;
-			readonly outputSchema?: unknown;
-			readonly model?: string;
-			readonly profile?: string;
-			readonly images?: readonly DurableHostEffectImage[];
-	  }
-	| {
-			readonly kind: 'ai.turn';
-			readonly messages: readonly AiMessage[];
-			readonly system?: string;
-			readonly model?: string;
-			readonly profile?: string;
-			readonly tools?: readonly AiToolSpec[];
-			readonly outputSchema?: unknown;
-			readonly images?: readonly DurableHostEffectImage[];
-	  };
+export const DurableHostEffectRequestSchema = z.discriminatedUnion('kind', [
+	z.object({
+		kind: z.literal('ai.prompt'),
+		prompt: z.string(),
+		outputSchema: z.unknown().optional(),
+		model: z.string().optional(),
+		profile: z.string().optional(),
+		images: z.array(DurableHostEffectImageSchema).max(8).readonly().optional()
+	}),
+	z.object({
+		kind: z.literal('ai.turn'),
+		messages: z.array(AiMessageSchema).readonly(),
+		system: z.string().optional(),
+		model: z.string().optional(),
+		profile: z.string().optional(),
+		tools: z.array(AiToolSpecSchema).readonly().optional(),
+		outputSchema: z.unknown().optional(),
+		images: z.array(DurableHostEffectImageSchema).max(8).readonly().optional()
+	})
+]);
+export type DurableHostEffectRequest = z.infer<typeof DurableHostEffectRequestSchema>;
 
-export type DurableAutomationAiEffect = {
-	readonly jobId: string;
-	readonly effectId: string;
-	readonly ordinal: number;
-	readonly requestHash: string;
-	readonly request: DurableHostEffectRequest;
-};
+export const DurableAutomationAiEffectSchema = z.object({
+	jobId: z.string(),
+	effectId: z.string(),
+	ordinal: z.number().int().nonnegative(),
+	requestHash: z.string(),
+	request: DurableHostEffectRequestSchema
+});
+export type DurableAutomationAiEffect = z.infer<typeof DurableAutomationAiEffectSchema>;
 
-export type DurableAutomationAiOutcome =
-	| {
-			readonly status: 'succeeded';
-			readonly result: import('@norbital-ai/platform-utils/runtime/binding').AiChatResult;
-	  }
-	| { readonly status: 'failed'; readonly error: string };
+export const DurableAutomationAiOutcomeSchema = z.discriminatedUnion('status', [
+	z.object({ status: z.literal('succeeded'), result: AiChatResultSchema }),
+	z.object({ status: z.literal('failed'), error: z.string() })
+]);
+export type DurableAutomationAiOutcome = z.infer<typeof DurableAutomationAiOutcomeSchema>;
 
 /**
  * Durable execution for the loops the runtime cannot run for itself. Satisfies `queue`.

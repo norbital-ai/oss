@@ -2,15 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
 	WEB_CHANNEL_ID,
 	buildConversationSelector,
-	conversationComboboxOptions,
 	listAccessibleChannels,
-	scopeConversationSessions,
-	type ConversationSelectorLabels,
-	type ConversationScopeInput,
+	sessionVisibleInScope,
 	type ConversationSession
 } from '../../src/ui/agent/conversation-selector.js';
 
-const labels: ConversationSelectorLabels = {
+const labels: Parameters<typeof buildConversationSelector>[0]['labels'] = {
 	web: 'Web',
 	users: 'Users',
 	groups: 'Groups',
@@ -18,40 +15,44 @@ const labels: ConversationSelectorLabels = {
 };
 
 function session(
-	input: Partial<ConversationSession> & Pick<ConversationSession, 'id'>
+	input: Partial<ConversationSession> & Pick<ConversationSession, 'norbital_id'>
 ): ConversationSession {
 	return {
-		title: input.title ?? input.id,
-		userId: input.userId ?? 'me',
+		title: input.title ?? input.norbital_id,
+		user_id: input.user_id ?? 'me',
 		visibility: input.visibility ?? 'personal',
 		platform: input.platform ?? null,
-		channelKey: input.channelKey ?? null,
-		externalThreadId: input.externalThreadId ?? null,
+		channel_key: input.channel_key ?? null,
+		external_thread_id: input.external_thread_id ?? null,
 		...input
 	};
 }
 
-describe('scopeConversationSessions', () => {
+describe('sessionVisibleInScope', () => {
 	const publicKeys = new Set(['support_bot']);
+	const visible = (
+		sessions: readonly ConversationSession[],
+		scope: Parameters<typeof sessionVisibleInScope>[1]
+	) => sessions.filter((row) => sessionVisibleInScope(row, scope));
 
 	it('keeps a member inbox to their own threads and authenticated groups', () => {
-		const scoped = scopeConversationSessions(
+		const scoped = visible(
 			[
-				session({ id: 'mine', title: 'Workspace agent' }),
-				session({ id: 'alice', title: 'Alice thread', userId: 'alice' }),
+				session({ norbital_id: 'mine', title: 'Workspace agent' }),
+				session({ norbital_id: 'alice', title: 'Alice thread', user_id: 'alice' }),
 				session({
-					id: 'group',
+					norbital_id: 'group',
 					title: 'Team',
 					visibility: 'channel_group',
-					channelKey: 'sales_desk',
-					userId: 'channel'
+					channel_key: 'sales_desk',
+					user_id: 'channel'
 				}),
 				session({
-					id: 'public',
+					norbital_id: 'public',
 					title: 'Anon',
 					visibility: 'channel_dm',
-					channelKey: 'support_bot',
-					userId: 'anon'
+					channel_key: 'support_bot',
+					user_id: 'anon'
 				})
 			],
 			{
@@ -61,27 +62,27 @@ describe('scopeConversationSessions', () => {
 				publicChannelKeys: publicKeys
 			}
 		);
-		expect(scoped.map((row) => row.id)).toEqual(['mine', 'group']);
+		expect(scoped.map((row) => row.norbital_id)).toEqual(['mine', 'group']);
 	});
 
 	it('lets an admin personal scope include public channels and hide other members', () => {
-		const scoped = scopeConversationSessions(
+		const scoped = visible(
 			[
-				session({ id: 'mine', title: 'Workspace agent' }),
-				session({ id: 'alice', title: 'Onboarding', userId: 'alice' }),
+				session({ norbital_id: 'mine', title: 'Workspace agent' }),
+				session({ norbital_id: 'alice', title: 'Onboarding', user_id: 'alice' }),
 				session({
-					id: 'public-dm',
+					norbital_id: 'public-dm',
 					title: 'Visitor',
 					visibility: 'channel_dm',
-					channelKey: 'support_bot',
-					userId: 'anon'
+					channel_key: 'support_bot',
+					user_id: 'anon'
 				}),
 				session({
-					id: 'auth-group',
+					norbital_id: 'auth-group',
 					title: 'Night shift',
 					visibility: 'channel_group',
-					channelKey: 'field_ops',
-					userId: 'channel'
+					channel_key: 'field_ops',
+					user_id: 'channel'
 				})
 			],
 			{
@@ -91,12 +92,12 @@ describe('scopeConversationSessions', () => {
 				publicChannelKeys: publicKeys
 			}
 		);
-		expect(scoped.map((row) => row.id)).toEqual(['mine', 'public-dm']);
+		expect(scoped.map((row) => row.norbital_id)).toEqual(['mine', 'public-dm']);
 	});
 
 	it('keeps personal threads visible before the requestor id is known', () => {
-		const scoped = scopeConversationSessions(
-			[session({ id: 'mine', title: 'Workspace agent', userId: 'unknown-user' })],
+		const scoped = visible(
+			[session({ norbital_id: 'mine', title: 'Workspace agent', user_id: 'unknown-user' })],
 			{
 				scopeUserId: null,
 				currentUserId: null,
@@ -104,20 +105,20 @@ describe('scopeConversationSessions', () => {
 				publicChannelKeys: publicKeys
 			}
 		);
-		expect(scoped.map((row) => row.id)).toEqual(['mine']);
+		expect(scoped.map((row) => row.norbital_id)).toEqual(['mine']);
 	});
 
 	it('scopes an admin onto another member without public channels', () => {
-		const scoped = scopeConversationSessions(
+		const scoped = visible(
 			[
-				session({ id: 'mine', title: 'Workspace agent' }),
-				session({ id: 'alice', title: 'Onboarding', userId: 'alice' }),
+				session({ norbital_id: 'mine', title: 'Workspace agent' }),
+				session({ norbital_id: 'alice', title: 'Onboarding', user_id: 'alice' }),
 				session({
-					id: 'public-dm',
+					norbital_id: 'public-dm',
 					title: 'Visitor',
 					visibility: 'channel_dm',
-					channelKey: 'support_bot',
-					userId: 'anon'
+					channel_key: 'support_bot',
+					user_id: 'anon'
 				})
 			],
 			{
@@ -127,7 +128,7 @@ describe('scopeConversationSessions', () => {
 				publicChannelKeys: publicKeys
 			}
 		);
-		expect(scoped.map((row) => row.id)).toEqual(['alice']);
+		expect(scoped.map((row) => row.norbital_id)).toEqual(['alice']);
 	});
 });
 
@@ -135,8 +136,8 @@ describe('buildConversationSelector', () => {
 	it('keeps a web inbox flat and without tabs', () => {
 		const model = buildConversationSelector({
 			sessions: [
-				session({ id: 'c1', title: 'Workspace agent' }),
-				session({ id: 'c2', title: 'Skills discussion' })
+				session({ norbital_id: 'c1', title: 'Workspace agent' }),
+				session({ norbital_id: 'c2', title: 'Skills discussion' })
 			],
 			labels
 		});
@@ -152,8 +153,8 @@ describe('buildConversationSelector', () => {
 	it('does not group a personal inbox by person', () => {
 		const model = buildConversationSelector({
 			sessions: [
-				session({ id: 'mine', title: 'My thread', userId: 'me' }),
-				session({ id: 'alice-1', title: 'Onboarding', userId: 'alice' })
+				session({ norbital_id: 'mine', title: 'My thread', user_id: 'me' }),
+				session({ norbital_id: 'alice-1', title: 'Onboarding', user_id: 'alice' })
 			],
 			labels
 		});
@@ -166,14 +167,14 @@ describe('buildConversationSelector', () => {
 	it('adds channel tabs only when a non-web channel exists', () => {
 		const model = buildConversationSelector({
 			sessions: [
-				session({ id: 'web-1', title: 'Workspace agent' }),
+				session({ norbital_id: 'web-1', title: 'Workspace agent' }),
 				session({
-					id: 'tg-1',
+					norbital_id: 'tg-1',
 					title: 'Invoice question',
 					visibility: 'channel_dm',
 					platform: 'telegram',
-					channelKey: 'sales_desk',
-					userId: 'channel'
+					channel_key: 'sales_desk',
+					user_id: 'channel'
 				})
 			],
 			labels
@@ -192,20 +193,20 @@ describe('buildConversationSelector', () => {
 		const model = buildConversationSelector({
 			sessions: [
 				session({
-					id: 'dm',
+					norbital_id: 'dm',
 					title: 'Ada',
 					visibility: 'channel_dm',
 					platform: 'whatsapp',
-					channelKey: 'field_ops',
-					userId: 'ada'
+					channel_key: 'field_ops',
+					user_id: 'ada'
 				}),
 				session({
-					id: 'group',
+					norbital_id: 'group',
 					title: 'Night shift',
 					visibility: 'channel_group',
 					platform: 'whatsapp',
-					channelKey: 'field_ops',
-					externalThreadId: 'wa-group-1'
+					channel_key: 'field_ops',
+					external_thread_id: 'wa-group-1'
 				})
 			],
 			labels
@@ -221,7 +222,7 @@ describe('buildConversationSelector', () => {
 
 	it('ignores unknown visibilities', () => {
 		const model = buildConversationSelector({
-			sessions: [session({ id: 'x', visibility: 'shared' })],
+			sessions: [session({ norbital_id: 'x', visibility: 'shared' })],
 			labels
 		});
 		expect(model.channels).toEqual([]);
@@ -229,60 +230,18 @@ describe('buildConversationSelector', () => {
 	});
 });
 
-describe('conversationComboboxOptions', () => {
-	it('keeps a personal inbox flat without group headers', () => {
-		const model = buildConversationSelector({
-			sessions: [
-				session({ id: 'c1', title: 'Workspace agent' }),
-				session({ id: 'c2', title: 'Skills discussion' })
-			],
-			labels
-		});
-		expect(conversationComboboxOptions(model)).toEqual([
-			expect.objectContaining({ value: 'c1', label: 'Workspace agent' }),
-			expect.objectContaining({ value: 'c2', label: 'Skills discussion' })
-		]);
-		expect(conversationComboboxOptions(model).every((option) => option.type == null)).toBe(true);
-	});
-
-	it('groups users and groups when both exist on a channel', () => {
-		const model = buildConversationSelector({
-			sessions: [
-				session({
-					id: 'dm',
-					title: 'Ada',
-					visibility: 'channel_dm',
-					channelKey: 'desk',
-					userId: 'ada'
-				}),
-				session({
-					id: 'group',
-					title: 'Night shift',
-					visibility: 'channel_group',
-					channelKey: 'desk'
-				})
-			],
-			labels
-		});
-		expect(conversationComboboxOptions(model)).toEqual([
-			expect.objectContaining({ value: 'dm', label: 'Ada', type: 'Users' }),
-			expect.objectContaining({ value: 'group', label: 'Night shift', type: 'Groups' })
-		]);
-	});
-});
-
 describe('listAccessibleChannels', () => {
-	const memberScope: ConversationScopeInput = {
+	const memberScope: Parameters<typeof sessionVisibleInScope>[1] = {
 		scopeUserId: 'me',
 		currentUserId: 'me',
 		isAdmin: false,
 		publicChannelKeys: new Set(['support_bot'])
 	};
-	const adminOwnScope: ConversationScopeInput = {
+	const adminOwnScope: Parameters<typeof sessionVisibleInScope>[1] = {
 		...memberScope,
 		isAdmin: true
 	};
-	const adminImpersonating: ConversationScopeInput = {
+	const adminImpersonating: Parameters<typeof sessionVisibleInScope>[1] = {
 		scopeUserId: 'alice',
 		currentUserId: 'me',
 		isAdmin: true,
@@ -292,7 +251,7 @@ describe('listAccessibleChannels', () => {
 	it('always includes web and authenticated manifest channels for a member', () => {
 		expect(
 			listAccessibleChannels({
-				sessions: [session({ id: 'web-1' })],
+				sessions: [session({ norbital_id: 'web-1' })],
 				labels,
 				manifestChannels: {
 					sales_desk: { audience: 'authenticated', transport: 'telegram' },
@@ -319,7 +278,7 @@ describe('listAccessibleChannels', () => {
 	it('hides public channels while impersonating another member', () => {
 		expect(
 			listAccessibleChannels({
-				sessions: [session({ id: 'alice', userId: 'alice' })],
+				sessions: [session({ norbital_id: 'alice', user_id: 'alice' })],
 				labels,
 				manifestChannels: {
 					support_bot: { audience: 'public', transport: 'whatsapp' }
@@ -334,9 +293,9 @@ describe('listAccessibleChannels', () => {
 			listAccessibleChannels({
 				sessions: [
 					session({
-						id: 'legacy',
+						norbital_id: 'legacy',
 						visibility: 'channel_dm',
-						channelKey: 'retired_desk',
+						channel_key: 'retired_desk',
 						platform: 'discord'
 					})
 				],

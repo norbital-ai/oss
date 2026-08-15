@@ -1,16 +1,17 @@
-import type { AiChatResult } from '@norbital-ai/platform-utils/runtime/binding';
+import { AiChatResultSchema, type AiChatResult } from '@norbital-ai/platform-utils/runtime/binding';
 import type { DurableHostEffectRequest } from '$lib/host/types.js';
 import { createHash } from 'node:crypto';
 import { createAsyncStore } from '$lib/server/async-store.js';
 import { z } from 'zod';
 
-export type DurableAutomationEffect = {
-	readonly ordinal: number;
-	readonly requestHash: string;
-	readonly status: 'succeeded' | 'failed';
-	readonly result?: AiChatResult;
-	readonly error?: string;
-};
+export const DurableAutomationEffectSchema = z.object({
+	ordinal: z.number().int().nonnegative(),
+	requestHash: z.string(),
+	status: z.enum(['succeeded', 'failed']),
+	result: AiChatResultSchema.optional(),
+	error: z.string().optional()
+});
+export type DurableAutomationEffect = z.infer<typeof DurableAutomationEffectSchema>;
 
 export type AutomationReplayContext = {
 	readonly jobId: string;

@@ -70,8 +70,7 @@ import {
 import { standaloneAutomationJobs, STANDALONE_AUTOMATION_ARTIFACT } from './standalone-automation.js';
 import { declaredWebhookBindings, webhookInboundDeliverer } from '../host/webhook-inbound.js';
 import {
-	reconcileDeclaredPolicies,
-	type PolicyReconcileClient
+	reconcileDeclaredPolicies
 } from '../server/bootstrap/policy_reconcile.server.js';
 import { reconcileDeclaredChannels } from '../server/bootstrap/channel_reconcile.server.js';
 
@@ -379,9 +378,8 @@ export async function migrateStandalone(
 		// adds a collection and a policy that reads it must become visible together, or a deploy has a
 		// window where the collection exists and nothing may touch it.
 		const manifest = await loadStandaloneManifest(root);
-		// stupidity: boundary-cast -- node-postgres satisfies the narrow query contract reconciliation needs.
 		const reconciled = await reconcileDeclaredPolicies(
-			client as unknown as PolicyReconcileClient,
+			client,
 			manifest
 		);
 		if (reconciled.created + reconciled.updated > 0) {
@@ -392,8 +390,7 @@ export async function migrateStandalone(
 		// After the policies, because a channel principal's team points at one: a channel declaring a
 		// policy this deploy also introduces must find it already there.
 		const channels = await reconcileDeclaredChannels(
-			// stupidity: boundary-cast -- node-postgres satisfies the narrow query contract reconciliation needs.
-			client as unknown as PolicyReconcileClient,
+			client,
 			manifest
 		);
 		if (channels.created + channels.updated > 0) {
@@ -483,8 +480,7 @@ export async function seedStandalone(
 		// teams exist, so binding them here is what closes that window rather than leaving it to the
 		// operator to remember a second migrate.
 		const reconciled = await reconcileDeclaredPolicies(
-			// stupidity: boundary-cast -- node-postgres satisfies the narrow query contract reconciliation needs.
-			client as unknown as PolicyReconcileClient,
+			client,
 			await loadStandaloneManifest(root)
 		);
 		if (reconciled.created + reconciled.updated > 0) {

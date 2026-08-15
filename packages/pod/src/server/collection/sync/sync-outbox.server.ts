@@ -1,9 +1,10 @@
 import { sql } from 'drizzle-orm';
 import { SYSTEM_COLUMN_NAMES } from '@norbital-ai/platform-utils/system/column_names';
+import type { CollectionMutationAction } from '@norbital-ai/platform-utils/collection';
 import type { ProvisionedContext, TenantDbClient } from '$lib/server/bootstrap/workspace_store.js';
 import { rowsPerMutationStatement } from '../collection_transaction.server.js';
 
-export type SyncOutboxAction = 'create' | 'update' | 'delete';
+export type SyncOutboxAction = CollectionMutationAction;
 
 /** Rows per INSERT. Four bind parameters each, so this stays far inside Postgres' 65,535 limit. */
 const OUTBOX_CHUNK = rowsPerMutationStatement(6);

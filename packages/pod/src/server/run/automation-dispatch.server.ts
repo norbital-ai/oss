@@ -1,6 +1,10 @@
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
-import { readSyncOutboxBatch, OUTBOX_CURSOR_START, type OutboxCursor } from '$lib/server/collection/sync/outbox-tailer.server.js';
+import {
+	readSyncOutboxBatch,
+	OUTBOX_CURSOR_START,
+	type OutboxCursor
+} from '$lib/server/collection/sync/outbox-tailer.server.js';
 import { withCollectionTransaction } from '$lib/server/collection/collection_transaction.server.js';
 import type { DurableAutomationAiEffect } from '$lib/host/types.js';
 import {
@@ -11,6 +15,7 @@ import {
 } from './automation-replay.server.js';
 import { executeAutomationHandler } from './tenant_run.js';
 import type { AdmitArtifact } from './admit-artifact.js';
+import type { CollectionMutationAction } from '@norbital-ai/platform-utils/collection';
 
 /** Interactive chat jobs. `automation_run.automation_name` stays null; this is only the job key. */
 export const INTERACTIVE_AGENT_AUTOMATION_NAME = 'agent:interactive';
@@ -25,7 +30,7 @@ export function isGuestAdmittedAgentJob(automationName: string): boolean {
 	);
 }
 
-export type ChangeAction = 'create' | 'update' | 'delete';
+export type ChangeAction = CollectionMutationAction;
 export type AutomationEvent = 'created' | 'updated' | 'deleted';
 type RegisteredAutomation = { readonly trigger?: unknown };
 
@@ -43,7 +48,10 @@ type AutomationReceipt = {
 
 export type AutomationAdmission = {
 	readonly epoch: string;
-	readonly receipts: readonly { readonly receiptId: string; readonly artifact: AutomationArtifactBinding }[];
+	readonly receipts: readonly {
+		readonly receiptId: string;
+		readonly artifact: AutomationArtifactBinding;
+	}[];
 };
 
 export type AutomationArtifactBinding = {
@@ -124,8 +132,7 @@ export async function admitEventAutomations(
 		const cursor = stored.rows[0] ?? OUTBOX_CURSOR_START;
 		const batch = await readSyncOutboxBatch(ctx, cursor, limit);
 		const registered = getTenantWorkspace().registered.automations as
-			| Record<string, RegisteredAutomation>
-			| undefined;
+			Record<string, RegisteredAutomation> | undefined;
 		const jobs = batch.rows.flatMap((row) =>
 			matchChangeAutomations(registered, row.collection, eventForAction(row.action)).map(
 				(automationName) => ({ automationName, row })
@@ -164,7 +171,11 @@ export async function admitEventAutomations(
 			);
 		}
 		const receipts = await ctx.tenantDb.query<{
-			norbital_id: string; artifact_id: string; checkpoint_id: string; tree_hash: string; runtime_version: string;
+			norbital_id: string;
+			artifact_id: string;
+			checkpoint_id: string;
+			tree_hash: string;
+			runtime_version: string;
 		}>(
 			`SELECT norbital_id::text, artifact_id, checkpoint_id, tree_hash, runtime_version
 			   FROM _norbital_automation_job
@@ -180,8 +191,12 @@ export async function admitEventAutomations(
 			epoch: await tenantEpoch(ctx),
 			receipts: receipts.rows.map((row) => ({
 				receiptId: row.norbital_id,
-				artifact: { artifactId: row.artifact_id, checkpointId: row.checkpoint_id,
-					treeHash: row.tree_hash, runtimeVersion: row.runtime_version }
+				artifact: {
+					artifactId: row.artifact_id,
+					checkpointId: row.checkpoint_id,
+					treeHash: row.tree_hash,
+					runtimeVersion: row.runtime_version
+				}
 			}))
 		};
 	});
@@ -209,7 +224,11 @@ export async function admitScheduledAutomation(
 		]
 	);
 	const receipt = await ctx.tenantDb.query<{
-		norbital_id: string; artifact_id: string; checkpoint_id: string; tree_hash: string; runtime_version: string;
+		norbital_id: string;
+		artifact_id: string;
+		checkpoint_id: string;
+		tree_hash: string;
+		runtime_version: string;
 	}>(
 		`SELECT norbital_id::text, artifact_id, checkpoint_id, tree_hash, runtime_version
 		   FROM _norbital_automation_job
@@ -218,10 +237,15 @@ export async function admitScheduledAutomation(
 	);
 	return {
 		epoch: await tenantEpoch(ctx),
-		receipts: receipt.rows.map((row) => ({ receiptId: row.norbital_id, artifact: {
-			artifactId: row.artifact_id, checkpointId: row.checkpoint_id,
-			treeHash: row.tree_hash, runtimeVersion: row.runtime_version
-		} }))
+		receipts: receipt.rows.map((row) => ({
+			receiptId: row.norbital_id,
+			artifact: {
+				artifactId: row.artifact_id,
+				checkpointId: row.checkpoint_id,
+				treeHash: row.tree_hash,
+				runtimeVersion: row.runtime_version
+			}
+		}))
 	};
 }
 
@@ -288,10 +312,12 @@ export async function runAutomationReceipt(
 	);
 	const receipt = selected.rows[0];
 	if (!receipt) throw new Error(`Unknown automation receipt ${receiptId}`);
-	if (receipt.artifact_id !== expectedArtifact.artifactId ||
+	if (
+		receipt.artifact_id !== expectedArtifact.artifactId ||
 		receipt.checkpoint_id !== expectedArtifact.checkpointId ||
 		receipt.tree_hash !== expectedArtifact.treeHash ||
-		receipt.runtime_version !== expectedArtifact.runtimeVersion) {
+		receipt.runtime_version !== expectedArtifact.runtimeVersion
+	) {
 		throw new Error(`Automation receipt ${receiptId} is bound to a different runtime artifact`);
 	}
 	const replay: AutomationReplayContext = {
@@ -351,7 +377,8 @@ export async function runAutomationReceipt(
 	}
 	if (receiptUsesAgentReducer(receipt)) {
 		if (authoredFailure) {
-			const error = authoredFailure instanceof Error ? authoredFailure.message : String(authoredFailure);
+			const error =
+				authoredFailure instanceof Error ? authoredFailure.message : String(authoredFailure);
 			await ctx.tenantDb.query(
 				`UPDATE _norbital_automation_job SET orchestration_status = 'failed', last_error = $2,
 				 updated_at = CURRENT_TIMESTAMP WHERE norbital_id = $1::uuid`,

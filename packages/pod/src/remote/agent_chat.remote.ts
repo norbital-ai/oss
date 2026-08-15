@@ -2,42 +2,23 @@ import { Guard, requireAuthMiddleware } from '$lib/remote/guard.server.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { parseCompactDirective } from '$lib/server/agent/agent-loop.server.js';
 import { composeMentionContext } from '$lib/server/agent/agent-mentions.server.js';
-import { persistInteractiveAgentStart } from '$lib/server/agent/agent-start.server.js';
-import { interactiveAgentStartSpec } from '$lib/server/agent/agent-spec.server.js';
+import {
+	persistInteractiveAgentStart,
+	type InteractiveAgentStartPersist
+} from '$lib/server/agent/agent-start.server.js';
+import { interactiveAgentSpec } from '$lib/server/agent/agent-spec.server.js';
 import { getRuntimeFacilities } from '$lib/server/facilities.js';
 import type { AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
+import {
+	automation_run,
+	chat_session
+} from '@norbital-ai/platform-utils/system/workspace-schema';
+import { eq } from 'drizzle-orm';
 import { error } from '$lib/server/http.js';
 import { requestI18n } from '$lib/server/i18n.js';
 import { updateScheduledVerifierPrompt } from '$lib/server/agent/goal-mode.server.js';
 import { resolveAgentIntent } from '$lib/shared/agent/intent.js';
 import { z } from 'zod';
-
-/** Resolve composer intent fields onto the snapshot the durable turn will replay. */
-function chatIntentFields(input: {
-	readonly message?: string;
-	readonly planMode?: boolean;
-	readonly intent?: 'do' | 'plan';
-	readonly verifierPrompt?: string;
-	readonly mentions?: readonly unknown[];
-}): {
-	readonly planMode?: true;
-	readonly intent: 'do' | 'plan';
-	readonly verifierPrompt?: string;
-	readonly goalMode?: true;
-} {
-	const resolved = resolveAgentIntent({
-		intent: input.intent,
-		planMode: input.planMode,
-		verifierPrompt: input.verifierPrompt,
-		message: input.message,
-		mentionCount: input.mentions?.length
-	});
-	return {
-		...(resolved.planMode ? { planMode: true as const } : {}),
-		intent: resolved.intent,
-		...(resolved.verify ? { verifierPrompt: resolved.verifierPrompt, goalMode: true as const } : {})
-	};
-}
 
 /**
  * The shape of a model identifier, which is all this package can judge on its own.
@@ -107,6 +88,25 @@ export const AgentChatInputSchema = z.object({
 		})
 		.optional()
 });
+export type AgentChatInput = z.infer<typeof AgentChatInputSchema>;
+
+/** Resolve composer intent fields onto the snapshot the durable turn will replay. */
+function chatIntentFields(
+	input: Pick<AgentChatInput, 'message' | 'planMode' | 'intent' | 'verifierPrompt' | 'mentions'>
+) {
+	const resolved = resolveAgentIntent({
+		intent: input.intent,
+		planMode: input.planMode,
+		verifierPrompt: input.verifierPrompt,
+		message: input.message,
+		mentionCount: input.mentions?.length
+	});
+	return {
+		...(resolved.planMode ? { planMode: true as const } : {}),
+		intent: resolved.intent,
+		...(resolved.verify ? { verifierPrompt: resolved.verifierPrompt, goalMode: true as const } : {})
+	};
+}
 
 export const AgentModelsInputSchema = z.object({});
 
@@ -115,13 +115,10 @@ export const AgentChatUpdateVerifierInputSchema = z.object({
 	prompt: z.string().min(1).max(4000)
 });
 
-export type AgentChatStartResult = {
-	readonly runId: string;
-	readonly chatId: string;
-	readonly accepted: true;
-	readonly session: Record<string, unknown>;
-	readonly syncSequence: string;
-};
+export type AgentChatStartResult = Pick<
+	InteractiveAgentStartPersist,
+	'runId' | 'chatId' | 'session' | 'syncSequence'
+> & { readonly accepted: true };
 
 /**
  * What the host will run, or nothing.
@@ -169,7 +166,7 @@ export const agentChatStart = authenticated.command(
 		const model = await resolveModel(input.model);
 		const ctx = getWorkspace({ provision: true });
 		const compact = parseCompactDirective(input.message);
-		const spec = interactiveAgentStartSpec(input.message, model);
+		const spec = interactiveAgentSpec(input.message, model);
 		const mentionContext = input.mentions?.length
 			? await composeMentionContext(ctx, input.mentions)
 			: null;
@@ -219,20 +216,21 @@ export const agentChatUpdateVerifier = authenticated.command(
 	AgentChatUpdateVerifierInputSchema,
 	async (input): Promise<{ readonly accepted: true }> => {
 		const ctx = getWorkspace({ provision: true });
+		const db = ctx.drizzleDb;
+		if (!db) throw error(500, 'Tenant database is not provisioned');
 		const ownerUserId = ctx.baseScope.requestor.norbital_id;
-		const existing = await ctx.tenantDb.query<{
-			requested_by_user_id: string;
-			automation_name: string | null;
-			chat_id: string | null;
-		}>({
-			text: `SELECT r.requested_by_user_id, r.automation_name, s.norbital_id AS chat_id
-			         FROM automation_run r
-			    LEFT JOIN chat_session s ON s.automation_run_id = r.norbital_id
-			        WHERE r.norbital_id = $1::uuid
-			        LIMIT 1`,
-			values: [input.runId]
-		});
-		const row = existing.rows[0];
+		const row = (
+			await db
+				.select({
+					requested_by_user_id: automation_run.requested_by_user_id,
+					automation_name: automation_run.automation_name,
+					chat_id: chat_session.norbital_id
+				})
+				.from(automation_run)
+				.leftJoin(chat_session, eq(chat_session.automation_run_id, automation_run.norbital_id))
+				.where(eq(automation_run.norbital_id, input.runId))
+				.limit(1)
+		)[0];
 		if (!row || row.automation_name !== null || !row.chat_id)
 			throw error(404, requestI18n().t('pod.server.agentConversationNotFound'));
 		if (row.requested_by_user_id !== ownerUserId)

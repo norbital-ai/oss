@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 
 /** Directory containing scan.mjs and tenant/ (resolved from this module at runtime). */
 const TOOL_ROOT = dirname(fileURLToPath(import.meta.url));
@@ -69,29 +70,38 @@ type NormalizedOptions = {
 	format: 'human' | 'json';
 };
 
-type Finding = {
-	source: string;
-	category: string;
-	ruleId: string | null;
-	severity: string;
-	confidence: string | null;
-	summary: string;
-	file: string | null;
-	line: number | null;
-	evidence: unknown;
-};
+const FindingSchema = z.object({
+	source: z.string(),
+	category: z.string(),
+	ruleId: z.string().nullable(),
+	severity: z.string(),
+	confidence: z.string().nullable(),
+	summary: z.string(),
+	file: z.string().nullable(),
+	line: z.number().nullable(),
+	evidence: z.unknown()
+});
+type Finding = z.infer<typeof FindingSchema>;
 
-type AuditReport = {
-	schemaVersion: number;
-	kind: string;
-	generatedAt?: string;
-	root: string;
-	verdict: string;
-	summary: ReturnType<typeof countFindings>;
-	findings: Finding[];
-	scanner: unknown;
-	fallow: unknown;
-};
+const FindingCountsSchema = z.object({
+	error: z.number(),
+	warning: z.number(),
+	hint: z.number(),
+	actionable: z.number(),
+	total: z.number()
+});
+const AuditReportSchema = z.object({
+	schemaVersion: z.number(),
+	kind: z.string(),
+	generatedAt: z.string().optional(),
+	root: z.string(),
+	verdict: z.string(),
+	summary: FindingCountsSchema,
+	findings: z.array(FindingSchema),
+	scanner: z.unknown(),
+	fallow: z.unknown()
+});
+type AuditReport = z.infer<typeof AuditReportSchema>;
 
 type BoundedReport = {
 	schemaVersion: number;
@@ -155,12 +165,12 @@ function loadFallow(): {
 		root: string;
 		configPath: string;
 		noCache: boolean;
-	}) => Promise<{ clone_groups?: unknown[] }>;
+	}) => Promise<{ clone_groups?: Array<Record<string, unknown>> }>;
 	computeHealth: (options: {
 		root: string;
 		configPath: string;
 		noCache: boolean;
-	}) => Promise<{ findings?: unknown[] }>;
+	}) => Promise<{ findings?: Array<Record<string, unknown>> }>;
 } {
 	const require = createRequire(import.meta.url);
 	return require('@fallow-cli/fallow-node');
@@ -243,7 +253,8 @@ function normalizeFallow(
 				confidence: 'high',
 				summary: category.replaceAll('_', ' '),
 				file: findingFile(record),
-				line: (record.line as number | undefined) ?? (record.start_line as number | undefined) ?? null,
+				line:
+					(record.line as number | undefined) ?? (record.start_line as number | undefined) ?? null,
 				evidence: findingText(value)
 			});
 		}
@@ -366,9 +377,9 @@ async function fallowConfig(root: string, diagnosisDir: string): Promise<string>
 	if (projectConfig) return projectConfig;
 
 	const source = join(TOOL_ROOT, 'tenant/fallow.jsonc');
-	const config = JSON.parse(await readFile(source, 'utf8')) as {
-		rulePacks?: string[];
-	};
+	const config = z
+		.object({ rulePacks: z.array(z.string()).optional() })
+		.parse(JSON.parse(await readFile(source, 'utf8')));
 	const runtimeDir = join(diagnosisDir, 'runtime');
 	await mkdir(runtimeDir, { recursive: true });
 	const rulePacks: string[] = [];
@@ -452,7 +463,7 @@ async function latestReport(options: NormalizedOptions): Promise<AuditReport> {
 	if (!existsSync(reportPath)) {
 		throw new Error(`No quality diagnosis found at ${reportPath}; run the audit first`);
 	}
-	return JSON.parse(await readFile(reportPath, 'utf8')) as AuditReport;
+	return AuditReportSchema.parse(JSON.parse(await readFile(reportPath, 'utf8')));
 }
 
 export async function runQualityAudit(options: QualityAuditOptions): Promise<QualityAuditResult> {

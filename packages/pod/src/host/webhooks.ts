@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { DeclaredWebhookBinding, HostWebhookListener, WebhookInboundResult } from './types.js';
+import type { WebhookSignatureTimestamp } from '../authoring/integrations/integrations.js';
 
 /** Where a signature is read from when the workspace declared no header of its own. */
 export const DEFAULT_WEBHOOK_SIGNATURE_HEADER = 'x-signature';
@@ -25,14 +26,6 @@ const DEFAULT_SIGNED_PAYLOAD_SEPARATOR = '.';
  * for. Nothing here is sniffed from the header: a scheme guessed from what happens to be present is
  * a scheme an attacker chooses by omitting a field.
  */
-export type WebhookSignatureTimestamp = {
-	readonly header?: string;
-	readonly field?: string;
-	readonly signatureField?: string;
-	readonly separator?: string;
-	readonly toleranceSeconds?: number;
-};
-
 /** `t=1614556800,v1=abc,v1=def` → every value filed under `label`, in order. */
 function elementValues(header: string, label: string): string[] {
 	return header.split(',').flatMap((element) => {

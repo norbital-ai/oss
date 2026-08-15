@@ -7,9 +7,13 @@
  */
 import { humanize } from '@norbital-ai/std';
 import { z } from 'zod';
+import { AiMessageSchema, type AiMessage } from '@norbital-ai/platform-utils/runtime/binding';
 import type { PodUiKeys } from '$lib/i18n/index.js';
 import { parsePublicMcpToolName } from '$lib/mcp/names.js';
-import { parseStoredGoalVerdict, parseStoredVerifierScheduled } from '$lib/shared/agent/goal-verdict.js';
+import {
+	parseStoredGoalVerdict,
+	parseStoredVerifierScheduled
+} from '$lib/shared/agent/goal-verdict.js';
 import { parseStoredSummary } from '$lib/shared/agent/intent.js';
 
 export type PanelText = {
@@ -54,12 +58,14 @@ export type PanelToolCall = {
 	readonly output: string | null;
 	readonly error: string | null;
 	readonly state: 'running' | 'complete' | 'failed' | 'needs_input';
-	readonly elicitation: readonly {
-		readonly id: string;
-		readonly message: string;
-		readonly mode?: 'form' | 'url';
-		readonly url?: string;
-	}[] | null;
+	readonly elicitation:
+		| readonly {
+				readonly id: string;
+				readonly message: string;
+				readonly mode?: 'form' | 'url';
+				readonly url?: string;
+		  }[]
+		| null;
 	/** Sandbox IPC and MCP are first-class families, not generic wrenches. */
 	readonly family: 'sandbox' | 'mcp' | null;
 	/**
@@ -106,12 +112,7 @@ export type PanelVerifier = {
 };
 
 export type PanelMessage =
-	| PanelText
-	| PanelReasoning
-	| PanelToolCall
-	| PanelCheckpoint
-	| PanelGoal
-	| PanelVerifier;
+	PanelText | PanelReasoning | PanelToolCall | PanelCheckpoint | PanelGoal | PanelVerifier;
 
 /**
  * Tool payloads are held behind a disclosure and capped.
@@ -188,9 +189,9 @@ export function toPanelMessages(
 	for (const record of records) {
 		const stored = storedMessage(record);
 		if (!stored || stored.role !== 'tool') continue;
-		const callId = stored.message.toolCallId;
+		const callId = stored.toolCallId;
 		if (typeof callId === 'string') {
-			const content = stored.message.content;
+			const content = stored.content;
 			let parsed: unknown = content;
 			if (typeof content === 'string') {
 				try {
@@ -244,7 +245,7 @@ export function toPanelMessages(
 		if (record.kind === 'summary') {
 			const stored = storedMessage(record);
 			const id = record.norbital_id;
-			const content = stored?.message.content;
+			const content = stored?.content;
 			if (typeof id === 'string' && typeof content === 'string') {
 				const parsed = parseStoredSummary(content);
 				output = [
@@ -262,7 +263,7 @@ export function toPanelMessages(
 		if (record.kind === 'goal') {
 			const stored = storedMessage(record);
 			const id = record.norbital_id;
-			const content = stored?.message.content;
+			const content = stored?.content;
 			if (typeof id === 'string' && typeof content === 'string') {
 				const scheduled = parseStoredVerifierScheduled(content);
 				if (scheduled) {
@@ -319,7 +320,7 @@ function toPanelRow(
 	if (typeof id !== 'string' || !stored) return [];
 	if (record.kind === 'usage') return [];
 	if (record.kind === 'reasoning') {
-		const content = stored.message.content;
+		const content = stored.content;
 		return typeof content === 'string' && content.trim()
 			? [{ kind: 'reasoning', key: id, content }]
 			: [];
@@ -328,13 +329,13 @@ function toPanelRow(
 	// that produced it. On its own it is an unattributed blob of JSON.
 	if (stored.role === 'tool') return [];
 
-	const raw = stored.message.toolCalls;
+	const raw = stored.toolCalls;
 	const calls: readonly unknown[] = Array.isArray(raw) ? raw : [];
 	const rows: PanelMessage[] = calls.map((call, index) =>
 		toToolCall(call, `${id}:${index}`, context, depth)
 	);
 
-	const body = stored.message.content;
+	const body = stored.content;
 	const content = typeof body === 'string' ? body : '';
 	const owningTurnStatus =
 		typeof record.turn_id === 'string' ? context.turnStatus.get(record.turn_id) : undefined;
@@ -397,7 +398,10 @@ function toToolCall(
 			: (metadata?.icon ?? 'lucide:wrench');
 	const family = mcpParsed ? 'mcp' : SANDBOX_AGENT_TOOLS.has(name) ? 'sandbox' : null;
 	const requests =
-		answered && isRecord(output) && output.resultType === 'input_required' && Array.isArray(output.requests)
+		answered &&
+		isRecord(output) &&
+		output.resultType === 'input_required' &&
+		Array.isArray(output.requests)
 			? output.requests
 			: null;
 	const elicitation = requests ? parseElicitationRequests(requests) : null;
@@ -470,25 +474,18 @@ function clamp(text: string, limit: number = PAYLOAD_LIMIT): string {
 	return text.length <= limit ? text : `${text.slice(0, limit)}…`;
 }
 
-/** A `parts[0]` entry that at least names its role — every other field stays unknown until read. */
-type StoredMessage = {
-	readonly role: string;
-	readonly message: Readonly<Record<string, unknown>>;
-};
-
 /** Reads the single `parts[0]` message a replica row is allowed to carry. */
-function storedMessage(record: Readonly<Record<string, unknown>>): StoredMessage | null {
+function storedMessage(record: Readonly<Record<string, unknown>>): AiMessage | null {
 	const parts = record.parts;
 	if (!Array.isArray(parts)) return null;
-	const message: unknown = parts[0];
-	if (!isRecord(message)) return null;
-	const role = message.role;
-	return typeof role === 'string' ? { role, message } : null;
+	const parsed = AiMessageSchema.safeParse(parts[0]);
+	return parsed.success ? parsed.data : null;
 }
 
 /** A plain object, as opposed to an array or a primitive the projectors cannot index. */
 // stupidity:allow Q4 -- named helper
-function isRecord(value: unknown): value is Record<string, unknown> { // stupidity:allow R5b -- projector boundary
+function isRecord(value: unknown): value is Record<string, unknown> {
+	// stupidity:allow R5b -- projector boundary
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -499,16 +496,6 @@ function isRecord(value: unknown): value is Record<string, unknown> { // stupidi
  * provider's own accounting. Nothing is derived: no token estimate, and above all no cost computed
  * from a price list, because a figure a reader takes for a bill has to be the bill.
  */
-export type PanelUsage = {
-	/** Tokens in the most recent request — how full the window actually was. */
-	readonly contextTokens: number | null;
-	/** The window those tokens sat in, when the host published one for the model. */
-	readonly contextLength: number | null;
-	readonly totalTokens: number;
-	/** Only when the host passed a cost through. `null` means unreported, never zero. */
-	readonly costUsd: number | null;
-};
-
 /** First finite number among the provider's spelling variants for one usage field. */
 function readNumber(
 	source: Readonly<Record<string, unknown>>,
@@ -525,7 +512,7 @@ function readNumber(
 export function toPanelUsage(
 	records: readonly Readonly<Record<string, unknown>>[],
 	contextLength: number | null = null
-): PanelUsage {
+) {
 	let contextTokens: number | null = null;
 	let totalTokens = 0;
 	let costUsd: number | null = null;
@@ -556,6 +543,7 @@ export function toPanelUsage(
 	}
 	return { contextTokens, contextLength, totalTokens, costUsd };
 }
+export type PanelUsage = ReturnType<typeof toPanelUsage>;
 
 /**
  * The conversation's durable totals, as the session row carries them.
@@ -564,18 +552,8 @@ export function toPanelUsage(
  * they survive the deletion of the messages that produced them — which is the whole point of storing
  * them at all.
  */
-export type SessionTotals = {
-	readonly costUsd: number;
-	readonly totalTokens: number;
-	readonly turnsCounted: number;
-	/** Turns whose host reported no cost. Non-zero means the total is a floor, not a figure. */
-	readonly turnsUnreported: number;
-};
-
 /** Reads the session row's durable usage counters, or null when nothing has settled. */
-export function toSessionTotals(
-	record: Readonly<Record<string, unknown>> | undefined
-): SessionTotals | null {
+export function toSessionTotals(record: Readonly<Record<string, unknown>> | undefined) {
 	if (!record) return null;
 	/** Treats a missing or non-finite counter as zero rather than dropping the totals. */
 	// stupidity:allow Q4 -- named helper
@@ -592,6 +570,7 @@ export function toSessionTotals(
 	// A session that has settled nothing has nothing to say, which is not the same as zero spend.
 	return totals.turnsCounted === 0 ? null : totals;
 }
+export type SessionTotals = NonNullable<ReturnType<typeof toSessionTotals>>;
 
 /** Walks checkpoint history to see whether the pending echo has already landed. */
 function containsPrompt(messages: readonly PanelMessage[], pending: string): boolean {

@@ -26,12 +26,15 @@
 		WEB_CHANNEL_ID,
 		buildConversationSelector,
 		listAccessibleChannels,
-		scopeConversationSessions,
 		sessionChannelId,
 		sessionVisibleInScope,
-		type ConversationSelectorLabels,
 		type ConversationSession
 	} from './conversation-selector.js';
+	import type { ChatSessionAggregate } from '$lib/shared/agent/context-window.js';
+	import {
+		ChatSessionMessagesSchema,
+		ChatSessionTurnsSchema
+	} from '@norbital-ai/platform-utils/system/workspace-schema';
 	import { writeAgentSurface } from './agent-activity-state.svelte.js';
 	import {
 		AGENT_TURN_STALE_MS,
@@ -210,7 +213,8 @@
 	}
 
 	/** Reconciles mention chip ranges after the writer edits the composer draft. */
-	function onComposerInput(): void { // stupidity:allow Q3 -- event handler
+	function onComposerInput(): void {
+		// stupidity:allow Q3 -- event handler
 		const element = mention.textarea;
 		if (!element) return;
 		mention.mentions = reconcileAfterEdit(mention.mentions, mention.lastDraft, element.value);
@@ -340,30 +344,8 @@
 	}
 	// ─────────────────────────────────────────────────────────────────────────────────────────────
 
-	type SessionRow = {
-		readonly norbital_id: string;
-		readonly automation_run_id: string | null;
-		readonly user_id: string;
-		readonly title: string;
-		readonly visibility: string;
-		readonly platform: string | null;
-		readonly channel_key: string | null;
-		readonly external_thread_id: string | null;
-		readonly messages: readonly Readonly<Record<string, unknown>>[];
-		readonly turns: readonly Readonly<Record<string, unknown>>[];
-	};
-	/** Maps a replicated chat_session row into the conversation-selector session shape. */
-	function toSelectorSession(session: SessionRow): ConversationSession {
-		return {
-			id: session.norbital_id,
-			title: session.title,
-			userId: session.user_id,
-			visibility: session.visibility,
-			platform: session.platform,
-			channelKey: session.channel_key,
-			externalThreadId: session.external_thread_id
-		};
-	}
+	type SessionRow = ConversationSession &
+		Pick<ChatSessionAggregate, 'automation_run_id' | 'messages' | 'turns'>;
 	const sessionQuery = $derived.by(() => {
 		try {
 			return getInitializedWorkspaceClient().db.chat_session?.findMany({
@@ -379,23 +361,21 @@
 			if (typeof row.norbital_id !== 'string') {
 				return [];
 			}
+			const messages = ChatSessionMessagesSchema.safeParse(row.messages);
+			const turns = ChatSessionTurnsSchema.safeParse(row.turns);
 			return [
 				{
 					norbital_id: row.norbital_id,
 					automation_run_id:
 						typeof row.automation_run_id === 'string' ? row.automation_run_id : null,
-					user_id: typeof row.user_id === 'string' ? row.user_id : 'unknown-user',
+					user_id: typeof row.user_id === 'string' ? row.user_id : '',
 					visibility: typeof row.visibility === 'string' ? row.visibility : 'personal',
 					platform: typeof row.platform === 'string' ? row.platform : null,
 					channel_key: typeof row.channel_key === 'string' ? row.channel_key : null,
 					external_thread_id:
 						typeof row.external_thread_id === 'string' ? row.external_thread_id : null,
-					messages: Array.isArray(row.messages)
-						? (row.messages as readonly Readonly<Record<string, unknown>>[])
-						: [],
-					turns: Array.isArray(row.turns)
-						? (row.turns as readonly Readonly<Record<string, unknown>>[])
-						: [],
+					messages: messages.success ? messages.data : [],
+					turns: turns.success ? turns.data : [],
 					title:
 						typeof row.title === 'string' && row.title.trim()
 							? row.title
@@ -436,14 +416,14 @@
 		return labels;
 	});
 	const selectorLabels = $derived.by(
-		(): ConversationSelectorLabels => ({
+		(): Parameters<typeof buildConversationSelector>[0]['labels'] => ({
 			web: t('pod.agent.webChannel'),
 			users: t('pod.agent.users'),
 			groups: t('pod.agent.groups'),
 			channelFallback: t('pod.agent.channelAgent')
 		})
 	);
-	const selectorSessions = $derived(sessions.map(toSelectorSession));
+	const selectorSessions = $derived(sessions);
 	const publicChannelKeys = $derived.by(() => {
 		const keys = new SvelteSet<string>();
 		const channels = platformState?.manifestContext?.manifest?.channels ?? {};
@@ -459,7 +439,7 @@
 		publicChannelKeys
 	});
 	const scopedSelectorSessions = $derived(
-		scopeConversationSessions(selectorSessions, conversationScope)
+		selectorSessions.filter((row) => sessionVisibleInScope(row, conversationScope))
 	);
 	const manifestChannels = $derived.by(() => {
 		const declared = platformState?.manifestContext?.manifest?.channels ?? {};
@@ -482,7 +462,7 @@
 			return selectedChannel;
 		}
 		const open = session.chatId
-			? selectorSessions.find((row) => row.id === session.chatId)
+			? selectorSessions.find((row) => row.norbital_id === session.chatId)
 			: undefined;
 		if (open) return sessionChannelId(open, selectorLabels);
 		return accessibleChannels[0]?.id ?? WEB_CHANNEL_ID;
@@ -529,7 +509,7 @@
 		session.chatId ??
 			(session.composingNew || channelSelectorSessions.length === 0
 				? undefined
-				: channelSelectorSessions[0].id)
+				: channelSelectorSessions[0].norbital_id)
 	);
 	const activeRunId = $derived.by(() => {
 		if (!activeChatId) return session.runId;
@@ -547,6 +527,8 @@
 		isAdmin &&
 			activeSession?.visibility === 'personal' &&
 			currentUserId !== null &&
+			typeof activeSession.user_id === 'string' &&
+			activeSession.user_id.length > 0 &&
 			activeSession.user_id !== currentUserId
 	);
 	const activeSessionIsReadOnly = $derived(
@@ -670,6 +652,21 @@
 		)
 	);
 
+	/** One timer for the in-flight turn. An inline `{@attach}` restarted it on every transcript tick. */
+	$effect(() => {
+		if (!composerLocked || agentHasSpoken) return;
+		const timer = window.setTimeout(() => {
+			session.waitedTooLong = true;
+			writeAgentSurface({
+				chatId: session.chatId,
+				composingNew: session.composingNew,
+				pending: false,
+				failed: true
+			});
+		}, AGENT_TURN_STALE_MS);
+		return () => window.clearTimeout(timer);
+	});
+
 	/** Pushes composer identity into the shared shell and FAB activity store. */
 	function syncAgentSurface(): void {
 		writeAgentSurface({
@@ -760,7 +757,8 @@
 	}
 
 	/** Switches the panel to an existing replicated session. */
-	function selectConversation(value: string | null): void { // stupidity:allow Q3 -- event handler
+	function selectConversation(value: string | null): void {
+		// stupidity:allow Q3 -- event handler
 		if (!value) return;
 		const row = sessions.find((candidate) => candidate.norbital_id === value);
 		if (!row) return;
@@ -770,18 +768,19 @@
 		session.echo = null;
 		session.sendFailure = null;
 		session.waitedTooLong = false;
-		selectedChannel = sessionChannelId(toSelectorSession(row), selectorLabels);
+		selectedChannel = sessionChannelId(row, selectorLabels);
 		syncAgentSurface();
 	}
 
 	/** Filters the conversation list to one member and drops a thread outside that scope. */
-	function selectScope(userId: string): void { // stupidity:allow Q3 -- event handler
+	function selectScope(userId: string): void {
+		// stupidity:allow Q3 -- event handler
 		scopeUserId = userId;
 		if (session.chatId && sessions.some((row) => row.norbital_id === session.chatId)) {
 			const current = sessions.find((row) => row.norbital_id === session.chatId);
 			if (
 				current &&
-				!sessionVisibleInScope(toSelectorSession(current), {
+				!sessionVisibleInScope(current, {
 					scopeUserId: userId,
 					currentUserId,
 					isAdmin,
@@ -802,10 +801,7 @@
 		selectedChannel = channelId;
 		if (session.chatId) {
 			const current = sessions.find((row) => row.norbital_id === session.chatId);
-			if (
-				current &&
-				sessionChannelId(toSelectorSession(current), selectorLabels) !== channelId
-			) {
+			if (current && sessionChannelId(current, selectorLabels) !== channelId) {
 				session.chatId = undefined;
 				session.runId = undefined;
 				session.composingNew = false;
@@ -818,7 +814,8 @@
 	}
 
 	/** Clears the active thread so the next send creates a new conversation. */
-	function startConversation(): void { // stupidity:allow Q3 -- event handler
+	function startConversation(): void {
+		// stupidity:allow Q3 -- event handler
 		scopeUserId = currentUserId;
 		selectedChannel = WEB_CHANNEL_ID;
 		session.chatId = undefined;
@@ -831,7 +828,8 @@
 	}
 
 	/** Routes keyboard input between the mention menu and the send action. */
-	function onKeydown(event: KeyboardEvent): void { // stupidity:allow Q3 -- event handler
+	function onKeydown(event: KeyboardEvent): void {
+		// stupidity:allow Q3 -- event handler
 		if (menuOpen) {
 			if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
 				event.preventDefault();
@@ -907,7 +905,7 @@
 		justify="between"
 		gap="sm"
 		shrink={false}
-		class="border-b px-3 py-2.5 sm:px-4"
+		class={`border-b bg-card ${headerOrb ? 'px-3 py-2.5 sm:px-4' : 'pt-1 pr-3 pb-3 pl-[3.75rem] sm:pr-5 sm:pl-16'}`}
 	>
 		{#if headerOrb}
 			<div
@@ -932,6 +930,7 @@
 				onValueChange={selectScope}
 				class="w-28"
 			/>
+			<span aria-hidden="true" class="h-5 w-px shrink-0 bg-border"></span>
 		{/if}
 		{#if showChannelPicker}
 			<ConversationScopePicker
@@ -968,11 +967,7 @@
 		<Bound size="full" grow>
 			<Scroll name={t('pod.agent.askAboutWorkspace')} axis="y" class="px-6 py-10">
 				<Center measure="narrow" layout="stack" gap="md" align="center" class="text-center">
-					<Inline
-						justify="center"
-						align="center"
-						class="size-12 rounded-xl bg-card shadow-xs"
-					>
+					<Inline justify="center" align="center" class="size-12 rounded-xl bg-card shadow-xs">
 						<IconWrapper name="product:pod" class="size-7 text-foreground" />
 					</Inline>
 					<h2 class="text-base font-semibold tracking-[-0.015em] text-foreground">
@@ -1018,19 +1013,6 @@
 						aria-label={session.waitedTooLong
 							? t('pod.agent.failed')
 							: t('pod.agent.agentIsWorking')}
-						{@attach () => {
-							if (!composerLocked || agentHasSpoken) return;
-							const timer = window.setTimeout(() => {
-								session.waitedTooLong = true;
-								writeAgentSurface({
-									chatId: session.chatId,
-									composingNew: session.composingNew,
-									pending: false,
-									failed: true
-								});
-							}, AGENT_TURN_STALE_MS);
-							return () => window.clearTimeout(timer);
-						}}
 					>
 						<span class="px-1 text-tiny font-medium text-muted-foreground"
 							>{t('pod.agent.agent')}</span

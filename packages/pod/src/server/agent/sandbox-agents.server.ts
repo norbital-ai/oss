@@ -14,32 +14,56 @@ import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { updateRecord } from '$lib/server/collection/collection_ops.server.js';
 import { appendChatMessage, readChatSession } from '$lib/server/agent/chat-session.server.js';
 import { parseStoredGoalVerdict } from '$lib/shared/agent/goal-verdict.js';
+import type { GoalVerdict } from '$lib/shared/agent/goal-verdict.js';
+import type { ChatSessionMessage } from '$lib/shared/agent/context-window.js';
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 import type { AiToolSpec } from '@norbital-ai/platform-utils/runtime/binding';
+import {
+	automation_run,
+	chat_session
+} from '@norbital-ai/platform-utils/system/workspace-schema';
+import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 
-export type DueSandboxWaiter = {
-	readonly runId: string;
-	readonly waiterSessionId: string;
-	readonly targetSessionId: string;
-	readonly sandboxKey: string;
-	readonly task: string;
-	readonly input: Record<string, unknown>;
-	readonly wait: Record<string, unknown>;
-};
+const SandboxWaitSchema = z
+	.object({
+		targetSessionId: z.string(),
+		waiterSessionId: z.string(),
+		sandboxKey: z.string(),
+		task: z.string().default('Continue the parked work.'),
+		resumedAt: z.string().optional()
+	})
+	.passthrough();
+const recordSchema = z.record(z.string(), z.unknown());
+
+const SandboxWaitInputSchema = z
+	.object({
+		sandbox_wait: SandboxWaitSchema
+	})
+	.passthrough();
+
+export const DueSandboxWaiterSchema = z.object({
+	runId: z.string(),
+	waiterSessionId: z.string(),
+	targetSessionId: z.string(),
+	sandboxKey: z.string(),
+	task: z.string(),
+	input: z.record(z.string(), z.unknown()),
+	wait: SandboxWaitSchema
+});
+export type DueSandboxWaiter = z.infer<typeof DueSandboxWaiterSchema>;
 
 export const SANDBOX_WAIT_RESULT = 'sandbox_wait';
 
-export type AgentSandbox =
-	| { readonly kind: 'user'; readonly id: string }
-	| { readonly kind: 'channel'; readonly id: string };
+export const AgentSandboxSchema = z.discriminatedUnion('kind', [
+	z.object({ kind: z.literal('user'), id: z.string() }),
+	z.object({ kind: z.literal('channel'), id: z.string() })
+]);
+export type AgentSandbox = z.infer<typeof AgentSandboxSchema>;
 
-export type SessionSandboxRow = {
-	readonly norbital_id: string;
-	readonly user_id: string;
-	readonly channel_key: string | null;
-	readonly title: string;
-	readonly automation_run_id: string | null;
-};
+export type SessionSandboxRow = Pick<
+	typeof chat_session.$inferSelect,
+	'norbital_id' | 'user_id' | 'channel_key' | 'title' | 'automation_run_id'
+>;
 
 const sessionIdInput = z.object({
 	sessionId: z.string().uuid()
@@ -63,10 +87,9 @@ export function sandboxKey(sandbox: AgentSandbox): string {
 	}
 }
 
-export function sandboxFromSession(row: {
-	readonly user_id: string;
-	readonly channel_key: string | null;
-}): AgentSandbox {
+export function sandboxFromSession(
+	row: Pick<SessionSandboxRow, 'user_id' | 'channel_key'>
+): AgentSandbox {
 	if (typeof row.channel_key === 'string' && row.channel_key.length > 0) {
 		return { kind: 'channel', id: row.channel_key };
 	}
@@ -126,7 +149,11 @@ export async function executeSandboxAgentTool(input: {
 			return messageSandboxAgent(input.sessionId, parsed.sessionId, parsed.message);
 		}
 		case 'await_sandbox_agent':
-			return awaitSandboxAgent(input.sessionId, sessionIdInput.parse(input.args).sessionId, input.spec);
+			return awaitSandboxAgent(
+				input.sessionId,
+				sessionIdInput.parse(input.args).sessionId,
+				input.spec
+			);
 		default:
 			return null;
 	}
@@ -136,19 +163,20 @@ export async function listDueSandboxWaiters(
 	completedSessionId: string
 ): Promise<readonly DueSandboxWaiter[]> {
 	const ctx = getWorkspace({ provision: true });
-	const waiters = await ctx.tenantDb.query<{
-		norbital_id: string;
-		input: unknown;
-	}>({
-		text: `SELECT norbital_id, input
-		         FROM automation_run
-		        WHERE input -> 'sandbox_wait' ->> 'targetSessionId' = $1
-		          AND input -> 'sandbox_wait' ->> 'resumedAt' IS NULL
-		        LIMIT 20`,
-		values: [completedSessionId]
-	});
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const waiters = await db
+		.select({ norbital_id: automation_run.norbital_id, input: automation_run.input })
+		.from(automation_run)
+		.where(
+			and(
+				sql`${automation_run.input} -> 'sandbox_wait' ->> 'targetSessionId' = ${completedSessionId}`,
+				sql`${automation_run.input} -> 'sandbox_wait' ->> 'resumedAt' IS NULL`
+			)
+		)
+		.limit(20);
 	const due: DueSandboxWaiter[] = [];
-	for (const waiter of waiters.rows) {
+	for (const waiter of waiters) {
 		const claimed = await claimDueWaiter(waiter.norbital_id, waiter.input, completedSessionId);
 		if (claimed) due.push(claimed);
 	}
@@ -164,10 +192,6 @@ export async function sandboxWaitResumeMessage(targetSessionId: string): Promise
 		'Continue the original request.',
 		'</sandbox-wait>'
 	].join('\n');
-}
-
-export async function loadSandboxSession(sessionId: string): Promise<SessionSandboxRow> {
-	return loadSessionRow(sessionId);
 }
 
 export async function markSandboxWaitResumed(waiter: DueSandboxWaiter): Promise<void> {
@@ -190,7 +214,7 @@ export async function markSandboxWaitResumed(waiter: DueSandboxWaiter): Promise<
 }
 
 async function listSandboxAgents(sessionId: string): Promise<Record<string, unknown>> {
-	const self = await loadSessionRow(sessionId);
+	const self = await loadSandboxSession(sessionId);
 	const sandbox = sandboxFromSession(self);
 	const peers = await listPeerRows(sandbox);
 	return {
@@ -260,16 +284,20 @@ async function awaitSandboxAgent(
 			latest: latestOutcome(session.messages)
 		};
 	}
-	const caller = await loadSessionRow(callerSessionId);
+	const caller = await loadSandboxSession(callerSessionId);
 	if (!caller.automation_run_id) {
 		throw new Error('This session has no run to park while waiting.');
 	}
 	const ctx = getWorkspace({ provision: true });
-	const existing = await ctx.tenantDb.query<{ input: unknown }>({
-		text: `SELECT input FROM automation_run WHERE norbital_id = $1::uuid`,
-		values: [caller.automation_run_id]
-	});
-	const input = isRecord(existing.rows[0]?.input) ? existing.rows[0].input : {};
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const existing = await db
+		.select({ input: automation_run.input })
+		.from(automation_run)
+		.where(eq(automation_run.norbital_id, caller.automation_run_id))
+		.limit(1);
+	const parsedInput = recordSchema.safeParse(existing[0]?.input);
+	const input = parsedInput.success ? parsedInput.data : {};
 	await updateRecord(
 		ctx,
 		'automation_run',
@@ -300,16 +328,15 @@ async function claimDueWaiter(
 	rawInput: unknown,
 	completedSessionId: string
 ): Promise<DueSandboxWaiter | null> {
-	const input = isRecord(rawInput) ? rawInput : {};
-	const wait = isRecord(input.sandbox_wait) ? input.sandbox_wait : null;
-	if (!wait || wait.resumedAt) return null;
-	const waiterSessionId = typeof wait.waiterSessionId === 'string' ? wait.waiterSessionId : null;
-	const expectedSandbox = typeof wait.sandboxKey === 'string' ? wait.sandboxKey : null;
-	const task = typeof wait.task === 'string' ? wait.task : 'Continue the parked work.';
-	if (!waiterSessionId || !expectedSandbox) return null;
+	const parsed = SandboxWaitInputSchema.safeParse(rawInput);
+	if (!parsed.success || parsed.data.sandbox_wait.resumedAt) return null;
+	const input = parsed.data;
+	const wait = input.sandbox_wait;
+	const waiterSessionId = wait.waiterSessionId;
+	const expectedSandbox = wait.sandboxKey;
 
-	const waiter = await loadSessionRow(waiterSessionId);
-	const completed = await loadSessionRow(completedSessionId);
+	const waiter = await loadSandboxSession(waiterSessionId);
+	const completed = await loadSandboxSession(completedSessionId);
 	if (sandboxKey(sandboxFromSession(waiter)) !== expectedSandbox) return null;
 	if (!sameSandbox(sandboxFromSession(waiter), sandboxFromSession(completed))) return null;
 	return {
@@ -317,7 +344,7 @@ async function claimDueWaiter(
 		waiterSessionId,
 		targetSessionId: completedSessionId,
 		sandboxKey: expectedSandbox,
-		task,
+		task: wait.task,
 		input,
 		wait
 	};
@@ -327,60 +354,54 @@ async function assertSameSandboxSession(
 	callerSessionId: string,
 	targetSessionId: string
 ): Promise<SessionSandboxRow> {
-	const caller = await loadSessionRow(callerSessionId);
-	const target = await loadSessionRow(targetSessionId);
+	const caller = await loadSandboxSession(callerSessionId);
+	const target = await loadSandboxSession(targetSessionId);
 	if (!sameSandbox(sandboxFromSession(caller), sandboxFromSession(target))) {
 		throw new Error('Permission denied: that agent is outside this sandbox.');
 	}
 	return target;
 }
 
-async function loadSessionRow(sessionId: string): Promise<SessionSandboxRow> {
+export async function loadSandboxSession(sessionId: string): Promise<SessionSandboxRow> {
 	const ctx = getWorkspace({ provision: true });
-	const result = await ctx.tenantDb.query<SessionSandboxRow>({
-		text: `SELECT norbital_id, user_id, channel_key, title, automation_run_id
-		         FROM chat_session
-		        WHERE norbital_id = $1::uuid
-		        LIMIT 1`,
-		values: [sessionId]
-	});
-	const row = result.rows[0];
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const row = (
+		await db.select().from(chat_session).where(eq(chat_session.norbital_id, sessionId)).limit(1)
+	)[0];
 	if (!row) throw new Error('Agent session does not exist');
 	return row;
 }
 
 async function listPeerRows(sandbox: AgentSandbox): Promise<readonly SessionSandboxRow[]> {
 	const ctx = getWorkspace({ provision: true });
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
 	if (sandbox.kind === 'channel') {
-		const result = await ctx.tenantDb.query<SessionSandboxRow>({
-			text: `SELECT norbital_id, user_id, channel_key, title, automation_run_id
-			         FROM chat_session
-			        WHERE channel_key = $1
-			        ORDER BY norbital_updated_at DESC
-			        LIMIT 50`,
-			values: [sandbox.id]
-		});
-		return result.rows;
+		return db
+			.select()
+			.from(chat_session)
+			.where(eq(chat_session.channel_key, sandbox.id))
+			.orderBy(desc(chat_session.norbital_updated_at))
+			.limit(50);
 	}
-	const result = await ctx.tenantDb.query<SessionSandboxRow>({
-		text: `SELECT norbital_id, user_id, channel_key, title, automation_run_id
-		         FROM chat_session
-		        WHERE user_id = $1::uuid
-		          AND (channel_key IS NULL OR channel_key = '')
-		          AND visibility = 'personal'
-		        ORDER BY norbital_updated_at DESC
-		        LIMIT 50`,
-		values: [sandbox.id]
-	});
-	return result.rows;
+	return db
+		.select()
+		.from(chat_session)
+		.where(
+			and(
+				eq(chat_session.user_id, sandbox.id),
+				or(isNull(chat_session.channel_key), eq(chat_session.channel_key, '')),
+				eq(chat_session.visibility, 'personal')
+			)
+		)
+		.orderBy(desc(chat_session.norbital_updated_at))
+		.limit(50);
 }
 
-function latestOutcome(messages: readonly { kind: string; parts?: readonly { content?: unknown }[] }[]): {
-	readonly text: string | null;
-	readonly goal: { readonly achieved: boolean; readonly summary: string } | null;
-} {
+function latestOutcome(messages: readonly ChatSessionMessage[]) {
 	let text: string | null = null;
-	let goal: { readonly achieved: boolean; readonly summary: string } | null = null;
+	let goal: Pick<GoalVerdict, 'achieved' | 'summary'> | null = null;
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const row = messages[index];
 		const content = row?.parts?.[0]?.content;
@@ -396,8 +417,4 @@ function latestOutcome(messages: readonly { kind: string; parts?: readonly { con
 		if (text && goal) break;
 	}
 	return { text, goal };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -6,6 +6,42 @@
  * a recent tail so the last tool exchange is not lost inside a recap.
  */
 import type { AiMessage } from '@norbital-ai/platform-utils/runtime/binding';
+import type { chat_session } from '@norbital-ai/platform-utils/system/workspace-schema';
+
+type ChatSessionRow = typeof chat_session.$inferSelect;
+
+/** Transcript item inferred from the JSON schema owned by the chat_session collection. */
+export type ChatSessionMessage = NonNullable<ChatSessionRow['messages']>[number];
+
+/** Turn lifecycle inferred from the JSON schema owned by the chat_session collection. */
+export type ChatSessionTurn = NonNullable<ChatSessionRow['turns']>[number];
+
+/** The conversation fields Pod mutates and sends to the client, composed from its collection row. */
+export type ChatSessionAggregate = Omit<
+	Pick<
+		ChatSessionRow,
+		| 'norbital_id'
+		| 'norbital_row_version'
+		| 'user_id'
+		| 'automation_run_id'
+		| 'title'
+		| 'visibility'
+		| 'platform'
+		| 'channel_key'
+		| 'external_thread_id'
+		| 'messages'
+		| 'turns'
+		| 'usage_cost_usd'
+		| 'usage_total_tokens'
+		| 'usage_turns_counted'
+		| 'usage_turns_unreported'
+	>,
+	'norbital_row_version' | 'messages' | 'turns'
+> & {
+	readonly norbital_row_version: number;
+	readonly messages: readonly ChatSessionMessage[];
+	readonly turns: readonly ChatSessionTurn[];
+};
 
 /** Compact when estimated prompt tokens reach this fraction of the model's context. */
 export const COMPACTION_CONTEXT_RATIO = 0.8;

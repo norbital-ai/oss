@@ -3,6 +3,7 @@ import type {
 	CollectionRelationship
 } from '@norbital-ai/platform-utils/collection';
 import { humanize } from '@norbital-ai/std/string';
+import type { FilterCollectionDefinition } from './collection-table-filter-fields.js';
 
 export interface CollectionAppliedFilterCondition {
 	readonly key: string;
@@ -15,12 +16,7 @@ export interface CollectionAppliedFilterCondition {
 	readonly lookupTarget?: string;
 }
 
-export interface AppliedFilterCollectionDefinition {
-	readonly name: string;
-	readonly fields: readonly CollectionField[];
-	readonly recordLabel?: string | null;
-	readonly relationships?: readonly CollectionRelationship[];
-}
+export type AppliedFilterCollectionDefinition = FilterCollectionDefinition;
 
 function linkedLabel(field: CollectionField): string {
 	return (field.label ?? humanize(field.name)).replace(/\s+id$/i, '').trim();

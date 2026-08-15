@@ -21,6 +21,8 @@ import { parseAdmitHeaders, type PodAdmit } from './admit.js';
 import { createCallRequest, headerLookup, readFetchRequest } from './call-request.js';
 import { runWithPodCall } from './pod-call.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
+import { z } from 'zod';
+import { typeGuard } from '@norbital-ai/std/schema';
 
 // This one re-export is the bundle contract, not a barrel: the generated server entry that
 // `vite/index.ts` writes imports `getTenantManifest` from `server/entry.js` (it needs the manifest
@@ -54,12 +56,13 @@ function cookieValue(request: PodRequestEvent['request'], name: string): string 
 
 const ADMIT_HEADER_NAMES = new Set(['x-norbital-timeout-ms', 'x-norbital-deadline-at']);
 
-export type HttpDispatchPayload = {
-	readonly method: string;
-	readonly search?: string;
-	readonly headers: Record<string, string>;
-	readonly body: string | null;
-};
+export const HttpDispatchPayloadSchema = z.object({
+	method: z.string(),
+	search: z.string().optional(),
+	headers: z.record(z.string(), z.string()),
+	body: z.string().nullable()
+});
+export type HttpDispatchPayload = z.infer<typeof HttpDispatchPayloadSchema>;
 
 /** Strip admit headers so the guest never sizes work from a client- or host-written costume. */
 function identityHeaders(headers: Record<string, string>): Record<string, string> {
@@ -73,15 +76,7 @@ function identityHeaders(headers: Record<string, string>): Record<string, string
 
 /** True when `payload` is the HTTP-shaped tenant call, not a host-command kind. */
 function isHttpDispatchPayload(payload: unknown): payload is HttpDispatchPayload {
-	if (payload == null || typeof payload !== 'object') return false;
-	const record = payload as Record<string, unknown>;
-	return (
-		typeof record.method === 'string' &&
-		record.headers != null &&
-		typeof record.headers === 'object' &&
-		!Array.isArray(record.headers) &&
-		'body' in record
-	);
+	return typeGuard(HttpDispatchPayloadSchema, payload);
 }
 
 /** Path the existing runtime handlers already understand. Never `tenant.local`. */
@@ -130,7 +125,8 @@ function readHostIdentity(payload: unknown): PodHostIdentity | null {
 	const source = nested as Record<string, unknown>;
 	const userId = typeof source.userId === 'string' ? source.userId : '';
 	const organizationId = typeof source.organizationId === 'string' ? source.organizationId : '';
-	const organizationName = typeof source.organizationName === 'string' ? source.organizationName : '';
+	const organizationName =
+		typeof source.organizationName === 'string' ? source.organizationName : '';
 	if (!userId && !organizationId) return null;
 	return {
 		userId,

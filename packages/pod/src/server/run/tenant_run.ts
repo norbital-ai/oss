@@ -98,18 +98,24 @@ export const runtimeRunRequestSchema = z.union([
 			action: z.literal('admit'),
 			occurrenceId: z.string().min(1).max(512),
 			artifact: z.object({
-				artifactId: z.string().min(1).max(512), checkpointId: z.string().min(1).max(512),
-				treeHash: z.string().min(1).max(512), runtimeVersion: z.string().min(1).max(128)
+				artifactId: z.string().min(1).max(512),
+				checkpointId: z.string().min(1).max(512),
+				treeHash: z.string().min(1).max(512),
+				runtimeVersion: z.string().min(1).max(128)
 			})
 		})
 		.strict(),
 	z.object({
 		kind: z.literal('automation-events'),
 		action: z.enum(['admit', 'run']),
-		artifact: z.object({
-			artifactId: z.string().min(1).max(512), checkpointId: z.string().min(1).max(512),
-			treeHash: z.string().min(1).max(512), runtimeVersion: z.string().min(1).max(128)
-		}).optional(),
+		artifact: z
+			.object({
+				artifactId: z.string().min(1).max(512),
+				checkpointId: z.string().min(1).max(512),
+				treeHash: z.string().min(1).max(512),
+				runtimeVersion: z.string().min(1).max(128)
+			})
+			.optional(),
 		receiptId: z.string().uuid().optional(),
 		limit: z.number().int().min(1).max(1000).optional()
 	}),
@@ -319,7 +325,8 @@ export async function executeAutomationHandler(params: {
 		params.automationName.startsWith('channel:')
 	) {
 		const snapshot = durableAgentSnapshotFromScope(params.scope);
-		if (!snapshot) throw new Error(`Agent turn receipt '${params.automationName}' is missing its snapshot`);
+		if (!snapshot)
+			throw new Error(`Agent turn receipt '${params.automationName}' is missing its snapshot`);
 		try {
 			return await runDurableAgentAutomation({
 				automationName:
@@ -514,7 +521,7 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 						subjectHmac: request.subjectHmac ?? null
 					});
 				default:
-					request.action satisfies never;
+					request satisfies never;
 					throw new Error('Unknown identity host-command action');
 			}
 		}

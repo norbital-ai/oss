@@ -250,6 +250,10 @@ describe('Norbital agent orb', () => {
 		expect(panel).toMatch(/IconWrapper name="product:pod"/);
 		expect(panel).toMatch(/Spinner/);
 		expect(panel).toMatch(/AGENT_TURN_STALE_MS/);
+		expect(panel).toMatch(/\$effect\(\(\) => \{/);
+		expect(panel).not.toContain('{@attach () => {');
+		expect(panel).toMatch(/activeSession\.user_id\.length > 0/);
+		expect(panel).not.toMatch(/unknown-user/);
 		expect(panel).toMatch(/state="failed"/);
 		expect(panel).not.toMatch(/NorbitalThinkingOrb state="idle"/);
 		expect(transcript).toMatch(/Spinner/);

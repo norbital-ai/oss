@@ -117,7 +117,7 @@ export default definePodHost({
 			stdio: 'pipe'
 		});
 		try {
-			await waitForOutput(running, /Pod listening at/);
+			await waitForOutput(running, /Reference host listening at/);
 			const response = await fetch(`http://127.0.0.1:${environment.POD_PORT}/`);
 			expect(response.status).toBe(200);
 		} finally {
@@ -141,7 +141,7 @@ export default definePodHost({
 			stdio: 'pipe'
 		});
 		const output = await waitForOutput(refused, /unavailable runtime facilities: ai/);
-		expect(output).not.toContain('Pod listening at');
+		expect(output).not.toContain('Reference host listening at');
 		if (refused.exitCode === null) {
 			await new Promise<void>((resolve) => refused.once('exit', () => resolve()));
 		}

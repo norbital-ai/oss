@@ -2,7 +2,11 @@ import type { NorbitalManifest } from '$lib/manifest';
 import type { UserOrganizationInfo } from '$lib/server/bootstrap/workspace_store.js';
 import type { TBaseScope, TScopeRequestor } from '$lib/ui/state/types.js';
 import type { CollectionColumnMap } from '@norbital-ai/platform-utils/manifest/context';
-import type { WorkspaceBillingSummary } from '@norbital-ai/platform-utils/runtime/binding';
+import type {
+	WorkspaceBillingSummary,
+	WorkspaceImpersonationSummary
+} from '@norbital-ai/platform-utils/runtime/binding';
+export type { WorkspaceImpersonationSummary as TenantWorkspaceImpersonation } from '@norbital-ai/platform-utils/runtime/binding';
 
 export type TenantWorkspacePolicyGrant = {
 	readonly id: string;
@@ -67,7 +71,7 @@ export type TenantWorkspaceShellData = {
 	 * Admin team impersonation state, when the host supplies it. Absent for
 	 * non-admins, so the account menu hides the picker rather than asking.
 	 */
-	readonly impersonation?: TenantWorkspaceImpersonation;
+	readonly impersonation?: WorkspaceImpersonationSummary;
 };
 
 /** The client-visible projection of a `HostAppPlugin`; `adminOnly` is resolved server-side. */
@@ -77,12 +81,4 @@ export type TenantWorkspaceHostPlugin = {
 	readonly icon: string | null;
 	readonly entry: string;
 	readonly placement: 'sidebar' | 'settings' | 'footer';
-};
-
-/** Admin team impersonation state projected from the host, mirroring `WorkspaceImpersonation`. */
-export type TenantWorkspaceImpersonation = {
-	readonly isAdmin: boolean;
-	readonly isActive: boolean;
-	readonly activeTeamIds: readonly string[];
-	readonly teams: readonly { norbital_id: string; name: string | null }[];
 };

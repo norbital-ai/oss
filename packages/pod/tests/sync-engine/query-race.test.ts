@@ -127,7 +127,9 @@ describe('findMany local path vs another collection catch-up', () => {
 				return raw.query(sql, params);
 			},
 			exec: (sql) => raw.exec(sql),
-			close: () => raw.close?.()
+			close: async () => {
+				await raw.close?.();
+			}
 		};
 
 		let releaseOrdersRemainder = () => {};
@@ -143,9 +145,7 @@ describe('findMany local path vs another collection catch-up', () => {
 					if (ordersPages > 1) await ordersRemainderBlocked;
 					return new Response(
 						JSON.stringify({
-							rows: [
-								{ norbital_id: `o${ordersPages}`, norbital_row_version: 1, status: 'open' }
-							],
+							rows: [{ norbital_id: `o${ordersPages}`, norbital_row_version: 1, status: 'open' }],
 							nextCursor: ordersPages === 1 ? 'more' : null,
 							watermark: '0'
 						}),

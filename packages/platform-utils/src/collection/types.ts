@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import type {
 	CountWireSchema,
 	CollectionFilterSchema,
@@ -12,6 +12,9 @@ import type {
 	UpdateManyWireSchema,
 	UpdateWireSchema
 } from '../remote/collection_wire_schemas.js';
+
+export const CollectionMutationActionSchema = z.enum(['create', 'update', 'delete']);
+export type CollectionMutationAction = z.infer<typeof CollectionMutationActionSchema>;
 
 export interface CollectionRecord {
 	readonly [field: string]: unknown;

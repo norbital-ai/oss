@@ -39,23 +39,13 @@ vi.mock('$lib/server/facilities.js', () => ({
 	})
 }));
 
-const { channelAgentSpec, interactiveAgentSpec, interactiveAgentStartSpec } =
+const { channelAgentSpec, interactiveAgentSpec } =
 	await import('../../src/server/agent/agent-spec.server.js');
 
 describe('the tools each entry point names', () => {
 	it('does not list sandbox host tools on the interactive spec', async () => {
 		host.listCalls = 0;
 		const spec = await interactiveAgentSpec('Assist with questions about this workspace.');
-		expect(spec.access).toBe('write');
-		expect(spec.tools).toEqual(['list_quotes', 'create_quote']);
-		expect(spec.hostTools).toBeUndefined();
-		expect(spec.mcpServers).toEqual(['stripe']);
-		expect(host.listCalls).toBe(0);
-	});
-
-	it('does not wait on the host tool inventory when synthesizing a start-path spec', () => {
-		host.listCalls = 0;
-		const spec = interactiveAgentStartSpec('Inspect this workspace.');
 		expect(spec.access).toBe('write');
 		expect(spec.tools).toEqual(['list_quotes', 'create_quote']);
 		expect(spec.hostTools).toBeUndefined();

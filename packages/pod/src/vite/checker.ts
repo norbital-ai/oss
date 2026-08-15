@@ -216,6 +216,14 @@ export async function checkPodWorkspace(
 export async function runSvelteCheck(root: string): Promise<void> {
 	const result = await checkPodWorkspace(root, { mode: 'build' });
 	if (!result.valid) {
-		throw new Error(`Pod workspace has ${result.diagnostics.length} type-check error(s)`);
+		throw new Error(
+			[
+				`Pod workspace has ${result.diagnostics.length} type-check error(s)`,
+				...result.diagnostics.map(
+					(diagnostic) =>
+						`${diagnostic.file}:${diagnostic.start.line}:${diagnostic.start.column} ${diagnostic.message}`
+				)
+			].join('\n')
+		);
 	}
 }

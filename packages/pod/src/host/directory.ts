@@ -4,10 +4,14 @@
  * The SQL is the same the guest used for `seats` / `membership` / `invite-email`. Guest wrappers
  * still call these during `resolve-subject` (which stays a named guest function).
  */
-import type { HostDbBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { UserRoleSchema, type TSeatCensus } from '@norbital-ai/platform-utils/system/types';
 
-export type HostDirectoryDb = Pick<HostDbBinding, 'query'>;
+export type HostDirectoryDb = {
+	query(
+		sql: string,
+		params?: readonly unknown[]
+	): Promise<{ readonly rows: readonly unknown[]; readonly rowCount?: number }>;
+};
 
 /** Billable seats: active humans only, so an agent user never appears on an invoice. */
 export async function seatCensusOnDb(db: HostDirectoryDb): Promise<TSeatCensus> {
@@ -35,11 +39,13 @@ export async function workspaceMembershipOnDb(
 	const result = await db.query(
 		`SELECT email, role, status FROM "user" WHERE kind = 'human' ORDER BY email`
 	);
-	return (result.rows as readonly {
-		email: string;
-		role: string | null;
-		status: string | null;
-	}[]).map((row) => ({
+	return (
+		result.rows as readonly {
+			email: string;
+			role: string | null;
+			status: string | null;
+		}[]
+	).map((row) => ({
 		email: row.email,
 		role: row.role ?? 'basic',
 		status: row.status ?? 'active'

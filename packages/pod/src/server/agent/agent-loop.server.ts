@@ -1,4 +1,10 @@
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
+import { ManifestAutomationAgentSpecSchema } from '@norbital-ai/platform-utils/manifest/types';
+import {
+	automation_run,
+	chat_session
+} from '@norbital-ai/platform-utils/system/workspace-schema';
+import { eq } from 'drizzle-orm';
 import { PLATFORM_AGENT_READ_TOOL_NAMES } from '$lib/authoring/automations/platform-agent-tools.js';
 import type { BeforeApi } from '$lib/authoring/workspace/hook-api.js';
 import { createBeforeApi } from '$lib/server/collection/hook-api.server.js';
@@ -35,10 +41,8 @@ import {
 	updateChatTurn,
 	type MutableChatSessionAggregate
 } from '$lib/server/agent/chat-session.server.js';
-import {
-	composeMentionContext,
-	type AgentMentionInput
-} from '$lib/server/agent/agent-mentions.server.js';
+import { composeMentionContext } from '$lib/server/agent/agent-mentions.server.js';
+import { MentionRecordHitSchema, type MentionRecordHit } from '$lib/shared/agent/mention.js';
 import { executeMcpTool } from '$lib/server/agent/mcp-tools.server.js';
 import {
 	allowedCollections,
@@ -83,11 +87,13 @@ import type {
 	AiToolCall,
 	AiToolSpec
 } from '@norbital-ai/platform-utils/runtime/binding';
+import { AiChatResultSchema } from '@norbital-ai/platform-utils/runtime/binding';
 import {
 	automationReplayStorage,
 	isAutomationEffectYield,
 	replayAutomationAi
 } from '$lib/server/run/automation-replay.server.js';
+import { requireAdmitArtifact } from '$lib/server/run/admit-artifact.js';
 import { resolveRequestorBaseScope } from '$lib/server/bootstrap/resolve_workspace.js';
 import { z } from 'zod';
 
@@ -142,24 +148,17 @@ async function selectedModelContextLength(spec: AgentAutomationSpec): Promise<nu
 /** Below this there is nothing a summary would usefully replace. */
 const COMPACTION_FLOOR_MESSAGES = 4;
 
-type TranscriptWriter = {
-	readonly sessionId: string;
-	persist(
-		message: AiMessage,
-		turnId: string,
-		extra?: Record<string, unknown>
-	): Promise<string | null>;
-};
-
 /** Narrow unknown usage payloads to a record, or an empty object. */
 function objectValue(value: unknown): Record<string, unknown> {
-	return recordSchema.safeParse(value).success ? (value as Record<string, unknown>) : { value };
+	const parsed = recordSchema.safeParse(value);
+	return parsed.success ? parsed.data : { value };
 }
 
 /** Token count from a provider usage payload, or zero when unreported. */
 function usageTokens(usage: unknown): number {
-	if (!recordSchema.safeParse(usage).success) return 0;
-	const record = usage as Record<string, unknown>;
+	const parsed = recordSchema.safeParse(usage);
+	if (!parsed.success) return 0;
+	const record = parsed.data;
 	for (const key of ['totalTokens', 'total_tokens', 'total']) {
 		if (typeof record[key] === 'number') return record[key];
 	}
@@ -203,13 +202,13 @@ function agentToolApi(spec: AgentAutomationSpec): BeforeApi {
 			throw new Error(`Agent cannot access collection ${property}`);
 		}
 	};
-	const query = new Proxy(Reflect.get(api.db, 'query') as object, {
+	const query = new Proxy(api.db.query, {
 		get(target, property, receiver) {
 			assertCollection(property);
 			return Reflect.get(target, property, receiver);
 		}
 	});
-	const db = new Proxy(api.db as object, {
+	const db = new Proxy(api.db, {
 		get(target, property, receiver) {
 			if (property === 'query') return query;
 			assertCollection(property);
@@ -226,7 +225,7 @@ function agentToolApi(spec: AgentAutomationSpec): BeforeApi {
 			});
 		}
 	});
-	return { ...api, db } as unknown as BeforeApi;
+	return { ...api, db };
 }
 
 const PLAN_MODE_READ_TOOLS = new Set<string>(PLATFORM_AGENT_READ_TOOL_NAMES);
@@ -320,11 +319,14 @@ async function executeTool(
  */
 async function ensureRunSession(runId: string, ownerUserId: string): Promise<string> {
 	const ctx = getWorkspace({ provision: true });
-	const existing = await ctx.tenantDb.query<{ norbital_id: string }>({
-		text: `SELECT norbital_id FROM chat_session WHERE automation_run_id = $1::uuid LIMIT 1`,
-		values: [runId]
-	});
-	const found = existing.rows[0]?.norbital_id;
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const existing = await db
+		.select({ norbital_id: chat_session.norbital_id })
+		.from(chat_session)
+		.where(eq(chat_session.automation_run_id, runId))
+		.limit(1);
+	const found = existing[0]?.norbital_id;
 	if (found) return found;
 	const created = await createRecord(
 		ctx,
@@ -365,21 +367,26 @@ function windowMessageFromStoredRow(
 	return pruneWindowMessage(message);
 }
 
-export type AgentRunResult = {
-	readonly runId: string;
-	readonly status: 'success';
-	readonly text: string;
+export const AgentRunResultSchema = z.object({
+	runId: z.string(),
+	status: z.literal('success'),
+	text: z.string(),
 	/** The transcript this run appended to — the caller's own session, or the one keyed to the run. */
-	readonly sessionId: string | null;
+	sessionId: z.string().nullable(),
 	/** The stored id of the input message, so a caller can point its own row at the transcript. */
-	readonly inputMessageId: string | null;
-};
+	inputMessageId: z.string().nullable()
+});
+export type AgentRunResult = z.infer<typeof AgentRunResultSchema>;
 
 /** Persist helper bound to one chat session. */
-function createTranscriptWriter(sessionId: string): TranscriptWriter {
+function createTranscriptWriter(sessionId: string) {
 	return {
 		sessionId,
-		async persist(message, turnId, extra): Promise<string | null> {
+		async persist(
+			message: AiMessage,
+			turnId: string,
+			extra?: Record<string, unknown>
+		): Promise<string | null> {
 			return appendChatMessage(sessionId, turnId, message, extra);
 		}
 	};
@@ -387,7 +394,7 @@ function createTranscriptWriter(sessionId: string): TranscriptWriter {
 
 /** Open a turn on the session, including a child turn when spawning. */
 async function createTurn(input: {
-	readonly writer: TranscriptWriter;
+	readonly writer: ReturnType<typeof createTranscriptWriter>;
 	readonly spec: AgentAutomationSpec;
 	readonly parentTurnId?: string;
 	readonly subagentId?: string;
@@ -401,8 +408,9 @@ async function createTurn(input: {
 
 /** What the provider said one message cost. `null` cost means unreported, never free. */
 function messageSpend(usage: unknown): { tokens: number; cost: number | null } {
-	if (!recordSchema.safeParse(usage).success) return { tokens: 0, cost: null };
-	const record = usage as Record<string, unknown>;
+	const parsed = recordSchema.safeParse(usage);
+	if (!parsed.success) return { tokens: 0, cost: null };
+	const record = parsed.data;
 	for (const key of ['cost', 'total_cost', 'totalCost']) {
 		const value = record[key];
 		if (typeof value === 'number' && Number.isFinite(value)) {
@@ -532,7 +540,7 @@ function compactionSpans(
 	return head.length > 0 ? { head, tail } : { head: pruned, tail: [] };
 }
 
-type LoopResult = { readonly text: string; readonly consumedTokens: number };
+type LoopResult = Pick<AiChatResult, 'text'> & { readonly consumedTokens: number };
 
 /** Ordinal of the effect this durable step just consumed. */
 function lastConsumedOrdinal(): number {
@@ -554,14 +562,17 @@ async function continueAfterGoalVerification(input: {
 	readonly userRequest: string;
 	readonly messages: AiMessage[];
 	readonly spec: AgentAutomationSpec;
-	readonly writer: TranscriptWriter;
+	readonly writer: ReturnType<typeof createTranscriptWriter>;
 	readonly turnId: string;
 	readonly verifierPrompt: string;
 }): Promise<boolean> {
 	if (!input.goalMode || input.depth !== 0) return false;
-	const ordinal = lastConsumedOrdinal();
+	const verifierOrdinal = automationReplayStorage.getStore()?.nextOrdinal;
+	if (verifierOrdinal === undefined) {
+		throw new Error('Goal verification requires a durable automation replay context');
+	}
 	const attempts = await countGoalVerdicts(input.writer.sessionId, input.turnId, {
-		beforeOrdinal: ordinal + 1
+		beforeOrdinal: verifierOrdinal
 	});
 	if (attempts >= MAX_GOAL_VERIFICATIONS) return false;
 	const scheduled = await readScheduledVerifierPrompt(input.writer.sessionId, input.turnId);
@@ -571,6 +582,7 @@ async function continueAfterGoalVerification(input: {
 		messages: input.messages,
 		verifierPrompt: scheduled ?? input.verifierPrompt
 	});
+	const ordinal = lastConsumedOrdinal();
 	if (!(await turnHasDurableOrdinal(input.writer.sessionId, input.turnId, ordinal))) {
 		await input.writer.persist(
 			{ role: 'system', content: serializeGoalVerdict(verdict) },
@@ -605,6 +617,7 @@ async function resumeSandboxWaiters(completedSessionId: string): Promise<void> {
 					: INTERACTIVE_AGENT_AUTOMATION_NAME,
 				triggerKey: `turn:${waiter.waiterSessionId}:${opened.turnId}`,
 				originScope: getWorkspace({ provision: true }).baseScope,
+				artifact: requireAdmitArtifact(),
 				snapshot: {
 					sessionId: waiter.waiterSessionId,
 					runId: waiter.runId,
@@ -651,93 +664,44 @@ async function withOriginRequestor<T>(
 	);
 }
 
-export type DurableAgentChannelDelivery = {
-	readonly channelKey: string;
-	readonly transport: string;
-	readonly conversationId: string;
-	readonly inboundReceiptId: string;
-	readonly conversationRowId: string;
-};
+export const DurableAgentChannelDeliverySchema = z.object({
+	channelKey: z.string(),
+	transport: z.string(),
+	conversationId: z.string(),
+	inboundReceiptId: z.string(),
+	conversationRowId: z.string()
+});
+export type DurableAgentChannelDelivery = z.infer<typeof DurableAgentChannelDeliverySchema>;
 
-export type DurableAgentTurnSnapshot = {
-	readonly sessionId: string;
-	readonly runId: string;
-	readonly turnId: string;
-	readonly promptContent: string;
-	readonly spec: AgentAutomationSpec;
-	readonly input?: string;
-	readonly inputMessageId?: string | null;
-	readonly planMode?: boolean;
-	readonly goalMode?: boolean;
-	readonly intent?: 'do' | 'plan';
-	readonly verifierPrompt?: string;
-	readonly compact?: { readonly instructions?: string };
-	readonly mentions?: readonly AgentMentionInput[];
-	readonly inputMetadata?: Record<string, unknown>;
-	readonly channel?: DurableAgentChannelDelivery;
-};
+export const DurableAgentTurnSnapshotSchema = z.object({
+	sessionId: z.string(),
+	runId: z.string(),
+	turnId: z.string(),
+	promptContent: z.string(),
+	spec: ManifestAutomationAgentSpecSchema,
+	input: z.string().optional(),
+	inputMessageId: z.string().nullable().optional(),
+	planMode: z.boolean().optional(),
+	goalMode: z.boolean().optional(),
+	intent: z.enum(['do', 'plan']).optional(),
+	verifierPrompt: z.string().optional(),
+	compact: z.object({ instructions: z.string().optional() }).optional(),
+	mentions: z.array(MentionRecordHitSchema).readonly().optional(),
+	inputMetadata: z.record(z.string(), z.unknown()).optional(),
+	channel: DurableAgentChannelDeliverySchema.optional()
+});
+export type DurableAgentTurnSnapshot = z.infer<typeof DurableAgentTurnSnapshotSchema>;
 
 /** Narrow unknown JSON to a record, or an empty object. */
 function asRecord(value: unknown): Record<string, unknown> {
-	return recordSchema.safeParse(value).success ? (value as Record<string, unknown>) : {};
+	const parsed = recordSchema.safeParse(value);
+	return parsed.success ? parsed.data : {};
 }
 
 /** Parse a durable turn snapshot from an incoming automation record. */
 function snapshotFromRecord(value: unknown): DurableAgentTurnSnapshot | null {
-	const record = asRecord(value);
-	if (
-		typeof record.sessionId !== 'string' ||
-		typeof record.runId !== 'string' ||
-		typeof record.turnId !== 'string' ||
-		typeof record.promptContent !== 'string'
-	) {
-		return null;
-	}
-	const specValue = record.spec;
-	if (!specValue || typeof specValue !== 'object' || Array.isArray(specValue)) return null;
-	const spec = specValue as AgentAutomationSpec;
-	if (
-		spec.kind !== 'agent' ||
-		typeof spec.task !== 'string' ||
-		typeof spec.description !== 'string'
-	) {
-		return null;
-	}
-	return {
-		sessionId: record.sessionId,
-		runId: record.runId,
-		turnId: record.turnId,
-		promptContent: record.promptContent,
-		spec,
-		...(typeof record.input === 'string' ? { input: record.input } : {}),
-		...(typeof record.inputMessageId === 'string' ? { inputMessageId: record.inputMessageId } : {}),
-		...(record.planMode === true ? { planMode: true } : {}),
-		...(record.goalMode === true ? { goalMode: true } : {}),
-		...(record.intent === 'do' || record.intent === 'plan' ? { intent: record.intent } : {}),
-		...(typeof record.verifierPrompt === 'string' && record.verifierPrompt
-			? { verifierPrompt: record.verifierPrompt }
-			: {}),
-		...(record.compact && typeof record.compact === 'object' && !Array.isArray(record.compact)
-			? {
-					compact: {
-						...((record.compact as { instructions?: unknown }).instructions
-							? {
-									instructions: String((record.compact as { instructions?: unknown }).instructions)
-								}
-							: {})
-					}
-				}
-			: {}),
-		...(Array.isArray(record.mentions) ? { mentions: record.mentions as AgentMentionInput[] } : {}),
-		...(record.inputMetadata &&
-		typeof record.inputMetadata === 'object' &&
-		!Array.isArray(record.inputMetadata)
-			? { inputMetadata: record.inputMetadata as Record<string, unknown> }
-			: {}),
-		...(record.channel && typeof record.channel === 'object' && !Array.isArray(record.channel)
-			? { channel: record.channel as DurableAgentChannelDelivery }
-			: {})
-	};
+	const parsed = DurableAgentTurnSnapshotSchema.safeParse(value);
+	return parsed.success ? parsed.data : null;
 }
 
 /** Rebuild the provider window for this turn from the stored transcript. */
@@ -803,7 +767,7 @@ async function turnHasDurableOrdinal(
 /** Replace the window prefix with a fenced summarizer checkpoint. */
 async function compactDurableWindow(input: {
 	readonly messages: AiMessage[];
-	readonly writer: TranscriptWriter;
+	readonly writer: ReturnType<typeof createTranscriptWriter>;
 	readonly turnId: string;
 	readonly spec: AgentAutomationSpec;
 	readonly instructions?: string;
@@ -847,7 +811,7 @@ async function compactDurableWindow(input: {
 async function foldSettledPlanWindow(input: {
 	readonly foldAsCheckpoint: boolean;
 	readonly messages: AiMessage[];
-	readonly writer: TranscriptWriter;
+	readonly writer: ReturnType<typeof createTranscriptWriter>;
 	readonly turnId: string;
 	readonly spec: AgentAutomationSpec;
 }): Promise<void> {
@@ -890,14 +854,7 @@ function replayProviderTurn(input: {
 			...(input.spec.profile ? { profile: input.spec.profile } : {})
 		}
 	});
-	if (!result || typeof result !== 'object' || Array.isArray(result)) {
-		throw new Error('Durable agent turn expected a provider result');
-	}
-	const parsed = result as AiChatResult;
-	if (typeof parsed.text !== 'string' || typeof parsed.stopReason !== 'string') {
-		throw new Error('Durable agent turn returned an invalid provider result');
-	}
-	return parsed;
+	return AiChatResultSchema.parse(result);
 }
 
 /** Persist a settled provider result and execute any tool calls it named. */
@@ -905,7 +862,7 @@ async function applySettledProviderTurn(input: {
 	readonly spec: AgentAutomationSpec;
 	readonly resolved: ResolvedTools;
 	readonly messages: AiMessage[];
-	readonly writer: TranscriptWriter;
+	readonly writer: ReturnType<typeof createTranscriptWriter>;
 	readonly turnId: string;
 	readonly depth: number;
 	readonly planMode: boolean;
@@ -1048,7 +1005,7 @@ async function applySettledProviderTurn(input: {
 async function runDurableAgentLoop(input: {
 	readonly spec: AgentAutomationSpec;
 	readonly messages: AiMessage[];
-	readonly writer: TranscriptWriter;
+	readonly writer: ReturnType<typeof createTranscriptWriter>;
 	readonly turnId: string;
 	readonly depth: number;
 	readonly planMode: boolean;
@@ -1147,7 +1104,7 @@ async function runDurableAgentLoop(input: {
 async function runDurableSubagent(input: {
 	readonly spec: AgentAutomationSpec;
 	readonly task: string;
-	readonly writer: TranscriptWriter;
+	readonly writer: ReturnType<typeof createTranscriptWriter>;
 	readonly parentTurnId: string;
 	readonly subagentId: string;
 	readonly depth: number;
@@ -1262,7 +1219,7 @@ async function completeDurableRun(input: {
 /** Persist the failure, settle usage, and fail a channel inbound receipt when present. */
 async function failDurableRun(input: {
 	readonly ctx: ReturnType<typeof getWorkspace>;
-	readonly writer: TranscriptWriter;
+	readonly writer: ReturnType<typeof createTranscriptWriter>;
 	readonly runId: string;
 	readonly sessionId: string;
 	readonly turnId: string;
@@ -1314,7 +1271,7 @@ export async function prepareInteractiveAgentTurn(input: {
 	readonly goalMode?: boolean;
 	readonly intent?: 'do' | 'plan';
 	readonly verifierPrompt?: string;
-	readonly mentions?: readonly AgentMentionInput[];
+	readonly mentions?: readonly MentionRecordHit[];
 	readonly inputMetadata?: Record<string, unknown>;
 }): Promise<{
 	readonly turnId: string;
@@ -1398,16 +1355,14 @@ export async function runDurableAgentAutomation(input: {
 			).norbital_id;
 		if (typeof runId !== 'string') throw new Error('Agent run has no id');
 		if (snapshot?.runId || jobId) {
-			const existing = await ctx.tenantDb.query<{
-				automation_name: string | null;
-				requested_by_user_id: string;
-			}>(
-				`SELECT automation_name, requested_by_user_id
-				   FROM automation_run
-				  WHERE norbital_id = $1::uuid`,
-				[runId]
-			);
-			if (existing.rows[0]) {
+			const db = ctx.drizzleDb;
+			if (!db) throw new Error('Tenant database is not provisioned');
+			const existing = await db
+				.select({ norbital_id: automation_run.norbital_id })
+				.from(automation_run)
+				.where(eq(automation_run.norbital_id, runId))
+				.limit(1);
+			if (existing[0]) {
 				await updateRecord(
 					ctx,
 					'automation_run',
