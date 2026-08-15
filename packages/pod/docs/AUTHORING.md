@@ -245,7 +245,7 @@ The surface is designed so that mistakes surface at their cause rather than down
 - **Timeout is host policy.** The host admits each function with a timeout; Core’s policy is
   2_000 ms. Admission and cold boot happen before that clock starts. Reads, writes, hooks, remotes
   and each automation or agent step share the same admit. Do not hide unbounded work in a handler —
-  the host kills the guest when the timeout fires.
+  the host disposes the isolate when the timeout fires.
 - **Yield ends the isolate.** Authors write an ordinary async handler. `await api.infer` yields;
   the isolate is disposed; the host runs the model; DBOS admits a new isolate for the next tenant
   step. One-shot work (`createMany`, `updateMany`, import, export, inbound) fails if it cannot

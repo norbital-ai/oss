@@ -107,9 +107,9 @@ export type { HttpWebhookListenerOptions } from './webhooks.js';
 /**
  * The delivery half, for a host that owns the socket itself.
  *
- * `httpWebhookListener` is the whole answer for a host that can open a port. Core cannot: a tenant is
- * a scale-to-zero microsandbox child with no listener of its own, so Core receives on its own route
- * and has to hand the result inward across the host-command plane.
+ * `httpWebhookListener` is the whole answer for a host that can open a port. The isolate has no
+ * listener; Core owns the socket, receives on its own route, and hands the result inward across
+ * the host-command plane.
  *
  * Exported because the alternative is what actually happened — Core reimplemented this, and its copy
  * dropped `eventId`, so Pod's `integration_inbound_event` ledger never deduped and every provider

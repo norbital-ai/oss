@@ -1,8 +1,8 @@
 /**
  * Permanent worker-runtime HTTP transport for tenant workspace operations.
  *
- * A compatible host invokes these `/_runtime/*` routes inside the tenant isolate. This is the
- * stable wire protocol between the host and the in-isolate Pod runtime.
+ * A compatible host invokes these `/_runtime/*` routes. This is the stable wire protocol
+ * between the host and the Pod runtime.
  */
 import { buildCtx } from '$lib/server/bootstrap/context.js';
 import { withRequestWorkspaceCtx } from '$lib/server/bootstrap/workspace_store.js';

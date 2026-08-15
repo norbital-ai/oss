@@ -4,9 +4,9 @@ import type { CollectionSyncState, ShapeResponse } from './types.js';
 /**
  * Rows per catch-up request, at the server's ceiling (`MAX_SHAPE_PAGE_SIZE`).
  *
- * This is a bulk download, not a page of UI, and each request is a full browser → Core → microVM →
- * Postgres round trip. At the old 1,000 a 20k-row collection cost 21 serialized round trips before
- * it was resident; the payload was never the expensive part, the trips were.
+ * This is a bulk download, not a page of UI, and each request is a full browser → Core → isolate
+ * step → Postgres round trip. At the old 1,000 a 20k-row collection cost 21 serialized round trips
+ * before it was resident; the payload was never the expensive part, the trips were.
  */
 const PAGE_SIZE = 5000;
 
@@ -45,7 +45,7 @@ export const DEFAULT_RESIDENCY_BYTES = 1_073_741_824; // 1 GiB
  *
  * Bytes are the right unit for a storage budget, but they are the wrong unit for the *download*
  * cost: a 23,000-row table of narrow rows is a few MB and "fits" the 1 GiB budget, yet pulling it
- * means five-plus serialized browser → Core → microVM → Postgres round trips before the replica
+ * means five-plus serialized browser → Core → isolate step → Postgres round trips before the replica
  * can answer. A page that filters to one company's month needs tens of rows, not the whole table.
  *
  * The row cap is what makes the windowed tier engage for collections like that: the catch-up

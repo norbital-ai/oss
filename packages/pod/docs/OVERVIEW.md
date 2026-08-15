@@ -94,9 +94,9 @@ The browser never talks to tenant hooks or server handlers directly. Pod’s ser
 request from a host identity provider, resolves or validates its user, organisation, role, and base
 scope, then evaluates ordinary policy before executing server code.
 
-Both hosts run the same `output/server/index.js`. Core compiles it in isolate-vm and calls a
-function export; leftover `node:crypto` / `node:async_hooks` are linker modules, and `node:fs` is
-denied. `pod start` `import()`s the same file in Node, so those specifiers resolve natively. The
+Both hosts run the same `output/server/index.js`. Core compiles it in isolate-vm and calls
+`handlePodDispatch`; leftover `node:` imports are answered by Core's isolate loader. `pod start`
+`import()`s the same file in Node, so those specifiers resolve natively. The
 standalone process listens only on a loopback address; a production self-hosted `pod.host.ts` must
 provide its identity provider.
 

@@ -1,17 +1,16 @@
 /**
- * The reference host: `pod start` implements the host API and loads the guest bundle in-process.
+ * In-process `pod start` only. This file is the reference host: it implements the host API and
+ * loads the compiled bundle with a native Node `import()`.
  *
- * One HTTP server (serve/server.ts), two deployments: the guest adapter inside Core's Cube
- * (remote facilities) and this reference host (pod start, in-process facilities). `pod start`
- * is a host.
+ * Core does not boot this process. It compiles the same `output/server/index.js` in isolate-vm
+ * and calls `handlePodDispatch`. There is no guest HTTP listener.
  *
- * Where the guest adapter trusts a host proxy for identity and serves only runtime routes, this
- * process authenticates itself (via the resolved host configuration), serves the workspace's
+ * This process authenticates itself (via the resolved host configuration), serves the workspace's
  * static assets and single-page document, and runs jobs, channels, and webhook listeners in the
- * same process. Both adapters delegate their whole request pipeline to the shared
- * `serve/server.ts` core, which hands the request to the `handlePodRequest`/`handlePodHostCommand`
- * entry points. Timeout is host policy on admit (`config.timeoutMs ?? 2_000`); that 2_000 is this
- * host's default, not a Pod contract. The guest reads `remainingMs()`.
+ * same process. The HTTP pipeline lives in `serve/server.ts` and hands the request to
+ * `handlePodRequest` / `handlePodHostCommand`. Timeout is host policy on admit
+ * (`config.timeoutMs ?? 2_000`); that 2_000 is this host's default, not a Pod contract. The
+ * guest reads `remainingMs()`.
  *
  * The `pod` CLI (`bin/invocation/index.ts`) imports the operations here directly.
  */
@@ -424,8 +423,8 @@ export async function seedStandalone(
 
 /** Import the compiled guest bundle this host will admit functions into. */
 async function loadPodRuntime(root: string): Promise<PodRuntimeModule> {
-	// The same server bundle the hosted runtime container executes — standalone differs only in
-	// who supplies the bindings and who owns the socket, never in the code being run.
+	// Same `output/server/index.js` Core loads in isolate-vm and calls via `handlePodDispatch`.
+	// This host `import()`s it in-process; only the bindings and the socket differ.
 	const runtimePath = path.join(standaloneBuildDirectory(root), 'output', 'server', 'index.js');
 	const loaded: unknown = await import(pathToFileURL(runtimePath).href);
 	if (

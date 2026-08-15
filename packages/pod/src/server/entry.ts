@@ -92,8 +92,8 @@ function createEvent(
  * Guest-side phase timings, surfaced as `Server-Timing` on the response.
  *
  * Core already reports how long the whole guest call took (`tenant_invoke`), which is enough to
- * know the guest is slow and useless for knowing why. These segments split that number, so a slow
- * workspace load can be attributed without adding logging or attaching a profiler to a microVM.
+ * know the guest is slow and useless for knowing why. These segments split that number so a slow
+ * workspace load can be attributed without adding logging.
  */
 async function phase<T>(marks: string[], name: string, run: () => Promise<T>): Promise<T> {
 	const startedAt = performance.now();

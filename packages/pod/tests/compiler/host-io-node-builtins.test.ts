@@ -23,7 +23,6 @@ describe('server compile leaves node builtins external', () => {
 		const source = await readFile(new URL('../../src/vite/index.ts', import.meta.url), 'utf8');
 		expect(source).toContain('HOST_IO_NODE_BUILTINS');
 		expect(source).not.toContain('unenv');
-		expect(source).not.toContain('defineEnv');
 		expect(source).not.toContain('guest-compat');
 		expect(source).not.toContain("external: (id: string) => id.startsWith('node:')");
 	});

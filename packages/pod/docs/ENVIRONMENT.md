@@ -102,14 +102,14 @@ only rejects a value that is present and fails its schema.
 
 1. Deploy declares rows in the facility (tenant) database.
 2. An admin sets values in Settings → Integrations.
-3. When Core boots the guest microVM it decrypts configured rows and injects them into the guest
-   `process.env` together with transport keys (`POD_HOST_TOKEN`, `POD_RUNTIME_PORT`).
+3. When Core boots the isolate it decrypts configured rows into isolate `process.env`. Isolate
+   `process.env` is workspace env only.
 4. Core's own platform secrets (`SECRET_NEON_API_KEY`, …) are **not** injected. Those stay in
    Core's process and are read from `$app/env/private` in Core, declared in
    `apps/core/src/env.schema.ts`.
 
-The guest has no network and is never told a database URL. Workspace secrets are the exception
-that belongs in the guest: they are the tenant's credentials, not Core's.
+The isolate has no network and is never told a database URL. Workspace secrets are the exception
+that belongs in the isolate: they are the tenant's credentials, not Core's.
 
 ### Self-host (`pod start`)
 

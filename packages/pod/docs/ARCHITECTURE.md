@@ -192,7 +192,8 @@ src/**  +  Pod compiler
         │
         ▼
 Vite / Rolldown
-  leftover node:* stay external — no compiler shim
+  externals: HOST_IO_NODE_BUILTINS only
+  (fs, crypto, async_hooks, path, buffer)
         │
         ▼
 output/server/index.js
@@ -201,25 +202,23 @@ output/server/index.js
    ▼                         ▼
 Core host                 Self-host (`pod start`)
 isolate-vm                Node import()
-linker:                   native node:crypto / async_hooks /
-  node:crypto  → host       path / buffer
-  node:async_hooks → ALS
-  node:path    → posix JS
-  node:buffer  → JS Buffer
-  node:fs*     → ENOENT
-facility RPC              same function exports
-dispose after the step    same admit / timeout policy
+handlePodDispatch         native node: resolution
+loader answers leftover   same function exports
+  node: (see below)       same admit / timeout policy
+dispose after the step
 ```
 
-The compiler does not call `unenv`'s `env(nodeless)` and does not inline Node. A nodeless alias
-map would rewrite `async_hooks` to a shim that drops the store on the first `await`.
+Vite marks only HOST_IO_NODE_BUILTINS external — not every `node:` specifier. Leftover `node:`
+imports are answered by Core's isolate loader: host-provided `util` / `stream` / `zlib` / `assert`
+via `createRequire`; isolate-local `path` / `buffer` / `crypto` / `async_hooks`; artifact CJS/WASM
+for `pdq-wasm`; ESM leftover `fs` is denied, while `createRequire` `fs` reads the sealed artifact
+only. Stream/EventEmitter's CJS default is an isolate-local constructor with a prototype so pngjs
+`util.inherits` works; the host still provides named `stream` / `zlib` / `util` exports.
+`inherits` and `promisify` stay isolate-local.
 
-Core never `import()`s the bundle into the host process. It compiles the file in a fresh isolate
-and the linker answers leftover `node:` specifiers. Path and Buffer are isolate-local JavaScript
-— not the host's `node:path` / `node:buffer` objects — so they cannot read the host disk or share
-host memory. Crypto still goes through host entropy. `fs` is denied. Self-host is a machine the
-operator provides: `pod start` loads the same file in-process and Node resolves those specifiers
-itself.
+Core never `import()`s the bundle into the host process. isolate-vm calls `handlePodDispatch`.
+There is no guest HTTP listener and no `serve.mjs`. Self-host (`pod start`) is a native Node
+`import()` of the same file. Do not resurrect `unenv`.
 
 MicroSandbox is not this path. It stays for untrusted shell and `pod check`.
 

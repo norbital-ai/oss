@@ -50,11 +50,13 @@ manifest revision; schema-changing deployment replaces that process.
 
 Hosted and standalone modes MUST execute the same Pod server bundle. Hosted mode MUST NOT load
 `pod.host.ts`. Standalone mode MAY load it to supply local bindings and identity. The compiler MUST
-NOT inline a Node-compat layer. Hosted isolate execution MUST supply `node:crypto`,
-`node:async_hooks`, posix `node:path`, and a JavaScript `node:buffer`, and MUST deny leftover
-filesystem builtins. Those path and Buffer implementations MUST be isolate-local values, not host
-objects. Standalone Node MAY resolve those specifiers natively. Workspace source MUST NOT install a
-Node-compat layer or branch on host kind.
+externalize only HOST_IO_NODE_BUILTINS (`fs`, `crypto`, `async_hooks`, `path`, `buffer`) and MUST
+NOT inline a Node-compat layer or mark every `node:` specifier external. Hosted isolate execution
+MUST answer leftover `node:` imports in the isolate loader: host-provided `util` / `stream` /
+`zlib` / `assert` via `createRequire`; isolate-local `path` / `buffer` / `crypto` / `async_hooks`;
+artifact CJS/WASM for `pdq-wasm`; ESM leftover `fs` denied, `createRequire` `fs` reads the sealed
+artifact only. Standalone Node MAY resolve those specifiers natively. Workspace source MUST NOT
+install a Node-compat layer or branch on host kind.
 
 ## 4. Identity and organization
 

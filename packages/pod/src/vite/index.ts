@@ -70,9 +70,12 @@ function podBuildFile(relativePath: string): string {
 }
 
 /**
- * Leftover `node:` specifiers stay external. Self-host is Node and resolves them natively.
- * Core's isolate linker supplies crypto, async_hooks, posix path, and a JS Buffer, and denies fs.
- * The compiler does not inline a Node-compat layer.
+ * Vite externals are only HOST_IO_NODE_BUILTINS (`fs`, `crypto`, `async_hooks`, `path`,
+ * `buffer`) — not every `node:` specifier. Leftover `node:` imports are answered by Core's
+ * isolate loader (host-provided util/stream/zlib/assert via createRequire; isolate-local
+ * path/buffer/crypto/async_hooks; artifact CJS/WASM for pdq-wasm; ESM leftover `fs` is
+ * denied, createRequire `fs` reads the sealed artifact only). Self-host (`pod start`) is a
+ * native Node `import()` of the same bundle.
  */
 const HOST_IO_NODE_BUILTINS = new Set([
 	'node:fs',
@@ -280,7 +283,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		);
 		// Core loads `output/server/index.js` in isolate-vm and calls `handlePodDispatch` /
 		// `handlePodHostCommand`. Self-host (`pod start`) uses `handlePodRequest` at the HTTP edge.
-		// There is no guest HTTP listener and no `serve.mjs` boot.
+		// Core does not boot this HTTP server.
 		await writeFile(path.join(clientDistRoot, 'package.json'), '{"type":"module"}\n');
 		await mkdir(path.join(artifactRoot, 'output/server'), { recursive: true });
 		await copyPodServerAssets(path.join(artifactRoot, 'output/server'), options.serverAssets ?? []);
