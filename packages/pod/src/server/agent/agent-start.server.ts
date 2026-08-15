@@ -142,6 +142,7 @@ export async function persistInteractiveAgentStart(input: {
 				.set({
 					messages: session.messages,
 					turns: session.turns,
+					norbital_row_version: session.norbital_row_version,
 					norbital_updated_at: new Date()
 				})
 				.where(
