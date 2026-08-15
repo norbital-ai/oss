@@ -82,6 +82,11 @@ export type PodRuntimeHarness = {
 	 * identity can reach may claim outbox rows.
 	 */
 	hostCommand(command: unknown): Promise<unknown>;
+	/**
+	 * Publish the host change-feed wake after a raw `pool` write. `serverInsert` and similar
+	 * helpers commit through `pg` directly, so they never pass `attachSyncWakeToDb`.
+	 */
+	notifySyncWake(): Promise<void>;
 	/** Serve the runtime over a real HTTP socket (forging `identity` on every request). */
 	serveHttp(identity: Identity): Promise<{ url: string; close: () => Promise<void> }>;
 	stop(): Promise<void>;
@@ -624,6 +629,13 @@ export async function bootPodRuntime(
 				...(init.body ? { body: init.body } : {})
 			});
 			return dispatchTenantRequest(request, guestDispatch, { db: binding, ...facilities }, hostSyncWake);
+		},
+		async notifySyncWake() {
+			const result = await pool.query<{ seq: string | null }>(
+				`SELECT MAX(seq)::text AS seq FROM sync_outbox`
+			);
+			const seq = result.rows[0]?.seq;
+			if (typeof seq === 'string' && seq.length > 0) hostSyncWake.wakeSync(ORG_ID, seq);
 		},
 		hostCommand(command) {
 			return dispatchHostOrGuest({

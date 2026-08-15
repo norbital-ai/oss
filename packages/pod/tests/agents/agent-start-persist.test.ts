@@ -66,6 +66,12 @@ describe('persistInteractiveAgentStart', () => {
 		const result = await persistInteractiveAgentStart({
 			message: 'Inspect this',
 			promptContent: 'Inspect this',
+			artifact: {
+				artifactId: 'test-artifact',
+				checkpointId: 'test-checkpoint',
+				treeHash: 'test-tree',
+				runtimeVersion: 'test-runtime'
+			},
 			spec: {
 				kind: 'agent',
 				description: 'Answers one interactive request from a person in this workspace.',

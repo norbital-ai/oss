@@ -81,6 +81,7 @@ export async function serverInsert(
 			[collection.name, id]
 		);
 		await client.query('COMMIT');
+		await harness.notifySyncWake();
 		return id;
 	} catch (err) {
 		await client.query('ROLLBACK').catch(() => undefined);
