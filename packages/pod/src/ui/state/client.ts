@@ -281,10 +281,16 @@ async function settleAgentStartSync(
 			sync.client.notifyCollection('chat_session');
 		}
 	}
+	// Let the collection's first-page snapshot seed a brand-new replica cursor before the
+	// read-your-command barrier starts the stream. Starting at cursor zero first makes the stream
+	// win cursor initialization and replay the tenant's entire seed outbox; a large fresh workspace
+	// can then finish the agent turn in Postgres while the browser is still tens of thousands of
+	// unrelated events behind. Interest was already published synchronously by register(), so an
+	// update committed during this await is replayed from the snapshot watermark.
+	await registration.catch(() => undefined);
 	if (receipt.syncSequence) {
 		await sync.client.waitForSequence(receipt.syncSequence, { timeoutMs: 30_000 });
 	}
-	await registration.catch(() => undefined);
 }
 
 /**

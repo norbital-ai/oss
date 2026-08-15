@@ -85,6 +85,63 @@ describe('agent start read-your-command consistency', () => {
 		expect(events.indexOf('subscribed:chat_session')).toBeLessThan(events.indexOf('wait:42'));
 	});
 
+	it('lets a cold collection snapshot seed the cursor before starting the receipt barrier', async () => {
+		const events: string[] = [];
+		let releaseShape: () => void = () => {};
+		const shapeReady = new Promise<void>((resolve) => {
+			releaseShape = resolve;
+		});
+		const client = {
+			onChange: () => {},
+			upsertRows: async () => {},
+			notifyCollection: () => {},
+			setSubscribedCollections: (collections: ReadonlySet<string>) => {
+				if (collections.has('chat_session')) events.push('subscribed');
+			},
+			shapeSubscribe: async () => {
+				events.push('shape:start');
+				await shapeReady;
+				events.push('shape:ready');
+				return {
+					rows: [],
+					cursor: { xid: '1', seq: '42' },
+					nextCursor: null
+				};
+			},
+			waitForSequence: async () => {
+				events.push('wait');
+				return true;
+			},
+			recordSyncState: async () => {},
+			loadSyncState: async () => new Map()
+		} as unknown as PodSyncClient;
+		enableClientSync(client);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							runId: 'run-cold',
+							chatId: 'chat-cold',
+							accepted: true,
+							session: null,
+							syncSequence: '42'
+						}),
+						{ status: 200, headers: { 'content-type': 'application/json' } }
+					)
+			)
+		);
+
+		const started = startInteractiveAgent({ message: 'Inspect this' });
+		await vi.waitFor(() => expect(events).toContain('shape:start'));
+		expect(events).not.toContain('wait');
+		releaseShape();
+		await started;
+
+		expect(events.indexOf('shape:ready')).toBeLessThan(events.indexOf('wait'));
+	});
+
 	it('folds the session receipt even when the replica schema is not published yet', async () => {
 		const upserts: (readonly Record<string, unknown>[])[] = [];
 		const notified: string[] = [];
