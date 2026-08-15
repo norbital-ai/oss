@@ -252,7 +252,7 @@ describe('Norbital agent orb', () => {
 		expect(panel).toMatch(/AGENT_TURN_STALE_MS/);
 		expect(panel).toMatch(/\$effect\(\(\) => \{/);
 		expect(panel).not.toContain('{@attach () => {');
-		expect(panel).toMatch(/activeSession\.user_id\.length > 0/);
+		expect(panel).toMatch(/resolvedScopeUserId !== currentUserId/);
 		expect(panel).not.toMatch(/unknown-user/);
 		expect(panel).toMatch(/state="failed"/);
 		expect(panel).not.toMatch(/NorbitalThinkingOrb state="idle"/);

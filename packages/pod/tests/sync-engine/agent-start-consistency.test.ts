@@ -20,6 +20,7 @@ describe('agent start read-your-command consistency', () => {
 		const upserts: (readonly Record<string, unknown>[])[] = [];
 		const notified: string[] = [];
 		const waited: string[] = [];
+		const events: string[] = [];
 		const client = {
 			onChange: () => {},
 			upsertRows: async (_collection: string, rows: readonly Record<string, unknown>[]) => {
@@ -27,10 +28,13 @@ describe('agent start read-your-command consistency', () => {
 			},
 			notifyCollection: (collection: string) => notified.push(collection),
 			waitForSequence: async (sequence: string) => {
+				events.push(`wait:${sequence}`);
 				waited.push(sequence);
 				return true;
 			},
-			setSubscribedCollections: () => {},
+			setSubscribedCollections: (collections: ReadonlySet<string>) => {
+				if (collections.has('chat_session')) events.push('subscribed:chat_session');
+			},
 			loadSyncState: async () => new Map()
 		} as unknown as PodSyncClient;
 		setLocalSchema(
@@ -78,6 +82,7 @@ describe('agent start read-your-command consistency', () => {
 		expect(upserts).toEqual([[session]]);
 		expect(notified).toEqual(['chat_session']);
 		expect(waited).toEqual(['42']);
+		expect(events.indexOf('subscribed:chat_session')).toBeLessThan(events.indexOf('wait:42'));
 	});
 
 	it('folds the session receipt even when the replica schema is not published yet', async () => {

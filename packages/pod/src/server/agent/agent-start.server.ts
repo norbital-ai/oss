@@ -187,7 +187,9 @@ export async function persistInteractiveAgentStart(input: {
 				action,
 				row_version: session.norbital_row_version,
 				origin_scope: originScope,
-				record_snapshot: { ...session }
+				// The sync diff re-reads the policy-scoped canonical row. Copying an increasingly large
+				// transcript into the outbox is a second data structure nobody consumes.
+				record_snapshot: { norbital_id: chatId }
 			})
 			.returning({ seq: sync_outbox.seq })
 	);

@@ -87,6 +87,7 @@ export async function mutateChatSession<T>(
 				usage_total_tokens: session.usage_total_tokens,
 				usage_turns_counted: session.usage_turns_counted,
 				usage_turns_unreported: session.usage_turns_unreported,
+				norbital_row_version: sql`COALESCE(${chat_session.norbital_row_version}, 0) + 1`,
 				norbital_updated_at: new Date()
 			})
 			.where(eq(chat_session.norbital_id, sessionId))
@@ -94,6 +95,7 @@ export async function mutateChatSession<T>(
 		const version = updated[0]?.norbital_row_version;
 		if (typeof version !== 'number')
 			throw new Error('Chat session update did not return a version');
+		session.norbital_row_version = version;
 		await emitSyncOutboxRow(ctx.tenantDb, 'chat_session', 'update', sessionId, version);
 		return result;
 	});

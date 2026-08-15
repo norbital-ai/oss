@@ -264,6 +264,12 @@ async function settleAgentStartSync(
 ): Promise<void> {
 	const sync = getClientSync();
 	if (!sync) return;
+	// Demand the collection before starting/waking the stream. On a cold replica the panel's first
+	// read may have completed against the server before local sync was ready, so it has not yet
+	// registered live interest. Starting the stream first can advance its cursor past every later
+	// update to this new conversation while `chat_session` is absent from the subscription set.
+	// `register()` publishes that interest synchronously before its first catch-up await.
+	const registration = sync.registry.register('chat_session');
 	if (receipt.session) {
 		const columns = localCollection('chat_session')?.columns ?? [];
 		if (columns.length > 0) {
@@ -276,8 +282,9 @@ async function settleAgentStartSync(
 		}
 	}
 	if (receipt.syncSequence) {
-		void sync.client.waitForSequence(receipt.syncSequence, { timeoutMs: 30_000 });
+		await sync.client.waitForSequence(receipt.syncSequence, { timeoutMs: 30_000 });
 	}
+	await registration.catch(() => undefined);
 }
 
 /**
