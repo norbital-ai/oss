@@ -1,7 +1,7 @@
 import type { AiChatResult } from '@norbital-ai/platform-utils/runtime/binding';
 import type { DurableHostEffectRequest } from '$lib/host/types.js';
 import { createHash } from 'node:crypto';
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { createAsyncStore } from '$lib/server/async-store.js';
 import { z } from 'zod';
 
 export type DurableAutomationEffect = {
@@ -19,7 +19,7 @@ export type AutomationReplayContext = {
 	pending?: AutomationEffectYield;
 };
 
-export const automationReplayStorage = new AsyncLocalStorage<AutomationReplayContext>();
+export const automationReplayStorage = createAsyncStore<AutomationReplayContext>();
 
 function canonicalJson(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;

@@ -13,7 +13,7 @@ the isolate. The host does not compose leftover rows.
          ▼                       ▼                       ▼
    HOST SERVICE             HOST HTTP                HOST SERVICE
    sync SSE                 pages, static,           channel WS
-   (LISTEN/NOTIFY)          function POST            (Baileys / Telegram)
+   (wakeSync)               named dispatch           (Baileys / Telegram)
          │                       │                       │
          │                  HOST ADMIT                   │
          │                  timeout = host policy        │
@@ -62,7 +62,7 @@ Core is one host. A self-hosted process is another. The same compiled workspace 
 │ db · fileStorage · maps · messaging · ai                     │
 │ queue · integrationDelivery                                   │
 │                                                               │
-│ owns HTTP, static, SSE, channel sockets, LISTEN/NOTIFY        │
+│ owns HTTP, static, SSE, channel sockets, wakeSync             │
 │ owns credentials, OpenRouter, admit/kill, the cap             │
 │ DBOS owns which durable step runs next                        │
 └────────────────────────────────────────────────────────────────┘
@@ -177,9 +177,10 @@ host-tool `sandbox_*`).
 
 ## Bundle
 
-The built guest is lightweight invokable functions (`handlePodRequest`, `handlePodHostCommand`,
-`register*`). It must not be “a server.” HTTP, listen, static assets, SSE, and timeout belong to
-the host. `pod start` is the reference host.
+The built guest is lightweight invokable functions (`dispatch`, `register*`). It must not be “a
+server.” HTTP, listen, static assets, SSE, and timeout belong to the host. `pod start` is the
+reference host. Host mail (outbox, notification drain, identity reads, getManifest, pull cursors)
+never enters the guest.
 
 ### How the same artifact runs
 
@@ -201,9 +202,9 @@ output/server/index.js
    ┌────┴────────────────────┐
    ▼                         ▼
 Core host                 Self-host (`pod start`)
-isolate-vm                Node import()
-handlePodDispatch         native node: resolution
-loader answers leftover   same function exports
+isolate-vm (64 MiB)       Node import()
+dispatch(name, …)         native node: resolution
+loader answers leftover   same named dispatch
   node: (see below)       same admit / timeout policy
 dispose after the step
 ```
@@ -216,9 +217,9 @@ only. Stream/EventEmitter's CJS default is an isolate-local constructor with a p
 `util.inherits` works; the host still provides named `stream` / `zlib` / `util` exports.
 `inherits` and `promisify` stay isolate-local.
 
-Core never `import()`s the bundle into the host process. isolate-vm calls `handlePodDispatch`.
-There is no guest HTTP listener and no `serve.mjs`. Self-host (`pod start`) is a native Node
-`import()` of the same file. Do not resurrect `unenv`.
+Core never `import()`s the bundle into the host process. isolate-vm calls `dispatch`. There is
+no guest HTTP listener and no `serve.mjs`. Self-host (`pod start`) is a native Node `import()`
+of the same file. Do not resurrect `unenv`.
 
 MicroSandbox is not this path. It stays for untrusted shell and `pod check`.
 
@@ -481,9 +482,10 @@ re-provision.
 
 `sync/shape`, `sync/head`, `sync/schema`, `sync/mutate`, and `sync/diff` are one-shot functions.
 `shape` paging stays as **separate** one-shot calls (`nextCursor` is a new function, not a resume).
-`sync/stream` is a **host service**, not a guest function. The host listens on Neon and writes SSE
-events. When a frame needs a policy-scoped read, the host admits `sync/diff` (2s, isolate → 0)
-and then writes the event. The guest never holds the socket.
+`sync/stream` is a **host service**, not a guest function. After `sync_outbox` commits the host
+publishes `wakeSync` and writes SSE events. When a frame needs a policy-scoped read, the host
+admits `sync/diff` (2s, isolate → 0) and then writes the event. The guest never holds the socket
+and the host never LISTENs on the tenant database.
 
 Each stream sends its materialized collection set. The server advances across the whole outbox but
 performs policy-scoped diff reads only for subscribed collections. This keeps cursor continuity
@@ -493,9 +495,9 @@ When a client materializes a new collection, it freezes its global cursor until 
 then adds the collection and replays from that cursor. This closes both the subscription race and
 the stale-page-after-delete race without a second cursor system or client tombstones.
 
-The host installs a dedicated PostgreSQL `LISTEN norbital_sync` connection. Isolation is binding,
-not a VM per tab: authenticate the session first, bind the stream to `claims.organizationId`, and
-subscribe that connection to that org’s LISTEN only.
+The host publishes `wakeSync` after the outbox commit. Isolation is binding, not a VM per tab:
+authenticate the session first, bind the stream to `claims.organizationId`, and subscribe that
+connection to that org’s wake bus only.
 
 ## Notifications
 

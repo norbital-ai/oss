@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { Pool, type PoolClient } from 'pg';
 import {
 	boolean,
-	customType,
 	date,
 	integer,
 	jsonb,
@@ -15,9 +14,9 @@ import {
 } from 'drizzle-orm/pg-core';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
 import { createHostTenantDb } from '../support/host-tenant-db.js';
-import { applyPodSchema } from '../support/pod-schema.js';
+import { applyPodSchema, seedTestUser } from '../support/pod-schema.js';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
-import { namedJsonbColumn } from '$lib/authoring/schema/table.js';
+import { namedJsonbColumn, norbitalTable } from '$lib/authoring/schema/table.js';
 import { attachColumnCustom } from '$lib/authoring/schema/columns.js';
 
 /**
@@ -34,25 +33,23 @@ requireDocker();
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
 const ROOT_CHUNK_BOUNDARY = 5_000;
-const tstzrange = customType<{ data: string }>({ dataType: () => 'tstzrange' });
 const orderState = pgEnum('test_order_state', ['OPEN', 'CLOSED']);
 
-const orders = pgTable('orders', {
-	norbital_id: uuid('norbital_id').primaryKey().defaultRandom(),
-	norbital_created_at: timestamp('norbital_created_at', { withTimezone: true }).defaultNow(),
-	norbital_updated_at: timestamp('norbital_updated_at', { withTimezone: true }).defaultNow(),
-	norbital_sys_period: tstzrange('norbital_sys_period'),
-	norbital_row_version: integer('norbital_row_version'),
-	norbital_approval_id: uuid('norbital_approval_id'),
-	status: text('status'),
-	work_date: date('work_date'),
-	occurred_at: timestamp('occurred_at', { withTimezone: true }),
-	optional_at: timestamp('optional_at', { withTimezone: true }),
-	enabled: boolean('enabled').default(true),
-	quantity: integer('quantity').default(7),
-	metadata: jsonb('metadata'),
-	state: orderState('state')
-});
+/** Same collection `applyPodSchema` materializes, plus the extra columns this suite ALTERs on. */
+const orders = norbitalTable(
+	'orders',
+	{
+		status: text(),
+		work_date: date(),
+		occurred_at: timestamp({ withTimezone: true }),
+		optional_at: timestamp({ withTimezone: true }),
+		enabled: boolean().default(true),
+		quantity: integer().default(7),
+		metadata: jsonb(),
+		state: orderState()
+	},
+	{ history: true }
+);
 
 const unsupportedNumericOrders = pgTable('unsupported_numeric_orders', {
 	norbital_id: uuid('norbital_id'),
@@ -184,6 +181,7 @@ describe('Batched collection create (real Postgres)', () => {
 		pg = await startPostgres();
 		pool = new Pool({ connectionString: pg.connectionString, max: 4 });
 		await applyPodSchema(pool);
+		await seedTestUser(pool, USER_ID);
 		await pool.query(`
 			CREATE TYPE test_order_state AS ENUM ('OPEN', 'CLOSED');
 			ALTER TABLE orders

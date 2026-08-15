@@ -87,7 +87,8 @@ async function tenantCollections(harness: PodRuntimeHarness): Promise<Collection
 		    AND c.relname !~ '_history$'
 		    AND c.relname NOT IN ('audit_event','_approval_lock','_norbital_internal_schema',
 		      '__drizzle_migrations','sync_outbox','approval_request','requestor','automation_run','user',
-		      '_norbital_automation_job',
+		      '_norbital_automation_job','_norbital_sync_compaction','_norbital_automation_cursor',
+		      '_norbital_sync_epoch',
 		      'agent_run_step','team','policy','integration_outbox','notification_outbox','notification',
 		      'document_asset','team_members')
 		    AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='norbital_id')

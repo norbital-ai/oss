@@ -1,7 +1,41 @@
 import { describe, expect, it } from 'vitest';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
+import type { HostDbBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { workspaceJobs } from '../../src/host/jobs.js';
 import { httpIntegrationDelivery } from '../../src/host/integration-http.js';
+
+function memoryCursorDb(initial: string | null = null): HostDbBinding & {
+	readonly storedCursor: () => string | null;
+	readonly storedError: () => string | null;
+} {
+	let cursor = initial;
+	let error: string | null = null;
+	const unused = async () => {
+		throw new Error('cursor test db does not open transactions');
+	};
+	return {
+		storedCursor: () => cursor,
+		storedError: () => error,
+		async query(text, values) {
+			const sql = typeof text === 'string' ? text : String(text);
+			if (sql.includes('SELECT cursor')) {
+				return { rows: cursor != null ? [{ cursor }] : [], rowCount: cursor != null ? 1 : 0 };
+			}
+			cursor = (values?.[3] as string | null | undefined) ?? cursor;
+			error = (values?.[4] as string | null | undefined) ?? null;
+			return { rows: [], rowCount: 1 };
+		},
+		begin: unused,
+		txQuery: unused,
+		commit: unused,
+		rollback: unused,
+		batch: unused,
+		txBatch: unused
+	} as HostDbBinding & {
+		readonly storedCursor: () => string | null;
+		readonly storedError: () => string | null;
+	};
+}
 
 const OUTBOX_ROW = {
 	norbital_id: '11111111-1111-4111-8111-111111111111',
@@ -91,13 +125,13 @@ describe('integration jobs', () => {
 	 * is roughly how it went unnoticed that nothing ever drove one.
 	 */
 	it('drives a pull with no integrationDelivery configured', async () => {
-		const { seen, dispatch } = recordingDispatch((request) =>
-			request.kind === 'integration-cursor' && request.action === 'read' ? { cursor: 'page-1' } : {}
-		);
+		const { seen, dispatch } = recordingDispatch(() => ({}));
+		const db = memoryCursorDb('page-1');
 		const requests: { url: string; authorization: string | null }[] = [];
 		const jobs = workspaceJobs({
 			manifest: manifest({ inbound: { 'quotes.receive.catalogue': PULL_ORIGIN } }),
 			dispatch,
+			db,
 			organizationId: 'org-1',
 			secrets: (name) => (name === 'REGISTRY_KEY' ? 'live-value' : undefined),
 			fetch: async (input, init) => {
@@ -118,25 +152,25 @@ describe('integration jobs', () => {
 			{ url: 'https://saas.example/v1/quotes?since=page-1', authorization: 'Bearer live-value' }
 		]);
 		expect(seen.map((request) => [request.kind, request.action ?? request.direction])).toEqual([
-			['integration-cursor', 'read'],
-			['integration', 'receive'],
-			['integration-cursor', 'write']
+			['integration', 'receive']
 		]);
+		expect(seen.some((request) => request.kind === 'integration-cursor')).toBe(false);
 		// A retry of this cursor names the same durable receipt; provider payload shape does not decide
 		// whether a pull page is new.
-		expect(seen[1]?.eventId).toMatch(/^pull:[0-9a-f]{64}$/);
+		expect(seen[0]?.eventId).toMatch(/^pull:[0-9a-f]{64}$/);
 		// Advanced only after the rows landed, and to what the remote said comes next.
-		expect(seen[2]).toMatchObject({ cursor: 'page-2', error: null });
+		expect(db.storedCursor()).toBe('page-2');
+		expect(db.storedError()).toBeNull();
 	});
 
 	/** A failed pull must not advance the cursor, or the page it never imported is skipped forever. */
 	it('leaves the cursor where it was when the remote refuses', async () => {
-		const { seen, dispatch } = recordingDispatch((request) =>
-			request.kind === 'integration-cursor' && request.action === 'read' ? { cursor: 'page-1' } : {}
-		);
+		const { seen, dispatch } = recordingDispatch(() => ({}));
+		const db = memoryCursorDb('page-1');
 		const jobs = workspaceJobs({
 			manifest: manifest({ inbound: { 'quotes.receive.catalogue': PULL_ORIGIN } }),
 			dispatch,
+			db,
 			organizationId: 'org-1',
 			log: () => {},
 			secrets: () => 'live-value',
@@ -145,8 +179,9 @@ describe('integration jobs', () => {
 		await expect(jobs.find((job) => job.name.includes('integration-pull'))!.run()).rejects.toThrow(
 			/refused/
 		);
-		expect(seen.at(-1)).toMatchObject({ action: 'write', cursor: 'page-1' });
-		expect(String(seen.at(-1)?.error)).toMatch(/503/);
+		expect(seen.some((request) => request.kind === 'integration-cursor')).toBe(false);
+		expect(db.storedCursor()).toBe('page-1');
+		expect(String(db.storedError())).toMatch(/503/);
 	});
 
 	/** A declared secret the host cannot supply fails naming the key, not as a far-away 401. */
@@ -154,6 +189,7 @@ describe('integration jobs', () => {
 		const jobs = workspaceJobs({
 			manifest: manifest({ inbound: { 'quotes.receive.catalogue': PULL_ORIGIN } }),
 			dispatch: async () => ({ cursor: null }),
+			db: memoryCursorDb(),
 			organizationId: 'org-1',
 			log: () => {},
 			secrets: () => undefined,

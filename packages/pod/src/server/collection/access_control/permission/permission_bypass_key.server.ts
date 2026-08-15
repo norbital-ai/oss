@@ -15,7 +15,7 @@
 import { SECRET_PERMISSION_BYPASS_KEY } from '$lib/server/env.js';
 import { getRequestEvent } from '$lib/server/request-context.js';
 import { TRUSTED_PERMISSION_BYPASS_HEADER } from '$lib/host/identity.js';
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { createAsyncStore } from '$lib/server/async-store.js';
 
 const RAW_KEY = SECRET_PERMISSION_BYPASS_KEY;
 
@@ -43,7 +43,7 @@ function getTrustedHostBypassKey(): string | undefined {
 	}
 }
 
-const bypassStorage = new AsyncLocalStorage<string | undefined>();
+const bypassStorage = createAsyncStore<string | undefined>();
 
 /** The bypass key active for the current async context, if any. */
 export function getCurrentPermissionBypassKey(): string | undefined {

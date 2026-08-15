@@ -370,7 +370,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				{
 					automation_name: INTERACTIVE_AGENT_AUTOMATION_NAME,
 					orchestration_status: 'admitted',
-					artifact_id: 'guest-admit'
+					artifact_id: 'test-artifact'
 				}
 			]);
 
@@ -473,7 +473,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 		}
 	});
 
-	it('leaves the turn running after agent/start until the host admits guest-admit, then executes real tools', async () => {
+	it('leaves the turn running after agent/start until the host admits the test artifact, then executes real tools', async () => {
 		const schemaSql = await harness
 			.request({ method: 'GET', path: 'sync/schema' }, member)
 			.then((response) => response.text());
@@ -533,7 +533,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			);
 			expect(job.rows[0]).toMatchObject({
 				orchestration_status: 'admitted',
-				artifact_id: 'guest-admit'
+				artifact_id: 'test-artifact'
 			});
 			const receiptId = job.rows[0]!.norbital_id;
 

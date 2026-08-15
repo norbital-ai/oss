@@ -1,31 +1,24 @@
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord, updateRecord } from '$lib/server/collection/collection_ops.server.js';
 import { UserRoleSchema, type TSeatCensus } from '@norbital-ai/platform-utils/system/types';
+import { seatCensusOnDb, workspaceMembershipOnDb } from '$lib/host/directory.js';
 
 export type ResolvedSubject = {
 	readonly userId: string;
 	readonly created: boolean;
 };
 
+function tenantDirectoryDb() {
+	const ctx = getWorkspace({ provision: true });
+	return {
+		query: (sql: string, values?: readonly unknown[]) =>
+			ctx.tenantDb.query({ text: sql, values: values ? [...values] : [] })
+	};
+}
+
 /** Billable seats: active humans only, so an agent user never appears on an invoice. */
 export async function seatCensus(): Promise<TSeatCensus> {
-	const ctx = getWorkspace({ provision: true });
-	const result = await ctx.tenantDb.query<{ role: string; seats: string }>({
-		text: `SELECT role, COUNT(*)::text AS seats
-		         FROM "user"
-		        WHERE status = 'active' AND kind = 'human'
-		        GROUP BY role`,
-		values: []
-	});
-	const census: TSeatCensus = { admin: 0, advanced: 0, basic: 0 };
-	const counts: Record<string, number> = { ...census };
-	for (const row of result.rows) {
-		// An unrecognized role is counted as `basic` rather than dropped: silently omitting a seat
-		// under-bills, and a role that fell out of the enum is a migration defect, not a free seat.
-		const role = UserRoleSchema.safeParse(row.role).success ? row.role : 'basic';
-		counts[role] = (counts[role] ?? 0) + Number(row.seats);
-	}
-	return { admin: counts.admin ?? 0, advanced: counts.advanced ?? 0, basic: counts.basic ?? 0 };
+	return seatCensusOnDb(tenantDirectoryDb());
 }
 
 /**
@@ -65,20 +58,7 @@ export async function emitMembershipEvent(input: {
 export async function workspaceMembership(): Promise<
 	readonly { readonly email: string; readonly role: string; readonly status: string }[]
 > {
-	const ctx = getWorkspace({ provision: true });
-	const result = await ctx.tenantDb.query<{
-		email: string;
-		role: string | null;
-		status: string | null;
-	}>({
-		text: `SELECT email, role, status FROM "user" WHERE kind = 'human' ORDER BY email`,
-		values: []
-	});
-	return result.rows.map((row) => ({
-		email: row.email,
-		role: row.role ?? 'basic',
-		status: row.status ?? 'active'
-	}));
+	return workspaceMembershipOnDb(tenantDirectoryDb());
 }
 
 /**

@@ -85,7 +85,8 @@ Engine code lives in two halves:
   `packages/pod/src/ui/state/client.ts` and `packages/pod/src/ui/state/remote-query.svelte.ts`
 - **server** — `packages/pod/src/server/collection/sync/`
 
-A compatible host provides the server transport. The host owns the SSE socket and LISTEN/NOTIFY.
+A compatible host provides the server transport. The host owns the SSE socket and publishes
+`wakeSync` after `sync_outbox` commits. The host never LISTENs on the tenant database.
 `sync/shape`, `sync/head`, `sync/schema`, `sync/mutate`, and `sync/diff` are one-shot functions.
 The sync engine itself is a Pod concern and does not depend on any particular host application.
 
@@ -156,14 +157,15 @@ Pod's server has a **single global change feed** (`sync_outbox`, tailed by `(xid
 that, the correct client sync unit is the **collection**, not the query shape. That is the
 central design decision below.
 
-Liveness is PostgreSQL `NOTIFY`, correctness is the durable outbox. The **host** holds the SSE
-connection and the LISTEN. When a frame needs a policy-scoped read, the host admits `sync/diff`
-(2s, isolate → 0) and then writes the SSE event. The guest never holds the socket. A commit that
-lands in the check-to-sleep window therefore makes the wait resolve immediately instead of leaving
-later agent text, tool results, titles, or terminal statuses invisible until another unrelated
-mutation or a refresh. One host subscription fans out to all stream waiters; Pod does not install
-a database listener per browser. Isolation is binding: authenticate the session first, bind the
-stream to `claims.organizationId`, and subscribe that connection to that org’s LISTEN only.
+Liveness is host `wakeSync` after the outbox commit; correctness is the durable outbox. The
+**host** holds the SSE connection and publishes the wake. When a frame needs a policy-scoped
+read, the host admits `sync/diff` (2s, isolate → 0) and then writes the SSE event. The guest
+never holds the socket and never LISTENs. A commit that lands in the check-to-sleep window
+therefore makes the wait resolve immediately instead of leaving later agent text, tool results,
+titles, or terminal statuses invisible until another unrelated mutation or a refresh. One host
+subscription fans out to all stream waiters. Isolation is binding: authenticate the session
+first, bind the stream to `claims.organizationId`, and subscribe that connection to that org’s
+wake bus only.
 
 ### 2.1 Where Pod landed relative to them
 
@@ -616,6 +618,6 @@ Honest list of what this design does not yet do.
 | **Client storage**       | `packages/pod/src/ui/sync/`                | `pglite-worker.ts` (SharedWorker PGlite), `pglite-worker-bridge.ts` (postMessage bridge), `browser-bootstrap.ts` (browser-side bootstrap)                                         |
 | **Client entry**         | `packages/pod/src/ui/state/`               | `client.ts` (browser API proxy), `packages/pod/src/ui/state/remote-query.svelte.ts` (remote query transport)                                                                      |
 | **Server wire protocol** | `packages/pod/src/server/collection/sync/` | `sync-endpoints.server.ts` (schema, shape, head, mutate, diff), `sync-outbox.server.ts` (change feed append), `outbox-tailer.server.ts` (cursor management)                        |
-| **Host SSE**             | `packages/pod/src/host/sync-stream.ts`     | Host LISTEN/NOTIFY + SSE pump. Guest never holds the socket.                                                                                                                      |
+| **Host SSE**             | `packages/pod/src/host/sync-stream.ts`     | Host `wakeSync` + SSE pump. Guest never holds the socket. The host never LISTENs on the tenant database.                                                                          |
 
 Tests: `packages/pod/tests/sync/` — `pod-sync-p0.test.ts`, `pod-sync-client.test.ts`, `sync-e2e-comprehensive.test.ts`, `sync-e2e.test.ts`, `sync-http-e2e.test.ts`, `client-sync.test.ts`, `mutation-rejection.test.ts`.

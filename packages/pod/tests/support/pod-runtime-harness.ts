@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFileSync } from 'node:child_process';
 import {
 	cp,
@@ -14,9 +15,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Client, Pool } from 'pg';
+import { Pool } from 'pg';
 import { PostgresHostDbBinding } from '../../src/host/db.js';
 import { isHostSyncStreamPath, serveHostSyncStream } from '../../src/host/sync-stream.js';
+import { attachSyncWakeToDb, createInProcessSyncWakeBus, type SyncWakeBus } from '../../src/host/sync-wake.js';
 import type {
 	HostAiBinding,
 	HostFileStorageBinding,
@@ -26,6 +28,16 @@ import type {
 } from '@norbital-ai/platform-utils/runtime/binding';
 import type { DurableHostEffectRequest } from '../../src/host/types.js';
 import { settleHostReceiptEffect } from '../../src/host/settle-receipt-effect.js';
+import { parseAdmitHeaders, startAdmit, type PodAdmit } from '../../src/server/admit.js';
+import { dispatchHostOrGuest } from '../../src/host/mail.js';
+import {
+	ADMIT_ARTIFACT_HEADER,
+	serializeAdmitArtifact,
+	withAdmitArtifact
+} from '../../src/host/admit-artifact.js';
+import { parseNorbitalManifest } from '@norbital-ai/platform-utils/manifest/parse';
+import { CHECKPOINT_MANIFEST_FILENAME } from '@norbital-ai/platform-utils/tenant_workspace/build-output';
+import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 import { INTERACTIVE_AGENT_AUTOMATION_NAME } from '../../src/server/run/automation-dispatch.server.js';
 
 import { linkCurrentPodWorkspaceDependencies } from './current-package-node-modules.js';
@@ -243,20 +255,55 @@ async function settleHarnessHostEffect(
 	}
 }
 
-type HandleTenantRequest = (
-	request: Request,
-	bindings: RuntimeFacilityBindings
-) => Promise<Response>;
-
-type HandleHostCommand = (
-	command: unknown,
+type GuestDispatch = (
+	name: string,
+	payload: unknown,
 	bindings: RuntimeFacilityBindings,
-	identity: { userId: string; organizationId: string; organizationName: string }
+	admit?: PodAdmit | null
 ) => Promise<unknown>;
 
-type HostSyncWake = {
-	subscribe(wake: () => void): () => void;
-};
+const ADMIT_HEADER_NAMES = new Set(['x-norbital-timeout-ms', 'x-norbital-deadline-at']);
+
+/** Runtime path without `/_runtime/`. */
+function runtimeNameFromPath(pathname: string): string {
+	if (pathname.startsWith('/_runtime/')) return pathname.slice('/_runtime/'.length);
+	return pathname.replace(/^\//, '');
+}
+
+/** Identity headers only — admit is an argument to `dispatch`. */
+function requestIdentityHeaders(request: Request): Record<string, string> {
+	const headers: Record<string, string> = {};
+	request.headers.forEach((value, name) => {
+		if (ADMIT_HEADER_NAMES.has(name.toLowerCase())) return;
+		headers[name] = value;
+	});
+	return headers;
+}
+
+/** Map one harness HTTP request onto the guest `dispatch` door. */
+async function dispatchHttpRequest(
+	dispatch: GuestDispatch,
+	request: Request,
+	bindings: RuntimeFacilityBindings
+): Promise<Response> {
+	const url = new URL(request.url);
+	const body =
+		request.method === 'GET' || request.method === 'HEAD' ? null : await request.text();
+	const result = (await dispatch(
+		runtimeNameFromPath(url.pathname),
+		{
+			method: request.method,
+			search: url.search,
+			headers: requestIdentityHeaders(request),
+			body
+		},
+		bindings,
+		parseAdmitHeaders(request.headers) ?? startAdmit(2_000)
+	)) as { readonly status: number; readonly headers: Record<string, string>; readonly bodyText: string };
+	return new Response(result.bodyText, { status: result.status, headers: result.headers });
+}
+
+type HostSyncWake = Pick<SyncWakeBus, 'subscribeSyncWake' | 'lastSyncSeq'>;
 
 
 const ORG_ID = '11111111-1111-4111-8111-111111111111';
@@ -511,43 +558,43 @@ export async function bootPodRuntime(
 	);
 
 	// Everything past this point can fail. Drop the database on the way out rather than leaving it.
-	let handleTenantRequest: HandleTenantRequest;
-	let handleHostCommand: HandleHostCommand;
+	let guestDispatch: GuestDispatch;
 	let pool: Pool;
-	let binding: PostgresHostDbBinding;
+	let binding: ReturnType<typeof attachSyncWakeToDb<PostgresHostDbBinding>>;
 	let schemaSql: string;
-	let notifyClient: Client | undefined;
-	let hostSyncWake: HostSyncWake = { subscribe: () => () => {} };
+	let compiledManifest: NorbitalManifest;
+	const hostSyncWake = createInProcessSyncWakeBus();
 	try {
+		(globalThis as { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??=
+			AsyncLocalStorage;
 		const runtimeModule = (await import(pathToFileURL(runtimePath).href)) as {
-			handlePodRequest?: HandleTenantRequest;
-			handlePodHostCommand?: HandleHostCommand;
+			dispatch?: GuestDispatch;
+			handlePodHostCommand?: (command: unknown) => Promise<unknown>;
 		};
-		if (!runtimeModule.handlePodRequest || !runtimeModule.handlePodHostCommand) {
-			throw new Error('built pod runtime is missing its request/host-command entry points');
+		if (!runtimeModule.dispatch && !runtimeModule.handlePodHostCommand) {
+			throw new Error('built pod runtime is missing its dispatch entry point');
 		}
-		handleTenantRequest = runtimeModule.handlePodRequest;
-		handleHostCommand = runtimeModule.handlePodHostCommand;
+		guestDispatch =
+			runtimeModule.dispatch ??
+			(async (_name, payload, _bindings, _admit) => {
+				if (!runtimeModule.handlePodHostCommand) {
+					throw new Error('built pod runtime is missing its dispatch entry point');
+				}
+				return runtimeModule.handlePodHostCommand(payload);
+			});
+		const manifestSource = await readFile(
+			path.join(templateRoot, '.norbital', 'build', CHECKPOINT_MANIFEST_FILENAME),
+			'utf8'
+		);
+		compiledManifest = parseNorbitalManifest(JSON.parse(manifestSource));
 		pool = new Pool({ connectionString: pg.connectionString, max: 12 });
-		binding = new PostgresHostDbBinding(pg.connectionString, { pool });
+		binding = attachSyncWakeToDb(
+			new PostgresHostDbBinding(pg.connectionString, { pool }),
+			hostSyncWake,
+			ORG_ID
+		);
 		schemaSql = await loadSchemaSql(templateRoot);
-
-		// Host LISTEN. Guest handlePodRequest never sees the stream socket.
-		notifyClient = new Client({ connectionString: pg.connectionString });
-		const listeners = new Set<() => void>();
-		await notifyClient.connect();
-		notifyClient.on('notification', () => {
-			for (const listener of listeners) listener();
-		});
-		await notifyClient.query('LISTEN norbital_sync');
-		hostSyncWake = {
-			subscribe(wake) {
-				listeners.add(wake);
-				return () => listeners.delete(wake);
-			}
-		};
 	} catch (err) {
-		await notifyClient?.end().catch(() => undefined);
 		pg.stop();
 		if (usesOverlay)
 			await rm(templateRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -569,24 +616,41 @@ export async function bootPodRuntime(
 				'x-norbital-request-id',
 				`req_${Math.abs(hashString(init.path + identity.userId))}`
 			);
+			headers.set(ADMIT_ARTIFACT_HEADER, serializeAdmitArtifact(HARNESS_AUTOMATION_ARTIFACT));
 			const request = new Request(`http://pod.local/_runtime/${init.path}`, {
 				method: init.method,
 				headers,
 				signal: init.signal,
 				...(init.body ? { body: init.body } : {})
 			});
-			return dispatchTenantRequest(request, handleTenantRequest, { db: binding, ...facilities }, hostSyncWake);
+			return dispatchTenantRequest(request, guestDispatch, { db: binding, ...facilities }, hostSyncWake);
 		},
 		hostCommand(command) {
-			return handleHostCommand(
+			return dispatchHostOrGuest({
 				command,
-				{ db: binding, ...facilities },
-				{ userId: ADMIN_ID, organizationId: ORG_ID, organizationName: ORG_NAME }
-			);
+				db: binding,
+				manifest: compiledManifest,
+				guest: (guestCommand) => {
+					const injected = withAdmitArtifact(guestCommand, HARNESS_AUTOMATION_ARTIFACT);
+					const kind =
+						injected != null && typeof injected === 'object' && 'kind' in injected
+							? String((injected as { kind: unknown }).kind)
+							: '';
+					return guestDispatch(
+						kind,
+						{
+							...(injected != null && typeof injected === 'object' ? injected : { command: injected }),
+							identity: { userId: ADMIN_ID, organizationId: ORG_ID, organizationName: ORG_NAME }
+						},
+						{ db: binding, ...facilities },
+						startAdmit(2_000)
+					);
+				}
+			});
 		},
 		async serveHttp(identity) {
 			const server = createServer((req, res) => {
-				void handleNodeRequest(req, res, identity, handleTenantRequest, {
+				void handleNodeRequest(req, res, identity, guestDispatch, {
 					db: binding,
 					...facilities
 				}, hostSyncWake).catch((cause: unknown) => {
@@ -602,7 +666,6 @@ export async function bootPodRuntime(
 			};
 		},
 		async stop() {
-			await notifyClient?.end().catch(() => undefined);
 			await binding.close();
 			await pool.end().catch(() => undefined);
 			pg.stop();
@@ -614,28 +677,33 @@ export async function bootPodRuntime(
 
 function dispatchTenantRequest(
 	request: Request,
-	handle: HandleTenantRequest,
+	dispatch: GuestDispatch,
 	bindings: RuntimeFacilityBindings,
 	hostSyncWake: HostSyncWake
 ): Promise<Response> {
 	if (!isHostSyncStreamPath(new URL(request.url).pathname)) {
-		return handle(request, bindings);
+		return dispatchHttpRequest(dispatch, request, bindings);
 	}
 	const served = serveHostSyncStream({
 		path: `${new URL(request.url).pathname}${new URL(request.url).search}`,
 		signal: request.signal,
 		pullDiff: async (diffPath) => {
-			const response = await handle(
-				new Request(new URL(diffPath, request.url), {
+			const diffUrl = new URL(diffPath, 'http://pod.local');
+			const pulled = (await dispatch(
+				runtimeNameFromPath(diffUrl.pathname),
+				{
 					method: 'GET',
-					headers: request.headers,
-					signal: request.signal
-				}),
-				bindings
-			);
-			return { status: response.status, bodyText: await response.text() };
+					search: diffUrl.search,
+					headers: requestIdentityHeaders(request),
+					body: null
+				},
+				bindings,
+				parseAdmitHeaders(request.headers) ?? startAdmit(2_000)
+			)) as { readonly status: number; readonly bodyText: string };
+			return { status: pulled.status, bodyText: pulled.bodyText };
 		},
-		subscribe: (wake) => hostSyncWake.subscribe(wake)
+		subscribe: (wake) => hostSyncWake.subscribeSyncWake(ORG_ID, () => wake()),
+		lastSeq: () => hostSyncWake.lastSyncSeq(ORG_ID)
 	});
 	return Promise.resolve(new Response(served.body, { status: served.status, headers: served.headers }));
 }
@@ -645,7 +713,7 @@ async function handleNodeRequest(
 	req: IncomingMessage,
 	res: ServerResponse,
 	identity: Identity,
-	handle: HandleTenantRequest,
+	handle: GuestDispatch,
 	bindings: RuntimeFacilityBindings,
 	hostSyncWake: HostSyncWake
 ): Promise<void> {
@@ -659,6 +727,7 @@ async function handleNodeRequest(
 	headers.set('x-norbital-org-id', ORG_ID);
 	headers.set('x-norbital-org-name', ORG_NAME);
 	headers.set('x-norbital-base-scope-json', baseScope(identity));
+	headers.set(ADMIT_ARTIFACT_HEADER, serializeAdmitArtifact(HARNESS_AUTOMATION_ARTIFACT));
 	const request = new Request(`http://pod.local${req.url ?? '/'}`, {
 		method: req.method,
 		headers,

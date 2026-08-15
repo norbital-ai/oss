@@ -10,12 +10,10 @@ import {
 	type DurableAutomationEffect
 } from './automation-replay.server.js';
 import { executeAutomationHandler } from './tenant_run.js';
+import type { AdmitArtifact } from './admit-artifact.js';
 
 /** Interactive chat jobs. `automation_run.automation_name` stays null; this is only the job key. */
 export const INTERACTIVE_AGENT_AUTOMATION_NAME = 'agent:interactive';
-
-/** Stamped by guest admit; Core's next `admit` rewrites these to the live artifact. */
-export const GUEST_ADMIT_ARTIFACT_MARKER = 'guest-admit';
 
 export function channelAgentAutomationName(channelKey: string): string {
 	return `channel:${channelKey}`;
@@ -158,19 +156,6 @@ export async function admitEventAutomations(
 				params
 			);
 		}
-		await ctx.tenantDb.query(
-			`UPDATE _norbital_automation_job
-			    SET artifact_id = $1, checkpoint_id = $2, tree_hash = $3, runtime_version = $4,
-			        updated_at = CURRENT_TIMESTAMP
-			  WHERE orchestration_status = 'admitted' AND artifact_id = $5`,
-			[
-				artifact.artifactId,
-				artifact.checkpointId,
-				artifact.treeHash,
-				artifact.runtimeVersion,
-				GUEST_ADMIT_ARTIFACT_MARKER
-			]
-		);
 		if (batch.rows.length > 0) {
 			await ctx.tenantDb.query(
 				`UPDATE _norbital_automation_cursor SET xid = $1::xid8, seq = $2::bigint
@@ -247,6 +232,7 @@ export async function admitAgentTurn(
 		readonly triggerKey: string;
 		readonly originScope: Record<string, unknown>;
 		readonly snapshot: Record<string, unknown>;
+		readonly artifact: AdmitArtifact;
 	}
 ): Promise<void> {
 	await ctx.tenantDb.query(
@@ -258,10 +244,10 @@ export async function admitAgentTurn(
 		[
 			input.automationName,
 			input.triggerKey,
-			GUEST_ADMIT_ARTIFACT_MARKER,
-			GUEST_ADMIT_ARTIFACT_MARKER,
-			GUEST_ADMIT_ARTIFACT_MARKER,
-			GUEST_ADMIT_ARTIFACT_MARKER,
+			input.artifact.artifactId,
+			input.artifact.checkpointId,
+			input.artifact.treeHash,
+			input.artifact.runtimeVersion,
 			JSON.stringify(input.originScope),
 			JSON.stringify(input.snapshot),
 			input.triggerKey

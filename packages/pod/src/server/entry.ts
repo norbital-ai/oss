@@ -17,13 +17,8 @@ import {
 } from '$lib/authoring/workspace/workspace-runtime.js';
 import { registerTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { dispatchRuntimeRun, parseRuntimeRunRequest } from '$lib/server/run/tenant_run.js';
-import {
-	admitHeaders,
-	parseAdmitHeaderRecord,
-	parseAdmitHeaders,
-	type PodAdmit
-} from './admit.js';
-import { createCallRequest, readFetchRequest } from './call-request.js';
+import { parseAdmitHeaders, type PodAdmit } from './admit.js';
+import { createCallRequest, headerLookup, readFetchRequest } from './call-request.js';
 import { runWithPodCall } from './pod-call.js';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 
@@ -57,34 +52,136 @@ function cookieValue(request: PodRequestEvent['request'], name: string): string 
 	return undefined;
 }
 
-/** Build the request event the guest runtime already understands from host-written headers. */
-function createEvent(
-	request: PodRequestEvent['request'],
+const ADMIT_HEADER_NAMES = new Set(['x-norbital-timeout-ms', 'x-norbital-deadline-at']);
+
+export type HttpDispatchPayload = {
+	readonly method: string;
+	readonly search?: string;
+	readonly headers: Record<string, string>;
+	readonly body: string | null;
+};
+
+/** Strip admit headers so the guest never sizes work from a client- or host-written costume. */
+function identityHeaders(headers: Record<string, string>): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [key, value] of Object.entries(headers)) {
+		if (ADMIT_HEADER_NAMES.has(key.toLowerCase())) continue;
+		out[key] = value;
+	}
+	return out;
+}
+
+/** True when `payload` is the HTTP-shaped tenant call, not a host-command kind. */
+function isHttpDispatchPayload(payload: unknown): payload is HttpDispatchPayload {
+	if (payload == null || typeof payload !== 'object') return false;
+	const record = payload as Record<string, unknown>;
+	return (
+		typeof record.method === 'string' &&
+		record.headers != null &&
+		typeof record.headers === 'object' &&
+		!Array.isArray(record.headers) &&
+		'body' in record
+	);
+}
+
+/** Path the existing runtime handlers already understand. Never `tenant.local`. */
+function dispatchHref(name: string, search: string): string {
+	const pathname = name.startsWith('_pod/') ? `/${name}` : `/_runtime/${name}`;
+	return `http://pod.local${pathname}${search}`;
+}
+
+/** Build the request event the guest runtime already understands from a named dispatch. */
+function createDispatchEvent(
+	name: string,
+	payload: HttpDispatchPayload,
 	bindings: RuntimeFacilityBindings
 ): PodRequestEvent {
-	const url = new URL(request.url);
-	const runtimePath = url.pathname.startsWith('/_runtime/')
-		? url.pathname.slice('/_runtime/'.length)
-		: '';
+	const headers = identityHeaders(payload.headers);
+	const search = payload.search ?? '';
+	const request = createCallRequest({
+		method: payload.method,
+		url: dispatchHref(name, search),
+		headers,
+		bodyText: payload.body
+	});
 	return {
 		request,
-		params: { path: runtimePath },
+		params: { path: name },
 		platform: { bindings },
 		locals: {
 			db: bindings.db,
-			// Identity comes from the request or not at all. Every caller that reaches here has already
-			// proven it is the trusted host and re-issued the request with the identity it established,
-			// so a request that arrives without one is a request nobody vouched for — and an ambient
-			// fallback would serve it under an organization nobody proved.
-			identity: request.headers.get('x-norbital-user-id')?.trim() ?? '',
+			identity: headerLookup(headers, 'x-norbital-user-id')?.trim() ?? '',
 			org: {
-				id: request.headers.get('x-norbital-org-id')?.trim() ?? '',
-				name: request.headers.get('x-norbital-org-name')?.trim() ?? ''
+				id: headerLookup(headers, 'x-norbital-org-id')?.trim() ?? '',
+				name: headerLookup(headers, 'x-norbital-org-name')?.trim() ?? ''
 			},
-			zone: request.headers.get('x-norbital-zone') === 'preview' ? 'preview' : 'live'
+			zone: headerLookup(headers, 'x-norbital-zone') === 'preview' ? 'preview' : 'live'
 		},
 		fetch: globalThis.fetch,
-		cookies: { get: (name) => cookieValue(request, name) }
+		cookies: { get: (cookieName) => cookieValue(request, cookieName) }
+	};
+}
+
+function readHostIdentity(payload: unknown): PodHostIdentity | null {
+	if (payload == null || typeof payload !== 'object') return null;
+	const record = payload as Record<string, unknown>;
+	const nested = record.identity;
+	if (nested == null || typeof nested !== 'object') return null;
+	const source = nested as Record<string, unknown>;
+	const userId = typeof source.userId === 'string' ? source.userId : '';
+	const organizationId = typeof source.organizationId === 'string' ? source.organizationId : '';
+	const organizationName = typeof source.organizationName === 'string' ? source.organizationName : '';
+	if (!userId && !organizationId) return null;
+	return {
+		userId,
+		organizationId,
+		organizationName,
+		...(source.baseScope !== undefined ? { baseScope: source.baseScope } : {})
+	};
+}
+
+function hostCommandPayload(payload: unknown): unknown {
+	if (payload == null || typeof payload !== 'object') return payload;
+	const record = { ...(payload as Record<string, unknown>) };
+	delete record.identity;
+	return record;
+}
+
+/** Identity-only event for a host-command kind. Never `tenant.local`. */
+function createHostCommandEvent(
+	identity: PodHostIdentity | null,
+	bindings: RuntimeFacilityBindings
+): PodRequestEvent {
+	const headers: Record<string, string> = {};
+	if (identity) {
+		headers['x-norbital-user-id'] = identity.userId;
+		headers['x-norbital-org-id'] = identity.organizationId;
+		headers['x-norbital-org-name'] = identity.organizationName;
+		if (identity.baseScope) {
+			headers[NORBITAL_BASE_SCOPE_HEADER] = JSON.stringify(identity.baseScope);
+		}
+	}
+	const request = createCallRequest({
+		method: 'POST',
+		url: 'http://pod.local/_host-command',
+		headers,
+		bodyText: null
+	});
+	return {
+		request,
+		params: { path: '' },
+		platform: { bindings },
+		locals: {
+			db: bindings.db,
+			identity: identity?.userId ?? '',
+			org: {
+				id: identity?.organizationId ?? '',
+				name: identity?.organizationName ?? ''
+			},
+			zone: 'live'
+		},
+		fetch: globalThis.fetch,
+		cookies: { get: () => undefined }
 	};
 }
 
@@ -139,34 +236,29 @@ async function dispatchResultFromResponse(response: Response): Promise<PodDispat
 	};
 }
 
-export type PodDispatchInput = {
-	readonly method: string;
-	readonly url: string;
-	readonly headers: Record<string, string>;
-	readonly bodyText: string | null;
-};
-
 export type PodDispatchResult = {
 	readonly status: number;
 	readonly headers: Record<string, string>;
 	readonly bodyText: string;
 };
 
-/**
- * Guest dispatch entry for isolate and other non-Fetch callers. Parses the host's admit headers and
- * runs the request under one PodCall so `remainingMs()` is visible to every function the request
- * reaches.
- */
-export async function handlePodDispatch(
-	input: PodDispatchInput,
-	bindings: RuntimeFacilityBindings,
-	admit?: PodAdmit | null
-): Promise<PodDispatchResult> {
-	const resolvedAdmit = admit !== undefined ? admit : parseAdmitHeaderRecord(input.headers);
-	const event = createEvent(createCallRequest(input), bindings);
+/** The trusted host's identity for a private control-plane command. */
+export type PodHostIdentity = {
+	readonly userId: string;
+	readonly organizationId: string;
+	readonly organizationName: string;
+	readonly baseScope?: unknown;
+};
 
+async function dispatchHttp(
+	name: string,
+	payload: HttpDispatchPayload,
+	bindings: RuntimeFacilityBindings,
+	admit: PodAdmit | null
+): Promise<PodDispatchResult> {
+	const event = createDispatchEvent(name, payload, bindings);
 	return runWithPodCall(
-		{ admit: resolvedAdmit, event, workspace: null, beforeApi: createBeforeApi() },
+		{ admit, event, workspace: null, beforeApi: createBeforeApi() },
 		async () => {
 			try {
 				const marks: string[] = [];
@@ -201,33 +293,76 @@ export async function handlePodDispatch(
 	);
 }
 
+async function dispatchHostCommand(
+	payload: unknown,
+	bindings: RuntimeFacilityBindings,
+	admit: PodAdmit | null
+): Promise<unknown> {
+	const identity = readHostIdentity(payload);
+	const command = hostCommandPayload(payload);
+	const event = createHostCommandEvent(identity, bindings);
+	return runWithPodCall(
+		{ admit, event, workspace: null, beforeApi: createBeforeApi() },
+		async () => {
+			const context = await buildCtx(event);
+			if (!context) error(401, 'Host command workspace context could not be established');
+			setPodCallWorkspace(context);
+			return dispatchRuntimeRun(parseRuntimeRunRequest(command));
+		}
+	);
+}
+
 /**
- * Self-host HTTP adapter. Parses the host's admit headers and runs the request through
- * `handlePodDispatch`, then re-wraps the plain result as a web Response.
+ * The one guest door. `name` is a runtime path without `/_runtime/` (`sync/diff`,
+ * `collections/findMany`, …) or a host-command kind (`automation`, `channel`, `agent`, …).
+ *
+ * HTTP-shaped payloads return `{ status, headers, bodyText }`. Host-command kinds return the
+ * current host-command result. Admit is an argument — the guest does not read admit headers.
+ */
+export async function dispatch(
+	name: string,
+	payload: unknown,
+	bindings: RuntimeFacilityBindings,
+	admit?: PodAdmit | null
+): Promise<unknown> {
+	const resolvedAdmit = admit ?? null;
+	if (isHttpDispatchPayload(payload)) {
+		return dispatchHttp(name, payload, bindings, resolvedAdmit);
+	}
+	return dispatchHostCommand(payload, bindings, resolvedAdmit);
+}
+
+/** Runtime path without `/_runtime/`, used by host-edge HTTP adapters. */
+export function runtimeNameFromPath(pathname: string): string {
+	if (pathname.startsWith('/_runtime/')) return pathname.slice('/_runtime/'.length);
+	return pathname.replace(/^\//, '');
+}
+
+/**
+ * Host-edge Fetch adapter. Not a guest-bundle export — maps a Request onto `dispatch`.
  */
 export async function handlePodRequest(
 	request: Request,
 	bindings: RuntimeFacilityBindings
 ): Promise<Response> {
 	const input = await readFetchRequest(request);
-	const result = await handlePodDispatch(input, bindings, parseAdmitHeaders(request.headers));
+	const url = new URL(request.url);
+	const result = (await dispatch(
+		runtimeNameFromPath(url.pathname),
+		{
+			method: input.method,
+			search: url.search,
+			headers: input.headers,
+			body: input.bodyText
+		},
+		bindings,
+		parseAdmitHeaders(request.headers)
+	)) as PodDispatchResult;
 	return new Response(result.bodyText, { status: result.status, headers: result.headers });
 }
 
-/** The trusted host's identity for a private control-plane command. */
-export type PodHostIdentity = {
-	readonly userId: string;
-	readonly organizationId: string;
-	readonly organizationName: string;
-	readonly baseScope?: unknown;
-};
-
 /**
- * Private control plane used by the trusted host. It is deliberately not reachable through
- * `handlePodRequest`, so a tenant identity can never claim jobs or inject system events.
- *
- * `admit` is the host's budget for this command. When omitted, admit headers on the synthetic
- * request are parsed — a host that already has a `PodAdmit` should pass it.
+ * Host-edge control-plane adapter. Not a guest-bundle export — maps a command onto `dispatch`.
  */
 export async function handlePodHostCommand(
 	command: unknown,
@@ -235,38 +370,14 @@ export async function handlePodHostCommand(
 	identity: PodHostIdentity,
 	admit?: PodAdmit | null
 ): Promise<unknown> {
-	const headers: Record<string, string> = {
-		'x-norbital-user-id': identity.userId,
-		'x-norbital-org-id': identity.organizationId,
-		'x-norbital-org-name': identity.organizationName
-	};
-	if (identity.baseScope) {
-		headers[NORBITAL_BASE_SCOPE_HEADER] = JSON.stringify(identity.baseScope);
-	}
-	if (admit) {
-		for (const [name, value] of Object.entries(admitHeaders(admit))) {
-			headers[name] = value;
-		}
-	}
-	const resolvedAdmit =
-		admit !== undefined ? admit : parseAdmitHeaderRecord(headers);
-	const event = createEvent(
-		createCallRequest({
-			method: 'POST',
-			url: 'http://tenant.local/_host-command',
-			headers,
-			bodyText: null
-		}),
-		bindings
-	);
-
-	return runWithPodCall(
-		{ admit: resolvedAdmit, event, workspace: null, beforeApi: createBeforeApi() },
-		async () => {
-			const context = await buildCtx(event);
-			if (!context) error(401, 'Host command workspace context could not be established');
-			setPodCallWorkspace(context);
-			return dispatchRuntimeRun(parseRuntimeRunRequest(command));
-		}
+	const kind =
+		command != null && typeof command === 'object' && 'kind' in command
+			? String((command as { kind: unknown }).kind)
+			: '';
+	return dispatch(
+		kind,
+		{ ...(command != null && typeof command === 'object' ? command : { command }), identity },
+		bindings,
+		admit ?? null
 	);
 }

@@ -5,7 +5,7 @@ import type {
 	TenantDbQueryInput,
 	TenantDbQueryResult
 } from './workspace_store.js';
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { createAsyncStore } from '$lib/server/async-store.js';
 export type { HostDbBinding } from '@norbital-ai/platform-utils/runtime/binding';
 
 export type CompilableSql = {
@@ -60,7 +60,7 @@ function mapTenantDbQueryResult<T>(result: {
  * mutations share that connection. Outside a transaction, queries use the pooled `query`.
  */
 export function createTenantDbFromBinding(binding: HostDbBinding): TenantDbClient {
-	const transactionStorage = new AsyncLocalStorage<string>();
+	const transactionStorage = createAsyncStore<string>();
 
 	const routedQuery: TenantDbQueryFn = async <T = Record<string, unknown>>(
 		sql: TenantDbQueryInput,

@@ -1,23 +1,15 @@
 import dedent from 'dedent';
-import { SYSTEM_COLLECTION_NAMES } from '@norbital-ai/platform-utils/system/collections';
-import { NON_TEMPORAL_SYSTEM_COLLECTIONS } from '@norbital-ai/platform-utils/system/workspace-schema';
+import {
+	NON_COLLECTION_INTERNALS,
+	NON_TEMPORAL_SYSTEM_COLLECTIONS,
+	SYSTEM_COLLECTIONS_INSERT_ONLY,
+	SYSTEM_COLLECTIONS_WITHOUT_APPROVAL_LOCK,
+	SYSTEM_COLLECTIONS_WITHOUT_OPS_GUARD,
+	replicaExcludedTables as replicaExcludedFromFlags
+} from '@norbital-ai/platform-utils/system/workspace-schema';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
 
-/**
- * Tables the ops guard exempts, as SQL literals.
- *
- * Derived from `SYSTEM_COLLECTION_NAMES` rather than restated. Two hand-copied versions of this list
- * had already drifted: adding a system collection meant remembering to edit SQL in a template literal,
- * and forgetting produced no compile error — only a runtime guard that rejected a legitimate write.
- * The internal tables below are not collections, so they are the only part that stays literal.
- */
-const INTERNAL_TABLES = [
-	'_approval_lock',
-	'_norbital_internal_schema',
-	'_norbital_sync_epoch',
-	'_norbital_automation_cursor',
-	'__drizzle_migrations'
-] as const;
+const INTERNAL_TABLES = NON_COLLECTION_INTERNALS;
 
 const sqlLiteralList = (names: Iterable<string>): string =>
 	[...new Set(names)]
@@ -25,18 +17,62 @@ const sqlLiteralList = (names: Iterable<string>): string =>
 		.map((name) => `'${name.replaceAll("'", "''")}'`)
 		.join(', ');
 
-/**
- * Tables the ops guard exempts: every system collection, plus the internal tables.
- *
- * This is a "who may write this table" question. System collection rows are written by paths other
- * than collection_ops, which do not set the GUC the guard checks, so all of them are exempt.
- */
-const opsGuardExemptTables = (): string =>
-	sqlLiteralList([...SYSTEM_COLLECTION_NAMES, ...INTERNAL_TABLES]);
+export type SchemaCollectionFlags = {
+	readonly nonTemporal: Iterable<string>;
+	readonly opsGuardExempt: Iterable<string>;
+	readonly approvalLockExempt: Iterable<string>;
+	readonly insertOnly: Iterable<string>;
+};
+
+function manifestExtensionFlag(
+	manifest: NorbitalManifest,
+	flag: 'history' | 'opsGuard' | 'approvalLock' | 'replica' | 'insertOnly',
+	match: boolean
+): string[] {
+	return Object.entries(manifest.collections)
+		.filter(([, collection]) => collection.extensions?.[flag] === match)
+		.map(([name]) => name);
+}
 
 /**
- * Tables the temporal-history refresh skips: the internal tables, plus whichever collections have
- * opted out of history.
+ * Tables the ops guard skips: leftover internals, plus every collection that has not opted in.
+ * System collections default to opted out; tenant collections default to opted in.
+ */
+export function opsGuardExemptCollections(manifest: NorbitalManifest): Set<string> {
+	return new Set([
+		...INTERNAL_TABLES,
+		...SYSTEM_COLLECTIONS_WITHOUT_OPS_GUARD,
+		...manifestExtensionFlag(manifest, 'opsGuard', false)
+	]);
+}
+
+/**
+ * Tables the approval-lock gate skips: leftover internals, plus every collection that opted out.
+ */
+export function approvalLockExemptCollections(manifest: NorbitalManifest): Set<string> {
+	return new Set([
+		...INTERNAL_TABLES,
+		...SYSTEM_COLLECTIONS_WITHOUT_APPROVAL_LOCK,
+		...manifestExtensionFlag(manifest, 'approvalLock', false)
+	]);
+}
+
+/** Collections that reject UPDATE/DELETE. */
+export function insertOnlyCollections(manifest: NorbitalManifest): Set<string> {
+	return new Set([
+		...SYSTEM_COLLECTIONS_INSERT_ONLY,
+		...manifestExtensionFlag(manifest, 'insertOnly', true)
+	]);
+}
+
+/** Tables omitted from the client replica DDL. */
+export function replicaExcludedTables(manifest: NorbitalManifest): string[] {
+	return replicaExcludedFromFlags(manifest.collections);
+}
+
+/**
+ * Tables the temporal-history refresh skips: the leftover internals, plus whichever collections
+ * have opted out of history.
  *
  * A different question from the ops guard — "does this table have a history relation" — and so
  * deliberately a different list. Sharing one was how ~17 system collections that do have history
@@ -44,6 +80,15 @@ const opsGuardExemptTables = (): string =>
  */
 const historyExemptTables = (nonTemporalCollections: Iterable<string>): string =>
 	sqlLiteralList([...INTERNAL_TABLES, ...nonTemporalCollections]);
+
+export function schemaCollectionFlags(manifest: NorbitalManifest): SchemaCollectionFlags {
+	return {
+		nonTemporal: nonTemporalCollections(manifest),
+		opsGuardExempt: opsGuardExemptCollections(manifest),
+		approvalLockExempt: approvalLockExemptCollections(manifest),
+		insertOnly: insertOnlyCollections(manifest)
+	};
+}
 
 /**
  * Every collection that has opted out of temporal history, read from the two places the flag is
@@ -370,187 +415,82 @@ export const SCHEMA_FUNCTIONS_SQL = dedent`
 /**
  * Idempotent tenant internals applied after manifest DDL (tables + triggers).
  *
- * Takes the non-temporal collections rather than deciding for itself, because the migration
- * generator has to make the same call and a second list is how the two came to disagree. The
- * caller reads them off the parsed manifest, where every collection carries its own `history` flag.
+ * Tables live in system collections. What remains here is the version stamp, singleton seed
+ * rows, leftover-notify cleanup, and the dynamic loops that attach triggers per collection —
+ * history relations included, because those are typed copies of whichever tables opted in.
  */
-export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): string => dedent`
+export function schemaPostDdlSql(
+	nonTemporal: Iterable<string>,
+	extras?: Omit<SchemaCollectionFlags, 'nonTemporal'>
+): string {
+	const opsGuardExempt = sqlLiteralList(
+		extras?.opsGuardExempt ?? [...SYSTEM_COLLECTIONS_WITHOUT_OPS_GUARD, ...INTERNAL_TABLES]
+	);
+	const approvalLockExempt = sqlLiteralList(
+		extras?.approvalLockExempt ?? [...SYSTEM_COLLECTIONS_WITHOUT_APPROVAL_LOCK, ...INTERNAL_TABLES]
+	);
+	const insertOnly = [...new Set(extras?.insertOnly ?? SYSTEM_COLLECTIONS_INSERT_ONLY)].sort();
+	const insertOnlyAttach = insertOnly
+		.map(
+			(name) => `
+    DO $insert_only_${name.replaceAll(/[^A-Za-z0-9_]/g, '_')}$
+    BEGIN
+      IF to_regclass('public.${name.replaceAll("'", "''")}') IS NOT NULL THEN
+        CREATE OR REPLACE FUNCTION _norbital_${name.replaceAll(/[^A-Za-z0-9_]/g, '_')}_insert_only() RETURNS trigger
+        LANGUAGE plpgsql AS $insert_only$
+        BEGIN
+          RAISE EXCEPTION '${name.replaceAll("'", "''")} is insert-only';
+        END;
+        $insert_only$;
+        DROP TRIGGER IF EXISTS _norbital_${name.replaceAll(/[^A-Za-z0-9_]/g, '_')}_insert_only ON ${name};
+        CREATE TRIGGER _norbital_${name.replaceAll(/[^A-Za-z0-9_]/g, '_')}_insert_only
+          BEFORE UPDATE OR DELETE ON ${name}
+          FOR EACH ROW EXECUTE FUNCTION _norbital_${name.replaceAll(/[^A-Za-z0-9_]/g, '_')}_insert_only();
+      END IF;
+    END
+    $insert_only_${name.replaceAll(/[^A-Za-z0-9_]/g, '_')}$;`
+		)
+		.join('\n');
+
+	return dedent`
     CREATE TABLE IF NOT EXISTS _norbital_internal_schema (
       version INT PRIMARY KEY,
       name TEXT NOT NULL,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Sync-engine change feed. collection_ops writes one row per committed collection
-    -- mutation in the same authoritative transaction as the data + audit + history, so
-    -- the feed is never lost and never partial. \`xid\` records the writing transaction
-    -- (pg_current_xact_id) so the tailer can apply a safe watermark: \`seq\` is assigned
-    -- at INSERT but transactions commit out of order, so a row is only safe to emit once
-    -- its xid drops below pg_snapshot_xmin(pg_current_snapshot()) — the oldest still
-    -- in-flight transaction. Ordered/exactly-once delivery follows from an xid-band cursor.
-    CREATE TABLE IF NOT EXISTS sync_outbox (
-      seq BIGSERIAL PRIMARY KEY,
-      collection TEXT NOT NULL,
-      record_id UUID NOT NULL,
-      action TEXT NOT NULL,
-      row_version INTEGER,
-	  origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb,
-	  record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
-      occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      xid xid8 NOT NULL DEFAULT pg_current_xact_id()
-    );
-	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb;
-	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
-	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_id UUID DEFAULT uuidv7();
-	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
-	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
-	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_sys_period tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)');
-	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_row_version INTEGER DEFAULT 1;
-	ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS norbital_approval_id UUID;
-    CREATE INDEX IF NOT EXISTS sync_outbox_xid_seq_idx ON sync_outbox (xid, seq);
-    -- Retention prunes by age, so the sweep needs to find old rows without a full scan.
-    CREATE INDEX IF NOT EXISTS sync_outbox_occurred_at_idx ON sync_outbox (occurred_at);
-
-    -- The compaction boundary: every change at or below \`pruned_through_seq\` has been discarded.
-    --
-    -- An unbounded change feed is not an option — it grows for the life of the tenant — but
-    -- pruning it without recording where creates a far worse failure than growth. A client whose
-    -- cursor points into the pruned range would resume from a feed that no longer contains its
-    -- changes, see no error, and stay silently and permanently wrong. \`min(seq)\` cannot answer
-    -- this either: prune the table empty and there is no minimum left to compare against.
-    --
-    -- So the boundary is durable and monotonic, and a cursor at or below it is answered with a
-    -- reset instead of a diff: the replica is discarded and rebuilt. This is the same contract
-    -- Electric states as its compaction boundary, and it is what makes retention safe.
-    CREATE TABLE IF NOT EXISTS _norbital_sync_compaction (
-      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-      pruned_through_seq BIGINT NOT NULL DEFAULT 0,
-      pruned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    INSERT INTO _norbital_sync_compaction (singleton)
-      VALUES (TRUE)
-      ON CONFLICT (singleton) DO NOTHING;
-
-    -- The event-automation consumer is tenant-wide and durable. It is independent of browser
-    -- stream cursors, so reconnecting clients can never duplicate automation dispatch.
-    CREATE TABLE IF NOT EXISTS _norbital_automation_cursor (
-      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-      xid xid8 NOT NULL DEFAULT '0'::xid8,
-      seq BIGINT NOT NULL DEFAULT 0
-    );
-    INSERT INTO _norbital_automation_cursor (singleton)
-      VALUES (TRUE)
-      ON CONFLICT (singleton) DO NOTHING;
-
-    -- Event effects are durable work, not part of the change-feed scan. Admission records one
-    -- immutable receipt per matching automation before moving its cursor. Core's DBOS workflow
-    -- owns retry/recovery; the tenant row is the transactional source of truth and final commit.
-    CREATE TABLE IF NOT EXISTS _norbital_automation_job (
-      norbital_id UUID PRIMARY KEY DEFAULT uuidv7(),
-      automation_name TEXT NOT NULL,
-      trigger_key TEXT NOT NULL,
-	  artifact_id TEXT NOT NULL,
-	  checkpoint_id TEXT NOT NULL,
-	  tree_hash TEXT NOT NULL,
-	  runtime_version TEXT NOT NULL,
-	  origin_scope JSONB NOT NULL DEFAULT '{}'::jsonb,
-	  record_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
-	  source_pointer TEXT NOT NULL,
-	  continuation JSONB NOT NULL DEFAULT '{"effects":[]}'::jsonb,
-	  effect_id TEXT,
-	  effect_ordinal INTEGER,
-	  effect_request_hash TEXT,
-	  effect_request JSONB,
-	  orchestration_status TEXT NOT NULL DEFAULT 'admitted'
-	    CHECK (orchestration_status IN ('admitted', 'waiting_effect', 'succeeded', 'failed')),
-      last_error TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	  UNIQUE (automation_name, trigger_key)
-    );
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_sys_period tstzrange DEFAULT tstzrange(CURRENT_TIMESTAMP, NULL, '[)');
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_row_version INTEGER DEFAULT 1;
-	ALTER TABLE _norbital_automation_job ADD COLUMN IF NOT EXISTS norbital_approval_id UUID;
-	CREATE UNIQUE INDEX IF NOT EXISTS _norbital_automation_job_trigger_idx
-	  ON _norbital_automation_job (automation_name, trigger_key);
-	CREATE INDEX IF NOT EXISTS _norbital_automation_job_claim_idx
-	  ON _norbital_automation_job (orchestration_status, created_at);
-
-    -- A durable identity for this physical tenant database. It survives ordinary migrations and
-    -- deploys, but a restore/re-provision/reset creates a fresh value. Clients persist the last
-    -- epoch they saw and discard their local replica when it changes; outbox sequence comparison
-    -- alone is insufficient because a bulk reseed can overtake the pre-reset sequence immediately.
-    CREATE TABLE IF NOT EXISTS _norbital_sync_epoch (
-      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-      epoch UUID NOT NULL DEFAULT uuidv7()
-    );
-    INSERT INTO _norbital_sync_epoch (singleton)
-      VALUES (TRUE)
-      ON CONFLICT (singleton) DO NOTHING;
-
-    -- The change feed announces itself. Postgres queues NOTIFY inside the transaction and
-    -- delivers it at COMMIT, which is exactly the moment a row becomes real — so a listener
-    -- wakes on the commit instead of asking repeatedly whether one happened. An idle
-    -- workspace therefore issues no queries at all.
-    --
-    -- Once per STATEMENT, not once per row. A bulk write is a single INSERT that appends
-    -- thousands of outbox rows, and per-row notification turned that into thousands of
-    -- deliveries — every one of them fanned out to every open stream on this database, each
-    -- waking to run the same catch-up query against the same committed state. The wake-ups
-    -- carry no information the first already carried: the feed is read from a cursor, so one
-    -- listener pass drains everything the statement wrote.
-    --
-    -- The transition table gives the statement's rows in one place. The payload is the highest
-    -- seq it appended, which is the only value that stays correct under coalescing — a listener
-    -- past it is past every row in the batch. Nothing reads the payload today; it is there so a
-    -- listener that wants to skip a catch-up can, without changing the trigger.
-    CREATE OR REPLACE FUNCTION _norbital_sync_notify() RETURNS trigger
-    LANGUAGE plpgsql AS $sync_notify$
-    DECLARE
-      latest_seq BIGINT;
+    -- Singleton rows for host-internal collections. The tables themselves are system
+    -- collections; these inserts are data bootstrap after drizzle has created them.
+    DO $seed_singletons$
     BEGIN
-      SELECT MAX(seq) INTO latest_seq FROM _norbital_sync_inserted;
-      IF latest_seq IS NOT NULL THEN
-        PERFORM pg_notify('norbital_sync', latest_seq::text);
+      IF to_regclass('public._norbital_sync_compaction') IS NOT NULL THEN
+        INSERT INTO _norbital_sync_compaction (singleton)
+          VALUES (TRUE)
+          ON CONFLICT (singleton) DO NOTHING;
       END IF;
-      RETURN NULL;
-    END;
-    $sync_notify$;
-
-    DROP TRIGGER IF EXISTS _norbital_sync_notify ON sync_outbox;
-    CREATE TRIGGER _norbital_sync_notify
-      AFTER INSERT ON sync_outbox
-      REFERENCING NEW TABLE AS _norbital_sync_inserted
-      FOR EACH STATEMENT EXECUTE FUNCTION _norbital_sync_notify();
-
-    CREATE TABLE IF NOT EXISTS _approval_lock (
-      norbital_id UUID PRIMARY KEY DEFAULT uuidv7(),
-      approval_request_id UUID NOT NULL,
-      lock_type TEXT NOT NULL CHECK (lock_type IN ('schema', 'record_delete', 'record_mutation')),
-      collection_name TEXT NOT NULL,
-      record_id UUID NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (collection_name, record_id, lock_type)
-    );
-
-    DO $approval_lock_fk$
-    BEGIN
-      IF to_regclass('public.approval_request') IS NOT NULL
-         AND NOT EXISTS (
-           SELECT 1
-             FROM pg_constraint
-            WHERE conname = 'fk_approval_lock_request'
-         ) THEN
-        ALTER TABLE _approval_lock
-          ADD CONSTRAINT fk_approval_lock_request
-          FOREIGN KEY (approval_request_id)
-          REFERENCES approval_request(norbital_id)
-          ON DELETE CASCADE;
+      IF to_regclass('public._norbital_automation_cursor') IS NOT NULL THEN
+        INSERT INTO _norbital_automation_cursor (singleton)
+          VALUES (TRUE)
+          ON CONFLICT (singleton) DO NOTHING;
+      END IF;
+      IF to_regclass('public._norbital_sync_epoch') IS NOT NULL THEN
+        INSERT INTO _norbital_sync_epoch (singleton)
+          VALUES (TRUE)
+          ON CONFLICT (singleton) DO NOTHING;
       END IF;
     END
-    $approval_lock_fk$;
+    $seed_singletons$;
+
+    -- The change feed is host-published after commit (\`wakeSync\`). Postgres no longer
+    -- NOTIFYs; a LISTEN would pin Neon. Drop the leftover trigger on existing tenants.
+    DO $drop_sync_notify$
+    BEGIN
+      IF to_regclass('public.sync_outbox') IS NOT NULL THEN
+        DROP TRIGGER IF EXISTS _norbital_sync_notify ON sync_outbox;
+      END IF;
+    END
+    $drop_sync_notify$;
+    DROP FUNCTION IF EXISTS _norbital_sync_notify();
 
     CREATE OR REPLACE FUNCTION _approval_lock_sync() RETURNS TRIGGER AS $$
     BEGIN
@@ -583,7 +523,8 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
 
     DO $approval_lock_sync$
     BEGIN
-      IF to_regclass('public.approval_request') IS NOT NULL THEN
+      IF to_regclass('public.approval_request') IS NOT NULL
+         AND to_regclass('public._approval_lock') IS NOT NULL THEN
         DROP TRIGGER IF EXISTS _approval_lock_sync ON approval_request;
         CREATE TRIGGER _approval_lock_sync
           AFTER INSERT OR UPDATE OF locked_record_refs, status OR DELETE
@@ -592,49 +533,7 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
       END IF;
     END
     $approval_lock_sync$;
-
-    -- A policy's key is its identity across deploys, so reconciliation can upsert on it and every
-    -- team.policy_id pointing at that policy survives. Without the constraint, two rows could share a
-    -- key and a team would be assigned to whichever one a query happened to return first.
-    DO $policy_key$
-    BEGIN
-      IF to_regclass('public.policy') IS NOT NULL THEN
-        CREATE UNIQUE INDEX IF NOT EXISTS policy_key_unique ON policy (key);
-      END IF;
-    END
-    $policy_key$;
-
-    -- One live invitation per address, enforced by the database rather than by a read-then-write.
-    -- Two accepts racing on the same email would otherwise both see "no user yet" and both create
-    -- one; the partial unique index makes the second INSERT fail instead, and the loser re-reads.
-    -- The predicate scopes it to live rows, so an address can be re-invited after leaving.
-    DO $invitation_guard$
-    BEGIN
-      IF to_regclass('public.invitation') IS NOT NULL THEN
-        CREATE UNIQUE INDEX IF NOT EXISTS invitation_live_email_unique
-          ON invitation (email) WHERE consumed_at IS NULL;
-      END IF;
-    END
-    $invitation_guard$;
-
-    -- audit_event is the append-only action log. Temporal history stores row states; audit_event
-    -- stores who did what and must never be rewritten or repurposed as a rollback source.
-    DO $audit_event_insert_only$
-    BEGIN
-      IF to_regclass('public.audit_event') IS NOT NULL THEN
-        CREATE OR REPLACE FUNCTION _norbital_audit_event_insert_only() RETURNS trigger
-        LANGUAGE plpgsql AS $audit_event$
-        BEGIN
-          RAISE EXCEPTION 'audit_event is insert-only';
-        END;
-        $audit_event$;
-        DROP TRIGGER IF EXISTS _norbital_audit_event_insert_only ON audit_event;
-        CREATE TRIGGER _norbital_audit_event_insert_only
-          BEFORE UPDATE OR DELETE ON audit_event
-          FOR EACH ROW EXECUTE FUNCTION _norbital_audit_event_insert_only();
-      END IF;
-    END
-    $audit_event_insert_only$;
+    ${insertOnlyAttach}
 
     DO $refresh_approval_lock_gates$
     DECLARE
@@ -647,7 +546,9 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
           AND c.relname !~ '_history$'
-	          AND c.relname NOT IN ('audit_event', '_approval_lock', '_norbital_internal_schema')
+          AND c.relname NOT IN (
+            ${approvalLockExempt}
+          )
           AND EXISTS (
             SELECT 1
               FROM pg_attribute a
@@ -666,12 +567,8 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
     $refresh_approval_lock_gates$;
 
     -- Attach _ops_guard to every tenant collection table (BEFORE INSERT/UPDATE/DELETE).
-    -- Platform/system tables are excluded: their rows are written by paths other than
-    -- collection_ops (audit sink, integration-outbox drainer, onboarding, file delete),
-    -- which do not set norbital.via_ops. Tenant collection tables are only ever written
-    -- by collection_ops / approval_service (both open a collection transaction) or the
-    -- seed executor — all of which set the GUC — so the guard never blocks a legitimate
-    -- write while rejecting any stray direct one.
+    -- Collections that opted out — every system collection by default — are skipped: their
+    -- rows are written by paths other than collection_ops, which do not set norbital.via_ops.
     DO $refresh_ops_guards$
     DECLARE
       tbl RECORD;
@@ -684,7 +581,7 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
           AND c.relkind = 'r'
           AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-            ${opsGuardExemptTables()}
+            ${opsGuardExempt}
           )
           AND EXISTS (
             SELECT 1
@@ -705,9 +602,9 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
 
     INSERT INTO _norbital_internal_schema (version, name) VALUES (1, 'initial') ON CONFLICT DO NOTHING;
 
-    -- Extension-backed temporal history. Every record table has a typed, same-shaped
-    -- <table>_history relation. CREATE IF NOT EXISTS is intentionally non-destructive:
-    -- schema migrations own both relations and must evolve them together.
+    -- Extension-backed temporal history. Every record table that opted in has a typed,
+    -- same-shaped <table>_history relation. CREATE IF NOT EXISTS is intentionally
+    -- non-destructive: schema migrations own both relations and must evolve them together.
     DO $refresh_versioning$
     DECLARE
       tbl RECORD;
@@ -721,7 +618,7 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
           AND c.relkind = 'r'
           AND c.relname !~ '_history$'
           AND c.relname NOT IN (
-            ${historyExemptTables(nonTemporalCollections)}
+            ${historyExemptTables(nonTemporal)}
           )
           AND EXISTS (
             SELECT 1
@@ -784,3 +681,4 @@ export const schemaPostDdlSql = (nonTemporalCollections: Iterable<string>): stri
     END
     $refresh_versioning$;
 `;
+}

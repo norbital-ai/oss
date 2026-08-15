@@ -1,7 +1,7 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import type { BeforeApi } from '$lib/authoring/workspace/hook-api.js';
 import type { PodAdmit } from './admit.js';
+import { createAsyncStore } from './async-store.js';
 import type { PodRequestEvent } from './request-context.js';
 
 export type PodCall = {
@@ -11,7 +11,7 @@ export type PodCall = {
 	beforeApi: BeforeApi | null;
 };
 
-const podCallStorage = new AsyncLocalStorage<PodCall>();
+const podCallStorage = createAsyncStore<PodCall>();
 
 export function runWithPodCall<T>(call: PodCall, fn: () => T): T {
 	return podCallStorage.run(call, fn);

@@ -23,10 +23,8 @@ import {
 	emptyChatSessionAggregate,
 	type MutableChatSessionAggregate
 } from '$lib/server/agent/chat-session.server.js';
-import {
-	GUEST_ADMIT_ARTIFACT_MARKER,
-	INTERACTIVE_AGENT_AUTOMATION_NAME
-} from '$lib/server/run/automation-dispatch.server.js';
+import { INTERACTIVE_AGENT_AUTOMATION_NAME } from '$lib/server/run/automation-dispatch.server.js';
+import { requireAdmitArtifact, type AdmitArtifact } from '$lib/server/run/admit-artifact.js';
 import type { AgentAutomationSpec } from '$lib/authoring/automations/automations.js';
 import { serializeVerifierScheduled } from '$lib/shared/agent/goal-verdict.js';
 
@@ -153,10 +151,12 @@ export async function persistInteractiveAgentStart(input: {
 	readonly planMode?: boolean;
 	readonly verify?: boolean;
 	readonly verifierPrompt?: string;
+	readonly artifact?: AdmitArtifact;
 }): Promise<InteractiveAgentStartPersist> {
 	const { ctx, db } = requireDrizzleDb();
 	const ownerUserId = ctx.baseScope.requestor.norbital_id;
 	const originScope = ctx.baseScope as unknown as Record<string, unknown>;
+	const artifact = requireAdmitArtifact(input.artifact);
 
 	if (!input.runId) {
 		const runId = v7();
@@ -203,10 +203,10 @@ export async function persistInteractiveAgentStart(input: {
 				.values({
 					automation_name: INTERACTIVE_AGENT_AUTOMATION_NAME,
 					trigger_key: `turn:${chatId}:${opened.turnId}`,
-					artifact_id: GUEST_ADMIT_ARTIFACT_MARKER,
-					checkpoint_id: GUEST_ADMIT_ARTIFACT_MARKER,
-					tree_hash: GUEST_ADMIT_ARTIFACT_MARKER,
-					runtime_version: GUEST_ADMIT_ARTIFACT_MARKER,
+					artifact_id: artifact.artifactId,
+					checkpoint_id: artifact.checkpointId,
+					tree_hash: artifact.treeHash,
+					runtime_version: artifact.runtimeVersion,
 					origin_scope: originScope,
 					record_snapshot: snapshot,
 					source_pointer: `turn:${chatId}:${opened.turnId}`
@@ -325,10 +325,10 @@ export async function persistInteractiveAgentStart(input: {
 				.values({
 					automation_name: INTERACTIVE_AGENT_AUTOMATION_NAME,
 					trigger_key: `turn:${row.chatId}:${opened.turnId}`,
-					artifact_id: GUEST_ADMIT_ARTIFACT_MARKER,
-					checkpoint_id: GUEST_ADMIT_ARTIFACT_MARKER,
-					tree_hash: GUEST_ADMIT_ARTIFACT_MARKER,
-					runtime_version: GUEST_ADMIT_ARTIFACT_MARKER,
+					artifact_id: artifact.artifactId,
+					checkpoint_id: artifact.checkpointId,
+					tree_hash: artifact.treeHash,
+					runtime_version: artifact.runtimeVersion,
 					origin_scope: originScope,
 					record_snapshot: snapshot,
 					source_pointer: `turn:${row.chatId}:${opened.turnId}`
@@ -396,10 +396,10 @@ export async function persistInteractiveAgentStart(input: {
 			.values({
 				automation_name: INTERACTIVE_AGENT_AUTOMATION_NAME,
 				trigger_key: `turn:${chatId}:${opened.turnId}`,
-				artifact_id: GUEST_ADMIT_ARTIFACT_MARKER,
-				checkpoint_id: GUEST_ADMIT_ARTIFACT_MARKER,
-				tree_hash: GUEST_ADMIT_ARTIFACT_MARKER,
-				runtime_version: GUEST_ADMIT_ARTIFACT_MARKER,
+				artifact_id: artifact.artifactId,
+				checkpoint_id: artifact.checkpointId,
+				tree_hash: artifact.treeHash,
+				runtime_version: artifact.runtimeVersion,
 				origin_scope: originScope,
 				record_snapshot: snapshot,
 				source_pointer: `turn:${chatId}:${opened.turnId}`

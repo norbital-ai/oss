@@ -1,5 +1,3 @@
-import { eq, getColumns } from 'drizzle-orm';
-import { integration_cursor } from '@norbital-ai/platform-utils/system/workspace-schema';
 import { getWorkspace, type ProvisionedContext } from '$lib/server/bootstrap/workspace_store.js';
 import { getTenantWorkspace } from '$lib/server/bootstrap/tenant_workspace.server.js';
 import { createMany, updateRecord } from '$lib/server/collection/collection_ops.server.js';
@@ -17,59 +15,6 @@ export function integrationBindingKey(integrationName: string, bindingName: stri
 	return `${integrationName}:${bindingName}`;
 }
 
-export type IntegrationCursorRequest =
-	| {
-			readonly kind: 'integration-cursor';
-			readonly action: 'read';
-			readonly integrationName: string;
-			readonly bindingName: string;
-	  }
-	| {
-			readonly kind: 'integration-cursor';
-			readonly action: 'write';
-			readonly integrationName: string;
-			readonly bindingName: string;
-			readonly cursor?: string | null;
-			readonly error?: string | null;
-	  };
-
-/**
- * Read or advance one pull binding's resume point.
- *
- * Lives tenant-side rather than in the job because the job has no database: under Core the pull runs
- * in the host process and reaches the tenant only over the host-command plane, exactly as the outbox
- * drain does.
- */
-export async function runIntegrationCursor(request: IntegrationCursorRequest) {
-	const ctx = getWorkspace({ provision: true });
-	const db = ctx.drizzleDb;
-	if (!db) throw new Error('Tenant database is not provisioned');
-	const columns = getColumns(integration_cursor);
-	const bindingKey = integrationBindingKey(request.integrationName, request.bindingName);
-
-	if (request.action === 'read') {
-		const [row] = await db
-			.select({ cursor: columns.cursor })
-			.from(integration_cursor)
-			.where(eq(columns.binding_key, bindingKey))
-			.limit(1);
-		return { cursor: row?.cursor ?? null };
-	}
-
-	const values = {
-		integration_name: request.integrationName,
-		binding_name: request.bindingName,
-		binding_key: bindingKey,
-		cursor: request.cursor ?? null,
-		last_pulled_at: new Date(),
-		last_error: request.error ?? null
-	};
-	await db
-		.insert(integration_cursor)
-		.values(values)
-		.onConflictDoUpdate({ target: columns.binding_key, set: values });
-	return { cursor: values.cursor };
-}
 
 /**
  * What one inbound delivery did.

@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://github.com/norbital-ai/oss/blob/main/release/runtime-smoke.schema.json",
 	"title": "Norbital published runtime smoke evidence",
-	"description": "Evidence that a build against a materialized depset produces a function-guest bundle (handlePodRequest / handlePodHostCommand). The bundle format is the only cross-version contract now that there are no images.",
+	"description": "Evidence that a build against a materialized depset produces a function-guest bundle (dispatch / registerPodHostPlugins). The bundle format is the only cross-version contract now that there are no images.",
 	"type": "object",
 	"additionalProperties": false,
 	"required": [

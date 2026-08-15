@@ -96,7 +96,16 @@ export const AgentChatInputSchema = z.object({
 	 * Records the caller referenced with "@" in the composer. An `@` that never matched a record is
 	 * simply text in the message and never appears here.
 	 */
-	mentions: z.array(AgentMentionSchema).max(20).optional()
+	mentions: z.array(AgentMentionSchema).max(20).optional(),
+	/** Host-injected admit artifact. Clients must not send this; the host overwrites it. */
+	artifact: z
+		.object({
+			artifactId: z.string().min(1).max(512),
+			checkpointId: z.string().min(1).max(512),
+			treeHash: z.string().min(1).max(512),
+			runtimeVersion: z.string().min(1).max(512)
+		})
+		.optional()
 });
 
 export const AgentModelsInputSchema = z.object({});
@@ -178,7 +187,8 @@ export const agentChatStart = authenticated.command(
 			},
 			planMode: intent.planMode,
 			verify: intent.goalMode,
-			verifierPrompt: intent.verifierPrompt
+			verifierPrompt: intent.verifierPrompt,
+			...(input.artifact ? { artifact: input.artifact } : {})
 		});
 		return {
 			runId: persisted.runId,

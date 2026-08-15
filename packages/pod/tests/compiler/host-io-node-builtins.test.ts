@@ -79,7 +79,8 @@ export default defineModel({ name: text().notNull() });`
 		const artifact = await readFile(path.join(root, '.norbital/dist/output/server/index.js'), 'utf8');
 		expect(elapsedMs).toBeLessThan(5000);
 		expect(artifact.length).toBeLessThan(2_000_000);
-		expect(artifact).toMatch(/from ["']node:async_hooks["']/);
+		expect(artifact).not.toMatch(/from ["']node:async_hooks["']/);
+		expect(artifact).not.toContain('createRequire');
 		expect(artifact).toMatch(/from ["']node:crypto["']/);
 		expect(artifact).toMatch(/from ["']node:buffer["']/);
 		expect(artifact).not.toContain('@neondatabase/serverless');

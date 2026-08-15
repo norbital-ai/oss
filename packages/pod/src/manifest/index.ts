@@ -78,7 +78,11 @@ function buildCollectionEntries(
 			extensions: {
 				indexes: meta?.indexes ?? [],
 				exclusions: meta?.exclusions ?? [],
-				history: meta?.history
+				history: meta?.history,
+				opsGuard: meta?.opsGuard,
+				approvalLock: meta?.approvalLock,
+				replica: meta?.replica,
+				insertOnly: meta?.insertOnly
 			},
 			enabled_semantic_search: meta?.semanticSearch === true ? true : null,
 			hooks: collectHooks(declaredHooks),

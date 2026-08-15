@@ -271,6 +271,26 @@ interface PlatformSystemRows {
 		readonly created_at: string;
 		readonly updated_at: string;
 	};
+	readonly _norbital_sync_compaction: SystemRecordFields & {
+		readonly singleton: boolean;
+		readonly pruned_through_seq: string;
+		readonly pruned_at: string;
+	};
+	readonly _norbital_automation_cursor: SystemRecordFields & {
+		readonly singleton: boolean;
+		readonly xid: string;
+		readonly seq: string;
+	};
+	readonly _norbital_sync_epoch: SystemRecordFields & {
+		readonly singleton: boolean;
+		readonly epoch: string;
+	};
+	readonly _approval_lock: SystemRecordFields & {
+		readonly approval_request_id: string;
+		readonly lock_type: string;
+		readonly collection_name: string;
+		readonly record_id: string;
+	};
 }
 
 export const SYSTEM_COLLECTION_NAMES = [
@@ -295,7 +315,11 @@ export const SYSTEM_COLLECTION_NAMES = [
 	'document_asset',
 	'team_members',
 	'sync_outbox',
-	'_norbital_automation_job'
+	'_norbital_automation_job',
+	'_norbital_sync_compaction',
+	'_norbital_automation_cursor',
+	'_norbital_sync_epoch',
+	'_approval_lock'
 ] as const;
 
 export type SystemCollectionName = (typeof SYSTEM_COLLECTION_NAMES)[number];
@@ -671,6 +695,42 @@ export const SYSTEM_COLLECTION_DEFINITIONS = {
 			{ name: 'last_error', kind: 'text', nullable: true },
 			{ name: 'created_at', kind: 'timestamptz', nullable: false },
 			{ name: 'updated_at', kind: 'timestamptz', nullable: false }
+		]
+	},
+	_norbital_sync_compaction: {
+		name: '_norbital_sync_compaction',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'singleton', kind: 'boolean', nullable: false },
+			{ name: 'pruned_through_seq', kind: 'integer', nullable: false },
+			{ name: 'pruned_at', kind: 'timestamptz', nullable: false }
+		]
+	},
+	_norbital_automation_cursor: {
+		name: '_norbital_automation_cursor',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'singleton', kind: 'boolean', nullable: false },
+			{ name: 'xid', kind: 'text', nullable: false },
+			{ name: 'seq', kind: 'integer', nullable: false }
+		]
+	},
+	_norbital_sync_epoch: {
+		name: '_norbital_sync_epoch',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'singleton', kind: 'boolean', nullable: false },
+			{ name: 'epoch', kind: 'uuid', nullable: false }
+		]
+	},
+	_approval_lock: {
+		name: '_approval_lock',
+		fields: [
+			...SYSTEM_FIELDS,
+			{ name: 'approval_request_id', kind: 'uuid', nullable: false },
+			{ name: 'lock_type', kind: 'text', nullable: false },
+			{ name: 'collection_name', kind: 'text', nullable: false },
+			{ name: 'record_id', kind: 'uuid', nullable: false }
 		]
 	}
 } satisfies {

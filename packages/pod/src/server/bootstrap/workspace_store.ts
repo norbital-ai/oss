@@ -6,7 +6,7 @@ import type { ManifestContext } from '@norbital-ai/platform-utils/manifest/conte
 import { error } from '$lib/server/http.js';
 import { drizzle, type PgRemoteDatabase } from 'drizzle-orm/pg-proxy';
 import type { PgTable } from 'drizzle-orm/pg-core';
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { createAsyncStore } from '$lib/server/async-store.js';
 import { currentPodCallOrNull, withPodCallField } from '$lib/server/pod-call.js';
 
 export type WorkspaceZone = 'live' | 'preview';
@@ -61,9 +61,9 @@ export type ProvisionedContext = {
 	tableRegistry?: Record<string, PgTable>;
 };
 
-let _storage: AsyncLocalStorage<ProvisionedContext> | undefined;
-function getStorage(): AsyncLocalStorage<ProvisionedContext> {
-	if (!_storage) _storage = new AsyncLocalStorage();
+let _storage: ReturnType<typeof createAsyncStore<ProvisionedContext>> | undefined;
+function getStorage(): ReturnType<typeof createAsyncStore<ProvisionedContext>> {
+	if (!_storage) _storage = createAsyncStore<ProvisionedContext>();
 	return _storage;
 }
 

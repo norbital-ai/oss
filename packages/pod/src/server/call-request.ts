@@ -14,7 +14,8 @@ export type CallRequestInput = {
 	readonly bodyText: string | null;
 };
 
-function headerLookup(headers: Record<string, string>, name: string): string | null {
+/** Case-insensitive lookup on a plain header record. */
+export function headerLookup(headers: Record<string, string>, name: string): string | null {
 	const direct = headers[name];
 	if (direct != null) return direct;
 	const lower = name.toLowerCase();

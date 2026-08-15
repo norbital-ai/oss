@@ -1,9 +1,11 @@
 /**
- * Host-owned sync SSE pump. The browser talks to the host; the host LISTENs on the
- * tenant database and writes frames. Policy-scoped diffs are one short guest function
- * (`sync/diff`). The guest never holds this socket.
+ * Host-owned sync SSE pump. The browser talks to the host; the host waits on
+ * `subscribeSyncWake` and writes frames. Policy-scoped diffs are one short guest
+ * function (`sync/diff`). The guest never holds this socket, and the host never
+ * LISTENs on the tenant database.
  */
 import { z } from 'zod';
+import { cursorMatchesLastSeq } from './sync-wake.js';
 
 const cursorSchema = z.object({
 	xid: z.string(),
@@ -33,6 +35,8 @@ export type HostSyncStreamInput = {
 	readonly signal?: AbortSignal;
 	readonly pullDiff: (path: string) => Promise<{ status: number; bodyText: string }>;
 	readonly subscribe: (wake: () => void) => () => void;
+	/** Live host-cached last published seq. Equal cursor means do not query the tenant DB. */
+	readonly lastSeq?: () => string | null;
 };
 
 export type HostSyncStreamResponse = {
@@ -98,6 +102,15 @@ export function serveHostSyncStream(input: HostSyncStreamInput): HostSyncStreamR
 			let cursor = url.searchParams.get('cursor') ?? '';
 			try {
 				while (!abort.signal.aborted) {
+					if (cursorMatchesLastSeq(cursor, input.lastSeq?.() ?? null)) {
+						if (!announcedSynced) {
+							send('event: synced\ndata: {}\n\n');
+							announcedSynced = true;
+						}
+						await waitForNotify();
+						settling = HORIZON_SETTLE_ATTEMPTS;
+						continue;
+					}
 					const diffPath = syncDiffPath(url.pathname, cursor, collections);
 					const pulled = await input.pullDiff(diffPath);
 					if (abort.signal.aborted) break;

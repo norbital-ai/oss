@@ -1,110 +1,108 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { Client, Pool } from 'pg';
-import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
-import { applyPodSchema } from '../support/pod-schema.js';
+import { describe, it, expect } from 'vitest';
+import type {
+	DbQueryConfig,
+	DbQueryInput,
+	DbQueryResult,
+	HostDbBinding
+} from '@norbital-ai/platform-utils/runtime/binding';
+import {
+	attachSyncWakeToDb,
+	createInProcessSyncWakeBus,
+	cursorMatchesLastSeq,
+	decodeCursorSeq
+} from '../../src/host/sync-wake.js';
 
-/**
- * How many times one write wakes the change feed.
- *
- * The notification is a wake-up, not a message: every listener that receives it runs the same
- * catch-up query from its own cursor, and one pass drains everything the statement committed. So
- * the cost of a second notification for the same statement is not a duplicate read — it is a
- * duplicate read multiplied by every open stream on the tenant database.
- *
- * A row-level trigger made that ratio the row count. A bulk import of a few thousand rows is one
- * statement and one commit, and it was announcing itself a few thousand times.
- */
+function encodeCursor(cursor: { xid: string; seq: string }): string {
+	return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
 
-requireDocker();
+function result(rows: readonly unknown[]): DbQueryResult {
+	return { rows, rowCount: rows.length };
+}
 
-describe('change-feed notifications are coalesced per statement', () => {
-	let pg: PgHarness;
-	let pool: Pool;
-	let listener: Client;
-	let received: string[] = [];
-
-	beforeAll(async () => {
-		pg = await startPostgres();
-		pool = new Pool({ connectionString: pg.connectionString, max: 4 });
-		await applyPodSchema(pool);
-		listener = new Client({ connectionString: pg.connectionString });
-		await listener.connect();
-		listener.on('notification', (message) => {
-			if (message.channel === 'norbital_sync') received.push(message.payload ?? '');
-		});
-		await listener.query('LISTEN norbital_sync');
-	}, 180_000);
-
-	afterAll(async () => {
-		await listener?.end().catch(() => undefined);
-		await pool?.end().catch(() => undefined);
-		pg?.stop();
-	});
-
-	beforeEach(async () => {
-		await pool.query('DELETE FROM sync_outbox');
-		received = [];
-	});
-
-	/** Notifications arrive after COMMIT and out of band; give the socket a moment to deliver. */
-	async function settle(): Promise<void> {
-		for (let attempt = 0; attempt < 20; attempt += 1) {
-			await new Promise((resolve) => setTimeout(resolve, 25));
-			await listener.query('SELECT 1');
+function memoryDb(): HostDbBinding & { readonly statements: string[] } {
+	let seq = 0;
+	const statements: string[] = [];
+	const textOf = (input: DbQueryInput) => (typeof input === 'string' ? input : input.text);
+	const run = (input: DbQueryInput): DbQueryResult => {
+		const text = textOf(input);
+		statements.push(text);
+		if (/insert\s+into\s+"?sync_outbox"?/i.test(text)) {
+			seq += 1;
+			return result([{ seq: String(seq) }]);
 		}
-	}
-
-	async function appendOutbox(rowCount: number): Promise<number> {
-		const { rows } = await pool.query<{ max: string }>(
-			`INSERT INTO sync_outbox (collection, record_id, action)
-			 SELECT 'orders', gen_random_uuid(), 'create' FROM generate_series(1, $1)
-			 RETURNING seq`,
-			[rowCount]
-		);
-		return Math.max(...rows.map((row) => Number((row as unknown as { seq: string }).seq)));
-	}
-
-	it('announces a bulk insert once, carrying the highest seq it wrote', async () => {
-		const highest = await appendOutbox(500);
-		await settle();
-
-		expect(received).toEqual([String(highest)]);
-	});
-
-	it('still announces every statement in a multi-statement transaction', async () => {
-		const client = await pool.connect();
-		try {
-			await client.query('BEGIN');
-			await client.query(
-				`INSERT INTO sync_outbox (collection, record_id, action)
-				 SELECT 'orders', gen_random_uuid(), 'create' FROM generate_series(1, 3)`
-			);
-			await client.query(
-				`INSERT INTO sync_outbox (collection, record_id, action)
-				 VALUES ('orders', gen_random_uuid(), 'update')`
-			);
-			await client.query('COMMIT');
-		} finally {
-			client.release();
+		if (/max\(seq\)/i.test(text)) {
+			return result(seq === 0 ? [{ seq: null }] : [{ seq: String(seq) }]);
 		}
-		await settle();
+		return result([]);
+	};
+	return {
+		statements,
+		query: async (sql) => run(sql),
+		begin: async () => 'tx-1',
+		txQuery: async (_tx, sql) => run(sql),
+		commit: async () => undefined,
+		rollback: async () => undefined,
+		batch: async (batchStatements: readonly DbQueryConfig[]) => batchStatements.map((s) => run(s)),
+		txBatch: async (_tx, batchStatements) => batchStatements.map((s) => run(s))
+	};
+}
 
-		// Two statements, two wake-ups — and nothing delivered before COMMIT, because a listener
-		// that woke early would read rows no other session can see yet.
-		expect(received).toHaveLength(2);
-		const { rows } = await pool.query<{ seq: string }>(
-			`SELECT MAX(seq)::text AS seq FROM sync_outbox`
-		);
-		expect(received.at(-1)).toBe(rows[0].seq);
+describe('host sync wake bus', () => {
+	it('publishes the highest seq after a committed outbox insert', async () => {
+		const bus = createInProcessSyncWakeBus();
+		const woken: string[] = [];
+		bus.subscribeSyncWake('org-a', (seq) => woken.push(seq));
+		const db = attachSyncWakeToDb(memoryDb(), bus, 'org-a');
+
+		await db.query('INSERT INTO sync_outbox (collection, record_id, action) VALUES ($1, $2, $3)');
+
+		expect(woken).toEqual(['1']);
+		expect(bus.lastSyncSeq('org-a')).toBe('1');
 	});
 
-	it('says nothing when a statement appends no rows', async () => {
-		await pool.query(
-			`INSERT INTO sync_outbox (collection, record_id, action)
-			 SELECT 'orders', gen_random_uuid(), 'create' WHERE false`
-		);
-		await settle();
+	it('wakes on commit, not on the transactional insert', async () => {
+		const bus = createInProcessSyncWakeBus();
+		const woken: string[] = [];
+		bus.subscribeSyncWake('org-a', (seq) => woken.push(seq));
+		const db = attachSyncWakeToDb(memoryDb(), bus, 'org-a');
 
-		expect(received).toEqual([]);
+		const tx = await db.begin();
+		await db.txQuery(tx, 'INSERT INTO sync_outbox (collection, record_id, action) VALUES ($1, $2, $3)');
+		expect(woken).toEqual([]);
+		await db.commit(tx);
+		expect(woken).toEqual(['1']);
+	});
+
+	it('does not wake a rolled-back outbox insert', async () => {
+		const bus = createInProcessSyncWakeBus();
+		const woken: string[] = [];
+		bus.subscribeSyncWake('org-a', (seq) => woken.push(seq));
+		const db = attachSyncWakeToDb(memoryDb(), bus, 'org-a');
+
+		const tx = await db.begin();
+		await db.txQuery(tx, 'INSERT INTO sync_outbox (collection, record_id, action) VALUES ($1, $2, $3)');
+		await db.rollback(tx);
+		expect(woken).toEqual([]);
+		expect(bus.lastSyncSeq('org-a')).toBeNull();
+	});
+
+	it('does not cross orgs', () => {
+		const bus = createInProcessSyncWakeBus();
+		const a: string[] = [];
+		const b: string[] = [];
+		bus.subscribeSyncWake('org-a', (seq) => a.push(seq));
+		bus.subscribeSyncWake('org-b', (seq) => b.push(seq));
+		bus.wakeSync('org-a', '9');
+		expect(a).toEqual(['9']);
+		expect(b).toEqual([]);
+	});
+
+	it('skips a tenant-DB pull when the cursor is already at the cached seq', () => {
+		const cursor = encodeCursor({ xid: '1', seq: '40' });
+		expect(decodeCursorSeq(cursor)).toBe('40');
+		expect(cursorMatchesLastSeq(cursor, '40')).toBe(true);
+		expect(cursorMatchesLastSeq(cursor, '41')).toBe(false);
+		expect(cursorMatchesLastSeq(null, '40')).toBe(false);
 	});
 });

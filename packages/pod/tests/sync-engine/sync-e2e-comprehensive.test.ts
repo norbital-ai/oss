@@ -192,7 +192,16 @@ describe('Pod Sync — comprehensive E2E', () => {
 		// and seat counts bound for the billing host. Every other deny in the permission guard is
 		// policy-driven and an admin short-circuits it, so without an explicit check an admin session
 		// would replicate both tables into a browser.
-		for (const opaque of ['invitation', 'host_event_outbox', 'sync_outbox', '_norbital_automation_job']) {
+		for (const opaque of [
+			'invitation',
+			'host_event_outbox',
+			'sync_outbox',
+			'_norbital_automation_job',
+			'_norbital_sync_compaction',
+			'_norbital_automation_cursor',
+			'_norbital_sync_epoch',
+			'_approval_lock'
+		]) {
 			it(`refuses to read ${opaque} even for an admin`, async () => {
 				const response = await harness.request(
 					{

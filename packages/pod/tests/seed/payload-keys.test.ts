@@ -6,7 +6,7 @@ import {
 	type SeedSidecarKeys
 } from '@norbital-ai/platform-utils/seed/execute';
 import { startPostgres, requireDocker, type PgHarness } from '../support/pg-harness.js';
-import { applyPodSchema } from '../support/pod-schema.js';
+import { applyPodSchema, seedTestUser } from '../support/pod-schema.js';
 
 /**
  * The executor's payload key contract, against the real DDL and a real `information_schema`.
@@ -60,6 +60,7 @@ describe('the seed executor payload key contract (real Postgres)', () => {
 		if (!client) return;
 		await client.query(`SELECT set_config('norbital.via_ops', 'on', false)`);
 		await client.query('TRUNCATE team_membership, audit_event, "user" CASCADE');
+		await seedTestUser(client, ADMIN_ID, 'admin@example.com');
 	});
 
 	function seed(plan: SeedExecutionPlan, sidecarKeys?: SeedSidecarKeys): SeedRun {
@@ -105,7 +106,10 @@ describe('the seed executor payload key contract (real Postgres)', () => {
 	}
 
 	async function userCount(): Promise<number> {
-		const result = await client!.query<{ count: string }>('SELECT count(*) FROM "user"');
+		const result = await client!.query<{ count: string }>(
+			'SELECT count(*) FROM "user" WHERE norbital_id <> $1::uuid',
+			[ADMIN_ID]
+		);
 		return Number(result.rows[0]?.count ?? '0');
 	}
 

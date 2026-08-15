@@ -13,31 +13,22 @@ import {
 	restrictBeforeHookApi
 } from '$lib/server/collection/hook-api.server.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
+import { resolveSubjectToUser } from '$lib/server/identity/subject.server.js';
 import {
-	resolveSubjectToUser,
-	seatCensus,
-	workspaceMembership
-} from '$lib/server/identity/subject.server.js';
-import {
-	inviteeEmailForToken,
 	absoluteAcceptUrl,
 	mintInvitation,
 	provisionFoundingInvitation
 } from '$lib/server/identity/invitation.server.js';
 import type {
 	CollectionExportPipeline,
-	CollectionImportPipeline,
-	TExportManifest
+	CollectionImportPipeline
 } from '$lib/authoring/automations/pipelines.js';
 import {
 	runCollectionExportPipeline as runExportPipeline,
 	runCollectionImportPipeline as runImportPipeline,
-	runIntegrationReceivePipeline,
 	runIntegrationSendPipeline
 } from '$lib/server/run/collection_pipeline.js';
 import {
-	allowsMutation,
-	getTenantManifest,
 	getTenantWorkspace,
 	getWorkspaceCollection
 } from '$lib/server/bootstrap/tenant_workspace.server.js';
@@ -46,13 +37,10 @@ import type { ErasedHookActionContext } from '$lib/server/collection/hook-contex
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { z } from 'zod';
 import { typeGuard } from '@norbital-ai/std/schema';
-import { runTenantOutbox } from '$lib/server/integrations/tenant-outbox.server.js';
 import {
 	dispatchSystemEvent,
-	importIntegrationRecords,
-	runIntegrationCursor
+	importIntegrationRecords
 } from '$lib/server/integrations/tenant-inbound.server.js';
-import { runNotificationOutbox } from '$lib/server/notification-outbox.server.js';
 import {
 	admitEventAutomations,
 	admitScheduledAutomation,
@@ -103,22 +91,6 @@ export const runtimeRunRequestSchema = z.union([
 		event: z.string().min(1),
 		payload: recordSchema
 	}),
-	// Where a scheduled pull got to. Read before the host fetches, written after it lands, so a
-	// restart resumes rather than re-importing everything the remote has ever had.
-	z.object({
-		kind: z.literal('integration-cursor'),
-		action: z.literal('read'),
-		integrationName: z.string().min(1),
-		bindingName: z.string().min(1)
-	}),
-	z.object({
-		kind: z.literal('integration-cursor'),
-		action: z.literal('write'),
-		integrationName: z.string().min(1),
-		bindingName: z.string().min(1),
-		cursor: z.string().nullable().optional(),
-		error: z.string().nullable().optional()
-	}),
 	z
 		.object({
 			kind: z.literal('automation'),
@@ -131,40 +103,6 @@ export const runtimeRunRequestSchema = z.union([
 			})
 		})
 		.strict(),
-	z.object({
-		kind: z.literal('outbox'),
-		action: z.literal('claim'),
-		limit: z.number().int().optional()
-	}),
-	z.object({
-		kind: z.literal('outbox'),
-		action: z.literal('delivered'),
-		ids: z.array(z.string().uuid())
-	}),
-	z.object({
-		kind: z.literal('outbox'),
-		action: z.literal('failed'),
-		ids: z.array(z.string().uuid()),
-		error: z.string(),
-		retryAt: z.string().datetime()
-	}),
-	z.object({
-		kind: z.literal('notification'),
-		action: z.literal('claim'),
-		limit: z.number().int().optional()
-	}),
-	z.object({
-		kind: z.literal('notification'),
-		action: z.literal('delivered'),
-		ids: z.array(z.string().uuid())
-	}),
-	z.object({
-		kind: z.literal('notification'),
-		action: z.literal('failed'),
-		ids: z.array(z.string().uuid()),
-		error: z.string(),
-		retryAt: z.string().datetime()
-	}),
 	z.object({
 		kind: z.literal('automation-events'),
 		action: z.enum(['admit', 'run']),
@@ -193,7 +131,6 @@ export const runtimeRunRequestSchema = z.union([
 	// here: Pod holds no transport credential, so it cannot verify a webhook signature, and a public
 	// inbound route would be a way to make the agent answer as anyone.
 	ChannelInboundSchema,
-	z.object({ kind: z.literal('getManifest') }),
 	// Identity work the host cannot do for itself: it holds the credential, Pod holds the directory.
 	z.object({
 		kind: z.literal('identity'),
@@ -201,15 +138,6 @@ export const runtimeRunRequestSchema = z.union([
 		email: z.string().trim().min(1).max(320),
 		displayName: z.string().trim().max(255).optional(),
 		subjectHmac: z.string().min(1).optional()
-	}),
-	z.object({ kind: z.literal('identity'), action: z.literal('seats') }),
-	z.object({ kind: z.literal('identity'), action: z.literal('membership') }),
-	// Which address an invitation token belongs to. Lookup only — the claim happens during subject
-	// resolution, so this cannot consume an invitation and cannot be used to enumerate them.
-	z.object({
-		kind: z.literal('identity'),
-		action: z.literal('invite-email'),
-		token: z.string().min(1).max(512)
 	}),
 	z.object({
 		kind: z.literal('identity'),
@@ -518,18 +446,12 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 				api: createBeforeApi()
 			});
 		}
-		case 'integration-cursor':
-			return runIntegrationCursor(request);
 		case 'system-event':
 			return dispatchSystemEvent({
 				eventId: request.eventId,
 				event: request.event,
 				payload: request.payload
 			});
-		case 'outbox':
-			return runTenantOutbox(request);
-		case 'notification':
-			return runNotificationOutbox(request);
 		case 'automation-events':
 			if (request.action === 'admit') {
 				if (!request.artifact) throw new Error('Automation admission requires an artifact binding');
@@ -569,33 +491,32 @@ export async function dispatchRuntimeRun(request: RuntimeRunRequest): Promise<un
 			}
 		case 'channel':
 			return deliverChannelMessage(request);
-		case 'getManifest':
-			return getTenantManifest();
 		case 'identity': {
-			if (request.action === 'seats') return seatCensus();
-			if (request.action === 'membership') return workspaceMembership();
-			if (request.action === 'invite-email') {
-				return { email: await inviteeEmailForToken(request.token) };
+			switch (request.action) {
+				case 'invite': {
+					// The host-command path, unlike the settings surface, has no browser to compose an origin
+					// against — `pod invite` prints the link to a terminal — so it builds an absolute one from
+					// the `publicUrl` the host already had to configure.
+					const minted = await mintInvitation({
+						email: request.email,
+						...(request.role ? { role: request.role } : {}),
+						...(request.invitedByUserId ? { invitedByUserId: request.invitedByUserId } : {})
+					});
+					return {
+						invitationId: minted.invitationId,
+						acceptUrl: absoluteAcceptUrl(request.publicUrl, minted.acceptPath)
+					};
+				}
+				case 'resolve-subject':
+					return resolveSubjectToUser({
+						email: request.email,
+						...(request.displayName ? { displayName: request.displayName } : {}),
+						subjectHmac: request.subjectHmac ?? null
+					});
+				default:
+					request.action satisfies never;
+					throw new Error('Unknown identity host-command action');
 			}
-			if (request.action === 'invite') {
-				// The host-command path, unlike the settings surface, has no browser to compose an origin
-				// against — `pod invite` prints the link to a terminal — so it builds an absolute one from
-				// the `publicUrl` the host already had to configure.
-				const minted = await mintInvitation({
-					email: request.email,
-					...(request.role ? { role: request.role } : {}),
-					...(request.invitedByUserId ? { invitedByUserId: request.invitedByUserId } : {})
-				});
-				return {
-					invitationId: minted.invitationId,
-					acceptUrl: absoluteAcceptUrl(request.publicUrl, minted.acceptPath)
-				};
-			}
-			return resolveSubjectToUser({
-				email: request.email,
-				...(request.displayName ? { displayName: request.displayName } : {}),
-				subjectHmac: request.subjectHmac ?? null
-			});
 		}
 		case 'provision':
 			return provisionFoundingInvitation({

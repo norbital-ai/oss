@@ -1,5 +1,6 @@
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { createRecord } from '$lib/server/collection/collection_ops.server.js';
+import { inviteeEmailForTokenOnDb } from '$lib/host/directory.js';
 import { hashToken, mintToken } from '$lib/host/session.js';
 import { requireRuntimeFacility } from '$lib/server/facilities.js';
 import { serverI18n } from '$lib/i18n/index.js';
@@ -87,13 +88,13 @@ export async function mintInvitation(input: {
  */
 export async function inviteeEmailForToken(token: string): Promise<string | null> {
 	const ctx = getWorkspace({ provision: true });
-	const result = await ctx.tenantDb.query<{ email: string }>({
-		text: `SELECT email FROM invitation
-		        WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
-		        LIMIT 1`,
-		values: [hashToken(token)]
-	});
-	return result.rows[0]?.email ?? null;
+	return inviteeEmailForTokenOnDb(
+		{
+			query: (sql, values) =>
+				ctx.tenantDb.query({ text: sql, values: values ? [...values] : [] })
+		},
+		hashToken(token)
+	);
 }
 
 /**

@@ -1,16 +1,17 @@
 /**
  * The HTTP server core for the reference standalone host.
  *
- * `handlePodRequest` takes a web `Request` and answers with a web `Response`, and `node:http`
- * speaks neither. The translation is small but every part of it has a failure mode that is
- * invisible in the common case — a repeated `set-cookie` collapsed into one, a binary upload
- * decoded as text, a server-sent-events body buffered until it completes — and the pipeline that
- * sits between the socket and the runtime is a security contract: which request is refused before
- * its body is read, and which identity a request may act under, is decided here and only here.
+ * The HTTP edge maps a web `Request` onto `dispatch(name, payload, bindings, admit)` and
+ * `node:http` speaks neither. The translation is small but every part of it has a failure mode
+ * that is invisible in the common case — a repeated `set-cookie` collapsed into one, a binary
+ * upload decoded as text, a server-sent-events body buffered until it completes — and the
+ * pipeline that sits between the socket and the runtime is a security contract: which request is
+ * refused before its body is read, and which identity a request may act under, is decided here
+ * and only here.
  *
  * The reference host (`serve/standalone.ts`) authenticates every request itself, serves the
- * workspace's static assets and single-page document, and hands tenant traffic to
- * `handlePodRequest` in-process.
+ * workspace's static assets and single-page document, and hands tenant traffic to `dispatch`
+ * in-process.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { RuntimeFacilityBindings } from '@norbital-ai/platform-utils/runtime/binding';
@@ -23,12 +24,41 @@ import {
 import {
 	ADMIT_DEADLINE_HEADER,
 	ADMIT_TIMEOUT_HEADER,
-	admitHeaders,
 	parseAdmitHeaders,
 	startAdmit,
 	type PodAdmit
 } from '../server/admit.js';
-import { handlePodRequest } from '../server/entry.js';
+import { dispatch, runtimeNameFromPath, type PodDispatchResult } from '../server/entry.js';
+
+const ADMIT_HEADER_NAMES = new Set([ADMIT_TIMEOUT_HEADER, ADMIT_DEADLINE_HEADER]);
+
+/** Map one authenticated HTTP request onto the guest `dispatch` door. */
+async function dispatchPodHttpRequest(
+	request: Request,
+	bindings: RuntimeFacilityBindings,
+	admit: PodAdmit | null
+): Promise<Response> {
+	const url = new URL(request.url);
+	const headers: Record<string, string> = {};
+	request.headers.forEach((value, name) => {
+		if (ADMIT_HEADER_NAMES.has(name.toLowerCase())) return;
+		headers[name] = value;
+	});
+	const body =
+		request.method === 'GET' || request.method === 'HEAD' ? null : await request.text();
+	const result = (await dispatch(
+		runtimeNameFromPath(url.pathname),
+		{
+			method: request.method,
+			search: url.search,
+			headers,
+			body
+		},
+		bindings,
+		admit
+	)) as PodDispatchResult;
+	return new Response(result.bodyText, { status: result.status, headers: result.headers });
+}
 
 /**
  * Identity and admit budget. The runtime reads these from its trusted host and never from the
@@ -111,15 +141,11 @@ async function toWebRequest(
  *
  * Stripping first is what makes any caller safe to trust. The runtime treats `x-norbital-*` as
  * proven, so a client that set those headers itself would otherwise be believed; a provider cannot
- * accidentally pass identity or a longer budget through by forgetting to clear it, because the only
- * values that survive this function are the ones it was given. `admit` is written after the strip
- * so a hosted Core fetch keeps the budget it already started.
+ * accidentally pass identity through by forgetting to clear it, because the only values that
+ * survive this function are the ones it was given. Admit is an argument to `dispatch`, not a
+ * header.
  */
-async function withHostIdentity(
-	request: Request,
-	identity: HostIdentity,
-	admit?: PodAdmit | null
-): Promise<Request> {
+async function withHostIdentity(request: Request, identity: HostIdentity): Promise<Request> {
 	const headers = new Headers(request.headers);
 	for (const name of IDENTITY_HEADERS) headers.delete(name);
 	headers.set('x-norbital-user-id', identity.userId);
@@ -127,11 +153,6 @@ async function withHostIdentity(
 	headers.set('x-norbital-org-name', identity.organizationName);
 	if (identity.baseScope) {
 		headers.set('x-norbital-base-scope-json', JSON.stringify(identity.baseScope));
-	}
-	if (admit) {
-		for (const [name, value] of Object.entries(admitHeaders(admit))) {
-			headers.set(name, value);
-		}
 	}
 	const body =
 		request.method === 'GET' || request.method === 'HEAD'
@@ -212,7 +233,7 @@ type PodHttpServerOptions = {
 	readonly bind: { readonly host: string; readonly port: number };
 	/** Who a request belongs to, established by whichever side fronts this process. */
 	readonly identity: HostIdentityProvider;
-	/** The facilities `handlePodRequest` runs tenant traffic against. */
+	/** The facilities `dispatch` runs tenant traffic against. */
 	readonly bindings: RuntimeFacilityBindings;
 	/** Pre-auth real-file serving for the workspace build output on disk. */
 	readonly staticAssets?: (
@@ -232,8 +253,8 @@ type PodHttpServerOptions = {
 	 */
 	readonly resolveSubject?: (verified: HostVerifiedSubject) => Promise<HostIdentity | null>;
 	/**
-	 * The runtime entry point. Defaults to this package's own `server/entry.js`. The reference host
-	 * passes the bundled copy it also loads its workspace into, so workspace registration and host
+	 * The runtime HTTP adapter. Defaults to mapping the request onto `dispatch`. The reference
+	 * host passes a wrapper around the bundled `dispatch` so workspace registration and host
 	 * plugins live in the same module instance every tenant request runs in.
 	 */
 	readonly handlePodRequest?: (
@@ -334,8 +355,10 @@ async function handleConnection(
 		options.timeoutMs != null
 			? startAdmit(options.timeoutMs)
 			: parseAdmitHeaders(incoming.headers);
-	const authenticated = await withHostIdentity(incoming, resolved, admit);
-	const handle = options.handlePodRequest ?? handlePodRequest;
+	const authenticated = await withHostIdentity(incoming, resolved);
+	const handle =
+		options.handlePodRequest ??
+		((request, bindings) => dispatchPodHttpRequest(request, bindings, admit));
 	return writeWebResponse(await handle(authenticated, options.bindings), response);
 }
 

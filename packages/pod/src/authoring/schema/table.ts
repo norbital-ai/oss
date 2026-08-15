@@ -68,6 +68,14 @@ export type TableMeta = {
 	 * decide a collection is temporal while the other decides it is not.
 	 */
 	readonly history?: boolean;
+	/** Whether writes must go through `collection_ops`. Tenant default is true. */
+	readonly opsGuard?: boolean;
+	/** Whether `_approval_lock_gate` attaches. Defaults to true. */
+	readonly approvalLock?: boolean;
+	/** Whether the collection is included in the client replica DDL. Defaults to true. */
+	readonly replica?: boolean;
+	/** Whether UPDATE/DELETE are rejected. Defaults to false. */
+	readonly insertOnly?: boolean;
 	readonly indexes?: readonly TableIndex[];
 	/**
 	 * Postgres EXCLUDE constraints. Drizzle has no entity for them, so these are pure

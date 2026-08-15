@@ -2,6 +2,7 @@ import { defineRelations, sql } from 'drizzle-orm';
 import {
 	bigint,
 	boolean,
+	check,
 	customType,
 	doublePrecision,
 	index,
@@ -9,14 +10,16 @@ import {
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 	uuid,
 	type AnyPgColumn,
 	type AnyPgColumnBuilder,
 	type ExtraConfigColumn,
-	type PgTable
+	type PgTable,
+	type PgTableExtraConfigValue
 } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
-import { SYSTEM_COLLECTION_NAMES, type SystemCollectionName } from './collections.js';
+import { type SystemCollectionName } from './collections.js';
 import { collectionSearchTrigramIndexName } from '../collection/types.js';
 
 export interface SystemTableMeta {
@@ -33,8 +36,45 @@ export interface SystemTableMeta {
 	 * and the rows in it — in the next generated migration.
 	 */
 	readonly history?: boolean;
+	/**
+	 * Whether writes must go through `collection_ops` (`norbital.via_ops`). System collections
+	 * default to false — their rows are written by onboarding, outbox drainers, and other host
+	 * paths that do not set that GUC. Tenant collections default to true.
+	 */
+	readonly opsGuard?: boolean;
+	/**
+	 * Whether `_approval_lock_gate` attaches. Defaults to true for any table with `norbital_id`.
+	 * Opt out for append-only logs and for the lock table itself.
+	 */
+	readonly approvalLock?: boolean;
+	/**
+	 * Whether the collection is included in the client replica DDL. Defaults to true.
+	 * Opt out for change-feed internals, outboxes, and anything the browser must not cache.
+	 */
+	readonly replica?: boolean;
+	/**
+	 * Whether every text column gets a GIN trigram index. System collections default to true to
+	 * preserve the existing search surface; opt out for internals whose text is not queried that way.
+	 * Tenant collections already opt in per column via `text({ search: true })`.
+	 */
+	readonly search?: boolean;
+	/**
+	 * Whether UPDATE/DELETE are rejected. Defaults to false. `audit_event` is the one current
+	 * insert-only collection; the post-DDL trigger is attached from this flag rather than the name.
+	 */
+	readonly insertOnly?: boolean;
 	readonly system: true;
 }
+
+/** Flags every leftover host-internal table shares: no history, no replica, no collection extras. */
+const INTERNAL_SYSTEM_FLAGS = {
+	history: false,
+	opsGuard: false,
+	approvalLock: false,
+	replica: false,
+	search: false,
+	system: true
+} as const satisfies Omit<SystemTableMeta, 'description' | 'record_label' | 'icon'>;
 
 const JsonObjectSchema = z.record(z.string(), z.unknown());
 const JsonArraySchema = z.array(z.unknown());
@@ -130,9 +170,16 @@ function jsonbColumn<T>(schema: z.ZodType<T>) {
 function systemTable<
 	const TName extends string,
 	const TColumns extends Record<string, AnyPgColumnBuilder>
->(name: TName, columns: TColumns, meta: SystemTableMeta) {
-	const table = pgTable(name, { ...systemColumns, ...columns }, (self) =>
-		Object.entries(columns)
+>(
+	name: TName,
+	columns: TColumns,
+	meta: SystemTableMeta,
+	extraConfig?: (self: Record<string, ExtraConfigColumn>) => PgTableExtraConfigValue[]
+) {
+	const table = pgTable(name, { ...systemColumns, ...columns }, (self) => {
+		const authored = extraConfig?.(self) ?? [];
+		if (meta.search === false) return authored;
+		const searchIndexes = Object.entries(columns)
 			.filter(([, builder]) => {
 				const config = Reflect.get(builder, 'config');
 				return (
@@ -149,8 +196,9 @@ function systemTable<
 					'gin',
 					column.op('gin_trgm_ops')
 				);
-			})
-	);
+			});
+		return [...authored, ...searchIndexes];
+	});
 	tableMeta.set(table, meta);
 	return table;
 }
@@ -244,7 +292,8 @@ const _policy = systemTable(
 		accessible_applications: jsonbColumn(StringArraySchema).default([]),
 		grants: jsonbColumn(JsonArraySchema).default([])
 	},
-	{ description: 'Access policies', record_label: 'name', system: true }
+	{ description: 'Access policies', record_label: 'name', system: true },
+	(t) => [uniqueIndex('policy_key_unique').on(t.key)]
 );
 
 const _team = systemTable(
@@ -279,7 +328,14 @@ const _audit_event = systemTable(
 	},
 	// An audit trail is append-only and is itself the revision record; versioning it would store a
 	// second copy of every row for a history nothing reads.
-	{ description: 'Audit events', record_label: 'event_type', history: false, system: true }
+	{
+		description: 'Audit events',
+		record_label: 'event_type',
+		history: false,
+		approvalLock: false,
+		insertOnly: true,
+		system: true
+	}
 );
 
 const _integration_outbox = systemTable(
@@ -301,6 +357,7 @@ const _integration_outbox = systemTable(
 	{
 		description: 'Transactional tenant integration delivery outbox',
 		record_label: 'integration_name',
+		replica: false,
 		system: true
 	}
 );
@@ -326,6 +383,7 @@ const _integration_cursor = systemTable(
 	{
 		description: 'Resume points for scheduled integration pulls',
 		record_label: 'binding_key',
+		replica: false,
 		system: true
 	}
 );
@@ -391,6 +449,7 @@ const _notification_outbox = systemTable(
 	{
 		description: 'Transactional external notification delivery outbox',
 		record_label: 'subject',
+		replica: false,
 		system: true
 	}
 );
@@ -642,8 +701,10 @@ const _invitation = systemTable(
 	{
 		description: 'Pending workspace invitations',
 		record_label: 'email',
+		replica: false,
 		system: true
-	}
+	},
+	(t) => [uniqueIndex('invitation_live_email_unique').on(t.email).where(sql`consumed_at IS NULL`)]
 );
 
 /**
@@ -671,8 +732,13 @@ const _sync_outbox = systemTable(
 		description: 'Tenant change-feed',
 		record_label: 'collection',
 		history: false,
+		replica: false,
 		system: true
-	}
+	},
+	(t) => [
+		index('sync_outbox_xid_seq_idx').on(t.xid, t.seq),
+		index('sync_outbox_occurred_at_idx').on(t.occurred_at)
+	]
 );
 
 const _norbital_automation_job = systemTable(
@@ -701,8 +767,17 @@ const _norbital_automation_job = systemTable(
 		description: 'Durable automation receipts',
 		record_label: 'automation_name',
 		history: false,
+		replica: false,
 		system: true
-	}
+	},
+	(t) => [
+		uniqueIndex('_norbital_automation_job_trigger_idx').on(t.automation_name, t.trigger_key),
+		index('_norbital_automation_job_claim_idx').on(t.orchestration_status, t.created_at),
+		check(
+			'_norbital_automation_job_orchestration_status_check',
+			sql`orchestration_status IN ('admitted', 'waiting_effect', 'succeeded', 'failed')`
+		)
+	]
 );
 
 const _host_event_outbox = systemTable(
@@ -723,8 +798,90 @@ const _host_event_outbox = systemTable(
 	{
 		description: 'Host-facing lifecycle and seat events',
 		record_label: 'event',
+		replica: false,
 		system: true
 	}
+);
+
+const _norbital_sync_compaction = systemTable(
+	'_norbital_sync_compaction',
+	{
+		singleton: boolean().notNull().default(true),
+		pruned_through_seq: bigint({ mode: 'bigint' }).notNull().default(sql`0`),
+		pruned_at: timestamp({ withTimezone: true }).notNull().defaultNow()
+	},
+	{
+		...INTERNAL_SYSTEM_FLAGS,
+		description: 'Change-feed compaction boundary',
+		record_label: 'pruned_through_seq'
+	},
+	(t) => [
+		uniqueIndex('_norbital_sync_compaction_singleton_key').on(t.singleton),
+		check('_norbital_sync_compaction_singleton_check', sql`singleton`)
+	]
+);
+
+const _norbital_automation_cursor = systemTable(
+	'_norbital_automation_cursor',
+	{
+		singleton: boolean().notNull().default(true),
+		xid: xid8Column().notNull().default(sql`'0'::xid8`),
+		seq: bigint({ mode: 'bigint' }).notNull().default(sql`0`)
+	},
+	{
+		...INTERNAL_SYSTEM_FLAGS,
+		description: 'Event-automation outbox cursor',
+		record_label: 'seq'
+	},
+	(t) => [
+		uniqueIndex('_norbital_automation_cursor_singleton_key').on(t.singleton),
+		check('_norbital_automation_cursor_singleton_check', sql`singleton`)
+	]
+);
+
+const _norbital_sync_epoch = systemTable(
+	'_norbital_sync_epoch',
+	{
+		singleton: boolean().notNull().default(true),
+		epoch: uuid().notNull().default(sql`uuidv7()`)
+	},
+	{
+		...INTERNAL_SYSTEM_FLAGS,
+		description: 'Physical tenant-database identity',
+		record_label: 'epoch'
+	},
+	(t) => [
+		uniqueIndex('_norbital_sync_epoch_singleton_key').on(t.singleton),
+		check('_norbital_sync_epoch_singleton_check', sql`singleton`)
+	]
+);
+
+const _approval_lock = systemTable(
+	'_approval_lock',
+	{
+		approval_request_id: uuid()
+			.notNull()
+			.references(() => _approval_request.norbital_id, { onDelete: 'cascade' }),
+		lock_type: text().notNull(),
+		collection_name: text().notNull(),
+		record_id: uuid().notNull()
+	},
+	{
+		...INTERNAL_SYSTEM_FLAGS,
+		description: 'Pending approval record locks',
+		record_label: 'collection_name'
+	},
+	(t) => [
+		uniqueIndex('_approval_lock_collection_record_type_key').on(
+			t.collection_name,
+			t.record_id,
+			t.lock_type
+		),
+		check(
+			'_approval_lock_lock_type_check',
+			sql`lock_type IN ('schema', 'record_delete', 'record_mutation')`
+		)
+	]
 );
 
 export const approval_request = _approval_request;
@@ -749,6 +906,10 @@ export const notification_outbox = _notification_outbox;
 export const notification = _notification;
 export const document_asset = _document_asset;
 export const team_members = _team_members;
+export const norbital_sync_compaction = _norbital_sync_compaction;
+export const norbital_automation_cursor = _norbital_automation_cursor;
+export const norbital_sync_epoch = _norbital_sync_epoch;
+export const approval_lock = _approval_lock;
 
 export const platformTables = {
 	approval_request,
@@ -791,7 +952,11 @@ export const systemTables = {
 	channel_inbound_message: { table: channel_inbound_message },
 	channel_rate_limit: { table: channel_rate_limit },
 	sync_outbox: { table: sync_outbox },
-	_norbital_automation_job: { table: norbital_automation_job }
+	_norbital_automation_job: { table: norbital_automation_job },
+	_norbital_sync_compaction: { table: norbital_sync_compaction },
+	_norbital_automation_cursor: { table: norbital_automation_cursor },
+	_norbital_sync_epoch: { table: norbital_sync_epoch },
+	_approval_lock: { table: approval_lock }
 } satisfies Record<SystemCollectionName, { table: PgTable }>;
 
 /**
@@ -802,11 +967,67 @@ export const systemTables = {
  * stopped mirroring column changes into history relations the lineage still declared, and nothing
  * dropped them. Both halves now read this.
  */
-export const NON_TEMPORAL_SYSTEM_COLLECTIONS: ReadonlySet<SystemCollectionName> = new Set(
-	Object.entries(systemTables)
-		.filter(([, entry]) => getSystemTableMeta(entry.table)?.history === false)
-		.map(([name]) => name as SystemCollectionName)
-);
+function systemFlag(
+	meta: SystemTableMeta | undefined,
+	flag: 'history' | 'opsGuard' | 'approvalLock' | 'replica' | 'search' | 'insertOnly',
+	defaultValue: boolean
+): boolean {
+	const value = meta?.[flag];
+	return typeof value === 'boolean' ? value : defaultValue;
+}
+
+function systemCollectionNamesWhere(
+	predicate: (meta: SystemTableMeta | undefined) => boolean
+): ReadonlySet<SystemCollectionName> {
+	return new Set(
+		Object.entries(systemTables)
+			.filter(([, entry]) => predicate(getSystemTableMeta(entry.table)))
+			.map(([name]) => name as SystemCollectionName)
+	);
+}
+
+export const NON_TEMPORAL_SYSTEM_COLLECTIONS: ReadonlySet<SystemCollectionName> =
+	systemCollectionNamesWhere((meta) => systemFlag(meta, 'history', true) === false);
+
+/** System collections whose writes do not set `norbital.via_ops`. Default for system is false. */
+export const SYSTEM_COLLECTIONS_WITHOUT_OPS_GUARD: ReadonlySet<SystemCollectionName> =
+	systemCollectionNamesWhere((meta) => systemFlag(meta, 'opsGuard', false) === false);
+
+/** System collections the approval-lock gate skips. Default is true (gate attaches). */
+export const SYSTEM_COLLECTIONS_WITHOUT_APPROVAL_LOCK: ReadonlySet<SystemCollectionName> =
+	systemCollectionNamesWhere((meta) => systemFlag(meta, 'approvalLock', true) === false);
+
+/** System collections omitted from the client replica DDL. Default is true (included). */
+export const SYSTEM_COLLECTIONS_WITHOUT_REPLICA: ReadonlySet<SystemCollectionName> =
+	systemCollectionNamesWhere((meta) => systemFlag(meta, 'replica', true) === false);
+
+/** System collections that reject UPDATE/DELETE. Default is false. */
+export const SYSTEM_COLLECTIONS_INSERT_ONLY: ReadonlySet<SystemCollectionName> =
+	systemCollectionNamesWhere((meta) => systemFlag(meta, 'insertOnly', false) === true);
+
+/**
+ * Relations that are not collections. Collection extras are opted on the collection itself;
+ * these names are the only leftovers that still have to be listed.
+ */
+export const NON_COLLECTION_INTERNALS = ['_norbital_internal_schema', '__drizzle_migrations'] as const;
+
+/** Leftover names the replica introspector must skip that are not collections. */
+export const REPLICA_INTERNAL_EXCLUSIONS = [...NON_COLLECTION_INTERNALS, 'mutation_log'] as const;
+
+/** Tables omitted from the client replica DDL. */
+export function replicaExcludedTables(collections: {
+	readonly [name: string]: { readonly extensions?: { readonly replica?: boolean } };
+}): string[] {
+	return [
+		...new Set([
+			...REPLICA_INTERNAL_EXCLUSIONS,
+			...SYSTEM_COLLECTIONS_WITHOUT_REPLICA,
+			...Object.entries(collections)
+				.filter(([, collection]) => collection.extensions?.replica === false)
+				.map(([name]) => name)
+		])
+	].sort();
+}
 
 export const platformRelations = defineRelations(platformTables, (r) => ({
 	approval_request: {

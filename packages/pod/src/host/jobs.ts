@@ -11,8 +11,9 @@ import type {
 	QueueJob
 } from './types.js';
 import { processEnvSecrets, resolveSecretHeaders } from './integration-http.js';
-import type { HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
+import type { HostDbBinding, HostMessagingBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { createHash } from 'node:crypto';
+import { runHostIntegrationCursor } from './mail.js';
 
 /** Calls the private runtime host-control entry point. */
 export type RuntimeDispatch = (body: unknown) => Promise<unknown>;
@@ -20,6 +21,11 @@ export type RuntimeDispatch = (body: unknown) => Promise<unknown>;
 export type WorkspaceJobOptions = {
 	readonly manifest: NorbitalManifest;
 	readonly dispatch: RuntimeDispatch;
+	/**
+	 * Tenant database for host-side pull cursors. Required when a pull job runs; registration
+	 * that only reads job names may omit it.
+	 */
+	readonly db?: HostDbBinding;
 	readonly integrationDelivery?: HostIntegrationDelivery;
 	readonly messaging?: HostMessagingBinding;
 	/** Resolves the secret names a declared connection references. Defaults to `process.env`. */
@@ -275,13 +281,15 @@ function integrationPullJob(
 		name: `pod:integration-pull:${integrationName}:${bindingName}`,
 		schedule: assertSchedule(describe, origin.schedule),
 		async run() {
-			const stored = (await options.dispatch({
+			const db = options.db;
+			if (!db) throw new Error(`${describe} pull requires a host database binding`);
+			const stored = await runHostIntegrationCursor(db, {
 				kind: 'integration-cursor',
 				action: 'read',
 				integrationName,
 				bindingName
-			})) as { readonly cursor?: string | null };
-			const cursor = stored?.cursor ?? null;
+			});
+			const cursor = stored.cursor;
 			const url = new URL(origin.url);
 			if (origin.cursorQuery && cursor) url.searchParams.set(origin.cursorQuery, cursor);
 			try {
@@ -318,7 +326,7 @@ function integrationPullJob(
 						`${describe} pull returned a body the binding refused — ${outcome.reason ?? 'no reason given'}`
 					);
 				}
-				await options.dispatch({
+				await runHostIntegrationCursor(db, {
 					kind: 'integration-cursor',
 					action: 'write',
 					integrationName,
@@ -333,16 +341,14 @@ function integrationPullJob(
 				log(`[pod:queue] ${describe} pull failed: ${reason}`);
 				// The cursor is left where it was, so the next tick retries the same page. Only the
 				// reason is recorded, and only so an operator can see it without reading the log.
-				await options
-					.dispatch({
-						kind: 'integration-cursor',
-						action: 'write',
-						integrationName,
-						bindingName,
-						cursor,
-						error: reason
-					})
-					.catch(() => undefined);
+				await runHostIntegrationCursor(db, {
+					kind: 'integration-cursor',
+					action: 'write',
+					integrationName,
+					bindingName,
+					cursor,
+					error: reason
+				}).catch(() => undefined);
 				throw cause;
 			}
 		}

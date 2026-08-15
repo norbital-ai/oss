@@ -920,8 +920,9 @@ The transport surface is:
 - `GET /_runtime/sync/stream` using server-sent events;
 - `POST /_runtime/sync/mutate`.
 
-Standalone uses PostgreSQL `LISTEN`/`NOTIFY` to wake its publisher. A hosted runtime supplies the
-equivalent host wake-up seam. The durable outbox, not the notification itself, remains authoritative.
+After `sync_outbox` commits, the host publishes `wakeSync`. Standalone uses an in-process bus;
+Core uses a Redis adapter. The host never LISTENs on the tenant database. The durable outbox, not
+the wake itself, remains authoritative.
 
 See [Sync engine](./docs/SYNC_ENGINE.md) for protocol details, reset behavior, resource limits, and
 documented gaps.

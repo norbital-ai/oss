@@ -3,14 +3,13 @@
  * loads the compiled bundle with a native Node `import()`.
  *
  * Core does not boot this process. It compiles the same `output/server/index.js` in isolate-vm
- * and calls `handlePodDispatch`. There is no guest HTTP listener.
+ * and calls `dispatch`. There is no guest HTTP listener.
  *
  * This process authenticates itself (via the resolved host configuration), serves the workspace's
  * static assets and single-page document, and runs jobs, channels, and webhook listeners in the
- * same process. The HTTP pipeline lives in `serve/server.ts` and hands the request to
- * `handlePodRequest` / `handlePodHostCommand`. Timeout is host policy on admit
- * (`config.timeoutMs ?? 2_000`); that 2_000 is this host's default, not a Pod contract. The
- * guest reads `remainingMs()`.
+ * same process. The HTTP pipeline lives in `serve/server.ts` and maps each request onto
+ * `dispatch`. Timeout is host policy on admit (`config.timeoutMs ?? 2_000`); that 2_000 is this
+ * host's default, not a Pod contract. The guest reads `remainingMs()`.
  *
  * The `pod` CLI (`bin/invocation/index.ts`) imports the operations here directly.
  */
@@ -51,8 +50,10 @@ import {
 	type SelfHostedPodHostConfig
 } from '../host/types.js';
 import { assertHostAgentTools, hostAgentTools } from '../host/agent-tools.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { startAdmit, type PodAdmit } from '../server/admit.js';
 import { isHostSyncStreamPath, serveHostSyncStream } from '../host/sync-stream.js';
+import { attachSyncWakeToDb, createInProcessSyncWakeBus } from '../host/sync-wake.js';
 import { createPodHttpServer } from './server.js';
 import { cookieSession, subjectHmac } from '../host/session.js';
 import { emailOtpIdentity } from '../host/email-otp.js';
@@ -60,7 +61,13 @@ import { serverI18n } from '$lib/i18n/index.js';
 import { assertChannelTransportsAreSupported } from '../authoring/channels/channels.js';
 import { loadHostConfig, resolveDatabaseUrl, type ResolvedHostConfig } from '../host/config.js';
 import { workspaceJobs } from '../host/jobs.js';
-import { standaloneAutomationJobs } from './standalone-automation.js';
+import { isHostMailCommand, runHostMail } from '../host/mail.js';
+import {
+	ADMIT_ARTIFACT_HEADER,
+	serializeAdmitArtifact,
+	withAdmitArtifact
+} from '../host/admit-artifact.js';
+import { standaloneAutomationJobs, STANDALONE_AUTOMATION_ARTIFACT } from './standalone-automation.js';
 import { declaredWebhookBindings, webhookInboundDeliverer } from '../host/webhook-inbound.js';
 import {
 	reconcileDeclaredPolicies,
@@ -96,17 +103,106 @@ interface StandaloneEnvironment {
 
 /** The compiled guest bundle this host loads and admits functions into. */
 interface PodRuntimeModule {
-	readonly handlePodRequest: (
-		request: Request,
-		bindings: RuntimeFacilityBindings
-	) => Promise<Response>;
-	readonly handlePodHostCommand: (
-		command: unknown,
+	readonly dispatch?: (
+		name: string,
+		payload: unknown,
 		bindings: RuntimeFacilityBindings,
-		identity: HostIdentity,
 		admit?: PodAdmit | null
 	) => Promise<unknown>;
+	readonly handlePodHostCommand?: (command: unknown) => Promise<unknown>;
 	readonly registerPodHostPlugins: (plugins: readonly HostAppPlugin[]) => void;
+}
+
+const ADMIT_HEADER_NAMES = new Set(['x-norbital-timeout-ms', 'x-norbital-deadline-at']);
+
+/** Runtime path without `/_runtime/`. */
+function runtimeNameFromPath(pathname: string): string {
+	if (pathname.startsWith('/_runtime/')) return pathname.slice('/_runtime/'.length);
+	return pathname.replace(/^\//, '');
+}
+
+/** Identity headers only — admit is an argument to `dispatch`, never a guest header. */
+function requestIdentityHeaders(request: Request): Record<string, string> {
+	const headers: Record<string, string> = {};
+	request.headers.forEach((value, name) => {
+		if (ADMIT_HEADER_NAMES.has(name.toLowerCase())) return;
+		headers[name] = value;
+	});
+	return headers;
+}
+
+/** Map one authenticated HTTP request onto the guest `dispatch` door. */
+async function dispatchHttpRequest(
+	runtime: PodRuntimeModule,
+	request: Request,
+	bindings: RuntimeFacilityBindings,
+	admit: PodAdmit | null
+): Promise<Response> {
+	const url = new URL(request.url);
+	const body =
+		request.method === 'GET' || request.method === 'HEAD' ? null : await request.text();
+	const headers = requestIdentityHeaders(request);
+	headers[ADMIT_ARTIFACT_HEADER] = serializeAdmitArtifact(STANDALONE_AUTOMATION_ARTIFACT);
+	const result = (await dispatchGuest(
+		runtime,
+		runtimeNameFromPath(url.pathname),
+		{
+			method: request.method,
+			search: url.search,
+			headers,
+			body
+		},
+		bindings,
+		admit
+	)) as { readonly status: number; readonly headers: Record<string, string>; readonly bodyText: string };
+	return new Response(result.bodyText, { status: result.status, headers: result.headers });
+}
+
+/** Guest named dispatch, or the previous `handlePodHostCommand` export during transition. */
+function dispatchGuest(
+	runtime: PodRuntimeModule,
+	name: string,
+	payload: unknown,
+	bindings: RuntimeFacilityBindings,
+	admit: PodAdmit | null
+): Promise<unknown> {
+	if (typeof runtime.dispatch === 'function') {
+		return runtime.dispatch(name, payload, bindings, admit);
+	}
+	if (typeof runtime.handlePodHostCommand === 'function') {
+		return runtime.handlePodHostCommand(payload);
+	}
+	throw new Error('Pod runtime is missing dispatch');
+}
+
+/** Map one host command onto host mail or guest `dispatch(kind, command, bindings, admit)`. */
+function dispatchHostCommand(
+	runtime: PodRuntimeModule,
+	command: unknown,
+	bindings: RuntimeFacilityBindings,
+	identity: HostIdentity,
+	admit: PodAdmit | null,
+	manifest: NorbitalManifest,
+	db: HostDbBinding
+): Promise<unknown> {
+	if (isHostMailCommand(command)) {
+		return runHostMail({ db, manifest, command });
+	}
+	const guestCommand = withAdmitArtifact(command, STANDALONE_AUTOMATION_ARTIFACT);
+	const kind =
+		guestCommand != null && typeof guestCommand === 'object' && 'kind' in guestCommand
+			? String((guestCommand as { kind: unknown }).kind)
+			: '';
+	return dispatchGuest(
+		runtime,
+		kind,
+		{
+			...(guestCommand != null && typeof guestCommand === 'object' ? guestCommand : { command: guestCommand }),
+			identity
+		},
+		bindings,
+		admit
+	);
 }
 
 /** Read one required `POD_*` / `DATABASE_URL` value from the process environment. */
@@ -198,31 +294,6 @@ export function assertStandaloneFacilities(
 	throw new Error(
 		`Standalone Pod workspace requires unavailable runtime facilities: ${missing.join(', ')}. Run this build in a host that implements every required facility.`
 	);
-}
-
-type HostSyncNotifications = {
-	subscribe(wake: () => void): () => void;
-	close(): Promise<void>;
-};
-
-/** LISTEN on the tenant database in the host process. Guest handlePodRequest never sees this. */
-async function installDatabaseNotifications(databaseUrl: string): Promise<HostSyncNotifications> {
-	const client = new Client({ connectionString: databaseUrl });
-	const listeners = new Set<() => void>();
-	await client.connect();
-	client.on('notification', () => {
-		for (const listener of listeners) listener();
-	});
-	await client.query('LISTEN norbital_sync');
-	return {
-		subscribe(wake) {
-			listeners.add(wake);
-			return () => listeners.delete(wake);
-		},
-		close: async () => {
-			await client.end();
-		}
-	};
 }
 
 /** Run `run` inside one PostgreSQL transaction and roll back on failure. */
@@ -352,7 +423,8 @@ export async function inviteStandalone(
 	const binding: HostDbConnection = config.db.connect();
 	await binding.validate();
 	try {
-		const result = (await runtime.handlePodHostCommand(
+		const result = (await dispatchHostCommand(
+			runtime,
 			{ kind: 'identity', action: 'invite', email, role: 'admin', publicUrl: config.publicUrl },
 			facilityBindings(config, binding),
 			{
@@ -360,7 +432,9 @@ export async function inviteStandalone(
 				organizationId: environment.orgId,
 				organizationName: environment.orgName
 			},
-			startAdmit(config.timeoutMs ?? 2_000)
+			startAdmit(config.timeoutMs ?? 2_000),
+			await loadStandaloneManifest(root),
+			binding
 		)) as { readonly acceptUrl?: string } | null;
 		return result?.acceptUrl ?? null;
 	} finally {
@@ -423,17 +497,20 @@ export async function seedStandalone(
 
 /** Import the compiled guest bundle this host will admit functions into. */
 async function loadPodRuntime(root: string): Promise<PodRuntimeModule> {
-	// Same `output/server/index.js` Core loads in isolate-vm and calls via `handlePodDispatch`.
+	// Same `output/server/index.js` Core loads in isolate-vm and calls via `dispatch`.
 	// This host `import()`s it in-process; only the bindings and the socket differ.
+	(globalThis as { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??=
+		AsyncLocalStorage;
 	const runtimePath = path.join(standaloneBuildDirectory(root), 'output', 'server', 'index.js');
 	const loaded: unknown = await import(pathToFileURL(runtimePath).href);
+	if (typeof loaded !== 'object' || loaded == null) {
+		throw new Error(`Invalid standalone Pod runtime artifact: ${runtimePath}`);
+	}
+	const hasDispatch = 'dispatch' in loaded && typeof loaded.dispatch === 'function';
+	const hasLegacyHost =
+		'handlePodHostCommand' in loaded && typeof loaded.handlePodHostCommand === 'function';
 	if (
-		typeof loaded !== 'object' ||
-		loaded == null ||
-		!('handlePodRequest' in loaded) ||
-		typeof loaded.handlePodRequest !== 'function' ||
-		!('handlePodHostCommand' in loaded) ||
-		typeof loaded.handlePodHostCommand !== 'function' ||
+		(!hasDispatch && !hasLegacyHost) ||
 		!('registerPodHostPlugins' in loaded) ||
 		typeof loaded.registerPodHostPlugins !== 'function'
 	) {
@@ -542,17 +619,12 @@ export async function startStandalone(
 	const hostPlugins = config.hostPlugins ?? [];
 	assertHostPlugins(hostPlugins);
 
-	const binding: HostDbConnection = config.db.connect();
-	await binding.validate();
+	const connected: HostDbConnection = config.db.connect();
+	await connected.validate();
 	const runtime = await loadPodRuntime(root);
 	runtime.registerPodHostPlugins(hostPlugins);
-	let hostNotifications: HostSyncNotifications;
-	try {
-		hostNotifications = await installDatabaseNotifications(config.db.connectionString);
-	} catch (cause) {
-		await binding.close();
-		throw cause;
-	}
+	const syncWake = createInProcessSyncWakeBus();
+	const binding = attachSyncWakeToDb(connected, syncWake, environment.orgId);
 	const bindings = facilityBindings(config, binding);
 
 	// Keys the digest the host-facing event stream carries. Absent means events carry no subject key,
@@ -619,7 +691,8 @@ export async function startStandalone(
 
 	const hostTimeoutMs = config.timeoutMs ?? 2_000;
 	const dispatch = (command: unknown): Promise<unknown> =>
-		runtime.handlePodHostCommand(
+		dispatchHostCommand(
+			runtime,
 			command,
 			bindings,
 			{
@@ -627,7 +700,9 @@ export async function startStandalone(
 				organizationId: environment.orgId,
 				organizationName: environment.orgName
 			},
-			startAdmit(hostTimeoutMs)
+			startAdmit(hostTimeoutMs),
+			manifest,
+			binding
 		);
 
 	const resolveSubject = async (verified: HostVerifiedSubject): Promise<HostIdentity | null> => {
@@ -714,7 +789,7 @@ export async function startStandalone(
 	/**
 	 * Hand one already-authenticated inbound message to the workspace.
 	 *
-	 * It goes over the private control plane rather than `handlePodRequest` for the same reason job
+	 * It goes over the private control plane rather than HTTP `dispatch` for the same reason job
 	 * dispatch does: nothing a tenant request can reach may run the agent as a channel principal.
 	 */
 	const deliverChannelInbound = async (
@@ -737,7 +812,7 @@ export async function startStandalone(
 	 *
 	 * The verification is inside `webhookInboundDeliverer`, not in the listener, so a host that writes
 	 * its own endpoint cannot accidentally skip it. Like the channel path, it crosses the private
-	 * control plane rather than `handlePodRequest`: an integration writes collections elevated, and
+	 * control plane rather than HTTP `dispatch`: an integration writes collections elevated, and
 	 * nothing a tenant request can reach may do that.
 	 */
 	const webhookBindings = declaredWebhookBindings(manifest);
@@ -786,6 +861,7 @@ export async function startStandalone(
 			...workspaceJobs({
 				manifest,
 				dispatch,
+				db: binding,
 				organizationId: environment.orgId,
 				...(config.integrationDelivery ? { integrationDelivery: config.integrationDelivery } : {}),
 				...(config.messaging ? { messaging: config.messaging } : {}),
@@ -800,7 +876,6 @@ export async function startStandalone(
 		];
 		if (config.queue && jobs.length > 0) stopQueue = await config.queue(jobs);
 	} catch (cause) {
-		await hostNotifications.close();
 		await binding.close();
 		throw cause;
 	}
@@ -811,7 +886,6 @@ export async function startStandalone(
 			stopChannels = await config.channels(deliverChannelInbound);
 		} catch (cause) {
 			stopQueue();
-			await hostNotifications.close();
 			await binding.close();
 			throw cause;
 		}
@@ -824,7 +898,6 @@ export async function startStandalone(
 		} catch (cause) {
 			stopChannels();
 			stopQueue();
-			await hostNotifications.close();
 			await binding.close();
 			throw cause;
 		}
@@ -846,26 +919,37 @@ export async function startStandalone(
 			appDocument,
 			resolveSubject,
 			handlePodRequest: async (request, requestBindings) => {
+				const admit = startAdmit(hostTimeoutMs);
 				if (isHostSyncStreamPath(new URL(request.url).pathname)) {
 					const served = serveHostSyncStream({
 						path: `${new URL(request.url).pathname}${new URL(request.url).search}`,
 						signal: request.signal,
 						pullDiff: async (diffPath) => {
-							const response = await runtime.handlePodRequest(
-								new Request(new URL(diffPath, request.url), {
+							const diffUrl = new URL(diffPath, 'http://pod.local');
+							const pulled = (await dispatchGuest(
+								runtime,
+								runtimeNameFromPath(diffUrl.pathname),
+								{
 									method: 'GET',
-									headers: request.headers,
-									signal: request.signal
-								}),
-								requestBindings
-							);
-							return { status: response.status, bodyText: await response.text() };
+									search: diffUrl.search,
+									headers: requestIdentityHeaders(request),
+									body: null
+								},
+								requestBindings,
+								admit
+							)) as {
+								readonly status: number;
+								readonly bodyText: string;
+							};
+							return { status: pulled.status, bodyText: pulled.bodyText };
 						},
-						subscribe: (wake) => hostNotifications.subscribe(wake)
+						subscribe: (wake) =>
+							syncWake.subscribeSyncWake(environment.orgId, () => wake()),
+						lastSeq: () => syncWake.lastSyncSeq(environment.orgId)
 					});
 					return new Response(served.body, { status: served.status, headers: served.headers });
 				}
-				return runtime.handlePodRequest(request, requestBindings);
+				return dispatchHttpRequest(runtime, request, requestBindings, admit);
 			},
 			timeoutMs: hostTimeoutMs
 		});
@@ -885,7 +969,6 @@ export async function startStandalone(
 		stopWebhooks();
 		stopChannels();
 		stopQueue();
-		await hostNotifications.close();
 		if (stopHttpServer) await stopHttpServer();
 		await binding.close();
 	}

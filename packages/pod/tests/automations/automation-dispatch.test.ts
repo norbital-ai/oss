@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
 	matchChangeAutomations,
 	eventForAction,
-	INTERACTIVE_AGENT_AUTOMATION_NAME,
-	GUEST_ADMIT_ARTIFACT_MARKER
+	INTERACTIVE_AGENT_AUTOMATION_NAME
 } from '$lib/server/run/automation-dispatch.server.js';
 import { readFileSync } from 'node:fs';
 
@@ -46,7 +45,6 @@ describe('durable automation jobs', () => {
 	// agent-live-capabilities-e2e.test.ts and ../standalone/channel-delivery-e2e.test.ts.
 	it('exports the interactive job sentinel used by guest admit', () => {
 		expect(INTERACTIVE_AGENT_AUTOMATION_NAME).toBe('agent:interactive');
-		expect(GUEST_ADMIT_ARTIFACT_MARKER).toBe('guest-admit');
 	});
 	it('keeps tenant receipts narrow while DBOS owns leases and retries', () => {
 		const source = readFileSync(
@@ -63,8 +61,10 @@ describe('durable automation jobs', () => {
 		expect(source).toContain('record_snapshot');
 		expect(source).toContain('checkpoint_id');
 		expect(source).toContain('runtime_version');
-		expect(source).toContain('GUEST_ADMIT_ARTIFACT_MARKER');
+		expect(source).not.toContain('GUEST_ADMIT_ARTIFACT_MARKER');
+		expect(source).not.toContain('guest-admit');
 		expect(source).toContain('admitAgentTurn');
+		expect(source).toContain('input.artifact.artifactId');
 		expect(source).toContain('receiptUsesAgentReducer');
 		expect(source).toContain(
 			"WHEN automation_name = 'agent:interactive' OR automation_name LIKE 'channel:%' THEN 0"

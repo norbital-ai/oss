@@ -211,8 +211,8 @@ try {
 
 	console.log('Loading output/server/index.js function exports from the clean bundle.');
 	const runtime = await import(pathToFileURL(path.join(bundle, 'output/server/index.js')).href);
-	if (typeof runtime.handlePodRequest !== 'function' || typeof runtime.handlePodHostCommand !== 'function') {
-		fail('Published server bundle does not export handlePodRequest / handlePodHostCommand.');
+	if (typeof runtime.dispatch !== 'function' || typeof runtime.registerPodHostPlugins !== 'function') {
+		fail('Published server bundle does not export dispatch / registerPodHostPlugins.');
 	}
 } finally {
 	rmSync(temporaryDirectory, { recursive: true, force: true });

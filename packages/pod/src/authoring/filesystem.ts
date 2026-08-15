@@ -43,6 +43,14 @@ export type ModelMetadata = {
 	 * the revisions in it, in the next generated migration. Turning it back on starts a fresh one.
 	 */
 	readonly history?: boolean;
+	/** Whether writes must go through `collection_ops`. Defaults to true for tenant collections. */
+	readonly opsGuard?: boolean;
+	/** Whether `_approval_lock_gate` attaches. Defaults to true. */
+	readonly approvalLock?: boolean;
+	/** Whether the collection is included in the client replica DDL. Defaults to true. */
+	readonly replica?: boolean;
+	/** Whether UPDATE/DELETE are rejected. Defaults to false. */
+	readonly insertOnly?: boolean;
 	readonly indexes?: readonly TableIndex[];
 	/** Postgres EXCLUDE constraints, emitted out-of-band (drizzle cannot express them). */
 	readonly exclusions?: readonly TableExclusion[];
@@ -157,6 +165,10 @@ function modelTableMeta(metadata: ModelMetadata | undefined): TableMeta | undefi
 		record_label: labelFields?.map((field) => `scope.record.${field}`).join(" + ' · ' + "),
 		icon: metadata.icon,
 		history: metadata.history,
+		opsGuard: metadata.opsGuard,
+		approvalLock: metadata.approvalLock,
+		replica: metadata.replica,
+		insertOnly: metadata.insertOnly,
 		indexes: metadata.indexes,
 		exclusions: metadata.exclusions
 	};

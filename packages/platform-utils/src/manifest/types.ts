@@ -60,7 +60,15 @@ export const ManifestCollectionEntrySchema = z
 				indexes: z.array(z.unknown()),
 				exclusions: z.array(ManifestExclusionSchema).optional(),
 				/** Absent means the default: the collection keeps a `<name>_history` relation. */
-				history: z.boolean().optional()
+				history: z.boolean().optional(),
+				/** Absent means the collection default: tenant true, system false. */
+				opsGuard: z.boolean().optional(),
+				/** Absent means the default: `_approval_lock_gate` attaches. */
+				approvalLock: z.boolean().optional(),
+				/** Absent means the default: included in the client replica DDL. */
+				replica: z.boolean().optional(),
+				/** Absent means the default: UPDATE/DELETE are allowed. */
+				insertOnly: z.boolean().optional()
 			})
 			.strict(),
 		enabled_semantic_search: z.boolean().nullable().optional(),

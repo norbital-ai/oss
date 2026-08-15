@@ -1,11 +1,9 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentPodCallOrNull, withPodCallField } from './pod-call.js';
 
 /**
- * Headers the host sets on every admitted function. The guest never invents a timeout.
+ * Headers the host may still strip at the HTTP edge. The guest never reads these.
  *
- * Clients cannot set these: the HTTP adapter strips them and the host writes them after
- * authentication, the same way it writes identity.
+ * Clients cannot set them: the HTTP adapter strips them. Admit is an argument to `dispatch`.
  */
 export const ADMIT_TIMEOUT_HEADER = 'x-norbital-timeout-ms';
 export const ADMIT_DEADLINE_HEADER = 'x-norbital-deadline-at';
@@ -21,7 +19,7 @@ export type PodAdmit = {
 	readonly deadlineAt: number;
 };
 
-const admitStorage = new AsyncLocalStorage<PodAdmit>();
+let testAdmit: PodAdmit | null | undefined;
 
 /**
  * Milliseconds left on the current admit, or `null` when no host admitted this call.
@@ -30,7 +28,7 @@ const admitStorage = new AsyncLocalStorage<PodAdmit>();
  * writers then take the whole caller batch instead of inventing a Pod-side 2_000 ms contract.
  */
 function activeAdmit(): PodAdmit | null {
-	return currentPodCallOrNull()?.admit ?? admitStorage.getStore() ?? null;
+	return currentPodCallOrNull()?.admit ?? testAdmit ?? null;
 }
 
 export function remainingMs(): number | null {
@@ -47,6 +45,8 @@ export function currentAdmit(): PodAdmit | null {
 /**
  * Parse the host's admit headers. Returns `null` when either value is missing or not a
  * positive integer — the guest then runs without a visible budget rather than guessing one.
+ *
+ * HTTP host edge only. The isolate bundle must not call this.
  */
 export function parseAdmitHeaders(headers: Headers): PodAdmit | null {
 	const timeoutMs = positiveInteger(headers.get(ADMIT_TIMEOUT_HEADER));
@@ -55,7 +55,7 @@ export function parseAdmitHeaders(headers: Headers): PodAdmit | null {
 	return { timeoutMs, deadlineAt };
 }
 
-/** Headers a host attaches so the guest can size work from the remaining budget. */
+/** Headers a host attaches so an HTTP edge can recover a budget it already started. */
 export function admitHeaders(admit: PodAdmit): Record<string, string> {
 	return {
 		[ADMIT_TIMEOUT_HEADER]: String(admit.timeoutMs),
@@ -74,7 +74,7 @@ export function startAdmit(timeoutMs: number): PodAdmit {
 	return { timeoutMs, deadlineAt: Date.now() + timeoutMs };
 }
 
-/** Parse admit headers from a plain record (no Fetch Request). */
+/** Parse admit headers from a plain record (no Fetch Request). HTTP host edge only. */
 export function parseAdmitHeaderRecord(headers: Record<string, string>): PodAdmit | null {
 	const get = (name: string) => {
 		const direct = headers[name];
@@ -93,11 +93,24 @@ export function parseAdmitHeaderRecord(headers: Record<string, string>): PodAdmi
 
 /** Run `fn` under the host's admit so `remainingMs()` is visible to guest code. */
 export function runWithAdmit<T>(admit: PodAdmit | null, fn: () => T): T {
-	if (!admit) return fn();
 	if (currentPodCallOrNull()) {
 		return withPodCallField('admit', admit, fn) as T;
 	}
-	return admitStorage.run(admit, fn);
+	const previous = testAdmit;
+	testAdmit = admit;
+	try {
+		const result = fn();
+		if (result && typeof (result as Promise<unknown>).then === 'function') {
+			return Promise.resolve(result).finally(() => {
+				testAdmit = previous;
+			}) as T;
+		}
+		testAdmit = previous;
+		return result;
+	} catch (error) {
+		testAdmit = previous;
+		throw error;
+	}
 }
 
 function positiveInteger(value: string | null): number | null {

@@ -70,27 +70,82 @@ function podBuildFile(relativePath: string): string {
 }
 
 /**
- * Vite externals are only HOST_IO_NODE_BUILTINS (`fs`, `crypto`, `async_hooks`, `path`,
- * `buffer`) — not every `node:` specifier. Leftover `node:` imports are answered by Core's
- * isolate loader (host-provided util/stream/zlib/assert via createRequire; isolate-local
- * path/buffer/crypto/async_hooks; artifact CJS/WASM for pdq-wasm; ESM leftover `fs` is
- * denied, createRequire `fs` reads the sealed artifact only). Self-host (`pod start`) is a
- * native Node `import()` of the same bundle.
+ * Vite externals are only HOST_IO_NODE_BUILTINS (`crypto`, `path`, `buffer` when still
+ * referenced). The server build refuses `createRequire` and every other `node:` specifier.
+ * Self-host (`pod start`) is a native Node `import()` of the same bundle.
  */
 const HOST_IO_NODE_BUILTINS = new Set([
-	'node:fs',
-	'node:fs/promises',
-	'fs',
-	'fs/promises',
 	'node:crypto',
 	'crypto',
-	'node:async_hooks',
-	'async_hooks',
 	'node:path',
 	'path',
 	'node:buffer',
 	'buffer'
 ]);
+
+const HOST_IO_DENY = new Set([
+	'node:async_hooks',
+	'async_hooks',
+	'node:fs',
+	'node:fs/promises',
+	'fs',
+	'fs/promises',
+	'node:module',
+	'module',
+	'node:child_process',
+	'child_process',
+	'node:http',
+	'node:https',
+	'http',
+	'https',
+	'node:net',
+	'node:tls',
+	'net',
+	'tls',
+	'node:worker_threads',
+	'worker_threads',
+	'node:os',
+	'os',
+	'node:util',
+	'util',
+	'node:stream',
+	'stream',
+	'node:zlib',
+	'zlib',
+	'node:assert',
+	'assert',
+	'node:url',
+	'url'
+]);
+
+const CREATE_REQUIRE_PATTERN = /\bcreateRequire\s*\(/;
+const NODE_MODULE_IMPORT_PATTERN = /from\s+['"]node:module['"]|require\(\s*['"]node:module['"]/;
+
+function isNodeSpecifier(source: string): boolean {
+	return source.startsWith('node:') || HOST_IO_DENY.has(source) || HOST_IO_NODE_BUILTINS.has(source);
+}
+
+function isGuestServerImporter(importer: string | undefined): boolean {
+	if (!importer) return false;
+	if (importer.includes('node_modules') || importer.includes('rolldown')) return false;
+	return (
+		importer.includes('/packages/pod/src/server/') ||
+		importer.includes('\\packages\\pod\\src\\server\\') ||
+		importer.includes('virtual:pod/server-entry') ||
+		importer.startsWith('\0virtual:pod/server-entry')
+	);
+}
+
+/** Refuse guest-bundle Node I/O: createRequire and any builtin outside the tiny allowlist. */
+function refuseServerNodeSpecifier(source: string): void {
+	if (source === 'node:module' || source === 'module' || HOST_IO_DENY.has(source)) {
+		throw new Error(`Server build refuses Node builtin ${source}`);
+	}
+	if (HOST_IO_NODE_BUILTINS.has(source)) return;
+	if (source.startsWith('node:')) {
+		throw new Error(`Server build refuses Node builtin ${source}`);
+	}
+}
 
 /** Read a tenant message JSON file, returning null when absent or unparsable. */
 async function readMessageFile(file: string): Promise<Readonly<Record<string, string>> | null> {
@@ -263,7 +318,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		const [
 			{ parseSeedManifest, seedManifestJson },
 			{ parseNorbitalManifest },
-			{ SCHEMA_FUNCTIONS_SQL, nonTemporalCollections, schemaPostDdlSql },
+			{ SCHEMA_FUNCTIONS_SQL, schemaCollectionFlags, schemaPostDdlSql },
 			{ workspaceExclusionsDdl }
 		] = await Promise.all([
 			import('@norbital-ai/platform-utils/seed/manifest'),
@@ -281,8 +336,8 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			path.join(clientDistRoot, 'index.html'),
 			`<!doctype html><html><head><meta charset="utf-8"><script>(function(){var stored=localStorage.getItem('mode-watcher-mode');var prefersDark=window.matchMedia('(prefers-color-scheme: dark)').matches;if(stored==='dark'||(stored==='system'&&prefersDark)||(!stored&&prefersDark)){document.documentElement.classList.add('dark');document.documentElement.style.colorScheme='dark';}})();</script><meta name="viewport" content="width=device-width,initial-scale=1">${stylesheets.map((file) => `<link rel="stylesheet" href="${file}">`).join('')}</head><body><script type="module" src="/${clientEntryFile}"></script></body></html>\n`
 		);
-		// Core loads `output/server/index.js` in isolate-vm and calls `handlePodDispatch` /
-		// `handlePodHostCommand`. Self-host (`pod start`) uses `handlePodRequest` at the HTTP edge.
+		// Core loads `output/server/index.js` in isolate-vm and calls `dispatch`.
+		// Self-host (`pod start`) maps HTTP onto `dispatch` at the host edge.
 		// Core does not boot this HTTP server.
 		await writeFile(path.join(clientDistRoot, 'package.json'), '{"type":"module"}\n');
 		await mkdir(path.join(artifactRoot, 'output/server'), { recursive: true });
@@ -320,9 +375,10 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 		// their own: every consumer (applier, checkpoint required-paths, bundled build, DDL
 		// validator, pod_migrate, studio preview) already reads that one file.
 		const manifest = parseNorbitalManifest(serverModule.workspaceManifest);
+		const flags = schemaCollectionFlags(manifest);
 		await writeFile(
 			path.join(artifactRoot, 'schema-post-ddl.sql'),
-			`${schemaPostDdlSql(nonTemporalCollections(manifest))}\n\n${workspaceExclusionsDdl(manifest)}`
+			`${schemaPostDdlSql(flags.nonTemporal, flags)}\n\n${workspaceExclusionsDdl(manifest)}`
 		);
 	}
 
@@ -503,7 +559,7 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 				}
 			};
 		},
-		resolveId(source) {
+		resolveId(source, importer) {
 			if (source === APP_ENV_PRIVATE || source === APP_ENV_PUBLIC) {
 				if (source === APP_ENV_PRIVATE && this.environment.name === 'client') {
 					throw new Error(
@@ -546,7 +602,18 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			}
 			if (source === '$pod/client') return generatedClient;
 			if (this.environment.name !== 'server') return;
-			if (HOST_IO_NODE_BUILTINS.has(source)) return { id: source, external: true };
+			if (isNodeSpecifier(source)) {
+				if (isGuestServerImporter(importer)) refuseServerNodeSpecifier(source);
+				if (HOST_IO_NODE_BUILTINS.has(source)) return { id: source, external: true };
+				return { id: source, external: true };
+			}
+		},
+		transform(code, id) {
+			if (this.environment.name !== 'server') return;
+			if (!isGuestServerImporter(id)) return;
+			if (CREATE_REQUIRE_PATTERN.test(code) || NODE_MODULE_IMPORT_PATTERN.test(code)) {
+				throw new Error(`Server build refuses createRequire in ${id}`);
+			}
 		},
 		async load(id) {
 			if (id === `\0${APP_ENV_PRIVATE}` || id === `\0${APP_ENV_PUBLIC}`) {
@@ -585,11 +652,11 @@ export function pod(options: PodPluginOptions = {}): PluginOption[] {
 			}
 			if (id === `\0${SERVER_ENTRY}`) {
 				return `import workspace from ${JSON.stringify(generatedWorkspace.split(path.sep).join('/'))};
-	import { handlePodDispatch, handlePodHostCommand, handlePodRequest, registerPodWorkspace, registerPodHostPlugins, getTenantManifest } from ${JSON.stringify(podBuildFile('server/entry.js'))};
+	import { dispatch, registerPodWorkspace, registerPodHostPlugins, getTenantManifest } from ${JSON.stringify(podBuildFile('server/entry.js'))};
 registerPodWorkspace(workspace);
 export const workspaceSeedManifest = workspace.seed?.manifest ?? null;
 export const workspaceManifest = getTenantManifest();
-	export { handlePodDispatch, handlePodHostCommand, handlePodRequest, registerPodHostPlugins };`;
+	export { dispatch, registerPodHostPlugins };`;
 			}
 			if (id !== `\0${CLIENT_ENTRY}`) return;
 			return `${clientPlatform ? '' : `import ${JSON.stringify(podBuildFile('app.css'))};\n`}import { mountPodWorkspace } from '@norbital-ai/pod/client/platform';

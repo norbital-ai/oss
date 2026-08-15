@@ -206,7 +206,11 @@ export const CLIENT_OPAQUE_COLLECTIONS: ReadonlySet<string> = new Set([
 	'invitation',
 	'host_event_outbox',
 	'sync_outbox',
-	'_norbital_automation_job'
+	'_norbital_automation_job',
+	'_norbital_sync_compaction',
+	'_norbital_automation_cursor',
+	'_norbital_sync_epoch',
+	'_approval_lock'
 ]);
 
 function assertClientReachable(collectionName: string): void {

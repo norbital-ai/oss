@@ -4,7 +4,7 @@ import {
 	withTenantSqlTransaction
 } from '$lib/server/bootstrap/workspace_store.js';
 import { error } from '$lib/server/http.js';
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { createAsyncStore } from '$lib/server/async-store.js';
 
 /** Keep headroom below PostgreSQL's 65,535 bind-parameter ceiling. */
 export const MUTATION_PARAMETER_BUDGET = 60_000;
@@ -18,7 +18,7 @@ export function rowsPerMutationStatement(columnsPerRow: number, rowCap = Infinit
 
 type DrizzleDb = NonNullable<ProvisionedContext['drizzleDb']>;
 
-const activeCollectionTransaction = new AsyncLocalStorage<TenantDbClient>();
+const activeCollectionTransaction = createAsyncStore<TenantDbClient>();
 
 export async function withCollectionTransaction<T>(
 	ctx: ProvisionedContext,

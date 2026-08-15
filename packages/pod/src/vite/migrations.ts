@@ -16,6 +16,39 @@ const platformSystemWorkspaceSchema = fileURLToPath(
 const STATEMENT_BREAKPOINT = '--> statement-breakpoint';
 const HISTORY_SUFFIX = '_history';
 
+/**
+ * Tables that existed as post-DDL leftovers before they became system collections.
+ * The first generated CREATE TABLE would fail on those tenants; IF NOT EXISTS keeps
+ * the live relation and lets later ALTERs add system columns.
+ */
+const PREEXISTING_POST_DDL_TABLES = [
+	'_norbital_sync_compaction',
+	'_norbital_automation_cursor',
+	'_norbital_sync_epoch',
+	'_approval_lock'
+] as const;
+
+const PREEXISTING_POST_DDL_INDEXES = [
+	'policy_key_unique',
+	'invitation_live_email_unique',
+	'sync_outbox_xid_seq_idx',
+	'sync_outbox_occurred_at_idx',
+	'_norbital_automation_job_trigger_idx',
+	'_norbital_automation_job_claim_idx'
+] as const;
+
+function promotePreexistingPostDdlTables(sql: string): string {
+	let out = sql;
+	for (const name of PREEXISTING_POST_DDL_TABLES) {
+		out = out.replaceAll(`CREATE TABLE "${name}"`, `CREATE TABLE IF NOT EXISTS "${name}"`);
+	}
+	for (const name of PREEXISTING_POST_DDL_INDEXES) {
+		out = out.replaceAll(`CREATE UNIQUE INDEX "${name}"`, `CREATE UNIQUE INDEX IF NOT EXISTS "${name}"`);
+		out = out.replaceAll(`CREATE INDEX "${name}"`, `CREATE INDEX IF NOT EXISTS "${name}"`);
+	}
+	return out;
+}
+
 function quoteIdentifier(identifier: string): string {
 	return `"${identifier.replaceAll('"', '""')}"`;
 }
@@ -331,10 +364,8 @@ export async function generatePodMigrations(input: {
 			);
 		} else {
 			const migrationFile = path.join(input.migrationsRoot, generated, 'migration.sql');
-			const mirrored = mirrorTemporalHistoryDdl(
-				await readFile(migrationFile, 'utf8'),
-				temporal,
-				nonTemporal
+			const mirrored = promotePreexistingPostDdlTables(
+				mirrorTemporalHistoryDdl(await readFile(migrationFile, 'utf8'), temporal, nonTemporal)
 			);
 			const drops = orphanedHistoryDrops(live, temporal, mirrored);
 			await writeFile(migrationFile, [...drops, mirrored].join(`\n${STATEMENT_BREAKPOINT}\n`));

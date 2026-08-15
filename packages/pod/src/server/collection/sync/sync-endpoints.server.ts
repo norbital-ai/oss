@@ -25,6 +25,7 @@ import { SYNC_REPLICA_EPOCH_HEADER, SYNC_REPLICA_STAMP_HEADER } from '$lib/ui/sy
 import { quoteSqlIdentifier } from '../sql-identifier.server.js';
 import { validate as uuidValidate, version as uuidVersion } from 'uuid';
 import { CLIENT_OPAQUE_COLLECTIONS } from '../access_control/permission/collection_permission.guard.server.js';
+import { replicaExcludedTables } from '@norbital-ai/platform-utils/system/workspace-schema';
 
 /** The rejection half of a `/_runtime/sync/mutate` result, without the `clientId`/`status` frame. */
 export type MutationRejection = {
@@ -116,22 +117,6 @@ async function handleHead(ctx: ProvisionedContext, headers: HeadersInit): Promis
 // reconcileSchema) without a SQL parser.
 // ---------------------------------------------------------------------------
 
-const REPLICA_EXCLUDED_TABLES = [
-	'sync_outbox',
-	'_norbital_sync_epoch',
-	'_norbital_sync_compaction',
-	'_norbital_automation_cursor',
-	'_norbital_automation_job',
-	'_approval_lock',
-	'_norbital_internal_schema',
-	'mutation_log',
-	'integration_outbox',
-	'integration_cursor',
-	'notification_outbox',
-	...CLIENT_OPAQUE_COLLECTIONS,
-	'__drizzle_migrations'
-];
-
 /**
  * Everything a browser needs to open its local replica: the DDL, the database name, and the epoch
  * that says whether the rows already on the device are still about the same database.
@@ -210,7 +195,7 @@ async function buildClientSchema(ctx: ProvisionedContext): Promise<string> {
 		       WHERE p.attrelid = c.oid AND p.attname = 'norbital_id' AND NOT p.attisdropped
 		    )
 		  ORDER BY c.relname, a.attnum`,
-		[REPLICA_EXCLUDED_TABLES]
+		[replicaExcludedTables(ctx.manifestCtx.manifest.collections)]
 	);
 	const byTable = new Map<string, { column: string; type: string }[]>();
 	for (const row of result.rows) {

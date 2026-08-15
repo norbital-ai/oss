@@ -12,6 +12,8 @@ import {
 	admitAgentTurn,
 	channelAgentAutomationName
 } from '$lib/server/run/automation-dispatch.server.js';
+import { requireAdmitArtifact } from '$lib/server/run/admit-artifact.js';
+import { admitArtifactSchema } from '$lib/host/admit-artifact.js';
 import {
 	appendChatMessage,
 	appendChatTurn,
@@ -47,7 +49,9 @@ export const ChannelInboundSchema = z.object({
 			id: z.string().trim().min(1).max(512),
 			displayName: z.string().trim().max(255).optional()
 		})
-		.optional()
+		.optional(),
+	/** Host-injected admit artifact. The host overwrites this; a client cannot choose it. */
+	artifact: admitArtifactSchema.optional()
 });
 
 export type ChannelInboundCommand = z.infer<typeof ChannelInboundSchema>;
@@ -607,6 +611,7 @@ export async function deliverChannelMessage(
 				await admitAgentTurn(ctx, {
 					automationName: channelAgentAutomationName(command.channel),
 					triggerKey: `turn:${bound.chatId}:${opened.turnId}`,
+					artifact: requireAdmitArtifact(command.artifact),
 					originScope: ctx.baseScope,
 					snapshot: {
 						sessionId: bound.chatId,

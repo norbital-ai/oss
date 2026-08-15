@@ -58,9 +58,15 @@ describe('per-collection temporal history', () => {
 
 	it('collects the opt-out from the system definitions and the tenant manifest alike', () => {
 		expect([...NON_TEMPORAL_SYSTEM_COLLECTIONS].sort()).toEqual([
+			'_approval_lock',
+			'_norbital_automation_cursor',
+			'_norbital_automation_job',
+			'_norbital_sync_compaction',
+			'_norbital_sync_epoch',
 			'audit_event',
 			'channel_rate_limit',
-			'chat_session'
+			'chat_session',
+			'sync_outbox'
 		]);
 
 		const names = nonTemporalCollections(
@@ -88,5 +94,22 @@ describe('per-collection temporal history', () => {
 		expect(opsGuard).toContain(`'user'`);
 		expect(opsGuard).toContain(`'approval_request'`);
 		expect(opsGuard).not.toContain(`'transcripts'`);
+
+		const approvalLock = exemptList(sql, 'refresh_approval_lock_gates');
+		expect(approvalLock).toContain(`'audit_event'`);
+		expect(approvalLock).toContain(`'_approval_lock'`);
+		expect(approvalLock).not.toContain(`'user'`);
+		expect(approvalLock).not.toContain(`'transcripts'`);
+	});
+
+	it('lets a tenant collection opt out of approval lock and ops guard the same way as history', () => {
+		const sql = schemaPostDdlSql(['transcripts'], {
+			opsGuardExempt: ['ledger'],
+			approvalLockExempt: ['ledger'],
+			insertOnly: ['audit_event']
+		});
+		expect(exemptList(sql, 'refresh_ops_guards')).toContain(`'ledger'`);
+		expect(exemptList(sql, 'refresh_approval_lock_gates')).toContain(`'ledger'`);
+		expect(sql).toContain('audit_event is insert-only');
 	});
 });
