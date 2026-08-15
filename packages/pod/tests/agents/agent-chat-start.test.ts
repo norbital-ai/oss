@@ -38,14 +38,7 @@ vi.mock('$lib/server/agent/agent-start.server.js', () => ({
 }));
 
 vi.mock('$lib/server/agent/agent-spec.server.js', () => ({
-	interactiveAgentSpec: async (message: string) => ({
-		kind: 'agent',
-		description: 'Answers one interactive request from a person in this workspace.',
-		task: message,
-		access: 'write',
-		tools: []
-	}),
-	interactiveAgentStartSpec: (message: string) => ({
+	interactiveAgentSpec: (message: string) => ({
 		kind: 'agent',
 		description: 'Answers one interactive request from a person in this workspace.',
 		task: message,
@@ -146,11 +139,10 @@ describe('hosted start path budget', () => {
 			'utf8'
 		);
 		expect(source).toContain('persistInteractiveAgentStart');
-		expect(source).toContain('interactiveAgentStartSpec');
+		expect(source).toContain('interactiveAgentSpec');
 		const startAt = source.indexOf('export const agentChatStart');
 		const startFn = source.slice(startAt, source.indexOf('export const agentModels'));
-		expect(startFn).toContain('interactiveAgentStartSpec');
-		expect(startFn).not.toContain('interactiveAgentSpec(');
+		expect(startFn).toContain('interactiveAgentSpec(');
 		expect(startFn).not.toContain("status: 'running'");
 		expect(startFn).not.toContain('createRecord');
 		expect(startFn).not.toContain('withCollectionTransaction');
@@ -174,7 +166,7 @@ describe('hosted start path budget', () => {
 		expect(runtime).toContain("'agent/updateVerifier'");
 		expect(runtime).not.toContain("'remotes/agentChatStart'");
 		expect(runtime).not.toContain("'remotes/agentChatUpdateVerifier'");
-		expect(client).toContain("post<InteractiveAgentStartResult>('agent/start', input)");
+		expect(client).toContain("post<AgentChatStartResult>('agent/start', input)");
 		expect(client).toContain("post<{ accepted: true }>('agent/updateVerifier', input)");
 		expect(client).not.toContain("'remotes/agentChatStart'");
 		expect(client).not.toContain("'remotes/agentChatUpdateVerifier'");

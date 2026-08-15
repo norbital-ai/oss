@@ -20,6 +20,16 @@ import {
 	updateChatTurn
 } from '$lib/server/agent/chat-session.server.js';
 import type { NorbitalManifest } from '@norbital-ai/platform-utils/manifest/types';
+import {
+	channel_conversation,
+	channel_inbound_message,
+	channel_rate_limit,
+	policy,
+	team,
+	team_members,
+	user
+} from '@norbital-ai/platform-utils/system/workspace-schema';
+import { and, count, eq, ilike, ne, sql } from 'drizzle-orm';
 
 type ManifestChannel = NonNullable<NorbitalManifest['channels']>[string];
 
@@ -56,28 +66,25 @@ export const ChannelInboundSchema = z.object({
 
 export type ChannelInboundCommand = z.infer<typeof ChannelInboundSchema>;
 
-export type ChannelInboundOutcome = {
-	readonly status:
-		| 'answered'
-		| 'accepted'
-		| 'duplicate'
-		| 'silent'
-		| 'registration_required'
-		| 'rate_limited';
-	readonly channel: string;
-	readonly conversationId: string;
-	readonly chatId?: string;
-	readonly runId?: string;
-	readonly text?: string;
-	readonly delivered?: boolean;
-};
+export const ChannelInboundOutcomeSchema = z.object({
+	status: z.enum([
+		'answered',
+		'accepted',
+		'duplicate',
+		'silent',
+		'registration_required',
+		'rate_limited'
+	]),
+	channel: z.string(),
+	conversationId: z.string(),
+	chatId: z.string().optional(),
+	runId: z.string().optional(),
+	text: z.string().optional(),
+	delivered: z.boolean().optional()
+});
+export type ChannelInboundOutcome = z.infer<typeof ChannelInboundOutcomeSchema>;
 
 type ResolvedRequestor = NonNullable<Awaited<ReturnType<typeof resolveRequestorBaseScope>>>;
-
-type StoredUserChannel = Readonly<Record<string, unknown>> & {
-	readonly type?: unknown;
-	readonly verified?: unknown;
-};
 
 const REGISTRATION_REQUIRED_MESSAGE =
 	'This agent is available only to registered members. Sign in to Norbital and ask an administrator ' +
@@ -111,11 +118,14 @@ async function withChannelPrincipal<T>(
 ): Promise<T> {
 	const ctx = getWorkspace({ provision: true });
 	const email = channelPrincipalEmail(channelKey);
-	const found = await ctx.tenantDb.query<{ norbital_id: string }>({
-		text: `SELECT norbital_id FROM "user" WHERE lower(email) = lower($1) AND status = 'active' LIMIT 1`,
-		values: [email]
-	});
-	const userId = found.rows[0]?.norbital_id;
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const found = await db
+		.select({ norbital_id: user.norbital_id })
+		.from(user)
+		.where(and(ilike(user.email, email), eq(user.status, 'active')))
+		.limit(1);
+	const userId = found[0]?.norbital_id;
 	if (!userId) {
 		throw new Error(
 			`Channel "${channelKey}" has no principal (${email}). Run \`pod migrate\` — channel principals ` +
@@ -182,17 +192,24 @@ function canonicalTransportIdentity(transport: string, value: string): string {
 	return beforeDomain.trim().toLowerCase();
 }
 
-function storedTransportIdentity(transport: string, channel: StoredUserChannel): string | null {
+function storedTransportIdentity(
+	transport: string,
+	channel: NonNullable<(typeof user.$inferSelect)['channels']>[number]
+): string | null {
 	if (channel.type !== transport || channel.verified !== true) return null;
-	const value =
-		transport === 'whatsapp' || transport === 'phone'
-			? channel.number
-			: transport === 'telegram'
-				? channel.telegram_user_id
-				: transport === 'slack'
-					? channel.slack_user_id
-					: channel.id;
-	return typeof value === 'string' && value.trim() ? value : null;
+	switch (channel.type) {
+		case 'email':
+			return channel.email;
+		case 'phone':
+		case 'whatsapp':
+			return channel.number;
+		case 'telegram':
+			return channel.username;
+		case 'slack':
+			return channel.slack_user_id;
+		case 'wechat':
+			return channel.wechat_id;
+	}
 }
 
 /** Resolve an assigned member by verified transport identity and the profile's declared policy. */
@@ -202,20 +219,17 @@ async function linkedChannelMember(
 ): Promise<string | null> {
 	if (!senderId) return null;
 	const ctx = getWorkspace({ provision: true });
-	const candidates = await ctx.tenantDb.query<{
-		norbital_id: string;
-		channels: readonly StoredUserChannel[] | null;
-	}>({
-		text: `SELECT DISTINCT u.norbital_id, u.channels
-		         FROM "user" u
-		         JOIN team_members tm ON tm.user_id = u.norbital_id
-		         JOIN team t ON t.norbital_id = tm.team_id AND t.is_active = true
-		         JOIN policy p ON p.norbital_id = t.policy_id AND p.is_active = true
-		        WHERE u.status = 'active' AND u.kind = 'human' AND p.key = $1`,
-		values: [channel.policy]
-	});
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const candidates = await db
+		.selectDistinct({ norbital_id: user.norbital_id, channels: user.channels })
+		.from(user)
+		.innerJoin(team_members, eq(team_members.user_id, user.norbital_id))
+		.innerJoin(team, and(eq(team.norbital_id, team_members.team_id), eq(team.is_active, true)))
+		.innerJoin(policy, and(eq(policy.norbital_id, team.policy_id), eq(policy.is_active, true)))
+		.where(and(eq(user.status, 'active'), eq(user.kind, 'human'), eq(policy.key, channel.policy)));
 	const sought = canonicalTransportIdentity(channel.transport, senderId);
-	for (const candidate of candidates.rows) {
+	for (const candidate of candidates) {
 		for (const stored of candidate.channels ?? []) {
 			const identity = storedTransportIdentity(channel.transport, stored);
 			if (identity && canonicalTransportIdentity(channel.transport, identity) === sought) {
@@ -238,15 +252,21 @@ async function bindConversation(
 	conversationId: string,
 	conversationKind: 'dm' | 'group',
 	sender?: { readonly id: string; readonly displayName?: string }
-): Promise<{ conversationRowId: string; chatId: string }> {
+): Promise<Pick<typeof channel_conversation.$inferSelect, 'norbital_id' | 'chat_id'>> {
 	const ctx = getWorkspace({ provision: true });
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
 	const bindingKey = `${channelKey}:${conversationKind}:${conversationId}`;
-	const existing = await ctx.tenantDb.query<{ norbital_id: string; chat_id: string }>({
-		text: `SELECT norbital_id, chat_id FROM channel_conversation WHERE binding_key = $1 LIMIT 1`,
-		values: [bindingKey]
-	});
-	const found = existing.rows[0];
-	if (found) return { conversationRowId: found.norbital_id, chatId: found.chat_id };
+	const existing = await db
+		.select({
+			norbital_id: channel_conversation.norbital_id,
+			chat_id: channel_conversation.chat_id
+		})
+		.from(channel_conversation)
+		.where(eq(channel_conversation.binding_key, bindingKey))
+		.limit(1);
+	const found = existing[0];
+	if (found) return found;
 
 	const session = await createRecord(
 		ctx,
@@ -265,36 +285,39 @@ async function bindConversation(
 		{ isElevated: true }
 	);
 	const chatId = String(session.norbital_id);
-	const inserted = await ctx.tenantDb.query<{ norbital_id: string; chat_id: string }>({
-		text: `INSERT INTO channel_conversation
-		            (channel_key, transport, external_conversation_id, conversation_kind,
-		             audience, policy_key, binding_key, chat_id)
-		     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid)
-		 ON CONFLICT (binding_key) DO NOTHING
-		  RETURNING norbital_id, chat_id`,
-		values: [
-			channelKey,
-			channel.transport,
-			conversationId,
-			conversationKind,
-			channel.audience,
-			channel.policy,
-			bindingKey,
-			chatId
-		]
-	});
-	const row = inserted.rows[0];
-	if (row) return { conversationRowId: row.norbital_id, chatId: row.chat_id };
+	const inserted = await db
+		.insert(channel_conversation)
+		.values({
+			channel_key: channelKey,
+			transport: channel.transport,
+			external_conversation_id: conversationId,
+			conversation_kind: conversationKind,
+			audience: channel.audience,
+			policy_key: channel.policy,
+			binding_key: bindingKey,
+			chat_id: chatId
+		})
+		.onConflictDoNothing({ target: channel_conversation.binding_key })
+		.returning({
+			norbital_id: channel_conversation.norbital_id,
+			chat_id: channel_conversation.chat_id
+		});
+	const row = inserted[0];
+	if (row) return row;
 
 	// Lost the race: another delivery bound this conversation first, so its session is the real one
 	// and the one just created is unreferenced.
-	const winner = await ctx.tenantDb.query<{ norbital_id: string; chat_id: string }>({
-		text: `SELECT norbital_id, chat_id FROM channel_conversation WHERE binding_key = $1 LIMIT 1`,
-		values: [bindingKey]
-	});
-	const settled = winner.rows[0];
+	const winner = await db
+		.select({
+			norbital_id: channel_conversation.norbital_id,
+			chat_id: channel_conversation.chat_id
+		})
+		.from(channel_conversation)
+		.where(eq(channel_conversation.binding_key, bindingKey))
+		.limit(1);
+	const settled = winner[0];
 	if (!settled) throw new Error(`Channel conversation ${bindingKey} could not be bound`);
-	return { conversationRowId: settled.norbital_id, chatId: settled.chat_id };
+	return settled;
 }
 
 async function attachConversationOwner(
@@ -315,23 +338,25 @@ async function attachConversationOwner(
 
 async function consumeRateLimit(bucketKey: string, requestsPerMinute: number): Promise<boolean> {
 	const ctx = getWorkspace({ provision: true });
-	const counted = await ctx.tenantDb.query<{ request_count: number }>({
-		text: `INSERT INTO channel_rate_limit (bucket_key, window_started_at, request_count)
-		     VALUES ($1, CURRENT_TIMESTAMP, 1)
-		 ON CONFLICT (bucket_key) DO UPDATE SET
-		             window_started_at = CASE
-		               WHEN channel_rate_limit.window_started_at <=
-		                    CURRENT_TIMESTAMP - interval '1 minute'
-		               THEN CURRENT_TIMESTAMP ELSE channel_rate_limit.window_started_at END,
-		             request_count = CASE
-		               WHEN channel_rate_limit.window_started_at <=
-		                    CURRENT_TIMESTAMP - interval '1 minute'
-		               THEN 1 ELSE channel_rate_limit.request_count + 1 END,
-		             norbital_updated_at = CURRENT_TIMESTAMP
-		 RETURNING request_count`,
-		values: [bucketKey]
-	});
-	return (counted.rows[0]?.request_count ?? requestsPerMinute + 1) <= requestsPerMinute;
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const counted = await db
+		.insert(channel_rate_limit)
+		.values({ bucket_key: bucketKey, window_started_at: new Date(), request_count: 1 })
+		.onConflictDoUpdate({
+			target: channel_rate_limit.bucket_key,
+			set: {
+				window_started_at: sql`CASE
+					WHEN ${channel_rate_limit.window_started_at} <= CURRENT_TIMESTAMP - interval '1 minute'
+					THEN CURRENT_TIMESTAMP ELSE ${channel_rate_limit.window_started_at} END`,
+				request_count: sql`CASE
+					WHEN ${channel_rate_limit.window_started_at} <= CURRENT_TIMESTAMP - interval '1 minute'
+					THEN 1 ELSE ${channel_rate_limit.request_count} + 1 END`,
+				norbital_updated_at: sql`CURRENT_TIMESTAMP`
+			}
+		})
+		.returning({ request_count: channel_rate_limit.request_count });
+	return (counted[0]?.request_count ?? requestsPerMinute + 1) <= requestsPerMinute;
 }
 
 async function channelAdmissionAllowed(input: {
@@ -351,16 +376,22 @@ async function channelAdmissionAllowed(input: {
 		input.limits.totalPerMinute
 	);
 	const ctx = getWorkspace({ provision: true });
-	const active = await ctx.tenantDb.query<{ count: string }>({
-		text: `SELECT count(*)::text AS count
-		         FROM channel_inbound_message
-		        WHERE channel_key = $1 AND status = 'received' AND norbital_id <> $2::uuid`,
-		values: [input.channelKey, input.receiptId]
-	});
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const active = await db
+		.select({ count: count() })
+		.from(channel_inbound_message)
+		.where(
+			and(
+				eq(channel_inbound_message.channel_key, input.channelKey),
+				eq(channel_inbound_message.status, 'received'),
+				ne(channel_inbound_message.norbital_id, input.receiptId)
+			)
+		);
 	return (
 		senderAllowed &&
 		profileAllowed &&
-		Number(active.rows[0]?.count ?? 0) < MAX_CONCURRENT_CHANNEL_RUNS
+		(active[0]?.count ?? 0) < MAX_CONCURRENT_CHANNEL_RUNS
 	);
 }
 
@@ -436,24 +467,23 @@ async function claimInbound(input: {
 	readonly sender?: { readonly id: string; readonly displayName?: string };
 }): Promise<string | null> {
 	const ctx = getWorkspace({ provision: true });
-	const claimed = await ctx.tenantDb.query<{ norbital_id: string }>({
-		text: `INSERT INTO channel_inbound_message
-		            (channel_key, conversation_id, external_conversation_id, external_message_id,
-		             receipt_key, sender_external_id, sender_display_name, status)
-		     VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, 'received')
-		 ON CONFLICT (receipt_key) DO NOTHING
-		  RETURNING norbital_id`,
-		values: [
-			input.channelKey,
-			input.conversationRowId,
-			input.conversationId,
-			input.messageId,
-			`${input.channelKey}:${input.conversationId}:${input.messageId}`,
-			input.sender?.id ?? null,
-			input.sender?.displayName ?? null
-		]
-	});
-	return claimed.rows[0]?.norbital_id ?? null;
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const claimed = await db
+		.insert(channel_inbound_message)
+		.values({
+			channel_key: input.channelKey,
+			conversation_id: input.conversationRowId,
+			external_conversation_id: input.conversationId,
+			external_message_id: input.messageId,
+			receipt_key: `${input.channelKey}:${input.conversationId}:${input.messageId}`,
+			sender_external_id: input.sender?.id ?? null,
+			sender_display_name: input.sender?.displayName ?? null,
+			status: 'received'
+		})
+		.onConflictDoNothing({ target: channel_inbound_message.receipt_key })
+		.returning({ norbital_id: channel_inbound_message.norbital_id });
+	return claimed[0]?.norbital_id ?? null;
 }
 
 /**
@@ -485,7 +515,7 @@ export async function deliverChannelMessage(
 		);
 		const receiptId = await claimInbound({
 			channelKey: command.channel,
-			conversationRowId: bound.conversationRowId,
+			conversationRowId: bound.norbital_id,
 			conversationId: command.conversationId,
 			messageId: command.messageId,
 			...(command.sender ? { sender: command.sender } : {})
@@ -495,7 +525,7 @@ export async function deliverChannelMessage(
 				status: 'duplicate',
 				channel: command.channel,
 				conversationId: command.conversationId,
-				chatId: bound.chatId
+				chatId: bound.chat_id
 			};
 		}
 		const groupInvocationAllowed =
@@ -518,7 +548,7 @@ export async function deliverChannelMessage(
 				status: 'silent',
 				channel: command.channel,
 				conversationId: command.conversationId,
-				chatId: bound.chatId
+				chatId: bound.chat_id
 			};
 		}
 		if (
@@ -533,12 +563,12 @@ export async function deliverChannelMessage(
 				...(await sendDeterministicReply({
 					command,
 					channel,
-					chatId: bound.chatId,
+					chatId: bound.chat_id,
 					receiptId,
 					status: 'rate_limited',
 					text: RATE_LIMIT_MESSAGE
 				})),
-				chatId: bound.chatId
+				chatId: bound.chat_id
 			};
 		}
 
@@ -551,16 +581,16 @@ export async function deliverChannelMessage(
 				...(await sendDeterministicReply({
 					command,
 					channel,
-					chatId: bound.chatId,
+					chatId: bound.chat_id,
 					receiptId,
 					status: 'registration_required',
 					text: REGISTRATION_REQUIRED_MESSAGE
 				})),
-				chatId: bound.chatId
+				chatId: bound.chat_id
 			};
 		}
 		if (linkedUserId && command.conversationKind === 'dm') {
-			await attachConversationOwner(bound.conversationRowId, bound.chatId, linkedUserId);
+			await attachConversationOwner(bound.norbital_id, bound.chat_id, linkedUserId);
 		}
 
 		try {
@@ -594,7 +624,7 @@ export async function deliverChannelMessage(
 				);
 				if (typeof started.norbital_id !== 'string') throw new Error('Agent run has no id');
 				const opened = await prepareInteractiveAgentTurn({
-					sessionId: bound.chatId,
+					sessionId: bound.chat_id,
 					spec,
 					message: command.text,
 					inputMetadata: {
@@ -610,11 +640,11 @@ export async function deliverChannelMessage(
 				});
 				await admitAgentTurn(ctx, {
 					automationName: channelAgentAutomationName(command.channel),
-					triggerKey: `turn:${bound.chatId}:${opened.turnId}`,
+					triggerKey: `turn:${bound.chat_id}:${opened.turnId}`,
 					artifact: requireAdmitArtifact(command.artifact),
 					originScope: ctx.baseScope,
 					snapshot: {
-						sessionId: bound.chatId,
+						sessionId: bound.chat_id,
 						runId: started.norbital_id,
 						turnId: opened.turnId,
 						promptContent: opened.promptContent,
@@ -631,7 +661,7 @@ export async function deliverChannelMessage(
 							transport: channel.transport,
 							conversationId: command.conversationId,
 							inboundReceiptId: receiptId,
-							conversationRowId: bound.conversationRowId
+							conversationRowId: bound.norbital_id
 						}
 					}
 				});
@@ -645,7 +675,7 @@ export async function deliverChannelMessage(
 				status: 'accepted',
 				channel: command.channel,
 				conversationId: command.conversationId,
-				chatId: bound.chatId,
+				chatId: bound.chat_id,
 				runId: admitted.runId,
 				delivered: false
 			};

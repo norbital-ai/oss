@@ -100,7 +100,7 @@ export function runWithAdmit<T>(admit: PodAdmit | null, fn: () => T): T {
 	testAdmit = admit;
 	try {
 		const result = fn();
-		if (result && typeof (result as Promise<unknown>).then === 'function') {
+		if (result && typeof Reflect.get(Object(result), 'then') === 'function') {
 			return Promise.resolve(result).finally(() => {
 				testAdmit = previous;
 			}) as T;

@@ -117,7 +117,8 @@
 		createFileUploadClient: () => new WorkspaceFileUploadClient({ t }), // stupidity:allow Q4 -- named helper
 		renderStaticMap: workspaceRuntimeOperations.renderStaticMap,
 		/** Live custom-type renderer map for the data-renderer runtime. */
-		get customTypeRenderers() { // stupidity:allow Q4 -- named helper
+		get customTypeRenderers() {
+			// stupidity:allow Q4 -- named helper
 			return customTypeRenderers;
 		}
 	});
@@ -153,7 +154,8 @@
 		/** Current app id that owns mounted collection views. */
 		appId: () => appName, // stupidity:allow Q4 -- named helper
 		/** Live collection-surface registry for the table runtime. */
-		get surfaces() { // stupidity:allow Q4 -- named helper
+		get surfaces() {
+			// stupidity:allow Q4 -- named helper
 			return collectionSurfaces;
 		},
 		/** Register a collection view key so two tables cannot claim the same view. */
@@ -288,7 +290,8 @@
 	}
 
 	/** Cmd+/ toggles the omni finder; the finder clears its query as it closes. */
-	function toggleOmniFinder(): void { // stupidity:allow Q4 -- template handler
+	function toggleOmniFinder(): void {
+		// stupidity:allow Q4 -- template handler
 		omniOpen = !omniOpen;
 	}
 	let shortcutModifier = $state(detectShortcutModifier());
@@ -374,18 +377,21 @@
 	const billingSettingsHref = $derived(resolveBillingSettingsHref(data.hostPlugins ?? []));
 
 	/** Pop the sidesheet detail stack when the sheet is dismissed. */
-	function closeDetailSheet(): void { // stupidity:allow Q4 -- template handler
+	function closeDetailSheet(): void {
+		// stupidity:allow Q4 -- template handler
 		if (detailSheetOpen) platformState.navigation.pop(page.url);
 	}
 
 	/** Toggle the collection-detail sidesheet between docked and fullscreen. */
-	function toggleDetailSheetFullscreen(): void { // stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
+	function toggleDetailSheetFullscreen(): void {
+		// stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
 		if (!topDetailFrame) return;
 		detailPreferences.toggleFullScreen(topDetailFrame.collection_name);
 	}
 
 	/** Prefetch the destination, then client-navigate without a full reload. */
-	function navigate(href: string): void { // stupidity:allow Q4 -- template handler
+	function navigate(href: string): void {
+		// stupidity:allow Q4 -- template handler
 		const path = href.split(/[?#]/, 1)[0] ?? href;
 		if (!resolveHostPluginSurface(path, data.hostPlugins ?? [])) {
 			prefetchWorkspaceSurface(href);
@@ -403,10 +409,11 @@
 	 * POST, because `/logout` refuses anything else: a cross-site `<img src="/logout">` would otherwise
 	 * end a session on sight. The endpoint clears the cookie and answers with a redirect, but this is
 	 * `fetch`, so nothing follows it on the caller's behalf — the assignment below is what actually
-   	 * leaves the page, and it is a full document load so the replica is torn down with the session.
-   	 */
+	 * leaves the page, and it is a full document load so the replica is torn down with the session.
+	 */
 	/** End the workspace session through Pod's POST /logout. */
-	async function onSignOut(): Promise<void> { // stupidity:allow Q3 -- template handler
+	async function onSignOut(): Promise<void> {
+		// stupidity:allow Q3 -- template handler
 		const response = await fetch('/logout', { method: 'POST', credentials: 'include' });
 		if (!response.ok && !response.redirected) throw new Error('Unable to sign out');
 		window.location.assign('/login');
@@ -417,13 +424,15 @@
 	 * teams from the cookie on the next request, so there is no intermediate state to keep the shell
 	 * in — the reloaded shell data carries the new scope and the account menu reflects it.
 	 */
-	function impersonate(teamId: string): void { // stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
+	function impersonate(teamId: string): void {
+		// stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
 		writeImpersonationTeamIds([teamId]);
 		window.location.reload();
 	}
 
 	/** Clear the impersonation cookie and reload so Core drops the simulated teams. */
-	function stopImpersonating(): void { // stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
+	function stopImpersonating(): void {
+		// stupidity:allow Q3 -- template handler; stupidity:allow Q4 -- template handler
 		writeImpersonationTeamIds([]);
 		window.location.reload();
 	}
@@ -532,10 +541,13 @@
 							if (existing !== undefined) clearTimeout(existing);
 							thumbnailRetryTimers.set(
 								app.key,
-								setTimeout(() => {
-									thumbnailRetryTimers.delete(app.key);
-									thumbnailAttempts.set(app.key, attempt + 1);
-								}, 250 * 2 ** attempt)
+								setTimeout(
+									() => {
+										thumbnailRetryTimers.delete(app.key);
+										thumbnailAttempts.set(app.key, attempt + 1);
+									},
+									250 * 2 ** attempt
+								)
 							);
 						}}
 					/>
@@ -836,8 +848,8 @@
 			}}
 		>
 			<Stack gap="none" fill>
-				<Sheet.Header class="shrink-0 border-b px-4 py-3.5 pr-12 text-left sm:px-5">
-					<Inline gap="sm" align="start" class="min-w-0">
+				<Sheet.Header class="shrink-0 bg-card px-4 pt-3 pr-12 pb-1 text-left sm:px-5 sm:pr-12">
+					<Inline gap="sm" align="center" class="min-w-0">
 						<div
 							class="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground"
 							data-testid="workspace-agent-orb"
@@ -848,14 +860,9 @@
 								label={t(agentOrbStatusKey(fabAgentState))}
 							/>
 						</div>
-						<Stack gap="none" class="min-w-0">
-							<Sheet.Title class="text-sm font-semibold"
-								>{t('pod.shell.workspaceAgentTitle')}</Sheet.Title
-							>
-							<Sheet.Description class="text-xs leading-5 text-muted-foreground">
-								{t(agentOrbStatusKey(fabAgentState))}
-							</Sheet.Description>
-						</Stack>
+						<Sheet.Title class="min-w-0 truncate text-sm font-semibold">
+							{t('pod.shell.workspaceAgentTitle')}
+						</Sheet.Title>
 					</Inline>
 				</Sheet.Header>
 				<Stack gap="none" grow>

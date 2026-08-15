@@ -13,26 +13,12 @@
 import type { MentionRecordHit } from './mention-sources.js';
 
 /** One chip in the draft: the `@label` span plus the record it stands for. */
-export type ComposerMention = {
+export type ComposerMention = MentionRecordHit & {
 	/** Index of the `@` in the draft. */
 	readonly start: number;
 	/** Index just past the label's last character. */
 	readonly end: number;
-	readonly collection: string;
-	readonly recordId: string;
-	readonly label: string;
 };
-
-/** A live `@` the writer is still typing a search into. */
-export type MentionTrigger = {
-	/** Index of the `@` that owns the caret. */
-	readonly start: number;
-	/** Text typed between the `@` and the caret — the search query, never part of the message. */
-	readonly query: string;
-};
-
-/** What a chip resolves to on the wire. Same shape as a mention-menu hit. */
-export type MentionReference = MentionRecordHit;
 
 /**
  * Longest query still read as a search. Past this the `@` is prose that happens to contain one —
@@ -72,7 +58,7 @@ export function findMentionTrigger(
 	draft: string,
 	caret: number,
 	mentions: readonly ComposerMention[]
-): MentionTrigger | null {
+) {
 	const position = Math.max(0, Math.min(caret, draft.length));
 	let atIndex = -1;
 	for (let index = position - 1; index >= 0; index -= 1) {
@@ -92,6 +78,9 @@ export function findMentionTrigger(
 	if (query.length > 0 && WHITESPACE.test(query[0])) return null;
 	return { start: atIndex, query };
 }
+
+/** A live `@` the writer is still typing a search into, inferred from the parser that creates it. */
+export type MentionTrigger = NonNullable<ReturnType<typeof findMentionTrigger>>;
 
 /** Shifts one chip's range after an edit that grew or shrank text before it. */
 // stupidity:allow Q4 -- named helper
@@ -117,7 +106,7 @@ export function insertMention(
 	draft: string,
 	mentions: readonly ComposerMention[],
 	trigger: MentionTrigger & { readonly caret: number },
-	reference: MentionReference
+	reference: MentionRecordHit
 ): { draft: string; mentions: ComposerMention[]; caret: number } {
 	const label = reference.label.trim();
 	const replacedEnd = Math.max(trigger.start, Math.min(trigger.caret, draft.length));
@@ -275,9 +264,9 @@ export function mentionDeletion(
 export function serializeMentions(
 	draft: string,
 	mentions: readonly ComposerMention[]
-): { message: string; references: MentionReference[] } {
+): { message: string; references: MentionRecordHit[] } {
 	const seen = new Set<string>();
-	const references: MentionReference[] = [];
+	const references: MentionRecordHit[] = [];
 	for (const mention of mentionsByStart(mentions)) {
 		if (draft.slice(mention.start, mention.end) !== `@${mention.label}`) continue;
 		if (!chipDelimited(draft, mention)) continue;

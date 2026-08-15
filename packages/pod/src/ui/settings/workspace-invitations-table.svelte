@@ -2,9 +2,10 @@
 	import type {
 		CollectionBaseQuery,
 		CollectionClient,
+		CollectionGroupedQuery,
 		CollectionQuery,
 		CollectionRecord,
-		ErasedCollectionRegistry
+		CollectionType
 	} from '@norbital-ai/platform-utils/collection';
 	import type { TUserRole } from '@norbital-ai/platform-utils/system/types';
 	import { UserRoleSchema } from '@norbital-ai/platform-utils/system/types';
@@ -66,7 +67,12 @@
 	 * The real collection is client-opaque because it contains `token_hash`; this adapter exposes
 	 * only the server-returned administrator view while retaining the shared table interaction model.
 	 */
-	const invitationClient = {
+	const invitationClient: CollectionClient<
+		Record<
+			'invitation',
+			CollectionType<WorkspaceInvitation, Partial<WorkspaceInvitation>, Partial<WorkspaceInvitation>>
+		>
+	> = {
 		collections: {
 			invitation: {
 				name: 'invitation',
@@ -127,7 +133,9 @@
 					const parsedRole = UserRoleSchema.safeParse(input.role);
 					onInvite(address, parsedRole.success ? parsedRole.data : 'basic');
 					await onRefresh();
-					return input as WorkspaceInvitation;
+					const created = invitations.find((invitation) => invitation.email === address);
+					if (!created) throw new Error(t('pod.settings.invitationEmailRequired'));
+					return created;
 				},
 				findMany(query?: CollectionQuery<WorkspaceInvitation>) {
 					const offset = Number.parseInt(query?.after ?? '0', 10) || 0;
@@ -138,6 +146,35 @@
 						},
 						get nextCursor() {
 							return projected(query).length > offset + limit ? String(offset + limit) : null;
+						},
+						get loading() {
+							return !loaded;
+						},
+						error: undefined,
+						refresh: onRefresh
+					};
+				},
+				findFirst(query?: CollectionBaseQuery<WorkspaceInvitation>) {
+					return {
+						get current() {
+							return projected(query)[0];
+						},
+						get loading() {
+							return !loaded;
+						},
+						error: undefined,
+						refresh: onRefresh
+					};
+				},
+				findGrouped(query: CollectionGroupedQuery<WorkspaceInvitation>) {
+					return {
+						get current() {
+							const groups: Record<string, WorkspaceInvitation[]> = {};
+							for (const invitation of projected(query)) {
+								const key = String(invitation[query.group.by] ?? '');
+								(groups[key] ??= []).push(invitation);
+							}
+							return groups;
 						},
 						get loading() {
 							return !loaded;
@@ -160,8 +197,26 @@
 				}
 			}
 		},
-		records: {}
-	} as unknown as CollectionClient<ErasedCollectionRegistry>; // Boundary adapter: only CollectionTable's read operations are exposed.
+		records: {
+			findMany(_collectionName, query) {
+				const offset = Number.parseInt(query?.after ?? '0', 10) || 0;
+				const limit = query?.limit ?? 25;
+				return {
+					get current() {
+						return projected(query).slice(offset, offset + limit);
+					},
+					get nextCursor() {
+						return projected(query).length > offset + limit ? String(offset + limit) : null;
+					},
+					get loading() {
+						return !loaded;
+					},
+					error: undefined,
+					refresh: onRefresh
+				};
+			}
+		}
+	};
 
 	function date(value: string): string {
 		const parsed = new Date(value);

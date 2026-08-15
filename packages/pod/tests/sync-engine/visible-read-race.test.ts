@@ -82,7 +82,9 @@ describe('visible reads race the server past background catch-up', () => {
 				return raw.query(sql, params);
 			},
 			exec: (sql) => raw.exec(sql),
-			close: () => raw.close?.()
+			close: async () => {
+				await raw.close?.();
+			}
 		};
 
 		let releaseOrdersRemainder = () => {};
@@ -98,9 +100,7 @@ describe('visible reads race the server past background catch-up', () => {
 					if (ordersPages > 1) await ordersRemainderBlocked;
 					return new Response(
 						JSON.stringify({
-							rows: [
-								{ norbital_id: `o${ordersPages}`, norbital_row_version: 1, status: 'open' }
-							],
+							rows: [{ norbital_id: `o${ordersPages}`, norbital_row_version: 1, status: 'open' }],
 							nextCursor: ordersPages === 1 ? 'more' : null,
 							watermark: '0'
 						}),
@@ -136,9 +136,12 @@ describe('visible reads race the server past background catch-up', () => {
 			const url = String(input);
 			if (url.includes('/_runtime/collections/findMany')) {
 				findManyStarted = true;
-				return new Response(JSON.stringify({ rows: [{ norbital_id: 'server' }], nextCursor: null }), {
-					headers: { 'content-type': 'application/json' }
-				});
+				return new Response(
+					JSON.stringify({ rows: [{ norbital_id: 'server' }], nextCursor: null }),
+					{
+						headers: { 'content-type': 'application/json' }
+					}
+				);
 			}
 			return previousFetch(input, init);
 		};
@@ -146,8 +149,7 @@ describe('visible reads race the server past background catch-up', () => {
 		try {
 			const query = workspaceRuntimeOperations.db.findMany({
 				collection: 'customers',
-				limit: 10,
-				trace: `race-${crypto.randomUUID()}`
+				limit: 10
 			});
 			await flush();
 			expect(findManyStarted).toBe(true);

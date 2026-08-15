@@ -30,7 +30,7 @@ function workspaceAgentTools(): readonly string[] {
  * and widening it from here would make that file advisory. `denyTools` on that file can withhold
  * workspace or platform tools; it cannot hide a bound sandbox.
  */
-function interactiveAgentBaseSpec(message: string, model?: string): AgentAutomationSpec {
+export function interactiveAgentSpec(message: string, model?: string): AgentAutomationSpec {
 	const authored = getTenantWorkspace().registered.agent;
 	const chosen = model === undefined ? {} : { model };
 	// An explicit choice overrides the authored profile's model, and only for this turn — the profile
@@ -48,23 +48,6 @@ function interactiveAgentBaseSpec(message: string, model?: string): AgentAutomat
 		mcpServers: declaredMcpServerNames(),
 		...chosen
 	};
-}
-
-/**
- * Start-path spec: persist and admit without waiting on the host tool inventory.
- *
- * Sandbox tools are not named on the spec. The funnel adds them later, when this session has a
- * bound sandbox, so the start path does not need a host round trip.
- */
-export function interactiveAgentStartSpec(message: string, model?: string): AgentAutomationSpec {
-	return interactiveAgentBaseSpec(message, model);
-}
-
-export async function interactiveAgentSpec(
-	message: string,
-	model?: string
-): Promise<AgentAutomationSpec> {
-	return interactiveAgentBaseSpec(message, model);
 }
 
 /**

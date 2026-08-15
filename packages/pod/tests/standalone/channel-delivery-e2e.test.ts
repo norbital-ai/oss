@@ -6,6 +6,7 @@ import path from 'node:path';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { requireDocker, startPostgres, type PgHarness } from '../support/pg-harness.js';
+import type { ChatSessionMessage } from '$lib/shared/agent/context-window.js';
 
 requireDocker();
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
@@ -46,11 +47,19 @@ async function pollUntil<T>(
 	throw new Error(`Timed out waiting for condition (last=${JSON.stringify(last)})`);
 }
 
-async function waitForSinkCount(sink: Sink, count: number): Promise<void> {
-	await pollUntil(
-		() => sink.sent.length,
-		(length) => length >= count
-	);
+async function waitForSinkCount(
+	sink: Sink,
+	count: number,
+	diagnostics: () => string = () => ''
+): Promise<void> {
+	try {
+		await pollUntil(
+			() => sink.sent.length,
+			(length) => length >= count
+		);
+	} catch (cause) {
+		throw new Error(`${cause instanceof Error ? cause.message : String(cause)}\nPod log:\n${diagnostics()}`);
+	}
 }
 
 async function freePort(): Promise<number> {
@@ -290,6 +299,12 @@ export default definePodHost({
 	ai: {
 		chat: async (input) => {
 			const messages = input.messages ?? [];
+			if (String(messages[0]?.content ?? '').includes('You are an independent verifier')) {
+				return {
+					text: JSON.stringify({ achieved: true, summary: 'The channel request was answered.', gaps: [] }),
+					stopReason: 'end'
+				};
+			}
 			const results = thisTurn(messages).filter((message) => message.role === 'tool');
 			if (results.length === 0) {
 				return {
@@ -465,7 +480,7 @@ describe('Pod standalone channel delivery — E2E', () => {
 		running = spawn('node', [POD_BIN, 'start'], { cwd: root, env: environment, stdio: 'pipe' });
 		running.stdout.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
 		running.stderr.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
-		await waitForOutput(running, /Pod listening at/);
+		await waitForOutput(running, /Reference host listening at/);
 	}, 300_000);
 
 	afterAll(async () => {
@@ -510,7 +525,7 @@ describe('Pod standalone channel delivery — E2E', () => {
 		expect(jobs[0]?.orchestration_status).toBe('admitted');
 		expect(jobs[0]?.trigger_key?.startsWith('turn:')).toBe(true);
 
-		await waitForSinkCount(sink, 1);
+		await waitForSinkCount(sink, 1, () => log);
 	});
 
 	it('answers an inbound message back over the transport it arrived on', () => {
@@ -541,13 +556,18 @@ describe('Pod standalone channel delivery — E2E', () => {
 	 */
 	it('offers a channel run every workspace tool with write access', () => {
 		expect(offered(sink.sent[0]?.text ?? '')).toEqual([
+			'await_sandbox_agent',
 			'describe_workspace',
-			'read_collection',
+			'list_quotes',
+			'list_sandbox_agents',
 			'list_skills',
+			'message_sandbox_agent',
+			'read_collection',
+			'read_sandbox_agent',
 			'read_skill',
+			'sandbox_probe',
 			'spawn_subagent',
-			'write_collection',
-			'list_quotes'
+			'write_collection'
 		]);
 	});
 
@@ -602,19 +622,17 @@ describe('Pod standalone channel delivery — E2E', () => {
 		expect(receipts[0]?.session_message_id).not.toBeNull();
 
 		const sessions = await queryTenant<{
-			messages: readonly {
-				role: string;
-				seq: number;
-				source_message_id: string | null;
-			}[];
+			messages: readonly Pick<ChatSessionMessage, 'role' | 'seq' | 'source_message_id'>[];
 		}>(`SELECT messages FROM chat_session WHERE norbital_id = $1::uuid`, [
 			conversations[0]?.chat_id
 		]);
 		const messages = sessions[0]?.messages ?? [];
-		// user → assistant tool call → three tool results → assistant answer.
+		// user → system context → assistant tool call → four tool results → assistant answer.
 		expect(messages.map((message) => message.role)).toEqual([
 			'user',
+			'system',
 			'assistant',
+			'tool',
 			'tool',
 			'tool',
 			'tool',
@@ -635,7 +653,7 @@ describe('Pod standalone channel delivery — E2E', () => {
 	it('continues the same transcript for the next message in the conversation', async () => {
 		const outcome = await deliver({ messageId: 'tg-msg-2', text: 'And the lead time?' });
 		expect(outcome.status).toBe('accepted');
-		await waitForSinkCount(sink, 2);
+		await waitForSinkCount(sink, 2, () => log);
 		expect(sink.sent[1]?.text).toContain('answering=And the lead time?');
 
 		const conversations = await queryTenant<{ chat_id: string }>(
@@ -672,9 +690,7 @@ describe('Pod standalone channel delivery — E2E', () => {
 		expect(outcome.delivered).toBe(true);
 		expect(outcome.text).toMatch(/registered members/i);
 		expect(sink.sent.at(-1)?.channel).toBe('member_desk');
-		const admissionTranscript = await queryTenant<{
-			messages: readonly { role: string; parts: readonly { content?: string }[] }[];
-		}>(
+		const admissionTranscript = await queryTenant<{ messages: readonly ChatSessionMessage[] }>(
 			`SELECT s.messages
 			   FROM channel_conversation cc
 			   JOIN chat_session s ON s.norbital_id = cc.chat_id
@@ -718,7 +734,7 @@ describe('Pod standalone channel delivery — E2E', () => {
 			text: 'Can I see the account now?'
 		});
 		expect(outcome.status).toBe('accepted');
-		await waitForSinkCount(sink, before + 1);
+		await waitForSinkCount(sink, before + 1, () => log);
 		expect(sink.sent.at(-1)?.text).toContain('answering=Can I see the account now?');
 
 		const owners = await queryTenant<{ user_id: string; owner_user_id: string }>(
@@ -770,12 +786,11 @@ describe('Pod standalone channel delivery — E2E', () => {
 		const before = sink.sent.length;
 		const outcome = await deliver({ messageId: 'tg-msg-4', text: 'Anything for us now?' });
 		expect(outcome.status).toBe('accepted');
-		await waitForSinkCount(sink, before + 1);
+		await waitForSinkCount(sink, before + 1, () => log);
 		const answer = sink.sent.at(-1)?.text ?? '';
 		expect(answer).toContain('accounts=denied');
 		expect(answer).toContain('payments=denied');
-		// And the host tool stays out of reach for the reason it always was, which is not this
-		// principal's missing policy: it was never offered.
-		expect(answer).toContain('probe=denied(');
+		// Sandbox-gated host tools remain available; collection access is what the missing policy denies.
+		expect(answer).toContain(`probe=${RECEIPT}`);
 	});
 });

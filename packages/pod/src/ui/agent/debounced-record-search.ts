@@ -1,7 +1,6 @@
-export type DebouncedRecordSearchParsed = {
-	readonly text: string;
-	readonly collection: string | null;
-};
+import type { ParsedCommandQuery } from './mention-sources.js';
+
+export type DebouncedRecordSearchParsed = Pick<ParsedCommandQuery, 'text' | 'collection'>;
 
 /** Debounces record search so caret moves that keep the same query do not refetch. */
 export function createDebouncedRecordSearch<T>(options: {

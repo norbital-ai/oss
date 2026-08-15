@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AiChatInput, HostAiBinding } from '@norbital-ai/platform-utils/runtime/binding';
 import { PodSyncClient } from '$lib/ui/sync/pod-sync-client.js';
 import type { SyncFetch } from '$lib/ui/sync/types.js';
-import type { ChatSessionMessage, ChatSessionTurn } from '$lib/shared/agent/chat-session.js';
+import type { ChatSessionMessage, ChatSessionTurn } from '$lib/shared/agent/context-window.js';
 import { requireDocker } from '../support/pg-harness.js';
 import { createClientDb } from '../support/pglite-node.js';
 import {
@@ -60,9 +60,6 @@ function toolResultPayload(message: ChatSessionMessage): Record<string, unknown>
 			return { text: content };
 		}
 	}
-	if (content && typeof content === 'object' && !Array.isArray(content)) {
-		return content as Record<string, unknown>;
-	}
 	return {};
 }
 
@@ -80,16 +77,14 @@ function syncFetchFor(harness: PodRuntimeHarness, identity: Identity): SyncFetch
 		);
 }
 
-function lastUserContent(input: { readonly messages?: readonly { role: string; content?: unknown }[] }): string {
-	const lastUser = [...(input.messages ?? [])]
-		.reverse()
-		.find((message) => {
-			if (message.role !== 'user' || typeof message.content !== 'string') return false;
-			return (
-				!message.content.startsWith('<intent-round>') &&
-				!message.content.startsWith('<goal-verification>')
-			);
-		})?.content;
+function lastUserContent(input: Pick<AiChatInput, 'messages'>): string {
+	const lastUser = input.messages.findLast((message) => {
+		if (message.role !== 'user' || typeof message.content !== 'string') return false;
+		return (
+			!message.content.startsWith('<intent-round>') &&
+			!message.content.startsWith('<goal-verification>')
+		);
+	})?.content;
 	return typeof lastUser === 'string' ? lastUser : '';
 }
 
@@ -97,12 +92,12 @@ const INSPECT_MESSAGE = 'Inspect the workspace then write a note.';
 const INSPECT_REPLY = 'Workspace inspected: skills listed and the schema described.';
 
 function toolResultCount(input: AiChatInput): number {
-	return (input.messages ?? []).filter((message) => message.role === 'tool').length;
+	return input.messages.filter((message) => message.role === 'tool').length;
 }
 
 function scriptedTurn(input: AiChatInput) {
 	const lastUser = lastUserContent(input);
-	const hasToolResult = (input.messages ?? []).some((message) => message.role === 'tool');
+	const hasToolResult = input.messages.some((message) => message.role === 'tool');
 	if (lastUser === INSPECT_MESSAGE) {
 		const toolsDone = toolResultCount(input);
 		if (toolsDone === 0) {
@@ -266,7 +261,9 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 			if (outcome.request.kind !== 'ai.turn') {
 				throw new Error(`Expected ai.turn, received ${outcome.request.kind}`);
 			}
-			const lastUser = lastUserContent({ messages: outcome.request.messages });
+			const messages = outcome.request.messages;
+			if (!messages) throw new Error('Durable ai.turn has no messages');
+			const lastUser = lastUserContent({ messages });
 			yielded.push(
 				`${step}:${lastUser}->tools:${(outcome.request.tools ?? []).map((tool) => tool.name).join(',')}`
 			);
@@ -274,7 +271,7 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 				receiptId,
 				outcome,
 				scriptedTurn({
-					messages: outcome.request.messages ?? [],
+					messages,
 					tools: []
 				})
 			);
@@ -560,9 +557,9 @@ describe('Pod live agent capabilities — runtime E2E', () => {
 					(turn) => turn.status === 'running' && turn.subagent_id == null
 				)
 			).toBe(true);
-			expect(storedArray(stillWaiting!.messages).some((message) => message.role === 'assistant')).toBe(
-				false
-			);
+			expect(
+				storedArray(stillWaiting!.messages).some((message) => message.role === 'assistant')
+			).toBe(false);
 			expect(orbOf(stillWaiting!)).toBe('thinking');
 
 			await harness.hostCommand({

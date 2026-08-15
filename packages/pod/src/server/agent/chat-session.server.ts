@@ -1,4 +1,5 @@
 import { v7 } from 'uuid';
+import { eq, getTableColumns, sql } from 'drizzle-orm';
 import { getWorkspace } from '$lib/server/bootstrap/workspace_store.js';
 import { withCollectionTransaction } from '$lib/server/collection/collection_transaction.server.js';
 import { emitSyncOutboxRow } from '$lib/server/collection/sync/sync-outbox.server.js';
@@ -6,75 +7,44 @@ import type {
 	ChatSessionAggregate,
 	ChatSessionMessage,
 	ChatSessionTurn
-} from '$lib/shared/agent/chat-session.js';
+} from '$lib/shared/agent/context-window.js';
 import type { AiMessage } from '@norbital-ai/platform-utils/runtime/binding';
+import {
+	chat_session,
+	ChatSessionMessageSchema,
+	ChatSessionMessagesSchema,
+	ChatSessionTurnSchema,
+	ChatSessionTurnsSchema
+} from '@norbital-ai/platform-utils/system/workspace-schema';
 
-type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-
-export type MutableChatSessionAggregate = Mutable<ChatSessionAggregate> & {
+export type MutableChatSessionAggregate = {
+	-readonly [K in keyof ChatSessionAggregate]: ChatSessionAggregate[K];
+} & {
 	messages: ChatSessionMessage[];
 	turns: ChatSessionTurn[];
 };
 
-function asArray<T>(value: unknown): T[] {
-	return Array.isArray(value) ? (value as T[]) : [];
-}
-
-function numberOrZero(value: unknown): number {
-	return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
-/** Empty transcript used to open a turn before the row exists. */
-export function emptyChatSessionAggregate(): MutableChatSessionAggregate {
-	return {
-		norbital_id: '',
-		norbital_row_version: 0,
-		title: '',
-		messages: [],
-		turns: [],
-		usage_cost_usd: 0,
-		usage_total_tokens: 0,
-		usage_turns_counted: 0,
-		usage_turns_unreported: 0
-	};
-}
-
-function aggregate(row: Readonly<Record<string, unknown>>): MutableChatSessionAggregate {
-	if (typeof row.norbital_id !== 'string') throw new Error('Chat session has no id');
-	return {
-		norbital_id: row.norbital_id,
-		norbital_row_version: numberOrZero(row.norbital_row_version),
-		title: typeof row.title === 'string' ? row.title : '',
-		messages: asArray<ChatSessionMessage>(row.messages),
-		turns: asArray<ChatSessionTurn>(row.turns),
-		usage_cost_usd: numberOrZero(row.usage_cost_usd),
-		usage_total_tokens: numberOrZero(row.usage_total_tokens),
-		usage_turns_counted: numberOrZero(row.usage_turns_counted),
-		usage_turns_unreported: numberOrZero(row.usage_turns_unreported)
-	};
-}
-
 /** Read the one tenant row that owns a conversation and every part in it. */
 export async function readChatSession(sessionId: string): Promise<MutableChatSessionAggregate> {
 	const ctx = getWorkspace({ provision: true });
-	const result = await ctx.tenantDb.query<Record<string, unknown>>(
-		`SELECT norbital_id,
-		        norbital_row_version,
-		        title,
-		        messages,
-		        turns,
-		        usage_cost_usd,
-		        usage_total_tokens,
-		        usage_turns_counted,
-		        usage_turns_unreported
-		   FROM chat_session
-		  WHERE norbital_id = $1::uuid
-		  LIMIT 1`,
-		[sessionId]
-	);
-	const row = result.rows[0];
+	const db = ctx.drizzleDb;
+	if (!db) throw new Error('Tenant database is not provisioned');
+	const row = (
+		await db
+			.select({
+				...getTableColumns(chat_session),
+				norbital_row_version: sql<number>`COALESCE(${chat_session.norbital_row_version}, 0)`
+			})
+			.from(chat_session)
+			.where(eq(chat_session.norbital_id, sessionId))
+			.limit(1)
+	)[0];
 	if (!row) throw new Error('Chat session does not exist');
-	return aggregate(row);
+	return {
+		...row,
+		messages: ChatSessionMessagesSchema.parse(row.messages ?? []),
+		turns: ChatSessionTurnsSchema.parse(row.turns ?? [])
+	};
 }
 
 /**
@@ -88,49 +58,40 @@ export async function mutateChatSession<T>(
 ): Promise<T> {
 	const ctx = getWorkspace({ provision: true });
 	return withCollectionTransaction(ctx, async () => {
-		const selected = await ctx.tenantDb.query<Record<string, unknown>>(
-			`SELECT norbital_id,
-			        norbital_row_version,
-			        title,
-			        messages,
-			        turns,
-			        usage_cost_usd,
-			        usage_total_tokens,
-			        usage_turns_counted,
-			        usage_turns_unreported
-			   FROM chat_session
-			  WHERE norbital_id = $1::uuid
-			  FOR UPDATE`,
-			[sessionId]
-		);
-		const row = selected.rows[0];
+		const db = ctx.drizzleDb;
+		if (!db) throw new Error('Tenant database is not provisioned');
+		const row = (
+			await db
+				.select({
+					...getTableColumns(chat_session),
+					norbital_row_version: sql<number>`COALESCE(${chat_session.norbital_row_version}, 0)`
+				})
+				.from(chat_session)
+				.where(eq(chat_session.norbital_id, sessionId))
+				.for('update')
+		)[0];
 		if (!row) throw new Error('Chat session does not exist');
-		const session = aggregate(row);
+		const session: MutableChatSessionAggregate = {
+			...row,
+			messages: ChatSessionMessagesSchema.parse(row.messages ?? []),
+			turns: ChatSessionTurnsSchema.parse(row.turns ?? [])
+		};
 		const result = await mutate(session);
-		const updated = await ctx.tenantDb.query<{ norbital_row_version: number }>(
-			`UPDATE chat_session
-			    SET title = $2,
-			        messages = $3::jsonb,
-			        turns = $4::jsonb,
-			        usage_cost_usd = $5,
-			        usage_total_tokens = $6,
-			        usage_turns_counted = $7,
-			        usage_turns_unreported = $8,
-			        norbital_updated_at = now()
-			  WHERE norbital_id = $1::uuid
-			RETURNING norbital_row_version`,
-			[
-				sessionId,
-				session.title,
-				JSON.stringify(session.messages),
-				JSON.stringify(session.turns),
-				session.usage_cost_usd,
-				session.usage_total_tokens,
-				session.usage_turns_counted,
-				session.usage_turns_unreported
-			]
-		);
-		const version = updated.rows[0]?.norbital_row_version;
+		const updated = await db
+			.update(chat_session)
+			.set({
+				title: session.title,
+				messages: session.messages,
+				turns: session.turns,
+				usage_cost_usd: session.usage_cost_usd,
+				usage_total_tokens: session.usage_total_tokens,
+				usage_turns_counted: session.usage_turns_counted,
+				usage_turns_unreported: session.usage_turns_unreported,
+				norbital_updated_at: new Date()
+			})
+			.where(eq(chat_session.norbital_id, sessionId))
+			.returning({ norbital_row_version: chat_session.norbital_row_version });
+		const version = updated[0]?.norbital_row_version;
 		if (typeof version !== 'number')
 			throw new Error('Chat session update did not return a version');
 		await emitSyncOutboxRow(ctx.tenantDb, 'chat_session', 'update', sessionId, version);
@@ -175,14 +136,12 @@ function pushChatMessage(
 				: 'live',
 		release_mode:
 			extra.release_mode === 'step' || extra.release_mode === 'turn' ? extra.release_mode : null,
-		author_user_id: typeof extra.author_user_id === 'string' ? extra.author_user_id : null,
 		author_display_name:
 			typeof extra.author_display_name === 'string' ? extra.author_display_name : null,
 		source_provider: typeof extra.source_provider === 'string' ? extra.source_provider : null,
 		source_conversation_id:
 			typeof extra.source_conversation_id === 'string' ? extra.source_conversation_id : null,
 		source_message_id: typeof extra.source_message_id === 'string' ? extra.source_message_id : null,
-		source_deleted_at: typeof extra.source_deleted_at === 'string' ? extra.source_deleted_at : null,
 		durable_ordinal: typeof extra.durable_ordinal === 'number' ? extra.durable_ordinal : null
 	});
 	return id;
@@ -229,7 +188,10 @@ export async function updateChatMessage(
 	await mutateChatSession(sessionId, (session) => {
 		const index = session.messages.findIndex((message) => message.norbital_id === messageId);
 		if (index < 0) throw new Error('Chat message does not exist');
-		session.messages[index] = { ...session.messages[index]!, ...values } as ChatSessionMessage;
+		session.messages[index] = ChatSessionMessageSchema.parse({
+			...session.messages[index]!,
+			...values
+		});
 	});
 }
 
@@ -272,7 +234,12 @@ export function applyOpenedInteractiveTurn(
 		session.turns[turnIndex] = { ...turn, prompt_message_id: inputMessageId };
 	}
 	for (const notice of input.systemMessages ?? []) {
-		pushChatMessage(session, turnId, { role: 'system', content: notice.content }, notice.extra ?? {});
+		pushChatMessage(
+			session,
+			turnId,
+			{ role: 'system', content: notice.content },
+			notice.extra ?? {}
+		);
 	}
 	return { turnId, inputMessageId };
 }
@@ -305,7 +272,10 @@ export async function updateChatTurn(
 	await mutateChatSession(sessionId, (session) => {
 		const index = session.turns.findIndex((turn) => turn.norbital_id === turnId);
 		if (index < 0) throw new Error('Chat turn does not exist');
-		session.turns[index] = { ...session.turns[index]!, ...values } as ChatSessionTurn;
+		session.turns[index] = ChatSessionTurnSchema.parse({
+			...session.turns[index]!,
+			...values
+		});
 	});
 }
 

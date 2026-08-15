@@ -43,6 +43,7 @@
 		onQueryInput?: (query: string) => void;
 		onClearScope?: () => void;
 	} = $props();
+	const commandItems = $derived([...items]);
 
 	function pickValue(value: string | null): void {
 		if (!value) return;
@@ -78,7 +79,7 @@
 		</Inline>
 	{/if}
 	<Command.Root
-		{items}
+		items={commandItems}
 		{disableNavigation}
 		{activeValue}
 		shouldFilter={false}
@@ -110,7 +111,11 @@
 				{/snippet}
 			</Command.Input>
 		{/if}
-		<Command.List itemHeight={34} gap={0} class={showInput ? 'max-h-[min(60vh,22rem)]' : 'max-h-64'}>
+		<Command.List
+			itemHeight={34}
+			gap={0}
+			class={showInput ? 'max-h-[min(60vh,22rem)]' : 'max-h-64'}
+		>
 			{#snippet itemSnippet({ item, isIndicator })}
 				{@const row = item as FinderRow}
 				{@const highlighted = isIndicator && row.kind !== 'group' && row.kind !== 'empty'}
@@ -135,9 +140,8 @@
 						/>
 						<span class="text-xs text-muted-foreground">{t('pod.shell.omniSearchingRecords')}</span>
 					{:else if row.kind === 'empty'}
-						<span
-							data-testid="agent-mention-empty"
-							class="truncate text-xs text-muted-foreground">{row.label}</span
+						<span data-testid="agent-mention-empty" class="truncate text-xs text-muted-foreground"
+							>{row.label}</span
 						>
 					{:else}
 						{#if row.thumbnail}
@@ -162,8 +166,7 @@
 								class="size-3.5 shrink-0 text-muted-foreground"
 							/>
 						{/if}
-						<span
-							class="min-w-0 flex-1 truncate text-xs font-normal text-foreground sm:text-micro"
+						<span class="min-w-0 flex-1 truncate text-xs font-normal text-foreground sm:text-micro"
 							>{row.label}</span
 						>
 						{#if row.description}
@@ -177,7 +180,10 @@
 		</Command.List>
 	</Command.Root>
 	{#if !showInput}
-		<Inline gap="md" class="border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground">
+		<Inline
+			gap="md"
+			class="border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground"
+		>
 			<span>{t('pod.agent.navigateHint')}</span>
 			<span>{t('pod.agent.selectHint')}</span>
 			<span>{t('pod.agent.dismissHint')}</span>

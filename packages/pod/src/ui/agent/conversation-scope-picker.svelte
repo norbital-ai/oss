@@ -45,6 +45,7 @@
 		maxHeight={280}
 		minWidth={220}
 		sameWidth={false}
+		align="start"
 		class="w-full"
 		triggerClass={cn(
 			'border-0 bg-transparent shadow-none hover:bg-muted',

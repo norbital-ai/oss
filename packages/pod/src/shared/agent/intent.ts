@@ -19,14 +19,6 @@ export const PLAN_FOLD_INSTRUCTIONS =
 const PLAN_SUMMARY_OPEN = '<plan-summary>';
 const PLAN_SUMMARY_CLOSE = '</plan-summary>';
 
-export type ResolvedAgentIntent = {
-	readonly intent: AgentIntent;
-	readonly planMode: boolean;
-	readonly foldAsCheckpoint: boolean;
-	readonly verify: boolean;
-	readonly verifierPrompt: string;
-};
-
 const TASK_SIGNAL =
 	/\b(create|update|delete|write|add|fix|migrate|build|deploy|list|find|show|explain|change|remove|approve|draft|outline|plan|check|audit|compare|count|export|import|assign|invite|configure|set\s+up|setup)\b/i;
 
@@ -39,7 +31,7 @@ export function resolveAgentIntent(input: {
 	readonly verifierPrompt?: string | null;
 	readonly message?: string | null;
 	readonly mentionCount?: number;
-}): ResolvedAgentIntent {
+}) {
 	const intent: AgentIntent = input.intent === 'plan' || input.planMode === true ? 'plan' : 'do';
 	const trimmed = typeof input.verifierPrompt === 'string' ? input.verifierPrompt.trim() : '';
 	const verifierPrompt = trimmed || DEFAULT_VERIFIER_PROMPTS[intent];
@@ -57,6 +49,7 @@ export function resolveAgentIntent(input: {
 		verifierPrompt
 	};
 }
+export type ResolvedAgentIntent = ReturnType<typeof resolveAgentIntent>;
 
 function hasTaskSignal(message: string): boolean {
 	const text = message.trim();

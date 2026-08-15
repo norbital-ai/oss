@@ -534,7 +534,7 @@ describe('Pod standalone integrations — E2E, both directions', () => {
 		running.stdout.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
 		running.stderr.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
 		try {
-			await waitForOutput(running, /Pod listening at/);
+			await waitForOutput(running, /Reference host listening at/);
 			expect(sink.delivered).toHaveLength(0);
 
 			const certificationName = `Working at Heights ${Date.now()}`;
@@ -611,7 +611,7 @@ describe('Pod standalone integrations — E2E, both directions', () => {
 		running.stdout.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
 		running.stderr.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
 		try {
-			await waitForOutput(running, /Pod listening at/);
+			await waitForOutput(running, /Reference host listening at/);
 			const landed = await waitFor(async () => {
 				const found = await rows(PULLED_INTO);
 				return found.length >= CATALOGUE.length ? found : undefined;
@@ -662,7 +662,7 @@ describe('Pod standalone integrations — E2E, both directions', () => {
 			stdio: 'pipe'
 		});
 		try {
-			await waitForOutput(running, /Pod listening at/);
+			await waitForOutput(running, /Reference host listening at/);
 			// Enough sweeps at the configured 1s interval for a claimable row to be re-sent and for the
 			// pull to run again in this fresh process.
 			await waitFor(
@@ -741,7 +741,7 @@ describe('Pod standalone integrations — E2E, both directions', () => {
 			running = spawn('node', [POD_BIN, 'start'], { cwd: root, env: environment, stdio: 'pipe' });
 			running.stdout.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
 			running.stderr.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
-			await waitForOutput(running, /Pod listening at/);
+			await waitForOutput(running, /Reference host listening at/);
 			// The endpoint is derived from the manifest, so seeing it announced is already evidence the
 			// declared binding produced a route rather than a warning.
 			expect(log).toContain('/webhooks/field_reports/rfis.receive.rfi');

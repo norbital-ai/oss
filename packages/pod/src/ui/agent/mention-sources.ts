@@ -31,13 +31,6 @@ export type MentionCommand = Extract<CommandScope, 'record' | 'plan' | 'app'>;
 /** System collections a person can `@` — people and teams, not platform plumbing. */
 export const MENTIONABLE_SYSTEM_COLLECTIONS: ReadonlySet<string> = new Set(['user', 'team']);
 
-export type ParsedCommandQuery = {
-	readonly scope: CommandScope | null;
-	readonly collection: string | null;
-	readonly text: string;
-	readonly raw: string;
-};
-
 const PREFIX_BY_CHAR: Readonly<Record<string, CommandScope>> = {
 	[COMMAND_PREFIX.record]: 'record',
 	[COMMAND_PREFIX.plan]: 'plan',
@@ -52,10 +45,7 @@ export function commandPrefixChar(scope: CommandScope): string {
 }
 
 /** Splits a typed command into scope, optional collection, and remaining text. */
-export function parseCommandQuery(
-	raw: string,
-	collections: readonly string[] = []
-): ParsedCommandQuery {
+export function parseCommandQuery(raw: string, collections: readonly string[] = []) {
 	const scope = PREFIX_BY_CHAR[raw[0] ?? ''];
 	if (!scope) return { scope: null, collection: null, text: raw, raw };
 	const rest = raw.slice(1);
@@ -65,6 +55,8 @@ export function parseCommandQuery(
 	}
 	return { scope, collection: null, text: rest.trimStart(), raw };
 }
+
+export type ParsedCommandQuery = ReturnType<typeof parseCommandQuery>;
 
 /** Narrows mentionable collection names by a typed token. */
 export function filterCollections(
@@ -98,9 +90,7 @@ export function filterApps(
 /** True only when a record search has both a collection and a query. */
 // stupidity:allow Q4 -- named helper
 export function shouldSearchRecords(parsed: ParsedCommandQuery): boolean {
-	return (
-		parsed.scope === 'record' && parsed.collection !== null && parsed.text.trim().length > 0
-	);
+	return parsed.scope === 'record' && parsed.collection !== null && parsed.text.trim().length > 0;
 }
 
 /** Stable key for “is this the same record search?” — never the raw trigger string. */
@@ -158,9 +148,10 @@ export function buildMentionMenuEntries(
 			return [{ kind: 'command', command: 'plan' }];
 		case 'record': {
 			if (parsed.collection) return records;
-			return filterCollections(parsed.text, collections).map(
-				(collection): MentionMenuItem => ({ kind: 'scope', collection })
-			);
+			return filterCollections(parsed.text, collections).map((collection): MentionMenuItem => ({
+				kind: 'scope',
+				collection
+			}));
 		}
 		case 'app':
 			return filterApps(parsed.text, apps).map((app): MentionMenuItem => ({
@@ -192,10 +183,6 @@ export function buildMentionMenuEntries(
 				...(app.description != null ? { description: app.description } : {})
 			}));
 			return [...scopes, ...appMentions];
-		}
-		default: {
-			const _exhaustive: never = parsed.scope;
-			return _exhaustive;
 		}
 	}
 }
@@ -358,7 +345,8 @@ export function createMentionSources(
 				const local = await localFindMany(sync, collection, params);
 				if (local) return local.rows;
 			}
-		} catch { // stupidity:ignore -- replica miss falls through to the server
+		} catch {
+			// stupidity:ignore -- replica miss falls through to the server
 			// The server path below is the fallback for any local failure, not an error of record.
 		}
 		const page = await post<{ rows: Record<string, unknown>[] }>('collections/findMany', {
@@ -381,7 +369,8 @@ export function createMentionSources(
 				row,
 				manifestContext.columnsFor(collection)
 			).text;
-		} catch { // stupidity:ignore -- label miss keeps the id fallback
+		} catch {
+			// stupidity:ignore -- label miss keeps the id fallback
 			// A label failure costs the pretty name, never the hit.
 		}
 		return { collection, recordId, label };

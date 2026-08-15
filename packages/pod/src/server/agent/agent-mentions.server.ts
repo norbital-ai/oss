@@ -15,8 +15,6 @@ import type { ProvisionedContext } from '$lib/server/bootstrap/workspace_store.j
 import { findMany } from '$lib/server/collection/collection_ops.server.js';
 import type { MentionRecordHit } from '$lib/shared/agent/mention.js';
 
-export type AgentMentionInput = MentionRecordHit;
-
 /** One record snapshot is capped so a wide row cannot eat the window by itself. */
 const SNAPSHOT_LIMIT = 8_000;
 
@@ -37,7 +35,7 @@ function escapeAttribute(value: string): string {
  */
 export async function composeMentionContext(
 	ctx: ProvisionedContext,
-	mentions: readonly AgentMentionInput[]
+	mentions: readonly MentionRecordHit[]
 ): Promise<string | null> {
 	if (mentions.length === 0) return null;
 	const manifestCollections = getTenantManifest().collections;

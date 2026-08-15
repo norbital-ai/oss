@@ -315,7 +315,7 @@ describe('Pod standalone host agent tools — E2E', () => {
 		running = spawn('node', [POD_BIN, 'start'], { cwd: root, env: environment, stdio: 'pipe' });
 		running.stdout.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
 		running.stderr.on('data', (chunk: Buffer) => (log += chunk.toString('utf8')));
-		await waitForOutput(running, /Pod listening at/);
+		await waitForOutput(running, /Reference host listening at/);
 	}, 300_000);
 
 	afterAll(async () => {
@@ -439,7 +439,7 @@ describe('Pod standalone host agent tools — E2E', () => {
 				.map((row) => row.parts?.[0]?.content ?? '')
 				.find((content) => content.includes('offered=')) ?? '';
 		expect(answer).toContain(
-			'offered=await_sandbox_agent|describe_workspace|list_quotes|list_sandbox_agents|list_skills|message_sandbox_agent|read_collection|read_skill|read_sandbox_agent|sandbox_deploy|spawn_subagent|write_collection'
+			'offered=await_sandbox_agent|describe_workspace|list_quotes|list_sandbox_agents|list_skills|message_sandbox_agent|read_collection|read_sandbox_agent|read_skill|sandbox_deploy|spawn_subagent|write_collection'
 		);
 		expect(answer).not.toContain('host_secret|');
 		expect(answer).toContain(`deploy=ok(${RECEIPT}:staging)`);
@@ -460,7 +460,7 @@ describe('Pod standalone host agent tools — E2E', () => {
 		expect(code).toBe(1);
 		expect(output).toContain('list_quotes');
 		expect(output).toMatch(/collides with the workspace agent tool/);
-		expect(output).not.toMatch(/Pod listening at/);
+		expect(output).not.toMatch(/Reference host listening at/);
 	}, 120_000);
 
 	/** And the other direction: an agent naming a host tool this host does not supply. */

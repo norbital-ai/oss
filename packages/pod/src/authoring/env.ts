@@ -38,14 +38,14 @@ type StandardSchemaResult<Output> =
 	| { readonly issues: readonly StandardSchemaIssue[] };
 
 interface StandardSchemaV1Props<Input, Output> {
-	readonly validate: (value: Input) => StandardSchemaResult<Output>;
+	readonly validate: (
+		value: Input
+	) => StandardSchemaResult<Output> | Promise<StandardSchemaResult<Output>>;
 }
 
 export type EnvVarsDeclaration = Readonly<Record<string, EnvVarConfig>>;
 
 /** Identity function so `src/+env.ts` is type-checked where it is written. */
-export function defineEnvVars<const T extends Record<string, EnvVarConfig>>(
-	variables: T
-): T {
+export function defineEnvVars<const T extends Record<string, EnvVarConfig>>(variables: T): T {
 	return variables;
 }

@@ -41,7 +41,8 @@
 	];
 
 	/** Read the live attribute Svelte keeps in sync — the attach closure must not snapshot `state`. */
-	function liveOrbState(root: Element): AgentOrbState { // stupidity:allow Q4 -- named helper
+	function liveOrbState(root: Element): AgentOrbState {
+		// stupidity:allow Q4 -- named helper
 		const value = root.getAttribute('data-state');
 		return value !== null && ORB_STATES.includes(value as AgentOrbState)
 			? (value as AgentOrbState)
@@ -49,12 +50,14 @@
 	}
 
 	/** Clamps a numeric value to the inclusive range between min and max. */
-	function clamp(value: number, min = 0, max = 1): number { // stupidity:allow Q4 -- named helper
+	function clamp(value: number, min = 0, max = 1): number {
+		// stupidity:allow Q4 -- named helper
 		return Math.min(max, Math.max(min, value));
 	}
 
 	/** Returns the shortest signed angular distance between two radians. */
-	function angleDistance(a: number, b: number): number { // stupidity:allow Q4 -- named helper
+	function angleDistance(a: number, b: number): number {
+		// stupidity:allow Q4 -- named helper
 		return Math.atan2(Math.sin(a - b), Math.cos(a - b));
 	}
 
@@ -77,7 +80,8 @@
 	}
 
 	/** Builds sphere seed coordinates scaled to the render size. */
-	function buildSphereLayout(renderSize: number): SphereSeed[] { // stupidity:allow Q3 -- named helper
+	function buildSphereLayout(renderSize: number): SphereSeed[] {
+		// stupidity:allow Q3 -- named helper
 		const sizeRatio = renderSize / 64;
 		const ringScale = clamp(Math.pow(sizeRatio, 0.35), 0.68, 1);
 		const columnScale = clamp(Math.pow(sizeRatio, 0.45), 0.56, 1);
@@ -234,7 +238,8 @@
 	}
 
 	/** Returns the 0–1 blend factor between sphere and state-shape modes over time. */
-	function stateShapeMix(mode: AgentOrbState, time: number): number { // stupidity:allow Q3 -- named helper
+	function stateShapeMix(mode: AgentOrbState, time: number): number {
+		// stupidity:allow Q3 -- named helper
 		if (mode === 'idle' || mode === 'thinking' || mode === 'failed') return 0;
 		const cycle = time % 5.2;
 		if (cycle < 0.8 || cycle > 4.8) return 0;
@@ -380,173 +385,178 @@
 		const canvas = root.querySelector('canvas');
 		const accentSwatch = root.querySelector('.orb-accent-swatch');
 		if (!(canvas instanceof HTMLCanvasElement) || !(accentSwatch instanceof HTMLElement)) return;
+		const canvasElement = canvas;
+		const accentElement = accentSwatch;
 
-		const canvasContext = canvas.getContext('2d');
+		const canvasContext = canvasElement.getContext('2d');
 		if (!canvasContext) return;
 		const context: CanvasRenderingContext2D = canvasContext;
 
-			const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-			let reducedMotion = motionQuery.matches;
-			let visible = true;
-			let frame = 0;
-			let targetState: AgentOrbState = 'idle';
-			let previousState: AgentOrbState = 'idle';
-			let transitionStarted = performance.now();
-			let initialized = false;
-			let inkColor = getComputedStyle(canvas).color;
-			let accentColor = getComputedStyle(accentSwatch).color;
-			let lastColorRead = 0;
-			let lastCanvasSize = 0;
-			let lastDpr = 0;
-			let sphereLayout: SphereSeed[] = [];
-			let lastDrawnState: AgentOrbState | null = null;
-			let lastDrawnSize = 0;
+		const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+		let reducedMotion = motionQuery.matches;
+		let visible = true;
+		let frame = 0;
+		let targetState: AgentOrbState = 'idle';
+		let previousState: AgentOrbState = 'idle';
+		let transitionStarted = performance.now();
+		let initialized = false;
+		let inkColor = getComputedStyle(canvasElement).color;
+		let accentColor = getComputedStyle(accentElement).color;
+		let lastColorRead = 0;
+		let lastCanvasSize = 0;
+		let lastDpr = 0;
+		let sphereLayout: SphereSeed[] = [];
+		let lastDrawnState: AgentOrbState | null = null;
+		let lastDrawnSize = 0;
 
-			/** Resizes the canvas and rebuilds sphere layout when size or DPR changes. */
-			function syncCanvas(): number { // stupidity:allow Q3 -- named helper
-				const dpr = Math.min(2, window.devicePixelRatio || 1);
-				if (lastCanvasSize !== size || lastDpr !== dpr) {
-					if (lastCanvasSize !== size) sphereLayout = buildSphereLayout(size);
-					canvas.width = Math.max(1, Math.round(size * dpr));
-					canvas.height = Math.max(1, Math.round(size * dpr));
-					context.setTransform(dpr, 0, 0, dpr, 0, 0);
-					lastCanvasSize = size;
-					lastDpr = dpr;
-				}
-				return dpr;
+		/** Resizes the canvas and rebuilds sphere layout when size or DPR changes. */
+		function syncCanvas(): number {
+			// stupidity:allow Q3 -- named helper
+			const dpr = Math.min(2, window.devicePixelRatio || 1);
+			if (lastCanvasSize !== size || lastDpr !== dpr) {
+				if (lastCanvasSize !== size) sphereLayout = buildSphereLayout(size);
+				canvasElement.width = Math.max(1, Math.round(size * dpr));
+				canvasElement.height = Math.max(1, Math.round(size * dpr));
+				context.setTransform(dpr, 0, 0, dpr, 0, 0);
+				lastCanvasSize = size;
+				lastDpr = dpr;
+			}
+			return dpr;
+		}
+
+		/** Renders one orb frame with state transition blending and accent highlights. */
+		function draw(now: number, staticFrame = false): void {
+			syncCanvas();
+			if (now - lastColorRead > 800 || lastColorRead === 0) {
+				inkColor = getComputedStyle(canvasElement).color;
+				accentColor = getComputedStyle(accentElement).color;
+				lastColorRead = now;
 			}
 
-			/** Renders one orb frame with state transition blending and accent highlights. */
-			function draw(now: number, staticFrame = false): void {
-				syncCanvas();
-				if (now - lastColorRead > 800 || lastColorRead === 0) {
-					inkColor = getComputedStyle(canvas).color;
-					accentColor = getComputedStyle(accentSwatch).color;
-					lastColorRead = now;
-				}
+			const currentState = liveOrbState(root);
+			if (currentState !== targetState) {
+				previousState = targetState;
+				targetState = currentState;
+				transitionStarted = now;
+			}
 
-				const currentState = liveOrbState(root);
-				if (currentState !== targetState) {
-					previousState = targetState;
-					targetState = currentState;
-					transitionStarted = now;
-				}
+			const compact = size <= 36;
+			const layout = sphereLayout;
+			const count = layout.length;
+			const transitionDuration = compact ? 145 : 190;
+			const transitionProgress = staticFrame
+				? 1
+				: clamp((now - transitionStarted) / transitionDuration);
+			const mix = 1 - (1 - transitionProgress) ** 4;
+			const elapsed = staticFrame ? 2.25 : now / 1000;
+			const stateElapsed = staticFrame ? 2.25 : Math.max(0, (now - transitionStarted) / 1000);
+			const radius = size * 0.405;
+			const dotScale = Math.pow(size / 64, 0.68) * (compact ? 1.06 : 1);
+			const points: Array<OrbPoint & { index: number }> = [];
 
-				const compact = size <= 36;
-				const layout = sphereLayout;
-				const count = layout.length;
-				const transitionDuration = compact ? 145 : 190;
-				const transitionProgress = staticFrame
-					? 1
-					: clamp((now - transitionStarted) / transitionDuration);
-				const mix = 1 - (1 - transitionProgress) ** 4;
-				const elapsed = staticFrame ? 2.25 : now / 1000;
-				const stateElapsed = staticFrame ? 2.25 : Math.max(0, (now - transitionStarted) / 1000);
-				const radius = size * 0.405;
-				const dotScale = Math.pow(size / 64, 0.68) * (compact ? 1.06 : 1);
-				const points: Array<OrbPoint & { index: number }> = [];
+			for (let index = 0; index < count; index += 1) {
+				const from = pointForState(previousState, index, layout, elapsed, compact);
+				const to = pointForState(targetState, index, layout, elapsed, compact, stateElapsed);
+				points.push({ ...interpolatePoint(from, to, mix), index });
+			}
+			points.sort((a, b) => a.z - b.z || a.index - b.index);
 
-				for (let index = 0; index < count; index += 1) {
-					const from = pointForState(previousState, index, layout, elapsed, compact);
-					const to = pointForState(targetState, index, layout, elapsed, compact, stateElapsed);
-					points.push({ ...interpolatePoint(from, to, mix), index });
-				}
-				points.sort((a, b) => a.z - b.z || a.index - b.index);
+			context.clearRect(0, 0, size, size);
+			for (const point of points) {
+				const depth = clamp((point.z + 1.08) / 2.16);
+				const near = depth ** 1.45;
+				const dotRadius = (0.26 + near * 1.08 + point.boost) * dotScale;
+				const alpha = 0.16 + near * 0.82;
+				const x = size / 2 + point.x * radius;
+				const y = size / 2 - point.y * radius;
 
-				context.clearRect(0, 0, size, size);
-				for (const point of points) {
-					const depth = clamp((point.z + 1.08) / 2.16);
-					const near = depth ** 1.45;
-					const dotRadius = (0.26 + near * 1.08 + point.boost) * dotScale;
-					const alpha = 0.16 + near * 0.82;
-					const x = size / 2 + point.x * radius;
-					const y = size / 2 - point.y * radius;
+				context.globalAlpha = alpha * point.visibility * (1 - point.accent * 0.36);
+				context.fillStyle = inkColor;
+				context.beginPath();
+				context.arc(x, y, dotRadius, 0, Math.PI * 2);
+				context.fill();
 
-					context.globalAlpha = alpha * point.visibility * (1 - point.accent * 0.36);
-					context.fillStyle = inkColor;
+				if (point.accent > 0.035) {
+					context.globalAlpha = alpha * point.visibility * point.accent * 0.9;
+					context.fillStyle = accentColor;
 					context.beginPath();
-					context.arc(x, y, dotRadius, 0, Math.PI * 2);
+					context.arc(x, y, dotRadius * (1 + point.accent * 0.08), 0, Math.PI * 2);
 					context.fill();
-
-					if (point.accent > 0.035) {
-						context.globalAlpha = alpha * point.visibility * point.accent * 0.9;
-						context.fillStyle = accentColor;
-						context.beginPath();
-						context.arc(x, y, dotRadius * (1 + point.accent * 0.08), 0, Math.PI * 2);
-						context.fill();
-					}
 				}
-				context.globalAlpha = 1;
 			}
+			context.globalAlpha = 1;
+		}
 
-			/** Advances the animation loop, honoring reduced-motion and visibility pauses. */
-			function tick(now: number): void {
-				if (!initialized) {
-					targetState = liveOrbState(root);
-					previousState = targetState;
-					transitionStarted = now;
-					initialized = true;
+		/** Advances the animation loop, honoring reduced-motion and visibility pauses. */
+		function tick(now: number): void {
+			if (!initialized) {
+				targetState = liveOrbState(root);
+				previousState = targetState;
+				transitionStarted = now;
+				initialized = true;
+			}
+			if (reducedMotion) {
+				const currentState = liveOrbState(root);
+				if (currentState === lastDrawnState && size === lastDrawnSize) {
+					frame = requestAnimationFrame(tick);
+					return;
 				}
-				if (reducedMotion) {
-					const currentState = liveOrbState(root);
-					if (currentState === lastDrawnState && size === lastDrawnSize) {
-						frame = requestAnimationFrame(tick);
-						return;
-					}
-					lastDrawnState = currentState;
-					lastDrawnSize = size;
-					draw(now, true);
-				} else {
-					draw(now);
-				}
-				frame = requestAnimationFrame(tick);
+				lastDrawnState = currentState;
+				lastDrawnSize = size;
+				draw(now, true);
+			} else {
+				draw(now);
 			}
+			frame = requestAnimationFrame(tick);
+		}
 
-			/** Starts the requestAnimationFrame loop when the orb is visible. */
-			function start(): void { // stupidity:allow Q4 -- named helper
-				if (frame || !visible || document.hidden) return;
-				frame = requestAnimationFrame(tick);
-			}
+		/** Starts the requestAnimationFrame loop when the orb is visible. */
+		function start(): void {
+			// stupidity:allow Q4 -- named helper
+			if (frame || !visible || document.hidden) return;
+			frame = requestAnimationFrame(tick);
+		}
 
-			/** Cancels the active animation frame, if any. */
-			function stop(): void {
-				if (!frame) return;
-				cancelAnimationFrame(frame);
-				frame = 0;
-			}
+		/** Cancels the active animation frame, if any. */
+		function stop(): void {
+			if (!frame) return;
+			cancelAnimationFrame(frame);
+			frame = 0;
+		}
 
-			/** Reacts to prefers-reduced-motion changes and redraws a static frame. */
-			function updateMotionPreference(): void {
-				reducedMotion = motionQuery.matches;
-				lastDrawnState = null;
-				lastDrawnSize = 0;
-				if (reducedMotion) draw(performance.now(), true);
-				updateVisibility();
-			}
+		/** Reacts to prefers-reduced-motion changes and redraws a static frame. */
+		function updateMotionPreference(): void {
+			reducedMotion = motionQuery.matches;
+			lastDrawnState = null;
+			lastDrawnSize = 0;
+			if (reducedMotion) draw(performance.now(), true);
+			updateVisibility();
+		}
 
-			/** Starts or stops animation based on document and intersection visibility. */
-			function updateVisibility(): void { // stupidity:allow Q4 -- named helper
-				if (document.hidden || !visible) stop();
-				else start();
-			}
+		/** Starts or stops animation based on document and intersection visibility. */
+		function updateVisibility(): void {
+			// stupidity:allow Q4 -- named helper
+			if (document.hidden || !visible) stop();
+			else start();
+		}
 
-			const observer = new IntersectionObserver(([entry]) => {
-				visible = entry?.isIntersecting ?? true;
-				updateVisibility();
-			});
-			observer.observe(canvas);
-			document.addEventListener('visibilitychange', updateVisibility);
-			motionQuery.addEventListener('change', updateMotionPreference);
+		const observer = new IntersectionObserver(([entry]) => {
+			visible = entry?.isIntersecting ?? true;
+			updateVisibility();
+		});
+		observer.observe(canvasElement);
+		document.addEventListener('visibilitychange', updateVisibility);
+		motionQuery.addEventListener('change', updateMotionPreference);
 
-			start();
+		start();
 
-			return () => {
-				stop();
-				observer.disconnect();
-				document.removeEventListener('visibilitychange', updateVisibility);
-				motionQuery.removeEventListener('change', updateMotionPreference);
-			};
-		}}
+		return () => {
+			stop();
+			observer.disconnect();
+			document.removeEventListener('visibilitychange', updateVisibility);
+			motionQuery.removeEventListener('change', updateMotionPreference);
+		};
+	}}
 >
 	<canvas aria-hidden="true"></canvas>
 	<span class="orb-accent-swatch" aria-hidden="true"></span>

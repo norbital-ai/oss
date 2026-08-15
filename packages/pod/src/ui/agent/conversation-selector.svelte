@@ -2,10 +2,7 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
-	import {
-		conversationComboboxOptions,
-		type ConversationSelectorModel
-	} from './conversation-selector.js';
+	import type { ConversationSelectorModel } from './conversation-selector.js';
 
 	let {
 		model,
@@ -25,7 +22,28 @@
 		onValueChange: (id: string) => void;
 	} = $props();
 
-	const options = $derived(conversationComboboxOptions(model));
+	const options = $derived.by(() => {
+		const rows = model.channels.flatMap((channel) => model.rowsByChannel[channel.id] ?? []);
+		const groupLabel = new Map<string, string>();
+		for (const row of rows) {
+			if (row.kind !== 'heading') continue;
+			if (row.id.endsWith(':users')) groupLabel.set('user', row.label);
+			else if (row.id.endsWith(':groups')) groupLabel.set('group', row.label);
+		}
+		return rows.flatMap((row) => {
+			if (row.kind !== 'conversation') return [];
+			const type = groupLabel.get(row.audience);
+			return [
+				{
+					value: row.id,
+					label: row.title,
+					icon: row.icon,
+					search_term: row.searchText,
+					...(type ? { type } : {})
+				}
+			];
+		});
+	});
 </script>
 
 <Combobox
@@ -43,6 +61,7 @@
 	maxHeight={280}
 	sameWidth={true}
 	preserveOptionOrder={true}
+	align="start"
 	class="w-full min-w-0"
 	triggerClass={cn(
 		'border-0 bg-transparent shadow-none hover:bg-muted',

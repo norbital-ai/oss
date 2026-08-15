@@ -7,8 +7,11 @@ function formatIssues(issues: readonly { readonly message: string }[]): string {
 function validatePresentValue(name: string, config: EnvVarConfig, raw: string): void {
 	const schema = config.schema;
 	if (!schema) return;
-	if ('~standard' in schema && schema['~standard']?.validate) {
+	if ('~standard' in schema) {
 		const result = schema['~standard'].validate(raw);
+		if ('then' in result) {
+			throw new Error(`Environment variable ${name} uses an asynchronous schema`);
+		}
 		if (result.issues?.length) {
 			throw new Error(`Invalid environment variable ${name}: ${formatIssues(result.issues)}`);
 		}

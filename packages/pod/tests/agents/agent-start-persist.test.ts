@@ -57,9 +57,8 @@ state.ctx = createWorkspaceContext({
 	tenantDb
 });
 
-const { persistInteractiveAgentStart } = await import(
-	'../../src/server/agent/agent-start.server.js'
-);
+const { persistInteractiveAgentStart } =
+	await import('../../src/server/agent/agent-start.server.js');
 
 describe('persistInteractiveAgentStart', () => {
 	it('flushes a new conversation as one drizzle batch', async () => {
@@ -89,7 +88,10 @@ describe('persistInteractiveAgentStart', () => {
 		expect(texts).toContain('_norbital_automation_job');
 		expect(texts).toContain('sync_outbox');
 		expect(result.syncSequence).toBe('42');
+		expect(result.session.user_id).toBe(USER_ID);
+		expect(result.session.visibility).toBe('personal');
+		expect(result.session.automation_run_id).toBe(result.runId);
 		expect(result.session.turns).toHaveLength(1);
-		expect(result.session.messages[0]?.role).toBe('user');
+		expect((result.session.messages as { role: string }[])[0]?.role).toBe('user');
 	});
 });

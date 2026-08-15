@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { z } from 'zod';
 
 /**
  * What a session asserts: an address was verified, and for which workspace.
@@ -8,11 +9,13 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
  * a deactivation, or a removal takes effect immediately instead of waiting for the cookie to expire —
  * which is what makes a long-lived stateless session acceptable without a revocation list.
  */
-export type SessionClaims = {
-	readonly email: string;
-	readonly organizationId: string;
-	readonly organizationName: string;
-};
+export const SessionClaimsSchema = z.object({
+	email: z.string(),
+	organizationId: z.string(),
+	organizationName: z.string()
+});
+export type SessionClaims = z.infer<typeof SessionClaimsSchema>;
+const StoredSessionClaimsSchema = SessionClaimsSchema.extend({ exp: z.number() });
 
 export type CookieSessionOptions = {
 	/** Signing secret. At least 32 bytes; rotate by re-deploying with a new value. */
@@ -111,10 +114,11 @@ export function cookieSession(options: CookieSessionOptions): CookieSession {
 			if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return null;
 
 			try {
-				const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as
-					(SessionClaims & { exp?: number }) | null;
-				if (!claims?.email || !claims.organizationId) return null;
-				if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now()) return null;
+				const parsed = StoredSessionClaimsSchema.safeParse(
+					JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+				);
+				if (!parsed.success || parsed.data.exp * 1000 <= Date.now()) return null;
+				const claims = parsed.data;
 				return {
 					email: claims.email,
 					organizationId: claims.organizationId,

@@ -3,6 +3,14 @@ import { flushSync } from 'svelte';
 import { FakeReplica } from '../support/fake-replica.svelte.js';
 import { render, settle } from '../support/component.js';
 import { DEFAULT_VERIFIER_PROMPTS } from '$lib/shared/agent/intent.js';
+import type { AiMessage, AiModelCatalog } from '@norbital-ai/platform-utils/runtime/binding';
+import {
+	ChatSessionMessageSchema,
+	ChatSessionTurnSchema
+} from '@norbital-ai/platform-utils/system/workspace-schema';
+import type { ChatSessionMessage, ChatSessionTurn } from '$lib/shared/agent/context-window.js';
+import type { AgentChatStartResult } from '$lib/remote/agent_chat.remote.js';
+import type { chat_session } from '@norbital-ai/platform-utils/system/workspace-schema';
 
 let replica = new FakeReplica();
 
@@ -36,20 +44,7 @@ const { setWorkspaceRemoteTransport } =
 	await import('$lib/authoring/workspace/remote-transport.js');
 const AgentChatPanel = (await import('$lib/ui/agent/agent-chat-panel.svelte')).default;
 
-type ChatResult = { runId: string; chatId: string };
-type EmbeddedMessage = Record<string, unknown> & {
-	readonly norbital_id: string;
-	readonly turn_id: string | null;
-	readonly seq: number;
-	readonly role: string;
-	readonly parts: readonly Record<string, unknown>[];
-};
-type EmbeddedTurn = Record<string, unknown> & {
-	readonly norbital_id: string;
-	readonly parent_turn_id: string | null;
-	readonly subagent_id: string | null;
-	readonly status: string;
-};
+type ChatResult = Pick<AgentChatStartResult, 'runId' | 'chatId'>;
 
 function deferred(): {
 	promise: Promise<ChatResult>;
@@ -67,12 +62,8 @@ function deferred(): {
 
 let inFlight = deferred();
 let sent: (typeof startState.sent)[number][] = [];
-type ModelCatalog = {
-	defaultModel: string;
-	options: { id: string; label: string; canonicalSlug: string; contextLength?: number }[];
-};
-let catalog: ModelCatalog | null = null;
-let modelsPromise: Promise<ModelCatalog | null> = Promise.resolve(null);
+let catalog: AiModelCatalog | null = null;
+let modelsPromise: Promise<AiModelCatalog | null> = Promise.resolve(null);
 
 beforeEach(() => {
 	replica = new FakeReplica();
@@ -113,24 +104,14 @@ function transcript(container: HTMLElement): { role: string; content: string }[]
 	}));
 }
 
-function message(input: {
-	id: string;
-	seq: number;
-	role: string;
-	content?: string;
-	turnId?: string;
-	status?: string;
-	toolCalls?: readonly Record<string, unknown>[];
-	toolCallId?: string;
-	kind?: string;
-}): EmbeddedMessage {
-	return {
-		norbital_id: input.id,
-		turn_id: input.turnId ?? 'root',
-		seq: input.seq,
-		role: input.role,
-		status: input.status ?? 'complete',
-		kind: input.kind ?? 'normal',
+function message(
+	input: Pick<ChatSessionMessage, 'norbital_id' | 'seq' | 'role'> &
+		Partial<Pick<ChatSessionMessage, 'turn_id' | 'status' | 'kind'>> &
+		Partial<Pick<AiMessage, 'content' | 'toolCalls' | 'toolCallId'>>
+): ChatSessionMessage {
+	return ChatSessionMessageSchema.parse({
+		...input,
+		turn_id: input.turn_id ?? 'root',
 		parts: [
 			{
 				role: input.role,
@@ -139,41 +120,35 @@ function message(input: {
 				...(input.toolCallId ? { toolCallId: input.toolCallId } : {})
 			}
 		]
-	};
+	});
 }
 
-function turn(input: {
-	id?: string;
-	status: string;
-	parentId?: string;
-	subagentId?: string;
-	error?: string;
-}): EmbeddedTurn {
-	return {
-		norbital_id: input.id ?? 'root',
-		parent_turn_id: input.parentId ?? null,
-		subagent_id: input.subagentId ?? null,
-		status: input.status,
-		error: input.error ?? null,
+function turn(
+	input: Pick<ChatSessionTurn, 'status'> &
+		Partial<Pick<ChatSessionTurn, 'norbital_id' | 'parent_turn_id' | 'subagent_id' | 'error'>>
+): ChatSessionTurn {
+	return ChatSessionTurnSchema.parse({
+		...input,
+		norbital_id: input.norbital_id ?? 'root',
 		started_at: '2026-08-12T00:00:00.000Z'
-	};
+	});
 }
 
-function arriveSession(input: {
-	id?: string;
-	title?: string;
-	runId?: string;
-	messages?: readonly EmbeddedMessage[];
-	turns?: readonly EmbeddedTurn[];
-	updatedAt?: string;
-}): void {
+function arriveSession(
+	input: Partial<
+		Pick<
+			typeof chat_session.$inferSelect,
+			'norbital_id' | 'title' | 'automation_run_id' | 'messages' | 'turns'
+		>
+	>
+): void {
 	replica.arrive('chat_session', {
-		norbital_id: input.id ?? 'c1',
-		automation_run_id: input.runId ?? 'r1',
+		norbital_id: input.norbital_id ?? 'c1',
+		automation_run_id: input.automation_run_id ?? 'r1',
 		title: input.title ?? 'Workspace agent',
 		messages: input.messages ?? [],
 		turns: input.turns ?? [],
-		norbital_updated_at: input.updatedAt ?? '2026-08-12T00:00:00.000Z'
+		norbital_updated_at: '2026-08-12T00:00:00.000Z'
 	});
 }
 
@@ -189,8 +164,8 @@ describe('agent chat panel', () => {
 		await settle();
 		arriveSession({
 			messages: [
-				message({ id: 'm1', seq: 1, role: 'user', content: 'What is on site?' }),
-				message({ id: 'm2', seq: 2, role: 'assistant', content: 'Two crews.' })
+				message({ norbital_id: 'm1', seq: 1, role: 'user', content: 'What is on site?' }),
+				message({ norbital_id: 'm2', seq: 2, role: 'assistant', content: 'Two crews.' })
 			]
 		});
 		await settle();
@@ -206,14 +181,14 @@ describe('agent chat panel', () => {
 		arriveSession({
 			messages: [
 				message({
-					id: 'reason-1',
+					norbital_id: 'reason-1',
 					seq: 1,
 					role: 'assistant',
 					kind: 'reasoning',
 					content: '**Check** the available skills.'
 				}),
 				message({
-					id: 'answer-1',
+					norbital_id: 'answer-1',
 					seq: 2,
 					role: 'assistant',
 					content: 'Two skills are available.'
@@ -239,12 +214,17 @@ describe('agent chat panel', () => {
 		inFlight.resolve({ runId: 'r1', chatId: 'c1' });
 		await settle();
 
-		const prompt = message({ id: 'm1', seq: 1, role: 'user', content: 'Inspect the workspace' });
+		const prompt = message({
+			norbital_id: 'm1',
+			seq: 1,
+			role: 'user',
+			content: 'Inspect the workspace'
+		});
 		arriveSession({
 			messages: [
 				prompt,
 				message({
-					id: 'm2',
+					norbital_id: 'm2',
 					seq: 2,
 					role: 'assistant',
 					content: 'I found the first part.',
@@ -257,25 +237,24 @@ describe('agent chat panel', () => {
 		expect(transcript(container).at(-1)?.content).toBe('I found the first part.');
 
 		const call = message({
-			id: 'm3',
+			norbital_id: 'm3',
 			seq: 3,
 			role: 'assistant',
 			toolCalls: [{ id: 'call-1', name: 'read_collection', input: { collection: 'sites' } }]
 		});
 		arriveSession({
 			title: 'Workspace Site Inspection',
-			updatedAt: '2026-08-12T00:00:01.000Z',
 			messages: [
 				prompt,
 				message({
-					id: 'm2',
+					norbital_id: 'm2',
 					seq: 2,
 					role: 'assistant',
 					content: 'I found the first part. And the second part.'
 				}),
 				call,
 				message({
-					id: 'm4',
+					norbital_id: 'm4',
 					seq: 4,
 					role: 'tool',
 					content: '{"rows":[{"name":"Depot"}]}',
@@ -302,9 +281,9 @@ describe('agent chat panel', () => {
 		await settle();
 		arriveSession({
 			messages: [
-				message({ id: 'm1', seq: 1, role: 'user', content: 'Read a missing file' }),
+				message({ norbital_id: 'm1', seq: 1, role: 'user', content: 'Read a missing file' }),
 				message({
-					id: 'm2',
+					norbital_id: 'm2',
 					seq: 2,
 					role: 'system',
 					content: 'Agent run failed after provider error'
@@ -325,27 +304,27 @@ describe('agent chat panel', () => {
 		arriveSession({
 			messages: [
 				message({
-					id: 'p1',
+					norbital_id: 'p1',
 					seq: 1,
 					role: 'assistant',
-					turnId: 'root',
+					turn_id: 'root',
 					toolCalls: [{ id: 'call-9', name: 'spawn_subagent', input: { task: 'Audit sites' } }]
 				}),
 				message({
-					id: 'c1m',
+					norbital_id: 'c1m',
 					seq: 2,
 					role: 'assistant',
-					turnId: 'child',
+					turn_id: 'child',
 					content: 'The delegated audit is complete.'
 				})
 			],
 			turns: [
 				turn({ status: 'succeeded' }),
 				turn({
-					id: 'child',
+					norbital_id: 'child',
 					status: 'succeeded',
-					parentId: 'root',
-					subagentId: 'subagent:call-9'
+					parent_turn_id: 'root',
+					subagent_id: 'subagent:call-9'
 				})
 			]
 		});
@@ -363,7 +342,14 @@ describe('agent chat panel', () => {
 		inFlight.reject(new Error('Agent unavailable'));
 		await settle();
 		arriveSession({
-			messages: [message({ id: 'm1', seq: 1, role: 'user', content: 'Draft the RFI response' })],
+			messages: [
+				message({
+					norbital_id: 'm1',
+					seq: 1,
+					role: 'user',
+					content: 'Draft the RFI response'
+				})
+			],
 			turns: [turn({ status: 'running' })]
 		});
 		await settle();
@@ -563,7 +549,7 @@ describe('agent chat panel', () => {
 				norbital_id: 'c1',
 				automation_run_id: 'r1',
 				title: 'Check the payroll run',
-				messages: [message({ id: 'm1', seq: 1, role: 'assistant', content: 'Ready.' })],
+				messages: [message({ norbital_id: 'm1', seq: 1, role: 'assistant', content: 'Ready.' })],
 				turns: [],
 				norbital_updated_at: '2026-08-12T10:00:00.000Z'
 			}

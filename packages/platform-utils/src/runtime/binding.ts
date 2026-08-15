@@ -100,79 +100,95 @@ export type HostFileStorageBinding = {
 	): Promise<readonly ({ readonly contentSha256: string; readonly facts: unknown } | null)[]>;
 };
 
-export type AiTextMessagePart = {
-	readonly type: 'text';
-	readonly text: string;
-};
+export const AiTextMessagePartSchema = z.object({
+	type: z.literal('text'),
+	text: z.string()
+});
+export type AiTextMessagePart = z.infer<typeof AiTextMessagePartSchema>;
 
 /** Image bytes stay binary across the isolate boundary; the trusted host encodes for its provider. */
-export type AiImageMessagePart = {
-	readonly type: 'image';
-	readonly bytes: Uint8Array;
-	readonly mimeType: string;
-	readonly detail?: 'auto' | 'low' | 'high';
-};
+export const AiImageMessagePartSchema = z.object({
+	type: z.literal('image'),
+	bytes: z.instanceof(Uint8Array),
+	mimeType: z.string(),
+	detail: z.enum(['auto', 'low', 'high']).optional()
+});
+export type AiImageMessagePart = z.infer<typeof AiImageMessagePartSchema>;
 
-export type AiMessagePart = AiTextMessagePart | AiImageMessagePart;
+export const AiMessagePartSchema = z.discriminatedUnion('type', [
+	AiTextMessagePartSchema,
+	AiImageMessagePartSchema
+]);
+export type AiMessagePart = z.infer<typeof AiMessagePartSchema>;
 
-export type AiMessage = {
-	readonly role: 'system' | 'user' | 'assistant' | 'tool';
-	readonly content: string | readonly AiMessagePart[];
-	readonly toolCallId?: string;
-	readonly toolCalls?: readonly AiToolCall[];
-};
+export const AiToolCallSchema = z.object({
+	id: z.string(),
+	name: z.string(),
+	input: z.unknown()
+});
+export type AiToolCall = z.infer<typeof AiToolCallSchema>;
 
-export type AiToolSpec = {
-	readonly name: string;
-	readonly description: string;
-	readonly inputSchema: unknown;
-};
+export const AiMessageSchema = z.object({
+	role: z.enum(['system', 'user', 'assistant', 'tool']),
+	content: z.union([z.string(), z.array(AiMessagePartSchema).readonly()]),
+	toolCallId: z.string().optional(),
+	toolCalls: z.array(AiToolCallSchema).readonly().optional()
+});
+export type AiMessage = z.infer<typeof AiMessageSchema>;
 
-export type AiToolCall = {
-	readonly id: string;
-	readonly name: string;
-	readonly input: unknown;
-};
+export const AiToolSpecSchema = z.object({
+	name: z.string(),
+	description: z.string(),
+	inputSchema: z.unknown()
+});
+export type AiToolSpec = z.infer<typeof AiToolSpecSchema>;
 
-export type AiChatInput = {
-	readonly messages: readonly AiMessage[];
-	readonly tools?: readonly AiToolSpec[];
-	readonly outputSchema?: unknown;
-	readonly model?: string;
-	readonly profile?: string;
-};
+export const AiChatInputSchema = z.object({
+	messages: z.array(AiMessageSchema).readonly(),
+	tools: z.array(AiToolSpecSchema).readonly().optional(),
+	outputSchema: z.unknown().optional(),
+	model: z.string().optional(),
+	profile: z.string().optional()
+});
+export type AiChatInput = z.infer<typeof AiChatInputSchema>;
 
-export type AiChatResult = {
-	readonly text: string;
+export const AiChatStopReasonSchema = z.enum(['end', 'tool_use', 'max_tokens', 'refusal']);
+
+export const AiChatResultSchema = z.object({
+	text: z.string(),
 	/** Provider-visible reasoning, when the adapter exposes it. Never folded into the answer text. */
-	readonly reasoning?: string;
-	readonly toolCalls?: readonly AiToolCall[];
-	readonly stopReason: 'end' | 'tool_use' | 'max_tokens' | 'refusal';
-	readonly usage?: unknown;
-};
+	reasoning: z.string().optional(),
+	toolCalls: z.array(AiToolCallSchema).readonly().optional(),
+	stopReason: AiChatStopReasonSchema,
+	usage: z.unknown().optional()
+});
+export type AiChatResult = z.infer<typeof AiChatResultSchema>;
 
 /** One provider-stream event normalized at the host boundary. */
-export type AiChatStreamEvent =
-	| { readonly type: 'text_part'; readonly text: string }
-	| { readonly type: 'reasoning_part'; readonly text: string }
-	| { readonly type: 'tool_call'; readonly call: AiToolCall }
-	| {
-			readonly type: 'finish';
-			readonly stopReason: AiChatResult['stopReason'];
-			readonly usage?: unknown;
-	  };
+export const AiChatStreamEventSchema = z.discriminatedUnion('type', [
+	z.object({ type: z.literal('text_part'), text: z.string() }),
+	z.object({ type: z.literal('reasoning_part'), text: z.string() }),
+	z.object({ type: z.literal('tool_call'), call: AiToolCallSchema }),
+	z.object({
+		type: z.literal('finish'),
+		stopReason: AiChatStopReasonSchema,
+		usage: z.unknown().optional()
+	})
+]);
+export type AiChatStreamEvent = z.infer<typeof AiChatStreamEventSchema>;
 
-export type AiChatStreamBatch = {
-	readonly events: readonly AiChatStreamEvent[];
-	readonly done: boolean;
-};
+export const AiChatStreamBatchSchema = z.object({
+	events: z.array(AiChatStreamEventSchema).readonly(),
+	done: z.boolean()
+});
+export type AiChatStreamBatch = z.infer<typeof AiChatStreamBatchSchema>;
 
 /** One model a host will accept in `AiChatInput.model`. */
-export type AiModelOption = {
-	readonly id: string;
-	readonly label: string;
+export const AiModelOptionSchema = z.object({
+	id: z.string(),
+	label: z.string(),
 	/** Groups the variants of one model (`:free`, `:thinking`) under a single family. */
-	readonly canonicalSlug: string;
+	canonicalSlug: z.string(),
 	/**
 	 * The model's context window, in tokens.
 	 *
@@ -180,8 +196,9 @@ export type AiModelOption = {
 	 * model, and a reader cannot turn a token count into "how full is the window" without it. Optional
 	 * because a host may not know it — a guest that guessed would be inventing the denominator.
 	 */
-	readonly contextLength?: number;
-};
+	contextLength: z.number().optional()
+});
+export type AiModelOption = z.infer<typeof AiModelOptionSchema>;
 
 /**
  * What this host will run, and which model it picks when a run names none.
@@ -190,10 +207,11 @@ export type AiModelOption = {
  * the credentials and the default; a guest that duplicated either would be a second source of truth
  * free to disagree with the one doing the inference.
  */
-export type AiModelCatalog = {
-	readonly defaultModel: string;
-	readonly options: readonly AiModelOption[];
-};
+export const AiModelCatalogSchema = z.object({
+	defaultModel: z.string(),
+	options: z.array(AiModelOptionSchema).readonly()
+});
+export type AiModelCatalog = z.infer<typeof AiModelCatalogSchema>;
 
 /** Model inference is the host's only AI responsibility; Pod owns the agent loop and tools. */
 export type HostAiBinding = {
