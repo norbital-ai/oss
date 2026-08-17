@@ -43,6 +43,10 @@
 			"types": "./build/cel/index.d.ts",
 			"default": "./build/cel/index.js"
 		},
+		"./collection": {
+			"types": "./build/collection/index.d.ts",
+			"default": "./build/collection/index.js"
+		},
 		"./date": {
 			"types": "./build/date/index.d.ts",
 			"default": "./build/date/index.js"
