@@ -116,6 +116,60 @@ export const appAccessAllowed = (
 	});
 };
 
+/**
+ * The containers an entry sits inside, nearest first.
+ *
+ * Two sources, because hosts build the tree two ways: an entry may declare `parent` outright, and a
+ * nested app's name is already a path (`hr_controller/leave`) whose own prefix names the group even
+ * when nothing declared the link. The walk is bounded and refuses to revisit a name, so a workspace
+ * that manages to declare a cycle produces a short chain instead of hanging the sidebar.
+ */
+const containersOf = (app: ShellApp, byName: ReadonlyMap<string, ShellApp>): ReadonlyArray<string> => {
+	const chain: string[] = [];
+	let cursor: ShellApp | undefined = app;
+	while (cursor !== undefined && chain.length < 16) {
+		const declared = cursor.parent;
+		const index = cursor.name.lastIndexOf('/');
+		const parent = declared ?? (index < 0 ? undefined : cursor.name.slice(0, index));
+		if (parent === undefined || parent === app.name || chain.includes(parent)) break;
+		chain.push(parent);
+		cursor = byName.get(parent);
+	}
+	return chain;
+};
+
+/**
+ * The entries a subject may see, containers included.
+ *
+ * The access list names *declared* apps, and a group is not one of them: it is a `+group.ts` sitting
+ * beside the app files, so `AccessControl.visibleApps` answers a policy written as
+ * `apps: ['hr_controller']` with the eight leaves underneath and never with the group itself.
+ * Filtering the host's navigation entries one by one against that list therefore deleted the very
+ * heading the grant was written on, and the sidebar came back flat — eight orphaned children
+ * promoted to top level, which is precisely the tree this module exists to avoid.
+ *
+ * So a container survives on its children's behalf: kept while anything beneath it is allowed,
+ * dropped only when nothing is. That is what hides "HR Controller" from an employee while leaving it
+ * intact, with its children nested under it, for someone in HR.
+ */
+export const filterAccessibleApps = <App extends ShellApp>(
+	apps: ReadonlyArray<App>,
+	accessibleAppNames: ReadonlyArray<string> | null | undefined
+): ReadonlyArray<App> => {
+	// `null`/absent stays "the host has not restricted anything" — the only honest reading when the
+	// host never had a list to give. Every caller that predates access filtering keeps its behaviour.
+	const accessible = accessibleAppNames ?? null;
+	if (accessible === null) return apps;
+	const byName = new Map(apps.map((app) => [app.name, app] as const));
+	const visible = new Set<string>();
+	for (const app of apps) {
+		if (!appAccessAllowed(app.name, accessible)) continue;
+		visible.add(app.name);
+		for (const container of containersOf(app, byName)) visible.add(container);
+	}
+	return apps.filter((app) => visible.has(app.name));
+};
+
 export type ShellApp = AppDeclaration & {
 	readonly icon?: string;
 	/** `null` when the app declares none — distinct from "not yet normalised". */
@@ -163,12 +217,16 @@ const toApplicationItem = (
 
 export const buildApplicationNavigation = (input: {
 	apps: ReadonlyArray<ShellApp>;
+	/**
+	 * What `AccessControl.visibleApps` answered for this session, or `null`/absent when the host has
+	 * no such list. Absent is unrestricted, not empty: a host that never asked must keep the sidebar
+	 * it had, and a host that asked and got nothing back is saying something quite different.
+	 */
 	accessibleAppNames?: ReadonlyArray<string> | null;
 	currentPath: string;
 	i18n?: NavigationLabelResolver;
 }): WorkspaceNavigationItem[] => {
-	const accessible = input.accessibleAppNames ?? null;
-	const declared = input.apps.filter((app) => appAccessAllowed(app.name, accessible));
+	const declared = filterAccessibleApps(input.apps, input.accessibleAppNames);
 	const names = new Set(declared.map((app) => app.name));
 	const childrenOf = new Map<string, ShellApp[]>();
 	for (const app of declared) {

@@ -356,7 +356,7 @@ const testLayer = () => {
 };
 
 describe('approval lock and resume', () => {
-	it.effect('holds a pending mutation without writing the collection row', () =>
+	it.effect('writes the row a pending mutation requested, and holds it', () =>
 		Effect.gen(function* () {
 			const service = yield* Collections.Service;
 			const pending = yield* Effect.flip(
@@ -374,9 +374,12 @@ describe('approval lock and resume', () => {
 			expect(pending.requestId).toMatch(
 				/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/
 			);
-			expect(
-				yield* service.findMany(EffectId.make('read-order'), subject, { collection: 'orders' })
-			).toEqual([]);
+			// The record exists and is held, rather than being absent until somebody decides. That is
+			// what makes it reviewable: the row carries the request that holds it.
+			const orders = yield* service.findMany(EffectId.make('read-order'), subject, {
+				collection: 'orders'
+			});
+			expect(orders).toHaveLength(1);
 			const stored = yield* (yield* Approvals.Service).status(
 				EffectId.make('status-order'),
 				pending.requestId
@@ -470,11 +473,12 @@ describe('approval lock and resume', () => {
 				'approve'
 			);
 			expect(first).toMatchObject({ _tag: 'Pending', step: 1 });
-			expect(
-				yield* collectionsService.findMany(EffectId.make('read-two-step'), subject, {
-					collection: 'employees'
-				})
-			).toEqual([]);
+			// Still held after the first of two approvals — the row is there, and stays held until the
+			// last step decides.
+			const employees = yield* collectionsService.findMany(EffectId.make('read-two-step'), subject, {
+				collection: 'employees'
+			});
+			expect(employees).toHaveLength(1);
 			const last = yield* approvalsService.decide(
 				EffectId.make('decide-two-step-2'),
 				subject,

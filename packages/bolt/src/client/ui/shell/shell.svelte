@@ -37,6 +37,7 @@
 		buildSystemNavigation,
 		resolveAppHeaderDescription,
 		resolveAppHeaderTitle,
+		filterAccessibleApps,
 		resolveHostPluginSurface,
 		resolveWorkspaceOrganizationOptions,
 		WORKSPACE_SETTINGS_PATH,
@@ -51,6 +52,7 @@
 		organizations = [],
 		user,
 		apps = [],
+		accessibleApps = null,
 		current = '',
 		path,
 		search = '',
@@ -97,6 +99,19 @@
 					parent?: string;
 			  }
 		>;
+		/**
+		 * The app names this session may see, as `AccessControl.visibleApps` computed them.
+		 *
+		 * `apps` above is the *compiled* registry — everything the workspace ships, which is what the
+		 * host can enumerate locally and is deliberately not a statement about who may open any of it.
+		 * This is the second half, and only the host can fetch it: the policies live in the tenant
+		 * runtime, so the answer arrives over the wire rather than out of the bundle.
+		 *
+		 * `null` means the host never restricted the workspace, which is how every host that predates
+		 * this behaved and still behaves. An empty array is a different claim — "this session may see
+		 * nothing" — and is honoured as one.
+		 */
+		accessibleApps?: ReadonlyArray<string> | null;
 		current?: string;
 		path?: string;
 		/**
@@ -144,7 +159,7 @@
 				roles: user?.role === undefined ? [] : [user.role]
 			},
 			organization: organization?.name ?? 'workspace',
-			apps: normalizedApps.map(({ name }) => name),
+			apps: visibleApps.map(({ name }) => name),
 			channels: declaredChannels
 		})
 	);
@@ -163,6 +178,17 @@
 				: { ...entry, description: entry.description ?? null }
 		)
 	);
+
+	/**
+	 * The same registry with everything this session may not see removed.
+	 *
+	 * The sidebar is not the only surface that lists apps. `OmniFinder` reads `navigationModel`, so it
+	 * inherits the filter for free — but the agent's mention catalog and the `platform.apps` an
+	 * authored page reads were both built straight off the full registry, so an app hidden from the
+	 * sidebar was still offered by `@` in the composer and still named to any page that asked. One
+	 * filter, applied where the list is first narrowed, keeps those three answers agreeing.
+	 */
+	const visibleApps = $derived(filterAccessibleApps(normalizedApps, accessibleApps));
 
 	const currentPath = $derived(path ?? (current ? `/app/${current}` : '/'));
 
@@ -218,6 +244,10 @@
 		}),
 		applications: buildApplicationNavigation({
 			apps: normalizedApps,
+			// The unfiltered registry plus the grant list, rather than `visibleApps` already narrowed:
+			// the builder owns this rule for every caller, and handing it both keeps the one place that
+			// decides what a group's survival means from depending on who called it.
+			accessibleAppNames: accessibleApps,
 			currentPath,
 			i18n: { has, t }
 		}),
@@ -357,7 +387,7 @@
 	const syncMentionCatalog = (): void => {
 		setBoltMentionCatalog({
 			collections: finderCollections,
-			apps: normalizedApps.map((app) => ({
+			apps: visibleApps.map((app) => ({
 				key: app.name,
 				label: app.label,
 				href: `/app/${app.name}`,

@@ -64,7 +64,7 @@ const rowCount = async (runtime: BoltTestRuntime, name: string): Promise<number>
 };
 
 describe('approval gate over SQL', () => {
-	it('holds a write on an approval-locked collection and writes no row', async () => {
+	it('writes the row a gated create requested, and holds it under the approval', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace);
 		const { runtime, effectId } = harness;
 
@@ -83,8 +83,15 @@ describe('approval gate over SQL', () => {
 
 		expect(failure).toBeInstanceOf(PendingApproval);
 		expect(failure).toMatchObject({ collection: 'people', id: rid('person-1'), action: 'create' });
-		// The point of the gate: the row is not merely hidden, it was never written.
-		expect(await rowCount(harness, 'people')).toBe(0);
+		// The point of the gate is not that the record is absent — it is that it is not settled. The row
+		// is written so a reviewer has something to open and the table has something to badge, and it
+		// carries the request that holds it, which is what every later mutation checks.
+		expect(await rowCount(harness, 'people')).toBe(1);
+		const held = await harness.database.query(
+			'select norbital_approval_id from people where norbital_id = $1',
+			[rid('person-1')]
+		);
+		expect(held[0]?.['norbital_approval_id']).toEqual(expect.any(String));
 	});
 
 	it('records the held request so a reviewer can find and read it', async () => {
@@ -159,10 +166,11 @@ describe('approval gate over SQL', () => {
 		);
 
 		expect(failure).toBeInstanceOf(PendingApproval);
-		expect(await rowCount(harness, 'people')).toBe(0);
+		// Each row is written and held on its own request; a batch is not one decision.
+		expect(await rowCount(harness, 'people')).toBe(1);
 	});
 
-	it('does not leak a held write into the sync outbox', async () => {
+	it('replicates a held write, because a reviewer reads through the replica', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace);
 		const { runtime, effectId } = harness;
 
@@ -178,10 +186,13 @@ describe('approval gate over SQL', () => {
 			)
 		);
 
-		// A replica must not learn about a record no one has approved.
+		// A held record has to reach the replica. The decision surface reads a row's
+		// `norbital_approval_id` to know it is pending and to offer approve/reject on it, and it reads
+		// through the replica like everything else — so a record withheld until approval is a record
+		// nobody can approve. Who may see it is still the access predicate's question, not this one's.
 		const outbox = await harness.database.query(
 			"select record_id from bolt_sync_outbox where collection_name = 'people'"
 		);
-		expect(outbox).toHaveLength(0);
+		expect(outbox).toHaveLength(1);
 	});
 });

@@ -703,6 +703,24 @@ export const layer = Layer.effect(
 				parameters: [id, requestId]
 			});
 		});
+		/**
+		 * Releases a record held by an approval, without touching anything else on it.
+		 *
+		 * `applyUpdate` can clear the lock as part of a write, which is how an approved *update* settles
+		 * — it has values to apply anyway. An approved *create* has none: the row was written when the
+		 * create was intercepted, so the only thing left to change is that it is no longer held.
+		 */
+		const releaseLock = Effect.fn('Collections.releaseLock')(function* (
+			effectId: EffectId,
+			collection: string,
+			id: string
+		) {
+			yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `update ${quoteIdentifier(collection)} set norbital_approval_id = null where norbital_id = $1 returning norbital_id`,
+				parameters: [id]
+			});
+		});
 		const holdForApproval = Effect.fn('Collections.holdForApproval')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
@@ -734,9 +752,10 @@ export const layer = Layer.effect(
 			if (state._tag !== 'Pending') {
 				return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'record is locked by a pending approval' });
 			}
-			if (action !== 'create') {
-				yield* setLock(effectId, input.collection, input.id, state.requestId);
-			}
+			// Every action locks, `create` included. The row a gated create produces exists before this
+			// runs — see `create` below — so there is something to stamp, and stamping it is what makes
+			// the record visible-but-held rather than absent.
+			yield* setLock(effectId, input.collection, input.id, state.requestId);
 			return yield* new PendingApproval({ requestId: state.requestId, collection: input.collection, id: input.id, action });
 		});
 		const requiresApproval = (
@@ -747,12 +766,30 @@ export const layer = Layer.effect(
 			const definition = yield* workspace.collection(input.collection);
 			yield* access.authorize(subject, 'create', input.collection);
 			const visibility = access.predicate(subject, 'create', input.collection);
-			if (requiresApproval(definition, visibility)) {
-				return yield* holdForApproval(effectId, subject, input, 'create');
-			}
 			const module = authored.hooks[input.collection];
+			/**
+			 * A gated create writes the row and then locks it, rather than holding the operation and
+			 * writing nothing.
+			 *
+			 * Holding was the earlier design and it had two costs that only show up on a real workspace.
+			 * The row did not exist, so there was nothing for a reviewer to open, nothing for the table
+			 * to show a pending badge on, and nothing for `approvals.process` to be invoked from — the
+			 * decision UI keys off `norbital_approval_id` on a visible row. And because the operation was
+			 * stored before any hook ran, the stored values were only what the form posted: `payroll_runs`
+			 * derives six `not null` columns in `create.before`, so replaying that operation later
+			 * inserted a row that could not satisfy its own schema, and `create.after` — which is what
+			 * starts the payroll engine — never ran at all.
+			 *
+			 * So the hooks run first and the row is written exactly as an ungated create would write it.
+			 * What approval changes is not whether the record exists but whether it is settled: the lock
+			 * `holdForApproval` stamps is what every later mutation checks, so the record can still be
+			 * moved, but only through the approval it is held by.
+			 */
 			const values = yield* runCreateHooks(effectId, subject, input, module);
 			yield* applyCreate(effectId, subject, { ...input, values }, definition);
+			if (requiresApproval(definition, visibility)) {
+				return yield* holdForApproval(effectId, subject, { ...input, values }, 'create');
+			}
 			if (module?.create?.after !== undefined) {
 				const api = buildApi(effectId, subject, true);
 				const record = yield* readRowElevated(effectId, input.collection, input.id);
@@ -880,9 +917,22 @@ export const layer = Layer.effect(
 			);
 			const definition = yield* workspace.collection(operation.collection);
 			switch (operation.action) {
-				case 'create':
-					yield* applyCreate(effectId, operation.subject, operation, definition);
+				case 'create': {
+					// The row was written when the create was intercepted, so approving it releases the
+					// lock rather than inserting anything — re-applying would collide with the row that is
+					// already there. `create.after` runs here and not at write time because that is what
+					// "approved" means for a created record: the engine, the notification, the side effect
+					// the workspace attached to a real one, all of which must not fire for a record still
+					// waiting on a decision.
+					yield* releaseLock(effectId, operation.collection, operation.id);
+					const createdModule = authored.hooks[operation.collection];
+					if (createdModule?.create?.after !== undefined) {
+						const api = buildApi(effectId, operation.subject, true);
+						const record = yield* readRowElevated(effectId, operation.collection, operation.id);
+						yield* runHook<unknown>(createdModule.create.after, { record, api }, api);
+					}
 					return;
+				}
 				case 'update':
 					yield* applyUpdate(effectId, operation.subject, operation, definition, true);
 					return;
@@ -910,8 +960,24 @@ export const layer = Layer.effect(
 				const pipeline = authored.pipelines[inputs[0]?.collection ?? ''];
 				if (pipeline?.import !== undefined) {
 					const api = buildApi(effectId, subject);
+					/**
+					 * The handler is given the document that was posted, not an array of them.
+					 *
+					 * An import is one workbook, and an authored `import` schema says so: every one of them
+					 * is a `Schema.Struct` carrying the header fields the sheet is read under — the roster
+					 * to attach to, the month, the legal entity, the timezone — with the rows nested
+					 * inside. Those header fields have no row to ride on, which is why the document is the
+					 * unit and not the row.
+					 *
+					 * This wrapped the values in an array, so every pipeline decoded an array against a
+					 * struct and threw before reading anything. Nothing caught it: `CollectionPipelines`
+					 * types the handler context as `{ input: unknown }`, so the mismatch was invisible to
+					 * the compiler, and the code below already assumed one input and many rows — it
+					 * resolves each output row's collection as `inputs[index] ?? inputs[0]`.
+					 */
+					const document = inputs[0]?.values;
 					const rows = yield* runAuthoredHandler(
-						pipeline.import.handler({ input: inputs.map((entry) => entry.values), api }, api)
+						pipeline.import.handler({ input: document, api }, api)
 					);
 					if (!Array.isArray(rows)) {
 						return yield* new AccessControl.AccessDenied({ action: 'import', resource: inputs[0]?.collection ?? '', reason: 'import pipeline returned no rows' });

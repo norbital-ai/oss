@@ -335,9 +335,18 @@ describe('invocation provenance', () => {
 			{ _tag: 'Approved', requestId, decidedBy: adminSubject.userId, operation: pending.operation }
 		]);
 
-		// Rows first, for the same reason: the failure to see when the gate is gone is the row landing.
+		// The lock first, for the same reason the row used to come first: the failure to see when the
+		// gate is gone is the record settling. It is the lock and not the row's existence that says so
+		// now — a gated create writes its row up front and holds it, so "no row" no longer distinguishes
+		// a refused resume from an accepted one, and asserting it would have passed either way.
+		const heldAfterPlugin = await harness.database.query(
+			'select norbital_approval_id from people'
+		);
 		const posted = await outcomeOf(harness, plugin('collections.resume', { requestId }));
-		expect(await harness.database.query('select name from people')).toEqual([]);
+		expect(heldAfterPlugin[0]?.['norbital_approval_id']).toEqual(expect.any(String));
+		expect(await harness.database.query('select norbital_approval_id from people')).toEqual(
+			heldAfterPlugin
+		);
 		expect(posted._tag === 'Failure' ? posted.failure : undefined).toBeInstanceOf(
 			AccessControl.AccessDenied
 		);
@@ -347,5 +356,9 @@ describe('invocation provenance', () => {
 		);
 		expect(resumed.value).toMatchObject({ resumed: true, requestId });
 		expect(await harness.database.query('select name from people')).toEqual([{ name: 'Ada' }]);
+		// Released only by the task: the record is settled, and nothing holds it.
+		expect(await harness.database.query('select norbital_approval_id from people')).toEqual([
+			{ norbital_approval_id: null }
+		]);
 	});
 });

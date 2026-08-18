@@ -51,6 +51,7 @@
 	let {
 		title = 'Bolt',
 		apps = [],
+		accessibleApps = null,
 		current = '',
 		path,
 		search = '',
@@ -81,6 +82,18 @@
 					parent?: string;
 			  }
 		>;
+		/**
+		 * Which of `apps` this session may see, from the host's `apps.visible` read.
+		 *
+		 * Forwarded verbatim to the shell and nowhere else: this component still resolves the active
+		 * app's title, icon and banner out of the *full* registry, because the header describes the
+		 * page that is open and a page reached by URL is not made unreachable by being unlisted. What
+		 * this gates is what the workspace *offers* — the sidebar, the overview, the finder, the
+		 * mention catalog — while the runtime stays the authority on what the page may read.
+		 *
+		 * `null` (the default) is "unrestricted", so a host that passes nothing keeps today's shell.
+		 */
+		accessibleApps?: ReadonlyArray<string> | null;
 		current?: string;
 		path?: string;
 		/** Live query string, forwarded to the detail surface that reads `?stack=`. */
@@ -147,6 +160,7 @@
 	headerBanner={activeAppBanner}
 	{headerActions}
 	{apps}
+	{accessibleApps}
 	{current}
 	{path}
 	{search}
