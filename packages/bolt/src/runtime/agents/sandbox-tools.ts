@@ -22,12 +22,14 @@ export const isSandboxTool = (name: string): name is SandboxToolName =>
 export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'spawn_subagent',
-		description: 'Spawn an in-session subagent for a task. Subagents cannot spawn further subagents.',
+		description:
+			'Spawn an in-session subagent for a task. Subagents cannot spawn further subagents.',
 		command: 'platform:spawn_subagent'
 	},
 	{
 		name: 'list_sandbox_agents',
-		description: 'List other agent sessions in this sandbox. A sandbox is the same person on web, or the same channel profile.',
+		description:
+			'List other agent sessions in this sandbox. A sandbox is the same person on web, or the same channel profile.',
 		command: 'platform:list_sandbox_agents'
 	},
 	{
@@ -111,14 +113,11 @@ const sameSandbox = Effect.fn('Agents.sameSandbox')(function* (
 
 /** This session's own title, which is how the reader on the other end tells two of its sessions apart. */
 const ownTitle = Effect.fn('Agents.ownTitle')(function* (context: SandboxContext) {
-	const result = yield* context.database.execute(
-		EffectId.make(`${context.effectId}:sender`),
-		{
-			_tag: 'Query',
-			sql: 'select title from bolt_conversations where id = $1',
-			parameters: [context.conversationId]
-		}
-	);
+	const result = yield* context.database.execute(EffectId.make(`${context.effectId}:sender`), {
+		_tag: 'Query',
+		sql: 'select title from bolt_conversations where id = $1',
+		parameters: [context.conversationId]
+	});
 	const decoded = Schema.decodeUnknownOption(
 		Schema.Struct({ title: Schema.optionalKey(NullableString) })
 	)(result.rows[0]);
@@ -138,10 +137,20 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			}
 			const parsed = yield* decode(TaskInput, input);
 			const conversationId = `subagent:${context.effectId}`;
+			// `parent_id` is what makes the delegated session findable from the one that spawned it:
+			// the reader's transcript walks down it to nest this agent's work under the call, and the
+			// usage roll-up walks up it so what this agent spends lands on the conversation the person
+			// is actually looking at, however many levels of delegation lie between.
 			yield* context.database.execute(EffectId.make(`${context.effectId}:spawn`), {
 				_tag: 'Query',
-				sql: 'insert into bolt_conversations (id, agent_name, user_id, title) values ($1, $2, $3, $4) on conflict do nothing',
-				parameters: [conversationId, context.agentName, context.subject.userId, parsed.task]
+				sql: 'insert into bolt_conversations (id, agent_name, user_id, title, parent_id) values ($1, $2, $3, $4, $5) on conflict do nothing',
+				parameters: [
+					conversationId,
+					context.agentName,
+					context.subject.userId,
+					parsed.task,
+					context.conversationId
+				]
 			});
 			yield* context.tasks.execute(EffectId.make(`${context.effectId}:enqueue`), {
 				_tag: 'Enqueue',

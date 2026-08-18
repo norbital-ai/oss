@@ -95,8 +95,7 @@
 		const indicatorHeight = elRect.height / 2;
 		const center = elRect.top - containerRect.top + elRect.height / 2;
 		const top = center - indicatorHeight / 2;
-		const left =
-			position === 'left' ? Math.max(0, elRect.left - containerRect.left + offset) : 0;
+		const left = position === 'left' ? Math.max(0, elRect.left - containerRect.left + offset) : 0;
 
 		return { top, height: indicatorHeight, left };
 	}

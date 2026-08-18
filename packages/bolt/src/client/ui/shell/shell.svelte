@@ -22,7 +22,10 @@
 	import { getAgentRuntime } from '../agent/client.js';
 	import { setBoltMentionCatalog } from '../agent/mention-catalog.js';
 	import { mergeBoltAgentMessages, type TenantMessageCatalogs } from '../agent/i18n.js';
-	import { setAppHeaderActionsSlot, type AppHeaderActionsSlot } from './app-header-actions.svelte.js';
+	import {
+		setAppHeaderActionsSlot,
+		type AppHeaderActionsSlot
+	} from './app-header-actions.svelte.js';
 	import {
 		setPlatformStateContext,
 		type PlatformChannel,
@@ -169,20 +172,18 @@
 	 * Employee Self-Service app — threw `missing_context` and rendered an empty body. The getter is
 	 * a function so a page reads the current value rather than a snapshot taken at mount.
 	 */
-	setPlatformStateContext(
-		(): PlatformState => ({
-			user: {
-				id: user?.name ?? 'unknown',
-				norbital_id: user?.name ?? 'unknown',
-				...(user?.email === undefined ? {} : { email: user.email }),
-				...(user?.name === undefined ? {} : { name: user.name }),
-				roles: user?.role === undefined ? [] : [user.role]
-			},
-			organization: organization?.name ?? 'workspace',
-			apps: visibleApps.map(({ name }) => name),
-			channels: declaredChannels
-		})
-	);
+	setPlatformStateContext((): PlatformState => ({
+		user: {
+			id: user?.name ?? 'unknown',
+			norbital_id: user?.name ?? 'unknown',
+			...(user?.email === undefined ? {} : { email: user.email }),
+			...(user?.name === undefined ? {} : { name: user.name }),
+			roles: user?.role === undefined ? [] : [user.role]
+		},
+		organization: organization?.name ?? 'workspace',
+		apps: visibleApps.map(({ name }) => name),
+		channels: declaredChannels
+	}));
 
 	// Loaded after mount, which is why the context above is a getter over this rather than a snapshot.
 	let declaredChannels = $state<ReadonlyArray<PlatformChannel>>([]);
@@ -234,7 +235,11 @@
 	);
 	const resolvedHeaderDescription = $derived(
 		currentPath.startsWith('/app/')
-			? resolveAppHeaderDescription({ has, t }, currentPath.slice('/app/'.length), headerDescription)
+			? resolveAppHeaderDescription(
+					{ has, t },
+					currentPath.slice('/app/'.length),
+					headerDescription
+				)
 			: (headerDescription ?? null)
 	);
 
@@ -274,9 +279,7 @@
 		applicationsHref: '/'
 	} satisfies WorkspaceNavigationModel);
 
-	const statusLabel = $derived(
-		offline ? 'Offline' : status === 'ready' ? 'Up to date' : status
-	);
+	const statusLabel = $derived(offline ? 'Offline' : status === 'ready' ? 'Up to date' : status);
 
 	const onAgentPath = $derived(
 		currentPath === AGENT_PATH || currentPath.startsWith(`${AGENT_PATH}/`)
@@ -551,7 +554,7 @@
 <WorkspaceShell
 	model={navigationModel}
 	onNavigate={navigate}
-	onOrganizationChange={onOrganizationChange}
+	{onOrganizationChange}
 	{onSignOut}
 	onSearch={toggleFinder}
 	searchLabel={t('bolt.shell.omniTitle')}
@@ -602,7 +605,10 @@
 									gap="xs"
 									class="rounded-lg border border-dashed p-8"
 								>
-									<IconWrapper name="lucide:layout-dashboard" class="size-8 text-muted-foreground" />
+									<IconWrapper
+										name="lucide:layout-dashboard"
+										class="size-8 text-muted-foreground"
+									/>
 									<span class="text-xs text-muted-foreground">No applications yet</span>
 									<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
 										Add an application to this workspace to see it here.
@@ -689,10 +695,7 @@
 					data-workspace-app-surface
 					class="h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:bolt-app] [container-type:inline-size]"
 				>
-					<CollectionTableNavigationSurface
-						url={detailUrl}
-						navigate={(href) => onNavigate?.(href)}
-					>
+					<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
 						{@render children?.()}
 					</CollectionTableNavigationSurface>
 				</div>

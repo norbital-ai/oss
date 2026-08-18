@@ -12,16 +12,13 @@ import { describeCause } from '../workspace.js';
 import * as Identity from '../identity/identity.js';
 
 /** Carries facility error through the typed facilities failure channel without losing diagnostic context. */
-export class FacilityError extends Schema.TaggedError<FacilityError>()(
-	'Bolt.FacilityError',
-	{
-		operation: Schema.NonEmptyString,
-		code: Schema.NonEmptyString,
-		message: Schema.NonEmptyString,
-		retryable: Schema.Boolean,
-		outcome: Schema.Literals(['known', 'unknown'])
-	}
-) {}
+export class FacilityError extends Schema.TaggedError<FacilityError>()('Bolt.FacilityError', {
+	operation: Schema.NonEmptyString,
+	code: Schema.NonEmptyString,
+	message: Schema.NonEmptyString,
+	retryable: Schema.Boolean,
+	outcome: Schema.Literals(['known', 'unknown'])
+}) {}
 
 export type CallContext = Readonly<{
 	readonly invocationId: InvocationId;
@@ -87,7 +84,10 @@ export const invokeBinding = <Input, Output>(
 	});
 
 export type Interface = Readonly<{
-	readonly execute: (effectId: EffectId, request: DatabaseRequest) => Effect.Effect<DatabaseResponse, FacilityError>;
+	readonly execute: (
+		effectId: EffectId,
+		request: DatabaseRequest
+	) => Effect.Effect<DatabaseResponse, FacilityError>;
 }>;
 
 /** Identifies the facilities service in Effect's context so dependency wiring remains explicit and type checked. */

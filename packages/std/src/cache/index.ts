@@ -154,4 +154,3 @@ export function lru<T>(options: LruCacheOptions<T> = {}): LruCache<T> {
 		}
 	};
 }
-

@@ -62,8 +62,19 @@ export type ClaimedDelivery = Readonly<{
 /** How a delivery ended, as the ledger records it. */
 export type Settlement =
 	| Readonly<{ readonly _tag: 'Delivered'; readonly sequence: number; readonly status: number }>
-	| Readonly<{ readonly _tag: 'Retry'; readonly sequence: number; readonly status: number | null; readonly reason: string; readonly delayMs: number }>
-	| Readonly<{ readonly _tag: 'Failed'; readonly sequence: number; readonly status: number | null; readonly reason: string }>;
+	| Readonly<{
+			readonly _tag: 'Retry';
+			readonly sequence: number;
+			readonly status: number | null;
+			readonly reason: string;
+			readonly delayMs: number;
+	  }>
+	| Readonly<{
+			readonly _tag: 'Failed';
+			readonly sequence: number;
+			readonly status: number | null;
+			readonly reason: string;
+	  }>;
 
 type Answered = Readonly<{
 	readonly status: number;
@@ -87,11 +98,22 @@ export type DeliverDependencies = Readonly<{
 	readonly request: (
 		effectId: EffectId,
 		connector: string,
-		descriptor: { readonly method: IntegrationHttpMethod; readonly url: string; readonly headers: Readonly<Record<string, string>>; readonly body?: Schema.Json }
+		descriptor: {
+			readonly method: IntegrationHttpMethod;
+			readonly url: string;
+			readonly headers: Readonly<Record<string, string>>;
+			readonly body?: Schema.Json;
+		}
 	) => Effect.Effect<Answered, { readonly message: string; readonly retryable: boolean }>;
 	/** Reads a declared secret, or fails naming the variable that has no value. */
-	readonly secret: (effectId: EffectId, name: string) => Effect.Effect<string, { readonly message: string }>;
-	readonly settle: (effectId: EffectId, settlement: Settlement) => Effect.Effect<void, { readonly message: string }>;
+	readonly secret: (
+		effectId: EffectId,
+		name: string
+	) => Effect.Effect<string, { readonly message: string }>;
+	readonly settle: (
+		effectId: EffectId,
+		settlement: Settlement
+	) => Effect.Effect<void, { readonly message: string }>;
 	readonly now: () => number;
 }>;
 
@@ -149,7 +171,8 @@ export const deliveryKey = (integration: string, binding: string, sequence: numb
 	`${integration}:${binding}:${sequence}`;
 
 /** Whether this method carries a body. `DELETE` does not: several APIs answer 400 to one that does. */
-const carriesBody = (method: IntegrationHttpMethod): boolean => method === 'POST' || method === 'PUT' || method === 'PATCH';
+const carriesBody = (method: IntegrationHttpMethod): boolean =>
+	method === 'POST' || method === 'PUT' || method === 'PATCH';
 
 const url = (connection: HttpConnection, path: string): string =>
 	`${connection.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
@@ -170,7 +193,11 @@ const attemptDelivery = (
 	claimed: ClaimedDelivery
 ): Effect.Effect<{ readonly settlement: Settlement; readonly outcome: DeliveryOutcome }> =>
 	Effect.gen(function* () {
-		const describe = (outcome: DeliveryOutcome['outcome'], status: number | null, reason: string | null): DeliveryOutcome => ({
+		const describe = (
+			outcome: DeliveryOutcome['outcome'],
+			status: number | null,
+			reason: string | null
+		): DeliveryOutcome => ({
 			binding: claimed.binding,
 			recordId: claimed.recordId,
 			operation: claimed.operation,
@@ -189,20 +216,29 @@ const attemptDelivery = (
 		// one should dead-letter it with a sentence rather than request `undefined`.
 		if (claimed.path === null) {
 			const reason = `${integration.name}.${claimed.binding} has no resolved request path`;
-			return { settlement: { _tag: 'Failed', sequence: claimed.sequence, status: null, reason }, outcome: describe('failed', null, reason) };
+			return {
+				settlement: { _tag: 'Failed', sequence: claimed.sequence, status: null, reason },
+				outcome: describe('failed', null, reason)
+			};
 		}
 		const answer = yield* Effect.result(
 			dependencies.request(effectId, integration.name, {
 				method: declaration.method,
 				url: url(connection, claimed.path),
 				headers,
-				...(carriesBody(declaration.method) && claimed.payload !== null ? { body: claimed.payload } : {})
+				...(carriesBody(declaration.method) && claimed.payload !== null
+					? { body: claimed.payload }
+					: {})
 			})
 		);
 		const status = Result.isSuccess(answer) ? answer.success.status : null;
 		if (Result.isSuccess(answer) && answer.success.status < 400) {
 			return {
-				settlement: { _tag: 'Delivered', sequence: claimed.sequence, status: answer.success.status },
+				settlement: {
+					_tag: 'Delivered',
+					sequence: claimed.sequence,
+					status: answer.success.status
+				},
 				outcome: describe('delivered', answer.success.status, null)
 			};
 		}
@@ -211,7 +247,9 @@ const attemptDelivery = (
 				? answer.failure.message
 				: `${declaration.method} answered ${answer.success.status}`
 		);
-		const retryable = Result.isFailure(answer) ? answer.failure.retryable : isRetryableStatus(answer.success.status);
+		const retryable = Result.isFailure(answer)
+			? answer.failure.retryable
+			: isRetryableStatus(answer.success.status);
 		if (!retryable) {
 			return {
 				// A 4xx is terminal on the first answer. Nothing about repeating a request the receiver has
@@ -262,7 +300,9 @@ export const runOutboxDrain = (
 			// Unreachable by construction — `describeIntegrations` refuses an integration that declares a
 			// send without a connection — and stated anyway, because the alternative to stating it is
 			// asserting it away with a cast.
-			return yield* Effect.fail({ message: `${integration.name} declares a send binding with no connection: there is no baseUrl to deliver to.` });
+			return yield* Effect.fail({
+				message: `${integration.name} declares a send binding with no connection: there is no baseUrl to deliver to.`
+			});
 		}
 		const claimed = yield* dependencies.claim(effectId, integration.name, Math.max(limit, 1));
 		const empty: FlushReport = {
@@ -290,7 +330,14 @@ export const runOutboxDrain = (
 				// rather than left pending forever: a queue that grows against a binding nobody declares is
 				// a leak, and one that is silently dropped is the failure this whole ledger exists to stop.
 				const reason = `${integration.name} no longer declares a send binding named ${entry.binding}`;
-				const settled = yield* Effect.result(dependencies.settle(effectId, { _tag: 'Failed', sequence: entry.sequence, status: null, reason }));
+				const settled = yield* Effect.result(
+					dependencies.settle(effectId, {
+						_tag: 'Failed',
+						sequence: entry.sequence,
+						status: null,
+						reason
+					})
+				);
 				failed += 1;
 				deliveries.push({
 					binding: entry.binding,
@@ -299,23 +346,40 @@ export const runOutboxDrain = (
 					attempt: entry.attempts,
 					outcome: 'failed',
 					status: null,
-					reason: Result.isFailure(settled) ? `${reason}; and the ledger write failed: ${settled.failure.message}` : reason
+					reason: Result.isFailure(settled)
+						? `${reason}; and the ledger write failed: ${settled.failure.message}`
+						: reason
 				});
 				continue;
 			}
 			const headers = {
 				...(declaration.headers ?? {}),
 				...credential,
-				[declaration.idempotencyHeader ?? 'idempotency-key']: deliveryKey(integration.name, entry.binding, entry.sequence)
+				[declaration.idempotencyHeader ?? 'idempotency-key']: deliveryKey(
+					integration.name,
+					entry.binding,
+					entry.sequence
+				)
 			};
-			const attempted = yield* attemptDelivery(dependencies, effectId, integration, connection, declaration, headers, entry);
+			const attempted = yield* attemptDelivery(
+				dependencies,
+				effectId,
+				integration,
+				connection,
+				declaration,
+				headers,
+				entry
+			);
 			const settled = yield* Effect.result(dependencies.settle(effectId, attempted.settlement));
 			if (attempted.outcome.outcome === 'delivered') delivered += 1;
 			else if (attempted.outcome.outcome === 'retrying') retrying += 1;
 			else failed += 1;
 			deliveries.push(
 				Result.isFailure(settled)
-					? { ...attempted.outcome, reason: `${attempted.outcome.reason ?? 'delivered'}; and the ledger write failed: ${settled.failure.message}` }
+					? {
+							...attempted.outcome,
+							reason: `${attempted.outcome.reason ?? 'delivered'}; and the ledger write failed: ${settled.failure.message}`
+						}
 					: attempted.outcome
 			);
 		}

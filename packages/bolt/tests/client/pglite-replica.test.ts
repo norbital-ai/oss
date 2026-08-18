@@ -63,9 +63,9 @@ describe('the browser replica on PGlite', () => {
 			record: { name: 'Ada', team: 'core' }
 		});
 		// An ordinary `where` + `order by`, which the `Map` projection could never have answered.
-		expect(await sql.query('select name from people where team = $1 order by name', ['core'])).toEqual([
-			{ name: 'Ada' }
-		]);
+		expect(
+			await sql.query('select name from people where team = $1 order by name', ['core'])
+		).toEqual([{ name: 'Ada' }]);
 	});
 
 	it('converges when the same change arrives twice, because the stream is at-least-once', async () => {
@@ -81,7 +81,9 @@ describe('the browser replica on PGlite', () => {
 		// delivered by both the snapshot and the log. That has to converge rather than raise.
 		await sql.applyChange(change);
 		await sql.applyChange(change);
-		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([{ count: 1 }]);
+		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([
+			{ count: 1 }
+		]);
 	});
 
 	it('merges an update onto the row it already holds rather than replacing it', async () => {
@@ -121,7 +123,9 @@ describe('the browser replica on PGlite', () => {
 			recordId: rid('p1'),
 			operation: 'delete'
 		});
-		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([{ count: 0 }]);
+		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([
+			{ count: 0 }
+		]);
 
 		await sql.applyChange({
 			cursor: { xid: 1, sequence: 3 },
@@ -131,11 +135,15 @@ describe('the browser replica on PGlite', () => {
 			record: { name: 'Grace', team: 'core' }
 		});
 		await sql.reset();
-		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([{ count: 0 }]);
+		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([
+			{ count: 0 }
+		]);
 	});
 
 	it('skips provisioning when the local database already matches the fingerprint', async () => {
-		const database = await PGlite.create('memory://', { extensions: { pg_trgm, btree_gist, vector } });
+		const database = await PGlite.create('memory://', {
+			extensions: { pg_trgm, btree_gist, vector }
+		});
 		databases.push(database);
 		const steps = await provisioningStatements(testWorkspace());
 		// A persisted replica opens an already-provisioned database on the second visit. Re-running the
@@ -143,7 +151,10 @@ describe('the browser replica on PGlite', () => {
 		expect(await provision(database as unknown as PGliteLike, steps, 'fnv1a32:abc')).toBe(true);
 		// Not yet skippable: provisioning alone does not mean the replica holds the workspace.
 		expect(await provision(database as unknown as PGliteLike, steps, 'fnv1a32:abc')).toBe(true);
-		await markProvisioned(database as unknown as PGliteLike, 'fnv1a32:abc', { xid: 0, sequence: 0 });
+		await markProvisioned(database as unknown as PGliteLike, 'fnv1a32:abc', {
+			xid: 0,
+			sequence: 0
+		});
 		expect(await provision(database as unknown as PGliteLike, steps, 'fnv1a32:abc')).toBe(false);
 
 		// A changed schema rebuilds rather than migrating: the replica is a reconstructible cache.
@@ -155,11 +166,16 @@ describe('the browser replica on PGlite', () => {
 	});
 
 	it('remembers how far it streamed, so the next session resumes', async () => {
-		const database = await PGlite.create('memory://', { extensions: { pg_trgm, btree_gist, vector } });
+		const database = await PGlite.create('memory://', {
+			extensions: { pg_trgm, btree_gist, vector }
+		});
 		databases.push(database);
 		const steps = await provisioningStatements(testWorkspace());
 		await provision(database as unknown as PGliteLike, steps, 'fnv1a32:abc');
-		await markProvisioned(database as unknown as PGliteLike, 'fnv1a32:abc', { xid: 0, sequence: 0 });
+		await markProvisioned(database as unknown as PGliteLike, 'fnv1a32:abc', {
+			xid: 0,
+			sequence: 0
+		});
 		expect((await readReplicaState(database as unknown as PGliteLike))?.cursor).toEqual({
 			xid: 0,
 			sequence: 0
@@ -172,7 +188,9 @@ describe('the browser replica on PGlite', () => {
 	});
 
 	it('names the step that failed rather than building a half-provisioned database', async () => {
-		const database = await PGlite.create('memory://', { extensions: { pg_trgm, btree_gist, vector } });
+		const database = await PGlite.create('memory://', {
+			extensions: { pg_trgm, btree_gist, vector }
+		});
 		databases.push(database);
 		await expect(
 			provision(database as unknown as PGliteLike, [

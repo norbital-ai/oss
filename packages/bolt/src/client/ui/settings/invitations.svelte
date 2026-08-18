@@ -70,7 +70,8 @@
 					<Stack gap="xs">
 						<h3 class="font-medium">{invitation.email}</h3>
 						<p class="text-xs text-muted-foreground">
-							{invitation.role}{#if invitation.invitedBy} · invited by {invitation.invitedBy}{/if}{#if expiry}
+							{invitation.role}{#if invitation.invitedBy}
+								· invited by {invitation.invitedBy}{/if}{#if expiry}
 								· expires {expiry}{/if}
 						</p>
 					</Stack>

@@ -78,11 +78,7 @@ describe('identity lifecycle hooks', () => {
 
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Identity.Service).acceptInvitation(
-					EffectId.make('accept-1'),
-					'inv-1',
-					'u1'
-				);
+				yield* (yield* Identity.Service).acceptInvitation(EffectId.make('accept-1'), 'inv-1', 'u1');
 			})
 		);
 

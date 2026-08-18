@@ -65,7 +65,10 @@ export const layoutTeamHierarchy = (
 		const placed = descendants.map((child) => visit(child, depth + 1));
 		const first = placed[0];
 		const last = placed[placed.length - 1];
-		const x = first === undefined || last === undefined ? leafColumn++ * horizontalPitch : (first + last) / 2;
+		const x =
+			first === undefined || last === undefined
+				? leafColumn++ * horizontalPitch
+				: (first + last) / 2;
 		positions.set(team.id, { id: team.id, x, y: depth * verticalPitch });
 		return x;
 	};
@@ -82,7 +85,10 @@ export const layoutTeamHierarchy = (
 	});
 	const edges = teams.flatMap((team) => {
 		const parentId = team.parentId ?? null;
-		return parentId !== null && parentId !== team.id && known.has(parentId) && positions.has(team.id)
+		return parentId !== null &&
+			parentId !== team.id &&
+			known.has(parentId) &&
+			positions.has(team.id)
 			? [{ parentId, childId: team.id }]
 			: [];
 	});

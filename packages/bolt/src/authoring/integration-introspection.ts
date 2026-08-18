@@ -111,11 +111,14 @@ export type IntegrationSendBindingInput = Readonly<{
 	readonly body?: unknown;
 }>;
 export type IntegrationsModuleInput = Readonly<
-	Record<string, Readonly<{
-		readonly connection?: unknown;
-		readonly receive?: Readonly<Record<string, IntegrationBindingInput>>;
-		readonly send?: Readonly<Record<string, IntegrationSendBindingInput>>;
-	}>>
+	Record<
+		string,
+		Readonly<{
+			readonly connection?: unknown;
+			readonly receive?: Readonly<Record<string, IntegrationBindingInput>>;
+			readonly send?: Readonly<Record<string, IntegrationSendBindingInput>>;
+		}>
+	>
 >;
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
@@ -123,7 +126,8 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 		? (value as Readonly<Record<string, unknown>>)
 		: undefined;
 
-const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+const text = (value: unknown): string | undefined =>
+	typeof value === 'string' ? value : undefined;
 
 const stringRecord = (value: unknown): Readonly<Record<string, string>> | undefined => {
 	const source = record(value);
@@ -148,7 +152,9 @@ const stringPath = (value: unknown): { readonly path: ReadonlyArray<string> } | 
 		: undefined;
 
 /** Where a next-cursor is read from, in the four shapes the runtime knows how to read. */
-const nextLocation = (next: Readonly<Record<string, unknown>>): PullCursorSpec['next'] | undefined =>
+const nextLocation = (
+	next: Readonly<Record<string, unknown>>
+): PullCursorSpec['next'] | undefined =>
 	text(next['header']) !== undefined
 		? { header: String(next['header']) }
 		: text(next['field']) !== undefined
@@ -163,9 +169,16 @@ const cursorSpec = (value: unknown): PullCursorSpec | undefined => {
 	const send = record(source['send']);
 	const next = record(source['next']);
 	if (send === undefined || next === undefined) return undefined;
-	const sent = text(send['query']) !== undefined ? { query: String(send['query']) } : text(send['header']) !== undefined ? { header: String(send['header']) } : undefined;
+	const sent =
+		text(send['query']) !== undefined
+			? { query: String(send['query']) }
+			: text(send['header']) !== undefined
+				? { header: String(send['header']) }
+				: undefined;
 	const following = nextLocation(next);
-	return sent === undefined || following === undefined ? undefined : { send: sent, next: following };
+	return sent === undefined || following === undefined
+		? undefined
+		: { send: sent, next: following };
 };
 
 const pagesSpec = (value: unknown): PullPagesSpec | undefined => {
@@ -177,7 +190,9 @@ const pagesSpec = (value: unknown): PullPagesSpec | undefined => {
 		return {
 			style: 'page',
 			pageQuery: String(source['pageQuery'] ?? 'page'),
-			...(text(source['sizeQuery']) === undefined ? {} : { sizeQuery: String(source['sizeQuery']) }),
+			...(text(source['sizeQuery']) === undefined
+				? {}
+				: { sizeQuery: String(source['sizeQuery']) }),
 			...(typeof source['size'] === 'number' ? { size: source['size'] } : {}),
 			...(typeof source['firstPage'] === 'number' ? { firstPage: source['firstPage'] } : {}),
 			...max
@@ -217,7 +232,9 @@ const retrySpec = (value: unknown): PullRetrySpec | undefined => {
 	if (source === undefined || typeof source['attempts'] !== 'number') return undefined;
 	return {
 		attempts: source['attempts'],
-		...(typeof source['initialDelayMs'] === 'number' ? { initialDelayMs: source['initialDelayMs'] } : {}),
+		...(typeof source['initialDelayMs'] === 'number'
+			? { initialDelayMs: source['initialDelayMs'] }
+			: {}),
 		...(typeof source['maxDelayMs'] === 'number' ? { maxDelayMs: source['maxDelayMs'] } : {})
 	};
 };
@@ -232,12 +249,18 @@ const retrySpec = (value: unknown): PullRetrySpec | undefined => {
  * no `connection` key at all) and requiring a `baseUrl` would have refused it for lacking something
  * it has no use for.
  */
-const connectionOf = (candidate: unknown, integrationName: string, required: boolean): HttpConnection | undefined => {
+const connectionOf = (
+	candidate: unknown,
+	integrationName: string,
+	required: boolean
+): HttpConnection | undefined => {
 	const source = record(candidate);
 	const baseUrl = source === undefined ? undefined : text(source['baseUrl']);
 	if (baseUrl === undefined) {
 		if (!required) return undefined;
-		throw new TypeError(`Integration ${integrationName} declares no connection: a pull or a send has nowhere to go without a baseUrl.`);
+		throw new TypeError(
+			`Integration ${integrationName} declares no connection: a pull or a send has nowhere to go without a baseUrl.`
+		);
 	}
 	const authentication = record(source?.['authentication']);
 	if (authentication === undefined) return { baseUrl };
@@ -246,7 +269,9 @@ const connectionOf = (candidate: unknown, integrationName: string, required: boo
 		const token = record(authentication['token']);
 		const environment = token === undefined ? undefined : text(token['env']);
 		if (environment === undefined) {
-			throw new TypeError(`Integration ${integrationName} declares bearer authentication without an { env } reference. A literal token in a workspace is a token in the artifact.`);
+			throw new TypeError(
+				`Integration ${integrationName} declares bearer authentication without an { env } reference. A literal token in a workspace is a token in the artifact.`
+			);
 		}
 		return { baseUrl, authentication: { type: 'bearer', token: { env: environment } } };
 	}
@@ -255,11 +280,15 @@ const connectionOf = (candidate: unknown, integrationName: string, required: boo
 		const value_ = record(authentication['value']);
 		const environment = value_ === undefined ? undefined : text(value_['env']);
 		if (header === undefined || environment === undefined) {
-			throw new TypeError(`Integration ${integrationName} declares header authentication without a header name and an { env } reference.`);
+			throw new TypeError(
+				`Integration ${integrationName} declares header authentication without a header name and an { env } reference.`
+			);
 		}
 		return { baseUrl, authentication: { type: 'header', header, value: { env: environment } } };
 	}
-	throw new TypeError(`Integration ${integrationName} declares an unsupported authentication type.`);
+	throw new TypeError(
+		`Integration ${integrationName} declares an unsupported authentication type.`
+	);
 };
 
 /**
@@ -278,24 +307,34 @@ const signatureSpec = (binding: string, value: unknown): WebhookSignatureSpec =>
 	const secret = record(source?.['secret']);
 	const environment = secret === undefined ? undefined : text(secret['env']);
 	if (header === undefined) {
-		throw new TypeError(`Integration ${binding} declares a webhook with no signature header. An unsigned delivery is an unauthenticated write into ${binding.split('.')[0] ?? 'the collection'}.`);
+		throw new TypeError(
+			`Integration ${binding} declares a webhook with no signature header. An unsigned delivery is an unauthenticated write into ${binding.split('.')[0] ?? 'the collection'}.`
+		);
 	}
 	if (environment === undefined) {
-		throw new TypeError(`Integration ${binding} declares a webhook signature without an { env } reference for its secret. A literal secret in a workspace is a secret in the artifact.`);
+		throw new TypeError(
+			`Integration ${binding} declares a webhook signature without an { env } reference for its secret. A literal secret in a workspace is a secret in the artifact.`
+		);
 	}
 	const algorithm = text(source?.['algorithm']);
 	if (algorithm !== undefined && algorithm !== 'sha256' && algorithm !== 'sha512') {
-		throw new TypeError(`Integration ${binding} declares an unsupported signature algorithm "${algorithm}".`);
+		throw new TypeError(
+			`Integration ${binding} declares an unsupported signature algorithm "${algorithm}".`
+		);
 	}
 	const encoding = text(source?.['encoding']);
 	if (encoding !== undefined && encoding !== 'hex' && encoding !== 'base64') {
-		throw new TypeError(`Integration ${binding} declares an unsupported signature encoding "${encoding}".`);
+		throw new TypeError(
+			`Integration ${binding} declares an unsupported signature encoding "${encoding}".`
+		);
 	}
 	const stamp = record(source?.['timestamp']);
 	const stampHeader = stamp === undefined ? undefined : text(stamp['header']);
 	const stampParameter = stamp === undefined ? undefined : text(stamp['parameter']);
 	if (stamp !== undefined && stampHeader === undefined && stampParameter === undefined) {
-		throw new TypeError(`Integration ${binding} declares a signature timestamp with neither a header nor a parameter to read it from.`);
+		throw new TypeError(
+			`Integration ${binding} declares a signature timestamp with neither a header nor a parameter to read it from.`
+		);
 	}
 	return {
 		header,
@@ -303,14 +342,20 @@ const signatureSpec = (binding: string, value: unknown): WebhookSignatureSpec =>
 		...(algorithm === undefined ? {} : { algorithm }),
 		...(encoding === undefined ? {} : { encoding }),
 		...(text(source?.['prefix']) === undefined ? {} : { prefix: String(source?.['prefix']) }),
-		...(text(source?.['parameter']) === undefined ? {} : { parameter: String(source?.['parameter']) }),
+		...(text(source?.['parameter']) === undefined
+			? {}
+			: { parameter: String(source?.['parameter']) }),
 		...(stampHeader !== undefined
 			? { timestamp: { header: stampHeader } }
 			: stampParameter !== undefined
 				? { timestamp: { parameter: stampParameter } }
 				: {}),
-		...(text(source?.['signedPayload']) === undefined ? {} : { signedPayload: String(source?.['signedPayload']) }),
-		...(typeof source?.['toleranceSeconds'] === 'number' ? { toleranceSeconds: source['toleranceSeconds'] } : {})
+		...(text(source?.['signedPayload']) === undefined
+			? {}
+			: { signedPayload: String(source?.['signedPayload']) }),
+		...(typeof source?.['toleranceSeconds'] === 'number'
+			? { toleranceSeconds: source['toleranceSeconds'] }
+			: {})
 	};
 };
 
@@ -331,20 +376,28 @@ const authoredHalf = (
 	const value = identity?.['value'];
 	const input = binding.input;
 	if (column === undefined || typeof value !== 'function') {
-		throw new TypeError(`Integration ${integrationName}.${bindingName} declares no identity { column, value }; without one a second delivery cannot recognise the rows the first one wrote.`);
+		throw new TypeError(
+			`Integration ${integrationName}.${bindingName} declares no identity { column, value }; without one a second delivery cannot recognise the rows the first one wrote.`
+		);
 	}
 	if (input === undefined) {
-		throw new TypeError(`Integration ${integrationName}.${bindingName} declares no input schema for one record.`);
+		throw new TypeError(
+			`Integration ${integrationName}.${bindingName} declares no input schema for one record.`
+		);
 	}
 	const map = binding.map;
 	const resolve = binding.resolve;
 	if (resolve !== undefined && typeof resolve !== 'function') {
-		throw new TypeError(`Integration ${integrationName}.${bindingName} declares a resolve that is not a function.`);
+		throw new TypeError(
+			`Integration ${integrationName}.${bindingName} declares a resolve that is not a function.`
+		);
 	}
 	// A resolve with nothing to hand its answer to is a query per batch that changes no row, and the
 	// author almost certainly meant to write the `map` that reads it. Refused here rather than run.
 	if (resolve !== undefined && typeof map !== 'function') {
-		throw new TypeError(`Integration ${integrationName}.${bindingName} declares a resolve but no map; nothing would ever read what it looked up.`);
+		throw new TypeError(
+			`Integration ${integrationName}.${bindingName} declares a resolve but no map; nothing would ever read what it looked up.`
+		);
 	}
 	return {
 		input,
@@ -352,7 +405,9 @@ const authoredHalf = (
 		identityValue: (candidate: unknown) => {
 			const key: unknown = Reflect.apply(value, undefined, [candidate]);
 			if (typeof key !== 'string' || key.trim() === '') {
-				throw new TypeError(`Integration ${integrationName}.${bindingName} read an empty external identity from a record; an empty key would make every record the same record.`);
+				throw new TypeError(
+					`Integration ${integrationName}.${bindingName} read an empty external identity from a record; an empty key would make every record the same record.`
+				);
 			}
 			return key;
 		},
@@ -368,7 +423,9 @@ const authoredHalf = (
 						const produced: unknown = Reflect.apply(map, undefined, [candidate, resolved]);
 						const mapped = record(produced);
 						if (mapped === undefined) {
-							throw new TypeError(`Integration ${integrationName}.${bindingName} mapped a record to something that is not a row.`);
+							throw new TypeError(
+								`Integration ${integrationName}.${bindingName} mapped a record to something that is not a row.`
+							);
 						}
 						return mapped;
 					}
@@ -381,11 +438,16 @@ const webhookDeclaration = (
 	integrationName: string,
 	bindingName: string,
 	binding: IntegrationBindingInput
-): { readonly declaration: IntegrationWebhookDeclaration; readonly authored: AuthoredIntegrationBinding } => {
+): {
+	readonly declaration: IntegrationWebhookDeclaration;
+	readonly authored: AuthoredIntegrationBinding;
+} => {
 	const webhook = record(binding.webhook);
 	const path = webhook === undefined ? undefined : text(webhook['path']);
 	if (webhook === undefined || path === undefined) {
-		throw new TypeError(`Integration ${integrationName}.${bindingName} declares no webhook { path }.`);
+		throw new TypeError(
+			`Integration ${integrationName}.${bindingName} declares no webhook { path }.`
+		);
 	}
 	const authored = authoredHalf(integrationName, bindingName, binding);
 	const eventIdHeader = text(webhook['eventIdHeader']);
@@ -407,12 +469,17 @@ const pullDeclaration = (
 	integrationName: string,
 	bindingName: string,
 	binding: IntegrationBindingInput
-): { readonly declaration: IntegrationPullDeclaration; readonly authored: AuthoredIntegrationBinding } => {
+): {
+	readonly declaration: IntegrationPullDeclaration;
+	readonly authored: AuthoredIntegrationBinding;
+} => {
 	const pull = record(binding.pull);
 	const path = pull === undefined ? undefined : text(pull['path']);
 	const schedule = pull === undefined ? undefined : text(pull['schedule']);
 	if (pull === undefined || path === undefined || schedule === undefined) {
-		throw new TypeError(`Integration ${integrationName}.${bindingName} declares no pull { schedule, path }.`);
+		throw new TypeError(
+			`Integration ${integrationName}.${bindingName} declares no pull { schedule, path }.`
+		);
 	}
 	const authored = authoredHalf(integrationName, bindingName, binding);
 	const method = text(pull['method']) === 'POST' ? 'POST' : 'GET';
@@ -455,29 +522,43 @@ const SEND_EVENTS: ReadonlyArray<IntegrationSendEvent> = ['create', 'update', 'd
 const sendTrigger = (
 	binding: string,
 	value: unknown
-): { readonly events: ReadonlyArray<IntegrationSendEvent>; readonly matches: (event: IntegrationSendEventContext) => boolean } => {
+): {
+	readonly events: ReadonlyArray<IntegrationSendEvent>;
+	readonly matches: (event: IntegrationSendEventContext) => boolean;
+} => {
 	if (typeof value === 'string') {
 		const named = SEND_EVENTS.find((event) => event === value);
 		if (named === undefined) {
-			throw new TypeError(`Integration ${binding} triggers on "${value}", which is not one of create, update or delete.`);
+			throw new TypeError(
+				`Integration ${binding} triggers on "${value}", which is not one of create, update or delete.`
+			);
 		}
 		return { events: [named], matches: (event) => event.operation === named };
 	}
 	const source = record(value);
 	if (source === undefined) {
-		throw new TypeError(`Integration ${binding} declares no { on }; without one nothing decides which writes are worth sending.`);
+		throw new TypeError(
+			`Integration ${binding} declares no { on }; without one nothing decides which writes are worth sending.`
+		);
 	}
-	const predicates = new Map<IntegrationSendEvent, (context: IntegrationSendEventContext) => unknown>();
+	const predicates = new Map<
+		IntegrationSendEvent,
+		(context: IntegrationSendEventContext) => unknown
+	>();
 	for (const event of SEND_EVENTS) {
 		const candidate = source[event];
 		if (candidate === undefined) continue;
 		if (typeof candidate !== 'function') {
-			throw new TypeError(`Integration ${binding} declares a ${event} trigger that is not a function.`);
+			throw new TypeError(
+				`Integration ${binding} declares a ${event} trigger that is not a function.`
+			);
 		}
 		predicates.set(event, (context) => Reflect.apply(candidate, undefined, [context]) as unknown);
 	}
 	if (predicates.size === 0) {
-		throw new TypeError(`Integration ${binding} subscribes to no collection event, so nothing could ever queue a delivery for it.`);
+		throw new TypeError(
+			`Integration ${binding} subscribes to no collection event, so nothing could ever queue a delivery for it.`
+		);
 	}
 	return {
 		events: SEND_EVENTS.filter((event) => predicates.has(event)),
@@ -495,7 +576,10 @@ const sendDeclaration = (
 	integrationName: string,
 	bindingName: string,
 	binding: IntegrationSendBindingInput
-): { readonly declaration: IntegrationSendDeclaration; readonly authored: AuthoredIntegrationSend } => {
+): {
+	readonly declaration: IntegrationSendDeclaration;
+	readonly authored: AuthoredIntegrationSend;
+} => {
 	const named = `${integrationName}.${bindingName}`;
 	const request = record(binding.send);
 	const path = request === undefined ? undefined : text(request['path']);
@@ -506,7 +590,9 @@ const sendDeclaration = (
 	if (method !== 'POST' && method !== 'PUT' && method !== 'PATCH' && method !== 'DELETE') {
 		// Not defaulted to POST. A delivery that silently creates where the author meant to replace is
 		// a wrong write on somebody else's system, and the declaration is one word away from saying so.
-		throw new TypeError(`Integration ${named} declares send method "${String(method)}"; an outbound binding must state POST, PUT, PATCH or DELETE.`);
+		throw new TypeError(
+			`Integration ${named} declares send method "${String(method)}"; an outbound binding must state POST, PUT, PATCH or DELETE.`
+		);
 	}
 	const trigger = sendTrigger(named, binding.on);
 	const headers = stringRecord(request['headers']);
@@ -529,7 +615,12 @@ const sendDeclaration = (
 		authored: {
 			events: trigger.events,
 			matches: trigger.matches,
-			...(body === undefined ? {} : { body: (event: IntegrationSendEventContext): unknown => Reflect.apply(body, undefined, [event]) as unknown })
+			...(body === undefined
+				? {}
+				: {
+						body: (event: IntegrationSendEventContext): unknown =>
+							Reflect.apply(body, undefined, [event]) as unknown
+					})
 		}
 	};
 };
@@ -546,7 +637,9 @@ export const describeIntegrations = (
 ): DescribedIntegrations => {
 	const declarations: Array<IntegrationDeclaration> = [];
 	const authored: Record<string, AuthoredIntegrationModule> = {};
-	for (const [collection, module] of Object.entries(modulesByCollection).toSorted(([left], [right]) => left.localeCompare(right))) {
+	for (const [collection, module] of Object.entries(modulesByCollection).toSorted(
+		([left], [right]) => left.localeCompare(right)
+	)) {
 		if (module === undefined || module === null) continue;
 		for (const [integrationName, declaration] of Object.entries(module)) {
 			if (declaration === undefined || declaration === null) continue;
@@ -556,17 +649,26 @@ export const describeIntegrations = (
 			// compile error, so the presence of `webhook` is the discriminant.
 			const entries = Object.entries(declaration.receive ?? {});
 			const pulls = entries.flatMap(([bindingName, binding]) =>
-				record(binding.webhook) === undefined ? [[bindingName, pullDeclaration(name, bindingName, binding)] as const] : []
+				record(binding.webhook) === undefined
+					? [[bindingName, pullDeclaration(name, bindingName, binding)] as const]
+					: []
 			);
 			const webhooks = entries.flatMap(([bindingName, binding]) =>
-				record(binding.webhook) === undefined ? [] : [[bindingName, webhookDeclaration(name, bindingName, binding)] as const]
+				record(binding.webhook) === undefined
+					? []
+					: [[bindingName, webhookDeclaration(name, bindingName, binding)] as const]
 			);
 			const sends = Object.entries(declaration.send ?? {}).map(
-				([bindingName, binding]) => [bindingName, sendDeclaration(name, bindingName, binding)] as const
+				([bindingName, binding]) =>
+					[bindingName, sendDeclaration(name, bindingName, binding)] as const
 			);
 			// A send needs a `baseUrl` for exactly the reason a pull does: it is a request this platform
 			// makes, and there is nowhere to make it. Only a webhook-only integration may omit one.
-			const connection = connectionOf(declaration.connection, name, pulls.length > 0 || sends.length > 0);
+			const connection = connectionOf(
+				declaration.connection,
+				name,
+				pulls.length > 0 || sends.length > 0
+			);
 			declarations.push(
 				integration({
 					name,
@@ -581,7 +683,9 @@ export const describeIntegrations = (
 				receive: Object.fromEntries(
 					[...pulls, ...webhooks].map(([bindingName, parsed]) => [bindingName, parsed.authored])
 				),
-				send: Object.fromEntries(sends.map(([bindingName, parsed]) => [bindingName, parsed.authored]))
+				send: Object.fromEntries(
+					sends.map(([bindingName, parsed]) => [bindingName, parsed.authored])
+				)
 			};
 		}
 	}

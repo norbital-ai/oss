@@ -36,9 +36,13 @@ export const routeContextOf = (url: URL): RouteContext | undefined => {
 /** The path a stack's links are rooted at, so a generated URL stays on the surface it came from. */
 export const baseUrlOf = (url: URL): string => {
 	const context = routeContextOf(url);
-	if (context?.hostSurface !== undefined) return `/__host/${encodeURIComponent(context.hostSurface)}`;
+	if (context?.hostSurface !== undefined)
+		return `/__host/${encodeURIComponent(context.hostSurface)}`;
 	if (context?.app !== undefined) {
-		return `/app/${context.app.split('/').map((segment) => encodeURIComponent(segment)).join('/')}`;
+		return `/app/${context.app
+			.split('/')
+			.map((segment) => encodeURIComponent(segment))
+			.join('/')}`;
 	}
 	return url.pathname;
 };
@@ -64,7 +68,9 @@ export const mergeDetailNavStack = (
 	if (parentRouteKey !== undefined) {
 		const parentIndex = current.findIndex((item) => item.node_id === parentRouteKey);
 		if (parentIndex !== -1) {
-			const existing = current.findIndex((item, index) => index > parentIndex && item.node_id === routeKey);
+			const existing = current.findIndex(
+				(item, index) => index > parentIndex && item.node_id === routeKey
+			);
 			return existing === -1
 				? [...current.slice(0, parentIndex + 1), next]
 				: [...current.slice(0, existing), next];

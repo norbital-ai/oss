@@ -23,7 +23,10 @@ type Answer = Readonly<{
 	readonly body: Schema.Json;
 }>;
 
-type Written = Readonly<{ readonly id: string; readonly values: Readonly<Record<string, Schema.Json>> }>;
+type Written = Readonly<{
+	readonly id: string;
+	readonly values: Readonly<Record<string, Schema.Json>>;
+}>;
 
 /** A dependency set that answers from a script and records what was asked and what was written. */
 const harness = (answers: ReadonlyArray<Answer>) => {
@@ -34,8 +37,15 @@ const harness = (answers: ReadonlyArray<Answer>) => {
 			urls.push(descriptor.url);
 			const answer = answers[urls.length - 1];
 			return answer === undefined
-				? Effect.fail({ message: `no scripted answer for request ${urls.length}`, retryable: false })
-				: Effect.succeed({ status: answer.status ?? 200, headers: answer.headers ?? {}, body: answer.body });
+				? Effect.fail({
+						message: `no scripted answer for request ${urls.length}`,
+						retryable: false
+					})
+				: Effect.succeed({
+						status: answer.status ?? 200,
+						headers: answer.headers ?? {},
+						body: answer.body
+					});
 		},
 		secret: (_effectId, name) => Effect.fail({ message: `no secret named ${name}` }),
 		existing: () => Effect.succeed(new Map<string, ReadonlyArray<string>>()),
@@ -64,7 +74,8 @@ const integrationOf = (binding: IntegrationPullDeclaration): IntegrationDeclarat
 });
 
 const identityValue = (record: unknown): string => {
-	const value = record === null || typeof record !== 'object' ? undefined : Reflect.get(record, 'id');
+	const value =
+		record === null || typeof record !== 'object' ? undefined : Reflect.get(record, 'id');
 	return `item:${String(value)}`;
 };
 
@@ -85,7 +96,14 @@ const run = (
 ) => {
 	const bound = harness(answers);
 	return Effect.runPromise(
-		runPullBinding(bound.dependencies, EffectId.make('pull'), integrationOf(binding), binding, authoredOf(input), storedCursor)
+		runPullBinding(
+			bound.dependencies,
+			EffectId.make('pull'),
+			integrationOf(binding),
+			binding,
+			authoredOf(input),
+			storedCursor
+		)
 	).then((report) => ({ report, urls: bound.urls, written: bound.written }));
 };
 
@@ -107,7 +125,12 @@ describe('pull cursor reads', () => {
 		const binding: IntegrationPullDeclaration = {
 			...base,
 			records: { path: ['message', 'items'] },
-			pages: { style: 'cursor', query: 'cursor', next: { path: ['message', 'next-cursor'] }, max: 5 }
+			pages: {
+				style: 'cursor',
+				query: 'cursor',
+				next: { path: ['message', 'next-cursor'] },
+				max: 5
+			}
 		};
 		const { report, urls, written } = await run(binding, NumericRecord, [
 			{ body: { message: { items: [{ id: 1 }, { id: 2 }], 'next-cursor': 'CURSOR-2' } } },
@@ -118,7 +141,11 @@ describe('pull cursor reads', () => {
 		expect(report.fetched).toBe(3);
 		expect(report.created).toBe(3);
 		expect(urls[1]).toContain('cursor=CURSOR-2');
-		expect(written.map(({ values }) => values['external_id'])).toEqual(['item:1', 'item:2', 'item:3']);
+		expect(written.map(({ values }) => values['external_id'])).toEqual([
+			'item:1',
+			'item:2',
+			'item:3'
+		]);
 	});
 
 	/** The reason `path` had to exist: `field` reads the top level and the token is not there. */
@@ -147,7 +174,9 @@ describe('pull cursor reads', () => {
 			...base,
 			cursor: { send: { query: 'since' }, next: { maxOf: 'id' } }
 		};
-		const { report } = await run(binding, NumericRecord, [{ body: [{ id: 98 }, { id: 371 }, { id: 26 }] }]);
+		const { report } = await run(binding, NumericRecord, [
+			{ body: [{ id: 98 }, { id: 371 }, { id: 26 }] }
+		]);
 		expect(report.cursor).toBe('371');
 	});
 
@@ -158,7 +187,13 @@ describe('pull cursor reads', () => {
 			cursor: { send: { query: 'since' }, next: { maxOf: 'id' } }
 		};
 		const { report } = await run(binding, TextRecord, [
-			{ body: [{ id: '2024-01-02T00:00:00Z' }, { id: '2024-01-10T00:00:00Z' }, { id: '2023-12-31T00:00:00Z' }] }
+			{
+				body: [
+					{ id: '2024-01-02T00:00:00Z' },
+					{ id: '2024-01-10T00:00:00Z' },
+					{ id: '2023-12-31T00:00:00Z' }
+				]
+			}
 		]);
 		expect(report.cursor).toBe('2024-01-10T00:00:00Z');
 	});

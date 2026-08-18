@@ -29,11 +29,12 @@ describe('depset addressing', () => {
 		assert.match(lockHash(lockfile), /^[0-9a-f]{32}$/);
 	});
 
-	it('agrees byte-for-byte with Core, which materializes the same depsets', () => {
-		// Core's `sandbox/toolchain.server.ts` must produce identical hashes, or a depset one
-		// side materializes would not be reusable by the other. Pinned with fixed vectors rather
-		// than a cross-repo import: Core never reads this checkout, and these exact vectors are
-		// asserted from that side in `tests/unit/tenant-workspace/depset.test.ts`.
+	it('holds the content address stable across revisions of this file', () => {
+		// These vectors were the cross-repository agreement with Core's
+		// `sandbox/toolchain.server.ts`, which materialized the same depsets and asserted the same
+		// three from its side. Core is gone and no host materializes depsets now, so the vectors
+		// no longer pin a second implementation — they pin this one, so a refactor cannot silently
+		// re-address every depset already in a store.
 		const vectors = [
 			['', 'e3b0c44298fc1c149afbf4c8996fb924'],
 			['lockfileVersion: 9.0\n', 'c98d2bd9d0bc739a5937aeba6ebfcb69'],

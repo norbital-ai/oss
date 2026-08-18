@@ -47,7 +47,9 @@ const NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
  * Names are validated here rather than at read time: a typo in `+env.ts` should fail the build, not
  * surface months later as a capability that silently never turns on.
  */
-export const defineEnvironment = <const T extends Readonly<Record<string, EnvironmentVariableSpec>>>(
+export const defineEnvironment = <
+	const T extends Readonly<Record<string, EnvironmentVariableSpec>>
+>(
 	variables: T
 ): EnvironmentSpec & { readonly variables: T } => {
 	for (const [name, declaration] of Object.entries(variables)) {

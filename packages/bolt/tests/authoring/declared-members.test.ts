@@ -73,11 +73,13 @@ describe('enums() members', () => {
 	 * assumed.
 	 */
 	it('changes no DDL — the column is still text', async () => {
-		const migration = await Effect.runPromise(planWorkspaceMigration({
-			models: { payroll_runs: model },
-			relations: [],
-			previous: undefined
-		}));
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: { payroll_runs: model },
+				relations: [],
+				previous: undefined
+			})
+		);
 		const create = migration?.statements.find((statement) => statement.startsWith('CREATE TABLE'));
 		expect(create).toContain('"status" text');
 		expect(create).not.toMatch(/CREATE TYPE|::"?payroll_runs/i);
@@ -90,27 +92,31 @@ describe('enums() members', () => {
 	 * columns whose storage did not change.
 	 */
 	it('leaves a lineage written before the fix converged', async () => {
-		const before = await Effect.runPromise(planWorkspaceMigration({
-			models: {
-				payroll_runs: defineModel({
-					status: text(),
-					lifecycle: text({ search: true }),
-					title: text().notNull(),
-					reference: text().default('x')
-				})
-			},
-			relations: [],
-			previous: undefined
-		}));
+		const before = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: {
+					payroll_runs: defineModel({
+						status: text(),
+						lifecycle: text({ search: true }),
+						title: text().notNull(),
+						reference: text().default('x')
+					})
+				},
+				relations: [],
+				previous: undefined
+			})
+		);
 		if (before === undefined)
 			throw new Error('a schema built from nothing must produce a migration');
 
 		expect(
-			await Effect.runPromise(planWorkspaceMigration({
-				models: { payroll_runs: model },
-				relations: [],
-				previous: before.snapshot
-			}))
+			await Effect.runPromise(
+				planWorkspaceMigration({
+					models: { payroll_runs: model },
+					relations: [],
+					previous: before.snapshot
+				})
+			)
 		).toBeUndefined();
 	});
 });

@@ -17,8 +17,10 @@ export {
 export type { BoltBundle } from './bundle.js';
 
 export {
+	addAIUsage,
 	AIRequest,
 	AIResponse,
+	AIUsage,
 	CommunicationRequest,
 	CommunicationResponse,
 	ConnectorRequest,
@@ -32,6 +34,7 @@ export {
 	HostToolResponse,
 	IdentityHookRequest,
 	IdentityHookResponse,
+	readAIUsage,
 	TaskRequest,
 	TaskResponse,
 	TransportDirection,

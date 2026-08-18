@@ -6,7 +6,15 @@ import { withSystemCollections } from './schema/system-collections.js';
 export class WorkspaceLookupError extends Schema.TaggedError<WorkspaceLookupError>()(
 	'Bolt.Workspace.LookupError',
 	{
-		kind: Schema.Literals(['collection', 'app', 'agent', 'automation', 'channel', 'integration', 'policy']),
+		kind: Schema.Literals([
+			'collection',
+			'app',
+			'agent',
+			'automation',
+			'channel',
+			'integration',
+			'policy'
+		]),
 		name: Schema.NonEmptyString
 	}
 ) {
@@ -15,13 +23,10 @@ export class WorkspaceLookupError extends Schema.TaggedError<WorkspaceLookupErro
 }
 
 /** Carries invocation routing failures through the shared runtime channel without flattening authorization status. */
-export class DispatchError extends Schema.TaggedError<DispatchError>()(
-	'Bolt.Dispatch.Error',
-	{
-		code: Schema.NonEmptyString,
-		message: Schema.NonEmptyString
-	}
-) {
+export class DispatchError extends Schema.TaggedError<DispatchError>()('Bolt.Dispatch.Error', {
+	code: Schema.NonEmptyString,
+	message: Schema.NonEmptyString
+}) {
 	readonly category = 'dispatch' as const;
 	readonly retryable = false;
 
@@ -46,23 +51,41 @@ export const describeCause = (cause: unknown): string => {
 			return typeof tag === 'string' ? `${tag}: ${message}` : message;
 		}
 		if (typeof tag === 'string' && tag.length > 0) {
-			const detail = JSON.stringify(cause, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value));
+			const detail = JSON.stringify(cause, (_key, value: unknown) =>
+				typeof value === 'bigint' ? value.toString() : value
+			);
 			return detail === undefined || detail === '{}' ? tag : `${tag}: ${detail}`;
 		}
 	}
 	const rendered = String(cause);
-	return rendered.length > 0 && rendered !== '[object Object]' ? rendered : 'An unattributed failure occurred';
+	return rendered.length > 0 && rendered !== '[object Object]'
+		? rendered
+		: 'An unattributed failure occurred';
 };
 
 export type Interface = Readonly<{
 	readonly definition: WorkspaceDefinition;
-	readonly collection: (name: string) => Effect.Effect<WorkspaceDefinition['collections'][number], WorkspaceLookupError>;
-	readonly app: (name: string) => Effect.Effect<WorkspaceDefinition['apps'][number], WorkspaceLookupError>;
-	readonly agent: (name: string) => Effect.Effect<WorkspaceDefinition['agents'][number], WorkspaceLookupError>;
-	readonly automation: (name: string) => Effect.Effect<WorkspaceDefinition['automations'][number], WorkspaceLookupError>;
-	readonly channel: (name: string) => Effect.Effect<WorkspaceDefinition['channels'][number], WorkspaceLookupError>;
-	readonly integration: (name: string) => Effect.Effect<WorkspaceDefinition['integrations'][number], WorkspaceLookupError>;
-	readonly policy: (name: string) => Effect.Effect<WorkspaceDefinition['policies'][number], WorkspaceLookupError>;
+	readonly collection: (
+		name: string
+	) => Effect.Effect<WorkspaceDefinition['collections'][number], WorkspaceLookupError>;
+	readonly app: (
+		name: string
+	) => Effect.Effect<WorkspaceDefinition['apps'][number], WorkspaceLookupError>;
+	readonly agent: (
+		name: string
+	) => Effect.Effect<WorkspaceDefinition['agents'][number], WorkspaceLookupError>;
+	readonly automation: (
+		name: string
+	) => Effect.Effect<WorkspaceDefinition['automations'][number], WorkspaceLookupError>;
+	readonly channel: (
+		name: string
+	) => Effect.Effect<WorkspaceDefinition['channels'][number], WorkspaceLookupError>;
+	readonly integration: (
+		name: string
+	) => Effect.Effect<WorkspaceDefinition['integrations'][number], WorkspaceLookupError>;
+	readonly policy: (
+		name: string
+	) => Effect.Effect<WorkspaceDefinition['policies'][number], WorkspaceLookupError>;
 	readonly capabilities: () => ReadonlyArray<string>;
 }>;
 
@@ -71,11 +94,16 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Workspace')
 
 /** Owns lookup behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const WorkspaceValues = {
-	lookup: <A>(kind: WorkspaceLookupError['kind'], values: ReadonlyArray<A>, nameOf: (value: A) => string) => Effect.fn(`Workspace.${kind}`)(function* (name: string) {
-		const found = values.find((value) => nameOf(value) === name);
-		if (found === undefined) return yield* new WorkspaceLookupError({ kind, name });
-		return found;
-	})
+	lookup: <A>(
+		kind: WorkspaceLookupError['kind'],
+		values: ReadonlyArray<A>,
+		nameOf: (value: A) => string
+	) =>
+		Effect.fn(`Workspace.${kind}`)(function* (name: string) {
+			const found = values.find((value) => nameOf(value) === name);
+			if (found === undefined) return yield* new WorkspaceLookupError({ kind, name });
+			return found;
+		})
 };
 const lookup = WorkspaceValues.lookup;
 

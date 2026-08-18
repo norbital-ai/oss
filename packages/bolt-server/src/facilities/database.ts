@@ -48,9 +48,7 @@ const jsonSafe = (value: unknown): unknown => {
 	if (Buffer.isBuffer(value)) return value.toString('base64');
 	if (Array.isArray(value)) return value.map(jsonSafe);
 	if (value !== null && typeof value === 'object') {
-		return Object.fromEntries(
-			Object.entries(value).map(([key, entry]) => [key, jsonSafe(entry)])
-		);
+		return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, jsonSafe(entry)]));
 	}
 	return value;
 };
@@ -70,7 +68,8 @@ export const makePostgresDatabase = ({
 			const client = new Client(clientOptions);
 			yield* Effect.acquireRelease(
 				Effect.tryPromise(() => client.connect()),
-				() => Effect.tryPromise(() => client.end()).pipe(Effect.catch(() => Effect.succeed(undefined)))
+				() =>
+					Effect.tryPromise(() => client.end()).pipe(Effect.catch(() => Effect.succeed(undefined)))
 			);
 			const result = yield* Effect.tryPromise(() =>
 				client.query<PostgresRow>(input.sql, Array.from(input.parameters))
@@ -98,7 +97,8 @@ export const makePostgresDatabase = ({
 			const client = new Client(clientOptions);
 			yield* Effect.acquireRelease(
 				Effect.tryPromise(() => client.connect()),
-				() => Effect.tryPromise(() => client.end()).pipe(Effect.catch(() => Effect.succeed(undefined)))
+				() =>
+					Effect.tryPromise(() => client.end()).pipe(Effect.catch(() => Effect.succeed(undefined)))
 			);
 			const completed = yield* Effect.gen(function* () {
 				yield* Effect.tryPromise(() => client.query('begin'));
@@ -118,7 +118,10 @@ export const makePostgresDatabase = ({
 				yield* Effect.tryPromise(() => client.query('commit'));
 				return {
 					rows: settled.at(-1)?.rows ?? initial.rows,
-					affectedRows: settled.reduce((total, entry) => total + entry.affectedRows, initial.affectedRows)
+					affectedRows: settled.reduce(
+						(total, entry) => total + entry.affectedRows,
+						initial.affectedRows
+					)
 				};
 			}).pipe(
 				Effect.catch((cause) =>
@@ -228,9 +231,13 @@ export const makeLocalDatabase = async ({
 						);
 						if (signal.aborted) {
 							return failure(
-								makeWireError('database.cancelled', 'Database result is unknown after cancellation', {
-									outcome: 'unknown'
-								})
+								makeWireError(
+									'database.cancelled',
+									'Database result is unknown after cancellation',
+									{
+										outcome: 'unknown'
+									}
+								)
 							);
 						}
 						return success(

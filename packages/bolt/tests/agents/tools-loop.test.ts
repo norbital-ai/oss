@@ -266,7 +266,8 @@ describe('Bolt agent tool loop', () => {
 		// Observed mid-turn: the call is already in the log, the turn has not settled, and no answer has
 		// been written for a call that has not returned.
 		expect(duringCall).toMatchObject({ status: 'running' });
-		const parts = (duringCall as { readonly parts: ReadonlyArray<{ readonly kind: string }> }).parts;
+		const parts = (duringCall as { readonly parts: ReadonlyArray<{ readonly kind: string }> })
+			.parts;
 		expect(parts.map((part) => part.kind)).toEqual(['tool']);
 		expect(stored).toMatchObject({ status: 'completed' });
 	});
@@ -287,7 +288,10 @@ describe('Bolt agent tool loop', () => {
 				turns += 1;
 				const output: AIResponse['output'] =
 					turns === 1
-						? { text: 'Looking at the workspace', toolCalls: [{ name: 'describe_workspace', input: {} }] }
+						? {
+								text: 'Looking at the workspace',
+								toolCalls: [{ name: 'describe_workspace', input: {} }]
+							}
 						: turns === 2
 							? { toolCalls: [{ name: 'list_skills', input: {} }] }
 							: { text: 'Two employees, no skills' };

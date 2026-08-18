@@ -48,7 +48,10 @@ describe('workspace access projection', () => {
 				[fixtureUserId('u2'), 'basic']
 			].sort()
 		);
-		expect(result.members.find(({ id }) => id === fixtureUserId('u2'))?.teams).toEqual(['People', 'Platform']);
+		expect(result.members.find(({ id }) => id === fixtureUserId('u2'))?.teams).toEqual([
+			'People',
+			'Platform'
+		]);
 	});
 
 	it('collapses several sessions for one user into a single member', async () => {

@@ -15,13 +15,15 @@ export type DetailSurfaceServiceOptions = Readonly<{
 	readonly navigate?: (pathname: string) => void;
 	readonly onRegistrationsChanged?: () => void;
 }>;
-const NavStack = Schema.Array(Schema.Struct({
-	collection_name: Schema.NonEmptyString,
-	record_id: Schema.NonEmptyString,
-	node_id: Schema.NonEmptyString,
-	viewMode: Schema.optionalKey(Schema.Literals(['page', 'modal', 'sidesheet'])),
-	with: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
-}));
+const NavStack = Schema.Array(
+	Schema.Struct({
+		collection_name: Schema.NonEmptyString,
+		record_id: Schema.NonEmptyString,
+		node_id: Schema.NonEmptyString,
+		viewMode: Schema.optionalKey(Schema.Literals(['page', 'modal', 'sidesheet'])),
+		with: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
+	})
+);
 
 /** Owns detail surface service behavior at the collection boundary so validation and typed semantics stay consistent for every caller. */
 export class DetailSurfaceService {
@@ -42,7 +44,8 @@ export class DetailSurfaceService {
 		this.#changed = changed ?? (() => undefined);
 	}
 	/** Owns <method> behavior at the collection boundary so validation and typed semantics stay consistent for every caller. */
-	static readonly #key = (routeKey: string, parentRouteKey?: string): string => `${parentRouteKey ?? ''}\u0000${routeKey}`;
+	static readonly #key = (routeKey: string, parentRouteKey?: string): string =>
+		`${parentRouteKey ?? ''}\u0000${routeKey}`;
 	/** Owns register behavior at the collection boundary so validation and typed semantics stay consistent for every caller. */
 	register(registration: DetailRegistration): () => void {
 		const key = DetailSurfaceService.#key(registration.routeKey, registration.parentRouteKey);
@@ -55,16 +58,24 @@ export class DetailSurfaceService {
 		};
 	}
 	/** Owns resolve behavior at the collection boundary so validation and typed semantics stay consistent for every caller. */
-	readonly resolve = (routeKey: string, parentRouteKey?: string): DetailRegistration | undefined => {
-		return this.#registrations.get(DetailSurfaceService.#key(routeKey, parentRouteKey))
-			?? this.#registrations.get(DetailSurfaceService.#key(routeKey));
+	readonly resolve = (
+		routeKey: string,
+		parentRouteKey?: string
+	): DetailRegistration | undefined => {
+		return (
+			this.#registrations.get(DetailSurfaceService.#key(routeKey, parentRouteKey)) ??
+			this.#registrations.get(DetailSurfaceService.#key(routeKey))
+		);
 	};
 	/** Owns read behavior at the collection boundary so validation and typed semantics stay consistent for every caller. */
 	readonly read = (url: URL): ReadonlyArray<NavStackItem> => {
 		const encoded = url.searchParams.get('stack');
 		if (encoded === null) return [];
-		try { return Schema.decodeUnknownSync(Schema.fromJsonString(NavStack))(encoded); }
-		catch { return []; }
+		try {
+			return Schema.decodeUnknownSync(Schema.fromJsonString(NavStack))(encoded);
+		} catch {
+			return [];
+		}
 	};
 	/** Owns url behavior at the collection boundary so validation and typed semantics stay consistent for every caller. */
 	readonly url = (url: URL, stack: ReadonlyArray<NavStackItem>): string => {
@@ -89,9 +100,16 @@ export class DetailSurfaceService {
 		);
 	};
 	/** Owns back behavior at the collection boundary so validation and typed semantics stay consistent for every caller. */
-	readonly back = (url: URL): void => { this.#navigate(this.url(url, popDetailNavStack(this.read(url)))); };
+	readonly back = (url: URL): void => {
+		this.#navigate(this.url(url, popDetailNavStack(this.read(url))));
+	};
 	/** The record this surface currently shows, and the parent it was opened from. */
 	readonly current = (url: URL) => currentDetailTarget(this.read(url));
 }
 import { Schema } from 'effect';
-import { currentDetailTarget, mergeDetailNavStack, popDetailNavStack, routeContextOf } from './nav-stack.js';
+import {
+	currentDetailTarget,
+	mergeDetailNavStack,
+	popDetailNavStack,
+	routeContextOf
+} from './nav-stack.js';

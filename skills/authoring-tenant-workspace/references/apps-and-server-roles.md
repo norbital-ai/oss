@@ -58,8 +58,8 @@ These fields are **in-product** app chrome. They are not the template's website 
 that is `assets/thumbnail.svg` at the template root (see
 [template-repository.md](template-repository.md#marketing-thumbnail-declare-once)).
 
-| Field           | Where it renders                                                                                             | Required |
-| --------------- | ------------------------------------------------------------------------------------------------------------ | -------- |
+| Field            | Where it renders                                                                                             | Required |
+| ---------------- | ------------------------------------------------------------------------------------------------------------ | -------- |
 | `bolt:icon`      | Sidebar, overview app cards, omni finder; opaque chip on the shell app media header when a banner is present | **yes**  |
 | `bolt:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; omni finder tile                                     | no       |
 | `bolt:banner`    | Always-visible compact shell chrome (`AppMediaHeader`): full-bleed image + dark scrim + title/description    | no       |
@@ -109,7 +109,10 @@ and reference them with the seed-asset URL — no external CDN needed:
 	name="bolt:thumbnail"
 	content="/api/template-seed-assets/<key>/app-media/operations-banner.svg"
 />
-<meta name="bolt:banner" content="/api/template-seed-assets/<key>/app-media/operations-banner.svg" />
+<meta
+	name="bolt:banner"
+	content="/api/template-seed-assets/<key>/app-media/operations-banner.svg"
+/>
 ```
 
 Any file under `assets/` is served by the host at `/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
@@ -207,12 +210,9 @@ export default defineAutomation(
 
 `kind: 'agent'` is not a `defineAutomation` body — interactive chat and channels use
 `AgentAutomationSpec` on `src/+agent.ts` instead. When a handler or hook needs model judgement, call
-`api.infer({ schema, prompt, model?, profile?, collections?, images? })`. That is the same host chat the
-agent uses: an Effect `Schema.Schema` for `schema` (never zod), optional `images`, and optional named
-workspace tools. The funnel
-always offers the read builtins (`describe_workspace`, `read_collection`, `list_skills`,
-`read_skill`) plus those workspace tools. It never offers `write_collection`, `spawn_subagent`,
-host sandbox, authoring, or MCP, and it does not own a `chat_session` transcript.
+`api.infer({ schema, prompt, model?, images? })` — an Effect `Schema.Schema` for `schema` (never
+zod), and optionally the workspace images the turn should see. It is a single schema-validated turn:
+it offers no tools, owns no transcript, and never reaches authoring, a sandbox, MCP, or a write.
 
 ```ts
 import { Effect, Schema } from 'effect';
@@ -230,7 +230,6 @@ export default defineAutomation(
 						summary: Schema.String,
 						highlights: Schema.Array(Schema.String)
 					}),
-					collections: ['jurisdictions', 'employment_statutory_facts'],
 					prompt: `Summarize these findings in prose:\n${findings.map((f) => `- ${f}`).join('\n')}`
 				});
 				return { summary: report.summary, highlights: report.highlights };
@@ -240,8 +239,10 @@ export default defineAutomation(
 ```
 
 Automations and hooks may make schema-validated inference over explicitly selected workspace
-images. Pass only `document_asset` IDs already associated with the record being processed; Bolt re-checks
-asset access and rejects non-images, more than eight images, or more than 20 MiB total:
+images. Pass only `document_asset` IDs already associated with the record being processed — the id a
+`file()` column holds. Bolt resolves each asset's stored bytes and mime type, inlines them on the
+turn, and refuses a non-image, more than eight images, or more than 20 MiB in total rather than
+dropping any of them silently:
 
 ```ts
 const result =

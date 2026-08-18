@@ -81,7 +81,11 @@ const nestedWith = (spec: unknown): WithSpec | undefined => {
 
 /** Reads a `with` clause into the relation names it names, ignoring entries switched off. */
 export const requestedRelations = (spec: unknown): ReadonlyArray<string> =>
-	isObject(spec) ? Object.entries(spec).filter(([, value]) => value !== false && value !== undefined).map(([name]) => name) : [];
+	isObject(spec)
+		? Object.entries(spec)
+				.filter(([, value]) => value !== false && value !== undefined)
+				.map(([name]) => name)
+		: [];
 
 /**
  * Attaches every relation named in `spec` to `rows`, recursing into nested `with` clauses.
@@ -111,19 +115,30 @@ export const attachRelations = (
 		}
 
 		for (const name of names) {
-			const relation = definition.relations.find((candidate) => candidate.source === collection && candidate.name === name);
+			const relation = definition.relations.find(
+				(candidate) => candidate.source === collection && candidate.name === name
+			);
 			if (relation === undefined) continue;
 			const sides = orientation(relation, collection);
 			if (sides === undefined) continue;
 
-			const keys = [...new Set(attached.map((row) => row[sides.sourceColumn]).filter((value): value is Schema.Json => value !== undefined && value !== null))];
+			const keys = [
+				...new Set(
+					attached
+						.map((row) => row[sides.sourceColumn])
+						.filter((value): value is Schema.Json => value !== undefined && value !== null)
+				)
+			];
 			if (keys.length === 0) continue;
 
 			const related = yield* read(relation.target, sides.targetColumn, keys);
 			const entry = isObject(spec) ? spec[name] : undefined;
 			const columns = requestedColumns(entry);
 			const deeper = nestedWith(entry);
-			const resolved = deeper === undefined ? related : yield* attachRelations(definition, relation.target, related, deeper, read);
+			const resolved =
+				deeper === undefined
+					? related
+					: yield* attachRelations(definition, relation.target, related, deeper, read);
 
 			// Grouped by the key each related row joins on, so attaching is a lookup per parent row.
 			const byKey = new Map<string, Array<Readonly<Record<string, Schema.Json>>>>();

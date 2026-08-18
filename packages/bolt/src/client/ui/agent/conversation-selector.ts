@@ -58,7 +58,9 @@ export function sessionVisibleInScope(
  * always empty.
  */
 export function publicChannelNames(channels: readonly PlatformChannel[]): ReadonlySet<string> {
-	return new Set(channels.filter((channel) => channel.audience === 'public').map(({ name }) => name));
+	return new Set(
+		channels.filter((channel) => channel.audience === 'public').map(({ name }) => name)
+	);
 }
 
 /** Channels the current scope may inspect: Web, allowed manifest entries, plus any scoped thread. */

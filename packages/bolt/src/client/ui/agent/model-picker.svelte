@@ -40,9 +40,27 @@
 </section>
 
 <style>
-	header, button { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
-	h2, p { margin: 0; }
-	[role='listbox'] { display: grid; gap: .25rem; margin-block-start: .5rem; }
-	button { width: 100%; padding: .5rem; }
-	button[aria-selected='true'] { font-weight: 700; }
+	header,
+	button {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+	h2,
+	p {
+		margin: 0;
+	}
+	[role='listbox'] {
+		display: grid;
+		gap: 0.25rem;
+		margin-block-start: 0.5rem;
+	}
+	button {
+		width: 100%;
+		padding: 0.5rem;
+	}
+	button[aria-selected='true'] {
+		font-weight: 700;
+	}
 </style>

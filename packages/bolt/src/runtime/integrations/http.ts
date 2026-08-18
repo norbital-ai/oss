@@ -41,7 +41,9 @@ export const IntegrationHttpResponse = Schema.Struct({
 	headers: Schema.Record(Schema.String, Schema.String),
 	body: Schema.Json
 });
-export interface IntegrationHttpResponse extends Schema.Schema.Type<typeof IntegrationHttpResponse> {}
+export interface IntegrationHttpResponse extends Schema.Schema.Type<
+	typeof IntegrationHttpResponse
+> {}
 
 /**
  * Whether a response is worth asking for again.
@@ -66,7 +68,8 @@ export const retryDelayMs = (
 ): number => {
 	if (retryAfter !== undefined) {
 		const seconds = Number(retryAfter);
-		if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, options.maxDelayMs);
+		if (Number.isFinite(seconds) && seconds >= 0)
+			return Math.min(seconds * 1000, options.maxDelayMs);
 		const at = Date.parse(retryAfter);
 		if (Number.isFinite(at)) return Math.min(Math.max(at - nowEpochMs, 0), options.maxDelayMs);
 	}

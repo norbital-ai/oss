@@ -51,7 +51,5 @@ export function loadAgentModelCatalog(transport: WorkspaceRemoteTransport): Prom
 	}
 	if (state.status === 'ready') return Promise.resolve();
 	state.status = 'loading';
-	return Effect.runPromise(
-		Effect.flatten(loadOnce ?? Effect.succeed(Effect.succeed(undefined)))
-	);
+	return Effect.runPromise(Effect.flatten(loadOnce ?? Effect.succeed(Effect.succeed(undefined))));
 }

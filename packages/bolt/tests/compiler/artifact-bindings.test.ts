@@ -54,7 +54,11 @@ describe('emitted artifact bindings', () => {
 			.join('\n')
 			.replaceAll(/^export const /gm, 'const ');
 		const imported = [...artifact.matchAll(/^import (?:\{([^}]*)\}|(\w+)) from/gm)].flatMap(
-			(match) => (match[2] ?? match[1] ?? '').split(',').map((name) => name.trim()).filter(Boolean)
+			(match) =>
+				(match[2] ?? match[1] ?? '')
+					.split(',')
+					.map((name) => name.trim())
+					.filter(Boolean)
 		);
 		// Declaring the stripped imports as parameters is what lets the body compile; an undeclared
 		// name that is *not* an import is exactly the bug this test exists for.

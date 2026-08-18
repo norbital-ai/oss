@@ -90,7 +90,10 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		}
 		// `startSession` admits the subject before minting, and refuses when no row comes back.
 		if (request._tag === 'Query' && request.sql.includes('update bolt_auth_user')) {
-			return Promise.resolve({ _tag: 'Success', value: { rows: [{ id: subject.userId }], affectedRows: 1 } });
+			return Promise.resolve({
+				_tag: 'Success',
+				value: { rows: [{ id: subject.userId }], affectedRows: 1 }
+			});
 		}
 		if (request._tag === 'Query' && request.sql.includes('bolt_external_subjects')) {
 			const externalId = request.parameters[1];

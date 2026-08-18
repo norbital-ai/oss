@@ -80,9 +80,7 @@ export const readProvisioning = async (
 							: [];
 					})
 				: [],
-			relations: Array.isArray(relations)
-				? (relations as ReplicaShape['relations'])
-				: []
+			relations: Array.isArray(relations) ? (relations as ReplicaShape['relations']) : []
 		}
 	};
 };
@@ -103,7 +101,10 @@ export type SnapshotOutcome = Readonly<{
  */
 export const loadSnapshot = async (
 	transport: BootstrapTransport,
-	write: (collection: string, rows: ReadonlyArray<Readonly<Record<string, unknown>>>) => Promise<number>,
+	write: (
+		collection: string,
+		rows: ReadonlyArray<Readonly<Record<string, unknown>>>
+	) => Promise<number>,
 	collections: ReadonlyArray<string>,
 	pageSize = 500
 ): Promise<SnapshotOutcome> => {
@@ -144,7 +145,9 @@ export const loadSnapshot = async (
 /** The collections this subject may read, as the server scopes them. */
 export const readShape = async (transport: BootstrapTransport): Promise<ReadonlyArray<string>> => {
 	const answer = await transport.command('sync.shape', {});
-	return Array.isArray(answer) ? answer.filter((entry): entry is string => typeof entry === 'string') : [];
+	return Array.isArray(answer)
+		? answer.filter((entry): entry is string => typeof entry === 'string')
+		: [];
 };
 
 export type LocalDatabase = Readonly<{
@@ -224,7 +227,8 @@ export const openLocalDatabase = async (
 	const readable = await readShape(transport);
 	const snapshot = await loadSnapshot(
 		transport,
-		async (collection, rows) => bulkUpsert(database, await columnsFor(collection), collection, rows),
+		async (collection, rows) =>
+			bulkUpsert(database, await columnsFor(collection), collection, rows),
 		readable
 	);
 	// Marked only now: until the snapshot has landed, this database does not hold the workspace, and a

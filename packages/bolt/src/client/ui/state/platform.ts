@@ -1,7 +1,13 @@
 import { createContext } from 'svelte';
 import { Cause, Effect, Exit, Fiber, Result } from 'effect';
 
-export type PlatformUser = Readonly<{ readonly id: string; readonly norbital_id: string; readonly email?: string; readonly name?: string; readonly roles?: ReadonlyArray<string> }>;
+export type PlatformUser = Readonly<{
+	readonly id: string;
+	readonly norbital_id: string;
+	readonly email?: string;
+	readonly name?: string;
+	readonly roles?: ReadonlyArray<string>;
+}>;
 /**
  * A channel as `workspace.manifest` publishes it — the authored declaration minus what only the
  * runtime needs.
@@ -12,10 +18,27 @@ export type PlatformUser = Readonly<{ readonly id: string; readonly norbital_id:
  * against `'public'` and treat everything else as reachable only by members, which is the safe
  * reading of an unrecognised value.
  */
-export type PlatformChannel = Readonly<{ readonly name: string; readonly transport: string; readonly audience: string }>;
-export type PlatformState = Readonly<{ readonly user: PlatformUser; readonly organization: string; readonly apps: ReadonlyArray<string>; readonly channels: ReadonlyArray<PlatformChannel> }>;
-export type ChatMessage = Readonly<{ readonly id: string; readonly role: 'user' | 'assistant' | 'tool'; readonly content: string }>;
-export type AgentUiState = Readonly<{ readonly conversationId?: string; readonly messages: ReadonlyArray<ChatMessage>; readonly busy: boolean }>;
+export type PlatformChannel = Readonly<{
+	readonly name: string;
+	readonly transport: string;
+	readonly audience: string;
+}>;
+export type PlatformState = Readonly<{
+	readonly user: PlatformUser;
+	readonly organization: string;
+	readonly apps: ReadonlyArray<string>;
+	readonly channels: ReadonlyArray<PlatformChannel>;
+}>;
+export type ChatMessage = Readonly<{
+	readonly id: string;
+	readonly role: 'user' | 'assistant' | 'tool';
+	readonly content: string;
+}>;
+export type AgentUiState = Readonly<{
+	readonly conversationId?: string;
+	readonly messages: ReadonlyArray<ChatMessage>;
+	readonly busy: boolean;
+}>;
 export type DetailLocation = Readonly<{ readonly collection: string; readonly recordId: string }>;
 export type BoltRoute = Readonly<{ readonly app: string; readonly path: string }>;
 
@@ -25,8 +48,12 @@ export const setPlatformStateContext = writePlatformState;
 
 /** Owns push detail behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
 const PlatformNavigation = {
-	pushDetail: (stack: ReadonlyArray<DetailLocation>, location: DetailLocation): ReadonlyArray<DetailLocation> => [...stack, location],
-	popDetail: (stack: ReadonlyArray<DetailLocation>): ReadonlyArray<DetailLocation> => stack.slice(0, -1),
+	pushDetail: (
+		stack: ReadonlyArray<DetailLocation>,
+		location: DetailLocation
+	): ReadonlyArray<DetailLocation> => [...stack, location],
+	popDetail: (stack: ReadonlyArray<DetailLocation>): ReadonlyArray<DetailLocation> =>
+		stack.slice(0, -1),
 	parseRoute: (pathname: string): BoltRoute => {
 		const parts = pathname.split('/').filter(Boolean);
 		return { app: parts[0] ?? '', path: `/${parts.slice(1).join('/')}` };

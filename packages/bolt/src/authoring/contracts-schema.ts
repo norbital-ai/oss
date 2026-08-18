@@ -9,13 +9,23 @@ import type { HttpConnection, PrivateEnvReference } from './workspace-schema.js'
 
 export interface WorkspaceAuthoringTypes {}
 
-type ApplyDimensions<Value, Dimensions, Depth extends ReadonlyArray<unknown> = readonly []> = [Dimensions] extends [never]
+type ApplyDimensions<Value, Dimensions, Depth extends ReadonlyArray<unknown> = readonly []> = [
+	Dimensions
+] extends [never]
 	? Value
 	: Dimensions extends number
-		? number extends Dimensions ? Value : Depth['length'] extends Dimensions ? Value : ApplyDimensions<ReadonlyArray<Value>, Dimensions, readonly [...Depth, unknown]>
+		? number extends Dimensions
+			? Value
+			: Depth['length'] extends Dimensions
+				? Value
+				: ApplyDimensions<ReadonlyArray<Value>, Dimensions, readonly [...Depth, unknown]>
 		: Value;
 type BuilderValue<Config extends { readonly data: unknown }> = ApplyDimensions<
-	Config extends { readonly $type: infer Custom } ? [Custom] extends [never] ? Config['data'] : Custom : Config['data'],
+	Config extends { readonly $type: infer Custom }
+		? [Custom] extends [never]
+			? Config['data']
+			: Custom
+		: Config['data'],
 	Config extends { readonly dimensions: infer Dimensions } ? Dimensions : 0
 >;
 type BuilderData<B> = B extends { readonly _: infer Config extends { readonly data: unknown } }
@@ -43,16 +53,20 @@ interface SystemColumnValue {
 	readonly norbital_approval_id: string | null;
 }
 export type SystemRow = { readonly [K in SystemColumnName]: SystemColumnValue[K] };
-type SelectForColumns<C extends Readonly<Record<string, AnyPgColumnBuilder>>> = SystemRow & { readonly [K in keyof C]: BuilderData<C[K]> };
+type SelectForColumns<C extends Readonly<Record<string, AnyPgColumnBuilder>>> = SystemRow & {
+	readonly [K in keyof C]: BuilderData<C[K]>;
+};
 type RequiredInsertKeys<C extends Readonly<Record<string, AnyPgColumnBuilder>>> = {
 	[K in keyof C]: C[K] extends { readonly _: { readonly notNull: true } }
-		? C[K] extends { readonly _: { readonly hasDefault: true } } ? never : K
-		: never
+		? C[K] extends { readonly _: { readonly hasDefault: true } }
+			? never
+			: K
+		: never;
 }[keyof C];
 type InsertForColumns<C extends Readonly<Record<string, AnyPgColumnBuilder>>> = {
-	readonly [K in RequiredInsertKeys<C>]: BuilderData<C[K]>
+	readonly [K in RequiredInsertKeys<C>]: BuilderData<C[K]>;
 } & {
-	readonly [K in Exclude<keyof C, RequiredInsertKeys<C>>]?: BuilderData<C[K]>
+	readonly [K in Exclude<keyof C, RequiredInsertKeys<C>>]?: BuilderData<C[K]>;
 };
 type ColumnsOf<M extends ModelDeclaration> = M['columns'];
 
@@ -62,7 +76,10 @@ export interface TableShape<Select, Insert = Partial<Select>> {
 }
 
 export type TablesForModels<M extends Readonly<Record<string, ModelDeclaration>>> = {
-	readonly [K in keyof M]: TableShape<SelectForColumns<ColumnsOf<M[K]>>, InsertForColumns<ColumnsOf<M[K]>>>;
+	readonly [K in keyof M]: TableShape<
+		SelectForColumns<ColumnsOf<M[K]>>,
+		InsertForColumns<ColumnsOf<M[K]>>
+	>;
 };
 
 export interface AnySchema {
@@ -71,11 +88,16 @@ export interface AnySchema {
 	readonly inputs: Readonly<Record<string, { readonly create: unknown; readonly update: unknown }>>;
 }
 
-export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends { readonly schema: infer S extends AnySchema } ? S : AnySchema;
+export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
+	readonly schema: infer S extends AnySchema;
+}
+	? S
+	: AnySchema;
 export type TableName<S extends AnySchema> = keyof S['tables'] & string;
 export type SchemaRow<S extends AnySchema, N extends TableName<S>> = S['tables'][N]['$inferSelect'];
 type QueryScalar = string | number | boolean | bigint | Date | null;
-type QueryOperand<Value> = Exclude<Value, undefined> extends QueryScalar ? Exclude<Value, undefined> | Date : unknown;
+type QueryOperand<Value> =
+	Exclude<Value, undefined> extends QueryScalar ? Exclude<Value, undefined> | Date : unknown;
 export type SchemaFieldFilter<Value> = {
 	readonly eq?: QueryOperand<Value>;
 	readonly ne?: QueryOperand<Value>;
@@ -101,7 +123,10 @@ export type SchemaWhere<Row extends object> = {
 	readonly AND?: ReadonlyArray<SchemaWhere<Row>>;
 	readonly OR?: ReadonlyArray<SchemaWhere<Row>>;
 	readonly NOT?: SchemaWhere<Row>;
-	readonly RAW?: (table: Readonly<Record<keyof Row, unknown>>, operators: SchemaRawOperators) => unknown;
+	readonly RAW?: (
+		table: Readonly<Record<keyof Row, unknown>>,
+		operators: SchemaRawOperators
+	) => unknown;
 	readonly $sql?: string;
 };
 export interface SchemaQueryConfig<S extends AnySchema, N extends TableName<S>> {
@@ -114,22 +139,55 @@ export interface SchemaQueryConfig<S extends AnySchema, N extends TableName<S>> 
 }
 
 type SelectedKeys<Row, Columns> = true extends Columns[keyof Columns]
-	? { [K in keyof Columns & keyof Row]: Columns[K] extends false ? never : K }[keyof Columns & keyof Row]
-	: Exclude<keyof Row, { [K in keyof Columns & keyof Row]: Columns[K] extends false ? K : never }[keyof Columns & keyof Row]>;
+	? { [K in keyof Columns & keyof Row]: Columns[K] extends false ? never : K }[keyof Columns &
+			keyof Row]
+	: Exclude<
+			keyof Row,
+			{ [K in keyof Columns & keyof Row]: Columns[K] extends false ? K : never }[keyof Columns &
+				keyof Row]
+		>;
 type SelectColumns<Row, Config> = Config extends { readonly columns: infer Columns }
 	? Pick<Row, SelectedKeys<Row, Columns>>
 	: Row;
 type WithRows<Config> = Config extends { readonly with: infer W }
-	? { readonly [K in keyof W]: Readonly<Record<string, unknown>> | ReadonlyArray<Readonly<Record<string, unknown>>> | null }
+	? {
+			readonly [K in keyof W]:
+				Readonly<Record<string, unknown>> | ReadonlyArray<Readonly<Record<string, unknown>>> | null;
+		}
 	: Readonly<Record<never, never>>;
-export type SchemaQueryRow<S extends AnySchema, N extends TableName<S>, Config extends SchemaQueryConfig<S, N> | undefined = undefined> = SelectColumns<SchemaRow<S, N>, Config> & WithRows<Config>;
+export type SchemaQueryRow<
+	S extends AnySchema,
+	N extends TableName<S>,
+	Config extends SchemaQueryConfig<S, N> | undefined = undefined
+> = SelectColumns<SchemaRow<S, N>, Config> & WithRows<Config>;
 
-export type MutationInsertFor<S extends AnySchema, N extends TableName<S>> = S['tables'][N]['$inferInsert'];
-export type MutationUpdateFor<S extends AnySchema, N extends TableName<S>> = Partial<S['tables'][N]['$inferSelect']>;
-export type InputValuesForTables<T extends Readonly<Record<string, TableShape<unknown, unknown>>>> = {
-	readonly [K in keyof T]: { readonly create: T[K]['$inferInsert']; readonly update: Partial<T[K]['$inferSelect']> };
-};
+export type MutationInsertFor<
+	S extends AnySchema,
+	N extends TableName<S>
+> = S['tables'][N]['$inferInsert'];
+export type MutationUpdateFor<S extends AnySchema, N extends TableName<S>> = Partial<
+	S['tables'][N]['$inferSelect']
+>;
+export type InputValuesForTables<T extends Readonly<Record<string, TableShape<unknown, unknown>>>> =
+	{
+		readonly [K in keyof T]: {
+			readonly create: T[K]['$inferInsert'];
+			readonly update: Partial<T[K]['$inferSelect']>;
+		};
+	};
 
+/**
+ * One nearest-neighbour read, answered by pgvector against the declared HNSW index.
+ *
+ * Every field here was ignored for a long time: both implementations spread this config into an
+ * ordinary `findMany`, which knows no `column`, `probe` or `metric` — so the query returned the
+ * collection's first rows in insertion order with no `distance` on them at all, and a caller doing
+ * duplicate detection found every record a near-duplicate of every other.
+ *
+ * `metric` picks the pgvector operator: `cosine` is `<=>`, `l2` is `<->`, and `ip` is `<#>` — the
+ * *negative* inner product, which is what makes ascending order mean "most similar" for all three,
+ * so an `ip` `maxDistance` is compared against a negative number.
+ */
 export interface NearestQueryConfig<Row> {
 	readonly column: keyof Row & string;
 	readonly probe: ReadonlyArray<number>;
@@ -141,11 +199,17 @@ export interface NearestQueryConfig<Row> {
 
 export interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
 	findMany(): Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
-	findMany<const Config extends SchemaQueryConfig<S, N>>(config: Config): Effect.Effect<Array<SchemaQueryRow<S, N, Config> & Readonly<Record<string, unknown>>>>;
+	findMany<const Config extends SchemaQueryConfig<S, N>>(
+		config: Config
+	): Effect.Effect<Array<SchemaQueryRow<S, N, Config> & Readonly<Record<string, unknown>>>>;
 	findFirst(): Effect.Effect<(SchemaRow<S, N> & Readonly<Record<string, unknown>>) | undefined>;
-	findFirst<const Config extends SchemaQueryConfig<S, N>>(config: Config): Effect.Effect<(SchemaQueryRow<S, N, Config> & Readonly<Record<string, unknown>>) | undefined>;
+	findFirst<const Config extends SchemaQueryConfig<S, N>>(
+		config: Config
+	): Effect.Effect<(SchemaQueryRow<S, N, Config> & Readonly<Record<string, unknown>>) | undefined>;
 	readonly count: (config?: Pick<SchemaQueryConfig<S, N>, 'where'>) => Effect.Effect<number>;
-	readonly findNearest: (config: NearestQueryConfig<SchemaRow<S, N>>) => Effect.Effect<Array<SchemaRow<S, N> & { readonly distance: number }>>;
+	readonly findNearest: (
+		config: NearestQueryConfig<SchemaRow<S, N>>
+	) => Effect.Effect<Array<SchemaRow<S, N> & { readonly distance: number }>>;
 }
 export interface ApprovalRequestRow extends SystemRow {
 	readonly collection_name: string;
@@ -154,34 +218,64 @@ export interface ApprovalRequestRow extends SystemRow {
 	readonly locked_record_refs: unknown;
 }
 export interface ApprovalRequestQuery {
-	readonly findMany: <const Config extends {
-		readonly where?: SchemaWhere<ApprovalRequestRow>;
-		readonly columns?: Partial<Readonly<Record<keyof ApprovalRequestRow, boolean>>>;
-		readonly orderBy?: Partial<Readonly<Record<keyof ApprovalRequestRow, 'asc' | 'desc'>>>;
-		readonly limit?: number;
-	}>(config?: Config) => Effect.Effect<Array<ApprovalRequestRow>>;
-	readonly findFirst: <const Config extends {
-		readonly where?: SchemaWhere<ApprovalRequestRow>;
-		readonly limit?: number;
-	}>(config?: Config) => Effect.Effect<ApprovalRequestRow | undefined>;
+	readonly findMany: <
+		const Config extends {
+			readonly where?: SchemaWhere<ApprovalRequestRow>;
+			readonly columns?: Partial<Readonly<Record<keyof ApprovalRequestRow, boolean>>>;
+			readonly orderBy?: Partial<Readonly<Record<keyof ApprovalRequestRow, 'asc' | 'desc'>>>;
+			readonly limit?: number;
+		}
+	>(
+		config?: Config
+	) => Effect.Effect<Array<ApprovalRequestRow>>;
+	readonly findFirst: <
+		const Config extends {
+			readonly where?: SchemaWhere<ApprovalRequestRow>;
+			readonly limit?: number;
+		}
+	>(
+		config?: Config
+	) => Effect.Effect<ApprovalRequestRow | undefined>;
 }
-export interface StructuredInferenceInput<S extends AnySchema, Output> {
+/**
+ * One schema-validated model call from an authored handler.
+ *
+ * `profile` and `collections` used to be declared here too — a named inference profile and a set of
+ * collections to offer the turn as tools. Neither was ever built: the runtime read `schema`,
+ * `prompt` and `model` and nothing else, so a handler naming collections got a turn with no tools
+ * and no indication that it had. They are gone rather than stubbed, because a declared capability
+ * that silently does nothing is the defect, not the absence of one.
+ *
+ * `images` is real. Each entry names a `document_asset` by `norbital_id` — the value a `file()`
+ * column holds — and the runtime resolves its bytes and mime type, inlines them on the turn, and
+ * refuses a non-image, more than eight of them, or more than 20 MiB in total rather than dropping
+ * any silently.
+ */
+export interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
 	readonly prompt: string;
 	readonly model?: string;
-	readonly profile?: string;
-	readonly collections?: ReadonlyArray<TableName<S>>;
-	readonly images?: ReadonlyArray<{ readonly assetId: string; readonly detail?: 'auto' | 'low' | 'high' }>;
+	readonly images?: ReadonlyArray<{
+		readonly assetId: string;
+		readonly detail?: 'auto' | 'low' | 'high';
+	}>;
 }
 
 export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
-	readonly db: { readonly query: { readonly [N in TableName<S>]: CollectionQuery<S, N> } & { readonly approval_request: ApprovalRequestQuery } } & {
+	readonly db: {
+		readonly query: { readonly [N in TableName<S>]: CollectionQuery<S, N> } & {
+			readonly approval_request: ApprovalRequestQuery;
+		};
+	} & {
 		readonly [N in TableName<S>]: CollectionQuery<S, N> & {
 			readonly create: (input: MutationInsertFor<S, N>) => Effect.Effect<SchemaRow<S, N>>;
-			readonly update: (id: string, input: MutationUpdateFor<S, N>) => Effect.Effect<SchemaRow<S, N>>;
+			readonly update: (
+				id: string,
+				input: MutationUpdateFor<S, N>
+			) => Effect.Effect<SchemaRow<S, N>>;
 		};
 	};
-	readonly infer: <Output>(input: StructuredInferenceInput<S, Output>) => Effect.Effect<Output>;
+	readonly infer: <Output>(input: StructuredInferenceInput<Output>) => Effect.Effect<Output>;
 	readonly readFileAsset: (assetId: string) => Effect.Effect<{
 		readonly id: string;
 		readonly name: string;
@@ -191,7 +285,8 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 	}>;
 };
 export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = BeforeApi<S>;
-export type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>> = MutationInsertFor<S, N> | ({ readonly norbital_id: string } & MutationUpdateFor<S, N>);
+export type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>> =
+	MutationInsertFor<S, N> | ({ readonly norbital_id: string } & MutationUpdateFor<S, N>);
 /**
  * The elevated writes, on the collection — one shape for reaching a collection, not two.
  *
@@ -202,25 +297,55 @@ export type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>>
  * a per-collection object, so `api.db.mutate` was an object named `mutate` and
  * `yield* api.db.mutate('payslips', rows)` raised `is not iterable` while typechecking cleanly.
  */
-export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<BeforeApi<S>, 'db'> & {
+export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<
+	BeforeApi<S>,
+	'db'
+> & {
 	readonly db: { readonly query: BeforeApi<S>['db']['query'] } & {
 		readonly [N in TableName<S>]: CollectionQuery<S, N> & {
 			readonly create: (input: MutationInsertFor<S, N>) => Effect.Effect<SchemaRow<S, N>>;
-			readonly update: (id: string, input: MutationUpdateFor<S, N>) => Effect.Effect<SchemaRow<S, N>>;
-			readonly mutate: (payloads: ReadonlyArray<ElevatedMutationPayload<S, N>>) => Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
+			readonly update: (
+				id: string,
+				input: MutationUpdateFor<S, N>
+			) => Effect.Effect<SchemaRow<S, N>>;
+			readonly mutate: (
+				payloads: ReadonlyArray<ElevatedMutationPayload<S, N>>
+			) => Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
 			readonly delete: (identifiers: ReadonlyArray<string>) => Effect.Effect<void>;
 		};
 	};
 };
 
 type DescribedHook<Handler> = { readonly description: string; readonly handler: Handler };
-type DescribedBatchHook<Handler, BatchHandler> = DescribedHook<Handler> & { readonly batchHandler?: BatchHandler };
+type DescribedBatchHook<Handler, BatchHandler> = DescribedHook<Handler> & {
+	readonly batchHandler?: BatchHandler;
+};
 type CreateInput<S extends AnySchema, N extends TableName<S>> = MutationInsertFor<S, N>;
-type CreateMutationPayload<S extends AnySchema, N extends TableName<S>> = MutationInsertFor<S, N> & Readonly<Record<string, unknown>>;
-type CreateBefore<S extends AnySchema, N extends TableName<S>> = (context: { readonly input: CreateInput<S, N>; readonly api: HookApi<S> }) => Effect.Effect<CreateInput<S, N> | CreateMutationPayload<S, N>, unknown, never> | Promise<CreateInput<S, N> | CreateMutationPayload<S, N>> | CreateInput<S, N> | CreateMutationPayload<S, N>;
-type CreateBeforeBatch<S extends AnySchema, N extends TableName<S>> = (context: { readonly inputs: ReadonlyArray<CreateInput<S, N>>; readonly api: HookApi<S> }) => Effect.Effect<ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>, unknown, never> | Promise<ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>> | ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>;
-type CreateAfter<S extends AnySchema, N extends TableName<S>> = (context: { readonly record: SchemaRow<S, N>; readonly api: AfterHookApi<S> }) => Effect.Effect<void, unknown, never> | Promise<void> | void;
-type CreateAfterBatch<S extends AnySchema, N extends TableName<S>> = (context: { readonly records: ReadonlyArray<SchemaRow<S, N>>; readonly api: AfterHookApi<S> }) => Effect.Effect<void, unknown, never> | Promise<void> | void;
+type CreateMutationPayload<S extends AnySchema, N extends TableName<S>> = MutationInsertFor<S, N> &
+	Readonly<Record<string, unknown>>;
+type CreateBefore<S extends AnySchema, N extends TableName<S>> = (context: {
+	readonly input: CreateInput<S, N>;
+	readonly api: HookApi<S>;
+}) =>
+	| Effect.Effect<CreateInput<S, N> | CreateMutationPayload<S, N>, unknown, never>
+	| Promise<CreateInput<S, N> | CreateMutationPayload<S, N>>
+	| CreateInput<S, N>
+	| CreateMutationPayload<S, N>;
+type CreateBeforeBatch<S extends AnySchema, N extends TableName<S>> = (context: {
+	readonly inputs: ReadonlyArray<CreateInput<S, N>>;
+	readonly api: HookApi<S>;
+}) =>
+	| Effect.Effect<ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>, unknown, never>
+	| Promise<ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>>
+	| ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>;
+type CreateAfter<S extends AnySchema, N extends TableName<S>> = (context: {
+	readonly record: SchemaRow<S, N>;
+	readonly api: AfterHookApi<S>;
+}) => Effect.Effect<void, unknown, never> | Promise<void> | void;
+type CreateAfterBatch<S extends AnySchema, N extends TableName<S>> = (context: {
+	readonly records: ReadonlyArray<SchemaRow<S, N>>;
+	readonly api: AfterHookApi<S>;
+}) => Effect.Effect<void, unknown, never> | Promise<void> | void;
 
 export type CollectionHooks<S extends AnySchema, N extends TableName<S>> = {
 	readonly create?: {
@@ -230,27 +355,71 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>> = {
 	};
 	readonly update?: {
 		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly before?: DescribedHook<(context: { readonly input: MutationUpdateFor<S, N>; readonly existing: SchemaRow<S, N>; readonly api: HookApi<S> }) => Effect.Effect<MutationUpdateFor<S, N>, unknown, never> | Promise<MutationUpdateFor<S, N>> | MutationUpdateFor<S, N>>;
-		readonly after?: DescribedHook<(context: { readonly record: SchemaRow<S, N>; readonly api: AfterHookApi<S> }) => Effect.Effect<void, unknown, never> | Promise<void> | void>;
+		readonly before?: DescribedHook<
+			(context: {
+				readonly input: MutationUpdateFor<S, N>;
+				readonly existing: SchemaRow<S, N>;
+				readonly api: HookApi<S>;
+			}) =>
+				| Effect.Effect<MutationUpdateFor<S, N>, unknown, never>
+				| Promise<MutationUpdateFor<S, N>>
+				| MutationUpdateFor<S, N>
+		>;
+		readonly after?: DescribedHook<
+			(context: {
+				readonly record: SchemaRow<S, N>;
+				readonly api: AfterHookApi<S>;
+			}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+		>;
 	};
 	readonly delete?: {
-		readonly before?: DescribedHook<(context: { readonly existing: SchemaRow<S, N>; readonly api: HookApi<S> }) => Effect.Effect<void, unknown, never> | Promise<void> | void>;
-		readonly after?: DescribedHook<(context: { readonly record: SchemaRow<S, N>; readonly api: AfterHookApi<S> }) => Effect.Effect<void, unknown, never> | Promise<void> | void>;
+		readonly before?: DescribedHook<
+			(context: {
+				readonly existing: SchemaRow<S, N>;
+				readonly api: HookApi<S>;
+			}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+		>;
+		readonly after?: DescribedHook<
+			(context: {
+				readonly record: SchemaRow<S, N>;
+				readonly api: AfterHookApi<S>;
+			}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+		>;
 	};
 };
 export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
-	readonly export?: { readonly description: string; readonly handler: (context: { readonly records: ReadonlyArray<SchemaRow<S, N>> }, api: BeforeApi<S>) => Effect.Effect<TExportManifest, unknown, never> | Promise<TExportManifest> | TExportManifest };
-	readonly import?: { readonly description: string; readonly input: Schema.Codec<unknown, unknown>; readonly handler: (context: { readonly input: unknown }, api: BeforeApi<S>) => Effect.Effect<ReadonlyArray<MutationInsertFor<S, N>>, unknown, never> | Promise<ReadonlyArray<MutationInsertFor<S, N>>> | ReadonlyArray<MutationInsertFor<S, N>> };
+	readonly export?: {
+		readonly description: string;
+		readonly handler: (
+			context: { readonly records: ReadonlyArray<SchemaRow<S, N>> },
+			api: BeforeApi<S>
+		) =>
+			Effect.Effect<TExportManifest, unknown, never> | Promise<TExportManifest> | TExportManifest;
+	};
+	readonly import?: {
+		readonly description: string;
+		readonly input: Schema.Codec<unknown, unknown>;
+		readonly handler: (
+			context: { readonly input: unknown },
+			api: BeforeApi<S>
+		) =>
+			| Effect.Effect<ReadonlyArray<MutationInsertFor<S, N>>, unknown, never>
+			| Promise<ReadonlyArray<MutationInsertFor<S, N>>>
+			| ReadonlyArray<MutationInsertFor<S, N>>;
+	};
 };
 type CollectionEventTrigger<S extends AnySchema, N extends TableName<S>> =
 	| 'create'
 	| 'update'
 	| 'delete'
 	| {
-		readonly create?: (context: { readonly record: SchemaRow<S, N> }) => boolean;
-		readonly update?: (context: { readonly previous: SchemaRow<S, N>; readonly record: SchemaRow<S, N> }) => boolean;
-		readonly delete?: (context: { readonly record: SchemaRow<S, N> }) => boolean;
-	};
+			readonly create?: (context: { readonly record: SchemaRow<S, N> }) => boolean;
+			readonly update?: (context: {
+				readonly previous: SchemaRow<S, N>;
+				readonly record: SchemaRow<S, N>;
+			}) => boolean;
+			readonly delete?: (context: { readonly record: SchemaRow<S, N> }) => boolean;
+	  };
 /**
  * The request half of an outbound binding: where a delivery goes and how hard the platform tries.
  *
@@ -332,9 +501,30 @@ export type PullCursorSpec = {
  * against someone else's API.
  */
 export type PullPagesSpec =
-	| { readonly style: 'page'; readonly pageQuery: string; readonly sizeQuery?: string; readonly size?: number; readonly firstPage?: number; readonly max?: number }
-	| { readonly style: 'offset'; readonly offsetQuery: string; readonly limitQuery: string; readonly size: number; readonly max?: number }
-	| { readonly style: 'cursor'; readonly query: string; readonly next: { readonly header: string } | { readonly field: string } | { readonly path: ReadonlyArray<string> }; readonly max?: number }
+	| {
+			readonly style: 'page';
+			readonly pageQuery: string;
+			readonly sizeQuery?: string;
+			readonly size?: number;
+			readonly firstPage?: number;
+			readonly max?: number;
+	  }
+	| {
+			readonly style: 'offset';
+			readonly offsetQuery: string;
+			readonly limitQuery: string;
+			readonly size: number;
+			readonly max?: number;
+	  }
+	| {
+			readonly style: 'cursor';
+			readonly query: string;
+			readonly next:
+				| { readonly header: string }
+				| { readonly field: string }
+				| { readonly path: ReadonlyArray<string> };
+			readonly max?: number;
+	  }
 	| { readonly style: 'link-header'; readonly max?: number };
 
 /** Retry with exponential backoff. `Retry-After` on a 429 or 503 wins over the computed delay. */
@@ -483,12 +673,18 @@ type CollectionInboundBinding<S extends AnySchema, N extends TableName<S>> = {
 	 * identity — so the step sees exactly the set that is about to be written and can gather its
 	 * keys in one `in (…)`.
 	 */
-	readonly resolve?: (context: { readonly records: ReadonlyArray<never>; readonly api: BeforeApi<S> }) => unknown;
+	readonly resolve?: (context: {
+		readonly records: ReadonlyArray<never>;
+		readonly api: BeforeApi<S>;
+	}) => unknown;
 	readonly map?: (record: never, resolved: never) => MutationInsertFor<S, N>;
 };
 
 /** One inbound binding driven by the platform's own scheduler. */
-export type CollectionPullBinding<S extends AnySchema, N extends TableName<S>> = CollectionInboundBinding<S, N> & {
+export type CollectionPullBinding<
+	S extends AnySchema,
+	N extends TableName<S>
+> = CollectionInboundBinding<S, N> & {
 	readonly pull: PullRequestSpec;
 	readonly webhook?: never;
 };
@@ -503,7 +699,10 @@ export type CollectionPullBinding<S extends AnySchema, N extends TableName<S>> =
  * and stamped into the identity column by the platform, never taken from whatever the record claims
  * its primary key is.
  */
-export type CollectionWebhookBinding<S extends AnySchema, N extends TableName<S>> = CollectionInboundBinding<S, N> & {
+export type CollectionWebhookBinding<
+	S extends AnySchema,
+	N extends TableName<S>
+> = CollectionInboundBinding<S, N> & {
 	readonly webhook: WebhookRequestSpec;
 	readonly pull?: never;
 };
@@ -519,15 +718,19 @@ export type CollectionWebhookBinding<S extends AnySchema, N extends TableName<S>
  * rule.
  */
 export type CollectionReceiveBinding<S extends AnySchema, N extends TableName<S>> =
-	| CollectionPullBinding<S, N>
-	| CollectionWebhookBinding<S, N>;
+	CollectionPullBinding<S, N> | CollectionWebhookBinding<S, N>;
 
-export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> = Readonly<Record<string, {
-	/** Omitted by an integration that only receives pushed deliveries: there is nothing to request. */
-	readonly connection?: HttpConnection;
-	readonly receive?: Readonly<Record<string, CollectionReceiveBinding<S, N>>>;
-	readonly send?: Readonly<Record<string, CollectionSendBinding<S, N>>>;
-}>>;
+export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> = Readonly<
+	Record<
+		string,
+		{
+			/** Omitted by an integration that only receives pushed deliveries: there is nothing to request. */
+			readonly connection?: HttpConnection;
+			readonly receive?: Readonly<Record<string, CollectionReceiveBinding<S, N>>>;
+			readonly send?: Readonly<Record<string, CollectionSendBinding<S, N>>>;
+		}
+	>
+>;
 
 export interface ChannelDefinition {
 	readonly transport: string;
@@ -535,6 +738,18 @@ export interface ChannelDefinition {
 	readonly description: string;
 	readonly audience: 'public' | 'authenticated';
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
+	/**
+	 * Per-minute caps on inbound messages, enforced in `runtime/channels/channels.ts`.
+	 *
+	 * Both are counted over the last minute of inbound receipts and checked in the same statement
+	 * that writes the receipt, so a simultaneous burst cannot all read the count from before any of
+	 * them was recorded. A message past either cap is refused with a `ChannelError` rather than
+	 * queued: the sender resends, the host does not retry.
+	 *
+	 * Omitting this leaves a channel uncapped. That is only reasonable for an `authenticated`
+	 * audience — a `public` channel is reachable by anyone who can message the transport, and the cap
+	 * is the only thing between that and an unbounded number of agent turns billed to the workspace.
+	 */
 	readonly rateLimits?: { readonly perSenderPerMinute: number; readonly totalPerMinute: number };
 	readonly task: string;
 }
@@ -544,7 +759,7 @@ type PolicyGrant<S extends AnySchema> = {
 		readonly action: 'read' | 'create' | 'update' | 'delete' | 'history';
 		readonly where?: SchemaWhere<SchemaRow<S, N>>;
 		readonly approval?: unknown;
-	}
+	};
 }[TableName<S>];
 export interface PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> {
 	readonly name: string;
@@ -552,4 +767,7 @@ export interface PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> 
 	readonly apps?: ReadonlyArray<string>;
 	readonly grants: ReadonlyArray<PolicyGrant<S>>;
 }
-export interface McpServerDefinition { readonly url: string; readonly tools?: ReadonlyArray<string>; }
+export interface McpServerDefinition {
+	readonly url: string;
+	readonly tools?: ReadonlyArray<string>;
+}

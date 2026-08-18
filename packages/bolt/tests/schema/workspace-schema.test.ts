@@ -267,17 +267,6 @@ describe('WorkspaceSchema owner', () => {
 	});
 
 	/**
-	 * A database the plan has just built from nothing is already at the head of the lineage — the plan
-	 * renders the current authored shape, which is where the entries end. Replaying how earlier shapes
-	 * became this one would fail on the first `CREATE TABLE`, so the entries are recorded, not run.
-	 *
-	 * It is also the only thing that lets a workspace whose lineage opens with a Pod baseline boot at
-	 * all — `templates/construction`, `templates/crm` and `templates/field-operations` still do, and
-	 * theirs calls `_norbital_create_history_table`, a Pod function Bolt installs nowhere. hr-payroll
-	 * has been re-baselined onto a single Bolt-generated entry and no longer needs that half; it still
-	 * needs this one, because the plan provisions its tables before the lineage is reached.
-	 */
-	/**
 	 * A virgin database now provisions *from the lineage*, because the plan no longer renders
 	 * collection tables at all.
 	 *
@@ -381,5 +370,4 @@ describe('WorkspaceSchema owner', () => {
 			await harness.dispose();
 		}
 	});
-
 });

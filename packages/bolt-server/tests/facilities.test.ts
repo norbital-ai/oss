@@ -50,7 +50,9 @@ const withConfiguration = (values: Record<string, string>) =>
  * asserted into a shape the type does not promise. Written as a predicate because `Array.isArray`
  * does not narrow the readonly array arm of `Json` away on its own.
  */
-const isJsonObject = (value: Schema.Json | undefined): value is Readonly<Record<string, Schema.Json>> =>
+const isJsonObject = (
+	value: Schema.Json | undefined
+): value is Readonly<Record<string, Schema.Json>> =>
 	value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
 
 it.effect(
@@ -109,7 +111,8 @@ it.effect('returns JSON-safe timestamps from local PGlite queries', () =>
 				// A row crosses the facility boundary as `Json`, so it is narrowed before it is indexed
 				// rather than asserted into a shape the type does not actually promise.
 				const [row] = response.value.rows;
-				if (!isJsonObject(row)) throw new Error(`expected a row object, received ${JSON.stringify(row)}`);
+				if (!isJsonObject(row))
+					throw new Error(`expected a row object, received ${JSON.stringify(row)}`);
 				const ts = row['ts'];
 				assert.strictEqual(typeof ts, 'string');
 				assert.match(String(ts), /^\d{4}-\d{2}-\d{2}T/);
@@ -199,8 +202,10 @@ it.effect('fans a memory transport Publish out to the topic, and only that topic
 					signal
 				)
 			);
-		const idOf = (result: { readonly _tag: string; readonly value?: { readonly connectionId?: string } }) =>
-			result.value?.connectionId ?? '';
+		const idOf = (result: {
+			readonly _tag: string;
+			readonly value?: { readonly connectionId?: string };
+		}) => result.value?.connectionId ?? '';
 
 		const listenerA = idOf(yield* open('bolt.sync'));
 		const listenerB = idOf(yield* open('bolt.sync'));

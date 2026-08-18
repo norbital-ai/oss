@@ -20,25 +20,26 @@ export const withAbortableOperation = <T>(
 	const { signal, onAbort } = options ?? {};
 	if (!signal) return effect;
 
-	const abortEffect = Effect.promise<never>((effectSignal) =>
-		new Promise<never>((_resolve, reject) => {
-			const handleAbort = () => {
-				effectSignal.removeEventListener('abort', handleAbort);
-				signal.removeEventListener('abort', handleAbort);
-				// The effect's own signal aborts when this promise-based effect is
-				// interrupted — that is the race being lost, not the external abort.
-				if (effectSignal.aborted) return;
-				const abortError = createAbortError(signal);
-				onAbort?.(abortError);
-				reject(abortError);
-			};
-			if (signal.aborted) {
-				handleAbort();
-				return;
-			}
-			effectSignal.addEventListener('abort', handleAbort, { once: true });
-			signal.addEventListener('abort', handleAbort, { once: true });
-		})
+	const abortEffect = Effect.promise<never>(
+		(effectSignal) =>
+			new Promise<never>((_resolve, reject) => {
+				const handleAbort = () => {
+					effectSignal.removeEventListener('abort', handleAbort);
+					signal.removeEventListener('abort', handleAbort);
+					// The effect's own signal aborts when this promise-based effect is
+					// interrupted — that is the race being lost, not the external abort.
+					if (effectSignal.aborted) return;
+					const abortError = createAbortError(signal);
+					onAbort?.(abortError);
+					reject(abortError);
+				};
+				if (signal.aborted) {
+					handleAbort();
+					return;
+				}
+				effectSignal.addEventListener('abort', handleAbort, { once: true });
+				signal.addEventListener('abort', handleAbort, { once: true });
+			})
 	);
 
 	return Effect.raceFirst(effect, abortEffect);

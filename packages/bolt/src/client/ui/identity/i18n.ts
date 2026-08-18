@@ -16,7 +16,8 @@ export const boltIdentityMessages = defineMessages({
 		'bolt.identity.invalidEmail': 'Enter a valid email address.',
 		'bolt.identity.incorrectCode': 'That code is not correct.',
 		'bolt.identity.noAccess': 'That email does not have access to this workspace.',
-		'bolt.identity.unknownWorkspace': 'That organization does not exist. Check the handle and try again.',
+		'bolt.identity.unknownWorkspace':
+			'That organization does not exist. Check the handle and try again.',
 		'bolt.identity.tooManyAttempts': 'Too many attempts. Wait a few minutes and try again.',
 		'bolt.identity.genericError': 'Something went wrong. Please try again.'
 	},

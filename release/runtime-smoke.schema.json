@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://github.com/norbital-ai/oss/blob/main/release/runtime-smoke.schema.json",
 	"title": "Norbital published runtime smoke evidence",
-	"description": "Evidence that a build against a materialized depset produces a function-guest bundle (dispatch / registerPodHostPlugins). The bundle format is the only cross-version contract now that there are no images.",
+	"description": "Evidence that a build against a materialized depset produces a loadable isolate runtime bundle. The bundle format is the only cross-version contract now that there are no images.",
 	"type": "object",
 	"additionalProperties": false,
 	"required": [
@@ -15,12 +15,13 @@
 		"requiredBundlePaths",
 		"migrationSqlCount",
 		"runtimeEntry",
-		"serveEntrySha256",
+		"runtimeEntrySha256",
+		"runtimeExports",
 		"passed"
 	],
 	"properties": {
 		"$schema": { "const": "../release/runtime-smoke.schema.json" },
-		"schemaVersion": { "const": 3 },
+		"schemaVersion": { "const": 4 },
 		"template": { "type": "string", "minLength": 1 },
 		"lockHash": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
 		"buildCommand": { "const": "vite build" },
@@ -36,9 +37,15 @@
 		},
 		"migrationSqlCount": { "type": "integer", "minimum": 1 },
 		"runtimeEntry": { "const": "output/server/index.js" },
-		"serveEntrySha256": {
+		"runtimeEntrySha256": {
 			"type": "string",
 			"pattern": "^[0-9a-f]{64}$"
+		},
+		"runtimeExports": {
+			"type": "array",
+			"contains": { "const": "dispatch" },
+			"items": { "type": "string" },
+			"uniqueItems": true
 		},
 		"passed": { "const": true }
 	}

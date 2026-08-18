@@ -1,8 +1,5 @@
 <script module lang="ts">
-	import type {
-		CollectionField,
-		CollectionRecordHistoryEntry
-	} from '@norbital-ai/std/collection';
+	import type { CollectionField, CollectionRecordHistoryEntry } from '@norbital-ai/std/collection';
 	import { createContext } from 'svelte';
 
 	interface CollectionFormFieldContext {

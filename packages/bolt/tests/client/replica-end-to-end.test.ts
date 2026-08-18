@@ -43,7 +43,8 @@ afterEach(async () => {
 /** The client's transport, wired straight into the server runtime rather than over HTTP. */
 const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 	command: async (command, input) => {
-		const record = input !== null && typeof input === 'object' && !Array.isArray(input) ? input : {};
+		const record =
+			input !== null && typeof input === 'object' && !Array.isArray(input) ? input : {};
 		return runtime.runtime.runPromise(
 			Effect.gen(function* () {
 				const sync = yield* Sync.Service;
@@ -53,13 +54,20 @@ const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 						const workspace = yield* Workspace.Service;
 						return {
 							steps: [
-								...plan.steps.filter(({ id }) => id.startsWith('bolt:')).map(({ id, sql }) => ({ id, sql })),
+								...plan.steps
+									.filter(({ id }) => id.startsWith('bolt:'))
+									.map(({ id, sql }) => ({ id, sql })),
 								...[...(workspace.definition.migrations ?? [])]
 									.toSorted((left, right) => left.tag.localeCompare(right.tag))
 									.flatMap((entry) =>
-										entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
+										entry.statements.map((sql, index) => ({
+											id: `lineage:${entry.tag}:${index}`,
+											sql
+										}))
 									),
-								...plan.steps.filter(({ id }) => !id.startsWith('bolt:')).map(({ id, sql }) => ({ id, sql }))
+								...plan.steps
+									.filter(({ id }) => !id.startsWith('bolt:'))
+									.map(({ id, sql }) => ({ id, sql }))
 							],
 							fingerprint: plan.fingerprint
 						} as Schema.Json;
@@ -68,17 +76,24 @@ const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 						return (yield* sync.shape(adminSubject)) as unknown as Schema.Json;
 					case 'sync.snapshot':
 						return (yield* sync.snapshot(
-							runtime.effectId(`snapshot:${String(Reflect.get(record, 'collection'))}:${String(Reflect.get(record, 'after') ?? 'first')}`),
+							runtime.effectId(
+								`snapshot:${String(Reflect.get(record, 'collection'))}:${String(Reflect.get(record, 'after') ?? 'first')}`
+							),
 							adminSubject,
 							String(Reflect.get(record, 'collection')),
-							typeof Reflect.get(record, 'after') === 'string' ? String(Reflect.get(record, 'after')) : undefined,
+							typeof Reflect.get(record, 'after') === 'string'
+								? String(Reflect.get(record, 'after'))
+								: undefined,
 							Number(Reflect.get(record, 'limit') ?? 500)
 						)) as unknown as Schema.Json;
 					case 'sync.diff': {
 						const cursor = Reflect.get(record, 'cursor');
 						const position =
 							cursor !== null && typeof cursor === 'object'
-								? { xid: Number(Reflect.get(cursor, 'xid') ?? 0), sequence: Number(Reflect.get(cursor, 'sequence') ?? 0) }
+								? {
+										xid: Number(Reflect.get(cursor, 'xid') ?? 0),
+										sequence: Number(Reflect.get(cursor, 'sequence') ?? 0)
+									}
 								: { xid: 0, sequence: 0 };
 						return (yield* sync.diff(
 							runtime.effectId(`diff:${position.xid}:${position.sequence}`),
@@ -97,7 +112,9 @@ const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 
 const openReplica = async (runtime: BoltTestRuntime) =>
 	openLocalDatabase(transportFor(runtime), async () => {
-		const database = await PGlite.create('memory://', { extensions: { pg_trgm, btree_gist, vector } });
+		const database = await PGlite.create('memory://', {
+			extensions: { pg_trgm, btree_gist, vector }
+		});
 		databases.push(database);
 		return database as unknown as PGliteLike;
 	});
@@ -108,12 +125,13 @@ describe('a browser replica against a real server', () => {
 		const { runtime, effectId, database } = harness;
 
 		// Written straight to the table, as a seed or an import does. The outbox knows nothing about it.
-		await database.query("insert into people (norbital_id, name, team) values ($1, 'Seeded', 'core')", [
-			rid('seeded-1')
-		]);
-		expect(
-			await database.query('select count(*)::int as count from bolt_sync_outbox', [])
-		).toEqual([{ count: 0 }]);
+		await database.query(
+			"insert into people (norbital_id, name, team) values ($1, 'Seeded', 'core')",
+			[rid('seeded-1')]
+		);
+		expect(await database.query('select count(*)::int as count from bolt_sync_outbox', [])).toEqual(
+			[{ count: 0 }]
+		);
 
 		const replica = await openReplica(harness);
 		// The snapshot is what makes this row present; a log-only replica would call the workspace empty.
@@ -145,7 +163,8 @@ describe('a browser replica against a real server', () => {
 			},
 			sink: {
 				apply: async (changes) => {
-					for (const change of changes) await replica.sql.applyChange(change as unknown as Schema.Json);
+					for (const change of changes)
+						await replica.sql.applyChange(change as unknown as Schema.Json);
 				},
 				reset: async () => replica.sql.reset()
 			},
@@ -201,17 +220,15 @@ describe('a browser replica against a real server', () => {
 		);
 		const replica = await openReplica(harness);
 
-		const local = await replica.sql.query(
-			'select name from people where team = $1 order by name',
-			['flight']
-		);
+		const local = await replica.sql.query('select name from people where team = $1 order by name', [
+			'flight'
+		]);
 		const server = await runtime.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Collections.Service).findMany(effectId('server-read'), adminSubject, {
 					collection: 'people',
 					where: { team: { eq: 'flight' } },
-					orderBy: { name: 'asc' },
-					columns: { name: true }
+					orderBy: { name: 'asc' }
 				});
 			})
 		);

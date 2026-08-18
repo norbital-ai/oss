@@ -45,7 +45,12 @@
 
 <svelte:element
 	this={as}
-	class={cn(className, 'grid min-h-0 min-w-0', GAP_CLASSES[gap], tracks ? null : minimumClasses[minimum])}
+	class={cn(
+		className,
+		'grid min-h-0 min-w-0',
+		GAP_CLASSES[gap],
+		tracks ? null : minimumClasses[minimum]
+	)}
 	style={tracks
 		? `grid-template-columns: ${tracks};${styleProp ? ` ${styleProp}` : ''}`
 		: styleProp}

@@ -37,7 +37,11 @@ export interface HandlerDefinition<
 	) => Effect.Effect<Output, unknown, never> | Promise<Output> | Output;
 }
 
-type AuthoredHandler<S extends Schema.Codec<unknown, unknown>, Workspace extends AnySchema, Output> = {
+type AuthoredHandler<
+	S extends Schema.Codec<unknown, unknown>,
+	Workspace extends AnySchema,
+	Output
+> = {
 	readonly description: string;
 	readonly schema: S;
 	readonly handler: (
@@ -48,7 +52,11 @@ type AuthoredHandler<S extends Schema.Codec<unknown, unknown>, Workspace extends
 
 /** Public read-remote contract that retains the augmented workspace schema in generated types. */
 interface DefineQueryHandler {
-	<const S extends Schema.Codec<unknown, unknown>, Workspace extends AnySchema = DefaultWorkspaceSchema, Output = unknown>(
+	<
+		const S extends Schema.Codec<unknown, unknown>,
+		Workspace extends AnySchema = DefaultWorkspaceSchema,
+		Output = unknown
+	>(
 		definition: AuthoredHandler<S, Workspace, Output>
 	): HandlerDefinition<S, Output, Workspace>;
 }
@@ -58,7 +66,11 @@ interface DefineQueryHandler {
  * and runtime authorization, while the symbolic default lets each workspace augment its tables.
  */
 interface DefineCommandHandler {
-	<const S extends Schema.Codec<unknown, unknown>, Workspace extends AnySchema = DefaultWorkspaceSchema, Output = unknown>(
+	<
+		const S extends Schema.Codec<unknown, unknown>,
+		Workspace extends AnySchema = DefaultWorkspaceSchema,
+		Output = unknown
+	>(
 		definition: AuthoredHandler<S, Workspace, Output>
 	): HandlerDefinition<S, Output, Workspace, 'command'>;
 }
@@ -75,11 +87,13 @@ const HandlerAuthoring: {
 	readonly command: DefineCommandHandler;
 } = {
 	query: (definition) => {
-		if (definition.description.trim() === '') throw new Error('Query handler description cannot be empty');
+		if (definition.description.trim() === '')
+			throw new Error('Query handler description cannot be empty');
 		return { kind: 'query', ...definition, schema: Schema.toStandardSchemaV1(definition.schema) };
 	},
 	command: (definition) => {
-		if (definition.description.trim() === '') throw new Error('Command handler description cannot be empty');
+		if (definition.description.trim() === '')
+			throw new Error('Command handler description cannot be empty');
 		return { kind: 'command', ...definition, schema: Schema.toStandardSchemaV1(definition.schema) };
 	}
 };
@@ -87,6 +101,14 @@ const HandlerAuthoring: {
 export const defineQueryHandler = HandlerAuthoring.query;
 export const defineCommandHandler = HandlerAuthoring.command;
 
-export interface TFileAttachment { name: string; contentType: 'HTML' | 'PDF' | 'CSV' | 'XLSX' | 'JSON' | 'TEXT' | 'BINARY'; content: unknown; }
-export interface TExportAction { label: string; attachments: Array<TFileAttachment>; metadata?: Record<string, unknown>; }
+export interface TFileAttachment {
+	name: string;
+	contentType: 'HTML' | 'PDF' | 'CSV' | 'XLSX' | 'JSON' | 'TEXT' | 'BINARY';
+	content: unknown;
+}
+export interface TExportAction {
+	label: string;
+	attachments: Array<TFileAttachment>;
+	metadata?: Record<string, unknown>;
+}
 export type TExportManifest = Array<TExportAction>;

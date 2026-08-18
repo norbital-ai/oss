@@ -20,7 +20,7 @@ assembly or generated output. The sealed authoring contract is the
 Local `/app/...` tenants run an immutable release artifact, not editable OSS source via HMR. After
 publishing a runtime or template release, consume the new release in Colony and restart the dev
 bootstrap before reporting success. The Colony dev bootstrap converges on every start — it seeds the
-tenant from `COLONY_WORKSPACE_ROOT`, compiles the checkout with `bolt sync`, builds and publishes a
+tenant from each workspace under `COLONY_WORKSPACE_ROOTS`, compiles the checkout with `bolt sync`, builds and publishes a
 release artifact, routes it, and provisions and migrates the tenant database when a Postgres URL is
 set. There is no separate `tenant:update` step; restart `pnpm --filter colony dev` after
 `pnpm yalc:link` (or a template publish) and hard-refresh the iframe.

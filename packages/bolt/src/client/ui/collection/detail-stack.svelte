@@ -39,10 +39,33 @@
 </nav>
 
 <style>
-	header, button { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-	h2, p, ol { margin: 0; }
-	ol { display: grid; gap: .25rem; padding: 0; list-style: none; }
-	li button { width: 100%; padding: .5rem; text-align: start; }
-	button[aria-current='page'] { font-weight: 700; }
-	code { opacity: .7; }
+	header,
+	button {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	h2,
+	p,
+	ol {
+		margin: 0;
+	}
+	ol {
+		display: grid;
+		gap: 0.25rem;
+		padding: 0;
+		list-style: none;
+	}
+	li button {
+		width: 100%;
+		padding: 0.5rem;
+		text-align: start;
+	}
+	button[aria-current='page'] {
+		font-weight: 700;
+	}
+	code {
+		opacity: 0.7;
+	}
 </style>

@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { defineEnvironment } from '../../src/authoring/environment-schema.js';
 import { Identity } from '../../src/runtime/identity/identity.js';
-import { PersonalSecrets, type Interface as PersonalSecretsInterface } from '../../src/runtime/secrets/personal-secrets.js';
+import {
+	PersonalSecrets,
+	type Interface as PersonalSecretsInterface
+} from '../../src/runtime/secrets/personal-secrets.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
@@ -44,7 +47,9 @@ const vaultWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+	],
 	agents: [],
 	automations: [],
 	channels: [],
@@ -53,14 +58,33 @@ const vaultWorkspace = workspace({
 	environment: defineEnvironment({ [SECRET_NAME]: { label: 'Geocoding key' } })
 });
 
-const userA: Identity.Subject = { userId: 'user-a', tenantId: 'test-tenant', roles: ['employee'], teams: [] };
-const userB: Identity.Subject = { userId: 'user-b', tenantId: 'test-tenant', roles: ['employee'], teams: [] };
+const userA: Identity.Subject = {
+	userId: 'user-a',
+	tenantId: 'test-tenant',
+	roles: ['employee'],
+	teams: []
+};
+const userB: Identity.Subject = {
+	userId: 'user-b',
+	tenantId: 'test-tenant',
+	roles: ['employee'],
+	teams: []
+};
 
-const writePersonal = (harnessed: BoltTestRuntime, subject: Identity.Subject, name: string, value: string) =>
+const writePersonal = (
+	harnessed: BoltTestRuntime,
+	subject: Identity.Subject,
+	name: string,
+	value: string
+) =>
 	harnessed.runtime.runPromise(
 		Effect.provideService(
 			Effect.gen(function* () {
-				yield* (yield* PersonalSecrets.Service).write(harnessed.effectId(`write-${subject.userId}`), name, value);
+				yield* (yield* PersonalSecrets.Service).write(
+					harnessed.effectId(`write-${subject.userId}`),
+					name,
+					value
+				);
 			}),
 			Identity.CurrentSubject,
 			subject
@@ -71,7 +95,10 @@ const readPersonal = (harnessed: BoltTestRuntime, subject: Identity.Subject, nam
 	harnessed.runtime.runPromise(
 		Effect.provideService(
 			Effect.gen(function* () {
-				return yield* (yield* PersonalSecrets.Service).read(harnessed.effectId(`read-${subject.userId}`), name);
+				return yield* (yield* PersonalSecrets.Service).read(
+					harnessed.effectId(`read-${subject.userId}`),
+					name
+				);
 			}),
 			Identity.CurrentSubject,
 			subject
@@ -89,8 +116,14 @@ const outcomeOf = <A, E extends { readonly _tag: string }, R>(
 ): Effect.Effect<{ readonly tag: string; readonly message: string }, never, R> =>
 	operation.pipe(
 		Effect.match({
-			onFailure: (error: E) => ({ tag: error._tag, message: error instanceof Error ? error.message : '' }),
-			onSuccess: (value: A) => ({ tag: `answered ${JSON.stringify(value)} instead of refusing`, message: '' })
+			onFailure: (error: E) => ({
+				tag: error._tag,
+				message: error instanceof Error ? error.message : ''
+			}),
+			onSuccess: (value: A) => ({
+				tag: `answered ${JSON.stringify(value)} instead of refusing`,
+				message: ''
+			})
 		})
 	);
 
@@ -98,7 +131,9 @@ const outcomeOf = <A, E extends { readonly _tag: string }, R>(
 const outcomeAsPerson = (
 	harnessed: BoltTestRuntime,
 	subject: Identity.Subject,
-	operation: (secrets: PersonalSecretsInterface) => Effect.Effect<unknown, { readonly _tag: string }>
+	operation: (
+		secrets: PersonalSecretsInterface
+	) => Effect.Effect<unknown, { readonly _tag: string }>
 ) =>
 	harnessed.runtime.runPromise(
 		outcomeOf(
@@ -115,7 +150,12 @@ const outcomeAsPerson = (
 const writeWorkspace = (harnessed: BoltTestRuntime, value: string) =>
 	harnessed.runtime.runPromise(
 		Effect.gen(function* () {
-			yield* (yield* Secrets.Service).write(harnessed.effectId('write'), SECRET_NAME, value, 'admin-1');
+			yield* (yield* Secrets.Service).write(
+				harnessed.effectId('write'),
+				SECRET_NAME,
+				value,
+				'admin-1'
+			);
 		})
 	);
 
@@ -127,7 +167,9 @@ const readWorkspace = (harnessed: BoltTestRuntime) =>
 	);
 
 const storedWorkspace = async (harnessed: BoltTestRuntime): Promise<string> => {
-	const [row] = await harnessed.database.query('select value from bolt_secrets where name = $1', [SECRET_NAME]);
+	const [row] = await harnessed.database.query('select value from bolt_secrets where name = $1', [
+		SECRET_NAME
+	]);
 	return String(row?.['value'] ?? '');
 };
 
@@ -154,7 +196,12 @@ describe('secrets at rest', () => {
 		const workspaceOutcome = await harness.runtime.runPromise(
 			outcomeOf(
 				Effect.gen(function* () {
-					yield* (yield* Secrets.Service).write(harness!.effectId('write'), SECRET_NAME, WORKSPACE_VALUE, 'admin-1');
+					yield* (yield* Secrets.Service).write(
+						harness!.effectId('write'),
+						SECRET_NAME,
+						WORKSPACE_VALUE,
+						'admin-1'
+					);
 				})
 			)
 		);
@@ -168,7 +215,10 @@ describe('secrets at rest', () => {
 		expect(workspaceOutcome.message).toContain('BOLT_SECRETS_KEY is not set');
 		expect(personalOutcome.message).toContain('BOLT_SECRETS_KEY is not set');
 
-		expect(await harness.database.query('select 1 from bolt_secrets'), 'a secret was stored despite the refusal').toHaveLength(0);
+		expect(
+			await harness.database.query('select 1 from bolt_secrets'),
+			'a secret was stored despite the refusal'
+		).toHaveLength(0);
 		expect(
 			await harness.database.query('select 1 from bolt_personal_secrets'),
 			'a personal secret was stored despite the refusal'
@@ -181,7 +231,12 @@ describe('secrets at rest', () => {
 		const outcome = await harness.runtime.runPromise(
 			outcomeOf(
 				Effect.gen(function* () {
-					yield* (yield* Secrets.Service).write(harness!.effectId('write'), SECRET_NAME, WORKSPACE_VALUE, 'admin-1');
+					yield* (yield* Secrets.Service).write(
+						harness!.effectId('write'),
+						SECRET_NAME,
+						WORKSPACE_VALUE,
+						'admin-1'
+					);
 				})
 			)
 		);
@@ -204,8 +259,12 @@ describe('secrets at rest', () => {
 		const workspaceStored = await storedWorkspace(harness);
 		const personalStored = await storedPersonal(harness, 'user-a');
 
-		expect(workspaceStored, 'the workspace vault stored the credential in the clear').not.toContain(WORKSPACE_VALUE);
-		expect(personalStored, 'the personal vault stored the session in the clear').not.toContain(PERSONAL_VALUE);
+		expect(workspaceStored, 'the workspace vault stored the credential in the clear').not.toContain(
+			WORKSPACE_VALUE
+		);
+		expect(personalStored, 'the personal vault stored the session in the clear').not.toContain(
+			PERSONAL_VALUE
+		);
 		// Not merely "different from the plaintext" — a substring of it, or a reversal, would also be
 		// different. `v1.<nonce>.<ciphertext>.<tag>`, four parts, is the encoding this vault claims.
 		for (const stored of [workspaceStored, personalStored]) {
@@ -290,7 +349,9 @@ describe('secrets at rest', () => {
 		const outcome = await outcomeAsPerson(harness, userB, (secrets) =>
 			secrets.read(harness!.effectId('read'), SESSION_NAME)
 		);
-		expect(outcome.tag, 'user A’s session was readable as user B by moving the row').toBe('Bolt.Secrets.Unreadable');
+		expect(outcome.tag, 'user A’s session was readable as user B by moving the row').toBe(
+			'Bolt.Secrets.Unreadable'
+		);
 		// User A's own row is untouched and still opens, so the binding refuses the copy rather than the
 		// value.
 		expect(await readPersonal(harness, userA, SESSION_NAME)).toBe(PERSONAL_VALUE);
@@ -377,8 +438,12 @@ describe('secrets at rest', () => {
 			)
 		);
 
-		expect(new Map(workspaceStatus.map((entry) => [entry.name, entry.configured])).get(SECRET_NAME)).toBe(true);
-		expect(personalStatus).toEqual([expect.objectContaining({ name: SESSION_NAME, configured: true })]);
+		expect(
+			new Map(workspaceStatus.map((entry) => [entry.name, entry.configured])).get(SECRET_NAME)
+		).toBe(true);
+		expect(personalStatus).toEqual([
+			expect.objectContaining({ name: SESSION_NAME, configured: true })
+		]);
 		// And neither payload carries a value or an envelope — the point of `status` is that it is safe
 		// to send to a browser.
 		for (const payload of [JSON.stringify(workspaceStatus), JSON.stringify(personalStatus)]) {

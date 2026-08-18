@@ -51,7 +51,9 @@ export const encodeWake = (frame: WakeFrame): Uint8Array =>
 export const decodeWake = (bytes: Uint8Array): WakeFrame => {
 	const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
 	const collections =
-		parsed !== null && typeof parsed === 'object' && Array.isArray(Reflect.get(parsed, 'collections'))
+		parsed !== null &&
+		typeof parsed === 'object' &&
+		Array.isArray(Reflect.get(parsed, 'collections'))
 			? (Reflect.get(parsed, 'collections') as ReadonlyArray<unknown>).filter(
 					(entry): entry is string => typeof entry === 'string'
 				)

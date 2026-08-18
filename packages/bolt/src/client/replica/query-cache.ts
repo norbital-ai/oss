@@ -141,7 +141,9 @@ export const createQueryCache = (namespace: string): QueryCache => {
 					const request = store.getAll();
 					request.onsuccess = () => {
 						const now = Date.now();
-						for (const entry of request.result as ReadonlyArray<CachedAnswer & { readonly key?: string }>) {
+						for (const entry of request.result as ReadonlyArray<
+							CachedAnswer & { readonly key?: string }
+						>) {
 							const key = entry.key;
 							if (typeof key !== 'string' || !key.startsWith(`${namespace}::`)) continue;
 							if (now - entry.at > MAX_AGE_MS) continue;

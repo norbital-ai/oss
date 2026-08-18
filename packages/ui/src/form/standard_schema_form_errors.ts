@@ -10,7 +10,9 @@ import { Schema } from 'effect';
 export type StandardSchemaIssue = Extract<
 	Awaited<
 		ReturnType<
-			ReturnType<typeof Schema.toStandardSchemaV1<Schema.Codec<unknown, unknown>>>['~standard']['validate']
+			ReturnType<
+				typeof Schema.toStandardSchemaV1<Schema.Codec<unknown, unknown>>
+			>['~standard']['validate']
 		>
 	>,
 	{ readonly issues: readonly unknown[] }

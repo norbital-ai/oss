@@ -13,7 +13,12 @@ import { toPanelMessages } from '../../src/client/ui/agent/transcript.js';
 const subject = { userId: 'admin-1', tenantId: 'tenant-1', roles: ['admin'], teams: [] };
 const conversationId = 'conversation-streaming';
 const turnId = 'turn-1';
-const call = { kind: 'tool', id: 'call-1', name: 'payroll_export', input: { collection: 'payroll' } };
+const call = {
+	kind: 'tool',
+	id: 'call-1',
+	name: 'payroll_export',
+	input: { collection: 'payroll' }
+};
 
 /** The parts of the assistant turn as the store holds them at this instant. */
 type StoredParts = ReadonlyArray<Record<string, unknown>>;
@@ -57,7 +62,8 @@ describe('agent turn streaming', () => {
 
 		const command = async (name: string, _input: unknown): Promise<unknown> => {
 			if (name === 'agents.history') return historyOf(status, parts);
-			if (name === 'agents.listConversations') return [{ id: conversationId, title: 'Export payroll' }];
+			if (name === 'agents.listConversations')
+				return [{ id: conversationId, title: 'Export payroll' }];
 			if (name === 'agents.turn') {
 				// Stands in for the loop: the call is committed the moment it is made, and the turn keeps
 				// running until this test lets it finish.
@@ -75,7 +81,12 @@ describe('agent turn streaming', () => {
 			return [];
 		};
 
-		configureAgentRuntime({ transport: { command }, subject, agentName: 'helper', userId: 'admin-1' });
+		configureAgentRuntime({
+			transport: { command },
+			subject,
+			agentName: 'helper',
+			userId: 'admin-1'
+		});
 		const pending = startInteractiveAgent({ message: 'Export payroll', runId: conversationId });
 
 		// Long enough for one poll to land, and no longer — the reader should not have to wait for the

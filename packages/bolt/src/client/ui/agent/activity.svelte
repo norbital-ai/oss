@@ -38,10 +38,32 @@
 </section>
 
 <style>
-	header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
-	h2, header p { margin: 0; }
-	ol { display: grid; gap: .5rem; padding: 0; list-style: none; }
-	li { display: flex; gap: .75rem; }
-	li span { font-variant-numeric: tabular-nums; opacity: .6; }
-	.progress, .empty { padding-block: .75rem; }
+	header {
+		display: flex;
+		align-items: start;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	h2,
+	header p {
+		margin: 0;
+	}
+	ol {
+		display: grid;
+		gap: 0.5rem;
+		padding: 0;
+		list-style: none;
+	}
+	li {
+		display: flex;
+		gap: 0.75rem;
+	}
+	li span {
+		font-variant-numeric: tabular-nums;
+		opacity: 0.6;
+	}
+	.progress,
+	.empty {
+		padding-block: 0.75rem;
+	}
 </style>

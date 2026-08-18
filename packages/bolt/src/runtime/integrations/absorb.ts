@@ -54,7 +54,9 @@ export type AbsorbDependencies = Readonly<{
 		effectId: EffectId,
 		collection: string,
 		record: unknown
-	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, { readonly message: string }> | undefined;
+	) =>
+		| Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, { readonly message: string }>
+		| undefined;
 	/**
 	 * Runs the binding's authored `resolve` once for the batch, with an `api` bound to this invocation.
 	 *
@@ -115,16 +117,24 @@ const rowsFor = (
 	authored: AuthoredIntegrationBinding,
 	record: unknown,
 	resolved: unknown
-): Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, { readonly message: string }> => {
+): Effect.Effect<
+	ReadonlyArray<Readonly<Record<string, unknown>>>,
+	{ readonly message: string }
+> => {
 	const map = authored.map;
 	if (map !== undefined) {
-		return Effect.try({ try: () => [map(record, resolved)], catch: (cause) => ({ message: describe(cause) }) });
+		return Effect.try({
+			try: () => [map(record, resolved)],
+			catch: (cause) => ({ message: describe(cause) })
+		});
 	}
 	const pipeline = dependencies.pipeline(effectId, target.collection, record);
 	if (pipeline !== undefined) return pipeline;
 	return record !== null && typeof record === 'object' && !Array.isArray(record)
 		? Effect.succeed([record as Readonly<Record<string, unknown>>])
-		: Effect.fail({ message: `${target.integration}.${target.binding} produced a record that is not a row and declares no map` });
+		: Effect.fail({
+				message: `${target.integration}.${target.binding} produced a record that is not a row and declares no map`
+			});
 };
 
 /**
@@ -133,7 +143,9 @@ const rowsFor = (
  * A value that is not JSON — a `Date`, a `BigInt`, a class instance — is rendered rather than
  * dropped, because dropping it writes a row that silently disagrees with the source.
  */
-const jsonValues = (row: Readonly<Record<string, unknown>>): Readonly<Record<string, Schema.Json>> =>
+const jsonValues = (
+	row: Readonly<Record<string, unknown>>
+): Readonly<Record<string, Schema.Json>> =>
 	Object.fromEntries(
 		Object.entries(row).map(([key, value]) => [
 			key,
@@ -188,9 +200,15 @@ export const absorbRecords = (
 
 		// The identity read can throw on a record that decoded but carries no usable key, so it is
 		// inside the same per-record isolation as the decode.
-		const keyed: Array<{ readonly key: string; readonly record: unknown; readonly position: number }> = [];
+		const keyed: Array<{
+			readonly key: string;
+			readonly record: unknown;
+			readonly position: number;
+		}> = [];
 		for (const { position, record } of decoded) {
-			const key = yield* Effect.result(Effect.try({ try: () => authored.identityValue(record), catch: (cause) => describe(cause) }));
+			const key = yield* Effect.result(
+				Effect.try({ try: () => authored.identityValue(record), catch: (cause) => describe(cause) })
+			);
 			if (Result.isFailure(key)) {
 				reject(indexOffset + position, key.failure);
 				continue;
@@ -198,9 +216,15 @@ export const absorbRecords = (
 			keyed.push({ key: key.success, record, position });
 		}
 
-		const known = keyed.length === 0
-			? new Map<string, ReadonlyArray<string>>()
-			: yield* dependencies.existing(effectId, target.collection, target.identityColumn, keyed.map(({ key }) => key));
+		const known =
+			keyed.length === 0
+				? new Map<string, ReadonlyArray<string>>()
+				: yield* dependencies.existing(
+						effectId,
+						target.collection,
+						target.identityColumn,
+						keyed.map(({ key }) => key)
+					);
 
 		// One lookup for the batch, and it is deliberately *not* inside the per-record loop below. A
 		// binding that resolved a foreign key per record would issue one round trip per record, which
@@ -215,12 +239,20 @@ export const absorbRecords = (
 		// A key that simply is not there is a different event entirely — `resolve` succeeded, the code
 		// is absent — and it is `map` that refuses that record, one record at a time.
 		const resolveBatch = authored.resolve;
-		const resolved: unknown = resolveBatch === undefined || keyed.length === 0
-			? undefined
-			: yield* dependencies.resolve(effectId, (api) => resolveBatch(keyed.map(({ record }) => record), api));
+		const resolved: unknown =
+			resolveBatch === undefined || keyed.length === 0
+				? undefined
+				: yield* dependencies.resolve(effectId, (api) =>
+						resolveBatch(
+							keyed.map(({ record }) => record),
+							api
+						)
+					);
 
 		for (const { key, record, position } of keyed) {
-			const rows = yield* Effect.result(rowsFor(dependencies, effectId, target, authored, record, resolved));
+			const rows = yield* Effect.result(
+				rowsFor(dependencies, effectId, target, authored, record, resolved)
+			);
 			if (Result.isFailure(rows)) {
 				reject(indexOffset + position, rows.failure.message);
 				continue;
@@ -233,7 +265,10 @@ export const absorbRecords = (
 				// a mapper that forgets it — or writes a different value into it — cannot produce a row the
 				// next delivery fails to recognise as the same record. On a pushed delivery this is also
 				// what stops a body from nominating its own primary key: the record is data, not authority.
-				const values: Readonly<Record<string, Schema.Json>> = { ...jsonValues(row), [target.identityColumn]: key };
+				const values: Readonly<Record<string, Schema.Json>> = {
+					...jsonValues(row),
+					[target.identityColumn]: key
+				};
 				/**
 				 * Derived for every row including the first, so a re-run addresses the same ids it wrote.
 				 *
@@ -242,7 +277,9 @@ export const absorbRecords = (
 				 * first — and, because a fan-out's width can differ between runs, made the id a row got
 				 * depend on which run wrote it.
 				 */
-				const id = before[offset] ?? deriveRecordId(`${target.integration}:${target.binding}:${key}:${offset}`);
+				const id =
+					before[offset] ??
+					deriveRecordId(`${target.integration}:${target.binding}:${key}:${offset}`);
 				const exists = before.includes(id);
 				survivors.add(id);
 				const written = yield* Effect.result(
@@ -259,7 +296,9 @@ export const absorbRecords = (
 			if (failedRow) continue;
 			const orphaned = before.filter((id) => !survivors.has(id));
 			if (orphaned.length > 0) {
-				const removed = yield* Effect.result(dependencies.remove(effectId, target.collection, orphaned));
+				const removed = yield* Effect.result(
+					dependencies.remove(effectId, target.collection, orphaned)
+				);
 				if (Result.isFailure(removed)) {
 					reject(indexOffset + position, removed.failure.message);
 					continue;

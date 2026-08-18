@@ -32,7 +32,10 @@ const digestOf = (payload: string, secret = SECRET): string =>
 	createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
 
 /** A delivery signed the way the construction template's reports system signs one. */
-const signed = (body: string, options: { readonly secret?: string; readonly atMs?: number; readonly eventId?: string } = {}) => {
+const signed = (
+	body: string,
+	options: { readonly secret?: string; readonly atMs?: number; readonly eventId?: string } = {}
+) => {
 	const seconds = Math.floor((options.atMs ?? NOW) / 1000);
 	return {
 		headers: {
@@ -78,8 +81,10 @@ const authored: AuthoredIntegrationBinding = {
 	input: Rfi,
 	identityColumn: 'rfi_number',
 	identityValue: (record) => {
-		const number = record === null || typeof record !== 'object' ? undefined : Reflect.get(record, 'number');
-		if (typeof number !== 'string' || number === '') throw new TypeError('a record with no rfi number');
+		const number =
+			record === null || typeof record !== 'object' ? undefined : Reflect.get(record, 'number');
+		if (typeof number !== 'string' || number === '')
+			throw new TypeError('a record with no rfi number');
 		return number;
 	},
 	map: (record) => {
@@ -90,7 +95,11 @@ const authored: AuthoredIntegrationBinding = {
 	}
 };
 
-type Row = Readonly<{ readonly id: string; readonly values: Readonly<Record<string, Schema.Json>>; readonly mode: 'create' | 'update' }>;
+type Row = Readonly<{
+	readonly id: string;
+	readonly values: Readonly<Record<string, Schema.Json>>;
+	readonly mode: 'create' | 'update';
+}>;
 
 /**
  * An in-memory host: a delivery ledger, a row store keyed by the identity column, and a vault.
@@ -106,7 +115,9 @@ const harness = (options: { readonly secret?: string | null; readonly nowMs?: nu
 	const dependencies: WebhookDependencies = {
 		secret: (_effectId, name) =>
 			options.secret === null
-				? Effect.fail({ message: `rfis.reports needs the environment variable ${name}, and the vault has no value for it` })
+				? Effect.fail({
+						message: `rfis.reports needs the environment variable ${name}, and the vault has no value for it`
+					})
 				: Effect.succeed(options.secret ?? SECRET),
 		remember: (_effectId, entry) => {
 			const key = `${entry.integration}:${entry.receiptId}`;
@@ -141,7 +152,8 @@ const harness = (options: { readonly secret?: string | null; readonly nowMs?: nu
 		},
 		write: (_effectId, _collection, id, values, mode) => {
 			const key = values['rfi_number'];
-			if (typeof key !== 'string') return Effect.fail({ message: 'a row with no identity reached the store' });
+			if (typeof key !== 'string')
+				return Effect.fail({ message: 'a row with no identity reached the store' });
 			const row: Row = { id, values, mode };
 			rows.set(key, row);
 			writes.push(row);
@@ -161,7 +173,16 @@ const deliver = (
 	delivery: { readonly headers: Readonly<Record<string, string>>; readonly body: string }
 ) =>
 	Effect.runPromise(
-		Effect.result(runWebhookDelivery(bound.dependencies, EffectId.make('delivery'), integration, binding, authored, delivery))
+		Effect.result(
+			runWebhookDelivery(
+				bound.dependencies,
+				EffectId.make('delivery'),
+				integration,
+				binding,
+				authored,
+				delivery
+			)
+		)
 	);
 
 const refusalOf = async (
@@ -240,7 +261,9 @@ describe('webhook signature verification', () => {
 		const authentic = signed(ONE_RFI);
 		const tampered = {
 			headers: authentic.headers,
-			body: JSON.stringify({ rfis: [{ number: 'RFI-001', title: 'Slab penetration clash — CLOSED' }] })
+			body: JSON.stringify({
+				rfis: [{ number: 'RFI-001', title: 'Slab penetration clash — CLOSED' }]
+			})
 		};
 		const message = await refusalOf(bound, tampered);
 
@@ -422,7 +445,10 @@ describe('webhook partial failure', () => {
 describe('webhook declarations that cannot verify are refused at authoring time', () => {
 	const base = {
 		input: Rfi,
-		identity: { column: 'rfi_number', value: (record: { readonly number: string }) => record.number }
+		identity: {
+			column: 'rfi_number',
+			value: (record: { readonly number: string }) => record.number
+		}
 	};
 
 	/**
@@ -467,21 +493,36 @@ describe('webhook declarations that cannot verify are refused at authoring time'
 		expect(() =>
 			defineWebhook({
 				...base,
-				webhook: { path: '/rfis', signature: { header: 'x-reports-signature', secret: { env: '  ' } } }
+				webhook: {
+					path: '/rfis',
+					signature: { header: 'x-reports-signature', secret: { env: '  ' } }
+				}
 			})
 		).toThrow(/verification against an empty key/u);
 	});
 
 	it('accepts the shapes GitHub, Slack and Stripe actually send', () => {
 		expect(() =>
-			defineWebhook({ ...base, webhook: { path: '/gh', signature: { header: 'x-hub-signature-256', secret: { env: 'GH' }, prefix: 'sha256=' } } })
+			defineWebhook({
+				...base,
+				webhook: {
+					path: '/gh',
+					signature: { header: 'x-hub-signature-256', secret: { env: 'GH' }, prefix: 'sha256=' }
+				}
+			})
 		).not.toThrow();
 		expect(() =>
 			defineWebhook({
 				...base,
 				webhook: {
 					path: '/slack',
-					signature: { header: 'x-slack-signature', secret: { env: 'SLACK' }, prefix: 'v0=', timestamp: { header: 'x-slack-request-timestamp' }, signedPayload: 'v0:{timestamp}:{body}' }
+					signature: {
+						header: 'x-slack-signature',
+						secret: { env: 'SLACK' },
+						prefix: 'v0=',
+						timestamp: { header: 'x-slack-request-timestamp' },
+						signedPayload: 'v0:{timestamp}:{body}'
+					}
 				}
 			})
 		).not.toThrow();
@@ -490,7 +531,13 @@ describe('webhook declarations that cannot verify are refused at authoring time'
 				...base,
 				webhook: {
 					path: '/stripe',
-					signature: { header: 'stripe-signature', secret: { env: 'STRIPE' }, parameter: 'v1', timestamp: { parameter: 't' }, signedPayload: '{timestamp}.{body}' }
+					signature: {
+						header: 'stripe-signature',
+						secret: { env: 'STRIPE' },
+						parameter: 'v1',
+						timestamp: { parameter: 't' },
+						signedPayload: '{timestamp}.{body}'
+					}
 				}
 			})
 		).not.toThrow();
@@ -511,7 +558,10 @@ describe('the digest comparison is constant-time by construction', () => {
 	 * digests to `timingSafeEqual` or it does not. This fails if somebody replaces that call with an
 	 * operator, which is the regression worth catching.
 	 */
-	const source = readFileSync(new URL('../../src/runtime/integrations/signature.ts', import.meta.url), 'utf8');
+	const source = readFileSync(
+		new URL('../../src/runtime/integrations/signature.ts', import.meta.url),
+		'utf8'
+	);
 
 	it('compares the digests with timingSafeEqual', () => {
 		expect(source).toContain('timingSafeEqual(provided, expected)');
@@ -529,7 +579,9 @@ describe('the digest comparison is constant-time by construction', () => {
 		const comparisons = source
 			.split('\n')
 			.map((line) => line.trim())
-			.filter((line) => /[!=]==/u.test(line) && /\bprovided\b/u.test(line) && /\bexpected\b/u.test(line));
+			.filter(
+				(line) => /[!=]==/u.test(line) && /\bprovided\b/u.test(line) && /\bexpected\b/u.test(line)
+			);
 
 		expect(comparisons).toEqual(['if (provided.length !== expected.length) {']);
 	});
@@ -540,6 +592,8 @@ describe('the digest comparison is constant-time by construction', () => {
 	 */
 	it('guards the length before the constant-time compare', () => {
 		expect(source).toContain('provided.length !== expected.length');
-		expect(source.indexOf('provided.length !== expected.length')).toBeLessThan(source.indexOf('timingSafeEqual(provided, expected)'));
+		expect(source.indexOf('provided.length !== expected.length')).toBeLessThan(
+			source.indexOf('timingSafeEqual(provided, expected)')
+		);
 	});
 });

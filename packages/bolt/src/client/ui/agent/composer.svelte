@@ -11,14 +11,17 @@
 	let message = $state('');
 </script>
 
-<form aria-label="Agent message" onsubmit={(event) => {
-	event.preventDefault();
-	const value = message.trim();
-	if (!disabled && value !== '') {
-		onsend?.(value);
-		message = '';
-	}
-}}>
+<form
+	aria-label="Agent message"
+	onsubmit={(event) => {
+		event.preventDefault();
+		const value = message.trim();
+		if (!disabled && value !== '') {
+			onsend?.(value);
+			message = '';
+		}
+	}}
+>
 	<label for="bolt-agent-message">Message</label>
 	<textarea
 		id="bolt-agent-message"
@@ -31,8 +34,7 @@
 				event.preventDefault();
 				event.currentTarget.form?.requestSubmit();
 			}
-		}}
-	></textarea>
+		}}></textarea>
 	<div class="composer-actions">
 		<small id="bolt-agent-message-help">Enter to send · Shift+Enter for a new line</small>
 		<button type="submit" disabled={disabled || message.trim() === ''}>
@@ -42,8 +44,21 @@
 </form>
 
 <style>
-	form { display: grid; gap: .5rem; }
-	label { font-weight: 600; }
-	textarea { min-height: 5rem; resize: vertical; }
-	.composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+	form {
+		display: grid;
+		gap: 0.5rem;
+	}
+	label {
+		font-weight: 600;
+	}
+	textarea {
+		min-height: 5rem;
+		resize: vertical;
+	}
+	.composer-actions {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
 </style>

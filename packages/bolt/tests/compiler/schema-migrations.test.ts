@@ -38,7 +38,9 @@ const withColumn = (
 const snapshotOf = async (
 	models: Readonly<Record<string, ModelDeclaration>>
 ): Promise<WorkspaceSnapshot> => {
-	const migration = await Effect.runPromise(planWorkspaceMigration({ models, relations: [], previous: undefined }));
+	const migration = await Effect.runPromise(
+		planWorkspaceMigration({ models, relations: [], previous: undefined })
+	);
 	if (migration === undefined)
 		throw new Error('a schema built from nothing must produce a migration');
 	return migration.snapshot;
@@ -70,7 +72,10 @@ describe('schema plan scope', () => {
 				collection({
 					name: collectionName,
 					fields: describeModelColumns(
-						defineModel({ amount: numeric(), sequence: integer(), effective_on: date(), note: text() }, { recordLabel: 'note' }).columns
+						defineModel(
+							{ amount: numeric(), sequence: integer(), effective_on: date(), note: text() },
+							{ recordLabel: 'note' }
+						).columns
 					)
 				})
 			],
@@ -108,11 +113,13 @@ describe('schema plan scope', () => {
 describe('Bolt Drizzle-driven schema migration', () => {
 	it('drops a removed column', async () => {
 		const previous = await snapshotOf(withColumn({ leave_year_start_month: numeric() }));
-		const migration = await Effect.runPromise(planWorkspaceMigration({
-			models: withColumn({}),
-			relations: [],
-			previous
-		}));
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: withColumn({}),
+				relations: [],
+				previous
+			})
+		);
 		expect(migration?.statements).toEqual([
 			'ALTER TABLE "jurisdictions" DROP COLUMN "leave_year_start_month";'
 		]);
@@ -120,11 +127,13 @@ describe('Bolt Drizzle-driven schema migration', () => {
 
 	it('adds a new column', async () => {
 		const previous = await snapshotOf(withColumn({}));
-		const migration = await Effect.runPromise(planWorkspaceMigration({
-			models: withColumn({ leave_year_start_month: numeric() }),
-			relations: [],
-			previous
-		}));
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: withColumn({ leave_year_start_month: numeric() }),
+				relations: [],
+				previous
+			})
+		);
 		expect(migration?.statements).toEqual([
 			'ALTER TABLE "jurisdictions" ADD COLUMN "leave_year_start_month" numeric;'
 		]);
@@ -145,18 +154,22 @@ describe('Bolt Drizzle-driven schema migration', () => {
 			),
 			retired: defineModel({ name: text() }, { recordLabel: 'name' })
 		});
-		const migration = await Effect.runPromise(planWorkspaceMigration({
-			models: withColumn({}),
-			relations: [],
-			previous
-		}));
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: withColumn({}),
+				relations: [],
+				previous
+			})
+		);
 		expect(migration?.statements.join('\n')).toContain('DROP TABLE "retired"');
 	});
 
 	it('writes no migration when the models and the lineage already agree', async () => {
 		const models = withColumn({ leave_year_start_month: numeric() });
 		expect(
-			await Effect.runPromise(planWorkspaceMigration({ models, relations: [], previous: await snapshotOf(models) }))
+			await Effect.runPromise(
+				planWorkspaceMigration({ models, relations: [], previous: await snapshotOf(models) })
+			)
 		).toBeUndefined();
 	});
 
@@ -167,11 +180,13 @@ describe('Bolt Drizzle-driven schema migration', () => {
 	 */
 	it('carries a generated column into the DDL as generated', async () => {
 		const previous = await snapshotOf(withColumn({}));
-		const migration = await Effect.runPromise(planWorkspaceMigration({
-			models: withColumn({ label: text().generatedAlwaysAs(sql`upper("code")`) }),
-			relations: [],
-			previous
-		}));
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: withColumn({ label: text().generatedAlwaysAs(sql`upper("code")`) }),
+				relations: [],
+				previous
+			})
+		);
 		expect(migration?.statements[0]).toContain('GENERATED ALWAYS AS');
 		expect(migration?.statements[0]).toContain('STORED');
 	});
@@ -183,16 +198,18 @@ describe('Bolt Drizzle-driven schema migration', () => {
 	 */
 	it('carries a searchable column into the lineage as a GIN trigram index', async () => {
 		const previous = await snapshotOf(withColumn({}));
-		const migration = await Effect.runPromise(planWorkspaceMigration({
-			models: {
-				jurisdictions: defineModel(
-					{ code: text(), name: text({ search: true }), ordinary_rate_divisor: numeric() },
-					{ recordLabel: 'name' }
-				)
-			},
-			relations: [],
-			previous
-		}));
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: {
+					jurisdictions: defineModel(
+						{ code: text(), name: text({ search: true }), ordinary_rate_divisor: numeric() },
+						{ recordLabel: 'name' }
+					)
+				},
+				relations: [],
+				previous
+			})
+		);
 
 		expect(migration?.statements).toEqual([
 			'CREATE INDEX "jurisdictions_name_search_trgm_idx" ON "jurisdictions" USING gin ("name" gin_trgm_ops);'
@@ -207,15 +224,19 @@ describe('Bolt Drizzle-driven schema migration', () => {
 	it('proposes the trigram index once and an un-opted column never', async () => {
 		const models = { jurisdictions: defineModel({ code: text(), name: text({ search: true }) }) };
 		expect(
-			await Effect.runPromise(planWorkspaceMigration({ models, relations: [], previous: await snapshotOf(models) }))
+			await Effect.runPromise(
+				planWorkspaceMigration({ models, relations: [], previous: await snapshotOf(models) })
+			)
 		).toBeUndefined();
 
 		const unopted = { jurisdictions: defineModel({ code: text(), name: text() }) };
-		const created = await Effect.runPromise(planWorkspaceMigration({
-			models: unopted,
-			relations: [],
-			previous: undefined
-		}));
+		const created = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: unopted,
+				relations: [],
+				previous: undefined
+			})
+		);
 		expect(created?.statements.join('\n')).not.toContain('gin_trgm_ops');
 	});
 });

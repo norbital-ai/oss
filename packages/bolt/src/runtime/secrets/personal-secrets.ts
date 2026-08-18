@@ -2,7 +2,12 @@ import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { Database } from '../facilities/database.js';
 import * as Identity from '../identity/identity.js';
-import { SecretCipher, bind, type SecretKeyUnavailable, type SecretUnreadable } from '@norbital-ai/std/secret';
+import {
+	SecretCipher,
+	bind,
+	type SecretKeyUnavailable,
+	type SecretUnreadable
+} from '@norbital-ai/std/secret';
 
 /**
  * The binding for a `bolt_personal_secrets` row: the whole primary key, so no row can stand in for
@@ -84,7 +89,10 @@ export type Interface = Readonly<{
 	 * Server-side callers only — there is no `personal-secrets.read` command. The value returned is
 	 * always the caller's; there is no argument that could make it somebody else's.
 	 */
-	readonly read: (effectId: EffectId, name: string) => Effect.Effect<
+	readonly read: (
+		effectId: EffectId,
+		name: string
+	) => Effect.Effect<
 		string | null,
 		NoPersonalSubject | Database.FacilityError | SecretKeyUnavailable | SecretUnreadable
 	>;
@@ -94,21 +102,33 @@ export type Interface = Readonly<{
 	 * Fails with `SecretKeyUnavailable` when the host has configured no encryption key, and stores
 	 * nothing in that case — there is no branch here that writes a value in the clear.
 	 */
-	readonly write: (effectId: EffectId, name: string, value: string) => Effect.Effect<
-		void,
-		NoPersonalSubject | Database.FacilityError | SecretKeyUnavailable
-	>;
+	readonly write: (
+		effectId: EffectId,
+		name: string,
+		value: string
+	) => Effect.Effect<void, NoPersonalSubject | Database.FacilityError | SecretKeyUnavailable>;
 	/** The calling person's own entries and whether each is set. Safe to send to a browser; carries no values. */
-	readonly status: (effectId: EffectId) => Effect.Effect<ReadonlyArray<PersonalSecretStatus>, NoPersonalSubject | Database.FacilityError>;
+	readonly status: (
+		effectId: EffectId
+	) => Effect.Effect<
+		ReadonlyArray<PersonalSecretStatus>,
+		NoPersonalSubject | Database.FacilityError
+	>;
 	/** Deletes the calling person's entry. Absent is the same as deleted, so this is idempotent. */
-	readonly forget: (effectId: EffectId, name: string) => Effect.Effect<void, NoPersonalSubject | Database.FacilityError>;
+	readonly forget: (
+		effectId: EffectId,
+		name: string
+	) => Effect.Effect<void, NoPersonalSubject | Database.FacilityError>;
 }>;
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/PersonalSecrets');
 
 /** Reads the loosely-typed values a SQL row hands back without scattering guards through each projection. */
 const rowText = (row: unknown, field: string): string | undefined => {
-	const value = row === null || typeof row !== 'object' || Array.isArray(row) ? undefined : Reflect.get(row, field);
+	const value =
+		row === null || typeof row !== 'object' || Array.isArray(row)
+			? undefined
+			: Reflect.get(row, field);
 	return typeof value === 'string' ? value : undefined;
 };
 
@@ -133,7 +153,10 @@ export const layer = Layer.effect(
 			return { tenantId: subject.value.tenantId, userId: subject.value.userId };
 		});
 
-		const read: Interface['read'] = Effect.fn('PersonalSecrets.read')(function* (effectId: EffectId, name: string) {
+		const read: Interface['read'] = Effect.fn('PersonalSecrets.read')(function* (
+			effectId: EffectId,
+			name: string
+		) {
 			const { tenantId, userId } = yield* owner('read');
 			const result = yield* database.execute(effectId, {
 				_tag: 'Query',
@@ -151,7 +174,11 @@ export const layer = Layer.effect(
 			return yield* cipher.decrypt(name, personalBinding(tenantId, userId, name), stored);
 		});
 
-		const write: Interface['write'] = Effect.fn('PersonalSecrets.write')(function* (effectId: EffectId, name: string, value: string) {
+		const write: Interface['write'] = Effect.fn('PersonalSecrets.write')(function* (
+			effectId: EffectId,
+			name: string,
+			value: string
+		) {
 			const { tenantId, userId } = yield* owner('write');
 			if (value === '') {
 				// Clearing is deleting, as in the workspace vault. Storing an empty string would make `read`
@@ -166,7 +193,11 @@ export const layer = Layer.effect(
 			}
 			// Sealed before the statement is even built, so a missing key refuses *ahead of* the write
 			// rather than after it. There is no ordering here in which a plaintext row reaches the table.
-			const sealed = yield* cipher.encrypt(`storing the personal secret ${name}`, personalBinding(tenantId, userId, name), value);
+			const sealed = yield* cipher.encrypt(
+				`storing the personal secret ${name}`,
+				personalBinding(tenantId, userId, name),
+				value
+			);
 			yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: `insert into bolt_personal_secrets (tenant_id, user_id, name, value) values ($1, $2, $3, $4)
@@ -175,7 +206,9 @@ export const layer = Layer.effect(
 			});
 		});
 
-		const status: Interface['status'] = Effect.fn('PersonalSecrets.status')(function* (effectId: EffectId) {
+		const status: Interface['status'] = Effect.fn('PersonalSecrets.status')(function* (
+			effectId: EffectId
+		) {
 			const { tenantId, userId } = yield* owner('status');
 			const result = yield* database.execute(effectId, {
 				_tag: 'Query',
@@ -195,16 +228,24 @@ export const layer = Layer.effect(
 				const name = rowText(row, 'name');
 				if (name === undefined || name === '') return [];
 				const updatedAt = rowText(row, 'updated_at');
-				const configured = row !== null && typeof row === 'object' && !Array.isArray(row) ? Reflect.get(row, 'configured') : undefined;
-				return [{
-					name,
-					configured: configured === true,
-					...(updatedAt === undefined ? {} : { updatedAt })
-				}];
+				const configured =
+					row !== null && typeof row === 'object' && !Array.isArray(row)
+						? Reflect.get(row, 'configured')
+						: undefined;
+				return [
+					{
+						name,
+						configured: configured === true,
+						...(updatedAt === undefined ? {} : { updatedAt })
+					}
+				];
 			});
 		});
 
-		const forget: Interface['forget'] = Effect.fn('PersonalSecrets.forget')(function* (effectId: EffectId, name: string) {
+		const forget: Interface['forget'] = Effect.fn('PersonalSecrets.forget')(function* (
+			effectId: EffectId,
+			name: string
+		) {
 			const { tenantId, userId } = yield* owner('forget');
 			yield* database.execute(effectId, {
 				_tag: 'Query',

@@ -52,13 +52,22 @@ const PolicyEvaluation = {
 		const subjectRoles = subject.roles.map((role) => role.toLocaleLowerCase());
 		return roles.some((role) => subjectRoles.includes(role.toLocaleLowerCase()));
 	},
-	matches: (policy: PolicyDeclaration, subject: Identity.Subject, action: string, resource: string): boolean => {
+	matches: (
+		policy: PolicyDeclaration,
+		subject: Identity.Subject,
+		action: string,
+		resource: string
+	): boolean => {
 		if (!PolicyEvaluation.subjectHasPolicy(policy, subject)) return false;
 		const grants = policy.grants ?? [];
 		if (grants.length > 0 && action === 'agent') return (policy.apps ?? []).length > 0;
-		if (grants.length > 0) return grants.some((grant) => grant.collection === resource && grant.action === action);
+		if (grants.length > 0)
+			return grants.some((grant) => grant.collection === resource && grant.action === action);
 		const actions = policy.actions ?? [];
-		return (actions.includes(action) || actions.includes('*')) && ((policy.apps ?? []).includes(resource) || (policy.apps ?? []).includes('*'));
+		return (
+			(actions.includes(action) || actions.includes('*')) &&
+			((policy.apps ?? []).includes(resource) || (policy.apps ?? []).includes('*'))
+		);
 	},
 	subjectValue: (subject: Identity.Subject, path: string): Schema.Json | undefined => {
 		if (path === 'requestor.norbital_id' || path === 'requestor.userId') return subject.userId;
@@ -75,53 +84,78 @@ export const decide = (
 	action: string,
 	app: string
 ): Decision => {
-	const applicable = policies.filter((policy) => PolicyEvaluation.matches(policy, subject, action, app));
-	if (applicable.some(({ effect }) => effect === 'deny')) return { allowed: false, reason: 'explicit deny' };
-	if (applicable.some(({ effect }) => effect !== 'deny')) return { allowed: true, reason: 'explicit allow' };
+	const applicable = policies.filter((policy) =>
+		PolicyEvaluation.matches(policy, subject, action, app)
+	);
+	if (applicable.some(({ effect }) => effect === 'deny'))
+		return { allowed: false, reason: 'explicit deny' };
+	if (applicable.some(({ effect }) => effect !== 'deny'))
+		return { allowed: true, reason: 'explicit allow' };
 	return { allowed: false, reason: 'no matching allow policy' };
 };
 
 /** Resolves the small, explicit requestor token vocabulary without allowing arbitrary property traversal. */
 /** Compiles trusted authored row scope into parameterized SQL while binding every identity value separately. */
 const compileWhereOwner = {
-compile: (where: Readonly<Record<string, unknown>> | undefined, subject: Identity.Subject): Readonly<{ sql: string; parameters: ReadonlyArray<Schema.Json> }> => {
-	if (where === undefined) return { sql: 'true', parameters: [] };
-	const raw = where.$sql;
-	if (typeof raw === 'string') {
+	compile: (
+		where: Readonly<Record<string, unknown>> | undefined,
+		subject: Identity.Subject
+	): Readonly<{ sql: string; parameters: ReadonlyArray<Schema.Json> }> => {
+		if (where === undefined) return { sql: 'true', parameters: [] };
+		const raw = where.$sql;
+		if (typeof raw === 'string') {
+			const parameters: Array<Schema.Json> = [];
+			const sql = raw.replaceAll(/\$\{([^}]+)\}/g, (_token, path: string) => {
+				const value = PolicyEvaluation.subjectValue(subject, path);
+				if (value === undefined) return 'null';
+				parameters.push(value);
+				return `$${parameters.length}`;
+			});
+			return { sql, parameters };
+		}
 		const parameters: Array<Schema.Json> = [];
-		const sql = raw.replaceAll(/\$\{([^}]+)\}/g, (_token, path: string) => {
-			const value = PolicyEvaluation.subjectValue(subject, path);
-			if (value === undefined) return 'null';
-			parameters.push(value);
-			return `$${parameters.length}`;
+		const clauses = Object.entries(where).flatMap(([field, value]) => {
+			if (field === 'AND' || field === 'OR' || field === 'NOT' || field === 'RAW') return [];
+			const resolved =
+				typeof value === 'string' && /^\$\{[^}]+\}$/.test(value)
+					? PolicyEvaluation.subjectValue(subject, value.slice(2, -1))
+					: value;
+			if (resolved === undefined) return ['false'];
+			parameters.push(Schema.is(Schema.Json)(resolved) ? resolved : String(resolved));
+			return [`"${field.replaceAll('"', '""')}" = $${parameters.length}`];
 		});
-		return { sql, parameters };
+		return { sql: clauses.length === 0 ? 'true' : clauses.join(' and '), parameters };
 	}
-	const parameters: Array<Schema.Json> = [];
-	const clauses = Object.entries(where).flatMap(([field, value]) => {
-		if (field === 'AND' || field === 'OR' || field === 'NOT' || field === 'RAW') return [];
-		const resolved = typeof value === 'string' && /^\$\{[^}]+\}$/.test(value)
-			? PolicyEvaluation.subjectValue(subject, value.slice(2, -1))
-			: value;
-		if (resolved === undefined) return ['false'];
-		parameters.push(Schema.is(Schema.Json)(resolved) ? resolved : String(resolved));
-		return [`"${field.replaceAll('"', '""')}" = $${parameters.length}`];
-	});
-	return { sql: clauses.length === 0 ? 'true' : clauses.join(' and '), parameters };
-}
 };
 
 /** Unions matching authored grants into the exact predicate, mask, and approval metadata used by collection execution. */
-const rowPredicate = (policies: ReadonlyArray<PolicyDeclaration>, subject: Identity.Subject, action: string, resource: string): RowPredicate => {
-	const applicable = policies.filter((policy) => PolicyEvaluation.matches(policy, subject, action, resource));
-	if (applicable.some(({ effect }) => effect === 'deny')) return { allowed: false, reason: 'explicit deny', sql: 'false', parameters: [] };
-	const grants = applicable.flatMap((policy) => policy.grants?.filter((grant) => grant.collection === resource && grant.action === action) ?? []);
+const rowPredicate = (
+	policies: ReadonlyArray<PolicyDeclaration>,
+	subject: Identity.Subject,
+	action: string,
+	resource: string
+): RowPredicate => {
+	const applicable = policies.filter((policy) =>
+		PolicyEvaluation.matches(policy, subject, action, resource)
+	);
+	if (applicable.some(({ effect }) => effect === 'deny'))
+		return { allowed: false, reason: 'explicit deny', sql: 'false', parameters: [] };
+	const grants = applicable.flatMap(
+		(policy) =>
+			policy.grants?.filter((grant) => grant.collection === resource && grant.action === action) ??
+			[]
+	);
 	if (grants.length === 0) {
 		const decision = decide(policies, subject, action, resource);
 		return { ...decision, sql: decision.allowed ? 'true' : 'false', parameters: [] };
 	}
-	const compiled = grants.map((grant) => ({ grant, predicate: compileWhereOwner.compile(grant.where, subject) }));
-	if (compiled.some(({ predicate }) => predicate.sql === 'true' && predicate.parameters.length === 0)) {
+	const compiled = grants.map((grant) => ({
+		grant,
+		predicate: compileWhereOwner.compile(grant.where, subject)
+	}));
+	if (
+		compiled.some(({ predicate }) => predicate.sql === 'true' && predicate.parameters.length === 0)
+	) {
 		const fields = compiled.flatMap(({ grant }) => grant.fields ?? []);
 		const approval = compiled.find(({ grant }) => grant.approval !== undefined)?.grant.approval;
 		return {
@@ -130,15 +164,19 @@ const rowPredicate = (policies: ReadonlyArray<PolicyDeclaration>, subject: Ident
 			sql: 'true',
 			parameters: [],
 			...(fields.length === 0 ? {} : { fields: [...new Set(fields)] }),
-			...(approval === undefined ? {} : { approval: Schema.is(Schema.Json)(approval) ? approval : String(approval) })
+			...(approval === undefined
+				? {}
+				: { approval: Schema.is(Schema.Json)(approval) ? approval : String(approval) })
 		};
 	}
 	const parameters: Array<Schema.Json> = [];
-	const sql = compiled.map(({ predicate }) => {
-		const offset = parameters.length;
-		parameters.push(...predicate.parameters);
-		return `(${predicate.sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`)})`;
-	}).join(' or ');
+	const sql = compiled
+		.map(({ predicate }) => {
+			const offset = parameters.length;
+			parameters.push(...predicate.parameters);
+			return `(${predicate.sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`)})`;
+		})
+		.join(' or ');
 	const fields = compiled.flatMap(({ grant }) => grant.fields ?? []);
 	const approval = compiled.find(({ grant }) => grant.approval !== undefined)?.grant.approval;
 	return {
@@ -147,7 +185,9 @@ const rowPredicate = (policies: ReadonlyArray<PolicyDeclaration>, subject: Ident
 		sql,
 		parameters,
 		...(fields.length === 0 ? {} : { fields: [...new Set(fields)] }),
-		...(approval === undefined ? {} : { approval: Schema.is(Schema.Json)(approval) ? approval : String(approval) })
+		...(approval === undefined
+			? {}
+			: { approval: Schema.is(Schema.Json)(approval) ? approval : String(approval) })
 	};
 };
 
@@ -184,16 +224,25 @@ export type ImpersonationTeam = Readonly<{ readonly id: string; readonly name: s
  * compiled client registry lists policies by lowercased filename (`employee`) while the declaration
  * names them `Employee`, and either spelling has to reach the same policy.
  */
-const impersonationTeams = (policies: ReadonlyArray<PolicyDeclaration>): ReadonlyArray<ImpersonationTeam> =>
-	policies.map(({ name }) => ({ id: name, name }));
+const impersonationTeams = (
+	policies: ReadonlyArray<PolicyDeclaration>
+): ReadonlyArray<ImpersonationTeam> => policies.map(({ name }) => ({ id: name, name }));
 
 /** Whether this subject may view the workspace as somebody else. Always asked of the real actor. */
-const mayImpersonate = (actor: Identity.Subject): boolean => actor.roles.includes(IMPERSONATOR_ROLE);
+const mayImpersonate = (actor: Identity.Subject): boolean =>
+	actor.roles.includes(IMPERSONATOR_ROLE);
 
 export type Interface = Readonly<{
-	readonly authorize: (subject: Identity.Subject, action: string, app: string) => Effect.Effect<void, AccessDenied>;
+	readonly authorize: (
+		subject: Identity.Subject,
+		action: string,
+		app: string
+	) => Effect.Effect<void, AccessDenied>;
 	readonly visibleApps: (subject: Identity.Subject) => ReadonlyArray<string>;
-	readonly impersonate: (actor: Identity.Subject, target: Identity.Subject) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
+	readonly impersonate: (
+		actor: Identity.Subject,
+		target: Identity.Subject
+	) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
 	/** The teams an administrator may view this workspace as, for the sidebar's picker. */
 	readonly impersonationTeams: () => ReadonlyArray<ImpersonationTeam>;
 	/** Whether this actor may impersonate at all. The picker is offered on this and nothing else. */
@@ -205,12 +254,28 @@ export type Interface = Readonly<{
 	 * writing a row here would put one audit entry per request into `bolt_audit` and bury the entry
 	 * that says the preview began. `impersonateTeam` is the audited entry point and is called once.
 	 */
-	readonly subjectAsTeam: (actor: Identity.Subject, teamId: string) => Effect.Effect<Identity.Subject, AccessDenied>;
+	readonly subjectAsTeam: (
+		actor: Identity.Subject,
+		teamId: string
+	) => Effect.Effect<Identity.Subject, AccessDenied>;
 	/** `subjectAsTeam`, plus the `bolt_audit` row recording that this actor started the preview. */
-	readonly impersonateTeam: (actor: Identity.Subject, teamId: string) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
-	readonly resolveScope: (subject: Identity.Subject) => { readonly tenantId: string; readonly userId: string; readonly roles: ReadonlyArray<string>; readonly teams: ReadonlyArray<string> };
+	readonly impersonateTeam: (
+		actor: Identity.Subject,
+		teamId: string
+	) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
+	readonly resolveScope: (subject: Identity.Subject) => {
+		readonly tenantId: string;
+		readonly userId: string;
+		readonly roles: ReadonlyArray<string>;
+		readonly teams: ReadonlyArray<string>;
+	};
 	readonly predicate: (subject: Identity.Subject, action: string, resource: string) => RowPredicate;
-	readonly mask: (subject: Identity.Subject, action: string, resource: string, value: Readonly<Record<string, Schema.Json>>) => Readonly<Record<string, Schema.Json>>;
+	readonly mask: (
+		subject: Identity.Subject,
+		action: string,
+		resource: string,
+		value: Readonly<Record<string, Schema.Json>>
+	) => Readonly<Record<string, Schema.Json>>;
 	readonly explain: (subject: Identity.Subject, action: string, resource: string) => Decision;
 }>;
 
@@ -222,9 +287,14 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const workspace = yield* Workspace.Service;
 		const database = yield* Database.Service;
-		const authorize = Effect.fn('AccessControl.authorize')(function* (subject: Identity.Subject, action: string, app: string) {
+		const authorize = Effect.fn('AccessControl.authorize')(function* (
+			subject: Identity.Subject,
+			action: string,
+			app: string
+		) {
 			const decision = decide(workspace.definition.policies, subject, action, app);
-			if (!decision.allowed) return yield* new AccessDenied({ action, resource: app, reason: decision.reason });
+			if (!decision.allowed)
+				return yield* new AccessDenied({ action, resource: app, reason: decision.reason });
 		});
 		/**
 		 * The same person, holding one policy's roles instead of their own.
@@ -249,18 +319,31 @@ export const layer = Layer.effect(
 		 * `impersonatedBy` is the actor's own id. It marks the subject as synthetic for anything
 		 * downstream that keys per-user state off it, and it is the same id the audit row names.
 		 */
-		const subjectAsTeam = Effect.fn('AccessControl.subjectAsTeam')(function* (actor: Identity.Subject, teamId: string) {
+		const subjectAsTeam = Effect.fn('AccessControl.subjectAsTeam')(function* (
+			actor: Identity.Subject,
+			teamId: string
+		) {
 			// Asked of the actor, whose roles came from the credential the boundary authenticated. An
 			// administrator already holds every policy's roles, so assuming one can only take authority
 			// away; for anybody else there is nothing to assume and the claim is refused outright rather
 			// than ignored — a request to run as somebody else is a claim, not a preference.
 			if (!mayImpersonate(actor)) {
-				return yield* new AccessDenied({ action: 'impersonate', resource: teamId, reason: 'impersonation not permitted' });
+				return yield* new AccessDenied({
+					action: 'impersonate',
+					resource: teamId,
+					reason: 'impersonation not permitted'
+				});
 			}
 			const wanted = teamId.trim().toLocaleLowerCase();
-			const matched = workspace.definition.policies.find(({ name }) => name.toLocaleLowerCase() === wanted);
+			const matched = workspace.definition.policies.find(
+				({ name }) => name.toLocaleLowerCase() === wanted
+			);
 			if (matched === undefined) {
-				return yield* new AccessDenied({ action: 'impersonate', resource: teamId, reason: 'no policy of that name' });
+				return yield* new AccessDenied({
+					action: 'impersonate',
+					resource: teamId,
+					reason: 'no policy of that name'
+				});
 			}
 			return {
 				...actor,
@@ -272,21 +355,31 @@ export const layer = Layer.effect(
 		return Service.of({
 			authorize,
 			resolveScope: ({ tenantId, userId, roles, teams }) => ({ tenantId, userId, roles, teams }),
-			predicate: (subject, action, resource) => rowPredicate(workspace.definition.policies, subject, action, resource),
+			predicate: (subject, action, resource) =>
+				rowPredicate(workspace.definition.policies, subject, action, resource),
 			mask: (subject, action, resource, value) => {
 				const predicate = rowPredicate(workspace.definition.policies, subject, action, resource);
 				if (!predicate.allowed) return {};
 				if (predicate.fields === undefined) return value;
-				return Object.fromEntries(Object.entries(value).filter(([field]) => predicate.fields?.includes(field)));
+				return Object.fromEntries(
+					Object.entries(value).filter(([field]) => predicate.fields?.includes(field))
+				);
 			},
-			explain: (subject, action, resource) => decide(workspace.definition.policies, subject, action, resource),
-			visibleApps: (subject) => workspace.definition.apps
-				.filter(({ name }) => workspace.definition.policies.some((policy) =>
-					policy.grants === undefined
-						? PolicyEvaluation.matches(policy, subject, 'view', name)
-						: PolicyEvaluation.subjectHasPolicy(policy, subject) && (policy.apps ?? []).some((app) => app === '*' || app === name || name.startsWith(`${app}/`))
-				))
-				.map(({ name }) => name),
+			explain: (subject, action, resource) =>
+				decide(workspace.definition.policies, subject, action, resource),
+			visibleApps: (subject) =>
+				workspace.definition.apps
+					.filter(({ name }) =>
+						workspace.definition.policies.some((policy) =>
+							policy.grants === undefined
+								? PolicyEvaluation.matches(policy, subject, 'view', name)
+								: PolicyEvaluation.subjectHasPolicy(policy, subject) &&
+									(policy.apps ?? []).some(
+										(app) => app === '*' || app === name || name.startsWith(`${app}/`)
+									)
+						)
+					)
+					.map(({ name }) => name),
 			impersonationTeams: () => impersonationTeams(workspace.definition.policies),
 			mayImpersonate,
 			subjectAsTeam,
@@ -298,18 +391,30 @@ export const layer = Layer.effect(
 				yield* database.execute(EffectId.make(`impersonate-team:${actor.userId}:${teamId}`), {
 					_tag: 'Query',
 					sql: 'insert into bolt_audit (kind, subject_id, payload) values ($1, $2, $3)',
-					parameters: ['impersonation_started', actor.userId, { tenantId: actor.tenantId, team: teamId, roles: [...subject.roles] }]
+					parameters: [
+						'impersonation_started',
+						actor.userId,
+						{ tenantId: actor.tenantId, team: teamId, roles: [...subject.roles] }
+					]
 				});
 				return subject;
 			}),
 			impersonate: Effect.fn('AccessControl.impersonate')(function* (actor, target) {
 				if (!mayImpersonate(actor) || actor.tenantId !== target.tenantId) {
-					return yield* new AccessDenied({ action: 'impersonate', resource: target.userId, reason: 'impersonation not permitted' });
+					return yield* new AccessDenied({
+						action: 'impersonate',
+						resource: target.userId,
+						reason: 'impersonation not permitted'
+					});
 				}
 				yield* database.execute(EffectId.make(`impersonate:${actor.userId}:${target.userId}`), {
 					_tag: 'Query',
 					sql: 'insert into bolt_audit (kind, subject_id, payload) values ($1, $2, $3)',
-					parameters: ['impersonation_started', actor.userId, { tenantId: actor.tenantId, targetUserId: target.userId }]
+					parameters: [
+						'impersonation_started',
+						actor.userId,
+						{ tenantId: actor.tenantId, targetUserId: target.userId }
+					]
 				});
 				return { ...target, impersonatedBy: actor.userId };
 			})

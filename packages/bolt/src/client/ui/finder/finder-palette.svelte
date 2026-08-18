@@ -138,7 +138,8 @@
 							icon="lucide:loader-circle"
 							class="size-3 shrink-0 animate-spin text-muted-foreground"
 						/>
-						<span class="text-xs text-muted-foreground">{t('bolt.shell.omniSearchingRecords')}</span>
+						<span class="text-xs text-muted-foreground">{t('bolt.shell.omniSearchingRecords')}</span
+						>
 					{:else if row.kind === 'empty'}
 						<span data-testid="agent-mention-empty" class="truncate text-xs text-muted-foreground"
 							>{row.label}</span

@@ -94,18 +94,30 @@ const readAs = (harnessed: BoltTestRuntime, subject: Identity.Subject, name: str
 	harnessed.runtime.runPromise(
 		Effect.provideService(
 			Effect.gen(function* () {
-				return yield* (yield* PersonalSecrets.Service).read(harnessed.effectId(`read-${subject.userId}`), name);
+				return yield* (yield* PersonalSecrets.Service).read(
+					harnessed.effectId(`read-${subject.userId}`),
+					name
+				);
 			}),
 			Identity.CurrentSubject,
 			subject
 		)
 	);
 
-const writeAs = (harnessed: BoltTestRuntime, subject: Identity.Subject, name: string, value: string) =>
+const writeAs = (
+	harnessed: BoltTestRuntime,
+	subject: Identity.Subject,
+	name: string,
+	value: string
+) =>
 	harnessed.runtime.runPromise(
 		Effect.provideService(
 			Effect.gen(function* () {
-				yield* (yield* PersonalSecrets.Service).write(harnessed.effectId(`write-${subject.userId}`), name, value);
+				yield* (yield* PersonalSecrets.Service).write(
+					harnessed.effectId(`write-${subject.userId}`),
+					name,
+					value
+				);
 			}),
 			Identity.CurrentSubject,
 			subject
@@ -113,8 +125,11 @@ const writeAs = (harnessed: BoltTestRuntime, subject: Identity.Subject, name: st
 	);
 
 const failureOf = async (harnessed: BoltTestRuntime, invocation: Invocation) => {
-	const outcome = await harnessed.runtime.runPromise(dispatchInvocation(invocation).pipe(Effect.result));
-	if (outcome._tag !== 'Failure') throw new Error(`expected a refusal, got ${JSON.stringify(outcome)}`);
+	const outcome = await harnessed.runtime.runPromise(
+		dispatchInvocation(invocation).pipe(Effect.result)
+	);
+	if (outcome._tag !== 'Failure')
+		throw new Error(`expected a refusal, got ${JSON.stringify(outcome)}`);
 	return outcome.failure;
 };
 
@@ -127,7 +142,12 @@ const vaultWorkspace = workspace({
 	apps: [],
 	policies: [
 		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] }),
-		policy({ name: 'employee', effect: 'allow', roles: ['employee'], grants: [{ collection: 'people', action: 'read' }] })
+		policy({
+			name: 'employee',
+			effect: 'allow',
+			roles: ['employee'],
+			grants: [{ collection: 'people', action: 'read' }]
+		})
 	],
 	agents: [],
 	automations: [],
@@ -143,7 +163,9 @@ describe('personal secrets', () => {
 		await session(harness, 'a-token', 'user-a', ['employee']);
 
 		const written = await harness.runtime.runPromise(
-			dispatchInvocation(command('personal-secrets.write', 'a-token', { name: SESSION_NAME, value: 'li_at=AAA' }))
+			dispatchInvocation(
+				command('personal-secrets.write', 'a-token', { name: SESSION_NAME, value: 'li_at=AAA' })
+			)
 		);
 		expect(written.value).toMatchObject({ saved: true, name: SESSION_NAME });
 
@@ -152,7 +174,9 @@ describe('personal secrets', () => {
 		const status = await harness.runtime.runPromise(
 			dispatchInvocation(command('personal-secrets.status', 'a-token'))
 		);
-		expect(status.value).toEqual([expect.objectContaining({ name: SESSION_NAME, configured: true })]);
+		expect(status.value).toEqual([
+			expect.objectContaining({ name: SESSION_NAME, configured: true })
+		]);
 		// The whole point of there being no `personal-secrets.read`: nothing a browser can ask for carries
 		// the value.
 		expect(JSON.stringify(status.value)).not.toContain('li_at=AAA');
@@ -170,14 +194,20 @@ describe('personal secrets', () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
 		await writeAs(harness, userA, SESSION_NAME, 'li_at=AAA');
 
-		expect(await readAs(harness, userB, SESSION_NAME), 'a second user read user A’s value').toBeNull();
+		expect(
+			await readAs(harness, userB, SESSION_NAME),
+			'a second user read user A’s value'
+		).toBeNull();
 		expect(await readAs(harness, admin, SESSION_NAME), 'an admin read user A’s value').toBeNull();
 
 		// A write under the same name is their own row, not an overwrite of user A's.
 		await writeAs(harness, userB, SESSION_NAME, 'li_at=BBB');
 		await writeAs(harness, admin, SESSION_NAME, 'li_at=ADMIN');
 
-		expect(await readAs(harness, userA, SESSION_NAME), 'user A’s value was overwritten by somebody else').toBe('li_at=AAA');
+		expect(
+			await readAs(harness, userA, SESSION_NAME),
+			'user A’s value was overwritten by somebody else'
+		).toBe('li_at=AAA');
 		expect(await readAs(harness, userB, SESSION_NAME)).toBe('li_at=BBB');
 		expect(await readAs(harness, admin, SESSION_NAME)).toBe('li_at=ADMIN');
 
@@ -199,20 +229,29 @@ describe('personal secrets', () => {
 		);
 		for (const row of rows)
 			for (const plaintext of ['li_at=AAA', 'li_at=BBB', 'li_at=ADMIN'])
-				expect(String(row['value']), `${String(row['user_id'])} stores a credential in the clear`).not.toContain(plaintext);
+				expect(
+					String(row['value']),
+					`${String(row['user_id'])} stores a credential in the clear`
+				).not.toContain(plaintext);
 
 		// Deleting is per-owner too: user B forgetting their entry must not clear user A's.
 		await harness.runtime.runPromise(
 			Effect.provideService(
 				Effect.gen(function* () {
-					yield* (yield* PersonalSecrets.Service).forget(harness!.effectId('forget-b'), SESSION_NAME);
+					yield* (yield* PersonalSecrets.Service).forget(
+						harness!.effectId('forget-b'),
+						SESSION_NAME
+					);
 				}),
 				Identity.CurrentSubject,
 				userB
 			)
 		);
 		expect(await readAs(harness, userB, SESSION_NAME)).toBeNull();
-		expect(await readAs(harness, userA, SESSION_NAME), 'one user’s forget deleted another user’s row').toBe('li_at=AAA');
+		expect(
+			await readAs(harness, userA, SESSION_NAME),
+			'one user’s forget deleted another user’s row'
+		).toBe('li_at=AAA');
 	});
 
 	/**
@@ -247,19 +286,29 @@ describe('personal secrets', () => {
 		// through the service because the column holds an envelope, and each read is bound to its own
 		// owner — so `user-b` still reading `li_at=BBB` is the assertion that their row was untouched.
 		expect(
-			(await harness.database.query('select user_id from bolt_personal_secrets order by user_id')).map((row) => row['user_id'])
+			(
+				await harness.database.query('select user_id from bolt_personal_secrets order by user_id')
+			).map((row) => row['user_id'])
 		).toEqual([fixtureUserId('user-a'), fixtureUserId('user-b')].sort());
 		expect(await readAs(harness, userA, SESSION_NAME)).toBe('stolen');
-		expect(await readAs(harness, userB, SESSION_NAME), 'a named user id reached the write').toBe('li_at=BBB');
+		expect(await readAs(harness, userB, SESSION_NAME), 'a named user id reached the write').toBe(
+			'li_at=BBB'
+		);
 
 		// And the same through `forget`, which is the destructive half of the same question.
 		await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('personal-secrets.forget', 'a-token', { name: SESSION_NAME, userId: 'user-b', owner: 'user-b' })
+				command('personal-secrets.forget', 'a-token', {
+					name: SESSION_NAME,
+					userId: 'user-b',
+					owner: 'user-b'
+				})
 			)
 		);
 		expect(
-			(await harness.database.query('select user_id from bolt_personal_secrets')).map((row) => row['user_id']),
+			(await harness.database.query('select user_id from bolt_personal_secrets')).map(
+				(row) => row['user_id']
+			),
 			'a named user id reached the delete'
 		).toEqual([fixtureUserId('user-b')]);
 		expect(await readAs(harness, userB, SESSION_NAME)).toBe('li_at=BBB');
@@ -276,7 +325,11 @@ describe('personal secrets', () => {
 	it('refuses a task, at the dispatch gate and again in the service', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
 
-		for (const name of ['personal-secrets.status', 'personal-secrets.write', 'personal-secrets.forget']) {
+		for (const name of [
+			'personal-secrets.status',
+			'personal-secrets.write',
+			'personal-secrets.forget'
+		]) {
 			const failure = await failureOf(harness, task(name, { name: SESSION_NAME, value: 'x' }));
 			expect(failure, name).toBeInstanceOf(AccessControl.AccessDenied);
 		}
@@ -286,33 +339,48 @@ describe('personal secrets', () => {
 		// Matched rather than flipped, so a method that *answers* is reported as the answer it gave — a
 		// bare `Effect.flip` turns "it returned null" into an unreadable defect, and "it returned null"
 		// is precisely the wrong behaviour under test.
-		const refusal = <A, E extends { readonly _tag: string }, R>(operation: Effect.Effect<A, E, R>) =>
+		const refusal = <A, E extends { readonly _tag: string }, R>(
+			operation: Effect.Effect<A, E, R>
+		) =>
 			operation.pipe(
 				Effect.match({
 					onFailure: (error: E) => error._tag,
-					onSuccess: (value: A) => `answered ${JSON.stringify(value) ?? 'nothing'} instead of refusing`
+					onSuccess: (value: A) =>
+						`answered ${JSON.stringify(value) ?? 'nothing'} instead of refusing`
 				})
 			);
 		const outcomes = await harness.runtime.runPromise(
 			Effect.all([
 				refusal(
 					Effect.gen(function* () {
-						return yield* (yield* PersonalSecrets.Service).read(harness!.effectId('read-nobody'), SESSION_NAME);
+						return yield* (yield* PersonalSecrets.Service).read(
+							harness!.effectId('read-nobody'),
+							SESSION_NAME
+						);
 					})
 				),
 				refusal(
 					Effect.gen(function* () {
-						yield* (yield* PersonalSecrets.Service).write(harness!.effectId('write-nobody'), SESSION_NAME, 'x');
+						yield* (yield* PersonalSecrets.Service).write(
+							harness!.effectId('write-nobody'),
+							SESSION_NAME,
+							'x'
+						);
 					})
 				),
 				refusal(
 					Effect.gen(function* () {
-						return yield* (yield* PersonalSecrets.Service).status(harness!.effectId('status-nobody'));
+						return yield* (yield* PersonalSecrets.Service).status(
+							harness!.effectId('status-nobody')
+						);
 					})
 				),
 				refusal(
 					Effect.gen(function* () {
-						yield* (yield* PersonalSecrets.Service).forget(harness!.effectId('forget-nobody'), SESSION_NAME);
+						yield* (yield* PersonalSecrets.Service).forget(
+							harness!.effectId('forget-nobody'),
+							SESSION_NAME
+						);
 					})
 				)
 			])
@@ -340,7 +408,12 @@ describe('personal secrets', () => {
 
 		await runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Secrets.Service).write(effectId('tenant-write'), 'GEOCODING_API_KEY', 'workspace-key', 'user-admin');
+				yield* (yield* Secrets.Service).write(
+					effectId('tenant-write'),
+					'GEOCODING_API_KEY',
+					'workspace-key',
+					'user-admin'
+				);
 			})
 		);
 		await writeAs(harness, userA, 'GEOCODING_API_KEY', 'user-a-key');
@@ -365,7 +438,10 @@ describe('personal secrets', () => {
 		expect(
 			await runtime.runPromise(
 				Effect.gen(function* () {
-					return yield* (yield* Secrets.Service).read(effectId('tenant-read-again'), 'GEOCODING_API_KEY');
+					return yield* (yield* Secrets.Service).read(
+						effectId('tenant-read-again'),
+						'GEOCODING_API_KEY'
+					);
 				})
 			)
 		).toBe('workspace-key');
@@ -388,7 +464,10 @@ describe('personal secrets', () => {
 	it('exposes status, write and forget, and deliberately no read', () => {
 		// Asserted on the dispatch source because the absence is the guarantee — a test that only
 		// exercised the commands that exist could never notice one being added.
-		const dispatch = readFileSync(new URL('../../src/runtime/dispatch.ts', import.meta.url), 'utf8');
+		const dispatch = readFileSync(
+			new URL('../../src/runtime/dispatch.ts', import.meta.url),
+			'utf8'
+		);
 		expect(dispatch).toContain("case 'personal-secrets.status'");
 		expect(dispatch).toContain("case 'personal-secrets.write'");
 		expect(dispatch).toContain("case 'personal-secrets.forget'");

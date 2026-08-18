@@ -1,6 +1,11 @@
 import { Effect, Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EffectId, type ConnectorRequest, type ConnectorResponse, type FacilityBinding } from '@norbital-ai/bolt-protocol';
+import {
+	EffectId,
+	type ConnectorRequest,
+	type ConnectorResponse,
+	type FacilityBinding
+} from '@norbital-ai/bolt-protocol';
 import { describeIntegrations } from '../../src/authoring/integration-introspection.js';
 import {
 	collection,
@@ -99,7 +104,9 @@ const jobsModule = {
 					// this is a fact about one record, so it must cost one record. The platform catches it
 					// per record and writes the job's siblings exactly as if this one had not been sent.
 					if (siteId === undefined) {
-						throw new Error(`job ${job.reference} names site ${job.site_code}, which this workspace does not have`);
+						throw new Error(
+							`job ${job.reference} names site ${job.site_code}, which this workspace does not have`
+						);
 					}
 					return { external_ref: job.reference, site_id: siteId, title: job.title };
 				}
@@ -150,7 +157,9 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+	],
 	agents: [],
 	automations: [],
 	channels: [],
@@ -189,7 +198,9 @@ const seedSites = async (built: BoltTestRuntime): Promise<Readonly<Record<string
 		"insert into sites (site_code, name) values ('SITE-A', 'Alpha'), ('SITE-B', 'Bravo') returning site_code, norbital_id",
 		[]
 	);
-	return Object.fromEntries(rows.map((row) => [String(row['site_code']), String(row['norbital_id'])]));
+	return Object.fromEntries(
+		rows.map((row) => [String(row['site_code']), String(row['norbital_id'])])
+	);
 };
 
 const pull = (built: BoltTestRuntime, integration: string, binding: string, run: string) =>
@@ -201,13 +212,16 @@ const pull = (built: BoltTestRuntime, integration: string, binding: string, run:
 
 /** The report crosses as `Schema.Json`, so it is read the way a host would have to read it. */
 const at = (value: Schema.Json, key: string): unknown =>
-	value === null || typeof value !== 'object' || Array.isArray(value) ? undefined : Reflect.get(value, key);
+	value === null || typeof value !== 'object' || Array.isArray(value)
+		? undefined
+		: Reflect.get(value, key);
 
 /** The one binding's own report, which is where the counts and the rejections live. */
 const bindingReport = (report: Schema.Json): Schema.Json => {
 	const bindings = at(report, 'bindings');
 	const first = Array.isArray(bindings) ? bindings[0] : undefined;
-	if (first === undefined) throw new Error(`the run reported no binding: ${JSON.stringify(report)}`);
+	if (first === undefined)
+		throw new Error(`the run reported no binding: ${JSON.stringify(report)}`);
 	return first;
 };
 
@@ -293,7 +307,10 @@ describe('a code that resolves to nothing costs that record and nothing else', (
 		const report = await pull(built, 'jobs.dispatch', 'job_updated', 'run-1');
 
 		expect(absorbed(report)).toBe(2);
-		const stored = await built.database.query('select external_ref, site_id from jobs order by external_ref', []);
+		const stored = await built.database.query(
+			'select external_ref, site_id from jobs order by external_ref',
+			[]
+		);
 		expect(stored).toEqual([
 			{ external_ref: 'JOB-1', site_id: sites['SITE-A'] },
 			{ external_ref: 'JOB-3', site_id: sites['SITE-B'] }
@@ -338,7 +355,7 @@ describe('the batch costs one lookup, not one per record', () => {
 	});
 });
 
-describe('resolve failing is the batch\'s problem, not a record\'s', () => {
+describe("resolve failing is the batch's problem, not a record's", () => {
 	/**
 	 * The one case that is deliberately *not* a per-record rejection. A lookup that could not run at
 	 * all — a database that will not answer, an authored step that threw — is not attributable to any
@@ -378,7 +395,10 @@ describe('a resolve nothing reads is refused where the workspace is compiled', (
 							job_updated: {
 								pull: { schedule: '0 * * * *', method: 'GET', path: '/jobs' },
 								input: DispatchedJob,
-								identity: { column: 'external_ref', value: (job: { readonly reference: string }) => job.reference },
+								identity: {
+									column: 'external_ref',
+									value: (job: { readonly reference: string }) => job.reference
+								},
 								resolve: () => new Map<string, string>()
 							}
 						}
@@ -396,10 +416,18 @@ describe('a pure map still works exactly as it did', () => {
 	 * is the guarantee that made changing the signature acceptable rather than a migration.
 	 */
 	it('imports through a one-argument map that never hears about the resolution', async () => {
-		const built = await build({ sites: [{ code: 'SITE-C', name: 'Charlie' }, { code: 'SITE-D', name: 'Delta' }] });
+		const built = await build({
+			sites: [
+				{ code: 'SITE-C', name: 'Charlie' },
+				{ code: 'SITE-D', name: 'Delta' }
+			]
+		});
 		const report = await pull(built, 'sites.registry', 'sites_changed', 'run-1');
 		expect(absorbed(report)).toBe(2);
-		const stored = await built.database.query('select site_code, name from sites order by site_code', []);
+		const stored = await built.database.query(
+			'select site_code, name from sites order by site_code',
+			[]
+		);
 		expect(stored).toEqual([
 			{ site_code: 'SITE-C', name: 'Charlie' },
 			{ site_code: 'SITE-D', name: 'Delta' }

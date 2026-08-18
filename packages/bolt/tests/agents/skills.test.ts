@@ -1,13 +1,11 @@
 import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { EffectId, InvocationId } from '@norbital-ai/bolt-protocol';
+import { EffectId } from '@norbital-ai/bolt-protocol';
 import { Files } from '../../src/runtime/facilities/services.js';
 import { readSkill } from '../../src/runtime/agents/agents.js';
+import { testCallContext } from '../support/bolt-test-layer.js';
 
-const context = {
-	invocationId: InvocationId.make('skills-test'),
-	deadlineEpochMs: Date.now() + 1000
-};
+const context = testCallContext('skills-test');
 
 describe('Agent skills owner', () => {
 	it('bounds names before accessing the file facility', async () => {

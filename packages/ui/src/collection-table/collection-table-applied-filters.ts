@@ -1,7 +1,4 @@
-import type {
-	CollectionField,
-	CollectionRelationship
-} from '@norbital-ai/std/collection';
+import type { CollectionField, CollectionRelationship } from '@norbital-ai/std/collection';
 import { humanize } from '@norbital-ai/std/string';
 import type { FilterCollectionDefinition } from './collection-table-filter-fields.js';
 

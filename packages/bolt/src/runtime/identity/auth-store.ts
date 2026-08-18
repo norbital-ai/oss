@@ -26,7 +26,10 @@ import { authSchema } from './auth-tables.js';
 export type ExecuteQuery = (
 	sql: string,
 	parameters: ReadonlyArray<unknown>
-) => Promise<{ readonly rows: ReadonlyArray<Record<string, unknown>>; readonly affectedRows: number }>;
+) => Promise<{
+	readonly rows: ReadonlyArray<Record<string, unknown>>;
+	readonly affectedRows: number;
+}>;
 
 /**
  * Drizzle's proxy driver wants positional rows; a facility answers with named ones.

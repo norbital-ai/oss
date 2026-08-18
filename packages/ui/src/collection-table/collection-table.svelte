@@ -568,8 +568,7 @@
 	// arrives; only a resolved [] may render the empty state.
 	const tableLoading = $derived(
 		!disabled &&
-			(queries.rows == null ||
-				(queries.rows.current === undefined && queries.rows.error == null))
+			(queries.rows == null || (queries.rows.current === undefined && queries.rows.error == null))
 	);
 	let approvalActionState = $state<ApprovalActionState>({ status: 'idle' });
 	let changeRequestOpen = $state(false);
@@ -1242,7 +1241,11 @@
 
 <!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
 <!-- stupidity:allow UI15 -- the table keeps a usable empty/loading viewport before rows establish intrinsic height -->
-<Bound size="full" class="collection-table-responsive min-h-[24rem] w-full" data-collection-table-surface>
+<Bound
+	size="full"
+	class="collection-table-responsive min-h-[24rem] w-full"
+	data-collection-table-surface
+>
 	<!--
 		One toolbar and one pagination bar for both halves of the surface. The wide grid and the narrow
 		list show the same page of the same query; only their body differs, so only their body is
@@ -1266,7 +1269,7 @@
 			rowActions={gridRowActions}
 			rowIndexOffset={queryState.pageIndex * queryState.pageSize}
 			stickyRowActions={true}
-			borderless={borderless}
+			{borderless}
 			{emptyPlaceholder}
 		/>
 

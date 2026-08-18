@@ -87,7 +87,15 @@
 				{#each entries as [name, value] (name)}
 					<div>
 						<dt>{name.replaceAll('_', ' ')}</dt>
-						<dd>{value === null || value === undefined ? '—' : typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : JSON.stringify(value)}</dd>
+						<dd>
+							{value === null || value === undefined
+								? '—'
+								: typeof value === 'string'
+									? value
+									: typeof value === 'number' || typeof value === 'boolean'
+										? String(value)
+										: JSON.stringify(value)}
+						</dd>
 					</div>
 				{/each}
 			</dl>
@@ -102,10 +110,14 @@
 							<Button type="button" size="sm" onclick={onapprove}>Approve</Button>
 						{/if}
 						{#if onreject !== undefined}
-							<Button type="button" size="sm" variant="destructive" onclick={onreject}>Reject</Button>
+							<Button type="button" size="sm" variant="destructive" onclick={onreject}
+								>Reject</Button
+							>
 						{/if}
 						{#if onwithdraw !== undefined}
-							<Button type="button" size="sm" variant="outline" onclick={onwithdraw}>Withdraw</Button>
+							<Button type="button" size="sm" variant="outline" onclick={onwithdraw}
+								>Withdraw</Button
+							>
 						{/if}
 					</Inline>
 				{/if}
@@ -134,10 +146,31 @@
 </section>
 
 <style>
-	h2 { margin-block-start: 0; }
-	dl { display: grid; gap: .75rem; }
-	dl div { display: grid; grid-template-columns: minmax(8rem, 1fr) 2fr; gap: 1rem; }
-	dt { font-weight: 600; text-transform: capitalize; }
-	dd { margin: 0; overflow-wrap: anywhere; }
-	ol { margin: 0; padding: 0; list-style: none; display: grid; gap: .25rem; }
+	h2 {
+		margin-block-start: 0;
+	}
+	dl {
+		display: grid;
+		gap: 0.75rem;
+	}
+	dl div {
+		display: grid;
+		grid-template-columns: minmax(8rem, 1fr) 2fr;
+		gap: 1rem;
+	}
+	dt {
+		font-weight: 600;
+		text-transform: capitalize;
+	}
+	dd {
+		margin: 0;
+		overflow-wrap: anywhere;
+	}
+	ol {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: grid;
+		gap: 0.25rem;
+	}
 </style>

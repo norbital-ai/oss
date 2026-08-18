@@ -154,7 +154,9 @@
 				: activeApp.label || activeApp.name
 	);
 	const activeAppDescription = $derived(
-		activeApp !== undefined && typeof activeApp !== 'string' ? (activeApp.description ?? null) : null
+		activeApp !== undefined && typeof activeApp !== 'string'
+			? (activeApp.description ?? null)
+			: null
 	);
 	const activeAppIcon = $derived(
 		activeApp !== undefined && typeof activeApp !== 'string' ? activeApp.icon : undefined

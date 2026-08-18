@@ -1,12 +1,6 @@
 import { Schema } from 'effect';
 import { InvocationScope } from './invocation.js';
-import {
-	EffectId,
-	FacilityCall,
-	FacilityResult,
-	LeaseId,
-	ReleaseId
-} from './wire.js';
+import { EffectId, FacilityCall, FacilityResult, LeaseId, ReleaseId } from './wire.js';
 
 export const DatabaseRequest = Schema.TaggedUnion({
 	Query: { sql: Schema.NonEmptyString, parameters: Schema.Array(Schema.Json) },
@@ -17,7 +11,10 @@ export const DatabaseRequest = Schema.TaggedUnion({
 	}
 });
 export type DatabaseRequest = typeof DatabaseRequest.Type;
-export const DatabaseResponse = Schema.Struct({ rows: Schema.Array(Schema.Json), affectedRows: Schema.Number });
+export const DatabaseResponse = Schema.Struct({
+	rows: Schema.Array(Schema.Json),
+	affectedRows: Schema.Number
+});
 export interface DatabaseResponse extends Schema.Schema.Type<typeof DatabaseResponse> {}
 
 // `Write` carried a `contentType` until it was noticed that nothing could ever honour it: no binding
@@ -53,7 +50,195 @@ export const AIRequest = Schema.TaggedUnion({
 	}
 });
 export type AIRequest = typeof AIRequest.Type;
-export const AIResponse = Schema.Struct({ output: Schema.Json, usage: Schema.optionalKey(Schema.Json) });
+
+/**
+ * What one model call consumed, as the host that paid for it reported.
+ *
+ * Carried on the wire as `Schema.Json` rather than as this struct, because the field predates the
+ * shape and a host that answers with its provider's own spelling must not have its turn rejected.
+ * This is the shape Norbital hosts emit and the one `readAIUsage` normalises to, so a consumer reads
+ * one record instead of guessing at six provider dialects.
+ *
+ * `costUsd` is the provider's own charge, never a figure derived from token counts and a price list:
+ * a number a reader takes for a bill has to be the bill. Token counts travel beside it because they
+ * are what makes the charge auditable, and because the panel needs input tokens to say how much of
+ * the context window a conversation is occupying.
+ */
+export const AIUsage = Schema.Struct({
+	model: Schema.optionalKey(Schema.String),
+	inputTokens: Schema.optionalKey(
+		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
+	),
+	cachedInputTokens: Schema.optionalKey(
+		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
+	),
+	outputTokens: Schema.optionalKey(
+		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
+	),
+	reasoningTokens: Schema.optionalKey(
+		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
+	),
+	totalTokens: Schema.optionalKey(
+		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
+	),
+	costUsd: Schema.optionalKey(
+		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
+	),
+	/**
+	 * What the host will charge its tenant for this call, in millionths of one major currency unit.
+	 *
+	 * Separate from `costUsd` because they are different facts. `costUsd` is what the provider took;
+	 * this is what the tenant owes, and a host billing in another currency does not make them the
+	 * same number — showing the provider's figure to the person paying understates it silently.
+	 * Micro-units rather than cents because one agent turn routinely costs a fraction of a cent.
+	 *
+	 * Absent when the host has no rate card of its own, in which case the provider charge is the only
+	 * honest figure there is and consumers fall back to it.
+	 */
+	costMicroUnits: Schema.optionalKey(
+		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
+	),
+	/** ISO 4217 code the charge above is denominated in. Meaningless, and omitted, without it. */
+	costCurrency: Schema.optionalKey(Schema.String)
+});
+export interface AIUsage extends Schema.Schema.Type<typeof AIUsage> {}
+
+/** First finite non-negative number among the spellings one provider field is known by. */
+const usageNumber = (
+	source: Readonly<Record<string, unknown>>,
+	keys: ReadonlyArray<string>
+): number | undefined => {
+	for (const key of keys) {
+		const value = source[key];
+		if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+	}
+	return undefined;
+};
+
+const usageRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
+	typeof value === 'object' && value !== null && !Array.isArray(value)
+		? (value as Readonly<Record<string, unknown>>)
+		: undefined;
+
+/**
+ * Reads whatever a host put in `AIResponse.usage` as the canonical record above.
+ *
+ * Providers spell the same three numbers at least three ways each, and OpenAI-compatible endpoints
+ * nest them under `usage` while some gateways hoist them to the top level. Normalising here is what
+ * lets the runtime, the meter, and the panel agree on one record instead of each learning the
+ * dialects separately — and it is why `usage` can stay `Json` on the wire without every consumer
+ * having to be tolerant.
+ *
+ * Returns `undefined` when nothing usage-shaped is present. That is not zero: a turn whose usage was
+ * never reported is a turn whose cost is unknown, and the two must not read alike.
+ */
+export const readAIUsage = (value: unknown): AIUsage | undefined => {
+	const outer = usageRecord(value);
+	if (outer === undefined) return undefined;
+	const inner = usageRecord(outer['usage']) ?? outer;
+	const details =
+		usageRecord(inner['prompt_tokens_details']) ?? usageRecord(inner['inputTokensDetails']);
+	const completion =
+		usageRecord(inner['completion_tokens_details']) ?? usageRecord(inner['outputTokensDetails']);
+	const inputTokens = usageNumber(inner, [
+		'inputTokens',
+		'input_tokens',
+		'promptTokens',
+		'prompt_tokens'
+	]);
+	const outputTokens = usageNumber(inner, [
+		'outputTokens',
+		'output_tokens',
+		'completionTokens',
+		'completion_tokens'
+	]);
+	const totalTokens =
+		usageNumber(inner, ['totalTokens', 'total_tokens']) ??
+		(inputTokens === undefined && outputTokens === undefined
+			? undefined
+			: (inputTokens ?? 0) + (outputTokens ?? 0));
+	const cachedInputTokens =
+		usageNumber(inner, ['cachedInputTokens', 'cached_input_tokens']) ??
+		(details === undefined ? undefined : usageNumber(details, ['cachedTokens', 'cached_tokens']));
+	const reasoningTokens =
+		usageNumber(inner, ['reasoningTokens', 'reasoning_tokens']) ??
+		(completion === undefined
+			? undefined
+			: usageNumber(completion, ['reasoningTokens', 'reasoning_tokens']));
+	const costUsd = usageNumber(inner, ['costUsd', 'cost_usd', 'cost', 'totalCost', 'total_cost']);
+	// Read only under its canonical name: no provider reports what *this host* charges, so a dialect
+	// list here would be inviting some field of the provider's to be mistaken for the tenant's bill.
+	const costMicroUnits = usageNumber(inner, ['costMicroUnits']);
+	const costCurrency =
+		typeof inner['costCurrency'] === 'string' ? inner['costCurrency'] : undefined;
+	const model =
+		typeof inner['model'] === 'string'
+			? inner['model']
+			: typeof outer['model'] === 'string'
+				? outer['model']
+				: undefined;
+	const usage: AIUsage = {
+		...(model === undefined ? {} : { model }),
+		...(inputTokens === undefined ? {} : { inputTokens }),
+		...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+		...(outputTokens === undefined ? {} : { outputTokens }),
+		...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+		...(totalTokens === undefined ? {} : { totalTokens }),
+		...(costUsd === undefined ? {} : { costUsd }),
+		...(costMicroUnits === undefined ? {} : { costMicroUnits }),
+		...(costMicroUnits === undefined || costCurrency === undefined ? {} : { costCurrency })
+	};
+	return Object.keys(usage).length === 0 ? undefined : usage;
+};
+
+/**
+ * Adds one turn's usage to a running total.
+ *
+ * A conversation's spend is the sum of every model call it caused, including the ones its subagents
+ * made, so the accumulator is the shape that has to be depth-agnostic: callers fold child totals in
+ * exactly as they fold their own turns. `model` is dropped on purpose — a total spanning two models
+ * has no single model, and reporting the last one would be a lie a reader could act on.
+ */
+export const addAIUsage = (
+	total: AIUsage | undefined,
+	next: AIUsage | undefined
+): AIUsage | undefined => {
+	if (next === undefined) return total;
+	if (total === undefined) return { ...next };
+	const sum = (left: number | undefined, right: number | undefined): number | undefined =>
+		left === undefined && right === undefined ? undefined : (left ?? 0) + (right ?? 0);
+	const inputTokens = sum(total.inputTokens, next.inputTokens);
+	const cachedInputTokens = sum(total.cachedInputTokens, next.cachedInputTokens);
+	const outputTokens = sum(total.outputTokens, next.outputTokens);
+	const reasoningTokens = sum(total.reasoningTokens, next.reasoningTokens);
+	const totalTokens = sum(total.totalTokens, next.totalTokens);
+	const costUsd = sum(total.costUsd, next.costUsd);
+	const costMicroUnits = sum(total.costMicroUnits, next.costMicroUnits);
+	// Two charges in different currencies do not add up, and a sum labelled with one of the two is a
+	// wrong number rather than a rounded one. Nothing in a single host mixes them; if something ever
+	// does, the total loses its label instead of misstating it.
+	const costCurrency =
+		total.costCurrency === undefined || next.costCurrency === undefined
+			? (total.costCurrency ?? next.costCurrency)
+			: total.costCurrency === next.costCurrency
+				? total.costCurrency
+				: undefined;
+	return {
+		...(inputTokens === undefined ? {} : { inputTokens }),
+		...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+		...(outputTokens === undefined ? {} : { outputTokens }),
+		...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+		...(totalTokens === undefined ? {} : { totalTokens }),
+		...(costUsd === undefined ? {} : { costUsd }),
+		...(costMicroUnits === undefined ? {} : { costMicroUnits }),
+		...(costMicroUnits === undefined || costCurrency === undefined ? {} : { costCurrency })
+	};
+};
+
+export const AIResponse = Schema.Struct({
+	output: Schema.Json,
+	usage: Schema.optionalKey(Schema.Json)
+});
 export interface AIResponse extends Schema.Schema.Type<typeof AIResponse> {}
 
 export const CommunicationRequest = Schema.TaggedUnion({
@@ -213,7 +398,9 @@ export const TransportResponse = Schema.Struct({
 	 * is reported rather than treated as a failure, because a workspace with no open tab is the common
 	 * case and must not look like a broken transport.
 	 */
-	delivered: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
+	delivered: Schema.optionalKey(
+		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+	)
 });
 export interface TransportResponse extends Schema.Schema.Type<typeof TransportResponse> {}
 
@@ -244,6 +431,9 @@ export type FacilityBindings = Readonly<{
 
 /** Owns immutable facility-call correlation metadata assembly. */
 const FacilityCalls = {
-	forEffect: (call: Omit<FacilityCall, 'effectId'>, effectId: EffectId): FacilityCall => ({ ...call, effectId })
+	forEffect: (call: Omit<FacilityCall, 'effectId'>, effectId: EffectId): FacilityCall => ({
+		...call,
+		effectId
+	})
 };
 export const facilityCallFor = FacilityCalls.forEffect;

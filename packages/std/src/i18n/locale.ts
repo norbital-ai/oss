@@ -14,9 +14,6 @@
 /** The supported application locales, in toggle order. English is the source-of-truth catalog. */
 export const SUPPORTED_LOCALES: readonly string[] = ['en', 'zh'];
 
-/** Backwards-compatible alias for the supported locale list. */
-export const LOCALES: readonly string[] = SUPPORTED_LOCALES;
-
 /**
  * The application locale identifier. Open by design: any catalog record may
  * carry any key, so `Locale` is the string it resolves to rather than a closed

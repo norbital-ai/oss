@@ -73,7 +73,9 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 				step: () => void 0,
 				body: () =>
 					Effect.gen(function* () {
-						const changes = yield* Effect.tryPromise(() => options.transport.diff(cursor, batchSize));
+						const changes = yield* Effect.tryPromise(() =>
+							options.transport.diff(cursor, batchSize)
+						);
 						if (changes.length === 0) {
 							more = false;
 							return;
@@ -94,11 +96,13 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 						if (last !== undefined) cursor = last.cursor;
 						options.onAdvance?.(cursor);
 						if (changes.length < batchSize) more = false;
-					}).pipe(Effect.catch((cause: unknown) => {
-						more = false;
-						options.onError?.(cause);
-						return Effect.succeed(undefined);
-					}))
+					}).pipe(
+						Effect.catch((cause: unknown) => {
+							more = false;
+							options.onError?.(cause);
+							return Effect.succeed(undefined);
+						})
+					)
 			});
 			return applied;
 		});
@@ -129,4 +133,5 @@ export const decodeChanges = (value: unknown): ReadonlyArray<SyncChange> =>
 	Schema.decodeUnknownSync(Schema.Array(SyncChange))(value);
 
 /** Decodes a head response from the wire. */
-export const decodeCursor = (value: unknown): SyncCursor => Schema.decodeUnknownSync(SyncCursor)(value);
+export const decodeCursor = (value: unknown): SyncCursor =>
+	Schema.decodeUnknownSync(SyncCursor)(value);

@@ -1,18 +1,30 @@
 import { Schema } from 'effect';
 
-export type CollectionExportInput = Readonly<(
-	| { readonly collection: string; readonly collection_name?: never }
-	| { readonly collection?: never; readonly collection_name: string }
-) & {
-	readonly records?: ReadonlyArray<string>;
-	readonly record_ids?: ReadonlyArray<string>;
-	readonly pipeline?: string;
-	readonly scope?: unknown;
+export type CollectionExportInput = Readonly<
+	(
+		| { readonly collection: string; readonly collection_name?: never }
+		| { readonly collection?: never; readonly collection_name: string }
+	) & {
+		readonly records?: ReadonlyArray<string>;
+		readonly record_ids?: ReadonlyArray<string>;
+		readonly pipeline?: string;
+		readonly scope?: unknown;
+	}
+>;
+export type ExportAttachment = Readonly<{
+	readonly name: string;
+	readonly contentType: string;
+	readonly content: unknown;
 }>;
-export type ExportAttachment = Readonly<{ readonly name: string; readonly contentType: string; readonly content: unknown }>;
-export type ExportAction = Readonly<{ readonly label: string; readonly attachments: ReadonlyArray<ExportAttachment>; readonly metadata?: Readonly<Record<string, unknown>> }>;
+export type ExportAction = Readonly<{
+	readonly label: string;
+	readonly attachments: ReadonlyArray<ExportAttachment>;
+	readonly metadata?: Readonly<Record<string, unknown>>;
+}>;
 export type ExportManifest = Readonly<ReadonlyArray<ExportAction>>;
-export type CollectionExportOptions = Readonly<{ readonly includeAction?: (action: ExportAction) => boolean }>;
+export type CollectionExportOptions = Readonly<{
+	readonly includeAction?: (action: ExportAction) => boolean;
+}>;
 
 /**
  * Both command responses are decoded, not cast.
@@ -22,11 +34,17 @@ export type CollectionExportOptions = Readonly<{ readonly includeAction?: (actio
  * that has to surface here rather than as `undefined.length` inside a download button. Decoding also
  * strips keys the manifest does not declare, which is what the zod schemas these replaced did.
  */
-const decodeExportManifest = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({
-	label: Schema.String,
-	attachments: Schema.Array(Schema.Struct({ name: Schema.String, contentType: Schema.String, content: Schema.Unknown })),
-	metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
-})));
+const decodeExportManifest = Schema.decodeUnknownSync(
+	Schema.Array(
+		Schema.Struct({
+			label: Schema.String,
+			attachments: Schema.Array(
+				Schema.Struct({ name: Schema.String, contentType: Schema.String, content: Schema.Unknown })
+			),
+			metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
+		})
+	)
+);
 /**
  * The import command answers with a count, not with the records it wrote.
  *
@@ -40,7 +58,9 @@ const decodeImportResult = Schema.decodeUnknownSync(Schema.Struct({ imported: Sc
 
 const commandHeaders = (): Readonly<Record<string, string>> => {
 	const authorization =
-		typeof document === 'undefined' ? undefined : document.documentElement.dataset['boltAuthorization'];
+		typeof document === 'undefined'
+			? undefined
+			: document.documentElement.dataset['boltAuthorization'];
 	return {
 		'content-type': 'application/json',
 		...(authorization === undefined || authorization.length === 0 ? {} : { authorization })
@@ -49,14 +69,27 @@ const commandHeaders = (): Readonly<Record<string, string>> => {
 
 /** Owns download collection export behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
 const CollectionTransfer = {
-	download: async (input: CollectionExportInput, options: CollectionExportOptions = {}): Promise<ExportManifest> => {
-		const response = await fetch('/api/bolt/command/collections.export', { method: 'POST', credentials: 'same-origin', headers: commandHeaders(), body: JSON.stringify(input) });
+	download: async (
+		input: CollectionExportInput,
+		options: CollectionExportOptions = {}
+	): Promise<ExportManifest> => {
+		const response = await fetch('/api/bolt/command/collections.export', {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: commandHeaders(),
+			body: JSON.stringify(input)
+		});
 		if (!response.ok) throw new Error(`Collection export failed (${response.status})`);
 		const manifest = decodeExportManifest(await response.json());
 		return options.includeAction === undefined ? manifest : manifest.filter(options.includeAction);
 	},
 	importRecords: async (input: CollectionImportInput): Promise<number> => {
-		const response = await fetch('/api/bolt/command/collections.import', { method: 'POST', credentials: 'same-origin', headers: commandHeaders(), body: JSON.stringify(input) });
+		const response = await fetch('/api/bolt/command/collections.import', {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: commandHeaders(),
+			body: JSON.stringify(input)
+		});
 		if (!response.ok) throw new Error(`Collection import failed (${response.status})`);
 		return decodeImportResult(await response.json()).imported;
 	}
@@ -94,6 +127,8 @@ export type CollectionImportRecord = Readonly<{
  * other tenant-data command: a body that could name its own subject is a body that could write into
  * someone else's tenant.
  */
-export type CollectionImportInput = Readonly<{ readonly records: ReadonlyArray<CollectionImportRecord> }>;
+export type CollectionImportInput = Readonly<{
+	readonly records: ReadonlyArray<CollectionImportRecord>;
+}>;
 /** Owns import collection records behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
 export const importCollectionRecords = CollectionTransfer.importRecords;

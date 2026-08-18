@@ -288,7 +288,10 @@ describe('invocation provenance', () => {
 				command('identity.authenticate', 'admin-token', { credential: 'admin-token' })
 			)
 		);
-		expect(still.value).toMatchObject({ userId: fixtureUserId('user-admin-token'), tenantId: 'test-tenant' });
+		expect(still.value).toMatchObject({
+			userId: fixtureUserId('user-admin-token'),
+			tenantId: 'test-tenant'
+		});
 		expect(outcome._tag === 'Failure' ? outcome.failure : undefined).toBeInstanceOf(
 			AccessControl.AccessDenied
 		);
@@ -340,9 +343,7 @@ describe('invocation provenance', () => {
 		// gate is gone is the record settling. It is the lock and not the row's existence that says so
 		// now — a gated create writes its row up front and holds it, so "no row" no longer distinguishes
 		// a refused resume from an accepted one, and asserting it would have passed either way.
-		const heldAfterPlugin = await harness.database.query(
-			'select norbital_approval_id from people'
-		);
+		const heldAfterPlugin = await harness.database.query('select norbital_approval_id from people');
 		const posted = await outcomeOf(harness, plugin('collections.resume', { requestId }));
 		expect(heldAfterPlugin[0]?.['norbital_approval_id']).toEqual(expect.any(String));
 		expect(await harness.database.query('select norbital_approval_id from people')).toEqual(

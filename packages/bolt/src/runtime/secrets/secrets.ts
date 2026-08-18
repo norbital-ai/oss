@@ -1,9 +1,17 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { describeEnvironment, type EnvironmentVariableView } from '../../authoring/environment-schema.js';
+import {
+	describeEnvironment,
+	type EnvironmentVariableView
+} from '../../authoring/environment-schema.js';
 import { Database } from '../facilities/database.js';
 import { Workspace } from '../workspace.js';
-import { SecretCipher, bind, type SecretKeyUnavailable, type SecretUnreadable } from '@norbital-ai/std/secret';
+import {
+	SecretCipher,
+	bind,
+	type SecretKeyUnavailable,
+	type SecretUnreadable
+} from '@norbital-ai/std/secret';
 
 /**
  * The binding for a `bolt_secrets` row. The table has one row per name, so the name is its identity.
@@ -65,7 +73,10 @@ export type Interface = Readonly<{
 	 * Server-side callers only. A caller that cannot proceed without the value refuses at its own
 	 * boundary, naming the variable — this layer does not know what the value is for.
 	 */
-	readonly read: (effectId: EffectId, name: string) => Effect.Effect<
+	readonly read: (
+		effectId: EffectId,
+		name: string
+	) => Effect.Effect<
 		string | null,
 		SecretNotDeclared | Database.FacilityError | SecretKeyUnavailable | SecretUnreadable
 	>;
@@ -76,17 +87,21 @@ export type Interface = Readonly<{
 	 * screen still works on a host whose key is missing, which is precisely when somebody needs to be
 	 * able to look.
 	 */
-	readonly status: (effectId: EffectId) => Effect.Effect<ReadonlyArray<SecretStatus>, Database.FacilityError>;
+	readonly status: (
+		effectId: EffectId
+	) => Effect.Effect<ReadonlyArray<SecretStatus>, Database.FacilityError>;
 	/**
 	 * Stores a value. An empty string clears the entry rather than storing emptiness.
 	 *
 	 * Fails with `SecretKeyUnavailable` when the host has configured no encryption key, and stores
 	 * nothing in that case — there is no branch here that writes a value in the clear.
 	 */
-	readonly write: (effectId: EffectId, name: string, value: string, updatedBy: string) => Effect.Effect<
-		void,
-		SecretNotDeclared | Database.FacilityError | SecretKeyUnavailable
-	>;
+	readonly write: (
+		effectId: EffectId,
+		name: string,
+		value: string,
+		updatedBy: string
+	) => Effect.Effect<void, SecretNotDeclared | Database.FacilityError | SecretKeyUnavailable>;
 }>;
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Secrets');
@@ -101,9 +116,13 @@ export const layer = Layer.effect(
 		const declared = (): ReadonlyArray<EnvironmentVariableView> =>
 			describeEnvironment(workspace.definition.environment);
 
-		const requireDeclared = (name: string): Effect.Effect<EnvironmentVariableView, SecretNotDeclared> => {
+		const requireDeclared = (
+			name: string
+		): Effect.Effect<EnvironmentVariableView, SecretNotDeclared> => {
 			const entry = declared().find((variable) => variable.name === name);
-			return entry === undefined ? Effect.fail(new SecretNotDeclared({ name })) : Effect.succeed(entry);
+			return entry === undefined
+				? Effect.fail(new SecretNotDeclared({ name }))
+				: Effect.succeed(entry);
 		};
 
 		const storedValue = (effectId: EffectId, name: string) =>
@@ -113,11 +132,17 @@ export const layer = Layer.effect(
 				parameters: [name]
 			});
 
-		const read: Interface['read'] = Effect.fn('Secrets.read')(function* (effectId: EffectId, name: string) {
+		const read: Interface['read'] = Effect.fn('Secrets.read')(function* (
+			effectId: EffectId,
+			name: string
+		) {
 			const variable = yield* requireDeclared(name);
 			const result = yield* storedValue(effectId, name);
 			const [row] = result.rows;
-			const stored = row !== null && typeof row === 'object' && !Array.isArray(row) ? Reflect.get(row, 'value') : undefined;
+			const stored =
+				row !== null && typeof row === 'object' && !Array.isArray(row)
+					? Reflect.get(row, 'value')
+					: undefined;
 			// A stored row that will not open is a failure, not a fall-through to the default: silently
 			// answering with the declared default would start an integration against the wrong endpoint,
 			// or — worse for a `secret: true` name, which cannot carry a default — read as "not set" and
@@ -140,7 +165,8 @@ export const layer = Layer.effect(
 				if (row === null || typeof row !== 'object' || Array.isArray(row)) continue;
 				const name = Reflect.get(row, 'name');
 				const updatedAt = Reflect.get(row, 'updated_at');
-				if (typeof name === 'string') stored.set(name, typeof updatedAt === 'string' ? updatedAt : undefined);
+				if (typeof name === 'string')
+					stored.set(name, typeof updatedAt === 'string' ? updatedAt : undefined);
 			}
 			return declared().map((variable) => {
 				const updatedAt = stored.get(variable.name);
@@ -171,7 +197,11 @@ export const layer = Layer.effect(
 			}
 			// Sealed before the statement is built, so a missing key refuses *ahead of* the write. There is
 			// no ordering here in which a plaintext credential reaches the table.
-			const sealed = yield* cipher.encrypt(`storing the secret ${name}`, workspaceBinding(name), value);
+			const sealed = yield* cipher.encrypt(
+				`storing the secret ${name}`,
+				workspaceBinding(name),
+				value
+			);
 			yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: `insert into bolt_secrets (tenant_id, name, value, updated_by) values ('', $1, $2, $3)

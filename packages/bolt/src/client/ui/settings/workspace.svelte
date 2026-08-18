@@ -128,13 +128,11 @@
 	 * session no matter how many times the tables remounted.
 	 */
 	const peopleClient = $derived(
-		inMemoryCollectionClient<
-			{
-				readonly [MEMBERS_COLLECTION]: CollectionType;
-				readonly [INVITATIONS_COLLECTION]: CollectionType;
-				readonly [EVENTS_COLLECTION]: CollectionType;
-			}
-		>(DEFINITIONS, {
+		inMemoryCollectionClient<{
+			readonly [MEMBERS_COLLECTION]: CollectionType;
+			readonly [INVITATIONS_COLLECTION]: CollectionType;
+			readonly [EVENTS_COLLECTION]: CollectionType;
+		}>(DEFINITIONS, {
 			[MEMBERS_COLLECTION]: memberRows,
 			[INVITATIONS_COLLECTION]: invitationRows,
 			[EVENTS_COLLECTION]: eventRows
@@ -144,7 +142,11 @@
 	let activeTab = $state('people');
 </script>
 
-<section aria-labelledby="workspace-settings-title" aria-busy={loading} class="h-full min-h-full min-w-0">
+<section
+	aria-labelledby="workspace-settings-title"
+	aria-busy={loading}
+	class="h-full min-h-full min-w-0"
+>
 	<Cover class="relative min-w-0 bg-background" gap="none">
 		{#snippet top()}
 			<Stack gap="lg" shrink={false} class="bg-background px-4 pt-4 sm:px-6 sm:pt-6">

@@ -1,15 +1,22 @@
 import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { EffectId, InvocationId, type TransportRequest } from '@norbital-ai/bolt-protocol';
+import { testCallContext } from '../support/bolt-test-layer.js';
 import { app, workspace } from '../../src/authoring/index.js';
 import { FacilityError } from '../../src/runtime/facilities/database.js';
 import { Transport } from '../../src/runtime/facilities/services.js';
 import { Workspace } from '../../src/runtime/workspace.js';
 
-const callContext = (invocationId: string) => ({
-	invocationId: InvocationId.make(invocationId),
-	deadlineEpochMs: Date.now() + 1000
-});
+/**
+ * One context per invocation, built the same way every time.
+ *
+ * What these tests are about is that two invocations running at once share nothing, so each gets
+ * its own context rather than a module-level one they both point at. The environment is the
+ * harness default: nothing here reads it — the transport facility passes invocation id, deadline
+ * and subject to the binding and no mode — so a value chosen per test would be decoration.
+ */
+const callContext = (invocationId: string) =>
+	testCallContext(invocationId, { deadlineEpochMs: Date.now() + 1000 });
 
 describe('artifact statelessness', () => {
 	it('keeps independent workspace registries isolated', async () => {

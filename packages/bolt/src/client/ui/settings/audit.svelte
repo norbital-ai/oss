@@ -40,16 +40,23 @@
 			each its own bordered card is the density the configurable sections above use because
 			each of those is separately actionable. Nothing here is.
 		-->
-		<Stack as="ol" gap="none" aria-label="Audit log" class="m-0 list-none divide-y rounded-lg border bg-card p-0">
+		<Stack
+			as="ol"
+			gap="none"
+			aria-label="Audit log"
+			class="m-0 list-none divide-y rounded-lg border bg-card p-0"
+		>
 			{#each ordered as event (event.id)}
 				<Cluster as="li" gap="md" align="baseline" justify="between" class="px-4 py-3">
 					<Stack gap="xs">
 						<span class="text-sm text-foreground" data-testid="audit-action">
-							{event.action}{#if event.subject} · {event.subject}{/if}
+							{event.action}{#if event.subject}
+								· {event.subject}{/if}
 						</span>
 						<span class="text-xs text-muted-foreground">{event.actor}</span>
 					</Stack>
-					<time class="text-xs text-muted-foreground" datetime={event.at}>{formatAt(event.at)}</time>
+					<time class="text-xs text-muted-foreground" datetime={event.at}>{formatAt(event.at)}</time
+					>
 				</Cluster>
 			{/each}
 		</Stack>

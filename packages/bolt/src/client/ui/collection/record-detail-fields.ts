@@ -61,7 +61,10 @@ const relationFor = (
 	relations: ReadonlyArray<CollectionRelation>
 ): DetailField['relation'] => {
 	const base = field.endsWith('_id') ? field.slice(0, -'_id'.length) : field;
-	const match = relations.find((relation) => relation.name === base || relation.target === `${base}s` || relation.target === base);
+	const match = relations.find(
+		(relation) =>
+			relation.name === base || relation.target === `${base}s` || relation.target === base
+	);
 	return match === undefined ? undefined : { name: match.name, target: match.target };
 };
 

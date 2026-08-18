@@ -1,7 +1,4 @@
-import type {
-	CollectionClient,
-	ErasedCollectionRegistry
-} from '@norbital-ai/std/collection';
+import type { CollectionClient, ErasedCollectionRegistry } from '@norbital-ai/std/collection';
 import { getContext, hasContext, setContext, type Component } from 'svelte';
 
 const COLLECTION_CLIENT_CONTEXT = Symbol.for('@norbital-ai/ui/collection-client');

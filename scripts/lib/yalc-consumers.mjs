@@ -56,7 +56,9 @@ export const linkedSignature = (consumerDirectory, name) =>
 
 /** What pnpm actually materialised, read through the node_modules symlink. */
 export const installedSignature = (consumerDirectory, name) =>
-	manifestSignature(path.join(consumerDirectory, 'node_modules', ...name.split('/'), 'package.json'));
+	manifestSignature(
+		path.join(consumerDirectory, 'node_modules', ...name.split('/'), 'package.json')
+	);
 
 /**
  * The packages this consumer would load a stale build of.

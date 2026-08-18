@@ -10,13 +10,13 @@ import { humanize } from '@norbital-ai/std';
 import type { BoltUiKeys } from './i18n.js';
 import { parseStoredSummary } from './intent.js';
 
-function parsePublicMcpToolName(name: string): { readonly server: string; readonly tool: string } | null {
+function parsePublicMcpToolName(
+	name: string
+): { readonly server: string; readonly tool: string } | null {
 	const index = name.indexOf(':');
 	if (index === -1) return null;
 	return { server: name.slice(0, index), tool: name.slice(index + 1) };
 }
-
-
 
 export type PanelText = {
 	readonly kind: 'text';
@@ -600,6 +600,9 @@ export function toPanelUsage(
 	for (const record of records) {
 		const usage = record.usage;
 		if (!isRecord(usage)) continue;
+		// A delegated agent runs against a window of its own. Counting its usage here would report the
+		// person's next prompt as landing in whatever context a subagent happened to leave behind.
+		if (record.delegated === true) continue;
 		// The newest request's input is the live window occupancy; earlier ones describe windows that
 		// have already been replaced.
 		const input = readNumber(usage, [
@@ -619,7 +622,7 @@ export function toPanelUsage(
 					'completion_tokens'
 				]) ?? 0);
 		totalTokens += total;
-		const cost = readNumber(usage, ['cost', 'total_cost', 'totalCost']);
+		const cost = readNumber(usage, ['costUsd', 'cost', 'total_cost', 'totalCost']);
 		if (cost !== null) costUsd = (costUsd ?? 0) + cost;
 	}
 	return { contextTokens, contextLength, totalTokens, costUsd };
@@ -642,8 +645,18 @@ export function toSessionTotals(record: Readonly<Record<string, unknown>> | unde
 		const value = record[key];
 		return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 	};
+	const currency = record['usage_cost_currency'];
 	const totals = {
 		costUsd: count('usage_cost_usd'),
+		/**
+		 * What the host will invoice, in millionths of `currency`, and the currency it is in.
+		 *
+		 * Preferred over `costUsd` wherever both exist, because they are not the same fact: the
+		 * provider charge is what the model cost, and this is what the person reading it will pay.
+		 * `null` currency means the host prices nothing and the provider figure is all there is.
+		 */
+		costMicroUnits: count('usage_cost_micro_units'),
+		currency: typeof currency === 'string' && currency.length > 0 ? currency : null,
 		totalTokens: count('usage_total_tokens'),
 		turnsCounted: count('usage_turns_counted'),
 		turnsUnreported: count('usage_turns_unreported')
@@ -652,6 +665,27 @@ export function toSessionTotals(record: Readonly<Record<string, unknown>> | unde
 	return totals.turnsCounted === 0 ? null : totals;
 }
 export type SessionTotals = NonNullable<ReturnType<typeof toSessionTotals>>;
+
+/**
+ * What this conversation has cost, as one string, or nothing when no figure has been reported.
+ *
+ * The host's own charge wins over the provider's whenever there is one. They are different numbers
+ * on any host that bills in its own currency, and the one worth putting beside a conversation is the
+ * one its owner is invoiced — a provider figure in that position reads as the bill and is not it. A
+ * host that prices nothing leaves the provider charge as the only honest answer, so that is shown.
+ *
+ * `≥` marks a total that is a floor: some turn's host reported no cost for it, and a conversation
+ * nobody could price must not read as a cheap one.
+ */
+export function formatSessionCost(totals: SessionTotals | null): string | null {
+	if (totals === null) return null;
+	const priced = totals.currency !== null && totals.costMicroUnits > 0;
+	if (!priced && totals.costUsd === 0 && totals.turnsUnreported >= totals.turnsCounted) return null;
+	const floor = totals.turnsUnreported > 0 ? '≥' : '';
+	return priced
+		? `${floor}${totals.currency} ${(totals.costMicroUnits / 1_000_000).toFixed(4)}`
+		: `${floor}$${totals.costUsd.toFixed(4)}`;
+}
 
 /** Walks checkpoint history to see whether the pending echo has already landed. */
 function containsPrompt(messages: readonly PanelMessage[], pending: string): boolean {

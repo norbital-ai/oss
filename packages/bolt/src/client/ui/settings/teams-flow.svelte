@@ -39,15 +39,13 @@
 		})
 	);
 	const edges = $derived(
-		chart.edges.map(
-			(edge): Edge => ({
-				id: `${edge.parentId}->${edge.childId}`,
-				source: edge.parentId,
-				target: edge.childId,
-				type: 'smoothstep',
-				style: 'stroke: var(--muted-foreground)'
-			})
-		)
+		chart.edges.map((edge): Edge => ({
+			id: `${edge.parentId}->${edge.childId}`,
+			source: edge.parentId,
+			target: edge.childId,
+			type: 'smoothstep',
+			style: 'stroke: var(--muted-foreground)'
+		}))
 	);
 </script>
 

@@ -18,14 +18,18 @@ const stable = (value: unknown): string => {
 
 /** Owns fingerprint behavior at the manifest boundary so validation and typed semantics stay consistent for every caller. */
 const ManifestValues = {
-	fingerprint: (value: unknown): string => `sha256:${createHash('sha256').update(stable(value)).digest('hex')}`
+	fingerprint: (value: unknown): string =>
+		`sha256:${createHash('sha256').update(stable(value)).digest('hex')}`
 };
 export const fingerprint = ManifestValues.fingerprint;
 
 export const ManifestInput = Schema.Struct({ artifactId: Schema.NonEmptyString });
 export interface ManifestInput extends Schema.Schema.Type<typeof ManifestInput> {}
 
-export const buildManifest = (workspace: WorkspaceDefinition, input: ManifestInput): BundleManifest => {
+export const buildManifest = (
+	workspace: WorkspaceDefinition,
+	input: ManifestInput
+): BundleManifest => {
 	const requiredFacilities = [...new Set(workspace.requiredFacilities)].sort();
 	const schemaFingerprint = fingerprint({
 		collections: workspace.collections,

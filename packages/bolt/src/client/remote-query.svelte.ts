@@ -14,7 +14,9 @@ export interface CollectionPageQuery<Value> extends RemoteQuery<Value> {
 }
 
 const asError = (cause: unknown): Error =>
-	cause instanceof Error ? cause : new Error(cause == null ? 'Remote invocation failed' : String(cause));
+	cause instanceof Error
+		? cause
+		: new Error(cause == null ? 'Remote invocation failed' : String(cause));
 
 /**
  * What a query needs to take part in the sync engine's cache.
@@ -52,7 +54,8 @@ class ReactiveRemoteQuery implements RemoteQuery<Schema.Json> {
 			// reason — a remote failing on `operator does not exist: text = uuid` reached the reader as
 			// "could not be loaded" and the console as a sentence about undefined.
 			if (this.error !== undefined) throw asError(this.error);
-			if (this.current === undefined) throw new Error('Remote invocation completed without a value');
+			if (this.current === undefined)
+				throw new Error('Remote invocation completed without a value');
 			return this.current;
 		});
 	}

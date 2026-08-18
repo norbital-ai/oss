@@ -352,7 +352,10 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			return;
 		}
 		const names = yield* Effect.try({
-			try: () => ({ plugin: decodeURIComponent(encodedPlugin), command: decodeURIComponent(encodedCommand) }),
+			try: () => ({
+				plugin: decodeURIComponent(encodedPlugin),
+				command: decodeURIComponent(encodedCommand)
+			}),
 			catch: (cause) =>
 				new ServerTransportError({
 					operation: 'BoltServer.Server.decodePlugin',
@@ -457,11 +460,11 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			protocolVersion: PROTOCOL_VERSION,
 			id: InvocationId.make(randomUUID()),
 			scope: configuration.scope,
-				deadlineEpochMs: now + configuration.invocationTimeoutMillis,
-				command,
-				input,
-				headers: rawRequestHeaders(request)
-			});
+			deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+			command,
+			input,
+			headers: rawRequestHeaders(request)
+		});
 		writeDispatchResult(
 			response,
 			yield* dispatch(invocation, facilities, configuration.invocationTimeoutMillis)
@@ -492,7 +495,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 		deadlineEpochMs: now + configuration.invocationTimeoutMillis,
 		method: request.method ?? 'GET',
 		url: request.url ?? '/',
-			headers: rawRequestHeaders(request),
+		headers: rawRequestHeaders(request),
 		...(body === undefined ? {} : { body })
 	});
 	const result = yield* dispatch(invocation, facilities, configuration.invocationTimeoutMillis);

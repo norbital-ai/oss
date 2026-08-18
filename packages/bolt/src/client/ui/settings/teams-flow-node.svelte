@@ -12,10 +12,7 @@
 	let { data }: NodeProps<TeamFlowNode> = $props();
 </script>
 
-<Stack
-	gap="xs"
-	class="min-w-40 rounded-md border border-border bg-card px-3 py-2 shadow-card"
->
+<Stack gap="xs" class="min-w-40 rounded-md border border-border bg-card px-3 py-2 shadow-card">
 	<span class="text-xs font-semibold text-foreground">{data.name}</span>
 	<Handle
 		type="target"

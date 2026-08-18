@@ -71,7 +71,8 @@ const authored: AuthoredIntegrationBinding = {
 };
 
 /** One source record fanning out into `width` rows, the way an import pipeline does. */
-const fanOut = (width: number): AbsorbDependencies['pipeline'] =>
+const fanOut =
+	(width: number): AbsorbDependencies['pipeline'] =>
 	(_effectId, _collection, record) =>
 		Effect.succeed(
 			Array.from({ length: width }, (_unused, line) => ({
@@ -81,10 +82,7 @@ const fanOut = (width: number): AbsorbDependencies['pipeline'] =>
 			}))
 		);
 
-const absorb = (
-	dependencies: AbsorbDependencies,
-	records: ReadonlyArray<unknown>
-) =>
+const absorb = (dependencies: AbsorbDependencies, records: ReadonlyArray<unknown>) =>
 	Effect.runPromise(
 		absorbRecords(dependencies, EffectId.make('absorb-test'), target, authored, records, 0, 50)
 	);

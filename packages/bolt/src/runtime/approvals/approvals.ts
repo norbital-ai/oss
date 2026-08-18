@@ -7,17 +7,33 @@ import { Tasks } from '../facilities/services.js';
 import type { Identity } from '../identity/identity.js';
 import { Workspace } from '../workspace.js';
 
-
 export const ApprovalState = Schema.TaggedUnion({
-	Pending: { requestId: Schema.NonEmptyString, step: Schema.Number.check(Schema.isInt()), operation: Schema.Json },
-	Approved: { requestId: Schema.NonEmptyString, decidedBy: Schema.NonEmptyString, operation: Schema.optionalKey(Schema.Json) },
+	Pending: {
+		requestId: Schema.NonEmptyString,
+		step: Schema.Number.check(Schema.isInt()),
+		operation: Schema.Json
+	},
+	Approved: {
+		requestId: Schema.NonEmptyString,
+		decidedBy: Schema.NonEmptyString,
+		operation: Schema.optionalKey(Schema.Json)
+	},
 	// The two terminal refusals carry the operation for the same reason `Approved` does: the record
 	// was already written when the request was opened, and it is still locked. Without the operation
 	// there is no way back to the row, so the lock outlived every decision that was not an approval —
 	// and since a workspace's liveness predicate is `norbital_approval_id is null`, a rejected record
 	// stayed invisible and could not be deleted either.
-	Rejected: { requestId: Schema.NonEmptyString, decidedBy: Schema.NonEmptyString, reason: Schema.String, operation: Schema.optionalKey(Schema.Json) },
-	Withdrawn: { requestId: Schema.NonEmptyString, withdrawnBy: Schema.NonEmptyString, operation: Schema.optionalKey(Schema.Json) }
+	Rejected: {
+		requestId: Schema.NonEmptyString,
+		decidedBy: Schema.NonEmptyString,
+		reason: Schema.String,
+		operation: Schema.optionalKey(Schema.Json)
+	},
+	Withdrawn: {
+		requestId: Schema.NonEmptyString,
+		withdrawnBy: Schema.NonEmptyString,
+		operation: Schema.optionalKey(Schema.Json)
+	}
 });
 export type ApprovalState = typeof ApprovalState.Type;
 
@@ -39,12 +55,14 @@ export interface ApprovalTimelineEvent extends Schema.Schema.Type<typeof Approva
 const ApprovalConfiguration = Schema.Struct({
 	id: Schema.NonEmptyString,
 	name: Schema.NonEmptyString,
-	steps: Schema.Array(Schema.Struct({
-		id: Schema.NonEmptyString,
-		name: Schema.NonEmptyString,
-		approvers: Schema.Array(Schema.NonEmptyString),
-		description: Schema.optionalKey(Schema.String)
-	}))
+	steps: Schema.Array(
+		Schema.Struct({
+			id: Schema.NonEmptyString,
+			name: Schema.NonEmptyString,
+			approvers: Schema.Array(Schema.NonEmptyString),
+			description: Schema.optionalKey(Schema.String)
+		})
+	)
 });
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
@@ -69,20 +87,43 @@ const ApprovalTransitions = {
 		reason = '',
 		steps = 1
 	): ApprovalState | ApprovalConflict => {
-		if (state._tag !== 'Pending') return new ApprovalConflict({ requestId: state.requestId, reason: 'approval is no longer pending' });
+		if (state._tag !== 'Pending')
+			return new ApprovalConflict({
+				requestId: state.requestId,
+				reason: 'approval is no longer pending'
+			});
 		switch (decision) {
 			case 'reject':
-				return { _tag: 'Rejected', requestId: state.requestId, decidedBy: actor, reason, operation: state.operation };
+				return {
+					_tag: 'Rejected',
+					requestId: state.requestId,
+					decidedBy: actor,
+					reason,
+					operation: state.operation
+				};
 			case 'approve': {
 				const total = Math.max(1, steps);
 				if (state.step + 1 < total) {
-					return { _tag: 'Pending', requestId: state.requestId, step: state.step + 1, operation: state.operation };
+					return {
+						_tag: 'Pending',
+						requestId: state.requestId,
+						step: state.step + 1,
+						operation: state.operation
+					};
 				}
-				return { _tag: 'Approved', requestId: state.requestId, decidedBy: actor, operation: state.operation };
+				return {
+					_tag: 'Approved',
+					requestId: state.requestId,
+					decidedBy: actor,
+					operation: state.operation
+				};
 			}
 			default: {
 				const _exhaustive: never = decision;
-				return new ApprovalConflict({ requestId: state.requestId, reason: `unsupported decision ${_exhaustive}` });
+				return new ApprovalConflict({
+					requestId: state.requestId,
+					reason: `unsupported decision ${_exhaustive}`
+				});
 			}
 		}
 	}
@@ -90,12 +131,43 @@ const ApprovalTransitions = {
 export const decideState = ApprovalTransitions.decide;
 
 export type Interface = Readonly<{
-	readonly request: (effectId: EffectId, subject: Identity.Subject, requestId: string, operation: Schema.Json) => Effect.Effect<ApprovalState, Database.FacilityError | ApprovalConflict>;
-	readonly decide: (effectId: EffectId, subject: Identity.Subject, state: ApprovalState, decision: 'approve' | 'reject', reason?: string) => Effect.Effect<ApprovalState, ApprovalConflict | AccessControl.AccessDenied | Database.FacilityError>;
-	readonly withdraw: (effectId: EffectId, subject: Identity.Subject, state: ApprovalState) => Effect.Effect<ApprovalState, ApprovalConflict | Database.FacilityError>;
-	readonly status: (effectId: EffectId, requestId: string) => Effect.Effect<ApprovalState | undefined, Database.FacilityError | ApprovalConflict>;
-	readonly pendingForRecord: (effectId: EffectId, collection: string, id: string) => Effect.Effect<ApprovalState | undefined, Database.FacilityError | ApprovalConflict>;
-	readonly timeline: (effectId: EffectId, requestId: string) => Effect.Effect<ReadonlyArray<ApprovalTimelineEvent>, Database.FacilityError | ApprovalConflict>;
+	readonly request: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		requestId: string,
+		operation: Schema.Json
+	) => Effect.Effect<ApprovalState, Database.FacilityError | ApprovalConflict>;
+	readonly decide: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		state: ApprovalState,
+		decision: 'approve' | 'reject',
+		reason?: string
+	) => Effect.Effect<
+		ApprovalState,
+		ApprovalConflict | AccessControl.AccessDenied | Database.FacilityError
+	>;
+	readonly withdraw: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		state: ApprovalState
+	) => Effect.Effect<ApprovalState, ApprovalConflict | Database.FacilityError>;
+	readonly status: (
+		effectId: EffectId,
+		requestId: string
+	) => Effect.Effect<ApprovalState | undefined, Database.FacilityError | ApprovalConflict>;
+	readonly pendingForRecord: (
+		effectId: EffectId,
+		collection: string,
+		id: string
+	) => Effect.Effect<ApprovalState | undefined, Database.FacilityError | ApprovalConflict>;
+	readonly timeline: (
+		effectId: EffectId,
+		requestId: string
+	) => Effect.Effect<
+		ReadonlyArray<ApprovalTimelineEvent>,
+		Database.FacilityError | ApprovalConflict
+	>;
 	readonly authorizeResume: (state: ApprovalState) => Effect.Effect<void, ApprovalConflict>;
 }>;
 
@@ -110,32 +182,54 @@ export const layer = Layer.effect(
 		const tasks = yield* Tasks.Service;
 		const workspace = yield* Workspace.Service;
 		/** Resolves the durable configuration embedded at request time, with authored grants as a legacy-state fallback. */
-		const approvalConfigurations = { resolve: (state: ApprovalState) => {
-			if (state._tag !== 'Pending' || typeof state.operation !== 'object' || state.operation === null || Array.isArray(state.operation)) return undefined;
-			const embedded = Reflect.get(state.operation, 'approval');
-			if (Schema.is(ApprovalConfiguration)(embedded)) return embedded;
-			const collection = Reflect.get(state.operation, 'collection');
-			if (typeof collection !== 'string') return undefined;
-			for (const policy of workspace.definition.policies) {
-				for (const grant of policy.grants ?? []) {
-					if (grant.collection === collection && Schema.is(ApprovalConfiguration)(grant.approval)) return grant.approval;
+		const approvalConfigurations = {
+			resolve: (state: ApprovalState) => {
+				if (
+					state._tag !== 'Pending' ||
+					typeof state.operation !== 'object' ||
+					state.operation === null ||
+					Array.isArray(state.operation)
+				)
+					return undefined;
+				const embedded = Reflect.get(state.operation, 'approval');
+				if (Schema.is(ApprovalConfiguration)(embedded)) return embedded;
+				const collection = Reflect.get(state.operation, 'collection');
+				if (typeof collection !== 'string') return undefined;
+				for (const policy of workspace.definition.policies) {
+					for (const grant of policy.grants ?? []) {
+						if (grant.collection === collection && Schema.is(ApprovalConfiguration)(grant.approval))
+							return grant.approval;
+					}
 				}
+				return undefined;
 			}
-			return undefined;
-		} };
-		const decodeState = Effect.fn('Approvals.decodeState')(function* (requestId: string, value: unknown) {
+		};
+		const decodeState = Effect.fn('Approvals.decodeState')(function* (
+			requestId: string,
+			value: unknown
+		) {
 			return yield* Schema.decodeUnknownEffect(ApprovalState)(value).pipe(
-				Effect.mapError(() => new ApprovalConflict({ requestId, reason: 'stored approval state is malformed' }))
+				Effect.mapError(
+					() => new ApprovalConflict({ requestId, reason: 'stored approval state is malformed' })
+				)
 			);
 		});
 		const status = Effect.fn('Approvals.status')(function* (effectId: EffectId, requestId: string) {
-			const result = yield* database.execute(effectId, { _tag: 'Query', sql: 'select state from bolt_approvals where request_id = $1', parameters: [requestId] });
+			const result = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: 'select state from bolt_approvals where request_id = $1',
+				parameters: [requestId]
+			});
 			const row = result.rows[0];
 			const state = typeof row === 'object' && row !== null ? Reflect.get(row, 'state') : undefined;
 			if (state === undefined) return undefined;
 			return yield* decodeState(requestId, state);
 		});
-		const pendingForRecord = Effect.fn('Approvals.pendingForRecord')(function* (effectId: EffectId, collection: string, id: string) {
+		const pendingForRecord = Effect.fn('Approvals.pendingForRecord')(function* (
+			effectId: EffectId,
+			collection: string,
+			id: string
+		) {
 			const result = yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: "select state from bolt_approvals where state->>'_tag' = 'Pending' and state->'operation'->>'collection' = $1 and state->'operation'->>'id' = $2 limit 1",
@@ -146,7 +240,10 @@ export const layer = Layer.effect(
 			if (state === undefined) return undefined;
 			return yield* decodeState(`${collection}:${id}`, state);
 		});
-		const timeline = Effect.fn('Approvals.timeline')(function* (effectId: EffectId, requestId: string) {
+		const timeline = Effect.fn('Approvals.timeline')(function* (
+			effectId: EffectId,
+			requestId: string
+		) {
 			const result = yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: 'select kind, subject_id as "subjectId", payload from bolt_audit where payload->>\'requestId\' = $1 order by sequence',
@@ -154,9 +251,14 @@ export const layer = Layer.effect(
 			});
 			const events: Array<ApprovalTimelineEvent> = [];
 			for (const row of result.rows) {
-				events.push(yield* Schema.decodeUnknownEffect(ApprovalTimelineEvent)(row).pipe(
-					Effect.mapError(() => new ApprovalConflict({ requestId, reason: 'stored approval timeline is malformed' }))
-				));
+				events.push(
+					yield* Schema.decodeUnknownEffect(ApprovalTimelineEvent)(row).pipe(
+						Effect.mapError(
+							() =>
+								new ApprovalConflict({ requestId, reason: 'stored approval timeline is malformed' })
+						)
+					)
+				);
 			}
 			return events;
 		});
@@ -182,9 +284,11 @@ export const layer = Layer.effect(
 			state: ApprovalState,
 			closedBy?: string
 		) {
-			const operation = state._tag === 'Pending' || state._tag === 'Approved' ? state.operation : undefined;
+			const operation =
+				state._tag === 'Pending' || state._tag === 'Approved' ? state.operation : undefined;
 			const fields = Schema.is(JsonObject)(operation) ? operation : {};
-			const collectionName = typeof fields['collection'] === 'string' ? fields['collection'] : 'unknown';
+			const collectionName =
+				typeof fields['collection'] === 'string' ? fields['collection'] : 'unknown';
 			const recordId = typeof fields['id'] === 'string' ? fields['id'] : 'unknown';
 			const action = typeof fields['action'] === 'string' ? fields['action'] : 'update';
 			yield* database.execute(effectId, {
@@ -222,15 +326,34 @@ export const layer = Layer.effect(
 		return Service.of({
 			request: Effect.fn('Approvals.request')(function* (effectId, subject, requestId, operation) {
 				let durableOperation = operation;
-				if (Schema.is(JsonObject)(operation) && operation.approval === undefined && typeof operation.collection === 'string') {
+				if (
+					Schema.is(JsonObject)(operation) &&
+					operation.approval === undefined &&
+					typeof operation.collection === 'string'
+				) {
 					const subjectRoles = subject.roles.map((role) => role.toLocaleLowerCase());
 					const configuration = workspace.definition.policies
-						.filter((policy) => (policy.roles ?? [policy.name]).some((role) => subjectRoles.includes(role.toLocaleLowerCase())))
+						.filter((policy) =>
+							(policy.roles ?? [policy.name]).some((role) =>
+								subjectRoles.includes(role.toLocaleLowerCase())
+							)
+						)
 						.flatMap((policy) => policy.grants ?? [])
-						.find((grant) => grant.collection === operation.collection && grant.approval !== undefined)?.approval;
-					if (Schema.is(Schema.Json)(configuration)) durableOperation = Object.fromEntries([...Object.entries(operation), ['approval', configuration]]);
+						.find(
+							(grant) => grant.collection === operation.collection && grant.approval !== undefined
+						)?.approval;
+					if (Schema.is(Schema.Json)(configuration))
+						durableOperation = Object.fromEntries([
+							...Object.entries(operation),
+							['approval', configuration]
+						]);
 				}
-				const state: ApprovalState = { _tag: 'Pending', requestId, step: 0, operation: durableOperation };
+				const state: ApprovalState = {
+					_tag: 'Pending',
+					requestId,
+					step: 0,
+					operation: durableOperation
+				};
 				const inserted = yield* database.execute(effectId, {
 					_tag: 'Query',
 					sql: 'insert into bolt_approvals (request_id, tenant_id, state) values ($1, $2, $3) on conflict (request_id) do nothing returning state',
@@ -242,59 +365,127 @@ export const layer = Layer.effect(
 					yield* database.execute(effectId, {
 						_tag: 'Query',
 						sql: 'insert into requestor (norbital_id, approval_request_id, user_id) values ($1, $2, $3) on conflict (norbital_id) do nothing',
-						parameters: [deriveRecordId(`${requestId}:${subject.userId}`), requestId, subject.userId]
+						parameters: [
+							deriveRecordId(`${requestId}:${subject.userId}`),
+							requestId,
+							subject.userId
+						]
 					});
 					return state;
 				}
 				const existing = yield* status(effectId, requestId);
-				if (existing === undefined) return yield* new ApprovalConflict({ requestId, reason: 'approval request conflicted without a durable state' });
+				if (existing === undefined)
+					return yield* new ApprovalConflict({
+						requestId,
+						reason: 'approval request conflicted without a durable state'
+					});
 				return existing;
 			}),
-			decide: Effect.fn('Approvals.decide')(function* (effectId, subject, state, decision, reason = '') {
+			decide: Effect.fn('Approvals.decide')(function* (
+				effectId,
+				subject,
+				state,
+				decision,
+				reason = ''
+			) {
 				const current = yield* status(effectId, state.requestId);
-				if (current === undefined) return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval request was not found' });
+				if (current === undefined)
+					return yield* new ApprovalConflict({
+						requestId: state.requestId,
+						reason: 'approval request was not found'
+					});
 				const configuration = approvalConfigurations.resolve(current);
 				if (configuration === undefined) {
 					yield* access.authorize(subject, 'approve', 'approvals');
 				} else {
 					const step = configuration.steps[current._tag === 'Pending' ? current.step : 0];
-					const eligible = step !== undefined && step.approvers.some((team: string) => subject.teams.includes(team));
-					if (!eligible) return yield* new AccessControl.AccessDenied({ action: 'approve', resource: current.requestId, reason: 'subject is not an approver for the active step' });
+					const eligible =
+						step !== undefined &&
+						step.approvers.some((team: string) => subject.teams.includes(team));
+					if (!eligible)
+						return yield* new AccessControl.AccessDenied({
+							action: 'approve',
+							resource: current.requestId,
+							reason: 'subject is not an approver for the active step'
+						});
 				}
-				const next = decideState(current, decision, subject.userId, reason, configuration === undefined ? 1 : configuration.steps.length);
+				const next = decideState(
+					current,
+					decision,
+					subject.userId,
+					reason,
+					configuration === undefined ? 1 : configuration.steps.length
+				);
 				if (next instanceof ApprovalConflict) return yield* next;
 				const updated = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: 'with updated as (update bolt_approvals set state = $2 where request_id = $1 and state->>\'_tag\' = \'Pending\' returning state) insert into bolt_audit (kind, subject_id, payload) select $3, $4, state from updated returning payload as state',
+					sql: "with updated as (update bolt_approvals set state = $2 where request_id = $1 and state->>'_tag' = 'Pending' returning state) insert into bolt_audit (kind, subject_id, payload) select $3, $4, state from updated returning payload as state",
 					parameters: [state.requestId, next, 'approval_decided', subject.userId]
 				});
-				if (updated.affectedRows === 0) return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval decision lost a competing update' });
+				if (updated.affectedRows === 0)
+					return yield* new ApprovalConflict({
+						requestId: state.requestId,
+						reason: 'approval decision lost a competing update'
+					});
 				yield* projectRequest(effectId, next, subject.userId);
 				if (next._tag === 'Approved') {
-					yield* tasks.execute(effectId, { _tag: 'Enqueue', command: 'collections.resume', input: { requestId: next.requestId } });
+					yield* tasks.execute(effectId, {
+						_tag: 'Enqueue',
+						command: 'collections.resume',
+						input: { requestId: next.requestId }
+					});
 				}
 				// A rejection has work to do too. Only the approval path was ever followed up, so a
 				// refused request left its record locked for good.
 				if (next._tag === 'Rejected') {
-					yield* tasks.execute(effectId, { _tag: 'Enqueue', command: 'collections.discard', input: { requestId: next.requestId } });
+					yield* tasks.execute(effectId, {
+						_tag: 'Enqueue',
+						command: 'collections.discard',
+						input: { requestId: next.requestId }
+					});
 				}
 				return next;
 			}),
 			withdraw: Effect.fn('Approvals.withdraw')(function* (effectId, subject, state) {
 				const current = yield* status(effectId, state.requestId);
-				if (current?._tag !== 'Pending') return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval is no longer pending' });
-				const next: ApprovalState = { _tag: 'Withdrawn', requestId: state.requestId, withdrawnBy: subject.userId, operation: current.operation };
-				const updated = yield* database.execute(effectId, { _tag: 'Query', sql: 'update bolt_approvals set state = $2 where request_id = $1 and state->>\'_tag\' = \'Pending\' returning state', parameters: [state.requestId, next] });
-				if (updated.affectedRows === 0) return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval withdrawal lost a competing update' });
+				if (current?._tag !== 'Pending')
+					return yield* new ApprovalConflict({
+						requestId: state.requestId,
+						reason: 'approval is no longer pending'
+					});
+				const next: ApprovalState = {
+					_tag: 'Withdrawn',
+					requestId: state.requestId,
+					withdrawnBy: subject.userId,
+					operation: current.operation
+				};
+				const updated = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: "update bolt_approvals set state = $2 where request_id = $1 and state->>'_tag' = 'Pending' returning state",
+					parameters: [state.requestId, next]
+				});
+				if (updated.affectedRows === 0)
+					return yield* new ApprovalConflict({
+						requestId: state.requestId,
+						reason: 'approval withdrawal lost a competing update'
+					});
 				yield* projectRequest(effectId, next, subject.userId);
-				yield* tasks.execute(effectId, { _tag: 'Enqueue', command: 'collections.discard', input: { requestId: next.requestId } });
+				yield* tasks.execute(effectId, {
+					_tag: 'Enqueue',
+					command: 'collections.discard',
+					input: { requestId: next.requestId }
+				});
 				return next;
 			}),
 			status,
 			pendingForRecord,
 			timeline,
 			authorizeResume: Effect.fn('Approvals.authorizeResume')(function* (state) {
-				if (state._tag !== 'Approved') return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval has not been approved' });
+				if (state._tag !== 'Approved')
+					return yield* new ApprovalConflict({
+						requestId: state.requestId,
+						reason: 'approval has not been approved'
+					});
 			})
 		});
 	})

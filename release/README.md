@@ -19,11 +19,11 @@ a duplicate.
 Bolt, templates, and tenants do not propagate into one another. They respect each other's APIs and
 move only when their own owner moves them.
 
-| Train        | Moves when                                                                           |
-| ------------ | ------------------------------------------------------------------------------------ |
-| **Bolt**     | changesets → version bump → publish. A normal npm package.                           |
+| Train        | Moves when                                                                            |
+| ------------ | ------------------------------------------------------------------------------------- |
+| **Bolt**     | changesets → version bump → publish. A normal npm package.                            |
 | **Template** | a developer edits source and pushes. It pins its own bolt version until they bump it. |
-| **Tenant**   | its owner says so. Forked from a template, managed independently.                    |
+| **Tenant**   | its owner says so. Forked from a template, managed independently.                     |
 
 The only coupling is **notification**: a tenant can be told its upstream template is N commits
 ahead, or that a newer `@norbital-ai/bolt` exists and may break it. Neither acts.

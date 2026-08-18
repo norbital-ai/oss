@@ -40,10 +40,27 @@
 </section>
 
 <style>
-	header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-	h2 { margin: 0; font-size: 1rem; }
-	[role='listbox'] { display: grid; gap: .25rem; }
-	[role='option'] { text-align: start; }
-	[aria-selected='true'] { font-weight: 700; }
-	.empty { opacity: .7; }
+	header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	h2 {
+		margin: 0;
+		font-size: 1rem;
+	}
+	[role='listbox'] {
+		display: grid;
+		gap: 0.25rem;
+	}
+	[role='option'] {
+		text-align: start;
+	}
+	[aria-selected='true'] {
+		font-weight: 700;
+	}
+	.empty {
+		opacity: 0.7;
+	}
 </style>

@@ -44,7 +44,9 @@ export const WireError = Schema.Struct({
 	message: Schema.NonEmptyString,
 	retryable: Schema.Boolean,
 	outcome: ProviderOutcome,
-	httpStatus: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(400), Schema.isLessThan(600))),
+	httpStatus: Schema.optionalKey(
+		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(400), Schema.isLessThan(600))
+	),
 	details: Schema.optionalKey(Schema.Json)
 }).annotate({ identifier: 'BoltWireError' });
 export interface WireError extends Schema.Schema.Type<typeof WireError> {}
@@ -82,7 +84,8 @@ export interface FacilityCall extends Schema.Schema.Type<typeof FacilityCall> {}
 
 /** Owns schema and value constructors for the transport-neutral facility result union. */
 const FacilityResults = {
-	schema: <A extends Schema.Top>(value: A) => Schema.TaggedUnion({ Success: { value }, Failure: { error: WireError } }),
+	schema: <A extends Schema.Top>(value: A) =>
+		Schema.TaggedUnion({ Success: { value }, Failure: { error: WireError } }),
 	success: <A>(value: A): FacilityResult<A> => ({ _tag: 'Success', value }),
 	failure: (error: WireError): FacilityResult<never> => ({ _tag: 'Failure', error })
 };
@@ -96,7 +99,9 @@ export type FacilityResult<A> = Readonly<
 export const WireErrorOptions = Schema.Struct({
 	retryable: Schema.optionalKey(Schema.Boolean),
 	outcome: Schema.optionalKey(ProviderOutcome),
-	httpStatus: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 100, maximum: 599 }))),
+	httpStatus: Schema.optionalKey(
+		Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 100, maximum: 599 }))
+	),
 	details: Schema.optionalKey(Schema.Json)
 });
 export interface WireErrorOptions extends Schema.Schema.Type<typeof WireErrorOptions> {}

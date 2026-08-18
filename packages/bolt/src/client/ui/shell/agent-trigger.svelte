@@ -47,7 +47,8 @@
 	<!-- No label on the orb: the button already carries one, and a second would be read twice. -->
 	<NorbitalThinkingOrb {state} size={18} />
 	{#if expanded}
-		<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">{label}</span
+		<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
+			>{label}</span
 		>
 		{#if shortcut}
 			<kbd

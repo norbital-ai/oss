@@ -1,4 +1,10 @@
-import { collection, field, type CollectionDefinition, type FieldDefinition, type PolicyDeclaration } from '../../authoring/workspace-schema.js';
+import {
+	collection,
+	field,
+	type CollectionDefinition,
+	type FieldDefinition,
+	type PolicyDeclaration
+} from '../../authoring/workspace-schema.js';
 
 /**
  * Collections the runtime owns and authored workspace code reads.
@@ -174,22 +180,17 @@ const documentAsset = collection({
 	history: false
 });
 
-export const IDENTITY_COLLECTIONS: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>> = Object.freeze([
-	authUser,
-	authSession,
-	authAccount,
-	authVerification,
-	authConfig
-]);
+export const IDENTITY_COLLECTIONS: ReadonlyArray<
+	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
+> = Object.freeze([authUser, authSession, authAccount, authVerification, authConfig]);
 
-export const SYSTEM_COLLECTIONS: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>> = Object.freeze([
-	...IDENTITY_COLLECTIONS,
-	documentAsset,
-	approvalRequest,
-	requestor
-]);
+export const SYSTEM_COLLECTIONS: ReadonlyArray<
+	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
+> = Object.freeze([...IDENTITY_COLLECTIONS, documentAsset, approvalRequest, requestor]);
 
-export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(SYSTEM_COLLECTIONS.map(({ name }) => name));
+export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(
+	SYSTEM_COLLECTIONS.map(({ name }) => name)
+);
 
 /**
  * Reading runtime state is allowed for any authenticated subject; writing never is, because the
@@ -198,7 +199,8 @@ export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(SYSTEM_COLLE
  */
 export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclaration>({
 	name: 'bolt.system-collections',
-	description: 'Read access to runtime-owned collections that authored queries and reports depend on.',
+	description:
+		'Read access to runtime-owned collections that authored queries and reports depend on.',
 	effect: 'allow',
 	/**
 	 * Identity is here only as a directory of names, and only because workspaces need one.
@@ -225,12 +227,23 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 });
 
 /** Merges runtime-owned collections into an authored definition without letting either shadow the other. */
-export const withSystemCollections = <T extends { readonly collections: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>>; readonly policies: ReadonlyArray<PolicyDeclaration> }>(
+export const withSystemCollections = <
+	T extends {
+		readonly collections: ReadonlyArray<
+			CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
+		>;
+		readonly policies: ReadonlyArray<PolicyDeclaration>;
+	}
+>(
 	definition: T
 ): T => {
 	const authored = new Set(definition.collections.map(({ name }) => name));
 	const missing = SYSTEM_COLLECTIONS.filter(({ name }) => !authored.has(name));
-	if (missing.length === 0 && definition.policies.some(({ name }) => name === SYSTEM_READ_POLICY.name)) return definition;
+	if (
+		missing.length === 0 &&
+		definition.policies.some(({ name }) => name === SYSTEM_READ_POLICY.name)
+	)
+		return definition;
 	return {
 		...definition,
 		collections: [...definition.collections, ...missing],

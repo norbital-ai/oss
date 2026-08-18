@@ -6,7 +6,6 @@ export { defineMessages, translate, interpolate, hasKey } from './catalog.js';
 export type { Locale } from './locale.js';
 export {
 	SUPPORTED_LOCALES,
-	LOCALES,
 	DEFAULT_LOCALE,
 	INTL_LOCALES,
 	intlLocale,

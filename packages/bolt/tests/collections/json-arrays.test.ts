@@ -1,16 +1,20 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer, Ref } from 'effect';
-import { EffectId, InvocationId, type DatabaseRequest, type DatabaseResponse } from '@norbital-ai/bolt-protocol';
+import { EffectId, type DatabaseRequest, type DatabaseResponse } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
 import { AccessControl } from '../../src/runtime/access/access-control.js';
 import { Approvals } from '../../src/runtime/approvals/approvals.js';
 import { Collections } from '../../src/runtime/collections/collections.js';
-import { AuthoredRuntimeService, emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
+import {
+	AuthoredRuntimeService,
+	emptyAuthoredRuntime
+} from '../../src/runtime/collections/authored.js';
 import { Database } from '../../src/runtime/facilities/database.js';
 import { AI, Files, Tasks, Transport } from '../../src/runtime/facilities/services.js';
 import { SyncWake } from '../../src/runtime/sync/wake.js';
 import type { Identity } from '../../src/runtime/identity/identity.js';
 import { Workspace } from '../../src/runtime/workspace.js';
+import { testCallContext } from '../support/bolt-test-layer.js';
 
 /**
  * A JSON column holding a list has to reach Postgres as JSON.
@@ -85,8 +89,11 @@ const recordingDatabase = (seen: Array<DatabaseRequest>) =>
 		})
 	);
 
-const context = { invocationId: InvocationId.make('json-arrays'), deadlineEpochMs: Date.now() + 10_000 };
-const tasks = Tasks.layer({ call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } }) }, context);
+const context = testCallContext('json-arrays');
+const tasks = Tasks.layer(
+	{ call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } }) },
+	context
+);
 
 const testLayer = (seen: Array<DatabaseRequest>) => {
 	const database = recordingDatabase(seen);
@@ -127,7 +134,12 @@ describe('JSON columns holding a list', () => {
 			yield* (yield* Collections.Service).create(EffectId.make('create-shift'), subject, {
 				collection: 'shifts',
 				id: RECORD_ID,
-				values: { name: 'Night', intervals, metadata: { source: 'roster' }, labels: ['night', 'weekend'] }
+				values: {
+					name: 'Night',
+					intervals,
+					metadata: { source: 'roster' },
+					labels: ['night', 'weekend']
+				}
 			});
 			const statement = rowStatement(seen, 'insert into "shifts"');
 			expect(statement).toBeDefined();

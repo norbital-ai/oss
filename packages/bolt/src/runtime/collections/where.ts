@@ -1,7 +1,11 @@
 import { Result, Schema } from 'effect';
 import { is, sql, SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import type { FieldDefinition, RelationDefinition, WorkspaceDefinition } from '../../authoring/workspace-schema.js';
+import type {
+	FieldDefinition,
+	RelationDefinition,
+	WorkspaceDefinition
+} from '../../authoring/workspace-schema.js';
 
 /** Parameterized SQL produced by collection predicate or JSON where compilation. */
 export type CompiledQuery = Readonly<{
@@ -93,18 +97,24 @@ const WhereSql = {
 		key.startsWith('norbital_') || Object.hasOwn(context.fields, key),
 	qualify: (collection: string, field: string): string =>
 		`${WhereSql.quoteIdentifier(collection)}.${WhereSql.quoteIdentifier(WhereSql.mapColumn(field))}`,
-	singular: (collection: string): string => (collection.endsWith('s') ? collection.slice(0, -1) : collection),
+	singular: (collection: string): string =>
+		collection.endsWith('s') ? collection.slice(0, -1) : collection,
 	/**
 	 * Widens an authored operand to a bindable parameter. `Date` reaches the compiler whenever a
 	 * handler computes a window in JS, and it is not `Schema.Json`; an ISO instant is what Postgres
 	 * compares a `timestamptz` against, so the conversion happens here rather than at the wire edge.
 	 */
 	parameter: (value: unknown): Schema.Json | undefined => {
-		if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value.toISOString();
+		if (value instanceof Date)
+			return Number.isNaN(value.getTime()) ? undefined : value.toISOString();
 		if (typeof value === 'bigint') return value.toString();
 		return Schema.is(Schema.Json)(value) ? value : undefined;
 	},
-	joinPredicate: (source: string, target: string, relation: RelationDefinition): string | undefined => {
+	joinPredicate: (
+		source: string,
+		target: string,
+		relation: RelationDefinition
+	): string | undefined => {
 		if (relation.from === undefined || relation.to === undefined) return undefined;
 		const fromSql = WhereSql.qualify(relation.from.collection, relation.from.column);
 		const toSql = WhereSql.qualify(relation.to.collection, relation.to.column);
@@ -117,7 +127,9 @@ const WhereSql = {
 		context: WhereContext,
 		name: string
 	): Readonly<{ readonly target: string; readonly join: string }> | undefined => {
-		const declared = context.relations.find((relation) => relation.source === context.collection && relation.name === name);
+		const declared = context.relations.find(
+			(relation) => relation.source === context.collection && relation.name === name
+		);
 		const target = declared?.target;
 		if (target !== undefined) {
 			const join = context.relations
@@ -143,14 +155,21 @@ const WhereSql = {
 		fieldsByCollection: context.fieldsByCollection
 	}),
 	/** Renumbers each clause's 1-based placeholders into one flat parameter list. */
-	join: (clauses: ReadonlyArray<CompiledQuery>, separator: 'AND' | 'OR', empty: 'true' | 'false'): CompiledQuery => {
+	join: (
+		clauses: ReadonlyArray<CompiledQuery>,
+		separator: 'AND' | 'OR',
+		empty: 'true' | 'false'
+	): CompiledQuery => {
 		if (clauses.length === 0) return { sql: empty, parameters: [] };
 		const parameters: Array<Schema.Json> = [];
 		const sql = clauses
 			.map((clause) => {
 				const offset = parameters.length;
 				parameters.push(...clause.parameters);
-				return clause.sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`);
+				return clause.sql.replaceAll(
+					/\$(\d+)/g,
+					(_token, index: string) => `$${Number(index) + offset}`
+				);
 			})
 			.join(` ${separator} `);
 		return { sql: clauses.length === 1 ? sql : separator === 'OR' ? `(${sql})` : sql, parameters };
@@ -167,14 +186,20 @@ export const makeWhereContext = (
 	fields,
 	relations: definition.relations ?? [],
 	collections: definition.collections.map(({ name }) => name),
-	fieldsByCollection: Object.fromEntries(definition.collections.map((entry) => [entry.name, entry.fields]))
+	fieldsByCollection: Object.fromEntries(
+		definition.collections.map((entry) => [entry.name, entry.fields])
+	)
 });
 
 const failure = (context: WhereContext, field: string, message: string): WhereResult =>
 	Result.fail(new WhereCompileError({ collection: context.collection, field, message }));
 
 const operandFailure = (context: WhereContext, field: string, operator: string): WhereResult =>
-	failure(context, field, `Operator '${operator}' received an operand that cannot be bound as a query parameter.`);
+	failure(
+		context,
+		field,
+		`Operator '${operator}' received an operand that cannot be bound as a query parameter.`
+	);
 
 /** Compiles one `{ operator: operand }` pair against an already-qualified column. */
 const compileOperator = (
@@ -187,21 +212,31 @@ const compileOperator = (
 	if (Object.hasOwn(COMPARISON_SQL, operator)) {
 		const value = WhereSql.parameter(operand);
 		if (value === undefined) return operandFailure(context, field, operator);
-		return Result.succeed({ sql: `${fieldSql} ${COMPARISON_SQL[operator as keyof typeof COMPARISON_SQL]} $1`, parameters: [value] });
+		return Result.succeed({
+			sql: `${fieldSql} ${COMPARISON_SQL[operator as keyof typeof COMPARISON_SQL]} $1`,
+			parameters: [value]
+		});
 	}
 	if (Object.hasOwn(PATTERN_SQL, operator)) {
 		if (typeof operand !== 'string') return operandFailure(context, field, operator);
-		return Result.succeed({ sql: `${fieldSql} ${PATTERN_SQL[operator as keyof typeof PATTERN_SQL]} $1`, parameters: [operand] });
+		return Result.succeed({
+			sql: `${fieldSql} ${PATTERN_SQL[operator as keyof typeof PATTERN_SQL]} $1`,
+			parameters: [operand]
+		});
 	}
 	if (Object.hasOwn(ARRAY_SQL, operator)) {
 		const value = WhereSql.parameter(operand);
 		if (value === undefined) return operandFailure(context, field, operator);
-		return Result.succeed({ sql: `${fieldSql} ${ARRAY_SQL[operator as keyof typeof ARRAY_SQL]} $1`, parameters: [value] });
+		return Result.succeed({
+			sql: `${fieldSql} ${ARRAY_SQL[operator as keyof typeof ARRAY_SQL]} $1`,
+			parameters: [value]
+		});
 	}
 	if (operator === 'in' || operator === 'notIn') {
 		if (!Array.isArray(operand)) return operandFailure(context, field, operator);
 		// `in ()` is a syntax error, and an empty set is a constant answer in both directions.
-		if (operand.length === 0) return Result.succeed({ sql: operator === 'in' ? 'false' : 'true', parameters: [] });
+		if (operand.length === 0)
+			return Result.succeed({ sql: operator === 'in' ? 'false' : 'true', parameters: [] });
 		const parameters: Array<Schema.Json> = [];
 		for (const entry of operand) {
 			const value = WhereSql.parameter(entry);
@@ -217,7 +252,10 @@ const compileOperator = (
 	if (operator === 'isNull' || operator === 'isNotNull') {
 		if (typeof operand !== 'boolean') return operandFailure(context, field, operator);
 		const wantsNull = operator === 'isNull' ? operand : !operand;
-		return Result.succeed({ sql: `${fieldSql} ${wantsNull ? 'is null' : 'is not null'}`, parameters: [] });
+		return Result.succeed({
+			sql: `${fieldSql} ${wantsNull ? 'is null' : 'is not null'}`,
+			parameters: []
+		});
 	}
 	if (operator === 'contains_date') {
 		const value = WhereSql.parameter(operand);
@@ -247,7 +285,11 @@ const compileOperator = (
 };
 
 /** Compiles every operator in one column condition as a conjunction. */
-const compileFieldCondition = (context: WhereContext, field: string, condition: unknown): WhereResult => {
+const compileFieldCondition = (
+	context: WhereContext,
+	field: string,
+	condition: unknown
+): WhereResult => {
 	if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
 		return failure(context, field, 'A column condition must be an object of operators.');
 	}
@@ -267,7 +309,8 @@ const compileBranches = (
 	key: 'AND' | 'OR',
 	branches: unknown
 ): WhereResult => {
-	if (!Array.isArray(branches)) return failure(context, key, `'${key}' requires an array of where objects.`);
+	if (!Array.isArray(branches))
+		return failure(context, key, `'${key}' requires an array of where objects.`);
 	const clauses: Array<CompiledQuery> = [];
 	for (const branch of branches) {
 		const compiled = compileWhere(branch, context);
@@ -301,24 +344,38 @@ const compileRaw = (
 	// `"component_entries.origin"` — a column that does not exist. `qualify` already renders the
 	// two-part form the rest of the compiler emits, so the reference is built from that.
 	const reference = (name: string): unknown => sql.raw(WhereSql.qualify(context.collection, name));
-	const columns = Object.fromEntries(Object.keys(context.fields).map((name) => [name, reference(name)]));
+	const columns = Object.fromEntries(
+		Object.keys(context.fields).map((name) => [name, reference(name)])
+	);
 	const table = new Proxy(columns, {
 		get: (target, property) =>
-			typeof property === 'string' && !(property in target) ? reference(property) : Reflect.get(target, property)
+			typeof property === 'string' && !(property in target)
+				? reference(property)
+				: Reflect.get(target, property)
 	});
 
 	try {
 		const fragment = build(table, { sql });
 		if (!is(fragment, SQL)) {
 			return Result.fail(
-				new WhereCompileError({ collection: context.collection, field: 'RAW', message: 'RAW must return a sql`` fragment.' })
+				new WhereCompileError({
+					collection: context.collection,
+					field: 'RAW',
+					message: 'RAW must return a sql`` fragment.'
+				})
 			);
 		}
 		const query = new PgDialect().sqlToQuery(fragment);
-		const parameters = query.params.filter((value): value is Schema.Json => Schema.is(Schema.Json)(value));
+		const parameters = query.params.filter((value): value is Schema.Json =>
+			Schema.is(Schema.Json)(value)
+		);
 		if (parameters.length !== query.params.length) {
 			return Result.fail(
-				new WhereCompileError({ collection: context.collection, field: 'RAW', message: 'RAW bound a value that cannot cross the facility boundary.' })
+				new WhereCompileError({
+					collection: context.collection,
+					field: 'RAW',
+					message: 'RAW bound a value that cannot cross the facility boundary.'
+				})
 			);
 		}
 		return Result.succeed({ sql: query.sql, parameters });
@@ -355,7 +412,13 @@ export const compileWhere = (where: unknown, context: WhereContext, offset = 0):
 			if (typeof condition !== 'function') {
 				return failure(context, key, 'RAW must be a function that builds a sql`` fragment.');
 			}
-			const raw = compileRaw(context, condition as (table: Readonly<Record<string, unknown>>, operators: { readonly sql: unknown }) => unknown);
+			const raw = compileRaw(
+				context,
+				condition as (
+					table: Readonly<Record<string, unknown>>,
+					operators: { readonly sql: unknown }
+				) => unknown
+			);
 			if (Result.isFailure(raw)) return raw;
 			clauses.push(raw.success);
 			continue;
@@ -367,11 +430,19 @@ export const compileWhere = (where: unknown, context: WhereContext, offset = 0):
 			continue;
 		}
 		if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
-			return failure(context, key, `'${key}' is neither a column of '${context.collection}' nor a relation filter.`);
+			return failure(
+				context,
+				key,
+				`'${key}' is neither a column of '${context.collection}' nor a relation filter.`
+			);
 		}
 		const resolved = WhereSql.resolveRelation(context, key);
 		if (resolved === undefined) {
-			return failure(context, key, `'${key}' is neither a column of '${context.collection}' nor a known relation.`);
+			return failure(
+				context,
+				key,
+				`'${key}' is neither a column of '${context.collection}' nor a known relation.`
+			);
 		}
 		const inner = compileWhere(condition, WhereSql.relatedContext(context, resolved.target));
 		if (Result.isFailure(inner)) return inner;
@@ -383,7 +454,10 @@ export const compileWhere = (where: unknown, context: WhereContext, offset = 0):
 	const combined = WhereSql.join(clauses, 'AND', 'true');
 	if (offset === 0) return Result.succeed(combined);
 	return Result.succeed({
-		sql: combined.sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`),
+		sql: combined.sql.replaceAll(
+			/\$(\d+)/g,
+			(_token, index: string) => `$${Number(index) + offset}`
+		),
 		parameters: combined.parameters
 	});
 };
@@ -399,9 +473,17 @@ export type OrderTerm = Readonly<{ readonly column: string; readonly direction: 
  * arbitrarily per statement, and rows are skipped or repeated at every page boundary. `norbital_id`
  * is the persisted primary key, so appending it is what makes the tuple unique.
  */
-export const compileOrderTerms = (orderBy: unknown, context: WhereContext): ReadonlyArray<OrderTerm> => {
+export const compileOrderTerms = (
+	orderBy: unknown,
+	context: WhereContext
+): ReadonlyArray<OrderTerm> => {
 	const terms: Array<OrderTerm> = [];
-	if (orderBy !== undefined && orderBy !== null && typeof orderBy === 'object' && !Array.isArray(orderBy)) {
+	if (
+		orderBy !== undefined &&
+		orderBy !== null &&
+		typeof orderBy === 'object' &&
+		!Array.isArray(orderBy)
+	) {
 		for (const [field, direction] of Object.entries(orderBy)) {
 			if (!WhereSql.isColumn(context, field)) continue;
 			if (direction !== 'asc' && direction !== 'desc') continue;
@@ -415,4 +497,6 @@ export const compileOrderTerms = (orderBy: unknown, context: WhereContext): Read
 
 /** Renders compiled ordering terms as the ` order by ...` suffix a select carries. */
 export const renderOrderBy = (terms: ReadonlyArray<OrderTerm>): string =>
-	terms.length === 0 ? '' : ` order by ${terms.map(({ column, direction }) => `${WhereSql.quoteIdentifier(column)} ${direction}`).join(', ')}`;
+	terms.length === 0
+		? ''
+		: ` order by ${terms.map(({ column, direction }) => `${WhereSql.quoteIdentifier(column)} ${direction}`).join(', ')}`;

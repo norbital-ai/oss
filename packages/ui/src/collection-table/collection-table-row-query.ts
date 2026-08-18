@@ -126,9 +126,7 @@ function containsValue(value: unknown, operand: unknown): boolean {
 		const expected = Array.isArray(operand) ? operand : [operand];
 		return expected.every((candidate) => value.some((item) => valuesEqual(item, candidate)));
 	}
-	return isPlainRecord(value) && isPlainRecord(operand)
-		? valuesEqual(value, operand)
-		: false;
+	return isPlainRecord(value) && isPlainRecord(operand) ? valuesEqual(value, operand) : false;
 }
 
 function dateRange(value: unknown): { start: string; end: string } | null {
@@ -289,8 +287,7 @@ export function collectionTableRowMatchesWhere(
 			if (
 				!related.some(
 					(candidate) =>
-						isPlainRecord(candidate) &&
-						collectionTableRowMatchesWhere(candidate, condition)
+						isPlainRecord(candidate) && collectionTableRowMatchesWhere(candidate, condition)
 				)
 			) {
 				return false;

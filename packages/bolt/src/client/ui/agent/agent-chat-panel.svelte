@@ -16,7 +16,13 @@
 		updateAgentVerifier
 	} from './client.js';
 	import { getPlatformStateContext } from '../state/platform.js';
-	import { toPanelMessages, toPanelUsage, toSessionTotals, withPendingEcho } from './transcript.js';
+	import {
+		formatSessionCost,
+		toPanelMessages,
+		toPanelUsage,
+		toSessionTotals,
+		withPendingEcho
+	} from './transcript.js';
 	import AgentModelPicker from './agent-model-picker.svelte';
 	import { getAgentModelState, loadAgentModelCatalog } from './agent-model-state.svelte.js';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
@@ -373,8 +379,13 @@
 	const usersQuery = $derived.by(() => {
 		if (!isAdmin) return undefined;
 		try {
-			return getInitializedWorkspaceClient().db.user?.findMany({
-				where: { kind: 'human' },
+			// `bolt_auth_user` is the only description of a person the runtime has, and the system read
+			// grant masks it down to `norbital_id` and `name` — which is exactly what a picker needs.
+			// `kind` distinguishes a person from a host provisioner's service row and defaults to
+			// `'person'`; the operand has to be an operator object, because a bare value fails the
+			// where compiler and takes the whole query with it.
+			return getInitializedWorkspaceClient().db.bolt_auth_user.findMany({
+				where: { kind: { eq: 'person' } },
 				orderBy: { name: 'asc' },
 				limit: 500
 			});
@@ -386,12 +397,10 @@
 		const labels = new SvelteMap<string, string>();
 		for (const row of usersQuery?.current ?? []) {
 			if (typeof row.norbital_id !== 'string') continue;
+			// Name or nothing: the read grant's field mask is `['norbital_id', 'name']`, so an address
+			// is not merely unselected here — it cannot be read through this grant at all.
 			const label =
-				typeof row.name === 'string' && row.name.trim()
-					? row.name
-					: typeof row.email === 'string'
-						? row.email
-						: t('bolt.agent.unknownMember');
+				typeof row.name === 'string' && row.name.trim() ? row.name : t('bolt.agent.unknownMember');
 			labels.set(row.norbital_id, label);
 		}
 		return labels;
@@ -582,13 +591,7 @@
 			? t('bolt.agent.tokens', { count: totals.totalTokens.toLocaleString() })
 			: null
 	);
-	// A turn whose host reported no cost makes the total a floor. Saying so costs one character and
-	// stops an unmeasured conversation reading as a cheap one.
-	const costLabel = $derived(
-		totals && (totals.costUsd > 0 || totals.turnsUnreported < totals.turnsCounted)
-			? `${totals.turnsUnreported > 0 ? '≥' : ''}$${totals.costUsd.toFixed(4)}`
-			: null
-	);
+	const costLabel = $derived(formatSessionCost(totals));
 	const costHint = $derived(
 		totals && totals.turnsUnreported > 0
 			? t('bolt.agent.turnsUnreportedCost', {
@@ -608,19 +611,17 @@
 		const lastAsk = messages.findLastIndex(
 			(message) => message.kind === 'text' && message.role === 'user'
 		);
-		return messages
-			.slice(lastAsk + 1)
-			.some(
-				(message) =>
-					message.kind === 'tool' ||
-					message.kind === 'checkpoint' ||
-					message.kind === 'reasoning' ||
-					message.kind === 'goal' ||
-					message.kind === 'verifier' ||
-					// A message it sent is the agent doing something; one it received is not.
-					(message.kind === 'agent-message' && message.direction === 'out') ||
-					(message.kind === 'text' && message.role === 'assistant')
-			);
+		return messages.slice(lastAsk + 1).some(
+			(message) =>
+				message.kind === 'tool' ||
+				message.kind === 'checkpoint' ||
+				message.kind === 'reasoning' ||
+				message.kind === 'goal' ||
+				message.kind === 'verifier' ||
+				// A message it sent is the agent doing something; one it received is not.
+				(message.kind === 'agent-message' && message.direction === 'out') ||
+				(message.kind === 'text' && message.role === 'assistant')
+		);
 	});
 
 	/** One timer for the in-flight turn. An inline `{@attach}` restarted it on every transcript tick. */

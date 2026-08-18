@@ -33,7 +33,14 @@ import {
 } from '../../src/authoring/workspace-schema.js';
 import { buildSchemaPlan, collectionIndexName } from '../../src/compiler/schema-plan.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
-import { boolean, doublePrecision, jsonb, timestamp, uuid as uuidColumn, type AnyPgColumnBuilder } from 'drizzle-orm/pg-core';
+import {
+	boolean,
+	doublePrecision,
+	jsonb,
+	timestamp,
+	uuid as uuidColumn,
+	type AnyPgColumnBuilder
+} from 'drizzle-orm/pg-core';
 import { text as authoredText } from '../../src/authoring/index.js';
 
 /**
@@ -135,8 +142,12 @@ import { WorkspaceSchema } from '../../src/runtime/schema/workspace-schema.js';
 import { Approvals } from '../../src/runtime/approvals/approvals.js';
 import { Collections } from '../../src/runtime/collections/collections.js';
 import { SyncWake } from '../../src/runtime/sync/wake.js';
-import { AuthoredRuntimeService, emptyAuthoredRuntime, type AuthoredRuntime } from '../../src/runtime/collections/authored.js';
-import { Database } from '../../src/runtime/facilities/database.js';
+import {
+	AuthoredRuntimeService,
+	emptyAuthoredRuntime,
+	type AuthoredRuntime
+} from '../../src/runtime/collections/authored.js';
+import { Database, type CallContext } from '../../src/runtime/facilities/database.js';
 import {
 	AI,
 	Communication,
@@ -164,10 +175,43 @@ import { Workspace } from '../../src/runtime/workspace.js';
  * rather than something that needs a container.
  */
 
-const context = {
+/**
+ * The environment every test invocation is scoped to unless one asks for another.
+ *
+ * A host scopes each invocation to a named environment, and the runtime reads that name rather than
+ * any ambient variable to decide anything mode-dependent — today, whether a sign-in code is the
+ * fixed development one or random. The harness is neither somebody's laptop nor a deployment, so it
+ * says `test`: anything that is not exactly `development` takes the ordinary path, which is the one
+ * a deployed workspace runs, so no test can pick up development behaviour by accident. A test that
+ * wants the development path has to name it, which `testCallContext` lets it do.
+ */
+export const TEST_ENVIRONMENT = 'test';
+
+const context: CallContext = {
 	invocationId: InvocationId.make('test-invocation'),
-	deadlineEpochMs: Number.MAX_SAFE_INTEGER
+	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
+	environment: TEST_ENVIRONMENT
 };
+
+/**
+ * A call context for a test that wires one facility layer directly rather than the whole harness.
+ *
+ * `Database.layer`, `Transport.layer` and the rest all take one, so a test checking a single
+ * facility builds it by hand and otherwise has no reason to know what a call context contains. One
+ * factory keeps that knowledge in a single place: when the context grows a field, these call sites
+ * inherit a sound value instead of each inventing one.
+ */
+export const testCallContext = (
+	invocationId: string,
+	options: {
+		readonly deadlineEpochMs?: number;
+		readonly environment?: string;
+	} = {}
+): CallContext => ({
+	invocationId: InvocationId.make(invocationId),
+	deadlineEpochMs: options.deadlineEpochMs ?? Date.now() + 10_000,
+	environment: options.environment ?? TEST_ENVIRONMENT
+});
 
 /**
  * The vault key every test runtime is built with unless one asks otherwise.
@@ -355,7 +399,8 @@ export const makeBoltTestRuntime = async (
 			{ _tag: 'Query', sql, parameters: [] },
 			new AbortController().signal
 		);
-		if (result._tag !== 'Success') throw new Error(`migration ${id} failed: ${JSON.stringify(result)}`);
+		if (result._tag !== 'Success')
+			throw new Error(`migration ${id} failed: ${JSON.stringify(result)}`);
 	};
 	for (const step of await provisioningStatements(definition)) await run(step.id, step.sql);
 	const migration = await Effect.runPromise(
@@ -409,7 +454,10 @@ export const makeBoltTestRuntime = async (
 		Transport.layer(bindings.transport, context)
 	);
 	const workspaceLayer = Workspace.layer(provisioned);
-	const authoredLayer = Layer.succeed(AuthoredRuntimeService, bindings.authored ?? emptyAuthoredRuntime);
+	const authoredLayer = Layer.succeed(
+		AuthoredRuntimeService,
+		bindings.authored ?? emptyAuthoredRuntime
+	);
 	const foundation = Layer.provideMerge(
 		Layer.mergeAll(Identity.layer, AccessControl.layer),
 		Layer.merge(workspaceLayer, facilities)
@@ -440,12 +488,17 @@ export const makeBoltTestRuntime = async (
 		Layer.provide(
 			ConfigProvider.layer(
 				ConfigProvider.fromEnvRecord(
-					bindings.secretKey === null ? {} : { [SECRET_KEY_VARIABLE]: bindings.secretKey ?? TEST_SECRET_KEY }
+					bindings.secretKey === null
+						? {}
+						: { [SECRET_KEY_VARIABLE]: bindings.secretKey ?? TEST_SECRET_KEY }
 				)
 			)
 		)
 	);
-	const vault = Layer.provideMerge(Layer.merge(Secrets.layer, PersonalSecrets.layer), Layer.merge(agents, cipher));
+	const vault = Layer.provideMerge(
+		Layer.merge(Secrets.layer, PersonalSecrets.layer),
+		Layer.merge(agents, cipher)
+	);
 	const surfaces = Layer.provideMerge(
 		Layer.mergeAll(
 			Automations.layer,

@@ -124,7 +124,10 @@ export const appAccessAllowed = (
  * when nothing declared the link. The walk is bounded and refuses to revisit a name, so a workspace
  * that manages to declare a cycle produces a short chain instead of hanging the sidebar.
  */
-const containersOf = (app: ShellApp, byName: ReadonlyMap<string, ShellApp>): ReadonlyArray<string> => {
+const containersOf = (
+	app: ShellApp,
+	byName: ReadonlyMap<string, ShellApp>
+): ReadonlyArray<string> => {
 	const chain: string[] = [];
 	let cursor: ShellApp | undefined = app;
 	while (cursor !== undefined && chain.length < 16) {
@@ -201,7 +204,11 @@ const toApplicationItem = (
 	const href = landing?.href ?? `/app/${app.name}`;
 	return {
 		key: app.name,
-		label: resolveNavigationLabel(input.i18n, app.name, app.label || NavigationText.humanize(app.name)),
+		label: resolveNavigationLabel(
+			input.i18n,
+			app.name,
+			app.label || NavigationText.humanize(app.name)
+		),
 		icon: app.icon ?? 'lucide:layout-grid',
 		href,
 		active: isUnder(input.currentPath, href) || children.some((child) => child.active === true),
@@ -237,7 +244,9 @@ export const buildApplicationNavigation = (input: {
 	}
 	return declared
 		.filter((app) => app.parent === undefined || !names.has(app.parent))
-		.map((app) => toApplicationItem(app, { currentPath: input.currentPath, i18n: input.i18n, childrenOf }));
+		.map((app) =>
+			toApplicationItem(app, { currentPath: input.currentPath, i18n: input.i18n, childrenOf })
+		);
 };
 
 export const buildSystemNavigation = (input: {

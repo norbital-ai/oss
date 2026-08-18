@@ -285,10 +285,11 @@ export type DateRange = Schema.Schema.Type<typeof dateRangeValueSchema>;
  * emitted `.d.ts` for the whole module silently disappeared over exactly that. The annotation is
  * `ReturnType` of the adapter's own instantiation, so the type is effect's and never restated.
  */
-export const dateRangeSchema: ReturnType<typeof Schema.toStandardSchemaV1<typeof dateRangeValueSchema>> =
-	Schema.toStandardSchemaV1(dateRangeValueSchema, {
-		parseOptions: { onExcessProperty: 'error' }
-	});
+export const dateRangeSchema: ReturnType<
+	typeof Schema.toStandardSchemaV1<typeof dateRangeValueSchema>
+> = Schema.toStandardSchemaV1(dateRangeValueSchema, {
+	parseOptions: { onExcessProperty: 'error' }
+});
 
 export interface CustomTypeDefinition<
 	Name extends string,
@@ -299,7 +300,10 @@ export interface CustomTypeDefinition<
 	readonly schema: S;
 }
 export type CustomTypeResolvedSchema<
-	D extends CustomTypeDefinition<string, Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)>
+	D extends CustomTypeDefinition<
+		string,
+		Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
+	>
 > = D['schema'] extends (...arguments_: never[]) => infer S
 	? S extends Schema.Codec<unknown, unknown>
 		? S
@@ -311,13 +315,19 @@ export type CustomTypeResolvedSchema<
  * branch could only ever have matched a library nothing here uses.
  */
 export type CustomTypeOutput<
-	D extends CustomTypeDefinition<string, Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)>
+	D extends CustomTypeDefinition<
+		string,
+		Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
+	>
 > =
 	CustomTypeResolvedSchema<D> extends Schema.Codec<unknown, unknown>
 		? Schema.Schema.Type<CustomTypeResolvedSchema<D>>
 		: never;
 export type CustomTypeFactoryOptions<
-	D extends CustomTypeDefinition<string, Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)>
+	D extends CustomTypeDefinition<
+		string,
+		Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
+	>
 > = D['schema'] extends (options: infer O) => Schema.Codec<unknown, unknown> ? O : never;
 
 const relationshipDelete = Symbol.for('@norbital-ai/bolt/relationship-on-delete');
@@ -333,7 +343,8 @@ const relationshipDelete = Symbol.for('@norbital-ai/bolt/relationship-on-delete'
 const CustomTypeAuthoring = {
 	define: <
 		const Name extends string,
-		const S extends Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
+		const S extends
+			Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
 	>(
 		definition: CustomTypeDefinition<Name, S>
 	): CustomTypeDefinition<Name, S> => {

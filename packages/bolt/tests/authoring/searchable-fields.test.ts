@@ -108,8 +108,8 @@ describe('searchable field opt-in', () => {
 	it('indexes exactly the columns the shared predicate calls searchable', async () => {
 		const source = [
 			'export default defineModel({',
-			"\ttitle: text({ search: true }).notNull(),",
-			"\thotline: phone({ search: true }),",
+			'\ttitle: text({ search: true }).notNull(),',
+			'\thotline: phone({ search: true }),',
 			"\tstatus: enums(['active', 'draft'], { search: true }),",
 			'\tsummary: text(),',
 			'\tcontact: phone()',

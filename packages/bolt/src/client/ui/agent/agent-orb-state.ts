@@ -12,9 +12,7 @@ import { toPanelMessages } from './transcript.js';
 export type AgentOrbState = 'ready' | 'working' | 'error';
 
 export type AgentOrbStatusKey =
-	| 'bolt.shell.workspaceAgentDescription'
-	| 'bolt.agent.working'
-	| 'bolt.agent.failed';
+	'bolt.shell.workspaceAgentDescription' | 'bolt.agent.working' | 'bolt.agent.failed';
 
 /** A running turn with no agent output for this long is treated as failed so the composer unlocks. */
 export const AGENT_TURN_STALE_MS = 60_000;
@@ -68,8 +66,7 @@ export function agentOrbState(input: {
 	const projected = toPanelMessages(messages, turns);
 	const activeTool = projected.some(
 		(message) =>
-			(message.kind === 'tool' || message.kind === 'agent-message') &&
-			message.state === 'running'
+			(message.kind === 'tool' || message.kind === 'agent-message') && message.state === 'running'
 	);
 	return activeTool ? 'working' : 'ready';
 }

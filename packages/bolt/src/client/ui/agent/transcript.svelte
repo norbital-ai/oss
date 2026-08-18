@@ -25,7 +25,13 @@
 		<ol>
 			{#each messages as message (message.id)}
 				<li data-role={message.role}>
-					<strong>{message.role === 'assistant' ? 'Agent' : message.role === 'tool' ? 'Tool' : 'You'}</strong>
+					<strong
+						>{message.role === 'assistant'
+							? 'Agent'
+							: message.role === 'tool'
+								? 'Tool'
+								: 'You'}</strong
+					>
 					<p>{message.content}</p>
 				</li>
 			{/each}
@@ -34,9 +40,29 @@
 </section>
 
 <style>
-	ol { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
-	li { max-width: 48rem; padding: .75rem; border: 1px solid currentColor; border-radius: .5rem; }
-	li[data-role='user'] { margin-inline-start: auto; }
-	li p, .empty p { margin-block: .25rem 0; white-space: pre-wrap; }
-	.empty { padding: 2rem; text-align: center; }
+	ol {
+		display: grid;
+		gap: 0.75rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	li {
+		max-width: 48rem;
+		padding: 0.75rem;
+		border: 1px solid currentColor;
+		border-radius: 0.5rem;
+	}
+	li[data-role='user'] {
+		margin-inline-start: auto;
+	}
+	li p,
+	.empty p {
+		margin-block: 0.25rem 0;
+		white-space: pre-wrap;
+	}
+	.empty {
+		padding: 2rem;
+		text-align: center;
+	}
 </style>

@@ -1,6 +1,9 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { makeAuthoringApi, type AuthoredCollectionOps } from '../../src/runtime/collections/authored.js';
+import {
+	makeAuthoringApi,
+	type AuthoredCollectionOps
+} from '../../src/runtime/collections/authored.js';
 
 /**
  * A collection is reached one way: as a property. `db.query.<name>.findMany`, `db.<name>.create`,

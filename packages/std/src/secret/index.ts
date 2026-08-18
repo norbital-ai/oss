@@ -174,13 +174,17 @@ type KeyMaterial =
 const BASE64_KEY = /^[A-Za-z0-9+/_-]{43}=?$/;
 
 const resolveKey = (configured: Option.Option<Redacted.Redacted<string>>): KeyMaterial => {
-	if (Option.isNone(configured)) return { _tag: 'Unavailable', reason: `${SECRET_KEY_VARIABLE} is not set` };
+	if (Option.isNone(configured))
+		return { _tag: 'Unavailable', reason: `${SECRET_KEY_VARIABLE} is not set` };
 	const text = Redacted.value(configured.value).trim();
 	if (!BASE64_KEY.test(text))
 		return { _tag: 'Unavailable', reason: `${SECRET_KEY_VARIABLE} is not 32 bytes of base64` };
 	const bytes = Buffer.from(text, 'base64url');
 	if (bytes.length !== KEY_BYTES)
-		return { _tag: 'Unavailable', reason: `${SECRET_KEY_VARIABLE} decodes to ${bytes.length} bytes, and AES-256 needs ${KEY_BYTES}` };
+		return {
+			_tag: 'Unavailable',
+			reason: `${SECRET_KEY_VARIABLE} decodes to ${bytes.length} bytes, and AES-256 needs ${KEY_BYTES}`
+		};
 	return { _tag: 'Key', key: Redacted.make(Uint8Array.from(bytes)) };
 };
 
@@ -205,14 +209,27 @@ type Opened =
 const open = (key: Uint8Array, binding: string, stored: string): Opened => {
 	const parts = stored.split('.');
 	const [version, nonce, ciphertext, tag] = parts;
-	if (parts.length !== 4 || version !== VERSION || nonce === undefined || ciphertext === undefined || tag === undefined)
+	if (
+		parts.length !== 4 ||
+		version !== VERSION ||
+		nonce === undefined ||
+		ciphertext === undefined ||
+		tag === undefined
+	)
 		// The plaintext case lands here, and saying so is the point: a value with no envelope was written
 		// before this vault encrypted anything, and no key will ever open it.
-		return { _tag: 'Rejected', reason: `it is not a ${VERSION} envelope, so it was stored before this vault encrypted anything and predates the key` };
+		return {
+			_tag: 'Rejected',
+			reason: `it is not a ${VERSION} envelope, so it was stored before this vault encrypted anything and predates the key`
+		};
 	const nonceBytes = Buffer.from(nonce, 'base64url');
 	const tagBytes = Buffer.from(tag, 'base64url');
 	if (nonceBytes.length !== NONCE_BYTES || tagBytes.length !== TAG_BYTES)
-		return { _tag: 'Rejected', reason: 'its nonce or authentication tag is the wrong size, so the stored value has been altered' };
+		return {
+			_tag: 'Rejected',
+			reason:
+				'its nonce or authentication tag is the wrong size, so the stored value has been altered'
+		};
 	try {
 		const decipher = createDecipheriv('aes-256-gcm', key, nonceBytes);
 		decipher.setAAD(Buffer.from(binding, 'utf8'));
@@ -227,7 +244,8 @@ const open = (key: Uint8Array, binding: string, stored: string): Opened => {
 	} catch {
 		return {
 			_tag: 'Rejected',
-			reason: 'it failed its authentication tag, so it was altered, was written under a different key, or belongs to a different row'
+			reason:
+				'it failed its authentication tag, so it was altered, was written under a different key, or belongs to a different row'
 		};
 	}
 };
@@ -247,7 +265,10 @@ export const layer = Layer.effect(
 		 */
 		const material = yield* Config.option(Config.redacted(SECRET_KEY_VARIABLE)).pipe(
 			Effect.match({
-				onFailure: (): KeyMaterial => ({ _tag: 'Unavailable', reason: `${SECRET_KEY_VARIABLE} could not be read from configuration` }),
+				onFailure: (): KeyMaterial => ({
+					_tag: 'Unavailable',
+					reason: `${SECRET_KEY_VARIABLE} could not be read from configuration`
+				}),
 				onSuccess: resolveKey
 			})
 		);
@@ -268,9 +289,13 @@ export const layer = Layer.effect(
 			stored: string
 		) {
 			if (material._tag === 'Unavailable')
-				return yield* new SecretKeyUnavailable({ operation: `reading ${name}`, reason: material.reason });
+				return yield* new SecretKeyUnavailable({
+					operation: `reading ${name}`,
+					reason: material.reason
+				});
 			const opened = open(Redacted.value(material.key), binding, stored);
-			if (opened._tag === 'Rejected') return yield* new SecretUnreadable({ name, reason: opened.reason });
+			if (opened._tag === 'Rejected')
+				return yield* new SecretUnreadable({ name, reason: opened.reason });
 			return opened.value;
 		});
 

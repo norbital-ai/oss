@@ -52,7 +52,13 @@ describe('Channels, Integrations, and Notifications owners', () => {
 				webhooks: [],
 				send: [],
 				receive: [
-					{ name: 'customers', schedule: '0 * * * *', method: 'GET', path: '/customers', identityColumn: '  ' }
+					{
+						name: 'customers',
+						schedule: '0 * * * *',
+						method: 'GET',
+						path: '/customers',
+						identityColumn: '  '
+					}
 				]
 			})
 		).toThrow(/identity column/));

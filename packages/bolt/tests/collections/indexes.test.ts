@@ -88,7 +88,9 @@ describe('declared collection indexes', () => {
 	 */
 	it('creates the same index in the migration lineage, under the same name', async () => {
 		const models = { work_items: defineModel({ zeta: text().unique(), ignored: text() }) };
-		const migration = await Effect.runPromise(planWorkspaceMigration({ models, relations: [], previous: undefined }));
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({ models, relations: [], previous: undefined })
+		);
 
 		expect(describeModel(models.work_items).zeta?.indexed).toBe(true);
 		expect(
@@ -106,12 +108,16 @@ describe('declared collection indexes', () => {
 	/** A second `bolt migrate` over an unchanged model must propose nothing, not the index again. */
 	it('converges: re-diffing an unchanged model proposes no further index', async () => {
 		const models = { work_items: defineModel({ zeta: text().unique(), ignored: text() }) };
-		const first = await Effect.runPromise(planWorkspaceMigration({ models, relations: [], previous: undefined }));
+		const first = await Effect.runPromise(
+			planWorkspaceMigration({ models, relations: [], previous: undefined })
+		);
 		if (first === undefined)
 			throw new Error('a schema built from nothing must produce a migration');
 
 		expect(
-			await Effect.runPromise(planWorkspaceMigration({ models, relations: [], previous: first.snapshot }))
+			await Effect.runPromise(
+				planWorkspaceMigration({ models, relations: [], previous: first.snapshot })
+			)
 		).toBeUndefined();
 	});
 });

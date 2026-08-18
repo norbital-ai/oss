@@ -1,4 +1,8 @@
-import type { FieldDefinition, RelationDefinition, ScalarType } from '../authoring/workspace-schema.js';
+import type {
+	FieldDefinition,
+	RelationDefinition,
+	ScalarType
+} from '../authoring/workspace-schema.js';
 
 const builderTypes: Readonly<Record<string, ScalarType>> = {
 	// No `uuid` entry, deliberately. A builder name is all this can see, and `uuid()` and
@@ -22,7 +26,8 @@ const builderTypes: Readonly<Record<string, ScalarType>> = {
 };
 
 const fieldPattern = /^\s*([A-Za-z_][A-Za-z0-9_]*):\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/gm;
-const collectionBlockPattern = /^(?:\t|  )([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{([\s\S]*?)^(?:\t|  )\}/gm;
+const collectionBlockPattern =
+	/^(?:\t|  )([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{([\s\S]*?)^(?:\t|  )\}/gm;
 const relationCallPattern =
 	/([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(cascade\(\s*)?r\.(one|many)\.([A-Za-z_][A-Za-z0-9_]*)\(((?:\{[\s\S]*?\})?)\)/g;
 const relationEndpointsPattern =
@@ -39,10 +44,18 @@ const relationEndpointsPattern =
  * The boundary is now the next match of the very pattern that defines a field, so a window cannot
  * disagree with what this module counts as a field.
  */
-const fieldWindows = (source: string): ReadonlyArray<{ readonly name: string; readonly builder: string; readonly window: string }> => {
+const fieldWindows = (
+	source: string
+): ReadonlyArray<{ readonly name: string; readonly builder: string; readonly window: string }> => {
 	const matches = [...source.matchAll(fieldPattern)].filter((match) => {
 		const name = match[1];
-		return name !== undefined && match[2] !== undefined && name !== 'import' && name !== 'export' && name !== 'from';
+		return (
+			name !== undefined &&
+			match[2] !== undefined &&
+			name !== 'import' &&
+			name !== 'export' &&
+			name !== 'from'
+		);
 	});
 	return matches.map((match, index) => ({
 		name: match[1] as string,
@@ -130,7 +143,9 @@ const enumValues = (window: string): ReadonlyArray<string> | undefined => {
 	const match = window.match(/enums\(\[([^\]]*)\]/);
 	const body = match?.[1];
 	if (body === undefined) return undefined;
-	const values = [...body.matchAll(/'([^']+)'/g)].map((entry) => entry[1]).filter((value): value is string => value !== undefined);
+	const values = [...body.matchAll(/'([^']+)'/g)]
+		.map((entry) => entry[1])
+		.filter((value): value is string => value !== undefined);
 	return values.length === 0 ? undefined : values;
 };
 
@@ -157,13 +172,15 @@ const recordLabel = (source: string): string | undefined => {
 	const declaration = source.match(/recordLabel:\s*(\[[^\]]*\]|['"][^'"]+['"])/)?.[1];
 	if (declaration === undefined) return undefined;
 	if (!declaration.startsWith('[')) return declaration.slice(1, -1);
-	const columns = [...declaration.matchAll(/['"]([^'"]+)['"]/g)].map((match) => match[1]).filter((column): column is string => column !== undefined);
+	const columns = [...declaration.matchAll(/['"]([^'"]+)['"]/g)]
+		.map((match) => match[1])
+		.filter((column): column is string => column !== undefined);
 	return columns.length === 0 ? undefined : columns.join(LABEL_TERM_JOIN);
 };
 
-
 /** Reads the type name out of `custom('leave_event')`. */
-const customTypeName = (window: string): string | undefined => window.match(/custom\(\s*'([^']+)'/)?.[1];
+const customTypeName = (window: string): string | undefined =>
+	window.match(/custom\(\s*'([^']+)'/)?.[1];
 
 /** CollectionTable metadata: field kinds, search opt-in, and relations from `+relationship.ts`. */
 export const extractCollectionCatalog = (
@@ -182,7 +199,10 @@ export const extractCollectionCatalog = (
 			// A `custom()` column is keyed by the type it declares, not by the word "custom": the renderer
 			// registry resolves by kind, and every custom column sharing one kind would mean every one
 			// of them rendering through whichever renderer happened to register last.
-			kind: builder === 'custom' ? (customTypeName(window) ?? 'custom') : (catalogKinds[builder] ?? 'text'),
+			kind:
+				builder === 'custom'
+					? (customTypeName(window) ?? 'custom')
+					: (catalogKinds[builder] ?? 'text'),
 			nullable: !window.includes('.notNull()'),
 			// Safe only because a field's window now ends at the next field: while the boundary ran
 			// past comments, this read `.generatedAlwaysAs(` from a later declaration and marked
@@ -192,7 +212,13 @@ export const extractCollectionCatalog = (
 			...(values === undefined ? {} : { values }),
 			...(relation === undefined
 				? {}
-				: { relation: { name: relation.name, target: relation.target, cardinality: relation.cardinality } })
+				: {
+						relation: {
+							name: relation.name,
+							target: relation.target,
+							cardinality: relation.cardinality
+						}
+					})
 		});
 	}
 	const label = recordLabel(source);
@@ -202,7 +228,11 @@ export const extractCollectionCatalog = (
 		fields,
 		relationships: relations
 			.filter((relation) => relation.source === name)
-			.map((relation) => ({ name: relation.name, target: relation.target, cardinality: relation.cardinality }))
+			.map((relation) => ({
+				name: relation.name,
+				target: relation.target,
+				cardinality: relation.cardinality
+			}))
 	};
 };
 
@@ -220,8 +250,16 @@ export const extractRelationships = (source: string): ReadonlyArray<RelationDefi
 			const cascaded = call[2] !== undefined;
 			const cardinality = call[3];
 			const target = call[4];
-			const endpoints = call[5] === undefined || call[5] === '' ? undefined : call[5].match(relationEndpointsPattern);
-			if (name === undefined || (cardinality !== 'one' && cardinality !== 'many') || target === undefined) continue;
+			const endpoints =
+				call[5] === undefined || call[5] === ''
+					? undefined
+					: call[5].match(relationEndpointsPattern);
+			if (
+				name === undefined ||
+				(cardinality !== 'one' && cardinality !== 'many') ||
+				target === undefined
+			)
+				continue;
 			const fromCollection = endpoints?.[1];
 			const fromColumn = endpoints?.[2];
 			const toCollection = endpoints?.[3];

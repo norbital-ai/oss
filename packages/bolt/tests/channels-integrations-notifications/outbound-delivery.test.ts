@@ -36,7 +36,12 @@ import type { Identity } from '../../src/runtime/identity/identity.js';
 import { makeHttpConnectorBinding } from '../../src/runtime/integrations/http-connector.js';
 import { Integrations } from '../../src/runtime/integrations/integrations.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
-import { adminSubject, makeBoltTestRuntime, recordId, type BoltTestRuntime } from '../support/bolt-test-layer.js';
+import {
+	adminSubject,
+	makeBoltTestRuntime,
+	recordId,
+	type BoltTestRuntime
+} from '../support/bolt-test-layer.js';
 
 /**
  * Outbound delivery, against a real HTTP server on a real socket.
@@ -71,7 +76,11 @@ type Recorded = Readonly<{
 	readonly body: string;
 }>;
 
-type Answer = Readonly<{ readonly status: number; readonly headers?: Readonly<Record<string, string>>; readonly body?: string }>;
+type Answer = Readonly<{
+	readonly status: number;
+	readonly headers?: Readonly<Record<string, string>>;
+	readonly body?: string;
+}>;
 
 /** What the server answers next, swapped per test. Defaults to a plain 202. */
 let respond: (received: Recorded, index: number) => Answer = () => ({ status: 202 });
@@ -94,16 +103,25 @@ beforeAll(async () => {
 					typeof value === 'string' ? [[name.toLowerCase(), value] as const] : []
 				)
 			);
-			const entry: Recorded = { method: request.method ?? '', path: request.url ?? '', headers, body };
+			const entry: Recorded = {
+				method: request.method ?? '',
+				path: request.url ?? '',
+				headers,
+				body
+			};
 			received.push(entry);
 			const answer = respond(entry, received.length - 1);
-			response.writeHead(answer.status, { 'content-type': 'application/json', ...(answer.headers ?? {}) });
+			response.writeHead(answer.status, {
+				'content-type': 'application/json',
+				...(answer.headers ?? {})
+			});
 			response.end(answer.body ?? '{}');
 		})();
 	});
 	await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
 	const address = server.address();
-	if (address === null || typeof address === 'string') throw new Error('the test server did not bind a port');
+	if (address === null || typeof address === 'string')
+		throw new Error('the test server did not bind a port');
 	origin = `http://localhost:${(address as AddressInfo).port}`;
 });
 
@@ -146,7 +164,11 @@ const ordersModule = (baseUrl: string) => ({
 					update: ({ previous, record }) => previous.status !== record.status,
 					delete: () => true
 				},
-				body: ({ operation, record }) => ({ kind: operation, order: record.external_id, status: record.status })
+				body: ({ operation, record }) => ({
+					kind: operation,
+					order: record.external_id,
+					status: record.status
+				})
 			})
 		}
 	}
@@ -196,7 +218,9 @@ const definitionFor = (integrations: WorkspaceDefinition['integrations']): Works
 			})
 		],
 		apps: [],
-		policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })],
+		policies: [
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+		],
 		agents: [],
 		automations: [],
 		channels: [],
@@ -229,7 +253,12 @@ const build = async (
 	if (options.token !== null) {
 		await harness.runtime.runPromise(
 			Effect.flatMap(Secrets.Service, (secrets) =>
-				secrets.write(EffectId.make('vault'), 'PARTNER_TOKEN', options.token ?? 'partner-token-fixture', 'proof')
+				secrets.write(
+					EffectId.make('vault'),
+					'PARTNER_TOKEN',
+					options.token ?? 'partner-token-fixture',
+					'proof'
+				)
 			)
 		);
 	}
@@ -242,17 +271,29 @@ afterEach(async () => {
 	respond = () => ({ status: 202 });
 });
 
-const create = (name: string, values: Readonly<Record<string, Schema.Json>>, subject: Identity.Subject = adminSubject) =>
+const create = (
+	name: string,
+	values: Readonly<Record<string, Schema.Json>>,
+	subject: Identity.Subject = adminSubject
+) =>
 	current().runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.create(EffectId.make(`create:${name}`), subject, { collection: 'orders', id: recordId(name), values })
+			collections.create(EffectId.make(`create:${name}`), subject, {
+				collection: 'orders',
+				id: recordId(name),
+				values
+			})
 		)
 	);
 
 const update = (name: string, run: string, values: Readonly<Record<string, Schema.Json>>) =>
 	current().runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.update(EffectId.make(`update:${run}`), adminSubject, { collection: 'orders', id: recordId(name), values })
+			collections.update(EffectId.make(`update:${run}`), adminSubject, {
+				collection: 'orders',
+				id: recordId(name),
+				values
+			})
 		)
 	);
 
@@ -265,17 +306,23 @@ const remove = (name: string, run: string) =>
 
 const flush = (run: string, input: Schema.Json = null) =>
 	current().runtime.runPromise(
-		Effect.flatMap(Integrations.Service, (integrations) => integrations.flush(EffectId.make(`flush:${run}`), 'orders.partner', input))
+		Effect.flatMap(Integrations.Service, (integrations) =>
+			integrations.flush(EffectId.make(`flush:${run}`), 'orders.partner', input)
+		)
 	);
 
 const status = (run: string) =>
 	current().runtime.runPromise(
-		Effect.flatMap(Integrations.Service, (integrations) => integrations.status(EffectId.make(`status:${run}`), 'orders.partner'))
+		Effect.flatMap(Integrations.Service, (integrations) =>
+			integrations.status(EffectId.make(`status:${run}`), 'orders.partner')
+		)
 	);
 
 /** The report crosses as `Schema.Json`, so it is read the way a host would have to read it. */
 const at = (value: Schema.Json, key: string): unknown =>
-	value === null || typeof value !== 'object' || Array.isArray(value) ? undefined : Reflect.get(value, key);
+	value === null || typeof value !== 'object' || Array.isArray(value)
+		? undefined
+		: Reflect.get(value, key);
 
 const outbox = async (): Promise<ReadonlyArray<Record<string, unknown>>> =>
 	current().database.query(
@@ -285,7 +332,10 @@ const outbox = async (): Promise<ReadonlyArray<Record<string, unknown>>> =>
 
 /** Makes every pending delivery due now, standing in for the wall clock a cron would have waited on. */
 const advancePastBackoff = async (): Promise<void> => {
-	await current().database.query("update bolt_integration_outbox set next_attempt_at = now() - interval '1 second' where status = 'pending'", []);
+	await current().database.query(
+		"update bolt_integration_outbox set next_attempt_at = now() - interval '1 second' where status = 'pending'",
+		[]
+	);
 };
 
 /* -------------------------------------------------------------------------------------------------
@@ -329,8 +379,12 @@ describe('an outbound declaration that cannot deliver is refused at compile time
 	});
 
 	it('refuses a send binding with no path and one that subscribes to nothing', () => {
-		expect(() => defineSend<Order>({ send: { method: 'POST', path: '  ' }, on: 'create' })).toThrow(/requires a path/);
-		expect(() => defineSend<Order>({ send: { method: 'POST', path: '/orders' }, on: {} })).toThrow(/subscribes to no collection event/);
+		expect(() => defineSend<Order>({ send: { method: 'POST', path: '  ' }, on: 'create' })).toThrow(
+			/requires a path/
+		);
+		expect(() => defineSend<Order>({ send: { method: 'POST', path: '/orders' }, on: {} })).toThrow(
+			/subscribes to no collection event/
+		);
 	});
 });
 
@@ -393,12 +447,16 @@ describe('a write queues a delivery and does not wait for it', () => {
 	 */
 	it('does not queue a delivery for the integration is own write', async () => {
 		await build(ordersModule);
-		await create('order-mirror', { external_id: 'A-M', status: 'placed', amount: 2 }, {
-			userId: 'integration:orders.partner',
-			tenantId: 'system',
-			roles: ['admin'],
-			teams: []
-		});
+		await create(
+			'order-mirror',
+			{ external_id: 'A-M', status: 'placed', amount: 2 },
+			{
+				userId: 'integration:orders.partner',
+				tenantId: 'system',
+				roles: ['admin'],
+				teams: []
+			}
+		);
 		expect(await outbox()).toEqual([]);
 	});
 });
@@ -430,7 +488,11 @@ describe('a queued delivery reaches a real endpoint', () => {
 		expect(sent?.headers['authorization']).toBe('Bearer partner-token-fixture');
 		expect(sent?.headers['x-partner-channel']).toBe('bolt');
 		expect(sent?.headers['content-type']).toBe('application/json');
-		expect(JSON.parse(sent?.body ?? 'null')).toEqual({ kind: 'create', order: 'A-3', status: 'placed' });
+		expect(JSON.parse(sent?.body ?? 'null')).toEqual({
+			kind: 'create',
+			order: 'A-3',
+			status: 'placed'
+		});
 		const rows = await outbox();
 		expect(rows[0]?.['status']).toBe('delivered');
 		expect(rows[0]?.['last_status']).toBe(202);
@@ -477,7 +539,10 @@ describe('a queued delivery reaches a real endpoint', () => {
 		// time. That is the ordering guarantee showing up where it was not the point of the test.
 		await flush('deletes-1');
 		await flush('deletes-2');
-		expect(received.map((entry) => entry.path)).toEqual(['/orders/A-6/events', '/orders/A-6/events']);
+		expect(received.map((entry) => entry.path)).toEqual([
+			'/orders/A-6/events',
+			'/orders/A-6/events'
+		]);
 		expect(JSON.parse(received[1]?.body ?? 'null')).toMatchObject({ kind: 'delete', order: 'A-6' });
 	});
 });
@@ -670,11 +735,17 @@ describe('nothing that fails disappears', () => {
 	it('takes back a delivery whose drain died before settling it', async () => {
 		await build(ordersModule);
 		await create('order-16', { external_id: 'A-16', status: 'placed', amount: 1 });
-		await current().database.query("update bolt_integration_outbox set status = 'inflight', attempts = 1, updated_at = now()", []);
+		await current().database.query(
+			"update bolt_integration_outbox set status = 'inflight', attempts = 1, updated_at = now()",
+			[]
+		);
 		// Freshly claimed: another drain must leave it alone, because somebody may still be sending it.
 		expect(at(await flush('leased'), 'claimed')).toBe(0);
 		expect(received).toEqual([]);
-		await current().database.query("update bolt_integration_outbox set updated_at = now() - interval '30 minutes'", []);
+		await current().database.query(
+			"update bolt_integration_outbox set updated_at = now() - interval '30 minutes'",
+			[]
+		);
 		expect(at(await flush('abandoned'), 'delivered')).toBe(1);
 		expect(received).toHaveLength(1);
 	});
@@ -732,7 +803,9 @@ describe('a record is events are delivered in order', () => {
 		await update('order-14', 'ship-2', { status: 'shipped' });
 		await flush('ordered-2');
 		await flush('ordered-3');
-		expect(received.map((entry) => JSON.parse(entry.body) as { kind: string; status: string })).toEqual([
+		expect(
+			received.map((entry) => JSON.parse(entry.body) as { kind: string; status: string })
+		).toEqual([
 			{ kind: 'create', order: 'A-14', status: 'placed' },
 			{ kind: 'update', order: 'A-14', status: 'shipped' }
 		]);
@@ -758,7 +831,12 @@ const activation: Activation = {
 const unreachable = <Input, Output>(name: string): FacilityBinding<Input, Output> => ({
 	call: async () => ({
 		_tag: 'Failure',
-		error: { code: `${name}.unreachable`, message: `activation must not call ${name}`, retryable: false, outcome: 'known' }
+		error: {
+			code: `${name}.unreachable`,
+			message: `activation must not call ${name}`,
+			retryable: false,
+			outcome: 'known'
+		}
 	})
 });
 
@@ -792,7 +870,8 @@ describe('activation asks the host to drain the outbox', () => {
 			},
 			new AbortController().signal
 		);
-		if (result._tag !== 'Activated') throw new Error(`activation failed: ${JSON.stringify(result)}`);
+		if (result._tag !== 'Activated')
+			throw new Error(`activation failed: ${JSON.stringify(result)}`);
 		expect(result.registrations.filter(({ schedule }) => schedule !== null)).toEqual([
 			{ command: 'integrations.flush', schedule: '* * * * *', input: { name: 'orders.partner' } }
 		]);
@@ -801,7 +880,10 @@ describe('activation asks the host to drain the outbox', () => {
 		// the cron. Only the second is a schedule.
 		expect(
 			requests.filter(
-				(request) => request._tag === 'Register' && request.command === 'integrations.flush' && request.schedule !== undefined
+				(request) =>
+					request._tag === 'Register' &&
+					request.command === 'integrations.flush' &&
+					request.schedule !== undefined
 			)
 		).toEqual([
 			{

@@ -169,7 +169,11 @@ describe('messages between sandbox agent sessions', () => {
 	it('attributes a received message in the prompt instead of passing it off as the person', async () => {
 		const stored = {
 			kind: 'agent_message',
-			from: { sessionId: recipient, agentName: 'helper', title: 'Migration and performance verification' },
+			from: {
+				sessionId: recipient,
+				agentName: 'helper',
+				title: 'Migration and performance verification'
+			},
 			text: 'Heads-up: four errors in auth-store.ts'
 		};
 		let prompt: ReadonlyArray<Readonly<Record<string, unknown>>> = [];

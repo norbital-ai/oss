@@ -296,7 +296,12 @@ describe('Sync engine over SQL', () => {
 		expect(mark[0]).toMatchObject({ xid: 0, sequence: 0 });
 		const changes = await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(effectId('replay'), adminSubject, { xid: 0, sequence: 0 }, 100);
+				return yield* (yield* Sync.Service).diff(
+					effectId('replay'),
+					adminSubject,
+					{ xid: 0, sequence: 0 },
+					100
+				);
 			})
 		);
 		expect(changes).toHaveLength(1);
@@ -312,12 +317,21 @@ describe('Sync engine over SQL', () => {
 			"insert into people (norbital_id, name, team) values ($1, 'Seeded', 'core')",
 			[rid('seeded-1')]
 		);
-		const outboxed = await database.query('select count(*)::int as count from bolt_sync_outbox', []);
-		expect(field(outboxed[0] ?? null, 'count')).toBe(0);
+		const outboxed = await database.query(
+			'select count(*)::int as count from bolt_sync_outbox',
+			[]
+		);
+		expect(outboxed[0]?.count).toBe(0);
 
 		const page = await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).snapshot(effectId('snap'), adminSubject, 'people', undefined, 500);
+				return yield* (yield* Sync.Service).snapshot(
+					effectId('snap'),
+					adminSubject,
+					'people',
+					undefined,
+					500
+				);
 			})
 		);
 		expect(page.collection).toBe('people');
@@ -337,7 +351,12 @@ describe('Sync engine over SQL', () => {
 		);
 		const changes = await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(effectId('after-diff'), adminSubject, page.cursor, 100);
+				return yield* (yield* Sync.Service).diff(
+					effectId('after-diff'),
+					adminSubject,
+					page.cursor,
+					100
+				);
 			})
 		);
 		expect(changes.map((change) => field(change.record ?? null, 'name'))).toEqual(['Later']);
@@ -365,9 +384,9 @@ describe('Sync engine over SQL', () => {
 				})
 			)
 			// `document_asset` replicates with them: a `file()` column is a uuid whose row lives here, and
-		// the renderer resolves it client-side, so a surface that cannot replicate it shows an empty
-		// file. It is not one of the identity collections, which stay out of the shape deliberately.
-	).toEqual(['approval_request', 'document_asset', 'people', 'requestor']);
+			// the renderer resolves it client-side, so a surface that cannot replicate it shows an empty
+			// file. It is not one of the identity collections, which stay out of the shape deliberately.
+		).toEqual(['approval_request', 'document_asset', 'people', 'requestor']);
 		expect(
 			await runtime.runPromise(
 				Effect.gen(function* () {

@@ -57,7 +57,8 @@ describe('facility contract', () => {
 			decodeBoltBundleModule({
 				protocolVersion: 1,
 				manifest,
-				dispatch: () => Promise.resolve({ _tag: 'Success', response: { status: 200, headers: {} } }),
+				dispatch: () =>
+					Promise.resolve({ _tag: 'Success', response: { status: 200, headers: {} } }),
 				activate: () => Promise.resolve({ _tag: 'Activated', registrations: [] })
 			})
 		);

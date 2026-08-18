@@ -51,7 +51,8 @@ export type WorkspaceSnapshot = Awaited<ReturnType<typeof generateDrizzleJson>>;
  * Built on `WorkspaceMigrationEntry` rather than restating `tag` and `statements`, so the shape the
  * host applies and the shape this writes to disk cannot drift apart.
  */
-export type WorkspaceMigration = WorkspaceMigrationEntry & Readonly<{ readonly snapshot: WorkspaceSnapshot }>;
+export type WorkspaceMigration = WorkspaceMigrationEntry &
+	Readonly<{ readonly snapshot: WorkspaceSnapshot }>;
 
 /**
  * The columns every collection table carries.
@@ -68,7 +69,9 @@ const systemColumns = (): Readonly<Record<string, AnyPgColumnBuilder>> => ({
 	norbital_id: uuid().primaryKey().defaultRandom(),
 	norbital_created_at: timestamp({ withTimezone: true }).defaultNow(),
 	norbital_updated_at: timestamp({ withTimezone: true }).defaultNow(),
-	norbital_sys_period: customType<{ data: string; driverData: string }>({ dataType: () => 'tstzrange' })()
+	norbital_sys_period: customType<{ data: string; driverData: string }>({
+		dataType: () => 'tstzrange'
+	})()
 		.notNull()
 		.default(sql`tstzrange(CURRENT_TIMESTAMP, NULL, '[)')`),
 	norbital_row_version: integer().default(1),
@@ -89,9 +92,14 @@ const authoredIndex = (
 		return opclass === undefined ? column : column.op(opclass);
 	});
 	const [first, ...rest] = members;
-	if (first === undefined) throw new Error(`Index on "${collectionName}" must declare at least one column`);
-	const builder = declaration.unique === true ? uniqueIndex(declaration.name) : index(declaration.name);
-	const built = declaration.method === undefined ? builder.on(first, ...rest) : builder.using(declaration.method, first, ...rest);
+	if (first === undefined)
+		throw new Error(`Index on "${collectionName}" must declare at least one column`);
+	const builder =
+		declaration.unique === true ? uniqueIndex(declaration.name) : index(declaration.name);
+	const built =
+		declaration.method === undefined
+			? builder.on(first, ...rest)
+			: builder.using(declaration.method, first, ...rest);
 	return declaration.where === undefined ? built : built.where(sql.raw(declaration.where));
 };
 
@@ -118,7 +126,8 @@ const declaredIndexes = (
 		.toSorted()
 		.map((columnName) => {
 			const column = self[columnName];
-			if (column === undefined) throw new Error(`Unknown indexed column "${collectionName}.${columnName}"`);
+			if (column === undefined)
+				throw new Error(`Unknown indexed column "${collectionName}.${columnName}"`);
 			return index(collectionIndexName(collectionName, columnName)).on(column);
 		});
 
@@ -141,8 +150,12 @@ const searchIndexes = (
 ) =>
 	searchableColumns(describeModelColumns(columns)).map((columnName) => {
 		const column = self[columnName];
-		if (column === undefined) throw new Error(`Unknown searchable column "${collectionName}.${columnName}"`);
-		return index(collectionSearchTrigramIndexName(collectionName, columnName)).using('gin', column.op('gin_trgm_ops'));
+		if (column === undefined)
+			throw new Error(`Unknown searchable column "${collectionName}.${columnName}"`);
+		return index(collectionSearchTrigramIndexName(collectionName, columnName)).using(
+			'gin',
+			column.op('gin_trgm_ops')
+		);
 	});
 
 /**
@@ -178,7 +191,9 @@ const authoredForeignKey = (
 	const { from, to } = relation;
 	const target = to === undefined ? undefined : tables[to.collection];
 	if (from === undefined || to === undefined || target === undefined) {
-		throw new Error(`Relation "${relation.name}" targets a collection this workspace does not declare`);
+		throw new Error(
+			`Relation "${relation.name}" targets a collection this workspace does not declare`
+		);
 	}
 	const column = self[from.column];
 	/**
@@ -237,12 +252,16 @@ export const workspaceMigrationTables = (
 	const targets: Record<string, PgTable> = { ...REFERENCE_ONLY_TABLES };
 	for (const [name, model] of Object.entries(models)) {
 		const table = pgTable(name, { ...systemColumns(), ...model.columns }, (self) => [
-			...(model.metadata?.indexes ?? []).map((declaration) => authoredIndex(name, self, declaration)),
+			...(model.metadata?.indexes ?? []).map((declaration) =>
+				authoredIndex(name, self, declaration)
+			),
 			...declaredIndexes(name, model.columns, self),
 			...searchIndexes(name, model.columns, self),
 			// Read when Drizzle asks for the table config rather than now, so a relation may point at a
 			// collection declared later in the same pass.
-			...(byCollection.get(name) ?? []).map((relation) => authoredForeignKey(relation, self, targets))
+			...(byCollection.get(name) ?? []).map((relation) =>
+				authoredForeignKey(relation, self, targets)
+			)
 		]);
 		tables[name] = table;
 		targets[name] = table;
@@ -305,9 +324,16 @@ const importModel = (modelFile: string) =>
 			)
 	}).pipe(
 		Effect.flatMap((module) => {
-			const declaration = module !== null && typeof module === 'object' ? Reflect.get(module, 'default') : undefined;
-			if (declaration === null || typeof declaration !== 'object' || Reflect.get(declaration, '__kind') !== 'model') {
-				return Effect.fail(new Error(`${modelFile} does not default-export a defineModel() declaration`));
+			const declaration =
+				module !== null && typeof module === 'object' ? Reflect.get(module, 'default') : undefined;
+			if (
+				declaration === null ||
+				typeof declaration !== 'object' ||
+				Reflect.get(declaration, '__kind') !== 'model'
+			) {
+				return Effect.fail(
+					new Error(`${modelFile} does not default-export a defineModel() declaration`)
+				);
 			}
 			return Effect.succeed(declaration as ModelDeclaration);
 		})
@@ -316,14 +342,17 @@ const importModel = (modelFile: string) =>
 /** The newest lineage entry's snapshot, or `undefined` when the workspace has no lineage yet. */
 export const latestSnapshot = (migrationsRoot: string) =>
 	Effect.gen(function* () {
-		const entries = yield* Effect.tryPromise(() => readdir(migrationsRoot, { withFileTypes: true })).pipe(
-			Effect.catch(() => Effect.succeed([] as Array<Dirent>))
-		);
-		const tags = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).toSorted();
+		const entries = yield* Effect.tryPromise(() =>
+			readdir(migrationsRoot, { withFileTypes: true })
+		).pipe(Effect.catch(() => Effect.succeed([] as Array<Dirent>)));
+		const tags = entries
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name)
+			.toSorted();
 		for (const tag of tags.toReversed()) {
-			const source = yield* Effect.tryPromise(() => readFile(join(migrationsRoot, tag, 'snapshot.json'), 'utf8')).pipe(
-				Effect.catch(() => Effect.succeed(undefined as string | undefined))
-			);
+			const source = yield* Effect.tryPromise(() =>
+				readFile(join(migrationsRoot, tag, 'snapshot.json'), 'utf8')
+			).pipe(Effect.catch(() => Effect.succeed(undefined as string | undefined)));
 			if (source !== undefined) return JSON.parse(source) as WorkspaceSnapshot;
 		}
 		return undefined;
@@ -341,10 +370,7 @@ export type MigrationResult = Readonly<{
  * Writes `<migrations>/<tag>/{migration.sql,snapshot.json}` — the layout the lineage already uses,
  * so the entries already there stay applicable and this one joins them. It does not apply anything.
  */
-export const generateWorkspaceMigration = (
-	workspaceRoot: string,
-	name?: string
-) =>
+export const generateWorkspaceMigration = (workspaceRoot: string, name?: string) =>
 	Effect.gen(function* () {
 		// Discovery is `sync`'s, not a second walk: a migration must cover exactly the collections the
 		// compiler emits, and two rules for "what is a collection" would eventually disagree.
@@ -370,17 +396,22 @@ export const generateWorkspaceMigration = (
 	});
 
 /** Writes one lineage entry in the layout drizzle-kit and the existing migrations already use. */
-export const writeMigration = (
-	migrationsRoot: string,
-	migration: WorkspaceMigration
-) =>
+export const writeMigration = (migrationsRoot: string, migration: WorkspaceMigration) =>
 	Effect.gen(function* () {
 		const directory = join(migrationsRoot, migration.tag);
 		yield* Effect.tryPromise(() => mkdir(directory, { recursive: true }));
 		yield* Effect.tryPromise(() =>
-			writeFile(join(directory, 'migration.sql'), `${migration.statements.join(`\n${STATEMENT_BREAKPOINT}\n`)}\n`, 'utf8')
+			writeFile(
+				join(directory, 'migration.sql'),
+				`${migration.statements.join(`\n${STATEMENT_BREAKPOINT}\n`)}\n`,
+				'utf8'
+			)
 		);
 		yield* Effect.tryPromise(() =>
-			writeFile(join(directory, 'snapshot.json'), `${JSON.stringify(migration.snapshot, null, 2)}\n`, 'utf8')
+			writeFile(
+				join(directory, 'snapshot.json'),
+				`${JSON.stringify(migration.snapshot, null, 2)}\n`,
+				'utf8'
+			)
 		);
 	});

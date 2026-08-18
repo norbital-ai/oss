@@ -88,7 +88,7 @@ bootstrap:
 ```bash
 # In the norbital repository
 pnpm yalc:link
-pnpm --filter colony dev   # converges on start: seeds from COLONY_WORKSPACE_ROOT,
+pnpm --filter colony dev   # converges on start: seeds from COLONY_WORKSPACE_ROOTS,
                            # compiles with bolt sync, builds and publishes the artifact,
                            # routes it, and provisions and migrates the tenant database
 ```

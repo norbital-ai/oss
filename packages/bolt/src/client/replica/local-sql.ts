@@ -24,7 +24,9 @@ export type LocalStore = Readonly<{
 }>;
 
 const asRecord = (value: unknown): ReplicaRow | undefined =>
-	value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as ReplicaRow) : undefined;
+	value !== null && typeof value === 'object' && !Array.isArray(value)
+		? (value as ReplicaRow)
+		: undefined;
 
 /** Builds an in-memory local store. One per runtime; it holds no cross-tab state. */
 export const createLocalStore = (): LocalStore => {
@@ -56,7 +58,9 @@ export const createLocalStore = (): LocalStore => {
 				// whatever the replica already holds instead of replacing it with a partial record.
 				table.set(
 					change.recordId,
-					change.operation === 'create' ? identified : { ...(table.get(change.recordId) ?? {}), ...identified }
+					change.operation === 'create'
+						? identified
+						: { ...(table.get(change.recordId) ?? {}), ...identified }
 				);
 			}
 		},

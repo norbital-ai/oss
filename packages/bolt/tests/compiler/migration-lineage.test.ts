@@ -68,9 +68,11 @@ describe('Bolt migration lineage', () => {
 	});
 
 	it('reports no lineage for a workspace that has never migrated, rather than failing', async () => {
-		expect(await Effect.runPromise(readWorkspaceMigrations(await mkdtemp(join(tmpdir(), 'bolt-lineage-'))))).toEqual(
-			[]
-		);
+		expect(
+			await Effect.runPromise(
+				readWorkspaceMigrations(await mkdtemp(join(tmpdir(), 'bolt-lineage-')))
+			)
+		).toEqual([]);
 	});
 
 	/**

@@ -24,12 +24,12 @@ source.
 
 Docs live next to the code they describe — there is no root `docs/` folder:
 
-| Area                            | Location                                                                     |
-| ------------------------------- | ---------------------------------------------------------------------------- |
-| Bolt framework                  | [`packages/bolt/src/`](./packages/bolt/src)                                 |
-| UI, std, config                 | `packages/<name>/docs/`                                                      |
-| Template workspaces             | [`norbital-ai/templates`](https://github.com/norbital-ai/templates)          |
-| Release contracts               | [`release/README.md`](./release/README.md), [`RELEASING.md`](./RELEASING.md) |
+| Area                | Location                                                                     |
+| ------------------- | ---------------------------------------------------------------------------- |
+| Bolt framework      | [`packages/bolt/src/`](./packages/bolt/src)                                  |
+| UI, std, config     | `packages/<name>/docs/`                                                      |
+| Template workspaces | [`norbital-ai/templates`](https://github.com/norbital-ai/templates)          |
+| Release contracts   | [`release/README.md`](./release/README.md), [`RELEASING.md`](./RELEASING.md) |
 
 ## Development
 

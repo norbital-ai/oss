@@ -66,7 +66,10 @@ const refuse = (reason: string): SignatureOutcome => ({ verified: false, refusal
  * Looking one up by exact match is how a verifier ends up reporting "no signature" for a delivery
  * that carried one.
  */
-const headerValue = (headers: Readonly<Record<string, string>>, name: string): string | undefined => {
+const headerValue = (
+	headers: Readonly<Record<string, string>>,
+	name: string
+): string | undefined => {
 	const wanted = name.trim().toLowerCase();
 	for (const [key, value] of Object.entries(headers)) {
 		if (key.trim().toLowerCase() === wanted) return value;
@@ -145,19 +148,26 @@ export const verifyDelivery = (
 	// A secret the vault answered with but which is empty verifies everything against an empty key.
 	// That is worse than having no secret at all, because the route looks configured.
 	if (secret === '') {
-		return refuse(`the vault holds no value for ${signature.secret.env}, and verifying against an empty secret would accept a digest anybody can compute`);
+		return refuse(
+			`the vault holds no value for ${signature.secret.env}, and verifying against an empty secret would accept a digest anybody can compute`
+		);
 	}
 	const header = headerValue(delivery.headers, signature.header);
 	if (header === undefined || header.trim() === '') {
-		return refuse(`the delivery carries no ${signature.header} header, so nothing about it is signed`);
+		return refuse(
+			`the delivery carries no ${signature.header} header, so nothing about it is signed`
+		);
 	}
-	const presented = signature.parameter === undefined ? header : parameterValue(header, signature.parameter);
+	const presented =
+		signature.parameter === undefined ? header : parameterValue(header, signature.parameter);
 	if (presented === undefined) {
 		return refuse(`the ${signature.header} header carries no ${signature.parameter} parameter`);
 	}
 	const prefix = signature.prefix ?? '';
 	if (prefix !== '' && !presented.startsWith(prefix)) {
-		return refuse(`the ${signature.header} header does not start with the declared ${prefix} prefix`);
+		return refuse(
+			`the ${signature.header} header does not start with the declared ${prefix} prefix`
+		);
 	}
 	const encoding = signature.encoding ?? 'hex';
 	const provided = decodeSignature(presented.slice(prefix.length), encoding);
@@ -165,34 +175,46 @@ export const verifyDelivery = (
 		return refuse(`the ${signature.header} header is not readable as ${encoding}`);
 	}
 
-	const stamp = signature.timestamp === undefined
-		? undefined
-		: 'header' in signature.timestamp
-			? headerValue(delivery.headers, signature.timestamp.header)
-			: parameterValue(header, signature.timestamp.parameter);
+	const stamp =
+		signature.timestamp === undefined
+			? undefined
+			: 'header' in signature.timestamp
+				? headerValue(delivery.headers, signature.timestamp.header)
+				: parameterValue(header, signature.timestamp.parameter);
 	if (signature.timestamp !== undefined && (stamp === undefined || stamp.trim() === '')) {
-		return refuse('the delivery carries no signed timestamp, so its age cannot be checked and a captured body could be replayed');
+		return refuse(
+			'the delivery carries no signed timestamp, so its age cannot be checked and a captured body could be replayed'
+		);
 	}
 
 	const algorithm = signature.algorithm ?? 'sha256';
 	const signedPayload = (signature.signedPayload ?? '{body}')
 		.replaceAll('{timestamp}', stamp ?? '')
 		.replaceAll('{body}', delivery.body);
-	const expected = Uint8Array.from(createHmac(algorithm, secret).update(signedPayload, 'utf8').digest());
+	const expected = Uint8Array.from(
+		createHmac(algorithm, secret).update(signedPayload, 'utf8').digest()
+	);
 
 	// Length first, because `timingSafeEqual` throws on operands of different lengths. This leaks
 	// nothing: a digest's length is fixed by its algorithm and is therefore already public.
 	if (provided.length !== expected.length) {
-		return refuse(`the ${signature.header} signature is ${provided.length} bytes where ${algorithm} produces ${expected.length}`);
+		return refuse(
+			`the ${signature.header} signature is ${provided.length} bytes where ${algorithm} produces ${expected.length}`
+		);
 	}
 	// Constant time, on purpose. See this module's header: an early-exit comparison turns recovering a
 	// digest from a brute-force search into a byte-at-a-time one.
 	if (!timingSafeEqual(provided, expected)) {
-		return refuse(`the ${signature.header} signature does not match the body under the declared secret`);
+		return refuse(
+			`the ${signature.header} signature does not match the body under the declared secret`
+		);
 	}
 
 	if (signature.timestamp === undefined || stamp === undefined) {
-		return { verified: true, proof: { digest: Buffer.from(expected).toString('hex'), replayChecked: false } };
+		return {
+			verified: true,
+			proof: { digest: Buffer.from(expected).toString('hex'), replayChecked: false }
+		};
 	}
 	const sentMs = timestampMs(stamp);
 	if (sentMs === undefined) {
@@ -204,7 +226,12 @@ export const verifyDelivery = (
 	// replay window that outlives the one the source intended.
 	const ageMs = Math.abs(nowMs - sentMs);
 	if (ageMs > toleranceMs) {
-		return refuse(`the delivery is signed for ${new Date(sentMs).toISOString()}, ${Math.round(ageMs / 1000)}s from now, outside the ${toleranceMs / 1000}s replay window`);
+		return refuse(
+			`the delivery is signed for ${new Date(sentMs).toISOString()}, ${Math.round(ageMs / 1000)}s from now, outside the ${toleranceMs / 1000}s replay window`
+		);
 	}
-	return { verified: true, proof: { digest: Buffer.from(expected).toString('hex'), replayChecked: true } };
+	return {
+		verified: true,
+		proof: { digest: Buffer.from(expected).toString('hex'), replayChecked: true }
+	};
 };

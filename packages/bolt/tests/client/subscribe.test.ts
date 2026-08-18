@@ -25,7 +25,8 @@ const stubSource = () => {
 	return {
 		source,
 		urls: [] as Array<string>,
-		emit: (type: string, data?: string) => listeners.get(type)?.({ ...(data === undefined ? {} : { data }) }),
+		emit: (type: string, data?: string) =>
+			listeners.get(type)?.({ ...(data === undefined ? {} : { data }) }),
 		fail: (cause: unknown) => source.onerror?.(cause),
 		isClosed: () => closed
 	};
@@ -35,7 +36,10 @@ describe('subscribing to change announcements', () => {
 	it('reports the collections a frame names', () => {
 		const stub = stubSource();
 		const seen: Array<ReadonlyArray<string>> = [];
-		subscribeToChanges({ onChange: (collections) => seen.push(collections), source: () => stub.source });
+		subscribeToChanges({
+			onChange: (collections) => seen.push(collections),
+			source: () => stub.source
+		});
 
 		stub.emit('sync', JSON.stringify({ collections: ['leave_requests', 'companies'] }));
 		expect(seen).toEqual([['leave_requests', 'companies']]);
@@ -57,7 +61,10 @@ describe('subscribing to change announcements', () => {
 	it('treats an unreadable frame as "something changed" rather than as nothing', () => {
 		const stub = stubSource();
 		const seen: Array<ReadonlyArray<string>> = [];
-		subscribeToChanges({ onChange: (collections) => seen.push(collections), source: () => stub.source });
+		subscribeToChanges({
+			onChange: (collections) => seen.push(collections),
+			source: () => stub.source
+		});
 
 		// Ignoring it would leave the replica stale until the next unrelated write; an empty list means
 		// the caller catches up on everything, which is the safe reading.
@@ -87,7 +94,11 @@ describe('subscribing to change announcements', () => {
 	it('reports the stream opening, so a caller can catch up across the gap', () => {
 		const stub = stubSource();
 		let opened = 0;
-		subscribeToChanges({ onChange: () => undefined, onOpen: () => (opened += 1), source: () => stub.source });
+		subscribeToChanges({
+			onChange: () => undefined,
+			onOpen: () => (opened += 1),
+			source: () => stub.source
+		});
 		stub.emit('ready', JSON.stringify({ connectionId: 'tenant:abc' }));
 		expect(opened).toBe(1);
 	});
@@ -108,7 +119,10 @@ describe('subscribing to change announcements', () => {
 
 	it('closes the stream when stopped', () => {
 		const stub = stubSource();
-		const subscription = subscribeToChanges({ onChange: () => undefined, source: () => stub.source });
+		const subscription = subscribeToChanges({
+			onChange: () => undefined,
+			source: () => stub.source
+		});
 		subscription.stop();
 		expect(stub.isClosed()).toBe(true);
 	});

@@ -70,7 +70,8 @@ const generatedExpression = (config: ColumnConfig): string | undefined => {
 	const as = config.generated?.as;
 	if (as === undefined) return undefined;
 	if (typeof as === 'string') return as;
-	if (typeof as === 'function') return generatedExpression({ generated: { as: (as as () => unknown)() } });
+	if (typeof as === 'function')
+		return generatedExpression({ generated: { as: (as as () => unknown)() } });
 	const query = dialect.sqlToQuery(as as Parameters<PgDialect['sqlToQuery']>[0]);
 	if (query.params.length > 0) {
 		throw new Error(`A generated column expression cannot bind parameters: ${query.sql}`);
@@ -85,7 +86,8 @@ const scalarOf = (config: ColumnConfig): ScalarType => {
 	// `statutory_contributions.relief_for` as `uuid` would refuse the JSON list the runtime writes
 	// there — so a dimensioned column keeps the `string` answer every array has always had here.
 	if (typeof config.dimensions === 'number') return 'string';
-	const byColumnType = config.columnType === undefined ? undefined : SCALAR_BY_COLUMN_TYPE[config.columnType];
+	const byColumnType =
+		config.columnType === undefined ? undefined : SCALAR_BY_COLUMN_TYPE[config.columnType];
 	if (byColumnType !== undefined) return byColumnType;
 	const dataType = config.dataType ?? '';
 	if (dataType.startsWith('number')) return 'number';
@@ -163,7 +165,10 @@ const declaredColumnSql = (
 	for (const [name, column] of Object.entries(built)) {
 		if (typeof configOf(columns[name])?.dimensions === 'number') continue;
 		const sqlDefault = declaredDefault(column);
-		declared.set(name, { sqlType: column.getSQLType(), ...(sqlDefault === undefined ? {} : { sqlDefault }) });
+		declared.set(name, {
+			sqlType: column.getSQLType(),
+			...(sqlDefault === undefined ? {} : { sqlDefault })
+		});
 	}
 	return declared;
 };
@@ -191,10 +196,14 @@ export const describeModelColumns = (
 			// that is both computed and defaulted, and Drizzle cannot express one either.
 			...(generated !== undefined || sqlDefault === undefined ? {} : { sqlDefault }),
 			...(generated === undefined ? {} : { generated }),
-			...(config.enumValues === undefined || config.enumValues.length === 0 ? {} : { values: [...config.enumValues] }),
+			...(config.enumValues === undefined || config.enumValues.length === 0
+				? {}
+				: { values: [...config.enumValues] }),
 			...(typeof config.boltCustomType === 'string' ? { customType: config.boltCustomType } : {}),
 			...(config.boltSearch === true ? { search: true } : {}),
-			...(config.boltMimeTypes === undefined || config.boltMimeTypes.length === 0 ? {} : { mimeTypes: [...config.boltMimeTypes] })
+			...(config.boltMimeTypes === undefined || config.boltMimeTypes.length === 0
+				? {}
+				: { mimeTypes: [...config.boltMimeTypes] })
 		};
 	}
 	return fields;
@@ -212,15 +221,18 @@ export const describeModelColumns = (
  * *client catalog* field, where a `kind` exists to weigh; `tests/authoring/searchable-fields.test.ts`
  * pins the two to the same answer so the DDL and the search UI cannot drift apart.
  */
-export const searchableColumns = (fields: Readonly<Record<string, FieldDefinition>>): ReadonlyArray<string> =>
+export const searchableColumns = (
+	fields: Readonly<Record<string, FieldDefinition>>
+): ReadonlyArray<string> =>
 	Object.entries(fields)
 		.filter(([, field]) => field.search === true)
 		.map(([name]) => name)
 		.toSorted();
 
 /** Describes a whole `defineModel` declaration, tolerating a module that failed to export one. */
-export const describeModel = (declaration: ModelDeclaration | undefined): Readonly<Record<string, FieldDefinition>> =>
-	describeModelColumns(declaration?.columns);
+export const describeModel = (
+	declaration: ModelDeclaration | undefined
+): Readonly<Record<string, FieldDefinition>> => describeModelColumns(declaration?.columns);
 
 /**
  * The operation/phase pairs an authored `+hooks.ts` actually declares.
@@ -240,4 +252,58 @@ export const describeHooks = (declaration: unknown): ReadonlyArray<string> => {
 		}
 	}
 	return named.toSorted();
+};
+
+/**
+ * The workspace agent, as `src/+agent.ts` declares it over the two facts the compiler supplies.
+ *
+ * The compiler knows a workspace's agent name, its `+<name>.tool.ts` tools and its
+ * `.agents/skills/` skills; the authored module knows everything else — the system prompt, the
+ * standing task, the collections in reach, the model and its budget, and what is withheld. Neither
+ * half can state the other's, which is why they meet here instead of one of them being invented.
+ *
+ * The module used to be discovered by nothing at all. `sync.ts` synthesized
+ * `{ name, prompt: 'You are the <workspace> workspace agent.', tools, skills }` and there was no
+ * glob for `+agent.ts`, so `hr-payroll` authored a scoped, write-capable agent with a real operating
+ * prompt and shipped an unscoped one that had never read a word of it.
+ *
+ * `prompt` is `systemPrompt` and `task` joined rather than either alone: the first says how to
+ * behave and the second says what the agent is here for, and a turn that opens with only one of
+ * them is missing half of its brief.
+ */
+export const describeAgent = <T extends { readonly name: string; readonly prompt: string }>(
+	declaration: T,
+	spec: unknown
+): T => {
+	if (spec === null || typeof spec !== 'object') return declaration;
+	const read = <V>(key: string, accept: (value: unknown) => value is V): V | undefined => {
+		const value = Reflect.get(spec, key);
+		return accept(value) ? value : undefined;
+	};
+	const isString = (value: unknown): value is string =>
+		typeof value === 'string' && value.trim() !== '';
+	const isStringList = (value: unknown): value is ReadonlyArray<string> =>
+		Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+	const isPositiveInteger = (value: unknown): value is number =>
+		typeof value === 'number' && Number.isInteger(value) && value > 0;
+	const isAccess = (value: unknown): value is 'read' | 'write' =>
+		value === 'read' || value === 'write';
+	const prompt = [read('systemPrompt', isString), read('task', isString)]
+		.filter((part): part is string => part !== undefined)
+		.join('\n\n');
+	const optional = <V>(key: string, value: V | undefined): Readonly<Record<string, V>> =>
+		value === undefined ? {} : { [key]: value };
+	return {
+		...declaration,
+		...(prompt === '' ? {} : { prompt }),
+		...optional('description', read('description', isString)),
+		...optional('task', read('task', isString)),
+		...optional('model', read('model', isString)),
+		...optional('maxTokens', read('maxTokens', isPositiveInteger)),
+		...optional('access', read('access', isAccess)),
+		...optional('collections', read('collections', isStringList)),
+		...optional('denyTools', read('denyTools', isStringList)),
+		...optional('mcpServers', read('mcpServers', isStringList)),
+		...optional('hostTools', read('hostTools', isStringList))
+	};
 };

@@ -104,7 +104,10 @@ export const makeMemoryTransport = (): {
 				let delivered = 0;
 				for (const [connectionId, connection] of connections) {
 					if (connection.closed || connection.topic !== input.topic) continue;
-					connections.set(connectionId, appended(connectionId, connection, input.kind, input.bytes));
+					connections.set(
+						connectionId,
+						appended(connectionId, connection, input.kind, input.bytes)
+					);
 					delivered += 1;
 				}
 				return { delivered };

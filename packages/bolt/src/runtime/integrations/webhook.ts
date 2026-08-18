@@ -34,27 +34,36 @@ const REJECTIONS_REPORTED = 20;
  */
 export type LedgerState = 'new' | 'pending' | 'absorbed';
 
-export type WebhookDependencies = AbsorbDependencies & Readonly<{
-	/** Reads a declared secret, or fails naming the variable that has no value. */
-	readonly secret: (effectId: EffectId, name: string) => Effect.Effect<string, { readonly message: string }>;
-	/**
-	 * Records this delivery in `bolt_integration_inbox` and says what was there before.
-	 *
-	 * One call rather than a read then a write, because two deliveries of the same event can arrive
-	 * concurrently — providers parallelise retries — and a read-then-write would let both see nothing
-	 * and both absorb. The insert's own conflict clause is the arbiter.
-	 */
-	readonly remember: (
-		effectId: EffectId,
-		entry: { readonly integration: string; readonly binding: string; readonly receiptId: string; readonly payload: Schema.Json }
-	) => Effect.Effect<LedgerState, { readonly message: string }>;
-	/** Marks a ledger entry absorbed, so a later redelivery of it is recognised as a repeat. */
-	readonly settle: (
-		effectId: EffectId,
-		entry: { readonly integration: string; readonly receiptId: string }
-	) => Effect.Effect<void, { readonly message: string }>;
-	readonly now: () => number;
-}>;
+export type WebhookDependencies = AbsorbDependencies &
+	Readonly<{
+		/** Reads a declared secret, or fails naming the variable that has no value. */
+		readonly secret: (
+			effectId: EffectId,
+			name: string
+		) => Effect.Effect<string, { readonly message: string }>;
+		/**
+		 * Records this delivery in `bolt_integration_inbox` and says what was there before.
+		 *
+		 * One call rather than a read then a write, because two deliveries of the same event can arrive
+		 * concurrently — providers parallelise retries — and a read-then-write would let both see nothing
+		 * and both absorb. The insert's own conflict clause is the arbiter.
+		 */
+		readonly remember: (
+			effectId: EffectId,
+			entry: {
+				readonly integration: string;
+				readonly binding: string;
+				readonly receiptId: string;
+				readonly payload: Schema.Json;
+			}
+		) => Effect.Effect<LedgerState, { readonly message: string }>;
+		/** Marks a ledger entry absorbed, so a later redelivery of it is recognised as a repeat. */
+		readonly settle: (
+			effectId: EffectId,
+			entry: { readonly integration: string; readonly receiptId: string }
+		) => Effect.Effect<void, { readonly message: string }>;
+		readonly now: () => number;
+	}>;
 
 export type DeliveryReport = Readonly<{
 	readonly binding: string;
@@ -88,8 +97,12 @@ const walk = (body: Schema.Json, path: ReadonlyArray<string>): unknown => {
  * providers post one event per request. Treating a single-object body as an empty list would make
  * the common case silently absorb nothing.
  */
-const selectRecords = (body: Schema.Json, records: IntegrationWebhookDeclaration['records']): ReadonlyArray<unknown> => {
-	const found = records === undefined ? body : walk(body, 'field' in records ? [records.field] : records.path);
+const selectRecords = (
+	body: Schema.Json,
+	records: IntegrationWebhookDeclaration['records']
+): ReadonlyArray<unknown> => {
+	const found =
+		records === undefined ? body : walk(body, 'field' in records ? [records.field] : records.path);
 	if (Array.isArray(found)) return found;
 	return found === undefined || found === null ? [] : [found];
 };
@@ -115,7 +128,8 @@ const deliveryKey = (
 	if (named !== undefined) {
 		const wanted = named.trim().toLowerCase();
 		for (const [key, value] of Object.entries(headers)) {
-			if (key.trim().toLowerCase() === wanted && value.trim() !== '') return `${binding.name}:${value.trim()}`;
+			if (key.trim().toLowerCase() === wanted && value.trim() !== '')
+				return `${binding.name}:${value.trim()}`;
 		}
 	}
 	return `${binding.name}:${digest}`;
@@ -136,7 +150,9 @@ export const runWebhookDelivery = (
 		const secret = yield* dependencies.secret(effectId, binding.signature.secret.env);
 		const outcome = verifyDelivery(binding.signature, secret, delivery, dependencies.now());
 		if (!outcome.verified) {
-			return yield* Effect.fail({ message: `${integration.name}.${binding.name} refused a delivery: ${outcome.refusal.reason}` });
+			return yield* Effect.fail({
+				message: `${integration.name}.${binding.name} refused a delivery: ${outcome.refusal.reason}`
+			});
 		}
 
 		// Parsed only now — after the bytes are known to be authentic. Parsing first would mean running
@@ -144,7 +160,9 @@ export const runWebhookDelivery = (
 		// taken over the reparsed document, which matches nothing the sender signed.
 		const parsed = yield* Effect.try({
 			try: (): Schema.Json => JSON.parse(delivery.body) as Schema.Json,
-			catch: () => ({ message: `${integration.name}.${binding.name} received a correctly signed body that is not JSON.` })
+			catch: () => ({
+				message: `${integration.name}.${binding.name} received a correctly signed body that is not JSON.`
+			})
 		});
 
 		const deliveryId = deliveryKey(binding, delivery.headers, outcome.proof.digest);
@@ -169,7 +187,12 @@ export const runWebhookDelivery = (
 		const absorbed = yield* absorbRecords(
 			dependencies,
 			effectId,
-			{ integration: integration.name, binding: binding.name, collection: integration.collection, identityColumn: binding.identityColumn },
+			{
+				integration: integration.name,
+				binding: binding.name,
+				collection: integration.collection,
+				identityColumn: binding.identityColumn
+			},
 			authored,
 			raw,
 			0,

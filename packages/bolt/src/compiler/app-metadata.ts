@@ -31,9 +31,7 @@ const decodeHtmlEntities = (value: string | null): string | null => {
 };
 
 const taggedMeta = (source: string, name: string): string | null => {
-	const tag = source.match(
-		new RegExp(`<meta\\b[^>]*\\bname=["']bolt:${name}["'][^>]*>`, 'i')
-	)?.[0];
+	const tag = source.match(new RegExp(`<meta\\b[^>]*\\bname=["']bolt:${name}["'][^>]*>`, 'i'))?.[0];
 	if (tag === undefined) return null;
 	return tag.match(/\bcontent=["']([^"']+)["']/)?.[1]?.trim() ?? null;
 };

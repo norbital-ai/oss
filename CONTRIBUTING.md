@@ -25,4 +25,3 @@ Templates are **not** authored here. They live in their own repositories —
 website advertises automatically, and `norbital-ai/templates-private` for the ones it should not.
 Each repository carries its own `templates:check`, `templates:lock`, and projection tooling, and is
 the only place `refs/heads/templates/*` is published from.
-

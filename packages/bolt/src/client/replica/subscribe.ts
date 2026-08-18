@@ -66,7 +66,8 @@ const parseCollections = (data: string | undefined): ReadonlyArray<string> => {
 export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
 	const create =
 		options.source ??
-		((url: string) => new EventSource(url, { withCredentials: true }) as unknown as EventSourceLike);
+		((url: string) =>
+			new EventSource(url, { withCredentials: true }) as unknown as EventSourceLike);
 
 	let source: EventSourceLike | undefined;
 	try {

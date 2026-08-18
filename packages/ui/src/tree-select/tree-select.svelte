@@ -103,9 +103,7 @@
 	function navigateToIndex(index: number, shouldScroll: boolean = true) {
 		const node = visibleNodesArray[index];
 		if (node) {
-			const shouldMoveTreeFocus = Boolean(
-				treeContainerElement?.contains(document.activeElement)
-			);
+			const shouldMoveTreeFocus = Boolean(treeContainerElement?.contains(document.activeElement));
 			treeState.setActiveNode(node.id);
 			if (shouldScroll) scrollActiveNodeIntoView();
 			if (shouldMoveTreeFocus) {
@@ -218,8 +216,7 @@
 			'Home',
 			'End'
 		];
-		const isLetterKey =
-			!isInputActive && event.key.length === 1 && /^[a-zA-Z]$/.test(event.key);
+		const isLetterKey = !isInputActive && event.key.length === 1 && /^[a-zA-Z]$/.test(event.key);
 		const isNavigationKey = navigationKeys.includes(event.key);
 		if (!isNavigationKey && !isLetterKey) return;
 

@@ -81,10 +81,20 @@ describe('agent turn lifecycle', () => {
 					status: turnStatus,
 					subagent_id: null,
 					parts: [
-						{ kind: 'tool', id: 'call-1', name: 'read_collection', input: { collection: 'employees' } },
+						{
+							kind: 'tool',
+							id: 'call-1',
+							name: 'read_collection',
+							input: { collection: 'employees' }
+						},
 						...(answered
 							? [
-									{ kind: 'tool-result', id: 'call-1', name: 'read_collection', output: { rows: 2 } },
+									{
+										kind: 'tool-result',
+										id: 'call-1',
+										name: 'read_collection',
+										output: { rows: 2 }
+									},
 									{ kind: 'text', text: 'Two employees.' }
 								]
 							: [])
@@ -139,10 +149,30 @@ describe('agent turn lifecycle', () => {
 								status: 'completed',
 								subagent_id: null,
 								parts: [
-									{ kind: 'tool', id: 'call-1', name: 'read_collection', input: { collection: 'employees' } },
-									{ kind: 'tool-result', id: 'call-1', name: 'read_collection', output: { rows: 2 } },
-									{ kind: 'tool', id: 'call-2', name: 'read_collection', input: { collection: 'companies' } },
-									{ kind: 'tool-result', id: 'call-2', name: 'read_collection', output: { rows: 1 } },
+									{
+										kind: 'tool',
+										id: 'call-1',
+										name: 'read_collection',
+										input: { collection: 'employees' }
+									},
+									{
+										kind: 'tool-result',
+										id: 'call-1',
+										name: 'read_collection',
+										output: { rows: 2 }
+									},
+									{
+										kind: 'tool',
+										id: 'call-2',
+										name: 'read_collection',
+										input: { collection: 'companies' }
+									},
+									{
+										kind: 'tool-result',
+										id: 'call-2',
+										name: 'read_collection',
+										output: { rows: 1 }
+									},
 									{ kind: 'text', text: 'Two employees across one company.' }
 								]
 							}

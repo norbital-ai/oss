@@ -1,8 +1,5 @@
 <script lang="ts">
-	import type {
-		CollectionField,
-		CollectionRecordHistoryEntry
-	} from '@norbital-ai/std/collection';
+	import type { CollectionField, CollectionRecordHistoryEntry } from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
 	import {
 		formatDataValue,

@@ -78,13 +78,18 @@ export type ReplicaState = Readonly<{
 
 export const readReplicaState = async (database: PGliteLike): Promise<ReplicaState | undefined> => {
 	await ensureStateTable(database);
-	const result = await database.query<{ fingerprint: string; xid: string | number; sequence: string | number }>(
-		`select fingerprint, xid, sequence from ${STATE_TABLE} where id`
-	);
+	const result = await database.query<{
+		fingerprint: string;
+		xid: string | number;
+		sequence: string | number;
+	}>(`select fingerprint, xid, sequence from ${STATE_TABLE} where id`);
 	const row = result.rows[0];
 	return row === undefined
 		? undefined
-		: { fingerprint: row.fingerprint, cursor: { xid: Number(row.xid), sequence: Number(row.sequence) } };
+		: {
+				fingerprint: row.fingerprint,
+				cursor: { xid: Number(row.xid), sequence: Number(row.sequence) }
+			};
 };
 
 /** Records how far the replica has streamed, so the next session resumes instead of re-snapshotting. */
@@ -218,7 +223,10 @@ const upsert = async (
  * Restricting to known columns also means a change naming a column this replica does not have is
  * trimmed rather than failing the batch.
  */
-const columnsOf = async (database: PGliteLike, collection: string): Promise<ReadonlySet<string>> => {
+const columnsOf = async (
+	database: PGliteLike,
+	collection: string
+): Promise<ReadonlySet<string>> => {
 	const result = await database.query<{ column_name: string }>(
 		"select column_name from information_schema.columns where table_schema = current_schema() and table_name = $1 and is_generated <> 'ALWAYS' and coalesce(identity_generation, '') <> 'ALWAYS'",
 		[collection]
@@ -246,7 +254,8 @@ export const bulkUpsert = async (
 ): Promise<number> => {
 	if (rows.length === 0) return 0;
 	const present = new Set<string>();
-	for (const row of rows) for (const name of Object.keys(row)) if (columns.has(name)) present.add(name);
+	for (const row of rows)
+		for (const name of Object.keys(row)) if (columns.has(name)) present.add(name);
 	if (!present.has('norbital_id')) return 0;
 	const names = [...present];
 	const parameters: Array<unknown> = [];

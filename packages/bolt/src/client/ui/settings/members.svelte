@@ -68,12 +68,12 @@
 							value={member.role}
 							disabled={busy || onRoleChange === undefined}
 							onValueChange={(role) => {
-							// The Combobox reports the chosen value as an open string. Looking it back up in
-							// the list that defines the legal set proves it is a role, where `as MemberRole`
-							// only asserted it — and the list is already the single source of that set.
-							const chosen = ROLES.find((option) => option.value === role);
-							if (chosen !== undefined) onRoleChange?.(member.id, chosen.value);
-						}}
+								// The Combobox reports the chosen value as an open string. Looking it back up in
+								// the list that defines the legal set proves it is a role, where `as MemberRole`
+								// only asserted it — and the list is already the single source of that set.
+								const chosen = ROLES.find((option) => option.value === role);
+								if (chosen !== undefined) onRoleChange?.(member.id, chosen.value);
+							}}
 						/>
 					</Inline>
 				</Cluster>

@@ -72,8 +72,9 @@ class I18nState<C extends LocaleCatalogs> {
  * Deliberately NOT `createContext()` from svelte: since 5.40 its `use` throws
  * `missing_context` when no provider is installed, which would make the global
  * fallback in `useI18n` unreachable for apps that never install the ui provider
- * (the website and the Core shell provide their own catalogs, not this one).
- * `getContext` returns `undefined` instead, so the fallback stays live.
+ * (the marketing website builds its own i18n context over its own catalogs and
+ * never calls `provideI18n`). `getContext` returns `undefined` instead, so the
+ * fallback stays live.
  */
 const I18N_CONTEXT_KEY = Symbol('@norbital-ai/ui/i18n');
 
@@ -83,8 +84,9 @@ function useI18nContext(): (() => I18nState<LocaleCatalogs> | null) | undefined 
 
 /**
  * Install the application's catalog pair and initial locale for the whole
- * component subtree. Call once from an application root (bolt shell, core
- * layout, website layout) during component init.
+ * component subtree. Call once from an application root during component init;
+ * the Bolt workspace shell is the caller, merging the tenant's catalogs over
+ * `uiMessages` before handing them here.
  *
  * The initial locale resolves as: persisted choice, browser languages, then
  * English.

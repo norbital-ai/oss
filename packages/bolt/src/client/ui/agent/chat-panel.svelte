@@ -10,7 +10,11 @@
 		oncancel,
 		onretry
 	}: {
-		messages?: ReadonlyArray<{ readonly id?: string; readonly role: string; readonly content: string }>;
+		messages?: ReadonlyArray<{
+			readonly id?: string;
+			readonly role: string;
+			readonly content: string;
+		}>;
 		busy?: boolean;
 		error?: string;
 		disabled?: boolean;
@@ -30,7 +34,11 @@
 		<h2 class="text-sm font-semibold text-foreground">Agent</h2>
 	</header>
 
-	<div class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5" aria-live="polite" aria-relevant="additions">
+	<div
+		class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5"
+		aria-live="polite"
+		aria-relevant="additions"
+	>
 		<Stack gap="sm">
 			{#if messages.length === 0 && !busy}
 				<p class="text-sm text-muted-foreground">Start a conversation with this workspace agent.</p>
@@ -40,7 +48,9 @@
 					data-role={message.role}
 					class="rounded-lg border border-border bg-background p-3 text-sm"
 				>
-					<strong class="text-xs tracking-wide text-muted-foreground uppercase">{message.role}</strong>
+					<strong class="text-xs tracking-wide text-muted-foreground uppercase"
+						>{message.role}</strong
+					>
 					<p class="mt-1 mb-0 whitespace-pre-wrap text-foreground">{message.content}</p>
 				</article>
 			{/each}
@@ -51,7 +61,10 @@
 	</div>
 
 	{#if error !== undefined}
-		<div role="alert" class="border-t border-destructive/30 px-4 py-2 text-sm text-destructive sm:px-5">
+		<div
+			role="alert"
+			class="border-t border-destructive/30 px-4 py-2 text-sm text-destructive sm:px-5"
+		>
 			<p>{error}</p>
 			{#if onretry}
 				<button type="button" class="mt-1 underline" onclick={onretry}>Retry</button>
@@ -71,7 +84,9 @@
 		}}
 	>
 		<Stack gap="sm">
-			<label for="bolt-agent-message" class="text-xs font-medium text-muted-foreground">Message</label>
+			<label for="bolt-agent-message" class="text-xs font-medium text-muted-foreground"
+				>Message</label
+			>
 			<textarea
 				id="bolt-agent-message"
 				bind:value={draft}

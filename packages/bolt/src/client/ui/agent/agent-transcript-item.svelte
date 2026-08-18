@@ -45,7 +45,8 @@
 	});
 
 	/** Writes the edited verifier prompt back when the field blurs. */
-	function saveVerifierPrompt(): void { // stupidity:allow Q3 -- event handler
+	function saveVerifierPrompt(): void {
+		// stupidity:allow Q3 -- event handler
 		if (message.kind !== 'verifier') return;
 		if (prompt === message.prompt) return;
 		onVerifierPrompt?.(prompt);
@@ -60,7 +61,8 @@
 	 * The session title says which of an agent's conversations this is, which is the thing a name
 	 * alone cannot; the id is the last resort, and it is still better than an unattributed message.
 	 */
-	function counterpart(message: Extract<PanelMessage, { kind: 'agent-message' }>): string { // stupidity:allow Q4 -- named helper
+	function counterpart(message: Extract<PanelMessage, { kind: 'agent-message' }>): string {
+		// stupidity:allow Q4 -- named helper
 		const named = message.agentName ?? message.sessionTitle;
 		if (named === null) return message.sessionId ?? t('bolt.agent.unknownAgent');
 		return message.sessionTitle === null || message.sessionTitle === message.agentName
@@ -69,7 +71,8 @@
 	}
 
 	/** A built-in tool's label is a catalog key; everything else is the humanized name. */
-	function toolLabel(message: Extract<PanelMessage, { kind: 'tool' }>): string { // stupidity:allow Q4 -- named helper
+	function toolLabel(message: Extract<PanelMessage, { kind: 'tool' }>): string {
+		// stupidity:allow Q4 -- named helper
 		return message.labelKey ? t(message.labelKey) : (message.label ?? message.name);
 	}
 </script>
@@ -206,8 +209,7 @@
 				/>
 			</summary>
 			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
-				{#if message.state === 'needs_input' ||
-					(Array.isArray(message.elicitation) && message.elicitation.length > 0)}
+				{#if message.state === 'needs_input' || (Array.isArray(message.elicitation) && message.elicitation.length > 0)}
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 							{t('bolt.agent.needsInput')}
@@ -299,10 +301,7 @@
 		data-direction={message.direction}
 		data-testid="agent-message"
 	>
-		<Stack
-			gap="xs"
-			class="min-w-0 rounded-lg border border-border/70 bg-muted/30 px-3 py-2"
-		>
+		<Stack gap="xs" class="min-w-0 rounded-lg border border-border/70 bg-muted/30 px-3 py-2">
 			<Inline gap="sm" class="min-w-0 text-tiny text-muted-foreground">
 				<Icon
 					icon={message.direction === 'in' ? 'lucide:inbox' : 'lucide:send'}

@@ -15,10 +15,11 @@ metadata:
 # The Norbital platform
 
 A Norbital workspace is a business application defined by tenant source and compiled by
-Bolt into a running app with a Postgres database behind it. On Core, that source is a branchless live
-pointer onto a detached worktree; Git objects sit underneath, but the tenant does not push to Git
-`main`. Almost everything a user might call "settings" — fields, dropdown values, permissions,
-approval routing — is source code, not runtime configuration.
+Bolt into a running app with a Postgres database behind it. On Colony, that source is one Git
+repository per tenant, and every user or agent profile authoring against it gets its own worktree on
+its own `profile/…` branch rather than its own clone; Git objects sit underneath, but the tenant does
+not push to Git `main`. Almost everything a user might call "settings" — fields, dropdown values,
+permissions, approval routing — is source code, not runtime configuration.
 
 That single fact answers most questions people ask, and getting it wrong is the most common failure
 mode: an agent invents an admin console that does not exist, and the user goes looking for it.

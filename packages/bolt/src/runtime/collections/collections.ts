@@ -10,13 +10,28 @@ import { Identity, Subject } from '../identity/identity.js';
 import { Workspace } from '../workspace.js';
 import { searchableColumns } from '../../authoring/model-introspection.js';
 import type { CollectionDefinition, FieldDefinition } from '../../authoring/workspace-schema.js';
-import { eventRecord, outboxEntriesFor, sendSubscriptions, watchesOperation, type SendSubscription } from '../integrations/outbox.js';
-import { compileOrderTerms, compileWhere, makeWhereContext, renderOrderBy, WhereCompileError, type OrderTerm, type WhereContext } from './where.js';
+import {
+	eventRecord,
+	outboxEntriesFor,
+	sendSubscriptions,
+	watchesOperation,
+	type SendSubscription
+} from '../integrations/outbox.js';
+import {
+	compileOrderTerms,
+	compileWhere,
+	makeWhereContext,
+	renderOrderBy,
+	WhereCompileError,
+	type OrderTerm,
+	type WhereContext
+} from './where.js';
 import { attachRelations } from './prefetch.js';
 import {
 	AuthoredRuntimeService,
 	makeAuthoringApi,
 	runAuthoredHandler,
+	inferenceTurnContent,
 	type AuthoredCollectionOps,
 	type AuthoredCollectionHookModule
 } from './authored.js';
@@ -29,8 +44,16 @@ export const Predicate = Schema.TaggedUnion({
 });
 export type Predicate = typeof Predicate.Type;
 
-export type CompiledQuery = Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }>;
-export type HistoryEntry = Readonly<{ readonly collection: string; readonly recordId: string; readonly operation: 'create' | 'update' | 'delete'; readonly version: number }>;
+export type CompiledQuery = Readonly<{
+	readonly sql: string;
+	readonly parameters: ReadonlyArray<Schema.Json>;
+}>;
+export type HistoryEntry = Readonly<{
+	readonly collection: string;
+	readonly recordId: string;
+	readonly operation: 'create' | 'update' | 'delete';
+	readonly version: number;
+}>;
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
 /**
@@ -67,18 +90,34 @@ export class PendingApproval extends Schema.TaggedError<PendingApproval>()(
 /** Owns identifier safety, predicate compilation, and parameter rebasing. */
 const CollectionSql = {
 	quoteIdentifier: (name: string): string => `"${name.replaceAll('"', '""')}"`,
-	offsetParameters: (sql: string, offset: number): string => sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`),
-	compilePredicate: (predicate: Predicate, offset = 0): CompiledQuery => Predicate.match(predicate, {
-		Equal: ({ field, value }) => ({ sql: `${CollectionSql.quoteIdentifier(field)} = $${offset + 1}`, parameters: [value] }),
-		NotEqual: ({ field, value }) => ({ sql: `${CollectionSql.quoteIdentifier(field)} <> $${offset + 1}`, parameters: [value] }),
-		GreaterThan: ({ field, value }) => ({ sql: `${CollectionSql.quoteIdentifier(field)} > $${offset + 1}`, parameters: [value] }),
-		In: ({ field, values }) => ({ sql: values.length === 0 ? 'false' : `${CollectionSql.quoteIdentifier(field)} in (${values.map((_, index) => `$${offset + index + 1}`).join(', ')})`, parameters: values })
-	})
+	offsetParameters: (sql: string, offset: number): string =>
+		sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`),
+	compilePredicate: (predicate: Predicate, offset = 0): CompiledQuery =>
+		Predicate.match(predicate, {
+			Equal: ({ field, value }) => ({
+				sql: `${CollectionSql.quoteIdentifier(field)} = $${offset + 1}`,
+				parameters: [value]
+			}),
+			NotEqual: ({ field, value }) => ({
+				sql: `${CollectionSql.quoteIdentifier(field)} <> $${offset + 1}`,
+				parameters: [value]
+			}),
+			GreaterThan: ({ field, value }) => ({
+				sql: `${CollectionSql.quoteIdentifier(field)} > $${offset + 1}`,
+				parameters: [value]
+			}),
+			In: ({ field, values }) => ({
+				sql:
+					values.length === 0
+						? 'false'
+						: `${CollectionSql.quoteIdentifier(field)} in (${values.map((_, index) => `$${offset + index + 1}`).join(', ')})`,
+				parameters: values
+			})
+		})
 };
 export const quoteIdentifier = CollectionSql.quoteIdentifier;
 export const compilePredicate = CollectionSql.compilePredicate;
 const offsetParameters = CollectionSql.offsetParameters;
-
 
 export type QueryInput = Readonly<{
 	readonly collection: string;
@@ -117,24 +156,112 @@ export type MutationInput = Readonly<{
 	readonly values: Readonly<Record<string, Schema.Json>>;
 }>;
 
-type MutationError = Workspace.WorkspaceLookupError | AccessControl.AccessDenied | Database.FacilityError | ApprovalConflict | PendingApproval;
-type ResumeError = Workspace.WorkspaceLookupError | AccessControl.AccessDenied | Database.FacilityError | ApprovalConflict;
+/**
+ * One nearest-neighbour read against a pgvector column.
+ *
+ * The operands stay `unknown` for the reason `QueryInput.where` does: they arrive from authored
+ * code, and the one place that decides what a vector search may be given is the place that renders
+ * the SQL for it. Everything here was previously spread into an ordinary `findMany`, which knows no
+ * `column`, no `probe` and no `metric` — so the whole config was dropped on the floor and the caller
+ * received the collection's first hundred rows as its "nearest" neighbours.
+ */
+export type NearestInput = Readonly<{
+	readonly collection: string;
+	readonly column: unknown;
+	readonly probe: unknown;
+	readonly metric: unknown;
+	readonly limit: unknown;
+	readonly maxDistance?: unknown;
+	readonly excludeIds?: unknown;
+}>;
+
+/**
+ * The pgvector distance operator each declared metric measures with.
+ *
+ * `<#>` is the *negative* inner product, which is what makes `order by` ascending mean "most
+ * similar" for all three; a caller comparing `ip` distances against a threshold is comparing
+ * negatives, and the authoring contract says so.
+ */
+const NEAREST_OPERATORS = { cosine: '<=>', l2: '<->', ip: '<#>' } as const;
+
+type MutationError =
+	| Workspace.WorkspaceLookupError
+	| AccessControl.AccessDenied
+	| Database.FacilityError
+	| ApprovalConflict
+	| PendingApproval;
+type ResumeError =
+	| Workspace.WorkspaceLookupError
+	| AccessControl.AccessDenied
+	| Database.FacilityError
+	| ApprovalConflict;
 /** Query paths add the where-compiler failure so an unsupported filter surfaces instead of silently widening the result. */
-type QueryError = Workspace.WorkspaceLookupError | AccessControl.AccessDenied | Database.FacilityError | WhereCompileError;
+type QueryError =
+	| Workspace.WorkspaceLookupError
+	| AccessControl.AccessDenied
+	| Database.FacilityError
+	| WhereCompileError;
 
 export type Interface = Readonly<{
-	readonly findMany: (effectId: EffectId, subject: Identity.Subject, input: QueryInput) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
-	readonly findFirst: (effectId: EffectId, subject: Identity.Subject, input: QueryInput) => Effect.Effect<Schema.Json | undefined, QueryError>;
-	readonly count: (effectId: EffectId, subject: Identity.Subject, input: QueryInput) => Effect.Effect<number, QueryError>;
-	readonly create: (effectId: EffectId, subject: Identity.Subject, input: MutationInput) => Effect.Effect<void, MutationError>;
-	readonly createMany: (effectId: EffectId, subject: Identity.Subject, inputs: ReadonlyArray<MutationInput>) => Effect.Effect<void, MutationError>;
-	readonly update: (effectId: EffectId, subject: Identity.Subject, input: MutationInput) => Effect.Effect<void, MutationError>;
-	readonly delete: (effectId: EffectId, subject: Identity.Subject, collection: string, id: string) => Effect.Effect<void, MutationError>;
+	readonly findMany: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		input: QueryInput
+	) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
+	readonly findFirst: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		input: QueryInput
+	) => Effect.Effect<Schema.Json | undefined, QueryError>;
+	readonly findNearest: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		input: NearestInput
+	) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
+	readonly count: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		input: QueryInput
+	) => Effect.Effect<number, QueryError>;
+	readonly create: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		input: MutationInput
+	) => Effect.Effect<void, MutationError>;
+	readonly createMany: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		inputs: ReadonlyArray<MutationInput>
+	) => Effect.Effect<void, MutationError>;
+	readonly update: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		input: MutationInput
+	) => Effect.Effect<void, MutationError>;
+	readonly delete: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		collection: string,
+		id: string
+	) => Effect.Effect<void, MutationError>;
 	readonly resume: (effectId: EffectId, requestId: string) => Effect.Effect<void, ResumeError>;
 	readonly discard: (effectId: EffectId, requestId: string) => Effect.Effect<void, ResumeError>;
-	readonly import: (effectId: EffectId, subject: Identity.Subject, inputs: ReadonlyArray<MutationInput>) => Effect.Effect<number, MutationError>;
-	readonly export: (effectId: EffectId, subject: Identity.Subject, input: QueryInput) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
-	readonly history: (effectId: EffectId, subject: Identity.Subject, collection: string, id: string) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
+	readonly import: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		inputs: ReadonlyArray<MutationInput>
+	) => Effect.Effect<number, MutationError>;
+	readonly export: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		input: QueryInput
+	) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
+	readonly history: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		collection: string,
+		id: string
+	) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
 }>;
 
 /** Identifies the collections service in Effect's context so dependency wiring remains explicit and type checked. */
@@ -149,7 +276,9 @@ const writableValues = (
 	values: Readonly<Record<string, Schema.Json>>,
 	definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
 ): Readonly<Record<string, Schema.Json>> => {
-	const generated = Object.entries(definition.fields).filter(([, field]) => field.generated !== undefined).map(([name]) => name);
+	const generated = Object.entries(definition.fields)
+		.filter(([, field]) => field.generated !== undefined)
+		.map(([name]) => name);
 	if (generated.length === 0) return values;
 	return Object.fromEntries(Object.entries(values).filter(([name]) => !generated.includes(name)));
 };
@@ -159,14 +288,22 @@ const writableValues = (
  * structured `predicate` does. Compilation failure is raised here so every read path reports the
  * offending column rather than running a widened query.
  */
-const compiledFilter = (input: QueryInput, context: WhereContext): Effect.Effect<CompiledQuery, WhereCompileError> => {
+const compiledFilter = (
+	input: QueryInput,
+	context: WhereContext
+): Effect.Effect<CompiledQuery, WhereCompileError> => {
 	if (input.where === undefined) {
-		return Effect.succeed(input.predicate === undefined ? { sql: 'true', parameters: [] } : compilePredicate(input.predicate));
+		return Effect.succeed(
+			input.predicate === undefined
+				? { sql: 'true', parameters: [] }
+				: compilePredicate(input.predicate)
+		);
 	}
 	const compiled = compileWhere(input.where, context);
-	return Result.isFailure(compiled) ? Effect.fail(compiled.failure) : Effect.succeed(compiled.success);
+	return Result.isFailure(compiled)
+		? Effect.fail(compiled.failure)
+		: Effect.succeed(compiled.success);
 };
-
 
 /**
  * Matches free text against the columns a collection declared searchable.
@@ -206,7 +343,10 @@ type CursorValue = string | number | boolean | null;
  */
 const CollectionCursor = {
 	isValue: (value: unknown): value is CursorValue =>
-		value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean',
+		value === null ||
+		typeof value === 'string' ||
+		typeof value === 'number' ||
+		typeof value === 'boolean',
 	// `btoa` only accepts latin1, so the payload is widened to bytes first: an ordering tuple holding
 	// an accented name would otherwise throw on encode.
 	encodeText: (text: string): string =>
@@ -217,7 +357,9 @@ const CollectionCursor = {
 	decodeText: (token: string): string | undefined => {
 		try {
 			const binary = atob(token.replaceAll('-', '+').replaceAll('_', '/'));
-			return new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
+			return new TextDecoder().decode(
+				Uint8Array.from(binary, (character) => character.charCodeAt(0))
+			);
 		} catch {
 			return undefined;
 		}
@@ -240,7 +382,9 @@ const CollectionCursor = {
 		terms: ReadonlyArray<OrderTerm>,
 		collection: string
 	): Result.Result<ReadonlyArray<CursorValue>, WhereCompileError> => {
-		const refuse = (message: string): Result.Result<ReadonlyArray<CursorValue>, WhereCompileError> =>
+		const refuse = (
+			message: string
+		): Result.Result<ReadonlyArray<CursorValue>, WhereCompileError> =>
 			Result.fail(new WhereCompileError({ collection, field: 'after', message }));
 		const text = CollectionCursor.decodeText(cursor);
 		if (text === undefined) return refuse('Pagination cursor is not a decodable token.');
@@ -254,7 +398,8 @@ const CollectionCursor = {
 		if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
 			return refuse('Pagination cursor does not carry a cursor payload.');
 		}
-		if (Reflect.get(payload, 'v') !== 1) return refuse('Pagination cursor was issued in a different cursor format.');
+		if (Reflect.get(payload, 'v') !== 1)
+			return refuse('Pagination cursor was issued in a different cursor format.');
 		const order: unknown = Reflect.get(payload, 'order');
 		if (!Array.isArray(order) || order.length !== terms.length) {
 			return refuse('Pagination cursor does not match the active sort.');
@@ -287,7 +432,11 @@ const CollectionCursor = {
 	 * null with `>` yields null rather than false, so the null cases are spelled out; without them a
 	 * page boundary landing on a nullable column silently drops every row that follows.
 	 */
-	seek: (terms: ReadonlyArray<OrderTerm>, values: ReadonlyArray<CursorValue>, offset: number): CompiledQuery => {
+	seek: (
+		terms: ReadonlyArray<OrderTerm>,
+		values: ReadonlyArray<CursorValue>,
+		offset: number
+	): CompiledQuery => {
 		const parameters: Array<CursorValue> = [];
 		const bind = (value: CursorValue): string => {
 			parameters.push(value);
@@ -307,7 +456,9 @@ const CollectionCursor = {
 				if (priorTerm === undefined) continue;
 				const priorValue = values[prior] ?? null;
 				const priorColumn = quoteIdentifier(priorTerm.column);
-				clauses.push(priorValue === null ? `${priorColumn} is null` : `${priorColumn} = ${bind(priorValue)}`);
+				clauses.push(
+					priorValue === null ? `${priorColumn} is null` : `${priorColumn} = ${bind(priorValue)}`
+				);
 			}
 			const column = quoteIdentifier(term.column);
 			clauses.push(
@@ -368,8 +519,12 @@ export const layer = Layer.effect(
 		 * Computed once here rather than per mutation. Almost no collection has one, so the cost of
 		 * outbound delivery on a workspace that declares none is a single failed map lookup per write.
 		 */
-		const sendsByCollection = sendSubscriptions(workspace.definition.integrations, authored.integrations);
-		const subscriptionsFor = (collection: string): ReadonlyArray<SendSubscription> => sendsByCollection.get(collection) ?? [];
+		const sendsByCollection = sendSubscriptions(
+			workspace.definition.integrations,
+			authored.integrations
+		);
+		const subscriptionsFor = (collection: string): ReadonlyArray<SendSubscription> =>
+			sendsByCollection.get(collection) ?? [];
 		/**
 		 * The statements that queue this write's outbound deliveries, to be run in the write's own
 		 * transaction.
@@ -401,7 +556,7 @@ export const layer = Layer.effect(
 				...(previous === undefined ? {} : { previous })
 			});
 			return entries.map((entry) => ({
-				sql: "insert into bolt_integration_outbox (integration_name, binding_name, collection_name, record_id, operation, path, payload, status, last_error) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+				sql: 'insert into bolt_integration_outbox (integration_name, binding_name, collection_name, record_id, operation, path, payload, status, last_error) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
 				parameters: [
 					entry.integration,
 					entry.binding,
@@ -421,17 +576,62 @@ export const layer = Layer.effect(
 		// Annotated from the interface because the body calls itself to prefetch relations, and a
 		// self-referencing const cannot have its type inferred.
 		/** Reads one row back without row-level visibility or masking — the elevated view hooks and change events see. */
-		const readRowElevated = Effect.fn('Collections.readRowElevated')(function* (effectId: EffectId, collection: string, id: string) {
+		const readRowElevated = Effect.fn('Collections.readRowElevated')(function* (
+			effectId: EffectId,
+			collection: string,
+			id: string
+		) {
 			const result = yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: `select * from ${quoteIdentifier(collection)} where norbital_id = $1`,
 				parameters: [id]
 			});
 			const row = result.rows[0];
-			return typeof row === 'object' && row !== null ? (row as Readonly<Record<string, unknown>>) : undefined;
+			return typeof row === 'object' && row !== null
+				? (row as Readonly<Record<string, unknown>>)
+				: undefined;
+		});
+		/**
+		 * The bytes and description behind a `file()` column's value.
+		 *
+		 * A `file()` column holds the `norbital_id` of a `document_asset` row, and that row is the only
+		 * thing that names the object-store key the bytes were written under, along with the file name,
+		 * size and mime type nothing else records. Asking the Files facility for the *asset id* — which
+		 * is what this used to do — asks for a key no upload ever wrote, so every authored
+		 * `readFileAsset` resolved against nothing and `mimeType` was hardcoded `null` because there
+		 * was no row being read to get one from.
+		 *
+		 * Read elevated, like every other read a hook's own follow-ups make: the caller already passed
+		 * authorization for the record carrying the column, and `document_asset` is granted to any
+		 * authenticated subject by the system read policy anyway.
+		 */
+		const readAsset = Effect.fn('Collections.readAsset')(function* (
+			effectId: EffectId,
+			assetId: string
+		) {
+			const row = yield* readRowElevated(effectId, 'document_asset', assetId);
+			const storageKey = typeof row?.['storage_key'] === 'string' ? row['storage_key'] : undefined;
+			if (row === undefined || storageKey === undefined) {
+				return yield* new Database.FacilityError({
+					operation: 'files.read',
+					code: 'files.asset_missing',
+					message: `No document_asset ${assetId}, so there is no stored object to read.`,
+					retryable: false,
+					outcome: 'known'
+				});
+			}
+			const response = yield* files.execute(effectId, { _tag: 'Read', key: storageKey });
+			const bytes = response.bytes ?? new Uint8Array();
+			const mimeType = typeof row['mime_type'] === 'string' ? row['mime_type'] : null;
+			const name = typeof row['file_name'] === 'string' ? row['file_name'] : assetId;
+			return { id: assetId, name, mimeType, size: bytes.byteLength, bytes };
 		});
 		/** Runs one authored hook handler with its context object, resolving Effect, promise, and plain results alike. */
-		const runHook = <A = unknown>(hook: { readonly handler: (context: unknown, api: unknown) => unknown } | undefined, context: unknown, api: unknown): Effect.Effect<A> => {
+		const runHook = <A = unknown>(
+			hook: { readonly handler: (context: unknown, api: unknown) => unknown } | undefined,
+			context: unknown,
+			api: unknown
+		): Effect.Effect<A> => {
 			if (hook === undefined) return Effect.succeed(undefined as A);
 			return runAuthoredHandler(hook.handler(context, api)) as Effect.Effect<A>;
 		};
@@ -443,21 +643,25 @@ export const layer = Layer.effect(
 		 * after hook — the record already passed authorization, so its own follow-ups must not fail
 		 * on a row filter the writer itself could not see past.
 		 */
-		const buildOps = (effectId: EffectId, subject: Identity.Subject, elevated = false): AuthoredCollectionOps => ({
+		const buildOps = (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			elevated = false
+		): AuthoredCollectionOps => ({
 			findMany: (collection, input) =>
 				findMany(effectId, subject, { collection, ...input }).pipe(
 					Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)
 				),
 			findFirst: (collection, input) =>
 				findMany(effectId, subject, { collection, ...input, limit: 1 }).pipe(
-					Effect.map((rows) => (rows[0] as Readonly<Record<string, unknown>> | undefined))
+					Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)
 				),
 			count: (collection, input) =>
 				findMany(effectId, subject, { collection, ...input }).pipe(
 					Effect.map((rows) => rows.length)
 				),
 			findNearest: (collection, input) =>
-				findMany(effectId, subject, { collection, ...input }).pipe(
+				findNearest(effectId, subject, { collection, ...input } as NearestInput).pipe(
 					Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)
 				),
 			create: (collection, id, values) =>
@@ -477,11 +681,27 @@ export const layer = Layer.effect(
 				Effect.all(
 					payloads.map((payload) =>
 						Effect.gen(function* () {
-							const identifier = typeof payload['norbital_id'] === 'string' ? payload['norbital_id'] : globalThis.crypto.randomUUID();
+							const identifier =
+								typeof payload['norbital_id'] === 'string'
+									? payload['norbital_id']
+									: globalThis.crypto.randomUUID();
 							const definition = yield* workspace.collection(collection);
-							yield* applyCreate(effectId, subject, { collection, id: identifier, values: payload as Readonly<Record<string, Schema.Json>> }, definition, true);
+							yield* applyCreate(
+								effectId,
+								subject,
+								{
+									collection,
+									id: identifier,
+									values: payload as Readonly<Record<string, Schema.Json>>
+								},
+								definition,
+								true
+							);
 							const row = yield* readRowElevated(effectId, collection, identifier);
-							return row ?? ({ norbital_id: identifier, ...payload } as Readonly<Record<string, unknown>>);
+							return (
+								row ??
+								({ norbital_id: identifier, ...payload } as Readonly<Record<string, unknown>>)
+							);
 						})
 					),
 					{ concurrency: 'unbounded' }
@@ -492,26 +712,23 @@ export const layer = Layer.effect(
 				),
 			approvalFindFirst: (input) =>
 				findMany(effectId, subject, { collection: 'approval_request', ...input, limit: 1 }).pipe(
-					Effect.map((rows) => (rows[0] as Readonly<Record<string, unknown>> | undefined))
+					Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)
 				),
 			infer: (input) =>
-				ai.execute(effectId, {
-					_tag: 'Turn',
-					model: input.model ?? 'gpt-5',
-					messages: [{ role: 'user', content: input.prompt }],
-					tools: [],
-					maxOutputTokens: 4_096
-				}).pipe(Effect.map((response) => Schema.decodeUnknownSync(input.schema)(response.output))),
-			readFileAsset: (assetId) =>
-				files.execute(effectId, { _tag: 'Read', key: assetId }).pipe(
-					Effect.map((response) => ({
-						id: assetId,
-						name: response.key ?? assetId,
-						mimeType: null,
-						size: (response.bytes ?? new Uint8Array()).byteLength,
-						bytes: response.bytes ?? new Uint8Array()
-					}))
-				)
+				Effect.gen(function* () {
+					const content = yield* inferenceTurnContent(input.prompt, input.images, (assetId) =>
+						readAsset(effectId, assetId)
+					);
+					const response = yield* ai.execute(effectId, {
+						_tag: 'Turn',
+						model: input.model ?? 'gpt-5',
+						messages: [{ role: 'user', content }],
+						tools: [],
+						maxOutputTokens: 4_096
+					});
+					return Schema.decodeUnknownSync(input.schema)(response.output);
+				}),
+			readFileAsset: (assetId) => readAsset(effectId, assetId)
 		});
 		const buildApi = (effectId: EffectId, subject: Identity.Subject, elevated = false): unknown =>
 			makeAuthoringApi(buildOps(effectId, subject, elevated), { elevated });
@@ -530,22 +747,29 @@ export const layer = Layer.effect(
 			event: 'created' | 'updated' | 'deleted'
 		) {
 			const triggers = Object.values(authored.automations).filter(
-				(automation) => automation.trigger._tag === 'Change' && automation.trigger.collection === collection && automation.trigger.event === event
+				(automation) =>
+					automation.trigger._tag === 'Change' &&
+					automation.trigger.collection === collection &&
+					automation.trigger.event === event
 			);
 			if (triggers.length === 0) return;
-			const row = event === 'deleted' ? undefined : yield* readRowElevated(effectId, collection, id);
+			const row =
+				event === 'deleted' ? undefined : yield* readRowElevated(effectId, collection, id);
 			for (const automation of triggers) {
-				yield* tasks.execute(EffectId.make(`${effectId}:event:${automation.name}`), {
-					_tag: 'Enqueue',
-					command: `automations.${automation.name}`,
-					input: {
-						args: {},
-						scope: event === 'deleted' || row === undefined
-							? {}
-							: { incoming_record: row as Schema.Json },
-						bolt_run_as: subject
-					}
-				}).pipe(Effect.ignore);
+				yield* tasks
+					.execute(EffectId.make(`${effectId}:event:${automation.name}`), {
+						_tag: 'Enqueue',
+						command: `automations.${automation.name}`,
+						input: {
+							args: {},
+							scope:
+								event === 'deleted' || row === undefined
+									? {}
+									: { incoming_record: row as Schema.Json },
+							bolt_run_as: subject
+						}
+					})
+					.pipe(Effect.ignore);
 			}
 		});
 		const runCreateHooks = Effect.fn('Collections.runCreateHooks')(function* (
@@ -558,7 +782,14 @@ export const layer = Layer.effect(
 			let values = input.values;
 			if (module?.create?.input !== undefined) {
 				const decoded = yield* Schema.decodeUnknownEffect(module.create.input)(values).pipe(
-					Effect.mapError((cause) => new AccessControl.AccessDenied({ action: 'create', resource: input.collection, reason: 'hook input validation failed' }))
+					Effect.mapError(
+						(cause) =>
+							new AccessControl.AccessDenied({
+								action: 'create',
+								resource: input.collection,
+								reason: 'hook input validation failed'
+							})
+					)
 				);
 				values = decoded as Readonly<Record<string, Schema.Json>>;
 			}
@@ -568,43 +799,154 @@ export const layer = Layer.effect(
 			}
 			return values;
 		});
-		const findMany: Interface['findMany'] = Effect.fn('Collections.findMany')(function* (effectId: EffectId, subject: Identity.Subject, input: QueryInput) {
-				const definition = yield* workspace.collection(input.collection);
-				yield* access.authorize(subject, 'read', input.collection);
-				const context = makeWhereContext(input.collection, definition.fields, workspace.definition);
-				const compiled = yield* compiledFilter(input, context);
-				const searched = searchClause(definition.fields, input.search, compiled.parameters.length);
-				const visibility = access.predicate(subject, 'read', input.collection);
-				const limit = Math.max(1, input.limit ?? 100);
-				const ordering = compileOrderTerms(input.orderBy, context);
-				// Seek parameters bind last, after the visibility predicate, so the offsets the filter,
-				// search and visibility clauses already computed among themselves stay as they were. The
-				// seek is one more conjunct, so a cursor pages the set the filter and search left.
-				const seek = yield* seekFilter(
-					input.after,
-					ordering,
-					input.collection,
-					compiled.parameters.length + searched.parameters.length + visibility.parameters.length
-				);
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select * from ${quoteIdentifier(input.collection)} where (${compiled.sql}) and (${searched.sql}) and (${offsetParameters(visibility.sql, compiled.parameters.length + searched.parameters.length)}) and (${seek.sql})${renderOrderBy(ordering)} limit ${limit}`,
-					parameters: [...compiled.parameters, ...searched.parameters, ...visibility.parameters, ...seek.parameters]
-				});
-				const rows = result.rows.map((row) => Schema.is(JsonObject)(row)
-					? access.mask(subject, 'read', input.collection, row)
-					: row);
-				// Related records are read through `findMany` itself, so each one passes the same
-				// authorization, row visibility and masking as a direct query would. `with` cannot
-				// become a way to read what the subject is not allowed to see.
-				return yield* attachRelations(workspace.definition, input.collection, rows, input.with, (collection, column, values) =>
+		const findMany: Interface['findMany'] = Effect.fn('Collections.findMany')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			input: QueryInput
+		) {
+			const definition = yield* workspace.collection(input.collection);
+			yield* access.authorize(subject, 'read', input.collection);
+			const context = makeWhereContext(input.collection, definition.fields, workspace.definition);
+			const compiled = yield* compiledFilter(input, context);
+			const searched = searchClause(definition.fields, input.search, compiled.parameters.length);
+			const visibility = access.predicate(subject, 'read', input.collection);
+			const limit = Math.max(1, input.limit ?? 100);
+			const ordering = compileOrderTerms(input.orderBy, context);
+			// Seek parameters bind last, after the visibility predicate, so the offsets the filter,
+			// search and visibility clauses already computed among themselves stay as they were. The
+			// seek is one more conjunct, so a cursor pages the set the filter and search left.
+			const seek = yield* seekFilter(
+				input.after,
+				ordering,
+				input.collection,
+				compiled.parameters.length + searched.parameters.length + visibility.parameters.length
+			);
+			const result = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `select * from ${quoteIdentifier(input.collection)} where (${compiled.sql}) and (${searched.sql}) and (${offsetParameters(visibility.sql, compiled.parameters.length + searched.parameters.length)}) and (${seek.sql})${renderOrderBy(ordering)} limit ${limit}`,
+				parameters: [
+					...compiled.parameters,
+					...searched.parameters,
+					...visibility.parameters,
+					...seek.parameters
+				]
+			});
+			const rows = result.rows.map((row) =>
+				Schema.is(JsonObject)(row) ? access.mask(subject, 'read', input.collection, row) : row
+			);
+			// Related records are read through `findMany` itself, so each one passes the same
+			// authorization, row visibility and masking as a direct query would. `with` cannot
+			// become a way to read what the subject is not allowed to see.
+			return yield* attachRelations(
+				workspace.definition,
+				input.collection,
+				rows,
+				input.with,
+				(collection, column, values) =>
 					findMany(effectId, subject, {
 						collection,
 						where: { [column]: { in: values } },
 						limit: PREFETCH_LIMIT
 					}).pipe(Effect.orElseSucceed(() => []))
+			);
+		});
+		/**
+		 * Nearest neighbours, measured in the database by the index that was declared for them.
+		 *
+		 * The distance operator is applied to the column itself rather than to an expression over it,
+		 * because that is the only form pgvector's HNSW index can answer: `order by "col" <-> $1` uses
+		 * the index, and any wrapping of `"col"` degrades it into a sequential scan over every row.
+		 * The same expression is projected as `distance`, so a caller comparing against a threshold and
+		 * the planner choosing an access path are reading one number.
+		 *
+		 * Row visibility is the read predicate every other read goes through, and `access.mask` runs on
+		 * the record before `distance` is put back on it — a field-restricted policy must not be
+		 * undone by a search, and `distance` is not a column of the collection for it to strip.
+		 */
+		const findNearest: Interface['findNearest'] = Effect.fn('Collections.findNearest')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			input: NearestInput
+		) {
+			const definition = yield* workspace.collection(input.collection);
+			yield* access.authorize(subject, 'read', input.collection);
+			const refuse = (field: string, message: string) =>
+				new WhereCompileError({ collection: input.collection, field, message });
+			const column = input.column;
+			if (typeof column !== 'string' || !Object.hasOwn(definition.fields, column)) {
+				return yield* refuse(
+					typeof column === 'string' ? column : 'column',
+					`'${String(column)}' is not a column of ${input.collection}; findNearest needs the vector column to measure against.`
 				);
+			}
+			const metric = input.metric;
+			if (typeof metric !== 'string' || !Object.hasOwn(NEAREST_OPERATORS, metric)) {
+				return yield* refuse(
+					'metric',
+					`No distance metric '${String(metric)}'. Accepted metrics: ${Object.keys(NEAREST_OPERATORS).join(', ')}.`
+				);
+			}
+			const probe = input.probe;
+			if (
+				!Array.isArray(probe) ||
+				probe.length === 0 ||
+				!probe.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
+			) {
+				return yield* refuse(
+					'probe',
+					"probe must be a non-empty array of finite numbers with the column's dimension."
+				);
+			}
+			const excludeIds = input.excludeIds ?? [];
+			if (!Array.isArray(excludeIds) || !excludeIds.every((entry) => typeof entry === 'string')) {
+				return yield* refuse('excludeIds', 'excludeIds must be an array of record identifiers.');
+			}
+			if (
+				input.maxDistance !== undefined &&
+				(typeof input.maxDistance !== 'number' || !Number.isFinite(input.maxDistance))
+			) {
+				return yield* refuse('maxDistance', 'maxDistance must be a finite number.');
+			}
+			const limit = Math.max(
+				1,
+				Math.min(
+					typeof input.limit === 'number' && Number.isFinite(input.limit)
+						? Math.trunc(input.limit)
+						: 100,
+					500
+				)
+			);
+			const parameters: Array<Schema.Json> = [];
+			// A driver binds a JavaScript array to a Postgres *array*, and `vector` is not one. The
+			// literal text form cast to `::vector` is what pgvector parses.
+			const probeIndex = parameters.push(JSON.stringify(probe));
+			const distanceSql = `(${quoteIdentifier(column)} ${NEAREST_OPERATORS[metric as keyof typeof NEAREST_OPERATORS]} $${probeIndex}::vector)`;
+			const visibility = access.predicate(subject, 'read', input.collection);
+			const visibilitySql = offsetParameters(visibility.sql, parameters.length);
+			parameters.push(...visibility.parameters);
+			const exclusionSql =
+				excludeIds.length === 0
+					? 'true'
+					: `${quoteIdentifier('norbital_id')} not in (${excludeIds.map((identifier) => `$${parameters.push(identifier)}::uuid`).join(', ')})`;
+			const boundSql =
+				input.maxDistance === undefined
+					? 'true'
+					: `${distanceSql} <= $${parameters.push(input.maxDistance)}`;
+			const result = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `select *, ${distanceSql} as distance from ${quoteIdentifier(input.collection)} where ${quoteIdentifier(column)} is not null and (${visibilitySql}) and (${exclusionSql}) and (${boundSql}) order by ${quoteIdentifier(column)} ${NEAREST_OPERATORS[metric as keyof typeof NEAREST_OPERATORS]} $${probeIndex}::vector limit ${limit}`,
+				parameters
 			});
+			return result.rows.map((row) => {
+				if (!Schema.is(JsonObject)(row)) return row;
+				const record = Object.fromEntries(
+					Object.entries(row).filter(([field]) => field !== 'distance')
+				);
+				const distance = row['distance'];
+				const measured = typeof distance === 'number' ? distance : Number(distance ?? Number.NaN);
+				return { ...access.mask(subject, 'read', input.collection, record), distance: measured };
+			});
+		});
 		/**
 		 * A column value as a parameter, and the placeholder that receives it.
 		 *
@@ -645,7 +987,9 @@ export const layer = Layer.effect(
 			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
 			elevated = false
 		) {
-			const visibility = elevated ? AccessControl.unrestricted : access.predicate(subject, 'create', input.collection);
+			const visibility = elevated
+				? AccessControl.unrestricted
+				: access.predicate(subject, 'create', input.collection);
 			const writable = writableValues(input.values, definition);
 			const entries = Object.entries(writable).sort(([left], [right]) => left.localeCompare(right));
 			const columns = ['norbital_id', ...entries.map(([name]) => name)];
@@ -657,10 +1001,14 @@ export const layer = Layer.effect(
 				...columnValues.map(([name, value]) => boundParameter(definition, name, value)),
 				...visibility.parameters
 			];
-			const history = definition.history ? [{
-				sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)',
-				parameters: [input.collection, input.id, 'create', subject.userId, input.values]
-			}] : [];
+			const history = definition.history
+				? [
+						{
+							sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)',
+							parameters: [input.collection, input.id, 'create', subject.userId, input.values]
+						}
+					]
+				: [];
 			yield* database.execute(effectId, {
 				_tag: 'Transaction',
 				statements: [
@@ -673,7 +1021,14 @@ export const layer = Layer.effect(
 						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)',
 						parameters: [input.collection, input.id, 'create', input.values]
 					},
-					...outboxStatements(subject, input.collection, input.id, 'create', input.values, undefined)
+					...outboxStatements(
+						subject,
+						input.collection,
+						input.id,
+						'create',
+						input.values,
+						undefined
+					)
 				]
 			});
 			yield* wake.announce(effectId, [input.collection]);
@@ -688,23 +1043,48 @@ export const layer = Layer.effect(
 			/** The row before this update, when an outbound binding on this collection needs one. */
 			previous: Readonly<Record<string, unknown>> | undefined = undefined
 		) {
-			const visibility = elevated ? AccessControl.unrestricted : access.predicate(subject, 'update', input.collection);
+			const visibility = elevated
+				? AccessControl.unrestricted
+				: access.predicate(subject, 'update', input.collection);
 			const writable = writableValues(input.values, definition);
 			const entries = Object.entries(writable).sort(([left], [right]) => left.localeCompare(right));
 			if (entries.length === 0 && !clearLock) return;
 			const assignments = [
-				...entries.map(([name, value], index) => `${quoteIdentifier(name)} = ${boundPlaceholder(definition, name, value, index + 1)}`),
+				...entries.map(
+					([name, value], index) =>
+						`${quoteIdentifier(name)} = ${boundPlaceholder(definition, name, value, index + 1)}`
+				),
 				'norbital_updated_at = now()',
 				'norbital_row_version = norbital_row_version + 1',
 				...(clearLock ? ['norbital_approval_id = null'] : [])
 			];
-			const history = definition.history ? [{ sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)', parameters: [input.collection, input.id, 'update', subject.userId, input.values] }] : [];
-			yield* database.execute(effectId, { _tag: 'Transaction', statements: [
-				{ sql: `update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where norbital_id = $${entries.length + 1} and (${offsetParameters(visibility.sql, entries.length + 1)})`, parameters: [...entries.map(([name, value]) => boundParameter(definition, name, value)), input.id, ...visibility.parameters] },
-				...history,
-				{ sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)', parameters: [input.collection, input.id, 'update', input.values] },
-				...outboxStatements(subject, input.collection, input.id, 'update', input.values, previous)
-			] });
+			const history = definition.history
+				? [
+						{
+							sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)',
+							parameters: [input.collection, input.id, 'update', subject.userId, input.values]
+						}
+					]
+				: [];
+			yield* database.execute(effectId, {
+				_tag: 'Transaction',
+				statements: [
+					{
+						sql: `update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where norbital_id = $${entries.length + 1} and (${offsetParameters(visibility.sql, entries.length + 1)})`,
+						parameters: [
+							...entries.map(([name, value]) => boundParameter(definition, name, value)),
+							input.id,
+							...visibility.parameters
+						]
+					},
+					...history,
+					{
+						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)',
+						parameters: [input.collection, input.id, 'update', input.values]
+					},
+					...outboxStatements(subject, input.collection, input.id, 'update', input.values, previous)
+				]
+			});
 			yield* wake.announce(effectId, [input.collection]);
 		});
 		const applyDelete = Effect.fn('Collections.applyDelete')(function* (
@@ -717,27 +1097,57 @@ export const layer = Layer.effect(
 			/** The row before this delete, when an outbound binding on this collection needs one. */
 			previous: Readonly<Record<string, unknown>> | undefined = undefined
 		) {
-			const visibility = elevated ? AccessControl.unrestricted : access.predicate(subject, 'delete', collection);
-			const history = definition.history ? [{ sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id) values ($1, $2, $3, $4)', parameters: [collection, id, 'delete', subject.userId] }] : [];
-			yield* database.execute(effectId, { _tag: 'Transaction', statements: [
-				{ sql: `delete from ${quoteIdentifier(collection)} where norbital_id = $1 and (${offsetParameters(visibility.sql, 1)})`, parameters: [id, ...visibility.parameters] },
-				...history,
-				{ sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation) values ($1, $2, $3)', parameters: [collection, id, 'delete'] },
-				...outboxStatements(subject, collection, id, 'delete', {}, previous)
-			] });
+			const visibility = elevated
+				? AccessControl.unrestricted
+				: access.predicate(subject, 'delete', collection);
+			const history = definition.history
+				? [
+						{
+							sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id) values ($1, $2, $3, $4)',
+							parameters: [collection, id, 'delete', subject.userId]
+						}
+					]
+				: [];
+			yield* database.execute(effectId, {
+				_tag: 'Transaction',
+				statements: [
+					{
+						sql: `delete from ${quoteIdentifier(collection)} where norbital_id = $1 and (${offsetParameters(visibility.sql, 1)})`,
+						parameters: [id, ...visibility.parameters]
+					},
+					...history,
+					{
+						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation) values ($1, $2, $3)',
+						parameters: [collection, id, 'delete']
+					},
+					...outboxStatements(subject, collection, id, 'delete', {}, previous)
+				]
+			});
 			yield* wake.announce(effectId, [collection]);
 		});
-		const readLock = Effect.fn('Collections.readLock')(function* (effectId: EffectId, collection: string, id: string) {
+		const readLock = Effect.fn('Collections.readLock')(function* (
+			effectId: EffectId,
+			collection: string,
+			id: string
+		) {
 			const result = yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: `select norbital_approval_id from ${quoteIdentifier(collection)} where norbital_id = $1`,
 				parameters: [id]
 			});
 			const row = result.rows[0];
-			const value = typeof row === 'object' && row !== null ? Reflect.get(row, 'norbital_approval_id') : undefined;
+			const value =
+				typeof row === 'object' && row !== null
+					? Reflect.get(row, 'norbital_approval_id')
+					: undefined;
 			return typeof value === 'string' && value.length > 0 ? value : undefined;
 		});
-		const setLock = Effect.fn('Collections.setLock')(function* (effectId: EffectId, collection: string, id: string, requestId: string) {
+		const setLock = Effect.fn('Collections.setLock')(function* (
+			effectId: EffectId,
+			collection: string,
+			id: string,
+			requestId: string
+		) {
 			yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: `update ${quoteIdentifier(collection)} set norbital_approval_id = $2 where norbital_id = $1 and norbital_approval_id is null returning norbital_id`,
@@ -770,12 +1180,18 @@ export const layer = Layer.effect(
 		) {
 			const pending = yield* approvals.pendingForRecord(effectId, input.collection, input.id);
 			if (pending !== undefined) {
-				return yield* new ApprovalConflict({ requestId: pending.requestId, reason: 'record is locked by a pending approval' });
+				return yield* new ApprovalConflict({
+					requestId: pending.requestId,
+					reason: 'record is locked by a pending approval'
+				});
 			}
 			if (action !== 'create') {
 				const locked = yield* readLock(effectId, input.collection, input.id);
 				if (locked !== undefined) {
-					return yield* new ApprovalConflict({ requestId: locked, reason: 'record is locked by a pending approval' });
+					return yield* new ApprovalConflict({
+						requestId: locked,
+						reason: 'record is locked by a pending approval'
+					});
 				}
 			}
 			// Derived, not random: the same interception must resolve to the same request so a retry
@@ -791,19 +1207,31 @@ export const layer = Layer.effect(
 				subject
 			});
 			if (state._tag !== 'Pending') {
-				return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'record is locked by a pending approval' });
+				return yield* new ApprovalConflict({
+					requestId: state.requestId,
+					reason: 'record is locked by a pending approval'
+				});
 			}
 			// Every action locks, `create` included. The row a gated create produces exists before this
 			// runs — see `create` below — so there is something to stamp, and stamping it is what makes
 			// the record visible-but-held rather than absent.
 			yield* setLock(effectId, input.collection, input.id, state.requestId);
-			return yield* new PendingApproval({ requestId: state.requestId, collection: input.collection, id: input.id, action });
+			return yield* new PendingApproval({
+				requestId: state.requestId,
+				collection: input.collection,
+				id: input.id,
+				action
+			});
 		});
 		const requiresApproval = (
 			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
 			visibility: AccessControl.RowPredicate
 		): boolean => definition.approvalLock === true || visibility.approval !== undefined;
-		const create = Effect.fn('Collections.create')(function* (effectId: EffectId, subject: Identity.Subject, input: MutationInput) {
+		const create = Effect.fn('Collections.create')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			input: MutationInput
+		) {
 			const definition = yield* workspace.collection(input.collection);
 			yield* access.authorize(subject, 'create', input.collection);
 			const visibility = access.predicate(subject, 'create', input.collection);
@@ -838,10 +1266,15 @@ export const layer = Layer.effect(
 			}
 			yield* emitChangeEvents(effectId, subject, input.collection, input.id, 'created');
 		});
-		const createMany = Effect.fn('Collections.createMany')(function* (effectId: EffectId, subject: Identity.Subject, inputs: ReadonlyArray<MutationInput>) {
+		const createMany = Effect.fn('Collections.createMany')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			inputs: ReadonlyArray<MutationInput>
+		) {
 			for (let index = 0; index < inputs.length; index += 1) {
 				const input = inputs[index];
-				if (input !== undefined) yield* create(EffectId.make(`${effectId}:${index}`), subject, input);
+				if (input !== undefined)
+					yield* create(EffectId.make(`${effectId}:${index}`), subject, input);
 			}
 		});
 		const count = Effect.fn('Collections.count')(function* (effectId, subject, input) {
@@ -856,7 +1289,11 @@ export const layer = Layer.effect(
 			// `after` is deliberately absent here. A count answers how large the filtered set is, which
 			// is what a "1 of 335" reads from; counting only the rows past the cursor would shrink that
 			// total on every page turn.
-			const result = yield* database.execute(effectId, { _tag: 'Query', sql: `select count(*) as count from ${quoteIdentifier(input.collection)} where (${compiled.sql}) and (${searched.sql}) and (${offsetParameters(visibility.sql, compiled.parameters.length + searched.parameters.length)})`, parameters: [...compiled.parameters, ...searched.parameters, ...visibility.parameters] });
+			const result = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `select count(*) as count from ${quoteIdentifier(input.collection)} where (${compiled.sql}) and (${searched.sql}) and (${offsetParameters(visibility.sql, compiled.parameters.length + searched.parameters.length)})`,
+				parameters: [...compiled.parameters, ...searched.parameters, ...visibility.parameters]
+			});
 			const row = result.rows[0];
 			const value = typeof row === 'object' && row !== null ? Reflect.get(row, 'count') : undefined;
 			return typeof value === 'number' ? value : Number(value ?? 0);
@@ -873,22 +1310,44 @@ export const layer = Layer.effect(
 			let values = input.values;
 			if (module?.update?.input !== undefined) {
 				values = yield* Schema.decodeUnknownEffect(module.update.input)(values).pipe(
-					Effect.mapError((cause) => new AccessControl.AccessDenied({ action: 'update', resource: input.collection, reason: 'hook input validation failed' }))
+					Effect.mapError(
+						(cause) =>
+							new AccessControl.AccessDenied({
+								action: 'update',
+								resource: input.collection,
+								reason: 'hook input validation failed'
+							})
+					)
 				) as Effect.Effect<Readonly<Record<string, Schema.Json>>>;
 			}
 			// Read once and used twice where both want it. An outbound binding needs it because a
 			// trigger is asked `previous.status !== record.status` and a patch alone cannot answer that;
 			// the hook needs it because it always has. The read is skipped entirely when neither does,
 			// so a collection with no `update` hook and no outbound binding costs nothing for it.
-			const wantsPrevious = module?.update?.before !== undefined || needsPreviousRow(input.collection, 'update');
-			const existing = wantsPrevious ? yield* readRowElevated(effectId, input.collection, input.id) : undefined;
+			const wantsPrevious =
+				module?.update?.before !== undefined || needsPreviousRow(input.collection, 'update');
+			const existing = wantsPrevious
+				? yield* readRowElevated(effectId, input.collection, input.id)
+				: undefined;
 			if (module?.update?.before !== undefined) {
-				const before = yield* runHook<unknown>(module.update.before, { input: values, existing, api }, api);
+				const before = yield* runHook<unknown>(
+					module.update.before,
+					{ input: values, existing, api },
+					api
+				);
 				if (before !== null && before !== undefined && typeof before === 'object') {
 					values = before as Readonly<Record<string, Schema.Json>>;
 				}
 			}
-			yield* applyUpdate(effectId, subject, { ...input, values }, definition, false, false, existing);
+			yield* applyUpdate(
+				effectId,
+				subject,
+				{ ...input, values },
+				definition,
+				false,
+				false,
+				existing
+			);
 			if (module?.update?.after !== undefined) {
 				const afterApi = buildApi(effectId, subject, true);
 				const record = yield* readRowElevated(effectId, input.collection, input.id);
@@ -896,35 +1355,43 @@ export const layer = Layer.effect(
 			}
 			yield* emitChangeEvents(effectId, subject, input.collection, input.id, 'updated');
 		});
-		const deleteRecord = Effect.fn('Collections.delete')(function* (effectId, subject, collection, id) {
-			const definition = yield* workspace.collection(collection);
-			yield* access.authorize(subject, 'delete', collection);
-			const visibility = access.predicate(subject, 'delete', collection);
-			if (requiresApproval(definition, visibility)) {
-				return yield* holdForApproval(effectId, subject, { collection, id, values: {} }, 'delete');
+		const deleteRecord = Effect.fn('Collections.delete')(
+			function* (effectId, subject, collection, id) {
+				const definition = yield* workspace.collection(collection);
+				yield* access.authorize(subject, 'delete', collection);
+				const visibility = access.predicate(subject, 'delete', collection);
+				if (requiresApproval(definition, visibility)) {
+					return yield* holdForApproval(
+						effectId,
+						subject,
+						{ collection, id, values: {} },
+						'delete'
+					);
+				}
+				const module = authored.hooks[collection];
+				const api = buildApi(effectId, subject);
+				let existing: Readonly<Record<string, unknown>> | undefined;
+				if (module?.delete?.before !== undefined || needsPreviousRow(collection, 'delete')) {
+					// An outbound delete binding needs this read for a reason no hook has: after the statement
+					// runs there is no row left to describe, so a delivery that did not capture it first can
+					// only say that *something* with this id is gone.
+					existing = yield* readRowElevated(effectId, collection, id);
+				}
+				if (module?.delete?.before !== undefined) {
+					yield* runHook<unknown>(module.delete.before, { existing, api }, api);
+				}
+				const record =
+					module?.delete?.after !== undefined
+						? (existing ?? (yield* readRowElevated(effectId, collection, id)))
+						: undefined;
+				yield* applyDelete(effectId, subject, collection, id, definition, false, existing);
+				if (module?.delete?.after !== undefined) {
+					const afterApi = buildApi(effectId, subject, true);
+					yield* runHook<unknown>(module.delete.after, { record, api: afterApi }, afterApi);
+				}
+				yield* emitChangeEvents(effectId, subject, collection, id, 'deleted');
 			}
-			const module = authored.hooks[collection];
-			const api = buildApi(effectId, subject);
-			let existing: Readonly<Record<string, unknown>> | undefined;
-			if (module?.delete?.before !== undefined || needsPreviousRow(collection, 'delete')) {
-				// An outbound delete binding needs this read for a reason no hook has: after the statement
-				// runs there is no row left to describe, so a delivery that did not capture it first can
-				// only say that *something* with this id is gone.
-				existing = yield* readRowElevated(effectId, collection, id);
-			}
-			if (module?.delete?.before !== undefined) {
-				yield* runHook<unknown>(module.delete.before, { existing, api }, api);
-			}
-			const record = module?.delete?.after !== undefined
-				? (existing ?? (yield* readRowElevated(effectId, collection, id)))
-				: undefined;
-			yield* applyDelete(effectId, subject, collection, id, definition, false, existing);
-			if (module?.delete?.after !== undefined) {
-				const afterApi = buildApi(effectId, subject, true);
-				yield* runHook<unknown>(module.delete.after, { record, api: afterApi }, afterApi);
-			}
-			yield* emitChangeEvents(effectId, subject, collection, id, 'deleted');
-		});
+		);
 		/**
 		 * The record an approval request was opened over, from whichever state the request reached.
 		 *
@@ -936,7 +1403,10 @@ export const layer = Layer.effect(
 			stored: unknown
 		) {
 			if (stored === undefined || !Schema.is(JsonObject)(stored)) {
-				return yield* new ApprovalConflict({ requestId, reason: 'stored approval operation is missing' });
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'stored approval operation is missing'
+				});
 			}
 			return yield* Schema.decodeUnknownEffect(CollectionOperation)({
 				collection: stored.collection,
@@ -945,7 +1415,10 @@ export const layer = Layer.effect(
 				action: stored.action,
 				subject: stored.subject
 			}).pipe(
-				Effect.mapError(() => new ApprovalConflict({ requestId, reason: 'stored approval operation is malformed' }))
+				Effect.mapError(
+					() =>
+						new ApprovalConflict({ requestId, reason: 'stored approval operation is malformed' })
+				)
 			);
 		});
 
@@ -959,24 +1432,39 @@ export const layer = Layer.effect(
 		 * An `update` or `delete` was never applied, so the record is already what it should be and
 		 * only the lock has to come off.
 		 */
-		const discard = Effect.fn('Collections.discard')(function* (effectId: EffectId, requestId: string) {
+		const discard = Effect.fn('Collections.discard')(function* (
+			effectId: EffectId,
+			requestId: string
+		) {
 			const state = yield* approvals.status(effectId, requestId);
-			if (state === undefined) return yield* new ApprovalConflict({ requestId, reason: 'approval request was not found' });
+			if (state === undefined)
+				return yield* new ApprovalConflict({ requestId, reason: 'approval request was not found' });
 			if (state._tag !== 'Rejected' && state._tag !== 'Withdrawn') {
 				return yield* new ApprovalConflict({ requestId, reason: 'approval was not refused' });
 			}
 			const operation = yield* storedOperation(requestId, state.operation);
 			const definition = yield* workspace.collection(operation.collection);
 			if (operation.action === 'create') {
-				yield* applyDelete(effectId, operation.subject, operation.collection, operation.id, definition, true);
+				yield* applyDelete(
+					effectId,
+					operation.subject,
+					operation.collection,
+					operation.id,
+					definition,
+					true
+				);
 				return;
 			}
 			yield* releaseLock(effectId, operation.collection, operation.id);
 		});
 
-		const resume = Effect.fn('Collections.resume')(function* (effectId: EffectId, requestId: string) {
+		const resume = Effect.fn('Collections.resume')(function* (
+			effectId: EffectId,
+			requestId: string
+		) {
 			const state = yield* approvals.status(effectId, requestId);
-			if (state === undefined) return yield* new ApprovalConflict({ requestId, reason: 'approval request was not found' });
+			if (state === undefined)
+				return yield* new ApprovalConflict({ requestId, reason: 'approval request was not found' });
 			yield* approvals.authorizeResume(state);
 			const operation = yield* storedOperation(requestId, state.operation);
 			const definition = yield* workspace.collection(operation.collection);
@@ -1001,11 +1489,20 @@ export const layer = Layer.effect(
 					yield* applyUpdate(effectId, operation.subject, operation, definition, true);
 					return;
 				case 'delete':
-					yield* applyDelete(effectId, operation.subject, operation.collection, operation.id, definition);
+					yield* applyDelete(
+						effectId,
+						operation.subject,
+						operation.collection,
+						operation.id,
+						definition
+					);
 					return;
 				default: {
 					const _exhaustive: never = operation.action;
-					return yield* new ApprovalConflict({ requestId, reason: `unsupported stored action ${_exhaustive}` });
+					return yield* new ApprovalConflict({
+						requestId,
+						reason: `unsupported stored action ${_exhaustive}`
+					});
 				}
 			}
 		});
@@ -1014,6 +1511,7 @@ export const layer = Layer.effect(
 			findFirst: Effect.fn('Collections.findFirst')(function* (effectId, subject, input) {
 				return (yield* findMany(effectId, subject, { ...input, limit: 1 }))[0];
 			}),
+			findNearest,
 			count,
 			create,
 			createMany,
@@ -1045,16 +1543,23 @@ export const layer = Layer.effect(
 						pipeline.import.handler({ input: document, api }, api)
 					);
 					if (!Array.isArray(rows)) {
-						return yield* new AccessControl.AccessDenied({ action: 'import', resource: inputs[0]?.collection ?? '', reason: 'import pipeline returned no rows' });
+						return yield* new AccessControl.AccessDenied({
+							action: 'import',
+							resource: inputs[0]?.collection ?? '',
+							reason: 'import pipeline returned no rows'
+						});
 					}
 					yield* createMany(
 						effectId,
 						subject,
 						rows.map((row, index) => ({
 							collection: inputs[index]?.collection ?? inputs[0]?.collection ?? '',
-							id: typeof row === 'object' && row !== null && typeof Reflect.get(row, 'norbital_id') === 'string'
-								? Reflect.get(row, 'norbital_id') as string
-								: deriveRecordId(`${inputs[0]?.collection ?? ''}:${effectId}:${index}`),
+							id:
+								typeof row === 'object' &&
+								row !== null &&
+								typeof Reflect.get(row, 'norbital_id') === 'string'
+									? (Reflect.get(row, 'norbital_id') as string)
+									: deriveRecordId(`${inputs[0]?.collection ?? ''}:${effectId}:${index}`),
 							values: row as Readonly<Record<string, Schema.Json>>
 						}))
 					);
@@ -1075,7 +1580,11 @@ export const layer = Layer.effect(
 			history: Effect.fn('Collections.history')(function* (effectId, subject, collection, id) {
 				yield* workspace.collection(collection);
 				yield* access.authorize(subject, 'history', collection);
-				return (yield* database.execute(effectId, { _tag: 'Query', sql: 'select * from bolt_collection_history where collection_name = $1 and record_id = $2 order by sequence desc', parameters: [collection, id] })).rows;
+				return (yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: 'select * from bolt_collection_history where collection_name = $1 and record_id = $2 order by sequence desc',
+					parameters: [collection, id]
+				})).rows;
 			})
 		});
 	})

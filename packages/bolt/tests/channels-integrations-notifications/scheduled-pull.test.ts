@@ -17,7 +17,10 @@ import {
 	type TaskRequest,
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
-import { describeIntegrations, manifestIntegrations } from '../../src/authoring/integration-introspection.js';
+import {
+	describeIntegrations,
+	manifestIntegrations
+} from '../../src/authoring/integration-introspection.js';
 import { renderArtifact } from '../../src/compiler/sync.js';
 import {
 	collection,
@@ -107,7 +110,9 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+	],
 	agents: [],
 	automations: [],
 	channels: [],
@@ -147,7 +152,13 @@ describe('a host can read an integration out of the manifest', () => {
 						method: 'GET',
 						path: '/invoices',
 						cursor: { send: { query: 'since' }, next: { field: 'next' } },
-						pages: { style: 'offset', offsetQuery: 'offset', limitQuery: 'limit', size: 50, max: 4 },
+						pages: {
+							style: 'offset',
+							offsetQuery: 'offset',
+							limitQuery: 'limit',
+							size: 50,
+							max: 4
+						},
 						identityColumn: 'external_id'
 					}
 				]
@@ -186,10 +197,21 @@ describe('a host can read an integration out of the manifest', () => {
 	it('is composed into the manifest the emitted artifact actually builds', () => {
 		const artifact = renderArtifact(
 			{ name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-			[], [], [], [], [], [], [], [], [], [], [],
+			[],
+			[],
+			[],
+			[],
+			[],
+			[],
+			[],
+			[],
+			[],
+			[],
+			[],
 			'fixture-agent',
 			'/workspace',
-			[], [],
+			[],
+			[],
 			undefined,
 			[]
 		);
@@ -260,7 +282,12 @@ const recordingTasks = (): {
 const unreachable = <Input, Output>(name: string): FacilityBinding<Input, Output> => ({
 	call: async () => ({
 		_tag: 'Failure',
-		error: { code: `${name}.unreachable`, message: `activation must not call ${name}`, retryable: false, outcome: 'known' }
+		error: {
+			code: `${name}.unreachable`,
+			message: `activation must not call ${name}`,
+			retryable: false,
+			outcome: 'known'
+		}
 	})
 });
 
@@ -280,7 +307,8 @@ describe('activation hands the host the schedule', () => {
 			activationFacilities(tasks.binding),
 			new AbortController().signal
 		);
-		if (result._tag !== 'Activated') throw new Error(`activation failed: ${JSON.stringify(result)}`);
+		if (result._tag !== 'Activated')
+			throw new Error(`activation failed: ${JSON.stringify(result)}`);
 		expect(result.registrations.filter(({ schedule }) => schedule !== null)).toEqual([
 			{
 				command: 'integrations.pull',
@@ -373,7 +401,10 @@ const scriptedConnector = (
 						? String(Reflect.get(request, 'url'))
 						: '';
 				urls.push(url);
-				const answer = answers[Math.min(index, answers.length - 1)] ?? { status: 200, body: { items: [] } };
+				const answer = answers[Math.min(index, answers.length - 1)] ?? {
+					status: 200,
+					body: { items: [] }
+				};
 				index += 1;
 				return {
 					_tag: 'Success',
@@ -404,14 +435,17 @@ const pull = (run: string, binding?: string) => {
 
 /** The report crosses as `Schema.Json`, so it is read the way a host would have to read it. */
 const at = (value: Schema.Json, key: string): unknown =>
-	value === null || typeof value !== 'object' || Array.isArray(value) ? undefined : Reflect.get(value, key);
+	value === null || typeof value !== 'object' || Array.isArray(value)
+		? undefined
+		: Reflect.get(value, key);
 
 const storedCursor = async (): Promise<unknown> => {
 	const current = harness;
 	if (current === undefined) throw new Error('harness not built');
-	const rows = await current.database.query('select cursor from bolt_integrations where name = $1', [
-		'mirrored.erp'
-	]);
+	const rows = await current.database.query(
+		'select cursor from bolt_integrations where name = $1',
+		['mirrored.erp']
+	);
 	return rows[0]?.['cursor'];
 };
 
@@ -502,9 +536,10 @@ describe('a scheduled pull is safe to fire repeatedly', () => {
 		expect(at(resumed, 'skipped')).toBe(false);
 		expect(connector.urls).toHaveLength(1);
 		// And the lease is handed back, so the tick after this one is not declined either.
-		const rows = await harness.database.query('select lease_until from bolt_integrations where name = $1', [
-			'mirrored.erp'
-		]);
+		const rows = await harness.database.query(
+			'select lease_until from bolt_integrations where name = $1',
+			['mirrored.erp']
+		);
 		expect(rows[0]?.['lease_until']).toBeNull();
 	});
 

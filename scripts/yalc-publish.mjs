@@ -134,7 +134,10 @@ const rewriteSpecifier = (name, specifier) => {
 const rewriteDependencyMap = (dependencies) => {
 	if (dependencies === undefined) return undefined;
 	return Object.fromEntries(
-		Object.entries(dependencies).map(([name, specifier]) => [name, rewriteSpecifier(name, specifier)])
+		Object.entries(dependencies).map(([name, specifier]) => [
+			name,
+			rewriteSpecifier(name, specifier)
+		])
 	);
 };
 
@@ -186,7 +189,9 @@ if (buildable.length > 0) {
 
 /** Where yalc has pushed this package, so the rewrite can follow it. */
 const installationsOf = (name) => {
-	const installations = readJsonIfPresent(path.join(os.homedir(), '.yalc/installations.json'))?.[name];
+	const installations = readJsonIfPresent(path.join(os.homedir(), '.yalc/installations.json'))?.[
+		name
+	];
 	return Array.isArray(installations) ? installations : [];
 };
 
@@ -228,9 +233,17 @@ for (const { directory, name } of packages) {
 	// Every installation's copy, stamped and rewritten whether or not this run pushed — a checkout
 	// linked before the stamp existed is otherwise indistinguishable from an up-to-date one.
 	for (const installation of installations) {
-		const installedManifestPath = path.join(installation, '.yalc', ...name.split('/'), 'package.json');
+		const installedManifestPath = path.join(
+			installation,
+			'.yalc',
+			...name.split('/'),
+			'package.json'
+		);
 		if (!existsSync(installedManifestPath)) continue;
-		writeManifest(installedManifestPath, consumerManifest(readJson(installedManifestPath), signature));
+		writeManifest(
+			installedManifestPath,
+			consumerManifest(readJson(installedManifestPath), signature)
+		);
 	}
 
 	report.packages[name] = { version, signature, pushed, stale };

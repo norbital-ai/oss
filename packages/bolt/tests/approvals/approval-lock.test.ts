@@ -1,22 +1,21 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer, Ref, Schema } from 'effect';
-import {
-	EffectId,
-	InvocationId,
-	type DatabaseRequest,
-	type DatabaseResponse
-} from '@norbital-ai/bolt-protocol';
+import { EffectId, type DatabaseRequest, type DatabaseResponse } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
 import { AccessControl } from '../../src/runtime/access/access-control.js';
 import { ApprovalConflict, Approvals } from '../../src/runtime/approvals/approvals.js';
 import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
 import { SyncWake } from '../../src/runtime/sync/wake.js';
-import { AuthoredRuntimeService, emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
+import {
+	AuthoredRuntimeService,
+	emptyAuthoredRuntime
+} from '../../src/runtime/collections/authored.js';
 import { Database } from '../../src/runtime/facilities/database.js';
 import { AI, Files, Tasks, Transport } from '../../src/runtime/facilities/services.js';
 import { Subject } from '../../src/runtime/identity/identity.js';
 import { Workspace } from '../../src/runtime/workspace.js';
+import { testCallContext } from '../support/bolt-test-layer.js';
 
 /** A stable UUID for a readable fixture name — records are keyed by `norbital_id uuid`. */
 const rid = (name: string): string => {
@@ -315,6 +314,8 @@ const memoryDatabaseLayer = () =>
 		})
 	);
 
+const context = testCallContext('approval-lock');
+
 /**
  * A tasks facility that remembers what it was asked to enqueue.
  *
@@ -332,13 +333,8 @@ const recordingTasks = (recorded: Array<string>) =>
 				return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
 			}
 		},
-		{ invocationId: InvocationId.make('approval-lock'), deadlineEpochMs: Date.now() + 10_000 }
+		context
 	);
-
-const context = {
-	invocationId: InvocationId.make('approval-lock'),
-	deadlineEpochMs: Date.now() + 10_000
-};
 
 const workspaceLayer = Workspace.layer(definition);
 const testLayer = (recorded: Array<string> = []) => {
@@ -489,9 +485,13 @@ describe('approval lock and resume', () => {
 			expect(first).toMatchObject({ _tag: 'Pending', step: 1 });
 			// Still held after the first of two approvals — the row is there, and stays held until the
 			// last step decides.
-			const employees = yield* collectionsService.findMany(EffectId.make('read-two-step'), subject, {
-				collection: 'employees'
-			});
+			const employees = yield* collectionsService.findMany(
+				EffectId.make('read-two-step'),
+				subject,
+				{
+					collection: 'employees'
+				}
+			);
 			expect(employees).toHaveLength(1);
 			const last = yield* approvalsService.decide(
 				EffectId.make('decide-two-step-2'),
@@ -631,10 +631,7 @@ describe('approval lock and resume', () => {
 				requested,
 				'reject'
 			);
-			yield* collectionsService.discard(
-				EffectId.make('discard-note-reject'),
-				pending.requestId
-			);
+			yield* collectionsService.discard(EffectId.make('discard-note-reject'), pending.requestId);
 			// The update was never applied, so the record is already what it should be and only the
 			// lock has to come off. Left on, the row stayed invisible and could not be edited again.
 			expect(

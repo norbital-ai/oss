@@ -94,9 +94,7 @@ describe('bolt-owned identity over a host facility', () => {
 		const email = 'someone.else@norbital.ai';
 		await auth.api.sendVerificationOTP({ body: { email, type: 'sign-in' } });
 		const code = delivered.at(-1)?.code ?? '';
-		await expect(
-			auth.api.signInEmailOTP({ body: { email, otp: '000000' } })
-		).rejects.toBeDefined();
+		await expect(auth.api.signInEmailOTP({ body: { email, otp: '000000' } })).rejects.toBeDefined();
 		expect((await auth.api.signInEmailOTP({ body: { email, otp: code } })).token).toBeTruthy();
 		// A code is spent when it is used. Replay is how a code read over someone's shoulder, or out
 		// of a mailbox later, becomes a second session.

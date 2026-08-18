@@ -46,7 +46,8 @@
 			</div>
 			<Cluster gap="xs">
 				{#if actionLabel && onaction}
-					<Button type="button" size="sm" variant="outline" onclick={onaction}>{actionLabel}</Button>
+					<Button type="button" size="sm" variant="outline" onclick={onaction}>{actionLabel}</Button
+					>
 				{/if}
 				{#if dismissible}
 					<Button

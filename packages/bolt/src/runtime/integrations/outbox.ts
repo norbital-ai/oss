@@ -88,13 +88,16 @@ export const resolvePath = (
 	const filled = path.replaceAll(/\{([^{}]+)\}/g, (_token, name: string) => {
 		const value: unknown = Reflect.get(record, name);
 		if (typeof value === 'string' && value !== '') return encodeURIComponent(value);
-		if (typeof value === 'number' || typeof value === 'bigint') return encodeURIComponent(String(value));
+		if (typeof value === 'number' || typeof value === 'bigint')
+			return encodeURIComponent(String(value));
 		missing.push(name);
 		return '';
 	});
 	return missing.length === 0
 		? { path: filled }
-		: { refusal: `the path names {${missing.join('}, {')}} and the record carries no value for ${missing.length === 1 ? 'it' : 'them'}` };
+		: {
+				refusal: `the path names {${missing.join('}, {')}} and the record carries no value for ${missing.length === 1 ? 'it' : 'them'}`
+			};
 };
 
 /**
@@ -106,7 +109,9 @@ export const resolvePath = (
  */
 export const sendSubscriptions = (
 	integrations: ReadonlyArray<IntegrationDeclaration>,
-	authored: Readonly<Record<string, Readonly<{ readonly send: Readonly<Record<string, AuthoredIntegrationSend>> }>>>
+	authored: Readonly<
+		Record<string, Readonly<{ readonly send: Readonly<Record<string, AuthoredIntegrationSend>> }>>
+	>
 ): ReadonlyMap<string, ReadonlyArray<SendSubscription>> => {
 	const byCollection = new Map<string, Array<SendSubscription>>();
 	for (const integration of integrations) {
@@ -166,7 +171,11 @@ const describe = (cause: unknown): string =>
  * the honest default and also the reason `body` exists — a collection with columns a partner has no
  * business seeing should state what it sends.
  */
-const defaultBody = (collection: string, event: IntegrationSendEventContext, recordId: string): Schema.Json => ({
+const defaultBody = (
+	collection: string,
+	event: IntegrationSendEventContext,
+	recordId: string
+): Schema.Json => ({
 	event: event.operation,
 	collection,
 	id: recordId,
@@ -233,7 +242,12 @@ export const outboxEntriesFor = (
 		}
 		const build = subscription.authored.body;
 		if (build === undefined) {
-			entries.push({ ...base, path: target.path, payload: defaultBody(subscription.collection, context, event.recordId), refusal: null });
+			entries.push({
+				...base,
+				path: target.path,
+				payload: defaultBody(subscription.collection, context, event.recordId),
+				refusal: null
+			});
 			continue;
 		}
 		let produced: unknown;

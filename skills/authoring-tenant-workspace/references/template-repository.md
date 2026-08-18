@@ -35,9 +35,9 @@ The gallery card image and Open Graph image share **one** file:
 | Kind                         | How you declare it                                              | Consumed by                                       |
 | ---------------------------- | --------------------------------------------------------------- | ------------------------------------------------- |
 | Template marketing thumbnail | `assets/thumbnail.svg` (optional manifest `thumbnail` override) | Website gallery cards, homepage cards, `og:image` |
-| App overview card            | `<meta name="bolt:thumbnail" …>` in the app                      | Workspace `/` overview, omni finder               |
-| App shell background         | `<meta name="bolt:banner" …>` in the app                         | Shell `AppMediaHeader`                            |
-| Record detail banner         | `<meta name="bolt:banner" …>` in `+representation.svelte`        | Collection detail sheet                           |
+| App overview card            | `<meta name="bolt:thumbnail" …>` in the app                     | Workspace `/` overview, omni finder               |
+| App shell background         | `<meta name="bolt:banner" …>` in the app                        | Shell `AppMediaHeader`                            |
+| Record detail banner         | `<meta name="bolt:banner" …>` in `+representation.svelte`       | Collection detail sheet                           |
 
 Do not reuse the marketing file as `bolt:thumbnail` / `bolt:banner` unless you intentionally want the
 same art inside the product. App and record media normally live under `assets/app-media/` and

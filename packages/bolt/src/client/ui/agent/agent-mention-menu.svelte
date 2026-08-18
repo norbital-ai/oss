@@ -13,7 +13,8 @@
 	const { t } = useI18n<BoltUiKeys>();
 
 	/** Icon for a prefix command in the mention menu. */
-	function commandIcon(command: MentionCommand): string { // stupidity:allow Q3 -- named helper
+	function commandIcon(command: MentionCommand): string {
+		// stupidity:allow Q3 -- named helper
 		switch (command) {
 			case 'record':
 				return 'lucide:search';
@@ -47,7 +48,8 @@
 	}
 
 	/** Maps a mention menu item onto a finder row. */
-	function toRow(item: MentionMenuItem): FinderRow { // stupidity:allow Q3 -- named helper
+	function toRow(item: MentionMenuItem): FinderRow {
+		// stupidity:allow Q3 -- named helper
 		switch (item.kind) {
 			case 'record':
 				return {
@@ -152,7 +154,8 @@
 	});
 
 	/** Forwards a palette pick to the parent highlight/select callbacks. */
-	function handlePick(entity: FinderEntity): void { // stupidity:allow Q3 -- template handler
+	function handlePick(entity: FinderEntity): void {
+		// stupidity:allow Q3 -- template handler
 		const index = rows.findIndex((row) => row.entity === entity || sameEntity(row.entity, entity));
 		if (index >= 0) {
 			onhighlight(index);
@@ -161,7 +164,8 @@
 	}
 
 	/** True when two finder entities name the same workspace object. */
-	function sameEntity(left: FinderEntity | undefined, right: FinderEntity): boolean { // stupidity:allow Q3 -- named helper
+	function sameEntity(left: FinderEntity | undefined, right: FinderEntity): boolean {
+		// stupidity:allow Q3 -- named helper
 		if (!left || left.kind !== right.kind) return false;
 		switch (left.kind) {
 			case 'record':

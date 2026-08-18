@@ -15,9 +15,17 @@ import { RemoteRegistry } from './remotes.js';
 import { WorkspaceSchema } from './schema/workspace-schema.js';
 import { Secrets } from './secrets/secrets.js';
 import { PersonalSecrets } from './secrets/personal-secrets.js';
-import { describeGeneratedColumnWrite, describeInvalidCustomValue } from './collections/custom-values.js';
+import {
+	describeGeneratedColumnWrite,
+	describeInvalidCustomValue
+} from './collections/custom-values.js';
 import { Sync, SyncCursor } from './sync/sync.js';
-import { AuthoredRuntimeService, makeAuthoringApi, makeBoundAuthoringOps, runAuthoredHandler } from './collections/authored.js';
+import {
+	AuthoredRuntimeService,
+	makeAuthoringApi,
+	makeBoundAuthoringOps,
+	runAuthoredHandler
+} from './collections/authored.js';
 import { DispatchError, Workspace } from './workspace.js';
 
 export { DispatchError } from './workspace.js';
@@ -33,13 +41,39 @@ const ImpersonateTeamInput = Schema.Struct({ actor: Subject, teamId: Schema.NonE
  * a browser believes it asked for. A sidebar that trusted its own cookie would keep showing a team
  * as active after the runtime had refused it.
  */
-const ImpersonationStateInput = Schema.Struct({ actor: Subject, impersonatedTeam: Schema.NullOr(Schema.String) });
-const AccessDecisionInput = Schema.Struct({ subject: Subject, action: Schema.NonEmptyString, resource: Schema.NonEmptyString });
-const AccessMaskInput = Schema.Struct({ subject: Subject, action: Schema.NonEmptyString, resource: Schema.NonEmptyString, value: Schema.Record(Schema.String, Schema.Json) });
-const ApprovalRequestInput = Schema.Struct({ subject: Subject, requestId: Schema.NonEmptyString, operation: Schema.Json });
-const ApprovalDecideInput = Schema.Struct({ subject: Subject, state: ApprovalState, decision: Schema.Literals(['approve', 'reject']), reason: Schema.optionalKey(Schema.String) });
+const ImpersonationStateInput = Schema.Struct({
+	actor: Subject,
+	impersonatedTeam: Schema.NullOr(Schema.String)
+});
+const AccessDecisionInput = Schema.Struct({
+	subject: Subject,
+	action: Schema.NonEmptyString,
+	resource: Schema.NonEmptyString
+});
+const AccessMaskInput = Schema.Struct({
+	subject: Subject,
+	action: Schema.NonEmptyString,
+	resource: Schema.NonEmptyString,
+	value: Schema.Record(Schema.String, Schema.Json)
+});
+const ApprovalRequestInput = Schema.Struct({
+	subject: Subject,
+	requestId: Schema.NonEmptyString,
+	operation: Schema.Json
+});
+const ApprovalDecideInput = Schema.Struct({
+	subject: Subject,
+	state: ApprovalState,
+	decision: Schema.Literals(['approve', 'reject']),
+	reason: Schema.optionalKey(Schema.String)
+});
 const SyncDiffInput = Schema.Struct({ subject: Subject, cursor: SyncCursor, limit: Schema.Number });
-const AgentTurnInput = Schema.Struct({ subject: Subject, agent: Schema.NonEmptyString, conversationId: Schema.NonEmptyString, message: Schema.String });
+const AgentTurnInput = Schema.Struct({
+	subject: Subject,
+	agent: Schema.NonEmptyString,
+	conversationId: Schema.NonEmptyString,
+	message: Schema.String
+});
 const AgentTitleInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
 const CollectionFindInput = Schema.Struct({
 	subject: Subject,
@@ -52,7 +86,11 @@ const CollectionFindInput = Schema.Struct({
 	after: Schema.optionalKey(Schema.String),
 	columns: Schema.optionalKey(Schema.Json)
 });
-const SecretsWriteInput = Schema.Struct({ subject: Subject, name: Schema.NonEmptyString, value: Schema.String });
+const SecretsWriteInput = Schema.Struct({
+	subject: Subject,
+	name: Schema.NonEmptyString,
+	value: Schema.String
+});
 /**
  * Note what these do *not* declare: no `subject`, no `userId`, no owner of any kind.
  *
@@ -62,9 +100,15 @@ const SecretsWriteInput = Schema.Struct({ subject: Subject, name: Schema.NonEmpt
  * Accepting an owner here, even one the boundary overwrites, would put a user id on the path from a
  * request body to a WHERE clause, and the only safe number of such paths is none.
  */
-const PersonalSecretsWriteInput = Schema.Struct({ name: Schema.NonEmptyString, value: Schema.String });
+const PersonalSecretsWriteInput = Schema.Struct({
+	name: Schema.NonEmptyString,
+	value: Schema.String
+});
 const PersonalSecretsNameInput = Schema.Struct({ name: Schema.NonEmptyString });
-const DataBrowserInput = Schema.Struct({ collection: Schema.NonEmptyString, input: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)) });
+const DataBrowserInput = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	input: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
+});
 /**
  * What a host may still assert once it has proved who it is, which is only ever *less* authority.
  *
@@ -79,13 +123,38 @@ const DataBrowserInput = Schema.Struct({ collection: Schema.NonEmptyString, inpu
 const PluginContext = Schema.Struct({
 	impersonatedSubject: Schema.optionalKey(Schema.NonEmptyString)
 });
-const CollectionCreateInput = Schema.Struct({ subject: Subject, collection: Schema.NonEmptyString, id: Schema.NonEmptyString, values: Schema.Record(Schema.String, Schema.Json) });
+const CollectionCreateInput = Schema.Struct({
+	subject: Subject,
+	collection: Schema.NonEmptyString,
+	id: Schema.NonEmptyString,
+	values: Schema.Record(Schema.String, Schema.Json)
+});
 const CollectionUpdateInput = CollectionCreateInput;
-const CollectionDeleteInput = Schema.Struct({ subject: Subject, collection: Schema.NonEmptyString, id: Schema.NonEmptyString });
-const CollectionMutation = Schema.Struct({ collection: Schema.NonEmptyString, id: Schema.NonEmptyString, values: Schema.Record(Schema.String, Schema.Json) });
-const CollectionCreateManyInput = Schema.Struct({ subject: Subject, records: Schema.Array(CollectionMutation) });
-const AutomationStartInput = Schema.Struct({ subject: Subject, name: Schema.NonEmptyString, input: Schema.Json });
-const ChannelReceiveInput = Schema.Struct({ subject: Subject, channel: Schema.NonEmptyString, conversationId: Schema.NonEmptyString, message: Schema.String });
+const CollectionDeleteInput = Schema.Struct({
+	subject: Subject,
+	collection: Schema.NonEmptyString,
+	id: Schema.NonEmptyString
+});
+const CollectionMutation = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	id: Schema.NonEmptyString,
+	values: Schema.Record(Schema.String, Schema.Json)
+});
+const CollectionCreateManyInput = Schema.Struct({
+	subject: Subject,
+	records: Schema.Array(CollectionMutation)
+});
+const AutomationStartInput = Schema.Struct({
+	subject: Subject,
+	name: Schema.NonEmptyString,
+	input: Schema.Json
+});
+const ChannelReceiveInput = Schema.Struct({
+	subject: Subject,
+	channel: Schema.NonEmptyString,
+	conversationId: Schema.NonEmptyString,
+	message: Schema.String
+});
 /**
  * `binding` is what a scheduled pull carries and an enqueued one does not.
  *
@@ -93,21 +162,44 @@ const ChannelReceiveInput = Schema.Struct({ subject: Subject, channel: Schema.No
  * `+integrations.ts` cron is declared at; `install` and `reconcile` enqueue without it and mean
  * "every binding this integration has".
  */
-const IntegrationPullInput = Schema.Struct({ name: Schema.NonEmptyString, cursor: Schema.Json, binding: Schema.optionalKey(Schema.NonEmptyString) });
+const IntegrationPullInput = Schema.Struct({
+	name: Schema.NonEmptyString,
+	cursor: Schema.Json,
+	binding: Schema.optionalKey(Schema.NonEmptyString)
+});
 const NamedInput = Schema.Struct({ name: Schema.NonEmptyString });
-const TaskInput = Schema.Struct({ taskId: Schema.NonEmptyString, input: Schema.optionalKey(Schema.Json) });
+const TaskInput = Schema.Struct({
+	taskId: Schema.NonEmptyString,
+	input: Schema.optionalKey(Schema.Json)
+});
 /** The task payload an authored automation runs from: the runtime's trigger context and the subject the runtime stamped at enqueue time. */
 const AutomationTaskInput = Schema.Struct({
 	args: Schema.Record(Schema.String, Schema.Json),
 	scope: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
 	bolt_run_as: Subject
 });
-const AgentStartInput = Schema.Struct({ subject: Subject, agent: Schema.NonEmptyString, conversationId: Schema.NonEmptyString });
-const AgentResumeInput = Schema.Struct({ taskId: Schema.NonEmptyString, conversationId: Schema.NonEmptyString });
-const AgentVerifierInput = Schema.Struct({ conversationId: Schema.NonEmptyString, verifier: Schema.Json });
-const AgentHistoryInput = Schema.Struct({ subject: Subject, conversationId: Schema.NonEmptyString });
+const AgentStartInput = Schema.Struct({
+	subject: Subject,
+	agent: Schema.NonEmptyString,
+	conversationId: Schema.NonEmptyString
+});
+const AgentResumeInput = Schema.Struct({
+	taskId: Schema.NonEmptyString,
+	conversationId: Schema.NonEmptyString
+});
+const AgentVerifierInput = Schema.Struct({
+	conversationId: Schema.NonEmptyString,
+	verifier: Schema.Json
+});
+const AgentHistoryInput = Schema.Struct({
+	subject: Subject,
+	conversationId: Schema.NonEmptyString
+});
 const AgentListConversationsInput = Schema.Struct({ subject: Subject });
-const SkillInput = Schema.Struct({ agent: Schema.optionalKey(Schema.NonEmptyString), name: Schema.optionalKey(Schema.NonEmptyString) });
+const SkillInput = Schema.Struct({
+	agent: Schema.optionalKey(Schema.NonEmptyString),
+	name: Schema.optionalKey(Schema.NonEmptyString)
+});
 const ApprovalStatusInput = Schema.Struct({ requestId: Schema.NonEmptyString });
 const ApprovalWithdrawInput = Schema.Struct({ subject: Subject, state: ApprovalState });
 const SyncShapeInput = Schema.Struct({ subject: Subject });
@@ -118,9 +210,24 @@ const SyncSnapshotInput = Schema.Struct({
 	limit: Schema.optional(Schema.Number)
 });
 const SyncCompactInput = Schema.Struct({ retentionDays: Schema.optional(Schema.Number) });
-const SyncMutateInput = Schema.Struct({ subject: Subject, changes: Schema.Array(Schema.Struct({ cursor: SyncCursor, collection: Schema.NonEmptyString, recordId: Schema.NonEmptyString, operation: Schema.Literals(['create', 'update', 'delete']), record: Schema.optionalKey(Schema.Json) })) });
+const SyncMutateInput = Schema.Struct({
+	subject: Subject,
+	changes: Schema.Array(
+		Schema.Struct({
+			cursor: SyncCursor,
+			collection: Schema.NonEmptyString,
+			recordId: Schema.NonEmptyString,
+			operation: Schema.Literals(['create', 'update', 'delete']),
+			record: Schema.optionalKey(Schema.Json)
+		})
+	)
+});
 const ChannelNameInput = Schema.Struct({ channel: Schema.NonEmptyString });
-const ChannelReplyInput = Schema.Struct({ channel: Schema.NonEmptyString, recipient: Schema.NonEmptyString, payload: Schema.Json });
+const ChannelReplyInput = Schema.Struct({
+	channel: Schema.NonEmptyString,
+	recipient: Schema.NonEmptyString,
+	payload: Schema.Json
+});
 /**
  * One pushed webhook delivery, as the boundary receives it.
  *
@@ -147,15 +254,41 @@ const IntegrationReceiveInput = Schema.Struct({
  * how much of it to attempt in one invocation. It cannot name a delivery — a caller that could
  * would be a caller who can replay one.
  */
-const IntegrationFlushInput = Schema.Struct({ name: Schema.NonEmptyString, input: Schema.optionalKey(Schema.Json) });
-const NotificationRecipientInput = Schema.Struct({ recipient: Schema.NonEmptyString, unreadOnly: Schema.optionalKey(Schema.Boolean) });
-const NotificationReadInput = Schema.Struct({ recipient: Schema.NonEmptyString, id: Schema.NonEmptyString });
-const IdentityInviteInput = Schema.Struct({ tenantId: Schema.NonEmptyString, email: Schema.NonEmptyString, invitedBy: Schema.NonEmptyString });
-const IdentityAcceptInput = Schema.Struct({ invitationId: Schema.NonEmptyString, userId: Schema.NonEmptyString });
-const IdentitySessionInput = Schema.Struct({ userId: Schema.NonEmptyString, tenantId: Schema.NonEmptyString });
+const IntegrationFlushInput = Schema.Struct({
+	name: Schema.NonEmptyString,
+	input: Schema.optionalKey(Schema.Json)
+});
+const NotificationRecipientInput = Schema.Struct({
+	recipient: Schema.NonEmptyString,
+	unreadOnly: Schema.optionalKey(Schema.Boolean)
+});
+const NotificationReadInput = Schema.Struct({
+	recipient: Schema.NonEmptyString,
+	id: Schema.NonEmptyString
+});
+const IdentityInviteInput = Schema.Struct({
+	tenantId: Schema.NonEmptyString,
+	email: Schema.NonEmptyString,
+	invitedBy: Schema.NonEmptyString
+});
+const IdentityAcceptInput = Schema.Struct({
+	invitationId: Schema.NonEmptyString,
+	userId: Schema.NonEmptyString
+});
+const IdentitySessionInput = Schema.Struct({
+	userId: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString
+});
 const IdentitySendCodeInput = Schema.Struct({ email: Schema.NonEmptyString });
-const IdentityAdmitFounderInput = Schema.Struct({ email: Schema.NonEmptyString, tenantId: Schema.NonEmptyString });
-const IdentityVerifyCodeInput = Schema.Struct({ email: Schema.NonEmptyString, code: Schema.NonEmptyString, tenantId: Schema.NonEmptyString });
+const IdentityAdmitFounderInput = Schema.Struct({
+	email: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString
+});
+const IdentityVerifyCodeInput = Schema.Struct({
+	email: Schema.NonEmptyString,
+	code: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString
+});
 
 /**
  * The only commands reachable without a credential.
@@ -174,14 +307,28 @@ const SIGN_IN_COMMANDS: ReadonlySet<string> = new Set(['identity.sendCode', 'ide
 const IdentityCredentialInput = Schema.Struct({ credential: Schema.NonEmptyString });
 const IdentitySettingsInput = Schema.Struct({ tenantId: Schema.NonEmptyString });
 const IdentityAuthenticateInput = Schema.Struct({ credential: Schema.NonEmptyString });
-const IdentityResolveInput = Schema.Struct({ provider: Schema.NonEmptyString, externalId: Schema.NonEmptyString });
-const CollectionRecordInput = Schema.Struct({ subject: Subject, collection: Schema.NonEmptyString, id: Schema.NonEmptyString });
+const IdentityResolveInput = Schema.Struct({
+	provider: Schema.NonEmptyString,
+	externalId: Schema.NonEmptyString
+});
+const CollectionRecordInput = Schema.Struct({
+	subject: Subject,
+	collection: Schema.NonEmptyString,
+	id: Schema.NonEmptyString
+});
 
 /** Owns wire decoding, JSON responses, and credential extraction shared by every invocation kind. */
 const DispatchValues = {
-	decode: <S extends Schema.Top>(schema: S, value: unknown) => Schema.decodeUnknownEffect(schema)(value).pipe(
-		Effect.mapError(() => new DispatchError({ code: 'invalid_input', message: 'Command input did not match its schema' }))
-	),
+	decode: <S extends Schema.Top>(schema: S, value: unknown) =>
+		Schema.decodeUnknownEffect(schema)(value).pipe(
+			Effect.mapError(
+				() =>
+					new DispatchError({
+						code: 'invalid_input',
+						message: 'Command input did not match its schema'
+					})
+			)
+		),
 	json: (value: Schema.Json): DispatchResponse => ({ status: 200, headers: {}, value }),
 	// The page ceiling belongs to this boundary, not the collections service: a client asks for a
 	// page, while an authored server-side handler asks for the exact rows its computation needs.
@@ -210,15 +357,29 @@ const DispatchValues = {
 	 * `subjectAsTeam` grants it only after checking, against the subject this boundary just
 	 * authenticated from the credential, that the actor holds `impersonator`.
 	 */
-	impersonatedTeamFromHeaders: (headers: Readonly<Record<string, ReadonlyArray<string>>>): string | undefined => {
-		const value = Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-colony-impersonated-team')?.[1][0]?.trim();
+	impersonatedTeamFromHeaders: (
+		headers: Readonly<Record<string, ReadonlyArray<string>>>
+	): string | undefined => {
+		const value = Object.entries(headers)
+			.find(([name]) => name.toLowerCase() === 'x-colony-impersonated-team')?.[1][0]
+			?.trim();
 		return value === undefined || value === '' ? undefined : value;
 	},
-	credentialFromHeaders: (headers: Readonly<Record<string, ReadonlyArray<string>>>): string | undefined => {
-		const authorization = Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1][0];
+	credentialFromHeaders: (
+		headers: Readonly<Record<string, ReadonlyArray<string>>>
+	): string | undefined => {
+		const authorization = Object.entries(headers).find(
+			([name]) => name.toLowerCase() === 'authorization'
+		)?.[1][0];
 		if (authorization !== undefined) return authorization.replace(/^Bearer\s+/i, '');
-		const cookie = Object.entries(headers).find(([name]) => name.toLowerCase() === 'cookie')?.[1].join(';');
-		return cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('bolt_session='))?.slice('bolt_session='.length);
+		const cookie = Object.entries(headers)
+			.find(([name]) => name.toLowerCase() === 'cookie')?.[1]
+			.join(';');
+		return cookie
+			?.split(';')
+			.map((part) => part.trim())
+			.find((part) => part.startsWith('bolt_session='))
+			?.slice('bolt_session='.length);
 	}
 };
 const decode = DispatchValues.decode;
@@ -230,7 +391,10 @@ const decode = DispatchValues.decode;
  * `invalid_input` already means here — so the check reuses the failure the boundary already has,
  * instead of introducing one that every service touching a write would have to widen to carry.
  */
-const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (collection: string, values: Readonly<Record<string, Schema.Json>>) {
+const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (
+	collection: string,
+	values: Readonly<Record<string, Schema.Json>>
+) {
 	const workspace = yield* Workspace.Service;
 	const definition = yield* workspace.collection(collection);
 	// Both faults are the same kind of thing — values this collection will not accept — so they are
@@ -238,7 +402,8 @@ const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (colle
 	const invalid =
 		describeGeneratedColumnWrite(definition.fields, values) ??
 		describeInvalidCustomValue(definition.fields, values, workspace.definition.customTypes);
-	if (invalid !== undefined) yield* Effect.fail(new DispatchError({ code: 'invalid_input', message: invalid }));
+	if (invalid !== undefined)
+		yield* Effect.fail(new DispatchError({ code: 'invalid_input', message: invalid }));
 });
 const json = DispatchValues.json;
 
@@ -263,10 +428,18 @@ const json = DispatchValues.json;
  * gated as a mutation until somebody decides otherwise.
  */
 const SCHEMA_RESOURCE = 'schema';
-const SCHEMA_READ_COMMANDS: ReadonlySet<string> = new Set(['schema.plan', 'schema.fingerprint', 'schema.validate', 'schema.verify']);
+const SCHEMA_READ_COMMANDS: ReadonlySet<string> = new Set([
+	'schema.plan',
+	'schema.fingerprint',
+	'schema.validate',
+	'schema.verify'
+]);
 // Only a `Command` reaches here at all: `authorizeInvocationProvenance` has already refused the two
 // credential-free tags, on which the `subject` this decodes would be whatever the payload claimed.
-const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function* (command: string, commandInput: unknown) {
+const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function* (
+	command: string,
+	commandInput: unknown
+) {
 	const action = SCHEMA_READ_COMMANDS.has(command) ? 'read' : 'manage';
 	const input = yield* decode(Schema.Struct({ subject: Subject }), commandInput);
 	yield* (yield* AccessControl.Service).authorize(input.subject, action, SCHEMA_RESOURCE);
@@ -289,7 +462,13 @@ const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function
  * prefix, because `automations.start`, `.register`, `.runStep`, `.resume`, `.status` and `.cancel`
  * share it and are host commands rather than enqueued ones.
  */
-const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set(['integrations.pull', 'integrations.flush', 'agents.resume', 'collections.resume', 'collections.discard']);
+const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
+	'integrations.pull',
+	'integrations.flush',
+	'agents.resume',
+	'collections.resume',
+	'collections.discard'
+]);
 
 /**
  * Which invocation tags may reach the command switch, and on what authority.
@@ -311,10 +490,16 @@ const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set(['integrations.pull', 'in
  * somebody enqueues it — the opposite polarity to the per-command list that let five `schema.*`
  * commands each ship without a check.
  */
-const authorizeInvocationProvenance = Effect.fn('Bolt.authorizeInvocationProvenance')(function* (tag: Invocation['_tag'], command: string) {
+const authorizeInvocationProvenance = Effect.fn('Bolt.authorizeInvocationProvenance')(function* (
+	tag: Invocation['_tag'],
+	command: string
+) {
 	const enqueued =
 		tag === 'Task' &&
-		(ENQUEUED_COMMANDS.has(command) || (yield* Workspace.Service).definition.automations.some(({ name }) => `automations.${name}` === command));
+		(ENQUEUED_COMMANDS.has(command) ||
+			(yield* Workspace.Service).definition.automations.some(
+				({ name }) => `automations.${name}` === command
+			));
 	if (!enqueued) {
 		yield* new AccessControl.AccessDenied({
 			action: 'invoke',
@@ -347,7 +532,14 @@ const authorizeInvocationProvenance = Effect.fn('Bolt.authorizeInvocationProvena
  * `automations.<name>` forwards its whole input to an authored automation. Without this, a task
  * payload could smuggle a subject in through that input.
  */
-const MINTED_IDENTITY = ['subject', 'actor', 'userId', 'tenantId', 'invitedBy', 'impersonatedTeam'] as const;
+const MINTED_IDENTITY = [
+	'subject',
+	'actor',
+	'userId',
+	'tenantId',
+	'invitedBy',
+	'impersonatedTeam'
+] as const;
 
 /**
  * Answers one keyset page: the rows, and the cursor its successor should carry.
@@ -360,20 +552,32 @@ const MINTED_IDENTITY = ['subject', 'actor', 'userId', 'tenantId', 'invitedBy', 
  * another page?". A cursor emitted from a last page that happened to fill the limit would offer a
  * next page that comes back empty, and the table would keep offering one forever.
  */
-const collectionPage = Effect.fn('Bolt.collectionPage')(function* (effectId: EffectId, input: typeof CollectionFindInput.Type) {
+const collectionPage = Effect.fn('Bolt.collectionPage')(function* (
+	effectId: EffectId,
+	input: typeof CollectionFindInput.Type
+) {
 	const query = DispatchValues.collectionQuery(input);
 	const workspace = yield* Workspace.Service;
 	const definition = yield* workspace.collection(input.collection);
 	const collections = yield* Collections.Service;
-	const rows = yield* collections.findMany(effectId, input.subject, { ...query, limit: query.limit + 1 });
+	const rows = yield* collections.findMany(effectId, input.subject, {
+		...query,
+		limit: query.limit + 1
+	});
 	const page = rows.slice(0, query.limit);
 	const last = page[page.length - 1];
 	// Compiled the same way the seek predicate was, so the tuple the cursor carries is the tuple the
 	// next page's seek compares against — including the primary key `compileOrderTerms` appends.
-	const ordering = compileOrderTerms(input.orderBy, makeWhereContext(input.collection, definition.fields, workspace.definition));
+	const ordering = compileOrderTerms(
+		input.orderBy,
+		makeWhereContext(input.collection, definition.fields, workspace.definition)
+	);
 	return json({
 		rows: page,
-		nextCursor: rows.length > query.limit && last !== undefined ? Collections.encodeCollectionCursor(ordering, last) : null
+		nextCursor:
+			rows.length > query.limit && last !== undefined
+				? Collections.encodeCollectionCursor(ordering, last)
+				: null
 	});
 });
 
@@ -390,33 +594,69 @@ const impersonatedTeamFromHeaders = DispatchValues.impersonatedTeamFromHeaders;
 
 export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocation: Invocation) {
 	if (invocation._tag === 'Request') {
-		if (new URL(invocation.url, 'http://bolt.invalid').pathname === '/health') return json({ status: 'ok' });
+		if (new URL(invocation.url, 'http://bolt.invalid').pathname === '/health')
+			return json({ status: 'ok' });
 		const credential = credentialFromHeaders(invocation.headers);
-		if (credential === undefined || credential === '') return yield* new DispatchError({ code: 'unauthorized', message: 'Missing authorization credential' });
+		if (credential === undefined || credential === '')
+			return yield* new DispatchError({
+				code: 'unauthorized',
+				message: 'Missing authorization credential'
+			});
 		const identity = yield* Identity.Service;
 		const subject = yield* identity.authenticate(EffectId.make(invocation.id), credential);
-		if (subject.tenantId !== invocation.scope.tenantId) return yield* new DispatchError({ code: 'tenant_mismatch', message: 'Authenticated subject is outside the invocation tenant' });
+		if (subject.tenantId !== invocation.scope.tenantId)
+			return yield* new DispatchError({
+				code: 'tenant_mismatch',
+				message: 'Authenticated subject is outside the invocation tenant'
+			});
 		const access = yield* AccessControl.Service;
 		return json({ subject, apps: access.visibleApps(subject) });
 	}
 	if (invocation._tag === 'Realtime') {
-		if (invocation.event._tag === 'Open') return { status: 200, headers: {}, realtime: { frames: [], nextCursor: '0' } };
+		if (invocation.event._tag === 'Open')
+			return { status: 200, headers: {}, realtime: { frames: [], nextCursor: '0' } };
 		if (invocation.event._tag === 'Input') {
 			const cursor = String(invocation.event.frame.sequence);
-			return { status: 200, headers: {}, realtime: { frames: [{ cursor, kind: invocation.event.frame.kind, bytes: invocation.event.frame.bytes }], nextCursor: cursor } };
+			return {
+				status: 200,
+				headers: {},
+				realtime: {
+					frames: [
+						{ cursor, kind: invocation.event.frame.kind, bytes: invocation.event.frame.bytes }
+					],
+					nextCursor: cursor
+				}
+			};
 		}
 		return {
 			status: 200,
 			headers: {},
-			realtime: { frames: [], ...(invocation.event._tag === 'Close' || invocation.event._tag === 'Cancel' ? { close: { code: invocation.event._tag === 'Close' ? invocation.event.code : 1000, reason: invocation.event.reason } } : {}) }
+			realtime: {
+				frames: [],
+				...(invocation.event._tag === 'Close' || invocation.event._tag === 'Cancel'
+					? {
+							close: {
+								code: invocation.event._tag === 'Close' ? invocation.event.code : 1000,
+								reason: invocation.event.reason
+							}
+						}
+					: {})
+			}
 		};
 	}
 	if (invocation._tag !== 'Command' && invocation._tag !== 'Plugin' && invocation._tag !== 'Task') {
-		return yield* new DispatchError({ code: 'unsupported_invocation', message: 'Unsupported Bolt invocation' });
+		return yield* new DispatchError({
+			code: 'unsupported_invocation',
+			message: 'Unsupported Bolt invocation'
+		});
 	}
 	const effectId = EffectId.make(invocation.id);
 	if (invocation._tag === 'Plugin' && invocation.plugin === 'data-browser') {
-		if (invocation.command !== 'query') return yield* new DispatchError({ code: 'unknown_plugin_command', message: `Unknown Data Browser command: ${invocation.command}` });
+		if (invocation.command !== 'query')
+			return yield* new DispatchError({
+				code: 'unknown_plugin_command',
+				message: `Unknown Data Browser command: ${invocation.command}`
+			});
 		const input = yield* decode(DataBrowserInput, invocation.input);
 		const context = yield* decode(PluginContext, invocation.trustedContext);
 		// The same credential the `Command` path reads, authenticated the same way, because the Data
@@ -425,15 +665,32 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 		// workspace has no rows" and sends the operator looking for the wrong fault.
 		const credential = credentialFromHeaders(invocation.headers);
 		if (credential === undefined || credential === '') {
-			return yield* new AccessControl.AccessDenied({ action: 'read', resource: input.collection, reason: 'a Plugin invocation must present a credential before its trustedContext is honoured' });
+			return yield* new AccessControl.AccessDenied({
+				action: 'read',
+				resource: input.collection,
+				reason:
+					'a Plugin invocation must present a credential before its trustedContext is honoured'
+			});
 		}
 		const identity = yield* Identity.Service;
 		const actor = yield* identity.authenticate(effectId, credential);
-		if (actor.tenantId !== invocation.scope.tenantId) return yield* new DispatchError({ code: 'tenant_mismatch', message: 'Plugin actor is outside the invocation tenant' });
+		if (actor.tenantId !== invocation.scope.tenantId)
+			return yield* new DispatchError({
+				code: 'tenant_mismatch',
+				message: 'Plugin actor is outside the invocation tenant'
+			});
 		const subject = yield* Effect.gen(function* () {
 			if (context.impersonatedSubject === undefined) return actor;
-			const target = yield* identity.resolveSubject(effectId, 'colony', context.impersonatedSubject);
-			if (target.tenantId !== invocation.scope.tenantId) return yield* new DispatchError({ code: 'tenant_mismatch', message: 'Plugin target is outside the invocation tenant' });
+			const target = yield* identity.resolveSubject(
+				effectId,
+				'colony',
+				context.impersonatedSubject
+			);
+			if (target.tenantId !== invocation.scope.tenantId)
+				return yield* new DispatchError({
+					code: 'tenant_mismatch',
+					message: 'Plugin target is outside the invocation tenant'
+				});
 			return yield* (yield* AccessControl.Service).impersonate(actor, target);
 		});
 		const collections = yield* Collections.Service;
@@ -444,14 +701,24 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 		// impersonated read is that it is on behalf of somebody else — an operator opening a member's
 		// rows must see that member's per-user state, not their own. The actor is not lost: the subject
 		// `impersonate` returns carries `impersonatedBy`, and the audit row it writes names them.
-		return json(yield* Effect.provideService(
-			collections.findMany(effectId, subject, { collection: input.collection, ...(limit === undefined ? {} : { limit }) }),
-			Identity.CurrentSubject,
-			subject
-		));
+		return json(
+			yield* Effect.provideService(
+				collections.findMany(effectId, subject, {
+					collection: input.collection,
+					...(limit === undefined ? {} : { limit })
+				}),
+				Identity.CurrentSubject,
+				subject
+			)
+		);
 	}
 	const authenticated = yield* Effect.gen(function* () {
-		const fields = typeof invocation.input === 'object' && invocation.input !== null && !Array.isArray(invocation.input) ? invocation.input : {};
+		const fields =
+			typeof invocation.input === 'object' &&
+			invocation.input !== null &&
+			!Array.isArray(invocation.input)
+				? invocation.input
+				: {};
 		if (invocation._tag !== 'Command') {
 			yield* authorizeInvocationProvenance(invocation._tag, invocation.command);
 			// Refused, not stripped: a payload that names a subject is asking to run as somebody, and
@@ -460,7 +727,11 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			// the same refusal by the schema each case already declares.
 			const claimed = MINTED_IDENTITY.find((name) => name in fields);
 			if (claimed !== undefined) {
-				return yield* new AccessControl.AccessDenied({ action: 'authenticate', resource: invocation.command, reason: `a ${invocation._tag} invocation carries no credential, so the ${claimed} its payload claims is refused` });
+				return yield* new AccessControl.AccessDenied({
+					action: 'authenticate',
+					resource: invocation.command,
+					reason: `a ${invocation._tag} invocation carries no credential, so the ${claimed} its payload claims is refused`
+				});
 			}
 			// Nobody is behind a `Task` or a bare `Plugin`, so it carries no subject and nothing is
 			// provided below — a facility called from here sees the same absence the runtime does.
@@ -482,14 +753,26 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 		if (SIGN_IN_COMMANDS.has(invocation.command)) {
 			const claimed = MINTED_IDENTITY.find((name) => name in fields);
 			if (claimed !== undefined) {
-				return yield* new AccessControl.AccessDenied({ action: 'authenticate', resource: invocation.command, reason: `a sign-in carries no credential, so the ${claimed} its payload claims is refused` });
+				return yield* new AccessControl.AccessDenied({
+					action: 'authenticate',
+					resource: invocation.command,
+					reason: `a sign-in carries no credential, so the ${claimed} its payload claims is refused`
+				});
 			}
 			return { input: { ...fields, tenantId: invocation.scope.tenantId }, subject: undefined };
 		}
 		const credential = credentialFromHeaders(invocation.headers);
-		if (credential === undefined || credential === '') return yield* new DispatchError({ code: 'unauthorized', message: 'Missing command credential' });
+		if (credential === undefined || credential === '')
+			return yield* new DispatchError({
+				code: 'unauthorized',
+				message: 'Missing command credential'
+			});
 		const actor = yield* (yield* Identity.Service).authenticate(effectId, credential);
-		if (actor.tenantId !== invocation.scope.tenantId) return yield* new DispatchError({ code: 'tenant_mismatch', message: 'Authenticated subject is outside the invocation tenant' });
+		if (actor.tenantId !== invocation.scope.tenantId)
+			return yield* new DispatchError({
+				code: 'tenant_mismatch',
+				message: 'Authenticated subject is outside the invocation tenant'
+			});
 		/**
 		 * The one place a team preview changes what this invocation is.
 		 *
@@ -509,8 +792,20 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 		 * claiming one is overwritten in both directions rather than only while a preview is running.
 		 */
 		const team = impersonatedTeamFromHeaders(invocation.headers);
-		const subject = team === undefined ? actor : yield* (yield* AccessControl.Service).subjectAsTeam(actor, team);
-		return { input: { ...fields, subject, actor, userId: actor.userId, tenantId: actor.tenantId, invitedBy: actor.userId, impersonatedTeam: team ?? null }, subject };
+		const subject =
+			team === undefined ? actor : yield* (yield* AccessControl.Service).subjectAsTeam(actor, team);
+		return {
+			input: {
+				...fields,
+				subject,
+				actor,
+				userId: actor.userId,
+				tenantId: actor.tenantId,
+				invitedBy: actor.userId,
+				impersonatedTeam: team ?? null
+			},
+			subject
+		};
 	});
 	/**
 	 * Who the facilities are told this invocation is acting for.
@@ -528,7 +823,9 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 	 * rather than a fabricated stand-in a facility would have to learn to distrust.
 	 */
 	const invoked = runCommand(invocation.command, effectId, authenticated.input);
-	return yield* (authenticated.subject === undefined ? invoked : Effect.provideService(invoked, Identity.CurrentSubject, authenticated.subject));
+	return yield* authenticated.subject === undefined
+		? invoked
+		: Effect.provideService(invoked, Identity.CurrentSubject, authenticated.subject);
 });
 
 /**
@@ -540,16 +837,31 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
  * provided over, so a facility called from any of the ninety-odd cases below carries it without
  * one of them being edited.
  */
-const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effectId: EffectId, commandInput: unknown) {
+const runCommand = Effect.fn('Bolt.runCommand')(function* (
+	command: string,
+	effectId: EffectId,
+	commandInput: unknown
+) {
 	if (command.startsWith('invoke.')) {
-		const values = yield* decode(Schema.Struct({ subject: Subject, input: Schema.Json }), commandInput);
-		return json(yield* (yield* RemoteRegistry).invoke(command.slice('invoke.'.length), values.input, values.subject, effectId));
+		const values = yield* decode(
+			Schema.Struct({ subject: Subject, input: Schema.Json }),
+			commandInput
+		);
+		return json(
+			yield* (yield* RemoteRegistry).invoke(
+				command.slice('invoke.'.length),
+				values.input,
+				values.subject,
+				effectId
+			)
+		);
 	}
 	// Gated before the switch, not case by case: the five schema commands were each written without a
 	// check, and one gate on the prefix is the only form a sixth cannot be added past.
 	if (command.startsWith('schema.')) yield* authorizeSchemaCommand(command, commandInput);
 	switch (command) {
-		case 'health': return json({ status: 'ok' });
+		case 'health':
+			return json({ status: 'ok' });
 		/**
 		 * There is deliberately no `secrets.read`.
 		 *
@@ -579,7 +891,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'secrets.write': {
 			const input = yield* decode(SecretsWriteInput, commandInput);
 			yield* (yield* AccessControl.Service).authorize(input.subject, 'manage', 'secrets');
-			yield* (yield* Secrets.Service).write(effectId, input.name, input.value, input.subject.userId);
+			yield* (yield* Secrets.Service).write(
+				effectId,
+				input.name,
+				input.value,
+				input.subject.userId
+			);
 			return json({ saved: true, name: input.name });
 		}
 		/**
@@ -626,7 +943,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'access.impersonate': {
 			const input = yield* decode(ImpersonateInput, commandInput);
 			const access = yield* AccessControl.Service;
-			return json({ subject: yield* access.impersonate(input.actor, input.target), apps: access.visibleApps(input.target) });
+			return json({
+				subject: yield* access.impersonate(input.actor, input.target),
+				apps: access.visibleApps(input.target)
+			});
 		}
 		/**
 		 * What the sidebar needs to render the picker: may this actor impersonate, what may they
@@ -672,12 +992,22 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'access.explain': {
 			const input = yield* decode(AccessDecisionInput, commandInput);
 			const access = yield* AccessControl.Service;
-			const decision = command === 'access.predicate' ? access.predicate(input.subject, input.action, input.resource) : access.explain(input.subject, input.action, input.resource);
+			const decision =
+				command === 'access.predicate'
+					? access.predicate(input.subject, input.action, input.resource)
+					: access.explain(input.subject, input.action, input.resource);
 			return json({ allowed: decision.allowed, reason: decision.reason });
 		}
 		case 'access.mask': {
 			const input = yield* decode(AccessMaskInput, commandInput);
-			return json((yield* AccessControl.Service).mask(input.subject, input.action, input.resource, input.value));
+			return json(
+				(yield* AccessControl.Service).mask(
+					input.subject,
+					input.action,
+					input.resource,
+					input.value
+				)
+			);
 		}
 		case 'identity.authenticate': {
 			const input = yield* decode(IdentityAuthenticateInput, commandInput);
@@ -685,7 +1015,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'identity.resolveSubject': {
 			const input = yield* decode(IdentityResolveInput, commandInput);
-			return json(yield* (yield* Identity.Service).resolveSubject(effectId, input.provider, input.externalId));
+			return json(
+				yield* (yield* Identity.Service).resolveSubject(effectId, input.provider, input.externalId)
+			);
 		}
 		case 'identity.admitFounder': {
 			const input = yield* decode(IdentityAdmitFounderInput, commandInput);
@@ -714,7 +1046,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 					const steps = Reflect.get(approval, 'steps');
 					if (!Array.isArray(steps)) continue;
 					for (const step of steps) {
-						const approvers = step === null || typeof step !== 'object' ? undefined : Reflect.get(step, 'approvers');
+						const approvers =
+							step === null || typeof step !== 'object'
+								? undefined
+								: Reflect.get(step, 'approvers');
 						if (!Array.isArray(approvers)) continue;
 						for (const team of approvers) if (typeof team === 'string') teams.add(team);
 					}
@@ -733,7 +1068,14 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'identity.invite': {
 			const input = yield* decode(IdentityInviteInput, commandInput);
-			return json({ invitationId: yield* (yield* Identity.Service).invite(effectId, input.tenantId, input.email, input.invitedBy) });
+			return json({
+				invitationId: yield* (yield* Identity.Service).invite(
+					effectId,
+					input.tenantId,
+					input.email,
+					input.invitedBy
+				)
+			});
 		}
 		case 'identity.acceptInvitation': {
 			const input = yield* decode(IdentityAcceptInput, commandInput);
@@ -749,11 +1091,24 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'identity.verifyCode': {
 			const input = yield* decode(IdentityVerifyCodeInput, commandInput);
-			return json({ credential: yield* (yield* Identity.Service).verifyCode(effectId, input.email, input.code, input.tenantId) });
+			return json({
+				credential: yield* (yield* Identity.Service).verifyCode(
+					effectId,
+					input.email,
+					input.code,
+					input.tenantId
+				)
+			});
 		}
 		case 'identity.startSession': {
 			const input = yield* decode(IdentitySessionInput, commandInput);
-			return json({ credential: yield* (yield* Identity.Service).startSession(effectId, input.userId, input.tenantId) });
+			return json({
+				credential: yield* (yield* Identity.Service).startSession(
+					effectId,
+					input.userId,
+					input.tenantId
+				)
+			});
 		}
 		case 'identity.endSession': {
 			const input = yield* decode(IdentityCredentialInput, commandInput);
@@ -771,12 +1126,16 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'approvals.request': {
 			const input = yield* decode(ApprovalRequestInput, commandInput);
 			const approvals = yield* Approvals.Service;
-			return json(yield* approvals.request(effectId, input.subject, input.requestId, input.operation));
+			return json(
+				yield* approvals.request(effectId, input.subject, input.requestId, input.operation)
+			);
 		}
 		case 'approvals.decide': {
 			const input = yield* decode(ApprovalDecideInput, commandInput);
 			const approvals = yield* Approvals.Service;
-			return json(yield* approvals.decide(effectId, input.subject, input.state, input.decision, input.reason));
+			return json(
+				yield* approvals.decide(effectId, input.subject, input.state, input.decision, input.reason)
+			);
 		}
 		case 'approvals.withdraw': {
 			const input = yield* decode(ApprovalWithdrawInput, commandInput);
@@ -805,13 +1164,22 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'sync.snapshot': {
 			const input = yield* decode(SyncSnapshotInput, commandInput);
-			return json(yield* (yield* Sync.Service).snapshot(effectId, input.subject, input.collection, input.after, input.limit ?? 500));
+			return json(
+				yield* (yield* Sync.Service).snapshot(
+					effectId,
+					input.subject,
+					input.collection,
+					input.after,
+					input.limit ?? 500
+				)
+			);
 		}
 		case 'sync.compact': {
 			const input = yield* decode(SyncCompactInput, commandInput);
 			return json(yield* (yield* Sync.Service).compact(effectId, input.retentionDays ?? 30));
 		}
-		case 'sync.schema': return json((yield* Sync.Service).schema());
+		case 'sync.schema':
+			return json((yield* Sync.Service).schema());
 		case 'sync.wakeHint': {
 			const input = yield* decode(SyncCursor, commandInput);
 			return json((yield* Sync.Service).wakeHint(input));
@@ -824,7 +1192,15 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'agents.turn': {
 			const input = yield* decode(AgentTurnInput, commandInput);
 			const agents = yield* Agents.Service;
-			return json(yield* agents.turn(effectId, input.subject, input.agent, input.conversationId, input.message));
+			return json(
+				yield* agents.turn(
+					effectId,
+					input.subject,
+					input.agent,
+					input.conversationId,
+					input.message
+				)
+			);
 		}
 		case 'agents.title': {
 			const input = yield* decode(AgentTitleInput, commandInput);
@@ -833,7 +1209,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'agents.start': {
 			const input = yield* decode(AgentStartInput, commandInput);
-			yield* (yield* Agents.Service).start(effectId, input.subject, input.agent, input.conversationId);
+			yield* (yield* Agents.Service).start(
+				effectId,
+				input.subject,
+				input.agent,
+				input.conversationId
+			);
 			return json({ started: true, conversationId: input.conversationId });
 		}
 		case 'agents.resume': {
@@ -863,12 +1244,20 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'agents.listSkills': {
 			const input = yield* decode(SkillInput, commandInput);
-			if (input.agent === undefined) return yield* new DispatchError({ code: 'invalid_input', message: 'Agent name is required' });
+			if (input.agent === undefined)
+				return yield* new DispatchError({
+					code: 'invalid_input',
+					message: 'Agent name is required'
+				});
 			return json(yield* (yield* Agents.Service).listSkills(input.agent));
 		}
 		case 'agents.readSkill': {
 			const input = yield* decode(SkillInput, commandInput);
-			if (input.name === undefined) return yield* new DispatchError({ code: 'invalid_input', message: 'Skill name is required' });
+			if (input.name === undefined)
+				return yield* new DispatchError({
+					code: 'invalid_input',
+					message: 'Skill name is required'
+				});
 			return json(yield* (yield* Agents.Service).readSkill(effectId, input.name));
 		}
 		// The agent model picker asks for the models this deployment offers. Bolt does not decide that
@@ -888,7 +1277,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 			const workspace = yield* Workspace.Service;
 			const access = yield* AccessControl.Service;
 			const definition = workspace.definition;
-			const readable = definition.collections.filter(({ name }) => access.predicate(input.subject, 'read', name).allowed);
+			const readable = definition.collections.filter(
+				({ name }) => access.predicate(input.subject, 'read', name).allowed
+			);
 			return json({
 				name: definition.name,
 				version: definition.version,
@@ -900,7 +1291,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 					// compiler now lifts them onto the collection descriptor, and this is the projection
 					// that would otherwise drop them again: a studio needs `description` and `icon` to
 					// name a collection, and `approvalLock` to know a write on it will be held.
-					...(collection.approvalLock === undefined ? {} : { approvalLock: collection.approvalLock }),
+					...(collection.approvalLock === undefined
+						? {}
+						: { approvalLock: collection.approvalLock }),
 					...(collection.description === undefined ? {} : { description: collection.description }),
 					...(collection.icon === undefined ? {} : { icon: collection.icon }),
 					...(collection.sourcePath === undefined ? {} : { sourcePath: collection.sourcePath }),
@@ -919,10 +1312,15 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 						...(definition.customType === undefined ? {} : { customType: definition.customType }),
 						...(definition.mimeTypes === undefined ? {} : { mimeTypes: [...definition.mimeTypes] })
 					})),
-					relations: definition.relations.filter((relation) => relation.source === collection.name).map(({ name, target, cardinality }) => ({ name, target, cardinality }))
+					relations: definition.relations
+						.filter((relation) => relation.source === collection.name)
+						.map(({ name, target, cardinality }) => ({ name, target, cardinality }))
 				})),
 				apps: definition.apps.map(({ name, label }) => ({ name, label })),
-				policies: definition.policies.map((policy) => ({ name: policy.name, grants: policy.grants?.length ?? 0 })),
+				policies: definition.policies.map((policy) => ({
+					name: policy.name,
+					grants: policy.grants?.length ?? 0
+				})),
 				agents: definition.agents.map(({ name }) => ({ name })),
 				automations: definition.automations.map(({ name }) => ({ name })),
 				// What identifies a channel and what shape of traffic it carries, for the same reason the
@@ -934,14 +1332,16 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 				// the channel's system prompt and `policy` names the grants its runs are ceilinged by;
 				// `workspace.manifest` answers any authenticated caller, and neither is something a caller
 				// needs in order to render a channel.
-				channels: definition.channels.map(({ name, agent, transport, audience, description, groupMessages }) => ({
-					name,
-					agent,
-					transport,
-					audience,
-					description,
-					...(groupMessages === undefined ? {} : { groupMessages })
-				})),
+				channels: definition.channels.map(
+					({ name, agent, transport, audience, description, groupMessages }) => ({
+						name,
+						agent,
+						transport,
+						audience,
+						description,
+						...(groupMessages === undefined ? {} : { groupMessages })
+					})
+				),
 				integrations: definition.integrations.map(({ name }) => ({ name })),
 				requiredFacilities: [...definition.requiredFacilities]
 			});
@@ -952,15 +1352,34 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'collections.findFirst': {
 			const input = yield* decode(CollectionFindInput, commandInput);
-			return json((yield* (yield* Collections.Service).findFirst(effectId, input.subject, collectionQuery(input))) ?? null);
+			return json(
+				(yield* (yield* Collections.Service).findFirst(
+					effectId,
+					input.subject,
+					collectionQuery(input)
+				)) ?? null
+			);
 		}
 		case 'collections.count': {
 			const input = yield* decode(CollectionFindInput, commandInput);
-			return json({ count: yield* (yield* Collections.Service).count(effectId, input.subject, collectionQuery(input)) });
+			return json({
+				count: yield* (yield* Collections.Service).count(
+					effectId,
+					input.subject,
+					collectionQuery(input)
+				)
+			});
 		}
 		case 'collections.history': {
 			const input = yield* decode(CollectionRecordInput, commandInput);
-			return json(yield* (yield* Collections.Service).history(effectId, input.subject, input.collection, input.id));
+			return json(
+				yield* (yield* Collections.Service).history(
+					effectId,
+					input.subject,
+					input.collection,
+					input.id
+				)
+			);
 		}
 		case 'collections.create': {
 			const input = yield* decode(CollectionCreateInput, commandInput);
@@ -974,7 +1393,11 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 			const records = input.records.map((record) => ({ ...record, subject: input.subject }));
 			for (const record of records) yield* checkWrittenValues(record.collection, record.values);
 			yield* (yield* Collections.Service).createMany(effectId, input.subject, records);
-			return json({ created: records.length, ids: records.map(({ id }) => id), norbital_ids: records.map(({ id }) => id) });
+			return json({
+				created: records.length,
+				ids: records.map(({ id }) => id),
+				norbital_ids: records.map(({ id }) => id)
+			});
 		}
 		case 'collections.update': {
 			const input = yield* decode(CollectionUpdateInput, commandInput);
@@ -1002,11 +1425,15 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'collections.import': {
 			const input = yield* decode(CollectionCreateManyInput, commandInput);
 			const records = input.records.map((record) => ({ ...record, subject: input.subject }));
-			return json({ imported: yield* (yield* Collections.Service).import(effectId, input.subject, records) });
+			return json({
+				imported: yield* (yield* Collections.Service).import(effectId, input.subject, records)
+			});
 		}
 		case 'collections.export': {
 			const input = yield* decode(CollectionFindInput, commandInput);
-			return json(yield* (yield* Collections.Service).export(effectId, input.subject, collectionQuery(input)));
+			return json(
+				yield* (yield* Collections.Service).export(effectId, input.subject, collectionQuery(input))
+			);
 		}
 		/**
 		 * The exact DDL this tenant's database was provisioned with, in order.
@@ -1026,13 +1453,17 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 			const workspace = yield* Workspace.Service;
 			return json({
 				steps: [
-					...plan.steps.filter(({ id }) => id.startsWith('bolt:')).map(({ id, sql }) => ({ id, sql })),
+					...plan.steps
+						.filter(({ id }) => id.startsWith('bolt:'))
+						.map(({ id, sql }) => ({ id, sql })),
 					...[...(workspace.definition.migrations ?? [])]
 						.toSorted((left, right) => left.tag.localeCompare(right.tag))
 						.flatMap((entry) =>
 							entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
 						),
-					...plan.steps.filter(({ id }) => !id.startsWith('bolt:')).map(({ id, sql }) => ({ id, sql }))
+					...plan.steps
+						.filter(({ id }) => !id.startsWith('bolt:'))
+						.map(({ id, sql }) => ({ id, sql }))
 				],
 				fingerprint: plan.fingerprint,
 				/**
@@ -1050,7 +1481,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'schema.plan': {
 			const schema = yield* WorkspaceSchema.Service;
 			const plan = schema.plan();
-			return json({ fingerprint: plan.fingerprint, steps: plan.steps.map(({ id, sql }) => ({ id, sql })) });
+			return json({
+				fingerprint: plan.fingerprint,
+				steps: plan.steps.map(({ id, sql }) => ({ id, sql }))
+			});
 		}
 		case 'schema.fingerprint': {
 			const schema = yield* WorkspaceSchema.Service;
@@ -1074,7 +1508,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'automations.start': {
 			const input = yield* decode(AutomationStartInput, commandInput);
 			const automations = yield* Automations.Service;
-			return json({ taskId: yield* automations.start(effectId, input.subject, input.name, input.input) });
+			return json({
+				taskId: yield* automations.start(effectId, input.subject, input.name, input.input)
+			});
 		}
 		case 'automations.register': {
 			const input = yield* decode(NamedInput, commandInput);
@@ -1083,7 +1519,14 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'automations.runStep': {
 			const input = yield* decode(AutomationStartInput, commandInput);
-			return json({ taskId: yield* (yield* Automations.Service).runStep(effectId, input.subject, input.name, input.input) });
+			return json({
+				taskId: yield* (yield* Automations.Service).runStep(
+					effectId,
+					input.subject,
+					input.name,
+					input.input
+				)
+			});
 		}
 		case 'automations.resume': {
 			const input = yield* decode(TaskInput, commandInput);
@@ -1102,7 +1545,15 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'channels.receive': {
 			const input = yield* decode(ChannelReceiveInput, commandInput);
 			const channels = yield* Channels.Service;
-			return json(yield* channels.receive(effectId, input.subject, input.channel, input.conversationId, input.message));
+			return json(
+				yield* channels.receive(
+					effectId,
+					input.subject,
+					input.channel,
+					input.conversationId,
+					input.message
+				)
+			);
 		}
 		case 'channels.register': {
 			const input = yield* decode(ChannelNameInput, commandInput);
@@ -1111,7 +1562,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'channels.reply': {
 			const input = yield* decode(ChannelReplyInput, commandInput);
-			yield* (yield* Channels.Service).reply(effectId, input.channel, input.recipient, input.payload);
+			yield* (yield* Channels.Service).reply(
+				effectId,
+				input.channel,
+				input.recipient,
+				input.payload
+			);
 			return json({ replied: true });
 		}
 		case 'channels.status': {
@@ -1129,9 +1585,18 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		case 'integrations.status': {
 			const input = yield* decode(NamedInput, commandInput);
 			const integrations = yield* Integrations.Service;
-			if (command === 'integrations.install') { yield* integrations.install(effectId, input.name); return json({ installed: true }); }
-			if (command === 'integrations.reconcile') { yield* integrations.reconcile(effectId, input.name); return json({ reconciled: true }); }
-			if (command === 'integrations.disable') { yield* integrations.disable(effectId, input.name); return json({ disabled: true }); }
+			if (command === 'integrations.install') {
+				yield* integrations.install(effectId, input.name);
+				return json({ installed: true });
+			}
+			if (command === 'integrations.reconcile') {
+				yield* integrations.reconcile(effectId, input.name);
+				return json({ reconciled: true });
+			}
+			if (command === 'integrations.disable') {
+				yield* integrations.disable(effectId, input.name);
+				return json({ disabled: true });
+			}
 			return json(yield* integrations.status(effectId, input.name));
 		}
 		case 'integrations.receive': {
@@ -1141,11 +1606,18 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 			// credential. That is one of the two independent checks a delivery passes — the host proves it
 			// is the host, and the HMAC proves the source is the source. Listing it as enqueued would drop
 			// the first of those and re-open a credential-free route into a collection write.
-			return json(yield* (yield* Integrations.Service).receive(effectId, input.name, input.binding, { headers: input.headers, body: input.body }));
+			return json(
+				yield* (yield* Integrations.Service).receive(effectId, input.name, input.binding, {
+					headers: input.headers,
+					body: input.body
+				})
+			);
 		}
 		case 'integrations.flush': {
 			const input = yield* decode(IntegrationFlushInput, commandInput);
-			return json(yield* (yield* Integrations.Service).flush(effectId, input.name, input.input ?? null));
+			return json(
+				yield* (yield* Integrations.Service).flush(effectId, input.name, input.input ?? null)
+			);
 		}
 		case 'notifications.enqueue': {
 			const input = yield* decode(Notification, commandInput);
@@ -1166,7 +1638,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 		}
 		case 'notifications.list': {
 			const input = yield* decode(NotificationRecipientInput, commandInput);
-			return json(yield* (yield* Notifications.Service).list(effectId, input.recipient, input.unreadOnly));
+			return json(
+				yield* (yield* Notifications.Service).list(effectId, input.recipient, input.unreadOnly)
+			);
 		}
 		default:
 			// An enqueued `automations.<name>` task is an authored automation's turn to run: the
@@ -1185,10 +1659,15 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 					const files = yield* Files.Service;
 					const ops = makeBoundAuthoringOps(effectId, input.bolt_run_as, collections, ai, files);
 					const api = makeAuthoringApi(ops);
-					const output = yield* runAuthoredHandler(automation.handler(api, { args: input.args, scope: input.scope ?? {} }));
+					const output = yield* runAuthoredHandler(
+						automation.handler(api, { args: input.args, scope: input.scope ?? {} })
+					);
 					return json(output as Schema.Json);
 				}
 			}
-			return yield* new DispatchError({ code: 'unknown_command', message: `Unknown Bolt command: ${command}` });
+			return yield* new DispatchError({
+				code: 'unknown_command',
+				message: `Unknown Bolt command: ${command}`
+			});
 	}
 });

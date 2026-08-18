@@ -18,36 +18,47 @@ const report = (commandName: string, result: SyncResult): void => {
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 		return;
 	}
-	process.stdout.write([
-		`Bolt ${commandName} complete: ${result.collectionNames.length} collections, ${result.appNames.length} apps, ${result.staticAssetCount} static assets`,
-		`Artifact: ${result.artifactPath}`,
-		''
-	].join('\n'));
+	process.stdout.write(
+		[
+			`Bolt ${commandName} complete: ${result.collectionNames.length} collections, ${result.appNames.length} apps, ${result.staticAssetCount} static assets`,
+			`Artifact: ${result.artifactPath}`,
+			''
+		].join('\n')
+	);
 };
 
 const fail = (commandName: string, error: unknown): void => {
-	const message = error instanceof Error && error.message.trim() !== '' ? error.message : String(error).trim() || `Unknown ${commandName} failure`;
-	process.stderr.write(json ? `${JSON.stringify({ error: message, command, workspaceRoot })}\n` : `Bolt ${commandName} failed: ${message}\n`);
+	const message =
+		error instanceof Error && error.message.trim() !== ''
+			? error.message
+			: String(error).trim() || `Unknown ${commandName} failure`;
+	process.stderr.write(
+		json
+			? `${JSON.stringify({ error: message, command, workspaceRoot })}\n`
+			: `Bolt ${commandName} failed: ${message}\n`
+	);
 	process.exitCode = 1;
 };
 
 if (command === 'help') {
-	process.stdout.write([
-		'bolt <command> [options]',
-		'',
-		'Commands:',
-		'  sync     regenerate workspace types and emit a portable artifact',
-		'  build    perform the same deterministic production artifact build',
-		'  check    validate discovery by completing an isolated deterministic build',
-		'  migrate  diff the authored models against the migration lineage and write the next entry',
-		'',
-		'Options:',
-		'  --root <path>  workspace root (defaults to the current directory)',
-		'  --name <name>  migration name (defaults to "auto")',
-		'  --json         emit the result as JSON',
-		'  --watch        rerun sync when authored source changes',
-		''
-	].join('\n'));
+	process.stdout.write(
+		[
+			'bolt <command> [options]',
+			'',
+			'Commands:',
+			'  sync     regenerate workspace types and emit a portable artifact',
+			'  build    perform the same deterministic production artifact build',
+			'  check    validate discovery by completing an isolated deterministic build',
+			'  migrate  diff the authored models against the migration lineage and write the next entry',
+			'',
+			'Options:',
+			'  --root <path>  workspace root (defaults to the current directory)',
+			'  --name <name>  migration name (defaults to "auto")',
+			'  --json         emit the result as JSON',
+			'  --watch        rerun sync when authored source changes',
+			''
+		].join('\n')
+	);
 } else if (command === 'migrate') {
 	// Its own command rather than a step inside `sync`. `sync` is idempotent — run it twice and the
 	// workspace is unchanged — while generating a migration appends a timestamped entry to a lineage
@@ -56,19 +67,25 @@ if (command === 'help') {
 	const program = Effect.gen(function* () {
 		// Imported here rather than at the top: the diff engine is a large module only this command
 		// needs, and `sync` runs on every save.
-		const { generateWorkspaceMigration } = yield* Effect.promise(() => import('./schema-migrations.js'));
+		const { generateWorkspaceMigration } = yield* Effect.promise(
+			() => import('./schema-migrations.js')
+		);
 		const result = yield* generateWorkspaceMigration(workspaceRoot, nameValue);
 		if (json) {
 			process.stdout.write(`${JSON.stringify(result)}\n`);
 		} else if (result.tag === undefined) {
-			process.stdout.write('Bolt migrate: the authored models and the migration lineage already agree; nothing written.\n');
+			process.stdout.write(
+				'Bolt migrate: the authored models and the migration lineage already agree; nothing written.\n'
+			);
 		} else {
-			process.stdout.write([
-				`Bolt migrate wrote ${result.tag} (${result.statements.length} statements)`,
-				`Lineage: ${result.migrationsRoot}`,
-				...result.statements.map((statement) => `  ${statement}`),
-				''
-			].join('\n'));
+			process.stdout.write(
+				[
+					`Bolt migrate wrote ${result.tag} (${result.statements.length} statements)`,
+					`Lineage: ${result.migrationsRoot}`,
+					...result.statements.map((statement) => `  ${statement}`),
+					''
+				].join('\n')
+			);
 		}
 	});
 	await Effect.runPromise(program).catch((error) => fail('migrate', error));

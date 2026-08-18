@@ -49,10 +49,16 @@ const DependencyAudit = {
 		const dependencies: Array<string> = [];
 		const visitor = {
 			visit: (node: ts.Node): void => {
-				if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) dependencies.push(node.moduleSpecifier.text);
+				if (
+					(ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+					node.moduleSpecifier !== undefined &&
+					ts.isStringLiteral(node.moduleSpecifier)
+				)
+					dependencies.push(node.moduleSpecifier.text);
 				if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
 					const argument = node.arguments[0];
-					if (argument !== undefined && ts.isStringLiteral(argument)) dependencies.push(argument.text);
+					if (argument !== undefined && ts.isStringLiteral(argument))
+						dependencies.push(argument.text);
 				}
 				ts.forEachChild(node, visitor.visit);
 			}
@@ -61,9 +67,12 @@ const DependencyAudit = {
 		return dependencies;
 	},
 	forbidden: (dependency: string): string | undefined => {
-		for (const root of forbiddenBoltDependencies) if (dependency === root || dependency.startsWith(`${root}/`)) return root;
-		for (const root of forbiddenProviderDependencies) if (dependency === root || dependency.startsWith(`${root}/`)) return root;
-		for (const root of forbiddenHostModules) if (dependency === root || dependency.startsWith(`${root}/`)) return root;
+		for (const root of forbiddenBoltDependencies)
+			if (dependency === root || dependency.startsWith(`${root}/`)) return root;
+		for (const root of forbiddenProviderDependencies)
+			if (dependency === root || dependency.startsWith(`${root}/`)) return root;
+		for (const root of forbiddenHostModules)
+			if (dependency === root || dependency.startsWith(`${root}/`)) return root;
 		return undefined;
 	},
 	/**
@@ -132,7 +141,12 @@ const AuthoringAudit = {
 		if (property === undefined) return undefined;
 		// `record['norbital_id']` and `Reflect.get(record, 'norbital_id')` reach the same column by a
 		// spelling a property-name check alone does not see.
-		const name = property['type'] === 'Identifier' ? property['name'] : property['type'] === 'Literal' ? property['value'] : undefined;
+		const name =
+			property['type'] === 'Identifier'
+				? property['name']
+				: property['type'] === 'Literal'
+					? property['value']
+					: undefined;
 		return typeof name === 'string' && SYSTEM_COLUMN_NAMES.includes(name) ? name : undefined;
 	},
 	/**
@@ -143,7 +157,9 @@ const AuthoringAudit = {
 	 * `ArrayExpression` and a function body are all absent below, which is what keeps a `where`
 	 * predicate, an export pipeline and an `onValueChange` handler out of the findings.
 	 */
-	valueSources: (node: Readonly<Record<string, unknown>>): ReadonlyArray<Readonly<Record<string, unknown>>> => {
+	valueSources: (
+		node: Readonly<Record<string, unknown>>
+	): ReadonlyArray<Readonly<Record<string, unknown>>> => {
 		const keys = ((): ReadonlyArray<string> => {
 			switch (node['type']) {
 				case 'ChainExpression':
@@ -152,7 +168,8 @@ const AuthoringAudit = {
 				case 'ParenthesizedExpression':
 					return ['expression'];
 				// The test is not handed over; only the branches are.
-				case 'ConditionalExpression': return ['consequent', 'alternate'];
+				case 'ConditionalExpression':
+					return ['consequent', 'alternate'];
 				case 'LogicalExpression':
 				case 'BinaryExpression':
 					return ['left', 'right'];
@@ -161,13 +178,19 @@ const AuthoringAudit = {
 					return ['expressions'];
 				// Arguments only — a callee named `norbital_id` would be a function, not a column, and
 				// descending into them is what stops `String(record.norbital_id)` laundering the value.
-				case 'CallExpression': return ['arguments'];
-				default: return [];
+				case 'CallExpression':
+					return ['arguments'];
+				default:
+					return [];
 			}
 		})();
 		return keys.flatMap((key) => {
 			const value = node[key];
-			return value === null || value === undefined ? [] : Array.isArray(value) ? value : [value as Readonly<Record<string, unknown>>];
+			return value === null || value === undefined
+				? []
+				: Array.isArray(value)
+					? value
+					: [value as Readonly<Record<string, unknown>>];
 		});
 	},
 	/** Every expression tag a single attribute carries, whether quoted with text or standing alone. */
@@ -175,7 +198,9 @@ const AuthoringAudit = {
 		const parts = Array.isArray(value) ? value : [value];
 		return parts.flatMap((part) => {
 			const node = part as Readonly<Record<string, unknown>> | null;
-			return node !== null && typeof node === 'object' && node['type'] === 'ExpressionTag' ? [node['expression'] as Readonly<Record<string, unknown>>] : [];
+			return node !== null && typeof node === 'object' && node['type'] === 'ExpressionTag'
+				? [node['expression'] as Readonly<Record<string, unknown>>]
+				: [];
 		});
 	}
 };
@@ -189,25 +214,15 @@ const AuthoringAudit = {
  * that feeding a `.svelte` path to `ts.createSourceFile` would under-report in silence rather than
  * fail. A component prop only exists in markup, so markup is what has to be parsed.
  */
-/**
- * Reports an authored `+integrations.ts`, because nothing reads one.
- *
- * `defineConnection` is exported from the authoring surface and these files typecheck, so a
- * connection with pull and push bindings looks supported. It is not: no glob in `sync.ts` discovers
- * the filename, the manifest hardcodes `integrations: []`, and — checked against history — no
- * runtime in Bolt or in Pod before it ever consumed one. The declaration was added to match the
- * documentation and a runtime was never built.
- *
- * A warning is the right severity rather than a build failure. The files are real work describing
- * real intent, and refusing them would break every template that has one for a defect none of them
- * caused; what has to stop is the silence. This is the same reading as the channel declarations that
- * were discarded until something said so.
- */
-export const auditAuthoredSystemColumns = (files: Readonly<Record<string, string>>): ReadonlyArray<SystemColumnFinding> => {
+export const auditAuthoredSystemColumns = (
+	files: Readonly<Record<string, string>>
+): ReadonlyArray<SystemColumnFinding> => {
 	const findings: Array<SystemColumnFinding> = [];
 	for (const [file, source] of Object.entries(files)) {
 		if (!file.endsWith('.svelte')) continue;
-		const root = parse(source, { modern: true, filename: file }) as unknown as Readonly<Record<string, unknown>>; // stupidity: boundary-cast — the audit walks the fragment structurally and Svelte does not publish a node union it can narrow against.
+		const root = parse(source, { modern: true, filename: file }) as unknown as Readonly<
+			Record<string, unknown>
+		>; // stupidity: boundary-cast — the audit walks the fragment structurally and Svelte does not publish a node union it can narrow against.
 		/** Descends the whole fragment, because a component can be nested in any block or snippet. */
 		const visit = (node: Readonly<Record<string, unknown>> | null | undefined): void => {
 			if (node === null || node === undefined || typeof node !== 'object') return;
@@ -215,9 +230,14 @@ export const auditAuthoredSystemColumns = (files: Readonly<Record<string, string
 				for (const child of node) visit(child as Readonly<Record<string, unknown>>);
 				return;
 			}
-			if (node['type'] === 'Component' || node['type'] === 'SvelteComponent' || node['type'] === 'SvelteSelf') {
+			if (
+				node['type'] === 'Component' ||
+				node['type'] === 'SvelteComponent' ||
+				node['type'] === 'SvelteSelf'
+			) {
 				const component = typeof node['name'] === 'string' ? node['name'] : 'component';
-				for (const attribute of (node['attributes'] as ReadonlyArray<Readonly<Record<string, unknown>>> | undefined) ?? []) {
+				for (const attribute of (node['attributes'] as
+					ReadonlyArray<Readonly<Record<string, unknown>>> | undefined) ?? []) {
 					if (attribute['type'] !== 'Attribute') continue;
 					const pending = [...AuthoringAudit.attributeExpressions(attribute['value'])];
 					while (pending.length > 0) {
@@ -227,7 +247,9 @@ export const auditAuthoredSystemColumns = (files: Readonly<Record<string, string
 						if (column !== undefined) {
 							findings.push({
 								file,
-								line: source.slice(0, typeof expression['start'] === 'number' ? expression['start'] : 0).split('\n').length,
+								line: source
+									.slice(0, typeof expression['start'] === 'number' ? expression['start'] : 0)
+									.split('\n').length,
 								component,
 								prop: typeof attribute['name'] === 'string' ? attribute['name'] : '',
 								column
@@ -251,14 +273,17 @@ export const auditAuthoredSystemColumns = (files: Readonly<Record<string, string
 };
 
 /** Parses the module graph and reports forbidden framework or provider dependencies. */
-export const auditImports = (files: Readonly<Record<string, string>>): ReadonlyArray<AuditFinding> => {
+export const auditImports = (
+	files: Readonly<Record<string, string>>
+): ReadonlyArray<AuditFinding> => {
 	const findings: Array<AuditFinding> = [];
 	for (const [file, source] of Object.entries(files)) {
 		for (const dependency of DependencyAudit.moduleSpecifiers(file, source)) {
 			const forbidden = DependencyAudit.forbidden(dependency);
 			if (forbidden !== undefined) findings.push({ file, dependency: forbidden });
 		}
-		if (DependencyAudit.readsAmbientEnvironment(file, source)) findings.push({ file, dependency: 'process.env' });
+		if (DependencyAudit.readsAmbientEnvironment(file, source))
+			findings.push({ file, dependency: 'process.env' });
 	}
 	return findings;
 };

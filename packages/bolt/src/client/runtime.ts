@@ -1,7 +1,19 @@
 import { Schema } from 'effect';
 import { createLocalStore, type LocalStore } from './replica/local-sql.js';
-import { compareCursors, createSyncClient, decodeChanges, decodeCursor, type SyncClient } from './replica/sync-client.js';
-import { ANY_COLLECTION, cacheKeyFor, collectionsFor, createQueryCache, type QueryCache } from './replica/query-cache.js';
+import {
+	compareCursors,
+	createSyncClient,
+	decodeChanges,
+	decodeCursor,
+	type SyncClient
+} from './replica/sync-client.js';
+import {
+	ANY_COLLECTION,
+	cacheKeyFor,
+	collectionsFor,
+	createQueryCache,
+	type QueryCache
+} from './replica/query-cache.js';
 import { createLiveQueryRegistry, type LiveQueryRegistry } from './replica/live-queries.js';
 import type { SyncChange, SyncCursor } from '../runtime/sync/sync.js';
 import { EnvironmentName, InvocationScope, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
@@ -108,7 +120,10 @@ const filterToWhere = (filter: QueryFilter): Schema.Json => {
 	const leaf = filter.path[filter.path.length - 1];
 	if (leaf === undefined) return {};
 	let node: Record<string, Schema.Json> = {
-		[leaf]: filter.operand === undefined ? { [filter.operator]: true } : { [filter.operator]: filter.operand }
+		[leaf]:
+			filter.operand === undefined
+				? { [filter.operator]: true }
+				: { [filter.operator]: filter.operand }
 	};
 	for (let index = filter.path.length - 2; index >= 0; index -= 1) {
 		const key = filter.path[index];
@@ -118,7 +133,10 @@ const filterToWhere = (filter: QueryFilter): Schema.Json => {
 	return node;
 };
 
-const mergeWhere = (query: Readonly<Record<string, Schema.Json>>, options?: QueryOptions): Readonly<Record<string, Schema.Json>> => {
+const mergeWhere = (
+	query: Readonly<Record<string, Schema.Json>>,
+	options?: QueryOptions
+): Readonly<Record<string, Schema.Json>> => {
 	const filters = options?.filters ?? [];
 	if (filters.length === 0) return query;
 	const clauses = filters.map(filterToWhere);
@@ -169,7 +187,11 @@ const cursorFrom = (value: Schema.Json | undefined): string | null => {
 
 /** Owns stateful remote-query construction without introducing a module-global runtime singleton. */
 const RemoteQueries = {
-	make: (runtime: WorkspaceClientRuntime, command: string, input: Schema.Json): RemoteQuery<Schema.Json> => {
+	make: (
+		runtime: WorkspaceClientRuntime,
+		command: string,
+		input: Schema.Json
+	): RemoteQuery<Schema.Json> => {
 		const cache = runtime.cache;
 		const registry = runtime.queries;
 		// Every read goes through here — `db.*`, `invoke.*`, `records`, `history`, `approvals` — which
@@ -198,7 +220,11 @@ const RemoteQueries = {
 };
 
 const PageQueries = {
-	make: (runtime: WorkspaceClientRuntime, command: string, input: Schema.Json): CollectionPageQuery<ReadonlyArray<Schema.Json>> => {
+	make: (
+		runtime: WorkspaceClientRuntime,
+		command: string,
+		input: Schema.Json
+	): CollectionPageQuery<ReadonlyArray<Schema.Json>> => {
 		const query = RemoteQueries.make(runtime, command, input);
 		const page: CollectionPageQuery<ReadonlyArray<Schema.Json>> = {
 			get current() {
@@ -218,7 +244,8 @@ const PageQueries = {
 			// unchanged when no handler is given is exactly that default — TypeScript just cannot
 			// prove it for an arbitrary caller-supplied `TResult1`.
 			then: <TResult1 = ReadonlyArray<Schema.Json>, TResult2 = never>(
-				onfulfilled?: ((value: ReadonlyArray<Schema.Json>) => TResult1 | PromiseLike<TResult1>) | null,
+				onfulfilled?:
+					((value: ReadonlyArray<Schema.Json>) => TResult1 | PromiseLike<TResult1>) | null,
 				onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
 			) =>
 				query.then((value) => {
@@ -294,7 +321,8 @@ const WorkspaceApis = {
 				RemoteQueries.make(runtime, 'collections.history', { collection, id: recordId })
 		},
 		approvals: {
-			findMany: (approvalId: string) => RemoteQueries.make(runtime, 'approvals.timeline', { requestId: approvalId }),
+			findMany: (approvalId: string) =>
+				RemoteQueries.make(runtime, 'approvals.timeline', { requestId: approvalId }),
 			process: async (input: {
 				readonly approvalRequestId: string;
 				readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE';
@@ -306,7 +334,11 @@ const WorkspaceApis = {
 					Schema.Json
 				);
 				const decision =
-					input.action === 'APPROVED' ? 'approve' : input.action === 'REJECTED' ? 'reject' : undefined;
+					input.action === 'APPROVED'
+						? 'approve'
+						: input.action === 'REJECTED'
+							? 'reject'
+							: undefined;
 				if (decision === undefined || state === null || typeof state !== 'object') return;
 				await runtime.bolt.command(
 					'approvals.decide',
@@ -373,11 +405,10 @@ const invalidateWrite = (runtime: WorkspaceClientRuntime, collection: string): v
 const ClientDatabase = {
 	collection: (runtime: WorkspaceClientRuntime, collection: string) => ({
 		findMany: (input: Schema.Json = {}, options?: QueryOptions) =>
-			PageQueries.make(
-				runtime,
-				'collections.findMany',
-				{ collection, ...mergeWhere(asJsonRecord(input), options) }
-			),
+			PageQueries.make(runtime, 'collections.findMany', {
+				collection,
+				...mergeWhere(asJsonRecord(input), options)
+			}),
 		findFirst: (input: Schema.Json = {}) =>
 			RemoteQueries.make(runtime, 'collections.findFirst', { collection, ...asJsonRecord(input) }),
 		count: (input: Schema.Json = {}, options?: QueryOptions) =>
@@ -466,7 +497,10 @@ export type BrowserReplica = Readonly<{
  */
 export const startBrowserReplica = async (
 	runtime: WorkspaceClientRuntime,
-	options: { readonly onAdvance?: (cursor: SyncCursor) => void; readonly onError?: (cause: unknown) => void } = {}
+	options: {
+		readonly onAdvance?: (cursor: SyncCursor) => void;
+		readonly onError?: (cause: unknown) => void;
+	} = {}
 ): Promise<BrowserReplica> => {
 	const store = createLocalStore();
 	const cache = runtime.cache;
@@ -578,7 +612,10 @@ const runningReplicas = new Map<string, Promise<LocalReplica>>();
 export const startLocalReplica = async (
 	runtime: WorkspaceClientRuntime,
 	open?: (steps: ReadonlyArray<ProvisioningStep>) => Promise<PGliteLike>,
-	options: { readonly onChange?: (applied: number) => void; readonly onError?: (cause: unknown) => void } = {}
+	options: {
+		readonly onChange?: (applied: number) => void;
+		readonly onError?: (cause: unknown) => void;
+	} = {}
 ): Promise<LocalReplica> => {
 	const key = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}`;
 	const running = runningReplicas.get(key);
@@ -602,7 +639,10 @@ export const startLocalReplica = async (
 const startReplica = async (
 	runtime: WorkspaceClientRuntime,
 	open?: (steps: ReadonlyArray<ProvisioningStep>) => Promise<PGliteLike>,
-	options: { readonly onChange?: (applied: number) => void; readonly onError?: (cause: unknown) => void } = {}
+	options: {
+		readonly onChange?: (applied: number) => void;
+		readonly onError?: (cause: unknown) => void;
+	} = {}
 ): Promise<LocalReplica> => {
 	const cache = runtime.cache;
 	const registry = runtime.queries;

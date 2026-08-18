@@ -137,7 +137,12 @@ const authoredModule = {
 						select: 'DOI,title,publisher,issue'
 					},
 					headers: { 'user-agent': 'bolt-integration-proof/1.0 (mailto:dion.neo@norbital.ai)' },
-					pages: { style: 'cursor', query: 'cursor', next: { path: ['message', 'next-cursor'] }, max: 2 }
+					pages: {
+						style: 'cursor',
+						query: 'cursor',
+						next: { path: ['message', 'next-cursor'] },
+						max: 2
+					}
 				},
 				input: Work,
 				records: { path: ['message', 'items'] },
@@ -178,7 +183,12 @@ const authoredModule = {
 		connection: githubAuthenticated,
 		receive: {
 			repositories: definePull({
-				pull: { schedule: '0 * * * *', method: 'GET', path: '/repositories', query: { per_page: '2' } },
+				pull: {
+					schedule: '0 * * * *',
+					method: 'GET',
+					path: '/repositories',
+					query: { per_page: '2' }
+				},
 				input: Repository,
 				identity: { column: 'external_id', value: (repository) => `github-auth:${repository.id}` }
 			})
@@ -204,7 +214,9 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+	],
 	agents: [],
 	automations: [],
 	channels: [],
@@ -246,11 +258,16 @@ const count = async (source: string): Promise<number> => (await rows(source)).le
 
 /** The report shape `Integrations.pull` returns, read defensively because it crosses as `Schema.Json`. */
 const report = (value: Schema.Json, binding: string): Readonly<Record<string, unknown>> => {
-	if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('report is not an object');
+	if (value === null || typeof value !== 'object' || Array.isArray(value))
+		throw new Error('report is not an object');
 	const bindings = Reflect.get(value, 'bindings');
 	if (!Array.isArray(bindings)) throw new Error('report carries no bindings');
 	const found = bindings.find(
-		(entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry) && Reflect.get(entry, 'binding') === binding
+		(entry) =>
+			entry !== null &&
+			typeof entry === 'object' &&
+			!Array.isArray(entry) &&
+			Reflect.get(entry, 'binding') === binding
 	);
 	if (found === null || found === undefined || typeof found !== 'object' || Array.isArray(found)) {
 		throw new Error(`no report for ${binding}: ${JSON.stringify(value)}`);
@@ -268,7 +285,12 @@ describe.skipIf(!live)('pull runtime against real public APIs', () => {
 	beforeAll(async () => {
 		harness = await makeBoltTestRuntime(definition, {
 			connector: makeHttpConnectorBinding({
-				allowedHosts: ['pokeapi.co', 'jsonplaceholder.typicode.com', 'api.crossref.org', 'api.github.com']
+				allowedHosts: [
+					'pokeapi.co',
+					'jsonplaceholder.typicode.com',
+					'api.crossref.org',
+					'api.github.com'
+				]
 			}),
 			authored: { ...emptyAuthoredRuntime, integrations: described.authored }
 		});
@@ -363,7 +385,10 @@ describe.skipIf(!live)('pull runtime against real public APIs', () => {
 		const secondSummary = report(second, 'repositories');
 		console.log('[github summary 1]', JSON.stringify(firstSummary));
 		console.log('[github summary 2]', JSON.stringify(secondSummary));
-		console.log('[github run 1 max numeric id]', Math.max(...firstRows.map((id) => Number(id.split(':')[1]))));
+		console.log(
+			'[github run 1 max numeric id]',
+			Math.max(...firstRows.map((id) => Number(id.split(':')[1])))
+		);
 		// The whole point: `?since=<max id seen>` means run two asks for a window run one never read, so
 		// every row is new. A cursor that failed to persist would re-read the same 100 and update them.
 		expect(secondSummary['created']).toBe(100);
@@ -374,7 +399,12 @@ describe.skipIf(!live)('pull runtime against real public APIs', () => {
 		expect(allRows.filter((id) => firstRows.includes(id))).toHaveLength(100);
 		console.log('[github run 1]', JSON.stringify(firstRows));
 		console.log('[github run 2]', JSON.stringify(allRows.filter((id) => !firstRows.includes(id))));
-		console.log('[github cursor]', JSON.stringify(firstSummary['cursor']), '->', JSON.stringify(secondSummary['cursor']));
+		console.log(
+			'[github cursor]',
+			JSON.stringify(firstSummary['cursor']),
+			'->',
+			JSON.stringify(secondSummary['cursor'])
+		);
 	}, 90_000);
 
 	it('resolves a declared bearer credential out of the vault and puts it on the wire', async () => {
@@ -385,7 +415,12 @@ describe.skipIf(!live)('pull runtime against real public APIs', () => {
 
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Secrets.Service).write(EffectId.make('vault-1'), 'GITHUB_TOKEN', 'not-a-real-token', 'proof');
+				yield* (yield* Secrets.Service).write(
+					EffectId.make('vault-1'),
+					'GITHUB_TOKEN',
+					'not-a-real-token',
+					'proof'
+				);
 			})
 		);
 		const wrong = await pull('external_records.github_authenticated', 'auth-1');

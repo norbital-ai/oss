@@ -108,7 +108,10 @@
 							>
 						{/if}
 						<div
-							class={cn(WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS, badgeIconName ? 'gap-1' : 'size-3.5')}
+							class={cn(
+								WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS,
+								badgeIconName ? 'gap-1' : 'size-3.5'
+							)}
 							aria-hidden="true"
 						>
 							{#if badgeIconName}

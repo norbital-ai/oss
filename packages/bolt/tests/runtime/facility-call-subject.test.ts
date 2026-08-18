@@ -110,7 +110,9 @@ const peopleWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+	],
 	agents: [],
 	automations: [],
 	channels: [],
@@ -130,7 +132,9 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+	],
 	agents: [],
 	automations: [],
 	channels: [],
@@ -162,11 +166,16 @@ describe('the subject a facility call carries', () => {
 
 		const calls = [...harness.database.calls];
 		expect(calls.length).toBeGreaterThan(1);
-		expect(calls[0]?.subject, 'the credential lookup ran before there was a subject').toBeUndefined();
+		expect(
+			calls[0]?.subject,
+			'the credential lookup ran before there was a subject'
+		).toBeUndefined();
 		expect(
 			subjectsOf(calls.slice(1)),
 			'a facility call made under an authenticated command carried no subject'
-		).toEqual(calls.slice(1).map(() => ({ userId: fixtureUserId('user-admin-token'), roles: ['admin'] })));
+		).toEqual(
+			calls.slice(1).map(() => ({ userId: fixtureUserId('user-admin-token'), roles: ['admin'] }))
+		);
 	});
 
 	/**

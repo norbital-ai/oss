@@ -227,7 +227,8 @@ export interface TreeMapRecordAsyncConfig<TIn, TOut, TCtx> {
 		key: string,
 		child: TIn,
 		ctx: TCtx
-	) => Effect.Effect<{ key: string; childCtx: TCtx } | null> | { key: string; childCtx: TCtx } | null;
+	) =>
+		Effect.Effect<{ key: string; childCtx: TCtx } | null> | { key: string; childCtx: TCtx } | null;
 }
 
 const toEffect = <A>(value: A | Effect.Effect<A>): Effect.Effect<A> =>

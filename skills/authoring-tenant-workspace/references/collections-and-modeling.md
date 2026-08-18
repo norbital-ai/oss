@@ -118,7 +118,9 @@ Handlers are **Effect-native**: `handler` receives `{ input, api }` (create/upda
 `{ existing, api }` (delete), and every `api.db.*`, `api.infer`, and `api.readFileAsset` call
 returns an `Effect.Effect` composed with `yield*`. The runtime executes hooks around create, update,
 and delete — `before` returns the accepted payload or patch; `after` makes same-transaction database
-or asset changes through the elevated `api.db.mutate` / `api.db.delete`. Neither may send traffic,
+or asset changes through the elevated `api.db.<collection>.mutate([...])` /
+`api.db.<collection>.delete([...])`. A collection is always reached as a property, never as a first
+argument. Neither may send traffic,
 queue work, email, invoke AI (bounded `api.infer` for judgement on the write path excepted), or
 notify. Reject a write with `refuse(message)`.
 

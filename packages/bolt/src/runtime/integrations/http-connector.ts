@@ -35,26 +35,52 @@ export const makeHttpConnectorBinding = (
 		call: async (_metadata, unsafeInput, signal) => {
 			const decoded = Schema.decodeUnknownExit(ConnectorRequest)(unsafeInput);
 			if (decoded._tag !== 'Success') {
-				return { _tag: 'Failure', error: makeWireError('connector.invalid_request', 'Connector request is malformed') };
+				return {
+					_tag: 'Failure',
+					error: makeWireError('connector.invalid_request', 'Connector request is malformed')
+				};
 			}
 			const input = decoded.value;
 			if (input.operation !== INTEGRATION_HTTP_OPERATION) {
 				return {
 					_tag: 'Failure',
-					error: makeWireError('connector.unsupported_operation', `This connector performs ${INTEGRATION_HTTP_OPERATION} only, not ${input.operation}`)
+					error: makeWireError(
+						'connector.unsupported_operation',
+						`This connector performs ${INTEGRATION_HTTP_OPERATION} only, not ${input.operation}`
+					)
 				};
 			}
 			const request = Schema.decodeUnknownExit(IntegrationHttpRequest)(input.input);
 			if (request._tag !== 'Success') {
-				return { _tag: 'Failure', error: makeWireError('connector.invalid_request', 'HTTP request descriptor is malformed') };
+				return {
+					_tag: 'Failure',
+					error: makeWireError('connector.invalid_request', 'HTTP request descriptor is malformed')
+				};
 			}
 			const { method, url, headers, body } = request.value;
 			const target = URL.parse(url);
-			if (target === null || (target.protocol !== 'https:' && target.hostname !== 'localhost' && target.hostname !== '127.0.0.1')) {
-				return { _tag: 'Failure', error: makeWireError('connector.refused', 'Integration requests must be HTTPS outside localhost') };
+			if (
+				target === null ||
+				(target.protocol !== 'https:' &&
+					target.hostname !== 'localhost' &&
+					target.hostname !== '127.0.0.1')
+			) {
+				return {
+					_tag: 'Failure',
+					error: makeWireError(
+						'connector.refused',
+						'Integration requests must be HTTPS outside localhost'
+					)
+				};
 			}
 			if (options.allowedHosts !== undefined && !options.allowedHosts.includes(target.host)) {
-				return { _tag: 'Failure', error: makeWireError('connector.refused', `${target.host} is not an allowed integration host`) };
+				return {
+					_tag: 'Failure',
+					error: makeWireError(
+						'connector.refused',
+						`${target.host} is not an allowed integration host`
+					)
+				};
 			}
 			const sends = body !== undefined && method !== 'GET';
 			try {
@@ -64,13 +90,23 @@ export const makeHttpConnectorBinding = (
 					// delivery that posted JSON without saying so is a delivery most receivers answer 415 to,
 					// and a 415 is a 4xx, so it would never be retried. Both defaults sit before the declared
 					// headers so a binding that names either one still wins.
-					headers: { accept: 'application/json', ...(sends ? { 'content-type': 'application/json' } : {}), ...headers },
+					headers: {
+						accept: 'application/json',
+						...(sends ? { 'content-type': 'application/json' } : {}),
+						...headers
+					},
 					...(sends ? { body: JSON.stringify(body) } : {}),
 					signal
 				});
 				const text = await response.text();
 				if (text.length > maxResponseBytes) {
-					return { _tag: 'Failure', error: makeWireError('connector.too_large', `Integration response exceeded ${maxResponseBytes} bytes`) };
+					return {
+						_tag: 'Failure',
+						error: makeWireError(
+							'connector.too_large',
+							`Integration response exceeded ${maxResponseBytes} bytes`
+						)
+					};
 				}
 				// A non-JSON body is not a transport failure — a 502 from a proxy arrives as HTML, and the
 				// runtime's retry policy needs to see the 502 rather than a decode error standing in for it.
@@ -80,7 +116,9 @@ export const makeHttpConnectorBinding = (
 					value: {
 						output: {
 							status: response.status,
-							headers: Object.fromEntries([...response.headers].map(([name, value]) => [name.toLowerCase(), value])),
+							headers: Object.fromEntries(
+								[...response.headers].map(([name, value]) => [name.toLowerCase(), value])
+							),
 							body: parsed
 						}
 					}
@@ -88,10 +126,14 @@ export const makeHttpConnectorBinding = (
 			} catch (cause) {
 				return {
 					_tag: 'Failure',
-					error: makeWireError('connector.transport', cause instanceof Error ? cause.message : String(cause), {
-						retryable: !signal.aborted,
-						outcome: 'unknown'
-					})
+					error: makeWireError(
+						'connector.transport',
+						cause instanceof Error ? cause.message : String(cause),
+						{
+							retryable: !signal.aborted,
+							outcome: 'unknown'
+						}
+					)
 				};
 			}
 		}

@@ -68,13 +68,26 @@ export type ToolExecutionContext = Readonly<{
 	readonly collections: Collections.Interface;
 	readonly hostTools: HostTools.Interface;
 	readonly files: Files.Interface;
+	/**
+	 * The collections `src/+agent.ts` put in reach, when it named any.
+	 *
+	 * A second ceiling under the policy, not a replacement for one: the subject's grants still decide
+	 * what a read returns. This is the author saying which part of their own workspace this agent is
+	 * for, and it was declared and discarded — a workspace scoped to one collection had an agent that
+	 * could read and write every one of them.
+	 */
+	readonly allowedCollections?: ReadonlyArray<string>;
 }>;
+
+/** Refuses a collection the agent was not scoped to, naming the tool rather than the collection. */
+const requireCollection = (context: ToolExecutionContext, tool: string, collection: string) =>
+	context.allowedCollections === undefined || context.allowedCollections.includes(collection)
+		? Effect.void
+		: Effect.fail(new ToolNotAllowed({ agent: context.agentName, tool }));
 
 const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
 	Schema.decodeUnknownEffect(schema)(input).pipe(
-		Effect.mapError(
-			() => new ToolNotAllowed({ agent: 'platform', tool: 'invalid-input' })
-		)
+		Effect.mapError(() => new ToolNotAllowed({ agent: 'platform', tool: 'invalid-input' }))
 	);
 
 /** Executes one platform tool against workspace, collection, and skill facilities. */
@@ -119,6 +132,7 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 		}
 		case 'read_collection': {
 			const parsed = yield* decode(CollectionReadInput, input);
+			yield* requireCollection(context, name, parsed.collection);
 			return yield* context.collections.findMany(context.effectId, context.subject, {
 				collection: parsed.collection,
 				limit: parsed.limit ?? 50
@@ -126,6 +140,7 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 		}
 		case 'write_collection': {
 			const parsed = yield* decode(CollectionWriteInput, input);
+			yield* requireCollection(context, name, parsed.collection);
 			switch (parsed.operation) {
 				case 'create':
 					yield* context.collections.create(context.effectId, context.subject, {

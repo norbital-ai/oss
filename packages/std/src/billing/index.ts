@@ -1,11 +1,9 @@
 import {
-	BILLING_SAFETY_MARGIN_MULTIPLIER,
-	BILLING_USD_TO_SGD_RATE,
+	AI_SGD_PER_PROVIDER_USD,
 	COMPUTE_SGD_PER_SECOND,
 	DISC_SGD_PER_GB_MONTH,
 	FILES_SGD_PER_GB_MONTH,
 	HOURS_PER_BILLING_MONTH,
-	OPENROUTER_CREDIT_PURCHASE_FEE_MULTIPLIER,
 	type BillingAccessTier
 } from './rate-card.js';
 
@@ -13,15 +11,6 @@ export const BILLING_CURRENCY = 'SGD' as const;
 export const DEFAULT_BILLING_TRIAL_DAYS = 30;
 export const CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT = 100;
 export const PLATFORM_PRODUCT_ID = 'platform';
-
-export const AI_USAGE_DIMENSION_KEYS = {
-	model: 'model',
-	inputTokens: 'input_tokens',
-	cachedInputTokens: 'cached_input_tokens',
-	outputTokens: 'output_tokens',
-	reasoningTokens: 'reasoning_tokens',
-	providerCostUsdMicros: 'provider_cost_usd_micros'
-} as const;
 
 export type BillingCatalogueInterval = 'month' | 'year';
 export type BillingCataloguePriceModel = 'flat' | 'per_seat' | 'metered';
@@ -62,17 +51,20 @@ export const USAGE_METER_UNITS = {
 	ai: 'micro-SGD'
 } as const;
 
-export function calculateAIProviderCostSgdMicros(providerCostUsd: number): number {
+/**
+ * What a tenant owes for one turn, in micro-SGD, given what the provider charged for it in USD.
+ *
+ * The single conversion for AI spend: the ledger prices an observation with it, the Stripe meter
+ * reports the quantity it returns, and the agent panel shows a conversation's total through it.
+ * There used to be three — a factored one here that nothing called, and the same literal written out
+ * twice more where the meter actually ran — so the published rate and the billed rate could differ
+ * with nothing in the code to say which one was the price.
+ */
+export function aiProviderCostSgdMicros(providerCostUsd: number): number {
 	if (!Number.isFinite(providerCostUsd) || providerCostUsd < 0) {
 		throw new Error('AI provider cost must be a finite non-negative USD amount');
 	}
-	return Math.round(
-		providerCostUsd *
-			OPENROUTER_CREDIT_PURCHASE_FEE_MULTIPLIER *
-			BILLING_USD_TO_SGD_RATE *
-			BILLING_SAFETY_MARGIN_MULTIPLIER *
-			1_000_000
-	);
+	return Math.round(providerCostUsd * AI_SGD_PER_PROVIDER_USD * 1_000_000);
 }
 
 export type BillingCatalogueTier = {
@@ -145,7 +137,7 @@ export const AI_METERED_PRICES = [
 		id: 'ai-provider-cost-micros-monthly',
 		name: 'AI usage',
 		description:
-			'OpenRouter request credits converted from USD to micro-SGD after the 5.5% credit-purchase fee, published billing FX rate, and 5% safety margin. Token counts and model remain attached to every event for audit.',
+			'Provider-reported request cost converted from USD to micro-SGD at the published billing rate, which loads provider credit fees, FX, payment processing and margin onto the conversion. Token counts and model remain attached to every event for audit.',
 		model: 'metered',
 		meterId: AI_USAGE_METER_ID,
 		stripePriceIds: {
@@ -276,17 +268,15 @@ export const LATEST_CATALOGUE = {
 } as const satisfies BillingCatalogue;
 
 export {
+	AI_SGD_PER_PROVIDER_USD,
 	BILLING_ACCESS_TIERS,
 	BILLING_RATE_CARD_VERSION,
-	BILLING_SAFETY_MARGIN_MULTIPLIER,
-	BILLING_USD_TO_SGD_RATE,
 	COMPUTE_SGD_PER_SECOND,
 	DISC_SGD_PER_GB_MONTH,
 	EXTERNAL_CLOUD_RATE_CARD_USD,
 	FILES_SGD_PER_GB_MONTH,
 	HOURS_PER_BILLING_MONTH,
 	LOCAL_CLOUD_RATE_CARD,
-	OPENROUTER_CREDIT_PURCHASE_FEE_MULTIPLIER,
 	type BillingAccessTier
 } from './rate-card.js';
 export {

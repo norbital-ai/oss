@@ -24,7 +24,12 @@ const project = async (messages: ReadonlyArray<{ role: string; content: unknown 
 		if (name === 'agents.history') return { conversationId, title: 'Auth module', messages };
 		return null;
 	});
-	configureAgentRuntime({ transport: { command }, subject, agentName: 'helper', userId: 'admin-1' });
+	configureAgentRuntime({
+		transport: { command },
+		subject,
+		agentName: 'helper',
+		userId: 'admin-1'
+	});
 	await refreshAgentSessions();
 	const session = getInitializedWorkspaceClient('chat_session')
 		.db.chat_session.findMany()
@@ -43,7 +48,10 @@ describe('inter-agent messages in the transcript', () => {
 	it('shows a received message as a message from the sending session, not as the reader', async () => {
 		const { panel } = await project([
 			{ role: 'user', content: JSON.stringify('Write the auth module') },
-			{ role: 'user', content: encodeAgentMessage(sender, 'Heads-up: four errors in auth-store.ts') }
+			{
+				role: 'user',
+				content: encodeAgentMessage(sender, 'Heads-up: four errors in auth-store.ts')
+			}
 		]);
 		const relayed = panel.filter((message) => message.kind === 'agent-message');
 		expect(relayed).toHaveLength(1);
@@ -56,13 +64,18 @@ describe('inter-agent messages in the transcript', () => {
 			state: 'complete'
 		});
 		// The person's own question is still theirs; only the relayed one moved.
-		expect(panel.filter((message) => message.kind === 'text' && message.role === 'user')).toHaveLength(1);
+		expect(
+			panel.filter((message) => message.kind === 'text' && message.role === 'user')
+		).toHaveLength(1);
 	});
 
 	/** A received message is somebody else's turn, so it must not become this conversation's name. */
 	it('does not title a conversation after a message another agent sent into it', async () => {
 		const { session } = await project([
-			{ role: 'user', content: encodeAgentMessage(sender, 'Heads-up: four errors in auth-store.ts') },
+			{
+				role: 'user',
+				content: encodeAgentMessage(sender, 'Heads-up: four errors in auth-store.ts')
+			},
 			{ role: 'user', content: JSON.stringify('Write the auth module') }
 		]);
 		expect(session.title).toBe('Auth module');
@@ -93,7 +106,12 @@ describe('inter-agent messages in the transcript', () => {
 							kind: 'tool-result',
 							id: call.id,
 							name: call.name,
-							output: { sessionId: sender.sessionId, delivered: true, agentName: 'migrator', title: sender.title }
+							output: {
+								sessionId: sender.sessionId,
+								delivered: true,
+								agentName: 'migrator',
+								title: sender.title
+							}
 						}
 					]
 				}

@@ -38,18 +38,27 @@ type Fetched = Readonly<{
 	readonly body: Schema.Json;
 }>;
 
-export type PullDependencies = AbsorbDependencies & Readonly<{
-	/** Performs one planned request through the host's connector facility. */
-	readonly request: (
-		effectId: EffectId,
-		connector: string,
-		descriptor: { readonly method: IntegrationHttpMethod; readonly url: string; readonly headers: Readonly<Record<string, string>>; readonly body?: Schema.Json }
-	) => Effect.Effect<Fetched, { readonly message: string; readonly retryable: boolean }>;
-	/** Reads a declared secret, or fails naming the variable that has no value. */
-	readonly secret: (effectId: EffectId, name: string) => Effect.Effect<string, { readonly message: string }>;
-	readonly sleep: (milliseconds: number) => Effect.Effect<void>;
-	readonly now: () => number;
-}>;
+export type PullDependencies = AbsorbDependencies &
+	Readonly<{
+		/** Performs one planned request through the host's connector facility. */
+		readonly request: (
+			effectId: EffectId,
+			connector: string,
+			descriptor: {
+				readonly method: IntegrationHttpMethod;
+				readonly url: string;
+				readonly headers: Readonly<Record<string, string>>;
+				readonly body?: Schema.Json;
+			}
+		) => Effect.Effect<Fetched, { readonly message: string; readonly retryable: boolean }>;
+		/** Reads a declared secret, or fails naming the variable that has no value. */
+		readonly secret: (
+			effectId: EffectId,
+			name: string
+		) => Effect.Effect<string, { readonly message: string }>;
+		readonly sleep: (milliseconds: number) => Effect.Effect<void>;
+		readonly now: () => number;
+	}>;
 
 /**
  * Walks a body down a path of object keys, stopping at the first step that is not an object.
@@ -72,15 +81,25 @@ const walk = (body: Schema.Json, path: ReadonlyArray<string>): unknown => {
 const recordsPath = (records: IntegrationPullDeclaration['records']): ReadonlyArray<string> =>
 	records === undefined ? [] : 'field' in records ? [records.field] : records.path;
 
-const selectRecords = (body: Schema.Json, records: IntegrationPullDeclaration['records']): ReadonlyArray<unknown> => {
+const selectRecords = (
+	body: Schema.Json,
+	records: IntegrationPullDeclaration['records']
+): ReadonlyArray<unknown> => {
 	const found = walk(body, recordsPath(records));
 	return Array.isArray(found) ? found : [];
 };
 
 /** Reads a next-cursor out of a body, at whatever depth the source buried it. */
-const bodyValue = (body: Schema.Json, next: { readonly field: string } | { readonly path: ReadonlyArray<string> }): string | undefined => {
+const bodyValue = (
+	body: Schema.Json,
+	next: { readonly field: string } | { readonly path: ReadonlyArray<string> }
+): string | undefined => {
 	const value = walk(body, 'field' in next ? [next.field] : next.path);
-	return typeof value === 'string' && value !== '' ? value : typeof value === 'number' ? String(value) : undefined;
+	return typeof value === 'string' && value !== ''
+		? value
+		: typeof value === 'number'
+			? String(value)
+			: undefined;
 };
 
 /**
@@ -99,8 +118,9 @@ const watermark = (records: ReadonlyArray<unknown>, field: string): string | und
 		if (record === null || typeof record !== 'object') continue;
 		const value: unknown = Reflect.get(record, field);
 		if (typeof value !== 'string' && typeof value !== 'number') continue;
-		const greater = highest === undefined
-			|| (typeof value === 'number' && typeof highest === 'number'
+		const greater =
+			highest === undefined ||
+			(typeof value === 'number' && typeof highest === 'number'
 				? value > highest
 				: String(value) > String(highest));
 		if (greater) highest = value;
@@ -123,12 +143,20 @@ const fetchWithRetry = (
 	dependencies: PullDependencies,
 	effectId: EffectId,
 	connector: string,
-	descriptor: { readonly method: 'GET' | 'POST'; readonly url: string; readonly headers: Readonly<Record<string, string>>; readonly body?: Schema.Json },
+	descriptor: {
+		readonly method: 'GET' | 'POST';
+		readonly url: string;
+		readonly headers: Readonly<Record<string, string>>;
+		readonly body?: Schema.Json;
+	},
 	retry: IntegrationPullDeclaration['retry']
 ): Effect.Effect<Fetched, { readonly message: string }> =>
 	Effect.gen(function* () {
 		const attempts = Math.max(retry?.attempts ?? 1, 1);
-		const backoff = { initialDelayMs: retry?.initialDelayMs ?? 250, maxDelayMs: retry?.maxDelayMs ?? 30_000 };
+		const backoff = {
+			initialDelayMs: retry?.initialDelayMs ?? 250,
+			maxDelayMs: retry?.maxDelayMs ?? 30_000
+		};
 		let last = `${descriptor.method} ${descriptor.url} was never attempted`;
 		for (let attempt = 0; attempt < attempts; attempt += 1) {
 			const outcome = yield* Effect.result(dependencies.request(effectId, connector, descriptor));
@@ -153,10 +181,16 @@ const pageUrl = (
 	connection: HttpConnection,
 	binding: IntegrationPullDeclaration,
 	cursor: string | null,
-	page: { readonly index: number; readonly absoluteUrl: string | undefined; readonly token: string | undefined }
+	page: {
+		readonly index: number;
+		readonly absoluteUrl: string | undefined;
+		readonly token: string | undefined;
+	}
 ): string => {
 	if (page.absoluteUrl !== undefined) return page.absoluteUrl;
-	const url = new URL(`${connection.baseUrl}${binding.path.startsWith('/') ? '' : '/'}${binding.path}`);
+	const url = new URL(
+		`${connection.baseUrl}${binding.path.startsWith('/') ? '' : '/'}${binding.path}`
+	);
 	for (const [key, value] of Object.entries(binding.query ?? {})) url.searchParams.set(key, value);
 	if (cursor !== null && binding.cursor !== undefined && 'query' in binding.cursor.send) {
 		url.searchParams.set(binding.cursor.send.query, cursor);
@@ -165,13 +199,15 @@ const pageUrl = (
 	if (pages !== undefined) {
 		if (pages.style === 'page') {
 			url.searchParams.set(pages.pageQuery, String((pages.firstPage ?? 1) + page.index));
-			if (pages.sizeQuery !== undefined && pages.size !== undefined) url.searchParams.set(pages.sizeQuery, String(pages.size));
+			if (pages.sizeQuery !== undefined && pages.size !== undefined)
+				url.searchParams.set(pages.sizeQuery, String(pages.size));
 		}
 		if (pages.style === 'offset') {
 			url.searchParams.set(pages.offsetQuery, String(page.index * pages.size));
 			url.searchParams.set(pages.limitQuery, String(pages.size));
 		}
-		if (pages.style === 'cursor' && page.token !== undefined) url.searchParams.set(pages.query, page.token);
+		if (pages.style === 'cursor' && page.token !== undefined)
+			url.searchParams.set(pages.query, page.token);
 	}
 	return url.toString();
 };
@@ -224,10 +260,16 @@ export const runPullBinding = (
 		// stated rather than asserted away.
 		const connection = integration.connection;
 		if (connection === undefined) {
-			return yield* Effect.fail({ message: `${integration.name}.${binding.name} is a pull with no connection: there is no baseUrl to request against.` });
+			return yield* Effect.fail({
+				message: `${integration.name}.${binding.name} is a pull with no connection: there is no baseUrl to request against.`
+			});
 		}
-		const headers = { ...(binding.headers ?? {}), ...(yield* authenticationHeaders(dependencies.secret, effectId, connection)) };
-		const maxPages = binding.pages === undefined ? 1 : Math.max(binding.pages.max ?? MAX_PAGES_DEFAULT, 1);
+		const headers = {
+			...(binding.headers ?? {}),
+			...(yield* authenticationHeaders(dependencies.secret, effectId, connection))
+		};
+		const maxPages =
+			binding.pages === undefined ? 1 : Math.max(binding.pages.max ?? MAX_PAGES_DEFAULT, 1);
 		const rejected: Array<{ readonly index: number; readonly reason: string }> = [];
 		let fetched = 0;
 		let created = 0;
@@ -237,7 +279,11 @@ export const runPullBinding = (
 		let pageToken: string | undefined;
 		let absoluteUrl: string | undefined;
 		for (let index = 0; index < maxPages; index += 1) {
-			const url = pageUrl(connection, binding, storedCursor, { index, absoluteUrl, token: pageToken });
+			const url = pageUrl(connection, binding, storedCursor, {
+				index,
+				absoluteUrl,
+				token: pageToken
+			});
 			const response = yield* fetchWithRetry(
 				dependencies,
 				effectId,
@@ -252,7 +298,12 @@ export const runPullBinding = (
 			const absorbed = yield* absorbRecords(
 				dependencies,
 				effectId,
-				{ integration: integration.name, binding: binding.name, collection: integration.collection, identityColumn: binding.identityColumn },
+				{
+					integration: integration.name,
+					binding: binding.name,
+					collection: integration.collection,
+					identityColumn: binding.identityColumn
+				},
 				authored,
 				raw,
 				fetched - raw.length,
@@ -265,11 +316,12 @@ export const runPullBinding = (
 			// The cursor advances from what this page said, so a run that stops early still resumes from
 			// the last page it actually read rather than from the last page it asked for.
 			if (binding.cursor !== undefined) {
-				const next = 'header' in binding.cursor.next
-					? response.headers[binding.cursor.next.header.toLowerCase()]
-					: 'maxOf' in binding.cursor.next
-						? watermark(absorbed.decoded, binding.cursor.next.maxOf)
-						: bodyValue(response.body, binding.cursor.next);
+				const next =
+					'header' in binding.cursor.next
+						? response.headers[binding.cursor.next.header.toLowerCase()]
+						: 'maxOf' in binding.cursor.next
+							? watermark(absorbed.decoded, binding.cursor.next.maxOf)
+							: bodyValue(response.body, binding.cursor.next);
 				if (next !== undefined && next !== '') nextCursor = next;
 			}
 
@@ -277,18 +329,27 @@ export const runPullBinding = (
 			if (pageSpec === undefined) break;
 			if (raw.length === 0) break;
 			if (pageSpec.style === 'cursor') {
-				pageToken = 'header' in pageSpec.next
-					? response.headers[pageSpec.next.header.toLowerCase()]
-					: bodyValue(response.body, pageSpec.next);
+				pageToken =
+					'header' in pageSpec.next
+						? response.headers[pageSpec.next.header.toLowerCase()]
+						: bodyValue(response.body, pageSpec.next);
 				if (pageToken === undefined || pageToken === '') break;
 			}
 			if (pageSpec.style === 'link-header') {
 				absoluteUrl = nextLink(response.headers['link']);
 				if (absoluteUrl === undefined) break;
 			}
-			if (pageSpec.style === 'page' && pageSpec.size !== undefined && raw.length < pageSpec.size) break;
+			if (pageSpec.style === 'page' && pageSpec.size !== undefined && raw.length < pageSpec.size)
+				break;
 			if (pageSpec.style === 'offset' && raw.length < pageSpec.size) break;
 		}
-		return { binding: binding.name, pages, fetched, created, updated, rejected, cursor: nextCursor };
+		return {
+			binding: binding.name,
+			pages,
+			fetched,
+			created,
+			updated,
+			rejected,
+			cursor: nextCursor
+		};
 	});
-

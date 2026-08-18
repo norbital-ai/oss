@@ -7,7 +7,7 @@ import {
 } from '../../src/client/ui/shell/workspace-navigation.js';
 
 describe('workspace navigation', () => {
-	it('builds the same sidebar sections as the Pod workspace shell', () => {
+	it('marks the current app active and places host plugins by their declared placement', () => {
 		const applications = buildApplicationNavigation({
 			apps: [
 				{ name: 'hr-controller', label: 'HR Controller' },
@@ -62,11 +62,9 @@ describe('workspace navigation', () => {
 		// The tenant's own People entry is inbuilt and wears no badge; every host-provided plugin
 		// entry wears the host's mark, so a host surface is never mistaken for a tenant one.
 		expect(system[0]?.children?.[0]?.badge).toBeUndefined();
-		expect(
-			system[0]?.children
-				?.slice(1)
-				.every((child) => child.badge === 'product:colony')
-		).toBe(true);
+		expect(system[0]?.children?.slice(1).every((child) => child.badge === 'product:colony')).toBe(
+			true
+		);
 		const studio = system.find((item) => item.key === 'workspace-studio');
 		expect(studio?.label).toBe('Workspace Studio');
 		expect(studio?.badge).toBe('product:colony');

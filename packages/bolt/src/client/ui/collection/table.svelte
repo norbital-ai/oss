@@ -125,7 +125,10 @@
 
 <section aria-label="Collection records" aria-busy={loading} class="p-4 sm:p-6">
 	{#if error !== undefined}
-		<div role="alert" class="rounded-lg border border-destructive/30 bg-card p-4 text-sm text-destructive">
+		<div
+			role="alert"
+			class="rounded-lg border border-destructive/30 bg-card p-4 text-sm text-destructive"
+		>
 			<p>{error}</p>
 			{#if onretry !== undefined}
 				<button type="button" class="mt-2 underline" onclick={onretry}>Try again</button>

@@ -11,7 +11,11 @@ export type InteractiveAgentStartInput = {
 	readonly intent?: 'do' | 'plan';
 	readonly verifierPrompt?: string;
 	readonly model?: string;
-	readonly mentions?: readonly { readonly collection: string; readonly recordId: string; readonly label: string }[];
+	readonly mentions?: readonly {
+		readonly collection: string;
+		readonly recordId: string;
+		readonly label: string;
+	}[];
 };
 
 export type AgentChatStartResult = { readonly runId: string; readonly chatId: string };
@@ -28,6 +32,8 @@ type ChatSessionRow = {
 	readonly messages: Array<Record<string, unknown>>;
 	readonly turns: Array<Record<string, unknown>>;
 	readonly usage_cost_usd?: number;
+	readonly usage_cost_micro_units?: number;
+	readonly usage_cost_currency?: string | null;
 	readonly usage_total_tokens?: number;
 	readonly usage_turns_counted?: number;
 	readonly usage_turns_unreported?: number;
@@ -68,10 +74,32 @@ type ConversationListRow = {
 	readonly title?: string | null;
 };
 
+/** One conversation's cumulative spend, as `agents.history` reports it off the session row. */
+type ConversationUsage = {
+	readonly costUsd?: number;
+	readonly costMicroUnits?: number;
+	readonly costCurrency?: string | null;
+	readonly totalTokens?: number;
+	readonly turnsCounted?: number;
+	readonly turnsUnreported?: number;
+};
+
 type ConversationHistory = {
 	readonly conversationId: string;
 	readonly title: string;
-	readonly messages: ReadonlyArray<{ readonly role: string; readonly content: unknown }>;
+	/**
+	 * Every row of this conversation *and* of everything it delegated, in one ordering.
+	 *
+	 * `turn_id` is what tells the two apart: a delegated session's rows carry the turn that produced
+	 * them, and the projection nests those under the call that spawned it instead of leaving them
+	 * interleaved into the parent by write order.
+	 */
+	readonly messages: ReadonlyArray<{
+		readonly role: string;
+		readonly content: unknown;
+		readonly turn_id?: string | null;
+	}>;
+	readonly usage?: ConversationUsage;
 };
 
 let runtime: AgentRuntimeConfig | undefined;
@@ -107,10 +135,17 @@ const sessionQuery: SessionQuery = {
 };
 
 /** A row of the workspace `user` collection, as the chat panel labels members from it. */
+/**
+ * A person, as much of one as this panel may read.
+ *
+ * No `email`, because the system read policy grants `bolt_auth_user` with the field mask
+ * `['norbital_id', 'name']` — `findMany` masks every row it returns, so an address is not merely
+ * unselected here, it cannot be read through that grant at all. Typing one promised the panel a
+ * field the runtime refuses, and the label fell back to it.
+ */
 export type WorkspaceUserRow = Readonly<{
 	readonly norbital_id?: string;
 	readonly name?: string;
-	readonly email?: string;
 }>;
 
 type UserQuery = Readonly<{ readonly current: ReadonlyArray<WorkspaceUserRow> }>;
@@ -127,9 +162,17 @@ const userQuery: UserQuery = {
 /**
  * Loads the workspace members the chat panel labels conversations with.
  *
- * This returned a hardcoded empty list, so every conversation scoped to another member rendered as
- * "unknown member" and the admin scope picker had nothing to pick. It reads the same collection any
- * other client query would, once, and tolerates a workspace that exposes no `user` collection.
+ * `bolt_auth_user` is the only description of a person the runtime has. This read `user`, a table the
+ * identity merge removed, so the request failed and the catch below turned every failure into an
+ * empty list: every conversation scoped to another member rendered as "unknown member" and the admin
+ * scope picker had nothing to pick.
+ *
+ * `kind` separates a person from a host provisioner's service row and defaults to `'person'`. The
+ * operand is an operator object because a bare value fails the where compiler and takes the whole
+ * query with it — which is the second way this query returned nothing.
+ *
+ * Answered by the server rather than out of the replica: identity is excluded from `Sync.shape` and
+ * from the change stream, so the membership table is never mirrored into a browser.
  */
 const loadWorkspaceUsers = async (): Promise<void> => {
 	if (workspaceUsersLoaded) return;
@@ -140,14 +183,17 @@ const loadWorkspaceUsers = async (): Promise<void> => {
 		// `BoltTransport.command` takes an optional signal, not an output schema — the schema-decoding
 		// overload belongs to `BoltClient`.
 		const rows = await active.transport.command('collections.findMany', {
-			collection: 'user',
+			collection: 'bolt_auth_user',
+			where: { kind: { eq: 'person' } },
+			orderBy: { name: 'asc' },
 			limit: 500
 		});
 		workspaceUsers = (rowsFrom(rows) ?? []).filter(
-			(row): row is WorkspaceUserRow => row !== null && typeof row === 'object' && !Array.isArray(row)
+			(row): row is WorkspaceUserRow =>
+				row !== null && typeof row === 'object' && !Array.isArray(row)
 		);
 	} catch {
-		// A workspace without a `user` collection labels by id; that is a display difference, not a
+		// A subject the read grant does not reach labels by id; that is a display difference, not a
 		// failure worth propagating into the chat panel.
 		workspaceUsers = [];
 	}
@@ -166,7 +212,7 @@ export function getInitializedWorkspaceClient(_collection?: string) {
 			chat_session: {
 				findMany: (_options?: Readonly<Record<string, unknown>>): SessionQuery => sessionQuery
 			},
-			user: {
+			bolt_auth_user: {
 				findMany: (_options?: Readonly<Record<string, unknown>>): UserQuery => userQuery
 			}
 		}
@@ -201,10 +247,13 @@ function readField(value: unknown, field: string): unknown {
  * between a call and the answer that names it, so the stored parts are handed on unchanged.
  */
 function mapHistoryMessage(
-	message: { readonly role: string; readonly content: unknown },
+	message: { readonly role: string; readonly content: unknown; readonly turn_id?: string | null },
 	index: number
 ): Record<string, unknown> {
 	const stored = message.content;
+	// Carried on every projected record, delegated or not: the projection reads it to decide which
+	// rows are this conversation's own and which belong inside one of its calls.
+	const turn = typeof message.turn_id === 'string' ? { turn_id: message.turn_id } : {};
 	// A sibling session's message is a `user` row that no user wrote. It is marked here rather than
 	// left to the projection to guess, because by the time the panel sees a role and some text the
 	// difference between "the person asked" and "another agent asked" is gone.
@@ -215,18 +264,25 @@ function mapHistoryMessage(
 			kind: 'agent_message',
 			role: message.role,
 			from: relayed.from,
-			parts: [{ kind: 'text', text: relayed.text }]
+			parts: [{ kind: 'text', text: relayed.text }],
+			...turn
 		};
 	}
 	const parts = readField(stored, 'parts');
 	if (Array.isArray(parts)) {
 		const id = readField(stored, 'id');
 		const status = readField(stored, 'status');
+		// The turn's own usage travels with the turn. The panel reads the newest one to say how much of
+		// the context window this conversation is occupying; cumulative spend comes off the session row
+		// instead, because that has to survive these messages being compacted away.
+		const usage = readField(stored, 'usage');
 		return {
 			norbital_id: typeof id === 'string' ? id : `${message.role}-${index}`,
 			role: message.role,
 			parts,
-			...(typeof status === 'string' ? { status } : {})
+			...(typeof status === 'string' ? { status } : {}),
+			...(usage !== undefined && usage !== null ? { usage } : {}),
+			...turn
 		};
 	}
 	// A user message has one part because a person's turn is one thing they said.
@@ -234,7 +290,8 @@ function mapHistoryMessage(
 	return {
 		norbital_id: `${message.role}-${index}`,
 		role: message.role,
-		parts: [{ kind: 'text', text }]
+		parts: [{ kind: 'text', text }],
+		...turn
 	};
 }
 
@@ -252,15 +309,38 @@ function mapHistoryTurn(content: unknown): Record<string, unknown> | null {
 	return { norbital_id: id, status, subagent_id: readField(content, 'subagent_id') ?? null };
 }
 
+/** A finite counter off the wire, or zero — a total that cannot be read is not a total of zero spend. */
+function usageCount(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 function mapHistoryToSession(
 	history: ConversationHistory,
 	userId: string,
 	fallbackTitle?: string | null
 ): ChatSessionRow {
+	// Derived from the assistant messages rather than listed beside them: the turn is the message.
+	const turns = history.messages.flatMap((message) => {
+		if (message.role !== 'assistant') return [];
+		const turn = mapHistoryTurn(message.content);
+		return turn === null ? [] : [turn];
+	});
+	// A delegated session's rows arrive inside this history. They are this conversation's content, but
+	// they are not messages anyone here sent — so they name neither the conversation nor the window
+	// the person's next prompt will be measured against.
+	const delegatedTurnIds = new Set(
+		turns
+			.filter((turn) => typeof turn.subagent_id === 'string')
+			.map((turn) => turn.norbital_id)
+			.filter((id): id is string => typeof id === 'string')
+	);
+	const delegated = (message: ConversationHistory['messages'][number]): boolean =>
+		typeof message.turn_id === 'string' && delegatedTurnIds.has(message.turn_id);
 	// Titled from what the person asked, not from what another agent sent in: a conversation named
 	// after an incoming message is named after somebody else's turn.
 	const firstUser = history.messages.find(
-		(message) => message.role === 'user' && parseAgentMessage(message.content) === null
+		(message) =>
+			message.role === 'user' && !delegated(message) && parseAgentMessage(message.content) === null
 	);
 	const title =
 		history.title.trim().length > 0 && history.title !== 'New conversation'
@@ -274,13 +354,21 @@ function mapHistoryToSession(
 		title,
 		user_id: userId,
 		visibility: 'personal',
-		messages: history.messages.map(mapHistoryMessage),
-		// Derived from the assistant messages rather than listed beside them: the turn is the message.
-		turns: history.messages.flatMap((message) => {
-			if (message.role !== 'assistant') return [];
-			const turn = mapHistoryTurn(message.content);
-			return turn === null ? [] : [turn];
-		})
+		messages: history.messages.map((message, index) => ({
+			...mapHistoryMessage(message, index),
+			...(delegated(message) ? { delegated: true } : {})
+		})),
+		turns,
+		// Read off the session row, never summed here. The counters already include everything this
+		// conversation delegated, at any depth, which is exactly the figure a reader takes for the
+		// cost of the conversation in front of them.
+		usage_cost_usd: usageCount(history.usage?.costUsd),
+		usage_cost_micro_units: usageCount(history.usage?.costMicroUnits),
+		usage_cost_currency:
+			typeof history.usage?.costCurrency === 'string' ? history.usage.costCurrency : null,
+		usage_total_tokens: usageCount(history.usage?.totalTokens),
+		usage_turns_counted: usageCount(history.usage?.turnsCounted),
+		usage_turns_unreported: usageCount(history.usage?.turnsUnreported)
 	};
 }
 
@@ -296,7 +384,10 @@ function mapHistoryToSession(
  * The boolean is the caller's answer to "did the store speak"; a host that has not wired persistence
  * answers no, and the caller keeps what it has instead of blanking the conversation.
  */
-async function loadSession(conversationId: string, fallbackTitle?: string | null): Promise<boolean> {
+async function loadSession(
+	conversationId: string,
+	fallbackTitle?: string | null
+): Promise<boolean> {
 	if (!runtime) return false;
 	try {
 		const history = await runtime.transport.command('agents.history', {
@@ -336,9 +427,12 @@ export async function refreshAgentSessions(): Promise<void> {
 		const rows = listed.filter(isConversationListRow);
 		if (rows.length === 0) return;
 		await Effect.runPromise(
-			Effect.all(rows.map((row) => Effect.tryPromise(() => loadSession(row.id, row.title ?? null))), {
-				concurrency: 'unbounded'
-			}).pipe(Effect.catch(() => Effect.succeed(undefined)))
+			Effect.all(
+				rows.map((row) => Effect.tryPromise(() => loadSession(row.id, row.title ?? null))),
+				{
+					concurrency: 'unbounded'
+				}
+			).pipe(Effect.catch(() => Effect.succeed(undefined)))
 		);
 	} catch {
 		// Keep whatever is already in memory when the host has not wired persistence yet.

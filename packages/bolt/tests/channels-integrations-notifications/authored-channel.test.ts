@@ -247,7 +247,9 @@ describe('an authored channel declaration', () => {
 			[]
 		);
 		expect(artifact).toContain('import channel0 from "../../src/channels/+sales_desk.channel.js";');
-		expect(artifact).toContain('import channel1 from "../../src/channels/+member_desk.channel.js";');
+		expect(artifact).toContain(
+			'import channel1 from "../../src/channels/+member_desk.channel.js";'
+		);
 		expect(artifact).toContain(
 			'const declaredChannels = {"sales_desk": channel0, "member_desk": channel1};'
 		);

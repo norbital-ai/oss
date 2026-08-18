@@ -42,7 +42,8 @@ afterEach(async () => {
 
 const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 	command: async (command, input) => {
-		const record = input !== null && typeof input === 'object' && !Array.isArray(input) ? input : {};
+		const record =
+			input !== null && typeof input === 'object' && !Array.isArray(input) ? input : {};
 		return runtime.runtime.runPromise(
 			Effect.gen(function* () {
 				const sync = yield* Sync.Service;
@@ -52,16 +53,26 @@ const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 						const workspace = yield* Workspace.Service;
 						return {
 							steps: [
-								...plan.steps.filter(({ id }) => id.startsWith('bolt:')).map(({ id, sql }) => ({ id, sql })),
+								...plan.steps
+									.filter(({ id }) => id.startsWith('bolt:'))
+									.map(({ id, sql }) => ({ id, sql })),
 								...[...(workspace.definition.migrations ?? [])]
 									.toSorted((left, right) => left.tag.localeCompare(right.tag))
 									.flatMap((entry) =>
-										entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
+										entry.statements.map((sql, index) => ({
+											id: `lineage:${entry.tag}:${index}`,
+											sql
+										}))
 									),
-								...plan.steps.filter(({ id }) => !id.startsWith('bolt:')).map(({ id, sql }) => ({ id, sql }))
+								...plan.steps
+									.filter(({ id }) => !id.startsWith('bolt:'))
+									.map(({ id, sql }) => ({ id, sql }))
 							],
 							fingerprint: plan.fingerprint,
-							collections: workspace.definition.collections.map(({ name, fields }) => ({ name, fields })),
+							collections: workspace.definition.collections.map(({ name, fields }) => ({
+								name,
+								fields
+							})),
 							relations: workspace.definition.relations ?? []
 						} as unknown as Schema.Json;
 					}
@@ -69,10 +80,14 @@ const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 						return (yield* sync.shape(adminSubject)) as unknown as Schema.Json;
 					case 'sync.snapshot':
 						return (yield* sync.snapshot(
-							runtime.effectId(`snapshot:${String(Reflect.get(record, 'collection'))}:${String(Reflect.get(record, 'after') ?? 'first')}`),
+							runtime.effectId(
+								`snapshot:${String(Reflect.get(record, 'collection'))}:${String(Reflect.get(record, 'after') ?? 'first')}`
+							),
 							adminSubject,
 							String(Reflect.get(record, 'collection')),
-							typeof Reflect.get(record, 'after') === 'string' ? String(Reflect.get(record, 'after')) : undefined,
+							typeof Reflect.get(record, 'after') === 'string'
+								? String(Reflect.get(record, 'after'))
+								: undefined,
 							Number(Reflect.get(record, 'limit') ?? 500)
 						)) as unknown as Schema.Json;
 					default:
@@ -85,7 +100,9 @@ const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 
 const openReplica = async (runtime: BoltTestRuntime) =>
 	openLocalDatabase(transportFor(runtime), async () => {
-		const database = await PGlite.create('memory://', { extensions: { pg_trgm, btree_gist, vector } });
+		const database = await PGlite.create('memory://', {
+			extensions: { pg_trgm, btree_gist, vector }
+		});
 		databases.push(database);
 		return database as unknown as PGliteLike;
 	});
@@ -129,14 +146,20 @@ describe('reads answered by the replica', () => {
 		const replica = await openReplica(harness);
 		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
 
-		const query = { collection: 'people', where: { team: { eq: 'flight' } }, orderBy: { name: 'asc' } };
+		const query = {
+			collection: 'people',
+			where: { team: { eq: 'flight' } },
+			orderBy: { name: 'asc' }
+		};
 		const local = await reader.answer('collections.findMany', query as never);
 		const server = await serverRows(harness, query);
 
 		expect(local).toBeDefined();
 		const localRows = (local as { readonly rows: ReadonlyArray<Record<string, unknown>> }).rows;
 		// The same rows, in the same order — the point of reusing the server's own compiler.
-		expect(localRows.map((row) => row['name'])).toEqual(server.map((row) => Reflect.get(row as object, 'name')));
+		expect(localRows.map((row) => row['name'])).toEqual(
+			server.map((row) => Reflect.get(row as object, 'name'))
+		);
 		expect(localRows.map((row) => row['name'])).toEqual(['Grace', 'Katherine']);
 	});
 
@@ -161,9 +184,13 @@ describe('reads answered by the replica', () => {
 
 		// Four rows, asking for two: the caller needs a `nextCursor`, and only the server can mint one
 		// that seeks correctly.
-		expect(await reader.answer('collections.findMany', { collection: 'people', limit: 2 } as never)).toBeUndefined();
+		expect(
+			await reader.answer('collections.findMany', { collection: 'people', limit: 2 } as never)
+		).toBeUndefined();
 		// The whole result fits, so there is no successor and `nextCursor: null` is the honest answer.
-		expect(await reader.answer('collections.findMany', { collection: 'people', limit: 50 } as never)).toBeDefined();
+		expect(
+			await reader.answer('collections.findMany', { collection: 'people', limit: 50 } as never)
+		).toBeDefined();
 	});
 
 	it('declines a query carrying a key it does not implement', async () => {
@@ -175,7 +202,10 @@ describe('reads answered by the replica', () => {
 		// `with` expands relationships, which lives in the Collections service. Ignoring the key would
 		// answer a different question while looking successful.
 		expect(
-			await reader.answer('collections.findMany', { collection: 'people', with: { team: true } } as never)
+			await reader.answer('collections.findMany', {
+				collection: 'people',
+				with: { team: true }
+			} as never)
 		).toBeUndefined();
 		expect(
 			await reader.answer('collections.findMany', { collection: 'people', search: 'ada' } as never)
@@ -190,7 +220,9 @@ describe('reads answered by the replica', () => {
 
 		// The replica holds only permitted rows, but a collection outside the reported shape must never
 		// be served from it regardless.
-		expect(await reader.answer('collections.findMany', { collection: 'people' } as never)).toBeUndefined();
+		expect(
+			await reader.answer('collections.findMany', { collection: 'people' } as never)
+		).toBeUndefined();
 	});
 
 	it('declines commands that are not reads at all', async () => {
@@ -198,7 +230,11 @@ describe('reads answered by the replica', () => {
 		const replica = await openReplica(harness);
 		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
 
-		expect(await reader.answer('collections.create', { collection: 'people' } as never)).toBeUndefined();
-		expect(await reader.answer('collections.history', { collection: 'people' } as never)).toBeUndefined();
+		expect(
+			await reader.answer('collections.create', { collection: 'people' } as never)
+		).toBeUndefined();
+		expect(
+			await reader.answer('collections.history', { collection: 'people' } as never)
+		).toBeUndefined();
 	});
 });

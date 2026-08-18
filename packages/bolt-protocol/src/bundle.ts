@@ -41,11 +41,17 @@ const PageTokenLocation = Schema.Union(pageTokenLocations);
  * `maxOf` is the greatest value of a field across the records just read, so it is a watermark for
  * the *next run* rather than a token that can advance a page within this one.
  */
-const CursorLocation = Schema.Union([...pageTokenLocations, Schema.Struct({ maxOf: Schema.NonEmptyString })]);
+const CursorLocation = Schema.Union([
+	...pageTokenLocations,
+	Schema.Struct({ maxOf: Schema.NonEmptyString })
+]);
 
 /** How a binding resumes: where the kept cursor is sent, and where the next one is read from. */
 export const ManifestPullCursor = Schema.Struct({
-	send: Schema.Union([Schema.Struct({ query: Schema.NonEmptyString }), Schema.Struct({ header: Schema.NonEmptyString })]),
+	send: Schema.Union([
+		Schema.Struct({ query: Schema.NonEmptyString }),
+		Schema.Struct({ header: Schema.NonEmptyString })
+	]),
 	next: CursorLocation
 }).annotate({ identifier: 'BoltManifestPullCursor' });
 export interface ManifestPullCursor extends Schema.Schema.Type<typeof ManifestPullCursor> {}
@@ -98,7 +104,9 @@ export const ManifestIntegrationBinding = Schema.Struct({
 	/** The collection column the external key lands in — what makes a second run an update. */
 	identityColumn: Schema.NonEmptyString
 }).annotate({ identifier: 'BoltManifestIntegrationBinding' });
-export interface ManifestIntegrationBinding extends Schema.Schema.Type<typeof ManifestIntegrationBinding> {}
+export interface ManifestIntegrationBinding extends Schema.Schema.Type<
+	typeof ManifestIntegrationBinding
+> {}
 
 /** One integration a tenant runtime offers, named `<collection>.<integration>` as the workspace named it. */
 export const ManifestIntegration = Schema.Struct({
@@ -189,52 +197,53 @@ export class BundleModuleError extends Schema.TaggedError<BundleModuleError>()(
 	'BoltProtocol.BundleModuleError',
 	{
 		message: Schema.NonEmptyString,
-		cause: Schema.optionalKey(
-			Schema.Defect()
-		)
+		cause: Schema.optionalKey(Schema.Defect())
 	}
 ) {
 	readonly category = 'bundle-module' as const;
 }
 
 /** Validates the data and callable surface of an unknown dynamic import without a cast. */
-export const decodeBoltBundleModule = Effect.fn('BoltProtocol.decodeBoltBundleModule')(
-	function* (input: unknown) {
-		if (!Predicate.isObject(input)) {
-			return yield* new BundleModuleError({ message: 'Bolt bundle module must be an object' });
-		}
-		const protocolVersion = yield* Schema.decodeUnknownEffect(ProtocolVersion)(
-			input['protocolVersion']
-		).pipe(
-			Effect.mapError(
-				(cause) => new BundleModuleError({ message: 'Unsupported Bolt protocol version', cause })
-			)
-		);
-		const manifest = yield* Schema.decodeUnknownEffect(BundleManifest)(input['manifest']).pipe(
-			Effect.mapError(
-				(cause) => new BundleModuleError({ message: 'Invalid Bolt bundle manifest', cause })
-			)
-		);
-		const dispatch = input['dispatch'];
-		const activate = input['activate'];
-		if (typeof dispatch !== 'function' || typeof activate !== 'function') {
-			return yield* new BundleModuleError({
-				message: 'Bolt bundle module must export dispatch and activate functions'
-			});
-		}
-		const bundle: BoltBundle = {
-			protocolVersion,
-			manifest,
-			dispatch: (invocation, facilities, signal) => dispatch(invocation, facilities, signal),
-			activate: (activation, facilities, signal) => activate(activation, facilities, signal)
-		};
-		return bundle;
+export const decodeBoltBundleModule = Effect.fn('BoltProtocol.decodeBoltBundleModule')(function* (
+	input: unknown
+) {
+	if (!Predicate.isObject(input)) {
+		return yield* new BundleModuleError({ message: 'Bolt bundle module must be an object' });
 	}
-);
+	const protocolVersion = yield* Schema.decodeUnknownEffect(ProtocolVersion)(
+		input['protocolVersion']
+	).pipe(
+		Effect.mapError(
+			(cause) => new BundleModuleError({ message: 'Unsupported Bolt protocol version', cause })
+		)
+	);
+	const manifest = yield* Schema.decodeUnknownEffect(BundleManifest)(input['manifest']).pipe(
+		Effect.mapError(
+			(cause) => new BundleModuleError({ message: 'Invalid Bolt bundle manifest', cause })
+		)
+	);
+	const dispatch = input['dispatch'];
+	const activate = input['activate'];
+	if (typeof dispatch !== 'function' || typeof activate !== 'function') {
+		return yield* new BundleModuleError({
+			message: 'Bolt bundle module must export dispatch and activate functions'
+		});
+	}
+	const bundle: BoltBundle = {
+		protocolVersion,
+		manifest,
+		dispatch: (invocation, facilities, signal) => dispatch(invocation, facilities, signal),
+		activate: (activation, facilities, signal) => activate(activation, facilities, signal)
+	};
+	return bundle;
+});
 
 /** Owns host-side bundle compatibility checks without attaching runtime or business meaning. */
 const BundleCompatibility = {
-	missingFacilities: (manifest: BundleManifest, bindings: FacilityBindings): ReadonlyArray<FacilityName> =>
+	missingFacilities: (
+		manifest: BundleManifest,
+		bindings: FacilityBindings
+	): ReadonlyArray<FacilityName> =>
 		manifest.requiredFacilities.filter((name) => bindings[name] === undefined)
 };
 export const missingFacilities = BundleCompatibility.missingFacilities;

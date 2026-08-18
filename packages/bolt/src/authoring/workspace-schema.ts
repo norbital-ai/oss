@@ -89,7 +89,8 @@ export interface FieldDefinition<TType extends ScalarType = ScalarType> {
 	readonly mimeTypes?: ReadonlyArray<string>;
 }
 /** Owns make field behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-const makeField = <TType extends ScalarType>(type: TType) =>
+const makeField =
+	<TType extends ScalarType>(type: TType) =>
 	(
 		options: {
 			readonly required?: boolean;
@@ -146,7 +147,14 @@ const makeField = <TType extends ScalarType>(type: TType) =>
  * hits when it renders the join it planned. Authored models get this type from their builder; a
  * runtime-owned collection is `field.*` calls and had no way to say it.
  */
-export const field = { string: makeField('string'), number: makeField('number'), boolean: makeField('boolean'), datetime: makeField('datetime'), json: makeField('json'), uuid: makeField('uuid') };
+export const field = {
+	string: makeField('string'),
+	number: makeField('number'),
+	boolean: makeField('boolean'),
+	datetime: makeField('datetime'),
+	json: makeField('json'),
+	uuid: makeField('uuid')
+};
 export interface CollectionDefinition<Fields extends Readonly<Record<string, FieldDefinition>>> {
 	readonly name: string;
 	readonly fields: Fields;
@@ -199,7 +207,9 @@ export interface RelationDefinition {
 	readonly cascade?: boolean;
 }
 /** Owns collection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const collection = <const Fields extends Readonly<Record<string, FieldDefinition>>>(options: {
+export const collection = <
+	const Fields extends Readonly<Record<string, FieldDefinition>>
+>(options: {
 	readonly name: string;
 	readonly fields: Fields;
 	readonly history?: boolean;
@@ -241,8 +251,10 @@ export interface ChannelDeclaration extends ChannelDefinition {
 /** Owns channel behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const channel = (declaration: ChannelDeclaration): ChannelDeclaration => {
 	if (declaration.name.trim() === '') throw new TypeError('Channel name cannot be empty.');
-	if (declaration.transport.trim() === '') throw new TypeError(`Channel ${declaration.name} requires a transport.`);
-	if (declaration.agent.trim() === '') throw new TypeError(`Channel ${declaration.name} requires an agent.`);
+	if (declaration.transport.trim() === '')
+		throw new TypeError(`Channel ${declaration.name} requires a transport.`);
+	if (declaration.agent.trim() === '')
+		throw new TypeError(`Channel ${declaration.name} requires an agent.`);
 	if (!['public', 'authenticated'].includes(declaration.audience)) {
 		throw new TypeError(`Channel ${declaration.name} has an unsupported audience.`);
 	}
@@ -371,27 +383,40 @@ export interface IntegrationDeclaration {
 /** Owns integration behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const integration = (declaration: IntegrationDeclaration): IntegrationDeclaration => {
 	if (declaration.name.trim() === '') throw new TypeError('Integration name cannot be empty.');
-	if (declaration.collection.trim() === '') throw new TypeError(`Integration ${declaration.name} requires a collection.`);
+	if (declaration.collection.trim() === '')
+		throw new TypeError(`Integration ${declaration.name} requires a collection.`);
 	for (const binding of declaration.receive) {
-		if (binding.name.trim() === '') throw new TypeError(`Integration ${declaration.name} has an unnamed receive binding.`);
-		if (binding.path.trim() === '') throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
+		if (binding.name.trim() === '')
+			throw new TypeError(`Integration ${declaration.name} has an unnamed receive binding.`);
+		if (binding.path.trim() === '')
+			throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
 		if (binding.identityColumn.trim() === '') {
-			throw new TypeError(`Integration ${declaration.name}.${binding.name} requires an identity column: without one a second run cannot recognise the rows the first run wrote.`);
+			throw new TypeError(
+				`Integration ${declaration.name}.${binding.name} requires an identity column: without one a second run cannot recognise the rows the first run wrote.`
+			);
 		}
 	}
 	for (const binding of declaration.webhooks) {
-		if (binding.name.trim() === '') throw new TypeError(`Integration ${declaration.name} has an unnamed webhook binding.`);
-		if (binding.path.trim() === '') throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
+		if (binding.name.trim() === '')
+			throw new TypeError(`Integration ${declaration.name} has an unnamed webhook binding.`);
+		if (binding.path.trim() === '')
+			throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
 		if (binding.identityColumn.trim() === '') {
-			throw new TypeError(`Integration ${declaration.name}.${binding.name} requires an identity column: webhook delivery is at-least-once, so without one a redelivery becomes a second row.`);
+			throw new TypeError(
+				`Integration ${declaration.name}.${binding.name} requires an identity column: webhook delivery is at-least-once, so without one a redelivery becomes a second row.`
+			);
 		}
 		assertVerifiableSignature(`${declaration.name}.${binding.name}`, binding.signature);
 	}
 	for (const binding of declaration.send) {
-		if (binding.name.trim() === '') throw new TypeError(`Integration ${declaration.name} has an unnamed send binding.`);
-		if (binding.path.trim() === '') throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
+		if (binding.name.trim() === '')
+			throw new TypeError(`Integration ${declaration.name} has an unnamed send binding.`);
+		if (binding.path.trim() === '')
+			throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
 		if (binding.events.length === 0) {
-			throw new TypeError(`Integration ${declaration.name}.${binding.name} subscribes to no collection event, so nothing could ever queue a delivery for it.`);
+			throw new TypeError(
+				`Integration ${declaration.name}.${binding.name} subscribes to no collection event, so nothing could ever queue a delivery for it.`
+			);
 		}
 	}
 	return Object.freeze({
@@ -418,35 +443,63 @@ export const WEBHOOK_DEFAULT_TOLERANCE_SECONDS = 300;
  */
 const assertVerifiableSignature = (binding: string, signature: WebhookSignatureSpec): void => {
 	if (signature.header.trim() === '') {
-		throw new TypeError(`Integration ${binding} declares no signature header; there is nowhere to read the proof from.`);
+		throw new TypeError(
+			`Integration ${binding} declares no signature header; there is nowhere to read the proof from.`
+		);
 	}
 	if (signature.secret.env.trim() === '') {
-		throw new TypeError(`Integration ${binding} declares no signature secret; verification against an empty key accepts a digest anybody can compute.`);
+		throw new TypeError(
+			`Integration ${binding} declares no signature secret; verification against an empty key accepts a digest anybody can compute.`
+		);
 	}
 	const template = signature.signedPayload ?? '{body}';
 	if (!template.includes('{body}')) {
-		throw new TypeError(`Integration ${binding} signs a payload template that omits {body}, so the signature would not cover the delivery at all.`);
+		throw new TypeError(
+			`Integration ${binding} signs a payload template that omits {body}, so the signature would not cover the delivery at all.`
+		);
 	}
 	if (signature.timestamp !== undefined && !template.includes('{timestamp}')) {
-		throw new TypeError(`Integration ${binding} reads a timestamp for replay defence but signs a payload that omits {timestamp}. An unsigned timestamp is attacker-controlled, so the freshness window would refuse nothing.`);
+		throw new TypeError(
+			`Integration ${binding} reads a timestamp for replay defence but signs a payload that omits {timestamp}. An unsigned timestamp is attacker-controlled, so the freshness window would refuse nothing.`
+		);
 	}
 	if (signature.toleranceSeconds !== undefined && !(signature.toleranceSeconds > 0)) {
-		throw new TypeError(`Integration ${binding} declares a replay window of ${signature.toleranceSeconds}s; a window that is not positive refuses every delivery including the live one.`);
+		throw new TypeError(
+			`Integration ${binding} declares a replay window of ${signature.toleranceSeconds}s; a window that is not positive refuses every delivery including the live one.`
+		);
 	}
-	if ('parameter' in (signature.timestamp ?? {}) && signature.parameter === undefined && signature.prefix === undefined) {
+	if (
+		'parameter' in (signature.timestamp ?? {}) &&
+		signature.parameter === undefined &&
+		signature.prefix === undefined
+	) {
 		// Stripe's shape: both values live in one `k=v,k=v` header, so the signature has to be named too.
-		throw new TypeError(`Integration ${binding} reads its timestamp from a parameter of ${signature.header} but does not say which parameter carries the signature.`);
+		throw new TypeError(
+			`Integration ${binding} reads its timestamp from a parameter of ${signature.header} but does not say which parameter carries the signature.`
+		);
 	}
 };
-export interface PrivateEnvReference { readonly env: string; }
-export interface HttpConnection { readonly baseUrl: string; readonly authentication?: { readonly type: 'bearer'; readonly token: PrivateEnvReference } | { readonly type: 'header'; readonly header: string; readonly value: PrivateEnvReference }; }
+export interface PrivateEnvReference {
+	readonly env: string;
+}
+export interface HttpConnection {
+	readonly baseUrl: string;
+	readonly authentication?:
+		| { readonly type: 'bearer'; readonly token: PrivateEnvReference }
+		| { readonly type: 'header'; readonly header: string; readonly value: PrivateEnvReference };
+}
 /** Owns define connection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const defineConnection = <const Connection extends HttpConnection>(connection: Connection): Connection => {
+export const defineConnection = <const Connection extends HttpConnection>(
+	connection: Connection
+): Connection => {
 	const url = new URL(connection.baseUrl);
 	if (url.protocol !== 'https:' && url.hostname !== 'localhost') {
 		throw new TypeError('Connection URLs must use HTTPS outside localhost development.');
 	}
-	if (connection.authentication?.type === 'header' && connection.authentication.header.trim() === '') {
+	if (
+		connection.authentication?.type === 'header' &&
+		connection.authentication.header.trim() === ''
+	) {
 		throw new TypeError('Header authentication requires a non-empty header name.');
 	}
 	return Object.freeze({
@@ -476,10 +529,10 @@ export const definePull = <Record_, Encoded, Row, Resolved = undefined>(binding:
 	readonly input: Schema.Codec<Record_, Encoded>;
 	readonly records?: PullRecordsSpec;
 	readonly identity: { readonly column: string; readonly value: (record: Record_) => string };
-	readonly resolve?: (context: { readonly records: ReadonlyArray<Record_>; readonly api: BeforeApi }) =>
-		| Effect.Effect<Resolved, unknown, never>
-		| Promise<Resolved>
-		| Resolved;
+	readonly resolve?: (context: {
+		readonly records: ReadonlyArray<Record_>;
+		readonly api: BeforeApi;
+	}) => Effect.Effect<Resolved, unknown, never> | Promise<Resolved> | Resolved;
 	readonly map?: (record: Record_, resolved: NoInfer<Resolved>) => Row;
 }): typeof binding => binding;
 
@@ -509,17 +562,21 @@ export const defineWebhook = <Record_, Encoded, Row, Resolved = undefined>(bindi
 	readonly input: Schema.Codec<Record_, Encoded>;
 	readonly records?: PullRecordsSpec;
 	readonly identity: { readonly column: string; readonly value: (record: Record_) => string };
-	readonly resolve?: (context: { readonly records: ReadonlyArray<Record_>; readonly api: BeforeApi }) =>
-		| Effect.Effect<Resolved, unknown, never>
-		| Promise<Resolved>
-		| Resolved;
+	readonly resolve?: (context: {
+		readonly records: ReadonlyArray<Record_>;
+		readonly api: BeforeApi;
+	}) => Effect.Effect<Resolved, unknown, never> | Promise<Resolved> | Resolved;
 	readonly map?: (record: Record_, resolved: NoInfer<Resolved>) => Row;
 }): typeof binding => {
 	if (binding.webhook.path.trim() === '') {
-		throw new TypeError('A webhook binding requires a path: a route with no path is a route nothing can deliver to.');
+		throw new TypeError(
+			'A webhook binding requires a path: a route with no path is a route nothing can deliver to.'
+		);
 	}
 	if (binding.identity.column.trim() === '') {
-		throw new TypeError('A webhook binding requires an identity column: webhook delivery is at-least-once, so without one a redelivery becomes a second row.');
+		throw new TypeError(
+			'A webhook binding requires an identity column: webhook delivery is at-least-once, so without one a redelivery becomes a second row.'
+		);
 	}
 	assertVerifiableSignature(binding.webhook.path, binding.webhook.signature);
 	return binding;
@@ -548,10 +605,10 @@ export const defineSend = <Row>(binding: {
 		| 'update'
 		| 'delete'
 		| {
-			readonly create?: (context: { readonly record: Row }) => boolean;
-			readonly update?: (context: { readonly previous: Row; readonly record: Row }) => boolean;
-			readonly delete?: (context: { readonly record: Row }) => boolean;
-		};
+				readonly create?: (context: { readonly record: Row }) => boolean;
+				readonly update?: (context: { readonly previous: Row; readonly record: Row }) => boolean;
+				readonly delete?: (context: { readonly record: Row }) => boolean;
+		  };
 	readonly body?: (event: {
 		readonly operation: 'create' | 'update' | 'delete';
 		readonly record: Row;
@@ -559,23 +616,71 @@ export const defineSend = <Row>(binding: {
 	}) => unknown;
 }): typeof binding => {
 	if (binding.send.path.trim() === '') {
-		throw new TypeError('A send binding requires a path: there is nowhere to deliver to without one.');
+		throw new TypeError(
+			'A send binding requires a path: there is nowhere to deliver to without one.'
+		);
 	}
-	if (typeof binding.on === 'object' && binding.on.create === undefined && binding.on.update === undefined && binding.on.delete === undefined) {
-		throw new TypeError('A send binding subscribes to no collection event, so nothing could ever queue a delivery for it.');
+	if (
+		typeof binding.on === 'object' &&
+		binding.on.create === undefined &&
+		binding.on.update === undefined &&
+		binding.on.delete === undefined
+	) {
+		throw new TypeError(
+			'A send binding subscribes to no collection event, so nothing could ever queue a delivery for it.'
+		);
 	}
 	return binding;
 };
 
-export interface ToolDeclaration { readonly name: string; readonly description: string; readonly command: string; }
-export interface AgentDeclaration { readonly name: string; readonly prompt: string; readonly tools: ReadonlyArray<ToolDeclaration>; readonly skills: ReadonlyArray<string>; }
+export interface ToolDeclaration {
+	readonly name: string;
+	readonly description: string;
+	readonly command: string;
+}
+/**
+ * The workspace agent, as the runtime reads it.
+ *
+ * `name`, `tools` and `skills` are the compiler's to supply — a workspace has one agent, its tools
+ * are the `+<name>.tool.ts` files and its skills are the `.agents/skills/` directories, none of
+ * which the authored module can state about itself. Everything below it is `src/+agent.ts`'s, and
+ * every one of those fields used to be discarded: the compiler synthesized a placeholder
+ * declaration, never discovered `+agent.ts` at all, and the agent ran with the prompt
+ * "You are the <workspace> workspace agent." unscoped over every collection.
+ */
+export interface AgentDeclaration {
+	readonly name: string;
+	readonly prompt: string;
+	readonly tools: ReadonlyArray<ToolDeclaration>;
+	readonly skills: ReadonlyArray<string>;
+	/** What this agent is for, as the manifest and the studio report it. */
+	readonly description?: string;
+	/** The standing task, appended to the prompt so a turn opens knowing what it is here to do. */
+	readonly task?: string;
+	/** The model each turn is made against. Absent means the host's default. */
+	readonly model?: string;
+	/** The output budget of one provider call, which is per call and not per turn. */
+	readonly maxTokens?: number;
+	/** `read` withholds `write_collection` entirely; `write` offers it. Absent reads as `read`. */
+	readonly access?: 'read' | 'write';
+	/** The collections `read_collection` and `write_collection` may reach. Absent means every one. */
+	readonly collections?: ReadonlyArray<string>;
+	/** Platform or workspace tools withheld from this agent. It cannot withhold a bound sandbox. */
+	readonly denyTools?: ReadonlyArray<string>;
+	/** The MCP servers whose tools this agent may call. Absent leaves the connector facility the gate. */
+	readonly mcpServers?: ReadonlyArray<string>;
+	/** Non-sandbox host tools this agent opts into, routed through the host-tools facility. */
+	readonly hostTools?: ReadonlyArray<string>;
+}
 /** Owns tool behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const tool = (declaration: ToolDeclaration): ToolDeclaration => {
 	if (!/^[a-z][a-z0-9_.-]*$/.test(declaration.name)) {
 		throw new TypeError(`Tool name "${declaration.name}" is invalid.`);
 	}
-	if (declaration.description.trim() === '') throw new TypeError(`Tool ${declaration.name} requires a description.`);
-	if (declaration.command.trim() === '') throw new TypeError(`Tool ${declaration.name} requires a command.`);
+	if (declaration.description.trim() === '')
+		throw new TypeError(`Tool ${declaration.name} requires a description.`);
+	if (declaration.command.trim() === '')
+		throw new TypeError(`Tool ${declaration.name} requires a command.`);
 	return Object.freeze({
 		...declaration,
 		description: declaration.description.trim(),
@@ -584,11 +689,28 @@ export const tool = (declaration: ToolDeclaration): ToolDeclaration => {
 };
 /** Owns agent behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const agent = (declaration: AgentDeclaration): AgentDeclaration => {
-	if (!/^[a-z][a-z0-9_.-]*$/.test(declaration.name)) throw new TypeError(`Agent name "${declaration.name}" is invalid.`);
-	if (declaration.prompt.trim() === '') throw new TypeError(`Agent ${declaration.name} requires a prompt.`);
+	if (!/^[a-z][a-z0-9_.-]*$/.test(declaration.name))
+		throw new TypeError(`Agent name "${declaration.name}" is invalid.`);
+	if (declaration.prompt.trim() === '')
+		throw new TypeError(`Agent ${declaration.name} requires a prompt.`);
 	const toolNames = declaration.tools.map(({ name }) => name);
-	if (new Set(toolNames).size !== toolNames.length) throw new TypeError(`Agent ${declaration.name} contains duplicate tools.`);
-	if (new Set(declaration.skills).size !== declaration.skills.length) throw new TypeError(`Agent ${declaration.name} contains duplicate skills.`);
+	if (new Set(toolNames).size !== toolNames.length)
+		throw new TypeError(`Agent ${declaration.name} contains duplicate tools.`);
+	if (new Set(declaration.skills).size !== declaration.skills.length)
+		throw new TypeError(`Agent ${declaration.name} contains duplicate skills.`);
+	if (
+		declaration.maxTokens !== undefined &&
+		(!Number.isInteger(declaration.maxTokens) || declaration.maxTokens <= 0)
+	) {
+		throw new TypeError(`Agent ${declaration.name} maxTokens must be a positive integer.`);
+	}
+	if (
+		declaration.access !== undefined &&
+		declaration.access !== 'read' &&
+		declaration.access !== 'write'
+	) {
+		throw new TypeError(`Agent ${declaration.name} has an unsupported access level.`);
+	}
 	return Object.freeze({
 		...declaration,
 		prompt: declaration.prompt.trim(),
@@ -619,17 +741,26 @@ export const policy = (declaration: PolicyDeclaration): PolicyDeclaration => {
 		throw new TypeError(`Policy ${declaration.name} must declare actions or collection grants.`);
 	}
 	for (const grant of declaration.grants ?? []) {
-		if (grant.collection.trim() === '') throw new TypeError(`Policy ${declaration.name} contains an empty collection grant.`);
+		if (grant.collection.trim() === '')
+			throw new TypeError(`Policy ${declaration.name} contains an empty collection grant.`);
 		if (grant.fields !== undefined && new Set(grant.fields).size !== grant.fields.length) {
-			throw new TypeError(`Policy ${declaration.name} grant ${grant.collection} contains duplicate field masks.`);
+			throw new TypeError(
+				`Policy ${declaration.name} grant ${grant.collection} contains duplicate field masks.`
+			);
 		}
 	}
 	return Object.freeze({ ...declaration, name: declaration.name.trim() });
 };
 
-export interface EnvironmentDeclaration { readonly name: string; readonly production: boolean; }
+export interface EnvironmentDeclaration {
+	readonly name: string;
+	readonly production: boolean;
+}
 /** Owns environment behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const environment = (name: string, options: { readonly production?: boolean } = {}): EnvironmentDeclaration => {
+export const environment = (
+	name: string,
+	options: { readonly production?: boolean } = {}
+): EnvironmentDeclaration => {
 	const normalized = name.trim();
 	if (!/^[a-z][a-z0-9-]*$/.test(normalized)) {
 		throw new TypeError(`Environment name "${name}" must be lowercase kebab-case.`);
@@ -642,10 +773,17 @@ export const environment = (name: string, options: { readonly production?: boole
 		production: options.production ?? false
 	});
 };
-export interface EnvVarConfig { readonly schema?: Schema.Codec<string | undefined, unknown>; readonly public?: boolean; readonly static?: boolean; readonly description?: string; }
+export interface EnvVarConfig {
+	readonly schema?: Schema.Codec<string | undefined, unknown>;
+	readonly public?: boolean;
+	readonly static?: boolean;
+	readonly description?: string;
+}
 /** Owns environment-variable authoring validation while retaining each literal declaration type. */
 const EnvironmentVariables = {
-	define: <const Variables extends Readonly<Record<string, EnvVarConfig>>>(variables: Variables): Variables => {
+	define: <const Variables extends Readonly<Record<string, EnvVarConfig>>>(
+		variables: Variables
+	): Variables => {
 		for (const [name, config] of Object.entries(variables)) {
 			if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
 				throw new TypeError(`Environment variable "${name}" must be UPPER_SNAKE_CASE.`);
@@ -688,7 +826,9 @@ export interface WorkspaceMigrationEntry {
 export interface WorkspaceDefinition {
 	readonly name: string;
 	readonly version: string;
-	readonly collections: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>>;
+	readonly collections: ReadonlyArray<
+		CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
+	>;
 	readonly relations: ReadonlyArray<RelationDefinition>;
 	/**
 	 * Authored custom-type definitions, keyed by declared name.
@@ -725,11 +865,21 @@ export type WorkspaceDraft = Omit<WorkspaceDefinition, 'relations'> & {
 /** Owns workspace behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const workspace = (definition: WorkspaceDraft): WorkspaceDefinition => {
 	if (definition.name.trim() === '') throw new TypeError('Workspace name cannot be empty.');
-	if (definition.version.trim() === '') throw new TypeError(`Workspace ${definition.name} requires a version.`);
-	const registries = [definition.collections, definition.apps, definition.policies, definition.agents, definition.automations, definition.channels, definition.integrations];
+	if (definition.version.trim() === '')
+		throw new TypeError(`Workspace ${definition.name} requires a version.`);
+	const registries = [
+		definition.collections,
+		definition.apps,
+		definition.policies,
+		definition.agents,
+		definition.automations,
+		definition.channels,
+		definition.integrations
+	];
 	for (const registry of registries) {
 		const names = registry.map(({ name }) => name);
-		if (new Set(names).size !== names.length) throw new TypeError(`Workspace ${definition.name} contains duplicate declarations.`);
+		if (new Set(names).size !== names.length)
+			throw new TypeError(`Workspace ${definition.name} contains duplicate declarations.`);
 	}
 	if (new Set(definition.requiredFacilities).size !== definition.requiredFacilities.length) {
 		throw new TypeError(`Workspace ${definition.name} contains duplicate required facilities.`);
