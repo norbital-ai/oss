@@ -29,7 +29,14 @@
 			Everyone who holds a seat in this workspace, and the role each one carries.
 		</p>
 	</Stack>
-	{#if ordered.length === 0}
+	{#if busy && ordered.length === 0}
+		<!-- "Loading" and "none" are different statements, and this said the second while the first was
+		     true: `busy` reached only `aria-busy`, so a surface waiting on its first read rendered
+		     "No members found." to somebody whose workspace was full of them. -->
+		<p role="status" class="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+			Loading members…
+		</p>
+	{:else if ordered.length === 0}
 		<div class="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
 			No members found.
 		</div>
