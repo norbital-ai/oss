@@ -187,6 +187,16 @@ export interface RelationDefinition {
 	readonly cardinality: 'one' | 'many';
 	readonly from?: RelationEndpoint;
 	readonly to?: RelationEndpoint;
+	/**
+	 * Whether the parent owns this row outright, so deleting it deletes this one.
+	 *
+	 * Declared by wrapping the relation in `cascade(...)`. That wrapper existed and did nothing: the
+	 * relation parser tolerated the call and stripped it, nothing carried a flag, and every foreign
+	 * key in every workspace was emitted `NO ACTION`. So a payroll run could not be deleted once it
+	 * had written a payslip — which is the documented way to release the settlement locks it holds
+	 * over attendance — and a declaration that reads as meaningful meant nothing at all.
+	 */
+	readonly cascade?: boolean;
 }
 /** Owns collection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const collection = <const Fields extends Readonly<Record<string, FieldDefinition>>>(options: {

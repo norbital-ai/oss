@@ -24,7 +24,7 @@ const builderTypes: Readonly<Record<string, ScalarType>> = {
 const fieldPattern = /^\s*([A-Za-z_][A-Za-z0-9_]*):\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/gm;
 const collectionBlockPattern = /^(?:\t|  )([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{([\s\S]*?)^(?:\t|  )\}/gm;
 const relationCallPattern =
-	/([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:cascade\(\s*)?r\.(one|many)\.([A-Za-z_][A-Za-z0-9_]*)\(((?:\{[\s\S]*?\})?)\)/g;
+	/([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(cascade\(\s*)?r\.(one|many)\.([A-Za-z_][A-Za-z0-9_]*)\(((?:\{[\s\S]*?\})?)\)/g;
 const relationEndpointsPattern =
 	/from:\s*r\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*to:\s*r\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)/;
 
@@ -215,9 +215,12 @@ export const extractRelationships = (source: string): ReadonlyArray<RelationDefi
 		if (sourceCollection === undefined || body === undefined) continue;
 		for (const call of body.matchAll(relationCallPattern)) {
 			const name = call[1];
-			const cardinality = call[2];
-			const target = call[3];
-			const endpoints = call[4] === undefined || call[4] === '' ? undefined : call[4].match(relationEndpointsPattern);
+			// Group 2 is the `cascade(` wrapper itself. It used to be a non-capturing group, so the
+			// call was recognised, stripped and forgotten.
+			const cascaded = call[2] !== undefined;
+			const cardinality = call[3];
+			const target = call[4];
+			const endpoints = call[5] === undefined || call[5] === '' ? undefined : call[5].match(relationEndpointsPattern);
 			if (name === undefined || (cardinality !== 'one' && cardinality !== 'many') || target === undefined) continue;
 			const fromCollection = endpoints?.[1];
 			const fromColumn = endpoints?.[2];
@@ -228,6 +231,7 @@ export const extractRelationships = (source: string): ReadonlyArray<RelationDefi
 				source: sourceCollection,
 				target,
 				cardinality,
+				...(cascaded ? { cascade: true } : {}),
 				...(fromCollection === undefined || fromColumn === undefined
 					? {}
 					: { from: { collection: fromCollection, column: fromColumn } }),

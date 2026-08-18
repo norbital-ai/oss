@@ -198,11 +198,15 @@ const authoredForeignKey = (
 	if (column === undefined || foreignColumn === undefined) {
 		throw new Error(`Relation "${relation.name}" names a column no collection declares`);
 	}
-	return foreignKey({
+	const constraint = foreignKey({
 		columns: [column],
 		foreignColumns: [foreignColumn],
 		name: `${from.collection}_${from.column}_${to.collection}_fk`
 	});
+	// `ON DELETE CASCADE` only where the workspace asked for it with `cascade(...)`. Without this the
+	// wrapper was decorative and every key was `NO ACTION`, so deleting a parent that owned children
+	// was refused by the database — a payroll run could not be deleted once it had written a payslip.
+	return relation.cascade === true ? constraint.onDelete('cascade') : constraint;
 };
 
 /**
