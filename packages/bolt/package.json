@@ -99,7 +99,8 @@
 		"@xyflow/svelte": "catalog:",
 		"better-auth": "^1.6.29",
 		"drizzle-kit": "catalog:",
-		"drizzle-orm": "catalog:"
+		"drizzle-orm": "catalog:",
+		"vite": "catalog:"
 	},
 	"peerDependencies": {
 		"effect": "4.0.0-rc.109",
@@ -114,7 +115,6 @@
 		"svelte": "^5.56.9",
 		"svelte-check": "^4.7.3",
 		"typescript": "catalog:",
-		"vite": "catalog:",
 		"vitest": "4.1.10"
 	},
 	"peerDependenciesMeta": {
