@@ -26,5 +26,3 @@ website advertises automatically, and `norbital-ai/templates-private` for the on
 Each repository carries its own `templates:check`, `templates:lock`, and projection tooling, and is
 the only place `refs/heads/templates/*` is published from.
 
-`template_workspaces/` here is a retained copy that the Pod test suites still boot. Changing it
-changes no template, no tenant, and no website page.

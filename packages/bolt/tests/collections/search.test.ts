@@ -1,0 +1,157 @@
+import { Effect } from 'effect';
+import { afterEach, describe, expect, it } from 'vitest';
+import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { Collections } from '../../src/runtime/collections/collections.js';
+import {
+	adminSubject,
+	makeBoltTestRuntime,
+	type BoltTestRuntime
+} from '../support/bolt-test-layer.js';
+
+/**
+ * A valid record id for a one-letter fixture name.
+ *
+ * Records are keyed by `norbital_id uuid`; `'a'` was only ever accepted by the `id text` primary key
+ * Bolt used to invent, so these fixtures built rows a real database would have rejected.
+ */
+const rid = (name: string): string =>
+	`00000000-0000-5000-8000-${name.charCodeAt(0).toString().padStart(12, '0')}`;
+
+/**
+ * Free-text search over real SQL.
+ *
+ * The box did nothing at all: the column builders accepted `search: true` and dropped it, the
+ * command boundary dropped the term, and the query input had no field for it. Each of the three
+ * would have been enough on its own.
+ */
+
+let harness: BoltTestRuntime | undefined;
+afterEach(async () => {
+	await harness?.dispose();
+	harness = undefined;
+});
+
+const searchable = workspace({
+	name: 'test-workspace',
+	version: '1',
+	collections: [
+		collection({
+			name: 'people',
+			fields: {
+				name: { type: 'string', required: true, indexed: false, search: true },
+				team: { type: 'string', required: false, indexed: false, search: true },
+				// Not opted in: search must never reach it.
+				secret_note: { type: 'string', required: false, indexed: false }
+			}
+		})
+	],
+	apps: [],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+	],
+	agents: [],
+	automations: [],
+	channels: [],
+	integrations: [],
+	requiredFacilities: []
+});
+
+const seed = (harness: BoltTestRuntime) =>
+	harness.runtime.runPromise(
+		Effect.gen(function* () {
+			const collections = yield* Collections.Service;
+			yield* collections.create(harness.effectId('a'), adminSubject, {
+				collection: 'people',
+				id: rid('a'),
+				values: { name: 'Ada Lovelace', team: 'Engineering', secret_note: 'zebra' }
+			});
+			yield* collections.create(harness.effectId('b'), adminSubject, {
+				collection: 'people',
+				id: rid('b'),
+				values: { name: 'Grace Hopper', team: 'Research', secret_note: 'quartz' }
+			});
+		})
+	);
+
+const search = (harness: BoltTestRuntime, term?: string) =>
+	harness.runtime.runPromise(
+		Effect.gen(function* () {
+			const rows = yield* (yield* Collections.Service).findMany(
+				harness.effectId('find'),
+				adminSubject,
+				{
+					collection: 'people',
+					...(term === undefined ? {} : { search: term })
+				}
+			);
+			return rows.map((row) =>
+				row !== null && typeof row === 'object' && !Array.isArray(row)
+					? Reflect.get(row, 'name')
+					: null
+			);
+		})
+	);
+
+describe('collection search', () => {
+	it('matches a declared searchable column', async () => {
+		harness = await makeBoltTestRuntime(searchable);
+		await seed(harness);
+		expect(await search(harness, 'Ada')).toEqual(['Ada Lovelace']);
+	});
+
+	it('matches case-insensitively and on a fragment', async () => {
+		harness = await makeBoltTestRuntime(searchable);
+		await seed(harness);
+		expect(await search(harness, 'hopp')).toEqual(['Grace Hopper']);
+	});
+
+	it('spans every searchable column, not just the first', async () => {
+		harness = await makeBoltTestRuntime(searchable);
+		await seed(harness);
+		expect(await search(harness, 'Research')).toEqual(['Grace Hopper']);
+	});
+
+	it('never reaches a column that did not opt in', async () => {
+		harness = await makeBoltTestRuntime(searchable);
+		await seed(harness);
+		// `zebra` exists, in a column nobody declared searchable. Matching it would make search a way
+		// to read fields a collection deliberately kept out of it.
+		expect(await search(harness, 'zebra')).toEqual([]);
+	});
+
+	it('returns everything when no term is given', async () => {
+		harness = await makeBoltTestRuntime(searchable);
+		await seed(harness);
+		expect((await search(harness)).sort()).toEqual(['Ada Lovelace', 'Grace Hopper']);
+	});
+
+	it('matches nothing on a collection that declares no searchable column', async () => {
+		harness = await makeBoltTestRuntime();
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				yield* (yield* Collections.Service).create(harness!.effectId('x'), adminSubject, {
+					collection: 'people',
+					id: rid('x'),
+					values: { name: 'Ada Lovelace' }
+				});
+			})
+		);
+		// The default fixture opts no column in, so a term that reached here must not widen to a scan.
+		expect(await search(harness, 'Ada')).toEqual([]);
+	});
+
+	it('counts the same rows it returns', async () => {
+		harness = await makeBoltTestRuntime(searchable);
+		await seed(harness);
+		const total = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).count(harness!.effectId('count'), adminSubject, {
+					collection: 'people',
+					search: 'Ada'
+				});
+			})
+		);
+		// A count that ignored the term reported the whole collection under a filtered page.
+		expect(total).toBe(1);
+	});
+});

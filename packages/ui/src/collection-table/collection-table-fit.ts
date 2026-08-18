@@ -1,4 +1,4 @@
-import type { CollectionField } from '@norbital-ai/platform-utils/collection';
+import type { CollectionField } from '@norbital-ai/std/collection';
 
 const bounds: Readonly<Record<string, readonly [number, number]>> = {
 	boolean: [72, 112],
@@ -6,6 +6,7 @@ const bounds: Readonly<Record<string, readonly [number, number]>> = {
 	date: [120, 168],
 	timestamp: [168, 240],
 	timestamptz: [168, 240],
+	datetime: [168, 240],
 	money: [120, 184],
 	numeric: [88, 168],
 	number: [88, 168],

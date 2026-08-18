@@ -1,1 +1,1 @@
-export type CodeEditorLanguage = 'javascript' | 'json' | 'plaintext';
+export type CodeEditorLanguage = 'javascript' | 'json' | 'markdown' | 'plaintext' | 'yaml';

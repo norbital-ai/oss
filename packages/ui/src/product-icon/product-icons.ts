@@ -18,6 +18,7 @@ export const PRODUCT_SUBMODULE_ICON_NAMES = [
 export const PRODUCT_ICON_NAMES = [
 	'core',
 	'pod',
+	'colony',
 	...PRODUCT_LAYER_ICON_NAMES,
 	...PRODUCT_SUBMODULE_ICON_NAMES,
 	'collections',

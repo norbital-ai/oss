@@ -1,4 +1,4 @@
-import type { CollectionRecordHistoryEntry } from '@norbital-ai/platform-utils/collection';
+import type { CollectionRecordHistoryEntry } from '@norbital-ai/std/collection';
 import { isEqual } from 'es-toolkit/predicate';
 
 export interface CollectionFieldHistoryEntry {

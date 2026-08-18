@@ -1,0 +1,128 @@
+import { describe, expect, it } from 'vitest';
+import {
+	appAccessAllowed,
+	buildApplicationNavigation,
+	buildSystemNavigation,
+	WORKSPACE_SETTINGS_PATH
+} from '../../src/client/ui/shell/workspace-navigation.js';
+
+describe('workspace navigation', () => {
+	it('builds the same sidebar sections as the Pod workspace shell', () => {
+		const applications = buildApplicationNavigation({
+			apps: [
+				{ name: 'hr-controller', label: 'HR Controller' },
+				{ name: 'employee-self-service', label: 'Employee Self-Service' }
+			],
+			currentPath: '/app/hr-controller'
+		});
+		expect(applications.map((item) => item.label)).toEqual([
+			'HR Controller',
+			'Employee Self-Service'
+		]);
+		expect(applications[0]?.active).toBe(true);
+		expect(applications[0]?.href).toBe('/app/hr-controller');
+
+		const system = buildSystemNavigation({
+			isAdmin: true,
+			currentPath: WORKSPACE_SETTINGS_PATH,
+			plugins: [
+				{
+					key: 'workspace-studio',
+					label: 'Workspace Studio',
+					icon: 'product:studio',
+					entry: '/__host/workspace-studio',
+					placement: 'sidebar',
+					adminOnly: true
+				},
+				{
+					key: 'organization',
+					label: 'Organization',
+					icon: 'lucide:building-2',
+					entry: '/__host/organization',
+					placement: 'settings',
+					adminOnly: true
+				},
+				{
+					key: 'agent',
+					label: 'Agents',
+					icon: 'lucide:bot',
+					entry: '/__host/agent',
+					placement: 'settings',
+					adminOnly: true
+				}
+			]
+		});
+		expect(system[0]?.label).toBe('Settings');
+		expect(system[0]?.children?.map((child) => child.label)).toEqual([
+			'People',
+			'Organization',
+			'Agents'
+		]);
+		expect(system[0]?.children?.[0]?.href).toBe(WORKSPACE_SETTINGS_PATH);
+		// The tenant's own People entry is inbuilt and wears no badge; every host-provided plugin
+		// entry wears the host's mark, so a host surface is never mistaken for a tenant one.
+		expect(system[0]?.children?.[0]?.badge).toBeUndefined();
+		expect(
+			system[0]?.children
+				?.slice(1)
+				.every((child) => child.badge === 'product:colony')
+		).toBe(true);
+		const studio = system.find((item) => item.key === 'workspace-studio');
+		expect(studio?.label).toBe('Workspace Studio');
+		expect(studio?.badge).toBe('product:colony');
+		expect(system[0]?.children?.some((child) => child.key === 'workspace-studio')).toBe(false);
+		expect(system.some((item) => item.key === 'workspace-studio')).toBe(true);
+	});
+
+	it('lands a group on its default child', () => {
+		const applications = buildApplicationNavigation({
+			apps: [
+				{ name: 'hr_controller', label: 'HR Controller', defaultChild: 'people' },
+				{ name: 'hr_controller/leave', label: 'Leave', parent: 'hr_controller' },
+				{ name: 'hr_controller/people', label: 'People', parent: 'hr_controller' }
+			],
+			currentPath: '/app/hr_controller/people'
+		});
+		expect(applications[0]?.href).toBe('/app/hr_controller/people');
+		expect(applications[0]?.children?.map((child) => child.key)).toEqual([
+			'hr_controller/leave',
+			'hr_controller/people'
+		]);
+	});
+
+	it('translates tenant app titles when the catalog has the key', () => {
+		const applications = buildApplicationNavigation({
+			apps: [{ name: 'hr_employee', label: 'Hr Employee', icon: 'lucide:user-round' }],
+			currentPath: '/',
+			i18n: {
+				has: (key) => key === 'app.hr_employee.title',
+				t: (key) => (key === 'app.hr_employee.title' ? 'Employee Self-Service' : key)
+			}
+		});
+		expect(applications[0]?.label).toBe('Employee Self-Service');
+		expect(applications[0]?.icon).toBe('lucide:user-round');
+	});
+
+	it('resolves nested app titles from the leaf catalog key', () => {
+		const applications = buildApplicationNavigation({
+			apps: [{ name: 'hr_controller/people', label: 'people', parent: 'hr_controller' }],
+			currentPath: '/',
+			i18n: {
+				has: (key) => key === 'app.people.title',
+				t: (key) => (key === 'app.people.title' ? 'People' : key)
+			}
+		});
+		expect(applications[0]?.label).toBe('People');
+	});
+
+	it('hides apps the subject cannot access', () => {
+		expect(appAccessAllowed('payroll', ['hr-controller'])).toBe(false);
+		expect(
+			buildApplicationNavigation({
+				apps: [{ name: 'payroll', label: 'Payroll' }],
+				accessibleAppNames: ['leave'],
+				currentPath: '/'
+			})
+		).toEqual([]);
+	});
+});

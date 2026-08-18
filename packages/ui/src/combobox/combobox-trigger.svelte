@@ -11,10 +11,6 @@
 	import type { Snippet } from 'svelte';
 	import { tick } from 'svelte';
 	import ComboboxContent from './combobox-content.svelte';
-	import {
-		estimateContentWidth as estimateContentWidthShared,
-		pickSnappedAlign as pickSnappedAlignShared
-	} from './combobox-alignment';
 	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from './index.js';
 
 	const { t } = useI18n<UiKeys>();
@@ -48,7 +44,6 @@
 		align?: 'start' | 'center' | 'end';
 		avoidCollisions: boolean;
 		collisionPadding: number;
-		snapToEnds: boolean;
 		renderSelectionContent: Snippet;
 		onOpenChange: (open: boolean) => Promise<void> | void;
 		onClear: (e: Event) => void;
@@ -122,7 +117,6 @@
 		align,
 		avoidCollisions,
 		collisionPadding,
-		snapToEnds,
 		renderSelectionContent,
 		onOpenChange,
 		onClear,
@@ -157,18 +151,7 @@
 		onInlineCreateSuccess
 	}: Props = $props();
 
-	let triggerEl = $state<HTMLElement | null>(null);
 	let listContainer = $state<HTMLDivElement | null>(null);
-	let alignOverride = $state<'start' | 'center' | 'end' | null>(null);
-	const computedAlign = $derived(alignOverride ?? align);
-
-	function estimateContentWidth(anchorWidth: number): number {
-		return estimateContentWidthShared(anchorWidth, { sameWidth, minWidth, maxWidth });
-	}
-
-	function pickSnappedAlign(preferred: 'start' | 'center' | 'end'): 'start' | 'center' | 'end' {
-		return pickSnappedAlignShared(triggerEl, preferred, estimateContentWidth);
-	}
 
 	function scrollToCurrentSelection() {
 		if (!listContainer) return;
@@ -180,9 +163,6 @@
 	}
 
 	async function handleOpenChange(newOpen: boolean) {
-		if (newOpen && snapToEnds) {
-			alignOverride = pickSnappedAlign(align ?? 'center');
-		}
 		await onOpenChange(newOpen);
 		if (newOpen && scrollToSelection) {
 			await tick();
@@ -240,7 +220,7 @@
 </script>
 
 <Popover.Root {open} onOpenChange={handleOpenChange}>
-	<div bind:this={triggerEl} class={cn('group relative min-w-0 w-full', className)} {style}>
+	<div class={cn('group relative min-w-0 w-full', className)} {style}>
 		<Popover.Trigger
 			aria-expanded={open}
 			aria-haspopup="listbox"
@@ -292,7 +272,7 @@
 		{sameWidth}
 		{minWidth}
 		{maxWidth}
-		align={snapToEnds ? computedAlign : align}
+		{align}
 		{avoidCollisions}
 		{collisionPadding}
 		sideOffset={2}

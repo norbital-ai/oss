@@ -4,7 +4,7 @@
 		CollectionQuery,
 		CollectionRecord,
 		CollectionRelationOptions
-	} from '@norbital-ai/platform-utils/collection';
+	} from '@norbital-ai/std/collection';
 	import type { Component, Snippet } from 'svelte';
 
 	export interface MatrixRow {

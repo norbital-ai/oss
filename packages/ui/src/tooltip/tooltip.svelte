@@ -30,9 +30,9 @@
 		 * only keyboard focus does.
 		 */
 		ignoreNonKeyboardFocus?: boolean;
-		side?: ContentProps['side'];
+		side?: ContentProps['side'] | undefined;
 		sideOffset?: ContentProps['sideOffset'];
-		align?: ContentProps['align'];
+		align?: ContentProps['align'] | undefined;
 		/**
 		 * Let Floating UI flip/shift the content to keep it on screen. Bits UI defaults this to
 		 * `true`, but leaves `collisionPadding` at `0`; we default to an 8px gutter instead.
@@ -43,7 +43,7 @@
 		avoidCollisions?: ContentProps['avoidCollisions'];
 		collisionPadding?: ContentProps['collisionPadding'];
 		/** Simple string body. Prefer `content` for richer markup. */
-		text?: string;
+		text?: string | undefined;
 		contentClass?: string;
 		/** Text-color class for the SVG arrow; match this when overriding the content surface. */
 		arrowClasses?: string;

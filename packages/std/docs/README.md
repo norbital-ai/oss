@@ -9,7 +9,7 @@ framework package.
 
 ## Public areas
 
-`async`, `billing`, `cache`, `cel`, `date`, `error`, `finance`, `json`, `reckon`, `result`, `schema`,
+`async`, `billing`, `cache`, `cel`, `date`, `error`, `finance`, `json`, `reckon`, `result`,
 `string`, `text`, `text/dedent`, `tree`, and `truncate` are public subpaths. The package root exposes
 only the stable general-purpose subset.
 
@@ -22,7 +22,6 @@ Import the narrowest public subpath, for example:
 
 ```ts
 import { parseUtcInstant } from '@norbital-ai/std/date';
-import { typeGuard } from '@norbital-ai/std/schema';
 ```
 
 Do not import from `src/` or `build/`. Add a module only when the behaviour is genuinely reusable across

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
 	assertSha512Integrity,
@@ -14,7 +15,10 @@ import {
 	readPublicPackageEntries
 } from '../lib/package-release.mjs';
 import { resolveWorkspacePackages } from '../resolve-published-packages.mjs';
-import { repositoryRoot } from '../lib/templates.mjs';
+
+// Resolved here rather than imported: it lived in a `lib/templates.mjs` that existed for the
+// deleted `template_workspaces/` fixture, and every other script in this directory computes it inline.
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const entries = [
 	{
@@ -99,15 +103,25 @@ describe('workspace package archives', () => {
 				})),
 				release.entries.map(({ name, version, integrity }) => ({ name, version, integrity }))
 			);
-			const pod = release.entries.find((entry) => entry.name === '@norbital-ai/pod');
+			// Asserted against whichever package `publicPackageDirectories` lists first rather than a
+			// named one, so deleting a package from the release set retires this assertion with it
+			// instead of leaving a reference to a directory that is no longer there — which is exactly
+			// how this broke when pod was removed.
+			const [firstDirectory] = publicPackageDirectories;
+			const packed = release.entries.find(
+				(entry) => entry.name === `@norbital-ai/${firstDirectory}`
+			);
 			// Compared against the checked-in manifest, not a literal. What this test is for is that
 			// packing does not *invent* or *rewrite* a version — hardcoding the current one turned it
 			// into a version pin that fails on any release, which says nothing about packing.
-			const podManifest = JSON.parse(
-				readFileSync(path.join(repositoryRoot, 'packages', 'pod', 'package.json'), 'utf8')
+			const packedManifest = JSON.parse(
+				readFileSync(path.join(repositoryRoot, 'packages', firstDirectory, 'package.json'), 'utf8')
 			);
-			assert.equal(pod?.version, podManifest.version);
-			assert.equal(pod?.tarball, 'https://releases.example.test/platform-v1/pod.tgz');
+			assert.equal(packed?.version, packedManifest.version);
+			assert.equal(
+				packed?.tarball,
+				`https://releases.example.test/platform-v1/${firstDirectory}.tgz`
+			);
 			for (const packageDirectory of publicPackageDirectories) {
 				assert.equal(existsSync(path.join(directory, `${packageDirectory}.tgz`)), true);
 			}

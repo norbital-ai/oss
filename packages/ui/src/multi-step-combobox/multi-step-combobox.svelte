@@ -22,10 +22,6 @@
 	import { isEqual } from 'es-toolkit/predicate';
 	import { watch } from 'runed';
 	import { tick, type Snippet } from 'svelte';
-	import {
-		doesAlignFit,
-		pickSnappedAlign as pickSnappedAlignShared
-	} from '../combobox/combobox-alignment';
 	import { Spinner } from '../spinner/index.js';
 	import MultiStepSelectionSidebar from './multi-step-selection-sidebar.svelte';
 	import MultiStepHeader from './multi-step-header.svelte';
@@ -81,7 +77,6 @@
 		sameWidth?: boolean;
 		dropdownClass?: string;
 		align?: 'start' | 'center' | 'end';
-		snapToEnds?: boolean;
 		allowClear?: boolean;
 		hideChevron?: boolean;
 		style?: string;
@@ -119,8 +114,7 @@
 		stepSeparator = ' → ',
 		panelHeight = 420,
 		ariaLabelSelections,
-		ariaLabelList,
-		snapToEnds = false
+		ariaLabelList
 	}: TMultiStepComboboxProps<TMultiple> = $props();
 
 	const ariaLabelSelectionsEffective = $derived(
@@ -153,24 +147,9 @@
 
 	let refs = $state({
 		searchInput: null as HTMLInputElement | null,
-		listContainer: null as HTMLDivElement | null,
-		triggerEl: null as HTMLElement | null
+		listContainer: null as HTMLDivElement | null
 	});
 	const comboboxId = `multi-step-combobox-${Math.random().toString(36).slice(2, 9)}`;
-
-	// Alignment computed when snapToEnds is enabled
-	const alignBase = $derived(align ?? 'center');
-	let alignOverride = $state<'start' | 'center' | 'end' | null>(null);
-	const computedAlign = $derived(alignOverride ?? alignBase);
-
-	function estimateContentWidth(anchorWidth: number): number {
-		if (sameWidth) return anchorWidth;
-		return showSelectionsSidebar ? 800 : 320;
-	}
-
-	function pickSnappedAlign(preferred: 'start' | 'center' | 'end'): 'start' | 'center' | 'end' {
-		return pickSnappedAlignShared(refs.triggerEl, preferred, estimateContentWidth);
-	}
 
 	/* ─────────────── Type Guards ─────────────── */
 	function isCustom<K extends keyof TValueMap>(def?: StepDef<K>): def is CustomStep<K> {
@@ -551,10 +530,6 @@
 			if (isBuiltin(currentStepDef)) {
 				focusInputSoon();
 			}
-			if (snapToEnds) {
-				const pref: 'start' | 'center' | 'end' = align ?? 'center';
-				alignOverride = pickSnappedAlign(pref);
-			}
 		} else {
 			handleClose();
 		}
@@ -616,7 +591,7 @@
 {/snippet}
 
 <Popover.Root {open} onOpenChange={handleOpenChange}>
-	<div bind:this={refs.triggerEl} class={cn('group relative w-full', className)} {style}>
+	<div class={cn('group relative w-full', className)} {style}>
 		<Popover.Trigger
 			aria-expanded={open}
 			aria-haspopup="listbox"
@@ -682,7 +657,7 @@
 			showSelectionsSidebar ? 'min-w-[800px]' : 'min-w-[320px]'
 		)}
 		{sameWidth}
-		align={snapToEnds ? computedAlign : align}
+		{align}
 		sideOffset={4}
 		aria-multiselectable={false}
 		style={`max-height: ${panelHeight}px;`}

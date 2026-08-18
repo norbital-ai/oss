@@ -1,0 +1,109 @@
+import type { ModelDeclaration } from './models-schema.js';
+export { describeHooks, describeModel, describeModelColumns } from './model-introspection.js';
+export { describeIntegrations, manifestIntegrations } from './integration-introspection.js';
+export type {
+	AuthoredIntegrationBinding,
+	AuthoredIntegrationModule,
+	DescribedIntegrations,
+	IntegrationBindingInput,
+	IntegrationsModuleInput
+} from './integration-introspection.js';
+import type { BeforeApi, DefaultWorkspaceSchema, SystemRow, TableName, TablesForModels } from './contracts-schema.js';
+
+/** Owns generated registry assembly without changing the inferred authored declaration types. */
+const RuntimeAuthoring = {
+	models: <const M extends Readonly<Record<string, ModelDeclaration>>>(models: M): M => models,
+	registry: <const M extends Readonly<Record<string, ModelDeclaration>>>(input: RuntimeRegistryInput<M>): RuntimeRegistry<M> => ({
+		tables: input.models,
+		collection: (name, definition) => ({ name, definition })
+	}),
+	collection: <M extends Readonly<Record<string, ModelDeclaration>>>(registry: RuntimeRegistry<M>, name: keyof M & string, definitions: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
+		registry.collection(name, Object.assign({}, ...definitions)),
+	workspace: <M extends Readonly<Record<string, ModelDeclaration>>, const Workspace>(_registry: RuntimeRegistry<M>, workspace: Workspace): Workspace => workspace
+};
+
+export const defineModels = RuntimeAuthoring.models;
+
+type RelationshipColumn = import('drizzle-orm/pg-core').AnyPgColumnBuilder & {
+	readonly through: (column: import('drizzle-orm/pg-core').AnyPgColumnBuilder) => unknown;
+};
+type RelationshipCollection<M extends Readonly<Record<string, ModelDeclaration>>, Name extends keyof M & string> = {
+	readonly [Field in keyof M[Name]['columns']]: M[Name]['columns'][Field] & RelationshipColumn;
+} & { readonly norbital_id: RelationshipColumn };
+type RelationFactories<M extends Readonly<Record<string, ModelDeclaration>>> = {
+	readonly [Name in keyof M & string]: (input?: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>;
+} & Readonly<Record<string, (input?: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>>>;
+export type RelationshipHelpers<M extends Readonly<Record<string, ModelDeclaration>>> = Readonly<{
+	readonly one: RelationFactories<M>;
+	readonly many: RelationFactories<M>;
+	readonly user: { readonly norbital_id: RelationshipColumn };
+	readonly team: { readonly norbital_id: RelationshipColumn };
+	readonly team_members: { readonly norbital_id: RelationshipColumn; readonly user_id: RelationshipColumn; readonly team_id: RelationshipColumn };
+}> & { readonly [Name in keyof M & string]: RelationshipCollection<M, Name> };
+export type PlatformRelationshipsFor<M extends Readonly<Record<string, ModelDeclaration>>> = (
+	helpers: RelationshipHelpers<M>
+) => Readonly<Record<string, unknown>>;
+
+export type { TablesForModels } from './contracts-schema.js';
+export type InputValuesForTables<T extends Readonly<Record<string, import('./contracts-schema.js').TableShape<unknown, unknown>>>> = import('./contracts-schema.js').InputValuesForTables<T>;
+export type MutationInsertFor<S extends import('./contracts-schema.js').AnySchema, N extends import('./contracts-schema.js').TableName<S>> = import('./contracts-schema.js').MutationInsertFor<S, N>;
+
+export const platformIdentityTables: Readonly<Record<string, never>> = {};
+
+type RuntimeRegistry<M extends Readonly<Record<string, ModelDeclaration>>> = {
+	readonly tables: M;
+	readonly collection: (name: keyof M & string, definition: Readonly<Record<string, unknown>>) => { readonly name: keyof M & string; readonly definition: Readonly<Record<string, unknown>> };
+};
+export type RuntimeRegistryInput<M extends Readonly<Record<string, ModelDeclaration>>> = Readonly<{
+	readonly models: M;
+	readonly relationships: unknown;
+	readonly customTypes?: Readonly<Record<string, unknown>>;
+	readonly platformTables?: Readonly<Record<string, unknown>>;
+}>;
+
+export const defineRuntimeRegistry = RuntimeAuthoring.registry;
+export const defineRuntimeCollection = RuntimeAuthoring.collection;
+export const defineRuntimeWorkspace = RuntimeAuthoring.workspace;
+
+export type WorkspaceAppDef = Readonly<{ readonly name: string; readonly label?: string; readonly description?: string; readonly icon?: string; readonly thumbnail?: string; readonly banner?: string; readonly group?: string; readonly component?: Readonly<Record<string, WorkspaceAppDef>>; readonly defaultChild?: string }>;
+export type GroupDefinition = import('./models-schema.js').BoltGroupDefinition;
+interface PlatformUserRow extends SystemRow {
+	readonly email: string;
+	readonly name: string;
+}
+interface PlatformDocumentAssetRow extends SystemRow {
+	readonly file_name: string;
+	readonly file_size: number | null;
+	readonly mime_type: string | null;
+	readonly storage_key: string;
+}
+interface PlatformTeamRow extends SystemRow { readonly name: string; }
+interface PlatformTeamMemberRow extends SystemRow { readonly team_id: string; readonly user_id: string; }
+type PlatformTables = {
+	readonly user: import('./contracts-schema.js').TableShape<PlatformUserRow, Partial<PlatformUserRow>>;
+	readonly document_asset: import('./contracts-schema.js').TableShape<PlatformDocumentAssetRow, Partial<PlatformDocumentAssetRow>>;
+	readonly team: import('./contracts-schema.js').TableShape<PlatformTeamRow, Partial<PlatformTeamRow>>;
+	readonly team_members: import('./contracts-schema.js').TableShape<PlatformTeamMemberRow, Partial<PlatformTeamMemberRow>>;
+};
+export type PlatformSchema = {
+	readonly tables: PlatformTables;
+	readonly relations: Readonly<Record<string, unknown>>;
+	readonly inputs: InputValuesForTables<PlatformTables>;
+};
+export type CollectionRegistryFor<S extends import('./contracts-schema.js').AnySchema, _Hooks = never> = {
+	readonly [N in TableName<S>]: {
+		readonly create: Partial<import('./contracts-schema.js').MutationInsertFor<S, N>>;
+		readonly update: import('./contracts-schema.js').MutationUpdateFor<S, N>;
+		readonly row: import('./contracts-schema.js').SchemaRow<S, N>;
+	};
+};
+export type InvokeClientApi<Invoke extends Readonly<Record<string, { readonly handler: (...arguments_: never[]) => unknown }>>> = {
+	readonly [K in keyof Invoke]: (input: Parameters<Invoke[K]['handler']>[0]) => RemoteQuery<Awaited<ReturnType<Invoke[K]['handler']>>>;
+};
+export interface RemoteQuery<Value> extends PromiseLike<Value> {
+	readonly current: Value | undefined;
+	readonly error: unknown;
+	readonly loading: boolean;
+	readonly refresh: () => Promise<void>;
+}
+export type InvokeClientRuntime<S extends import('./contracts-schema.js').AnySchema = DefaultWorkspaceSchema> = Readonly<{ readonly api: BeforeApi<S> }>;

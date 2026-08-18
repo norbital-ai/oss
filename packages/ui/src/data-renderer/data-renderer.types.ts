@@ -1,4 +1,4 @@
-import type { CollectionField } from '@norbital-ai/platform-utils/collection';
+import type { CollectionField } from '@norbital-ai/std/collection';
 
 export interface DataRendererProps {
 	field: CollectionField;

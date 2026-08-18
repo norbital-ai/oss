@@ -30,6 +30,10 @@ test-results/
 playwright-report/
 .tmp/
 
+# Local yalc store
+**/.yalc/
+**/yalc.lock
+
 # Environment and local files
 .env
 .env.*

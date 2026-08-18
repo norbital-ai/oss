@@ -9,13 +9,13 @@ description: >-
   confident wrong answers.
 license: MIT
 metadata:
-  package: '@norbital-ai/pod'
+  package: '@norbital-ai/bolt'
 ---
 
 # The Norbital platform
 
 A Norbital workspace is a business application defined by tenant source and compiled by
-Pod into a running app with a Postgres database behind it. On Core, that source is a branchless live
+Bolt into a running app with a Postgres database behind it. On Core, that source is a branchless live
 pointer onto a detached worktree; Git objects sit underneath, but the tenant does not push to Git
 `main`. Almost everything a user might call "settings" — fields, dropdown values, permissions,
 approval routing — is source code, not runtime configuration.

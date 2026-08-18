@@ -30,10 +30,10 @@
 
 	type ResolvedTabMeta = {
 		value: string;
-		label?: string;
+		label?: string | undefined;
 		labelSnippet?: Snippet;
-		icon?: string;
-		description?: string;
+		icon?: string | undefined;
+		description?: string | undefined;
 		disabled?: boolean;
 		keepAlive?: boolean;
 		lazyLoad?: boolean;

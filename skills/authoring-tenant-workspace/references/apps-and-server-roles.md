@@ -40,7 +40,7 @@ second padded container, or an unbounded `Stack`.
 An optional group directory contains `+group.ts`:
 
 ```ts
-import { group } from '@norbital-ai/pod/authoring';
+import { group } from '@norbital-ai/bolt/authoring';
 
 export default group({
 	label: 'Operations',
@@ -83,7 +83,7 @@ instead and it lands at the trailing edge of the media header:
 
 ```svelte
 <script lang="ts">
-	import AppHeaderActions from '@norbital-ai/pod/client/app-header-actions';
+	import AppHeaderActions from '@norbital-ai/bolt/client/app-header-actions';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 </script>
 
@@ -112,7 +112,7 @@ and reference them with the seed-asset URL — no external CDN needed:
 <meta name="pod:banner" content="/api/template-seed-assets/<key>/app-media/operations-banner.svg" />
 ```
 
-Any file under `assets/` is served by Core at `/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
+Any file under `assets/` is served by the host at `/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
 WebP, GIF, SVG, IFC, PDF, …). Reuse one wide image (e.g. 1600×800) for both thumbnail and banner:
 the overview `Frame ratio="banner"` crops it 2:1 and the shell media header crops it `object-top`
 into a fixed compact strip. Keep the interesting composition in the top ~260px of the art.
@@ -143,7 +143,7 @@ The shell owns document scroll and one app query container. Use `Stack`, `Inline
 explicit `<Bound><Scroll>…</Scroll></Bound>`. Do not use raw structural flex/grid, generic overflow clipping,
 or flex/min-size chains. See the layout section in [SKILL.md](../SKILL.md#apps-layout-and-collection-surfaces).
 
-`CollectionTable`, `CollectionKanban`, and `CollectionForm` get the unified client from Pod context. Tables
+`CollectionTable`, `CollectionKanban`, and `CollectionForm` get the unified client from Bolt context. Tables
 always use an explicit typed `columns` snippet. A duplicate collection surface needs an explicit unique
 `view`. Query options are reactive. Use the collection-owned `+representation.svelte` only for a genuine
 override; schema-derived defaults otherwise remain the single source of form/detail behavior. It imports
@@ -153,7 +153,7 @@ versus existing-record display/edit.
 ## Client API
 
 ```ts
-import { client } from '$pod/client';
+import { client } from '$bolt/client';
 
 const sites = client.db.sites.findMany({ limit: 50, after });
 await client.db.sites.create({ name: 'North site' });
@@ -169,89 +169,102 @@ Server roles use the same database method names with promises.
 `src/automation/+daily_site_digest.ts`:
 
 ```ts
-import { defineAutomation } from '@norbital-ai/pod/authoring';
+import { defineAutomation } from '@norbital-ai/bolt/authoring';
+import { Effect } from 'effect';
 
 export default defineAutomation(
 	{ schedule: '0 6 * * *' },
 	{
 		description:
 			'Counts every active site each morning so the ops desk opens on a fresh roll-call.',
-		handler: async (api) => {
-			const sites = await api.db.query.sites.findMany({ limit: 250 });
-			return { count: sites.length };
-		}
+		handler: (api) =>
+			Effect.gen(function* () {
+				const sites = yield* api.db.query.sites.findMany({ limit: 250 });
+				return { count: sites.length };
+			})
 	}
 );
 ```
 
 The spec is always an object and its `description` is mandatory — it is what the manifest, and so the
 studio, says this automation is for. Automations run after commit, are durable and idempotent, and never
-repeat their filename as an ID. Use a schedule or collection event trigger:
+repeat their filename as an ID. The runtime executes them — schedule triggers run on cron; a collection
+event trigger runs whenever a row changes, receiving the triggering row as `scope.incoming_record`:
 
 ```ts
 export default defineAutomation(
 	{ trigger: { collection: 'sites', event: 'created' } },
 	{
 		description: 'Recounts sites whenever one is added, so the desk total never drifts.',
-		handler: async (api, { scope }) => ({ count: await api.db.sites.count({}) })
+		handler: (api, { scope }) =>
+			Effect.gen(function* () {
+				const count = yield* api.db.query.sites.count({});
+				return { count, site: scope.incoming_record.norbital_id };
+			})
 	}
 );
 ```
 
 `kind: 'agent'` is not a `defineAutomation` body — interactive chat and channels use
 `AgentAutomationSpec` on `src/+agent.ts` instead. When a handler or hook needs model judgement, call
-`api.infer({ prompt, schema?, tools?, collections?, images? })`. That is the same host chat the
-agent uses: optional Zod `schema`, optional `images`, optional named workspace tools. The funnel
+`api.infer({ schema, prompt, model?, profile?, collections?, images? })`. That is the same host chat the
+agent uses: an Effect `Schema.Schema` for `schema` (never zod), optional `images`, and optional named
+workspace tools. The funnel
 always offers the read builtins (`describe_workspace`, `read_collection`, `list_skills`,
 `read_skill`) plus those workspace tools. It never offers `write_collection`, `spawn_subagent`,
 host sandbox, authoring, or MCP, and it does not own a `chat_session` transcript.
 
 ```ts
-import { z } from 'zod';
+import { Effect, Schema } from 'effect';
 
 export default defineAutomation(
 	{ schedule: '0 3 * * 1' },
 	{
 		description:
 			'Weekly statutory alignment check — rule-based drift detection, optional successor copies, AI-written report.',
-		handler: async (api) => {
-			const findings = detectDrift(/* bounded reads */);
-			const report = await api.infer({
-				schema: z.object({ summary: z.string(), highlights: z.array(z.string()) }),
-				collections: ['jurisdictions', 'employment_statutory_facts'],
-				prompt: `Summarize these findings in prose:\n${findings.map((f) => `- ${f}`).join('\n')}`
-			});
-			return { summary: report.summary, highlights: report.highlights };
-		}
+		handler: (api) =>
+			Effect.gen(function* () {
+				const findings = detectDrift(/* bounded reads */);
+				const report = yield* api.infer({
+					schema: Schema.Struct({
+						summary: Schema.String,
+						highlights: Schema.Array(Schema.String)
+					}),
+					collections: ['jurisdictions', 'employment_statutory_facts'],
+					prompt: `Summarize these findings in prose:\n${findings.map((f) => `- ${f}`).join('\n')}`
+				});
+				return { summary: report.summary, highlights: report.highlights };
+			})
 	}
 );
 ```
 
 Automations and hooks may make schema-validated inference over explicitly selected workspace
-images. Pass only `document_asset` IDs already associated with the record being processed; Pod re-checks
+images. Pass only `document_asset` IDs already associated with the record being processed; Bolt re-checks
 asset access and rejects non-images, more than eight images, or more than 20 MiB total:
 
 ```ts
-const result = await api.infer({
-	model: 'stepfun/step-3.7-flash',
-	prompt: 'Read the visibly printed site name and unit number. Use null when absent.',
-	images: [{ assetId: scope.incoming_record.document_asset_id, detail: 'high' }],
-	schema: z.object({
-		site_name: z.string().nullable(),
-		unit_number: z.string().nullable()
-	})
-});
+const result =
+	yield *
+	api.infer({
+		model: 'stepfun/step-3.7-flash',
+		prompt: 'Read the visibly printed site name and unit number. Use null when absent.',
+		images: [{ assetId: scope.incoming_record.document_asset_id, detail: 'high' }],
+		schema: Schema.Struct({
+			site_name: Schema.NullOr(Schema.String),
+			unit_number: Schema.NullOr(Schema.String)
+		})
+	});
 ```
 
 Heavy durable infer belongs in a post-commit automation. Hooks may call `api.infer` for judgement
 on the write path (for example a photo), but they still must not queue work or send email.
 
 Timeout is host policy. The host admits each function — including reads — and kills the guest when
-the timeout fires. Core’s policy is 2_000 ms. An automation can take longer overall because if the
+the timeout fires. An automation can take longer overall because if the
 work is not finished, the host calls the same function again. `api.infer` yields: pre-inference
 writes roll back, the host runs the model, and a later admit resumes the handler with the stored
-result. Each invocation accepts at most 64 outer `api.infer` calls and 100,000 prompt characters.
-The successful writes commit when the function returns. Keep the authored handler straightforward;
+result. The successful writes commit when the function returns. Keep the authored handler straightforward;
 do not add home-grown queues, timers or retry tables.
 
 Interactive chat and channel inbound start the same way: persist the user turn, then admit the loop
@@ -262,15 +275,20 @@ function. Authors never choose a queue.
 `src/remotes/+compute_forecast.ts`:
 
 ```ts
-import { defineQueryHandler } from '@norbital-ai/pod/authoring';
-import { z } from 'zod';
+import { defineQueryHandler } from '@norbital-ai/bolt/authoring';
+import { Effect, Schema } from 'effect';
 import type { Api } from './$types.js';
 
 export default defineQueryHandler({
 	description: 'Counts the visits recorded against one site, for the site header badge.',
-	schema: z.object({ site_id: z.string() }),
-	handler: async ({ site_id }, api: Api) =>
-		api.db.site_visits.count({ where: { site_id: { eq: site_id } } })
+	schema: Schema.Struct({ site_id: Schema.String.check(Schema.isUUID()) }),
+	handler: ({ site_id }, api: Api) =>
+		Effect.gen(function* () {
+			const count = yield* api.db.query.site_visits.count({
+				where: { site_id: { eq: site_id } }
+			});
+			return count;
+		})
 });
 ```
 
@@ -278,9 +296,11 @@ export default defineQueryHandler({
 author-chosen and its payload schema describes the request, not the effect. Remotes are imperative
 request/response calls; reactive reads belong to `client.db`. The filename becomes the
 generated `client.invoke` property. Use `defineQueryHandler` for reactive, read-only server computation and
-`defineCommandHandler` for imperative work that may mutate data.
+`defineCommandHandler` for imperative work that may mutate data. Payload schemas are Effect `Schema`
+(`Schema.Struct`, `Schema.Union`, `Schema.Literals`, …) — the authoring boundary adapts them to
+`~standard` for dispatch validation, so there is no zod in authoring.
 
 ## Optional seed
 
-`src/+seed.ts` may default-export tenant fixture behavior. Keep Core reset data, policy seed, and sensitive
-statutory seed in Core when they require system facilities. Author at most one tenant seed role.
+`src/+seed.ts` may default-export tenant fixture behavior. Keep Colony reset data, policy seed, and sensitive
+statutory seed in Colony when they require system facilities. Author at most one tenant seed role.

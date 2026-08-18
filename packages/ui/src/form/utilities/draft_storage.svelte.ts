@@ -9,7 +9,7 @@
  */
 
 import { safeParse } from '@norbital-ai/std';
-import { z } from 'zod';
+import { Schema } from 'effect';
 import { scopedStorageKey } from '../../storage-scope/index.js';
 import type { FormSchema } from '../form_state.svelte';
 
@@ -34,11 +34,18 @@ export interface DraftStorageConfig {
 
 const DRAFT_PREFIX = 'draft_';
 
-const draftEnvelopeSchema = z.object({
-	data: z.unknown(),
-	lastModified: z.number(),
-	schemaHash: z.string()
-});
+/**
+ * `Finite`, not `Number`: Effect's `Schema.Number` admits `NaN` and `Infinity` where the zod schema
+ * this replaced did not, and `lastModified` is compared against a staleness window — a `NaN` there
+ * makes every comparison false, so a draft would neither be used nor evicted.
+ */
+const decodeDraftEnvelope = Schema.decodeUnknownResult(
+	Schema.Struct({
+		data: Schema.Unknown,
+		lastModified: Schema.Finite,
+		schemaHash: Schema.String
+	})
+);
 
 /**
  * Validate the localStorage envelope (without trusting the inner `data`,
@@ -46,8 +53,8 @@ const draftEnvelopeSchema = z.object({
  * Returns the parsed envelope, or `null` if the shape is wrong.
  */
 function parseDraftEnvelope(stored: string): DraftData<unknown> | null {
-	const result = draftEnvelopeSchema.safeParse(safeParse(stored));
-	return result.success ? result.data : null;
+	const result = decodeDraftEnvelope(safeParse(stored));
+	return result._tag === 'Success' ? result.success : null;
 }
 
 async function generateHash(str: string): Promise<string> {

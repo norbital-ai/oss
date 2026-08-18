@@ -1,70 +1,4 @@
-export { batchOperation, itemsSource, paginatedSource } from './batch.js';
-export type {
-	BatchCollectFn,
-	BatchContext,
-	BatchOperationFlatOptions,
-	BatchOperationMapOptions,
-	BatchOperationOptions,
-	BatchOperationReduceOptions,
-	BatchOperationResult,
-	BatchRunFn,
-	BatchSource,
-	BatchSourceItem,
-	ItemsBatchSource,
-	PaginatedBatchSource
-} from './batch.js';
-
-export type SettledResult<T> = {
-	fulfilled: T[];
-	rejected: unknown[];
-};
-
-export function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export function withTimeout<T>(
-	fn: () => Promise<T>,
-	timeoutMs: number,
-	label?: string
-): Promise<T> {
-	const signal = AbortSignal.timeout(timeoutMs);
-
-	return new Promise<T>((resolve, reject) => {
-		const onAbort = () => {
-			const msg = label ? `${label} exceeded ${timeoutMs}ms` : `Operation exceeded ${timeoutMs}ms`;
-			reject(new Error(msg));
-		};
-		signal.addEventListener('abort', onAbort, { once: true });
-
-		fn().then(
-			(result) => {
-				signal.removeEventListener('abort', onAbort);
-				resolve(result);
-			},
-			(error) => {
-				signal.removeEventListener('abort', onAbort);
-				reject(error);
-			}
-		);
-	});
-}
-
-export async function allSettled<T>(promises: Array<Promise<T>>): Promise<SettledResult<T>> {
-	const settled = await Promise.allSettled(promises);
-	const fulfilled: T[] = [];
-	const rejected: unknown[] = [];
-
-	for (const result of settled) {
-		if (result.status === 'fulfilled') {
-			fulfilled.push(result.value);
-		} else {
-			rejected.push(result.reason);
-		}
-	}
-
-	return { fulfilled, rejected };
-}
+import { Effect } from 'effect';
 
 function createAbortError(signal?: AbortSignal): Error {
 	const reason = signal?.reason;
@@ -72,38 +6,40 @@ function createAbortError(signal?: AbortSignal): Error {
 	return new DOMException('The operation was aborted.', 'AbortError');
 }
 
-export function withAbortableOperation<T>(
-	operation: () => Promise<T>,
+/**
+ * Runs the effect while honoring an external `AbortSignal`: when the signal
+ * aborts, the effect's fiber is interrupted and the effect fails with the
+ * abort reason. When the effect completes first, the signal listener is
+ * removed. When no signal is provided the effect runs as-is, relying on
+ * Effect's own interruption.
+ */
+export const withAbortableOperation = <T>(
+	effect: Effect.Effect<T>,
 	options?: { signal?: AbortSignal; onAbort?: (error: Error) => void }
-): Promise<T> {
+): Effect.Effect<T> => {
 	const { signal, onAbort } = options ?? {};
-	signal?.throwIfAborted();
-	if (!signal) return operation();
+	if (!signal) return effect;
 
-	return new Promise<T>((resolve, reject) => {
-		let settled = false;
-		const finalize = () => {
-			signal.removeEventListener('abort', handleAbort);
-		};
-		const settle = (callback: () => void) => {
-			if (settled) return;
-			settled = true;
-			finalize();
-			callback();
-		};
-		const handleAbort = () => {
-			const abortError = createAbortError(signal);
-			onAbort?.(abortError);
-			settle(() => reject(abortError));
-		};
-		signal.addEventListener('abort', handleAbort, { once: true });
-		operation().then(
-			(result) => {
-				settle(() => resolve(result));
-			},
-			(error) => {
-				settle(() => reject(error));
+	const abortEffect = Effect.promise<never>((effectSignal) =>
+		new Promise<never>((_resolve, reject) => {
+			const handleAbort = () => {
+				effectSignal.removeEventListener('abort', handleAbort);
+				signal.removeEventListener('abort', handleAbort);
+				// The effect's own signal aborts when this promise-based effect is
+				// interrupted — that is the race being lost, not the external abort.
+				if (effectSignal.aborted) return;
+				const abortError = createAbortError(signal);
+				onAbort?.(abortError);
+				reject(abortError);
+			};
+			if (signal.aborted) {
+				handleAbort();
+				return;
 			}
-		);
-	});
-}
+			effectSignal.addEventListener('abort', handleAbort, { once: true });
+			signal.addEventListener('abort', handleAbort, { once: true });
+		})
+	);
+
+	return Effect.raceFirst(effect, abortEffect);
+};

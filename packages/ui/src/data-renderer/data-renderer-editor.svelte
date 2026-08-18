@@ -100,9 +100,9 @@
 		{onValueChange}
 		class={className}
 	/>
-{:else if field.kind === 'date' || field.kind === 'timestamp' || field.kind === 'timestamptz'}
+{:else if field.kind === 'date' || field.kind === 'timestamp' || field.kind === 'timestamptz' || field.kind === 'datetime'}
 	<TimestamptzRenderer {field} {value} {disabled} {placeholder} {onValueChange} class={className} />
-{:else if field.kind === 'date-range' || field.kind === 'tstzrange'}
+{:else if field.kind === 'date-range' || field.kind === 'dateRange' || field.kind === 'tstzrange'}
 	<TstzrangeRenderer {field} {value} {disabled} {placeholder} {onValueChange} class={className} />
 {:else if field.kind === 'money'}
 	<MoneyRenderer {field} {value} {id} {disabled} {onValueChange} class={className} />

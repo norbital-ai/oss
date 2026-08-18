@@ -2,7 +2,7 @@ import type {
 	CollectionFilter,
 	CollectionFilterOptions,
 	CollectionRecord
-} from '@norbital-ai/platform-utils/collection';
+} from '@norbital-ai/std/collection';
 import { PersistedState } from 'runed';
 
 /**

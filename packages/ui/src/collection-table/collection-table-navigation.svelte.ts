@@ -1,6 +1,6 @@
 import { safeParse } from '@norbital-ai/std';
 import { getContext, setContext, type Snippet } from 'svelte';
-import { z } from 'zod';
+import { Schema } from 'effect';
 
 export interface CollectionTableNavigationTarget {
 	collectionName: string;
@@ -33,17 +33,17 @@ export interface CollectionTableNavigation {
 	pop(): void;
 }
 
-const urlNavigationStackItemSchema = z.object({
-	collection_name: z.string(),
-	record_id: z.string(),
-	node_id: z.string(),
-	viewMode: z.enum(['page', 'sidesheet'])
+const urlNavigationStackItemSchema = Schema.Struct({
+	collection_name: Schema.String,
+	record_id: Schema.String,
+	node_id: Schema.String,
+	viewMode: Schema.Literals(['page', 'sidesheet'])
 });
-type UrlNavigationStackItem = z.infer<typeof urlNavigationStackItemSchema>;
+type UrlNavigationStackItem = typeof urlNavigationStackItemSchema.Type;
 
-const urlNavigationStackSchema = z.object({
-	stack: z.array(urlNavigationStackItemSchema)
-});
+const decodeUrlNavigationStack = Schema.decodeUnknownResult(
+	Schema.Struct({ stack: Schema.Array(urlNavigationStackItemSchema) })
+);
 
 const COLLECTION_TABLE_NAVIGATION_CONTEXT = Symbol.for(
 	'@norbital-ai/ui/collection-table-navigation'
@@ -86,8 +86,8 @@ export function createCollectionTableRouteKey(params: { view: string }): string 
 function parseUrlNavigationStack(url: URL): UrlNavigationStackItem[] {
 	const value = url.searchParams.get('stack');
 	if (!value) return [];
-	const result = urlNavigationStackSchema.safeParse(safeParse(value));
-	return result.success ? result.data.stack : [];
+	const result = decodeUrlNavigationStack(safeParse(value));
+	return result._tag === 'Success' ? [...result.success.stack] : [];
 }
 
 function registrationKey(routeKey: string, parentRouteKey?: string): string {

@@ -22,11 +22,10 @@ import get from 'es-toolkit/compat/get';
 import merge from 'es-toolkit/compat/merge';
 import set from 'es-toolkit/compat/set';
 import type { JsonPatchOperation } from '@norbital-ai/std/json';
-import type { StandardSchemaIssue } from '@norbital-ai/std/schema';
 import type { MessageVars } from '@norbital-ai/std/i18n';
 import { toast } from 'svelte-sonner';
 import type { Get } from './path';
-import { fieldAndFormErrorsFromStandardIssues } from './standard_schema_form_errors';
+import { fieldAndFormErrorsFromStandardIssues, type StandardSchemaIssue } from './standard_schema_form_errors';
 import { SubmissionHandledExternallyError } from './submission_handled_externally_error';
 import { compareWithIdentity, getChangesForPath, hasChangesForPath } from './utilities/diff_engine';
 import {
@@ -42,7 +41,7 @@ export type TranslateFn = (key: string, vars?: MessageVars) => string;
 // ============================================================================
 
 /**
- * Structural constraint satisfied by any Standard Schema v1 schema (Zod 3+, Zod 4, etc.).
+ * Structural constraint satisfied by any Standard Schema v1 schema, read through `~standard`.
  */
 export type FormSchema = {
 	readonly ['~standard']: {
@@ -180,15 +179,19 @@ export type FormStateHooks<T> = {
 /**
  * A reactive form state manager implementing the Merged State Model.
  *
+ * `schema` is any Standard Schema, read through `~standard` — the Effect adapter
+ * (`Schema.toStandardSchemaV1`) below, or anything else implementing the spec. Nothing here depends
+ * on the library.
+ *
  * @example
  * ```typescript
- * import { z } from 'zod';
+ * import { Schema } from 'effect';
  *
  * const form = new FormState({
- *   schema: z.object({
- *     name: z.string(),
- *     email: z.string()
- *   }),
+ *   schema: Schema.toStandardSchemaV1(Schema.Struct({
+ *     name: Schema.String,
+ *     email: Schema.String
+ *   })),
  *   defaultState: { name: '', email: '' },      // D - fallback
  *   serverState: existingUser,                   // S - from database (optional)
  *   draftKey: ['user_form', 'create'],          // enables W persistence

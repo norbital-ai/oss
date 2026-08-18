@@ -5,7 +5,7 @@
 `src/collections/sites/+model.ts`:
 
 ```ts
-import { defineModel, enums, geolocation, text } from '@norbital-ai/pod/authoring';
+import { defineModel, enums, geolocation, text } from '@norbital-ai/bolt/authoring';
 
 export default defineModel(
 	{
@@ -52,7 +52,7 @@ indexes: [
 ```
 
 Nearest-neighbor search is **server-only** (`api.db.query.<collection>.findNearest` in hooks /
-remotes / automations). The PGlite replica remaps `vector` to text and cannot evaluate distance
+remotes / automations). The browser replica remaps `vector` to text and cannot evaluate distance
 operators. A future per-record omni embedding system column reuses this same path — do not invent a
 parallel one.
 
@@ -86,29 +86,44 @@ Keep relation names explicit and stable: query `with` clauses and generated form
 `src/collections/site_visits/+hooks.ts`:
 
 ```ts
+import { Effect, Schema } from 'effect';
+import { refuse } from '@norbital-ai/bolt/authoring';
 import type { Hooks } from './$types.js';
 
 export default {
 	create: {
 		before: {
 			description: 'Rejects a visit against an unknown site and defaults the visit date to today.',
-			handler: async ({ input, db }) => {
-				const site = await db.sites.findFirst({ where: { norbital_id: { eq: input.site_id } } });
-				if (!site) throw new Error('Referenced site does not exist.');
-				return { ...input, visited_at: input.visited_at ?? new Date() };
-			}
+			handler: ({ input, api }) =>
+				Effect.gen(function* () {
+					const site = yield* api.db.query.sites.findFirst({
+						where: { norbital_id: { eq: input.site_id } },
+						columns: { norbital_id: true }
+					});
+					if (site == null) refuse('Referenced site does not exist.');
+					return { ...input, visited_at: input.visited_at ?? new Date() };
+				})
 		}
 	}
 } satisfies Hooks;
 ```
 
-Every hook is `{ description, handler }`. The bare-function form does not exist: the description is
+Every hook point is `{ description, handler }` (create `before` also takes an optional `batchHandler`
+for bulk writes). The bare-function form does not exist: the description is
 mandatory because it travels into the manifest, and the Workspace Studio shows it to people reading a
 collection who will never open `+hooks.ts`. Write what this hook does to this data — "runs before
 create" repeats the key and says nothing.
 
-`handler` returns the accepted payload or patch on `before`; `after` makes same-transaction database or
-asset changes. Neither may send traffic, queue work, email, invoke AI, or notify.
+Handlers are **Effect-native**: `handler` receives `{ input, api }` (create/update) or
+`{ existing, api }` (delete), and every `api.db.*`, `api.infer`, and `api.readFileAsset` call
+returns an `Effect.Effect` composed with `yield*`. The runtime executes hooks around create, update,
+and delete — `before` returns the accepted payload or patch; `after` makes same-transaction database
+or asset changes through the elevated `api.db.mutate` / `api.db.delete`. Neither may send traffic,
+queue work, email, invoke AI (bounded `api.infer` for judgement on the write path excepted), or
+notify. Reject a write with `refuse(message)`.
+
+A `create.before` hook may validate the payload schema through its own Effect `Schema` by declaring
+`create.input`; the compiler validates incoming writes through it before the handler runs.
 
 ## Pipelines and integrations
 
@@ -131,13 +146,15 @@ export default { accounting: { receive: {}, send: {} } } satisfies Integrations;
 ```
 
 Pipelines own canonical import/export behavior; integrations bind portable delivery facilities. Declare
-secret requirements but never embed secret values.
+secret requirements but never embed secret values. Import/export pipeline handlers are Effect-native
+too — an `export` handler receives `({ records }, api)` and returns the export manifest
+(`TExportManifest`), an `import` handler receives `({ input }, api)` and returns the insert payloads.
 
 ## Structured values
 
 Inline custom schemas do not exist. Use a collection and relationship when a value has independent identity,
-query, policy, hooks, or lifecycle. Represent mutually exclusive owned variants with a strict Zod
-discriminated union, never nullable columns that can disagree.
+query, policy, hooks, or lifecycle. Represent mutually exclusive owned variants with a strict Effect
+Schema, never nullable columns that can disagree.
 
 An owned structured value lives in `custom-types/<name>/` with exactly a `+definition.ts` default-exporting
 `defineCustomType({ name, description, schema })` and a mandatory `+renderer.svelte`. The description is
@@ -149,3 +166,29 @@ and named custom values use JSONB storage. Collection helpers import that defini
 definition must never import or re-export its schema from a collection. Keep scalar references as scalar columns plus relationships.
 The compiler discovers the renderer statically; manual imports, registration calls, and runtime renderer
 registries do not exist. `money` follows this same filesystem contract; it is not a built-in exception.
+
+Custom-type schemas are **Effect Schema**, never zod. Compose with `Schema.Struct`, `Schema.Union`,
+`Schema.Literals`, and `Schema.NullOr` from `effect`, and export the value type as
+`Schema.Schema.Type<typeof valueSchema>`. The runtime validates through `~standard`
+(`Schema.toStandardSchemaV1`, strict on excess properties), so declare a strict object with
+`onExcessProperty: 'error'` — the platform default for custom-type values:
+
+```ts
+import { defineCustomType } from '@norbital-ai/bolt/authoring';
+import { Schema } from 'effect';
+
+const settlementSchema = Schema.Struct({
+	currency: Schema.Literals('MYR', 'USD'),
+	amount: Schema.Number,
+	memo: Schema.optional(Schema.String),
+	approved_on: Schema.NullOr(Schema.String)
+});
+
+export default defineCustomType({
+	name: 'settlement_policy',
+	description: 'One settlement rule: a currency, an amount, and an optional approval instant.',
+	schema: Schema.toStandardSchemaV1(settlementSchema, {
+		parseOptions: { onExcessProperty: 'error' }
+	})
+});
+```

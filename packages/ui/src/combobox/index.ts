@@ -157,15 +157,6 @@ export interface TComboboxBaseProps<
 	 * @default 8
 	 */
 	collisionPadding?: number;
-	/**
-	 * When true, if the popover is displaced horizontally due to viewport collisions,
-	 * the combobox will snap alignment to 'start' (left) or 'end' (right) automatically.
-	 *
-	 * @deprecated Redundant. Viewport clamping is handled natively by `avoidCollisions`
-	 * (on by default), which re-evaluates continuously instead of guessing the dropdown
-	 * width once at open time. Remove this prop; it will be dropped in a future major.
-	 */
-	snapToEnds?: boolean;
 
 	// Callbacks
 	onValueChange?: (value: TMultiple extends true ? T[] | null : T | null) => void;

@@ -9,15 +9,13 @@ Starter workspaces live in their own repository:
 
 - [`@norbital-ai/pod`](./packages/pod) — tenant workspace authoring SDK, runtime, and Vite plugin
 - [`@norbital-ai/ui`](./packages/ui) — Svelte component library and design tokens
-- [`@norbital-ai/platform-utils`](./packages/platform-utils) — shared manifests, wire contracts,
-  migrations, and tenant database utilities
-- [`@norbital-ai/std`](./packages/std) — common schema, date, CEL, finance, and utility modules
+- [`@norbital-ai/std`](./packages/std) — common schema, date, CEL, finance, collection contract, and
+  utility modules
 - [`@norbital-ai/config`](./packages/config) — shared TypeScript and Svelte configuration
 
-`template_workspaces/` is a retained copy, not the source of truth. Templates are authored in
-[`norbital-ai/templates`](https://github.com/norbital-ai/templates), which is also where
-`refs/heads/templates/*` is published from. The copy here exists only until the Pod test suites
-that boot a real workspace are moved onto a vendored fixture.
+Templates are authored in [`norbital-ai/templates`](https://github.com/norbital-ai/templates),
+which is also where `refs/heads/templates/*` is published from. This repository holds no template
+source.
 
 ## Documentation
 
@@ -26,7 +24,7 @@ Docs live next to the code they describe — there is no root `docs/` folder:
 | Area                            | Location                                                                     |
 | ------------------------------- | ---------------------------------------------------------------------------- |
 | Pod framework                   | [`packages/pod/docs/`](./packages/pod/docs)                                  |
-| UI, std, config, platform-utils | `packages/<name>/docs/`                                                      |
+| UI, std, config                 | `packages/<name>/docs/`                                                      |
 | Template workspaces             | [`norbital-ai/templates`](https://github.com/norbital-ai/templates)          |
 | Release contracts               | [`release/README.md`](./release/README.md), [`RELEASING.md`](./RELEASING.md) |
 

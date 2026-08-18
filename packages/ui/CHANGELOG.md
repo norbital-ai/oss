@@ -190,9 +190,8 @@
   behaviour, so existing call sites are unaffected; pass `avoidCollisions={false}` to pin the
   dropdown to `align` exactly.
 
-  `snapToEnds` is now deprecated. It re-implemented the same clamping by guessing the dropdown width
-  once at open time, which the primitive already does continuously and with real measurements. It
-  still works and still defaults to `false`; remove it in favour of `avoidCollisions`.
+  `snapToEnds` is removed. It re-implemented the same clamping by guessing the dropdown width
+  once at open time, which the primitive already does continuously and with real measurements.
 
   The trigger chevron now renders as a small rounded control that gains a background and an outline
   on hover and on focus-within. The glyph itself stays visible at rest, so the "this is a dropdown"

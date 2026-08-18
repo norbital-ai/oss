@@ -1,0 +1,278 @@
+import { deriveRecordId } from '../derive-record-id.js';
+import { Context, Effect, Layer, Schema } from 'effect';
+import type { EffectId } from '@norbital-ai/bolt-protocol';
+import { AccessControl } from '../access/access-control.js';
+import { Database } from '../facilities/database.js';
+import { Tasks } from '../facilities/services.js';
+import type { Identity } from '../identity/identity.js';
+import { Workspace } from '../workspace.js';
+
+
+export const ApprovalState = Schema.TaggedUnion({
+	Pending: { requestId: Schema.NonEmptyString, step: Schema.Number.check(Schema.isInt()), operation: Schema.Json },
+	Approved: { requestId: Schema.NonEmptyString, decidedBy: Schema.NonEmptyString, operation: Schema.optionalKey(Schema.Json) },
+	Rejected: { requestId: Schema.NonEmptyString, decidedBy: Schema.NonEmptyString, reason: Schema.String },
+	Withdrawn: { requestId: Schema.NonEmptyString, withdrawnBy: Schema.NonEmptyString }
+});
+export type ApprovalState = typeof ApprovalState.Type;
+
+/** The `approval_request.status` vocabulary authored reports filter on. */
+const APPROVAL_STATUS: Readonly<Record<ApprovalState['_tag'], string>> = {
+	Pending: 'ONGOING',
+	Approved: 'APPROVED',
+	Rejected: 'REJECTED',
+	Withdrawn: 'WITHDRAWN'
+};
+
+export const ApprovalTimelineEvent = Schema.Struct({
+	kind: Schema.NonEmptyString,
+	subjectId: Schema.NonEmptyString,
+	payload: Schema.Json
+});
+export interface ApprovalTimelineEvent extends Schema.Schema.Type<typeof ApprovalTimelineEvent> {}
+
+const ApprovalConfiguration = Schema.Struct({
+	id: Schema.NonEmptyString,
+	name: Schema.NonEmptyString,
+	steps: Schema.Array(Schema.Struct({
+		id: Schema.NonEmptyString,
+		name: Schema.NonEmptyString,
+		approvers: Schema.Array(Schema.NonEmptyString),
+		description: Schema.optionalKey(Schema.String)
+	}))
+});
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+
+/** Carries approval conflict through the typed approvals failure channel without losing diagnostic context. */
+export class ApprovalConflict extends Schema.TaggedError<ApprovalConflict>()(
+	'Bolt.Approvals.Conflict',
+	{
+		requestId: Schema.NonEmptyString,
+		reason: Schema.NonEmptyString
+	}
+) {
+	readonly category = 'approval-conflict' as const;
+	readonly retryable = false;
+}
+
+/** Owns decide state behavior at the approvals boundary so validation and typed semantics stay consistent for every caller. */
+const ApprovalTransitions = {
+	decide: (
+		state: ApprovalState,
+		decision: 'approve' | 'reject',
+		actor: string,
+		reason = '',
+		steps = 1
+	): ApprovalState | ApprovalConflict => {
+		if (state._tag !== 'Pending') return new ApprovalConflict({ requestId: state.requestId, reason: 'approval is no longer pending' });
+		switch (decision) {
+			case 'reject':
+				return { _tag: 'Rejected', requestId: state.requestId, decidedBy: actor, reason };
+			case 'approve': {
+				const total = Math.max(1, steps);
+				if (state.step + 1 < total) {
+					return { _tag: 'Pending', requestId: state.requestId, step: state.step + 1, operation: state.operation };
+				}
+				return { _tag: 'Approved', requestId: state.requestId, decidedBy: actor, operation: state.operation };
+			}
+			default: {
+				const _exhaustive: never = decision;
+				return new ApprovalConflict({ requestId: state.requestId, reason: `unsupported decision ${_exhaustive}` });
+			}
+		}
+	}
+};
+export const decideState = ApprovalTransitions.decide;
+
+export type Interface = Readonly<{
+	readonly request: (effectId: EffectId, subject: Identity.Subject, requestId: string, operation: Schema.Json) => Effect.Effect<ApprovalState, Database.FacilityError | ApprovalConflict>;
+	readonly decide: (effectId: EffectId, subject: Identity.Subject, state: ApprovalState, decision: 'approve' | 'reject', reason?: string) => Effect.Effect<ApprovalState, ApprovalConflict | AccessControl.AccessDenied | Database.FacilityError>;
+	readonly withdraw: (effectId: EffectId, subject: Identity.Subject, state: ApprovalState) => Effect.Effect<ApprovalState, ApprovalConflict | Database.FacilityError>;
+	readonly status: (effectId: EffectId, requestId: string) => Effect.Effect<ApprovalState | undefined, Database.FacilityError | ApprovalConflict>;
+	readonly pendingForRecord: (effectId: EffectId, collection: string, id: string) => Effect.Effect<ApprovalState | undefined, Database.FacilityError | ApprovalConflict>;
+	readonly timeline: (effectId: EffectId, requestId: string) => Effect.Effect<ReadonlyArray<ApprovalTimelineEvent>, Database.FacilityError | ApprovalConflict>;
+	readonly authorizeResume: (state: ApprovalState) => Effect.Effect<void, ApprovalConflict>;
+}>;
+
+/** Identifies the approvals service in Effect's context so dependency wiring remains explicit and type checked. */
+export const Service = Context.Service<Interface>('@norbital-ai/bolt/Approvals');
+
+export const layer = Layer.effect(
+	Service,
+	Effect.gen(function* () {
+		const database = yield* Database.Service;
+		const access = yield* AccessControl.Service;
+		const tasks = yield* Tasks.Service;
+		const workspace = yield* Workspace.Service;
+		/** Resolves the durable configuration embedded at request time, with authored grants as a legacy-state fallback. */
+		const approvalConfigurations = { resolve: (state: ApprovalState) => {
+			if (state._tag !== 'Pending' || typeof state.operation !== 'object' || state.operation === null || Array.isArray(state.operation)) return undefined;
+			const embedded = Reflect.get(state.operation, 'approval');
+			if (Schema.is(ApprovalConfiguration)(embedded)) return embedded;
+			const collection = Reflect.get(state.operation, 'collection');
+			if (typeof collection !== 'string') return undefined;
+			for (const policy of workspace.definition.policies) {
+				for (const grant of policy.grants ?? []) {
+					if (grant.collection === collection && Schema.is(ApprovalConfiguration)(grant.approval)) return grant.approval;
+				}
+			}
+			return undefined;
+		} };
+		const decodeState = Effect.fn('Approvals.decodeState')(function* (requestId: string, value: unknown) {
+			return yield* Schema.decodeUnknownEffect(ApprovalState)(value).pipe(
+				Effect.mapError(() => new ApprovalConflict({ requestId, reason: 'stored approval state is malformed' }))
+			);
+		});
+		const status = Effect.fn('Approvals.status')(function* (effectId: EffectId, requestId: string) {
+			const result = yield* database.execute(effectId, { _tag: 'Query', sql: 'select state from bolt_approvals where request_id = $1', parameters: [requestId] });
+			const row = result.rows[0];
+			const state = typeof row === 'object' && row !== null ? Reflect.get(row, 'state') : undefined;
+			if (state === undefined) return undefined;
+			return yield* decodeState(requestId, state);
+		});
+		const pendingForRecord = Effect.fn('Approvals.pendingForRecord')(function* (effectId: EffectId, collection: string, id: string) {
+			const result = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: "select state from bolt_approvals where state->>'_tag' = 'Pending' and state->'operation'->>'collection' = $1 and state->'operation'->>'id' = $2 limit 1",
+				parameters: [collection, id]
+			});
+			const row = result.rows[0];
+			const state = typeof row === 'object' && row !== null ? Reflect.get(row, 'state') : undefined;
+			if (state === undefined) return undefined;
+			return yield* decodeState(`${collection}:${id}`, state);
+		});
+		const timeline = Effect.fn('Approvals.timeline')(function* (effectId: EffectId, requestId: string) {
+			const result = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: 'select kind, subject_id as "subjectId", payload from bolt_audit where payload->>\'requestId\' = $1 order by sequence',
+				parameters: [requestId]
+			});
+			const events: Array<ApprovalTimelineEvent> = [];
+			for (const row of result.rows) {
+				events.push(yield* Schema.decodeUnknownEffect(ApprovalTimelineEvent)(row).pipe(
+					Effect.mapError(() => new ApprovalConflict({ requestId, reason: 'stored approval timeline is malformed' }))
+				));
+			}
+			return events;
+		});
+		const persistAudit = Effect.fn('Approvals.persistAudit')(function* (
+			effectId: EffectId,
+			kind: string,
+			subjectId: string,
+			payload: Schema.Json
+		) {
+			yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: 'insert into bolt_audit (kind, subject_id, payload) values ($1, $2, $3)',
+				parameters: [kind, subjectId, payload]
+			});
+		});
+		/**
+		 * Mirrors durable approval state into the `approval_request` row authored code reads.
+		 * `bolt_approvals` stays the authority; this projection is what makes status, close time,
+		 * and the held records answerable by an ordinary collection query.
+		 */
+		const projectRequest = Effect.fn('Approvals.project')(function* (
+			effectId: EffectId,
+			state: ApprovalState,
+			closedBy?: string
+		) {
+			const operation = state._tag === 'Pending' || state._tag === 'Approved' ? state.operation : undefined;
+			const fields = Schema.is(JsonObject)(operation) ? operation : {};
+			const collectionName = typeof fields['collection'] === 'string' ? fields['collection'] : 'unknown';
+			const recordId = typeof fields['id'] === 'string' ? fields['id'] : 'unknown';
+			const action = typeof fields['action'] === 'string' ? fields['action'] : 'update';
+			yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `insert into approval_request (norbital_id, collection_name, record_id, action, status, steps, locked_record_refs, closed_at, closed_by)
+					values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+					on conflict (norbital_id) do update set status = excluded.status, closed_at = excluded.closed_at, closed_by = excluded.closed_by, norbital_updated_at = now()`,
+				parameters: [
+					state.requestId,
+					collectionName,
+					recordId,
+					action,
+					APPROVAL_STATUS[state._tag],
+					state._tag === 'Pending' ? [{ step: state.step }] : [],
+					collectionName === 'unknown' ? [] : [{ collection_name: collectionName, record_id: recordId }],
+					state._tag === 'Pending' ? null : new Date().toISOString(),
+					closedBy ?? null
+				]
+			});
+		});
+		return Service.of({
+			request: Effect.fn('Approvals.request')(function* (effectId, subject, requestId, operation) {
+				let durableOperation = operation;
+				if (Schema.is(JsonObject)(operation) && operation.approval === undefined && typeof operation.collection === 'string') {
+					const subjectRoles = subject.roles.map((role) => role.toLocaleLowerCase());
+					const configuration = workspace.definition.policies
+						.filter((policy) => (policy.roles ?? [policy.name]).some((role) => subjectRoles.includes(role.toLocaleLowerCase())))
+						.flatMap((policy) => policy.grants ?? [])
+						.find((grant) => grant.collection === operation.collection && grant.approval !== undefined)?.approval;
+					if (Schema.is(Schema.Json)(configuration)) durableOperation = Object.fromEntries([...Object.entries(operation), ['approval', configuration]]);
+				}
+				const state: ApprovalState = { _tag: 'Pending', requestId, step: 0, operation: durableOperation };
+				const inserted = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: 'insert into bolt_approvals (request_id, tenant_id, state) values ($1, $2, $3) on conflict (request_id) do nothing returning state',
+					parameters: [requestId, subject.tenantId, state]
+				});
+				if (inserted.affectedRows > 0) {
+					yield* persistAudit(effectId, 'approval_requested', subject.userId, state);
+					yield* projectRequest(effectId, state);
+					yield* database.execute(effectId, {
+						_tag: 'Query',
+						sql: 'insert into requestor (norbital_id, approval_request_id, user_id) values ($1, $2, $3) on conflict (norbital_id) do nothing',
+						parameters: [deriveRecordId(`${requestId}:${subject.userId}`), requestId, subject.userId]
+					});
+					return state;
+				}
+				const existing = yield* status(effectId, requestId);
+				if (existing === undefined) return yield* new ApprovalConflict({ requestId, reason: 'approval request conflicted without a durable state' });
+				return existing;
+			}),
+			decide: Effect.fn('Approvals.decide')(function* (effectId, subject, state, decision, reason = '') {
+				const current = yield* status(effectId, state.requestId);
+				if (current === undefined) return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval request was not found' });
+				const configuration = approvalConfigurations.resolve(current);
+				if (configuration === undefined) {
+					yield* access.authorize(subject, 'approve', 'approvals');
+				} else {
+					const step = configuration.steps[current._tag === 'Pending' ? current.step : 0];
+					const eligible = step !== undefined && step.approvers.some((team: string) => subject.teams.includes(team));
+					if (!eligible) return yield* new AccessControl.AccessDenied({ action: 'approve', resource: current.requestId, reason: 'subject is not an approver for the active step' });
+				}
+				const next = decideState(current, decision, subject.userId, reason, configuration === undefined ? 1 : configuration.steps.length);
+				if (next instanceof ApprovalConflict) return yield* next;
+				const updated = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: 'with updated as (update bolt_approvals set state = $2 where request_id = $1 and state->>\'_tag\' = \'Pending\' returning state) insert into bolt_audit (kind, subject_id, payload) select $3, $4, state from updated returning payload as state',
+					parameters: [state.requestId, next, 'approval_decided', subject.userId]
+				});
+				if (updated.affectedRows === 0) return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval decision lost a competing update' });
+				yield* projectRequest(effectId, next, subject.userId);
+				if (next._tag === 'Approved') {
+					yield* tasks.execute(effectId, { _tag: 'Enqueue', command: 'collections.resume', input: { requestId: next.requestId } });
+				}
+				return next;
+			}),
+			withdraw: Effect.fn('Approvals.withdraw')(function* (effectId, subject, state) {
+				const current = yield* status(effectId, state.requestId);
+				if (current?._tag !== 'Pending') return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval is no longer pending' });
+				const next: ApprovalState = { _tag: 'Withdrawn', requestId: state.requestId, withdrawnBy: subject.userId };
+				const updated = yield* database.execute(effectId, { _tag: 'Query', sql: 'update bolt_approvals set state = $2 where request_id = $1 and state->>\'_tag\' = \'Pending\' returning state', parameters: [state.requestId, next] });
+				if (updated.affectedRows === 0) return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval withdrawal lost a competing update' });
+				yield* projectRequest(effectId, next, subject.userId);
+				return next;
+			}),
+			status,
+			pendingForRecord,
+			timeline,
+			authorizeResume: Effect.fn('Approvals.authorizeResume')(function* (state) {
+				if (state._tag !== 'Approved') return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval has not been approved' });
+			})
+		});
+	})
+);
+
+export * as Approvals from './approvals.js';

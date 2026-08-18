@@ -1,9 +1,22 @@
 import { textSearchMatches } from '@norbital-ai/std/string';
-import { typeGuard } from '@norbital-ai/std/schema';
-import type { CollectionFilter } from '@norbital-ai/platform-utils/collection';
-import { z } from 'zod';
+import type { CollectionFilter } from '@norbital-ai/std/collection';
 
-const recordSchema = z.record(z.string(), z.unknown());
+/**
+ * Whether a value is an object this predicate may descend into, key by key.
+ *
+ * This used to be a schema-backed type guard over a record schema. It is written as a plain
+ * predicate now because a record *schema* is the wrong instrument for it in two ways. It checks no
+ * fields, which is the one case a schema-backed guard exists to replace and not to serve; and the
+ * prototype test is load-bearing in a way no record schema expresses. `valuesEqual` reaches this
+ * with two `Date`s: a schema that admits any non-array object hands them to `Object.entries`, which
+ * answers `[]`, and `[].every(...)` is `true` — so two different instants would compare equal and a
+ * filter would match rows it must not.
+ */
+export const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
+	if (typeof value !== 'object' || value === null) return false;
+	const prototype = Object.getPrototypeOf(value) as object | null;
+	return prototype === Object.prototype || prototype === null;
+};
 
 /**
  * A filter whose path cannot be resolved against the row in hand.
@@ -72,7 +85,7 @@ function resolveFilterPath(row: object, path: readonly string[]): PathResolution
 			if (candidate == null) continue;
 			// Descending into a scalar is the unresolvable case: the row does not have the shape the
 			// path describes, and no answer about matching can honestly be given.
-			if (!typeGuard(recordSchema, candidate)) return { resolved: false, segment };
+			if (!isPlainRecord(candidate)) return { resolved: false, segment };
 			if (!(segment in candidate)) return { resolved: false, segment };
 			next.push(Reflect.get(candidate, segment));
 		}
@@ -100,7 +113,7 @@ function valuesEqual(left: unknown, right: unknown): boolean {
 			left.length === right.length && left.every((value, index) => valuesEqual(value, right[index]))
 		);
 	}
-	if (typeGuard(recordSchema, left) && typeGuard(recordSchema, right)) {
+	if (isPlainRecord(left) && isPlainRecord(right)) {
 		const entries = Object.entries(right);
 		return entries.every(([key, value]) => valuesEqual(Reflect.get(left, key), value));
 	}
@@ -113,13 +126,13 @@ function containsValue(value: unknown, operand: unknown): boolean {
 		const expected = Array.isArray(operand) ? operand : [operand];
 		return expected.every((candidate) => value.some((item) => valuesEqual(item, candidate)));
 	}
-	return typeGuard(recordSchema, value) && typeGuard(recordSchema, operand)
+	return isPlainRecord(value) && isPlainRecord(operand)
 		? valuesEqual(value, operand)
 		: false;
 }
 
 function dateRange(value: unknown): { start: string; end: string } | null {
-	if (!typeGuard(recordSchema, value)) return null;
+	if (!isPlainRecord(value)) return null;
 	const start = Reflect.get(value, 'start');
 	const end = Reflect.get(value, 'end');
 	return typeof start === 'string' && typeof end === 'string' ? { start, end } : null;
@@ -242,7 +255,7 @@ export function collectionTableRowMatchesWhere(
 		if (field === 'AND' && Array.isArray(condition)) {
 			if (
 				!condition.every(
-					(entry) => typeGuard(recordSchema, entry) && collectionTableRowMatchesWhere(row, entry)
+					(entry) => isPlainRecord(entry) && collectionTableRowMatchesWhere(row, entry)
 				)
 			)
 				return false;
@@ -251,18 +264,18 @@ export function collectionTableRowMatchesWhere(
 		if (field === 'OR' && Array.isArray(condition)) {
 			if (
 				!condition.some(
-					(entry) => typeGuard(recordSchema, entry) && collectionTableRowMatchesWhere(row, entry)
+					(entry) => isPlainRecord(entry) && collectionTableRowMatchesWhere(row, entry)
 				)
 			)
 				return false;
 			continue;
 		}
-		if (field === 'NOT' && typeGuard(recordSchema, condition)) {
+		if (field === 'NOT' && isPlainRecord(condition)) {
 			if (collectionTableRowMatchesWhere(row, condition)) return false;
 			continue;
 		}
 		const value = Reflect.get(row, field);
-		if (!typeGuard(recordSchema, condition)) {
+		if (!isPlainRecord(condition)) {
 			if (value !== condition) return false;
 			continue;
 		}
@@ -276,7 +289,7 @@ export function collectionTableRowMatchesWhere(
 			if (
 				!related.some(
 					(candidate) =>
-						typeGuard(recordSchema, candidate) &&
+						isPlainRecord(candidate) &&
 						collectionTableRowMatchesWhere(candidate, condition)
 				)
 			) {

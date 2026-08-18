@@ -11,7 +11,7 @@
 		CollectionRow,
 		CollectionUpdateInput,
 		RemoteQuery
-	} from '@norbital-ai/platform-utils/collection';
+	} from '@norbital-ai/std/collection';
 	import { Button } from '#lib/button';
 	import { FormState, type FormSchema, type TranslateFn } from '#lib/form';
 	import { useI18n, type UiKeys } from '#lib/i18n';
@@ -21,6 +21,7 @@
 	import {
 		deriveFormFieldNames,
 		isFullWidthFormField,
+		optionalCollectionRecordId,
 		pickFieldNames
 	} from '../collection-table/collection-card-derivation.js';
 	import CollectionFormField, {
@@ -134,7 +135,6 @@
 		client,
 		collection,
 		defaultValues,
-		recordId,
 		submitLabel,
 		validation,
 		onSubmit,
@@ -154,6 +154,14 @@
 
 	// svelte-ignore state_referenced_locally
 	const initialValues: Record<string, unknown> = { ...defaultValues };
+	/**
+	 * Create or update, decided from the record itself.
+	 *
+	 * A mounted form owns one record baseline (see `FormState` below), so this is read once from the
+	 * same snapshot `initialValues` was taken from; a different record remounts the surface.
+	 */
+	// svelte-ignore state_referenced_locally
+	const recordId = optionalCollectionRecordId(defaultValues);
 	const definition = $derived(workspaceClient.collections[String(collection)]);
 	// Auto field emission (RFC V.4): a `fields` pick wins over the model-ordered writable set; both
 	// are ignored when a `children` composition is provided.

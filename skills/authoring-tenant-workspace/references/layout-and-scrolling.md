@@ -171,15 +171,15 @@ Each tab snippet is ONE of:
 
 All layout is container-query driven, not viewport breakpoints.
 
-| Mechanism                 | Breakpoint     | Behavior                                    |
-| ------------------------- | -------------- | ------------------------------------------- |
-| `Split collapse="stack"`  | `narrow` 40rem | Panes stack vertically                      |
-| `Split collapse="switch"` | `narrow` 40rem | Tab toggle between panes                    |
-| `Grid minimum="compact"`  | auto-fit 12rem | Cards collapse early for small widgets      |
-| `Grid minimum="card"`     | auto-fit 18rem | Medium widgets                              |
-| `Grid minimum="panel"`    | auto-fit 26rem | Form fields, standard cards                 |
+| Mechanism                 | Breakpoint     | Behavior                                     |
+| ------------------------- | -------------- | -------------------------------------------- |
+| `Split collapse="stack"`  | `narrow` 40rem | Panes stack vertically                       |
+| `Split collapse="switch"` | `narrow` 40rem | Tab toggle between panes                     |
+| `Grid minimum="compact"`  | auto-fit 12rem | Cards collapse early for small widgets       |
+| `Grid minimum="card"`     | auto-fit 18rem | Medium widgets                               |
+| `Grid minimum="panel"`    | auto-fit 26rem | Form fields, standard cards                  |
 | `Grid tracks="…"`         | explicit       | Known uneven columns (log tables, key/value) |
-| Data renderers            | intrinsic      | Shrink to content; `min-width: 0` on parent |
+| Data renderers            | intrinsic      | Shrink to content; `min-width: 0` on parent  |
 
 **Data renderers in narrow containers:** every data renderer is wrapped in `min-w-0` via the layout
 primitives, so they shrink gracefully rather than "collapsing too fast." The `compact` (12rem)
@@ -259,19 +259,19 @@ Our primitives are the [every-layout](https://every-layout.dev) / [bedrock](http
 set with our own names. If you know those, this is the mapping — and if you are reaching for
 something not in this table, you are almost certainly about to write a layout by hand.
 
-| Ours               | Elsewhere          | The one thing it does                                  |
-| ------------------ | ------------------ | ------------------------------------------------------ |
-| `Stack`            | Stack              | Sibling rhythm down the block axis                     |
-| `Inline`           | Inline / Cluster   | Sibling rhythm along the inline axis                   |
-| `Cluster`          | Cluster            | Inline rhythm that wraps                               |
-| `Center`           | Center             | A measure: `max-inline-size` + auto margins            |
-| `Cover`            | Cover              | Chrome, body, chrome — body takes the remaining height |
-| `Bound`            | PadBox / Frame     | A named height contract                                |
-| `Frame`            | Frame              | Aspect-ratio media                                     |
+| Ours               | Elsewhere          | The one thing it does                                           |
+| ------------------ | ------------------ | --------------------------------------------------------------- |
+| `Stack`            | Stack              | Sibling rhythm down the block axis                              |
+| `Inline`           | Inline / Cluster   | Sibling rhythm along the inline axis                            |
+| `Cluster`          | Cluster            | Inline rhythm that wraps                                        |
+| `Center`           | Center             | A measure: `max-inline-size` + auto margins                     |
+| `Cover`            | Cover              | Chrome, body, chrome — body takes the remaining height          |
+| `Bound`            | PadBox / Frame     | A named height contract                                         |
+| `Frame`            | Frame              | Aspect-ratio media                                              |
 | `Grid`             | Grid               | `auto-fit` tracks with a minimum, or `tracks` for known columns |
-| `Columns`/`Column` | Columns            | Explicit column spans                                  |
-| `Split`            | Sidebar / Switcher | Two panes that collapse on a container query           |
-| `Scroll`           | Reel               | A named scrollport                                     |
+| `Columns`/`Column` | Columns            | Explicit column spans                                           |
+| `Split`            | Sidebar / Switcher | Two panes that collapse on a container query                    |
+| `Scroll`           | Reel               | A named scrollport                                              |
 
 Each does exactly one thing. Two primitives composed always beat one primitive plus classes — that
 is the whole reason the set is this small.

@@ -2,7 +2,7 @@
 	import type {
 		CollectionField,
 		CollectionRecordHistoryEntry
-	} from '@norbital-ai/platform-utils/collection';
+	} from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
 	import {
 		formatDataValue,

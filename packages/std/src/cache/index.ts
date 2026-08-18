@@ -1,3 +1,5 @@
+import { Effect, PartitionedSemaphore } from 'effect';
+
 export interface LruCacheOptions<T> {
 	capacity?: number;
 	ttl?: number;
@@ -153,34 +155,3 @@ export function lru<T>(options: LruCacheOptions<T> = {}): LruCache<T> {
 	};
 }
 
-const _dedupQueues = new Map<string, Promise<void>>();
-
-export function dedup<T>(
-	cache: LruCache<T>,
-	key: string,
-	factory: () => T | Promise<T>
-): Promise<T> {
-	const previous = _dedupQueues.get(key) ?? Promise.resolve();
-
-	let release!: () => void;
-	const next = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	const queued = previous.then(() => next);
-	_dedupQueues.set(key, queued);
-
-	return previous
-		.then(() => {
-			const cached = cache.get(key);
-			if (cached !== undefined) return cached;
-			return factory();
-		})
-		.then((result): T => {
-			cache.set(key, result);
-			return result;
-		})
-		.finally(() => {
-			release();
-			_dedupQueues.delete(key);
-		});
-}

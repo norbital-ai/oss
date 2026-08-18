@@ -7,8 +7,8 @@
 		CollectionDefinition,
 		CollectionRegistry,
 		CollectionRow
-	} from '@norbital-ai/platform-utils/collection';
-	import { resolveRecordLabel } from '@norbital-ai/platform-utils/manifest/context';
+	} from '@norbital-ai/std/collection';
+	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Grid } from '#lib/layout';
@@ -21,7 +21,11 @@
 		CollectionTableDetailRenderContext,
 		CollectionTableNavigation
 	} from '../collection-table/collection-table-navigation.svelte.js';
-	import { getCollectionSurfaceRuntime, resolveCollectionSurface } from '#lib/collection-runtime';
+	import {
+		getCollectionSurfaceRuntime,
+		resolveCollectionSurface,
+		setCollectionRecordScope
+	} from '#lib/collection-runtime';
 
 	type Row = CollectionRow<TCollections[TName]>;
 
@@ -59,6 +63,9 @@
 	const collectionSurface = $derived(
 		resolveCollectionSurface(surfaceRuntime?.surfaces, String(collection))
 	);
+	// A table nested in this detail surface belongs to the open record; it persists its view against
+	// that record instead of sharing one key across every card on the board.
+	setCollectionRecordScope(() => activeRecordId);
 </script>
 
 {#snippet uiDetails()}
@@ -70,12 +77,7 @@
 	{:else if activeRecord && activeRecordId}
 		<!-- Default detail surface (RFC V.3/V.6): a schema-derived form bound to the record. -->
 		{#key activeRecordId}
-			<CollectionForm
-				{client}
-				{collection}
-				recordId={activeRecordId}
-				defaultValues={activeRecord}
-			/>
+			<CollectionForm {client} {collection} defaultValues={activeRecord} />
 		{/key}
 	{:else}
 		<CollectionRecordDetailEmpty

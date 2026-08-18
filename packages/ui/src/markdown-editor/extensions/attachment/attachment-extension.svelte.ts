@@ -13,13 +13,22 @@ import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { mount } from 'svelte';
 import { toast } from 'svelte-sonner';
-import { z } from 'zod';
+import { Schema } from 'effect';
 import AttachmentView from './attachment-view.svelte';
 
-const fileMetadataSchema: z.ZodType<TFileMetadata> = z.object({
-	summary: z.string(),
-	structure_hint: z.string()
+/**
+ * The annotation is what makes this a contract rather than a second opinion.
+ *
+ * It replaces `z.ZodType<TFileMetadata>`, which pinned the schema to the declared type so a field
+ * added to `FileMetadata` could not be forgotten here. Effect states the same pin as the decoder's
+ * return type: drop `summary` from the struct and this stops compiling, which is the whole reason
+ * the annotation was written in the first place.
+ */
+const fileMetadataSchema: Schema.Codec<TFileMetadata> = Schema.Struct({
+	summary: Schema.String,
+	structure_hint: Schema.String
 });
+const decodeFileMetadata = Schema.decodeUnknownResult(fileMetadataSchema);
 
 export interface FileAttachmentMetadata {
 	name: string;
@@ -210,8 +219,8 @@ export function createFileAttachmentExtension(options: {
 					parseHTML: (element) => {
 						const data = element.getAttribute('data-metadata');
 						if (!data) return null;
-						const result = fileMetadataSchema.safeParse(safeParse(data));
-						return result.success ? result.data : null;
+						const result = decodeFileMetadata(safeParse(data));
+						return result._tag === 'Success' ? result.success : null;
 					},
 					renderHTML: (attributes) => ({
 						'data-metadata': attributes.metadata ? JSON.stringify(attributes.metadata) : null

@@ -1,6 +1,6 @@
 # Interface Ideology
 
-The axioms every layout, scroll, and spacing decision in a Pod workspace derives from. Read this
+The axioms every layout, scroll, and spacing decision in a Bolt workspace derives from. Read this
 before [layout-and-scrolling.md](layout-and-scrolling.md) or
 [padding-and-spacing.md](padding-and-spacing.md) — those two are the behaviour that falls out of
 these principles, not independent rule sets.

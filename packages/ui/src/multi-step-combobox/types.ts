@@ -73,7 +73,6 @@ export type TMultiStepComboboxProps<
 	sameWidth?: boolean;
 	dropdownClass?: string;
 	align?: 'start' | 'center' | 'end';
-	snapToEnds?: boolean;
 	allowClear?: boolean;
 	hideChevron?: boolean;
 	style?: string;

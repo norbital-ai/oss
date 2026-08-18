@@ -1,5 +1,0 @@
-{
-	"$schema": "https://typedoc.org/schema.json",
-	"entryPoints": ["src/authoring/index.ts", "src/ui/public.ts", "src/vite/index.ts"],
-	"alwaysCreateEntryPointModule": true
-}

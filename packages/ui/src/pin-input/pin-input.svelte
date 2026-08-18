@@ -25,6 +25,12 @@
 	const invalid = $derived(ariaInvalid === true || ariaInvalid === 'true');
 </script>
 
+<!--
+	Cells share the row rather than sitting at a fixed width. `flex-1` over a `min-w-0` basis lets
+	six of them span exactly the container, so the group lines up with the full-width button beneath
+	it instead of stopping short of it — `w-10` with `justify-start` was a fixed width the container
+	could never fill, whatever it was given.
+-->
 <PinInputPrimitive.Root
 	bind:value
 	{maxlength}
@@ -33,18 +39,15 @@
 	inputmode="numeric"
 	autocomplete="one-time-code"
 	aria-invalid={ariaInvalid}
-	class={cn('flex items-center justify-center gap-2', className)}
+	class={cn('flex w-full items-center justify-between gap-2', className)}
 	{...restProps}
 >
 	{#snippet children({ cells })}
 		{#each cells as cell, index (index)}
-			{#if index === Math.ceil(cells.length / 2)}
-				<span class="h-px w-3 shrink-0 bg-border" aria-hidden="true"></span>
-			{/if}
 			<PinInputPrimitive.Cell
 				{cell}
 				class={cn(
-					'flex h-11 w-10 shrink-0 items-center justify-center rounded-sm border border-input bg-background text-base font-medium tabular-nums shadow-xs transition-[border-color,box-shadow,background-color] outline-none dark:bg-input/30',
+					'flex h-11 min-w-0 flex-1 items-center justify-center rounded-sm border border-input bg-background text-base font-medium tabular-nums shadow-xs transition-[border-color,box-shadow,background-color] outline-none dark:bg-input/30',
 					cell.isActive && 'border-ring ring-[3px] ring-ring/50 ring-inset dark:bg-input/40',
 					invalid && 'border-destructive ring-destructive/20 ring-inset dark:ring-destructive/40',
 					disabled && 'cursor-not-allowed bg-muted opacity-50 shadow-none',

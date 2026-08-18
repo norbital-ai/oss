@@ -6,6 +6,7 @@
 	import { watch } from 'runed';
 	import {
 		WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS,
+		WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS,
 		toggleWorkspaceNavigationBranch,
 		type WorkspaceNavigationItem
 	} from './workspace-shell.types.js';
@@ -20,8 +21,8 @@
 	}: {
 		item: WorkspaceNavigationItem;
 		open: boolean;
-		onNavigate?: (href: string) => void;
-		onPrefetch?: (href: string) => void;
+		onNavigate?: (href: string) => void | undefined;
+		onPrefetch?: (href: string) => void | undefined;
 	} = $props();
 
 	// Expand the active branch on first paint; watch keeps it open on nav.
@@ -57,22 +58,21 @@
 				onclick={toggle}
 				class={cn(
 					typeof props.class === 'string' ? props.class : undefined,
-					'relative w-full pr-7'
+					'relative w-full overflow-visible pr-7'
 				)}
 			>
-				{#if productIconName}
-					<ProductIcon name={productIconName} class="size-3.5 shrink-0" />
-				{:else}
-					<Icon icon={item.icon ?? 'lucide:folder'} class="size-3.5 shrink-0" />
-				{/if}
+				<span class="flex size-6 shrink-0 items-center justify-center">
+					{#if productIconName}
+						<ProductIcon name={productIconName} class="size-3.5" />
+					{:else}
+						<Icon icon={item.icon ?? 'lucide:folder'} class="size-3.5" />
+					{/if}
+				</span>
 				<span
 					class={cn('min-w-0 flex-1 truncate text-left pe-1', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
 					>{item.label}</span
 				>
-				<div
-					class="pointer-events-none absolute top-1/2 right-1.5 flex size-3.5 -translate-y-1/2 items-center justify-center"
-					aria-hidden="true"
-				>
+				<div class={cn(WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS, 'size-3.5')} aria-hidden="true">
 					<Icon
 						icon="lucide:chevron-right"
 						class={cn('size-3.5 transition-transform duration-150', displayed && 'rotate-90')}

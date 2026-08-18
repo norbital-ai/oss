@@ -1,39 +1,33 @@
 ---
 name: authoring-tenant-workspace
 description: >-
-  Author filesystem-first Pod tenant workspaces in the public OSS repository. Load for collections,
-  custom types, apps, automations, remotes, seeds, generated $types, the unified $pod/client,
+  Author filesystem-first Bolt tenant workspaces in the public OSS repository. Load for collections,
+  custom types, apps, automations, remotes, seeds, generated $types, the unified $bolt/client,
   temporal values, filters, client rendering, and template repository metadata including the
   marketing thumbnail (`assets/thumbnail.svg`).
 ---
 
-# Authoring Pod Tenant Workspaces
+# Authoring Bolt Tenant Workspaces
 
-Pod 1.0 tenant workspaces are plain Vite projects. Authors write `src/` plus `.agents/skills/` for Agent
-Skills; the Pod filesystem compiler
+Bolt tenant workspaces are plain Vite projects. Authors write `src/` plus `.agents/skills/` for Agent
+Skills; the Bolt filesystem compiler
 derives the registry, workspace, client, loaders, and local types under `.norbital/`. Never hand-author
-assembly or generated output. The sealed contract is in the OSS Pod package:
-[Form system documentation](https://github.com/norbital-ai/oss/blob/main/packages/pod/docs/FORM_SYSTEM.md).
+assembly or generated output. The sealed authoring contract is the
+[Bolt authoring package](https://github.com/norbital-ai/oss/blob/main/packages/bolt/src/authoring/index.ts).
 
 ## Live checkpoint redeploy
 
-Local `/app/...` tenants run an immutable checkpoint, not editable OSS source via HMR. After publishing
-a runtime or template release, consume the new release in Core and redeploy before reporting success:
+Local `/app/...` tenants run an immutable release artifact, not editable OSS source via HMR. After
+publishing a runtime or template release, consume the new release in Colony and restart the dev
+bootstrap before reporting success. The Colony dev bootstrap converges on every start — it seeds the
+tenant from `COLONY_WORKSPACE_ROOT`, compiles the checkout with `bolt sync`, builds and publishes a
+release artifact, routes it, and provisions and migrates the tenant database when a Postgres URL is
+set. There is no separate `tenant:update` step; restart `pnpm --filter colony dev` after
+`pnpm yalc:link` (or a template publish) and hard-refresh the iframe.
 
-```bash
-# Core (`pnpm dev`) must be running
-pnpm tenant:update --org=<org-slug>
-pnpm tenant:update --org=<org-slug> --template=<slug>
-```
-
-Use `--template` after publishing the template projection ref, then hard-refresh the iframe. Use
-`pnpm env:reset --target dev --template <slug>` only for a deliberate reseed. Do not keep one-off tenant import,
-provisioning, or patch scripts: durable fixtures belong in `src/+seed.ts` or the Core seed plan.
-
-`+seed.ts` initializes new tenants; it does not evolve deployed data. For an existing tenant, create a
-committed migration with `pnpm exec pod migration create <name> --custom`, edit its SQL, then run
-`pnpm tenant:update --org=<org-slug> --template=<slug>`. Resolve update conflicts in Organization
-Studio → Template updates using the explicit Template/Tenant choices.
+`+seed.ts` initializes new tenants; it does not evolve deployed data. For an existing tenant, diff the
+authored models against the migration lineage and write the next entry with `pnpm exec bolt migrate`,
+then edit its SQL before deploying through Colony.
 
 ## Reference routing
 
@@ -51,8 +45,8 @@ Studio → Template updates using the explicit Template/Tenant choices.
 | Mandatory bilingual copy, catalogs, the raw-text rule                   | [internationalization.md](references/internationalization.md)         |
 | Template manifest, README, marketing thumbnail (`assets/thumbnail.svg`) | [template-repository.md](references/template-repository.md)           |
 
-Read only the relevant reference. Use
-[ARCHITECTURE.md](../../packages/pod/docs/ARCHITECTURE.md) for runtime internals,
+Read only the relevant reference. Use the Bolt runtime internals
+(`packages/bolt/src/runtime/` in the OSS repository) for hook, pipeline, and automation execution,
 the `norbital-platform` skill for policy behavior, and the code-quality skill after edits.
 
 **Template authoring defaults:** inline duplicated UI to keep the file count small; DRY only for
@@ -121,7 +115,7 @@ a workspace can keep engine and helper code somewhere.
 **both `messages.en.json` and `messages.zh.json` are required** in every workspace — bilingual wiring
 is mandatory even when the tenant only ships English today (the zh file mirrors the English copy
 until real translations land). The compiler enforces that the two files carry exactly the same keys,
-and the pod runtime merges them over the platform chrome catalogs (pod + `@norbital-ai/ui`) at build
+and the bolt runtime merges them over the platform chrome catalogs (bolt + `@norbital-ai/ui`) at build
 time. Use `useI18n<TenantKeys>()` from `@norbital-ai/ui/i18n` in your app files, keyed by your own
 catalog keys (import your `messages.en.json` for the key type). Every user-facing string in an app
 file must come from `t(...)`; the compiler rejects raw text in Svelte markup (see
@@ -138,7 +132,7 @@ Two consequences worth stating, because the compiler will not state them for you
 - Compiler-legal is not skill-legal. The layout, spacing, data-access and date rules in the references
   apply to every authored file, `+`-prefixed or not.
 
-`pod sync` owns `.norbital/generated/{models,registry,apps,workspace,client}.ts`, `types`, `diagnosis`,
+`bolt sync` owns `.norbital/generated/{models,registry,apps,workspace,client}.ts`, `types`, `diagnosis`,
 `dist`, and `tsconfig.json`. `.norbital/migrations` is generated but committed; other `.norbital` output is
 ignored. The authored root `tsconfig.json` only extends `.norbital/tsconfig.json`.
 
@@ -147,7 +141,7 @@ ignored. The authored root `tsconfig.json` only extends `.norbital/tsconfig.json
 Use one model signature: `defineModel(columns, metadata?)`. The directory owns the collection name.
 
 ```ts
-import { defineModel, enums, text } from '@norbital-ai/pod/authoring';
+import { defineModel, enums, text } from '@norbital-ai/bolt/authoring';
 
 export default defineModel(
 	{
@@ -175,13 +169,13 @@ filesystem definition and renderer in every workspace that uses it. Do not cast 
 
 ## One client and one database vocabulary
 
-Apps import a single typed object. All reads are **live reactive queries** backed by Pod's sync
-engine — a local PGlite replica of policy-scoped data. There is no `refetch`, `invalidate`, or
-`revalidate`. Mutations are **optimistic**: the UI updates same-frame, and the server confirms
-or rejects asynchronously.
+Apps import a single typed object. All reads are **live reactive queries** backed by Bolt's sync
+engine — a policy-scoped local replica of the data this device has already seen. There is no
+`refetch`, `invalidate`, or `revalidate`. Mutations are **optimistic**: the UI updates same-frame,
+and the server confirms or rejects asynchronously.
 
 ```ts
-import { client } from '$pod/client';
+import { client } from '$bolt/client';
 
 const employees = client.db.employees.findMany({ where, orderBy, columns, with, search, limit, after });
 await client.db.claims.create(input);
@@ -191,14 +185,14 @@ const forecast = await client.invoke.holiday_feed(input);
 Reads return reactive queries; mutations are promises and update live queries automatically. Use
 opaque `after` cursors, never offset pagination. Use `findGrouped` and `aggregate` only for
 queryable reporting; do not load wide datasets and regroup them in memory. Server roles use the
-same method names with plain promises.
+same method names through the Effect-native `api.db` surface.
 
-**How it works under the hood:** every `findMany`/`findFirst` executes against the local PGlite
-replica — no network for data this device has already seen. When a mutation lands (yours or
+**How it works under the hood:** every `findMany`/`findFirst` executes against the local replica —
+no network for data this device has already seen. When a mutation lands (yours or
 someone else's), the sync engine re-evaluates every live query that depends on the changed
 collections. The sync unit is the **collection**, not the query shape, so changing a sort or
-filter never creates server work against a resident collection. For the full architecture see
-[the public sync-engine documentation](https://github.com/norbital-ai/oss/blob/main/packages/pod/docs/SYNC_ENGINE.md).
+filter never creates server work against a resident collection. For the wire protocol see
+[the bolt sync source](https://github.com/norbital-ai/oss/blob/main/packages/bolt/src/runtime/sync/sync.ts).
 
 ## Apps, layout, and collection surfaces
 
@@ -216,7 +210,7 @@ in-product media contract.
 Do not configure that image a second time as `pod:thumbnail`. Details in
 [template-repository.md](references/template-repository.md#marketing-thumbnail-declare-once).
 
-The pod shell owns the application region, default document scroll, query container, and app identity.
+The bolt shell owns the application region, default document scroll, query container, and app identity.
 Use ordinary `PageHeader` and `Tabs` from `@norbital-ai/ui` where their semantics fit; neither controls
 geometry. Compose body layout with primitives from `@norbital-ai/ui/layout`:
 
@@ -259,12 +253,12 @@ boundary.
 responsiveness, and scroll-trap anti-patterns, and
 [padding-and-spacing.md](references/padding-and-spacing.md) for gap/pad ownership and the app inset.
 
-Pod collection surfaces receive the generated `client` explicitly. A table has explicit typed columns;
+Bolt collection surfaces receive the generated `client` explicitly. A table has explicit typed columns;
 its collection-owned representation decides whether custom create/display/edit surfaces exist:
 
 ```svelte
 <script lang="ts">
-	import { client } from '$pod/client';
+	import { client } from '$bolt/client';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Cover } from '@norbital-ai/ui/layout';
 	import { PageHeader } from '@norbital-ai/ui/page-header';
@@ -314,35 +308,46 @@ sentence; "runs before create" restates the key and is worse than nothing.
   the funnel supplies them when a sandbox is bound (including WhatsApp and other channels). Use
   typesafe `denyTools` to withhold workspace or platform tools; it cannot hide a bound sandbox.
   Non-sandbox host tools remain an explicit `hostTools` opt-in. The funnel is documented in the
-  platform skill (`agent-capabilities.md`) and `packages/pod/docs/AGENT_ARCHITECTURE.md`.
+  platform skill (`agent-capabilities.md`).
+- Hooks, pipelines, automations, remotes, and agent tools are **Effect-native**. Every handler is an
+  `Effect.gen(function* () { ... })` receiving `{ input, api }`, and every `api.db.*`,
+  `api.infer`, and `api.readFileAsset` call returns an `Effect.Effect` you `yield*` — never a
+  plain Promise (promises and plain values are still admitted and normalized at the authoring
+  boundary). The runtime actually executes these handlers: before/after hooks wrap create, update,
+  and delete (create also takes a `batchHandler` for bulk writes), import/export pipelines run the
+  canonical import and export flows, and change-triggered automations receive
+  `{ args, scope }` with the triggering row as `scope.incoming_record`.
 - Hooks validate and return the exact input/patch, then make only same-transaction database or asset
   reads. Hooks MAY call bounded `api.infer` for judgement (photos etc.); heavy/durable infer still
-  belongs in automations. They never queue work, send email, or spawn agent sessions.
+  belongs in automations. They never queue work, send email, or spawn agent sessions. Reject a write
+  with `refuse(message)` from `@norbital-ai/bolt/authoring`.
 - Automations run after commit, are durable and idempotent, and receive stable event IDs. They are
-  always deterministic handlers; when one needs model judgement, call `api.infer` (at most 64 calls
-  and 100,000 prompt characters). That is the same host chat the agent uses, with an optional Zod
-  `schema`, optional `images`, and optional named workspace tools. It never offers authoring,
-  sandbox, `write_collection`, or `spawn_subagent`, and it does not own a chat transcript. Each run
-  is one admitted function. If the work is not finished, the host calls the same function again.
-- Remotes are imperative request/response methods. Reactive reads belong to `client.db`.
+  always deterministic handlers; when one needs model judgement, call `api.infer` with an Effect
+  `Schema.Schema` for `schema` (never zod), optional `images`, and optional named workspace tools.
+  It never offers authoring, sandbox, `write_collection`, or `spawn_subagent`, and it does not own a
+  chat transcript. Each run is one admitted function. If the work is not finished, the host calls
+  the same function again.
+- Remotes are imperative request/response methods declared with `defineQueryHandler` /
+  `defineCommandHandler`; their payload schema is an Effect `Schema` (e.g. `Schema.Struct`), adapted
+  to `~standard` for dispatch validation. Reactive reads belong to `client.db`.
 - Integrations use portable runtime delivery facilities; missing facilities fail at boot.
-- Put tenant-specific fixture behavior in `src/+seed.ts`. Sensitive statutory or system seed remains Core-owned.
+- Put tenant-specific fixture behavior in `src/+seed.ts`. Sensitive statutory or system seed remains Colony-owned.
 
 ## Prohibitions
 
 Do not author `schema.ts`, `workspace.ts`, collection barrels, `*.schema.ts`, app `App.svelte`, SvelteKit
 routes, a custom bundler, `defineTable`, `defineSchema`, `QueryRow`, `NorbitalAuthoring`, `$tenant`, or `$lib`.
 The compiler rejects the former Page/Pane/Region, layout metadata, split-client, legacy enum, record-rep,
-`+create.svelte`, and call-site create APIs; there is no compatibility path.
+`+create.svelte`, call-site create APIs, and hand-written assembly; there is no compatibility path.
 
 ## Workflow
 
 ```bash
-# Run from the selected template workspace in a checkout of the public OSS repository.
-pnpm sync
+# Run from the selected template workspace in a checkout of the templates repository.
+pnpm sync        # template script wrapping `bolt sync`
 pnpm lint
-pnpm build
+pnpm build       # `vite build` through the `bolt()` plugin
 ```
 
-Publish through the OSS release workflow before asking Core to consume the change. Before finishing, run
+Publish through the OSS release workflow before asking Colony to consume the change. Before finishing, run
 the relevant quality audit, sync, lint, build, and focused behaviour test in OSS.

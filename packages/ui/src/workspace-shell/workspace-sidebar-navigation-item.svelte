@@ -8,6 +8,7 @@
 	import { watch } from 'runed';
 	import {
 		WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS,
+		WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS,
 		toggleWorkspaceNavigationBranch,
 		type WorkspaceNavigationItem
 	} from './workspace-shell.types.js';
@@ -22,8 +23,8 @@
 	}: {
 		item: WorkspaceNavigationItem;
 		open: boolean;
-		onNavigate?: (href: string) => void;
-		onPrefetch?: (href: string) => void;
+		onNavigate?: (href: string) => void | undefined;
+		onPrefetch?: (href: string) => void | undefined;
 	} = $props();
 
 	// Expand the active branch on first paint; watch keeps it open on nav.
@@ -35,6 +36,7 @@
 	);
 	const hasChildren = $derived(Boolean(item.children?.length));
 	const productIconName = $derived(productIconNameFromReference(item.icon));
+	const badgeIconName = $derived(productIconNameFromReference(item.badge));
 
 	function navigate(event: MouseEvent, href: string): void {
 		if (!onNavigate) return;
@@ -70,7 +72,7 @@
 					onclick={toggle}
 					class={cn(
 						typeof props.class === 'string' ? props.class : undefined,
-						'relative w-full',
+						'relative w-full overflow-visible',
 						open && 'pr-7'
 					)}
 				>
@@ -97,18 +99,23 @@
 							class={cn('min-w-0 flex-1 truncate text-left', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
 							>{item.label}</span
 						>
-						{#if item.badge}
+						{#if item.badge && !badgeIconName}
 							<Badge
 								variant="outline"
-								class="mr-4 ml-auto shrink-0 px-1.5 py-0 text-[0.625rem] leading-4 font-medium"
+								class="ml-auto shrink-0 px-1.5 py-0 text-[0.625rem] leading-4 font-medium"
 								data-navigation-badge={item.badge}
 								aria-hidden="true">{item.badge}</Badge
 							>
 						{/if}
 						<div
-							class="pointer-events-none absolute top-1/2 right-1.5 flex size-3.5 -translate-y-1/2 items-center justify-center"
+							class={cn(WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS, badgeIconName ? 'gap-1' : 'size-3.5')}
 							aria-hidden="true"
 						>
+							{#if badgeIconName}
+								<span data-navigation-badge={item.badge}>
+									<ProductIcon name={badgeIconName} class="size-3.5" />
+								</span>
+							{/if}
 							<Icon
 								icon="lucide:chevron-right"
 								class={cn('size-3.5 transition-transform duration-150', displayed && 'rotate-90')}
@@ -141,7 +148,7 @@
 					aria-current={item.active ? 'page' : undefined}
 					class={cn(
 						typeof props.class === 'string' ? props.class : undefined,
-						'relative w-full',
+						'relative w-full overflow-visible',
 						open && 'pr-7'
 					)}
 				>
@@ -168,12 +175,22 @@
 							class="min-w-0 flex-1 truncate {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">{item.label}</span
 						>
 						{#if item.badge}
-							<Badge
-								variant="outline"
-								class="ml-auto shrink-0 px-1.5 py-0 text-[0.625rem] leading-4 font-medium"
-								data-navigation-badge={item.badge}
-								aria-hidden="true">{item.badge}</Badge
-							>
+							{#if badgeIconName}
+								<span
+									class={cn(WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS, 'size-3.5')}
+									data-navigation-badge={item.badge}
+									aria-hidden="true"
+								>
+									<ProductIcon name={badgeIconName} class="size-3.5" />
+								</span>
+							{:else}
+								<Badge
+									variant="outline"
+									class="ml-auto shrink-0 px-1.5 py-0 text-[0.625rem] leading-4 font-medium"
+									data-navigation-badge={item.badge}
+									aria-hidden="true">{item.badge}</Badge
+								>
+							{/if}
 						{/if}
 					{/if}
 				</a>

@@ -1,5 +1,5 @@
 <script lang="ts" generics="TRow extends object">
-	import type { CollectionField } from '@norbital-ai/platform-utils/collection';
+	import type { CollectionField } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
@@ -35,6 +35,7 @@
 		'text',
 		'timestamp',
 		'timestamptz',
+		'datetime',
 		'uuid'
 	]);
 

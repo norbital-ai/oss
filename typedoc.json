@@ -3,24 +3,14 @@
 	"name": "Norbital API Reference",
 	"plugin": ["typedoc-plugin-markdown"],
 	"tsconfig": "typedoc.registry.tsconfig.json",
-	"entryPoints": [
-		"packages/pod/build",
-		"packages/platform-utils/build",
-		"packages/std/build",
-		"packages/ui/build"
-	],
+	"entryPoints": ["packages/std/build", "packages/ui/build"],
 	"entryPointStrategy": "expand",
 	"excludeExternals": true,
 	"excludeInternal": true,
 	"excludePrivate": true,
 	"excludeProtected": true,
 	"skipErrorChecking": true,
-	"packagesRequiringDocumentation": [
-		"@norbital-ai/pod",
-		"@norbital-ai/platform-utils",
-		"@norbital-ai/std",
-		"@norbital-ai/ui"
-	],
+	"packagesRequiringDocumentation": ["@norbital-ai/std", "@norbital-ai/ui"],
 	"validation": {
 		"invalidLink": false,
 		"notDocumented": false,

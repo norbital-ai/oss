@@ -54,14 +54,18 @@ jobs:
       # Building here leaves each prepack a cache hit, so the sequential packs do no repeated work.
       # It must run through turbo, and not `pnpm packages:build`, so that turbo's cache is the thing
       # that gets populated — a pnpm-driven build produces the same output and still leaves every
-      # prepack a cache miss. `...@norbital-ai/pod` is pod and its dependencies, which is exactly the
-      # five publishable packages and none of the templates.
+      # prepack a cache miss.
+      #
+      # This used to anchor on `...@norbital-ai/pod`, whose dependency closure happened to be exactly
+      # the publishable set. Pod and platform-utils are gone, and `ui` now closes over what is left:
+      # it pulls in std and config. Keep this filter in step with `publicPackageDirectories` in
+      # `scripts/lib/package-release.mjs`, which is what `publication:check` reads.
       - name: Build publishable packages
-        run: pnpm exec turbo run build --filter=...@norbital-ai/pod
+        run: pnpm exec turbo run build --filter=...@norbital-ai/ui --filter=...@norbital-ai/bolt --filter=...@norbital-ai/bolt-server
 
       - name: Publish one coherent beta package set
         run: |
-          for package in config std platform-utils ui pod; do
+          for package in config std ui bolt-protocol bolt-server bolt; do
             pnpm --dir "packages/$package" publish --access public --no-git-checks --force
           done
         env:

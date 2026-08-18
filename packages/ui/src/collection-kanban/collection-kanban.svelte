@@ -12,8 +12,8 @@
 		CollectionType,
 		CollectionUpdateInput,
 		RemoteQuery
-	} from '@norbital-ai/platform-utils/collection';
-	import { resolveRecordLabel } from '@norbital-ai/platform-utils/manifest/context';
+	} from '@norbital-ai/std/collection';
+	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import { watch } from 'runed';
 	import { Cover, Grid, Inline, Scroll, Stack } from '#lib/layout';
@@ -21,7 +21,11 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { type Translate } from '../data-renderer/index.js';
 	import { onMount } from 'svelte';
-	import { getCollectionSurfaceRuntime } from '#lib/collection-runtime';
+	import {
+		getCollectionRecordScope,
+		getCollectionSurfaceRuntime,
+		resolveCollectionViewKey
+	} from '#lib/collection-runtime';
 	import { badgeColorClass } from '../collection-table/collection-card-colors.js';
 	import {
 		createCollectionTableRouteKey,
@@ -66,6 +70,8 @@
 		rows = 1,
 		query: collectionQuery,
 		selectable = false,
+		title,
+		description,
 		exportPipelines = [],
 		importPipelines = [],
 		integrations = [],
@@ -78,8 +84,13 @@
 	setCollectionClientContext(() => workspaceClient);
 	const { t } = useI18n<UiKeys>();
 	const surfaceRuntime = getCollectionSurfaceRuntime();
+	const recordScope = getCollectionRecordScope();
 	const resolvedView = $derived(
-		view ?? `${surfaceRuntime?.appId() ?? 'unhosted'}:${String(collection)}`
+		resolveCollectionViewKey(
+			view,
+			`${surfaceRuntime?.appId() ?? 'unhosted'}:${String(collection)}`,
+			recordScope?.()
+		)
 	);
 	onMount(() => surfaceRuntime?.claimView(resolvedView));
 	const definition = $derived(
@@ -433,14 +444,18 @@
 			hasRecordLabel: Boolean(definition.recordLabel)
 		})
 	);
+	/**
+	 * The kanban derives its whole card from field structure — there are no authored columns here to
+	 * ask, so the schema formatter is the entire resolution. A caller who needs more supplies the
+	 * `Card` snippet and this path is not taken at all.
+	 */
+	function cardText(name: string, record: Row): string {
+		return formatAutoCardField(definition.fields, name, record, t as Translate);
+	}
+
 	function autoCardTitle(record: Row): string {
 		if (autoCard.title.kind === 'field') {
-			const text = formatAutoCardField(
-				definition.fields,
-				autoCard.title.name,
-				record,
-				t as Translate
-			);
+			const text = cardText(autoCard.title.name, record);
 			if (text && text !== '—') return text;
 		}
 		const label = resolveRecordLabel(definition.recordLabel ?? null, record);
@@ -451,8 +466,8 @@
 </script>
 
 {#snippet autoCardSnippet(record: Row)}
-	{@const subtitle = formatAutoCardSubtitle(autoCard, definition.fields, record, t as Translate)}
-	{@const badge = formatAutoCardBadge(autoCard, definition.fields, record, t as Translate)}
+	{@const subtitle = formatAutoCardSubtitle(autoCard, (name) => cardText(name, record))}
+	{@const badge = formatAutoCardBadge(autoCard, record, (name) => cardText(name, record))}
 	<Inline align="start" justify="between" gap="md">
 		<Stack gap="xs">
 			<p class="min-w-0 truncate font-medium">{autoCardTitle(record)}</p>
@@ -463,7 +478,7 @@
 			<span
 				class={cn(
 					'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-xs font-medium',
-					badgeColorClass(badge.color)
+					badgeColorClass()
 				)}>{badge.label}</span
 			>
 		{/if}
@@ -501,7 +516,8 @@
 			{client}
 			{collection}
 			query={queryState}
-			searchPlaceholder={t('kanban.searchRecords')}
+			{title}
+			about={description ? { description } : undefined}
 			filterPersistenceKey={resolvedView}
 			operations={{
 				exportPipelines,

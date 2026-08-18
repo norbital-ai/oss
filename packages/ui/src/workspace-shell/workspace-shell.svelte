@@ -26,11 +26,12 @@
 		onSearch,
 		searchLabel,
 		searchShortcut,
+		agent,
 		children
 	}: {
 		model: WorkspaceNavigationModel;
-		onNavigate?: (href: string) => void;
-		onPrefetch?: (href: string) => void;
+		onNavigate?: (href: string) => void | undefined;
+		onPrefetch?: (href: string) => void | undefined;
 		onOrganizationChange?: (organizationId: string) => void | Promise<void>;
 		onSignOut?: () => void | Promise<void>;
 		/**
@@ -54,6 +55,8 @@
 		onSearch?: () => void;
 		searchLabel?: string;
 		searchShortcut?: string;
+		/** The workspace agent's trigger, rendered at the top of the sidebar navigation. */
+		agent?: Snippet<[{ expanded: boolean }]>;
 		children: Snippet;
 	} = $props();
 
@@ -118,6 +121,7 @@
 				{onSearch}
 				{searchLabel}
 				{searchShortcut}
+				{agent}
 			/>
 		{/snippet}
 		{@render children()}

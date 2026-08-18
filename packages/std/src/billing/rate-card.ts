@@ -1,4 +1,4 @@
-export const BILLING_RATE_CARD_VERSION = '2026-07-28';
+export const BILLING_RATE_CARD_VERSION = '2026-08-18';
 export const BILLING_SAFETY_MARGIN_MULTIPLIER = 1.05;
 export const BILLING_USD_TO_SGD_RATE = 1.4;
 export const OPENROUTER_CREDIT_PURCHASE_FEE_MULTIPLIER = 1.055;
@@ -7,12 +7,22 @@ export const BILLING_ACCESS_TIERS = ['standard', 'builder'] as const;
 export type BillingAccessTier = (typeof BILLING_ACCESS_TIERS)[number];
 
 /**
- * Local bare-metal cost allocation. The three shares add to 100%, so CPU,
- * memory, and disk are never charged as three copies of the same server bill.
+ * Tenant-visible usage prices. Compute is one isolate-second: the isolate already
+ * hard-walls CPU time and RAM together, so memory is not a separate meter.
+ * Disc and files are GB-months converted to GB-hours over a 730-hour month.
+ */
+export const COMPUTE_SGD_PER_SECOND = 0.0005;
+export const DISC_SGD_PER_GB_MONTH = 3;
+export const FILES_SGD_PER_GB_MONTH = 0.25;
+export const HOURS_PER_BILLING_MONTH = 730;
+
+/**
+ * Local bare-metal cost allocation, kept for capacity planning. It is not a
+ * customer-facing meter split: RAM is bundled into compute seconds.
  */
 export const LOCAL_CLOUD_RATE_CARD = {
 	serverMonthlyCostSgd: 149.99,
-	hoursPerMonth: 730,
+	hoursPerMonth: HOURS_PER_BILLING_MONTH,
 	cpuCores: 6,
 	ramGb: 32,
 	diskGb: 894,

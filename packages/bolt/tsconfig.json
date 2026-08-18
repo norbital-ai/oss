@@ -1,0 +1,11 @@
+{
+	"extends": "@norbital-ai/config/svelte.json",
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		"target": "ES2024",
+		"paths": { "$lib/*": ["./src/*"] }
+	},
+	"include": ["src/**/*.ts", "src/**/*.svelte"],
+	"exclude": ["build", "tests"]
+}

@@ -1,17 +1,14 @@
 import CollectionTableCheckbox from './component/row-selection/collection-table-checkbox.svelte';
 import { renderComponent } from '#lib/utils';
-import { z } from 'zod';
-import { typeGuard } from '@norbital-ai/std/schema';
+import { isPlainRecord } from '../collection-table-row-query.js';
 import { uniqBy } from 'es-toolkit/array';
 import { omit } from 'es-toolkit/object';
 import { PersistedState, watch } from 'runed';
 import type { Translate } from '../../data-renderer/index.js';
 
-const looseRecordSchema = z.record(z.string(), z.unknown());
-
 function getPath(obj: unknown, path: string): unknown {
 	return path.split('.').reduce((o: unknown, k: string) => {
-		if (!typeGuard(looseRecordSchema, o)) return undefined;
+		if (!isPlainRecord(o)) return undefined;
 		return o[k];
 	}, obj);
 }
@@ -184,6 +181,8 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 
 	data = $state<T[]>([]);
 	totalRows = $state<number>(0);
+	/** Domain freeze: locked rows stay visible but cannot join a bulk selection. */
+	rowLocked: (row: T) => boolean = () => false;
 
 	condition!: TableState<TCondition>;
 	sort!: TableState<TableSortEntry[]>;
@@ -283,15 +282,14 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 
 		this.rowInstances = $derived(this.data.map((raw, index) => this.createRowInstance(raw, index)));
 		this.rowIds = $derived(this.rowInstances.map((r) => r.id));
-		this.pageSelectionState = $derived({
-			selectedCount: Object.values(this.rowSelection.current).filter(Boolean).length,
-			isAllSelected:
-				this.rowInstances.length > 0 &&
-				Object.values(this.rowSelection.current).filter(Boolean).length ===
-					this.rowInstances.length,
-			isSomeSelected:
-				Object.values(this.rowSelection.current).filter(Boolean).length > 0 &&
-				Object.values(this.rowSelection.current).filter(Boolean).length < this.rowInstances.length
+		this.pageSelectionState = $derived.by(() => {
+			const selectable = this.rowInstances.filter((row) => !this.rowLocked(row.raw));
+			const selectedCount = selectable.filter((row) => this.rowSelection.current[row.id]).length;
+			return {
+				selectedCount,
+				isAllSelected: selectable.length > 0 && selectedCount === selectable.length,
+				isSomeSelected: selectedCount > 0 && selectedCount < selectable.length
+			};
 		});
 		this.isAllPageRowsSelected = $derived(Boolean(this.pageSelectionState.isAllSelected));
 		this.isSomePageRowsSelected = $derived(Boolean(this.pageSelectionState.isSomeSelected));
@@ -553,6 +551,8 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	}
 
 	toggleRowSelection(rowId: string) {
+		const instance = this.rowInstances.find((row) => row.id === rowId);
+		if (instance && this.rowLocked(instance.raw)) return;
 		const current = this.rowSelection.current;
 		if (current[rowId]) {
 			this.rowSelection.current = omit(current, [rowId]);
@@ -565,7 +565,10 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	toggleAllPageRowsSelected(select: boolean) {
 		if (select) {
 			const next = { ...this.rowSelection.current };
-			for (const row of this.rowInstances) next[row.id] = true;
+			for (const row of this.rowInstances) {
+				if (this.rowLocked(row.raw)) continue;
+				next[row.id] = true;
+			}
 			this.rowSelection.current = next;
 		} else {
 			this.rowSelection.current = {};
@@ -745,7 +748,8 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 export function withSelectionColumn<TData extends Record<string, unknown>, TCondition = unknown>(
 	cols: TCreateColumnProps<TData, TCondition>[],
 	enabled: boolean,
-	t?: Translate
+	t?: Translate,
+	isLocked?: (row: RowAPI<TData, TCondition>) => boolean
 ): TCreateColumnProps<TData, TCondition>[] {
 	if (!enabled) return cols.slice();
 
@@ -765,6 +769,7 @@ export function withSelectionColumn<TData extends Record<string, unknown>, TCond
 					renderComponent(CollectionTableCheckbox, {
 						controlledChecked: true,
 						checked: row.isSelected,
+						disabled: isLocked?.(row) === true,
 						onCheckedChange: () => row.toggleSelection(),
 						'aria-label': t ? t('table.selectRow') : 'Select row'
 					}),

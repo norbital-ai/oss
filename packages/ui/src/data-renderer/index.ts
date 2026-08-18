@@ -1,6 +1,6 @@
 export { default as DataRenderer } from './data-renderer.svelte';
 export type { DataRendererProps } from './data-renderer.types.js';
-export type { CollectionField } from '@norbital-ai/platform-utils/collection';
+export type { CollectionField } from '@norbital-ai/std/collection';
 export { formatDataValue, formatStructuredValue, type Translate } from './data-renderer.utils.js';
 export {
 	getDataRendererRuntimeContext,

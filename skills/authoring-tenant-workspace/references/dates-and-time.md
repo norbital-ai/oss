@@ -21,9 +21,9 @@ occurrence. Never use a fixed UTC offset as timezone identity; daylight-saving r
 
 ## Storage and wire rules
 
-- Let Pod authoring own storage: `timestamp()` is PostgreSQL `timestamptz`; do not import Drizzle's
+- Let Bolt authoring own storage: `timestamp()` is PostgreSQL `timestamptz`; do not import Drizzle's
   raw timestamp builder.
-- `clockTime()` is Pod's native wall-clock semantic type. It intentionally uses canonical `HH:mm`
+- `clockTime()` is Bolt's native wall-clock semantic type. It intentionally uses canonical `HH:mm`
   text storage so PostgreSQL, the local replica, JSON, and `<input type="time">` share one value
   without driver-added seconds or timezone behavior.
 - Send instants as canonical UTC ISO (`2026-07-26T01:30:00.000Z`). Reject unzoned strings such as
@@ -42,7 +42,7 @@ occurrence. Never use a fixed UTC offset as timezone identity; daylight-saving r
 
 ## Client and renderer rules
 
-- Use the schema-derived Pod renderers. They display instants in the viewer's timezone and emit UTC
+- Use the schema-derived Bolt renderers. They display instants in the viewer's timezone and emit UTC
   after local date/time editing.
 - Do not append `Z` to a local input; that falsely labels local wall time as UTC. Resolve it with the
   client timezone, then serialize the resulting instant.

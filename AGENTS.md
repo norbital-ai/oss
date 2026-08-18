@@ -8,10 +8,6 @@ This pnpm and Turborepo monorepo owns all `@norbital-ai/*` packages.
 > the only place `refs/heads/templates/*` is published from; this repository no longer publishes
 > them. **Do not author template changes here.**
 >
-> `template_workspaces/` is a test-only fixture snapshot: Pod's compiler and runtime suites boot it
-> against the current workspace packages. Edits reach no tenant and no website; authored template
-> source lives only in the two template repositories above.
->
 > Template marketing image (website gallery / `og:image`): `<key>/assets/thumbnail.svg`. That is
 > not `pod:banner` / `pod:thumbnail`. See
 > `skills/authoring-tenant-workspace/references/template-repository.md`.

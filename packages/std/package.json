@@ -71,13 +71,13 @@
 			"types": "./build/reckon/index.d.ts",
 			"default": "./build/reckon/index.js"
 		},
+		"./secret": {
+			"types": "./build/secret/index.d.ts",
+			"default": "./build/secret/index.js"
+		},
 		"./result": {
 			"types": "./build/result/index.d.ts",
 			"default": "./build/result/index.js"
-		},
-		"./schema": {
-			"types": "./build/schema/index.d.ts",
-			"default": "./build/schema/index.js"
 		},
 		"./string": {
 			"types": "./build/string/index.d.ts",
@@ -103,13 +103,14 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/std",
-		"lint": "tsc -p tsconfig.json --noEmit"
+		"lint": "tsc -p tsconfig.json --noEmit",
+		"test": "node --test tests/*.test.ts"
 	},
 	"dependencies": {
 		"@marcbachmann/cel-js": "^8.0.0",
-		"@standard-schema/spec": "^1.1.0",
 		"dedent": "^1.7.2",
-		"js-yaml": "^5.2.1"
+		"js-yaml": "^5.2.1",
+		"effect": "4.0.0-rc.109"
 	},
 	"devDependencies": {
 		"@norbital-ai/config": "workspace:*",

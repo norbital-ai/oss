@@ -9,10 +9,8 @@
 	import type { Snippet } from 'svelte';
 
 	type Props = {
-		/** Bindable open state */
+		/** Bindable open state; defaults to open, so `open={false}` is how a node starts collapsed. */
 		open?: boolean;
-		/** Initial open state, will override open */
-		defaultOpen?: boolean;
 		/** Additional CSS classes */
 		class?: string;
 		/** Content snippet for the node header */

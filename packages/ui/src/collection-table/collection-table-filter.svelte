@@ -3,8 +3,8 @@
 		CollectionFilter,
 		CollectionRecord,
 		CollectionRelationOptions
-	} from '@norbital-ai/platform-utils/collection';
-	import { resolveRecordLabel } from '@norbital-ai/platform-utils/manifest/context';
+	} from '@norbital-ai/std/collection';
+	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { PersistedState } from 'runed';

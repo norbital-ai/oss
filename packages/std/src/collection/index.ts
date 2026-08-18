@@ -14,9 +14,8 @@
  * dependency of everything that merely names a column — a template's `+model.ts`, the compiler's
  * index planning, a server-side query — none of which render anything.
  *
- * Deliberately zod-free. The wire schemas that validate these shapes stay with the transport that
- * speaks them; here the TypeScript type is the source of truth and a schema pins itself to it with
- * `satisfies z.ZodType<…>`, so the two cannot drift without failing to compile.
+ * Deliberately schema-free. The wire schemas that validate these shapes stay with the transport
+ * that speaks them; here the TypeScript type is the source of truth.
  */
 
 export { labelTermText, resolveRecordLabel } from './record-label.js';
@@ -200,11 +199,8 @@ export interface CollectionRelationOptions<TRow extends object = CollectionRecor
 /**
  * One filter condition as the wire carries it.
  *
- * Stated structurally rather than inferred from the zod schema that validates it, because the
- * schema needs a transport and the vocabulary does not — a table rendering filter chips has no
- * business importing a wire validator to learn what a filter is. `CollectionFilterSchema` declares
- * `satisfies z.ZodType<CollectionFilter>` against this, so the validator cannot accept an operator
- * this type does not name.
+ * Stated structurally, because the schema needs a transport and the vocabulary does not — a table
+ * rendering filter chips has no business importing a wire validator to learn what a filter is.
  *
  * `operator` stays an inline union rather than an exported alias: the filter builder already
  * extends it as `CollectionFilter['operator'] | 'contains'`, and a second exported name for the

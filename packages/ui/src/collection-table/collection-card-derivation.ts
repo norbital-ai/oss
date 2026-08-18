@@ -1,4 +1,4 @@
-import type { CollectionField } from '@norbital-ai/platform-utils/collection';
+import type { CollectionField } from '@norbital-ai/std/collection';
 import { humanize } from '@norbital-ai/std/string';
 import { formatDataValue, type Translate } from '../data-renderer/data-renderer.utils.js';
 
@@ -21,13 +21,24 @@ export function isSystemField(name: string): boolean {
 	return name.startsWith('norbital_');
 }
 
+/**
+ * The framework row key, when the value is a persisted row rather than a draft.
+ *
+ * This is the single place the framework reads `norbital_id` off a caller-supplied object, so an
+ * authored surface never has to: it hands over the record it already has and the framework tells
+ * create and update apart from the presence of the key.
+ */
+export function optionalCollectionRecordId(record: object | undefined | null): string | undefined {
+	if (record == null) return undefined;
+	const value = Reflect.get(record, 'norbital_id');
+	return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
 /** Resolve a required runtime row key before issuing a selection-scoped mutation. */
 export function collectionRecordId(record: object): string {
-	const value = Reflect.get(record, 'norbital_id');
-	if (typeof value !== 'string' || value.length === 0) {
-		throw new Error('Cannot mutate a record without a norbital_id.');
-	}
-	return String(value);
+	const value = optionalCollectionRecordId(record);
+	if (value === undefined) throw new Error('Cannot mutate a record without a norbital_id.');
+	return value;
 }
 
 /** Field kinds whose form control spans the full intrinsic grid width (RFC IV.2 / V.4). */
@@ -135,23 +146,12 @@ export function deriveAutoCard(
 	return { title, subtitles, badge };
 }
 
-/** Display metadata for an enum value on auto cards; colours come from view lanes, not schema. */
-export interface EnumDisplayOption {
-	readonly label: string;
-	readonly color?: string;
-}
-
-/** Humanized enum label for badge rendering when no view lane colour is available. */
-export function findEnumOption(
-	field: CollectionField,
-	value: unknown
-): EnumDisplayOption | undefined {
-	void field;
-	if (value == null || value === '') return undefined;
-	return { label: humanize(String(value)) };
-}
-
-/** Format one field from an auto-card model without coupling the view to a renderer component. */
+/**
+ * Format one field from an auto-card model without coupling the view to a renderer component.
+ *
+ * This is the schema's answer, and the default `CardText` for a surface that has no other. A
+ * surface with authored columns has a better one: see `CardText`.
+ */
 export function formatAutoCardField(
 	fields: readonly CollectionField[],
 	name: string,
@@ -162,36 +162,41 @@ export function formatAutoCardField(
 	return field ? formatDataValue(field, Reflect.get(record, name), undefined, t) : '';
 }
 
+/**
+ * How one record's field becomes a line of card text.
+ *
+ * A card role names a field, but only the surface knows how that field reads: the table has the
+ * authored `<Column render>` that turns `leave_type_id` into `MEDICAL_LEAVE · Medical leave`, while
+ * the kanban derives its card from field structure alone and has nothing but the schema formatter.
+ * Passing the resolution in keeps that difference at the call site instead of teaching this module
+ * about columns.
+ */
+export type CardText = (name: string) => string;
+
 /** Join the non-empty subtitle values selected by an auto-card model. */
-export function formatAutoCardSubtitle(
-	model: AutoCardModel,
-	fields: readonly CollectionField[],
-	record: object,
-	t?: Translate
-): string {
+export function formatAutoCardSubtitle(model: AutoCardModel, text: CardText): string {
 	return model.subtitles
-		.map((name) => formatAutoCardField(fields, name, record, t))
-		.filter((text) => text && text !== '—')
+		.map(text)
+		.filter((value) => value && value !== '—')
 		.join(' · ');
 }
 
-/** Resolve the optional enum badge selected by an auto-card model. */
+/**
+ * Resolve the optional badge selected by an auto-card model.
+ *
+ * The record is still read directly: a badge is dropped when the field is empty, which is not the
+ * same as a resolver that formats an empty value into a dash.
+ */
 export function formatAutoCardBadge(
 	model: AutoCardModel,
-	fields: readonly CollectionField[],
 	record: object,
-	t?: Translate
-): { label: string; color?: string } | null {
+	text: CardText
+): { label: string } | null {
 	if (!model.badge) return null;
-	const field = fields.find((candidate) => candidate.name === model.badge);
-	if (!field) return null;
 	const value = Reflect.get(record, model.badge);
 	if (value == null || value === '') return null;
-	const option = findEnumOption(field, value);
-	return {
-		label: option?.label ?? formatDataValue(field, value, undefined, t),
-		color: option?.color
-	};
+	const label = text(model.badge);
+	return label && label !== '—' ? { label } : null;
 }
 
 /** A kanban lane derived from a groupBy field's enum values in model order (RFC V.3). */

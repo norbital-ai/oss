@@ -3,6 +3,9 @@ import type { FeatureColorKey } from '../feature-colors/index.js';
 export const WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS =
 	'text-micro font-normal uppercase tracking-wide sm:text-tiny';
 export const WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS = 'text-xs font-normal sm:text-micro';
+/** Shared right-edge slot for expand chevrons and host-plugin badges. */
+export const WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS =
+	'pointer-events-none absolute top-1/2 right-2 flex -translate-y-1/2 items-center justify-center';
 
 export interface WorkspaceOrganizationOption {
 	readonly id: string;
@@ -27,6 +30,10 @@ export interface WorkspaceNavigationItem {
 	/** Compact provenance label for a host-supplied navigation surface. */
 	readonly badge?: string;
 	readonly featureColor?: FeatureColorKey;
+	/** Authored app description, shown by the omni finder beneath the label. */
+	readonly description?: string | null;
+	/** Authored app thumbnail, shown by the omni finder and the overview cards. */
+	readonly thumbnail?: string | null;
 	readonly children?: readonly WorkspaceNavigationItem[];
 }
 

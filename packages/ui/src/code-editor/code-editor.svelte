@@ -1,12 +1,11 @@
 <script lang="ts">
-	import { javascript } from '@codemirror/lang-javascript';
-	import { json } from '@codemirror/lang-json';
 	import { Annotation, EditorState, StateEffect, type Extension } from '@codemirror/state';
 	import { EditorView } from '@codemirror/view';
 	import { cn } from '#lib/utils';
 	import { basicSetup } from 'codemirror';
 	import type { Action } from 'svelte/action';
 	import { fromAction } from 'svelte/attachments';
+	import { languageExtension } from './languages.js';
 	import { buildCodeEditorTheme, codeEditorShellClass } from './theme.js';
 	import type { CodeEditorLanguage } from './code-editor.types.js';
 
@@ -41,24 +40,14 @@
 		onValueChange?: (value: string) => void;
 	};
 
-	function languageExtension(editorLanguage: CodeEditorLanguage): Extension {
-		switch (editorLanguage) {
-			case 'javascript':
-				return javascript();
-			case 'json':
-				return json();
-			default:
-				return [];
-		}
-	}
-
 	function buildExtensions(
 		parameters: EditorParameters,
 		handleDocumentChange: (value: string) => void
 	): Extension[] {
 		return [
 			basicSetup,
-			buildCodeEditorTheme({ invalid: parameters.invalid }),
+			...(parameters.language === 'markdown' ? [EditorView.lineWrapping] : []),
+			buildCodeEditorTheme({ invalid: parameters.invalid, language: parameters.language }),
 			languageExtension(parameters.language),
 			EditorState.readOnly.of(parameters.readonly),
 			EditorView.editable.of(!parameters.readonly),

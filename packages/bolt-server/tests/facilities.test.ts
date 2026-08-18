@@ -1,0 +1,441 @@
+import { assert, it } from '@effect/vitest';
+import type { Schema } from 'effect';
+import {
+	AIRequest,
+	CommunicationRequest,
+	ConnectorRequest,
+	DatabaseRequest,
+	EffectId,
+	FileRequest,
+	HostToolRequest,
+	InvocationId,
+	TaskRequest,
+	TransportRequest
+} from '@norbital-ai/bolt-protocol';
+import { ConfigProvider, Effect } from 'effect';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { makeAiBinding, makeAiBindingFromConfig } from '../src/facilities/ai.js';
+import {
+	makeCommunicationBinding,
+	makeCommunicationBindingFromConfig
+} from '../src/facilities/communication.js';
+import {
+	makeConnectorBinding,
+	makeConnectorBindingFromConfig
+} from '../src/facilities/connector.js';
+import { makeDatabaseFromConfig, makeLocalDatabase } from '../src/facilities/database.js';
+import { makeFilesBindingFromConfig, makeLocalFilesBinding } from '../src/facilities/files.js';
+import {
+	makeHostToolBinding,
+	makeHostToolBindingFromConfig
+} from '../src/facilities/host-tools.js';
+import { makeTaskBinding, makeTaskBindingFromConfig } from '../src/facilities/tasks.js';
+import { makeMemoryTransport } from '../src/facilities/transport.js';
+
+const metadata = {
+	invocationId: InvocationId.make('invocation-1'),
+	effectId: EffectId.make('effect-1'),
+	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
+	idempotencyKey: 'stable-1'
+};
+
+const signal = new AbortController().signal;
+const withConfiguration = (values: Record<string, string>) =>
+	ConfigProvider.layer(ConfigProvider.fromUnknown(values));
+
+/**
+ * A row crosses the facility boundary as `Json`, so it is narrowed before it is indexed rather than
+ * asserted into a shape the type does not promise. Written as a predicate because `Array.isArray`
+ * does not narrow the readonly array arm of `Json` away on its own.
+ */
+const isJsonObject = (value: Schema.Json | undefined): value is Readonly<Record<string, Schema.Json>> =>
+	value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
+
+it.effect(
+	'executes local PostgreSQL-compatible query and transaction calls',
+	() =>
+		Effect.acquireUseRelease(
+			Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
+			(database) =>
+				Effect.gen(function* () {
+					yield* Effect.tryPromise(() =>
+						database.binding.call(
+							metadata,
+							DatabaseRequest.cases.Query.make({
+								sql: 'create table proof (id integer primary key, label text not null)',
+								parameters: []
+							}),
+							signal
+						)
+					);
+					const inserted = yield* Effect.tryPromise(() =>
+						database.binding.call(
+							metadata,
+							DatabaseRequest.cases.Transaction.make({
+								statements: [
+									{ sql: 'insert into proof values ($1, $2)', parameters: [1, 'one'] },
+									{ sql: 'select * from proof order by id', parameters: [] }
+								]
+							}),
+							signal
+						)
+					);
+					assert.deepStrictEqual(inserted, {
+						_tag: 'Success',
+						value: { rows: [{ id: 1, label: 'one' }], affectedRows: 1 }
+					});
+				}),
+			(database) => Effect.promise(database.close)
+		),
+	30_000
+);
+
+it.effect('returns JSON-safe timestamps from local PGlite queries', () =>
+	Effect.acquireUseRelease(
+		Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
+		(database) =>
+			Effect.gen(function* () {
+				const response = yield* Effect.tryPromise(() =>
+					database.binding.call(
+						metadata,
+						DatabaseRequest.cases.Query.make({ sql: 'select now() as ts', parameters: [] }),
+						signal
+					)
+				);
+				assert.strictEqual(response._tag, 'Success');
+				if (response._tag !== 'Success') return;
+				// A row crosses the facility boundary as `Json`, so it is narrowed before it is indexed
+				// rather than asserted into a shape the type does not actually promise.
+				const [row] = response.value.rows;
+				if (!isJsonObject(row)) throw new Error(`expected a row object, received ${JSON.stringify(row)}`);
+				const ts = row['ts'];
+				assert.strictEqual(typeof ts, 'string');
+				assert.match(String(ts), /^\d{4}-\d{2}-\d{2}T/);
+			}),
+		(database) => Effect.promise(database.close)
+	)
+);
+
+it.effect('executes memory transport Open, Send, Pull, and Close', () =>
+	Effect.gen(function* () {
+		const transport = makeMemoryTransport();
+		const opened = yield* Effect.tryPromise(() =>
+			transport.binding.call(
+				metadata,
+				TransportRequest.cases.Open.make({
+					protocol: 'websocket',
+					direction: 'two-way'
+				}),
+				signal
+			)
+		);
+		assert.strictEqual(opened._tag, 'Success');
+		if (opened._tag !== 'Success') return;
+		const connectionId = opened.value.connectionId;
+		assert.notStrictEqual(connectionId, undefined);
+		assert.strictEqual(transport.activeConnections(), 1);
+
+		const sent = yield* Effect.tryPromise(() =>
+			transport.binding.call(
+				metadata,
+				TransportRequest.cases.Send.make({
+					connectionId: connectionId ?? '',
+					kind: 'text',
+					bytes: new TextEncoder().encode('hello transport')
+				}),
+				signal
+			)
+		);
+		assert.strictEqual(sent._tag, 'Success');
+
+		const pulled = yield* Effect.tryPromise(() =>
+			transport.binding.call(
+				metadata,
+				TransportRequest.cases.Pull.make({ connectionId: connectionId ?? '', maxFrames: 16 }),
+				signal
+			)
+		);
+		assert.strictEqual(pulled._tag, 'Success');
+		if (pulled._tag !== 'Success') return;
+		assert.strictEqual(pulled.value.frames?.length, 1);
+		assert.strictEqual(
+			new TextDecoder().decode(pulled.value.frames?.[0]?.bytes ?? new Uint8Array()),
+			'hello transport'
+		);
+
+		const closed = yield* Effect.tryPromise(() =>
+			transport.binding.call(
+				metadata,
+				TransportRequest.cases.Close.make({ connectionId: connectionId ?? '' }),
+				signal
+			)
+		);
+		assert.strictEqual(closed._tag, 'Success');
+		assert.strictEqual(closed._tag === 'Success' && closed.value.closed, true);
+
+		yield* Effect.promise(transport.close);
+		assert.strictEqual(transport.activeConnections(), 0);
+	})
+);
+
+/**
+ * The other half of the sync engine's push path.
+ *
+ * A stateless invocation never held the browser's connection, so it addresses the topic instead. What
+ * matters is that the frame lands on every connection listening to that topic and on no other, and
+ * that reaching nobody is an ordinary answer rather than a failure — a workspace with no open tab is
+ * the common case.
+ */
+it.effect('fans a memory transport Publish out to the topic, and only that topic', () =>
+	Effect.gen(function* () {
+		const transport = makeMemoryTransport();
+		const open = (topic: string) =>
+			Effect.tryPromise(() =>
+				transport.binding.call(
+					metadata,
+					TransportRequest.cases.Open.make({ protocol: 'sse', direction: 'one-way', topic }),
+					signal
+				)
+			);
+		const idOf = (result: { readonly _tag: string; readonly value?: { readonly connectionId?: string } }) =>
+			result.value?.connectionId ?? '';
+
+		const listenerA = idOf(yield* open('bolt.sync'));
+		const listenerB = idOf(yield* open('bolt.sync'));
+		const bystander = idOf(yield* open('something.else'));
+
+		const published = yield* Effect.tryPromise(() =>
+			transport.binding.call(
+				metadata,
+				TransportRequest.cases.Publish.make({
+					topic: 'bolt.sync',
+					kind: 'text',
+					bytes: new TextEncoder().encode('{"collections":["people"]}')
+				}),
+				signal
+			)
+		);
+		assert.strictEqual(published._tag, 'Success');
+		if (published._tag !== 'Success') return;
+		assert.strictEqual(published.value.delivered, 2);
+
+		const pull = (connectionId: string) =>
+			Effect.tryPromise(() =>
+				transport.binding.call(
+					metadata,
+					TransportRequest.cases.Pull.make({ connectionId, maxFrames: 16 }),
+					signal
+				)
+			);
+		for (const connectionId of [listenerA, listenerB]) {
+			const pulled = yield* pull(connectionId);
+			assert.strictEqual(pulled._tag, 'Success');
+			if (pulled._tag !== 'Success') return;
+			assert.strictEqual(pulled.value.frames?.length, 1);
+			assert.strictEqual(
+				new TextDecoder().decode(pulled.value.frames?.[0]?.bytes ?? new Uint8Array()),
+				'{"collections":["people"]}'
+			);
+		}
+		// A tenant listening on another topic must not learn that this one changed.
+		const unrelated = yield* pull(bystander);
+		assert.strictEqual(unrelated._tag === 'Success' && (unrelated.value.frames?.length ?? 0), 0);
+
+		const toNobody = yield* Effect.tryPromise(() =>
+			transport.binding.call(
+				metadata,
+				TransportRequest.cases.Publish.make({
+					topic: 'nobody.here',
+					kind: 'text',
+					bytes: new TextEncoder().encode('{}')
+				}),
+				signal
+			)
+		);
+		// Reported, not failed: the write it announces has already committed.
+		assert.strictEqual(toNobody._tag, 'Success');
+		assert.strictEqual(toNobody._tag === 'Success' && toNobody.value.delivered, 0);
+
+		yield* Effect.promise(transport.close);
+	})
+);
+
+it.effect('keeps local file keys under the configured root', () =>
+	Effect.acquireUseRelease(
+		Effect.tryPromise(() => mkdtemp(join(tmpdir(), 'bolt-server-files-'))),
+		(root) =>
+			Effect.gen(function* () {
+				const files = makeLocalFilesBinding({ rootDirectory: root });
+				const written = yield* Effect.tryPromise(() =>
+					files.call(
+						metadata,
+						FileRequest.cases.Write.make({
+							key: 'documents/proof.txt',
+							bytes: new TextEncoder().encode('proof')
+						}),
+						signal
+					)
+				);
+				assert.strictEqual(written._tag, 'Success');
+
+				const read = yield* Effect.tryPromise(() =>
+					files.call(metadata, FileRequest.cases.Read.make({ key: 'documents/proof.txt' }), signal)
+				);
+				assert.strictEqual(
+					read._tag === 'Success' && read.value.bytes !== undefined
+						? new TextDecoder().decode(read.value.bytes)
+						: undefined,
+					'proof'
+				);
+				const listed = yield* Effect.tryPromise(() =>
+					files.call(metadata, FileRequest.cases.List.make({ prefix: 'documents' }), signal)
+				);
+				assert.deepStrictEqual(listed, {
+					_tag: 'Success',
+					value: { keys: ['documents/proof.txt'] }
+				});
+
+				const escaped = yield* Effect.tryPromise(() =>
+					files.call(metadata, FileRequest.cases.Read.make({ key: '../outside.txt' }), signal)
+				);
+				assert.strictEqual(escaped._tag, 'Failure');
+			}),
+		(root) => Effect.promise(() => rm(root, { recursive: true, force: true }))
+	)
+);
+
+it.effect('loads production database and file providers through Effect Config', () =>
+	Effect.acquireUseRelease(
+		Effect.gen(function* () {
+			const database = yield* makeDatabaseFromConfig();
+			const files = yield* makeFilesBindingFromConfig();
+			return { database, files };
+		}).pipe(
+			Effect.provide(
+				withConfiguration({
+					BOLT_SERVER_DATABASE_PROVIDER: 'postgres',
+					BOLT_SERVER_DATABASE_URL: 'postgres://unused:unused@127.0.0.1:1/unused',
+					BOLT_SERVER_DATABASE_SSL: 'false',
+					BOLT_SERVER_FILES_PROVIDER: 'local',
+					BOLT_SERVER_FILES_ROOT: '/tmp/bolt-server-configured-files'
+				})
+			)
+		),
+		({ database, files }) =>
+			Effect.gen(function* () {
+				const controller = new AbortController();
+				controller.abort(new Error('cancelled before connection'));
+				const response = yield* Effect.tryPromise(() =>
+					database.binding.call(
+						metadata,
+						DatabaseRequest.cases.Query.make({ sql: 'select 1', parameters: [] }),
+						controller.signal
+					)
+				);
+				assert.strictEqual(response._tag, 'Failure');
+				assert.strictEqual(typeof files.call, 'function');
+			}),
+		({ database }) => Effect.promise(database.close)
+	)
+);
+
+it.effect('adapts AI, communication, connector, task and host-tool providers', () =>
+	Effect.gen(function* () {
+		const ai = makeAiBinding({ call: async () => ({ output: { models: ['test-model'] } }) });
+		const communication = makeCommunicationBinding({
+			call: async () => ({ receipt: { id: 'message-1' } })
+		});
+		const connector = makeConnectorBinding({
+			call: async (_metadata, input) => ({ output: { operation: input.operation } })
+		});
+		const tasks = makeTaskBinding({ call: async () => ({ taskId: 'task-1' }) });
+		const hostTools = makeHostToolBinding({
+			call: async (_metadata, input) => ({ output: { tool: input.tool } })
+		});
+
+		const results = yield* Effect.all([
+			Effect.tryPromise(() => ai.call(metadata, AIRequest.cases.Models.make({}), signal)),
+			Effect.tryPromise(() =>
+				communication.call(
+					metadata,
+					CommunicationRequest.cases.Send.make({
+						channel: 'test',
+						recipient: 'user-1',
+						payload: { text: 'hello' }
+					}),
+					signal
+				)
+			),
+			Effect.tryPromise(() =>
+				connector.call(
+					metadata,
+					ConnectorRequest.make({ connector: 'test', operation: 'read', input: {} }),
+					signal
+				)
+			),
+			Effect.tryPromise(() =>
+				tasks.call(
+					metadata,
+					TaskRequest.cases.Enqueue.make({ command: 'agent.turn', input: {} }),
+					signal
+				)
+			),
+			Effect.tryPromise(() =>
+				hostTools.call(
+					metadata,
+					HostToolRequest.make({ tool: 'workspace.inspect', input: {} }),
+					signal
+				)
+			)
+		]);
+		assert.deepStrictEqual(
+			results.map((result) => result._tag),
+			['Success', 'Success', 'Success', 'Success', 'Success']
+		);
+	})
+);
+
+it.effect('constructs each extension provider selected by Effect Config', () =>
+	Effect.gen(function* () {
+		let selectedEndpoint: string | undefined;
+		const ai = yield* makeAiBindingFromConfig({
+			fixture: {
+				make: (settings) => {
+					selectedEndpoint = settings.endpoint;
+					return Effect.succeed({ call: async () => ({ output: {} }) });
+				}
+			}
+		});
+		const communication = yield* makeCommunicationBindingFromConfig({
+			fixture: { make: () => Effect.succeed({ call: async () => ({}) }) }
+		});
+		const connector = yield* makeConnectorBindingFromConfig({
+			fixture: { make: () => Effect.succeed({ call: async () => ({ output: {} }) }) }
+		});
+		const tasks = yield* makeTaskBindingFromConfig({
+			fixture: { make: () => Effect.succeed({ call: async () => ({ taskId: 'configured' }) }) }
+		});
+		const hostTools = yield* makeHostToolBindingFromConfig({
+			fixture: { make: () => Effect.succeed({ call: async () => ({ output: {} }) }) }
+		});
+		assert.strictEqual(selectedEndpoint, 'https://ai.invalid');
+		assert.deepStrictEqual(
+			[ai, communication, connector, tasks, hostTools].map((binding) => typeof binding.call),
+			['function', 'function', 'function', 'function', 'function']
+		);
+	}).pipe(
+		Effect.provide(
+			withConfiguration({
+				BOLT_SERVER_AI_PROVIDER: 'fixture',
+				BOLT_SERVER_AI_ENDPOINT: 'https://ai.invalid',
+				BOLT_SERVER_AI_CREDENTIAL: 'secret-not-exposed',
+				BOLT_SERVER_COMMUNICATION_PROVIDER: 'fixture',
+				BOLT_SERVER_CONNECTOR_PROVIDER: 'fixture',
+				BOLT_SERVER_TASKS_PROVIDER: 'fixture',
+				BOLT_SERVER_HOST_TOOLS_PROVIDER: 'fixture'
+			})
+		)
+	)
+);

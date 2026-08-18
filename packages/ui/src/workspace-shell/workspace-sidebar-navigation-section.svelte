@@ -11,20 +11,23 @@
 		items,
 		open,
 		href,
+		class: className,
 		onNavigate,
 		onPrefetch
 	}: {
 		label: string;
 		items: readonly WorkspaceNavigationItem[];
 		open: boolean;
-		href?: string;
-		onNavigate?: (href: string) => void;
-		onPrefetch?: (href: string) => void;
+		href?: string | undefined;
+		/** Padding override for a section that follows another group and needs no gap of its own. */
+		class?: string | undefined;
+		onNavigate?: (href: string) => void | undefined;
+		onPrefetch?: (href: string) => void | undefined;
 	} = $props();
 </script>
 
 {#if items.length > 0}
-	<Sidebar.Group>
+	<Sidebar.Group class={className}>
 		<Sidebar.GroupLabel class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>
 			{#if href}
 				<a

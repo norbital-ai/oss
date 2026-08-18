@@ -4,7 +4,7 @@ import type {
 	CollectionQuery,
 	CollectionRegistry,
 	CollectionRow
-} from '@norbital-ai/platform-utils/collection';
+} from '@norbital-ai/std/collection';
 import type { Snippet } from 'svelte';
 import type { AuthoredLaneInput } from '../collection-table/collection-card-derivation.js';
 import type {
@@ -37,6 +37,8 @@ export interface CollectionKanbanProps<
 	rows?: number;
 	query?: CollectionQuery<CollectionRow<TCollections[TName]>>;
 	selectable?: boolean;
+	title?: string;
+	description?: string;
 	exportPipelines?: readonly CollectionTablePipeline<CollectionRow<TCollections[TName]>>[];
 	importPipelines?: readonly CollectionTablePipeline<CollectionRow<TCollections[TName]>>[];
 	integrations?: readonly CollectionTableIntegrationStatus[];

@@ -15,8 +15,8 @@
 		CollectionRecord,
 		CollectionUpdateInput,
 		RemoteQuery
-	} from '@norbital-ai/platform-utils/collection';
-	import { resolveRecordLabel } from '@norbital-ai/platform-utils/manifest/context';
+	} from '@norbital-ai/std/collection';
+	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
@@ -80,10 +80,14 @@
 	import { collectionTableColumnCanSort } from './collection-table.types.js';
 	import { fitCollectionColumnWidth } from './collection-table-fit.js';
 	import { badgeColorClass } from './collection-card-colors.js';
-	import { getCollectionSurfaceRuntime, resolveCollectionSurface } from '#lib/collection-runtime';
 	import {
 		getCollectionClientForSurface,
-		setCollectionClientContext
+		getCollectionRecordScope,
+		getCollectionSurfaceRuntime,
+		resolveCollectionSurface,
+		resolveCollectionViewKey,
+		setCollectionClientContext,
+		setCollectionRecordScope
 	} from '#lib/collection-runtime';
 
 	type Row = TRow;
@@ -114,13 +118,16 @@
 		query,
 		initialFilters = [],
 		disabled = false,
+		isRowLocked,
+		rowLockReason,
 		selectable = false,
 		class: className,
+		rootClass,
+		borderless = false,
 		rowActions,
 		emptyPlaceholder,
 		title,
 		description,
-		searchPlaceholder,
 		features = {},
 		exportPipelines = [],
 		importPipelines = [],
@@ -148,8 +155,13 @@
 		client.db[collection] as CollectionOperations<CollectionType<Row, object, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
 	);
 	const recordIdField = 'norbital_id';
+	const recordScope = getCollectionRecordScope();
 	const resolvedView = $derived(
-		view ?? `${surfaceRuntime?.appId() ?? 'unhosted'}:${String(collection)}`
+		resolveCollectionViewKey(
+			view,
+			`${surfaceRuntime?.appId() ?? 'unhosted'}:${String(collection)}`,
+			recordScope?.()
+		)
 	);
 	const resolvedDetailRouteKey = $derived(
 		createCollectionTableRouteKey({
@@ -191,6 +203,7 @@
 		conditionDefault: undefined,
 		parseCondition: (condition) => condition
 	});
+	tableApi.rowLocked = (row) => isRowLocked?.(row.record) === true;
 	/**
 	 * The one search + filter + page model this table runs on.
 	 *
@@ -273,7 +286,8 @@
 				};
 			}),
 			effectiveSelectable,
-			t as Translate
+			t as Translate,
+			(row) => isRowLocked?.(row.raw.record) === true
 		)
 	);
 
@@ -328,14 +342,29 @@
 	);
 	const createLabel = $derived(createActionLabel(String(collection), undefined, t as Translate));
 
+	/**
+	 * One card line, resolved the way the wide grid resolves the same cell.
+	 *
+	 * A card role names a column, and on a relation column only that column's authored `render`
+	 * knows how to read the row — `leave_type_id` is a uuid until `render` reaches through the
+	 * joined `leave_request_type`. Asking `renderCell` is what keeps the narrow list and the wide
+	 * grid saying the same thing about the same record; formatting the raw field instead is how the
+	 * list came to show operators raw uuids on any surface under 48rem.
+	 *
+	 * Only text answers are taken. A column may render a component or a snippet, and a card line is
+	 * a single truncating row with nowhere to mount one — and a column with no `render` at all
+	 * resolves to the default cell snippet, which is exactly the case the schema formatter covers.
+	 */
+	function cardText(name: string, record: Row): string {
+		const column = activeColumns.find((candidate) => String(candidate.key) === name);
+		const rendered = column ? renderCell(column, record) : undefined;
+		if (typeof rendered === 'string' && rendered !== '') return rendered;
+		return formatAutoCardField(definition.fields, name, record, t as Translate);
+	}
+
 	function autoCardTitle(record: Row): string {
 		if (autoCard.title.kind === 'field') {
-			const text = formatAutoCardField(
-				definition.fields,
-				autoCard.title.name,
-				record,
-				t as Translate
-			);
+			const text = cardText(autoCard.title.name, record);
 			if (text && text !== '—') return text;
 		}
 		return recordTitle(record);
@@ -529,6 +558,9 @@
 			return undefined;
 		return record;
 	});
+	// A table nested in this table's detail surface belongs to the open record; it persists its view
+	// against that record instead of sharing one key across every parent row.
+	setCollectionRecordScope(() => activeRecordId);
 	const activeRecordLoading = $derived(Boolean(queries.record?.loading));
 	const activeRecordError = $derived(queries.record?.error?.message);
 	// A missing query resource or an undefined first value is still "unknown", never an empty
@@ -633,9 +665,16 @@
 		if (Reflect.get(row.record, 'norbital_pending_sync') === true) {
 			return { borderClass: 'border-warning', tooltip: t('table.pendingSync') };
 		}
-		return typeof Reflect.get(row.record, 'norbital_approval_id') === 'string'
-			? { borderClass: 'border-brand', tooltip: t('table.pendingApproval') }
-			: null;
+		if (typeof Reflect.get(row.record, 'norbital_approval_id') === 'string') {
+			return { borderClass: 'border-brand', tooltip: t('table.pendingApproval') };
+		}
+		if (isRowLocked?.(row.record) === true) {
+			return {
+				borderClass: 'border-muted-foreground',
+				tooltip: rowLockReason?.(row.record) ?? t('table.recordLocked')
+			};
+		}
+		return null;
 	}
 
 	function isRecordDetailActive(rowId: string): boolean {
@@ -655,7 +694,16 @@
 	}
 
 	function recordTitle(record: Row): string {
-		const label = resolveRecordLabel(definition.recordLabel ?? null, record);
+		// Bolt declares `recordLabel` as a plain column name — `recordLabel: 'summary'`. The CEL
+		// resolver evaluates it as an expression and returns null for a bare identifier, so the title
+		// fell through to the first non-uuid column, which on a leave request is the raw event JSON.
+		// A bare name is read as what it is; anything else is still an expression.
+		const declared = definition.recordLabel ?? null;
+		if (declared && /^[A-Za-z_][A-Za-z0-9_]*$/.test(declared)) {
+			const value = Reflect.get(record, declared);
+			if (typeof value === 'string' && value.trim() !== '') return value;
+		}
+		const label = resolveRecordLabel(declared, record);
 		if (label) return label;
 		const fallbackField = definition.fields.find(
 			(field) => !isSystemField(field.name) && field.kind !== 'uuid' && !field.name.endsWith('_id')
@@ -916,7 +964,6 @@
 			? { description, ...(query?.where ? { appliedContent: appliedFilters } : {}) }
 			: undefined}
 		{disabled}
-		{searchPlaceholder}
 		features={{ search: searchEnabled, filter: filterEnabled }}
 		{initialFilters}
 		filterPersistenceKey={resolvedView}
@@ -947,8 +994,8 @@
 {/snippet}
 
 {#snippet autoListCard(record: Row)}
-	{@const subtitle = formatAutoCardSubtitle(autoCard, definition.fields, record, t as Translate)}
-	{@const badge = formatAutoCardBadge(autoCard, definition.fields, record, t as Translate)}
+	{@const subtitle = formatAutoCardSubtitle(autoCard, (name) => cardText(name, record))}
+	{@const badge = formatAutoCardBadge(autoCard, record, (name) => cardText(name, record))}
 	<Inline align="start" justify="between" gap="md">
 		<Stack gap="xs">
 			<p class="min-w-0 truncate font-medium">{autoCardTitle(record)}</p>
@@ -961,7 +1008,7 @@
 			<span
 				class={cn(
 					'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-xs font-medium',
-					badgeColorClass(badge.color)
+					badgeColorClass()
 				)}>{badge.label}</span
 			>
 		{/if}
@@ -981,12 +1028,7 @@
 	{:else if activeRecord}
 		<!-- Default detail surface (RFC V.2/V.6): a schema-derived form bound to the record. -->
 		{#key activeRecordId}
-			<CollectionForm
-				{client}
-				{collection}
-				recordId={activeRecordId}
-				defaultValues={activeRecord}
-			/>
+			<CollectionForm {client} {collection} defaultValues={activeRecord} />
 		{/key}
 	{:else}
 		<CollectionRecordDetailEmpty
@@ -1200,13 +1242,19 @@
 
 <!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
 <!-- stupidity:allow UI15 -- the table keeps a usable empty/loading viewport before rows establish intrinsic height -->
-<Bound size="full" class="collection-table-responsive min-h-[24rem]" data-collection-table-surface>
+<Bound size="full" class="collection-table-responsive min-h-[24rem] w-full" data-collection-table-surface>
 	<!--
 		One toolbar and one pagination bar for both halves of the surface. The wide grid and the narrow
 		list show the same page of the same query; only their body differs, so only their body is
 		rendered twice.
 	-->
-	<Cover as="div" gap="sm" top={toolbar} bottom={paginationBar}>
+	<!--
+		The table is its own tab content box when `rootClass` supplies the outline: toolbar, body and
+		pagination share one border, and `borderless` drops the grid's own inner border so there is
+		exactly one line around the whole surface rather than two. The box hugs its content — no
+		forced fill, so a height-chain break can never collapse it out of view.
+	-->
+	<Cover as="div" gap="sm" top={toolbar} bottom={paginationBar} class={rootClass}>
 		<CollectionGrid
 			table={tableApi}
 			{disabled}
@@ -1218,6 +1266,7 @@
 			rowActions={gridRowActions}
 			rowIndexOffset={queryState.pageIndex * queryState.pageSize}
 			stickyRowActions={true}
+			borderless={borderless}
 			{emptyPlaceholder}
 		/>
 

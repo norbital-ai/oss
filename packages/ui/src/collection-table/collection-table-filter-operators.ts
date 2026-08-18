@@ -1,4 +1,4 @@
-import type { CollectionField, CollectionFilter } from '@norbital-ai/platform-utils/collection';
+import type { CollectionField, CollectionFilter } from '@norbital-ai/std/collection';
 
 export type CollectionFilterOperator = CollectionFilter['operator'] | 'contains';
 
@@ -55,9 +55,11 @@ export function collectionFilterOperatorOptions(
 			case 'clock_time':
 			case 'timestamp':
 			case 'timestamptz':
+			case 'datetime':
 				applicable = orderedOperators;
 				break;
 			case 'date-range':
+			case 'dateRange':
 				applicable = [
 					{ value: 'contains_date', label: 'contains date' },
 					{ value: 'overlaps', label: 'overlaps' }

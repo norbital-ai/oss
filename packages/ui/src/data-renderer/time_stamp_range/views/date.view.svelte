@@ -84,7 +84,7 @@
 		readonly = false,
 		borderless = false,
 		maxTriggerRanges = 2,
-		numberOfMonths = 2,
+		numberOfMonths = allowTime ? 2 : 1,
 		minDate,
 		maxDate,
 		timeGranularity = 'minute',
@@ -167,6 +167,18 @@
 		return activeDateRange.start.compare(activeDateRange.end) === 0;
 	});
 
+	const minCalendarDate = $derived(toDateValue(minDate));
+	const maxCalendarDate = $derived(toDateValue(maxDate));
+
+	const dateDisabledMatcher = $derived.by((): DateMatcher => {
+		return (date: DateValue) => {
+			if (isDateDisabled?.(date)) return true;
+			if (minCalendarDate && date.compare(minCalendarDate) < 0) return true;
+			if (maxCalendarDate && date.compare(maxCalendarDate) > 0) return true;
+			return false;
+		};
+	});
+
 	// ==================================================================================
 	// EVENT HANDLERS
 	// ==================================================================================
@@ -183,8 +195,21 @@
 		}
 	}
 
+	/** Ignore calendar echoes that did not change the selected days — a rewrite would loop. */
 	function handleDateChange(newDateRange: DateRange | undefined) {
 		if (!newDateRange) return;
+
+		const startSame =
+			(activeDateRange.start === undefined && newDateRange.start === undefined) ||
+			(activeDateRange.start !== undefined &&
+				newDateRange.start !== undefined &&
+				activeDateRange.start.compare(newDateRange.start) === 0);
+		const endSame =
+			(activeDateRange.end === undefined && newDateRange.end === undefined) ||
+			(activeDateRange.end !== undefined &&
+				newDateRange.end !== undefined &&
+				activeDateRange.end.compare(newDateRange.end) === 0);
+		if (startSame && endSame) return;
 
 		updateRange({
 			start: combineDateTime(newDateRange.start, activeTimes.start),
@@ -366,7 +391,7 @@
 			</Inline>
 			<Scroll axis="y" name={t('dataRenderer.selectedRangesScroll')} class="max-h-[300px]">
 				<Stack gap="sm">
-					{#each ranges as range, index}
+					{#each ranges as range, index (index)}
 						{@render RangeBadge(range, index, index === activeRangeIndex)}
 					{/each}
 					{#if ranges.length === 0}
@@ -425,51 +450,30 @@
 	<Popover.Content class="w-auto p-0 shadow-lg" {align} sameWidth={false}>
 		<Inline align="stretch" gap="none">
 			<Stack gap="md" class="p-4">
-				<RangeCalendar
-					value={activeDateRange}
-					onValueChange={handleDateChange}
-					{numberOfMonths}
-					readonly={cantMutate}
-					excludeDisabled={true}
-					isDateDisabled={(date) => {
-						if (isDateDisabled?.(date)) return true;
-						if (minDate) {
-							try {
-								const minCalendarDate = toCalendarDate(parseTimestamp(minDate));
-								if (date.compare(minCalendarDate) < 0) {
-									return true;
-								}
-							} catch (error) {
-								console.warn('Failed to parse minDate:', minDate, error);
-							}
-						}
-						if (maxDate) {
-							try {
-								const maxCalendarDate = toCalendarDate(parseTimestamp(maxDate));
-								if (date.compare(maxCalendarDate) > 0) {
-									return true;
-								}
-							} catch (error) {
-								console.warn('Failed to parse maxDate:', maxDate, error);
-							}
-						}
-						return false;
-					}}
-					{isDateUnavailable}
-				/>
-				{#if allowTime && activeDateRange.start}
-					<TimeView
-						class="border-t border-border pt-4"
-						{isSameDay}
-						hasEnd={Boolean(activeDateRange.end)}
-						value={activeTimes}
-						granularity={timeGranularity}
-						{hourCycle}
-						disabled={cantMutate}
-						onStartChange={(time) => handleTimeChange({ isStart: true, time })}
-						onEndChange={(time) => handleTimeChange({ isEnd: true, time })}
-						onRangeChange={(range) => handleTimeChange({ range })}
+				{#if popoverOpen}
+					<RangeCalendar
+						value={activeDateRange}
+						onValueChange={handleDateChange}
+						{numberOfMonths}
+						readonly={cantMutate}
+						excludeDisabled={true}
+						isDateDisabled={dateDisabledMatcher}
+						{isDateUnavailable}
 					/>
+					{#if allowTime && activeDateRange.start}
+						<TimeView
+							class="border-t border-border pt-4"
+							{isSameDay}
+							hasEnd={Boolean(activeDateRange.end)}
+							value={activeTimes}
+							granularity={timeGranularity}
+							{hourCycle}
+							disabled={cantMutate}
+							onStartChange={(time) => handleTimeChange({ isStart: true, time })}
+							onEndChange={(time) => handleTimeChange({ isEnd: true, time })}
+							onRangeChange={(range) => handleTimeChange({ range })}
+						/>
+					{/if}
 				{/if}
 			</Stack>
 			{@render RangeListSidebar()}

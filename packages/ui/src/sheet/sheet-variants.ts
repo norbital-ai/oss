@@ -6,9 +6,14 @@ export const sheetVariants = tv({
 		side: {
 			top: 'inset-x-0 top-0 border-b',
 			bottom: 'inset-x-0 bottom-0 border-t',
-			left: 'inset-x-0 bottom-0 h-[min(90dvh,48rem)] max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-full rounded-t-xl border-t pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:right-auto md:left-0 md:h-full md:max-h-full md:w-[var(--sheet-width,75%)] md:max-w-[var(--sheet-max-width,90%)] md:rounded-none md:border-t-0 md:border-r md:pb-0',
+			// The mobile bottom-sheet edges are spelled `left-0 right-0` rather than `inset-x-0` on
+			// purpose. `inset-x-*` and `left-*`/`right-*` are different utility groups, and Tailwind
+			// emits the group after the single sides — so `inset-x-0` won over `md:left-auto` and every
+			// side sheet pinned itself to the left edge on desktop. Same group, variant after base,
+			// media query wins.
+			left: 'right-0 bottom-0 left-0 h-[min(90dvh,48rem)] max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-full rounded-t-xl border-t pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:right-auto md:left-0 md:h-full md:max-h-full md:w-[var(--sheet-width,75%)] md:max-w-[var(--sheet-max-width,90%)] md:rounded-none md:border-t-0 md:border-r md:pb-0',
 			right:
-				'inset-x-0 bottom-0 h-[min(90dvh,48rem)] max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-full rounded-t-xl border-t pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:right-0 md:left-auto md:h-full md:max-h-full md:w-[var(--sheet-width,75%)] md:max-w-[var(--sheet-max-width,90%)] md:rounded-none md:border-t-0 md:border-l md:pb-0'
+				'right-0 bottom-0 left-0 h-[min(90dvh,48rem)] max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-full rounded-t-xl border-t pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:right-0 md:left-auto md:h-full md:max-h-full md:w-[var(--sheet-width,75%)] md:max-w-[var(--sheet-max-width,90%)] md:rounded-none md:border-t-0 md:border-l md:pb-0'
 		}
 	},
 	defaultVariants: {

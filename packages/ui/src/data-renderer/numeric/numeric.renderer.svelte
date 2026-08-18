@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { NumericRendererVariant } from '@norbital-ai/platform-utils/collection';
+	import type { NumericRendererVariant } from '@norbital-ai/std/collection';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { DataRendererProps } from '../data-renderer.types.js';
 	import NumberView from './views/number.view.svelte';

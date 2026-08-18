@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const publicPackageDirectories = ['config', 'platform-utils', 'pod', 'std', 'ui'];
+export const publicPackageDirectories = ['bolt', 'bolt-protocol', 'bolt-server', 'config', 'std', 'ui'];
 
 export function readPublicPackageEntries(repositoryRoot) {
 	return publicPackageDirectories

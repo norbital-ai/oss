@@ -2,9 +2,9 @@ import type {
 	CollectionField,
 	CollectionFilter,
 	CollectionRelationship
-} from '@norbital-ai/platform-utils/collection';
-import { isSystemColumnName } from '@norbital-ai/platform-utils/system/column_names';
+} from '@norbital-ai/std/collection';
 import { humanize } from '@norbital-ai/std/string';
+import { isSystemField } from './collection-card-derivation.js';
 import { ENTITY_ICONS } from '../icon-wrapper/entity-icons.js';
 import type { BaseTreeItem } from '#lib/tree-select';
 import { calendarDateToInstant } from '../data-renderer/time_stamp/date.utils.js';
@@ -44,6 +44,7 @@ function collectionFilterFieldIcon(field: CollectionField): string {
 		case 'clock_time':
 			return ENTITY_ICONS.datatype.timestamptz;
 		case 'date-range':
+		case 'dateRange':
 			return ENTITY_ICONS.datatype['date-range'];
 		case 'enum':
 			return ENTITY_ICONS.datatype.enum;
@@ -59,6 +60,7 @@ function collectionFilterFieldIcon(field: CollectionField): string {
 			return ENTITY_ICONS.datatype.numeric;
 		case 'timestamp':
 		case 'timestamptz':
+		case 'datetime':
 		case 'tstzrange':
 			return ENTITY_ICONS.datatype.timestamptz;
 		case 'uuid':
@@ -110,7 +112,11 @@ export function collectionFilterFieldTree(
 			continue;
 		}
 
-		if (isSystemColumnName(field.name)) systemFields.push(filterField);
+		// The same predicate the table and the card derivation already use for this, rather than a
+		// second one imported from the transport package: `norbital_*` is the framework's reserved
+		// namespace, so a definition field carrying that prefix is system-owned whether or not it is
+		// one of the six columns the DDL currently names.
+		if (isSystemField(field.name)) systemFields.push(filterField);
 		else directFields.push(filterField);
 	}
 

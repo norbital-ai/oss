@@ -13,7 +13,7 @@
 		sidebarWidth?: string;
 		sidebarWidthIcon?: string;
 		collapsible?: 'offcanvas' | 'icon' | 'none';
-		side?: 'left' | 'right';
+		side?: 'left' | 'right' | undefined;
 		class?: string;
 		sidebarClass?: string;
 		mobileSidebarClass?: string;

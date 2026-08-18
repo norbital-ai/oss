@@ -3,7 +3,7 @@
 		CollectionRecord,
 		CollectionRelationOptions,
 		RemoteQuery
-	} from '@norbital-ai/platform-utils/collection';
+	} from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import { Combobox } from '#lib/combobox';
 	import { useI18n, type UiKeys } from '#lib/i18n';

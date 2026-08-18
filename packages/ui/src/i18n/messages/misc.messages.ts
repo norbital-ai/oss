@@ -178,6 +178,9 @@ export const miscMessages = defineMessages({
 		'misc.switchToDarkMode': 'Switch to dark mode',
 		'misc.localeName.en': 'English',
 		'misc.localeName.zh': '中文',
+		'misc.appearance': 'Appearance',
+		'misc.themeName.light': 'Light',
+		'misc.themeName.dark': 'Dark',
 		'misc.impersonate': 'Impersonate',
 		'misc.impersonateHint': 'Preview the workspace under another team\u2019s policy scope.',
 		'misc.stopImpersonating': 'Stop impersonating'
@@ -350,6 +353,9 @@ export const miscMessages = defineMessages({
 		'misc.switchToDarkMode': '切换到深色模式',
 		'misc.localeName.en': 'English',
 		'misc.localeName.zh': '中文',
+		'misc.appearance': '外观',
+		'misc.themeName.light': '浅色',
+		'misc.themeName.dark': '深色',
 		'misc.impersonate': '身份模拟',
 		'misc.impersonateHint': '以其他团队的策略范围预览此工作区。',
 		'misc.stopImpersonating': '停止模拟'

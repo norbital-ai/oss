@@ -10,25 +10,19 @@
 		"build": "turbo build --concurrency=1",
 		"lint": "turbo lint",
 		"test": "turbo test",
-		"test:ci": "pnpm --filter @norbital-ai/platform-utils test && pnpm --filter @norbital-ai/pod test:ci",
-		"packages:build": "pnpm --filter @norbital-ai/pod... build",
-		"check": "pnpm packages:build && pnpm deps:sync && pnpm templates:sync && pnpm lint && pnpm test && pnpm test:scripts && pnpm build && pnpm templates:check && pnpm templates:lock:check && pnpm publication:check",
-		"check:ci": "pnpm packages:build && pnpm deps:sync && pnpm templates:sync && pnpm lint && pnpm test:ci && pnpm test:scripts && pnpm build && pnpm templates:check && pnpm templates:lock:check && pnpm publication:check",
-		"check:packages:ci": "pnpm exec turbo run build --filter=...@norbital-ai/pod --concurrency=1 && pnpm exec turbo run lint --filter=...@norbital-ai/pod --concurrency=1 && pnpm test:ci && pnpm test:scripts && pnpm skills:check && pnpm publication:check",
+		"packages:build": "pnpm --filter @norbital-ai/ui... build",
+		"check": "pnpm packages:build && pnpm lint && pnpm test && pnpm test:scripts && pnpm build && pnpm publication:check",
+		"check:ci": "pnpm packages:build && pnpm lint && pnpm test && pnpm test:scripts && pnpm build && pnpm publication:check",
+		"check:packages:ci": "pnpm exec turbo run build --concurrency=1 && pnpm exec turbo run lint --concurrency=1 && pnpm test && pnpm test:scripts && pnpm publication:check",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"test:scripts": "node --test scripts/tests/*.test.mjs",
 		"publication:check": "node scripts/validate-package-publication.mjs",
-		"deps:sync": "node scripts/sync-injected-deps.mjs",
-		"templates:sync": "node scripts/sync-templates.mjs",
-		"templates:check": "node scripts/project-templates.mjs --check",
-		"templates:lock": "node scripts/lock-templates.mjs",
-		"templates:lock:check": "node scripts/lock-templates.mjs --check",
-		"templates:lock:verify": "node scripts/lock-templates.mjs --check --verify-install",
-		"templates:project": "node scripts/project-templates.mjs --update-local --output .tmp/template-revisions.json",
 		"skills:generate": "node scripts/generate-skills.mjs",
 		"skills:check": "node scripts/generate-skills.mjs --check",
-		"docs:api": "typedoc --options typedoc.json && node scripts/generate-api-docs.mjs"
+		"docs:api": "typedoc --options typedoc.json && node scripts/generate-api-docs.mjs",
+		"yalc:publish": "node scripts/yalc-publish.mjs",
+		"yalc:push": "node scripts/yalc-publish.mjs --push"
 	},
 	"devDependencies": {
 		"@types/node": "^26.1.1",
@@ -37,6 +31,7 @@
 		"prettier-plugin-svelte": "^4.1.1",
 		"turbo": "^2.10.5",
 		"typedoc": "0.28.20",
-		"typedoc-plugin-markdown": "^4.12.0"
+		"typedoc-plugin-markdown": "^4.12.0",
+		"yalc": "1.0.0-pre.53"
 	}
 }

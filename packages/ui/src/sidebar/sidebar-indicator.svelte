@@ -27,6 +27,7 @@
 	type IndicatorRect = {
 		top: number;
 		height: number;
+		left: number;
 	};
 
 	let sidebarRootElement: HTMLElement | null = null;
@@ -82,6 +83,7 @@
 		return null;
 	}
 
+	/** Places the rail on the active row — nested items are indented, so a fixed sidebar offset misses them. */
 	function calculateIndicatorRect(el: HTMLElement): IndicatorRect | null {
 		if (!ref || !el) return null;
 
@@ -93,8 +95,10 @@
 		const indicatorHeight = elRect.height / 2;
 		const center = elRect.top - containerRect.top + elRect.height / 2;
 		const top = center - indicatorHeight / 2;
+		const left =
+			position === 'left' ? Math.max(0, elRect.left - containerRect.left + offset) : 0;
 
-		return { top, height: indicatorHeight };
+		return { top, height: indicatorHeight, left };
 	}
 
 	function clearAnimationTimer(): void {
@@ -144,7 +148,7 @@
 		}
 
 		const transition = animate || isAnimating ? '' : ' transition: none;';
-		style = `transform: translate3d(0, ${rect.top}px, 0); height: ${rect.height}px; opacity: 1;${transition}`;
+		style = `transform: translate3d(${rect.left}px, ${rect.top}px, 0); height: ${rect.height}px; opacity: 1;${transition}`;
 	}
 
 	function scheduleUpdate(animate: boolean): void {
@@ -257,9 +261,7 @@
 		};
 	});
 
-	const positionStyle = $derived(
-		position === 'left' ? `left: ${offset}px;` : `right: ${offset}px;`
-	);
+	const positionStyle = $derived(position === 'left' ? 'left: 0;' : `right: ${offset}px;`);
 </script>
 
 <div

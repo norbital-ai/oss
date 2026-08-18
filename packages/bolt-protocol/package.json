@@ -1,0 +1,58 @@
+{
+	"name": "@norbital-ai/bolt-protocol",
+	"version": "0.0.52",
+	"description": "Neutral Bolt artifact invocation and facility contracts.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "AGPL-3.0-only",
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		},
+		"./bundle": {
+			"types": "./build/bundle.d.ts",
+			"default": "./build/bundle.js"
+		},
+		"./facilities": {
+			"types": "./build/facilities.d.ts",
+			"default": "./build/facilities.js"
+		},
+		"./invocation": {
+			"types": "./build/invocation.d.ts",
+			"default": "./build/invocation.js"
+		},
+		"./wire": {
+			"types": "./build/wire.d.ts",
+			"default": "./build/wire.js"
+		}
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"lint": "tsc -p tsconfig.json --noEmit",
+		"test": "vitest run",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-protocol"
+	},
+	"peerDependencies": {
+		"effect": "4.0.0-rc.109"
+	},
+	"devDependencies": {
+		"@effect/vitest": "4.0.0-rc.109",
+		"effect": "4.0.0-rc.109",
+		"typescript": "catalog:",
+		"vitest": "4.1.10"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/bolt-protocol"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

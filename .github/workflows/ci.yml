@@ -40,9 +40,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 
-      # `template_workspaces/` is a stale Pod test fixture, not a release source. Public and private
-      # templates have their own repositories and CI; this repository gates the publishable package
-      # graph plus the tests that exercise those packages.
+      # Public and private templates have their own repositories and CI; this repository gates the
+      # publishable package graph plus the tests that exercise those packages.
       - name: Check publishable packages
         run: pnpm check:packages:ci
         env:

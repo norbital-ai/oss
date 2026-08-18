@@ -1,11 +1,12 @@
 import type {
 	CollectionClient,
 	ErasedCollectionRegistry
-} from '@norbital-ai/platform-utils/collection';
+} from '@norbital-ai/std/collection';
 import { getContext, hasContext, setContext, type Component } from 'svelte';
 
 const COLLECTION_CLIENT_CONTEXT = Symbol.for('@norbital-ai/ui/collection-client');
 const COLLECTION_SURFACE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-surface');
+const COLLECTION_RECORD_SCOPE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-record-scope');
 
 type CollectionClientGetter = () => CollectionClient<ErasedCollectionRegistry>;
 
@@ -76,4 +77,42 @@ export function setCollectionSurfaceRuntime(runtime: CollectionSurfaceRuntime): 
 
 export function getCollectionSurfaceRuntime(): CollectionSurfaceRuntime | undefined {
 	return getContext<CollectionSurfaceRuntime>(COLLECTION_SURFACE_CONTEXT);
+}
+
+/**
+ * The record a detail surface is currently mounted for, as a view-persistence scope segment.
+ *
+ * A table nested inside a `+representation.svelte` shows one record's children, so its saved
+ * columns/filters/sort must be keyed per parent record — otherwise every employee shares one
+ * "employments" view. Authored source used to build that key by interpolating the parent's
+ * `norbital_id`, which is exactly the system column authored code must not reach into. The
+ * surface that mounts the representation already knows the id, so it publishes it here and
+ * `view` stays a readable, stable name the author chose.
+ *
+ * A getter rather than a value: the mounting surface's active record is reactive state, and the
+ * scope has to follow it without the consumer re-reading context.
+ */
+export function setCollectionRecordScope(scope: () => string | undefined): void {
+	setContext(COLLECTION_RECORD_SCOPE_CONTEXT, scope);
+}
+
+export function getCollectionRecordScope(): (() => string | undefined) | undefined {
+	return hasContext(COLLECTION_RECORD_SCOPE_CONTEXT)
+		? getContext<() => string | undefined>(COLLECTION_RECORD_SCOPE_CONTEXT)
+		: undefined;
+}
+
+/**
+ * The persistence key a collection surface saves its view state under.
+ *
+ * Composed rather than concatenated at each call site so the table and the board agree on the
+ * shape, and so a nested surface inside a record detail cannot accidentally share the outer key.
+ */
+export function resolveCollectionViewKey(
+	view: string | undefined,
+	fallback: string,
+	recordScope: string | undefined
+): string {
+	const base = view ?? fallback;
+	return recordScope === undefined || recordScope === '' ? base : `${base}:${recordScope}`;
 }

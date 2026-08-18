@@ -1,0 +1,49 @@
+{
+	"name": "@norbital-ai/bolt-server",
+	"version": "0.0.52",
+	"description": "Standalone and local-development server shell for immutable Norbital Bolt bundles.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "AGPL-3.0-only",
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		}
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"scripts": {
+		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"test": "vitest run",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-server"
+	},
+	"dependencies": {
+		"@electric-sql/pglite": "^0.3.16",
+		"@norbital-ai/bolt-protocol": "workspace:*",
+		"effect": "4.0.0-rc.109",
+		"pg": "^8.22.0",
+		"ws": "^8.21.1"
+	},
+	"devDependencies": {
+		"@effect/vitest": "4.0.0-rc.109",
+		"@norbital-ai/config": "workspace:*",
+		"@types/node": "^26.1.1",
+		"@types/pg": "^8.20.0",
+		"@types/ws": "^8.18.1",
+		"typescript": "catalog:",
+		"vitest": "4.1.10"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/bolt-server"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

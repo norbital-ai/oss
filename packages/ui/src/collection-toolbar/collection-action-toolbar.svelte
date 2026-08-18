@@ -8,7 +8,7 @@
 		CollectionRegistry,
 		CollectionRow,
 		CollectionType
-	} from '@norbital-ai/platform-utils/collection';
+	} from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { getCollectionClientForSurface } from '#lib/collection-runtime';
@@ -37,7 +37,6 @@
 		about,
 		navigation,
 		disabled = false,
-		searchPlaceholder,
 		features = {},
 		initialFilters = [],
 		filterPersistenceKey,
@@ -70,7 +69,9 @@
 		}
 	});
 
-	const searchEnabled = $derived(features.search !== false && definition.fields.length > 0);
+	// Only the caller's opt-out. Whether the collection has anything to search is the schema's
+	// answer, taken inside the control from the fields carrying `search: true`.
+	const searchEnabled = $derived(features.search !== false);
 	const filterEnabled = $derived(features.filter !== false);
 	const operationsVisible = $derived(
 		operations != null &&
@@ -166,7 +167,6 @@
 				initialSearch={query.search}
 				{initialFilters}
 				{filterPersistenceKey}
-				searchPlaceholder={searchPlaceholder ?? t('table.searchTextFields')}
 				onSearchChange={(search) => query.setSearch(search)}
 				onFilterChange={applyFilters}
 				onCustomFilterChange={() => query.setPageIndex(0)}

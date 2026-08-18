@@ -16,8 +16,8 @@
 	data-slot="sidebar-menu-sub"
 	data-sidebar="menu-sub"
 	class={cn(
-		// Indent with padding only so nested rows stay full-width — chevrons can share one right edge.
-		'mr-0 ml-0 flex w-full min-w-0 flex-col gap-1 border-l border-sidebar-border py-0.5 pr-0 pl-5',
+		// Guide under the parent icon; rows start after it so the highlight hugs the icon, not a hole.
+		'mr-0 ml-5 flex min-w-0 flex-col gap-1 border-l border-sidebar-border py-0.5 pr-0 pl-2',
 		'group-data-[collapsible=icon]:hidden',
 		className
 	)}

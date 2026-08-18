@@ -7,8 +7,9 @@ import type {
 	CollectionRegistry,
 	CollectionRow,
 	CollectionUpdateInput
-} from '@norbital-ai/platform-utils/collection';
-import type { StandardSchemaV1 } from '@norbital-ai/std/schema';
+} from '@norbital-ai/std/collection';
+import type { Schema } from 'effect';
+import type { StandardSchemaOf } from '../form/standard_schema_form_errors.js';
 import type {
 	Component,
 	ComponentConstructorOptions,
@@ -30,8 +31,8 @@ export interface CollectionFormValidationIssue {
 }
 
 export interface CollectionFormValidation {
-	/** Standard Schema validation, including Zod refinements and superRefine rules. */
-	readonly schema?: StandardSchemaV1;
+	/** Effect schema validation, read through the schema's `~standard` adapter. */
+	readonly schema?: StandardSchemaOf<Schema.Codec<unknown, unknown>>;
 	/** Cross-field or domain validation that may perform asynchronous checks. */
 	readonly semantic?: (
 		values: CollectionFormValidationValues
@@ -126,11 +127,19 @@ export interface CollectionFormProps<
 > {
 	client: CollectionDbClient<TCollections>;
 	collection: TName;
+	/**
+	 * The row being edited, or a partial seed for a new one.
+	 *
+	 * This alone decides create vs. update: a value carrying the framework's row key is an existing
+	 * record, anything else is a draft. There is deliberately no `recordId` prop — it was always the
+	 * same id the caller had just dug out of this record, and every authored `+representation.svelte`
+	 * threaded it back by hand. An optional override would be an escape hatch that silently
+	 * re-legalises reaching into `norbital_*` from authored source.
+	 */
 	defaultValues?:
 		| Partial<CollectionRow<TCollections[TName]>>
 		| Partial<CollectionCreateInput<TCollections[TName]>>
 		| Partial<CollectionUpdateInput<TCollections[TName]>>;
-	recordId?: string;
 	submitLabel?: string;
 	validation?: CollectionFormValidation;
 	onSubmit?: (

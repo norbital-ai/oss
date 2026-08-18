@@ -1,0 +1,134 @@
+{
+	"name": "@norbital-ai/bolt",
+	"version": "0.0.52",
+	"description": "Portable Effect v4 tenant application framework, compiler, runtime, and client.",
+	"type": "module",
+	"sideEffects": [
+		"**/*.css"
+	],
+	"license": "AGPL-3.0-only",
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		},
+		"./authoring": {
+			"types": "./build/authoring/index.d.ts",
+			"default": "./build/authoring/index.js"
+		},
+		"./authoring/internals": {
+			"types": "./build/authoring/internals.d.ts",
+			"default": "./build/authoring/internals.js"
+		},
+		"./client": {
+			"types": "./build/client.d.ts",
+			"svelte": "./build/client.js",
+			"default": "./build/client.js"
+		},
+		"./client-runtime": {
+			"types": "./build/client/runtime.d.ts",
+			"default": "./build/client/runtime.js"
+		},
+		"./client-platform": {
+			"types": "./build/client/ui/state/platform.d.ts",
+			"default": "./build/client/ui/state/platform.js"
+		},
+		"./client/navigation": {
+			"types": "./build/client/ui/collection/detail-surface.d.ts",
+			"default": "./build/client/ui/collection/detail-surface.js"
+		},
+		"./client/import-export": {
+			"types": "./build/client/ui/state/import-export.d.ts",
+			"default": "./build/client/ui/state/import-export.js"
+		},
+		"./client/files": {
+			"types": "./build/client/ui/state/files.d.ts",
+			"default": "./build/client/ui/state/files.js"
+		},
+		"./client/identity": {
+			"types": "./build/client/identity.d.ts",
+			"svelte": "./build/client/identity.js",
+			"default": "./build/client/identity.js"
+		},
+		"./client/settings-table-client": {
+			"types": "./build/client/ui/settings/table-client.d.ts",
+			"default": "./build/client/ui/settings/table-client.js"
+		},
+		"./client/app-header-actions": {
+			"types": "./build/client/ui/shell/header-actions.svelte.d.ts",
+			"svelte": "./build/client/ui/shell/header-actions.svelte",
+			"default": "./build/client/ui/shell/header-actions.svelte"
+		},
+		"./host": {
+			"types": "./build/host.d.ts",
+			"default": "./build/host.js"
+		},
+		"./vite": {
+			"types": "./build/compiler/vite-plugin.d.ts",
+			"default": "./build/compiler/vite-plugin.js"
+		},
+		"./runtime": {
+			"types": "./build/runtime/app.d.ts",
+			"default": "./build/runtime/app.js"
+		},
+		"./quality": {
+			"types": "./build/quality/audit.d.ts",
+			"default": "./build/quality/audit.js"
+		}
+	},
+	"bin": {
+		"bolt": "./build/compiler/cli.js"
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"scripts": {
+		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {} --tsconfig tsconfig.json",
+		"lint": "svelte-check --tsconfig ./tsconfig.json && tsc -p tests/tsconfig.json --noEmit",
+		"test": "vitest run",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
+	},
+	"dependencies": {
+		"@electric-sql/pglite": "^0.3.16",
+		"@iconify/svelte": "catalog:",
+		"@norbital-ai/bolt-protocol": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/ui": "workspace:*",
+		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"@xyflow/svelte": "catalog:",
+		"better-auth": "^1.6.29",
+		"drizzle-kit": "catalog:",
+		"drizzle-orm": "catalog:"
+	},
+	"peerDependencies": {
+		"effect": "4.0.0-rc.109",
+		"svelte": "^5.0.0"
+	},
+	"devDependencies": {
+		"@effect/vitest": "4.0.0-rc.109",
+		"@norbital-ai/config": "workspace:*",
+		"@sveltejs/package": "^2.5.8",
+		"@types/node": "^26.1.1",
+		"happy-dom": "^20.11.1",
+		"svelte": "^5.56.9",
+		"svelte-check": "^4.7.3",
+		"typescript": "catalog:",
+		"vite": "catalog:",
+		"vitest": "4.1.10"
+	},
+	"peerDependenciesMeta": {
+		"effect": {
+			"optional": false
+		}
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/bolt"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

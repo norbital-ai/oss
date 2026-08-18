@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { CollectionRecord, RemoteQuery } from '@norbital-ai/platform-utils/collection';
+	import type { CollectionRecord, RemoteQuery } from '@norbital-ai/std/collection';
 	import type { IFileUploadClient } from '#lib/file-upload';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';

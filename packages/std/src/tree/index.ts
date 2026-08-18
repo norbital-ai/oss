@@ -3,6 +3,8 @@
  * Works with any object that has a children property (or any specified key).
  */
 
+import { Effect } from 'effect';
+
 export function treeFlatten<T extends object, K extends keyof T>(
 	nodes: readonly T[] | undefined | null,
 	childrenKey: K
@@ -216,57 +218,66 @@ export function treeBuildIndex<T extends object, K extends keyof T, V>(
 }
 
 export interface TreeMapRecordAsyncConfig<TIn, TOut, TCtx> {
-	mapNode: (node: TIn, ctx: TCtx, isRoot: boolean) => Promise<Omit<TOut, 'include'>>;
+	mapNode: (
+		node: TIn,
+		ctx: TCtx,
+		isRoot: boolean
+	) => Effect.Effect<Omit<TOut, 'include'>> | Omit<TOut, 'include'>;
 	mapChildEntry: (
 		key: string,
 		child: TIn,
 		ctx: TCtx
-	) => Promise<{ key: string; childCtx: TCtx } | null>;
+	) => Effect.Effect<{ key: string; childCtx: TCtx } | null> | { key: string; childCtx: TCtx } | null;
 }
 
-export async function treeMapRecordAsync<TIn extends object, TOut extends object, TCtx>(
+const toEffect = <A>(value: A | Effect.Effect<A>): Effect.Effect<A> =>
+	Effect.isEffect(value) ? value : Effect.succeed(value);
+
+export function treeMapRecordAsync<TIn extends object, TOut extends object, TCtx>(
 	node: TIn,
 	childrenKey: keyof TIn & keyof TOut & string,
 	config: TreeMapRecordAsyncConfig<TIn, TOut, TCtx>,
 	ctx: TCtx,
 	isRoot: boolean = true
-): Promise<TOut> {
-	const mappedNode = await config.mapNode(node, ctx, isRoot);
-	const children = node[childrenKey] as Record<string, TIn> | undefined;
+): Effect.Effect<TOut> {
+	return Effect.gen(function* () {
+		const mappedNode = yield* toEffect(config.mapNode(node, ctx, isRoot));
+		const children = node[childrenKey] as Record<string, TIn> | undefined;
 
-	if (children === undefined) {
-		return mappedNode as TOut;
-	}
+		if (children === undefined) {
+			return mappedNode as TOut;
+		}
 
-	if (Object.keys(children).length === 0) {
+		if (Object.keys(children).length === 0) {
+			return {
+				...mappedNode,
+				[childrenKey]: {}
+			} as TOut;
+		}
+
+		const mappedChildren: Record<string, TOut> = {};
+
+		// stupidity:allow A6 -- mapping is intentionally depth-first to preserve callback ordering
+		for (const [key, child] of Object.entries(children)) {
+			const entryResult = yield* toEffect(config.mapChildEntry(key, child as TIn, ctx));
+			if (!entryResult) continue;
+
+			const { key: newKey, childCtx } = entryResult;
+			const mappedChild = yield* treeMapRecordAsync(
+				child as TIn,
+				childrenKey,
+				config,
+				childCtx,
+				false
+			);
+			mappedChildren[newKey] = mappedChild;
+		}
+
 		return {
 			...mappedNode,
-			[childrenKey]: {}
+			[childrenKey]: mappedChildren
 		} as TOut;
-	}
-
-	const mappedChildren: Record<string, TOut> = {};
-
-	// stupidity:allow A6 -- mapping is intentionally depth-first to preserve callback ordering
-	for (const [key, child] of Object.entries(children)) {
-		const entryResult = await config.mapChildEntry(key, child as TIn, ctx);
-		if (!entryResult) continue;
-
-		const { key: newKey, childCtx } = entryResult;
-		const mappedChild = await treeMapRecordAsync(
-			child as TIn,
-			childrenKey,
-			config,
-			childCtx,
-			false
-		);
-		mappedChildren[newKey] = mappedChild;
-	}
-
-	return {
-		...mappedNode,
-		[childrenKey]: mappedChildren
-	} as TOut;
+	});
 }
 
 export function toAsciiTree(root: string, section: string, items: string[]): string {

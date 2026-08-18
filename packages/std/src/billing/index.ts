@@ -1,8 +1,10 @@
 import {
 	BILLING_SAFETY_MARGIN_MULTIPLIER,
 	BILLING_USD_TO_SGD_RATE,
-	EXTERNAL_CLOUD_RATE_CARD_USD,
-	LOCAL_CLOUD_RATE_CARD,
+	COMPUTE_SGD_PER_SECOND,
+	DISC_SGD_PER_GB_MONTH,
+	FILES_SGD_PER_GB_MONTH,
+	HOURS_PER_BILLING_MONTH,
 	OPENROUTER_CREDIT_PURCHASE_FEE_MULTIPLIER,
 	type BillingAccessTier
 } from './rate-card.js';
@@ -26,12 +28,6 @@ export type BillingCataloguePriceModel = 'flat' | 'per_seat' | 'metered';
 
 export const AI_USAGE_METER_ID = 'norbital_ai_cost_sgd_micros_v1';
 
-const BYTES_PER_MIB = 1024 ** 2;
-const SECONDS_PER_HOUR = 3_600;
-const MINUTES_PER_NEON_MONTH = 730 * 60;
-const MINUTES_PER_R2_MONTH = 30 * 24 * 60;
-const MIB_PER_PROVIDER_GB = 1_000_000_000 / BYTES_PER_MIB;
-
 function stripeDecimalCents(sgdPerUnit: number): string {
 	return (sgdPerUnit * CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT)
 		.toFixed(12)
@@ -39,56 +35,31 @@ function stripeDecimalCents(sgdPerUnit: number): string {
 		.replace(/\.$/, '');
 }
 
-const CLOUD_METER_UNIT_AMOUNT_CENTS = {
-	cpu: stripeDecimalCents(
-		(LOCAL_CLOUD_RATE_CARD.serverMonthlyCostSgd *
-			LOCAL_CLOUD_RATE_CARD.allocation.cpu *
-			BILLING_SAFETY_MARGIN_MULTIPLIER) /
-			(LOCAL_CLOUD_RATE_CARD.cpuCores *
-				LOCAL_CLOUD_RATE_CARD.hoursPerMonth *
-				SECONDS_PER_HOUR *
-				1_000)
+const MILLISECONDS_PER_SECOND = 1_000;
+const MICRO_UNITS_PER_GB_HOUR = 1_000_000;
+
+const USAGE_METER_UNIT_AMOUNT_CENTS = {
+	compute: stripeDecimalCents(COMPUTE_SGD_PER_SECOND / MILLISECONDS_PER_SECOND),
+	disc: stripeDecimalCents(
+		DISC_SGD_PER_GB_MONTH / HOURS_PER_BILLING_MONTH / MICRO_UNITS_PER_GB_HOUR
 	),
-	ram: stripeDecimalCents(
-		(LOCAL_CLOUD_RATE_CARD.serverMonthlyCostSgd *
-			LOCAL_CLOUD_RATE_CARD.allocation.ram *
-			BILLING_SAFETY_MARGIN_MULTIPLIER) /
-			(LOCAL_CLOUD_RATE_CARD.ramGb * 1_024 * LOCAL_CLOUD_RATE_CARD.hoursPerMonth * SECONDS_PER_HOUR)
-	),
-	disk_local: stripeDecimalCents(
-		(LOCAL_CLOUD_RATE_CARD.serverMonthlyCostSgd *
-			LOCAL_CLOUD_RATE_CARD.allocation.disk *
-			BILLING_SAFETY_MARGIN_MULTIPLIER) /
-			(LOCAL_CLOUD_RATE_CARD.diskGb * 1_024 * LOCAL_CLOUD_RATE_CARD.hoursPerMonth * 60)
-	),
-	disk_neon: stripeDecimalCents(
-		(EXTERNAL_CLOUD_RATE_CARD_USD.neonStoragePerGbMonth *
-			BILLING_USD_TO_SGD_RATE *
-			BILLING_SAFETY_MARGIN_MULTIPLIER) /
-			(MIB_PER_PROVIDER_GB * MINUTES_PER_NEON_MONTH)
-	),
-	disk_r2: stripeDecimalCents(
-		(EXTERNAL_CLOUD_RATE_CARD_USD.r2StoragePerGbMonth *
-			BILLING_USD_TO_SGD_RATE *
-			BILLING_SAFETY_MARGIN_MULTIPLIER) /
-			(MIB_PER_PROVIDER_GB * MINUTES_PER_R2_MONTH)
+	files: stripeDecimalCents(
+		FILES_SGD_PER_GB_MONTH / HOURS_PER_BILLING_MONTH / MICRO_UNITS_PER_GB_HOUR
 	)
 } as const;
 
-export const CLOUD_USAGE_METER_IDS = {
-	cpu: 'norbital_cpu_millicore_seconds_v1',
-	ram: 'norbital_ram_mib_seconds_v1',
-	disk_local: 'norbital_disk_local_mib_minutes_v1',
-	disk_neon: 'norbital_disk_neon_mib_minutes_v1',
-	disk_r2: 'norbital_disk_r2_mib_minutes_v1'
+export const USAGE_METER_IDS = {
+	compute: 'norbital_compute_seconds_v1',
+	disc: 'norbital_disc_gb_hours_v1',
+	files: 'norbital_files_gb_hours_v1',
+	ai: AI_USAGE_METER_ID
 } as const;
 
-export const CLOUD_USAGE_UNITS = {
-	cpu: 'millicore-second',
-	ram: 'MiB-second',
-	disk_local: 'MiB-minute',
-	disk_neon: 'MiB-minute',
-	disk_r2: 'MiB-minute'
+export const USAGE_METER_UNITS = {
+	compute: 'millisecond',
+	disc: 'micro-GB-hour',
+	files: 'micro-GB-hour',
+	ai: 'micro-SGD'
 } as const;
 
 export function calculateAIProviderCostSgdMicros(providerCostUsd: number): number {
@@ -192,7 +163,7 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 		id: PLATFORM_PRODUCT_ID,
 		name: 'Norbital Platform',
 		description:
-			'One subscription containing Standard and Pro seats plus separately metered CPU, RAM, disk, and AI usage.',
+			'One subscription containing Standard and Pro seats plus separately metered compute, disc, files, and AI usage.',
 		prices: [
 			{
 				id: 'platform-standard-seat-monthly',
@@ -223,76 +194,47 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 				amount: '5000'
 			},
 			{
-				id: 'cpu-millicore-second-monthly',
-				name: 'CPU usage',
+				id: 'compute-second-monthly',
+				name: 'Compute usage',
 				description:
-					'SGD 0.0143826 per vCPU-hour; measured as 1,000 millicore-seconds per vCPU-second.',
+					'SGD 0.0005 per isolate compute second. RAM is included because the isolate hard-walls memory with that second. Stripe records milliseconds.',
 				model: 'metered',
-				meterId: CLOUD_USAGE_METER_IDS.cpu,
+				meterId: USAGE_METER_IDS.compute,
 				interval: 'month',
 				checkout: true,
 				stripePriceIds: {
-					sandbox: 'price_1Ty7G6LvWjJB44nUftzJt81E',
-					production: 'price_1Ty7GBLlQVSVzCBMozTR0vrx'
+					sandbox: 'price_1U5gO4LvWjJB44nUCUzkwD61',
+					production: 'price_1U5gPrLlQVSVzCBMefEfyUnM'
 				},
-				unitAmountDecimal: CLOUD_METER_UNIT_AMOUNT_CENTS.cpu
+				unitAmountDecimal: USAGE_METER_UNIT_AMOUNT_CENTS.compute
 			},
 			{
-				id: 'ram-mib-second-monthly',
-				name: 'RAM usage',
-				description: 'SGD 0.00235965 per GiB-hour; measured in MiB-seconds.',
+				id: 'disc-gb-hour-monthly',
+				name: 'Disc usage',
+				description: 'SGD 3.00 per GB-month for tenant database storage, measured in GB-hours.',
 				model: 'metered',
-				meterId: CLOUD_USAGE_METER_IDS.ram,
+				meterId: USAGE_METER_IDS.disc,
 				interval: 'month',
 				checkout: true,
 				stripePriceIds: {
-					sandbox: 'price_1Ty7G7LvWjJB44nU77OkZvG7',
-					production: 'price_1Ty7GCLlQVSVzCBMqYYG2NKF'
+					sandbox: 'price_1U5gOQLvWjJB44nUkHqcqjGn',
+					production: 'price_1U5gPrLlQVSVzCBM3ctzic6b'
 				},
-				unitAmountDecimal: CLOUD_METER_UNIT_AMOUNT_CENTS.ram
+				unitAmountDecimal: USAGE_METER_UNIT_AMOUNT_CENTS.disc
 			},
 			{
-				id: 'disk-local-mib-minute-monthly',
-				name: 'Disk usage · local NVMe',
-				description:
-					'SGD 0.0440407 per GiB-month for tenant workspace, file, and checkpoint storage.',
+				id: 'files-gb-hour-monthly',
+				name: 'Files usage',
+				description: 'SGD 0.25 per GB-month for tenant object storage, measured in GB-hours.',
 				model: 'metered',
-				meterId: CLOUD_USAGE_METER_IDS.disk_local,
+				meterId: USAGE_METER_IDS.files,
 				interval: 'month',
 				checkout: true,
 				stripePriceIds: {
-					sandbox: 'price_1Ty7N6LvWjJB44nU9hwTFumB',
-					production: 'price_1Ty7N8LlQVSVzCBMBTXnfd3y'
+					sandbox: 'price_1U5gORLvWjJB44nUzycz1ITJ',
+					production: 'price_1U5gPsLlQVSVzCBMHKfK5Ker'
 				},
-				unitAmountDecimal: CLOUD_METER_UNIT_AMOUNT_CENTS.disk_local
-			},
-			{
-				id: 'disk-neon-mib-minute-monthly',
-				name: 'Disk usage · Neon database',
-				description: 'SGD 0.5145 per provider GB-month for tenant database storage.',
-				model: 'metered',
-				meterId: CLOUD_USAGE_METER_IDS.disk_neon,
-				interval: 'month',
-				checkout: true,
-				stripePriceIds: {
-					sandbox: 'price_1Ty7N7LvWjJB44nUpcYREKZR',
-					production: 'price_1Ty7N8LlQVSVzCBMJzWiEC1v'
-				},
-				unitAmountDecimal: CLOUD_METER_UNIT_AMOUNT_CENTS.disk_neon
-			},
-			{
-				id: 'disk-r2-mib-minute-monthly',
-				name: 'Disk usage · R2 object storage',
-				description: 'SGD 0.02205 per provider GB-month for tenant object storage.',
-				model: 'metered',
-				meterId: CLOUD_USAGE_METER_IDS.disk_r2,
-				interval: 'month',
-				checkout: true,
-				stripePriceIds: {
-					sandbox: 'price_1Ty7N7LvWjJB44nUaUNRrtRO',
-					production: 'price_1Ty7N9LlQVSVzCBMa1M93Hwd'
-				},
-				unitAmountDecimal: CLOUD_METER_UNIT_AMOUNT_CENTS.disk_r2
+				unitAmountDecimal: USAGE_METER_UNIT_AMOUNT_CENTS.files
 			},
 			...AI_METERED_PRICES
 		],
@@ -338,26 +280,19 @@ export {
 	BILLING_RATE_CARD_VERSION,
 	BILLING_SAFETY_MARGIN_MULTIPLIER,
 	BILLING_USD_TO_SGD_RATE,
+	COMPUTE_SGD_PER_SECOND,
+	DISC_SGD_PER_GB_MONTH,
 	EXTERNAL_CLOUD_RATE_CARD_USD,
+	FILES_SGD_PER_GB_MONTH,
+	HOURS_PER_BILLING_MONTH,
 	LOCAL_CLOUD_RATE_CARD,
 	OPENROUTER_CREDIT_PURCHASE_FEE_MULTIPLIER,
 	type BillingAccessTier
 } from './rate-card.js';
 export {
-	BILLING_ALLOCATION_METHODS,
-	BILLING_MAX_GAUGE_SAMPLE_INTERVAL_SECONDS,
-	BILLING_MEASUREMENT_STATUSES,
-	BILLING_RESOURCE_TYPES,
-	BILLING_RESOURCE_UNITS,
 	BILLING_SOURCE_CATALOGUE,
 	BILLING_SOURCE_IDS,
-	integrateBillingObservation,
-	isUsageBillableSubscriptionStatus,
-	type BillingAllocationMethod,
-	type BillingIntegrationInput,
-	type BillingIntegrationResult,
-	type BillingMeasurementStatus,
-	type BillingResourceType,
+	BILLING_SOURCE_UNITS,
 	type BillingSourceDefinition,
 	type BillingSourceId
 } from './metering.js';

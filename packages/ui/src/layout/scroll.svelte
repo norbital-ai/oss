@@ -51,8 +51,13 @@
 	};
 	const layoutClasses: Record<ScrollLayout, string | undefined> = {
 		block: undefined,
+		// `flex-nowrap` and `[&>*]:shrink-0` say the same thing on the two axes: a scroll container
+		// scrolls, its children do not compress to fit. Without it on the stack axis, a column whose
+		// content overruns shrank every child — and a child carrying `min-h-0`, which the layout
+		// primitives set, has no floor, so the agent transcript collapsed every message to zero height
+		// and the replies painted over one another.
 		inline: 'flex flex-row flex-nowrap',
-		stack: 'flex flex-col'
+		stack: 'flex flex-col [&>*]:shrink-0'
 	};
 	const alignClasses = {
 		start: 'items-start',

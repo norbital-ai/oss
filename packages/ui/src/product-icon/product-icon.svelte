@@ -59,6 +59,11 @@
 	{:else if name === 'pod'}
 		<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" />
 		<path d="M8.5 12h7" class="accent-stroke" />
+	{:else if name === 'colony'}
+		<!-- Three honeycomb cells: two above, one below, and the middle cell wears the brand. -->
+		<path d="M10.4 10.3 6.5 12.5 2.6 10.3 2.6 5.8 6.5 3.5 10.4 5.8Z" />
+		<path d="M21.4 10.3 17.5 12.5 13.6 10.3 13.6 5.8 17.5 3.5 21.4 5.8Z" />
+		<path d="M15.9 19.8 12 22 8.1 19.8 8.1 15.3 12 13 15.9 15.3Z" class="accent-stroke" />
 	{:else if name === 'models'}
 		<rect x="4" y="3" width="16" height="18" rx="2" />
 		<path d="M8 8h8M8 12h8M8 16h5" />

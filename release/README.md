@@ -1,7 +1,7 @@
 # Distribution contracts
 
 Norbital OSS publishes one immutable resource type: exact public package archives for
-`@norbital-ai/config`, `platform-utils`, `pod`, `std`, and `ui`.
+`@norbital-ai/config`, `std`, and `ui`.
 
 Template source is the other half of the distribution story, and it is published from the template
 repositories rather than from here — see [Templates](#templates) below.

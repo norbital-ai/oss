@@ -2,7 +2,7 @@ import type {
 	CollectionDbClient,
 	CollectionRegistry,
 	CollectionRow
-} from '@norbital-ai/platform-utils/collection';
+} from '@norbital-ai/std/collection';
 import type {
 	Component,
 	ComponentConstructorOptions,
@@ -192,7 +192,6 @@ export interface CollectionActionToolbarProps<
 	 */
 	navigation?: Snippet;
 	disabled?: boolean;
-	searchPlaceholder?: string;
 	features?: CollectionToolbarFeatures;
 	/** Conditions the view opens with, seeded into the builder as removable rows. */
 	initialFilters?: readonly CollectionTableInitialFilter[];

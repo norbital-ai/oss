@@ -1,18 +1,19 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { mode, toggleMode } from 'mode-watcher';
 	import type { Snippet } from 'svelte';
 	import * as Avatar from '#lib/avatar';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import * as DropdownMenu from '#lib/dropdown-menu';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { detectShortcutModifier, formatShortcut } from '#lib/keybindings';
 	import { Inline } from '#lib/layout';
 	import * as Sidebar from '#lib/sidebar';
 	import { Spinner } from '#lib/spinner';
-	import { ThemeToggle } from '#lib/theme-toggle';
+	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
 	import {
-		WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS,
 		type WorkspaceImpersonation,
 		type WorkspaceNavigationModel,
 		type WorkspaceOrganizationOption
@@ -34,11 +35,12 @@
 		onStopImpersonating,
 		onSearch,
 		searchLabel,
-		searchShortcut
+		searchShortcut,
+		agent
 	}: {
 		model: WorkspaceNavigationModel;
-		onNavigate?: (href: string) => void;
-		onPrefetch?: (href: string) => void;
+		onNavigate?: (href: string) => void | undefined;
+		onPrefetch?: (href: string) => void | undefined;
 		onOrganizationChange?: (organizationId: string) => void | Promise<void>;
 		onSignOut?: () => void | Promise<void>;
 		notifications?: Snippet<[{ expanded: boolean }]>;
@@ -48,6 +50,15 @@
 		onSearch?: () => void;
 		searchLabel?: string;
 		searchShortcut?: string;
+		/**
+		 * The workspace agent's trigger, rendered at the top of the navigation.
+		 *
+		 * A snippet, like `notifications`, because the agent's own state (thinking, failed) belongs to
+		 * the runtime driving it — the shell only owns where it sits. It sits *here*, in the flow of the
+		 * sidebar, rather than floating over the content: a fixed button covers whatever is beneath it,
+		 * and the bottom-right corner of a table is exactly where the last row and the pagination live.
+		 */
+		agent?: Snippet<[{ expanded: boolean }]>;
 	} = $props();
 
 	let switchingOrganizationId = $state<string | null>(null);
@@ -110,6 +121,24 @@
 		i18n.setLocale(nextLocale);
 	}
 
+	/**
+	 * Detected again on mount: the server has no `navigator`, so it always renders the `Ctrl` label,
+	 * and a Mac would keep reading it until something else forced an update.
+	 */
+	let shortcutModifier = $state(detectShortcutModifier());
+	$effect(() => {
+		shortcutModifier = detectShortcutModifier();
+	});
+	const sidebarShortcut = $derived(formatShortcut(shortcutModifier, 'B'));
+
+	/** Both controls name what the click switches *to*, matching the language row beside them. */
+	const isDark = $derived(mode.current === 'dark');
+	const nextThemeLabel = $derived(t(isDark ? 'misc.themeName.light' : 'misc.themeName.dark'));
+
+	/** An icon-only control has no visible label, so its tooltip carries the name and the key. */
+	const withShortcut = (label: string, key: string | undefined): string =>
+		key ? `${label} · ${key}` : label;
+
 	async function selectImpersonationTeam(teamId: string): Promise<void> {
 		if (impersonationBusy || teamId === impersonationActiveTeamId || !onImpersonate) return;
 		impersonationBusy = true;
@@ -171,12 +200,32 @@
 				: 'size-8 justify-center p-0 shadow-xs [&>div]:grow-0 [&>div]:py-0'}
 			minWidth={256}
 			align="start"
-			snapToEnds={true}
 			onValueChange={(organizationId) => {
 				if (organizationId) void selectOrganization(organizationId);
 			}}
 		/>
 	{/key}
+{/snippet}
+
+{#snippet searchIcon(extraClass: string)}
+	{#if onSearch && searchLabel}
+		<Tooltip side="bottom" text={withShortcut(searchLabel, searchShortcut)}>
+			{#snippet trigger({ props })}
+				<Button
+					{...props}
+					type="button"
+					variant="ghost"
+					size="icon"
+					class={cn('size-8 shrink-0', extraClass)}
+					aria-label={searchShortcut ? `${searchLabel} (${searchShortcut})` : searchLabel}
+					onclick={onSearch}
+					data-testid="workspace-omni-trigger"
+				>
+					<Icon icon="lucide:search" class="size-4" />
+				</Button>
+			{/snippet}
+		</Tooltip>
+	{/if}
 {/snippet}
 
 <Sidebar.Indicator />
@@ -185,14 +234,28 @@
 	<Inline gap="xs" class="h-8">
 		{#if displayExpanded}
 			<div class="min-w-0 flex-1">{@render organizationSwitcher()}</div>
-			<ThemeToggle class="size-8 shrink-0" />
-			<Sidebar.Trigger
-				target="expansion"
-				class="size-8 shrink-0"
-				aria-label={sidebar.isMobile
+			<!-- Search is an icon here rather than a row below: the agent now holds the one full-width
+				slot at the top of the navigation, and two competing full rows read as two primary actions. -->
+			{@render searchIcon('')}
+			<!-- The key is only offered on desktop: on mobile this closes the drawer, and a modifier
+				chord is not a gesture that surface has. -->
+			<Tooltip
+				side="bottom"
+				text={sidebar.isMobile
 					? t('misc.closeWorkspaceNavigation')
-					: t('misc.collapseSidebar')}
-			/>
+					: withShortcut(t('misc.collapseSidebar'), sidebarShortcut)}
+			>
+				{#snippet trigger({ props })}
+					<Sidebar.Trigger
+						{...props}
+						target="expansion"
+						class="size-8 shrink-0"
+						aria-label={sidebar.isMobile
+							? t('misc.closeWorkspaceNavigation')
+							: t('misc.collapseSidebar')}
+					/>
+				{/snippet}
+			</Tooltip>
 		{:else}
 			<div class="group/org relative mx-auto flex size-8 items-center justify-center">
 				<div
@@ -213,31 +276,23 @@
 </Sidebar.Header>
 
 <Sidebar.Content class="text-xs">
-	{#if onSearch && searchLabel}
-		<Sidebar.Group class="pb-1">
+	<!--
+		Notifications sit with the agent rather than down in the account footer: both are inbound
+		workspace attention, and the bell buried under the user card read as an account setting.
+		The group drops its bottom padding so "Platform" follows on the section gap alone — with
+		`pb-1` plus the section's own `pt-2` on top of it, the label floated a third of an inch
+		below a two-row group.
+	-->
+	{#if agent || notifications}
+		<Sidebar.Group class="pb-0">
 			<Sidebar.Menu>
-				<Sidebar.MenuItem>
-					<Sidebar.MenuButton
-						size="sm"
-						tooltipContent={searchShortcut ? `${searchLabel} ${searchShortcut}` : searchLabel}
-						aria-label={searchShortcut ? `${searchLabel} (${searchShortcut})` : searchLabel}
-						onclick={onSearch}
-						data-testid="workspace-omni-trigger"
+				{#if agent}
+					<Sidebar.MenuItem>{@render agent({ expanded: displayExpanded })}</Sidebar.MenuItem>
+				{/if}
+				{#if notifications}
+					<Sidebar.MenuItem>{@render notifications({ expanded: displayExpanded })}</Sidebar.MenuItem
 					>
-						<Icon icon="lucide:search" class="size-3.5 shrink-0" />
-						{#if displayExpanded}
-							<span class="min-w-0 flex-1 truncate {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
-								>{searchLabel}</span
-							>
-							{#if searchShortcut}
-								<kbd
-									class="pointer-events-none ml-auto hidden h-5 select-none items-center rounded-md border border-border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:inline-flex"
-									aria-hidden="true">{searchShortcut}</kbd
-								>
-							{/if}
-						{/if}
-					</Sidebar.MenuButton>
-				</Sidebar.MenuItem>
+				{/if}
 			</Sidebar.Menu>
 		</Sidebar.Group>
 	{/if}
@@ -245,6 +300,7 @@
 		label={t('misc.platform')}
 		items={model.system}
 		open={displayExpanded}
+		class={agent || notifications ? 'pt-0' : undefined}
 		{onNavigate}
 		{onPrefetch}
 	/>
@@ -260,9 +316,6 @@
 
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-2 text-xs">
 	<Sidebar.Menu class="gap-2">
-		{#if notifications}
-			<Sidebar.MenuItem>{@render notifications({ expanded: displayExpanded })}</Sidebar.MenuItem>
-		{/if}
 		{#if displayExpanded}
 			<div class="px-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase">
 				{t('misc.account')}
@@ -332,6 +385,20 @@
 							{t(`misc.localeName.${nextLocale}` as UiKeys)}
 						</span>
 					</Button>
+					<!-- Appearance belongs beside language: both are personal display preferences, and
+						neither is a workspace action worth a permanent seat in the header. -->
+					<Button
+						type="button"
+						variant="ghost"
+						class="h-9 w-full justify-start gap-2 px-2 text-xs"
+						aria-label={t(isDark ? 'misc.switchToLightMode' : 'misc.switchToDarkMode')}
+						onclick={() => toggleMode()}
+						data-testid="workspace-theme-toggle"
+					>
+						<Icon icon={isDark ? 'lucide:sun' : 'lucide:moon'} class="size-3.5" />
+						<span>{t('misc.appearance')}</span>
+						<span class="ml-auto text-muted-foreground">{nextThemeLabel}</span>
+					</Button>
 					{#if impersonationAvailable}
 						<DropdownMenu.Separator />
 						<DropdownMenu.Label
@@ -365,10 +432,13 @@
 						{/if}
 					{/if}
 					<DropdownMenu.Separator />
+					<!-- Same box as language and appearance above it: without `h-9 px-2` this row kept the
+						button's default padding, so its icon started a few pixels right of theirs and the
+						column of glyphs bent at the last item. -->
 					<Button
 						type="button"
 						variant="ghost"
-						class="flex w-full items-center justify-start gap-2 text-xs hover:bg-destructive/10 hover:text-destructive"
+						class="h-9 w-full justify-start gap-2 px-2 text-xs hover:bg-destructive/10 hover:text-destructive"
 						disabled={!onSignOut || signOutPending}
 						onclick={() => void signOut()}
 					>
@@ -380,7 +450,7 @@
 			</DropdownMenu.Root>
 		</Sidebar.MenuItem>
 		{#if !displayExpanded}
-			<Sidebar.MenuItem><ThemeToggle class="mx-auto size-8" /></Sidebar.MenuItem>
+			<Sidebar.MenuItem>{@render searchIcon('mx-auto')}</Sidebar.MenuItem>
 		{/if}
 	</Sidebar.Menu>
 </Sidebar.Footer>

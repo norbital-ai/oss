@@ -4,7 +4,7 @@ import type {
 	CollectionQuery,
 	CollectionRegistry,
 	CollectionRow
-} from '@norbital-ai/platform-utils/collection';
+} from '@norbital-ai/std/collection';
 import type { Component, Snippet } from 'svelte';
 import type { CollectionFilterOperator } from './collection-table-filter-operators.js';
 
@@ -71,6 +71,7 @@ const COLLECTION_TABLE_SCALAR_SORT_KINDS = new Set([
 	'text',
 	'timestamp',
 	'timestamptz',
+	'datetime',
 	'uuid'
 ]);
 
@@ -161,11 +162,24 @@ interface CollectionTableBaseProps<
 	 */
 	initialFilters?: readonly CollectionTableInitialFilter[];
 	disabled?: boolean;
+	/** When true, the row cannot be selected for bulk writes and shows a locked leading accent. */
+	isRowLocked?: (row: NoInfer<TRow>) => boolean;
+	/** Operator-facing sentence for why `isRowLocked` is true. */
+	rowLockReason?: (row: NoInfer<TRow>) => string | null;
 	selectable?: boolean;
 	class?: string;
+	/**
+	 * Classes for the table's own root box. When supplied, the table is its own content container:
+	 * toolbar, body and pagination share one outline (pair with `borderless` so the grid's inner
+	 * border does not double it).
+	 */
+	rootClass?: string;
+	/**
+	 * Drops the grid body's own border so a `rootClass` outline is the table's only line.
+	 */
+	borderless?: boolean;
 	title?: string;
 	description?: string;
-	searchPlaceholder?: string;
 	features?: CollectionTableFeatures;
 	exportPipelines?: readonly CollectionTablePipeline<NoInfer<TRow>>[];
 	importPipelines?: readonly CollectionTablePipeline<NoInfer<TRow>>[];

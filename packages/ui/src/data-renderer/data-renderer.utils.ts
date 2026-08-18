@@ -1,4 +1,4 @@
-import type { CollectionField } from '@norbital-ai/platform-utils/collection';
+import type { CollectionField } from '@norbital-ai/std/collection';
 import type { MessageVars } from '@norbital-ai/std/i18n';
 import { intlLocale } from '@norbital-ai/std/i18n';
 import { formatDateRangeLocal } from '@norbital-ai/std/date';
@@ -119,13 +119,15 @@ function formatScalar(
 				: String(value);
 		}
 		case 'timestamp':
-		case 'timestamptz': {
+		case 'timestamptz':
+		case 'datetime': {
 			const date = dateValue(value);
 			return date
 				? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 				: String(value);
 		}
 		case 'date-range':
+		case 'dateRange':
 			return formatDateRange(value, locale);
 		case 'geolocation': {
 			const address = objectProperty(value, 'formatted_address');

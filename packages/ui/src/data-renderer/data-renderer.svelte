@@ -9,7 +9,7 @@
 	import { cn } from '#lib/utils';
 	import DataRendererEditor from './data-renderer-editor.svelte';
 	import { getDataRendererRuntimeContext } from './data-renderer-runtime.js';
-	import type { CollectionRecord } from '@norbital-ai/platform-utils/collection';
+	import type { CollectionRecord } from '@norbital-ai/std/collection';
 	import type { DataRendererProps } from './data-renderer.types.js';
 	import { formatDataValue, type Translate } from './data-renderer.utils.js';
 	import NumericRenderer from './numeric/numeric.renderer.svelte';
@@ -21,6 +21,7 @@
 		'boolean',
 		'date',
 		'date-range',
+		'dateRange',
 		'enum',
 		'file',
 		'geolocation',
@@ -33,6 +34,7 @@
 		'string',
 		'timestamp',
 		'timestamptz',
+		'datetime',
 		'tstzrange',
 		'text',
 		'uuid'
