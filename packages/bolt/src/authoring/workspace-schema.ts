@@ -88,7 +88,21 @@ export interface FieldDefinition<TType extends ScalarType = ScalarType> {
 }
 /** Owns make field behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 const makeField = <TType extends ScalarType>(type: TType) =>
-	(options: { readonly required?: boolean; readonly indexed?: boolean } = {}): FieldDefinition<TType> => {
+	(
+		options: {
+			readonly required?: boolean;
+			readonly indexed?: boolean;
+			/**
+			 * The column's DEFAULT, as the SQL literal the DDL carries — see `sqlDefault` above.
+			 *
+			 * A builder-authored model gets this from the builder. A runtime-owned collection is these
+			 * `field.*` calls and had no way to say it, so `required: true` rendered `not null` with no
+			 * default and every insert that correctly omits the column was refused. That is the same
+			 * failure `roster_entries.origin` had, one layer up.
+			 */
+			readonly sqlDefault?: string;
+		} = {}
+	): FieldDefinition<TType> => {
 		const required = options.required ?? false;
 		const indexed = options.indexed ?? false;
 		if (typeof required !== 'boolean') {
@@ -97,9 +111,21 @@ const makeField = <TType extends ScalarType>(type: TType) =>
 		if (typeof indexed !== 'boolean') {
 			throw new TypeError(`Field ${type} indexed flag must be boolean.`);
 		}
-		return Object.freeze({ type, required, indexed });
+		return Object.freeze(
+			options.sqlDefault === undefined
+				? { type, required, indexed }
+				: { type, required, indexed, sqlDefault: options.sqlDefault }
+		);
 	};
-export const field = { string: makeField('string'), number: makeField('number'), boolean: makeField('boolean'), datetime: makeField('datetime'), json: makeField('json') };
+/**
+ * `uuid` is here because a column that references another collection has to be one.
+ *
+ * Every collection is keyed by `norbital_id uuid`, so a foreign key into one is `uuid` too — and a
+ * `text` column planned in its place is the `operator does not exist: text = uuid` the where compiler
+ * hits when it renders the join it planned. Authored models get this type from their builder; a
+ * runtime-owned collection is `field.*` calls and had no way to say it.
+ */
+export const field = { string: makeField('string'), number: makeField('number'), boolean: makeField('boolean'), datetime: makeField('datetime'), json: makeField('json'), uuid: makeField('uuid') };
 export interface CollectionDefinition<Fields extends Readonly<Record<string, FieldDefinition>>> {
 	readonly name: string;
 	readonly fields: Fields;

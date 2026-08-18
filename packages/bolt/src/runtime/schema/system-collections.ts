@@ -50,7 +50,104 @@ const requestor = collection({
 	history: false
 });
 
+/**
+ * Identity, declared as collections rather than as DDL beside them.
+ *
+ * These four *are* Better Auth's tables. There is no second `user` shadowing an auth table and no
+ * hand-written `create table` for them anywhere: they are ordinary runtime-owned collections, so the
+ * schema plan creates them the way it creates `approval_request`, `verify` checks their columns like
+ * any other, and a workspace relates to `user` with the same `norbital_id` every collection is keyed
+ * by. `auth-tables.ts` maps Better Auth's field names onto these columns, which is all the library
+ * requires of a schema.
+ *
+ * They are the runtime's and not the workspace's for the reason the note above gives: identity
+ * exists in every workspace, including one that authors no collections at all, so a template that
+ * omitted the model — or renamed a column in it — would boot a runtime whose only writer has nowhere
+ * to write.
+ *
+ * The prefix on the table names is deliberate. `user`, `session` and `account` are names a tenant's
+ * own workspace is entitled to use, and a workspace with a `user` collection would otherwise share a
+ * table with the auth system and corrupt both.
+ */
+const authUser = collection({
+	name: 'bolt_auth_user',
+	fields: {
+		name: field.string({ required: true }),
+		email: field.string({ indexed: true }),
+		emailVerified: field.boolean({ required: true, sqlDefault: 'false' }),
+		image: field.string(),
+		/**
+		 * What kind of subject this is. A host provisioner is not a person, and the design this
+		 * replaced gave it one: a row called `admin-1` carrying a real employee's address.
+		 */
+		kind: field.string({ required: true, sqlDefault: "'person'" }),
+		/** The workspace this subject belongs to — Bolt's concept, not Better Auth's. */
+		tenantId: field.string({ indexed: true }),
+		roles: field.json({ required: true, sqlDefault: "'[]'::jsonb" }),
+		teams: field.json({ required: true, sqlDefault: "'[]'::jsonb" })
+	},
+	history: false
+});
+
+const authSession = collection({
+	name: 'bolt_auth_session',
+	fields: {
+		expiresAt: field.datetime({ required: true }),
+		token: field.string({ required: true, indexed: true }),
+		ipAddress: field.string(),
+		userAgent: field.string(),
+		userId: field.uuid({ required: true, indexed: true })
+	},
+	history: false
+});
+
+const authAccount = collection({
+	name: 'bolt_auth_account',
+	fields: {
+		accountId: field.string({ required: true }),
+		providerId: field.string({ required: true }),
+		userId: field.uuid({ required: true, indexed: true }),
+		accessToken: field.string(),
+		refreshToken: field.string(),
+		idToken: field.string(),
+		accessTokenExpiresAt: field.datetime(),
+		refreshTokenExpiresAt: field.datetime(),
+		scope: field.string(),
+		password: field.string()
+	},
+	history: false
+});
+
+const authVerification = collection({
+	name: 'bolt_auth_verification',
+	fields: {
+		identifier: field.string({ required: true, indexed: true }),
+		value: field.string({ required: true }),
+		expiresAt: field.datetime({ required: true })
+	},
+	history: false
+});
+
+/** Where the pod keeps the secret that signs its sessions, generated on first use. */
+const authConfig = collection({
+	name: 'bolt_auth_config',
+	fields: {
+		key: field.string({ required: true, indexed: true }),
+		value: field.string({ required: true })
+	},
+	history: false
+});
+
+export const IDENTITY_COLLECTIONS: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>> = Object.freeze([
+	authUser,
+	authSession,
+	authAccount,
+	authVerification,
+	authConfig
+]);
+
 export const SYSTEM_COLLECTIONS: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>> = Object.freeze([
+	...IDENTITY_COLLECTIONS,
 	approvalRequest,
 	requestor
 ]);
@@ -66,7 +163,19 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	name: 'bolt.system-collections',
 	description: 'Read access to runtime-owned collections that authored queries and reports depend on.',
 	effect: 'allow',
-	grants: SYSTEM_COLLECTIONS.map(({ name }) => ({ collection: name, action: 'read' }))
+	/**
+	 * Identity is deliberately not here.
+	 *
+	 * This grant exists so an authored query can read the runtime's own bookkeeping — approval state
+	 * a report filters on. `bolt_auth_user` is not that: it holds every person in the workspace with
+	 * their roles, teams and address, and granting read on it to any authenticated subject would put
+	 * the whole membership behind one signed-in session and replicate it into every browser the sync
+	 * engine serves. Identity is read through `Identity`, which answers about the caller, and through
+	 * `workspaceAccess`, which is authorised on its own terms.
+	 */
+	grants: SYSTEM_COLLECTIONS.filter(
+		({ name }) => !IDENTITY_COLLECTIONS.some((identity) => identity.name === name)
+	).map(({ name }) => ({ collection: name, action: 'read' }))
 });
 
 /** Merges runtime-owned collections into an authored definition without letting either shadow the other. */

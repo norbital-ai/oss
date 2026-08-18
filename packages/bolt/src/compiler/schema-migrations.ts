@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Effect } from 'effect';
 import { getTableColumns, sql } from 'drizzle-orm';
+import { boltAuthUser } from '../runtime/identity/auth-tables.js';
 import {
 	customType,
 	foreignKey,
@@ -191,22 +192,43 @@ const authoredForeignKey = (
 	});
 };
 
-/** The Drizzle tables a workspace's authored models describe, as drizzle-kit serialises them. */
+/**
+ * Tables a relation may point at without the workspace declaring them.
+ *
+ * `user` is the identity provider's own table, and it is the only description of a person Bolt has —
+ * so "who owns this record" is a foreign key into it, not into a collection each workspace would
+ * otherwise have to invent and keep in step with who can actually sign in. There is deliberately no
+ * `user` collection wrapping it: the auth provider *is* the user, and a second table claiming to
+ * describe the same people is the arrangement identity was moved into the pod to remove.
+ */
+const REFERENCE_ONLY_TABLES: Readonly<Record<string, PgTable>> = { user: boltAuthUser };
+
+/**
+ * The Drizzle tables a workspace's authored models describe, as drizzle-kit serialises them.
+ *
+ * The identity table is reachable as a foreign-key target but is never returned, and the difference
+ * matters: this map is also what the migration is diffed against, so including it would write a
+ * `CREATE TABLE bolt_auth_user` into every workspace's lineage — for a table the schema plan already
+ * owns and creates before any lineage runs.
+ */
 export const workspaceMigrationTables = (
 	models: Readonly<Record<string, ModelDeclaration>>,
 	relations: ReadonlyArray<RelationDefinition>
 ): Readonly<Record<string, PgTable>> => {
 	const byCollection = foreignKeyRelations(relations);
 	const tables: Record<string, PgTable> = {};
+	const targets: Record<string, PgTable> = { ...REFERENCE_ONLY_TABLES };
 	for (const [name, model] of Object.entries(models)) {
-		tables[name] = pgTable(name, { ...systemColumns(), ...model.columns }, (self) => [
+		const table = pgTable(name, { ...systemColumns(), ...model.columns }, (self) => [
 			...(model.metadata?.indexes ?? []).map((declaration) => authoredIndex(name, self, declaration)),
 			...declaredIndexes(name, model.columns, self),
 			...searchIndexes(name, model.columns, self),
 			// Read when Drizzle asks for the table config rather than now, so a relation may point at a
 			// collection declared later in the same pass.
-			...(byCollection.get(name) ?? []).map((relation) => authoredForeignKey(relation, self, tables))
+			...(byCollection.get(name) ?? []).map((relation) => authoredForeignKey(relation, self, targets))
 		]);
+		tables[name] = table;
+		targets[name] = table;
 	}
 	return tables;
 };

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { fixtureUserId } from '../support/fixture-identity.js';
 import { parseAst } from 'vite';
 import {
 	EnvironmentName,
@@ -143,10 +144,10 @@ describe('an authored channel declaration', () => {
 			})
 		);
 		await harness.database.query(
-			`with person as (insert into bolt_auth_user (id, "name", "email", "tenantId", "roles", "teams") values ($2, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict (id) do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning id) insert into bolt_auth_session (id, "token", "userId", "expiresAt") select gen_random_uuid()::text, $1, person.id, now() + interval '1 hour' from person`,
+			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
 			[
 				'admin-token',
-				'user-admin-token',
+				fixtureUserId('user-admin-token'),
 				'test-tenant',
 				JSON.stringify(['admin']),
 				'admin@example.test'

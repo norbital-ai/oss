@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Schema } from 'effect';
+import { IDENTITY_COLLECTIONS } from '../schema/system-collections.js';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { AccessControl } from '../access/access-control.js';
 import { Collections, PendingApproval } from '../collections/collections.js';
@@ -137,7 +138,19 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
 			) {
 				return [{ cursor: incompleteBelow, collection: '*', recordId: 'reset', operation: 'reset' as const }];
 			}
+			/**
+			 * Identity never replicates, whatever the subject may read.
+			 *
+			 * A replica is a copy of the workspace in somebody's browser, and `bolt_auth_user` holds
+			 * every person in the workspace with their roles, teams and address — so an administrator,
+			 * who may legitimately read it, would have the entire membership written to local storage on
+			 * whatever machine they signed in from, and the session and verification tables with it.
+			 * Excluded here rather than by withholding a grant, because the grant is what makes
+			 * `workspaceAccess` and the runtime's own reads work; it is replication that is wrong, not
+			 * reading.
+			 */
 			const readable = workspace.definition.collections
+				.filter(({ name }) => !IDENTITY_COLLECTIONS.some((identity) => identity.name === name))
 				.map(({ name }) => ({ name, predicate: access.predicate(subject, 'read', name) }))
 				.filter(({ predicate }) => predicate.allowed);
 			if (readable.length === 0) return [];
@@ -175,7 +188,10 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
 			);
 		}),
 		shape: Effect.fn('Sync.shape')(function* (subject) {
+			// Identity is excluded for the same reason it is excluded from the change stream: a replica
+			// is a copy in somebody's browser, and the membership table does not belong in one.
 			return workspace.definition.collections
+				.filter(({ name }) => !IDENTITY_COLLECTIONS.some((identity) => identity.name === name))
 				.map(({ name }) => name)
 				.filter((name) => access.predicate(subject, 'read', name).allowed)
 				.toSorted();

@@ -98,7 +98,8 @@ export { Identity } from './runtime/identity/identity.js';
  * Colony created a `bolt_sessions` table shaped the way it remembered, and the pod created one
  * shaped the way it needed. One declaration, imported, cannot drift.
  */
-export { AUTH_MODELS, AUTH_SCHEMA, DEVELOPMENT_SIGN_IN_CODE } from './runtime/identity/auth.js';
+export { AUTH_MODELS, DEVELOPMENT_SIGN_IN_CODE } from './runtime/identity/auth.js';
+export { identitySchemaSteps } from './compiler/schema-plan.js';
 export { Integrations } from './runtime/integrations/integrations.js';
 export { Notifications } from './runtime/notifications/notifications.js';
 export { Sync } from './runtime/sync/sync.js';

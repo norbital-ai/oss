@@ -149,12 +149,16 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 				// Two v4 UUIDs rather than `gen_random_bytes`, which lives in pgcrypto — an extension a
 				// host is under no obligation to have installed, and did not. `gen_random_uuid` is core
 				// Postgres, and two of them are 64 hex characters carrying ~244 bits of entropy.
-				sql: `insert into bolt_auth_config (key, value) values ('session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '')) on conflict (key) do nothing`,
+				// `where not exists` rather than `on conflict (key)`: this is an ordinary collection now, so
+				// it is keyed by `norbital_id` and `key` carries an index but no unique constraint for a
+				// conflict target to match. Concurrent callers race to insert and the loser's row is
+				// harmless — the select below takes whichever secret is there, and both are valid.
+				sql: `insert into bolt_auth_config ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from bolt_auth_config where "key" = 'session-secret')`,
 				parameters: []
 			});
 			const stored = yield* database.execute(effectId, {
 				_tag: 'Query',
-				sql: `select value from bolt_auth_config where key = 'session-secret'`,
+				sql: `select "value" from bolt_auth_config where "key" = 'session-secret' limit 1`,
 				parameters: []
 			});
 			const secret = IdentityRows.text(stored.rows[0], 'value');
@@ -198,7 +202,7 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 			 * than a `revoked_at` the host had to remember to set.
 			 */
 			authenticate: Effect.fn('Identity.authenticate')((effectId, credential) =>
-				readSubject(effectId, `select u.id as "userId", u."tenantId" as "tenantId", u."roles" as "roles", u."teams" as "teams", u."email" as "email" from ${AUTH_MODELS.session} s join ${AUTH_MODELS.user} u on u.id = s."userId" where s."token" = $1 and s."expiresAt" > now()`, [credential])
+				readSubject(effectId, `select u."norbital_id" as "userId", u."tenantId" as "tenantId", u."roles" as "roles", u."teams" as "teams", u."email" as "email" from ${AUTH_MODELS.session} s join ${AUTH_MODELS.user} u on u."norbital_id" = s."userId" where s."token" = $1 and s."expiresAt" > now()`, [credential])
 			),
 			resolveSubject: Effect.fn('Identity.resolveSubject')((effectId, provider, externalId) =>
 				readSubject(effectId, 'select user_id as "userId", tenant_id as "tenantId", roles, teams, email from bolt_external_subjects where provider = $1 and external_id = $2', [provider, externalId])
@@ -277,7 +281,7 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 				// actually signed in, so a second user sharing the address cannot be the one admitted.
 				const admitted = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "updatedAt" = now() where id = (select "userId" from ${AUTH_MODELS.session} where "token" = $1) returning id`,
+					sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "norbital_updated_at" = now() where "norbital_id" = (select "userId" from ${AUTH_MODELS.session} where "token" = $1) returning "norbital_id" as "id"`,
 					parameters: [signedIn.token, tenantId]
 				});
 				const admittedId = IdentityRows.text(admitted.rows[0], 'id');
@@ -297,13 +301,13 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 				const credential = `bolt:${tenantId}:${globalThis.crypto.randomUUID()}`;
 				const admitted = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "updatedAt" = now() where id = $1 returning id`,
+					sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "norbital_updated_at" = now() where "norbital_id" = $1 returning "norbital_id" as "id"`,
 					parameters: [userId, tenantId]
 				});
 				if (admitted.rows[0] === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
 				yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `insert into ${AUTH_MODELS.session} (id, "token", "userId", "expiresAt") values ($1, $2, $3, now() + interval '8 hours')`,
+					sql: `insert into ${AUTH_MODELS.session} ("norbital_id", "token", "userId", "expiresAt") values ($1, $2, $3, now() + interval '8 hours')`,
 					parameters: [globalThis.crypto.randomUUID(), credential, userId]
 				});
 				yield* identityHooks.emit(effectId, { _tag: 'UserChanged', userId, organizationId: tenantId, roles: [], teams: [] });
@@ -329,7 +333,10 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 					_tag: 'Query',
 					sql: `select user_id as "id", max(email) as "email", jsonb_agg(distinct role) filter (where role is not null) as "roles", jsonb_agg(distinct team) filter (where team is not null) as "teams"
 						  from (
-							select id as user_id, "email", "roles", "teams" from ${AUTH_MODELS.user} where "tenantId" = $1 and "kind" = 'person'
+							-- Cast to text so the union matches: identity is keyed by \`norbital_id uuid\`, while an
+							-- external subject's id is whatever its provider calls it, and both are only ever
+							-- read back out of this projection as a string.
+							select "norbital_id"::text as user_id, "email", "roles", "teams" from ${AUTH_MODELS.user} where "tenantId" = $1 and "kind" = 'person'
 							union all
 							select user_id, email, roles, teams from bolt_external_subjects where tenant_id = $1
 						  ) subjects

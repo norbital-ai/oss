@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fixtureUserId } from '../support/fixture-identity.js';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -70,13 +71,15 @@ const session = async (
 	roles: ReadonlyArray<string>
 ) => {
 	await runtime.database.query(
-		`with person as (insert into bolt_auth_user (id, "name", "email", "tenantId", "roles", "teams") values ($2, $2, $4, 'test-tenant', $3::jsonb, '[]'::jsonb) on conflict (id) do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning id) insert into bolt_auth_session (id, "token", "userId", "expiresAt") select gen_random_uuid()::text, $1, person.id, now() + interval '1 hour' from person`,
+		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $4, 'test-tenant', $3::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
 		[token, userId, JSON.stringify([...roles]), `${userId}@example.test`]
 	);
 };
 
+// The readable name is hashed the same way the fixture's SQL hashes it, because identity is keyed
+// by `norbital_id uuid` and a subject has to name the row the session actually points at.
 const subjectFor = (userId: string, roles: ReadonlyArray<string>): Identity.Subject => ({
-	userId,
+	userId: fixtureUserId(userId),
 	tenantId: 'test-tenant',
 	roles,
 	teams: []
@@ -185,11 +188,15 @@ describe('personal secrets', () => {
 		const rows = await harness.database.query(
 			'select user_id, name, value from bolt_personal_secrets order by user_id'
 		);
-		expect(rows.map((row) => [row['user_id'], row['name']])).toEqual([
-			['user-a', SESSION_NAME],
-			['user-admin', SESSION_NAME],
-			['user-b', SESSION_NAME]
-		]);
+		// Compared as a set: the rows come back ordered by `user_id`, which is a uuid, so their order is
+		// the hash's rather than the readable name's.
+		expect(rows.map((row) => [row['user_id'], row['name']]).sort()).toEqual(
+			[
+				[fixtureUserId('user-a'), SESSION_NAME],
+				[fixtureUserId('user-admin'), SESSION_NAME],
+				[fixtureUserId('user-b'), SESSION_NAME]
+			].sort()
+		);
 		for (const row of rows)
 			for (const plaintext of ['li_at=AAA', 'li_at=BBB', 'li_at=ADMIN'])
 				expect(String(row['value']), `${String(row['user_id'])} stores a credential in the clear`).not.toContain(plaintext);
@@ -241,7 +248,7 @@ describe('personal secrets', () => {
 		// owner — so `user-b` still reading `li_at=BBB` is the assertion that their row was untouched.
 		expect(
 			(await harness.database.query('select user_id from bolt_personal_secrets order by user_id')).map((row) => row['user_id'])
-		).toEqual(['user-a', 'user-b']);
+		).toEqual([fixtureUserId('user-a'), fixtureUserId('user-b')].sort());
 		expect(await readAs(harness, userA, SESSION_NAME)).toBe('stolen');
 		expect(await readAs(harness, userB, SESSION_NAME), 'a named user id reached the write').toBe('li_at=BBB');
 
@@ -254,7 +261,7 @@ describe('personal secrets', () => {
 		expect(
 			(await harness.database.query('select user_id from bolt_personal_secrets')).map((row) => row['user_id']),
 			'a named user id reached the delete'
-		).toEqual(['user-b']);
+		).toEqual([fixtureUserId('user-b')]);
 		expect(await readAs(harness, userB, SESSION_NAME)).toBe('li_at=BBB');
 	});
 

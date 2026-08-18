@@ -1,14 +1,6 @@
 import { betterAuth } from 'better-auth';
 import { emailOTP } from 'better-auth/plugins';
 import { makeAuthStore, type ExecuteQuery } from './auth-store.js';
-import {
-	boltAuthAccount,
-	boltAuthConfig,
-	boltAuthSession,
-	boltAuthUser,
-	boltAuthVerification,
-	createTableSql
-} from './auth-tables.js';
 
 /**
  * Identity for the pod, owned by the pod.
@@ -65,36 +57,13 @@ export type AuthOptions = Readonly<{
 }>;
 
 /**
- * The schema the pod's identity needs, in the same `create table if not exists` idiom as the rest
- * of the plan so `schema.migrate` applies it and re-applies it safely.
+ * Identity's tables are declared in `system-collections.ts`, as collections.
  *
- * Columns are quoted camelCase because that is the shape Better Auth reads and writes; aliasing
- * snake_case back on every query would put a translation layer between the library and its own
- * schema, and that layer is where a mismatch hides.
- *
- * The step ids are not decorative. The plan applies steps in sorted id order, so a child table has
- * to sort after the table it references — hence `bolt:auth-user-session` rather than
- * `bolt:auth-session`, which would have sorted before its own parent and failed on a fresh
- * database. Naming the parent in the child's id makes that ordering visible instead of incidental.
+ * There is no `AUTH_SCHEMA` here any more. It was a hand-written `create table` per model, rendered
+ * beside a second declaration of the same columns — so the schema had two authors and a test between
+ * them. The collections are the one declaration now: the schema plan creates them, `verify` checks
+ * them, and `auth-tables.ts` maps Better Auth's field names onto the columns they produce.
  */
-export const AUTH_SCHEMA: ReadonlyArray<{ readonly id: string; readonly sql: string }> = [
-	// The step ids are not decorative. The plan applies steps in sorted id order, so a child table has
-	// to sort after the table it references — hence `bolt:auth-user-session` rather than
-	// `bolt:auth-session`, which would have sorted before its own parent and failed on a fresh
-	// database. Naming the parent in the child's id makes that ordering visible instead of incidental.
-	{ id: 'bolt:auth-user', sql: createTableSql(boltAuthUser) },
-	{ id: 'bolt:auth-user-session', sql: createTableSql(boltAuthSession) },
-	{ id: 'bolt:auth-user-account', sql: createTableSql(boltAuthAccount) },
-	{ id: 'bolt:auth-verification', sql: createTableSql(boltAuthVerification) },
-	{ id: 'bolt:auth-config', sql: createTableSql(boltAuthConfig) },
-	{
-		// The lookup every code check performs. Without it, verification degrades to a sequential scan
-		// over every code the workspace has ever issued. An index is not part of a table's definition,
-		// so it is the one step still written out here.
-		id: 'bolt:auth-verification-identifier',
-		sql: `create index if not exists ${AUTH_MODELS.verification}_identifier_idx on ${AUTH_MODELS.verification} ("identifier")`
-	}
-];
 
 /**
  * Builds the pod's auth instance.
@@ -109,6 +78,16 @@ export const makeAuth = (options: AuthOptions) =>
 		secret: options.secret,
 		baseURL: options.baseURL,
 		emailAndPassword: { enabled: false },
+		/**
+		 * Ids are UUIDs, because the workspace references them.
+		 *
+		 * Better Auth's own default is a random string of its choosing, which is fine for a library that
+		 * owns its tables outright — but these are joined to from workspace collections whose keys are
+		 * `uuid`, so the value has to be one. Generated here rather than defaulted in the column so the
+		 * library still decides when a row exists and what it is called; only the shape is the
+		 * platform's.
+		 */
+		advanced: { database: { generateId: () => globalThis.crypto.randomUUID() } },
 		user: { modelName: AUTH_MODELS.user },
 		session: { modelName: AUTH_MODELS.session },
 		account: { modelName: AUTH_MODELS.account },

@@ -1,4 +1,5 @@
 import { Effect } from 'effect';
+import { fixtureUserId } from '../support/fixture-identity.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	EnvironmentName,
@@ -83,7 +84,7 @@ const dataBrowserQuery = (credential: string, trustedContext: unknown) =>
 
 const session = async (runtime: BoltTestRuntime, token: string, roles: ReadonlyArray<string>) => {
 	await runtime.database.query(
-		`with person as (insert into bolt_auth_user (id, "name", "email", "tenantId", "roles", "teams") values ($2, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict (id) do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning id) insert into bolt_auth_session (id, "token", "userId", "expiresAt") select gen_random_uuid()::text, $1, person.id, now() + interval '1 hour' from person`,
+		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
 		[token, `user-${token}`, 'test-tenant', JSON.stringify([...roles]), `${token}@example.test`]
 	);
 };
@@ -165,7 +166,7 @@ describe('the subject a facility call carries', () => {
 		expect(
 			subjectsOf(calls.slice(1)),
 			'a facility call made under an authenticated command carried no subject'
-		).toEqual(calls.slice(1).map(() => ({ userId: 'user-admin-token', roles: ['admin'] })));
+		).toEqual(calls.slice(1).map(() => ({ userId: fixtureUserId('user-admin-token'), roles: ['admin'] })));
 	});
 
 	/**
@@ -191,7 +192,7 @@ describe('the subject a facility call carries', () => {
 
 		const named = subjectsOf(harness.database.calls).map((subject) => subject?.userId);
 		expect(named, 'a payload-named user reached a facility call').not.toContain('user-victim');
-		expect(named).toContain('user-admin-token');
+		expect(named).toContain(fixtureUserId('user-admin-token'));
 	});
 
 	/**

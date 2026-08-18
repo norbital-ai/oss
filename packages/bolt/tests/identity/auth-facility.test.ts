@@ -1,8 +1,8 @@
 import { PGlite } from '@electric-sql/pglite';
+import { identitySchemaSteps } from '../../src/compiler/schema-plan.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
 	AUTH_MODELS,
-	AUTH_SCHEMA,
 	DEVELOPMENT_SIGN_IN_CODE,
 	makeAuth,
 	type DeliverCode
@@ -28,7 +28,7 @@ describe('pod-owned identity over a host facility', () => {
 			const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
 			return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
 		};
-		for (const statement of AUTH_SCHEMA) await database.exec(statement.sql);
+		for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
 	});
 
 	afterAll(async () => {
@@ -38,7 +38,7 @@ describe('pod-owned identity over a host facility', () => {
 	it('applies its schema through the same plan idiom, and re-applies safely', async () => {
 		// `schema.migrate` runs on every deploy, so a statement that is not idempotent breaks the
 		// second one rather than the first.
-		for (const statement of AUTH_SCHEMA) await database.exec(statement.sql);
+		for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
 		const tables = await database.query<{ table_name: string }>(
 			`select table_name from information_schema.tables where table_name like 'bolt_auth_%' order by table_name`
 		);
@@ -156,7 +156,7 @@ describe('the code a development environment issues', () => {
 				const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
 				return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
 			};
-			for (const statement of AUTH_SCHEMA) await database.exec(statement.sql);
+			for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
 			const sent: Array<string> = [];
 			const development = makeAuth({
 				execute: run,
@@ -189,8 +189,8 @@ describe('the signing secret the pod generates for itself', () => {
 		// run the statement that provisions the secret. This one runs the real SQL.
 		const database = await PGlite.create('memory://');
 		try {
-			for (const statement of AUTH_SCHEMA) await database.exec(statement.sql);
-			const insert = `insert into bolt_auth_config (key, value) values ('session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '')) on conflict (key) do nothing`;
+			for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
+			const insert = `insert into bolt_auth_config ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from bolt_auth_config where "key" = 'session-secret')`;
 			await database.query(insert);
 			// Re-running must not rotate the secret: a secret that changed on every boot would
 			// invalidate every session the previous boot issued.

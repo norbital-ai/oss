@@ -2,8 +2,7 @@ import { collectionSearchTrigramIndexName } from '@norbital-ai/std/collection';
 import type { ModelExclusion } from '../authoring/models-schema.js';
 import { searchableColumns } from '../authoring/model-introspection.js';
 import type { CollectionDefinition, FieldDefinition, WorkspaceDefinition } from '../authoring/workspace-schema.js';
-import { SYSTEM_COLLECTION_NAMES, withSystemCollections } from '../runtime/schema/system-collections.js';
-import { AUTH_SCHEMA } from '../runtime/identity/auth.js';
+import { IDENTITY_COLLECTIONS, SYSTEM_COLLECTION_NAMES, withSystemCollections } from '../runtime/schema/system-collections.js';
 
 export type SchemaStep = Readonly<{
 	readonly id: string;
@@ -388,7 +387,6 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		{ id: 'bolt:schema-migrations', sql: 'create table if not exists __drizzle_migrations (id serial primary key, tag text not null unique, created_at timestamptz not null default now())' },
 		// Identity's own tables, declared where identity declares them rather than restated here. The
 		// pod owns its schema; the plan only has to apply it.
-		...AUTH_SCHEMA,
 		/**
 		 * The sync log every replica reads.
 		 *
@@ -497,3 +495,21 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 	const steps = [...foundation, ...collections].toSorted((left, right) => left.id.localeCompare(right.id));
 	return { fingerprint: SchemaPlanValues.fingerprint(steps), steps };
 };
+
+/**
+ * The steps a host applies before anything can authenticate.
+ *
+ * A freshly provisioned database is empty, and `schema.migrate` — the command that would fill it —
+ * authenticates through a session row like every other command. So a host has to create identity's
+ * tables before it can migrate, and this is what it applies: the same steps the plan would emit for
+ * those collections, generated from the same declaration, rather than a copy of the DDL kept
+ * somewhere a host could let drift. `schema.migrate` remains the authority and re-applies them.
+ */
+export const identitySchemaSteps = (): ReadonlyArray<SchemaStep> =>
+	buildSchemaPlan({
+		name: 'identity',
+		collections: IDENTITY_COLLECTIONS,
+		customTypes: {},
+		policies: [],
+		relations: []
+	} as unknown as WorkspaceDefinition).steps.filter((step) => step.id.startsWith('collection:bolt_auth_'));

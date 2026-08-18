@@ -1,4 +1,5 @@
 import { Effect } from 'effect';
+import { fixtureUserId } from '../support/fixture-identity.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	EffectId,
@@ -111,14 +112,14 @@ describe('identity lifecycle hooks', () => {
 		// to exist before a session can be started for them. That refusal is the point: the previous
 		// implementation would issue a live credential for any user id it was handed.
 		await harness.database.query(
-			`insert into bolt_auth_user (id, "name", "tenantId") values ($1, $1, 'test-tenant') on conflict (id) do nothing`,
+			`insert into bolt_auth_user ("norbital_id", "name", "tenantId") values (md5($1::text)::uuid, $1, 'test-tenant') on conflict ("norbital_id") do nothing`,
 			['u1']
 		);
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				yield* (yield* Identity.Service).startSession(
 					EffectId.make('start-1'),
-					'u1',
+					fixtureUserId('u1'),
 					'test-tenant'
 				);
 			})
@@ -127,7 +128,7 @@ describe('identity lifecycle hooks', () => {
 		expect(hooks.events).toEqual([
 			{
 				_tag: 'UserChanged',
-				userId: 'u1',
+				userId: fixtureUserId('u1'),
 				organizationId: 'test-tenant',
 				roles: [],
 				teams: []
@@ -141,7 +142,7 @@ describe('identity lifecycle hooks', () => {
 		// to exist before a session can be started for them. That refusal is the point: the previous
 		// implementation would issue a live credential for any user id it was handed.
 		await harness.database.query(
-			`insert into bolt_auth_user (id, "name", "tenantId") values ($1, $1, 'test-tenant') on conflict (id) do nothing`,
+			`insert into bolt_auth_user ("norbital_id", "name", "tenantId") values (md5($1::text)::uuid, $1, 'test-tenant') on conflict ("norbital_id") do nothing`,
 			['u2']
 		);
 		const result = await harness.runtime.runPromise(
@@ -155,7 +156,7 @@ describe('identity lifecycle hooks', () => {
 				);
 				const credential = yield* identity.startSession(
 					EffectId.make('start-2'),
-					'u2',
+					fixtureUserId('u2'),
 					'test-tenant'
 				);
 				return { invitationId, credential };
