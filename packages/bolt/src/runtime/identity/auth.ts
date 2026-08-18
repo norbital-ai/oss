@@ -1,6 +1,14 @@
 import { betterAuth } from 'better-auth';
 import { emailOTP } from 'better-auth/plugins';
 import { makeAuthStore, type ExecuteQuery } from './auth-store.js';
+import {
+	boltAuthAccount,
+	boltAuthConfig,
+	boltAuthSession,
+	boltAuthUser,
+	boltAuthVerification,
+	createTableSql
+} from './auth-tables.js';
 
 /**
  * Identity for the pod, owned by the pod.
@@ -70,51 +78,19 @@ export type AuthOptions = Readonly<{
  * database. Naming the parent in the child's id makes that ordering visible instead of incidental.
  */
 export const AUTH_SCHEMA: ReadonlyArray<{ readonly id: string; readonly sql: string }> = [
-	{
-		/**
-		 * Better Auth's own columns, plus the three the workspace authorizes with.
-		 *
-		 * `tenantId`, `roles` and `teams` are Bolt's concepts, not Better Auth's, and they sit here
-		 * rather than in a second table because the alternative is the arrangement being removed: two
-		 * stores that must agree about who someone is, and eventually do not. Better Auth never reads
-		 * or writes them — it manages only the fields it declared — so the two coexist without either
-		 * owning the other's meaning.
-		 *
-		 * `email` is nullable and `kind` exists so a non-person subject can be represented honestly. A
-		 * host provisioner is not a person, and the previous design gave it one: a row called
-		 * `admin-1` carrying a real employee's address. A service row with no email and `kind` of
-		 * `service` says what it is instead of impersonating somebody.
-		 */
-		id: 'bolt:auth-user',
-		sql: `create table if not exists ${AUTH_MODELS.user} (id text primary key, "name" text not null, "email" text unique, "emailVerified" boolean not null default false, "image" text, "kind" text not null default 'person', "tenantId" text, "roles" jsonb not null default '[]'::jsonb, "teams" jsonb not null default '[]'::jsonb, "createdAt" timestamptz not null default now(), "updatedAt" timestamptz not null default now())`
-	},
-	{
-		id: 'bolt:auth-user-session',
-		sql: `create table if not exists ${AUTH_MODELS.session} (id text primary key, "expiresAt" timestamptz not null, "token" text not null unique, "createdAt" timestamptz not null default now(), "updatedAt" timestamptz not null default now(), "ipAddress" text, "userAgent" text, "userId" text not null references ${AUTH_MODELS.user}(id) on delete cascade)`
-	},
-	{
-		id: 'bolt:auth-user-account',
-		sql: `create table if not exists ${AUTH_MODELS.account} (id text primary key, "accountId" text not null, "providerId" text not null, "userId" text not null references ${AUTH_MODELS.user}(id) on delete cascade, "accessToken" text, "refreshToken" text, "idToken" text, "accessTokenExpiresAt" timestamptz, "refreshTokenExpiresAt" timestamptz, "scope" text, "password" text, "createdAt" timestamptz not null default now(), "updatedAt" timestamptz not null default now())`
-	},
-	{
-		id: 'bolt:auth-verification',
-		sql: `create table if not exists ${AUTH_MODELS.verification} (id text primary key, "identifier" text not null, "value" text not null, "expiresAt" timestamptz not null, "createdAt" timestamptz not null default now(), "updatedAt" timestamptz not null default now())`
-	},
-	{
-		/**
-		 * Where the pod keeps the secret that signs its sessions.
-		 *
-		 * In the database, generated on first use, rather than injected by the host. That is what
-		 * "self-sustaining" has to mean for a secret: a host-supplied one makes the pod depend on the
-		 * host having configured something, and two hosts configuring it differently would invalidate
-		 * each other's sessions for the same workspace.
-		 */
-		id: 'bolt:auth-config',
-		sql: `create table if not exists bolt_auth_config (key text primary key, value text not null, "createdAt" timestamptz not null default now())`
-	},
+	// The step ids are not decorative. The plan applies steps in sorted id order, so a child table has
+	// to sort after the table it references — hence `bolt:auth-user-session` rather than
+	// `bolt:auth-session`, which would have sorted before its own parent and failed on a fresh
+	// database. Naming the parent in the child's id makes that ordering visible instead of incidental.
+	{ id: 'bolt:auth-user', sql: createTableSql(boltAuthUser) },
+	{ id: 'bolt:auth-user-session', sql: createTableSql(boltAuthSession) },
+	{ id: 'bolt:auth-user-account', sql: createTableSql(boltAuthAccount) },
+	{ id: 'bolt:auth-verification', sql: createTableSql(boltAuthVerification) },
+	{ id: 'bolt:auth-config', sql: createTableSql(boltAuthConfig) },
 	{
 		// The lookup every code check performs. Without it, verification degrades to a sequential scan
-		// over every code the workspace has ever issued.
+		// over every code the workspace has ever issued. An index is not part of a table's definition,
+		// so it is the one step still written out here.
 		id: 'bolt:auth-verification-identifier',
 		sql: `create index if not exists ${AUTH_MODELS.verification}_identifier_idx on ${AUTH_MODELS.verification} ("identifier")`
 	}

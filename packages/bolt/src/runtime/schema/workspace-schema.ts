@@ -240,10 +240,27 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
 						) ?? 0
 					)
 				: 0;
+			/**
+			 * An EXCLUDE constraint has to wait for the lineage that builds the table it constrains.
+			 *
+			 * These are the one part of the plan that alters a workspace collection rather than creating
+			 * something of Bolt's own, and the plan stopped rendering those tables when the lineage took
+			 * them over — so on a virgin database the constraint arrived before anything had created
+			 * `contribution_rates`, `'contribution_rates'::regclass` raised, and `migrate` died there.
+			 * The lineage never ran, and the tenant was left with the handful of `bolt_*` tables the
+			 * plan does still own, looking provisioned. It only stayed hidden because an already-migrated
+			 * database has the tables, so the constraint applies and the ordering never shows.
+			 *
+			 * Split by id rather than by inspecting the SQL: `exclusionStep` is what mints these and it
+			 * is the same module that decides they belong to a collection.
+			 */
+			const isExclusion = (id: string) => id.includes(':exclusion:');
+			const planSteps = schemaPlan.steps.filter((step) => !isExclusion(step.id));
+			const exclusionSteps = schemaPlan.steps.filter((step) => isExclusion(step.id));
 			yield* database.execute(effectId, {
 				_tag: 'Transaction',
 				statements: [
-					...schemaPlan.steps.map(({ sql }) => ({ sql, parameters: [] })),
+					...planSteps.map(({ sql }) => ({ sql, parameters: [] })),
 					{
 						sql: 'insert into bolt_schema_state (fingerprint) values ($1)',
 						parameters: [schemaPlan.fingerprint]
@@ -283,6 +300,13 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
 			const recorded = yield* appliedTags(effectId);
 			const legacy = !virgin && recorded.size === 0 && planned > 0;
 			yield* legacy ? baselineLineage(effectId) : applyLineage(effectId);
+			// Now that the collections exist, whichever half created them.
+			if (exclusionSteps.length > 0) {
+				yield* database.execute(effectId, {
+					_tag: 'Transaction',
+					statements: exclusionSteps.map(({ sql }) => ({ sql, parameters: [] }))
+				});
+			}
 			// Neither half can be trusted to have finished the job. The plan can only add, so a collection
 			// whose table already exists in an older shape is skipped by every `if not exists` in it; the
 			// lineage only carries the entries somebody generated. A successful run is therefore not
