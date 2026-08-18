@@ -67,7 +67,7 @@ type Row = { readonly [column: string]: Schema.Json };
 const store = (transcript: ReadonlyArray<Row>) => {
 	const writes: Array<ReadonlyArray<unknown>> = [];
 	const titles: Readonly<Record<string, string>> = {
-		[sender]: 'Wrote the pod-owned auth module',
+		[sender]: 'Wrote bolt-owned auth module',
 		[recipient]: 'Migration and performance verification'
 	};
 	const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
@@ -153,7 +153,7 @@ describe('messages between sandbox agent sessions', () => {
 			from: {
 				sessionId: sender,
 				agentName: 'helper',
-				title: 'Wrote the pod-owned auth module'
+				title: 'Wrote bolt-owned auth module'
 			},
 			text: 'Those four are already fixed.'
 		});

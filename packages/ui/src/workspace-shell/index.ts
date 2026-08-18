@@ -6,6 +6,8 @@ export {
 	WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS
 } from './workspace-shell.types.js';
 export type {
+	WorkspaceImpersonation,
+	WorkspaceImpersonationTeam,
 	WorkspaceNavigationItem,
 	WorkspaceNavigationModel,
 	WorkspaceOrganizationOption,

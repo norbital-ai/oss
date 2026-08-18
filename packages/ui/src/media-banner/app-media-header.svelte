@@ -1,4 +1,4 @@
-<!-- fallow-ignore-file unrendered-component -- exported package app chrome rendered by the pod shell -->
+<!-- fallow-ignore-file unrendered-component -- exported package app chrome rendered by bolt shell -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { IconWrapper } from '#lib/icon-wrapper';
@@ -14,11 +14,11 @@
 		class: className
 	}: {
 		/**
-		 * App banner image (`pod:banner`). Decorative only — copy sits on the dark scrim.
+		 * App banner image (`bolt:banner`). Decorative only — copy sits on the dark scrim.
 		 * Optional: without one the header keeps its base wash and stays legible.
 		 */
 		src?: string | null;
-		/** App icon (`pod:icon`). Opaque chip so it stays readable on any banner. */
+		/** App icon (`bolt:icon`). Opaque chip so it stays readable on any banner. */
 		icon?: string | null;
 		title?: string | null;
 		description?: string | null;

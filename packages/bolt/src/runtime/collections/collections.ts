@@ -605,6 +605,39 @@ export const layer = Layer.effect(
 					}).pipe(Effect.orElseSucceed(() => []))
 				);
 			});
+		/**
+		 * A column value as a parameter, and the placeholder that receives it.
+		 *
+		 * A driver binds a JavaScript array to a Postgres *array*, so a `jsonb` column handed
+		 * `[{ start_at, end_at }]` receives array-literal syntax and answers `invalid input syntax for
+		 * type json`. An object does not take that path — a driver serialises it — which is why only
+		 * list-valued JSON columns were broken, and why nothing caught it until a workspace stored one:
+		 * `time_entries.worked_intervals` is a list, so no attendance record could be written or
+		 * corrected through the runtime at all.
+		 *
+		 * The decision is the *column's* declared type, never the value's JavaScript type. A model can
+		 * declare a real Postgres array with `.array()`, and a value bound for one must stay an array —
+		 * encoding it as JSON because it happened to arrive as a list would corrupt exactly the column
+		 * the driver was already handling correctly.
+		 */
+		const isJsonColumn = (
+			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+			column: string
+		): boolean => definition.fields[column]?.type === 'json';
+		const boundParameter = (
+			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+			column: string,
+			value: Schema.Json
+		): Schema.Json =>
+			isJsonColumn(definition, column) && Array.isArray(value) ? JSON.stringify(value) : value;
+		const boundPlaceholder = (
+			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+			column: string,
+			value: Schema.Json,
+			position: number
+		): string =>
+			`$${position}${isJsonColumn(definition, column) && Array.isArray(value) ? '::jsonb' : ''}`;
+
 		const applyCreate = Effect.fn('Collections.applyCreate')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
@@ -616,7 +649,14 @@ export const layer = Layer.effect(
 			const writable = writableValues(input.values, definition);
 			const entries = Object.entries(writable).sort(([left], [right]) => left.localeCompare(right));
 			const columns = ['norbital_id', ...entries.map(([name]) => name)];
-			const parameters: ReadonlyArray<Schema.Json> = [input.id, ...entries.map(([, value]) => value), ...visibility.parameters];
+			const columnValues: ReadonlyArray<readonly [string, Schema.Json]> = [
+				['norbital_id', input.id],
+				...entries.map(([name, value]) => [name, value] as const)
+			];
+			const parameters: ReadonlyArray<Schema.Json> = [
+				...columnValues.map(([name, value]) => boundParameter(definition, name, value)),
+				...visibility.parameters
+			];
 			const history = definition.history ? [{
 				sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)',
 				parameters: [input.collection, input.id, 'create', subject.userId, input.values]
@@ -625,7 +665,7 @@ export const layer = Layer.effect(
 				_tag: 'Transaction',
 				statements: [
 					{
-						sql: `insert into ${quoteIdentifier(input.collection)} (${columns.map(quoteIdentifier).join(', ')}) select ${columns.map((_, index) => `$${index + 1}`).join(', ')} where ${offsetParameters(visibility.sql, columns.length)}`,
+						sql: `insert into ${quoteIdentifier(input.collection)} (${columns.map(quoteIdentifier).join(', ')}) select ${columnValues.map(([name, value], index) => boundPlaceholder(definition, name, value, index + 1)).join(', ')} where ${offsetParameters(visibility.sql, columns.length)}`,
 						parameters
 					},
 					...history,
@@ -653,14 +693,14 @@ export const layer = Layer.effect(
 			const entries = Object.entries(writable).sort(([left], [right]) => left.localeCompare(right));
 			if (entries.length === 0 && !clearLock) return;
 			const assignments = [
-				...entries.map(([name], index) => `${quoteIdentifier(name)} = $${index + 1}`),
+				...entries.map(([name, value], index) => `${quoteIdentifier(name)} = ${boundPlaceholder(definition, name, value, index + 1)}`),
 				'norbital_updated_at = now()',
 				'norbital_row_version = norbital_row_version + 1',
 				...(clearLock ? ['norbital_approval_id = null'] : [])
 			];
 			const history = definition.history ? [{ sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)', parameters: [input.collection, input.id, 'update', subject.userId, input.values] }] : [];
 			yield* database.execute(effectId, { _tag: 'Transaction', statements: [
-				{ sql: `update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where norbital_id = $${entries.length + 1} and (${offsetParameters(visibility.sql, entries.length + 1)})`, parameters: [...entries.map(([, value]) => value), input.id, ...visibility.parameters] },
+				{ sql: `update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where norbital_id = $${entries.length + 1} and (${offsetParameters(visibility.sql, entries.length + 1)})`, parameters: [...entries.map(([name, value]) => boundParameter(definition, name, value)), input.id, ...visibility.parameters] },
 				...history,
 				{ sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)', parameters: [input.collection, input.id, 'update', input.values] },
 				...outboxStatements(subject, input.collection, input.id, 'update', input.values, previous)

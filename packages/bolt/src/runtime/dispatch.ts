@@ -24,6 +24,16 @@ export { DispatchError } from './workspace.js';
 
 const VisibleAppsInput = Schema.Struct({ subject: Subject });
 const ImpersonateInput = Schema.Struct({ actor: Subject, target: Subject });
+const ImpersonateTeamInput = Schema.Struct({ actor: Subject, teamId: Schema.NonEmptyString });
+/**
+ * Both halves are minted by the boundary, never read from the payload.
+ *
+ * `actor` is the credential holder and `impersonatedTeam` is what the boundary resolved out of the
+ * host's header — so this command reports the preview the runtime is *actually* running, not the one
+ * a browser believes it asked for. A sidebar that trusted its own cookie would keep showing a team
+ * as active after the runtime had refused it.
+ */
+const ImpersonationStateInput = Schema.Struct({ actor: Subject, impersonatedTeam: Schema.NullOr(Schema.String) });
 const AccessDecisionInput = Schema.Struct({ subject: Subject, action: Schema.NonEmptyString, resource: Schema.NonEmptyString });
 const AccessMaskInput = Schema.Struct({ subject: Subject, action: Schema.NonEmptyString, resource: Schema.NonEmptyString, value: Schema.Record(Schema.String, Schema.Json) });
 const ApprovalRequestInput = Schema.Struct({ subject: Subject, requestId: Schema.NonEmptyString, operation: Schema.Json });
@@ -157,7 +167,7 @@ const IdentityVerifyCodeInput = Schema.Struct({ email: Schema.NonEmptyString, co
  *
  * Neither command answers anything about an address the caller did not supply, and neither reveals
  * whether an address is already known, so an unauthenticated caller learns nothing from either.
- * Rate limiting and bot checks are the host's: a pod cannot see the request rate of a surface it
+ * Rate limiting and bot checks are the host's: a bolt cannot see the request rate of a surface it
  * does not serve.
  */
 const SIGN_IN_COMMANDS: ReadonlySet<string> = new Set(['identity.sendCode', 'identity.verifyCode']);
@@ -189,6 +199,21 @@ const DispatchValues = {
 		// on, then stripping them back out — so it stays unimplemented rather than half-wired into a
 		// query that returns fewer columns than the cursor and the prefetch both need.
 	}),
+	/**
+	 * The team this invocation asks to be viewed as, or `undefined`.
+	 *
+	 * The same `x-colony-impersonated-*` family the plugin path reads out of `trustedContext`, carried
+	 * as a header because a `Command` has no `trustedContext` field — headers are already where it
+	 * carries its credential, and a second channel would be a second thing to authenticate.
+	 *
+	 * Nothing here trusts the value. It names a policy the workspace itself declares, and
+	 * `subjectAsTeam` grants it only after checking, against the subject this boundary just
+	 * authenticated from the credential, that the actor holds `impersonator`.
+	 */
+	impersonatedTeamFromHeaders: (headers: Readonly<Record<string, ReadonlyArray<string>>>): string | undefined => {
+		const value = Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-colony-impersonated-team')?.[1][0]?.trim();
+		return value === undefined || value === '' ? undefined : value;
+	},
 	credentialFromHeaders: (headers: Readonly<Record<string, ReadonlyArray<string>>>): string | undefined => {
 		const authorization = Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1][0];
 		if (authorization !== undefined) return authorization.replace(/^Bearer\s+/i, '');
@@ -322,7 +347,7 @@ const authorizeInvocationProvenance = Effect.fn('Bolt.authorizeInvocationProvena
  * `automations.<name>` forwards its whole input to an authored automation. Without this, a task
  * payload could smuggle a subject in through that input.
  */
-const MINTED_IDENTITY = ['subject', 'actor', 'userId', 'tenantId', 'invitedBy'] as const;
+const MINTED_IDENTITY = ['subject', 'actor', 'userId', 'tenantId', 'invitedBy', 'impersonatedTeam'] as const;
 
 /**
  * Answers one keyset page: the rows, and the cursor its successor should carry.
@@ -361,6 +386,7 @@ const collectionPage = Effect.fn('Bolt.collectionPage')(function* (effectId: Eff
  */
 export const collectionQuery = DispatchValues.collectionQuery;
 const credentialFromHeaders = DispatchValues.credentialFromHeaders;
+const impersonatedTeamFromHeaders = DispatchValues.impersonatedTeamFromHeaders;
 
 export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocation: Invocation) {
 	if (invocation._tag === 'Request') {
@@ -442,7 +468,7 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 		}
 		// Checked before the credential is demanded, because a person signing in has none yet.
 		//
-		// The tenant is minted here rather than left out. A pod serves exactly one workspace, so which
+		// The tenant is minted here rather than left out. A bolt serves exactly one workspace, so which
 		// tenant a sign-in belongs to is a fact the invocation already carries — and the alternative was
 		// not "no tenant" but a broken flow: Better Auth admits the address, the user row lands with a
 		// null `tenantId`, and the credential it hands back fails `authenticate` as malformed on its
@@ -462,9 +488,29 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 		}
 		const credential = credentialFromHeaders(invocation.headers);
 		if (credential === undefined || credential === '') return yield* new DispatchError({ code: 'unauthorized', message: 'Missing command credential' });
-		const subject = yield* (yield* Identity.Service).authenticate(effectId, credential);
-		if (subject.tenantId !== invocation.scope.tenantId) return yield* new DispatchError({ code: 'tenant_mismatch', message: 'Authenticated subject is outside the invocation tenant' });
-		return { input: { ...fields, subject, actor: subject, userId: subject.userId, tenantId: subject.tenantId, invitedBy: subject.userId }, subject };
+		const actor = yield* (yield* Identity.Service).authenticate(effectId, credential);
+		if (actor.tenantId !== invocation.scope.tenantId) return yield* new DispatchError({ code: 'tenant_mismatch', message: 'Authenticated subject is outside the invocation tenant' });
+		/**
+		 * The one place a team preview changes what this invocation is.
+		 *
+		 * It substitutes the *subject* rather than filtering any particular answer, which is the whole
+		 * point: `visibleApps` decides what the sidebar offers, but the row predicate is what decides
+		 * whether a read is served, and both read `subject.roles`. Narrowing the subject once here moves
+		 * every decision below together — the ninety-odd cases in `runCommand`, the collection predicates,
+		 * the field masks — so there is no path where the navigation hides an app the runtime would still
+		 * serve rows for.
+		 *
+		 * `actor` stays the real credential holder. `subject` is who the command runs as, `actor` is who
+		 * is really here, and the audit trail, `invitedBy` and `access.impersonation`'s own answer all
+		 * need the second — an admin previewing `Employee` must still be told they may impersonate, or
+		 * the picker disappears and there is no way back.
+		 *
+		 * `impersonatedTeam` is minted unconditionally, as `null` when there is no preview, so a payload
+		 * claiming one is overwritten in both directions rather than only while a preview is running.
+		 */
+		const team = impersonatedTeamFromHeaders(invocation.headers);
+		const subject = team === undefined ? actor : yield* (yield* AccessControl.Service).subjectAsTeam(actor, team);
+		return { input: { ...fields, subject, actor, userId: actor.userId, tenantId: actor.tenantId, invitedBy: actor.userId, impersonatedTeam: team ?? null }, subject };
 	});
 	/**
 	 * Who the facilities are told this invocation is acting for.
@@ -582,6 +628,37 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 			const access = yield* AccessControl.Service;
 			return json({ subject: yield* access.impersonate(input.actor, input.target), apps: access.visibleApps(input.target) });
 		}
+		/**
+		 * What the sidebar needs to render the picker: may this actor impersonate, what may they
+		 * become, and what are they right now.
+		 *
+		 * A command rather than something stamped onto the document, for the same reason `apps.visible`
+		 * is one: the answer is the compiled workspace's policy list crossed with the credential's own
+		 * roles, and only the tenant runtime holds both.
+		 */
+		case 'access.impersonation': {
+			const input = yield* decode(ImpersonationStateInput, commandInput);
+			const access = yield* AccessControl.Service;
+			return json({
+				isAdmin: access.mayImpersonate(input.actor),
+				isActive: input.impersonatedTeam !== null,
+				activeTeamIds: input.impersonatedTeam === null ? [] : [input.impersonatedTeam],
+				teams: access.impersonationTeams()
+			});
+		}
+		/**
+		 * Starting a preview, which is what writes the audit row.
+		 *
+		 * The host calls this once, before it stores the choice, so a refusal is reported where a person
+		 * can see it rather than as every subsequent command failing. `subjectAsTeam` re-checks the same
+		 * authority on every invocation afterwards — this is not the gate, it is the record.
+		 */
+		case 'access.impersonateTeam': {
+			const input = yield* decode(ImpersonateTeamInput, commandInput);
+			const access = yield* AccessControl.Service;
+			const previewed = yield* access.impersonateTeam(input.actor, input.teamId);
+			return json({ subject: previewed, apps: access.visibleApps(previewed) });
+		}
 		case 'access.resolveScope': {
 			const input = yield* decode(VisibleAppsInput, commandInput);
 			return json((yield* AccessControl.Service).resolveScope(input.subject));
@@ -623,6 +700,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 			// nobody in the workspace is eligible to decide.
 			const roles = new Set<string>();
 			const teams = new Set<string>();
+			// Plus the one role no policy can declare. `mayImpersonate` requires it, and viewing the
+			// workspace as another team is not an authority a policy grants to a group — it is a property
+			// of being the administrator who owns the workspace. Derived from the policies alone, the
+			// founder of every workspace would hold every role *except* the one the sidebar's picker
+			// needs, and the impersonation menu would never render for anybody.
+			roles.add(AccessControl.IMPERSONATOR_ROLE);
 			for (const policy of definition.policies) {
 				for (const role of policy.roles ?? [policy.name]) roles.add(role);
 				for (const grant of policy.grants ?? []) {

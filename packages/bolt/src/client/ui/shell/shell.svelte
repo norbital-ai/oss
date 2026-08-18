@@ -6,6 +6,7 @@
 	import { detectShortcutModifier, formatShortcut, shortcut } from '@norbital-ai/ui/keybindings';
 	import {
 		WorkspaceShell,
+		type WorkspaceImpersonation,
 		type WorkspaceNavigationItem,
 		type WorkspaceNavigationModel
 	} from '@norbital-ai/ui/workspace-shell';
@@ -58,6 +59,9 @@
 		search = '',
 		plugins = [],
 		isAdmin,
+		impersonation = null,
+		onImpersonate,
+		onStopImpersonating,
 		headerTitle,
 		headerDescription,
 		headerIcon,
@@ -121,6 +125,22 @@
 		search?: string;
 		plugins?: HostPlugin[];
 		isAdmin?: boolean;
+		/**
+		 * The admin team-preview state the sidebar's account menu renders, or `null` for no menu.
+		 *
+		 * Forwarded to `<WorkspaceShell>` and read nowhere else here. The sidebar has carried the
+		 * picker since it was written, but this was the only component that mounts the shell and it
+		 * passed none of the three props — so `impersonationAvailable` was `false` for every host and
+		 * the menu had never rendered anywhere.
+		 *
+		 * Who qualifies and what the teams are is the host's answer, not the shell's: only the tenant
+		 * runtime holds the compiled policy list and the credential's roles at the same time.
+		 */
+		impersonation?: WorkspaceImpersonation | null;
+		/** Preview the workspace under one team's policy. The host owns storing and applying it. */
+		onImpersonate?: (teamId: string) => void | Promise<void>;
+		/** Return to the real subject. */
+		onStopImpersonating?: () => void | Promise<void>;
 		headerTitle?: string;
 		headerDescription?: string | null;
 		headerIcon?: string;
@@ -536,6 +556,9 @@
 	onSearch={toggleFinder}
 	searchLabel={t('bolt.shell.omniTitle')}
 	{searchShortcut}
+	{impersonation}
+	{onImpersonate}
+	{onStopImpersonating}
 >
 	{#snippet agent({ expanded })}
 		<AgentTrigger

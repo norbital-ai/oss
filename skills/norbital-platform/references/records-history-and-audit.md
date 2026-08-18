@@ -2,7 +2,7 @@
 
 ## System columns
 
-Every collection row carries columns Pod owns. They are read-only to workspace code, and they appear
+Every collection row carries columns Bolt owns. They are read-only to workspace code, and they appear
 in the manifest marked as such.
 
 | Column                 | Meaning                                            |

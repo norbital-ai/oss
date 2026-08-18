@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import { Toaster } from '@norbital-ai/ui/sonner';
+	import type { WorkspaceImpersonation } from '@norbital-ai/ui/workspace-shell';
 	import Shell from './shell.svelte';
 	import type { TenantMessageCatalogs } from '../agent/i18n.js';
 	import type { HostPlugin } from './workspace-navigation.js';
@@ -62,6 +63,9 @@
 		user,
 		plugins = DEFAULT_PLUGINS,
 		isAdmin = true,
+		impersonation = null,
+		onImpersonate,
+		onStopImpersonating,
 		tenantMessages,
 		children,
 		onNavigate,
@@ -115,6 +119,16 @@
 		};
 		plugins?: HostPlugin[];
 		isAdmin?: boolean;
+		/**
+		 * Admin team preview, forwarded verbatim to the shell.
+		 *
+		 * Only the host can build it — the teams are the tenant's compiled policies and whether this
+		 * session may impersonate is a fact about its credential — so this component neither derives
+		 * nor defaults it. `null` is "no picker", which is what every host that supplies nothing gets.
+		 */
+		impersonation?: WorkspaceImpersonation | null;
+		onImpersonate?: (teamId: string) => void | Promise<void>;
+		onStopImpersonating?: () => void | Promise<void>;
 		tenantMessages?: TenantMessageCatalogs;
 		/** App-contributed header controls, rendered inside the banner rather than above the tabs. */
 		headerActions?: Snippet;
@@ -170,6 +184,9 @@
 	{user}
 	{plugins}
 	{isAdmin}
+	{impersonation}
+	{onImpersonate}
+	{onStopImpersonating}
 	{tenantMessages}
 	{onNavigate}
 	{onOrganizationChange}

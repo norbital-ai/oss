@@ -7,7 +7,7 @@ export { makeHttpConnectorBinding } from './runtime/integrations/http-connector.
  *
  * A freshly provisioned database is empty, and `schema.migrate` — the command that would fill it —
  * authenticates through a session row like every other command. So a host has to write that row
- * before it can migrate, and to write it, it needs the schema. Handing over the pod's own
+ * before it can migrate, and to write it, it needs the schema. Handing over bolt's own
  * declaration is what stops the host from writing one from memory: Colony did exactly that, kept a
  * `bolt_sessions` of its own shaped the way it recalled, and the two drifted until authentication
  * read one table while the bootstrap wrote the other.

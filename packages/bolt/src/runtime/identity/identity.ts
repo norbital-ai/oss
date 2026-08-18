@@ -72,7 +72,7 @@ export type Interface = Readonly<{
 	readonly admit: (effectId: EffectId, tenantId: string, email: string, roles: ReadonlyArray<string>, teams: ReadonlyArray<string>) => Effect.Effect<string, Database.FacilityError>;
 	readonly invite: (effectId: EffectId, tenantId: string, email: string, invitedBy: string) => Effect.Effect<string, Database.FacilityError | Database.FacilityError>;
 	readonly acceptInvitation: (effectId: EffectId, invitationId: string, userId: string) => Effect.Effect<void, AuthenticationError | Database.FacilityError>;
-	/** Sends a sign-in code to an address. The pod issues it; the host only carries it. */
+	/** Sends a sign-in code to an address. Bolt issues it; the host only carries it. */
 	readonly sendCode: (effectId: EffectId, email: string) => Effect.Effect<void, Database.FacilityError>;
 	/** Exchanges a code for a session credential, or refuses it. */
 	readonly verifyCode: (effectId: EffectId, email: string, code: string, tenantId: string) => Effect.Effect<string, AuthenticationError | Database.FacilityError>;
@@ -114,7 +114,7 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Identity');
 /**
  * Identity, told whether its host can deliver a message.
  *
- * The pod cannot read an environment variable to learn it is running locally, and should not: it is
+ * Bolt cannot read an environment variable to learn it is running locally, and should not: it is
  * the same bundle everywhere. What differs is the capability the host binds. A host that binds no
  * communication facility cannot deliver a code, so a random one would be unusable and nobody could
  * sign in at all — there, the fixed development code is the only value that makes the flow work.
@@ -194,7 +194,7 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 		return Service.of({
 			/**
 			 * Resolves the credential against Better Auth's session table, which is the only session
-			 * store the pod has.
+			 * store bolt has.
 			 *
 			 * There was a second one — `bolt_sessions` — written by Bolt here and *also* written
 			 * directly over `pg` by the host. Two writers and two shapes for one fact is what let a
@@ -241,10 +241,10 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 			/**
 			 * Issues a sign-in code for an address.
 			 *
-			 * The pod generates it, decides its lifetime and its attempt limit, and hands it to the
+			 * Bolt generates it, decides its lifetime and its attempt limit, and hands it to the
 			 * host only to be delivered. The host never learns a valid code for an address it did not
 			 * ask about, and cannot mint one — which is the difference from the arrangement this
-			 * replaces, where the host generated the code and the pod was never involved.
+			 * replaces, where the host generated the code and bolt was never involved.
 			 */
 			sendCode: Effect.fn('Identity.sendCode')(function* (effectId, email) {
 				const auth = yield* authFor(effectId).pipe(Effect.catch(() => Effect.succeed(undefined)));
@@ -265,9 +265,9 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 			 * reads one table. Left unset, `authenticate` decodes the subject, finds no tenant, and
 			 * refuses the very credential this just issued as malformed.
 			 *
-			 * The tenant is the invocation's, minted at the dispatch boundary from the scope the pod was
+			 * The tenant is the invocation's, minted at the dispatch boundary from the scope bolt was
 			 * addressed with; a caller cannot supply it. So this admits the verified address to the
-			 * workspace whose pod it proved the code against, and to no other.
+			 * workspace whose bolt it proved the code against, and to no other.
 			 */
 			/**
 			 * Gives an address roles and teams in this workspace before anybody signs in as it.

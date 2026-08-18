@@ -151,10 +151,63 @@ const rowPredicate = (policies: ReadonlyArray<PolicyDeclaration>, subject: Ident
 	};
 };
 
+/**
+ * The role that may view this workspace as somebody else.
+ *
+ * Named once because two places have to agree on it and neither can derive it: `mayImpersonate`
+ * checks it, and `identity.admitFounder` grants it. No policy declares it and none should — a policy
+ * says what a group of people may do with the workspace's data, and "see the workspace as another
+ * group" is not that. It is a property of being the administrator who owns the workspace, so the
+ * founder is given it explicitly rather than it being derived from an authored policy that would
+ * have to exist in every workspace for the feature to work in any of them.
+ */
+export const IMPERSONATOR_ROLE = 'impersonator';
+
+/** A team an administrator may view this workspace as. */
+export type ImpersonationTeam = Readonly<{ readonly id: string; readonly name: string }>;
+
+/**
+ * What a "team" is here, and why the list is the workspace's policies.
+ *
+ * The product asks for "impersonating a team, and the policy it has", and in an authored workspace
+ * those are one declaration. `hr-payroll` declares `Employee`, `HR` and `Management`: each names a
+ * body of staff *and* the authority that body holds, which is exactly the pair being impersonated.
+ *
+ * It is deliberately **not** the approver teams a grant names — `L1 Manager`, `HR Manager`,
+ * `HQ Payroll HR`. Those select who may decide an approval step. They are not roles, no policy lists
+ * one under `roles`, and `subjectHasPolicy` matches a subject to a policy by role — so a subject
+ * carrying `roles: ['L1 Manager']` matches no policy at all, sees no app and may read nothing. That
+ * view would satisfy "an employee cannot see hr_controller" by seeing *nothing whatsoever*, which is
+ * a false pass rather than a preview of anyone's workspace.
+ *
+ * The id is the policy's own name. `subjectAsTeam` resolves it case-insensitively, because the
+ * compiled client registry lists policies by lowercased filename (`employee`) while the declaration
+ * names them `Employee`, and either spelling has to reach the same policy.
+ */
+const impersonationTeams = (policies: ReadonlyArray<PolicyDeclaration>): ReadonlyArray<ImpersonationTeam> =>
+	policies.map(({ name }) => ({ id: name, name }));
+
+/** Whether this subject may view the workspace as somebody else. Always asked of the real actor. */
+const mayImpersonate = (actor: Identity.Subject): boolean => actor.roles.includes(IMPERSONATOR_ROLE);
+
 export type Interface = Readonly<{
 	readonly authorize: (subject: Identity.Subject, action: string, app: string) => Effect.Effect<void, AccessDenied>;
 	readonly visibleApps: (subject: Identity.Subject) => ReadonlyArray<string>;
 	readonly impersonate: (actor: Identity.Subject, target: Identity.Subject) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
+	/** The teams an administrator may view this workspace as, for the sidebar's picker. */
+	readonly impersonationTeams: () => ReadonlyArray<ImpersonationTeam>;
+	/** Whether this actor may impersonate at all. The picker is offered on this and nothing else. */
+	readonly mayImpersonate: (actor: Identity.Subject) => boolean;
+	/**
+	 * The actor as a member of one team, with no audit row.
+	 *
+	 * This is the per-invocation seam: every command a previewing browser sends carries the choice, so
+	 * writing a row here would put one audit entry per request into `bolt_audit` and bury the entry
+	 * that says the preview began. `impersonateTeam` is the audited entry point and is called once.
+	 */
+	readonly subjectAsTeam: (actor: Identity.Subject, teamId: string) => Effect.Effect<Identity.Subject, AccessDenied>;
+	/** `subjectAsTeam`, plus the `bolt_audit` row recording that this actor started the preview. */
+	readonly impersonateTeam: (actor: Identity.Subject, teamId: string) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
 	readonly resolveScope: (subject: Identity.Subject) => { readonly tenantId: string; readonly userId: string; readonly roles: ReadonlyArray<string>; readonly teams: ReadonlyArray<string> };
 	readonly predicate: (subject: Identity.Subject, action: string, resource: string) => RowPredicate;
 	readonly mask: (subject: Identity.Subject, action: string, resource: string, value: Readonly<Record<string, Schema.Json>>) => Readonly<Record<string, Schema.Json>>;
@@ -172,6 +225,49 @@ export const layer = Layer.effect(
 		const authorize = Effect.fn('AccessControl.authorize')(function* (subject: Identity.Subject, action: string, app: string) {
 			const decision = decide(workspace.definition.policies, subject, action, app);
 			if (!decision.allowed) return yield* new AccessDenied({ action, resource: app, reason: decision.reason });
+		});
+		/**
+		 * The same person, holding one policy's roles instead of their own.
+		 *
+		 * Identity is deliberately left alone. `userId`, `tenantId` and `email` stay the actor's, so an
+		 * `Employee` preview resolves `${requestor.email}` to the administrator's *own* employee row
+		 * rather than opening a colleague's. Impersonating a team asks what the workspace looks like
+		 * under a policy, and answering it by borrowing a real person's identity would disclose that
+		 * person's records to answer a question that never named them — that is what
+		 * `impersonate(actor, target)` is for, and it is a different question with its own audit row.
+		 *
+		 * `roles` becomes exactly the policy's roles and nothing else, which is what makes this one
+		 * narrowing rather than an overlay: `subjectHasPolicy` reads `subject.roles`, so every decision
+		 * the runtime makes — `visibleApps`, `authorize`, `predicate`, `mask` — moves to the previewed
+		 * policy together. There is no separate app-visibility path that could drift from the row
+		 * predicate, which is the failure this seam exists to avoid: hiding navigation is not authority.
+		 *
+		 * `teams` is emptied rather than guessed. A policy names authority, not membership: nothing in
+		 * the definition says which tenant teams an `Employee` belongs to, and inventing one would hand
+		 * the preview approval eligibility it was never granted. Empty can only ever narrow.
+		 *
+		 * `impersonatedBy` is the actor's own id. It marks the subject as synthetic for anything
+		 * downstream that keys per-user state off it, and it is the same id the audit row names.
+		 */
+		const subjectAsTeam = Effect.fn('AccessControl.subjectAsTeam')(function* (actor: Identity.Subject, teamId: string) {
+			// Asked of the actor, whose roles came from the credential the boundary authenticated. An
+			// administrator already holds every policy's roles, so assuming one can only take authority
+			// away; for anybody else there is nothing to assume and the claim is refused outright rather
+			// than ignored — a request to run as somebody else is a claim, not a preference.
+			if (!mayImpersonate(actor)) {
+				return yield* new AccessDenied({ action: 'impersonate', resource: teamId, reason: 'impersonation not permitted' });
+			}
+			const wanted = teamId.trim().toLocaleLowerCase();
+			const matched = workspace.definition.policies.find(({ name }) => name.toLocaleLowerCase() === wanted);
+			if (matched === undefined) {
+				return yield* new AccessDenied({ action: 'impersonate', resource: teamId, reason: 'no policy of that name' });
+			}
+			return {
+				...actor,
+				roles: matched.roles ?? [matched.name],
+				teams: [],
+				impersonatedBy: actor.userId
+			} satisfies Identity.Subject;
 		});
 		return Service.of({
 			authorize,
@@ -191,8 +287,23 @@ export const layer = Layer.effect(
 						: PolicyEvaluation.subjectHasPolicy(policy, subject) && (policy.apps ?? []).some((app) => app === '*' || app === name || name.startsWith(`${app}/`))
 				))
 				.map(({ name }) => name),
+			impersonationTeams: () => impersonationTeams(workspace.definition.policies),
+			mayImpersonate,
+			subjectAsTeam,
+			impersonateTeam: Effect.fn('AccessControl.impersonateTeam')(function* (actor, teamId) {
+				const subject = yield* subjectAsTeam(actor, teamId);
+				// The trace, written once when the preview begins rather than on every request it covers.
+				// The same `kind` carries both forms of impersonation so an auditor asking "who acted as
+				// somebody else" gets one answer; the payload says which form it was.
+				yield* database.execute(EffectId.make(`impersonate-team:${actor.userId}:${teamId}`), {
+					_tag: 'Query',
+					sql: 'insert into bolt_audit (kind, subject_id, payload) values ($1, $2, $3)',
+					parameters: ['impersonation_started', actor.userId, { tenantId: actor.tenantId, team: teamId, roles: [...subject.roles] }]
+				});
+				return subject;
+			}),
 			impersonate: Effect.fn('AccessControl.impersonate')(function* (actor, target) {
-				if (!actor.roles.includes('impersonator') || actor.tenantId !== target.tenantId) {
+				if (!mayImpersonate(actor) || actor.tenantId !== target.tenantId) {
 					return yield* new AccessDenied({ action: 'impersonate', resource: target.userId, reason: 'impersonation not permitted' });
 				}
 				yield* database.execute(EffectId.make(`impersonate:${actor.userId}:${target.userId}`), {

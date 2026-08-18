@@ -1,6 +1,6 @@
 # UI package
 
-`@norbital-ai/ui` is the shared visual system for Norbital interfaces and Pod tenant apps.
+`@norbital-ai/ui` is the shared visual system for Norbital interfaces and Bolt tenant apps.
 
 ## Goal
 
@@ -18,7 +18,7 @@ logic and tenant presentation decisions in the workspace that uses them.
 ## Boundaries
 
 - Import components through public subpaths, never `src/` or `build/`.
-- Import `@norbital-ai/ui/base.css` once at an application root. Pod does this for generated tenant
+- Import `@norbital-ai/ui/base.css` once at an application root. Bolt does this for generated tenant
   clients, so a tenant must not add a second base stylesheet or Tailwind integration.
 - Keep tenant-specific workflows, data fetching, collection hooks, and one-off visual treatment out of
   this package.

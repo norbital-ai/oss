@@ -95,7 +95,7 @@ export { Identity } from './runtime/identity/identity.js';
  * Identity's schema and models, exported because a host has to provision them.
  *
  * A host that hardcoded its own copy of this DDL is how the two-writer session store came about:
- * Colony created a `bolt_sessions` table shaped the way it remembered, and the pod created one
+ * Colony created a `bolt_sessions` table shaped the way it remembered, and bolt created one
  * shaped the way it needed. One declaration, imported, cannot drift.
  */
 export { AUTH_MODELS, DEVELOPMENT_SIGN_IN_CODE } from './runtime/identity/auth.js';

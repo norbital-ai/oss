@@ -1,7 +1,7 @@
 # Distribution contracts
 
 Norbital OSS publishes one immutable resource type: exact public package archives for
-`@norbital-ai/config`, `std`, and `ui`.
+`@norbital-ai/bolt`, `bolt-protocol`, `bolt-server`, `config`, `std`, and `ui`.
 
 Template source is the other half of the distribution story, and it is published from the template
 repositories rather than from here — see [Templates](#templates) below.
@@ -16,17 +16,17 @@ a duplicate.
 
 ## Three independent trains
 
-Pod, templates, and tenants do not propagate into one another. They respect each other's APIs and
+Bolt, templates, and tenants do not propagate into one another. They respect each other's APIs and
 move only when their own owner moves them.
 
 | Train        | Moves when                                                                           |
 | ------------ | ------------------------------------------------------------------------------------ |
-| **Pod**      | changesets → version bump → publish. A normal npm package.                           |
-| **Template** | a developer edits source and pushes. It pins its own pod version until they bump it. |
+| **Bolt**     | changesets → version bump → publish. A normal npm package.                           |
+| **Template** | a developer edits source and pushes. It pins its own bolt version until they bump it. |
 | **Tenant**   | its owner says so. Forked from a template, managed independently.                    |
 
 The only coupling is **notification**: a tenant can be told its upstream template is N commits
-ahead, or that a newer `@norbital-ai/pod` exists and may break it. Neither acts.
+ahead, or that a newer `@norbital-ai/bolt` exists and may break it. Neither acts.
 
 ## Templates
 

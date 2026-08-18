@@ -7,7 +7,10 @@ Starter workspaces live in their own repository:
 
 ## Packages
 
-- [`@norbital-ai/pod`](./packages/pod) — tenant workspace authoring SDK, runtime, and Vite plugin
+- [`@norbital-ai/bolt`](./packages/bolt) — tenant workspace authoring SDK, compiler, runtime, and
+  client
+- [`@norbital-ai/bolt-server`](./packages/bolt-server) — self-host server around the Bolt bundle
+- [`@norbital-ai/bolt-protocol`](./packages/bolt-protocol) — wire protocol shared by host and runtime
 - [`@norbital-ai/ui`](./packages/ui) — Svelte component library and design tokens
 - [`@norbital-ai/std`](./packages/std) — common schema, date, CEL, finance, collection contract, and
   utility modules
@@ -23,7 +26,7 @@ Docs live next to the code they describe — there is no root `docs/` folder:
 
 | Area                            | Location                                                                     |
 | ------------------------------- | ---------------------------------------------------------------------------- |
-| Pod framework                   | [`packages/pod/docs/`](./packages/pod/docs)                                  |
+| Bolt framework                  | [`packages/bolt/src/`](./packages/bolt/src)                                 |
 | UI, std, config                 | `packages/<name>/docs/`                                                      |
 | Template workspaces             | [`norbital-ai/templates`](https://github.com/norbital-ai/templates)          |
 | Release contracts               | [`release/README.md`](./release/README.md), [`RELEASING.md`](./RELEASING.md) |
@@ -37,7 +40,7 @@ pnpm install
 pnpm check
 ```
 
-Every compiled package rebuilds from source during `pnpm pack`; Pod and UI use `svelte-package`,
+Every compiled package rebuilds from source during `pnpm pack`; Bolt and UI use `svelte-package`,
 while the TypeScript-only packages use `tsc`. Publication checks remove existing build output,
 create temporary standalone archives, validate their contents, and delete the archives afterward.
 Consumers install released packages from the configured registry; no consumer reads this repository

@@ -4,7 +4,7 @@ import type { WorkspaceRemoteTransport } from './remote-transport.js';
 
 /**
  * One model the host offers for a turn. The host catalog is the only answer to "what is about to
- * run"; Pod renders the picker and does not keep a second list of ids.
+ * run"; Bolt renders the picker and does not keep a second list of ids.
  */
 export type AgentModelCatalogStatus = 'idle' | 'loading' | 'ready' | 'error';
 

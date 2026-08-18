@@ -392,8 +392,8 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		// read-then-write race between two hosts booting at the same time. It once also carried a
 		// `sql_hash` column, which Bolt never wrote and only Pod's applier read.
 		{ id: 'bolt:schema-migrations', sql: 'create table if not exists __drizzle_migrations (id serial primary key, tag text not null unique, created_at timestamptz not null default now())' },
-		// Identity's own tables, declared where identity declares them rather than restated here. The
-		// pod owns its schema; the plan only has to apply it.
+		// Identity's own tables, declared where identity declares them rather than restated here.
+		// Bolt owns its schema; the plan only has to apply it.
 		/**
 		 * The sync log every replica reads.
 		 *

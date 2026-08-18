@@ -14,7 +14,7 @@ import type { ExecuteQuery } from '../../src/runtime/identity/auth-store.js';
  * binds. Asserting on generated SQL strings would only prove the adapter emits what its author
  * expected; running it proves Postgres accepts it, which is the claim that matters.
  */
-describe('pod-owned identity over a host facility', () => {
+describe('bolt-owned identity over a host facility', () => {
 	let database: PGlite;
 	let execute: ExecuteQuery;
 	const delivered: Array<{ email: string; code: string; purpose: string }> = [];
@@ -44,7 +44,7 @@ describe('pod-owned identity over a host facility', () => {
 		);
 		expect(tables.rows.map((row) => row.table_name)).toEqual([
 			AUTH_MODELS.account,
-			// Where the pod keeps its own signing secret, so no host has to supply one.
+			// Where bolt keeps its own signing secret, so no host has to supply one.
 			'bolt_auth_config',
 			AUTH_MODELS.session,
 			AUTH_MODELS.user,
@@ -57,12 +57,12 @@ describe('pod-owned identity over a host facility', () => {
 			execute,
 			deliver,
 			secret: 'test-secret-not-a-real-one',
-			baseURL: 'http://pod.test',
+			baseURL: 'http://bolt.test',
 			production: true
 		});
 		const email = 'dion.neo@norbital.ai';
 		await auth.api.sendVerificationOTP({ body: { email, type: 'sign-in' } });
-		// The pod never sent anything itself: delivery went out through the host seam.
+		// Bolt never sent anything itself: delivery went out through the host seam.
 		expect(delivered.map((message) => message.email)).toEqual([email]);
 		expect(delivered[0]?.purpose).toBe('sign-in');
 		const code = delivered[0]?.code ?? '';
@@ -88,7 +88,7 @@ describe('pod-owned identity over a host facility', () => {
 			execute,
 			deliver,
 			secret: 'test-secret-not-a-real-one',
-			baseURL: 'http://pod.test',
+			baseURL: 'http://bolt.test',
 			production: true
 		});
 		const email = 'someone.else@norbital.ai';
@@ -108,13 +108,13 @@ describe('pod-owned identity over a host facility', () => {
 			execute,
 			deliver,
 			secret: 'test-secret-not-a-real-one',
-			baseURL: 'http://pod.test',
+			baseURL: 'http://bolt.test',
 			production: false
 		});
 		const before = delivered.length;
 		const email = 'local.developer@norbital.ai';
 		await auth.api.sendVerificationOTP({ body: { email, type: 'sign-in' } });
-		// Nothing left the pod, and the code is the known one — the same request-a-code flow as
+		// Nothing left bolt, and the code is the known one — the same request-a-code flow as
 		// production rather than a bypass with a different shape.
 		expect(delivered.length).toBe(before);
 		expect(
@@ -164,7 +164,7 @@ describe('the code a development environment issues', () => {
 					sent.push(message.code);
 				},
 				secret: 'test-secret-not-a-real-one',
-				baseURL: 'http://pod.test',
+				baseURL: 'http://bolt.test',
 				production: false
 			});
 			const email = 'local.dev@norbital.ai';
@@ -181,7 +181,7 @@ describe('the code a development environment issues', () => {
 	});
 });
 
-describe('the signing secret the pod generates for itself', () => {
+describe('the signing secret bolt generates for itself', () => {
 	it('uses only core Postgres, because pgcrypto is not a host obligation', async () => {
 		// This shipped broken: the statement used `gen_random_bytes`, which lives in pgcrypto, and the
 		// dev host had no such extension — every sign-in failed with `function gen_random_bytes(integer)

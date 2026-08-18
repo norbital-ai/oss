@@ -13,7 +13,7 @@ import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-c
  * `updatedAt`; a Bolt collection is keyed by `norbital_id` and stamped with `norbital_created_at`
  * and `norbital_updated_at`. Drizzle names the property and the column separately, so one table
  * satisfies both contracts and there is no second `user` shadowing an auth table — which is the
- * arrangement identity was moved into the pod to remove.
+ * arrangement identity was moved into bolt to remove.
  */
 
 /** The columns every collection carries, under the names Better Auth expects to find them. */

@@ -212,7 +212,7 @@ const authoredForeignKey = (
  * so "who owns this record" is a foreign key into it, not into a collection each workspace would
  * otherwise have to invent and keep in step with who can actually sign in. There is deliberately no
  * `user` collection wrapping it: the auth provider *is* the user, and a second table claiming to
- * describe the same people is the arrangement identity was moved into the pod to remove.
+ * describe the same people is the arrangement identity was moved into bolt to remove.
  */
 const REFERENCE_ONLY_TABLES: Readonly<Record<string, PgTable>> = { user: boltAuthUser };
 
@@ -268,7 +268,7 @@ export const planWorkspaceMigration = (input: {
 	Effect.gen(function* () {
 		const tables = workspaceMigrationTables(input.models, input.relations);
 		// The previous snapshot is used whole. It used to be filtered to the tables the current models
-		// declare, so that a lineage written by Pod — whose snapshot also carried its platform identity
+		// declare, so that a lineage written by Bolt — whose snapshot also carried its platform identity
 		// tables — did not diff into a `DROP TABLE` for each. Every lineage is Bolt's own now, and against
 		// one the filter had exactly one remaining effect: a collection deleted from the workspace is not
 		// in the current models either, so it was stripped from both sides of the diff and no `DROP TABLE`

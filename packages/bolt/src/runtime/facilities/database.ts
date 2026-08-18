@@ -29,7 +29,7 @@ export type CallContext = Readonly<{
 	/**
 	 * The deployment environment this invocation was made against, as the host named it.
 	 *
-	 * The pod reads no environment variables and has no idea whether it is running on a laptop or in
+	 * Bolt reads no environment variables and has no idea whether it is running on a laptop or in
 	 * production. What it does have is the environment the host scoped the invocation to, which is
 	 * already part of the protocol — so anything mode-dependent inside the bundle reads it from here
 	 * rather than inventing its own notion of a mode.

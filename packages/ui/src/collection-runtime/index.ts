@@ -14,7 +14,7 @@ export type CollectionRepresentationSurface = Component;
 
 export interface CollectionSurface {
 	readonly representation?: CollectionRepresentationSurface;
-	/** Static `pod:banner` URL declared on the collection's `+representation.svelte`, if any. */
+	/** Static `bolt:banner` URL declared on the collection's `+representation.svelte`, if any. */
 	readonly banner?: string | null;
 }
 

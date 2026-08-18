@@ -22,10 +22,10 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 
 const entries = [
 	{
-		name: '@norbital-ai/pod',
+		name: '-ai/bolt',
 		version: '0.0.1',
-		tarball: 'https://registry.example.test/pod-a.tgz',
-		integrity: sha512Integrity(Buffer.from('pod archive'))
+		tarball: 'https://registry.example.test/bolt-a.tgz',
+		integrity: sha512Integrity(Buffer.from('bolt archive'))
 	},
 	{
 		name: '@norbital-ai/ui',
@@ -56,7 +56,7 @@ describe('published package identity', () => {
 			}))
 		);
 		const changedBytes = platformPackageKey([
-			{ ...entries[0], integrity: sha512Integrity(Buffer.from('replaced pod archive')) },
+			{ ...entries[0], integrity: sha512Integrity(Buffer.from('replaced bolt archive')) },
 			entries[1]
 		]);
 		assert.equal(original, movedRegistry);
@@ -71,9 +71,9 @@ describe('published package identity', () => {
 		const output = [
 			'$ pnpm build',
 			'src -> build',
-			JSON.stringify([{ filename: '/tmp/norbital-ai-pod-0.0.1.tgz' }], null, 2)
+			JSON.stringify([{ filename: '/tmp/norbital-ai-bolt-0.0.1.tgz' }], null, 2)
 		].join('\n');
-		assert.equal(packedArchiveFilename(output), '/tmp/norbital-ai-pod-0.0.1.tgz');
+		assert.equal(packedArchiveFilename(output), '/tmp/norbital-ai-bolt-0.0.1.tgz');
 	});
 });
 

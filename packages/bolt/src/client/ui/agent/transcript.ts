@@ -48,7 +48,7 @@ export type PanelToolCall = {
 	readonly name: string;
 	/**
 	 * Catalog key for a built-in tool label, or `null` when the tool is not one
-	 * Pod ships — those render the humanized name in `label` instead.
+	 * Bolt ships — those render the humanized name in `label` instead.
 	 */
 	readonly labelKey: BoltUiKeys | null;
 	/** Humanized fallback label, used only when `labelKey` is null. */

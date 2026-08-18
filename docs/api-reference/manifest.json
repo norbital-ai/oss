@@ -1,1144 +1,6 @@
 {
-	"generatedAt": "2026-08-06T03:57:01.806Z",
+	"generatedAt": "2026-08-18T15:02:57.268Z",
 	"packages": [
-		{
-			"id": "@norbital-ai/pod",
-			"title": "@norbital-ai/pod",
-			"slug": "pod",
-			"href": "/docs/api-reference/pod",
-			"children": [
-				{
-					"title": "pod/build/authoring",
-					"slug": "pod/build/authoring",
-					"href": "/docs/api-reference/pod/build/authoring"
-				},
-				{
-					"title": "pod/build/authoring/automations/agent-tools",
-					"slug": "pod/build/authoring/automations/agent-tools",
-					"href": "/docs/api-reference/pod/build/authoring/automations/agent-tools"
-				},
-				{
-					"title": "pod/build/authoring/automations/automations",
-					"slug": "pod/build/authoring/automations/automations",
-					"href": "/docs/api-reference/pod/build/authoring/automations/automations"
-				},
-				{
-					"title": "pod/build/authoring/automations/handlers",
-					"slug": "pod/build/authoring/automations/handlers",
-					"href": "/docs/api-reference/pod/build/authoring/automations/handlers"
-				},
-				{
-					"title": "pod/build/authoring/automations/hooks",
-					"slug": "pod/build/authoring/automations/hooks",
-					"href": "/docs/api-reference/pod/build/authoring/automations/hooks"
-				},
-				{
-					"title": "pod/build/authoring/automations/pipelines",
-					"slug": "pod/build/authoring/automations/pipelines",
-					"href": "/docs/api-reference/pod/build/authoring/automations/pipelines"
-				},
-				{
-					"title": "pod/build/authoring/builtin/columns",
-					"slug": "pod/build/authoring/builtin/columns",
-					"href": "/docs/api-reference/pod/build/authoring/builtin/columns"
-				},
-				{
-					"title": "pod/build/authoring/builtin/custom\\_types",
-					"slug": "pod/build/authoring/builtin/custom_types",
-					"href": "/docs/api-reference/pod/build/authoring/builtin/custom_types"
-				},
-				{
-					"title": "pod/build/authoring/builtin/money",
-					"slug": "pod/build/authoring/builtin/money",
-					"href": "/docs/api-reference/pod/build/authoring/builtin/money"
-				},
-				{
-					"title": "pod/build/authoring/channels/channels",
-					"slug": "pod/build/authoring/channels/channels",
-					"href": "/docs/api-reference/pod/build/authoring/channels/channels"
-				},
-				{
-					"title": "pod/build/authoring/custom-type",
-					"slug": "pod/build/authoring/custom-type",
-					"href": "/docs/api-reference/pod/build/authoring/custom-type"
-				},
-				{
-					"title": "pod/build/authoring/env",
-					"slug": "pod/build/authoring/env",
-					"href": "/docs/api-reference/pod/build/authoring/env"
-				},
-				{
-					"title": "pod/build/authoring/filesystem",
-					"slug": "pod/build/authoring/filesystem",
-					"href": "/docs/api-reference/pod/build/authoring/filesystem"
-				},
-				{
-					"title": "pod/build/authoring/integrations/integrations",
-					"slug": "pod/build/authoring/integrations/integrations",
-					"href": "/docs/api-reference/pod/build/authoring/integrations/integrations"
-				},
-				{
-					"title": "pod/build/authoring/internals",
-					"slug": "pod/build/authoring/internals",
-					"href": "/docs/api-reference/pod/build/authoring/internals"
-				},
-				{
-					"title": "pod/build/authoring/policies/policies",
-					"slug": "pod/build/authoring/policies/policies",
-					"href": "/docs/api-reference/pod/build/authoring/policies/policies"
-				},
-				{
-					"title": "pod/build/authoring/refuse",
-					"slug": "pod/build/authoring/refuse",
-					"href": "/docs/api-reference/pod/build/authoring/refuse"
-				},
-				{
-					"title": "pod/build/authoring/schema/collection-behavior",
-					"slug": "pod/build/authoring/schema/collection-behavior",
-					"href": "/docs/api-reference/pod/build/authoring/schema/collection-behavior"
-				},
-				{
-					"title": "pod/build/authoring/schema/columns",
-					"slug": "pod/build/authoring/schema/columns",
-					"href": "/docs/api-reference/pod/build/authoring/schema/columns"
-				},
-				{
-					"title": "pod/build/authoring/schema/define-schema",
-					"slug": "pod/build/authoring/schema/define-schema",
-					"href": "/docs/api-reference/pod/build/authoring/schema/define-schema"
-				},
-				{
-					"title": "pod/build/authoring/schema/define-table",
-					"slug": "pod/build/authoring/schema/define-table",
-					"href": "/docs/api-reference/pod/build/authoring/schema/define-table"
-				},
-				{
-					"title": "pod/build/authoring/schema/extract",
-					"slug": "pod/build/authoring/schema/extract",
-					"href": "/docs/api-reference/pod/build/authoring/schema/extract"
-				},
-				{
-					"title": "pod/build/authoring/schema/input-schemas",
-					"slug": "pod/build/authoring/schema/input-schemas",
-					"href": "/docs/api-reference/pod/build/authoring/schema/input-schemas"
-				},
-				{
-					"title": "pod/build/authoring/schema/mutation-types",
-					"slug": "pod/build/authoring/schema/mutation-types",
-					"href": "/docs/api-reference/pod/build/authoring/schema/mutation-types"
-				},
-				{
-					"title": "pod/build/authoring/schema/system-workspace",
-					"slug": "pod/build/authoring/schema/system-workspace",
-					"href": "/docs/api-reference/pod/build/authoring/schema/system-workspace"
-				},
-				{
-					"title": "pod/build/authoring/schema/table",
-					"slug": "pod/build/authoring/schema/table",
-					"href": "/docs/api-reference/pod/build/authoring/schema/table"
-				},
-				{
-					"title": "pod/build/authoring/schema/types",
-					"slug": "pod/build/authoring/schema/types",
-					"href": "/docs/api-reference/pod/build/authoring/schema/types"
-				},
-				{
-					"title": "pod/build/authoring/workspace/build-workspace-api",
-					"slug": "pod/build/authoring/workspace/build-workspace-api",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/build-workspace-api"
-				},
-				{
-					"title": "pod/build/authoring/workspace/db-api",
-					"slug": "pod/build/authoring/workspace/db-api",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/db-api"
-				},
-				{
-					"title": "pod/build/authoring/workspace/db-api-types",
-					"slug": "pod/build/authoring/workspace/db-api-types",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/db-api-types"
-				},
-				{
-					"title": "pod/build/authoring/workspace/define-workspace",
-					"slug": "pod/build/authoring/workspace/define-workspace",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/define-workspace"
-				},
-				{
-					"title": "pod/build/authoring/workspace/derive-relationships",
-					"slug": "pod/build/authoring/workspace/derive-relationships",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/derive-relationships"
-				},
-				{
-					"title": "pod/build/authoring/workspace/hook-api",
-					"slug": "pod/build/authoring/workspace/hook-api",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/hook-api"
-				},
-				{
-					"title": "pod/build/authoring/workspace/invoke-api-types",
-					"slug": "pod/build/authoring/workspace/invoke-api-types",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/invoke-api-types"
-				},
-				{
-					"title": "pod/build/authoring/workspace/pod-remote-operations",
-					"slug": "pod/build/authoring/workspace/pod-remote-operations",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/pod-remote-operations"
-				},
-				{
-					"title": "pod/build/authoring/workspace/relations-filter",
-					"slug": "pod/build/authoring/workspace/relations-filter",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/relations-filter"
-				},
-				{
-					"title": "pod/build/authoring/workspace/remote-transport",
-					"slug": "pod/build/authoring/workspace/remote-transport",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/remote-transport"
-				},
-				{
-					"title": "pod/build/authoring/workspace/workspace-runtime",
-					"slug": "pod/build/authoring/workspace/workspace-runtime",
-					"href": "/docs/api-reference/pod/build/authoring/workspace/workspace-runtime"
-				},
-				{
-					"title": "pod/build/bin/invocation",
-					"slug": "pod/build/bin/invocation",
-					"href": "/docs/api-reference/pod/build/bin/invocation"
-				},
-				{
-					"title": "pod/build/host",
-					"slug": "pod/build/host",
-					"href": "/docs/api-reference/pod/build/host"
-				},
-				{
-					"title": "pod/build/host/agent-tools",
-					"slug": "pod/build/host/agent-tools",
-					"href": "/docs/api-reference/pod/build/host/agent-tools"
-				},
-				{
-					"title": "pod/build/host/config",
-					"slug": "pod/build/host/config",
-					"href": "/docs/api-reference/pod/build/host/config"
-				},
-				{
-					"title": "pod/build/host/cron",
-					"slug": "pod/build/host/cron",
-					"href": "/docs/api-reference/pod/build/host/cron"
-				},
-				{
-					"title": "pod/build/host/db",
-					"slug": "pod/build/host/db",
-					"href": "/docs/api-reference/pod/build/host/db"
-				},
-				{
-					"title": "pod/build/host/email-otp",
-					"slug": "pod/build/host/email-otp",
-					"href": "/docs/api-reference/pod/build/host/email-otp"
-				},
-				{
-					"title": "pod/build/host/facilities",
-					"slug": "pod/build/host/facilities",
-					"href": "/docs/api-reference/pod/build/host/facilities"
-				},
-				{
-					"title": "pod/build/host/file-storage",
-					"slug": "pod/build/host/file-storage",
-					"href": "/docs/api-reference/pod/build/host/file-storage"
-				},
-				{
-					"title": "pod/build/host/identity",
-					"slug": "pod/build/host/identity",
-					"href": "/docs/api-reference/pod/build/host/identity"
-				},
-				{
-					"title": "pod/build/host/identity-pages",
-					"slug": "pod/build/host/identity-pages",
-					"href": "/docs/api-reference/pod/build/host/identity-pages"
-				},
-				{
-					"title": "pod/build/host/integration-http",
-					"slug": "pod/build/host/integration-http",
-					"href": "/docs/api-reference/pod/build/host/integration-http"
-				},
-				{
-					"title": "pod/build/host/interval-queue",
-					"slug": "pod/build/host/interval-queue",
-					"href": "/docs/api-reference/pod/build/host/interval-queue"
-				},
-				{
-					"title": "pod/build/host/jobs",
-					"slug": "pod/build/host/jobs",
-					"href": "/docs/api-reference/pod/build/host/jobs"
-				},
-				{
-					"title": "pod/build/host/maps",
-					"slug": "pod/build/host/maps",
-					"href": "/docs/api-reference/pod/build/host/maps"
-				},
-				{
-					"title": "pod/build/host/s3",
-					"slug": "pod/build/host/s3",
-					"href": "/docs/api-reference/pod/build/host/s3"
-				},
-				{
-					"title": "pod/build/host/session",
-					"slug": "pod/build/host/session",
-					"href": "/docs/api-reference/pod/build/host/session"
-				},
-				{
-					"title": "pod/build/host/telegram",
-					"slug": "pod/build/host/telegram",
-					"href": "/docs/api-reference/pod/build/host/telegram"
-				},
-				{
-					"title": "pod/build/host/types",
-					"slug": "pod/build/host/types",
-					"href": "/docs/api-reference/pod/build/host/types"
-				},
-				{
-					"title": "pod/build/host/webhook-inbound",
-					"slug": "pod/build/host/webhook-inbound",
-					"href": "/docs/api-reference/pod/build/host/webhook-inbound"
-				},
-				{
-					"title": "pod/build/host/webhooks",
-					"slug": "pod/build/host/webhooks",
-					"href": "/docs/api-reference/pod/build/host/webhooks"
-				},
-				{
-					"title": "pod/build/i18n",
-					"slug": "pod/build/i18n",
-					"href": "/docs/api-reference/pod/build/i18n"
-				},
-				{
-					"title": "pod/build/i18n/messages",
-					"slug": "pod/build/i18n/messages",
-					"href": "/docs/api-reference/pod/build/i18n/messages"
-				},
-				{
-					"title": "pod/build/manifest",
-					"slug": "pod/build/manifest",
-					"href": "/docs/api-reference/pod/build/manifest"
-				},
-				{
-					"title": "pod/build/remote",
-					"slug": "pod/build/remote",
-					"href": "/docs/api-reference/pod/build/remote"
-				},
-				{
-					"title": "pod/build/remote/agent\\_chat.remote",
-					"slug": "pod/build/remote/agent_chat.remote",
-					"href": "/docs/api-reference/pod/build/remote/agent_chat.remote"
-				},
-				{
-					"title": "pod/build/remote/approval\\_request.remote",
-					"slug": "pod/build/remote/approval_request.remote",
-					"href": "/docs/api-reference/pod/build/remote/approval_request.remote"
-				},
-				{
-					"title": "pod/build/remote/approval\\_request.runtime.server",
-					"slug": "pod/build/remote/approval_request.runtime.server",
-					"href": "/docs/api-reference/pod/build/remote/approval_request.runtime.server"
-				},
-				{
-					"title": "pod/build/remote/approval\\_request.schema",
-					"slug": "pod/build/remote/approval_request.schema",
-					"href": "/docs/api-reference/pod/build/remote/approval_request.schema"
-				},
-				{
-					"title": "pod/build/remote/collection.remote",
-					"slug": "pod/build/remote/collection.remote",
-					"href": "/docs/api-reference/pod/build/remote/collection.remote"
-				},
-				{
-					"title": "pod/build/remote/geolocation.remote",
-					"slug": "pod/build/remote/geolocation.remote",
-					"href": "/docs/api-reference/pod/build/remote/geolocation.remote"
-				},
-				{
-					"title": "pod/build/remote/guard.server",
-					"slug": "pod/build/remote/guard.server",
-					"href": "/docs/api-reference/pod/build/remote/guard.server"
-				},
-				{
-					"title": "pod/build/remote/handler.remote",
-					"slug": "pod/build/remote/handler.remote",
-					"href": "/docs/api-reference/pod/build/remote/handler.remote"
-				},
-				{
-					"title": "pod/build/remote/static\\_map.remote",
-					"slug": "pod/build/remote/static_map.remote",
-					"href": "/docs/api-reference/pod/build/remote/static_map.remote"
-				},
-				{
-					"title": "pod/build/serve/hosted",
-					"slug": "pod/build/serve/hosted",
-					"href": "/docs/api-reference/pod/build/serve/hosted"
-				},
-				{
-					"title": "pod/build/serve/server",
-					"slug": "pod/build/serve/server",
-					"href": "/docs/api-reference/pod/build/serve/server"
-				},
-				{
-					"title": "pod/build/serve/standalone",
-					"slug": "pod/build/serve/standalone",
-					"href": "/docs/api-reference/pod/build/serve/standalone"
-				},
-				{
-					"title": "pod/build/serve/stdio",
-					"slug": "pod/build/serve/stdio",
-					"href": "/docs/api-reference/pod/build/serve/stdio"
-				},
-				{
-					"title": "pod/build/server/agent/agent-loop.server",
-					"slug": "pod/build/server/agent/agent-loop.server",
-					"href": "/docs/api-reference/pod/build/server/agent/agent-loop.server"
-				},
-				{
-					"title": "pod/build/server/agent/agent-mentions.server",
-					"slug": "pod/build/server/agent/agent-mentions.server",
-					"href": "/docs/api-reference/pod/build/server/agent/agent-mentions.server"
-				},
-				{
-					"title": "pod/build/server/agent/agent-spec.server",
-					"slug": "pod/build/server/agent/agent-spec.server",
-					"href": "/docs/api-reference/pod/build/server/agent/agent-spec.server"
-				},
-				{
-					"title": "pod/build/server/agent/system-prompt",
-					"slug": "pod/build/server/agent/system-prompt",
-					"href": "/docs/api-reference/pod/build/server/agent/system-prompt"
-				},
-				{
-					"title": "pod/build/server/audit\\_event.server",
-					"slug": "pod/build/server/audit_event.server",
-					"href": "/docs/api-reference/pod/build/server/audit_event.server"
-				},
-				{
-					"title": "pod/build/server/bootstrap/channel\\_reconcile.server",
-					"slug": "pod/build/server/bootstrap/channel_reconcile.server",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/channel_reconcile.server"
-				},
-				{
-					"title": "pod/build/server/bootstrap/context",
-					"slug": "pod/build/server/bootstrap/context",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/context"
-				},
-				{
-					"title": "pod/build/server/bootstrap/host\\_base\\_scope",
-					"slug": "pod/build/server/bootstrap/host_base_scope",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/host_base_scope"
-				},
-				{
-					"title": "pod/build/server/bootstrap/manifest\\_context",
-					"slug": "pod/build/server/bootstrap/manifest_context",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/manifest_context"
-				},
-				{
-					"title": "pod/build/server/bootstrap/policy\\_reconcile.server",
-					"slug": "pod/build/server/bootstrap/policy_reconcile.server",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/policy_reconcile.server"
-				},
-				{
-					"title": "pod/build/server/bootstrap/resolve\\_workspace",
-					"slug": "pod/build/server/bootstrap/resolve_workspace",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/resolve_workspace"
-				},
-				{
-					"title": "pod/build/server/bootstrap/runtime\\_request.server",
-					"slug": "pod/build/server/bootstrap/runtime_request.server",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/runtime_request.server"
-				},
-				{
-					"title": "pod/build/server/bootstrap/tenant\\_db\\_binding",
-					"slug": "pod/build/server/bootstrap/tenant_db_binding",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/tenant_db_binding"
-				},
-				{
-					"title": "pod/build/server/bootstrap/tenant\\_workspace.server",
-					"slug": "pod/build/server/bootstrap/tenant_workspace.server",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/tenant_workspace.server"
-				},
-				{
-					"title": "pod/build/server/bootstrap/workspace\\_runtime",
-					"slug": "pod/build/server/bootstrap/workspace_runtime",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/workspace_runtime"
-				},
-				{
-					"title": "pod/build/server/bootstrap/workspace\\_store",
-					"slug": "pod/build/server/bootstrap/workspace_store",
-					"href": "/docs/api-reference/pod/build/server/bootstrap/workspace_store"
-				},
-				{
-					"title": "pod/build/server/channel-delivery.server",
-					"slug": "pod/build/server/channel-delivery.server",
-					"href": "/docs/api-reference/pod/build/server/channel-delivery.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/approval\\_lock.server",
-					"slug": "pod/build/server/collection/access_control/approval_lock.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_lock.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/approval\\_operation.server",
-					"slug": "pod/build/server/collection/access_control/approval_operation.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_operation.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/approval\\_scope\\_types",
-					"slug": "pod/build/server/collection/access_control/approval_scope_types",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_scope_types"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/approval\\_service.server",
-					"slug": "pod/build/server/collection/access_control/approval_service.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_service.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/approval\\_step\\_conditions.server",
-					"slug": "pod/build/server/collection/access_control/approval_step_conditions.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_step_conditions.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/permission/collection\\_permission.guard.server",
-					"slug": "pod/build/server/collection/access_control/permission/collection_permission.guard.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/permission/collection_permission.guard.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/permission/permission\\_bypass\\_key.server",
-					"slug": "pod/build/server/collection/access_control/permission/permission_bypass_key.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/permission/permission_bypass_key.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/permission/permission\\_record\\_resolution.server",
-					"slug": "pod/build/server/collection/access_control/permission/permission_record_resolution.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/permission/permission_record_resolution.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/policy\\_grant\\_loader.server",
-					"slug": "pod/build/server/collection/access_control/policy_grant_loader.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/policy_grant_loader.server"
-				},
-				{
-					"title": "pod/build/server/collection/access\\_control/policy\\_sql.server",
-					"slug": "pod/build/server/collection/access_control/policy_sql.server",
-					"href": "/docs/api-reference/pod/build/server/collection/access_control/policy_sql.server"
-				},
-				{
-					"title": "pod/build/server/collection/collection\\_cursor.server",
-					"slug": "pod/build/server/collection/collection_cursor.server",
-					"href": "/docs/api-reference/pod/build/server/collection/collection_cursor.server"
-				},
-				{
-					"title": "pod/build/server/collection/collection\\_direct",
-					"slug": "pod/build/server/collection/collection_direct",
-					"href": "/docs/api-reference/pod/build/server/collection/collection_direct"
-				},
-				{
-					"title": "pod/build/server/collection/collection\\_filters.server",
-					"slug": "pod/build/server/collection/collection_filters.server",
-					"href": "/docs/api-reference/pod/build/server/collection/collection_filters.server"
-				},
-				{
-					"title": "pod/build/server/collection/collection\\_operators.server",
-					"slug": "pod/build/server/collection/collection_operators.server",
-					"href": "/docs/api-reference/pod/build/server/collection/collection_operators.server"
-				},
-				{
-					"title": "pod/build/server/collection/collection\\_ops.server",
-					"slug": "pod/build/server/collection/collection_ops.server",
-					"href": "/docs/api-reference/pod/build/server/collection/collection_ops.server"
-				},
-				{
-					"title": "pod/build/server/collection/collection\\_search.server",
-					"slug": "pod/build/server/collection/collection_search.server",
-					"href": "/docs/api-reference/pod/build/server/collection/collection_search.server"
-				},
-				{
-					"title": "pod/build/server/collection/collection\\_transaction.server",
-					"slug": "pod/build/server/collection/collection_transaction.server",
-					"href": "/docs/api-reference/pod/build/server/collection/collection_transaction.server"
-				},
-				{
-					"title": "pod/build/server/collection/constraint-errors.server",
-					"slug": "pod/build/server/collection/constraint-errors.server",
-					"href": "/docs/api-reference/pod/build/server/collection/constraint-errors.server"
-				},
-				{
-					"title": "pod/build/server/collection/hook-api-context.server",
-					"slug": "pod/build/server/collection/hook-api-context.server",
-					"href": "/docs/api-reference/pod/build/server/collection/hook-api-context.server"
-				},
-				{
-					"title": "pod/build/server/collection/hook-api.server",
-					"slug": "pod/build/server/collection/hook-api.server",
-					"href": "/docs/api-reference/pod/build/server/collection/hook-api.server"
-				},
-				{
-					"title": "pod/build/server/collection/hook-context",
-					"slug": "pod/build/server/collection/hook-context",
-					"href": "/docs/api-reference/pod/build/server/collection/hook-context"
-				},
-				{
-					"title": "pod/build/server/collection/http\\_error",
-					"slug": "pod/build/server/collection/http_error",
-					"href": "/docs/api-reference/pod/build/server/collection/http_error"
-				},
-				{
-					"title": "pod/build/server/collection/norbital\\_db\\_record",
-					"slug": "pod/build/server/collection/norbital_db_record",
-					"href": "/docs/api-reference/pod/build/server/collection/norbital_db_record"
-				},
-				{
-					"title": "pod/build/server/collection/record\\_history.server",
-					"slug": "pod/build/server/collection/record_history.server",
-					"href": "/docs/api-reference/pod/build/server/collection/record_history.server"
-				},
-				{
-					"title": "pod/build/server/collection/scope\\_hydration.server",
-					"slug": "pod/build/server/collection/scope_hydration.server",
-					"href": "/docs/api-reference/pod/build/server/collection/scope_hydration.server"
-				},
-				{
-					"title": "pod/build/server/collection/sql-identifier.server",
-					"slug": "pod/build/server/collection/sql-identifier.server",
-					"href": "/docs/api-reference/pod/build/server/collection/sql-identifier.server"
-				},
-				{
-					"title": "pod/build/server/collection/sync/db-notifications.server",
-					"slug": "pod/build/server/collection/sync/db-notifications.server",
-					"href": "/docs/api-reference/pod/build/server/collection/sync/db-notifications.server"
-				},
-				{
-					"title": "pod/build/server/collection/sync/mutation-rejection.server",
-					"slug": "pod/build/server/collection/sync/mutation-rejection.server",
-					"href": "/docs/api-reference/pod/build/server/collection/sync/mutation-rejection.server"
-				},
-				{
-					"title": "pod/build/server/collection/sync/outbox-tailer.server",
-					"slug": "pod/build/server/collection/sync/outbox-tailer.server",
-					"href": "/docs/api-reference/pod/build/server/collection/sync/outbox-tailer.server"
-				},
-				{
-					"title": "pod/build/server/collection/sync/sync-endpoints.server",
-					"slug": "pod/build/server/collection/sync/sync-endpoints.server",
-					"href": "/docs/api-reference/pod/build/server/collection/sync/sync-endpoints.server"
-				},
-				{
-					"title": "pod/build/server/collection/sync/sync-outbox.server",
-					"slug": "pod/build/server/collection/sync/sync-outbox.server",
-					"href": "/docs/api-reference/pod/build/server/collection/sync/sync-outbox.server"
-				},
-				{
-					"title": "pod/build/server/collection/sync/visibility-deltas.server",
-					"slug": "pod/build/server/collection/sync/visibility-deltas.server",
-					"href": "/docs/api-reference/pod/build/server/collection/sync/visibility-deltas.server"
-				},
-				{
-					"title": "pod/build/server/collection/workspace-collections",
-					"slug": "pod/build/server/collection/workspace-collections",
-					"href": "/docs/api-reference/pod/build/server/collection/workspace-collections"
-				},
-				{
-					"title": "pod/build/server/entry",
-					"slug": "pod/build/server/entry",
-					"href": "/docs/api-reference/pod/build/server/entry"
-				},
-				{
-					"title": "pod/build/server/env",
-					"slug": "pod/build/server/env",
-					"href": "/docs/api-reference/pod/build/server/env"
-				},
-				{
-					"title": "pod/build/server/facilities",
-					"slug": "pod/build/server/facilities",
-					"href": "/docs/api-reference/pod/build/server/facilities"
-				},
-				{
-					"title": "pod/build/server/host-plugins",
-					"slug": "pod/build/server/host-plugins",
-					"href": "/docs/api-reference/pod/build/server/host-plugins"
-				},
-				{
-					"title": "pod/build/server/http",
-					"slug": "pod/build/server/http",
-					"href": "/docs/api-reference/pod/build/server/http"
-				},
-				{
-					"title": "pod/build/server/i18n",
-					"slug": "pod/build/server/i18n",
-					"href": "/docs/api-reference/pod/build/server/i18n"
-				},
-				{
-					"title": "pod/build/server/identity/invitation.server",
-					"slug": "pod/build/server/identity/invitation.server",
-					"href": "/docs/api-reference/pod/build/server/identity/invitation.server"
-				},
-				{
-					"title": "pod/build/server/identity/subject.server",
-					"slug": "pod/build/server/identity/subject.server",
-					"href": "/docs/api-reference/pod/build/server/identity/subject.server"
-				},
-				{
-					"title": "pod/build/server/identity/workspace\\_settings.server",
-					"slug": "pod/build/server/identity/workspace_settings.server",
-					"href": "/docs/api-reference/pod/build/server/identity/workspace_settings.server"
-				},
-				{
-					"title": "pod/build/server/integrations/tenant-inbound.server",
-					"slug": "pod/build/server/integrations/tenant-inbound.server",
-					"href": "/docs/api-reference/pod/build/server/integrations/tenant-inbound.server"
-				},
-				{
-					"title": "pod/build/server/integrations/tenant-outbox.server",
-					"slug": "pod/build/server/integrations/tenant-outbox.server",
-					"href": "/docs/api-reference/pod/build/server/integrations/tenant-outbox.server"
-				},
-				{
-					"title": "pod/build/server/notification-outbox.server",
-					"slug": "pod/build/server/notification-outbox.server",
-					"href": "/docs/api-reference/pod/build/server/notification-outbox.server"
-				},
-				{
-					"title": "pod/build/server/request-context",
-					"slug": "pod/build/server/request-context",
-					"href": "/docs/api-reference/pod/build/server/request-context"
-				},
-				{
-					"title": "pod/build/server/run/automation-dispatch.server",
-					"slug": "pod/build/server/run/automation-dispatch.server",
-					"href": "/docs/api-reference/pod/build/server/run/automation-dispatch.server"
-				},
-				{
-					"title": "pod/build/server/run/collection\\_pipeline",
-					"slug": "pod/build/server/run/collection_pipeline",
-					"href": "/docs/api-reference/pod/build/server/run/collection_pipeline"
-				},
-				{
-					"title": "pod/build/server/run/tenant\\_run",
-					"slug": "pod/build/server/run/tenant_run",
-					"href": "/docs/api-reference/pod/build/server/run/tenant_run"
-				},
-				{
-					"title": "pod/build/server/shell-data.server",
-					"slug": "pod/build/server/shell-data.server",
-					"href": "/docs/api-reference/pod/build/server/shell-data.server"
-				},
-				{
-					"title": "pod/build/shared/abortable-delay",
-					"slug": "pod/build/shared/abortable-delay",
-					"href": "/docs/api-reference/pod/build/shared/abortable-delay"
-				},
-				{
-					"title": "pod/build/shared/approval",
-					"slug": "pod/build/shared/approval",
-					"href": "/docs/api-reference/pod/build/shared/approval"
-				},
-				{
-					"title": "pod/build/shared/collection-names",
-					"slug": "pod/build/shared/collection-names",
-					"href": "/docs/api-reference/pod/build/shared/collection-names"
-				},
-				{
-					"title": "pod/build/shared/scope",
-					"slug": "pod/build/shared/scope",
-					"href": "/docs/api-reference/pod/build/shared/scope"
-				},
-				{
-					"title": "pod/build/skills",
-					"slug": "pod/build/skills",
-					"href": "/docs/api-reference/pod/build/skills"
-				},
-				{
-					"title": "pod/build/skills/personal.server",
-					"slug": "pod/build/skills/personal.server",
-					"href": "/docs/api-reference/pod/build/skills/personal.server"
-				},
-				{
-					"title": "pod/build/skills/registry.server",
-					"slug": "pod/build/skills/registry.server",
-					"href": "/docs/api-reference/pod/build/skills/registry.server"
-				},
-				{
-					"title": "pod/build/skills/skills.generated",
-					"slug": "pod/build/skills/skills.generated",
-					"href": "/docs/api-reference/pod/build/skills/skills.generated"
-				},
-				{
-					"title": "pod/build/skills/types",
-					"slug": "pod/build/skills/types",
-					"href": "/docs/api-reference/pod/build/skills/types"
-				},
-				{
-					"title": "pod/build/ui/agent/agent-chat-panel.svelte",
-					"slug": "pod/build/ui/agent/agent-chat-panel.svelte",
-					"href": "/docs/api-reference/pod/build/ui/agent/agent-chat-panel.svelte"
-				},
-				{
-					"title": "pod/build/ui/agent/agent-composer-focus",
-					"slug": "pod/build/ui/agent/agent-composer-focus",
-					"href": "/docs/api-reference/pod/build/ui/agent/agent-composer-focus"
-				},
-				{
-					"title": "pod/build/ui/agent/agent-mention-menu.svelte",
-					"slug": "pod/build/ui/agent/agent-mention-menu.svelte",
-					"href": "/docs/api-reference/pod/build/ui/agent/agent-mention-menu.svelte"
-				},
-				{
-					"title": "pod/build/ui/agent/agent-model-picker.svelte",
-					"slug": "pod/build/ui/agent/agent-model-picker.svelte",
-					"href": "/docs/api-reference/pod/build/ui/agent/agent-model-picker.svelte"
-				},
-				{
-					"title": "pod/build/ui/agent/agent-transcript-item.svelte",
-					"slug": "pod/build/ui/agent/agent-transcript-item.svelte",
-					"href": "/docs/api-reference/pod/build/ui/agent/agent-transcript-item.svelte"
-				},
-				{
-					"title": "pod/build/ui/agent/composer-chrome",
-					"slug": "pod/build/ui/agent/composer-chrome",
-					"href": "/docs/api-reference/pod/build/ui/agent/composer-chrome"
-				},
-				{
-					"title": "pod/build/ui/agent/composer-mentions",
-					"slug": "pod/build/ui/agent/composer-mentions",
-					"href": "/docs/api-reference/pod/build/ui/agent/composer-mentions"
-				},
-				{
-					"title": "pod/build/ui/agent/mention-sources",
-					"slug": "pod/build/ui/agent/mention-sources",
-					"href": "/docs/api-reference/pod/build/ui/agent/mention-sources"
-				},
-				{
-					"title": "pod/build/ui/agent/models",
-					"slug": "pod/build/ui/agent/models",
-					"href": "/docs/api-reference/pod/build/ui/agent/models"
-				},
-				{
-					"title": "pod/build/ui/agent/transcript",
-					"slug": "pod/build/ui/agent/transcript",
-					"href": "/docs/api-reference/pod/build/ui/agent/transcript"
-				},
-				{
-					"title": "pod/build/ui/collection/collection-record-detail-fallback.svelte",
-					"slug": "pod/build/ui/collection/collection-record-detail-fallback.svelte",
-					"href": "/docs/api-reference/pod/build/ui/collection/collection-record-detail-fallback.svelte"
-				},
-				{
-					"title": "pod/build/ui/collection/collection-record-detail-fields",
-					"slug": "pod/build/ui/collection/collection-record-detail-fields",
-					"href": "/docs/api-reference/pod/build/ui/collection/collection-record-detail-fields"
-				},
-				{
-					"title": "pod/build/ui/collection/collection-table-navigation",
-					"slug": "pod/build/ui/collection/collection-table-navigation",
-					"href": "/docs/api-reference/pod/build/ui/collection/collection-table-navigation"
-				},
-				{
-					"title": "pod/build/ui/collection/detail-surface-stack.svelte",
-					"slug": "pod/build/ui/collection/detail-surface-stack.svelte",
-					"href": "/docs/api-reference/pod/build/ui/collection/detail-surface-stack.svelte"
-				},
-				{
-					"title": "pod/build/ui/collection/detail/detail\\_stack",
-					"slug": "pod/build/ui/collection/detail/detail_stack",
-					"href": "/docs/api-reference/pod/build/ui/collection/detail/detail_stack"
-				},
-				{
-					"title": "pod/build/ui/collection/utils/collection\\_detail\\_navigation",
-					"slug": "pod/build/ui/collection/utils/collection_detail_navigation",
-					"href": "/docs/api-reference/pod/build/ui/collection/utils/collection_detail_navigation"
-				},
-				{
-					"title": "pod/build/ui/collection/utils/context\\_stack",
-					"slug": "pod/build/ui/collection/utils/context_stack",
-					"href": "/docs/api-reference/pod/build/ui/collection/utils/context_stack"
-				},
-				{
-					"title": "pod/build/ui/collection/utils/route\\_context",
-					"slug": "pod/build/ui/collection/utils/route_context",
-					"href": "/docs/api-reference/pod/build/ui/collection/utils/route_context"
-				},
-				{
-					"title": "pod/build/ui/public",
-					"slug": "pod/build/ui/public",
-					"href": "/docs/api-reference/pod/build/ui/public"
-				},
-				{
-					"title": "pod/build/ui/settings/team-hierarchy",
-					"slug": "pod/build/ui/settings/team-hierarchy",
-					"href": "/docs/api-reference/pod/build/ui/settings/team-hierarchy"
-				},
-				{
-					"title": "pod/build/ui/settings/team-node.svelte",
-					"slug": "pod/build/ui/settings/team-node.svelte",
-					"href": "/docs/api-reference/pod/build/ui/settings/team-node.svelte"
-				},
-				{
-					"title": "pod/build/ui/settings/workspace-audit-table.svelte",
-					"slug": "pod/build/ui/settings/workspace-audit-table.svelte",
-					"href": "/docs/api-reference/pod/build/ui/settings/workspace-audit-table.svelte"
-				},
-				{
-					"title": "pod/build/ui/settings/workspace-invitations-table.svelte",
-					"slug": "pod/build/ui/settings/workspace-invitations-table.svelte",
-					"href": "/docs/api-reference/pod/build/ui/settings/workspace-invitations-table.svelte"
-				},
-				{
-					"title": "pod/build/ui/settings/workspace-members-table.svelte",
-					"slug": "pod/build/ui/settings/workspace-members-table.svelte",
-					"href": "/docs/api-reference/pod/build/ui/settings/workspace-members-table.svelte"
-				},
-				{
-					"title": "pod/build/ui/settings/workspace-team-chart.svelte",
-					"slug": "pod/build/ui/settings/workspace-team-chart.svelte",
-					"href": "/docs/api-reference/pod/build/ui/settings/workspace-team-chart.svelte"
-				},
-				{
-					"title": "pod/build/ui/shell/billing-banner.svelte",
-					"slug": "pod/build/ui/shell/billing-banner.svelte",
-					"href": "/docs/api-reference/pod/build/ui/shell/billing-banner.svelte"
-				},
-				{
-					"title": "pod/build/ui/shell/mount-client",
-					"slug": "pod/build/ui/shell/mount-client",
-					"href": "/docs/api-reference/pod/build/ui/shell/mount-client"
-				},
-				{
-					"title": "pod/build/ui/shell/notifications",
-					"slug": "pod/build/ui/shell/notifications",
-					"href": "/docs/api-reference/pod/build/ui/shell/notifications"
-				},
-				{
-					"title": "pod/build/ui/shell/notifications-menu.svelte",
-					"slug": "pod/build/ui/shell/notifications-menu.svelte",
-					"href": "/docs/api-reference/pod/build/ui/shell/notifications-menu.svelte"
-				},
-				{
-					"title": "pod/build/ui/shell/omni-finder.svelte",
-					"slug": "pod/build/ui/shell/omni-finder.svelte",
-					"href": "/docs/api-reference/pod/build/ui/shell/omni-finder.svelte"
-				},
-				{
-					"title": "pod/build/ui/shell/organization-switch",
-					"slug": "pod/build/ui/shell/organization-switch",
-					"href": "/docs/api-reference/pod/build/ui/shell/organization-switch"
-				},
-				{
-					"title": "pod/build/ui/shell/pod-app.svelte",
-					"slug": "pod/build/ui/shell/pod-app.svelte",
-					"href": "/docs/api-reference/pod/build/ui/shell/pod-app.svelte"
-				},
-				{
-					"title": "pod/build/ui/shell/pod-shell.svelte",
-					"slug": "pod/build/ui/shell/pod-shell.svelte",
-					"href": "/docs/api-reference/pod/build/ui/shell/pod-shell.svelte"
-				},
-				{
-					"title": "pod/build/ui/shell/workspace-navigation",
-					"slug": "pod/build/ui/shell/workspace-navigation",
-					"href": "/docs/api-reference/pod/build/ui/shell/workspace-navigation"
-				},
-				{
-					"title": "pod/build/ui/shell/workspace-settings",
-					"slug": "pod/build/ui/shell/workspace-settings",
-					"href": "/docs/api-reference/pod/build/ui/shell/workspace-settings"
-				},
-				{
-					"title": "pod/build/ui/shell/workspace-settings-api",
-					"slug": "pod/build/ui/shell/workspace-settings-api",
-					"href": "/docs/api-reference/pod/build/ui/shell/workspace-settings-api"
-				},
-				{
-					"title": "pod/build/ui/shell/workspace-settings-surface.svelte",
-					"slug": "pod/build/ui/shell/workspace-settings-surface.svelte",
-					"href": "/docs/api-reference/pod/build/ui/shell/workspace-settings-surface.svelte"
-				},
-				{
-					"title": "pod/build/ui/state/client",
-					"slug": "pod/build/ui/state/client",
-					"href": "/docs/api-reference/pod/build/ui/state/client"
-				},
-				{
-					"title": "pod/build/ui/state/collection-export",
-					"slug": "pod/build/ui/state/collection-export",
-					"href": "/docs/api-reference/pod/build/ui/state/collection-export"
-				},
-				{
-					"title": "pod/build/ui/state/collection-import",
-					"slug": "pod/build/ui/state/collection-import",
-					"href": "/docs/api-reference/pod/build/ui/state/collection-import"
-				},
-				{
-					"title": "pod/build/ui/state/page\\_surface\\_state.svelte",
-					"slug": "pod/build/ui/state/page_surface_state.svelte",
-					"href": "/docs/api-reference/pod/build/ui/state/page_surface_state.svelte"
-				},
-				{
-					"title": "pod/build/ui/state/platform\\_state.svelte",
-					"slug": "pod/build/ui/state/platform_state.svelte",
-					"href": "/docs/api-reference/pod/build/ui/state/platform_state.svelte"
-				},
-				{
-					"title": "pod/build/ui/state/remote-query.svelte",
-					"slug": "pod/build/ui/state/remote-query.svelte",
-					"href": "/docs/api-reference/pod/build/ui/state/remote-query.svelte"
-				},
-				{
-					"title": "pod/build/ui/state/router.svelte",
-					"slug": "pod/build/ui/state/router.svelte",
-					"href": "/docs/api-reference/pod/build/ui/state/router.svelte"
-				},
-				{
-					"title": "pod/build/ui/state/types",
-					"slug": "pod/build/ui/state/types",
-					"href": "/docs/api-reference/pod/build/ui/state/types"
-				},
-				{
-					"title": "pod/build/ui/state/workspace-client",
-					"slug": "pod/build/ui/state/workspace-client",
-					"href": "/docs/api-reference/pod/build/ui/state/workspace-client"
-				},
-				{
-					"title": "pod/build/ui/state/workspace-file-upload.svelte",
-					"slug": "pod/build/ui/state/workspace-file-upload.svelte",
-					"href": "/docs/api-reference/pod/build/ui/state/workspace-file-upload.svelte"
-				},
-				{
-					"title": "pod/build/ui/state/workspace\\_shell\\_types",
-					"slug": "pod/build/ui/state/workspace_shell_types",
-					"href": "/docs/api-reference/pod/build/ui/state/workspace_shell_types"
-				},
-				{
-					"title": "pod/build/ui/subservices/access\\_control.service",
-					"slug": "pod/build/ui/subservices/access_control.service",
-					"href": "/docs/api-reference/pod/build/ui/subservices/access_control.service"
-				},
-				{
-					"title": "pod/build/ui/subservices/detail\\_surface.service",
-					"slug": "pod/build/ui/subservices/detail_surface.service",
-					"href": "/docs/api-reference/pod/build/ui/subservices/detail_surface.service"
-				},
-				{
-					"title": "pod/build/ui/sync/base64url",
-					"slug": "pod/build/ui/sync/base64url",
-					"href": "/docs/api-reference/pod/build/ui/sync/base64url"
-				},
-				{
-					"title": "pod/build/ui/sync/client-sync",
-					"slug": "pod/build/ui/sync/client-sync",
-					"href": "/docs/api-reference/pod/build/ui/sync/client-sync"
-				},
-				{
-					"title": "pod/build/ui/sync/local-sql",
-					"slug": "pod/build/ui/sync/local-sql",
-					"href": "/docs/api-reference/pod/build/ui/sync/local-sql"
-				},
-				{
-					"title": "pod/build/ui/sync/mutation-rejection",
-					"slug": "pod/build/ui/sync/mutation-rejection",
-					"href": "/docs/api-reference/pod/build/ui/sync/mutation-rejection"
-				},
-				{
-					"title": "pod/build/ui/sync/pglite-worker",
-					"slug": "pod/build/ui/sync/pglite-worker",
-					"href": "/docs/api-reference/pod/build/ui/sync/pglite-worker"
-				},
-				{
-					"title": "pod/build/ui/sync/pod-sync-client",
-					"slug": "pod/build/ui/sync/pod-sync-client",
-					"href": "/docs/api-reference/pod/build/ui/sync/pod-sync-client"
-				},
-				{
-					"title": "pod/build/ui/sync/replica",
-					"slug": "pod/build/ui/sync/replica",
-					"href": "/docs/api-reference/pod/build/ui/sync/replica"
-				},
-				{
-					"title": "pod/build/ui/sync/subscription-registry",
-					"slug": "pod/build/ui/sync/subscription-registry",
-					"href": "/docs/api-reference/pod/build/ui/sync/subscription-registry"
-				},
-				{
-					"title": "pod/build/ui/sync/types",
-					"slug": "pod/build/ui/sync/types",
-					"href": "/docs/api-reference/pod/build/ui/sync/types"
-				},
-				{
-					"title": "pod/build/vite",
-					"slug": "pod/build/vite",
-					"href": "/docs/api-reference/pod/build/vite"
-				},
-				{
-					"title": "pod/build/vite/checker",
-					"slug": "pod/build/vite/checker",
-					"href": "/docs/api-reference/pod/build/vite/checker"
-				},
-				{
-					"title": "pod/build/vite/compiler",
-					"slug": "pod/build/vite/compiler",
-					"href": "/docs/api-reference/pod/build/vite/compiler"
-				},
-				{
-					"title": "pod/build/vite/compiler/app-metadata",
-					"slug": "pod/build/vite/compiler/app-metadata",
-					"href": "/docs/api-reference/pod/build/vite/compiler/app-metadata"
-				},
-				{
-					"title": "pod/build/vite/compiler/diagnostics",
-					"slug": "pod/build/vite/compiler/diagnostics",
-					"href": "/docs/api-reference/pod/build/vite/compiler/diagnostics"
-				},
-				{
-					"title": "pod/build/vite/compiler/skill-frontmatter",
-					"slug": "pod/build/vite/compiler/skill-frontmatter",
-					"href": "/docs/api-reference/pod/build/vite/compiler/skill-frontmatter"
-				},
-				{
-					"title": "pod/build/vite/compiler/types",
-					"slug": "pod/build/vite/compiler/types",
-					"href": "/docs/api-reference/pod/build/vite/compiler/types"
-				},
-				{
-					"title": "pod/build/vite/isolated-build",
-					"slug": "pod/build/vite/isolated-build",
-					"href": "/docs/api-reference/pod/build/vite/isolated-build"
-				},
-				{
-					"title": "pod/build/vite/migration-fingerprint",
-					"slug": "pod/build/vite/migration-fingerprint",
-					"href": "/docs/api-reference/pod/build/vite/migration-fingerprint"
-				},
-				{
-					"title": "pod/build/vite/migrations",
-					"slug": "pod/build/vite/migrations",
-					"href": "/docs/api-reference/pod/build/vite/migrations"
-				},
-				{
-					"title": "pod/build/vite/platform",
-					"slug": "pod/build/vite/platform",
-					"href": "/docs/api-reference/pod/build/vite/platform"
-				},
-				{
-					"title": "pod/build/vite/platform-contract",
-					"slug": "pod/build/vite/platform-contract",
-					"href": "/docs/api-reference/pod/build/vite/platform-contract"
-				},
-				{
-					"title": "pod/build/vite/schema-functions-sql",
-					"slug": "pod/build/vite/schema-functions-sql",
-					"href": "/docs/api-reference/pod/build/vite/schema-functions-sql"
-				},
-				{
-					"title": "pod/build/vite/workspace-exclusions-sql",
-					"slug": "pod/build/vite/workspace-exclusions-sql",
-					"href": "/docs/api-reference/pod/build/vite/workspace-exclusions-sql"
-				},
-				{
-					"title": "pod/build/xyflow-css",
-					"slug": "pod/build/xyflow-css",
-					"href": "/docs/api-reference/pod/build/xyflow-css"
-				}
-			]
-		},
 		{
 			"id": "@norbital-ai/std",
 			"title": "@norbital-ai/std",
@@ -1154,11 +16,6 @@
 					"title": "std/build/async",
 					"slug": "std/build/async",
 					"href": "/docs/api-reference/std/build/async"
-				},
-				{
-					"title": "std/build/async/batch",
-					"slug": "std/build/async/batch",
-					"href": "/docs/api-reference/std/build/async/batch"
 				},
 				{
 					"title": "std/build/billing",
@@ -1184,6 +41,16 @@
 					"title": "std/build/cel",
 					"slug": "std/build/cel",
 					"href": "/docs/api-reference/std/build/cel"
+				},
+				{
+					"title": "std/build/collection",
+					"slug": "std/build/collection",
+					"href": "/docs/api-reference/std/build/collection"
+				},
+				{
+					"title": "std/build/collection/record-label",
+					"slug": "std/build/collection/record-label",
+					"href": "/docs/api-reference/std/build/collection/record-label"
 				},
 				{
 					"title": "std/build/date",
@@ -1286,19 +153,9 @@
 					"href": "/docs/api-reference/std/build/reckon/runtime.server"
 				},
 				{
-					"title": "std/build/result",
-					"slug": "std/build/result",
-					"href": "/docs/api-reference/std/build/result"
-				},
-				{
-					"title": "std/build/result/outcome",
-					"slug": "std/build/result/outcome",
-					"href": "/docs/api-reference/std/build/result/outcome"
-				},
-				{
-					"title": "std/build/schema",
-					"slug": "std/build/schema",
-					"href": "/docs/api-reference/std/build/schema"
+					"title": "std/build/secret",
+					"slug": "std/build/secret",
+					"href": "/docs/api-reference/std/build/secret"
 				},
 				{
 					"title": "std/build/string",
@@ -2039,6 +896,16 @@
 					"href": "/docs/api-reference/ui/build/code-editor/code-editor.types"
 				},
 				{
+					"title": "ui/build/code-editor/languages",
+					"slug": "ui/build/code-editor/languages",
+					"href": "/docs/api-reference/ui/build/code-editor/languages"
+				},
+				{
+					"title": "ui/build/code-editor/markdown-blocks",
+					"slug": "ui/build/code-editor/markdown-blocks",
+					"href": "/docs/api-reference/ui/build/code-editor/markdown-blocks"
+				},
+				{
 					"title": "ui/build/code-editor/theme",
 					"slug": "ui/build/code-editor/theme",
 					"href": "/docs/api-reference/ui/build/code-editor/theme"
@@ -2134,6 +1001,16 @@
 					"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban.types"
 				},
 				{
+					"title": "ui/build/collection-query",
+					"slug": "ui/build/collection-query",
+					"href": "/docs/api-reference/ui/build/collection-query"
+				},
+				{
+					"title": "ui/build/collection-query/collection-query-state.svelte",
+					"slug": "ui/build/collection-query/collection-query-state.svelte",
+					"href": "/docs/api-reference/ui/build/collection-query/collection-query-state.svelte"
+				},
+				{
 					"title": "ui/build/collection-runtime",
 					"slug": "ui/build/collection-runtime",
 					"href": "/docs/api-reference/ui/build/collection-runtime"
@@ -2177,6 +1054,16 @@
 					"title": "ui/build/collection-table/collection-record-detail-tabs.svelte",
 					"slug": "ui/build/collection-table/collection-record-detail-tabs.svelte",
 					"href": "/docs/api-reference/ui/build/collection-table/collection-record-detail-tabs.svelte"
+				},
+				{
+					"title": "ui/build/collection-table/collection-table-applied-filters",
+					"slug": "ui/build/collection-table/collection-table-applied-filters",
+					"href": "/docs/api-reference/ui/build/collection-table/collection-table-applied-filters"
+				},
+				{
+					"title": "ui/build/collection-table/collection-table-applied-filters.svelte",
+					"slug": "ui/build/collection-table/collection-table-applied-filters.svelte",
+					"href": "/docs/api-reference/ui/build/collection-table/collection-table-applied-filters.svelte"
 				},
 				{
 					"title": "ui/build/collection-table/collection-table-filter-fields",
@@ -2249,6 +1136,11 @@
 					"href": "/docs/api-reference/ui/build/collection-table/collection-table.types"
 				},
 				{
+					"title": "ui/build/collection-table/data-grid.svelte",
+					"slug": "ui/build/collection-table/data-grid.svelte",
+					"href": "/docs/api-reference/ui/build/collection-table/data-grid.svelte"
+				},
+				{
 					"title": "ui/build/collection-table/internal",
 					"slug": "ui/build/collection-table/internal",
 					"href": "/docs/api-reference/ui/build/collection-table/internal"
@@ -2279,14 +1171,39 @@
 					"href": "/docs/api-reference/ui/build/collection-table/internal/component/row-selection/collection-table-checkbox.svelte"
 				},
 				{
+					"title": "ui/build/collection-toolbar",
+					"slug": "ui/build/collection-toolbar",
+					"href": "/docs/api-reference/ui/build/collection-toolbar"
+				},
+				{
+					"title": "ui/build/collection-toolbar/collection-action-toolbar.svelte",
+					"slug": "ui/build/collection-toolbar/collection-action-toolbar.svelte",
+					"href": "/docs/api-reference/ui/build/collection-toolbar/collection-action-toolbar.svelte"
+				},
+				{
+					"title": "ui/build/collection-toolbar/collection-pagination.svelte",
+					"slug": "ui/build/collection-toolbar/collection-pagination.svelte",
+					"href": "/docs/api-reference/ui/build/collection-toolbar/collection-pagination.svelte"
+				},
+				{
+					"title": "ui/build/collection-toolbar/collection-toolbar-action.svelte",
+					"slug": "ui/build/collection-toolbar/collection-toolbar-action.svelte",
+					"href": "/docs/api-reference/ui/build/collection-toolbar/collection-toolbar-action.svelte"
+				},
+				{
+					"title": "ui/build/collection-toolbar/collection-toolbar-filter.svelte",
+					"slug": "ui/build/collection-toolbar/collection-toolbar-filter.svelte",
+					"href": "/docs/api-reference/ui/build/collection-toolbar/collection-toolbar-filter.svelte"
+				},
+				{
+					"title": "ui/build/collection-toolbar/collection-toolbar.types",
+					"slug": "ui/build/collection-toolbar/collection-toolbar.types",
+					"href": "/docs/api-reference/ui/build/collection-toolbar/collection-toolbar.types"
+				},
+				{
 					"title": "ui/build/combobox",
 					"slug": "ui/build/combobox",
 					"href": "/docs/api-reference/ui/build/combobox"
-				},
-				{
-					"title": "ui/build/combobox/combobox-alignment",
-					"slug": "ui/build/combobox/combobox-alignment",
-					"href": "/docs/api-reference/ui/build/combobox/combobox-alignment"
 				},
 				{
 					"title": "ui/build/combobox/combobox-content.svelte",
@@ -2472,6 +1389,11 @@
 					"title": "ui/build/data-renderer/boolean/boolean.renderer.svelte",
 					"slug": "ui/build/data-renderer/boolean/boolean.renderer.svelte",
 					"href": "/docs/api-reference/ui/build/data-renderer/boolean/boolean.renderer.svelte"
+				},
+				{
+					"title": "ui/build/data-renderer/channels/channels.renderer.svelte",
+					"slug": "ui/build/data-renderer/channels/channels.renderer.svelte",
+					"href": "/docs/api-reference/ui/build/data-renderer/channels/channels.renderer.svelte"
 				},
 				{
 					"title": "ui/build/data-renderer/data-renderer-editor.svelte",
@@ -3389,6 +2311,11 @@
 					"href": "/docs/api-reference/ui/build/keybindings/keybindings.svelte"
 				},
 				{
+					"title": "ui/build/keybindings/shortcut-label",
+					"slug": "ui/build/keybindings/shortcut-label",
+					"href": "/docs/api-reference/ui/build/keybindings/shortcut-label"
+				},
+				{
 					"title": "ui/build/label",
 					"slug": "ui/build/label",
 					"href": "/docs/api-reference/ui/build/label"
@@ -3469,6 +2396,16 @@
 					"href": "/docs/api-reference/ui/build/layout/stack.svelte"
 				},
 				{
+					"title": "ui/build/locale-toggle",
+					"slug": "ui/build/locale-toggle",
+					"href": "/docs/api-reference/ui/build/locale-toggle"
+				},
+				{
+					"title": "ui/build/locale-toggle/locale-toggle.svelte",
+					"slug": "ui/build/locale-toggle/locale-toggle.svelte",
+					"href": "/docs/api-reference/ui/build/locale-toggle/locale-toggle.svelte"
+				},
+				{
 					"title": "ui/build/markdown-editor",
 					"slug": "ui/build/markdown-editor",
 					"href": "/docs/api-reference/ui/build/markdown-editor"
@@ -3537,6 +2474,16 @@
 					"title": "ui/build/markdown-editor/tiptap-storage",
 					"slug": "ui/build/markdown-editor/tiptap-storage",
 					"href": "/docs/api-reference/ui/build/markdown-editor/tiptap-storage"
+				},
+				{
+					"title": "ui/build/media-banner",
+					"slug": "ui/build/media-banner",
+					"href": "/docs/api-reference/ui/build/media-banner"
+				},
+				{
+					"title": "ui/build/media-banner/app-media-header.svelte",
+					"slug": "ui/build/media-banner/app-media-header.svelte",
+					"href": "/docs/api-reference/ui/build/media-banner/app-media-header.svelte"
 				},
 				{
 					"title": "ui/build/menubar",
@@ -4384,21 +3331,6 @@
 					"href": "/docs/api-reference/ui/build/theme-toggle/theme-toggle.svelte"
 				},
 				{
-					"title": "ui/build/thinking-orb",
-					"slug": "ui/build/thinking-orb",
-					"href": "/docs/api-reference/ui/build/thinking-orb"
-				},
-				{
-					"title": "ui/build/thinking-orb/thinking-orb.svelte",
-					"slug": "ui/build/thinking-orb/thinking-orb.svelte",
-					"href": "/docs/api-reference/ui/build/thinking-orb/thinking-orb.svelte"
-				},
-				{
-					"title": "ui/build/thinking-orb/thinking-orb.types",
-					"slug": "ui/build/thinking-orb/thinking-orb.types",
-					"href": "/docs/api-reference/ui/build/thinking-orb/thinking-orb.types"
-				},
-				{
 					"title": "ui/build/time-field",
 					"slug": "ui/build/time-field",
 					"href": "/docs/api-reference/ui/build/time-field"
@@ -4412,6 +3344,11 @@
 					"title": "ui/build/time-range",
 					"slug": "ui/build/time-range",
 					"href": "/docs/api-reference/ui/build/time-range"
+				},
+				{
+					"title": "ui/build/time-range/compare",
+					"slug": "ui/build/time-range/compare",
+					"href": "/docs/api-reference/ui/build/time-range/compare"
 				},
 				{
 					"title": "ui/build/time-range/time-range.svelte",
@@ -4578,1136 +3515,6 @@
 			"href": "/docs/api-reference"
 		},
 		{
-			"title": "pod/build/authoring",
-			"slug": "pod/build/authoring",
-			"href": "/docs/api-reference/pod/build/authoring"
-		},
-		{
-			"title": "pod/build/authoring/automations/agent-tools",
-			"slug": "pod/build/authoring/automations/agent-tools",
-			"href": "/docs/api-reference/pod/build/authoring/automations/agent-tools"
-		},
-		{
-			"title": "pod/build/authoring/automations/automations",
-			"slug": "pod/build/authoring/automations/automations",
-			"href": "/docs/api-reference/pod/build/authoring/automations/automations"
-		},
-		{
-			"title": "pod/build/authoring/automations/handlers",
-			"slug": "pod/build/authoring/automations/handlers",
-			"href": "/docs/api-reference/pod/build/authoring/automations/handlers"
-		},
-		{
-			"title": "pod/build/authoring/automations/hooks",
-			"slug": "pod/build/authoring/automations/hooks",
-			"href": "/docs/api-reference/pod/build/authoring/automations/hooks"
-		},
-		{
-			"title": "pod/build/authoring/automations/pipelines",
-			"slug": "pod/build/authoring/automations/pipelines",
-			"href": "/docs/api-reference/pod/build/authoring/automations/pipelines"
-		},
-		{
-			"title": "pod/build/authoring/builtin/columns",
-			"slug": "pod/build/authoring/builtin/columns",
-			"href": "/docs/api-reference/pod/build/authoring/builtin/columns"
-		},
-		{
-			"title": "pod/build/authoring/builtin/custom\\_types",
-			"slug": "pod/build/authoring/builtin/custom_types",
-			"href": "/docs/api-reference/pod/build/authoring/builtin/custom_types"
-		},
-		{
-			"title": "pod/build/authoring/builtin/money",
-			"slug": "pod/build/authoring/builtin/money",
-			"href": "/docs/api-reference/pod/build/authoring/builtin/money"
-		},
-		{
-			"title": "pod/build/authoring/channels/channels",
-			"slug": "pod/build/authoring/channels/channels",
-			"href": "/docs/api-reference/pod/build/authoring/channels/channels"
-		},
-		{
-			"title": "pod/build/authoring/custom-type",
-			"slug": "pod/build/authoring/custom-type",
-			"href": "/docs/api-reference/pod/build/authoring/custom-type"
-		},
-		{
-			"title": "pod/build/authoring/env",
-			"slug": "pod/build/authoring/env",
-			"href": "/docs/api-reference/pod/build/authoring/env"
-		},
-		{
-			"title": "pod/build/authoring/filesystem",
-			"slug": "pod/build/authoring/filesystem",
-			"href": "/docs/api-reference/pod/build/authoring/filesystem"
-		},
-		{
-			"title": "pod/build/authoring/integrations/integrations",
-			"slug": "pod/build/authoring/integrations/integrations",
-			"href": "/docs/api-reference/pod/build/authoring/integrations/integrations"
-		},
-		{
-			"title": "pod/build/authoring/internals",
-			"slug": "pod/build/authoring/internals",
-			"href": "/docs/api-reference/pod/build/authoring/internals"
-		},
-		{
-			"title": "pod/build/authoring/policies/policies",
-			"slug": "pod/build/authoring/policies/policies",
-			"href": "/docs/api-reference/pod/build/authoring/policies/policies"
-		},
-		{
-			"title": "pod/build/authoring/refuse",
-			"slug": "pod/build/authoring/refuse",
-			"href": "/docs/api-reference/pod/build/authoring/refuse"
-		},
-		{
-			"title": "pod/build/authoring/schema/collection-behavior",
-			"slug": "pod/build/authoring/schema/collection-behavior",
-			"href": "/docs/api-reference/pod/build/authoring/schema/collection-behavior"
-		},
-		{
-			"title": "pod/build/authoring/schema/columns",
-			"slug": "pod/build/authoring/schema/columns",
-			"href": "/docs/api-reference/pod/build/authoring/schema/columns"
-		},
-		{
-			"title": "pod/build/authoring/schema/define-schema",
-			"slug": "pod/build/authoring/schema/define-schema",
-			"href": "/docs/api-reference/pod/build/authoring/schema/define-schema"
-		},
-		{
-			"title": "pod/build/authoring/schema/define-table",
-			"slug": "pod/build/authoring/schema/define-table",
-			"href": "/docs/api-reference/pod/build/authoring/schema/define-table"
-		},
-		{
-			"title": "pod/build/authoring/schema/extract",
-			"slug": "pod/build/authoring/schema/extract",
-			"href": "/docs/api-reference/pod/build/authoring/schema/extract"
-		},
-		{
-			"title": "pod/build/authoring/schema/input-schemas",
-			"slug": "pod/build/authoring/schema/input-schemas",
-			"href": "/docs/api-reference/pod/build/authoring/schema/input-schemas"
-		},
-		{
-			"title": "pod/build/authoring/schema/mutation-types",
-			"slug": "pod/build/authoring/schema/mutation-types",
-			"href": "/docs/api-reference/pod/build/authoring/schema/mutation-types"
-		},
-		{
-			"title": "pod/build/authoring/schema/system-workspace",
-			"slug": "pod/build/authoring/schema/system-workspace",
-			"href": "/docs/api-reference/pod/build/authoring/schema/system-workspace"
-		},
-		{
-			"title": "pod/build/authoring/schema/table",
-			"slug": "pod/build/authoring/schema/table",
-			"href": "/docs/api-reference/pod/build/authoring/schema/table"
-		},
-		{
-			"title": "pod/build/authoring/schema/types",
-			"slug": "pod/build/authoring/schema/types",
-			"href": "/docs/api-reference/pod/build/authoring/schema/types"
-		},
-		{
-			"title": "pod/build/authoring/workspace/build-workspace-api",
-			"slug": "pod/build/authoring/workspace/build-workspace-api",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/build-workspace-api"
-		},
-		{
-			"title": "pod/build/authoring/workspace/db-api",
-			"slug": "pod/build/authoring/workspace/db-api",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/db-api"
-		},
-		{
-			"title": "pod/build/authoring/workspace/db-api-types",
-			"slug": "pod/build/authoring/workspace/db-api-types",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/db-api-types"
-		},
-		{
-			"title": "pod/build/authoring/workspace/define-workspace",
-			"slug": "pod/build/authoring/workspace/define-workspace",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/define-workspace"
-		},
-		{
-			"title": "pod/build/authoring/workspace/derive-relationships",
-			"slug": "pod/build/authoring/workspace/derive-relationships",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/derive-relationships"
-		},
-		{
-			"title": "pod/build/authoring/workspace/hook-api",
-			"slug": "pod/build/authoring/workspace/hook-api",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/hook-api"
-		},
-		{
-			"title": "pod/build/authoring/workspace/invoke-api-types",
-			"slug": "pod/build/authoring/workspace/invoke-api-types",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/invoke-api-types"
-		},
-		{
-			"title": "pod/build/authoring/workspace/pod-remote-operations",
-			"slug": "pod/build/authoring/workspace/pod-remote-operations",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/pod-remote-operations"
-		},
-		{
-			"title": "pod/build/authoring/workspace/relations-filter",
-			"slug": "pod/build/authoring/workspace/relations-filter",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/relations-filter"
-		},
-		{
-			"title": "pod/build/authoring/workspace/remote-transport",
-			"slug": "pod/build/authoring/workspace/remote-transport",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/remote-transport"
-		},
-		{
-			"title": "pod/build/authoring/workspace/workspace-runtime",
-			"slug": "pod/build/authoring/workspace/workspace-runtime",
-			"href": "/docs/api-reference/pod/build/authoring/workspace/workspace-runtime"
-		},
-		{
-			"title": "pod/build/bin/invocation",
-			"slug": "pod/build/bin/invocation",
-			"href": "/docs/api-reference/pod/build/bin/invocation"
-		},
-		{
-			"title": "pod/build/host",
-			"slug": "pod/build/host",
-			"href": "/docs/api-reference/pod/build/host"
-		},
-		{
-			"title": "pod/build/host/agent-tools",
-			"slug": "pod/build/host/agent-tools",
-			"href": "/docs/api-reference/pod/build/host/agent-tools"
-		},
-		{
-			"title": "pod/build/host/config",
-			"slug": "pod/build/host/config",
-			"href": "/docs/api-reference/pod/build/host/config"
-		},
-		{
-			"title": "pod/build/host/cron",
-			"slug": "pod/build/host/cron",
-			"href": "/docs/api-reference/pod/build/host/cron"
-		},
-		{
-			"title": "pod/build/host/db",
-			"slug": "pod/build/host/db",
-			"href": "/docs/api-reference/pod/build/host/db"
-		},
-		{
-			"title": "pod/build/host/email-otp",
-			"slug": "pod/build/host/email-otp",
-			"href": "/docs/api-reference/pod/build/host/email-otp"
-		},
-		{
-			"title": "pod/build/host/facilities",
-			"slug": "pod/build/host/facilities",
-			"href": "/docs/api-reference/pod/build/host/facilities"
-		},
-		{
-			"title": "pod/build/host/file-storage",
-			"slug": "pod/build/host/file-storage",
-			"href": "/docs/api-reference/pod/build/host/file-storage"
-		},
-		{
-			"title": "pod/build/host/identity",
-			"slug": "pod/build/host/identity",
-			"href": "/docs/api-reference/pod/build/host/identity"
-		},
-		{
-			"title": "pod/build/host/identity-pages",
-			"slug": "pod/build/host/identity-pages",
-			"href": "/docs/api-reference/pod/build/host/identity-pages"
-		},
-		{
-			"title": "pod/build/host/integration-http",
-			"slug": "pod/build/host/integration-http",
-			"href": "/docs/api-reference/pod/build/host/integration-http"
-		},
-		{
-			"title": "pod/build/host/interval-queue",
-			"slug": "pod/build/host/interval-queue",
-			"href": "/docs/api-reference/pod/build/host/interval-queue"
-		},
-		{
-			"title": "pod/build/host/jobs",
-			"slug": "pod/build/host/jobs",
-			"href": "/docs/api-reference/pod/build/host/jobs"
-		},
-		{
-			"title": "pod/build/host/maps",
-			"slug": "pod/build/host/maps",
-			"href": "/docs/api-reference/pod/build/host/maps"
-		},
-		{
-			"title": "pod/build/host/s3",
-			"slug": "pod/build/host/s3",
-			"href": "/docs/api-reference/pod/build/host/s3"
-		},
-		{
-			"title": "pod/build/host/session",
-			"slug": "pod/build/host/session",
-			"href": "/docs/api-reference/pod/build/host/session"
-		},
-		{
-			"title": "pod/build/host/telegram",
-			"slug": "pod/build/host/telegram",
-			"href": "/docs/api-reference/pod/build/host/telegram"
-		},
-		{
-			"title": "pod/build/host/types",
-			"slug": "pod/build/host/types",
-			"href": "/docs/api-reference/pod/build/host/types"
-		},
-		{
-			"title": "pod/build/host/webhook-inbound",
-			"slug": "pod/build/host/webhook-inbound",
-			"href": "/docs/api-reference/pod/build/host/webhook-inbound"
-		},
-		{
-			"title": "pod/build/host/webhooks",
-			"slug": "pod/build/host/webhooks",
-			"href": "/docs/api-reference/pod/build/host/webhooks"
-		},
-		{
-			"title": "pod/build/i18n",
-			"slug": "pod/build/i18n",
-			"href": "/docs/api-reference/pod/build/i18n"
-		},
-		{
-			"title": "pod/build/i18n/messages",
-			"slug": "pod/build/i18n/messages",
-			"href": "/docs/api-reference/pod/build/i18n/messages"
-		},
-		{
-			"title": "pod/build/manifest",
-			"slug": "pod/build/manifest",
-			"href": "/docs/api-reference/pod/build/manifest"
-		},
-		{
-			"title": "pod/build/remote",
-			"slug": "pod/build/remote",
-			"href": "/docs/api-reference/pod/build/remote"
-		},
-		{
-			"title": "pod/build/remote/agent\\_chat.remote",
-			"slug": "pod/build/remote/agent_chat.remote",
-			"href": "/docs/api-reference/pod/build/remote/agent_chat.remote"
-		},
-		{
-			"title": "pod/build/remote/approval\\_request.remote",
-			"slug": "pod/build/remote/approval_request.remote",
-			"href": "/docs/api-reference/pod/build/remote/approval_request.remote"
-		},
-		{
-			"title": "pod/build/remote/approval\\_request.runtime.server",
-			"slug": "pod/build/remote/approval_request.runtime.server",
-			"href": "/docs/api-reference/pod/build/remote/approval_request.runtime.server"
-		},
-		{
-			"title": "pod/build/remote/approval\\_request.schema",
-			"slug": "pod/build/remote/approval_request.schema",
-			"href": "/docs/api-reference/pod/build/remote/approval_request.schema"
-		},
-		{
-			"title": "pod/build/remote/collection.remote",
-			"slug": "pod/build/remote/collection.remote",
-			"href": "/docs/api-reference/pod/build/remote/collection.remote"
-		},
-		{
-			"title": "pod/build/remote/geolocation.remote",
-			"slug": "pod/build/remote/geolocation.remote",
-			"href": "/docs/api-reference/pod/build/remote/geolocation.remote"
-		},
-		{
-			"title": "pod/build/remote/guard.server",
-			"slug": "pod/build/remote/guard.server",
-			"href": "/docs/api-reference/pod/build/remote/guard.server"
-		},
-		{
-			"title": "pod/build/remote/handler.remote",
-			"slug": "pod/build/remote/handler.remote",
-			"href": "/docs/api-reference/pod/build/remote/handler.remote"
-		},
-		{
-			"title": "pod/build/remote/static\\_map.remote",
-			"slug": "pod/build/remote/static_map.remote",
-			"href": "/docs/api-reference/pod/build/remote/static_map.remote"
-		},
-		{
-			"title": "pod/build/serve/hosted",
-			"slug": "pod/build/serve/hosted",
-			"href": "/docs/api-reference/pod/build/serve/hosted"
-		},
-		{
-			"title": "pod/build/serve/server",
-			"slug": "pod/build/serve/server",
-			"href": "/docs/api-reference/pod/build/serve/server"
-		},
-		{
-			"title": "pod/build/serve/standalone",
-			"slug": "pod/build/serve/standalone",
-			"href": "/docs/api-reference/pod/build/serve/standalone"
-		},
-		{
-			"title": "pod/build/serve/stdio",
-			"slug": "pod/build/serve/stdio",
-			"href": "/docs/api-reference/pod/build/serve/stdio"
-		},
-		{
-			"title": "pod/build/server/agent/agent-loop.server",
-			"slug": "pod/build/server/agent/agent-loop.server",
-			"href": "/docs/api-reference/pod/build/server/agent/agent-loop.server"
-		},
-		{
-			"title": "pod/build/server/agent/agent-mentions.server",
-			"slug": "pod/build/server/agent/agent-mentions.server",
-			"href": "/docs/api-reference/pod/build/server/agent/agent-mentions.server"
-		},
-		{
-			"title": "pod/build/server/agent/agent-spec.server",
-			"slug": "pod/build/server/agent/agent-spec.server",
-			"href": "/docs/api-reference/pod/build/server/agent/agent-spec.server"
-		},
-		{
-			"title": "pod/build/server/agent/system-prompt",
-			"slug": "pod/build/server/agent/system-prompt",
-			"href": "/docs/api-reference/pod/build/server/agent/system-prompt"
-		},
-		{
-			"title": "pod/build/server/audit\\_event.server",
-			"slug": "pod/build/server/audit_event.server",
-			"href": "/docs/api-reference/pod/build/server/audit_event.server"
-		},
-		{
-			"title": "pod/build/server/bootstrap/channel\\_reconcile.server",
-			"slug": "pod/build/server/bootstrap/channel_reconcile.server",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/channel_reconcile.server"
-		},
-		{
-			"title": "pod/build/server/bootstrap/context",
-			"slug": "pod/build/server/bootstrap/context",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/context"
-		},
-		{
-			"title": "pod/build/server/bootstrap/host\\_base\\_scope",
-			"slug": "pod/build/server/bootstrap/host_base_scope",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/host_base_scope"
-		},
-		{
-			"title": "pod/build/server/bootstrap/manifest\\_context",
-			"slug": "pod/build/server/bootstrap/manifest_context",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/manifest_context"
-		},
-		{
-			"title": "pod/build/server/bootstrap/policy\\_reconcile.server",
-			"slug": "pod/build/server/bootstrap/policy_reconcile.server",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/policy_reconcile.server"
-		},
-		{
-			"title": "pod/build/server/bootstrap/resolve\\_workspace",
-			"slug": "pod/build/server/bootstrap/resolve_workspace",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/resolve_workspace"
-		},
-		{
-			"title": "pod/build/server/bootstrap/runtime\\_request.server",
-			"slug": "pod/build/server/bootstrap/runtime_request.server",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/runtime_request.server"
-		},
-		{
-			"title": "pod/build/server/bootstrap/tenant\\_db\\_binding",
-			"slug": "pod/build/server/bootstrap/tenant_db_binding",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/tenant_db_binding"
-		},
-		{
-			"title": "pod/build/server/bootstrap/tenant\\_workspace.server",
-			"slug": "pod/build/server/bootstrap/tenant_workspace.server",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/tenant_workspace.server"
-		},
-		{
-			"title": "pod/build/server/bootstrap/workspace\\_runtime",
-			"slug": "pod/build/server/bootstrap/workspace_runtime",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/workspace_runtime"
-		},
-		{
-			"title": "pod/build/server/bootstrap/workspace\\_store",
-			"slug": "pod/build/server/bootstrap/workspace_store",
-			"href": "/docs/api-reference/pod/build/server/bootstrap/workspace_store"
-		},
-		{
-			"title": "pod/build/server/channel-delivery.server",
-			"slug": "pod/build/server/channel-delivery.server",
-			"href": "/docs/api-reference/pod/build/server/channel-delivery.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/approval\\_lock.server",
-			"slug": "pod/build/server/collection/access_control/approval_lock.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_lock.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/approval\\_operation.server",
-			"slug": "pod/build/server/collection/access_control/approval_operation.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_operation.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/approval\\_scope\\_types",
-			"slug": "pod/build/server/collection/access_control/approval_scope_types",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_scope_types"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/approval\\_service.server",
-			"slug": "pod/build/server/collection/access_control/approval_service.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_service.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/approval\\_step\\_conditions.server",
-			"slug": "pod/build/server/collection/access_control/approval_step_conditions.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/approval_step_conditions.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/permission/collection\\_permission.guard.server",
-			"slug": "pod/build/server/collection/access_control/permission/collection_permission.guard.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/permission/collection_permission.guard.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/permission/permission\\_bypass\\_key.server",
-			"slug": "pod/build/server/collection/access_control/permission/permission_bypass_key.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/permission/permission_bypass_key.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/permission/permission\\_record\\_resolution.server",
-			"slug": "pod/build/server/collection/access_control/permission/permission_record_resolution.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/permission/permission_record_resolution.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/policy\\_grant\\_loader.server",
-			"slug": "pod/build/server/collection/access_control/policy_grant_loader.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/policy_grant_loader.server"
-		},
-		{
-			"title": "pod/build/server/collection/access\\_control/policy\\_sql.server",
-			"slug": "pod/build/server/collection/access_control/policy_sql.server",
-			"href": "/docs/api-reference/pod/build/server/collection/access_control/policy_sql.server"
-		},
-		{
-			"title": "pod/build/server/collection/collection\\_cursor.server",
-			"slug": "pod/build/server/collection/collection_cursor.server",
-			"href": "/docs/api-reference/pod/build/server/collection/collection_cursor.server"
-		},
-		{
-			"title": "pod/build/server/collection/collection\\_direct",
-			"slug": "pod/build/server/collection/collection_direct",
-			"href": "/docs/api-reference/pod/build/server/collection/collection_direct"
-		},
-		{
-			"title": "pod/build/server/collection/collection\\_filters.server",
-			"slug": "pod/build/server/collection/collection_filters.server",
-			"href": "/docs/api-reference/pod/build/server/collection/collection_filters.server"
-		},
-		{
-			"title": "pod/build/server/collection/collection\\_operators.server",
-			"slug": "pod/build/server/collection/collection_operators.server",
-			"href": "/docs/api-reference/pod/build/server/collection/collection_operators.server"
-		},
-		{
-			"title": "pod/build/server/collection/collection\\_ops.server",
-			"slug": "pod/build/server/collection/collection_ops.server",
-			"href": "/docs/api-reference/pod/build/server/collection/collection_ops.server"
-		},
-		{
-			"title": "pod/build/server/collection/collection\\_search.server",
-			"slug": "pod/build/server/collection/collection_search.server",
-			"href": "/docs/api-reference/pod/build/server/collection/collection_search.server"
-		},
-		{
-			"title": "pod/build/server/collection/collection\\_transaction.server",
-			"slug": "pod/build/server/collection/collection_transaction.server",
-			"href": "/docs/api-reference/pod/build/server/collection/collection_transaction.server"
-		},
-		{
-			"title": "pod/build/server/collection/constraint-errors.server",
-			"slug": "pod/build/server/collection/constraint-errors.server",
-			"href": "/docs/api-reference/pod/build/server/collection/constraint-errors.server"
-		},
-		{
-			"title": "pod/build/server/collection/hook-api-context.server",
-			"slug": "pod/build/server/collection/hook-api-context.server",
-			"href": "/docs/api-reference/pod/build/server/collection/hook-api-context.server"
-		},
-		{
-			"title": "pod/build/server/collection/hook-api.server",
-			"slug": "pod/build/server/collection/hook-api.server",
-			"href": "/docs/api-reference/pod/build/server/collection/hook-api.server"
-		},
-		{
-			"title": "pod/build/server/collection/hook-context",
-			"slug": "pod/build/server/collection/hook-context",
-			"href": "/docs/api-reference/pod/build/server/collection/hook-context"
-		},
-		{
-			"title": "pod/build/server/collection/http\\_error",
-			"slug": "pod/build/server/collection/http_error",
-			"href": "/docs/api-reference/pod/build/server/collection/http_error"
-		},
-		{
-			"title": "pod/build/server/collection/norbital\\_db\\_record",
-			"slug": "pod/build/server/collection/norbital_db_record",
-			"href": "/docs/api-reference/pod/build/server/collection/norbital_db_record"
-		},
-		{
-			"title": "pod/build/server/collection/record\\_history.server",
-			"slug": "pod/build/server/collection/record_history.server",
-			"href": "/docs/api-reference/pod/build/server/collection/record_history.server"
-		},
-		{
-			"title": "pod/build/server/collection/scope\\_hydration.server",
-			"slug": "pod/build/server/collection/scope_hydration.server",
-			"href": "/docs/api-reference/pod/build/server/collection/scope_hydration.server"
-		},
-		{
-			"title": "pod/build/server/collection/sql-identifier.server",
-			"slug": "pod/build/server/collection/sql-identifier.server",
-			"href": "/docs/api-reference/pod/build/server/collection/sql-identifier.server"
-		},
-		{
-			"title": "pod/build/server/collection/sync/db-notifications.server",
-			"slug": "pod/build/server/collection/sync/db-notifications.server",
-			"href": "/docs/api-reference/pod/build/server/collection/sync/db-notifications.server"
-		},
-		{
-			"title": "pod/build/server/collection/sync/mutation-rejection.server",
-			"slug": "pod/build/server/collection/sync/mutation-rejection.server",
-			"href": "/docs/api-reference/pod/build/server/collection/sync/mutation-rejection.server"
-		},
-		{
-			"title": "pod/build/server/collection/sync/outbox-tailer.server",
-			"slug": "pod/build/server/collection/sync/outbox-tailer.server",
-			"href": "/docs/api-reference/pod/build/server/collection/sync/outbox-tailer.server"
-		},
-		{
-			"title": "pod/build/server/collection/sync/sync-endpoints.server",
-			"slug": "pod/build/server/collection/sync/sync-endpoints.server",
-			"href": "/docs/api-reference/pod/build/server/collection/sync/sync-endpoints.server"
-		},
-		{
-			"title": "pod/build/server/collection/sync/sync-outbox.server",
-			"slug": "pod/build/server/collection/sync/sync-outbox.server",
-			"href": "/docs/api-reference/pod/build/server/collection/sync/sync-outbox.server"
-		},
-		{
-			"title": "pod/build/server/collection/sync/visibility-deltas.server",
-			"slug": "pod/build/server/collection/sync/visibility-deltas.server",
-			"href": "/docs/api-reference/pod/build/server/collection/sync/visibility-deltas.server"
-		},
-		{
-			"title": "pod/build/server/collection/workspace-collections",
-			"slug": "pod/build/server/collection/workspace-collections",
-			"href": "/docs/api-reference/pod/build/server/collection/workspace-collections"
-		},
-		{
-			"title": "pod/build/server/entry",
-			"slug": "pod/build/server/entry",
-			"href": "/docs/api-reference/pod/build/server/entry"
-		},
-		{
-			"title": "pod/build/server/env",
-			"slug": "pod/build/server/env",
-			"href": "/docs/api-reference/pod/build/server/env"
-		},
-		{
-			"title": "pod/build/server/facilities",
-			"slug": "pod/build/server/facilities",
-			"href": "/docs/api-reference/pod/build/server/facilities"
-		},
-		{
-			"title": "pod/build/server/host-plugins",
-			"slug": "pod/build/server/host-plugins",
-			"href": "/docs/api-reference/pod/build/server/host-plugins"
-		},
-		{
-			"title": "pod/build/server/http",
-			"slug": "pod/build/server/http",
-			"href": "/docs/api-reference/pod/build/server/http"
-		},
-		{
-			"title": "pod/build/server/i18n",
-			"slug": "pod/build/server/i18n",
-			"href": "/docs/api-reference/pod/build/server/i18n"
-		},
-		{
-			"title": "pod/build/server/identity/invitation.server",
-			"slug": "pod/build/server/identity/invitation.server",
-			"href": "/docs/api-reference/pod/build/server/identity/invitation.server"
-		},
-		{
-			"title": "pod/build/server/identity/subject.server",
-			"slug": "pod/build/server/identity/subject.server",
-			"href": "/docs/api-reference/pod/build/server/identity/subject.server"
-		},
-		{
-			"title": "pod/build/server/identity/workspace\\_settings.server",
-			"slug": "pod/build/server/identity/workspace_settings.server",
-			"href": "/docs/api-reference/pod/build/server/identity/workspace_settings.server"
-		},
-		{
-			"title": "pod/build/server/integrations/tenant-inbound.server",
-			"slug": "pod/build/server/integrations/tenant-inbound.server",
-			"href": "/docs/api-reference/pod/build/server/integrations/tenant-inbound.server"
-		},
-		{
-			"title": "pod/build/server/integrations/tenant-outbox.server",
-			"slug": "pod/build/server/integrations/tenant-outbox.server",
-			"href": "/docs/api-reference/pod/build/server/integrations/tenant-outbox.server"
-		},
-		{
-			"title": "pod/build/server/notification-outbox.server",
-			"slug": "pod/build/server/notification-outbox.server",
-			"href": "/docs/api-reference/pod/build/server/notification-outbox.server"
-		},
-		{
-			"title": "pod/build/server/request-context",
-			"slug": "pod/build/server/request-context",
-			"href": "/docs/api-reference/pod/build/server/request-context"
-		},
-		{
-			"title": "pod/build/server/run/automation-dispatch.server",
-			"slug": "pod/build/server/run/automation-dispatch.server",
-			"href": "/docs/api-reference/pod/build/server/run/automation-dispatch.server"
-		},
-		{
-			"title": "pod/build/server/run/collection\\_pipeline",
-			"slug": "pod/build/server/run/collection_pipeline",
-			"href": "/docs/api-reference/pod/build/server/run/collection_pipeline"
-		},
-		{
-			"title": "pod/build/server/run/tenant\\_run",
-			"slug": "pod/build/server/run/tenant_run",
-			"href": "/docs/api-reference/pod/build/server/run/tenant_run"
-		},
-		{
-			"title": "pod/build/server/shell-data.server",
-			"slug": "pod/build/server/shell-data.server",
-			"href": "/docs/api-reference/pod/build/server/shell-data.server"
-		},
-		{
-			"title": "pod/build/shared/abortable-delay",
-			"slug": "pod/build/shared/abortable-delay",
-			"href": "/docs/api-reference/pod/build/shared/abortable-delay"
-		},
-		{
-			"title": "pod/build/shared/approval",
-			"slug": "pod/build/shared/approval",
-			"href": "/docs/api-reference/pod/build/shared/approval"
-		},
-		{
-			"title": "pod/build/shared/collection-names",
-			"slug": "pod/build/shared/collection-names",
-			"href": "/docs/api-reference/pod/build/shared/collection-names"
-		},
-		{
-			"title": "pod/build/shared/scope",
-			"slug": "pod/build/shared/scope",
-			"href": "/docs/api-reference/pod/build/shared/scope"
-		},
-		{
-			"title": "pod/build/skills",
-			"slug": "pod/build/skills",
-			"href": "/docs/api-reference/pod/build/skills"
-		},
-		{
-			"title": "pod/build/skills/personal.server",
-			"slug": "pod/build/skills/personal.server",
-			"href": "/docs/api-reference/pod/build/skills/personal.server"
-		},
-		{
-			"title": "pod/build/skills/registry.server",
-			"slug": "pod/build/skills/registry.server",
-			"href": "/docs/api-reference/pod/build/skills/registry.server"
-		},
-		{
-			"title": "pod/build/skills/skills.generated",
-			"slug": "pod/build/skills/skills.generated",
-			"href": "/docs/api-reference/pod/build/skills/skills.generated"
-		},
-		{
-			"title": "pod/build/skills/types",
-			"slug": "pod/build/skills/types",
-			"href": "/docs/api-reference/pod/build/skills/types"
-		},
-		{
-			"title": "pod/build/ui/agent/agent-chat-panel.svelte",
-			"slug": "pod/build/ui/agent/agent-chat-panel.svelte",
-			"href": "/docs/api-reference/pod/build/ui/agent/agent-chat-panel.svelte"
-		},
-		{
-			"title": "pod/build/ui/agent/agent-composer-focus",
-			"slug": "pod/build/ui/agent/agent-composer-focus",
-			"href": "/docs/api-reference/pod/build/ui/agent/agent-composer-focus"
-		},
-		{
-			"title": "pod/build/ui/agent/agent-mention-menu.svelte",
-			"slug": "pod/build/ui/agent/agent-mention-menu.svelte",
-			"href": "/docs/api-reference/pod/build/ui/agent/agent-mention-menu.svelte"
-		},
-		{
-			"title": "pod/build/ui/agent/agent-model-picker.svelte",
-			"slug": "pod/build/ui/agent/agent-model-picker.svelte",
-			"href": "/docs/api-reference/pod/build/ui/agent/agent-model-picker.svelte"
-		},
-		{
-			"title": "pod/build/ui/agent/agent-transcript-item.svelte",
-			"slug": "pod/build/ui/agent/agent-transcript-item.svelte",
-			"href": "/docs/api-reference/pod/build/ui/agent/agent-transcript-item.svelte"
-		},
-		{
-			"title": "pod/build/ui/agent/composer-chrome",
-			"slug": "pod/build/ui/agent/composer-chrome",
-			"href": "/docs/api-reference/pod/build/ui/agent/composer-chrome"
-		},
-		{
-			"title": "pod/build/ui/agent/composer-mentions",
-			"slug": "pod/build/ui/agent/composer-mentions",
-			"href": "/docs/api-reference/pod/build/ui/agent/composer-mentions"
-		},
-		{
-			"title": "pod/build/ui/agent/mention-sources",
-			"slug": "pod/build/ui/agent/mention-sources",
-			"href": "/docs/api-reference/pod/build/ui/agent/mention-sources"
-		},
-		{
-			"title": "pod/build/ui/agent/models",
-			"slug": "pod/build/ui/agent/models",
-			"href": "/docs/api-reference/pod/build/ui/agent/models"
-		},
-		{
-			"title": "pod/build/ui/agent/transcript",
-			"slug": "pod/build/ui/agent/transcript",
-			"href": "/docs/api-reference/pod/build/ui/agent/transcript"
-		},
-		{
-			"title": "pod/build/ui/collection/collection-record-detail-fallback.svelte",
-			"slug": "pod/build/ui/collection/collection-record-detail-fallback.svelte",
-			"href": "/docs/api-reference/pod/build/ui/collection/collection-record-detail-fallback.svelte"
-		},
-		{
-			"title": "pod/build/ui/collection/collection-record-detail-fields",
-			"slug": "pod/build/ui/collection/collection-record-detail-fields",
-			"href": "/docs/api-reference/pod/build/ui/collection/collection-record-detail-fields"
-		},
-		{
-			"title": "pod/build/ui/collection/collection-table-navigation",
-			"slug": "pod/build/ui/collection/collection-table-navigation",
-			"href": "/docs/api-reference/pod/build/ui/collection/collection-table-navigation"
-		},
-		{
-			"title": "pod/build/ui/collection/detail-surface-stack.svelte",
-			"slug": "pod/build/ui/collection/detail-surface-stack.svelte",
-			"href": "/docs/api-reference/pod/build/ui/collection/detail-surface-stack.svelte"
-		},
-		{
-			"title": "pod/build/ui/collection/detail/detail\\_stack",
-			"slug": "pod/build/ui/collection/detail/detail_stack",
-			"href": "/docs/api-reference/pod/build/ui/collection/detail/detail_stack"
-		},
-		{
-			"title": "pod/build/ui/collection/utils/collection\\_detail\\_navigation",
-			"slug": "pod/build/ui/collection/utils/collection_detail_navigation",
-			"href": "/docs/api-reference/pod/build/ui/collection/utils/collection_detail_navigation"
-		},
-		{
-			"title": "pod/build/ui/collection/utils/context\\_stack",
-			"slug": "pod/build/ui/collection/utils/context_stack",
-			"href": "/docs/api-reference/pod/build/ui/collection/utils/context_stack"
-		},
-		{
-			"title": "pod/build/ui/collection/utils/route\\_context",
-			"slug": "pod/build/ui/collection/utils/route_context",
-			"href": "/docs/api-reference/pod/build/ui/collection/utils/route_context"
-		},
-		{
-			"title": "pod/build/ui/public",
-			"slug": "pod/build/ui/public",
-			"href": "/docs/api-reference/pod/build/ui/public"
-		},
-		{
-			"title": "pod/build/ui/settings/team-hierarchy",
-			"slug": "pod/build/ui/settings/team-hierarchy",
-			"href": "/docs/api-reference/pod/build/ui/settings/team-hierarchy"
-		},
-		{
-			"title": "pod/build/ui/settings/team-node.svelte",
-			"slug": "pod/build/ui/settings/team-node.svelte",
-			"href": "/docs/api-reference/pod/build/ui/settings/team-node.svelte"
-		},
-		{
-			"title": "pod/build/ui/settings/workspace-audit-table.svelte",
-			"slug": "pod/build/ui/settings/workspace-audit-table.svelte",
-			"href": "/docs/api-reference/pod/build/ui/settings/workspace-audit-table.svelte"
-		},
-		{
-			"title": "pod/build/ui/settings/workspace-invitations-table.svelte",
-			"slug": "pod/build/ui/settings/workspace-invitations-table.svelte",
-			"href": "/docs/api-reference/pod/build/ui/settings/workspace-invitations-table.svelte"
-		},
-		{
-			"title": "pod/build/ui/settings/workspace-members-table.svelte",
-			"slug": "pod/build/ui/settings/workspace-members-table.svelte",
-			"href": "/docs/api-reference/pod/build/ui/settings/workspace-members-table.svelte"
-		},
-		{
-			"title": "pod/build/ui/settings/workspace-team-chart.svelte",
-			"slug": "pod/build/ui/settings/workspace-team-chart.svelte",
-			"href": "/docs/api-reference/pod/build/ui/settings/workspace-team-chart.svelte"
-		},
-		{
-			"title": "pod/build/ui/shell/billing-banner.svelte",
-			"slug": "pod/build/ui/shell/billing-banner.svelte",
-			"href": "/docs/api-reference/pod/build/ui/shell/billing-banner.svelte"
-		},
-		{
-			"title": "pod/build/ui/shell/mount-client",
-			"slug": "pod/build/ui/shell/mount-client",
-			"href": "/docs/api-reference/pod/build/ui/shell/mount-client"
-		},
-		{
-			"title": "pod/build/ui/shell/notifications",
-			"slug": "pod/build/ui/shell/notifications",
-			"href": "/docs/api-reference/pod/build/ui/shell/notifications"
-		},
-		{
-			"title": "pod/build/ui/shell/notifications-menu.svelte",
-			"slug": "pod/build/ui/shell/notifications-menu.svelte",
-			"href": "/docs/api-reference/pod/build/ui/shell/notifications-menu.svelte"
-		},
-		{
-			"title": "pod/build/ui/shell/omni-finder.svelte",
-			"slug": "pod/build/ui/shell/omni-finder.svelte",
-			"href": "/docs/api-reference/pod/build/ui/shell/omni-finder.svelte"
-		},
-		{
-			"title": "pod/build/ui/shell/organization-switch",
-			"slug": "pod/build/ui/shell/organization-switch",
-			"href": "/docs/api-reference/pod/build/ui/shell/organization-switch"
-		},
-		{
-			"title": "pod/build/ui/shell/pod-app.svelte",
-			"slug": "pod/build/ui/shell/pod-app.svelte",
-			"href": "/docs/api-reference/pod/build/ui/shell/pod-app.svelte"
-		},
-		{
-			"title": "pod/build/ui/shell/pod-shell.svelte",
-			"slug": "pod/build/ui/shell/pod-shell.svelte",
-			"href": "/docs/api-reference/pod/build/ui/shell/pod-shell.svelte"
-		},
-		{
-			"title": "pod/build/ui/shell/workspace-navigation",
-			"slug": "pod/build/ui/shell/workspace-navigation",
-			"href": "/docs/api-reference/pod/build/ui/shell/workspace-navigation"
-		},
-		{
-			"title": "pod/build/ui/shell/workspace-settings",
-			"slug": "pod/build/ui/shell/workspace-settings",
-			"href": "/docs/api-reference/pod/build/ui/shell/workspace-settings"
-		},
-		{
-			"title": "pod/build/ui/shell/workspace-settings-api",
-			"slug": "pod/build/ui/shell/workspace-settings-api",
-			"href": "/docs/api-reference/pod/build/ui/shell/workspace-settings-api"
-		},
-		{
-			"title": "pod/build/ui/shell/workspace-settings-surface.svelte",
-			"slug": "pod/build/ui/shell/workspace-settings-surface.svelte",
-			"href": "/docs/api-reference/pod/build/ui/shell/workspace-settings-surface.svelte"
-		},
-		{
-			"title": "pod/build/ui/state/client",
-			"slug": "pod/build/ui/state/client",
-			"href": "/docs/api-reference/pod/build/ui/state/client"
-		},
-		{
-			"title": "pod/build/ui/state/collection-export",
-			"slug": "pod/build/ui/state/collection-export",
-			"href": "/docs/api-reference/pod/build/ui/state/collection-export"
-		},
-		{
-			"title": "pod/build/ui/state/collection-import",
-			"slug": "pod/build/ui/state/collection-import",
-			"href": "/docs/api-reference/pod/build/ui/state/collection-import"
-		},
-		{
-			"title": "pod/build/ui/state/page\\_surface\\_state.svelte",
-			"slug": "pod/build/ui/state/page_surface_state.svelte",
-			"href": "/docs/api-reference/pod/build/ui/state/page_surface_state.svelte"
-		},
-		{
-			"title": "pod/build/ui/state/platform\\_state.svelte",
-			"slug": "pod/build/ui/state/platform_state.svelte",
-			"href": "/docs/api-reference/pod/build/ui/state/platform_state.svelte"
-		},
-		{
-			"title": "pod/build/ui/state/remote-query.svelte",
-			"slug": "pod/build/ui/state/remote-query.svelte",
-			"href": "/docs/api-reference/pod/build/ui/state/remote-query.svelte"
-		},
-		{
-			"title": "pod/build/ui/state/router.svelte",
-			"slug": "pod/build/ui/state/router.svelte",
-			"href": "/docs/api-reference/pod/build/ui/state/router.svelte"
-		},
-		{
-			"title": "pod/build/ui/state/types",
-			"slug": "pod/build/ui/state/types",
-			"href": "/docs/api-reference/pod/build/ui/state/types"
-		},
-		{
-			"title": "pod/build/ui/state/workspace\\_shell\\_types",
-			"slug": "pod/build/ui/state/workspace_shell_types",
-			"href": "/docs/api-reference/pod/build/ui/state/workspace_shell_types"
-		},
-		{
-			"title": "pod/build/ui/state/workspace-client",
-			"slug": "pod/build/ui/state/workspace-client",
-			"href": "/docs/api-reference/pod/build/ui/state/workspace-client"
-		},
-		{
-			"title": "pod/build/ui/state/workspace-file-upload.svelte",
-			"slug": "pod/build/ui/state/workspace-file-upload.svelte",
-			"href": "/docs/api-reference/pod/build/ui/state/workspace-file-upload.svelte"
-		},
-		{
-			"title": "pod/build/ui/subservices/access\\_control.service",
-			"slug": "pod/build/ui/subservices/access_control.service",
-			"href": "/docs/api-reference/pod/build/ui/subservices/access_control.service"
-		},
-		{
-			"title": "pod/build/ui/subservices/detail\\_surface.service",
-			"slug": "pod/build/ui/subservices/detail_surface.service",
-			"href": "/docs/api-reference/pod/build/ui/subservices/detail_surface.service"
-		},
-		{
-			"title": "pod/build/ui/sync/base64url",
-			"slug": "pod/build/ui/sync/base64url",
-			"href": "/docs/api-reference/pod/build/ui/sync/base64url"
-		},
-		{
-			"title": "pod/build/ui/sync/client-sync",
-			"slug": "pod/build/ui/sync/client-sync",
-			"href": "/docs/api-reference/pod/build/ui/sync/client-sync"
-		},
-		{
-			"title": "pod/build/ui/sync/local-sql",
-			"slug": "pod/build/ui/sync/local-sql",
-			"href": "/docs/api-reference/pod/build/ui/sync/local-sql"
-		},
-		{
-			"title": "pod/build/ui/sync/mutation-rejection",
-			"slug": "pod/build/ui/sync/mutation-rejection",
-			"href": "/docs/api-reference/pod/build/ui/sync/mutation-rejection"
-		},
-		{
-			"title": "pod/build/ui/sync/pglite-worker",
-			"slug": "pod/build/ui/sync/pglite-worker",
-			"href": "/docs/api-reference/pod/build/ui/sync/pglite-worker"
-		},
-		{
-			"title": "pod/build/ui/sync/pod-sync-client",
-			"slug": "pod/build/ui/sync/pod-sync-client",
-			"href": "/docs/api-reference/pod/build/ui/sync/pod-sync-client"
-		},
-		{
-			"title": "pod/build/ui/sync/replica",
-			"slug": "pod/build/ui/sync/replica",
-			"href": "/docs/api-reference/pod/build/ui/sync/replica"
-		},
-		{
-			"title": "pod/build/ui/sync/subscription-registry",
-			"slug": "pod/build/ui/sync/subscription-registry",
-			"href": "/docs/api-reference/pod/build/ui/sync/subscription-registry"
-		},
-		{
-			"title": "pod/build/ui/sync/types",
-			"slug": "pod/build/ui/sync/types",
-			"href": "/docs/api-reference/pod/build/ui/sync/types"
-		},
-		{
-			"title": "pod/build/vite",
-			"slug": "pod/build/vite",
-			"href": "/docs/api-reference/pod/build/vite"
-		},
-		{
-			"title": "pod/build/vite/checker",
-			"slug": "pod/build/vite/checker",
-			"href": "/docs/api-reference/pod/build/vite/checker"
-		},
-		{
-			"title": "pod/build/vite/compiler",
-			"slug": "pod/build/vite/compiler",
-			"href": "/docs/api-reference/pod/build/vite/compiler"
-		},
-		{
-			"title": "pod/build/vite/compiler/app-metadata",
-			"slug": "pod/build/vite/compiler/app-metadata",
-			"href": "/docs/api-reference/pod/build/vite/compiler/app-metadata"
-		},
-		{
-			"title": "pod/build/vite/compiler/diagnostics",
-			"slug": "pod/build/vite/compiler/diagnostics",
-			"href": "/docs/api-reference/pod/build/vite/compiler/diagnostics"
-		},
-		{
-			"title": "pod/build/vite/compiler/skill-frontmatter",
-			"slug": "pod/build/vite/compiler/skill-frontmatter",
-			"href": "/docs/api-reference/pod/build/vite/compiler/skill-frontmatter"
-		},
-		{
-			"title": "pod/build/vite/compiler/types",
-			"slug": "pod/build/vite/compiler/types",
-			"href": "/docs/api-reference/pod/build/vite/compiler/types"
-		},
-		{
-			"title": "pod/build/vite/isolated-build",
-			"slug": "pod/build/vite/isolated-build",
-			"href": "/docs/api-reference/pod/build/vite/isolated-build"
-		},
-		{
-			"title": "pod/build/vite/migration-fingerprint",
-			"slug": "pod/build/vite/migration-fingerprint",
-			"href": "/docs/api-reference/pod/build/vite/migration-fingerprint"
-		},
-		{
-			"title": "pod/build/vite/migrations",
-			"slug": "pod/build/vite/migrations",
-			"href": "/docs/api-reference/pod/build/vite/migrations"
-		},
-		{
-			"title": "pod/build/vite/platform",
-			"slug": "pod/build/vite/platform",
-			"href": "/docs/api-reference/pod/build/vite/platform"
-		},
-		{
-			"title": "pod/build/vite/platform-contract",
-			"slug": "pod/build/vite/platform-contract",
-			"href": "/docs/api-reference/pod/build/vite/platform-contract"
-		},
-		{
-			"title": "pod/build/vite/schema-functions-sql",
-			"slug": "pod/build/vite/schema-functions-sql",
-			"href": "/docs/api-reference/pod/build/vite/schema-functions-sql"
-		},
-		{
-			"title": "pod/build/vite/workspace-exclusions-sql",
-			"slug": "pod/build/vite/workspace-exclusions-sql",
-			"href": "/docs/api-reference/pod/build/vite/workspace-exclusions-sql"
-		},
-		{
-			"title": "pod/build/xyflow-css",
-			"slug": "pod/build/xyflow-css",
-			"href": "/docs/api-reference/pod/build/xyflow-css"
-		},
-		{
 			"title": "std/build",
 			"slug": "std/build",
 			"href": "/docs/api-reference/std/build"
@@ -5716,11 +3523,6 @@
 			"title": "std/build/async",
 			"slug": "std/build/async",
 			"href": "/docs/api-reference/std/build/async"
-		},
-		{
-			"title": "std/build/async/batch",
-			"slug": "std/build/async/batch",
-			"href": "/docs/api-reference/std/build/async/batch"
 		},
 		{
 			"title": "std/build/billing",
@@ -5746,6 +3548,16 @@
 			"title": "std/build/cel",
 			"slug": "std/build/cel",
 			"href": "/docs/api-reference/std/build/cel"
+		},
+		{
+			"title": "std/build/collection",
+			"slug": "std/build/collection",
+			"href": "/docs/api-reference/std/build/collection"
+		},
+		{
+			"title": "std/build/collection/record-label",
+			"slug": "std/build/collection/record-label",
+			"href": "/docs/api-reference/std/build/collection/record-label"
 		},
 		{
 			"title": "std/build/date",
@@ -5848,19 +3660,9 @@
 			"href": "/docs/api-reference/std/build/reckon/runtime.server"
 		},
 		{
-			"title": "std/build/result",
-			"slug": "std/build/result",
-			"href": "/docs/api-reference/std/build/result"
-		},
-		{
-			"title": "std/build/result/outcome",
-			"slug": "std/build/result/outcome",
-			"href": "/docs/api-reference/std/build/result/outcome"
-		},
-		{
-			"title": "std/build/schema",
-			"slug": "std/build/schema",
-			"href": "/docs/api-reference/std/build/schema"
+			"title": "std/build/secret",
+			"slug": "std/build/secret",
+			"href": "/docs/api-reference/std/build/secret"
 		},
 		{
 			"title": "std/build/string",
@@ -6593,6 +4395,16 @@
 			"href": "/docs/api-reference/ui/build/code-editor/code-editor.types"
 		},
 		{
+			"title": "ui/build/code-editor/languages",
+			"slug": "ui/build/code-editor/languages",
+			"href": "/docs/api-reference/ui/build/code-editor/languages"
+		},
+		{
+			"title": "ui/build/code-editor/markdown-blocks",
+			"slug": "ui/build/code-editor/markdown-blocks",
+			"href": "/docs/api-reference/ui/build/code-editor/markdown-blocks"
+		},
+		{
 			"title": "ui/build/code-editor/theme",
 			"slug": "ui/build/code-editor/theme",
 			"href": "/docs/api-reference/ui/build/code-editor/theme"
@@ -6688,6 +4500,16 @@
 			"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban.types"
 		},
 		{
+			"title": "ui/build/collection-query",
+			"slug": "ui/build/collection-query",
+			"href": "/docs/api-reference/ui/build/collection-query"
+		},
+		{
+			"title": "ui/build/collection-query/collection-query-state.svelte",
+			"slug": "ui/build/collection-query/collection-query-state.svelte",
+			"href": "/docs/api-reference/ui/build/collection-query/collection-query-state.svelte"
+		},
+		{
 			"title": "ui/build/collection-runtime",
 			"slug": "ui/build/collection-runtime",
 			"href": "/docs/api-reference/ui/build/collection-runtime"
@@ -6731,6 +4553,16 @@
 			"title": "ui/build/collection-table/collection-record-detail-tabs.svelte",
 			"slug": "ui/build/collection-table/collection-record-detail-tabs.svelte",
 			"href": "/docs/api-reference/ui/build/collection-table/collection-record-detail-tabs.svelte"
+		},
+		{
+			"title": "ui/build/collection-table/collection-table-applied-filters",
+			"slug": "ui/build/collection-table/collection-table-applied-filters",
+			"href": "/docs/api-reference/ui/build/collection-table/collection-table-applied-filters"
+		},
+		{
+			"title": "ui/build/collection-table/collection-table-applied-filters.svelte",
+			"slug": "ui/build/collection-table/collection-table-applied-filters.svelte",
+			"href": "/docs/api-reference/ui/build/collection-table/collection-table-applied-filters.svelte"
 		},
 		{
 			"title": "ui/build/collection-table/collection-table-filter-fields",
@@ -6803,6 +4635,11 @@
 			"href": "/docs/api-reference/ui/build/collection-table/collection-table.types"
 		},
 		{
+			"title": "ui/build/collection-table/data-grid.svelte",
+			"slug": "ui/build/collection-table/data-grid.svelte",
+			"href": "/docs/api-reference/ui/build/collection-table/data-grid.svelte"
+		},
+		{
 			"title": "ui/build/collection-table/internal",
 			"slug": "ui/build/collection-table/internal",
 			"href": "/docs/api-reference/ui/build/collection-table/internal"
@@ -6833,14 +4670,39 @@
 			"href": "/docs/api-reference/ui/build/collection-table/internal/component/row-selection/collection-table-checkbox.svelte"
 		},
 		{
+			"title": "ui/build/collection-toolbar",
+			"slug": "ui/build/collection-toolbar",
+			"href": "/docs/api-reference/ui/build/collection-toolbar"
+		},
+		{
+			"title": "ui/build/collection-toolbar/collection-action-toolbar.svelte",
+			"slug": "ui/build/collection-toolbar/collection-action-toolbar.svelte",
+			"href": "/docs/api-reference/ui/build/collection-toolbar/collection-action-toolbar.svelte"
+		},
+		{
+			"title": "ui/build/collection-toolbar/collection-pagination.svelte",
+			"slug": "ui/build/collection-toolbar/collection-pagination.svelte",
+			"href": "/docs/api-reference/ui/build/collection-toolbar/collection-pagination.svelte"
+		},
+		{
+			"title": "ui/build/collection-toolbar/collection-toolbar-action.svelte",
+			"slug": "ui/build/collection-toolbar/collection-toolbar-action.svelte",
+			"href": "/docs/api-reference/ui/build/collection-toolbar/collection-toolbar-action.svelte"
+		},
+		{
+			"title": "ui/build/collection-toolbar/collection-toolbar-filter.svelte",
+			"slug": "ui/build/collection-toolbar/collection-toolbar-filter.svelte",
+			"href": "/docs/api-reference/ui/build/collection-toolbar/collection-toolbar-filter.svelte"
+		},
+		{
+			"title": "ui/build/collection-toolbar/collection-toolbar.types",
+			"slug": "ui/build/collection-toolbar/collection-toolbar.types",
+			"href": "/docs/api-reference/ui/build/collection-toolbar/collection-toolbar.types"
+		},
+		{
 			"title": "ui/build/combobox",
 			"slug": "ui/build/combobox",
 			"href": "/docs/api-reference/ui/build/combobox"
-		},
-		{
-			"title": "ui/build/combobox/combobox-alignment",
-			"slug": "ui/build/combobox/combobox-alignment",
-			"href": "/docs/api-reference/ui/build/combobox/combobox-alignment"
 		},
 		{
 			"title": "ui/build/combobox/combobox-content.svelte",
@@ -7026,6 +4888,11 @@
 			"title": "ui/build/data-renderer/boolean/boolean.renderer.svelte",
 			"slug": "ui/build/data-renderer/boolean/boolean.renderer.svelte",
 			"href": "/docs/api-reference/ui/build/data-renderer/boolean/boolean.renderer.svelte"
+		},
+		{
+			"title": "ui/build/data-renderer/channels/channels.renderer.svelte",
+			"slug": "ui/build/data-renderer/channels/channels.renderer.svelte",
+			"href": "/docs/api-reference/ui/build/data-renderer/channels/channels.renderer.svelte"
 		},
 		{
 			"title": "ui/build/data-renderer/data-renderer-editor.svelte",
@@ -7943,6 +5810,11 @@
 			"href": "/docs/api-reference/ui/build/keybindings/keybindings.svelte"
 		},
 		{
+			"title": "ui/build/keybindings/shortcut-label",
+			"slug": "ui/build/keybindings/shortcut-label",
+			"href": "/docs/api-reference/ui/build/keybindings/shortcut-label"
+		},
+		{
 			"title": "ui/build/label",
 			"slug": "ui/build/label",
 			"href": "/docs/api-reference/ui/build/label"
@@ -8023,6 +5895,16 @@
 			"href": "/docs/api-reference/ui/build/layout/stack.svelte"
 		},
 		{
+			"title": "ui/build/locale-toggle",
+			"slug": "ui/build/locale-toggle",
+			"href": "/docs/api-reference/ui/build/locale-toggle"
+		},
+		{
+			"title": "ui/build/locale-toggle/locale-toggle.svelte",
+			"slug": "ui/build/locale-toggle/locale-toggle.svelte",
+			"href": "/docs/api-reference/ui/build/locale-toggle/locale-toggle.svelte"
+		},
+		{
 			"title": "ui/build/markdown-editor",
 			"slug": "ui/build/markdown-editor",
 			"href": "/docs/api-reference/ui/build/markdown-editor"
@@ -8091,6 +5973,16 @@
 			"title": "ui/build/markdown-editor/tiptap-storage",
 			"slug": "ui/build/markdown-editor/tiptap-storage",
 			"href": "/docs/api-reference/ui/build/markdown-editor/tiptap-storage"
+		},
+		{
+			"title": "ui/build/media-banner",
+			"slug": "ui/build/media-banner",
+			"href": "/docs/api-reference/ui/build/media-banner"
+		},
+		{
+			"title": "ui/build/media-banner/app-media-header.svelte",
+			"slug": "ui/build/media-banner/app-media-header.svelte",
+			"href": "/docs/api-reference/ui/build/media-banner/app-media-header.svelte"
 		},
 		{
 			"title": "ui/build/menubar",
@@ -8938,21 +6830,6 @@
 			"href": "/docs/api-reference/ui/build/theme-toggle/theme-toggle.svelte"
 		},
 		{
-			"title": "ui/build/thinking-orb",
-			"slug": "ui/build/thinking-orb",
-			"href": "/docs/api-reference/ui/build/thinking-orb"
-		},
-		{
-			"title": "ui/build/thinking-orb/thinking-orb.svelte",
-			"slug": "ui/build/thinking-orb/thinking-orb.svelte",
-			"href": "/docs/api-reference/ui/build/thinking-orb/thinking-orb.svelte"
-		},
-		{
-			"title": "ui/build/thinking-orb/thinking-orb.types",
-			"slug": "ui/build/thinking-orb/thinking-orb.types",
-			"href": "/docs/api-reference/ui/build/thinking-orb/thinking-orb.types"
-		},
-		{
 			"title": "ui/build/time-field",
 			"slug": "ui/build/time-field",
 			"href": "/docs/api-reference/ui/build/time-field"
@@ -8966,6 +6843,11 @@
 			"title": "ui/build/time-range",
 			"slug": "ui/build/time-range",
 			"href": "/docs/api-reference/ui/build/time-range"
+		},
+		{
+			"title": "ui/build/time-range/compare",
+			"slug": "ui/build/time-range/compare",
+			"href": "/docs/api-reference/ui/build/time-range/compare"
 		},
 		{
 			"title": "ui/build/time-range/time-range.svelte",

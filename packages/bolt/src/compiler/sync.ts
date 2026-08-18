@@ -505,7 +505,7 @@ static readonly write = (path: string, content: string) =>
 /**
  * Statement separator in a `migration.sql`.
  *
- * drizzle-kit writes it, the lineage on disk already uses it, and Pod's applier splits on it — so it
+ * drizzle-kit writes it, the lineage on disk already uses it, and Bolt's applier splits on it — so it
  * is the file format, not a convention this compiler invents.
  */
 export const STATEMENT_BREAKPOINT = '--> statement-breakpoint';

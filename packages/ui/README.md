@@ -14,7 +14,7 @@ Import components through their public subpaths:
 </script>
 ```
 
-Import `@norbital-ai/ui/base.css` once at the application root. Pod's generated client entry imports
+Import `@norbital-ai/ui/base.css` once at the application root. Bolt's generated client entry imports
 it automatically, so tenant apps do not add a second base stylesheet or Tailwind integration.
 
 The wildcard export exposes one subpath per component directory. Additional stable subpaths cover

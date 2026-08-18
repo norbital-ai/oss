@@ -138,7 +138,7 @@ const authVerification = collection({
 	history: false
 });
 
-/** Where the pod keeps the secret that signs its sessions, generated on first use. */
+/** Where bolt keeps the secret that signs its sessions, generated on first use. */
 const authConfig = collection({
 	name: 'bolt_auth_config',
 	fields: {

@@ -37,7 +37,7 @@ export type WhereResult = Result.Result<CompiledQuery, WhereCompileError>;
 
 /**
  * Binary column comparisons. The key is the authored operator; the value is its SQL symbol. These
- * are the operators Drizzle exposed through Pod's `where` objects, so authored workspace code keeps
+ * are the operators Drizzle exposed through Bolt's `where` objects, so authored workspace code keeps
  * the vocabulary it was written against.
  */
 const COMPARISON_SQL = {

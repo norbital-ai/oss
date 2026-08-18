@@ -189,8 +189,18 @@ export const layer = Layer.effect(
 			const action = typeof fields['action'] === 'string' ? fields['action'] : 'update';
 			yield* database.execute(effectId, {
 				_tag: 'Query',
+				// `$6` and `$7` are cast, and their values are JSON text rather than arrays.
+				//
+				// A driver binds a JavaScript array to a Postgres *array*, not to JSON — so a `jsonb`
+				// column handed `[{ step: 0 }]` receives array-literal syntax and answers `invalid input
+				// syntax for type json`. This projection runs inside `request`, before the record is
+				// locked, so the failure took the whole write-then-lock path down with it: every
+				// approval-gated create wrote its row, threw here, and left the record unlocked with no
+				// approval to find it by. Objects survive the same binding because a driver serialises
+				// those to JSON; only arrays take the other path, which is why this was invisible
+				// wherever a projection happened to carry none.
 				sql: `insert into approval_request (norbital_id, collection_name, record_id, action, status, steps, locked_record_refs, closed_at, closed_by)
-					values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+					values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
 					on conflict (norbital_id) do update set status = excluded.status, closed_at = excluded.closed_at, closed_by = excluded.closed_by, norbital_updated_at = now()`,
 				parameters: [
 					state.requestId,
@@ -198,8 +208,12 @@ export const layer = Layer.effect(
 					recordId,
 					action,
 					APPROVAL_STATUS[state._tag],
-					state._tag === 'Pending' ? [{ step: state.step }] : [],
-					collectionName === 'unknown' ? [] : [{ collection_name: collectionName, record_id: recordId }],
+					JSON.stringify(state._tag === 'Pending' ? [{ step: state.step }] : []),
+					JSON.stringify(
+						collectionName === 'unknown'
+							? []
+							: [{ collection_name: collectionName, record_id: recordId }]
+					),
 					state._tag === 'Pending' ? null : new Date().toISOString(),
 					closedBy ?? null
 				]

@@ -6,7 +6,7 @@ import { authSchema } from './auth-tables.js';
  * Better Auth over a host facility, through Drizzle.
  *
  * Better Auth ships adapters for Drizzle, Kysely and a raw Postgres pool, and every one of them
- * wants a connection the pod does not have and must not have: a pod is a stateless bundle that
+ * wants a connection bolt does not have and must not have: a bolt is a stateless bundle that
  * reaches state only through the facilities its host binds. That constraint used to be met by
  * hand-writing an adapter whose entire I/O was `execute` — a query builder, a where compiler and a
  * column mapper, all restating what Drizzle already knows, and all of it ours to get wrong. It was
@@ -17,7 +17,7 @@ import { authSchema } from './auth-tables.js';
  * `drizzle-orm/pg-proxy` removes the dilemma rather than splitting it. It is a Drizzle driver whose
  * transport is a callback, so Drizzle composes the SQL and Better Auth's own `drizzleAdapter` maps
  * the models, while the only thing crossing the boundary is still a string and an array of
- * parameters. The pod stays connection-free and host-agnostic — the same bundle authenticates
+ * parameters. Bolt stays connection-free and host-agnostic — the same bundle authenticates
  * against Colony's Neon branch, bolt-server's Postgres, or a test's in-memory tables — and the
  * tables are declared as Drizzle tables, the same way collections are.
  */

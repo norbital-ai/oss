@@ -83,7 +83,7 @@ function useI18nContext(): (() => I18nState<LocaleCatalogs> | null) | undefined 
 
 /**
  * Install the application's catalog pair and initial locale for the whole
- * component subtree. Call once from an application root (pod shell, core
+ * component subtree. Call once from an application root (bolt shell, core
  * layout, website layout) during component init.
  *
  * The initial locale resolves as: persisted choice, browser languages, then
