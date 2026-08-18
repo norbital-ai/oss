@@ -67,8 +67,21 @@ export const defineRuntimeWorkspace = RuntimeAuthoring.workspace;
 
 export type WorkspaceAppDef = Readonly<{ readonly name: string; readonly label?: string; readonly description?: string; readonly icon?: string; readonly thumbnail?: string; readonly banner?: string; readonly group?: string; readonly component?: Readonly<Record<string, WorkspaceAppDef>>; readonly defaultChild?: string }>;
 export type GroupDefinition = import('./models-schema.js').BoltGroupDefinition;
-interface PlatformUserRow extends SystemRow {
-	readonly email: string;
+/**
+ * A person, as much of one as a workspace may read.
+ *
+ * Two fields, because the system read policy grants `bolt_auth_user` with exactly that field mask —
+ * `findMany` masks every row it returns, so the address, roles and teams are not merely unselected
+ * here, they cannot be read at all. Typing the full row would promise authored code something the
+ * runtime refuses.
+ *
+ * This replaces `user`, `team` and `team_members`, which were declared here long after the tables
+ * themselves stopped existing: identity became runtime-owned and merged into `bolt_auth_user`, and
+ * teams became a jsonb array on that row rather than records of their own. Nothing removed the
+ * types, so `db.user.findMany(...)` went on typechecking in three workspace screens and failing at
+ * run time against a table that is not in `information_schema`.
+ */
+interface PlatformPersonRow extends SystemRow {
 	readonly name: string;
 }
 interface PlatformDocumentAssetRow extends SystemRow {
@@ -77,13 +90,9 @@ interface PlatformDocumentAssetRow extends SystemRow {
 	readonly mime_type: string | null;
 	readonly storage_key: string;
 }
-interface PlatformTeamRow extends SystemRow { readonly name: string; }
-interface PlatformTeamMemberRow extends SystemRow { readonly team_id: string; readonly user_id: string; }
 type PlatformTables = {
-	readonly user: import('./contracts-schema.js').TableShape<PlatformUserRow, Partial<PlatformUserRow>>;
+	readonly bolt_auth_user: import('./contracts-schema.js').TableShape<PlatformPersonRow, Partial<PlatformPersonRow>>;
 	readonly document_asset: import('./contracts-schema.js').TableShape<PlatformDocumentAssetRow, Partial<PlatformDocumentAssetRow>>;
-	readonly team: import('./contracts-schema.js').TableShape<PlatformTeamRow, Partial<PlatformTeamRow>>;
-	readonly team_members: import('./contracts-schema.js').TableShape<PlatformTeamMemberRow, Partial<PlatformTeamMemberRow>>;
 };
 export type PlatformSchema = {
 	readonly tables: PlatformTables;
