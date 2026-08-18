@@ -4,11 +4,11 @@
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Inline } from '@norbital-ai/ui/layout';
-	import type { PodUiKeys } from '../agent/i18n.js';
+	import type { BoltUiKeys } from '../agent/i18n.js';
 	import { commandPrefixChar, type CommandScope } from '../agent/mention-sources.js';
 	import type { FinderEntity, FinderRow } from './finder-entity.js';
 
-	const { t } = useI18n<PodUiKeys>();
+	const { t } = useI18n<BoltUiKeys>();
 
 	/**
 	 * Shared finder list. Cmd+/ wraps it in a dialog with an input; the composer `@` menu
@@ -65,7 +65,7 @@
 		>
 			<Inline gap="sm" class="min-w-0">
 				<Icon icon="lucide:filter" class="size-3 shrink-0" />
-				<span class="truncate">{t('pod.agent.searchingScope', { scope })}</span>
+				<span class="truncate">{t('bolt.agent.searchingScope', { scope })}</span>
 			</Inline>
 			{#if onClearScope}
 				<button
@@ -73,7 +73,7 @@
 					class="shrink-0 rounded px-1 transition-colors hover:text-foreground"
 					onclick={onClearScope}
 				>
-					{t('pod.agent.clearScope')}
+					{t('bolt.agent.clearScope')}
 				</button>
 			{/if}
 		</Inline>
@@ -138,7 +138,7 @@
 							icon="lucide:loader-circle"
 							class="size-3 shrink-0 animate-spin text-muted-foreground"
 						/>
-						<span class="text-xs text-muted-foreground">{t('pod.shell.omniSearchingRecords')}</span>
+						<span class="text-xs text-muted-foreground">{t('bolt.shell.omniSearchingRecords')}</span>
 					{:else if row.kind === 'empty'}
 						<span data-testid="agent-mention-empty" class="truncate text-xs text-muted-foreground"
 							>{row.label}</span
@@ -194,9 +194,9 @@
 			gap="md"
 			class="border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground"
 		>
-			<span>{t('pod.agent.navigateHint')}</span>
-			<span>{t('pod.agent.selectHint')}</span>
-			<span>{t('pod.agent.dismissHint')}</span>
+			<span>{t('bolt.agent.navigateHint')}</span>
+			<span>{t('bolt.agent.selectHint')}</span>
+			<span>{t('bolt.agent.dismissHint')}</span>
 		</Inline>
 	{/if}
 </div>

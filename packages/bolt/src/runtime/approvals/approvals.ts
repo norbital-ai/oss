@@ -11,8 +11,13 @@ import { Workspace } from '../workspace.js';
 export const ApprovalState = Schema.TaggedUnion({
 	Pending: { requestId: Schema.NonEmptyString, step: Schema.Number.check(Schema.isInt()), operation: Schema.Json },
 	Approved: { requestId: Schema.NonEmptyString, decidedBy: Schema.NonEmptyString, operation: Schema.optionalKey(Schema.Json) },
-	Rejected: { requestId: Schema.NonEmptyString, decidedBy: Schema.NonEmptyString, reason: Schema.String },
-	Withdrawn: { requestId: Schema.NonEmptyString, withdrawnBy: Schema.NonEmptyString }
+	// The two terminal refusals carry the operation for the same reason `Approved` does: the record
+	// was already written when the request was opened, and it is still locked. Without the operation
+	// there is no way back to the row, so the lock outlived every decision that was not an approval —
+	// and since a workspace's liveness predicate is `norbital_approval_id is null`, a rejected record
+	// stayed invisible and could not be deleted either.
+	Rejected: { requestId: Schema.NonEmptyString, decidedBy: Schema.NonEmptyString, reason: Schema.String, operation: Schema.optionalKey(Schema.Json) },
+	Withdrawn: { requestId: Schema.NonEmptyString, withdrawnBy: Schema.NonEmptyString, operation: Schema.optionalKey(Schema.Json) }
 });
 export type ApprovalState = typeof ApprovalState.Type;
 
@@ -67,7 +72,7 @@ const ApprovalTransitions = {
 		if (state._tag !== 'Pending') return new ApprovalConflict({ requestId: state.requestId, reason: 'approval is no longer pending' });
 		switch (decision) {
 			case 'reject':
-				return { _tag: 'Rejected', requestId: state.requestId, decidedBy: actor, reason };
+				return { _tag: 'Rejected', requestId: state.requestId, decidedBy: actor, reason, operation: state.operation };
 			case 'approve': {
 				const total = Math.max(1, steps);
 				if (state.step + 1 < total) {
@@ -254,15 +259,21 @@ export const layer = Layer.effect(
 				if (next._tag === 'Approved') {
 					yield* tasks.execute(effectId, { _tag: 'Enqueue', command: 'collections.resume', input: { requestId: next.requestId } });
 				}
+				// A rejection has work to do too. Only the approval path was ever followed up, so a
+				// refused request left its record locked for good.
+				if (next._tag === 'Rejected') {
+					yield* tasks.execute(effectId, { _tag: 'Enqueue', command: 'collections.discard', input: { requestId: next.requestId } });
+				}
 				return next;
 			}),
 			withdraw: Effect.fn('Approvals.withdraw')(function* (effectId, subject, state) {
 				const current = yield* status(effectId, state.requestId);
 				if (current?._tag !== 'Pending') return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval is no longer pending' });
-				const next: ApprovalState = { _tag: 'Withdrawn', requestId: state.requestId, withdrawnBy: subject.userId };
+				const next: ApprovalState = { _tag: 'Withdrawn', requestId: state.requestId, withdrawnBy: subject.userId, operation: current.operation };
 				const updated = yield* database.execute(effectId, { _tag: 'Query', sql: 'update bolt_approvals set state = $2 where request_id = $1 and state->>\'_tag\' = \'Pending\' returning state', parameters: [state.requestId, next] });
 				if (updated.affectedRows === 0) return yield* new ApprovalConflict({ requestId: state.requestId, reason: 'approval withdrawal lost a competing update' });
 				yield* projectRequest(effectId, next, subject.userId);
+				yield* tasks.execute(effectId, { _tag: 'Enqueue', command: 'collections.discard', input: { requestId: next.requestId } });
 				return next;
 			}),
 			status,

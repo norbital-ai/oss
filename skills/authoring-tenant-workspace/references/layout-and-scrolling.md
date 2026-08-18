@@ -186,7 +186,7 @@ primitives, so they shrink gracefully rather than "collapsing too fast." The `co
 breakpoint is for genuinely small widgets like stat cards. For form fields and tables, use
 `Grid minimum="panel"` (26rem) to keep renderers at a usable width.
 
-**Why not viewport breakpoints:** the app renders inside a `[container-name:pod-app]` container
+**Why not viewport breakpoints:** the app renders inside a `[container-name:bolt-app]` container
 query. The sidebar and shell chrome affect available width. Container queries respond to the actual
 rendering area, not the browser window.
 
@@ -349,7 +349,7 @@ outermost element of a document is fine — that is a floor, not a guess.
 
 Every layout here responds to its _container_, never to the browser window, and does it without a
 media query: `Grid minimum=` uses `auto-fit`, `Cluster` wraps, `Split collapse=` switches on a
-container query. An app renders inside `[container-name:pod-app]` with a sidebar and shell chrome
+container query. An app renders inside `[container-name:bolt-app]` with a sidebar and shell chrome
 taking width, so a viewport breakpoint is measuring the wrong box. If you find yourself writing
 `sm:`/`md:`/`lg:` for layout, the primitive is either wrong or missing a prop.
 

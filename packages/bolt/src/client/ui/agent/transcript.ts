@@ -7,7 +7,7 @@
  */
 import { parseStoredGoalVerdict, parseStoredVerifierScheduled } from './goal-verdict.js';
 import { humanize } from '@norbital-ai/std';
-import type { PodUiKeys } from './i18n.js';
+import type { BoltUiKeys } from './i18n.js';
 import { parseStoredSummary } from './intent.js';
 
 function parsePublicMcpToolName(name: string): { readonly server: string; readonly tool: string } | null {
@@ -50,7 +50,7 @@ export type PanelToolCall = {
 	 * Catalog key for a built-in tool label, or `null` when the tool is not one
 	 * Pod ships — those render the humanized name in `label` instead.
 	 */
-	readonly labelKey: PodUiKeys | null;
+	readonly labelKey: BoltUiKeys | null;
 	/** Humanized fallback label, used only when `labelKey` is null. */
 	readonly label: string | null;
 	readonly icon: string;
@@ -156,7 +156,7 @@ export type PanelMessage =
  */
 const PAYLOAD_LIMIT = 2_000;
 
-type ToolMetadata = { readonly labelKey: PodUiKeys | null; readonly icon: string };
+type ToolMetadata = { readonly labelKey: BoltUiKeys | null; readonly icon: string };
 
 /** The tools this package resolves itself. Tenant and host tools are named by their registration. */
 export const SEARCH_TOOLS = new Set([
@@ -171,16 +171,16 @@ export const SEARCH_TOOLS = new Set([
 export const AUTHORING_TOOLS = new Set(['write_collection']);
 
 const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
-	describe_workspace: { labelKey: 'pod.agent.tool.describeWorkspace', icon: 'lucide:book-open' },
-	read_collection: { labelKey: 'pod.agent.tool.readCollection', icon: 'lucide:table' },
-	write_collection: { labelKey: 'pod.agent.tool.writeCollection', icon: 'lucide:database' },
-	spawn_subagent: { labelKey: 'pod.agent.tool.delegateTask', icon: 'lucide:network' },
-	list_skills: { labelKey: 'pod.agent.tool.listSkills', icon: 'lucide:library' },
-	read_skill: { labelKey: 'pod.agent.tool.readSkill', icon: 'lucide:book-marked' },
-	list_sandbox_agents: { labelKey: 'pod.agent.tool.listSandboxAgents', icon: 'lucide:users' },
-	read_sandbox_agent: { labelKey: 'pod.agent.tool.readSandboxAgent', icon: 'lucide:scan-search' },
-	message_sandbox_agent: { labelKey: 'pod.agent.tool.messageSandboxAgent', icon: 'lucide:send' },
-	await_sandbox_agent: { labelKey: 'pod.agent.tool.awaitSandboxAgent', icon: 'lucide:hourglass' }
+	describe_workspace: { labelKey: 'bolt.agent.tool.describeWorkspace', icon: 'lucide:book-open' },
+	read_collection: { labelKey: 'bolt.agent.tool.readCollection', icon: 'lucide:table' },
+	write_collection: { labelKey: 'bolt.agent.tool.writeCollection', icon: 'lucide:database' },
+	spawn_subagent: { labelKey: 'bolt.agent.tool.delegateTask', icon: 'lucide:network' },
+	list_skills: { labelKey: 'bolt.agent.tool.listSkills', icon: 'lucide:library' },
+	read_skill: { labelKey: 'bolt.agent.tool.readSkill', icon: 'lucide:book-marked' },
+	list_sandbox_agents: { labelKey: 'bolt.agent.tool.listSandboxAgents', icon: 'lucide:users' },
+	read_sandbox_agent: { labelKey: 'bolt.agent.tool.readSandboxAgent', icon: 'lucide:scan-search' },
+	message_sandbox_agent: { labelKey: 'bolt.agent.tool.messageSandboxAgent', icon: 'lucide:send' },
+	await_sandbox_agent: { labelKey: 'bolt.agent.tool.awaitSandboxAgent', icon: 'lucide:hourglass' }
 };
 
 /**

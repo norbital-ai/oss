@@ -2,18 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { extractAppMetadata, extractGroupMetadata } from '../../src/compiler/app-metadata.js';
 
 describe('app metadata', () => {
-	it('reads bolt static head tags and falls back to authored pod tags', () => {
-		const authored = extractAppMetadata(`
+	it('reads bolt static head tags, and reads no other prefix', () => {
+		// A name the platform does not own is not metadata. The compiler used to accept `pod:` beside
+		// `bolt:` while templates were converted; they are converted, so a stray prefix now reads as
+		// absent rather than silently working.
+		const foreign = extractAppMetadata(`
 			<svelte:head>
 				<title>People</title>
 				<meta name="description" content="Employees and employments" />
 				<meta name="pod:icon" content="lucide:users" />
 			</svelte:head>
 		`);
-		expect(authored).toEqual({
+		expect(foreign).toEqual({
 			title: 'People',
 			description: 'Employees and employments',
-			icon: 'lucide:users',
+			icon: null,
 			thumbnail: null,
 			banner: null
 		});

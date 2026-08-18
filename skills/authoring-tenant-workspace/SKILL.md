@@ -197,17 +197,17 @@ filter never creates server work against a resident collection. For the wire pro
 ## Apps, layout, and collection surfaces
 
 Apps are `src/apps/**/+<app>.svelte`. Their `<svelte:head>` metadata is static (`title`, a required
-`description`, literal `pod:icon`, optional static `pod:thumbnail` / `pod:banner` URLs). There is no host layout metadata.
+`description`, literal `bolt:icon`, optional static `bolt:thumbnail` / `bolt:banner` URLs). There is no host layout metadata.
 App thumbnails and banners are optional — missing ones get a same-size icon fallback in the shell (overview
 cards keep their 16:9 media slot, omni finder keeps its 6×6 tile). Ship product images under `assets/`
 and reference `/api/template-seed-assets/<key>/<path>` URLs. The collection-owned `+representation.svelte`
-can also declare a static `pod:banner` meta, rendered above the record detail sheet header. See
+can also declare a static `bolt:banner` meta, rendered above the record detail sheet header. See
 [apps-and-server-roles.md](references/apps-and-server-roles.md#app-media--icons-thumbnails-banners) for the
 in-product media contract.
 
 **Template marketing thumbnail is separate:** website gallery / homepage cards / `og:image` read
 `<key>/assets/thumbnail.svg` once (optional manifest `thumbnail` override only if the path differs).
-Do not configure that image a second time as `pod:thumbnail`. Details in
+Do not configure that image a second time as `bolt:thumbnail`. Details in
 [template-repository.md](references/template-repository.md#marketing-thumbnail-declare-once).
 
 The bolt shell owns the application region, default document scroll, query container, and app identity.
@@ -266,7 +266,7 @@ its collection-owned representation decides whether custom create/display/edit s
 
 <svelte:head>
 	<title>Requests</title>
-	<meta name="pod:icon" content="lucide:file-question" />
+	<meta name="bolt:icon" content="lucide:file-question" />
 </svelte:head>
 
 {#snippet pageHeading()}

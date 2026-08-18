@@ -17,9 +17,9 @@
 	import type { PanelMessage } from './transcript.js';
 	import Self from './agent-transcript-item.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import type { PodUiKeys } from './i18n.js';
+	import type { BoltUiKeys } from './i18n.js';
 
-	const { t } = useI18n<PodUiKeys>();
+	const { t } = useI18n<BoltUiKeys>();
 
 	/**
 	 * Where this row sits, which decides what a `user` message means.
@@ -62,7 +62,7 @@
 	 */
 	function counterpart(message: Extract<PanelMessage, { kind: 'agent-message' }>): string { // stupidity:allow Q4 -- named helper
 		const named = message.agentName ?? message.sessionTitle;
-		if (named === null) return message.sessionId ?? t('pod.agent.unknownAgent');
+		if (named === null) return message.sessionId ?? t('bolt.agent.unknownAgent');
 		return message.sessionTitle === null || message.sessionTitle === message.agentName
 			? named
 			: `${named} · ${message.sessionTitle}`;
@@ -86,10 +86,10 @@
 			>
 				<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0" />
 				<span class="shrink-0 whitespace-nowrap">
-					{message.fold === 'plan' ? t('pod.agent.planFolded') : t('pod.agent.contextCompacted')}
+					{message.fold === 'plan' ? t('bolt.agent.planFolded') : t('bolt.agent.contextCompacted')}
 				</span>
 				<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground/70">
-					{t('pod.agent.messagesKept', { count: message.before.length })}
+					{t('bolt.agent.messagesKept', { count: message.before.length })}
 				</span>
 				<Icon
 					icon="lucide:chevron-right"
@@ -97,7 +97,7 @@
 				/>
 			</summary>
 			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
-				<Inline gap="xs" role="tablist" aria-label={t('pod.agent.compactedContextAria')}>
+				<Inline gap="xs" role="tablist" aria-label={t('bolt.agent.compactedContextAria')}>
 					<button
 						type="button"
 						role="tab"
@@ -109,7 +109,7 @@
 								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
 						}`}
 					>
-						{t('pod.agent.whatAgentKept')}
+						{t('bolt.agent.whatAgentKept')}
 					</button>
 					<button
 						type="button"
@@ -123,14 +123,14 @@
 						}`}
 					>
 						{message.fold === 'plan'
-							? t('pod.agent.planningConversation')
-							: t('pod.agent.fullConversation')}
+							? t('bolt.agent.planningConversation')
+							: t('bolt.agent.fullConversation')}
 					</button>
 				</Inline>
 				<div role="tabpanel" class="min-w-0">
 					{#if checkpointTab === 'summary'}
 						<Scroll
-							name={t('pod.agent.whatAgentKept')}
+							name={t('bolt.agent.whatAgentKept')}
 							class="max-h-72 text-micro leading-relaxed text-foreground/90"
 						>
 							<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
@@ -139,8 +139,8 @@
 						<Scroll
 							as="ol"
 							name={message.fold === 'plan'
-								? t('pod.agent.planningConversation')
-								: t('pod.agent.conversationBeforeCompaction')}
+								? t('bolt.agent.planningConversation')
+								: t('bolt.agent.conversationBeforeCompaction')}
 							layout="stack"
 							gap="xs"
 							class="m-0 max-h-72 list-none p-0"
@@ -177,7 +177,7 @@
 				/>
 				<span class="shrink-0 font-medium whitespace-nowrap text-foreground/80">
 					{#if message.family === 'sandbox'}
-						{t('pod.agent.sandboxAgent')} · {toolLabel(message)}
+						{t('bolt.agent.sandboxAgent')} · {toolLabel(message)}
 					{:else}
 						{toolLabel(message)}
 					{/if}
@@ -187,11 +187,11 @@
 				{/if}
 				{#if message.children.length > 0}
 					<span class="shrink-0 whitespace-nowrap text-tiny text-muted-foreground/70">
-						{t('pod.agent.steps', { count: message.children.length })}
+						{t('bolt.agent.steps', { count: message.children.length })}
 					</span>
 				{/if}
 				{#if message.state === 'running'}
-					<Spinner class="size-3 shrink-0 text-foreground" label={t('pod.agent.working')} />
+					<Spinner class="size-3 shrink-0 text-foreground" label={t('bolt.agent.working')} />
 				{:else if message.state === 'needs_input'}
 					<Icon
 						icon="lucide:message-circle-question"
@@ -210,7 +210,7 @@
 					(Array.isArray(message.elicitation) && message.elicitation.length > 0)}
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							{t('pod.agent.needsInput')}
+							{t('bolt.agent.needsInput')}
 						</span>
 						{#if message.elicitation?.length}
 							{#each message.elicitation as request (request.id)}
@@ -222,17 +222,17 @@
 								</Stack>
 							{/each}
 						{:else}
-							<p class="m-0 text-micro text-muted-foreground">{t('pod.agent.elicitation')}</p>
+							<p class="m-0 text-micro text-muted-foreground">{t('bolt.agent.elicitation')}</p>
 						{/if}
 					</Stack>
 				{/if}
 				{#if message.input}
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							{t('pod.agent.input')}
+							{t('bolt.agent.input')}
 						</span>
 						<Scroll
-							name={t('pod.agent.input')}
+							name={t('bolt.agent.input')}
 							axis="both"
 							class="m-0 max-h-56 rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90"
 						>
@@ -244,13 +244,13 @@
 					<!-- The delegated agent's own transcript, rendered by this same component. -->
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							{t('pod.agent.delegatedTranscript')}
+							{t('bolt.agent.delegatedTranscript')}
 						</span>
 						<Stack
 							as="ol"
 							gap="sm"
 							class="m-0 list-none p-0"
-							aria-label={t('pod.agent.subagentTranscriptAria')}
+							aria-label={t('bolt.agent.subagentTranscriptAria')}
 						>
 							{#each message.children as child (child.key)}
 								<Self message={child} nested="subagent" />
@@ -261,10 +261,10 @@
 				{#if message.error}
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-destructive uppercase"
-							>{t('pod.agent.error')}</span
+							>{t('bolt.agent.error')}</span
 						>
 						<Scroll
-							name={t('pod.agent.error')}
+							name={t('bolt.agent.error')}
 							class="m-0 max-h-56 rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive"
 						>
 							<pre class="m-0 font-inherit text-inherit whitespace-pre-wrap">{message.error}</pre>
@@ -273,10 +273,10 @@
 				{:else if message.output}
 					<Stack gap="xs" class="min-w-0">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							{t('pod.agent.result')}
+							{t('bolt.agent.result')}
 						</span>
 						<Scroll
-							name={t('pod.agent.result')}
+							name={t('bolt.agent.result')}
 							axis="both"
 							class="m-0 max-h-56 rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90"
 						>
@@ -284,7 +284,7 @@
 						</Scroll>
 					</Stack>
 				{:else if message.state === 'running'}
-					<p class="m-0 text-micro text-muted-foreground">{t('pod.agent.waitingForResult')}</p>
+					<p class="m-0 text-micro text-muted-foreground">{t('bolt.agent.waitingForResult')}</p>
 				{/if}
 			</Stack>
 		</details>
@@ -310,19 +310,19 @@
 				/>
 				<span class="min-w-0 flex-1 truncate font-medium text-foreground/80">
 					{message.direction === 'in'
-						? t('pod.agent.messageFrom', { name: counterpart(message) })
-						: t('pod.agent.messageTo', { name: counterpart(message) })}
+						? t('bolt.agent.messageFrom', { name: counterpart(message) })
+						: t('bolt.agent.messageTo', { name: counterpart(message) })}
 				</span>
 				{#if message.state === 'running'}
-					<Spinner class="size-3 shrink-0 text-foreground" label={t('pod.agent.delivering')} />
+					<Spinner class="size-3 shrink-0 text-foreground" label={t('bolt.agent.delivering')} />
 				{:else if message.state === 'failed'}
 					<Icon icon="lucide:circle-alert" class="size-3 shrink-0 text-destructive" />
 				{/if}
 			</Inline>
 			<Scroll
 				name={message.direction === 'in'
-					? t('pod.agent.messageFrom', { name: counterpart(message) })
-					: t('pod.agent.messageTo', { name: counterpart(message) })}
+					? t('bolt.agent.messageFrom', { name: counterpart(message) })
+					: t('bolt.agent.messageTo', { name: counterpart(message) })}
 				class="max-h-72 text-sm leading-6 text-foreground/90"
 			>
 				<ReadonlyMarkdown scale="reading" content={message.content} class="content" />
@@ -342,7 +342,7 @@
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon icon="lucide:brain" class="size-3.5 shrink-0" />
-				<span class="font-medium text-foreground/80">{t('pod.agent.reasoning')}</span>
+				<span class="font-medium text-foreground/80">{t('bolt.agent.reasoning')}</span>
 				<Icon
 					icon="lucide:chevron-right"
 					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/reasoning:rotate-90"
@@ -363,16 +363,16 @@
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon icon="lucide:shield-check" class="size-3.5 shrink-0" />
-				<span class="font-medium text-foreground/80">{t('pod.agent.verifierTriggered')}</span>
+				<span class="font-medium text-foreground/80">{t('bolt.agent.verifierTriggered')}</span>
 				<Icon
 					icon="lucide:chevron-right"
 					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/verifier:rotate-90"
 				/>
 			</summary>
 			<Stack gap="xs" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
-				<p class="m-0 text-tiny text-muted-foreground">{t('pod.agent.verifierPromptHint')}</p>
+				<p class="m-0 text-tiny text-muted-foreground">{t('bolt.agent.verifierPromptHint')}</p>
 				<label class="sr-only" for="agent-verifier-scheduled-{message.key}"
-					>{t('pod.agent.verifierPrompt')}</label
+					>{t('bolt.agent.verifierPrompt')}</label
 				>
 				<Textarea
 					id="agent-verifier-scheduled-{message.key}"
@@ -397,7 +397,7 @@
 					class={`size-3.5 shrink-0 ${message.achieved ? 'text-primary' : 'text-muted-foreground'}`}
 				/>
 				<span class="font-medium text-foreground/80">
-					{message.achieved ? t('pod.agent.verified') : t('pod.agent.notVerified')}
+					{message.achieved ? t('bolt.agent.verified') : t('bolt.agent.notVerified')}
 				</span>
 				<Icon
 					icon="lucide:chevron-right"
@@ -412,7 +412,7 @@
 				{#if message.gaps.length > 0}
 					<Stack gap="xs">
 						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-							{t('pod.agent.goalGaps')}
+							{t('bolt.agent.goalGaps')}
 						</span>
 						<ul class="m-0 list-disc pl-4 text-micro text-foreground/80">
 							{#each message.gaps as gap (gap)}
@@ -436,12 +436,12 @@
 	>
 		<span class="px-1 text-tiny font-medium text-muted-foreground">
 			{nested === 'subagent' && message.role === 'user'
-				? t('pod.agent.task')
+				? t('bolt.agent.task')
 				: message.role === 'user'
-					? t('pod.agent.you')
+					? t('bolt.agent.you')
 					: message.role === 'assistant'
-						? t('pod.agent.agent')
-						: t('pod.agent.system')}
+						? t('bolt.agent.agent')
+						: t('bolt.agent.system')}
 		</span>
 		<div
 			class={nested
@@ -462,8 +462,8 @@
 		</div>
 		{#if message.status === 'streaming'}
 			<Inline as="span" gap="sm" class="text-tiny text-muted-foreground">
-				<Spinner class="size-3.5 text-foreground" label={t('pod.agent.streaming')} />
-				{t('pod.agent.streaming')}
+				<Spinner class="size-3.5 text-foreground" label={t('bolt.agent.streaming')} />
+				{t('bolt.agent.streaming')}
 			</Inline>
 		{/if}
 	</Stack>

@@ -852,6 +852,19 @@ sync: (workspaceRoot = process.cwd()) => {
 			build({
 				root,
 				configFile: false,
+				/**
+				 * Node's `global`, for dependencies that still reach for it.
+				 *
+				 * An artifact runs in a worker isolate, which has `globalThis` and no reason to define
+				 * Node's older alias. A published package that reads it — `exifr`, in the template that
+				 * indexes a JPEG corpus — therefore throws `global is not defined` the moment the host
+				 * inspects the bundle, and the whole workspace is rejected for a line in a dependency
+				 * nobody here wrote. Substituted at build time rather than shimmed at run time, because
+				 * only one of those leaves the runtime able to say what globals an artifact actually has.
+				 * esbuild replaces the bare identifier and leaves `x.global` and any shadowing binding
+				 * alone, so this cannot reach anything that is not the global it means.
+				 */
+				define: { global: 'globalThis' },
 				resolve: {
 					preserveSymlinks: false,
 					dedupe: ['effect', 'svelte'],

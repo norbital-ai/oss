@@ -90,7 +90,8 @@ const ENQUEUED_COMMANDS: ReadonlyArray<string> = [
 	'integrations.pull',
 	'integrations.flush',
 	'agents.resume',
-	'collections.resume'
+	'collections.resume',
+	'collections.discard'
 ];
 
 const scopedInvocation = {

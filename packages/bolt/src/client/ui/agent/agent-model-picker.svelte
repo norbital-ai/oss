@@ -13,9 +13,9 @@
 	import type { AgentModelCatalogStatus } from './agent-model-state.svelte.js';
 	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import type { PodUiKeys } from './i18n.js';
+	import type { BoltUiKeys } from './i18n.js';
 
-	const { t } = useI18n<PodUiKeys>();
+	const { t } = useI18n<BoltUiKeys>();
 
 	interface ModelFamily {
 		id: string;
@@ -91,7 +91,7 @@
 			const defaultModelId = selectedFamily?.defaultOption.id ?? option.id;
 			const label =
 				option.id === defaultModelId
-					? t('pod.agent.default')
+					? t('bolt.agent.default')
 					: option.id
 							.slice(baseModelId(option.id).length + 1)
 							.replaceAll(/[-_]/g, ' ')
@@ -117,13 +117,13 @@
 
 {#snippet fields()}
 	<Stack gap="xs" class="min-w-0">
-		{#if !compact}<span class="text-sm font-medium">{t('pod.agent.model')}</span>{/if}
+		{#if !compact}<span class="text-sm font-medium">{t('bolt.agent.model')}</span>{/if}
 		<Combobox
 			options={modelOptions}
-			ariaLabel={t('pod.agent.model')}
+			ariaLabel={t('bolt.agent.model')}
 			value={selectedFamily?.defaultOption.id ?? value}
 			onValueChange={selectModel}
-			searchPlaceholder={t('pod.agent.searchAllModels')}
+			searchPlaceholder={t('bolt.agent.searchAllModels')}
 			emptyPlaceholder={unavailableLabel}
 			itemHeight={36}
 			maxHeight={360}
@@ -141,10 +141,10 @@
 	</Stack>
 	{#if variantOptions.length > 1}
 		<Stack gap="xs" class="min-w-0">
-			{#if !compact}<span class="text-sm font-medium">{t('pod.agent.variant')}</span>{/if}
+			{#if !compact}<span class="text-sm font-medium">{t('bolt.agent.variant')}</span>{/if}
 			<Combobox
 				options={variantOptions}
-				ariaLabel={t('pod.agent.modelVariantAria')}
+				ariaLabel={t('bolt.agent.modelVariantAria')}
 				{value}
 				onValueChange={selectModel}
 				searchable={false}

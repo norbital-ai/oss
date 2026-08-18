@@ -12,9 +12,9 @@ import { toPanelMessages } from './transcript.js';
 export type AgentOrbState = 'ready' | 'working' | 'error';
 
 export type AgentOrbStatusKey =
-	| 'pod.shell.workspaceAgentDescription'
-	| 'pod.agent.working'
-	| 'pod.agent.failed';
+	| 'bolt.shell.workspaceAgentDescription'
+	| 'bolt.agent.working'
+	| 'bolt.agent.failed';
 
 /** A running turn with no agent output for this long is treated as failed so the composer unlocks. */
 export const AGENT_TURN_STALE_MS = 60_000;
@@ -23,11 +23,11 @@ export const AGENT_TURN_STALE_MS = 60_000;
 export function agentOrbStatusKey(state: AgentOrbState): AgentOrbStatusKey {
 	switch (state) {
 		case 'ready':
-			return 'pod.shell.workspaceAgentDescription';
+			return 'bolt.shell.workspaceAgentDescription';
 		case 'working':
-			return 'pod.agent.working';
+			return 'bolt.agent.working';
 		case 'error':
-			return 'pod.agent.failed';
+			return 'bolt.agent.failed';
 		default: {
 			const _exhaustive: never = state;
 			return _exhaustive;
@@ -38,8 +38,8 @@ export function agentOrbStatusKey(state: AgentOrbState): AgentOrbStatusKey {
 /** In-transcript / composer busy copy. Ready reads as working — the description is header-only. */
 export function agentOrbBusyStatusKey(
 	state: AgentOrbState
-): Exclude<AgentOrbStatusKey, 'pod.shell.workspaceAgentDescription'> {
-	return state === 'error' ? 'pod.agent.failed' : 'pod.agent.working';
+): Exclude<AgentOrbStatusKey, 'bolt.shell.workspaceAgentDescription'> {
+	return state === 'error' ? 'bolt.agent.failed' : 'bolt.agent.working';
 }
 
 /**

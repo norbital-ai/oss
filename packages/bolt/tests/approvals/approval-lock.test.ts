@@ -315,12 +315,25 @@ const memoryDatabaseLayer = () =>
 		})
 	);
 
-const tasks = Tasks.layer(
-	{
-		call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } })
-	},
-	{ invocationId: InvocationId.make('approval-lock'), deadlineEpochMs: Date.now() + 10_000 }
-);
+/**
+ * A tasks facility that remembers what it was asked to enqueue.
+ *
+ * The follow-up work a decision schedules is the part that is easy to leave out — `resume` was
+ * enqueued on approval and nothing at all was enqueued on rejection, so the lock a refused request
+ * had taken was never released by anybody. Recording the calls is what lets a test say that the
+ * refusal path schedules its cleanup, rather than only that the cleanup works when called by hand.
+ */
+const recordingTasks = (recorded: Array<string>) =>
+	Tasks.layer(
+		{
+			// The binding is called as `(metadata, request)`; the command is in the second argument.
+			call: (_metadata: unknown, request: unknown) => {
+				recorded.push(JSON.stringify(request));
+				return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
+			}
+		},
+		{ invocationId: InvocationId.make('approval-lock'), deadlineEpochMs: Date.now() + 10_000 }
+	);
 
 const context = {
 	invocationId: InvocationId.make('approval-lock'),
@@ -328,7 +341,8 @@ const context = {
 };
 
 const workspaceLayer = Workspace.layer(definition);
-const testLayer = () => {
+const testLayer = (recorded: Array<string> = []) => {
+	const tasks = recordingTasks(recorded);
 	const database = memoryDatabaseLayer();
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvalsLayer = Approvals.layer.pipe(
@@ -543,6 +557,125 @@ describe('approval lock and resume', () => {
 					norbital_approval_id: null
 				})
 			]);
+		}).pipe(Effect.provide(testLayer()))
+	);
+
+	it.effect('discards the provisional row when a create is rejected', () => {
+		const enqueued: Array<string> = [];
+		return Effect.gen(function* () {
+			const collectionsService = yield* Collections.Service;
+			const approvalsService = yield* Approvals.Service;
+			const pending = yield* Effect.flip(
+				collectionsService.create(EffectId.make('create-rejected'), subject, {
+					collection: 'orders',
+					id: rid('order-rejected'),
+					values: { title: 'Refused' }
+				})
+			);
+			expect(pending).toBeInstanceOf(PendingApproval);
+			if (!(pending instanceof PendingApproval)) return;
+			const requested = yield* approvalsService.status(
+				EffectId.make('status-rejected'),
+				pending.requestId
+			);
+			if (requested === undefined) return;
+			yield* approvalsService.decide(
+				EffectId.make('decide-rejected'),
+				subject,
+				requested,
+				'reject',
+				'not this one'
+			);
+			// The decision schedules its own cleanup. Asserted before running it by hand, because a
+			// `discard` that works but is never called leaves the record locked in exactly the way
+			// this whole path exists to prevent.
+			expect(enqueued.some((request) => request.includes('collections.discard'))).toBe(true);
+			yield* collectionsService.discard(EffectId.make('discard-rejected'), pending.requestId);
+			// Write-then-lock means the row was already there when it was refused. Releasing its lock
+			// would have published exactly the record somebody just rejected, because a workspace's
+			// liveness predicate is `norbital_approval_id is null` — so the provisional write goes.
+			expect(
+				yield* collectionsService.findMany(EffectId.make('read-rejected'), subject, {
+					collection: 'orders'
+				})
+			).toEqual([]);
+		}).pipe(Effect.provide(testLayer(enqueued)));
+	});
+
+	it.effect('releases the lock on an existing row when its update is rejected', () =>
+		Effect.gen(function* () {
+			const collectionsService = yield* Collections.Service;
+			const approvalsService = yield* Approvals.Service;
+			yield* collectionsService.create(EffectId.make('create-note-reject'), subject, {
+				collection: 'notes',
+				id: rid('note-reject'),
+				values: { body: 'Original' }
+			});
+			const pending = yield* Effect.flip(
+				collectionsService.update(EffectId.make('update-note-reject'), subject, {
+					collection: 'notes',
+					id: rid('note-reject'),
+					values: { body: 'Pending' }
+				})
+			);
+			expect(pending).toBeInstanceOf(PendingApproval);
+			if (!(pending instanceof PendingApproval)) return;
+			const requested = yield* approvalsService.status(
+				EffectId.make('status-note-reject'),
+				pending.requestId
+			);
+			if (requested === undefined) return;
+			yield* approvalsService.decide(
+				EffectId.make('decide-note-reject'),
+				subject,
+				requested,
+				'reject'
+			);
+			yield* collectionsService.discard(
+				EffectId.make('discard-note-reject'),
+				pending.requestId
+			);
+			// The update was never applied, so the record is already what it should be and only the
+			// lock has to come off. Left on, the row stayed invisible and could not be edited again.
+			expect(
+				yield* collectionsService.findMany(EffectId.make('read-note-reject'), subject, {
+					collection: 'notes'
+				})
+			).toEqual([
+				expect.objectContaining({
+					norbital_id: rid('note-reject'),
+					body: 'Original',
+					norbital_approval_id: null
+				})
+			]);
+		}).pipe(Effect.provide(testLayer()))
+	);
+
+	it.effect('releases the lock when a pending request is withdrawn', () =>
+		Effect.gen(function* () {
+			const collectionsService = yield* Collections.Service;
+			const approvalsService = yield* Approvals.Service;
+			const pending = yield* Effect.flip(
+				collectionsService.create(EffectId.make('create-withdrawn'), subject, {
+					collection: 'orders',
+					id: rid('order-withdrawn'),
+					values: { title: 'Recalled' }
+				})
+			);
+			expect(pending).toBeInstanceOf(PendingApproval);
+			if (!(pending instanceof PendingApproval)) return;
+			const requested = yield* approvalsService.status(
+				EffectId.make('status-withdrawn'),
+				pending.requestId
+			);
+			if (requested === undefined) return;
+			yield* approvalsService.withdraw(EffectId.make('withdraw'), subject, requested);
+			yield* collectionsService.discard(EffectId.make('discard-withdrawn'), pending.requestId);
+			expect(
+				yield* collectionsService.findMany(EffectId.make('read-withdrawn'), subject, {
+					collection: 'orders'
+				})
+			).toEqual([]);
 		}).pipe(Effect.provide(testLayer()))
 	);
 

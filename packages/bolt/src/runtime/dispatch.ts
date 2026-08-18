@@ -144,6 +144,7 @@ const IdentityInviteInput = Schema.Struct({ tenantId: Schema.NonEmptyString, ema
 const IdentityAcceptInput = Schema.Struct({ invitationId: Schema.NonEmptyString, userId: Schema.NonEmptyString });
 const IdentitySessionInput = Schema.Struct({ userId: Schema.NonEmptyString, tenantId: Schema.NonEmptyString });
 const IdentitySendCodeInput = Schema.Struct({ email: Schema.NonEmptyString });
+const IdentityAdmitFounderInput = Schema.Struct({ email: Schema.NonEmptyString, tenantId: Schema.NonEmptyString });
 const IdentityVerifyCodeInput = Schema.Struct({ email: Schema.NonEmptyString, code: Schema.NonEmptyString, tenantId: Schema.NonEmptyString });
 
 /**
@@ -263,7 +264,7 @@ const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function
  * prefix, because `automations.start`, `.register`, `.runStep`, `.resume`, `.status` and `.cancel`
  * share it and are host commands rather than enqueued ones.
  */
-const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set(['integrations.pull', 'integrations.flush', 'agents.resume', 'collections.resume']);
+const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set(['integrations.pull', 'integrations.flush', 'agents.resume', 'collections.resume', 'collections.discard']);
 
 /**
  * Which invocation tags may reach the command switch, and on what authority.
@@ -609,6 +610,44 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 			const input = yield* decode(IdentityResolveInput, commandInput);
 			return json(yield* (yield* Identity.Service).resolveSubject(effectId, input.provider, input.externalId));
 		}
+		case 'identity.admitFounder': {
+			const input = yield* decode(IdentityAdmitFounderInput, commandInput);
+			const definition = (yield* Workspace.Service).definition;
+			// Every role the workspace declares, and every team it names as an approver.
+			//
+			// Derived rather than configured because only the workspace knows them. A founder given
+			// `['admin']` matches no policy at all — there is no admin bypass in `decide`, and a policy
+			// is matched by its own name — so the first administrator of the HR workspace could see no
+			// app and read no collection. The approver teams matter for the same reason one step later:
+			// a record whose create is approval-gated is written, locked, and then waits forever if
+			// nobody in the workspace is eligible to decide.
+			const roles = new Set<string>();
+			const teams = new Set<string>();
+			for (const policy of definition.policies) {
+				for (const role of policy.roles ?? [policy.name]) roles.add(role);
+				for (const grant of policy.grants ?? []) {
+					const approval = grant.approval;
+					if (approval === null || typeof approval !== 'object') continue;
+					const steps = Reflect.get(approval, 'steps');
+					if (!Array.isArray(steps)) continue;
+					for (const step of steps) {
+						const approvers = step === null || typeof step !== 'object' ? undefined : Reflect.get(step, 'approvers');
+						if (!Array.isArray(approvers)) continue;
+						for (const team of approvers) if (typeof team === 'string') teams.add(team);
+					}
+				}
+			}
+			// `tenantId` is stamped onto every command input from the invocation scope, never read from
+			// the payload — so a caller cannot admit a founder into somebody else's workspace.
+			const founderId = yield* (yield* Identity.Service).admit(
+				effectId,
+				input.tenantId,
+				input.email,
+				[...roles],
+				[...teams]
+			);
+			return json({ admitted: true, userId: founderId, roles: [...roles], teams: [...teams] });
+		}
 		case 'identity.invite': {
 			const input = yield* decode(IdentityInviteInput, commandInput);
 			return json({ invitationId: yield* (yield* Identity.Service).invite(effectId, input.tenantId, input.email, input.invitedBy) });
@@ -871,6 +910,11 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (command: string, effe
 			const input = yield* decode(ApprovalStatusInput, commandInput);
 			yield* (yield* Collections.Service).resume(effectId, input.requestId);
 			return json({ resumed: true, requestId: input.requestId });
+		}
+		case 'collections.discard': {
+			const input = yield* decode(ApprovalStatusInput, commandInput);
+			yield* (yield* Collections.Service).discard(effectId, input.requestId);
+			return json({ discarded: true, requestId: input.requestId });
 		}
 		case 'collections.import': {
 			const input = yield* decode(CollectionCreateManyInput, commandInput);

@@ -3,8 +3,8 @@
 ## Apps and groups
 
 Every application is `src/apps/**/+<app>.svelte`; filename and group directory own their IDs. Metadata in
-`<svelte:head>` is static: literal title, optional description, literal `pod:icon`, and optional static
-`pod:thumbnail` / `pod:banner` URLs. There is no layout metadata.
+`<svelte:head>` is static: literal title, optional description, literal `bolt:icon`, and optional static
+`bolt:thumbnail` / `bolt:banner` URLs. There is no layout metadata.
 
 ```svelte
 <script lang="ts">
@@ -15,9 +15,9 @@ Every application is `src/apps/**/+<app>.svelte`; filename and group directory o
 <svelte:head>
 	<title>Operations</title>
 	<meta name="description" content="Manage daily operations" />
-	<meta name="pod:icon" content="lucide:briefcase" />
-	<meta name="pod:thumbnail" content="https://cdn.example.com/operations-card.webp" />
-	<meta name="pod:banner" content="https://cdn.example.com/operations-banner.webp" />
+	<meta name="bolt:icon" content="lucide:briefcase" />
+	<meta name="bolt:thumbnail" content="https://cdn.example.com/operations-card.webp" />
+	<meta name="bolt:banner" content="https://cdn.example.com/operations-banner.webp" />
 </svelte:head>
 
 <Cover as="main">
@@ -60,14 +60,14 @@ that is `assets/thumbnail.svg` at the template root (see
 
 | Field           | Where it renders                                                                                             | Required |
 | --------------- | ------------------------------------------------------------------------------------------------------------ | -------- |
-| `pod:icon`      | Sidebar, overview app cards, omni finder; opaque chip on the shell app media header when a banner is present | **yes**  |
-| `pod:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; omni finder tile                                     | no       |
-| `pod:banner`    | Always-visible compact shell chrome (`AppMediaHeader`): full-bleed image + dark scrim + title/description    | no       |
+| `bolt:icon`      | Sidebar, overview app cards, omni finder; opaque chip on the shell app media header when a banner is present | **yes**  |
+| `bolt:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; omni finder tile                                     | no       |
+| `bolt:banner`    | Always-visible compact shell chrome (`AppMediaHeader`): full-bleed image + dark scrim + title/description    | no       |
 
 Not every app needs a thumbnail or banner. Overview cards keep a `Frame ratio="banner"` media slot
-with a website-style gradient and app-icon fallback when `pod:thumbnail` is missing or fails to load;
+with a website-style gradient and app-icon fallback when `bolt:thumbnail` is missing or fails to load;
 the omni finder shows the app icon in the same 6×6 tile a thumbnail would occupy — so grids and rows
-stay aligned whether or not an app ships images. App banners are omitted entirely when `pod:banner`
+stay aligned whether or not an app ships images. App banners are omitted entirely when `bolt:banner`
 is missing or fails to load. When present, the shell renders a fixed Airbnb-style media header
 (image + bottom-weighted dark scrim + icon chip + localized title/description). Copy always sits on
 the scrim — never on the raw banner art — so contrast does not depend on light or dark imagery.
@@ -94,7 +94,7 @@ instead and it lands at the trailing edge of the media header:
 
 The controls sit on the dark scrim, so keep them compact and self-labelling — an `ariaLabel` and a
 placeholder rather than a stacked visible label. An app that registers actions but ships no
-`pod:banner` still gets the header, on its base wash, so the controls have somewhere to live.
+`bolt:banner` still gets the header, on its base wash, so the controls have somewhere to live.
 Reach for `PageHeader` only for a heading the manifest cannot know, such as a dynamic record title.
 
 **Shipping images with a template.** Commit image files under `assets/` in the template workspace
@@ -106,10 +106,10 @@ and reference them with the seed-asset URL — no external CDN needed:
 
 ```svelte
 <meta
-	name="pod:thumbnail"
+	name="bolt:thumbnail"
 	content="/api/template-seed-assets/<key>/app-media/operations-banner.svg"
 />
-<meta name="pod:banner" content="/api/template-seed-assets/<key>/app-media/operations-banner.svg" />
+<meta name="bolt:banner" content="/api/template-seed-assets/<key>/app-media/operations-banner.svg" />
 ```
 
 Any file under `assets/` is served by the host at `/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
@@ -120,14 +120,14 @@ Template assets are the standard place for this; a URL from any stable origin wo
 
 ### Record detail banners (`+representation.svelte`)
 
-The collection-owned `+representation.svelte` may also declare a static `pod:banner` meta. The
+The collection-owned `+representation.svelte` may also declare a static `bolt:banner` meta. The
 compiler reads it and the record detail sheet renders it as a fixed-height image above the sheet
 header — on both table and kanban detail surfaces. It is optional and independent of app media.
 
 ```svelte
 <svelte:head>
 	<meta
-		name="pod:banner"
+		name="bolt:banner"
 		content="/api/template-seed-assets/<key>/record-media/employments-banner.svg"
 	/>
 </svelte:head>

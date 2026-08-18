@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Stack } from '@norbital-ai/ui/layout';
-	import type { PodUiKeys } from './i18n.js';
+	import type { BoltUiKeys } from './i18n.js';
 	import {
 		commandPrefixChar,
 		type MentionCommand,
@@ -10,7 +10,7 @@
 	import type { FinderEntity, FinderRow } from '../finder/finder-entity.js';
 	import FinderPalette from '../finder/finder-palette.svelte';
 
-	const { t } = useI18n<PodUiKeys>();
+	const { t } = useI18n<BoltUiKeys>();
 
 	/** Icon for a prefix command in the mention menu. */
 	function commandIcon(command: MentionCommand): string { // stupidity:allow Q3 -- named helper
@@ -31,14 +31,14 @@
 	/** i18n key for a prefix command's menu label. */
 	function commandLabelKey( // stupidity:allow Q3 -- named helper
 		command: MentionCommand
-	): 'pod.agent.prefixSearch' | 'pod.agent.prefixPlan' | 'pod.agent.prefixApps' {
+	): 'bolt.agent.prefixSearch' | 'bolt.agent.prefixPlan' | 'bolt.agent.prefixApps' {
 		switch (command) {
 			case 'record':
-				return 'pod.agent.prefixSearch';
+				return 'bolt.agent.prefixSearch';
 			case 'plan':
-				return 'pod.agent.prefixPlan';
+				return 'bolt.agent.prefixPlan';
 			case 'app':
-				return 'pod.agent.prefixApps';
+				return 'bolt.agent.prefixApps';
 			default: {
 				const _exhaustive: never = command;
 				return _exhaustive;
@@ -66,7 +66,7 @@
 				return {
 					value: `scope:${item.collection}`,
 					kind: 'scope',
-					label: t('pod.agent.searchCollection', { collection: item.collection }),
+					label: t('bolt.agent.searchCollection', { collection: item.collection }),
 					description: commandPrefixChar('record'),
 					entity: { kind: 'scope', collection: item.collection }
 				};
@@ -75,7 +75,7 @@
 					value: `collection:${item.collection}`,
 					kind: 'command',
 					label: item.collection,
-					description: t('pod.agent.collection'),
+					description: t('bolt.agent.collection'),
 					icon: 'lucide:table',
 					entity: { kind: 'collection', collection: item.collection }
 				};
@@ -84,7 +84,7 @@
 					value: `app:${item.key}`,
 					kind: 'app',
 					label: item.label,
-					description: t('pod.agent.app'),
+					description: t('bolt.agent.app'),
 					icon: 'lucide:layout-grid',
 					entity: {
 						kind: 'app',
@@ -143,8 +143,8 @@
 					disabled: true,
 					label:
 						scope && !query.trim()
-							? t('pod.agent.typeToSearchScope', { scope })
-							: t('pod.agent.noRecordsMatch', { query: query.trim() })
+							? t('bolt.agent.typeToSearchScope', { scope })
+							: t('bolt.agent.noRecordsMatch', { query: query.trim() })
 				}
 			];
 		}

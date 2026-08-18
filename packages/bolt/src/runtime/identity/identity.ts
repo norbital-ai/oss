@@ -69,6 +69,7 @@ export class AuthenticationError extends Schema.TaggedError<AuthenticationError>
 export type Interface = Readonly<{
 	readonly authenticate: (effectId: EffectId, credential: string) => Effect.Effect<Subject, AuthenticationError | Database.FacilityError>;
 	readonly resolveSubject: (effectId: EffectId, provider: string, externalId: string) => Effect.Effect<Subject, AuthenticationError | Database.FacilityError>;
+	readonly admit: (effectId: EffectId, tenantId: string, email: string, roles: ReadonlyArray<string>, teams: ReadonlyArray<string>) => Effect.Effect<string, Database.FacilityError>;
 	readonly invite: (effectId: EffectId, tenantId: string, email: string, invitedBy: string) => Effect.Effect<string, Database.FacilityError | Database.FacilityError>;
 	readonly acceptInvitation: (effectId: EffectId, invitationId: string, userId: string) => Effect.Effect<void, AuthenticationError | Database.FacilityError>;
 	/** Sends a sign-in code to an address. The pod issues it; the host only carries it. */
@@ -165,7 +166,7 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 			if (secret === undefined) return yield* new AuthenticationError({ reason: 'malformed' });
 			return makeAuth({
 				secret,
-				baseURL: 'https://pod.invalid',
+				baseURL: 'https://bolt.invalid',
 				production: canDeliver,
 				execute: (sql, parameters) =>
 					Effect.runPromise(
@@ -268,6 +269,39 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 			 * addressed with; a caller cannot supply it. So this admits the verified address to the
 			 * workspace whose pod it proved the code against, and to no other.
 			 */
+			/**
+			 * Gives an address roles and teams in this workspace before anybody signs in as it.
+			 *
+			 * A workspace's first administrator is the one membership nobody inside it can grant, because
+			 * there is nobody inside it yet. `verifyCode` deliberately grants nothing — it binds a tenant
+			 * and no more — so without this a founder signs in perfectly and then reads 403 from every
+			 * collection, which is a failure that looks like a broken sign-in and is not one.
+			 *
+			 * Keyed by email and written before the person exists: Better Auth creates the user row on
+			 * first sign-in, and an upsert on the address means the row it finds already carries the
+			 * membership rather than the two racing.
+			 */
+			admit: Effect.fn('Identity.admit')(function* (effectId, tenantId, email, roles, teams) {
+				const admitted = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: `insert into ${AUTH_MODELS.user} ("norbital_id", "name", "email", "emailVerified", "kind", "tenantId", "roles", "teams")
+					      values (gen_random_uuid(), $1, $1, true, 'person', $2, $3::jsonb, $4::jsonb)
+					      on conflict ("email") do update set
+					        "tenantId" = excluded."tenantId",
+					        "roles" = excluded."roles",
+					        "teams" = excluded."teams",
+					        "norbital_updated_at" = now()
+					      returning "norbital_id" as "id"`,
+					parameters: [email, tenantId, JSON.stringify([...roles]), JSON.stringify([...teams])]
+				});
+				const admittedId = IdentityRows.text(admitted.rows[0], 'id') ?? '';
+				// The address rides along because it is the only stable name this person has across
+				// organizations: identity is per-tenant, so the same human is a different `norbital_id`
+				// in every workspace they belong to, and a host filing memberships by user id records
+				// six strangers rather than one person in six places.
+				yield* identityHooks.emit(effectId, { _tag: 'UserChanged', userId: admittedId, email, organizationId: tenantId, roles: [...roles], teams: [...teams] });
+				return admittedId;
+			}),
 			verifyCode: Effect.fn('Identity.verifyCode')(function* (effectId, email, code, tenantId) {
 				const auth = yield* authFor(effectId);
 				const signedIn = yield* Effect.tryPromise({
@@ -286,7 +320,9 @@ export const layerWith = (canDeliver: boolean) => Layer.effect(
 				});
 				const admittedId = IdentityRows.text(admitted.rows[0], 'id');
 				if (admittedId === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
-				yield* identityHooks.emit(effectId, { _tag: 'UserChanged', userId: admittedId, organizationId: tenantId, roles: [], teams: [] });
+				// Same reason as `admit`: without the address the host cannot tell that the person signing
+				// into this organization is the one it already knows from another.
+				yield* identityHooks.emit(effectId, { _tag: 'UserChanged', userId: admittedId, email, organizationId: tenantId, roles: [], teams: [] });
 				return signedIn.token;
 			}),
 			/**

@@ -42,7 +42,7 @@ nest the two primitives instead.
 ### 3. Intrinsic over breakpoints
 
 Layouts respond to the space they are actually given, not to the browser window. Apps render inside
-a `[container-name:pod-app]` container query; the sidebar and shell chrome change available width
+a `[container-name:bolt-app]` container query; the sidebar and shell chrome change available width
 without changing viewport width, so viewport breakpoints lie.
 
 Use `Grid minimum="…"` (auto-fit), `Split collapse="…"` (container tokens), and `min-w-0` shrinking.

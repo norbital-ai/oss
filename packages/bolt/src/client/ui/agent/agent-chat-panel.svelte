@@ -69,10 +69,10 @@
 	import { readBoltMentionCatalog } from './mention-catalog.js';
 	import { formatFinderEntityForPrompt } from '../finder/finder-entity.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import type { PodUiKeys } from './i18n.js';
+	import type { BoltUiKeys } from './i18n.js';
 	import { resolveAgentIntent } from './intent.js';
 
-	const { t } = useI18n<PodUiKeys>();
+	const { t } = useI18n<BoltUiKeys>();
 
 	let { headerOrb = true }: { headerOrb?: boolean } = $props();
 
@@ -391,17 +391,17 @@
 					? row.name
 					: typeof row.email === 'string'
 						? row.email
-						: t('pod.agent.unknownMember');
+						: t('bolt.agent.unknownMember');
 			labels.set(row.norbital_id, label);
 		}
 		return labels;
 	});
 	const selectorLabels = $derived.by(
 		(): Parameters<typeof buildConversationSelector>[0]['labels'] => ({
-			web: t('pod.agent.webChannel'),
-			users: t('pod.agent.users'),
-			groups: t('pod.agent.groups'),
-			channelFallback: t('pod.agent.channelAgent')
+			web: t('bolt.agent.webChannel'),
+			users: t('bolt.agent.users'),
+			groups: t('bolt.agent.groups'),
+			channelFallback: t('bolt.agent.channelAgent')
 		})
 	);
 	const selectorSessions = $derived(sessions);
@@ -455,7 +455,7 @@
 	const scopeOptions = $derived.by(() => {
 		if (!isAdmin || currentUserId == null) return [];
 		const options: { id: string; label: string }[] = [
-			{ id: currentUserId, label: t('pod.agent.me') }
+			{ id: currentUserId, label: t('bolt.agent.me') }
 		];
 		for (const [id, label] of userLabels) {
 			if (id === currentUserId) continue;
@@ -515,18 +515,18 @@
 		if (root?.status === 'failed' || root?.status === 'aborted') {
 			return typeof root.error === 'string' && root.error.trim()
 				? root.error
-				: t('pod.agent.couldNotFinish');
+				: t('bolt.agent.couldNotFinish');
 		}
 		const terminal = terminalMessage;
 		if (terminal?.kind === 'text' && terminal.role === 'system') {
-			return terminal.content.trim() || t('pod.agent.couldNotFinish');
+			return terminal.content.trim() || t('bolt.agent.couldNotFinish');
 		}
 		return null;
 	});
 	const failure = $derived(
 		session.sendFailure ??
 			replicaFailure ??
-			(session.waitedTooLong ? t('pod.agent.couldNotFinish') : null)
+			(session.waitedTooLong ? t('bolt.agent.couldNotFinish') : null)
 	);
 	const activityState = $derived(
 		agentOrbState({
@@ -579,7 +579,7 @@
 	);
 	const tokenLabel = $derived(
 		totals && totals.totalTokens > 0
-			? t('pod.agent.tokens', { count: totals.totalTokens.toLocaleString() })
+			? t('bolt.agent.tokens', { count: totals.totalTokens.toLocaleString() })
 			: null
 	);
 	// A turn whose host reported no cost makes the total a floor. Saying so costs one character and
@@ -591,11 +591,11 @@
 	);
 	const costHint = $derived(
 		totals && totals.turnsUnreported > 0
-			? t('pod.agent.turnsUnreportedCost', {
+			? t('bolt.agent.turnsUnreportedCost', {
 					unreported: totals.turnsUnreported,
 					counted: totals.turnsCounted
 				})
-			: t('pod.agent.costReportedByProvider')
+			: t('bolt.agent.costReportedByProvider')
 	);
 
 	// A tool call is the agent doing something. Once one is on screen it carries its own progress, and
@@ -720,8 +720,8 @@
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : String(cause);
 			session.sendFailure =
-				!message || message === 'INTERNAL_ERROR' || message === t('pod.server.internalError')
-					? t('pod.agent.couldNotStart')
+				!message || message === 'INTERNAL_ERROR' || message === t('bolt.server.internalError')
+					? t('bolt.agent.couldNotStart')
 					: message;
 			session.pending = false;
 			syncAgentSurface();
@@ -870,7 +870,7 @@
 	gap="none"
 	fill
 	class="bg-background"
-	aria-label={t('pod.shell.workspaceAgentTitle')}
+	aria-label={t('bolt.shell.workspaceAgentTitle')}
 >
 	<!--
 		`justify="between"` spread three controls of unequal width across the whole header, so the
@@ -896,7 +896,7 @@
 					state={activityState}
 					size={22}
 					label={activityState === 'ready'
-						? t('pod.shell.workspaceAgentTitle')
+						? t('bolt.shell.workspaceAgentTitle')
 						: t(agentOrbStatusKey(activityState))}
 				/>
 			</div>
@@ -905,8 +905,8 @@
 			<ConversationScopePicker
 				value={resolvedScopeUserId}
 				options={scopeOptions}
-				searchPlaceholder={t('pod.agent.searchMembers')}
-				ariaLabel={t('pod.agent.conversationScope')}
+				searchPlaceholder={t('bolt.agent.searchMembers')}
+				ariaLabel={t('bolt.agent.conversationScope')}
 				onValueChange={selectScope}
 				icon="lucide:user-round"
 				class="w-44"
@@ -916,8 +916,8 @@
 			<ConversationScopePicker
 				value={resolvedChannel}
 				options={channelOptions}
-				searchPlaceholder={t('pod.agent.searchChannels')}
-				ariaLabel={t('pod.agent.conversationChannel')}
+				searchPlaceholder={t('bolt.agent.searchChannels')}
+				ariaLabel={t('bolt.agent.conversationChannel')}
 				onValueChange={selectChannel}
 				icon="lucide:hash"
 				class="w-36"
@@ -929,10 +929,10 @@
 			<ConversationSelector
 				model={conversationSelector}
 				value={activeChatId}
-				placeholder={t('pod.agent.noConversations')}
-				searchPlaceholder={t('pod.agent.searchConversations')}
-				ariaLabel={t('pod.agent.conversationThread')}
-				emptyLabel={t('pod.agent.noConversations')}
+				placeholder={t('bolt.agent.noConversations')}
+				searchPlaceholder={t('bolt.agent.searchConversations')}
+				ariaLabel={t('bolt.agent.conversationThread')}
+				emptyLabel={t('bolt.agent.noConversations')}
 				onValueChange={(id) => selectConversation(id)}
 				icon="lucide:message-square"
 			/>
@@ -941,8 +941,8 @@
 			variant="ghost"
 			size="icon"
 			class="shrink-0"
-			hint={t('pod.agent.newConversation')}
-			aria-label={t('pod.agent.newConversation')}
+			hint={t('bolt.agent.newConversation')}
+			aria-label={t('bolt.agent.newConversation')}
 			onclick={startConversation}
 		>
 			<Icon icon="lucide:square-pen" class="size-4" />
@@ -950,16 +950,16 @@
 	</Inline>
 	{#if messages.length === 0 && !composerLocked}
 		<Bound size="full" grow>
-			<Scroll name={t('pod.agent.askAboutWorkspace')} axis="y" class="px-6 py-10">
+			<Scroll name={t('bolt.agent.askAboutWorkspace')} axis="y" class="px-6 py-10">
 				<Center measure="narrow" layout="stack" gap="md" align="center" class="text-center">
 					<Inline justify="center" align="center" class="size-12 rounded-xl bg-card shadow-xs">
-						<IconWrapper name="product:pod" class="size-7 text-foreground" />
+						<IconWrapper name="product:bolt" class="size-7 text-foreground" />
 					</Inline>
 					<h2 class="text-base font-semibold tracking-[-0.015em] text-foreground">
-						{t('pod.agent.askAboutWorkspace')}
+						{t('bolt.agent.askAboutWorkspace')}
 					</h2>
 					<p class="text-sm leading-6 text-muted-foreground">
-						{t('pod.agent.askDescription')}
+						{t('bolt.agent.askDescription')}
 					</p>
 				</Center>
 			</Scroll>
@@ -996,21 +996,21 @@
 						as="li"
 						gap="sm"
 						aria-label={session.waitedTooLong
-							? t('pod.agent.failed')
-							: t('pod.agent.agentIsWorking')}
+							? t('bolt.agent.failed')
+							: t('bolt.agent.agentIsWorking')}
 					>
 						<span class="px-1 text-tiny font-medium text-muted-foreground"
-							>{t('pod.agent.agent')}</span
+							>{t('bolt.agent.agent')}</span
 						>
 						<Inline class="w-fit rounded-xl bg-muted px-3.5 py-2.5 text-sm">
 							{#if session.waitedTooLong}
 								<NorbitalThinkingOrb
 									state="error"
 									size={20}
-									label={t('pod.agent.failed')}
+									label={t('bolt.agent.failed')}
 									class="text-destructive"
 								/>
-								<span class="text-destructive">{t('pod.agent.failed')}</span>
+								<span class="text-destructive">{t('bolt.agent.failed')}</span>
 							{:else}
 								<Spinner
 									class="size-4 text-foreground"
@@ -1048,8 +1048,8 @@
 				<Icon icon="lucide:lock-keyhole" class="size-3.5 shrink-0" />
 				<span>
 					{activeSessionIsChannel
-						? t('pod.agent.channelReadOnly')
-						: t('pod.agent.adminConversationReadOnly')}
+						? t('bolt.agent.channelReadOnly')
+						: t('bolt.agent.adminConversationReadOnly')}
 				</span>
 			</Inline>
 		{:else}
@@ -1074,7 +1074,7 @@
 					}}
 				>
 					<div class="px-3 pt-3 pb-1 sm:px-4 sm:pt-4" data-agent-composer>
-						<label class="sr-only" for="agent-chat-input">{t('pod.agent.messageAgent')}</label>
+						<label class="sr-only" for="agent-chat-input">{t('bolt.agent.messageAgent')}</label>
 						<Textarea
 							id="agent-chat-input"
 							bind:value={draft}
@@ -1098,7 +1098,7 @@
 							aria-autocomplete="list"
 							aria-expanded={menuOpen}
 							aria-controls="agent-mention-menu"
-							placeholder={t('pod.agent.composerPlaceholder')}
+							placeholder={t('bolt.agent.composerPlaceholder')}
 							rows={1}
 							class={AGENT_COMPOSER_EDITOR_CLASS}
 							disabled={composerLocked}
@@ -1112,7 +1112,7 @@
 								class={`flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md px-1.5 py-1 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
 							>
 								<Icon icon="lucide:shield-check" class="size-3.5 shrink-0" />
-								<span class="shrink-0">{t('pod.agent.verifierWillCheck')}</span>
+								<span class="shrink-0">{t('bolt.agent.verifierWillCheck')}</span>
 								<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground/70"
 									>{verifierPreview}</span
 								>
@@ -1123,10 +1123,10 @@
 							</summary>
 							<Stack gap="xs" class="px-1.5 pb-1.5">
 								<p class="m-0 text-tiny text-muted-foreground">
-									{t('pod.agent.verifierPromptHint')}
+									{t('bolt.agent.verifierPromptHint')}
 								</p>
 								<label class="sr-only" for="agent-verifier-prompt"
-									>{t('pod.agent.verifierPrompt')}</label
+									>{t('bolt.agent.verifierPrompt')}</label
 								>
 								<Textarea
 									id="agent-verifier-prompt"
@@ -1168,13 +1168,13 @@
 										? 'bg-primary/10 text-primary'
 										: 'text-muted-foreground hover:bg-muted hover:text-foreground'
 								}`}
-								title={planMode ? t('pod.agent.planModeOn') : t('pod.agent.planModeOff')}
+								title={planMode ? t('bolt.agent.planModeOn') : t('bolt.agent.planModeOff')}
 								data-testid="agent-plan-mode"
 							>
-								{t('pod.agent.plan')}
+								{t('bolt.agent.plan')}
 							</button>
 							{#if contextPercent !== null}
-								<Inline as="span" gap="xs" title={t('pod.agent.contextWindowUsed')}>
+								<Inline as="span" gap="xs" title={t('bolt.agent.contextWindowUsed')}>
 									<span
 										class="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted"
 										aria-hidden="true"
@@ -1195,7 +1195,7 @@
 							{/if}
 						</Inline>
 						<Inline justify="end" align="center" gap="xs" class="min-w-0">
-							<div class="min-w-0" title={t('pod.agent.modelAndVariant')}>
+							<div class="min-w-0" title={t('bolt.agent.modelAndVariant')}>
 								<AgentModelPicker
 									bind:value={modelState.selectedModel}
 									options={modelState.catalog?.options ?? []}
@@ -1210,7 +1210,7 @@
 								size="icon"
 								class="size-8 shrink-0 rounded-full"
 								data-testid="agent-send"
-								aria-label={composerLocked ? t('pod.agent.agentIsWorking') : t('pod.agent.send')}
+								aria-label={composerLocked ? t('bolt.agent.agentIsWorking') : t('bolt.agent.send')}
 							>
 								{#if composerLocked}
 									<Spinner class="size-4" label={t(agentOrbBusyStatusKey(activityState))} />

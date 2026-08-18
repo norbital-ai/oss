@@ -44,16 +44,13 @@ const namedMeta = (source: string, name: string): string | null => {
 	return tag.match(/\bcontent=["']([^"']+)["']/)?.[1]?.trim() ?? null;
 };
 
-const taggedMetaWithFallback = (source: string, name: string): string | null =>
-	taggedMeta(source, name) ?? namedMeta(source, `pod:${name}`);
-
-/** Reads static app identity from `<svelte:head>`. Accepts `bolt:` and authored `pod:` meta names. */
+/** Reads static app identity from `<svelte:head>`. */
 export const extractAppMetadata = (source: string): AppMetadata => ({
 	title: decodeHtmlEntities(source.match(/<title>([^<]*)<\/title>/i)?.[1]?.trim() ?? null),
 	description: namedMeta(source, 'description'),
-	icon: taggedMetaWithFallback(source, 'icon'),
-	thumbnail: taggedMetaWithFallback(source, 'thumbnail'),
-	banner: taggedMetaWithFallback(source, 'banner')
+	icon: taggedMeta(source, 'icon'),
+	thumbnail: taggedMeta(source, 'thumbnail'),
+	banner: taggedMeta(source, 'banner')
 });
 
 export type GroupMetadata = Readonly<{

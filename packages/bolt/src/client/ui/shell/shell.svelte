@@ -534,13 +534,13 @@
 	onOrganizationChange={onOrganizationChange}
 	{onSignOut}
 	onSearch={toggleFinder}
-	searchLabel={t('pod.shell.omniTitle')}
+	searchLabel={t('bolt.shell.omniTitle')}
 	{searchShortcut}
 >
 	{#snippet agent({ expanded })}
 		<AgentTrigger
 			state={fabAgentState}
-			label={t('pod.shell.askAgent')}
+			label={t('bolt.shell.askAgent')}
 			shortcut={agentShortcut}
 			{expanded}
 			onclick={() => openAgent()}
@@ -664,7 +664,7 @@
 			<Cover gap="md" top={resolvedHeaderTitle ? activeAppBanner : undefined}>
 				<div
 					data-workspace-app-surface
-					class="h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:pod-app] [container-type:inline-size]"
+					class="h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:bolt-app] [container-type:inline-size]"
 				>
 					<CollectionTableNavigationSurface
 						url={detailUrl}
@@ -736,7 +736,7 @@
 						/>
 					</div>
 					<Sheet.Title class="min-w-0 truncate text-sm font-semibold">
-						{t('pod.shell.workspaceAgentTitle')}
+						{t('bolt.shell.workspaceAgentTitle')}
 					</Sheet.Title>
 				</Inline>
 			</Sheet.Header>

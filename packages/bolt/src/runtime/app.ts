@@ -146,6 +146,7 @@ type KeyedRegistration = Readonly<{ readonly key: string; readonly registration:
 const ActivationCommands = { forWorkspace: (workspace: WorkspaceDefinition): ReadonlyArray<KeyedRegistration> => {
 	const routed: ReadonlyArray<KeyedRegistration> = [
 		'collections.resume',
+		'collections.discard',
 		'agents.resume',
 		'notifications.drain',
 		'integrations.pull',

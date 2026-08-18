@@ -446,6 +446,9 @@ describe('runnable Bolt vertical slice', () => {
 			registrations: [
 				{ command: 'agents.resume', schedule: null, input: null },
 				{ command: 'channels.receive', schedule: null, input: null },
+				// A refused approval has cleanup to do — the provisional row it locked. Routed beside
+				// `resume` because a rejection is followed up as deliberately as an approval is.
+				{ command: 'collections.discard', schedule: null, input: null },
 				{ command: 'collections.resume', schedule: null, input: null },
 				// Routing only. `integrations.flush` is the outbound drain, and a workspace that declares
 				// no send binding gets the route without a cron: nothing here has an outbox to empty.
@@ -454,6 +457,6 @@ describe('runnable Bolt vertical slice', () => {
 				{ command: 'notifications.drain', schedule: null, input: null }
 			]
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(6);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(7);
 	});
 });

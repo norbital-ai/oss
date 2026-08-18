@@ -20,7 +20,7 @@ describe('tenant i18n catalogs', () => {
 		);
 		expect(merged.en['app.people.workforce']).toBe('Workforce');
 		expect(merged.en['ui.ok']).toBe('OK');
-		expect(merged.en['pod.shell.askAgent']).toBe('Ask agent');
+		expect(merged.en['bolt.shell.askAgent']).toBe('Ask agent');
 		expect(merged.zh['ui.ok']).toBe('好');
 		expect(merged.zh['app.people.workforce']).toBeUndefined();
 	});

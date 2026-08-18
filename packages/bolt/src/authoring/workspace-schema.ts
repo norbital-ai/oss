@@ -30,6 +30,8 @@ export interface FieldDefinition<TType extends ScalarType = ScalarType> {
 	readonly type: TType;
 	readonly required: boolean;
 	readonly indexed: boolean;
+	/** Whether that index is a unique one. Only meaningful alongside `indexed`. */
+	readonly unique?: boolean;
 	/** Inline SQL for a `generatedAlwaysAs` column; the database computes it and nothing writes it. */
 	readonly generated?: string;
 	/**
@@ -93,6 +95,16 @@ const makeField = <TType extends ScalarType>(type: TType) =>
 			readonly required?: boolean;
 			readonly indexed?: boolean;
 			/**
+			 * Makes the column's index unique — one row per value.
+			 *
+			 * Needed wherever an upsert conflicts on the column rather than on the key: `on conflict`
+			 * requires a unique index to conflict against, and without one the statement does not
+			 * degrade, it fails. `bolt_auth_user.email` is the case that forced this — the write that
+			 * admits a workspace's first administrator is an upsert on the address, made before that
+			 * person exists.
+			 */
+			readonly unique?: boolean;
+			/**
 			 * The column's DEFAULT, as the SQL literal the DDL carries — see `sqlDefault` above.
 			 *
 			 * A builder-authored model gets this from the builder. A runtime-owned collection is these
@@ -111,11 +123,20 @@ const makeField = <TType extends ScalarType>(type: TType) =>
 		if (typeof indexed !== 'boolean') {
 			throw new TypeError(`Field ${type} indexed flag must be boolean.`);
 		}
-		return Object.freeze(
-			options.sqlDefault === undefined
-				? { type, required, indexed }
-				: { type, required, indexed, sqlDefault: options.sqlDefault }
-		);
+		const unique = options.unique ?? false;
+		if (typeof unique !== 'boolean') {
+			throw new TypeError(`Field ${type} unique flag must be boolean.`);
+		}
+		if (unique && !indexed) {
+			throw new TypeError(`Field ${type} cannot be unique without being indexed.`);
+		}
+		return Object.freeze({
+			type,
+			required,
+			indexed,
+			...(unique ? { unique } : {}),
+			...(options.sqlDefault === undefined ? {} : { sqlDefault: options.sqlDefault })
+		});
 	};
 /**
  * `uuid` is here because a column that references another collection has to be one.

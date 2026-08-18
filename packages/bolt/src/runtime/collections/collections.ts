@@ -131,6 +131,7 @@ export type Interface = Readonly<{
 	readonly update: (effectId: EffectId, subject: Identity.Subject, input: MutationInput) => Effect.Effect<void, MutationError>;
 	readonly delete: (effectId: EffectId, subject: Identity.Subject, collection: string, id: string) => Effect.Effect<void, MutationError>;
 	readonly resume: (effectId: EffectId, requestId: string) => Effect.Effect<void, ResumeError>;
+	readonly discard: (effectId: EffectId, requestId: string) => Effect.Effect<void, ResumeError>;
 	readonly import: (effectId: EffectId, subject: Identity.Subject, inputs: ReadonlyArray<MutationInput>) => Effect.Effect<number, MutationError>;
 	readonly export: (effectId: EffectId, subject: Identity.Subject, input: QueryInput) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
 	readonly history: (effectId: EffectId, subject: Identity.Subject, collection: string, id: string) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
@@ -884,29 +885,20 @@ export const layer = Layer.effect(
 			}
 			yield* emitChangeEvents(effectId, subject, collection, id, 'deleted');
 		});
-		const resume = Effect.fn('Collections.resume')(function* (effectId: EffectId, requestId: string) {
-			const state = yield* approvals.status(effectId, requestId);
-			if (state === undefined) return yield* new ApprovalConflict({ requestId, reason: 'approval request was not found' });
-			yield* approvals.authorizeResume(state);
-			const stored = (() => {
-				switch (state._tag) {
-					case 'Approved':
-						return state.operation;
-					case 'Pending':
-						return state.operation;
-					case 'Rejected':
-					case 'Withdrawn':
-						return undefined;
-					default: {
-						const _exhaustive: never = state;
-						return _exhaustive;
-					}
-				}
-			})();
+		/**
+		 * The record an approval request was opened over, from whichever state the request reached.
+		 *
+		 * Written as one reader because `resume` and `discard` differ in what they do with the record,
+		 * never in how they find it.
+		 */
+		const storedOperation = Effect.fn('Collections.storedOperation')(function* (
+			requestId: string,
+			stored: unknown
+		) {
 			if (stored === undefined || !Schema.is(JsonObject)(stored)) {
 				return yield* new ApprovalConflict({ requestId, reason: 'stored approval operation is missing' });
 			}
-			const operation = yield* Schema.decodeUnknownEffect(CollectionOperation)({
+			return yield* Schema.decodeUnknownEffect(CollectionOperation)({
 				collection: stored.collection,
 				id: stored.id,
 				values: stored.values,
@@ -915,6 +907,38 @@ export const layer = Layer.effect(
 			}).pipe(
 				Effect.mapError(() => new ApprovalConflict({ requestId, reason: 'stored approval operation is malformed' }))
 			);
+		});
+
+		/**
+		 * Undoes the provisional write behind a request that was refused.
+		 *
+		 * Write-then-lock means the record exists before anyone has decided about it, so a refusal has
+		 * something to clean up and cannot simply be recorded. What "clean up" means depends on the
+		 * action: a rejected `create` must not be allowed to become live — releasing its lock alone
+		 * would publish exactly the payroll run somebody just refused — so the provisional row goes.
+		 * An `update` or `delete` was never applied, so the record is already what it should be and
+		 * only the lock has to come off.
+		 */
+		const discard = Effect.fn('Collections.discard')(function* (effectId: EffectId, requestId: string) {
+			const state = yield* approvals.status(effectId, requestId);
+			if (state === undefined) return yield* new ApprovalConflict({ requestId, reason: 'approval request was not found' });
+			if (state._tag !== 'Rejected' && state._tag !== 'Withdrawn') {
+				return yield* new ApprovalConflict({ requestId, reason: 'approval was not refused' });
+			}
+			const operation = yield* storedOperation(requestId, state.operation);
+			const definition = yield* workspace.collection(operation.collection);
+			if (operation.action === 'create') {
+				yield* applyDelete(effectId, operation.subject, operation.collection, operation.id, definition, true);
+				return;
+			}
+			yield* releaseLock(effectId, operation.collection, operation.id);
+		});
+
+		const resume = Effect.fn('Collections.resume')(function* (effectId: EffectId, requestId: string) {
+			const state = yield* approvals.status(effectId, requestId);
+			if (state === undefined) return yield* new ApprovalConflict({ requestId, reason: 'approval request was not found' });
+			yield* approvals.authorizeResume(state);
+			const operation = yield* storedOperation(requestId, state.operation);
 			const definition = yield* workspace.collection(operation.collection);
 			switch (operation.action) {
 				case 'create': {
@@ -956,6 +980,7 @@ export const layer = Layer.effect(
 			update,
 			delete: deleteRecord,
 			resume,
+			discard,
 			import: Effect.fn('Collections.import')(function* (effectId, subject, inputs) {
 				const pipeline = authored.pipelines[inputs[0]?.collection ?? ''];
 				if (pipeline?.import !== undefined) {

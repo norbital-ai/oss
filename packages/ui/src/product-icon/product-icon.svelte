@@ -53,10 +53,8 @@
 				/>
 			{/if}
 		{/each}
-	{:else if name === 'core'}
-		<ellipse cx="12" cy="12" rx="9" ry="6" />
-		<path d="M5.5 9.5A9 6 0 0 1 12 6" class="accent-stroke" />
-	{:else if name === 'pod'}
+	{:else if name === 'bolt'}
+		<!-- The sealed bundle a workspace compiles to: one solid, one seam. -->
 		<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" />
 		<path d="M8.5 12h7" class="accent-stroke" />
 	{:else if name === 'colony'}

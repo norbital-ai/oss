@@ -92,7 +92,10 @@ describe('Bolt compiler owners', () => {
 		const ids = buildSchemaPlan(fixture).steps.map(({ id }) => id);
 		expect(ids.filter((id) => id.startsWith('bolt:extension-'))).toEqual([
 			'bolt:extension-btree-gist',
-			'bolt:extension-pg-trgm'
+			'bolt:extension-pg-trgm',
+			// Unconditional like the other two: the plan runs before the lineage that creates the
+			// columns, so it cannot ask the workspace whether it embeds anything.
+			'bolt:extension-vector'
 		]);
 		// Steps execute in id order, so asserting the ordering is the half that actually holds — an
 		// index or constraint created before its extension fails outright. Every `bolt:` id sorts before

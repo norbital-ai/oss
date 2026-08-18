@@ -181,7 +181,20 @@ const authoredForeignKey = (
 		throw new Error(`Relation "${relation.name}" targets a collection this workspace does not declare`);
 	}
 	const column = self[from.column];
-	const foreignColumn = getTableColumns(target)[to.column];
+	/**
+	 * Relations name a database column; `getTableColumns` is keyed by the Drizzle property.
+	 *
+	 * For a workspace collection the two are the same string, so the direct lookup is right and cheap.
+	 * Identity is the exception, and deliberately so: Better Auth requires a model with `id`, while a
+	 * Bolt collection is keyed by `norbital_id`, and one table satisfies both only because Drizzle
+	 * names the property and the column separately. A relation pointing at `user.norbital_id` — which
+	 * is what every other collection is pointed at by — would otherwise find nothing, because the
+	 * property there is called `id`.
+	 */
+	const targetColumns = getTableColumns(target);
+	const foreignColumn =
+		targetColumns[to.column] ??
+		Object.values(targetColumns).find((candidate) => candidate.name === to.column);
 	if (column === undefined || foreignColumn === undefined) {
 		throw new Error(`Relation "${relation.name}" names a column no collection declares`);
 	}

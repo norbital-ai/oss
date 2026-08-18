@@ -175,12 +175,12 @@ const declaredIndexSteps = (
 ): ReadonlyArray<SchemaStep> =>
 	Object.entries(collection.fields)
 		.filter(([, field]) => field.indexed)
-		.map(([column]) => column)
-		.toSorted()
-		.map((column) => ({
+		.map(([column, field]) => ({ column, unique: field.unique === true }))
+		.toSorted((left, right) => left.column.localeCompare(right.column))
+		.map(({ column, unique }) => ({
 			// Sorts after `collection:<name>` (its table), so the column exists by the time this runs.
 			id: `collection:${collection.name}:index:${column}`,
-			sql: `create index if not exists ${quoteIdentifier(collectionIndexName(collection.name, column))} on ${quoteIdentifier(collection.name)} (${quoteIdentifier(column)})`
+			sql: `create ${unique ? 'unique ' : ''}index if not exists ${quoteIdentifier(collectionIndexName(collection.name, column))} on ${quoteIdentifier(collection.name)} (${quoteIdentifier(column)})`
 		}));
 
 /**
@@ -259,6 +259,13 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		// Postgres 13. Requesting the extension only fails on a build that does not ship it.
 		{ id: 'bolt:extension-btree-gist', sql: 'create extension if not exists btree_gist' },
 		{ id: 'bolt:extension-pg-trgm', sql: 'create extension if not exists pg_trgm' },
+		// `vector`, for the embedding columns two templates declare. Unconditional, like the two above:
+		// the plan runs before the lineage that creates the columns, so deciding from the declarations
+		// would mean deciding from a workspace this step cannot see — and a tenant provisioned before a
+		// template gained its first embedding column would have no step to add it later. A workspace
+		// that never embeds anything pays for an unused extension; one that does, without this, fails
+		// its very first migration on `type "vector" does not exist`.
+		{ id: 'bolt:extension-vector', sql: 'create extension if not exists vector' },
 		{
 			// A STORED generated column refuses a STABLE expression, and `text::date` is only STABLE
 			// because it reads DateStyle. Authored values are canonical ISO dates, whose parse does not,

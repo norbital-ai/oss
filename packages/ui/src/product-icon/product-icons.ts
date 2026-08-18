@@ -16,8 +16,7 @@ export const PRODUCT_SUBMODULE_ICON_NAMES = [
 ] as const;
 
 export const PRODUCT_ICON_NAMES = [
-	'core',
-	'pod',
+	'bolt',
 	'colony',
 	...PRODUCT_LAYER_ICON_NAMES,
 	...PRODUCT_SUBMODULE_ICON_NAMES,

@@ -3,7 +3,7 @@
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { humanize } from '@norbital-ai/std/string';
 	import type { WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
-	import type { PodUiKeys } from '../agent/i18n.js';
+	import type { BoltUiKeys } from '../agent/i18n.js';
 	import type { AgentComposerSeed } from '../agent/composer-chrome.js';
 	import {
 		COMMAND_PREFIX,
@@ -20,7 +20,7 @@
 	import type { FinderEntity, FinderRow } from '../finder/finder-entity.js';
 	import FinderPalette from '../finder/finder-palette.svelte';
 
-	const { t } = useI18n<PodUiKeys>();
+	const { t } = useI18n<BoltUiKeys>();
 
 	/**
 	 * Cmd+/ host for the shared finder. Record search is a second step: pick a collection,
@@ -58,15 +58,15 @@
 
 	const PREFIX_LABEL_KEYS: Record<
 		CommandScope,
-		| 'pod.shell.omniPrefixSearch'
-		| 'pod.shell.omniPrefixPlan'
-		| 'pod.shell.omniPrefixApps'
-		| 'pod.shell.omniPrefixCommands'
+		| 'bolt.shell.omniPrefixSearch'
+		| 'bolt.shell.omniPrefixPlan'
+		| 'bolt.shell.omniPrefixApps'
+		| 'bolt.shell.omniPrefixCommands'
 	> = {
-		record: 'pod.shell.omniPrefixSearch',
-		plan: 'pod.shell.omniPrefixPlan',
-		app: 'pod.shell.omniPrefixApps',
-		command: 'pod.shell.omniPrefixCommands'
+		record: 'bolt.shell.omniPrefixSearch',
+		plan: 'bolt.shell.omniPrefixPlan',
+		app: 'bolt.shell.omniPrefixApps',
+		command: 'bolt.shell.omniPrefixCommands'
 	};
 
 	/**
@@ -75,15 +75,15 @@
 	 */
 	const PREFIX_HINT_KEYS: Record<
 		CommandScope,
-		| 'pod.shell.omniPrefixSearchHint'
-		| 'pod.shell.omniPrefixPlanHint'
-		| 'pod.shell.omniPrefixAppsHint'
-		| 'pod.shell.omniPrefixCommandsHint'
+		| 'bolt.shell.omniPrefixSearchHint'
+		| 'bolt.shell.omniPrefixPlanHint'
+		| 'bolt.shell.omniPrefixAppsHint'
+		| 'bolt.shell.omniPrefixCommandsHint'
 	> = {
-		record: 'pod.shell.omniPrefixSearchHint',
-		plan: 'pod.shell.omniPrefixPlanHint',
-		app: 'pod.shell.omniPrefixAppsHint',
-		command: 'pod.shell.omniPrefixCommandsHint'
+		record: 'bolt.shell.omniPrefixSearchHint',
+		plan: 'bolt.shell.omniPrefixPlanHint',
+		app: 'bolt.shell.omniPrefixAppsHint',
+		command: 'bolt.shell.omniPrefixCommandsHint'
 	};
 
 	let query = $state('');
@@ -228,8 +228,8 @@
 			(collection): FinderRow => ({
 				value: rowValue('scope', collection),
 				kind: 'scope',
-				label: t('pod.agent.searchCollection', { collection }),
-				description: t('pod.agent.typeToSearchScope', { scope: humanize(collection) }),
+				label: t('bolt.agent.searchCollection', { collection }),
+				description: t('bolt.agent.typeToSearchScope', { scope: humanize(collection) }),
 				hint: commandPrefixChar('record'),
 				entity: { kind: 'scope', collection }
 			})
@@ -244,8 +244,8 @@
 					value: rowValue('command', 'plan'),
 					kind: 'command',
 					label: parsed.text
-						? t('pod.shell.omniPlanWithQuery', { query: parsed.text })
-						: t('pod.shell.omniPrefixPlan'),
+						? t('bolt.shell.omniPlanWithQuery', { query: parsed.text })
+						: t('bolt.shell.omniPrefixPlan'),
 					icon: 'product:agent',
 					entity: { kind: 'plan', query: parsed.text }
 				}
@@ -274,8 +274,8 @@
 				rows.push({
 					value: rowValue('command', 'ask-agent'),
 					kind: 'command',
-					label: t('pod.shell.omniAskWithQuery', { query: parsed.text }),
-					description: t('pod.shell.omniNewConversationHint'),
+					label: t('bolt.shell.omniAskWithQuery', { query: parsed.text }),
+					description: t('bolt.shell.omniNewConversationHint'),
 					icon: 'product:agent',
 					entity: { kind: 'ask-agent', query: parsed.text }
 				});
@@ -283,8 +283,8 @@
 				rows.push({
 					value: rowValue('command', 'ask-agent'),
 					kind: 'command',
-					label: t('pod.shell.omniNewConversation'),
-					description: t('pod.shell.omniNewConversationHint'),
+					label: t('bolt.shell.omniNewConversation'),
+					description: t('bolt.shell.omniNewConversationHint'),
 					icon: 'product:agent',
 					entity: { kind: 'ask-agent', query: '' }
 				});
@@ -294,8 +294,8 @@
 		rows.push({
 			value: rowValue('command', 'overview'),
 			kind: 'command',
-			label: t('pod.shell.omniOpenWorkspace'),
-			description: t('pod.shell.omniOpenWorkspaceHint'),
+			label: t('bolt.shell.omniOpenWorkspace'),
+			description: t('bolt.shell.omniOpenWorkspaceHint'),
 			icon: 'lucide:layout-dashboard',
 			entity: { kind: 'navigate', href: '/' }
 		});
@@ -338,10 +338,10 @@
 				disabled: true,
 				label:
 					kind === 'apps'
-						? t('pod.shell.omniApps')
+						? t('bolt.shell.omniApps')
 						: kind === 'records'
-							? t('pod.shell.omniRecords')
-							: t('pod.shell.omniCommands')
+							? t('bolt.shell.omniRecords')
+							: t('bolt.shell.omniCommands')
 			};
 		}
 
@@ -363,7 +363,7 @@
 							value: rowValue('empty', 'type'),
 							kind: 'empty',
 							disabled: true,
-							label: t('pod.agent.typeToSearchScope', { scope: parsed.collection })
+							label: t('bolt.agent.typeToSearchScope', { scope: parsed.collection })
 						});
 					} else {
 						out.push(...recordRows);
@@ -408,7 +408,7 @@
 				value: rowValue('empty', 'none'),
 				kind: 'empty',
 				disabled: true,
-				label: t('pod.shell.omniNoResults', { query: searchText })
+				label: t('bolt.shell.omniNoResults', { query: searchText })
 			});
 		}
 		return out;
@@ -465,8 +465,8 @@
 			{items}
 			scope={parsed.collection}
 			parsedScope={parsed.scope}
-			placeholder={t('pod.shell.omniPlaceholder')}
-			ariaLabel={t('pod.shell.omniTitle')}
+			placeholder={t('bolt.shell.omniPlaceholder')}
+			ariaLabel={t('bolt.shell.omniTitle')}
 			onPick={handlePick}
 			onQueryInput={(next) => commitQuery(next)}
 			onClearScope={() => commitQuery('#', true)}

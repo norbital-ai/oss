@@ -73,7 +73,17 @@ const authUser = collection({
 	name: 'bolt_auth_user',
 	fields: {
 		name: field.string({ required: true }),
-		email: field.string({ indexed: true }),
+		/**
+		 * One row per address, and the index is unique for two reasons that meet here.
+		 *
+		 * Better Auth already assumes it — it looks a person up by email and expects one answer — and
+		 * admitting a workspace's first administrator depends on it: that write is an upsert on the
+		 * address, made before the person exists, so `on conflict ("email")` needs something to
+		 * conflict against. Without it the statement does not degrade, it fails, and the founder is
+		 * left with a workspace they can sign into and cannot read. Nulls do not collide in a Postgres
+		 * unique index, so the provisioner's addressless service row is unaffected.
+		 */
+		email: field.string({ indexed: true, unique: true }),
 		emailVerified: field.boolean({ required: true, sqlDefault: 'false' }),
 		image: field.string(),
 		/**
