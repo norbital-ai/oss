@@ -364,7 +364,10 @@ describe('Sync engine over SQL', () => {
 					return yield* (yield* Sync.Service).shape(adminSubject);
 				})
 			)
-		).toEqual(['approval_request', 'people', 'requestor']);
+			// `document_asset` replicates with them: a `file()` column is a uuid whose row lives here, and
+		// the renderer resolves it client-side, so a surface that cannot replicate it shows an empty
+		// file. It is not one of the identity collections, which stay out of the shape deliberately.
+	).toEqual(['approval_request', 'document_asset', 'people', 'requestor']);
 		expect(
 			await runtime.runPromise(
 				Effect.gen(function* () {

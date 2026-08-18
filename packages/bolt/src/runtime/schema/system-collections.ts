@@ -148,6 +148,32 @@ const authConfig = collection({
 	history: false
 });
 
+/**
+ * An uploaded file, as a row.
+ *
+ * `file()` renders a plain `uuid` column with a mime hint and no foreign key, and the value it holds
+ * is a row in here — `data-renderer/file` resolves it with `records.findMany('document_asset', …)`
+ * and reads `file_name`, `file_size`, `mime_type` and `storage_key` off the result. That table was
+ * never carried across when identity became runtime-owned, so every `file()` column in every
+ * workspace resolved against nothing: a photo, a permit scan and a tender document all rendered
+ * empty, and no asset could be seeded because there was no row to seed.
+ *
+ * Deliberately not one of the identity collections below. Those are excluded from the system read
+ * policy and from replication because they carry a person's address, roles and teams; an uploaded
+ * file is ordinary workspace data that the surfaces showing it must be able to read.
+ */
+const documentAsset = collection({
+	name: 'document_asset',
+	fields: {
+		file_name: field.string({ required: true }),
+		file_size: field.number(),
+		mime_type: field.string(),
+		/** Where the bytes are, in the host's object store. The Files facility is keyed by this. */
+		storage_key: field.string({ required: true, indexed: true })
+	},
+	history: false
+});
+
 export const IDENTITY_COLLECTIONS: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>> = Object.freeze([
 	authUser,
 	authSession,
@@ -158,6 +184,7 @@ export const IDENTITY_COLLECTIONS: ReadonlyArray<CollectionDefinition<Readonly<R
 
 export const SYSTEM_COLLECTIONS: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>> = Object.freeze([
 	...IDENTITY_COLLECTIONS,
+	documentAsset,
 	approvalRequest,
 	requestor
 ]);
@@ -174,18 +201,27 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	description: 'Read access to runtime-owned collections that authored queries and reports depend on.',
 	effect: 'allow',
 	/**
-	 * Identity is deliberately not here.
+	 * Identity is here only as a directory of names, and only because workspaces need one.
 	 *
-	 * This grant exists so an authored query can read the runtime's own bookkeeping — approval state
-	 * a report filters on. `bolt_auth_user` is not that: it holds every person in the workspace with
-	 * their roles, teams and address, and granting read on it to any authenticated subject would put
-	 * the whole membership behind one signed-in session and replicate it into every browser the sync
-	 * engine serves. Identity is read through `Identity`, which answers about the caller, and through
-	 * `workspaceAccess`, which is authorised on its own terms.
+	 * The rest of this grant lets an authored query read the runtime's own bookkeeping — approval
+	 * state a report filters on. `bolt_auth_user` is not that: the row holds a person's address,
+	 * roles and teams, and granting the whole of it to any authenticated subject would put the entire
+	 * membership behind one signed-in session.
+	 *
+	 * But three workspaces render an owner picker, and they were written against a `user` table that
+	 * the identity merge removed — `db.user.findMany` against a table that does not exist. What they
+	 * actually need is an id and a display name, so that is exactly what the field mask allows.
+	 * `findMany` applies `access.mask` to every row it returns, so the address, the roles and the
+	 * teams are not merely unselected: they cannot be read through this grant at all. Replication is
+	 * unaffected — `Sync.shape` and the change stream exclude every identity collection, so a
+	 * directory is answered by a query and never mirrored into a browser.
 	 */
-	grants: SYSTEM_COLLECTIONS.filter(
-		({ name }) => !IDENTITY_COLLECTIONS.some((identity) => identity.name === name)
-	).map(({ name }) => ({ collection: name, action: 'read' }))
+	grants: [
+		...SYSTEM_COLLECTIONS.filter(
+			({ name }) => !IDENTITY_COLLECTIONS.some((identity) => identity.name === name)
+		).map(({ name }) => ({ collection: name, action: 'read' as const })),
+		{ collection: authUser.name, action: 'read' as const, fields: ['norbital_id', 'name'] }
+	]
 });
 
 /** Merges runtime-owned collections into an authored definition without letting either shadow the other. */
