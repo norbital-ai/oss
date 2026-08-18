@@ -122,10 +122,23 @@ export const makeAuthoringApi = (
 			return ops.create(collection, identifier, input as Readonly<Record<string, Schema.Json>>);
 		},
 		update: (id: string, input: Readonly<Record<string, unknown>>) => ops.update(collection, id, input as Readonly<Record<string, Schema.Json>>),
+		/**
+		 * The elevated writes, on the collection like everything else that reaches one.
+		 *
+		 * They were also declared on `db` itself, taking the collection as a first argument — two ways
+		 * to say one thing, and the db-level pair was never implemented: this proxy answers any string
+		 * with `collectionApi(property)`, so `api.db.mutate` was an object named `mutate` and
+		 * `yield* api.db.mutate('payslips', rows)` raised `is not iterable` while typechecking
+		 * cleanly. hr-payroll's whole PERSIST phase was written that way, so every payroll run
+		 * computed through seven phases and threw on its first write.
+		 *
+		 * Elevated only: these bypass the row predicate, and a hook running as an ordinary subject
+		 * must not.
+		 */
 		...(options.elevated === true
 			? {
 					mutate: (payloads: ReadonlyArray<Readonly<Record<string, unknown>>>) => ops.mutate(collection, payloads),
-					delete: (identifiers: ReadonlyArray<string>) => ops.delete(collection, identifiers[0] ?? '')
+							delete: (identifiers: ReadonlyArray<string>) => deleteAll(collection, identifiers)
 				}
 			: {})
 	});
@@ -140,6 +153,19 @@ export const makeAuthoringApi = (
 					? collectionApi(property)
 					: undefined
 	});
+	/**
+	 * Every identifier, not the first one.
+	 *
+	 * `ops.delete` takes a single id, and the array form used to hand it `identifiers[0]`. That is a
+	 * silent wrong answer rather than a failure: `clearRunResults` exists to remove every payslip of
+	 * a run before recomputing it, and removing one turned a recalculation into a partial wipe that
+	 * reported success.
+	 */
+	const deleteAll = (collection: string, identifiers: ReadonlyArray<string>) =>
+		Effect.forEach(identifiers, (identifier) => ops.delete(collection, identifier), {
+			discard: true
+		});
+
 	const database = new Proxy<Readonly<Record<string, unknown>>>({}, {
 		get: (_target, property) =>
 			property === 'query' ? query : typeof property === 'string' ? collectionApi(property) : undefined

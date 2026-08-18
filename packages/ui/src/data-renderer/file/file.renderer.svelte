@@ -78,7 +78,7 @@
 					name,
 					size,
 					type: typeof type === 'string' ? type : 'application/octet-stream',
-					url: `/api/files/download/${encodeURIComponent(storageKey)}`
+					url: `/api/files/${encodeURIComponent(storageKey)}`
 				}
 			];
 		})

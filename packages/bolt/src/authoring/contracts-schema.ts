@@ -192,10 +192,24 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 };
 export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = BeforeApi<S>;
 export type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>> = MutationInsertFor<S, N> | ({ readonly norbital_id: string } & MutationUpdateFor<S, N>);
+/**
+ * The elevated writes, on the collection — one shape for reaching a collection, not two.
+ *
+ * These were declared on `db` itself, taking the collection as a first argument, while everything
+ * else in this contract reaches a collection as a property: `db.query.<name>.findMany`,
+ * `db.<name>.create`, `db.<name>.update`. Two ways to say one thing is one too many, and the
+ * db-level pair was additionally never implemented — the proxy behind `db` answered any string with
+ * a per-collection object, so `api.db.mutate` was an object named `mutate` and
+ * `yield* api.db.mutate('payslips', rows)` raised `is not iterable` while typechecking cleanly.
+ */
 export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<BeforeApi<S>, 'db'> & {
-	readonly db: BeforeApi<S>['db'] & {
-		readonly mutate: <const N extends TableName<S>>(collection: N, payloads: ReadonlyArray<ElevatedMutationPayload<S, N>>) => Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
-		readonly delete: <const N extends TableName<S>>(collection: N, identifiers: ReadonlyArray<string>) => Effect.Effect<void>;
+	readonly db: { readonly query: BeforeApi<S>['db']['query'] } & {
+		readonly [N in TableName<S>]: CollectionQuery<S, N> & {
+			readonly create: (input: MutationInsertFor<S, N>) => Effect.Effect<SchemaRow<S, N>>;
+			readonly update: (id: string, input: MutationUpdateFor<S, N>) => Effect.Effect<SchemaRow<S, N>>;
+			readonly mutate: (payloads: ReadonlyArray<ElevatedMutationPayload<S, N>>) => Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
+			readonly delete: (identifiers: ReadonlyArray<string>) => Effect.Effect<void>;
+		};
 	};
 };
 
